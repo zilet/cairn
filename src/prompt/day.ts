@@ -141,31 +141,63 @@ rest: acknowledge the stretch and offer the smallest thing worth doing, as an op
 // counts only, never a rate or a grade), and this is the one prompt where it is about
 // the very decision being made.
 //
-// Only rendered once a rest pattern is genuinely there (two or more), so an athlete
-// who follows their reads never carries this block; and never as a licence to
-// escalate — the server owns the safety call and discards an upgrade, so the guidance
-// is about how to shape the day already open, not about opening a bigger one.
+// Only rendered once a pattern is genuinely there (two or more divergences on a read
+// kind), so an athlete who follows their reads never carries this block; and never as a
+// licence to escalate — the server owns the safety call and discards an upgrade, so the
+// guidance is about how to shape the day already open, not about opening a bigger one.
+//
+// BOTH deterministic ladders are narrated, because both can already have acted before
+// this prompt runs: rest → easy (outcome_feedback) and easy → train (easy_outcome_feedback).
+// Carrying only the rest one left the agent blind to a day the easy ladder had opened,
+// free to quietly write it back down to easy — the exact re-argument the ladder exists
+// to end. Machine register throughout: this is evidence handed to the agent, not prose
+// an athlete reads.
 function renderReadOutcomes(context: any, baseline: any): string {
   const byRead = Array.isArray(context?.read_adherence?.by_read) ? context.read_adherence.by_read : [];
-  const rest = byRead.find((row: any) => row?.read === "rest");
-  const diverged = Number(rest?.diverged ?? 0);
-  const days = Number(rest?.days ?? 0);
-  if (!Number.isFinite(diverged) || diverged < 2 || !Number.isFinite(days) || days < diverged) return "";
-  const followed = Number(rest?.followed ?? 0);
+  // A kind's counts, or null when the pattern isn't there. `days < diverged` is a
+  // malformed row, not a pattern.
+  const pattern = (kind: string): { days: number; diverged: number; followed: number } | null => {
+    const row = byRead.find((entry: any) => entry?.read === kind);
+    const diverged = Number(row?.diverged ?? 0);
+    const days = Number(row?.days ?? 0);
+    if (!Number.isFinite(diverged) || diverged < 2 || !Number.isFinite(days) || days < diverged) return null;
+    return { days, diverged, followed: Number(row?.followed ?? 0) };
+  };
+  const rest = pattern("rest");
+  const easy = pattern("easy");
+  if (!rest && !easy) return "";
   // `applied`, never `active`. `active` says only that the pattern exists, and it is
   // just as true on a morning that reads train or one where a clinical constraint held
   // the rest in place — so keying on it told the agent the day had been eased on
   // mornings where nothing had been eased at all.
-  const softened = baseline?.signals?.outcome_feedback?.applied === true;
-  const softenedLine = softened
+  const restSoftened = baseline?.signals?.outcome_feedback?.applied === true;
+  const easyOpened = baseline?.signals?.easy_outcome_feedback?.applied === true;
+  const restLine = rest
     ? `
+Of the ${rest.days} rest read${rest.days === 1 ? "" : "s"} in the recent window, they trained anyway on
+${rest.diverged} and took ${rest.followed} as rest.${
+        restSoftened
+          ? `
 Today's suggestion has ALREADY been eased from rest to an easy day for exactly this reason — that
 easing is the answer to the pattern, so do not spend the read re-arguing it or apologising for it.`
+          : ""
+      }`
+    : "";
+  const easyLine = easy
+    ? `
+Of the ${easy.days} easy read${easy.days === 1 ? "" : "s"} in the recent window, they went above easy on
+${easy.diverged} and kept ${easy.followed} at or under it.${
+        easyOpened
+          ? `
+Today's suggestion has ALREADY been opened from easy to a training day for exactly this reason. That
+opening IS the answer to the pattern — write the training day, and do NOT quietly walk it back to an
+easy one or hedge it into a recovery session.`
+          : ""
+      }`
     : "";
   return `
-HOW YOUR READS HAVE ACTUALLY LANDED: of the ${days} rest read${days === 1 ? "" : "s"} in the recent
-window, they trained anyway on ${diverged} and took ${followed} as rest. \`read_adherence\` in DATA has
-the day by day.${softenedLine}
+HOW YOUR READS HAVE ACTUALLY LANDED:${restLine}${easyLine}
+\`read_adherence\` in DATA has the day by day.
 - A read they keep declining is not a read that is working. Do NOT re-derive the same case in fresh
   words. Say what today actually supports and let the day be theirs.
 - Where today's picture leaves room, take the MORE PERMISSIVE of the readings open to you, and give

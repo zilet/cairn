@@ -183,26 +183,33 @@ test("a quiet nutrition adjustment waits for the next day boundary", () => {
   );
 });
 
-test("surprise-budget exhaustion requires an explicit review instead of silently announcing", () => {
+// 2026-08-17 ruling: a spent surprise budget is a WAIT, not a question. The pace is
+// three material changes per domain-week, and the change that overruns it announces at
+// its natural boundary instead of being demoted to a review the athlete has to answer.
+test("surprise-budget exhaustion delays to the next boundary instead of asking", () => {
   seedPlan();
   repo.setSettings({ lead_mode: "lead" });
-  const first = repo.createProposal("stub", "first bounded change", "", {
-    summary: "First bench change",
-    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
-  });
-  assert.equal(applyProposalWithAutonomy(first.id, { requested_tier: "quiet_apply" }).applied.length, 1);
+  for (const [index, weight] of [120, 125, 130].entries()) {
+    const change = repo.createProposal("stub", `bounded change ${index}`, "", {
+      summary: `Bench change ${index}`,
+      changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: weight }],
+    });
+    assert.equal(applyProposalWithAutonomy(change.id, { requested_tier: "quiet_apply" }).applied.length, 1);
+  }
 
-  const second = repo.createProposal("stub", "second bounded change", "", {
-    summary: "Second bench change",
-    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 125 }],
+  const overrun = repo.createProposal("stub", "the change that overruns the week", "", {
+    summary: "A fourth bench change",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 135 }],
   });
-  const held = applyProposalWithAutonomy(second.id, { requested_tier: "quiet_apply" });
-  assert.equal(held.applied, false);
-  assert.equal(held.tier, "ask");
-  assert.equal(held.review_required, true);
-  assert.match(held.reasons.join(" "), /weekly surprise budget already used/i);
-  assert.equal(repo.getProposal(second.id).status, "draft");
-  assert.equal(repo.getPlanDay(1).items[0].target_weight, 120);
+  const deferred = applyProposalWithAutonomy(overrun.id, { requested_tier: "quiet_apply" });
+  assert.equal(deferred.applied, false);
+  assert.equal(deferred.review_required, undefined, "a full week is never turned into a question");
+  assert.notEqual(deferred.tier, "ask");
+  assert.equal(deferred.announced, true);
+  assert.equal(deferred.budget_deferred, true);
+  assert.equal(deferred.decision.status, "announced");
+  assert.equal(repo.getProposal(overrun.id).status, "draft");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 130, "nothing lands until the boundary");
 });
 
 test("stale proposal snapshots require a fresh review before autonomous apply", () => {

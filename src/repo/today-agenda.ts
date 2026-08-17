@@ -68,6 +68,10 @@ import { goalCheckinCandidate } from "./goal-checkin.js";
 // the recovery read. Rides the shared attention schedule for its cooldown, so it
 // is made at most a handful of times and then goes quiet on its own.
 import { reconcileSensorRecheckAttention, sensorRecheckCandidate } from "./sensor-recheck.js";
+// The one calm ask for a measurement a live derivation is blocked on. Same shape
+// as the sensor recheck: a pure producer here, and the attention ladder is only
+// ever spent once placement is known.
+import { measurementRequestCandidate, reconcileMeasurementRequestAttention } from "./measurement-request.js";
 import { listBrainDecisions } from "./brain-decisions.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import { getAppState, setAppState } from "./app-state.js";
@@ -895,6 +899,8 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   // that isn't known until every candidate is ranked; see the reconcile call
   // after placement, which is the only place this offer may be spent.
   add(safe(() => sensorRecheckCandidate(d)));
+  // Also a PURE read — the ask is only spent after placement, below.
+  add(safe(() => measurementRequestCandidate(d)));
 
   // Stable sort by priority desc. Array.prototype.sort is stable in modern V8, but
   // tie-break on insertion order explicitly so the budget split is deterministic.
@@ -933,6 +939,15 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
       reconcileSensorRecheckAttention(d, primaryIds.has("sensor-recheck"));
     } catch {
       /* presentation-only; a failed write just re-offers (or re-cleans) next time */
+    }
+    try {
+      // Same contract, one need at a time: the ask is spent only for the request
+      // that actually reached the inline set, and every retired need is swept
+      // regardless of placement.
+      const surfaced = [...primaryIds].find((id) => id.startsWith("measurement-request-")) ?? null;
+      reconcileMeasurementRequestAttention(d, surfaced);
+    } catch {
+      /* presentation-only; a failed write just re-asks (or re-cleans) next time */
     }
   }
 

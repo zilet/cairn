@@ -192,7 +192,17 @@ function hydrateProposal(row: any) {
   } catch {
     parsed = null;
   }
-  parsed = normalizeStoredProposalPayload(parsed, row.created_at);
+  // Quarantine per ROW, never per list. Normalization is the read path's last defence
+  // and it clamps rather than throws, but a payload can still be malformed in a way it
+  // cannot repair — and a list that throws on one such row takes every healthy row with
+  // it (that is how draft adoption stopped for days). A quarantined row comes back with
+  // its raw stored payload and a marker, so callers can show it and diagnose it.
+  let hydrationError: string | null = null;
+  try {
+    parsed = normalizeStoredProposalPayload(parsed, row.created_at);
+  } catch (error) {
+    hydrationError = String(error instanceof Error ? error.message : error).slice(0, 300);
+  }
   const autonomy = db
     .prepare(
       `SELECT id, status, autonomy_tier, effective_date, summary, context_json
@@ -211,6 +221,7 @@ function hydrateProposal(row: any) {
   return {
     ...row,
     parsed,
+    ...(hydrationError ? { hydration_error: hydrationError } : {}),
     autonomy: autonomy
       ? {
           id: Number(autonomy.id),

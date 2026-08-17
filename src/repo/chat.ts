@@ -653,6 +653,45 @@ export function createBrainReviewAgentJob(
   return { job, created: true };
 }
 
+// The week-ahead cache warm/refresh is fired from two independent callers (a
+// user-facing GET on a cold/stale cache, and the scheduler's day-rollover
+// warm) that can race. Deduplicate against any 'week_ahead' job for the exact
+// same cacheKey (day + plan + goal + training-reality fingerprint) still
+// queued or running, so a burst never spawns more than one coaching CLI. A
+// job that already finished is NOT a match — the caller only asks for one
+// when the cache is missing or stale, so a prior completion (fresh or
+// failed) has nothing left to coalesce against; the next miss/staleness
+// starts a fresh dedup window.
+export function createWeekAheadAgentJob(input: { cacheKey: string; agent?: string | null }): {
+  job: any;
+  created: boolean;
+} {
+  const cacheKey = String(input?.cacheKey ?? "").trim();
+  if (!cacheKey) throw new Error("invalid week-ahead cache key");
+  const active = db
+    .prepare(
+      `SELECT id, input_json FROM agent_jobs
+        WHERE kind = 'week_ahead' AND status IN ('queued','running')
+        ORDER BY id DESC LIMIT 50`
+    )
+    .all() as any[];
+  for (const row of active) {
+    try {
+      const parsed = row.input_json ? JSON.parse(row.input_json) : null;
+      if (parsed?.cacheKey === cacheKey) return { job: getAgentJob(Number(row.id)), created: false };
+    } catch {
+      // A malformed in-flight row is ignored rather than blocking a valid warm.
+    }
+  }
+  const job = createAgentJob({
+    kind: "week_ahead",
+    phase: "queued to sketch the week ahead",
+    input: { cacheKey, agent: input.agent ?? null },
+    agent: input.agent ?? null,
+  });
+  return { job, created: true };
+}
+
 export function getAgentJob(id: number) {
   return hydrateAgentJob(db.prepare(`SELECT * FROM agent_jobs WHERE id = ?`).get(id));
 }

@@ -347,7 +347,12 @@ test("the chronic sleep phrasings belong to an observation built from the window
   assert.equal(recovery.conflicts.length, 1);
   assert.match(recovery.conflicts[0], /But sleep across the recent window/);
   assert.equal(recovery.voice.key, "sleep_short");
-  assert.equal(state.action.directives.training, "hold_aggression");
+  // One caution, alone on the board: since the 2026-08-17 rebalance that is a finding
+  // the read speaks, not a second opinion that holds the week (see the bar in
+  // planningDirectives and the cases in brainRebalanceEarnPath.test.js). The dimension
+  // is still at watch, which is what this case is actually about.
+  assert.equal(recovery.status, "watch");
+  assert.equal(state.action.directives.training, "proceed");
 });
 
 // day-read requires a readiness reading dated today or yesterday before it may force a
@@ -594,7 +599,10 @@ test("Apple-only daily activity contributes one conservative generic load observ
   assert.equal(load.evidence[0].freshness, "fresh");
   assert.match(load.evidence[0].summary, /without assuming a sport/i);
   assert.equal(state.action.posture, "train", "generic movement alone must not force recovery");
-  assert.equal(state.action.directives.training, "hold_aggression");
+  // …and since the 2026-08-17 rebalance it does not hold aggression on its own either.
+  // The watch is what this case pins; the counsel needs a second opinion.
+  assert.equal(load.status, "watch");
+  assert.equal(state.action.directives.training, "proceed");
 });
 
 test("a same-day endurance record suppresses mirrored Apple generic load", () => {

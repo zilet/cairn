@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { db } from "../db.js";
+import { clampEvidenceDate, clampProposalProvenanceDates } from "./proposal-provenance-clamp.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+
+// Re-exported so `src/repo.ts` and its callers keep one import site for proposal
+// truth; the clamp itself lives in a db-free module because migration 92 needs it.
+export { clampEvidenceDate, clampProposalProvenanceDates };
 
 export interface ReasonProvenance {
   reason_code: string;
@@ -147,12 +152,20 @@ export function validReasonProvenance(value: unknown): value is ReasonProvenance
   );
 }
 
+// A reason is free prose, and prose names FUTURE dates all the time ("suspend Z4 for
+// 2026-08-09→2026-08-22"). Matching the first ISO date in it is a heuristic, so its
+// result is clamped here rather than trusted: an unclamped future date used to be
+// written straight into reason_provenance, and every later rehydration then threw on
+// its own stored row.
 function inferredEvidenceDate(reason: string, asOf: string, latestTrainingDate: string | null): string {
-  if (/\byesterday\b/i.test(reason)) return addDaysISO(asOf, -1) ?? asOf;
-  if (/\blast week\b/i.test(reason)) return addDaysISO(startOfWeek(asOf), -7) ?? asOf;
-  if (/\b(?:this week|earlier this week)\b/i.test(reason)) return startOfWeek(asOf);
-  const explicitIso = reason.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1];
-  return explicitIso ?? latestTrainingDate ?? asOf;
+  const inferred = (() => {
+    if (/\byesterday\b/i.test(reason)) return addDaysISO(asOf, -1) ?? asOf;
+    if (/\blast week\b/i.test(reason)) return addDaysISO(startOfWeek(asOf), -7) ?? asOf;
+    if (/\b(?:this week|earlier this week)\b/i.test(reason)) return startOfWeek(asOf);
+    const explicitIso = reason.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1];
+    return explicitIso ?? latestTrainingDate ?? asOf;
+  })();
+  return clampEvidenceDate(inferred, asOf);
 }
 
 export function normalizeHistoricalReason(
@@ -597,31 +610,44 @@ export function captureProposalEvidence(
   };
 }
 
+// "write" is the gate on the way IN: a payload that contradicts itself is refused
+// before it can be stored. "stored" is the way back OUT, and it may not throw — a row
+// that is already in the table cannot be un-stored, and one poison payload used to
+// take down every caller that hydrated it (listProposals, the whole scheduler sweep).
+// On the read path an inconsistency CLAMPS: evidence_date falls back to its own
+// as_of_date, and a stored as_of that disagrees with the payload's is kept as stored.
+type ProvenanceMode = "write" | "stored";
+
 function provenanceFor(
   raw: unknown,
   reason: string,
   asOf: string,
-  evidence: ProposalEvidenceSnapshot
+  evidence: ProposalEvidenceSnapshot,
+  mode: ProvenanceMode
 ): ReasonProvenance {
   const supplied = object(raw);
   const suppliedAsOf = isoDate(supplied?.as_of_date);
-  if (supplied?.as_of_date != null && suppliedAsOf !== asOf) {
+  if (mode === "write" && supplied?.as_of_date != null && suppliedAsOf !== asOf) {
     throw new Error("reason provenance as_of_date must match the server date");
   }
+  const effectiveAsOf = mode === "stored" ? (suppliedAsOf ?? asOf) : asOf;
   const suppliedEvidenceDate = isoDate(supplied?.evidence_date);
-  if (supplied?.evidence_date != null && !suppliedEvidenceDate) {
+  if (mode === "write" && supplied?.evidence_date != null && !suppliedEvidenceDate) {
     throw new Error("reason provenance evidence_date must be YYYY-MM-DD");
   }
-  if (suppliedEvidenceDate && suppliedEvidenceDate > asOf) {
+  if (mode === "write" && suppliedEvidenceDate && suppliedEvidenceDate > effectiveAsOf) {
     throw new Error("reason provenance evidence_date cannot be after as_of_date");
   }
-  const evidenceDate = suppliedEvidenceDate ?? inferredEvidenceDate(reason, asOf, evidence.latest_training_date);
+  const evidenceDate = clampEvidenceDate(
+    suppliedEvidenceDate ?? inferredEvidenceDate(reason, effectiveAsOf, evidence.latest_training_date),
+    effectiveAsOf
+  );
   return {
     reason_code: String(supplied?.reason_code ?? "training_evidence")
       .trim()
       .slice(0, 80),
     evidence_date: evidenceDate,
-    as_of_date: asOf,
+    as_of_date: effectiveAsOf,
     source_ref_type:
       supplied?.source_ref_type == null ? "training_evidence_snapshot" : String(supplied.source_ref_type).slice(0, 80),
     source_ref_key:
@@ -634,30 +660,36 @@ function normalizeReasonOwner(
   field: "reason" | "rationale",
   provenanceField: "reason_provenance" | "rationale_provenance",
   asOf: string,
-  evidence: ProposalEvidenceSnapshot
+  evidence: ProposalEvidenceSnapshot,
+  mode: ProvenanceMode
 ): void {
   if (typeof owner[field] !== "string" || !owner[field].trim()) return;
-  const provenance = provenanceFor(owner[provenanceField], owner[field], asOf, evidence);
+  const provenance = provenanceFor(owner[provenanceField], owner[field], asOf, evidence, mode);
   owner[field] = normalizeHistoricalReason(owner[field], provenance, asOf);
   owner[provenanceField] = provenance;
 }
 
-function normalizePayloadReasons(payload: Record<string, any>, asOf: string, evidence: ProposalEvidenceSnapshot): void {
+function normalizePayloadReasons(
+  payload: Record<string, any>,
+  asOf: string,
+  evidence: ProposalEvidenceSnapshot,
+  mode: ProvenanceMode
+): void {
   if (typeof payload.summary === "string")
     payload.summary = normalizeHistoricalReason(payload.summary, payload.rationale_provenance, asOf);
   if (typeof payload.notes === "string")
     payload.notes = normalizeHistoricalReason(payload.notes, payload.rationale_provenance, asOf);
-  normalizeReasonOwner(payload, "rationale", "rationale_provenance", asOf, evidence);
+  normalizeReasonOwner(payload, "rationale", "rationale_provenance", asOf, evidence, mode);
   for (const change of Array.isArray(payload.changes) ? payload.changes : []) {
     if (object(change)) {
-      normalizeReasonOwner(change, "reason", "reason_provenance", asOf, evidence);
+      normalizeReasonOwner(change, "reason", "reason_provenance", asOf, evidence, mode);
       if (typeof change.note === "string")
         change.note = normalizeHistoricalReason(change.note, change.reason_provenance, asOf);
     }
   }
   for (const cardio of Array.isArray(payload.cardio) ? payload.cardio : []) {
     if (object(cardio)) {
-      normalizeReasonOwner(cardio, "reason", "reason_provenance", asOf, evidence);
+      normalizeReasonOwner(cardio, "reason", "reason_provenance", asOf, evidence, mode);
       if (typeof cardio.note === "string")
         cardio.note = normalizeHistoricalReason(cardio.note, cardio.reason_provenance, asOf);
     }
@@ -665,7 +697,7 @@ function normalizePayloadReasons(payload: Record<string, any>, asOf: string, evi
   for (const day of Array.isArray(payload.days) ? payload.days : []) {
     for (const item of Array.isArray(day?.items) ? day.items : []) {
       if (object(item)) {
-        normalizeReasonOwner(item, "reason", "reason_provenance", asOf, evidence);
+        normalizeReasonOwner(item, "reason", "reason_provenance", asOf, evidence, mode);
         if (typeof item.note === "string")
           item.note = normalizeHistoricalReason(item.note, item.reason_provenance, asOf);
       }
@@ -693,7 +725,7 @@ export function prepareProposalPayload(parsed: unknown): unknown {
   const evidence = captureProposalEvidence(asOf);
   payload.as_of_date = asOf;
   payload.proposal_truth = { version: 1, evidence };
-  normalizePayloadReasons(payload, asOf, evidence);
+  normalizePayloadReasons(payload, asOf, evidence, "write");
   return payload;
 }
 
@@ -717,7 +749,12 @@ export function normalizeStoredProposalPayload(parsed: unknown, createdAt?: unkn
           training_fingerprint: "",
         };
   payload.as_of_date = asOf;
-  normalizePayloadReasons(payload, asOf, evidence);
+  // Repair what is on disk before reading it back. A payload written before the
+  // inference clamp existed can hold an evidence_date in its own future; clamping it
+  // here (rather than throwing) is what keeps one poison row from taking a whole
+  // listProposals — and therefore the scheduler's draft-adoption sweep — down with it.
+  clampProposalProvenanceDates(payload);
+  normalizePayloadReasons(payload, asOf, evidence, "stored");
   return payload;
 }
 

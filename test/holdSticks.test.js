@@ -88,15 +88,17 @@ function benchDraft(instruction, targetWeight, opts = {}) {
   });
 }
 
-// Route a bench draft into a live budget-review hold (a real live `review` row that
-// listReviewHeldProposals reads). Returns { draft, reviewRow }.
+// Route a bench draft into a live review hold (a real live `review` row that
+// listReviewHeldProposals reads). Routed through an explicitly REQUESTED review: since
+// the 2026-08-17 ruling a spent surprise budget delays rather than parking, so it is no
+// longer a way to produce the review row these retirement tests need.
 function makeReviewHeldBenchDraft(instruction = "bounded bench change", targetWeight = 195) {
   seedBenchPlan();
   repo.setSettings({ lead_mode: "lead" });
   seedAppliedAgenticTraining();
   const draft = benchDraft(instruction, targetWeight);
-  const held = applyProposalWithAutonomy(draft.id, { requested_tier: "quiet_apply" });
-  assert.equal(held.review_reason_code, "budget_review", "the draft is parked in a live review hold");
+  const held = applyProposalWithAutonomy(draft.id, { requested_tier: "ask" });
+  assert.equal(held.review_reason_code, "requested_review", "the draft is parked in a live review hold");
   const reviewRow = repo.listBrainDecisions({ status: "review", domain: "training", limit: 5 })
     .find((d) => d.source_ref_key === String(draft.id));
   assert.ok(reviewRow, "a live review row now owns the held draft");
@@ -185,8 +187,8 @@ test("a weekly auto-evolution supersede retires a review-held draft's live revie
   repo.setSettings({ lead_mode: "lead" });
   seedAppliedAgenticTraining();
   const draft = benchDraft(repo.AUTO_EVOLUTION_INSTRUCTION, 195);
-  const held = applyProposalWithAutonomy(draft.id, { requested_tier: "quiet_apply" });
-  assert.equal(held.review_reason_code, "budget_review");
+  const held = applyProposalWithAutonomy(draft.id, { requested_tier: "ask" });
+  assert.equal(held.review_reason_code, "requested_review");
   assert.equal(liveReviewRowsFor(draft.id).length, 1, "precondition: one live review row");
   assert.equal(repo.getProposal(draft.id).status, "draft", "a review hold leaves the draft as a draft");
 

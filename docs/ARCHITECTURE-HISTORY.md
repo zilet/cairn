@@ -4,6 +4,56 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-17 — heads-up autonomy, the brake needs a second opinion, the cut comes off the record
+
+Four parallel workstreams plus a stitch round, born from a live diagnosis: the draft-adoption sweep
+had been crashing every scheduler tick since 08-08 (13,398 grouped errors in seven days) on two
+case-conference drafts whose `reason_provenance.evidence_date` sat in the future — `inferredEvidenceDate`
+lifted the first ISO date out of reason prose ("suspend … 2026-08-09→2026-08-22") unclamped, the
+write-path guard only checked *supplied* dates, and one poison row killed all of `listProposals`.
+**Pipeline integrity:** the inference now clamps to `as_of`; `provenanceFor` gained a
+`"write" | "stored"` mode — write keeps its throws, stored **clamps** (a stored row cannot be
+un-stored); `hydrateProposal` quarantines a still-unreadable row behind a `hydration_error` marker
+instead of throwing the list; the clamp lives in db-free `src/repo/proposal-provenance-clamp.ts` so
+migration **v92** (`proposal-provenance-future-evidence-clamp`, per-row try/catch, idempotent, no
+deletions) can reuse it. **Heads-up autonomy (VISION Amendment 3):** under `lead_mode: lead`,
+goal changes and reversible high-risk changes announce instead of asking; clinical / user-locked /
+irreversible / clamp-refused floors are unmoved; the surprise budget paces at three material
+changes per domain-week and a budget miss **delays to the next boundary, never demotes to review**
+("budget_review" lost its producer); `thawParkedReviewDecisions` rides the adoption tick and
+re-offers parked review decisions once each under current policy, superseding stale-evidence drafts
+with a readable receipt; a new announced/undoable **goal-date path**
+(`applyGoalDateAdaptationWithAutonomy`, `goal_date` rollback kind, snapshot in the apply savepoint,
+live-profile `from` or refusal) lands the cut's adapted timeline as a heads-up. **The rebalance:**
+`recoveryDown`'s HRV term reads a band (≥7% of the athlete's own comparison median, else ≥5 ms),
+not a sign; `easyOverrideSoftening` mirrors the rest ladder one rung up (ten days, three
+overridden-and-fine easy mornings, symmetric reset, allowlisted codes, never clinical, the two
+ladders cannot compose); `push_bias` is vetoed by safety caveats only (recovery week, injury,
+ease-around, joint pain, life pressure) and no longer by bookkeeping (adapted pick,
+anticipate-deload, volume spike, low-sleep trend, commitment pressure — each already brakes
+elsewhere); `hold_aggression` needs a second opinion (two dimensions at watch, or one constrained),
+deliberately reversing the 08-06 pin that a run-intensity caution alone holds lifting days; and
+every hold closes with its **earn path** — the condition that lifts it, the intensity form quoting
+the athlete's own bpm ceiling — while an unseconded caution still leads the read in its own voice
+so the raised bar never trades over-holding for silence. `renderReadOutcomes` now narrates both
+ladders to the day-read agent so an opened day isn't quietly walked back. **Grounded nutrition:**
+`src/repo/cut-target.ts` derives maintenance from ≥2 weigh-ins ≥7 days apart plus ≥7 logged intake
+days in 28 (energy balance via `estimateExpenditure`, outliers clamped to its own plausibility
+band), else the formula prior at stated low confidence; deficit bounded 350±100 kcal, pace band
+0.5–0.75% bodyweight/week narrowed (never widened) by the leanness ceiling, and when the goal date
+demands a faster pace **the date adapts** through the announced goal-date path; calendar
+diet-breaks are gated off while a reaffirmed cut stands; the check-in target is ceilinged by the
+grounded anchor (protective under-fuelling evidence still passes). **Measurement requests**
+(`src/repo/measurement-request.ts`, attention source `measurement-request`): one calm in-app ask
+for the datum a live derivation is blocked on — weigh-in >5 d mid-cut, waist >30 d under an open
+composition prediction, lab past recheck +14 d grace — on the shared attention ladder, four
+phrasings per need, deduped, self-retiring. **Week-ahead never hangs the GET:** a synchronous
+`weekAheadServe` serves cache or the deterministic floor with `computing:true` while
+`ensureWeekAheadJob` fills the cache through the deduped background job machinery, warmed at day
+rollover by `weekAheadWarmTick`; the hung-CLI production case (p95 12 min, max 59 min) is
+structurally gone. No `public/` change, so the service-worker cache stays **v548**. Agent CLI pins
+bumped (claude 2.1.233, codex 0.147.0, grok installer sha refreshed for the 1.x line).
+
 ## 2026-08-06 (fourth round) — the easy runs are held to the athlete's own easy
 
 **Run-intensity discipline.** `classifyRunEffort` (`src/repo/hr-model.ts`) could already read a run

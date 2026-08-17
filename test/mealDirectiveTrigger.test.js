@@ -122,8 +122,13 @@ test("respects lead_mode tiers: a meal-plan draft announces under lead, asks und
 });
 
 // ---- mealPlanFreshness same-day boundary fix (nutrition.ts) ----
+// Anchored a couple of days back rather than to a literal: mealPlanFreshness also calls a
+// plan stale on calendar age alone past MEAL_PLAN_CALENDAR_STALE_DAYS, so a fixed date ages
+// out of that window and both cases below start reporting stale for the wrong reason.
+const FRESH_DAY = localDaysAgo(2);
+
 test("mealPlanFreshness: a directive written intra-day AFTER the plan (same date) reads stale", () => {
-  const day = "2026-07-23";
+  const day = FRESH_DAY;
   const plan = { created_at: `${day} 10:00:00`, parsed: { source_ts: day } };
   // A directive on the same date but created later in the day postdates the plan.
   db.prepare(
@@ -134,7 +139,7 @@ test("mealPlanFreshness: a directive written intra-day AFTER the plan (same date
 });
 
 test("mealPlanFreshness: a directive written BEFORE the plan on the same date does not read stale", () => {
-  const day = "2026-07-23";
+  const day = FRESH_DAY;
   const plan = { created_at: `${day} 10:00:00`, parsed: { source_ts: day } };
   db.prepare(
     `INSERT INTO health_directives (created_at, source, domain, directive, directive_key, status)

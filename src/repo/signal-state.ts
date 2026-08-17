@@ -1049,6 +1049,30 @@ function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionS
   const health = dimensions.health_constraints.status;
   const energy = dimensions.energy_fueling.status;
   const life = dimensions.life_capacity.status;
+  // ---- WHAT IT TAKES TO HOLD AGGRESSION (owner ruling, 2026-08-17) ----
+  //
+  // A single dimension at `watch` used to counsel holding load and volume everywhere,
+  // on every kind of training day. `watch` is the SOFTEST brake this layer can raise —
+  // one caution item, no safety_override, nothing acute — and an experienced athlete
+  // collects one of those most weeks, so the softest possible finding was producing the
+  // firmest ordinary counsel and the read came out structurally pessimistic.
+  //
+  // The bar is now a SECOND opinion: two dimensions at watch, or any one dimension
+  // genuinely constrained (the three `constrained` rungs below are unchanged, and
+  // energy-constrained still holds on its own exactly as it always did). One caution
+  // alone still reaches the athlete — the dimension is visibly at watch, the evidence
+  // is in the state, and the surfaces that speak it still speak it — it just no longer
+  // stops the week on its own.
+  //
+  // `life_capacity` is deliberately NOT counted. It has never had a hold rung of its
+  // own (it drives `schedule`, below), and a busy calendar is not a second physiological
+  // opinion about whether today can carry load. Counting it would have made the new bar
+  // easier to clear than the old one in exactly the cases the ruling is about.
+  const WATCHES_TO_HOLD = 2;
+  const holdWatchCount = (
+    ["recovery_capacity", "training_load_tolerance", "health_constraints", "energy_fueling"] as const
+  ).filter((dimension) => dimensions[dimension].status === "watch").length;
+  const secondedWatch = holdWatchCount >= WATCHES_TO_HOLD;
   // ONE ordered precedence chain, evaluated once: each rung carries both the verdict
   // and the dimension whose status produced it, so the directive and its cause can
   // never drift apart the way two parallel condition chains would. The rungs are the
@@ -1063,9 +1087,16 @@ function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionS
     { fires: recovery === "constrained", training: "recover", source: "recovery_capacity" },
     { fires: trainingLoad === "constrained", training: "recover", source: "training_load_tolerance" },
     { fires: health === "constrained", training: "modify", source: "health_constraints" },
-    { fires: recovery === "watch", training: "hold_aggression", source: "recovery_capacity" },
-    { fires: trainingLoad === "watch", training: "hold_aggression", source: "training_load_tolerance" },
-    { fires: health === "watch", training: "hold_aggression", source: "health_constraints" },
+    // The three watch rungs keep their original ORDER and their original source
+    // attribution — which dimension gets named when the hold does fire is unchanged.
+    // All three now additionally require the second opinion above.
+    { fires: secondedWatch && recovery === "watch", training: "hold_aggression", source: "recovery_capacity" },
+    {
+      fires: secondedWatch && trainingLoad === "watch",
+      training: "hold_aggression",
+      source: "training_load_tolerance",
+    },
+    { fires: secondedWatch && health === "watch", training: "hold_aggression", source: "health_constraints" },
     { fires: energy === "constrained", training: "hold_aggression", source: "energy_fueling" },
   ];
   const decided = rungs.find((rung) => rung.fires) ?? null;

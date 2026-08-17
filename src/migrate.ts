@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { extractMeasuredRmr } from "./repo/metabolism-core.js";
 import { retireSupersededExpectations } from "./repo/brain/expectation-arbitration.js";
+// Deliberately the db-free clamp module, not repo/proposal-truth.js: db.ts statically
+// imports this file, so importing anything that imports the database back would close
+// a boot-order cycle.
+import { clampProposalProvenanceDates } from "./repo/proposal-provenance-clamp.js";
 
 export interface Migration {
   version: number;
@@ -1976,6 +1980,48 @@ export const MIGRATIONS: Migration[] = [
         `);
       } catch {
         /* a DB predating the brain ledger has no cancelled predictions to heal */
+      }
+    },
+  },
+  {
+    version: 92,
+    name: "proposal-provenance-future-evidence-clamp",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // THE ROWS THIS EXISTS FOR. `inferredEvidenceDate` used to take the first ISO date
+    // it found in a reason's prose and write it into reason_provenance unclamped. A
+    // reason that names a forward WINDOW ("suspend Z4 for 2026-08-09 → 2026-08-22")
+    // therefore stored an evidence_date in its own future. Nothing caught it on the way
+    // in, and every later rehydration of that row threw "evidence_date cannot be after
+    // as_of_date" — which took down the whole listProposals call, and with it the
+    // scheduler's draft-adoption sweep, on every tick. The write path now clamps the
+    // inference and the read path clamps instead of throwing; this pulls the payloads
+    // already on disk back onto the same law so they stop being a live hazard.
+    //
+    // WHAT IT CHANGES. Only `evidence_date` values that sit strictly after their OWN
+    // `as_of_date`, moved down to that as_of_date. No row is deleted, no reason prose is
+    // rewritten, no as_of_date is touched, and a payload with consistent dates is left
+    // byte-identical (it is only re-serialized when the clamp actually moved something).
+    //
+    // Per-row try/catch: one unparseable parsed_json must not stop the repair of the
+    // rest. Idempotent by construction — the second pass finds every evidence_date at
+    // or below its as_of and writes nothing.
+    up: (db) => {
+      let rows: any[] = [];
+      try {
+        rows = db.prepare(`SELECT id, parsed_json FROM plan_proposals WHERE parsed_json IS NOT NULL`).all() as any[];
+      } catch {
+        return; /* a DB predating plan_proposals has nothing to repair */
+      }
+      const update = db.prepare(`UPDATE plan_proposals SET parsed_json = ? WHERE id = ?`);
+      for (const row of rows) {
+        try {
+          const parsed = JSON.parse(String(row.parsed_json));
+          if (!clampProposalProvenanceDates(parsed)) continue;
+          update.run(JSON.stringify(parsed), Number(row.id));
+        } catch {
+          /* an unparseable payload is left exactly as stored; hydration quarantines it */
+        }
       }
     },
   },

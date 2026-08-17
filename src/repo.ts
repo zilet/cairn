@@ -58,6 +58,7 @@ export * from "./repo/sensor-freshness.js"; // how old a wearable reading may be
 export * from "./repo/sensor-cadence.js"; // how MUCH of a wearable series there is before it may describe a trend
 export * from "./repo/wear-pattern-voice.js"; // how absence is SAID: episodic cadence vs a lapsed series vs no wearable
 export * from "./repo/sensor-recheck.js"; // when the recovery picture has aged enough that one night would sharpen it
+export * from "./repo/measurement-request.js"; // ONE calm in-app ask for the measurement a live derivation is blocked on
 export * from "./repo/propagation.js";
 export * from "./repo/marker-response.js"; // the lab loop: anchor an applied plan/meal change to its marker + learn which change coincided with which direction
 export * from "./repo/symptom-links.js"; // deterministic symptom → off-marker reasoning
@@ -109,6 +110,7 @@ export * from "./repo/learned-models.js"; // learned cross-domain coincidences (
 export * from "./repo/trajectory.js"; // one periodized arc to the goals, today as the next step
 export * from "./repo/whole-person-trajectory.js"; // standing "everything better" objective, per-domain words not a score
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation
+export * from "./repo/cut-target.js"; // the cut's calorie target, derived from logged intake + the measured weight trend
 export * from "./repo/recomposition.js"; // phase-aware fat-loss + muscle/fuel protection synthesis
 export * from "./repo/cut-quality.js"; // is the weight-loss phase preserving muscle? (goal-aware complement to under-fueling)
 export * from "./repo/forward-timeline.js"; // the road ahead: one dated forward-looking timeline read

@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { enqueueAgentJob } from "../agentJobs.js";
-import { composeDailySession, suggestSession, weekAheadRead } from "../coachOps.js";
+import { enqueueAgentJob, ensureWeekAheadJob } from "../agentJobs.js";
+import { composeDailySession, suggestSession, weekAheadServe } from "../coachOps.js";
 import { readToday } from "../domain/brain/index.js";
 import { createAgentJob } from "../domain/person/index.js";
 import {
@@ -265,9 +265,18 @@ dayCoachRouter.get("/session-primer", (req, res) => {
 // The week ahead — a calm forward look (lift / run / mixed / rest across the next
 // several days). Agentic with a deterministic plan-rotation floor, so it always
 // returns a usable shape even with no agent. Cached per day+plan+goal.
-dayCoachRouter.get("/week-ahead", async (req, res) => {
+//
+// This GET never spawns a CLI inline: weekAheadServe reads the cache
+// synchronously (fresh cache / stale cache / the deterministic floor) and, on a
+// miss or a stale hit, ensureWeekAheadJob kicks (or joins) a durable background
+// job that runs the real agentic read and refreshes the cache for next time —
+// deduplicated so a burst of opens never spawns more than one CLI per day.
+dayCoachRouter.get("/week-ahead", (req, res) => {
   try {
-    res.json(await weekAheadRead(req.query.agent != null ? String(req.query.agent) : undefined));
+    const agentParam = req.query.agent != null ? String(req.query.agent) : undefined;
+    const { response, needsRefresh, cacheKey } = weekAheadServe();
+    if (needsRefresh) ensureWeekAheadJob(agentParam, cacheKey);
+    res.json(response);
   } catch (e: any) {
     res.json({ ok: false, error: e.message });
   }

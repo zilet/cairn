@@ -1200,6 +1200,10 @@ export type ClientWeekAheadResponse =
       summary: string;
       source: "deterministic";
       cached: false;
+      // Set when a cold cache handed back the floor and a background job is
+      // already filling the cache for next time (GET never waits on it). The
+      // Today rail only reads ok/days/summary and ignores this marker.
+      computing?: true;
     }
   | {
       ok: true;
@@ -1209,6 +1213,9 @@ export type ClientWeekAheadResponse =
       cached: boolean;
       stale?: boolean;
       agent?: string | null;
+      // Set when this is a stale cache hit served while a refresh is already
+      // queued in the background (GET never waits on it).
+      computing?: true;
     }
   | {
       ok: false;

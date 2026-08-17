@@ -473,11 +473,20 @@ export function moveBrainExpectations(fromDecisionId: number, toDecisionId: numb
   );
 }
 
-export function saveBrainRollback(
-  decisionId: number,
-  kind: "training_plan" | "nutrition_target" | "meal_plan" | "recovery_cycle",
-  payload: unknown
-): boolean {
+// The undo snapshot kinds. 'goal_date' joined them with heads-up autonomy: a goal date
+// that adapts from the signals is only allowed to announce because putting it back is
+// one tap, so the rollback has to exist before the write does.
+export type BrainRollbackKind = "training_plan" | "nutrition_target" | "meal_plan" | "recovery_cycle" | "goal_date";
+
+const BRAIN_ROLLBACK_KINDS: readonly BrainRollbackKind[] = [
+  "training_plan",
+  "nutrition_target",
+  "meal_plan",
+  "recovery_cycle",
+  "goal_date",
+];
+
+export function saveBrainRollback(decisionId: number, kind: BrainRollbackKind, payload: unknown): boolean {
   if (!getBrainDecision(decisionId)) return false;
   const encoded = JSON.stringify(payload);
   if (Buffer.byteLength(encoded, "utf8") > 256 * 1024) throw new Error("rollback snapshot exceeds 256 KiB");
@@ -488,12 +497,9 @@ export function saveBrainRollback(
   return true;
 }
 
-export function getBrainRollback(
-  decisionId: number
-): { kind: "training_plan" | "nutrition_target" | "meal_plan" | "recovery_cycle"; payload: any } | null {
+export function getBrainRollback(decisionId: number): { kind: BrainRollbackKind; payload: any } | null {
   const row = db.prepare(`SELECT kind, payload_json FROM brain_rollbacks WHERE decision_id = ?`).get(decisionId) as any;
-  if (!row || !["training_plan", "nutrition_target", "meal_plan", "recovery_cycle"].includes(String(row.kind)))
-    return null;
+  if (!row || !BRAIN_ROLLBACK_KINDS.includes(String(row.kind) as BrainRollbackKind)) return null;
   try {
     return { kind: row.kind, payload: JSON.parse(row.payload_json) };
   } catch {

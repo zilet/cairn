@@ -21,6 +21,7 @@ import {
 import {
   DAY_READ_CAVEAT_CONCEPT,
   DAY_READ_CAVEAT_VARIANTS,
+  DAY_READ_EARN_PATH_VARIANTS,
   DAY_READ_DRIVE_FOCUS_HEADLINE_VARIANTS,
   DAY_READ_DRIVE_HEADLINE_VARIANTS,
   DAY_READ_FOCUS_HEADLINE_VARIANTS,
@@ -567,7 +568,15 @@ test("a chronically short sleeper is still OFFERED a due plan day, with the slee
 // asked the athlete to hold, with the caveat's "until that settles" pointing at nothing.
 // `directives.training_source` names the dimension whose status produced the hold, and
 // its own voice is the brake.
-test("a hold-aggression train day leads with the BRAKE's voice, never a support voice, and rotates", () => {
+// SINCE THE 2026-08-17 REBALANCE this fixture — one caution, alone on the board —
+// no longer holds aggression; it takes the unseconded-caution branch instead, which
+// speaks the same brake in the same place and leaves the day open (see
+// brainRebalanceEarnPath.test.js for the bar itself, and for the hold branch's own
+// version of this assertion). The DEFECT this case exists for is untouched and is
+// still exactly reproducible here: the day is posture "train" / readiness "ready", so
+// `action.voice` is drawn from SUPPORT evidence, and the branch must reach past it to
+// the brake's own voice.
+test("a caution-led train day leads with the BRAKE's voice, never a support voice, and rotates", () => {
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
   const brake = signalVoice({ key: "generic_activity_load", subject: "51 exercise minutes and 8.4 km of movement" });
   const support = signalVoice({ key: "sleep_feel_ok" });
@@ -590,19 +599,24 @@ test("a hold-aggression train day leads with the BRAKE's voice, never a support 
     const action = r.signals.signal_state.action;
     assert.equal(action.posture, "train");
     assert.equal(action.readiness, "ready");
-    assert.equal(action.directives.training, "hold_aggression");
+    // The finding is still on the board in full; what it no longer does is stop the
+    // week on its own.
+    assert.equal(r.signals.signal_state.dimensions.training_load_tolerance.status, "watch");
+    assert.equal(action.directives.training, "proceed");
     // The posture voice IS the support one — that is the whole defect, and it stays
-    // true. What changed is which voice the hold lead reaches for.
+    // true. What changed is which voice the branch reaches for.
     assert.equal(action.voice.key, "sleep_feel_ok");
-    assert.equal(action.directives.training_source, "training_load_tolerance");
 
     const lead = brake.find((variant) => r.why.startsWith(variant));
     assert.ok(lead, `expected the brake to lead the read, got ${JSON.stringify(r.why)}`);
     leads.push(lead);
     for (const variant of support) {
-      assert.equal(r.why.includes(variant), false, `a support voice spoke on a hold day: ${JSON.stringify(r.why)}`);
+      assert.equal(r.why.includes(variant), false, `a support voice spoke on a braked day: ${JSON.stringify(r.why)}`);
     }
-    saysOneCaveat(r.why, "planned_training:hold_aggression");
+    assert.ok(
+      DAY_READ_LEAD_VARIANTS["planned_training:noted_lead"].some((variant) => r.why.includes(variant)),
+      `expected the noted lead, got ${JSON.stringify(r.why)}`
+    );
     assert.match(r.why, /\.$/, "the composed read is still one finished sentence run");
   }
   assert.equal(new Set(leads).size, leads.length, "consecutive days must not repeat the brake's phrasing");
@@ -614,15 +628,22 @@ test("a hold-aggression train day leads with the BRAKE's voice, never a support 
 test("three caveats at once still compose into one grammatical sentence", () => {
   for (let i = 1; i <= 2; i++) seedTrainingDay(dayBefore(REF, i));
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
-  const r = repo.dayRead(REF, {
-    has_data: true,
-    recovery: { avg_sleep_min: 300, exercise_min: 51, distance_km: 8.4 },
-    delta: { rhr: 5 }, // recovery drifting the wrong way → the deload anticipation
-    quality: {
-      exercise_min: { latest_date: REF, source: "apple", freshness: "fresh", sample_count: 1 },
-      distance_km: { latest_date: REF, source: "apple", freshness: "fresh", sample_count: 1 },
+  const r = repo.dayRead(
+    REF,
+    {
+      has_data: true,
+      recovery: { avg_sleep_min: 300, exercise_min: 51, distance_km: 8.4 },
+      delta: { rhr: 5 }, // recovery drifting the wrong way → the deload anticipation
+      quality: {
+        exercise_min: { latest_date: REF, source: "apple", freshness: "fresh", sample_count: 1 },
+        distance_km: { latest_date: REF, source: "apple", freshness: "fresh", sample_count: 1 },
+      },
     },
-  });
+    undefined,
+    // The second watch the hold has needed since the 2026-08-17 ruling. Fuelling adds
+    // no caveat of its own here, so this is still exactly three caveats composing.
+    { state: "settling", rationale: "Fuel availability is still settling." }
+  );
 
   assert.equal(r.kind, "train");
   assert.equal(r.decision.rule_code, "planned_training");
@@ -631,11 +652,18 @@ test("three caveats at once still compose into one grammatical sentence", () => 
   saysOneCaveat(r.why, "planned_training:hold_aggression");
   assert.equal(r.why.split("; and ").length, 3, "three caveats, joined once each");
 
-  // One finished sentence run: the only terminal stops are the brake's own lead and
-  // the full stop that closes the caveat run.
+  // One finished sentence run: the only terminal stops are the brake's own lead, the
+  // full stop that closes the caveat run, and — since the 2026-08-17 rebalance — the
+  // earn path that closes the read. It is stripped first so the caveat run is held to
+  // exactly the shape it always was.
   assert.match(r.why, /\.$/);
   assert.doesNotMatch(r.why, /\.\.|\s;|;\s*and\s*[A-Z]|—\s*[A-Z]/, `broken sentence: ${JSON.stringify(r.why)}`);
-  const caveatRun = r.why.slice(r.why.indexOf(" — ") + 3);
+  const earn = Object.values(DAY_READ_EARN_PATH_VARIANTS)
+    .flat()
+    .find((variant) => r.why.endsWith(variant));
+  assert.ok(earn, `a hold must say what lifts it: ${JSON.stringify(r.why)}`);
+  const composed = r.why.slice(0, r.why.length - earn.length).trimEnd();
+  const caveatRun = composed.slice(composed.indexOf(" — ") + 3);
   assert.equal(caveatRun.split(".").length, 2, `the caveat run must be one sentence: ${JSON.stringify(caveatRun)}`);
 });
 
@@ -1502,7 +1530,18 @@ test("every caveat the planned-training rule pushes rotates through a registered
 // new lead phrasing could skip it entirely.
 test("every planned-training lead is a calm capitalised opener, several per set", () => {
   const sets = Object.entries(DAY_READ_LEAD_VARIANTS);
-  assert.equal(sets.length, 2, "the caveat lead and the hold lead");
+  assert.deepEqual(
+    Object.keys(DAY_READ_LEAD_VARIANTS).sort(),
+    [
+      // the green-light lead, and the hold lead…
+      "planned_training:caveats",
+      "planned_training:hold_lead",
+      // …plus the two the 2026-08-17 rebalance added: the lead for a caution that is
+      // real but unseconded, and the lead for a backed day carrying only bookkeeping.
+      "planned_training:noted_lead",
+      "planned_training:push_caveats",
+    ].sort()
+  );
   for (const [key, variants] of sets) {
     assert.ok(Array.isArray(variants) && variants.length >= 3, `${key} needs several phrasings`);
     assert.equal(new Set(variants).size, variants.length, `${key} has a duplicate phrasing`);
@@ -1540,9 +1579,12 @@ test("every planned-training rotation key in the source is registered", () => {
   const registered = new Set([
     ...Object.keys(DAY_READ_CAVEAT_VARIANTS),
     ...Object.keys(DAY_READ_LEAD_VARIANTS),
+    ...Object.keys(DAY_READ_EARN_PATH_VARIANTS),
     // The brake's own spoken sentence rotates through the signal-voice registry, which
-    // has its own guards (and its own entries in DAY_READ_WHY_VARIANTS).
+    // has its own guards (and its own entries in DAY_READ_WHY_VARIANTS). `noted` is the
+    // same sentence on the unseconded-caution branch.
     "planned_training:hold",
+    "planned_training:noted",
   ]);
   const used = new Set([...src.matchAll(/"(planned_training:[a-z_]+)"/g)].map((match) => match[1]));
   assert.ok(used.size >= 10, `expected the rule's rotation keys, found ${used.size}`);

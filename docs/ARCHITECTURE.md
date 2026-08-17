@@ -220,6 +220,33 @@ shapes rationale, it gates nothing.
   carried-through macros for one-tap re-log. `setSessionFeedback(date, {soreness, performance,
   joint_pain})` writes the 1-tap autoregulation feedback the coach reads to bend volume.
 - Check-ins (`addCheckin`/`getCheckinByDate`/`listCheckins`); food notes.
+- **The cut target comes off the record** (`src/repo/cut-target.ts`). `deriveCutTarget()` =
+  `cutTargetState()` (the thin DB read: profile, resolved bodyweight, one shared expenditure estimate)
+  → `cutTargetDecision()` (pure). It answers with the maintenance estimate and its basis
+  (`logged_reality` from logged intake measured against weigh-ins, else `formula_estimate`), the
+  deficit the target actually delivers after every clamp, and the pace that buys. The leanness taper is
+  a SAFETY ceiling that can only narrow the pace band, never widen it to accommodate a date — so when
+  the goal date wants a faster loss than the ceiling allows, the deficit holds and **the DATE is what
+  gives**: `goal_date_adaptation {from, to, weeks_added, reason}`. The derivation is read-only; that
+  adaptation becomes a decision on the nutrition check-in cadence (`maybeAdaptGoalDateFromCut` in
+  `src/coachOps.ts` → `applyGoalDateAdaptationWithAutonomy`), deduped against a goal_change already
+  waiting on the same date so a repeating cadence never re-announces. `cutReaffirmation()` decides
+  whether this is a cut the athlete has affirmed; every branch except a live unanswered goal check-in
+  reads as reaffirmed, because proposing maintenance to someone mid-cut is the costlier error.
+- **Measurement requests: the system asks for DATA, not for permission** (`src/repo/measurement-request.ts`).
+  Pull-never-push was written about opinions; it was never a good answer to a derivation gone blind
+  for want of one cheap measurement only the athlete can supply. So: ONE calm in-app request tied to a
+  NAMED need, saying what and why in a sentence, waiting where they already look, one open request at
+  a time, retiring itself the moment the data lands or the need lapses — never a notification, badge,
+  nag, streak, count of what was missed, or a gate. Three needs in priority order: `weigh_in` (only
+  inside an active cut, at `WEIGH_IN_STALE_DAYS` = 5, because the grounded derivation reads a weekly
+  rate), `body_measurement` (`BODY_MEASUREMENT_STALE_DAYS` = 30, only while a body-composition
+  expectation is open that the tape would settle), `lab_recheck` (`LAB_RECHECK_GRACE_DAYS` = 14 past
+  its own recheck window, so it never duplicates the health surfaces' own schedule). The decision core
+  is PURE — no DB, no clock. Cadence, escalation and eventual silence are not a private timer but the
+  shared attention tier machine (`src/repo/attention.ts`), with each surfacing recorded as a clean
+  check, so an unmet need asks a handful of times, further apart each time, and then stops. It reaches
+  Today as an agenda candidate under attention source `measurement-request`.
 
 ### Day intelligence & recovery
 
@@ -429,6 +456,17 @@ which voice narrates the lead, but every input that can actually MOVE it (recent
 fatigue, logged-today, today's load) is already hashed elsewhere in the fingerprint, so the same
 `hold_aggression` changing hands between two dimensions is not itself a new decision — hashing the
 source too would discard a warm agentic read for pure churn.
+
+**A hold needs a SECOND opinion (2026-08-17 ruling).** `watch` is the softest brake this layer can
+raise — one caution item, no `safety_override`, nothing acute — and an experienced athlete collects
+one most weeks, so the softest possible finding was producing the firmest ordinary counsel and the
+read came out structurally pessimistic. The three `watch` rungs now additionally require two of
+`recovery_capacity`/`training_load_tolerance`/`health_constraints`/`energy_fueling` at `watch`;
+their order and source attribution are unchanged, the three `constrained` rungs are unchanged, and
+energy-constrained still holds on its own. `life_capacity` is deliberately NOT counted — it has no
+hold rung of its own, and a busy calendar is not a second physiological opinion. One caution alone
+still reaches the athlete through the dimension's own status and voice; it just no longer stops the
+week by itself.
 
 **One directive, two unrelated causes.** `directives.schedule === "compress"` fires whenever the
 `life_capacity` dimension sits at `watch`, and that can mean either a real dated commitment (the
@@ -683,6 +721,38 @@ honored rest, or an honored softened-easy morning, resets the count. `signals.ou
 publishes `{...RestOverrideSoftening, applied}` — `applied` is the only field a consumer should key
 on; the softening can be evaluated `active` on a morning that reads `train`, or one a clinical
 constraint held at rest, so `active` alone would misreport whether today was actually eased.
+
+**The same loop, one rung up: easy → train.** `easyOverrideSoftening()` (`src/repo/brain/read-adherence.ts`)
+mirrors the rest ladder for an EASY read the athlete has repeatedly taken above easy without paying
+for it, producing the `outcome_feedback_open` outcome and `signals.easy_outcome_feedback` (same
+`applied`-not-`active` rule). One step only — easy → train, never further — with the same evidence
+bar and clinical floor, plus one more: never inside a reduced recovery week, which is a structure the
+athlete signed up for rather than a read arguing with them. The two ladders cannot compose into
+rest → train: a rest morning the other ladder already eased is excluded from this one's evidence, and
+`softenEasy` additionally requires `!softenRest`. An opened day takes the focus and clock of the plan
+day that was actually due (`suggestedPlanDay()`), since these easy reads sit above the
+planned-training rule and would otherwise hand back a training day with nothing in it. The day-read
+prompt's "HOW YOUR READS HAVE ACTUALLY LANDED" block (`renderReadOutcomes`, `src/prompt/day.ts`)
+narrates BOTH ladders, so an agent handed an opened day is told why and told not to walk it back.
+
+**A caveat is classified where it is raised; only SAFETY caveats veto the push.** The planned-training
+read's push and its caveat run used to be mutually exclusive (`!caveats.length`), so a backed day
+carrying nothing worse than bookkeeping lost its reach. The test is now subject, not severity — does
+this caveat say something about whether the day can carry load — and a push that survives its caveats
+composes through a lead that offers the reach and still hands off to the caveat run honestly
+(`TRAIN_PUSH_CAVEAT_LEAD`).
+
+**A brake that never says what clears it reads as a verdict.** Both run-volume brakes that hold a
+build week now carry their own earn path (`RUN_VOLUME_RECOVERY_UNLOCK` / `RUN_VOLUME_LEARNED_EASE_UNLOCK`,
+`src/repo/run-progression.ts`) — variant sets rather than literals, rotated per WEEK rather than per
+day because they belong to a weekly prescription and should read the same every morning of that week.
+No number about the athlete, no deadline, nothing they must do. The recovery brake itself also got a
+band: `recovery.delta.hrv` is a difference of two noisy medians, and reading it on SIGN alone fired
+on roughly half of all weeks — including a one-millisecond move — quietly outrunning a learned
+acceleration capped at 1.05. HRV now counts as down only past a 7% relative drop from the athlete's
+own baseline median, or 5 ms absolute when no baseline median is available. Direction is unchanged
+(only a drop counts) and the other `recoveryDown` terms (rhr / sleep / readiness / status) are
+untouched.
 
 **The training drive is a standing preference that selects, never one that decides.**
 `settings.training_drive` (`steady` by default, or `push`) lets the athlete answer ONE rest — the
@@ -1345,6 +1415,24 @@ Relative wording is normalized when the proposal is stored: a July 17 proposal c
 continues to say “July 16, 2026” when applied or read later. Legacy rows are normalized on hydration
 against their creation/as-of date.
 
+**The write path refuses; the stored path repairs.** `provenanceFor` in `src/repo/proposal-truth.ts`
+runs in one of two modes. On the way IN (`"write"`, from `prepareProposalPayload`) a payload that
+contradicts itself — an `as_of_date` disagreeing with the server date, a malformed or future
+`evidence_date` — is rejected before it can be stored. On the way back OUT (`"stored"`, from
+`normalizeStoredProposalPayload`) it may not throw: a row already in the table cannot be un-stored,
+and one poison payload used to take down every caller that hydrated it, including `listProposals` and
+with it the scheduler's whole draft-adoption sweep. The read path CLAMPS instead — a stored `as_of`
+is kept as stored, and an `evidence_date` above it falls back onto it. The clamp itself lives in
+`src/repo/proposal-provenance-clamp.ts`, which imports no `db` on purpose: `src/migrate.ts` is
+statically imported by `src/db.ts`, so migration 92's one-off repair of the rows already on disk can
+only reuse a helper that does not import the database back (same reason `metabolism-core.ts` and
+`expectation-arbitration.ts` are their own modules). Reason inference is the source of the bad rows:
+free prose names future dates all the time ("suspend Z4 for 2026-08-09→2026-08-22"), so the first-ISO
+match is a heuristic whose result is clamped rather than trusted. Last defence is **per-ROW
+quarantine**: `hydrateProposal` (`src/repo/profile.ts`) catches a payload normalization cannot repair
+and returns the row with its raw stored payload plus a `hydration_error` marker, so a list shows and
+diagnoses the bad row instead of dying on it.
+
 Quiet/announced changes compare that fingerprint again before scheduling and at the natural apply
 boundary. A plan edit or newly logged training evidence holds the draft for review; age is only a
 secondary ceiling. Legacy drafts without a fingerprint remain explicitly/manual-applicable with an
@@ -1352,6 +1440,17 @@ honest `unverified` receipt, but are never adopted autonomously. Weekly plan not
 prescription facts (including one baseline cue for an uncalibrated exercise); historical narrative
 and provenance live in the proposal and decision ledger, where plan reads can render the original
 rationale and Undo without freezing it into daily snapshots.
+
+**The week ahead is served, never awaited.** `GET /api/week-ahead` spawns no CLI inline. The read
+splits three ways: `weekAheadServe()` (`src/coachOps.ts`) reads the cache SYNCHRONOUSLY and returns
+`{response, needsRefresh, cacheKey}` — a fresh cache hit as-is, a stale hit immediately with
+`stale:true, computing:true`, and a miss as the deterministic plan-rotation floor with
+`source:"deterministic", computing:true`. Only then does the route call `ensureWeekAheadJob()`
+(`src/agentJobs.ts`), which creates or JOINS one durable background job per cache key, so a burst of
+opens never spawns more than one CLI per day; the job runs the real agentic read and refreshes the
+cache for the next open. A once-per-local-day scheduler tick (`week_ahead_warm_date`) runs the same
+serve+ensure pair so the forward look is usually already warm before the first open of the morning.
+That tick is enqueue-only — it never awaits the agent computation, so a hung CLI cannot hold it up.
 
 The scheduler also drives the whole-person trajectory's monthly / phase-boundary /
 unexplained-regression revision conferences.
@@ -1493,9 +1592,21 @@ durable `brain_review`/`case_conference` jobs (`src/brainReviewJobs.ts`).
 `decideAutonomyTier()` (`src/brain/autonomy.ts`) owns the five postures (observe / quiet_apply /
 announce / ask / clinician) under `settings.lead_mode`; `src/domain/brain/autonomy-service.ts`
 applies announced/quiet changes at natural boundaries (per-decision error isolation — a failing
-decision parks in `review`, never blocks the pass) with exact three-way-merge Undo, a ~1-material-
-change/domain/week surprise budget, and 90-day veto-rate demotion. The clinician floor is
-deterministic — a conductor cannot self-attest it away (`src/domain/brain/case-conference.ts`).
+decision parks in `review`, never blocks the pass) with exact three-way-merge Undo, a
+3-material-change/domain/week surprise budget (`SURPRISE_BUDGET_PER_DOMAIN_WEEK`), and 90-day
+veto-rate demotion. The clinician floor is deterministic — a conductor cannot self-attest it away
+(`src/domain/brain/case-conference.ts`).
+
+`applyDueAnnouncedDecisions()` handles THREE action types, not two: `proposal_id`, `meal_plan_id`,
+and a `goal_date_adaptation` (see the goal-date path in `docs/ELITE-BRAIN-IMPLEMENTATION.md`), which
+is also where that adaptation's `goal_date` rollback snapshot is taken. It returns
+`{applied, failed, delayed}` — the third list being the 2026-08-17 ruling that **a spent surprise
+budget is a wait, not a question**: the decision's `effective_date` moves out a day and it stays
+announced/pending for the next pass to re-offer, rather than parking at `review` and turning "not
+this week" into something the athlete has to answer. Termination stays with the ceilings that own it
+(the proposal age gate, evidence freshness). `thawParkedReviewDecisions()` re-offers already-parked
+decisions through today's policy, skipping anything held behind a floor and stamping
+`thaw_attempted` so each is retried once rather than every sweep.
 
 **Training volume has no ladder back up, so a cut has to be owed back.** Progressive overload only
 ever moves load and reps; nothing in the push ladder can raise a plan item's `sets`, so a repeated

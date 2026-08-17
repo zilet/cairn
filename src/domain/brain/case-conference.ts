@@ -691,6 +691,11 @@ export async function runCaseConference(
     // decision on schedule — writing a verdict about a counterfactual. Held
     // here, they survive the hold intact and are thawed with re-based windows by
     // recordAppliedProposalDecision if and when this proposal is finally applied.
+    // This branch is only reached when autonomy produced NO decision at all — i.e. the
+    // revision could not be routed. That is a genuine dead end, so it still parks at
+    // review under an ask/clinician tier: announcing a change with no boundary-appliable
+    // decision behind it would be an inert promise. The advisory path below is where the
+    // 2026-08-17 "no parking above ask" ruling bites.
     const heldTier = policy.tier === "observe" ? "observe" : policy.tier === "clinician" ? "clinician" : "ask";
     decision.autonomy_tier = heldTier;
     assertActive();
@@ -756,7 +761,14 @@ export async function runCaseConference(
   // is real information about the read, not about a change that never landed.
   // Any real change that lands on the same metric mid-window is picked up as an
   // overlapping-decision confounder, so attribution stays honest.
-  const advisoryTier = policy.tier === "observe" ? "observe" : policy.tier === "clinician" ? "clinician" : "ask";
+  //
+  // The tier is the POLICY's, not a blanket "ask" (2026-08-17 ruling). A conference
+  // whose reading policy says announce is a heads-up the athlete can read when they
+  // open the app — it is recorded as `observed`, not parked at `review` where it would
+  // sit in the queue asking for a decision that has no change behind it to approve.
+  // Only ask and clinician — the floors — still park for review.
+  const advisoryTier = policy.tier;
+  const advisoryParks = advisoryTier === "ask" || advisoryTier === "clinician";
   decision.autonomy_tier = advisoryTier;
   assertActive();
   const recorded = recordDecision(
@@ -769,7 +781,7 @@ export async function runCaseConference(
       source: "case_conference",
       source_ref_type: null,
       source_ref_key: null,
-      status: advisoryTier === "observe" ? "observed" : "review",
+      status: advisoryParks ? "review" : "observed",
       autonomy_tier: advisoryTier,
       risk_class: decision.risk_class,
       reversible: decision.reversible,

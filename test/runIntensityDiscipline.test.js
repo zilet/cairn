@@ -16,7 +16,12 @@ import { db, resetTables } from "./_seed.js";
 import { runIntensityDiscipline, runVarietyRead } from "../dist/repo/run-progression.js";
 import { getHrModel } from "../dist/repo/hr-model.js";
 import { dayPlanningSignalState, violatesReadingGrammar } from "../dist/repo/day-read.js";
-import { signalVoice, SIGNAL_VOICE_REGISTRY, spokenSignalVoice } from "../dist/repo/signal-state.js";
+import {
+  buildUnifiedSignalState,
+  signalVoice,
+  SIGNAL_VOICE_REGISTRY,
+  spokenSignalVoice,
+} from "../dist/repo/signal-state.js";
 import { renderSignalState } from "../dist/prompt/shared.js";
 import { projectCoachContext } from "../dist/prompt/context-projection.js";
 import { localDateISO } from "../dist/repo/shared.js";
@@ -229,20 +234,88 @@ test("the compressed read reaches the planning state as a caution that overrules
   assert.equal(state.dimensions.training_load_tolerance.status, "watch");
 });
 
-test("alone on a clean board, the caution counsels holding aggression — deliberately", () => {
-  // This is a product decision, pinned so it reads as chosen rather than accidental:
-  // a fortnight where every run finished near threshold is systemic recovery debt,
-  // and the planning directive says "don't reach for more this week" — on lifting
-  // days included. What it must NEVER do is harden into a gate: the posture stays
-  // "train", nothing is clamped, and the athlete drives.
+test("alone on a clean board, the caution is VISIBLE and holds nothing — owner ruling 2026-08-17", () => {
+  // THIS TEST DELIBERATELY REVERSES THE ONE IT REPLACES.
+  //
+  // It used to pin the opposite: a compressed fortnight, alone on an otherwise-clean
+  // board, counselled holding load and volume everywhere — lifting days included — on
+  // the argument that a fortnight of near-threshold easy running is systemic recovery
+  // debt. The owner has ruled that too firm for the softest brake this layer can raise.
+  // One caution is a finding; it is not a second opinion, and an experienced athlete
+  // collects one most weeks, so the softest evidence was producing the firmest ordinary
+  // counsel.
+  //
+  // What is pinned now: the finding still REACHES the athlete in full — the dimension
+  // sits at watch, the observation carries its voice and its bpm ceiling, and the read
+  // says so — it just no longer stops the week by itself. See the second-opinion bar in
+  // planningDirectives (signal-state.ts) and the earn-path branch in the planned-training
+  // rule (day-read.ts).
   seedModelBasis(REF);
   seedThresholdEasyRuns(REF);
   prescribeEasyRunning();
 
   const state = dayPlanningSignalState(REF);
-  assert.equal(state.action.directives.training, "hold_aggression");
-  assert.equal(state.action.directives.training_source, "training_load_tolerance");
+  assert.equal(state.dimensions.training_load_tolerance.status, "watch", "the finding is still on the board");
+  assert.equal(state.action.directives.training, "proceed", "one caution no longer holds aggression on its own");
+  assert.equal(state.action.directives.training_source, null);
   assert.equal(state.action.posture, "train", "counsel, not a gate — the day is still a training day");
+});
+
+test("a second watch anywhere is what turns the caution into a hold", () => {
+  // The other half of the same ruling: the bar is a SECOND opinion, not the removal of
+  // the brake. Built from observations rather than seeded rows so the threshold itself
+  // is what is under test — the compressed-fortnight caution is the same one
+  // dayPlanningSignalState emits above (training_load_tolerance, direction "caution").
+  const caution = (dimension, field) => ({
+    dimension,
+    field,
+    date: REF,
+    source: "cairn_test",
+    direction: "caution",
+    summary: "A caution about this dimension.",
+  });
+  const intensity = caution("training_load_tolerance", "run_intensity_discipline");
+
+  const alone = buildUnifiedSignalState(REF, [intensity]);
+  assert.equal(alone.dimensions.training_load_tolerance.status, "watch");
+  assert.equal(alone.action.directives.training, "proceed");
+
+  const seconded = buildUnifiedSignalState(REF, [intensity, caution("recovery_capacity", "sleep_debt")]);
+  assert.equal(seconded.action.directives.training, "hold_aggression");
+  assert.equal(
+    seconded.action.directives.training_source,
+    "recovery_capacity",
+    "the rung order is unchanged — recovery still names the hold before training load"
+  );
+
+  // One dimension CONSTRAINED still decides on its own; the ruling raised the bar for
+  // `watch` and left every constrained rung exactly where it was.
+  const constrained = buildUnifiedSignalState(REF, [
+    { ...caution("energy_fueling", "protein_gap"), direction: "constraint" },
+  ]);
+  assert.equal(constrained.action.directives.training, "hold_aggression");
+  assert.equal(constrained.action.directives.training_source, "energy_fueling");
+});
+
+test("a busy calendar is not the second opinion", () => {
+  // life_capacity is deliberately excluded from the count: it has never had a hold rung
+  // of its own (it drives `schedule`), and counting it would have made the new bar
+  // easier to clear than the old one in the cases the ruling is about.
+  const caution = (dimension, field) => ({
+    dimension,
+    field,
+    date: REF,
+    source: "cairn_test",
+    direction: "caution",
+    summary: "A caution about this dimension.",
+  });
+  const state = buildUnifiedSignalState(REF, [
+    caution("training_load_tolerance", "run_intensity_discipline"),
+    caution("life_capacity", "commitment"),
+  ]);
+  assert.equal(state.dimensions.life_capacity.status, "watch");
+  assert.equal(state.action.directives.schedule, "compress", "it still governs the clock");
+  assert.equal(state.action.directives.training, "proceed", "…and still not the training day");
 });
 
 test("a polarized fortnight puts no row in the state at all", () => {

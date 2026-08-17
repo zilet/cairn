@@ -1,7 +1,14 @@
 import * as repo from "./repo.js";
 import { runAgentWithFallback, setAgentRunSink } from "./agents.js";
 import { buildCoachPrompt } from "./prompt.js";
-import { draftMealPlan, evolveProgram, generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
+import {
+  draftMealPlan,
+  evolveProgram,
+  generateInsight,
+  nutritionCheckin,
+  synthesizeHealth,
+  weekAheadServe,
+} from "./coachOps.js";
 import { precomputeDayRead, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
 import {
@@ -17,7 +24,7 @@ import {
   buildRunPlanWithAutonomy,
 } from "./domain/brain/autonomy-service.js";
 import { lastAppliedRunPlanDate } from "./repo/sessions.js";
-import { enqueueAgentJob } from "./agentJobs.js";
+import { enqueueAgentJob, ensureWeekAheadJob } from "./agentJobs.js";
 import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
 import { runWithTimeZone } from "./tz.js";
 import { addDaysISO, nowContext } from "./repo/shared.js";
@@ -1119,6 +1126,33 @@ export function startScheduler() {
     }
   };
 
+  // ---- Week-ahead cache warm (day rollover). ----
+  //      GET /api/week-ahead never spawns a coaching CLI inline — a cold or
+  //      stale cache is served the deterministic floor/stale-cache answer, and a
+  //      background job fills the cache for the NEXT open. This tick makes that
+  //      next-open case rare: once per local day it checks the fresh cacheKey
+  //      and kicks (or joins, via ensureWeekAheadJob's dedup) the same job, so
+  //      the forward look is usually already warm before the athlete's first
+  //      open. Enqueue-only — the task body never awaits the agent computation
+  //      itself (ensureWeekAheadJob just creates/joins the durable job row and
+  //      returns), so a slow or hung CLI can never hold up this tick.
+  let weekAheadWarmBusy = false;
+  const weekAheadWarmTick = async () => {
+    if (weekAheadWarmBusy) return;
+    const now = new Date();
+    if (!dailySlotDue(now, "week_ahead_warm_date")) return;
+    weekAheadWarmBusy = true;
+    try {
+      await runScheduled("week_ahead_warm_date", localToday(now), "week_ahead_warm_date", () => {
+        const { needsRefresh, cacheKey } = weekAheadServe(localToday(now));
+        if (needsRefresh) ensureWeekAheadJob(undefined, cacheKey);
+        return { outcome: "succeeded", value: { needsRefresh } };
+      });
+    } finally {
+      weekAheadWarmBusy = false;
+    }
+  };
+
   // Its OWN tick, deliberately not a step inside proactiveTick: keeping the
   // endurance week current is deterministic and spawns no agent, so it must not
   // ride the settings.proactive_enabled toggle. Miss-tolerant like every other
@@ -1167,12 +1201,14 @@ export function startScheduler() {
   setInterval(inOwnerTimeZone(updateCheckTick), 60_000); // self-hosted update check (≤ once/day)
   setInterval(inOwnerTimeZone(propagationTick), 60_000); // connected-brain re-derivation (≤ once/day)
   setInterval(inOwnerTimeZone(hrModelTick), 60_000); // personal HR model re-derivation (≤ once/day)
+  setInterval(inOwnerTimeZone(weekAheadWarmTick), 60_000); // week-ahead cache warm (≤ once/day)
   setInterval(inOwnerTimeZone(runPlanApplyTick), 60_000); // keep the applied run week current (Mondays)
   setInterval(heartbeatTick, 60_000); // readiness evidence; no agent/provider dependency
   setTimeout(inOwnerTimeZone(garminTick), 45_000); // the boot-time pass; later passes ride the minute tick
   setTimeout(inOwnerTimeZone(updateCheckTick), 30_000); // first update check shortly after boot (then daily)
   setTimeout(inOwnerTimeZone(propagationTick), 20_000); // catch up a day the process slept through
   setTimeout(inOwnerTimeZone(hrModelTick), 25_000); // same catch-up for the HR model
+  setTimeout(inOwnerTimeZone(weekAheadWarmTick), 30_000); // catch up a day the process slept through
   setTimeout(inOwnerTimeZone(runPlanApplyTick), 25_000); // catch up a Monday the process slept through
   setTimeout(inOwnerTimeZone(boundaryApplyTick), 5_000);
   setTimeout(inOwnerTimeZone(revisionTick), 15_000);

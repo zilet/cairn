@@ -43,7 +43,11 @@ import {
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 import { normalizeHealthSynthesis } from "./health-synthesis.js";
 import { clampNutritionFloors } from "./repo/nutrition-safety.js";
-import { applyMealPlanWithAutonomy, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
+import {
+  applyGoalDateAdaptationWithAutonomy,
+  applyMealPlanWithAutonomy,
+  applyProposalWithAutonomy,
+} from "./domain/brain/autonomy-service.js";
 import { personalizedNutritionStep } from "./domain/brain/underfueling-service.js";
 import {
   DAILY_SESSION_SUGGESTION_NORMALIZATION,
@@ -88,7 +92,11 @@ export function validateMealPlanDraftForPersistence(parsed: any, dietaryInstruct
 // proposal actually carries. The personal-response layer may tune the SIZE of
 // the nudge, but the universal 250-kcal ceiling and lean-safe kcal/protein floors
 // remain authoritative. Exported so the deterministic boundary is testable.
-export function personalizeNutritionCheckinTarget(nutrition: any, goalInput?: any): any {
+export function personalizeNutritionCheckinTarget(
+  nutrition: any,
+  goalInput?: any,
+  opts: { cutAnchor?: repo.CutTargetDerivation | null; protective?: boolean } = {}
+): any {
   if (!nutrition || typeof nutrition !== "object") return nutrition;
   const goal = goalInput ?? repo.computeGoalCheck();
   const rawTarget = Number(nutrition.target_kcal);
@@ -116,8 +124,53 @@ export function personalizeNutritionCheckinTarget(nutrition: any, goalInput?: an
     const learnedStep = sign === 0 ? 0 : personalizedNutritionStep(standardStep, localDateISO(), 250);
     target = Math.round(previous + sign * learnedStep);
   }
+  // THE GROUNDED CEILING. During a cut the athlete has affirmed, a RAISE toward
+  // maintenance is not the model's to make on judgement: it has to be what the
+  // athlete's own logged intake and weight trend imply. `cutAnchor` is that
+  // derivation (repo/cut-target.ts) — maintenance measured from the record, minus
+  // the bounded deficit — so a suggestion above it is a suggestion the evidence
+  // does not support, and it is pulled back to the anchor.
+  //
+  // Three deliberate escapes, in order of who wins:
+  //   - A CUT is never manufactured here. Clamping a raise can at most hold the
+  //     target where it already was; it can never push it below the number in
+  //     force, because that would turn "the raise isn't supported" into a cut
+  //     nobody asked for.
+  //   - PROTECTIVE evidence (fresh deterministic under-fuelling / fading
+  //     performance) is exactly the grounded evidence the rule asks for, so it
+  //     passes straight through.
+  //   - The lean-safe kcal FLOOR still runs afterwards and still wins. A safety
+  //     floor is never subordinate to a ceiling.
+  let anchorClamped = false;
+  const anchorTarget = Number(opts.cutAnchor?.target_kcal);
+  if (
+    !opts.protective &&
+    Number.isFinite(anchorTarget) &&
+    Number.isFinite(previous) &&
+    target > previous &&
+    target > anchorTarget
+  ) {
+    target = Math.round(Math.max(previous, anchorTarget));
+    anchorClamped = true;
+  }
   const bounded = clampNutritionFloors(
-    { ...nutrition, target_kcal: target, prev_target_kcal: Number.isFinite(previous) ? Math.round(previous) : null },
+    {
+      ...nutrition,
+      target_kcal: target,
+      prev_target_kcal: Number.isFinite(previous) ? Math.round(previous) : null,
+      ...(opts.cutAnchor
+        ? {
+            cut_anchor: {
+              target_kcal: opts.cutAnchor.target_kcal,
+              tdee_kcal: opts.cutAnchor.tdee_kcal,
+              tdee_basis: opts.cutAnchor.tdee_basis,
+              confidence: opts.cutAnchor.confidence,
+              deficit_kcal: opts.cutAnchor.deficit_kcal,
+              clamped: anchorClamped,
+            },
+          }
+        : {}),
+    },
     { kcal: "target_kcal", protein: "protein_g" },
     goal
   );
@@ -1188,10 +1241,7 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
   return floorResult;
 }
 
-export function weekAheadCacheKey(
-  floor: ReturnType<typeof repo.weekAheadPlan>,
-  date = localDateISO()
-): string {
+export function weekAheadCacheKey(floor: ReturnType<typeof repo.weekAheadPlan>, date = localDateISO()): string {
   const profile: any = repo.getProfile();
   return repo.fingerprint({
     op: WEEK_AHEAD_KIND,
@@ -1200,6 +1250,60 @@ export function weekAheadCacheKey(
     goal: { gw: profile?.goal_weight_lb ?? null, gd: profile?.goal_date ?? null },
     trainingReality: coachingCacheFreshnessFingerprint(date),
   });
+}
+
+// Synchronous, agent-free counterpart to weekAheadRead for the HTTP GET: a cold
+// or stale cache must never spawn a coaching CLI inline on a user-facing
+// request. This returns the best answer already on hand (fresh cache / stale
+// cache / the deterministic floor) instantly and reports `needsRefresh` so the
+// caller (the route, or the scheduler's day-rollover warm) can kick a
+// background job — agentJobs.ensureWeekAheadJob — that runs the real
+// weekAheadRead computation and fills the cache for next time. `computing:
+// true` marks a floor/stale answer a background read is already chasing; the
+// PWA's today-week-ahead-client only reads ok/days/summary and ignores it.
+export function weekAheadServe(date = localDateISO()): {
+  response: Awaited<ReturnType<typeof weekAheadRead>> & { computing?: true };
+  needsRefresh: boolean;
+  cacheKey: string;
+} {
+  const floor = repo.weekAheadPlan(date);
+  const cacheKey = weekAheadCacheKey(floor, date);
+  const cached = repo.getAiCache(WEEK_AHEAD_KIND, cacheKey);
+  const cachedSane = sanitizeWeekAhead(cached?.result);
+  if (cached && cachedSane && !cached.stale) {
+    return {
+      response: { ok: true, ...cachedSane, source: "agent", cached: true, agent: cached.chosen_agent },
+      needsRefresh: false,
+      cacheKey,
+    };
+  }
+  if (cachedSane) {
+    return {
+      response: {
+        ok: true,
+        ...cachedSane,
+        source: "agent",
+        cached: true,
+        stale: true,
+        agent: cached?.chosen_agent ?? null,
+        computing: true,
+      },
+      needsRefresh: true,
+      cacheKey,
+    };
+  }
+  return {
+    response: {
+      ok: true,
+      days: floor.days,
+      summary: floor.summary,
+      source: "deterministic",
+      cached: false,
+      computing: true,
+    },
+    needsRefresh: true,
+    cacheKey,
+  };
 }
 
 // Draft a goal-aware weekly meal plan, then run a bounded self-critique verify
@@ -1299,6 +1403,39 @@ export async function draftMealPlan(
   };
 }
 
+// A goal date the lean-safe pace cannot reach is a DECISION, not a reading. The
+// derivation computes it on every read (deriveCutTarget is read-only and runs behind
+// several surfaces), so the ledger entry is made HERE, on the check-in cadence — the
+// one pass that already re-reads the whole record and is entitled to change something.
+// The policy, the heads-up and the undo all belong to applyGoalDateAdaptationWithAutonomy;
+// this only decides that now is the moment to offer it.
+//
+// `from` is never taken on trust: the derivation read the profile's goal date moments
+// ago, and the seam itself refuses an adaptation whose `from` no longer matches.
+// Idempotent on two fronts — the seam answers `changed:false` when the profile already
+// holds `to`, and a goal_change for the same date still waiting (announced, or parked
+// for review) is left alone rather than re-announced every cadence.
+export function maybeAdaptGoalDateFromCut(cutAnchor: repo.CutTargetDerivation | null): any {
+  const adaptation = cutAnchor?.goal_date_adaptation ?? null;
+  if (!adaptation?.to) return null;
+  try {
+    const waiting = repo
+      .listBrainDecisions({ kind: "goal_change", limit: 50 })
+      .some(
+        (decision: any) =>
+          (decision?.status === "announced" || decision?.status === "review") &&
+          String(decision?.action?.goal_date_adaptation?.to ?? "") === String(adaptation.to)
+      );
+    if (waiting) {
+      return { ok: true, changed: false, deduped: true, reasons: ["that goal date is already waiting"] };
+    }
+    return applyGoalDateAdaptationWithAutonomy(adaptation);
+  } catch {
+    // Ledger bookkeeping is fail-soft: a check-in still returns its reading.
+    return null;
+  }
+}
+
 // Quiet adaptive-nutrition check-in. Creates a nutrition_target proposal only on
 // meaningful drift, then routes it through the server autonomy policy; change:false
 // is the calm, common answer. ok:false is the
@@ -1365,6 +1502,21 @@ export async function nutritionCheckin(
   if (!p || typeof p !== "object") {
     return { ok: false as const, error: "agent returned no usable check-in", agent: chosen, tried, expenditure };
   }
+  // The deterministic derivation off the athlete's own record. Shares the estimate
+  // already read above, so this costs no second expenditure pass. Null whenever
+  // there is no cut to derive for (at goal, gaining, holding) — in which case the
+  // grounded ceiling simply does not apply.
+  //
+  // Read BEFORE the change:false branch on purpose: a date that the safe pace cannot
+  // reach is exactly the case where the calorie target holds steady, so gating the
+  // goal-date heads-up on a target change would silence it in the situation it exists for.
+  let cutAnchor: repo.CutTargetDerivation | null = null;
+  try {
+    cutAnchor = repo.cutReaffirmation().reaffirmed ? repo.deriveCutTarget(localDateISO(), { expenditure }) : null;
+  } catch {
+    cutAnchor = null;
+  }
+  const goalDate = maybeAdaptGoalDateFromCut(cutAnchor);
   // No meaningful drift → no proposal. The calm, common answer.
   if (!p.change || !p.nutrition || !Number.isFinite(Number(p.nutrition.target_kcal))) {
     return {
@@ -1374,9 +1526,13 @@ export async function nutritionCheckin(
       agent: chosen,
       tried,
       expenditure,
+      ...(goalDate ? { goal_date_adaptation: goalDate } : {}),
     };
   }
-  const nutrition = personalizeNutritionCheckinTarget(p.nutrition);
+  const nutrition = personalizeNutritionCheckinTarget(p.nutrition, undefined, {
+    cutAnchor,
+    protective: protectiveEvidence.length > 0,
+  });
   // The protective low-confidence exception is raise-only. A model cannot turn
   // wearable/load/fatigue evidence into a deficit cut, and the delta is already
   // measured from the server-owned active target by the boundary above.
@@ -1402,6 +1558,7 @@ export async function nutritionCheckin(
         agent: chosen,
         tried,
         expenditure,
+        ...(goalDate ? { goal_date_adaptation: goalDate } : {}),
       };
     }
   }
@@ -1449,6 +1606,8 @@ export async function nutritionCheckin(
     agent: chosen,
     tried,
     expenditure,
+    ...(cutAnchor ? { cut_target: cutAnchor } : {}),
+    ...(goalDate ? { goal_date_adaptation: goalDate } : {}),
     ...(protectiveEvidence.length ? { protective_evidence: protectiveEvidence } : {}),
   };
 }
@@ -1666,8 +1825,7 @@ export function insightVerdict(opts: {
     ? repo.resolveInsightIntent(p.connection, text, p.rationale)
     : ({ status: "unkeyed", key: null } as const);
   // An unusable `connection` is treated as no connection at all: drop it and derive.
-  const intent =
-    named.status === "invalid" ? repo.resolveInsightIntent(undefined, text, p.rationale) : named;
+  const intent = named.status === "invalid" ? repo.resolveInsightIntent(undefined, text, p.rationale) : named;
   if (intent.status === "keyed" && repo.isDuplicateInsightIntent(intent.key, opts.keyCorpus)) {
     return { accept: false, agent_ran: true };
   }

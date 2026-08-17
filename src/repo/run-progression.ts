@@ -783,6 +783,65 @@ const DIRECTIVE_HOLD_FACTOR = 0.9; // a firm endurance-limiting directive caps t
 // copies of it would let the plan's ceiling and the ramp's feasibility read drift.
 const MAX_WEEKLY_BUILD_FACTOR = SUSTAINABLE_WEEKLY_BUILD_FACTOR;
 
+// ---------------------------------------------------------------------------
+// What counts as HRV being DOWN (owner ruling, 2026-08-17).
+//
+// `recovery.delta.hrv` is a difference of two MEDIANS in milliseconds — the recent
+// window's median hrv_ms minus the baseline window's (see getRecoverySummary in
+// coach.ts) — and it used to be read on its SIGN alone: any negative number at all
+// put the week on the 0.9 recovery-down factor. The sign of a difference of noisy
+// medians is close to a coin flip, so the brake fired on roughly half of all weeks,
+// including weeks whose HRV had moved by a single millisecond. Structurally that
+// outran everything pushing the other way: the learned acceleration is capped at
+// 1.05 and only applies on a standard build week, which `recoveryDown` is not, so a
+// coin-flip brake was quietly winning against every earned acceleration the athlete
+// could produce.
+//
+// So the term now needs a BAND rather than a sign. Relative to the athlete's own
+// baseline median where there is one (7% is comfortably outside ordinary
+// night-to-night median wobble while still catching a real suppression), and an
+// absolute floor in milliseconds for the case where the baseline median is missing
+// even though the delta is not. Direction is unchanged — only a DROP counts, and
+// every other recoveryDown term (rhr / sleep / readiness / status) is untouched.
+const HRV_DOWN_RELATIVE_DROP = 0.07;
+const HRV_DOWN_ABSOLUTE_DROP_MS = 5;
+
+// Is the HRV term of `recoveryDown` genuinely down? Exported for the pin in
+// test/runVolumeBrakes.test.js — the band is a product decision, not an implementation
+// detail, and it should be testable without staging a whole week.
+// ---------------------------------------------------------------------------
+// THE EARN PATH (owner ruling, 2026-08-17).
+//
+// A brake that never says what clears it reads as a verdict, and the two run-volume
+// brakes that hold a build week — recovery reading down, and the learned "you aren't
+// absorbing this" ease — both used to stop at the finding. So each now carries the
+// condition that opens the build back up, in the same calm suggestion register as
+// everything else the athlete reads: no number about them, no date as a deadline,
+// nothing they have to do. Variant sets rather than literals, rotated per WEEK (the
+// week start, not the day) because these lines belong to a weekly prescription and
+// should read the same every morning of the week they describe.
+export const RUN_VOLUME_RECOVERY_UNLOCK: readonly string[] = [
+  "A week where those readings come back to your usual is all the build needs to carry on.",
+  "Once they settle back toward your own normal, the weekly build picks up where it left off.",
+  "Give it a stretch of steadier readings and the mileage starts climbing again on its own.",
+  "The build carries on from here as soon as those come back to where they usually sit for you.",
+];
+export const RUN_VOLUME_LEARNED_EASE_UNLOCK: readonly string[] = [
+  "A couple of weeks landing cleanly at this mileage and the step opens back up.",
+  "Once these weeks are going down comfortably again, the step widens on its own.",
+  "String a few clean weeks together and there's room to build a little faster again.",
+  "As the weeks start landing the way they used to, the build widens again.",
+];
+
+export function hrvReadsDown(delta: unknown, baselineMedian?: unknown): boolean {
+  const drop = Number(delta);
+  if (!Number.isFinite(drop) || drop >= 0) return false;
+  const baseline = Number(baselineMedian);
+  return Number.isFinite(baseline) && baseline > 0
+    ? Math.abs(drop) >= baseline * HRV_DOWN_RELATIVE_DROP
+    : Math.abs(drop) >= HRV_DOWN_ABSOLUTE_DROP_MS;
+}
+
 export function weeklyRunPlan(
   date?: string,
   opts?: {
@@ -1085,7 +1144,10 @@ export function weeklyRunPlan(
         })()
       : (runState?.longest_km_4wk ?? null);
 
-  const hrvDown = recovery?.delta?.hrv != null && recovery.delta.hrv < 0;
+  // A BAND, not a sign — see hrvReadsDown. `recovery.baseline.hrv` is the comparison
+  // median the delta was taken against, so the relative test is against the athlete's
+  // own norm rather than a population figure; absent it, the millisecond floor stands.
+  const hrvDown = hrvReadsDown(recovery?.delta?.hrv, recovery?.baseline?.hrv);
   const rhrUp = recovery?.delta?.rhr != null && recovery.delta.rhr > 2;
   const sleepDown = recovery?.delta?.sleep != null && recovery.delta.sleep < -30;
   // Wearable readiness/status weigh in ONLY when present and clearly low/strained — a
@@ -1138,7 +1200,10 @@ export function weeklyRunPlan(
     if (hrvDown || rhrUp || sleepDown) bits.push("sleep / HRV / resting HR");
     if (readinessLow) bits.push("this week's readiness is reading low");
     if (statusStrained) bits.push(`your watch reads training as ${statusWord}`);
-    rationale.push(`Recovery's down this week (${bits.join("; ")}) — easing volume and keeping it gentle.`);
+    rationale.push(
+      `Recovery's down this week (${bits.join("; ")}) — easing volume and keeping it gentle. ` +
+        pickDayVariant(RUN_VOLUME_RECOVERY_UNLOCK, week_start, "run_volume:recovery_unlock")
+    );
   } else if (spiking) {
     // DELIBERATELY LIVE, and the one input allowed to move a week from inside it.
     // `spiking` is a trailing-7-day acute read with no week boundary, so a big block
@@ -1296,7 +1361,8 @@ export function weeklyRunPlan(
     if (eased < factor) {
       factor = eased;
       rationale.push(
-        "Easing the weekly build a touch — your own recent results point to a more conservative volume step."
+        "Easing the weekly build a touch — your own recent results point to a more conservative volume step. " +
+          pickDayVariant(RUN_VOLUME_LEARNED_EASE_UNLOCK, week_start, "run_volume:learned_ease_unlock")
       );
     }
   } else if (runModifier && runModifier.scale > 1 && standardBuild && !firmHold && !softHold) {
@@ -1587,7 +1653,9 @@ export function weeklyRunPlan(
     if (longSlot !== 6) {
       rationale.push("Placed the long run clear of your planned leg days so the legs are fresh for it.");
     } else if (lowerDays.has(6)) {
-      rationale.push("Couldn't fully separate the long run from a leg day this week — keep it easy so the legs stay honest.");
+      rationale.push(
+        "Couldn't fully separate the long run from a leg day this week — keep it easy so the legs stay honest."
+      );
     }
   }
 

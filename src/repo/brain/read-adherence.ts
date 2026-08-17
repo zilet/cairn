@@ -642,6 +642,14 @@ export interface ReadAdherenceDay {
   // therefore what lets the evidence keep accumulating after it activates (see
   // restOverrideSoftening).
   softened: boolean;
+  // The same fact for the rung above: was this morning's read the product of
+  // easyOverrideSoftening — a train day that would otherwise have been easy? Only ever
+  // true on a `train` read, and it does exactly the same job there (see
+  // easyOverrideSoftening). Two separate flags rather than one, because the two ladders
+  // must never read each other's evidence: a rest this loop eased to easy is the REST
+  // ladder's day, and counting it as an ordinary easy morning would chain the two into
+  // a single rest → train step.
+  easy_softened: boolean;
 }
 
 export interface ReadAdherenceModel {
@@ -657,6 +665,7 @@ const READ_ORDER: PredictiveDayReadKind[] = ["train", "easy", "rest"];
 export interface MorningRead {
   kind: PredictiveDayReadKind;
   softened: boolean;
+  easySoftened: boolean;
 }
 
 // Which read the athlete was actually GIVEN that morning, taken from the earliest
@@ -695,13 +704,16 @@ function morningReadsByDate(from: string, to: string): Map<string, MorningRead> 
     }
     if (!isPredictiveDayReadKind(kind)) continue;
     let softened = false;
+    let easySoftened = false;
     try {
       const context = JSON.parse(String(row.context_json ?? "null"));
       softened = context?.signals?.outcome_feedback?.applied === true;
+      easySoftened = context?.signals?.easy_outcome_feedback?.applied === true;
     } catch {
       softened = false;
+      easySoftened = false;
     }
-    out.set(String(row.date), { kind, softened });
+    out.set(String(row.date), { kind, softened, easySoftened });
   }
   return out;
 }
@@ -757,7 +769,15 @@ export function readAdherenceModel(asOf: string = localDateISO(), windowDays = 4
     if (outcome === "followed") stat.followed++;
     else if (outcome === "diverged") stat.diverged++;
     else stat.unclear++;
-    recent.push({ date, read, outcome, load: truth.load, trained: truth.trained, softened: morning.softened });
+    recent.push({
+      date,
+      read,
+      outcome,
+      load: truth.load,
+      trained: truth.trained,
+      softened: morning.softened,
+      easy_softened: morning.easySoftened,
+    });
   }
 
   return {
@@ -894,5 +914,95 @@ export function restOverrideSoftening(model: ReadAdherenceModel | null, asOf: st
     window_days: OUTCOME_SOFTENING_WINDOW_DAYS,
     overridden_and_fine: overriddenAndFine,
     last_honored_rest: lastHonoredRest,
+  };
+}
+
+// ---------- the same question, one rung up ----------
+//
+// The rule above closes the loop on the REST read. This one closes it on the EASY
+// read, and it exists because closing only half of it left a new floor in place of the
+// old one: an athlete whose easy mornings kept turning into real sessions, week after
+// week, was still handed an easy morning, and the disagreement was
+// recorded and never read back — the exact defect the rest rule was written to fix,
+// displaced by one rung (owner ruling, 2026-08-17).
+//
+// The evidence bar is deliberately IDENTICAL, constant for constant: the same ten-day
+// window, the same three divergences, the same "nothing in the session feedback says it
+// cost them" test, the same reset on the first morning they agree with the read. Two
+// rules that answer the same question about neighbouring reads must not be able to
+// disagree about what counts as evidence.
+//
+// It can only ever make a read one step LOUDER — easy → train, never past it — and
+// every clinical path, and the reduced week, are excluded by the caller before this is
+// consulted at all, exactly as they are for the rest ladder.
+
+export interface EasyOverrideSoftening {
+  active: boolean;
+  window_days: number;
+  // The easy mornings inside the window the athlete took ABOVE easy with nothing in the
+  // session feedback suggesting it cost them, newest last.
+  overridden_and_fine: string[];
+  // The most recent morning they actually kept at or under easy when a quiet-ish read
+  // asked them to. Everything on or before it is discarded — agreeing with the read
+  // starts the count over.
+  last_honored_easy: string | null;
+}
+
+export interface EasyOutcomeFeedbackSignal extends EasyOverrideSoftening {
+  applied: boolean;
+}
+
+const NO_EASY_SOFTENING: EasyOverrideSoftening = Object.freeze({
+  active: false,
+  window_days: OUTCOME_SOFTENING_WINDOW_DAYS,
+  overridden_and_fine: [],
+  last_honored_easy: null,
+});
+
+// Which mornings THIS signal may reason about. The mirror of softeningRelevant, and
+// the same two kinds for the same reason:
+//
+//   • an ORDINARY easy morning — the read the athlete has been outrunning; and
+//   • a morning this rule itself opened to train, which is the same evidence restated
+//     under the new read and is what keeps it from self-extinguishing (once active, no
+//     new easy mornings can accrue, so without this the window empties in ten days and
+//     the read relapses on a cycle).
+//
+// A SOFTENED easy morning — a rest the rest-ladder already eased — is deliberately
+// neither. It belongs to that ladder's evidence, and counting it here would compose the
+// two into a single rest → train step that neither rule is allowed to take.
+function easySofteningRelevant(day: ReadAdherenceDay): boolean {
+  return (day.read === "easy" && !day.softened) || (day.read === "train" && day.easy_softened);
+}
+
+// Did the day go ABOVE easy? The same test readAdherenceOutcome holds an easy read to
+// (`above_easy`), re-derived from the load the model already carries rather than
+// re-queried — so "diverged from the easy read" and "counts as evidence here" cannot
+// come apart. `trained` alone is deliberately not enough: a twenty-minute mobility
+// flush satisfies "trained" and is exactly what an easy read asks for.
+function wentAboveEasy(day: ReadAdherenceDay): boolean {
+  return day.load === "hard" || day.load === "moderate";
+}
+
+// The bounded signal for `asOf`, read off a model the caller already holds. Pure with
+// respect to the model plus the sessions table; safe to call with null.
+export function easyOverrideSoftening(model: ReadAdherenceModel | null, asOf: string): EasyOverrideSoftening {
+  if (!model || !Array.isArray(model.recent)) return NO_EASY_SOFTENING;
+  const lastClosed = addDaysISO(asOf, -1);
+  const from = addDaysISO(asOf, -OUTCOME_SOFTENING_WINDOW_DAYS);
+  if (!lastClosed || !from) return NO_EASY_SOFTENING;
+  const easyMornings = model.recent
+    .filter((day) => day.date >= from && day.date <= lastClosed && easySofteningRelevant(day))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const lastHonoredEasy = easyMornings.filter((day) => !wentAboveEasy(day)).at(-1)?.date ?? null;
+  const overriddenAndFine = easyMornings
+    .filter((day) => wentAboveEasy(day) && (lastHonoredEasy == null || day.date > lastHonoredEasy))
+    .map((day) => day.date)
+    .filter(trainedWithoutHarm);
+  return {
+    active: overriddenAndFine.length >= OUTCOME_SOFTENING_MIN_DIVERGENCES,
+    window_days: OUTCOME_SOFTENING_WINDOW_DAYS,
+    overridden_and_fine: overriddenAndFine,
+    last_honored_easy: lastHonoredEasy,
   };
 }

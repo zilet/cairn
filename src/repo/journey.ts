@@ -9,6 +9,7 @@ import {
   projectGoalPace,
 } from "./profile.js";
 import { localDateISO } from "./shared.js";
+import { mayProposeEaseFromCut } from "./cut-target.js";
 import { recompositionRead } from "./recomposition.js";
 import type { ExpenditureEstimate } from "./expenditure.js";
 import type { ProgramState } from "./program-state.js";
@@ -408,7 +409,19 @@ export function journeyTransitionSuggestion(today = localDateISO()): JourneyTran
     };
   }
 
-  if (mode === "lose" && (phase == null || phase.kind === "cut")) {
+  // A DIET BREAK IS NOT A DEFAULT LANE. While the athlete is in a cut they have
+  // affirmed, the system does not volunteer maintenance on a calendar — a phase
+  // that reads to the athlete as "start eating back up" has to be earned by
+  // logged evidence, not by the cut having simply run a while. `mayProposeEaseFromCut`
+  // is false exactly while that cut stands (src/repo/cut-target.ts); it opens as
+  // soon as the goal check-in is asking whether the goal still holds and the
+  // question is unanswered, which is the moment the athlete IS reconsidering.
+  //
+  // This gates only what the SYSTEM proposes on its own. The athlete asking for a
+  // break, and `createJourneyPhase` being called directly, are untouched — and the
+  // grounded ease of the DEFICIT (cut-target.ts's derivation) is a different lever
+  // that keeps working throughout.
+  if (mode === "lose" && (phase == null || phase.kind === "cut") && mayProposeEaseFromCut(today)) {
     const age = phaseAgeDays(phase, today);
     const pace = projectGoalPace(p, Number.isFinite(goalWeight) ? Math.max(0, weight - goalWeight) : 0);
     const stalled = pace.trend_lb_wk != null && pace.trend_lb_wk > -0.1;

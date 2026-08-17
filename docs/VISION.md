@@ -70,6 +70,20 @@ a feature conflict, the principle wins.
 > on your body; the plan remains a suggestion you are free to ignore. Where this amendment conflicts
 > with earlier propose-first language, this amendment governs.
 
+> **Amendment 3 — Heads-up autonomy (2026-08).** Amendment 1 let the coach lead inside a perimeter
+> that still parked goal-level and structural calls for a tap. Living with that perimeter taught the
+> next lesson: an approval queue is its own kind of nag, and a parked decision helps nobody.
+> The relationship matures again: **Cairn decides and tells you — it adapts the plan, the targets,
+> and the goal's own timeline from your signals, announces what changed and why, and keeps one-tap
+> undo as your veto.** Asks are reserved for three floors that do not move: anything clinical
+> (always you and your clinician), anything you explicitly locked, and anything irreversible. When
+> Cairn needs something from you, it asks for **evidence, not permission** — the weigh-in it's
+> missing, a measurement gone stale, a lab past its window — one calm in-app request at a time, tied
+> to the decision it would sharpen, never a notification. And missing data is estimated out loud, at
+> stated confidence, rather than waited on: the system moves with its best read of you and says so.
+> Where this conflicts with Amendment 1's ask-first language for goal-level changes, this amendment
+> governs.
+
 2. **Calm by default.** Quiet reassurance is the *normal* state. On a day when all is well, the app
    should be nearly silent — "you're good, here's your session" — not a wall of metrics to interpret.
    The amount of interface scales with how much there genuinely is to say. (Apple Vitals' "only

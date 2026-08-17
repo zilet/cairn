@@ -30,8 +30,10 @@ import { getPlan, replacePlan } from "../../repo/plan.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
 import {
   applyProposal,
+  getProfile,
   getProposal,
   listProposals,
+  setProfile,
   type NormalizedProposalApplyPayload,
   type OrphanSiblingCleanup,
   RECOVERY_WEEK_INSTRUCTION_PREFIX,
@@ -123,8 +125,11 @@ type ProposalReviewReasonCode =
   | "user_lock"
   | "review_posture"
   | "requested_review"
-  | "domain_policy"
-  | "budget_review";
+  | "domain_policy";
+// NOTE: "budget_review" is deliberately gone. A spent surprise budget no longer parks a
+// change for review at all (2026-08-17 ruling) — it delays to the next natural boundary —
+// so the code that produced this reason code has no remaining caller. Keeping the member
+// would invite a future writer to re-create the demotion the ruling removed.
 
 function holdProposalForReview(
   proposal: any,
@@ -544,19 +549,10 @@ export function applyMealPlanWithAutonomy(
   if (policy.tier === "ask" || policy.tier === "clinician" || policy.tier === "observe") {
     return { ok: true, applied: false, tier: policy.tier, plan, reasons: policy.reasons };
   }
-  if (
-    !input.coordinated_update &&
-    !surpriseBudgetAllows(materialChangesThisWeek("nutrition", undefined, "meal_plan"))
-  ) {
-    return {
-      ok: true,
-      applied: false,
-      review_required: true,
-      tier: "ask",
-      plan,
-      reasons: ["weekly nutrition change budget already used; this plan stays available for an explicit review"],
-    };
-  }
+  // A spent budget delays this plan to its natural boundary and lets the boundary pass
+  // re-check the week; it never converts the plan into an ask (2026-08-17 ruling).
+  const surpriseBudgetSpent =
+    !input.coordinated_update && !surpriseBudgetAllows(materialChangesThisWeek("nutrition", undefined, "meal_plan"));
 
   const effectiveDate = nextMealBoundary();
   const recorded = withSqliteSavepoint(`schedule_meal_plan_${planId}`, () => {
@@ -598,6 +594,7 @@ export function applyMealPlanWithAutonomy(
       input_fingerprint: null,
       context: {
         natural_boundary: true,
+        surprise_budget_deferred: surpriseBudgetSpent,
         coordinated_update: input.coordinated_update === true,
         evidence_keys: [`meal_plan:${plan.id}`, "coach_context:nutrition"],
         evidence_observed_at: new Date().toISOString(),
@@ -618,6 +615,7 @@ export function applyMealPlanWithAutonomy(
     effective_date: effectiveDate,
     decision: recorded.decision,
     plan: getMealPlan(planId),
+    ...(surpriseBudgetSpent ? { budget_deferred: true } : {}),
   };
 }
 
@@ -791,21 +789,17 @@ export function applyProposalWithAutonomy(
   // (materialChangesThisWeek also excludes it from the count, so it never spends the
   // budget for other changes either).
   const routineChange = ROUTINE_CHANGE_SOURCES.has(String(proposal.agent ?? ""));
-  if (
-    !surpriseBudgetAllows(
-      materialChangesThisWeek(shape.domain, undefined, budgetKind),
-      !!input.safety_response || !!input.explicit_user_request || routineChange
-    )
-  ) {
-    return holdProposalForReview(proposal, shape, {
-      code: "budget_review",
-      reasons: ["weekly surprise budget already used; review this change before applying"],
-      policy_inputs: { lead_mode: leadMode, safety_response: !!input.safety_response },
-      coordination_key: input.coordination_key,
-      coordinated_update: input.coordinated_update,
-    });
-  }
-  if (policy.tier === "announce") {
+  // A spent surprise budget is a WAIT, not a refusal (2026-08-17 ruling). The change
+  // keeps its ledger row, its expectation and its one-tap undo; it simply announces and
+  // lands at the next natural boundary, where the boundary pass re-checks the budget and
+  // delays again if the week is still full. It is never demoted to a bare draft, and
+  // never turned into an ask the athlete has to answer — being told "later" is the
+  // system's job, not theirs. Age and evidence freshness remain the real ceilings.
+  const surpriseBudgetSpent = !surpriseBudgetAllows(
+    materialChangesThisWeek(shape.domain, undefined, budgetKind),
+    !!input.safety_response || !!input.explicit_user_request || routineChange
+  );
+  if (policy.tier === "announce" || surpriseBudgetSpent) {
     const effectiveDate = nextBoundary(shape.kind);
     const recorded = recordDecision({
       effective_date: effectiveDate,
@@ -826,6 +820,7 @@ export function applyProposalWithAutonomy(
       input_fingerprint: null,
       context: {
         natural_boundary: true,
+        surprise_budget_deferred: surpriseBudgetSpent,
         coordination_key: input.coordination_key ?? null,
         coordinated_update: input.coordinated_update === true,
         orphan_sibling_cleanup: input.orphan_sibling_cleanup ?? null,
@@ -854,6 +849,7 @@ export function applyProposalWithAutonomy(
       tier: "announce",
       effective_date: effectiveDate,
       decision: recorded.decision,
+      ...(surpriseBudgetSpent ? { budget_deferred: true } : {}),
     };
   }
 
@@ -1041,7 +1037,284 @@ function legacyBackgroundNormalizedPayload(
 // pass re-offers each such draft to the autonomy layer so the system adapts without the
 // athlete: when the budget week rolls over, a veto ages out, or the posture is loosened,
 // a later pass adopts it (deterministic, no agent calls).
-export function adoptOrphanedDrafts(): { adopted: number; skipped: number } {
+// ---------- goal-date adaptation ----------
+
+// The shape a derivation hands over. `from`/`to` are ISO dates (`from` may be null when
+// the profile carried no goal date yet), `weeks_added` is the signed change in weeks, and
+// `reason` is the athlete-facing sentence explaining why the date moved.
+export interface GoalDateAdaptation {
+  from: string | null;
+  to: string;
+  weeks_added: number;
+  reason: string;
+}
+
+function isoDateOnly(value: unknown): string | null {
+  const text = String(value ?? "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
+}
+
+// A goal date that adapts from the signals, with a heads-up and a one-tap undo.
+//
+// This is the seam a cut-target derivation calls: it owns the POLICY and the ledger, and
+// deliberately does not own the arithmetic — the caller decides that the date should move
+// and to where, this decides whether the athlete gets told first and guarantees they can
+// put it back. Under lead it announces (goal_change + goal_identity, 2026-08-17 ruling);
+// under announce_first and review_everything it still asks, and a user lock or a clinical
+// flag still outranks everything.
+//
+// Nothing is written here. The date lands at its natural boundary through
+// applyDueAnnouncedDecisions, which is also where the rollback snapshot is taken, so an
+// announced goal date is never a promise the boundary pass cannot keep.
+export function applyGoalDateAdaptationWithAutonomy(
+  adaptation: GoalDateAdaptation,
+  input: { requested_tier?: AutonomyTier; user_locked?: boolean; clinical?: boolean; coordination_key?: string } = {}
+): any {
+  const to = isoDateOnly(adaptation?.to);
+  if (!to) return { ok: false, error: "goal date adaptation needs a YYYY-MM-DD target date" };
+  // The PROFILE decides what "from" is, not the caller's claim about it. A derivation
+  // reasons from the goal date it read; if the athlete has moved it since, the arithmetic
+  // behind `to` was done against a date that no longer exists, so the whole adaptation is
+  // refused rather than half-trusted (the same law as a stale prescription: absent, not
+  // approximate). Nothing about a live goal date is ever inferred from the payload.
+  const currentGoalDate = isoDateOnly((getProfile() as any)?.goal_date);
+  if (currentGoalDate === to) {
+    return { ok: true, applied: false, changed: false, reasons: ["the goal date is already there"] };
+  }
+  const from = isoDateOnly(adaptation?.from);
+  if (from !== currentGoalDate) {
+    return {
+      ok: false,
+      error: "goal date adaptation was derived from a goal date the profile no longer holds",
+      derived_from: from,
+      current_goal_date: currentGoalDate,
+    };
+  }
+  const weeksAdded = Number.isFinite(Number(adaptation?.weeks_added)) ? Number(adaptation.weeks_added) : 0;
+  const reason = String(adaptation?.reason ?? "").trim();
+
+  const policy = decideAutonomyTier({
+    kind: "goal_change",
+    risk_class: input.clinical ? "clinical" : "moderate",
+    reversible: true,
+    requested_tier: input.requested_tier,
+    lead_mode: getSettings().lead_mode,
+    goal_identity: true,
+    user_locked: input.user_locked,
+    clinical: input.clinical,
+    domain_demoted: domainIsDemoted("nutrition"),
+  });
+  const parks = policy.tier === "ask" || policy.tier === "clinician" || policy.tier === "observe";
+
+  const effectiveDate = parks ? null : nextMealBoundary();
+  const recorded = recordDecision({
+    effective_date: effectiveDate,
+    kind: "goal_change",
+    domain: "nutrition",
+    summary: `Your goal date moves ${weeksAdded === 0 ? "" : weeksAdded > 0 ? "out " : "in "}to ${to}.`
+      .replace(/\s+/g, " ")
+      .slice(0, 300),
+    rationale: (reason || "The current trend puts the goal on a different date than the one on file.").slice(0, 1_500),
+    source: "goal_date_adaptation",
+    source_ref_type: null,
+    source_ref_key: null,
+    status: parks ? "review" : "announced",
+    autonomy_tier: parks ? policy.tier : "announce",
+    risk_class: input.clinical ? "clinical" : "moderate",
+    reversible: false,
+    input_fingerprint: null,
+    context: {
+      natural_boundary: !parks,
+      review_required: parks,
+      ...(parks ? { review_reason_code: input.clinical ? "clinical" : input.user_locked ? "user_lock" : "review_posture" } : {}),
+      policy_reasons: policy.reasons,
+      coordination_key: input.coordination_key ?? null,
+      evidence_keys: ["profile:goal", "coach_context:nutrition"],
+      evidence_observed_at: new Date().toISOString(),
+    },
+    action: { goal_date_adaptation: { from, to, weeks_added: weeksAdded, reason } },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+  return {
+    ok: true,
+    applied: false,
+    changed: true,
+    ...(parks ? { review_required: true } : { announced: true }),
+    tier: parks ? policy.tier : "announce",
+    effective_date: effectiveDate,
+    decision: recorded.decision,
+    reasons: policy.reasons,
+  };
+}
+
+function goalDateAdaptationAction(action: unknown): GoalDateAdaptation | null {
+  const adaptation = action && typeof action === "object" ? (action as any).goal_date_adaptation : null;
+  if (!adaptation || typeof adaptation !== "object") return null;
+  const to = isoDateOnly(adaptation.to);
+  return to ? { from: isoDateOnly(adaptation.from), to, weeks_added: Number(adaptation.weeks_added) || 0, reason: String(adaptation.reason ?? "") } : null;
+}
+
+type ParkedDecision = ReturnType<typeof listBrainDecisions>[number];
+
+// A parked decision behind one of these reason codes is not a posture artefact — it is
+// a deliberate refusal by a safety, lock, or clinical rule. The thaw never touches it.
+// The clinician floor is deterministic and cannot be attested away (docs/VISION.md
+// Amendment 1), and a user lock is the athlete's own word on the matter.
+const THAW_FLOOR_REASON_CODES = new Set(["clinical", "clinical_ceiling", "safety_floor", "user_lock"]);
+
+// An advisory record — a conference reading with no draft behind it — asks nothing and
+// changes nothing, so a stored `reversible: false` on it means "no rollback snapshot was
+// taken", not "this cannot be undone". Re-offering it through the irreversibility floor
+// would pin every such record at 'ask' forever, which is the state this sweep exists to
+// clear. Its executable siblings still route through applyProposalWithAutonomy, which
+// derives reversibility from the real change.
+function reofferParkedAdvisory(decision: ParkedDecision, context: Record<string, any>): boolean {
+  const policy = decideAutonomyTier({
+    kind: decision.kind,
+    risk_class: decision.risk_class,
+    reversible: true,
+    lead_mode: getSettings().lead_mode,
+    clinical: decision.risk_class === "clinical",
+  });
+  if (policy.tier === "ask" || policy.tier === "clinician") return false;
+  return !!patchBrainDecision(decision.id!, {
+    status: "observed",
+    autonomy_tier: policy.tier,
+    context: {
+      ...context,
+      review_required: false,
+      thaw_outcome: "observed",
+      thaw_reasons: policy.reasons,
+    },
+  });
+}
+
+// A held draft whose evidence has moved is SET ASIDE with a receipt, never adopted. The
+// live case for this: diet-break drafts written before the cut was reaffirmed. Adopting
+// one on thaw would apply a plan the athlete's own picture has already contradicted, so
+// the sweep supersedes it and records why in the ledger, where the athlete can read it.
+function supersedeStaleDraftOnThaw(proposal: any, decision: ParkedDecision, freshness: ProposalFreshness): void {
+  const shape = proposalShape(proposal);
+  const changed = freshness.changed_components.join(" and ");
+  const why =
+    freshness.status === "changed"
+      ? `The ${changed || "training"} picture moved after this was drafted, so it no longer describes where you are.`
+      : "This draft carries no record of what it was written against, so there is no way to tell whether it still fits.";
+  recordDecision({
+    effective_date: localDateISO(),
+    kind: shape.kind,
+    domain: shape.domain,
+    summary: "A held draft was set aside instead of applied.",
+    rationale: `${why} Nothing changed; a fresh read can pick this up from where you are now.`.slice(0, 1_500),
+    source: proposal.agent || "autonomy",
+    source_ref_type: "plan_proposal",
+    source_ref_key: String(proposal.id),
+    status: "superseded",
+    autonomy_tier: "ask",
+    risk_class: shape.risk,
+    reversible: false,
+    input_fingerprint: null,
+    context: {
+      thaw_receipt: true,
+      review_reason_code: "stale_snapshot",
+      proposal_freshness: freshness,
+      superseded_review_decision_id: decision.id ?? null,
+    },
+    action: {
+      proposal_id: proposal.id,
+      outcome: "superseded_stale_evidence",
+      reason_provenance: proposalReasonProvenance(proposal),
+    },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+  // Retires the draft AND every live review hold pointing at it, in one authoritative
+  // call, so the sweep cannot leave the decision open behind a dead draft.
+  setProposalStatus(Number(proposal.id), "superseded");
+}
+
+// Thaw for decisions frozen at `status: 'review'`. A decision parked under an older,
+// stricter policy — or by a surprise budget that has since rolled over — used to sit in
+// the queue forever showing "NEEDS YOUR DECISION", because nothing re-read it when the
+// conditions that parked it changed. This re-offers each one through TODAY's policy.
+//
+// Deterministic and agent-free. Once per decision: the attempt is stamped into the
+// decision's own context BEFORE the re-offer runs, so a throwing re-offer cannot make
+// the sweep retry it on the next tick. Floors above are never re-offered, and under
+// 'review_everything' the sweep does nothing at all — the athlete has asked to see
+// everything, so nothing may be adopted or set aside on their behalf.
+export function thawParkedReviewDecisions(): { thawed: number; superseded: number; skipped: number } {
+  let thawed = 0;
+  let superseded = 0;
+  let skipped = 0;
+  if (getSettings().lead_mode === "review_everything") return { thawed, superseded, skipped };
+  for (const decision of listBrainDecisions({ status: "review", limit: 100 })) {
+    try {
+      const context = (decision.context ?? {}) as Record<string, any>;
+      if (context.thaw_attempted === true) {
+        skipped += 1;
+        continue;
+      }
+      if (
+        decision.autonomy_tier === "clinician" ||
+        decision.risk_class === "clinical" ||
+        context.clinical === true ||
+        context.user_locked === true ||
+        THAW_FLOOR_REASON_CODES.has(String(context.review_reason_code ?? ""))
+      ) {
+        skipped += 1;
+        continue;
+      }
+      const stamped =
+        patchBrainDecision(decision.id!, {
+          context: { ...context, thaw_attempted: true, thaw_attempted_at: new Date().toISOString() },
+        }) ?? decision;
+      const stampedContext = (stamped.context ?? {}) as Record<string, any>;
+      const proposalId =
+        Number((decision.action as any)?.proposal_id) ||
+        (decision.source_ref_type === "plan_proposal" ? Number(decision.source_ref_key) : 0);
+      const proposal = proposalId > 0 ? getProposal(proposalId) : null;
+      if (!proposal || proposal.status !== "draft") {
+        // No live draft behind it: this is a reading, not a pending change.
+        if (reofferParkedAdvisory(stamped, stampedContext)) thawed += 1;
+        else skipped += 1;
+        continue;
+      }
+      const freshness = verifyProposalEvidenceFreshness(proposal.parsed, localDateISO());
+      if (freshness.status === "changed" || freshness.status === "unverified") {
+        supersedeStaleDraftOnThaw(proposal, stamped, freshness);
+        superseded += 1;
+        continue;
+      }
+      const result = applyProposalWithAutonomy(proposalId, {});
+      if (["pending", "announced", "applied"].includes(String(result?.decision?.status ?? ""))) thawed += 1;
+      else skipped += 1;
+    } catch {
+      // Per-decision isolation: one bad row must never break the sweep.
+      skipped += 1;
+    }
+  }
+  return { thawed, superseded, skipped };
+}
+
+export function adoptOrphanedDrafts(): {
+  adopted: number;
+  skipped: number;
+  thawed: number;
+  superseded: number;
+} {
+  // Parked decisions thaw on the same deterministic tick as orphaned drafts, ahead of
+  // adoption: a decision re-offered here may retire the very draft the loop below would
+  // otherwise walk. Deliberately called from inside this sweep rather than wired into
+  // the scheduler separately, so the two can never drift apart in ordering.
+  const thaw = thawParkedReviewDecisions();
   let adopted = 0;
   let skipped = 0;
   const now = Date.now();
@@ -1167,10 +1440,14 @@ export function adoptOrphanedDrafts(): { adopted: number; skipped: number } {
       skipped += 1;
     }
   }
-  return { adopted, skipped };
+  return { adopted, skipped, thawed: thaw.thawed, superseded: thaw.superseded };
 }
 
-export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: number[]; failed: number[] } {
+export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
+  applied: number[];
+  failed: number[];
+  delayed: number[];
+} {
   const due = [
     ...listBrainDecisions({ status: "announced", limit: 100 }),
     ...listBrainDecisions({ status: "pending", limit: 100 }).filter(
@@ -1181,7 +1458,9 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
       (decision) =>
         !!decision.effective_date &&
         decision.effective_date <= asOf &&
-        (Number((decision.action as any)?.proposal_id) > 0 || Number((decision.action as any)?.meal_plan_id) > 0)
+        (Number((decision.action as any)?.proposal_id) > 0 ||
+          Number((decision.action as any)?.meal_plan_id) > 0 ||
+          !!goalDateAdaptationAction(decision.action))
     )
     // OLDEST first (listBrainDecisions returns id DESC): when several decisions share a
     // boundary the newest read must land LAST and win — otherwise a stale restructure
@@ -1189,6 +1468,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
     .sort((a, b) => Number(a.id) - Number(b.id));
   const applied: number[] = [];
   const failed: number[] = [];
+  const delayed: number[] = [];
   // A sibling that lands earlier in THIS pass changes the plan and therefore makes
   // later siblings look CAS-stale. Track only those pass-local budget consumers so
   // their policy reason can win that expected collision. A budget spent before this
@@ -1210,8 +1490,67 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
     }
     failed.push(decision.id!);
   };
+  // A spent surprise budget DELAYS a due change by a day and leaves it announced/pending
+  // (2026-08-17 ruling): the next pass re-offers it, and it lands as soon as the rolling
+  // domain-week has room. Parking it at 'review' used to turn "not this week" into a
+  // question the athlete had to answer. Termination is owned by the ceilings that should
+  // own it — the age gate below rejects a proposal that waited too long, and evidence
+  // freshness holds one whose picture moved.
+  const delayForSurpriseBudget = (decision: (typeof due)[number], reason: string) => {
+    const from = String(decision.effective_date ?? asOf);
+    const next = addDaysISO(from > asOf ? from : asOf, 1) ?? asOf;
+    try {
+      patchBrainDecision(decision.id!, {
+        effective_date: next,
+        context: {
+          ...(decision.context ?? {}),
+          surprise_budget_deferred: true,
+          surprise_budget_deferred_to: next,
+          surprise_budget_reason: reason.slice(0, 300),
+        },
+      });
+      delayed.push(decision.id!);
+    } catch {
+      /* the pass must survive even when the delay write fails */
+    }
+  };
   for (const announced of due) {
     try {
+      const goalDate = goalDateAdaptationAction(announced.action);
+      if (goalDate) {
+        // The goal date is read straight off the profile at apply time, not trusted from
+        // the announcement: if the athlete moved it themselves while this waited, their
+        // hand wins and the stale adaptation is canceled rather than overwriting them.
+        const currentGoalDate = isoDateOnly((getProfile() as any)?.goal_date);
+        if (currentGoalDate !== goalDate.from) {
+          transitionBrainDecision(announced.id!, "canceled");
+          failed.push(announced.id!);
+          continue;
+        }
+        withSqliteSavepoint(`due_goal_date_${announced.id}`, () => {
+          setProfile({ goal_date: goalDate.to });
+          const landed = isoDateOnly((getProfile() as any)?.goal_date);
+          if (landed !== goalDate.to) throw new Error("the goal date did not reach the profile");
+          const transitioned = transitionBrainDecision(announced.id!, "applied");
+          if (!transitioned) throw new Error("the goal-date decision could not reach applied status");
+          if (
+            !saveBrainRollback(announced.id!, "goal_date", {
+              version: 1,
+              previous_goal_date: goalDate.from,
+              applied_goal_date: goalDate.to,
+            })
+          ) {
+            throw new Error("the goal-date rollback snapshot was not stored");
+          }
+          const updated = patchBrainDecision(announced.id!, {
+            context: { ...(transitioned.context ?? {}), rollback_available: true },
+            reversible: true,
+          });
+          if (!updated) throw new Error("the goal-date decision could not be finalized");
+        });
+        applied.push(announced.id!);
+        continue;
+      }
       const mealPlanId = Number((announced.action as any)?.meal_plan_id);
       if (mealPlanId > 0) {
         const plan = getMealPlan(mealPlanId) as any;
@@ -1222,9 +1561,9 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
         }
         const coordinated = (announced.context as any)?.coordinated_update === true;
         if (!coordinated && !surpriseBudgetAllows(materialChangesThisWeek("nutrition", ["applied"], "meal_plan"))) {
-          parkForReview(
+          delayForSurpriseBudget(
             announced,
-            "weekly nutrition change budget already used; review this meal plan before applying"
+            "this week's nutrition changes are already in; the plan waits for the next boundary"
           );
           continue;
         }
@@ -1290,7 +1629,10 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
       // Only a budget consumer that landed earlier in THIS pass gets to precede
       // freshness: its own expected plan mutation caused the sibling's CAS delta.
       if (budgetLandedInPass.has(boundaryBudgetKey) && budgetBlocks()) {
-        parkForReview(announced, "weekly surprise budget already used; review this change before applying");
+        delayForSurpriseBudget(
+          announced,
+          "a sibling change landed first this pass; this one waits for the next boundary"
+        );
         continue;
       }
       const decisionEvidence =
@@ -1330,15 +1672,14 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
         failed.push(announced.id!);
         continue;
       }
-      // With no pass-local collision, freshness has had first refusal. Now apply the
-      // ordinary weekly budget, including changes that landed before this pass began.
-      if (budgetBlocks()) {
-        parkForReview(announced, "weekly surprise budget already used; review this change before applying");
-        continue;
-      }
       // Age is a secondary ceiling after the evidence compare-and-set above. A
       // young proposal can still be stale when the plan changed; an unchanged
       // snapshot can still age out and require a fresh review.
+      //
+      // It is checked BEFORE the weekly budget on purpose: the budget now DELAYS rather
+      // than parks, so age is what terminates a change that keeps waiting. Checking the
+      // budget first would let a full domain-week push a decision forward day after day
+      // and never let it reach the ceiling that should retire it.
       const createdAt = Date.parse(String(proposal.created_at ?? ""));
       const freshnessDays = shape.kind === "training_structure" ? 14 : 7;
       const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
@@ -1355,6 +1696,16 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
           },
         });
         failed.push(announced.id!);
+        continue;
+      }
+      // With no pass-local collision, freshness and age have had first refusal. Now the
+      // ordinary weekly budget, including changes that landed before this pass began —
+      // and it delays rather than parks.
+      if (budgetBlocks()) {
+        delayForSurpriseBudget(
+          announced,
+          "this week's changes for this domain are already in; this one waits for the next boundary"
+        );
         continue;
       }
       const orphanCleanup = (announced.context as any)?.orphan_sibling_cleanup;
@@ -1416,10 +1767,14 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
         }
       });
       applied.push(announced.id!);
+      // The marker means exactly "THIS pass's landing is what closed the budget", so it
+      // is asked through surpriseBudgetAllows rather than a literal count — the previous
+      // `< 1 … >= 1` form silently encoded a budget of one and stopped firing the moment
+      // the pace moved to three.
       if (
         !routineChange &&
-        materialChangesBeforeApply < 1 &&
-        materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind) >= 1
+        surpriseBudgetAllows(materialChangesBeforeApply) &&
+        !surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind))
       ) {
         budgetLandedInPass.add(boundaryBudgetKey);
       }
@@ -1427,7 +1782,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
       parkForReview(announced, String(error?.message ?? error ?? "unexpected apply error"));
     }
   }
-  return { applied, failed };
+  return { applied, failed, delayed };
 }
 
 // A veto teaches the brain DETERMINISTICALLY, not anecdotally: the reverted
@@ -1511,6 +1866,13 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
         // decision still owns the current one.
         if (appliedId > 0 && Number(current?.id) === appliedId) {
           restoreMealPlanAfterUndo(appliedId, previousId > 0 ? previousId : null);
+        }
+      } else if (rollback?.kind === "goal_date" && rollback.payload?.version === 1) {
+        // Undo only moves the date when this decision still owns what the profile holds.
+        // If the athlete set it themselves after this landed, theirs stands.
+        const appliedGoalDate = isoDateOnly(rollback.payload.applied_goal_date);
+        if (isoDateOnly((getProfile() as any)?.goal_date) === appliedGoalDate) {
+          setProfile({ goal_date: isoDateOnly(rollback.payload.previous_goal_date) ?? "" });
         }
       } else if (rollback?.kind === "recovery_cycle" && rollback.payload?.version === 1) {
         const cycleId = Number(rollback.payload.cycle_id);

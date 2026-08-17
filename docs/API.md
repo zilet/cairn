@@ -847,7 +847,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/week-ahead` | The week ahead — a calm forward look (lift / run / mixed / rest across the next several days). Agentic with a deterministic plan-rotation floor, so it always returns a usable shape even with no agent. Cached per day+plan+goal. |
+| GET | `/api/week-ahead` | The week ahead — a calm forward look (lift / run / mixed / rest across the next several days). Agentic with a deterministic plan-rotation floor, so it always returns a usable shape even with no agent. Cached per day+plan+goal.  This GET never spawns a CLI inline: weekAheadServe reads the cache synchronously (fresh cache / stale cache / the deterministic floor) and, on a miss or a stale hit, ensureWeekAheadJob kicks (or joins) a durable background job that runs the real agentic read and refreshes the cache for next time — deduplicated so a burst of opens never spawns more than one CLI per day. |
 
 ## `/week-wins`
 

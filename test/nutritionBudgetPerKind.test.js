@@ -64,21 +64,23 @@ test("a bounded target nudge still quiet-applies in a week that already landed a
   assert.equal(repo.getProposal(nudge.id).status, "draft");
 });
 
-test("a second bounded target nudge in the same week still holds for review", () => {
+test("a bounded target nudge that overruns the same-kind week waits instead of asking", () => {
   repo.setSettings({ lead_mode: "lead" });
-  const first = nutritionTargetProposal("first nutrition response", 2250);
-  const firstPending = applyProposalWithAutonomy(first.id, { requested_tier: "quiet_apply" });
-  assert.equal(firstPending.pending, true);
+  // The per-kind budget is still real; the 2026-08-17 ruling only changed its pace (one
+  // change a week became three) and what a miss DOES — it delays, it never asks.
+  for (const [index, kcal] of [2250, 2260, 2270].entries()) {
+    const nudge = nutritionTargetProposal(`nutrition response ${index}`, kcal);
+    assert.equal(applyProposalWithAutonomy(nudge.id, { requested_tier: "quiet_apply" }).pending, true);
+  }
 
-  // A same-KIND second change this week is a genuine second surprise — the per-kind budget
-  // is still one, so it must hold for an explicit review.
-  const second = nutritionTargetProposal("second nutrition response", 2260);
-  const held = applyProposalWithAutonomy(second.id, { requested_tier: "quiet_apply" });
-  assert.equal(held.applied, false);
-  assert.equal(held.tier, "ask");
-  assert.equal(held.review_required, true);
-  assert.match(held.reasons.join(" "), /surprise budget/i);
-  assert.equal(repo.getProposal(second.id).status, "draft");
+  const overrun = nutritionTargetProposal("the nudge that overruns the week", 2280);
+  const deferred = applyProposalWithAutonomy(overrun.id, { requested_tier: "quiet_apply" });
+  assert.equal(deferred.applied, false);
+  assert.equal(deferred.review_required, undefined, "a full week is a wait, never a question");
+  assert.notEqual(deferred.tier, "ask");
+  assert.equal(deferred.announced, true);
+  assert.equal(deferred.budget_deferred, true);
+  assert.equal(repo.getProposal(overrun.id).status, "draft");
 });
 
 test("a meal plan announces even with a same-week nutrition_target decision", () => {

@@ -4,14 +4,16 @@
 //       quiet-applied change already spent the domain's surprise budget this week;
 //   (b) non-consumption — a routine progression does not spend the budget for a later
 //       genuine agentic change;
-//   (c) the cap still bites — two genuine agentic training changes in one week still hold;
-//   (d) Ruling B — a budget hold never interrupts Today (nor the attention-review list),
-//       but review posture's queue still sees it;
-//   (e) hygiene — once the budget frees and the held draft finally routes, its stale
-//       'review' decision is superseded, never left dangling open.
+//   (c) the cap still bites — a fourth genuine agentic training change in one week is
+//       paced (the 2026-08-17 ruling moved the pace from one to three per domain-week);
+//   (d) Ruling B — a budget miss is a WAIT: it never interrupts Today, and it never
+//       enters a review queue at all, because there is nothing to review;
+//   (e) the boundary pass delays such a change forward while the week is full, keeping
+//       its ledger row and its announced status, and lands it once the week frees.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyDueAnnouncedDecisions,
   applyProposalWithAutonomy,
   buildProgressionWithAutonomy,
 } from "../dist/domain/brain/autonomy-service.js";
@@ -49,13 +51,16 @@ function seedEarnedOverload() {
 }
 
 // A genuine agentic training change that already quiet-applied this week — the domain-wide
-// surprise-budget spender, recorded directly like adoptOrphanedDrafts' veto seed.
-function seedAppliedAgenticTraining() {
+// surprise-budget spender, recorded directly like adoptOrphanedDrafts' veto seed. The
+// index makes each seed a distinct decision: recordDecision fingerprints on
+// kind + source_ref_type + source_ref_key + effective_date + action, so identical seeds
+// would collapse into one row and never fill the week.
+function seedAppliedAgenticTraining(index = 0) {
   return repo.recordDecision({
     effective_date: null,
     kind: "training_target",
     domain: "training",
-    summary: "An agentic training change already landed this week",
+    summary: `An agentic training change already landed this week (${index})`,
     rationale: null,
     source: "stub",
     source_ref_type: null,
@@ -65,7 +70,7 @@ function seedAppliedAgenticTraining() {
     risk_class: "low",
     reversible: true,
     context: null,
-    action: null,
+    action: { seed: index },
     specialist: null,
     applied_at: null,
     reverted_at: null,
@@ -115,74 +120,94 @@ test("a routine progression does not consume the surprise budget for a later age
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 200);
 });
 
-test("the surprise budget still gates a second genuine agentic training change", () => {
+test("the surprise budget still paces genuine agentic training changes", () => {
   seedEarnedOverload();
   repo.setSettings({ lead_mode: "lead" });
 
-  const first = repo.createProposal("stub", "first agentic change", "", {
-    summary: "First bench change",
-    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 190 }],
-  });
-  assert.equal(applyProposalWithAutonomy(first.id, { requested_tier: "quiet_apply" }).applied.length, 1);
+  // The pace is three material changes per domain-week (2026-08-17 ruling). The first
+  // three land; the fourth overruns the week.
+  for (const [index, weight] of [190, 195, 200].entries()) {
+    const change = repo.createProposal("stub", `agentic change ${index}`, "", {
+      summary: `Bench change ${index}`,
+      changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: weight }],
+    });
+    assert.equal(applyProposalWithAutonomy(change.id, { requested_tier: "quiet_apply" }).applied.length, 1);
+  }
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 200);
 
-  const second = repo.createProposal("stub", "second agentic change", "", {
-    summary: "Second bench change",
-    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 195 }],
+  const overrun = repo.createProposal("stub", "the change that overruns the week", "", {
+    summary: "A fourth bench change",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 205 }],
   });
-  const held = applyProposalWithAutonomy(second.id, { requested_tier: "quiet_apply" });
-  assert.equal(held.review_required, true);
-  assert.equal(held.review_reason_code, "budget_review", "the cap itself must keep working for real surprises");
-  assert.equal(repo.getProposal(second.id).status, "draft");
-  assert.equal(repo.getPlanDay(1).items[0].target_weight, 190, "the second change did not land");
+  const deferred = applyProposalWithAutonomy(overrun.id, { requested_tier: "quiet_apply" });
+  // The cap still works for real surprises — but a miss WAITS. It is never demoted to a
+  // bare draft or to an ask the athlete has to answer.
+  assert.equal(deferred.review_required, undefined);
+  assert.notEqual(deferred.tier, "ask");
+  assert.equal(deferred.announced, true);
+  assert.equal(deferred.budget_deferred, true);
+  assert.equal(repo.getProposal(overrun.id).status, "draft");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 200, "the fourth change did not land yet");
 });
 
-test("Ruling B: a budget hold waits off Today but review posture's queue still sees it", () => {
+test("Ruling B: a budget-deferred change never interrupts Today and is not a review hold", () => {
   seedEarnedOverload();
   repo.setSettings({ lead_mode: "lead" });
-  seedAppliedAgenticTraining(); // spend the domain budget, plan untouched
+  for (let index = 0; index < 3; index += 1) seedAppliedAgenticTraining(index);
 
-  const held = repo.createProposal("stub", "second agentic change", "", {
-    summary: "A held bench change",
+  const waiting = repo.createProposal("stub", "the change that overruns the week", "", {
+    summary: "A bench change waiting on the week",
     changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 195 }],
   });
-  const routed = applyProposalWithAutonomy(held.id, { requested_tier: "quiet_apply" });
-  assert.equal(routed.review_reason_code, "budget_review");
+  const routed = applyProposalWithAutonomy(waiting.id, { requested_tier: "quiet_apply" });
+  assert.equal(routed.budget_deferred, true);
+  assert.equal(routed.announced, true);
 
+  // It is not an interrupt, and it is not in ANY review queue — there is nothing to
+  // review. It simply has a boundary date in front of it.
   const attentionIds = repo.listAttentionReviewHeldProposals(20).map((p) => Number(p.id));
-  assert.ok(!attentionIds.includes(Number(held.id)), "a budget hold is not a coach-led attention interrupt");
-
+  assert.ok(!attentionIds.includes(Number(waiting.id)), "a wait is not a coach-led attention interrupt");
   const reviewIds = repo.listReviewHeldProposals(20).map((p) => Number(p.id));
-  assert.ok(reviewIds.includes(Number(held.id)), "review_everything's queue still sees the hold");
+  assert.ok(!reviewIds.includes(Number(waiting.id)), "a wait never enters the review queue at all");
 
   const agenda = repo.todayAgenda();
   const draftCard = [...agenda.primary, ...agenda.more].find((c) => c.id === "draft-proposals");
-  assert.equal(draftCard, undefined, "the budget hold never becomes a Today decision card under lead mode");
+  assert.equal(draftCard, undefined, "the waiting change never becomes a Today decision card under lead mode");
 });
 
-test("hygiene: a later successful routing supersedes the stale budget review row", () => {
+test("the boundary pass delays a due change while the week is full, then lands it", () => {
   seedEarnedOverload();
   repo.setSettings({ lead_mode: "lead" });
-  const spender = seedAppliedAgenticTraining();
+  const spenders = [0, 1, 2].map((index) => seedAppliedAgenticTraining(index));
 
   const draft = repo.createProposal("stub", "bounded bench change", "", {
-    summary: "A bounded bench change waiting on the budget",
+    summary: "A bounded bench change waiting on the week",
     changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 195 }],
   });
-  const held = applyProposalWithAutonomy(draft.id, { requested_tier: "quiet_apply" });
-  assert.equal(held.review_reason_code, "budget_review");
-  const reviewRow = repo.listBrainDecisions({ status: "review", domain: "training", limit: 5 })[0];
-  assert.equal(reviewRow.source_ref_key, String(draft.id), "a live review row now owns the held draft");
+  const routed = applyProposalWithAutonomy(draft.id, { requested_tier: "quiet_apply" });
+  assert.equal(routed.budget_deferred, true);
+  const decisionId = Number(routed.decision.id);
 
-  // The surprise-budget week rolls over: the earlier change ages out of the window.
-  db.prepare(`UPDATE brain_decisions SET created_at = datetime('now','-8 days') WHERE id = ?`).run(spender.decision.id);
+  // At its boundary the week is still full: the pass pushes it forward rather than
+  // parking it at review, and it stays announced with its ledger row intact.
+  const blocked = applyDueAnnouncedDecisions(routed.effective_date);
+  assert.deepEqual(blocked.applied, []);
+  assert.deepEqual(blocked.delayed, [decisionId], "it is delayed, not failed");
+  const waited = repo.getBrainDecision(decisionId);
+  assert.equal(waited.status, "announced", "still announced, never demoted to review");
+  assert.equal(waited.context.surprise_budget_deferred, true);
+  assert.ok(waited.effective_date > routed.effective_date, "its boundary moved forward");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 185, "nothing landed while it waited");
 
-  const rerouted = applyProposalWithAutonomy(draft.id, { requested_tier: "quiet_apply" });
-  assert.equal(rerouted.applied.length, 1, "with the budget freed the draft finally lands");
-  assert.equal(
-    repo.getBrainDecision(reviewRow.id).status,
-    "superseded",
-    "the stale budget review row is retired, not left dangling open"
-  );
-  const reviewIds = repo.listReviewHeldProposals(20).map((p) => Number(p.id));
-  assert.ok(!reviewIds.includes(Number(draft.id)), "no dangling open review remains for the now-applied draft");
+  // The surprise-budget week rolls over: the earlier changes age out of the window.
+  for (const spender of spenders) {
+    db.prepare(`UPDATE brain_decisions SET created_at = datetime('now','-8 days') WHERE id = ?`).run(
+      spender.decision.id
+    );
+  }
+
+  const landed = applyDueAnnouncedDecisions(waited.effective_date);
+  assert.deepEqual(landed.applied, [decisionId], "with the week freed it lands at its boundary");
+  assert.equal(repo.getProposal(draft.id).status, "applied");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 195);
 });

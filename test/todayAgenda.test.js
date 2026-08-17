@@ -597,22 +597,31 @@ test("an older safety review survives nine newer generic requested-review decisi
   assert.equal(draft.body, "Keep the safety-floor decision visible");
 });
 
-test("a weekly budget hold is persisted but waits quietly off the Today rail under lead posture", () => {
+test("a change that overruns the weekly budget waits quietly off the Today rail under lead posture", () => {
   repo.setSettings({ lead_mode: "lead" });
-  const first = nutritionCheckinDraft();
-  assert.equal(applyProposalWithAutonomy(first.id, { requested_tier: "quiet_apply" }).pending, true);
-  const second = repo.createProposal("stub", "auto: follow-up nutrition read", "", {
+  assert.equal(applyProposalWithAutonomy(nutritionCheckinDraft().id, { requested_tier: "quiet_apply" }).pending, true);
+  for (const [index, kcal] of [2_310, 2_320].entries()) {
+    const filler = repo.createProposal("stub", `auto: filler nutrition read ${index}`, "", {
+      kind: "nutrition_target",
+      summary: `A filler nutrition change ${index}`,
+      nutrition: { target_kcal: kcal, protein_g: 170 },
+    });
+    assert.equal(applyProposalWithAutonomy(filler.id, { requested_tier: "quiet_apply" }).pending, true);
+  }
+  const overrun = repo.createProposal("stub", "auto: follow-up nutrition read", "", {
+    summary: "A change that overruns the week",
     kind: "nutrition_target",
-    summary: "A second change needs a decision",
     nutrition: { target_kcal: 2_300, protein_g: 170 },
   });
 
-  const held = applyProposalWithAutonomy(second.id, { requested_tier: "quiet_apply" });
-  assert.equal(held.review_reason_code, "budget_review");
-  assert.equal(repo.getProposal(second.id).autonomy?.review_reason_code, "budget_review");
-  // Ruling B: a budget hold is a WAIT, not an ask — it lands automatically when the
-  // surprise-budget week rolls (orphan adoption re-offers it), so it never interrupts Today.
-  assert.equal(agendaDraftCandidate(), undefined, "a budget hold never nags as a decision on Today");
+  // Ruling B, as amended 2026-08-17: a spent budget is a WAIT, not an ask. It announces
+  // at its own boundary rather than being parked for review, so there is nothing for
+  // Today to interrupt with — and nothing in any review queue either.
+  const deferred = applyProposalWithAutonomy(overrun.id, { requested_tier: "quiet_apply" });
+  assert.equal(deferred.budget_deferred, true);
+  assert.equal(deferred.review_required, undefined);
+  assert.equal(repo.getProposal(overrun.id).autonomy?.review_required, false);
+  assert.equal(agendaDraftCandidate(), undefined, "a waiting change never nags as a decision on Today");
 });
 
 test("acknowledging a scheduled nutrition target drops it out of the Today rail", () => {

@@ -346,30 +346,72 @@ test("a pending quiet-apply counts against the same-week surprise budget at deci
   const first = applyProposalWithAutonomy(firstProposal.id, { requested_tier: "quiet_apply" });
   assert.equal(first.pending, true, "the first bounded change is committed, waiting for its boundary");
 
-  // A second bounded training change the same week must now be held for review — a
-  // scheduled-but-unlanded change already spends the domain's budget.
-  const second = repo.createProposal("stub", "another bounded change", "", {
-    summary: "Second bench change",
-    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 195 }],
+  // Two more fill the week: a scheduled-but-unlanded change already spends the domain's
+  // budget, so all three count even though none has landed.
+  for (const [index, weight] of [195, 200].entries()) {
+    const filler = repo.createProposal("stub", `filler bounded change ${index}`, "", {
+      summary: `Filler bench change ${index}`,
+      changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: weight }],
+    });
+    assert.equal(applyProposalWithAutonomy(filler.id, { requested_tier: "quiet_apply" }).pending, true);
+  }
+
+  // The fourth overruns the week. It WAITS at an announced boundary rather than being
+  // demoted to an ask (2026-08-17 ruling).
+  const overrun = repo.createProposal("stub", "the change that overruns the week", "", {
+    summary: "A fourth bench change",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 205 }],
   });
-  const held = applyProposalWithAutonomy(second.id, { requested_tier: "quiet_apply" });
-  assert.equal(held.applied, false);
-  assert.equal(held.tier, "ask");
-  assert.equal(held.review_required, true);
-  assert.match(held.reasons.join(" "), /surprise budget/i);
-  assert.equal(repo.getProposal(second.id).status, "draft");
+  const deferred = applyProposalWithAutonomy(overrun.id, { requested_tier: "quiet_apply" });
+  assert.equal(deferred.applied, false);
+  assert.equal(deferred.review_required, undefined);
+  assert.notEqual(deferred.tier, "ask");
+  assert.equal(deferred.announced, true);
+  assert.equal(deferred.budget_deferred, true);
+  assert.equal(repo.getProposal(overrun.id).status, "draft");
 });
 
-test("the boundary re-checks the budget: the oldest due change lands, the second parks for review", () => {
+// A material training change that already LANDED this week, recorded directly. The index
+// keeps each seed a distinct decision (recordDecision fingerprints on
+// kind + source_ref_type + source_ref_key + effective_date + action).
+function seedLandedTrainingChange(index) {
+  return repo.recordDecision({
+    effective_date: null,
+    kind: "training_target",
+    domain: "training",
+    summary: `A training change that already landed this week (${index})`,
+    rationale: null,
+    source: "stub",
+    source_ref_type: null,
+    source_ref_key: null,
+    status: "applied",
+    autonomy_tier: "quiet_apply",
+    risk_class: "low",
+    reversible: true,
+    context: null,
+    action: { seed: index },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+}
+
+test("the boundary re-checks the budget: the oldest due change lands, the second waits", () => {
   seedEarnedOverload();
   // An unfinished session today forces both bounded changes to WAIT (pending).
   repo.upsertExercise({ name: "Plank", muscle_group: "core", mode: "timed" });
   const plank = repo.getOrCreateSession(localDateISO(), null);
   dbInsertSet(plank.id, repo.findExercise("Plank").id, { set_number: 1, duration_sec: 60 });
   repo.setSettings({ lead_mode: "lead" });
+  // Two material changes already landed this week, so the pass-local landing below is
+  // the third and the week is full for the sibling behind it.
+  seedLandedTrainingChange(0);
+  seedLandedTrainingChange(1);
 
   // A GENUINE agentic first change spends the budget at the boundary — a routine
-  // auto-progression is exempt (Ruling A) and would not force the second to park.
+  // auto-progression is exempt (Ruling A) and would not force the second to wait.
   const firstProposal = repo.createProposal("stub", "first bounded change", "", {
     summary: "First bench change",
     changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 190 }],
@@ -377,7 +419,7 @@ test("the boundary re-checks the budget: the oldest due change lands, the second
   const first = applyProposalWithAutonomy(firstProposal.id, { requested_tier: "quiet_apply" });
   assert.equal(first.pending, true);
   // The second gets scheduled only because it's a safety response (bypasses the
-  // creation-time budget) — the boundary must still enforce one landing per week.
+  // creation-time budget) — the boundary must still pace what LANDS in a week.
   const second = repo.createProposal("stub", "safety follow-up", "", {
     summary: "Second bench change",
     changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 195 }],
@@ -388,18 +430,20 @@ test("the boundary re-checks the budget: the oldest due change lands, the second
   const asOf = [first.effective_date, b.effective_date].sort().pop();
   const due = applyDueAnnouncedDecisions(asOf);
   assert.deepEqual(due.applied, [first.decision.id], "the oldest change lands");
-  assert.deepEqual(due.failed, [b.decision.id], "the second is held, not silently applied");
-  const parked = repo.getBrainDecision(b.decision.id);
-  assert.equal(parked.status, "review", "parked for review per the existing pattern");
-  assert.equal(
-    parked.context.apply_error,
-    "weekly surprise budget already used; review this change before applying"
-  );
-  const siblingFreshness = repo.verifyProposalEvidenceSnapshot(parked.context.proposal_evidence, asOf);
+  assert.deepEqual(due.failed, [], "waiting is not failing");
+  assert.deepEqual(due.delayed, [b.decision.id], "the second waits, not silently applied and not parked");
+  const waiting = repo.getBrainDecision(b.decision.id);
+  // 2026-08-17 ruling: a full week moves the boundary, it does not demote the change.
+  assert.equal(waiting.status, "pending", "still owned by the ledger, never sent to review");
+  assert.notEqual(waiting.autonomy_tier, "ask");
+  assert.equal(waiting.context.surprise_budget_deferred, true);
+  assert.match(waiting.context.surprise_budget_reason, /sibling/i);
+  assert.ok(waiting.effective_date > b.effective_date, "its boundary moved forward");
+  const siblingFreshness = repo.verifyProposalEvidenceSnapshot(waiting.context.proposal_evidence, asOf);
   assert.equal(siblingFreshness.status, "changed", "the first sibling's landing did change the second snapshot");
   assert.deepEqual(siblingFreshness.changed_components, ["plan"]);
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 190, "only the first change reached the plan");
-  assert.equal(repo.getProposal(second.id).status, "draft", "the parked sibling remains reviewable");
+  assert.equal(repo.getProposal(second.id).status, "draft", "the waiting sibling remains a live draft");
 });
 
 test("pre-pass budget use never hides a stale due proposal's freshness reason", () => {

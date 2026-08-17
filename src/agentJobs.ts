@@ -317,6 +317,16 @@ export function enqueueAgentJob(id: number): void {
   runner.enqueue(id);
 }
 
+// Kick (or join) the background job that fills/refreshes the week-ahead cache
+// for `cacheKey`. Used by GET /api/week-ahead on a cold/stale cache and by the
+// scheduler's day-rollover warm — repo.createWeekAheadAgentJob dedupes so a
+// burst of callers coalesces onto one queued/running job per cacheKey.
+export function ensureWeekAheadJob(agent: string | undefined, cacheKey: string): { job: any; created: boolean } {
+  const { job, created } = repo.createWeekAheadAgentJob({ cacheKey, agent: agent ?? null });
+  if (created) enqueueAgentJob(Number(job.id));
+  return { job, created };
+}
+
 async function processAgentJob(id: number): Promise<void> {
   const job = repo.getAgentJob(id) as any;
   if (!job || job.status !== "queued") return; // canceled while queued, or already handled

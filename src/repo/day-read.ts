@@ -17,6 +17,9 @@ import {
   type DayReadRuleOutcome,
 } from "./brain/day-read-rules.js";
 import {
+  type EasyOutcomeFeedbackSignal,
+  easyOverrideSoftening,
+  type EasyOverrideSoftening,
   OUTCOME_SOFTENING_WINDOW_DAYS,
   type OutcomeFeedbackSignal,
   readAdherenceModel,
@@ -59,6 +62,8 @@ import {
   spokenSignalVoice,
   SIGNAL_VOICE_KEYS,
   SIGNAL_VOICE_REGISTRY,
+  type SignalDimension,
+  type SignalVoiceRef,
   type UnifiedSignalState,
 } from "./signal-state.js";
 import {
@@ -303,6 +308,23 @@ export const DAY_READ_OUTCOMES = {
       "You've kept training on days like this recently, and it's held up.",
     ],
   },
+  // The MIRROR of the rule above, one rung further up the ladder (owner ruling,
+  // 2026-08-17). The rest→easy softening closed half the loop: it could answer a rest
+  // the athlete kept overruling, and then the eased day became the new floor and the
+  // loop went quiet again — an athlete whose easy mornings kept turning into real
+  // sessions, week after week, was still being offered an easy morning. This answers
+  // that one, on the same evidence bar and with the same resets, and it too moves
+  // exactly ONE step: easy → train, never further, never against anything clinical,
+  // never inside a reduced week.
+  outcome_feedback_open: {
+    code: "outcome_feedback_open",
+    reasons: [
+      "Your last few easy mornings turned into real sessions and they went well.",
+      "The last handful of easy reads became proper training, and it held up.",
+      "You've been turning days like this into solid sessions lately, and they've landed fine.",
+      "Easy mornings have been becoming real work for you recently, and coming out fine.",
+    ],
+  },
 } as const satisfies Record<string, DayReadRuleOutcome>;
 
 // The athlete-facing `why` for each deterministic read, in several calm phrasings
@@ -385,6 +407,16 @@ const OUTCOME_FEEDBACK_SOFTEN_WHY: readonly string[] = [
   "Training through days like this has been working for you lately, so keep today light rather than taking it off entirely.",
   "You've been training through these and coming out fine, so today's an easy day rather than a rest day.",
 ];
+// The opened easy day — the same job one rung up. It has to name the evidence (their
+// own last few mornings, not a hunch) AND still offer rather than instruct: every
+// phrasing says the day CAN open, none of them asks for a session, and none names a
+// number about them. "solid" / "real" describe the sessions they already logged.
+const OUTCOME_FEEDBACK_OPEN_WHY: readonly string[] = [
+  "Your last few easy mornings became solid sessions and it went well, so today can open harder if you want it to.",
+  "The last handful of days like this turned into real training and held up — so today reads as a training day.",
+  "You've been turning these into proper sessions lately and coming out fine, so today's open for one.",
+  "Easy mornings have been becoming real work for you and it's been landing, so today can be a session rather than a stroll.",
+];
 const UNPROGRAMMED_WHY: readonly string[] = [
   "Nothing programmed — some easy movement is plenty today.",
   "Nothing's due today, so move however you feel like moving.",
@@ -431,7 +463,31 @@ const TRAIN_HOLD_LEAD: readonly string[] = [
   "Keep today's effort in check",
 ];
 
-// The two LEADS above, registered. They rotated from the start but belonged to
+// The hold lead's softer sibling, for the caution that is REAL but unseconded — one
+// dimension at watch on a board where nothing else is pulling (see the second-opinion
+// bar in planningDirectives, owner ruling 2026-08-17). That caution used to counsel
+// holding load and volume everywhere; now it only speaks. The lead has to work in two
+// shapes: with a caveat run after it, and on its own with nothing but the earn path
+// behind it — so each phrasing is a complete clause that survives a full stop.
+const TRAIN_NOTED_LEAD: readonly string[] = [
+  "The session's still yours",
+  "Today's still a training day",
+  "That doesn't close the day down",
+  "The work still stands",
+];
+// The push lead. The push and the caveat run used to be mutually exclusive — any
+// caveat at all withdrew the push — so a backed day carrying nothing worse than a
+// bookkeeping note read exactly like a day with a brake on it. Now that bookkeeping
+// caveats no longer veto the push, the composed sentence needs a lead that OFFERS the
+// reach and still hands off to the caveats honestly.
+const TRAIN_PUSH_CAVEAT_LEAD: readonly string[] = [
+  "There's room to reach today",
+  "Today's a day you can ask more of",
+  "Worth going after a little more today",
+  "Today has room in it for more",
+];
+
+// The LEADS above, registered. They rotated from the start but belonged to
 // neither existing registry, so nothing held them to the constitution and a new
 // phrasing could skip it entirely: they are not a whole `why` (they carry no
 // terminal punctuation — a caveat run follows) and not a caveat fragment (they open
@@ -441,6 +497,8 @@ const TRAIN_HOLD_LEAD: readonly string[] = [
 export const DAY_READ_LEAD_VARIANTS: Readonly<Record<string, readonly string[]>> = {
   "planned_training:caveats": TRAIN_CAVEAT_LEAD,
   "planned_training:hold_lead": TRAIN_HOLD_LEAD,
+  "planned_training:noted_lead": TRAIN_NOTED_LEAD,
+  "planned_training:push_caveats": TRAIN_PUSH_CAVEAT_LEAD,
 };
 
 // The one idea each lead must carry, exactly as DAY_READ_CAVEAT_CONCEPT does for the
@@ -449,7 +507,63 @@ export const DAY_READ_LEAD_VARIANTS: Readonly<Record<string, readonly string[]>>
 export const DAY_READ_LEAD_CONCEPT: Readonly<Record<string, RegExp>> = {
   "planned_training:caveats": /\b(?:train|session|green light)\b/i,
   "planned_training:hold_lead": /\b(?:conservative|measured|in check)\b/i,
+  // A noted caution must leave the day OPEN — that is the whole difference between it
+  // and the hold lead sitting above it.
+  "planned_training:noted_lead": /\b(?:still|doesn't close)\b/i,
+  "planned_training:push_caveats": /\b(?:room|reach|more)\b/i,
 };
+
+// ---------- THE EARN PATH (owner ruling, 2026-08-17) ----------
+//
+// A brake the athlete cannot see the end of is a verdict wearing a suggestion's
+// clothes. Every surface where something holds the day back now closes with the
+// condition that opens it again — never a date, never a target, never a number about
+// the person, and never an instruction ("you must" is already a grammar violation).
+//
+// Two sets, because exactly one brake in this vocabulary can name a CONCRETE unlock:
+// the run-intensity caution, whose voice already carries the athlete's own easy
+// ceiling in bpm as its subject (SIGNAL_VOICE.run_intensity_compressed). A ceiling is
+// a measurement, not a grade, and it is the one thing that makes "keep the next runs
+// under it" actionable rather than vague. Everything else gets the honest general
+// form: a clean stretch on whatever is being watched and the room comes back.
+const EARN_PATH_INTENSITY: ReadonlyArray<(ceiling: string) => string> = [
+  (ceiling) => `Bring the next few runs in under ${ceiling} and the room to build opens back up.`,
+  (ceiling) => `A couple of runs that actually sit under ${ceiling} is what gives this back.`,
+  (ceiling) => `Once the easy runs are landing under ${ceiling} again, there's room to reach for more.`,
+  (ceiling) => `Give it a run or two under ${ceiling} and the harder work has somewhere to go again.`,
+];
+const EARN_PATH_GENERAL: readonly string[] = [
+  "A clear day or two on that and there's room to reach again.",
+  "Once it settles, the room to push comes back with it.",
+  "Give it a day or two to come good and today's ceiling lifts again.",
+  "It opens back up as soon as that reads clear again.",
+];
+
+// The earn-path vocabulary, registered beside the rest of the Brief's words
+// (templated set rendered with a sample ceiling, exactly as DAY_READ_WHY_VARIANTS
+// does for its own templated entries).
+export const DAY_READ_EARN_PATH_VARIANTS: Readonly<Record<string, readonly string[]>> = {
+  "planned_training:earn_path_intensity": EARN_PATH_INTENSITY.map((render) => render("148 bpm")),
+  "planned_training:earn_path": EARN_PATH_GENERAL,
+};
+// The one idea each must carry: something OPENS. A phrasing that names the brake and
+// forgets the way out is the sentence this whole layer exists to replace.
+export const DAY_READ_EARN_PATH_CONCEPT: Readonly<Record<string, RegExp>> = {
+  "planned_training:earn_path_intensity": /\b(?:opens?|back|again|somewhere to go)\b/i,
+  "planned_training:earn_path": /\b(?:opens?|back|again|room)\b/i,
+};
+
+// The one earn-path sentence for the brake that is actually holding the day, or "" when
+// the brake carries no voice at all. Keyed off the VOICE rather than the dimension: the
+// run-intensity caution is the only one carrying a concrete unlock, and it identifies
+// itself by voice key, so a second brake that grows one later joins here rather than in
+// a parallel chain somewhere else.
+function earnPathClause(voice: SignalVoiceRef | null | undefined, date: string): string {
+  const ceiling = String(voice?.subject ?? "").trim();
+  return voice?.key === "run_intensity_compressed" && ceiling
+    ? pickDayVariant(EARN_PATH_INTENSITY, date, "planned_training:earn_path_intensity")(ceiling)
+    : pickDayVariant(EARN_PATH_GENERAL, date, "planned_training:earn_path");
+}
 
 // (A `RECOVERY_WEEK_TRAIN_WHY` set used to sit here as the third arm of the planned-
 // training `why` chain — `holdAggression ? … : caveats.length ? … : recoveryWeek ? … :
@@ -898,6 +1012,7 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   endurance_volume_spike: VOLUME_SPIKE_WHY,
   chronic_sleep_watch: CHRONIC_SLEEP_WHY,
   outcome_feedback_soften: OUTCOME_FEEDBACK_SOFTEN_WHY,
+  outcome_feedback_open: OUTCOME_FEEDBACK_OPEN_WHY,
   unprogrammed_easy_day: UNPROGRAMMED_WHY,
   planned_training: TRAIN_CLEAR_WHY,
   // The backed train day. It keeps the `planned_training` LEDGER code — the decision
@@ -945,6 +1060,11 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // out would soften the day without saying what earned it, which is the one thing an
   // outcome-driven rule may never do.
   outcome_feedback_soften: /\b(?:trained|training)\b(?=[\s\S]*\b(?:well|held up|working|fine)\b)/i,
+  // Same two-part guard as its sibling above, for the same reason: this rule OPENS a
+  // day the floor wanted quiet, and the only thing that earns that is the athlete's
+  // own recent mornings AND how they turned out. A phrasing that keeps the history and
+  // drops the outcome would be opening the day on a hunch.
+  outcome_feedback_open: /\b(?:sessions?|training|work)\b(?=[\s\S]*\b(?:well|held up|landing|fine)\b)/i,
   planned_reduced_training: /\b(?:reduced|light|lighter)\b/i,
   planned_training: /\b(?:due|train|session)\b/i,
   // A push read that forgets to offer the reach is just a clear day with extra words.
@@ -1326,9 +1446,9 @@ function compactRecentLoadFingerprint(
   }));
 }
 
-function compactFlexibleAgendaFingerprint(value: unknown): NonNullable<
-  DayReadFingerprintContext["flexible_training_agenda"]
-> | null {
+function compactFlexibleAgendaFingerprint(
+  value: unknown
+): NonNullable<DayReadFingerprintContext["flexible_training_agenda"]> | null {
   if (!value || typeof value !== "object") return null;
   const agenda = value as Record<string, any>;
   const available = agenda.available === true;
@@ -1374,10 +1494,10 @@ function currentDayReadFingerprintContext(date: string): DayReadFingerprintConte
   try {
     programBlock =
       (db
-      .prepare(
-        `SELECT goal, focus, phase, week_index, total_weeks, started_at
+        .prepare(
+          `SELECT goal, focus, phase, week_index, total_weeks, started_at
            FROM program_blocks WHERE status = 'active' ORDER BY id DESC LIMIT 1`
-      )
+        )
         .get() as DayReadFingerprintContext["program_block"]) ?? null;
   } catch {
     programBlock = null;
@@ -1646,7 +1766,8 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
     const programState =
       provided.programState ??
       signalInput(
-        () => brainSignal(isLiveDate ? "program_state" : `program_state:${date}`, () => getProgramState(date, recovery)),
+        () =>
+          brainSignal(isLiveDate ? "program_state" : `program_state:${date}`, () => getProgramState(date, recovery)),
         null
       );
     const expenditure =
@@ -1675,8 +1796,7 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
         signalInput(() => brainSignal(`run_intensity:${date}`, () => runIntensityDiscipline(date)), null),
       context: provided.context ?? signalInput(() => activeContextEffect(date), null),
       contextEvents:
-        provided.contextEvents ??
-        signalInput(() => listContextEvents({ activeOnly: true, on: date }) as any[], []),
+        provided.contextEvents ?? signalInput(() => listContextEvents({ activeOnly: true, on: date }) as any[], []),
       completedToday: provided.completedToday ?? false,
     });
   });
@@ -1716,6 +1836,40 @@ const SOFTENABLE_REST_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.low_readiness_rest.code,
   DAY_READ_OUTCOMES.felt_run_down_rest.code,
   DAY_READ_OUTCOMES.acute_signal_protection.code,
+]);
+
+// ---------- …and which EASY reads it may open (owner ruling, 2026-08-17) ----------
+// The mirror of the set above, one rung up. Same shape of argument: these are the easy
+// reads whose case is an ACCUMULATION — a sleep trend, a week's running that ramped, a
+// board of soft signals — never a fact about the last 24 hours and never anything
+// clinical. Those are exactly the reads an experienced athlete has been outrunning
+// successfully, and opening one is reversible: a train read is still a suggestion, and
+// tomorrow's model sees how today actually went.
+//
+// EVERY easy-producing rule code, and where each landed:
+//   • acute_signal_protection  — SOFTENABLE. The dominant soft-signal easy read. Its
+//     clinical shapes are already excluded by clinicallyDriven() at the call site, so
+//     what is left here is the accumulation case this rule is for.
+//   • chronic_sleep_watch      — SOFTENABLE. A trend, explicitly "nothing acute this
+//     morning". (Its acute sibling, acute_sleep_corroborated, produces a REST and is
+//     excluded from the rest ladder for the same reason: fresh evidence about today.)
+//   • endurance_volume_spike   — SOFTENABLE. A week-shaped mileage argument, and the
+//     kind of week an athlete who is absorbing it demonstrably trains through.
+//   • logged_light_work_today  — EXCLUDED. Not a brake at all: it acknowledges movement
+//     ALREADY logged today. Opening it would ask for a second session on the strength
+//     of evidence about other mornings.
+//   • unprogrammed_easy_day    — EXCLUDED. There is no session to open. The floor is
+//     saying nothing is due, which history cannot argue with.
+//   • outcome_feedback_soften  — EXCLUDED, and this one is a safety rule rather than a
+//     taste: it is a rest this loop ALREADY softened once. Allowing it would chain the
+//     two ladders into rest → easy → train inside one window, and each ladder moves
+//     exactly one step by design.
+// Recovery-week and symptom/illness reads reach neither set: `recoveryWeek` and
+// clinicallyDriven() are checked at the call site, whichever code produced the day.
+const SOFTENABLE_EASY_CODES: ReadonlySet<string> = new Set([
+  DAY_READ_OUTCOMES.acute_signal_protection.code,
+  DAY_READ_OUTCOMES.chronic_sleep_watch.code,
+  DAY_READ_OUTCOMES.endurance_volume_spike.code,
 ]);
 
 // The hard ceiling on the training-drive read. Three stacked loading days is where the
@@ -2251,6 +2405,18 @@ export function dayRead(
   // Published here so the rules below can see the evidence, and REPUBLISHED once the
   // rules have resolved with `applied` — whether the softening actually fired — added.
   if (outcomeFeedback) (signals as any).outcome_feedback = { ...outcomeFeedback, applied: false };
+  // The same evidence one rung up: easy mornings that became real sessions. Derived
+  // from the SAME model instance rather than a second read of the ledger — two windows
+  // over the same days that could disagree about which days they cover is the drift
+  // this file keeps paying for elsewhere. Same memo, same fail-soft contract.
+  const easyFeedback: EasyOverrideSoftening | null = signalInput(
+    () =>
+      brainSignal(`easy_override_softening:${d}`, () =>
+        easyOverrideSoftening(readAdherenceModel(d, OUTCOME_SOFTENING_WINDOW_DAYS + 2), d)
+      ),
+    null
+  );
+  if (easyFeedback) (signals as any).easy_outcome_feedback = { ...easyFeedback, applied: false };
   // The rhythm-driven rest: genuinely-loading days stacking up outside a reduced week.
   // Hoisted out of the earned-rest rule because the training-drive rule directly above
   // it answers THIS trigger and no other, and two copies of the condition is how the
@@ -2517,8 +2683,53 @@ export function dayRead(
         // Each caveat is a rotating variant set, never a literal (see the sets above):
         // this rule fires on most mornings, so a fixed fragment reads as a stuck app.
         const caveats: string[] = [];
-        if (recoveryWeek) caveats.push(pickDayVariant(RECOVERY_WEEK_CAVEAT, d, "planned_training:recovery_week"));
-        if (reduceItem)
+        // ---- SAFETY vs BOOKKEEPING (owner ruling, 2026-08-17) ----
+        //
+        // A caveat used to withdraw the push simply by EXISTING: `!caveats.length` was
+        // the gate, so the read's one positive direction was switched off by any note
+        // at all, including notes that are not about whether the athlete can carry load
+        // today. On a real training block something is essentially always worth
+        // mentioning, so the push was unreachable in practice — the read could get
+        // quieter but never louder, which is the pessimism this ruling is about.
+        //
+        // So each caveat is now classified where it is raised, and only the SAFETY ones
+        // veto. The test is not severity, it is subject: does this caveat say something
+        // about the athlete's capacity to take load today?
+        //
+        //   SAFETY (vetoes the push)
+        //     recovery_week      a deliberately reduced week; reaching inside it is
+        //                        reaching against the structure, not within it
+        //     injury             an active injury being worked around
+        //     ease_around        a dated load-reducing constraint, same family
+        //     joint_pain         a fresh health constraint off session feedback
+        //     life_pressure      thinner RECOVERY (a late night / a stressful stretch);
+        //                        the caveat's own job is to hold intensity down
+        //
+        //   BOOKKEEPING (no longer vetoes)
+        //     adapted plan pick  which day was chosen, not how much can be carried
+        //     anticipate_deload  a reset on the HORIZON; the deload itself, when it
+        //                        arrives, is a recovery week and vetoes as one
+        //     volume_spike       running-specific, and it already has its own dedicated
+        //                        brake (the endurance_volume_spike easy read above, plus
+        //                        the spike factor in weeklyRunPlan) — vetoing the lifting
+        //                        push as well was the same finding charged twice
+        //     low_sleep          a chronic sleep TREND, which already brakes in its own
+        //                        right (the recovery dimension, the chronic-sleep easy
+        //                        read, and the run-volume factor) — charged twice again
+        //     commitment_pressure a squeezed CLOCK; the day is already clamped 60 → 40,
+        //                        and a short session is a fine session to reach inside
+        //
+        // `backed` and `!holdAggression` are unchanged and still required, and between
+        // them they already exclude every fresh caution and constraint in the signal
+        // state — so most of the SAFETY list is belt-and-braces on top of a bar those
+        // two already clear. It is enumerated anyway: a veto that depends on a
+        // coincidence of two other layers is a veto nobody can find later.
+        const pushVetoes: string[] = [];
+        if (recoveryWeek) {
+          caveats.push(pickDayVariant(RECOVERY_WEEK_CAVEAT, d, "planned_training:recovery_week"));
+          pushVetoes.push("recovery_week");
+        }
+        if (reduceItem) {
           caveats.push(
             reduceItem.kind === "injury"
               ? pickDayVariant(
@@ -2528,6 +2739,8 @@ export function dayRead(
                 )(String(reduceItem.title || "an injury").toLowerCase())
               : pickDayVariant(EASE_AROUND_CAVEAT, d, "planned_training:ease_around")
           );
+          pushVetoes.push(reduceItem.kind === "injury" ? "injury" : "ease_around");
+        }
         // A health constraint the CONTEXT path cannot see. `reduceItem` is derived from
         // context EVENTS, so an injury, an illness or a dated constraint is already
         // voiced just above — but joint pain arrives from session feedback
@@ -2547,7 +2760,10 @@ export function dayRead(
               ? pickDayVariant(JOINT_PAIN_CAVEAT, d, "planned_training:joint_pain")(sore)
               : pickDayVariant(EASE_AROUND_CAVEAT, d, "planned_training:ease_around")
           );
+          pushVetoes.push("joint_pain");
         }
+        // BOOKKEEPING from here down — these push a caveat and no veto. See the table
+        // where `pushVetoes` is declared for why each one landed on that side.
         if (sd.selection?.adapted && sd.selection?.reason) caveats.push(String(sd.selection.reason));
         if (anticipateDeload)
           caveats.push(pickDayVariant(ANTICIPATE_DELOAD_CAVEAT, d, "planned_training:anticipate_deload"));
@@ -2617,6 +2833,10 @@ export function dayRead(
           };
         } else if (schedulePressure) {
           caveats.push(pickDayVariant(LIFE_PRESSURE_CAVEAT, d, "planned_training:life_pressure"));
+          // SAFETY — this branch is the RECOVERY one of the two compress causes (see the
+          // split above); its whole content is "hold the intensity", which is the exact
+          // opposite of what the push offers.
+          pushVetoes.push("life_pressure");
           // Recovery pressure is a reason to hold intensity, not to shorten the day —
           // so the clock is left alone. The directive is still recorded so the machine
           // surface stays honest about what the signal state said AND what the read
@@ -2636,23 +2856,76 @@ export function dayRead(
         // see the retired RECOVERY_WEEK_TRAIN_WHY note at the top of this file).
         // The brain's other direction. Every arm above this one either holds the day
         // back or leaves it alone; this is the only one that offers MORE, and it fires
-        // exactly when the unified state says the evidence positively backs the day
-        // (support === "backed") AND this rule found nothing at all to caveat. Both
-        // halves matter: `backed` already requires no fresh caution or constraint
-        // anywhere, and an empty caveat list is what rules out the day's non-signal
-        // brakes too — a recovery week (which always pushes its own caveat), a
-        // deload on the horizon, a mileage spike, a work-around. Suggestion, never a
-        // gate; `est_minutes` is deliberately untouched, because a backed day is a
-        // reason to reach WITHIN the session, not a reason to make it longer.
-        const pushBias = signalState.action.support?.level === "backed" && !holdAggression && !caveats.length;
+        // when the unified state says the evidence positively backs the day
+        // (support === "backed") AND nothing SAFETY-class is on the board. `backed`
+        // already requires no fresh caution or constraint anywhere; `pushVetoes` is what
+        // rules out the day's non-signal brakes too — a recovery week, an injury being
+        // worked around, a stretch that is eating recovery.
+        //
+        // The gate used to read `!caveats.length`, i.e. any note at all. That is the
+        // clause this ruling replaces: see the SAFETY/BOOKKEEPING table above for which
+        // notes still veto and why. Suggestion, never a gate; `est_minutes` is
+        // deliberately untouched, because a backed day is a reason to reach WITHIN the
+        // session, not a reason to make it longer.
+        // ---- the caution that is real but UNSECONDED (owner ruling, 2026-08-17) ----
+        //
+        // Raising the hold bar to a second opinion left a gap the athlete would have
+        // felt as the read going deaf: one dimension genuinely at `watch`, no hold, and
+        // therefore nothing at all in the read about it — the Brief would have said
+        // "nothing's holding you back today" on a morning where something was
+        // demonstrably worth saying. Silence would have been a worse bug than the
+        // over-holding, because the finding is real; only the counsel was too firm.
+        //
+        // So the caution still SPEAKS, in its own voice, and the day stays open. Read in
+        // the same precedence order planningDirectives uses, off the same four
+        // dimensions it counts, so the sentence names the dimension the hold WOULD have
+        // named had a second one joined it.
+        //
+        // Held out entirely when anything SAFETY-class is already on the board: those
+        // days already lead with the thing that matters (an injury, a reduced week, a
+        // stretch eating recovery), and handing the lead to a soft caution instead would
+        // demote the constraint to a fragment after the dash. This branch is for the
+        // otherwise-clean board, which is exactly the case the ruling is about.
+        const HOLD_DIMENSIONS: readonly SignalDimension[] = [
+          "recovery_capacity",
+          "training_load_tolerance",
+          "health_constraints",
+          "energy_fueling",
+        ];
+        const notedWatch =
+          holdAggression || pushVetoes.length
+            ? null
+            : (HOLD_DIMENSIONS.find((dimension) => signalState.dimensions[dimension].status === "watch") ?? null);
+        const notedVoice = notedWatch ? signalState.dimensions[notedWatch].voice : null;
+        const notedLead = notedWatch ? spokenSignalVoice(notedVoice, d, "planned_training:noted") : "";
+        const pushBias = signalState.action.support?.level === "backed" && !holdAggression && !pushVetoes.length;
         if (pushBias) (signals as any).push_bias = { backed_by: signalState.action.support?.fields ?? [] };
+        // Whatever holds the day back also says what opens it again — the earn path.
+        // Only the two branches that actually hold something carry one; a clear day and
+        // a push day have nothing to unlock.
+        const earnPath = holdAggression
+          ? ` ${earnPathClause(holdVoice, d)}`
+          : notedWatch
+            ? ` ${earnPathClause(notedVoice, d)}`
+            : "";
+        const caveatRun = caveats.length ? ` — ${caveats.join("; and ")}` : "";
         const why = holdAggression
-          ? `${holdLead} ${pickDayVariant(TRAIN_HOLD_LEAD, d, "planned_training:hold_lead")} — ${caveats.join("; and ")}.`
-          : caveats.length
-            ? `${pickDayVariant(TRAIN_CAVEAT_LEAD, d, "planned_training:caveats")} — ${caveats.join("; and ")}.`
-            : pushBias
-              ? pickDayVariant(TRAIN_PUSH_WHY, d, "planned_training_push")
-              : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
+          ? `${holdLead} ${pickDayVariant(TRAIN_HOLD_LEAD, d, "planned_training:hold_lead")}${caveatRun}.${earnPath}`
+          : notedWatch
+            ? // The caution speaks, the day stays open, and the earn path closes it out.
+              `${notedLead} ${pickDayVariant(TRAIN_NOTED_LEAD, d, "planned_training:noted_lead")}${caveatRun}.${earnPath}`
+            : caveats.length
+              ? // A backed day carrying only bookkeeping notes keeps the reach in the
+                // lead rather than losing it: the caveats are still said, in full, but
+                // the sentence no longer opens as though something were wrong.
+                `${pickDayVariant(
+                  pushBias ? TRAIN_PUSH_CAVEAT_LEAD : TRAIN_CAVEAT_LEAD,
+                  d,
+                  pushBias ? "planned_training:push_caveats" : "planned_training:caveats"
+                )}${caveatRun}.`
+              : pushBias
+                ? pickDayVariant(TRAIN_PUSH_WHY, d, "planned_training_push")
+                : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
         return {
           outcome: recoveryWeek ? DAY_READ_OUTCOMES.planned_reduced_training : DAY_READ_OUTCOMES.planned_training,
           read: { kind: "train", focus: sd.focus, why, est_minutes: commitmentPressure ? 40 : 60, signals },
@@ -2711,7 +2984,41 @@ export function dayRead(
   if (outcomeFeedback) {
     (signals as any).outcome_feedback = { ...outcomeFeedback, applied: softenRest } satisfies OutcomeFeedbackSignal;
   }
-  const outcome = softenRest ? DAY_READ_OUTCOMES.outcome_feedback_soften : ruleOutcome;
+  // ---- …and the same loop one rung up ----
+  // An EASY read the athlete has repeatedly taken above easy without paying for it
+  // becomes a training day. ONE step, exactly as above: easy → train and no further.
+  // Same evidence bar, same clinical floor, and additionally never inside a reduced
+  // week — a recovery week is a deliberate structure the athlete signed up for, not a
+  // read arguing with them, so their own overruns are not evidence against it.
+  //
+  // `!softenRest` is belt-and-braces rather than arithmetic: a rest read cannot be in
+  // SOFTENABLE_EASY_CODES anyway, but stating it here makes it impossible for the two
+  // ladders to compose into rest → train by way of a future code appearing in both.
+  const softenEasy =
+    !softenRest &&
+    easyFeedback?.active === true &&
+    ruleRead.kind === "easy" &&
+    SOFTENABLE_EASY_CODES.has(ruleOutcome.code) &&
+    !recoveryWeek &&
+    !clinicallyDriven(signalState, healthWorkaround);
+  // The opened day gets the focus and the clock of the session that was actually due,
+  // when one is: the easy reads this rule may open sit ABOVE the planned-training rule
+  // and preempt it, so without this an athlete who has been outrunning the quiet reads
+  // for a fortnight would be handed a training day with nothing in it. No plan day due
+  // → the read keeps its own focus and opens the clock a little rather than inventing a
+  // session that does not exist.
+  const openedPlanDay = softenEasy ? suggestedPlanDay() : null;
+  if (easyFeedback) {
+    (signals as any).easy_outcome_feedback = {
+      ...easyFeedback,
+      applied: softenEasy,
+    } satisfies EasyOutcomeFeedbackSignal;
+  }
+  const outcome = softenRest
+    ? DAY_READ_OUTCOMES.outcome_feedback_soften
+    : softenEasy
+      ? DAY_READ_OUTCOMES.outcome_feedback_open
+      : ruleOutcome;
   const resolvedRead = softenRest
     ? {
         ...ruleRead,
@@ -2720,7 +3027,15 @@ export function dayRead(
         why: pickDayVariant(OUTCOME_FEEDBACK_SOFTEN_WHY, d, "outcome_feedback_soften"),
         est_minutes: 20,
       }
-    : ruleRead;
+    : softenEasy
+      ? {
+          ...ruleRead,
+          kind: "train" as const,
+          focus: openedPlanDay?.focus ?? ruleRead.focus ?? null,
+          why: pickDayVariant(OUTCOME_FEEDBACK_OPEN_WHY, d, "outcome_feedback_open"),
+          est_minutes: openedPlanDay ? 60 : 45,
+        }
+      : ruleRead;
   // The health work-around closes EVERY protective read, whichever rule produced it
   // — a short night, stacked load, a light walk already logged, or the bare floor. It
   // used to be spoken by one rule only, so the athlete's constraint guidance disappeared
@@ -3249,9 +3564,7 @@ export function frequentFoods(hour?: number): FrequentFood[] {
   for (const r of rows) {
     // eaten_at is local "HH:MM"; created_at is stored UTC ("YYYY-MM-DD HH:MM:SS").
     // Read whichever this row has and accept a ±2h window (wrapping midnight).
-    const hh = r.eaten_at
-      ? Number(String(r.eaten_at).slice(0, 2))
-      : Number(String(r.created_at ?? "").slice(11, 13));
+    const hh = r.eaten_at ? Number(String(r.eaten_at).slice(0, 2)) : Number(String(r.created_at ?? "").slice(11, 13));
     if (!Number.isFinite(hh)) continue;
     const diff = Math.min(Math.abs(hh - targetHour), 24 - Math.abs(hh - targetHour));
     if (diff > 2) continue;
