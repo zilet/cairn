@@ -71,6 +71,13 @@ function envFor(dir) {
     // suite on a config difference rather than a regression.
     GEMINI_TEXT_MODEL: "",
     GEMINI_IMAGE_MODEL: "",
+    // The art pipeline's optional per-kind knobs, for the same reason: a
+    // developer who exports one of these must not change what the art tests
+    // assert. Each art test sets what it needs before importing dist/art.js.
+    GEMINI_EXERCISE_IMAGE_MODEL: "",
+    ART_EXERCISE_STYLE_REFS: "",
+    ART_IMAGE_COST_USD: "",
+    ART_EXERCISE_IMAGE_COST_USD: "",
   };
 }
 

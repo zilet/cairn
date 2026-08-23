@@ -8,7 +8,10 @@
 // again. Offline — asserts on the resolved constants, no network call.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GEMINI_IMAGE_MODEL, GEMINI_TEXT_MODEL } from "../dist/art.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { GEMINI_IMAGE_MODEL, GEMINI_TEXT_MODEL, GEMINI_EXERCISE_IMAGE_MODEL } from "../dist/art.js";
 
 // Google's current stable Flash-tier ids (verified against the live model
 // list at the time this test was written). Only extend this list after
@@ -22,7 +25,11 @@ const KNOWN_VALID_TEXT_MODELS = [
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
 ];
-const KNOWN_VALID_IMAGE_MODELS = ["gemini-3.1-flash-image"];
+// gemini-3-pro-image ("Nano Banana Pro") verified 2026-08-23 against Google's own
+// https://ai.google.dev/gemini-api/docs/models (generative-media section) and
+// https://ai.google.dev/gemini-api/docs/pricing ($0.134 per 1K/2K image). It is
+// the recommended GEMINI_EXERCISE_IMAGE_MODEL, so it belongs in the allowlist.
+const KNOWN_VALID_IMAGE_MODELS = ["gemini-3.1-flash-image", "gemini-3-pro-image"];
 
 test("GEMINI_TEXT_MODEL default is a non-empty, currently-valid Flash-tier id", () => {
   assert.equal(typeof GEMINI_TEXT_MODEL, "string");
@@ -47,4 +54,27 @@ test("GEMINI_IMAGE_MODEL default is a non-empty, currently-valid image-generatio
     KNOWN_VALID_IMAGE_MODELS.includes(GEMINI_IMAGE_MODEL),
     `GEMINI_IMAGE_MODEL default "${GEMINI_IMAGE_MODEL}" is not a known-valid Gemini image id`,
   );
+});
+
+test("the exercise-model override is unset by default", () => {
+  // Opting in is a deployment decision: unset means exercise art bills, renders
+  // and fails exactly like every other kind.
+  assert.equal(GEMINI_EXERCISE_IMAGE_MODEL, "");
+});
+
+test(".env.example never recommends a model id that isn't on the verified list", () => {
+  // The F1 bug class, one level up: the code default was pinned by the tests
+  // above, but .env.example was free to recommend an id nobody had checked
+  // against Google's model list. A recommendation in the file a user copies IS
+  // a default, so it answers to the same allowlist.
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const env = fs.readFileSync(path.join(root, ".env.example"), "utf8");
+  const recommended = [...env.matchAll(/^#\s*GEMINI\w*_IMAGE_MODEL=(\S+)\s*$/gm)].map((m) => m[1]);
+  assert.ok(recommended.length, "the art model overrides are still documented");
+  for (const id of recommended) {
+    assert.ok(
+      KNOWN_VALID_IMAGE_MODELS.includes(id),
+      `.env.example recommends "${id}", which is not a verified Gemini image model id`,
+    );
+  }
 });

@@ -187,7 +187,31 @@ function settingsArtSpendCardHtml(stats: unknown): string {
     <div class="sess" style="margin-top:10px">
       <div class="sess-line"><b>${money(recent.est_cost_usd)}</b> est. spend ${since} · ${recent.images_generated} image${recent.images_generated === 1 ? "" : "s"} generated · ${recent.reused} reused (~${money(recent.est_saved_usd)} saved)</div>
       <div class="sess-line" style="color:var(--muted)">All-time: ${money(all.est_cost_usd)} spent · ${all.images_generated} images · ${artStats.cached_assets} cached, served from cache forever after.</div>
+      ${artStats.art_enabled && artStats.gemini_configured ? settingsArtHealthLineHtml(artStats.health) : ""}
     </div>`;
+}
+
+/**
+ * One calm line about whether art is actually rendering. Observational, never an
+ * alarm: it reports when a new image last arrived and how many attempts didn't
+ * come back, and says plainly when the pipeline has paused itself.
+ *
+ * Only rendered when art is switched ON and a Gemini key is configured. A fresh
+ * or seeded install has neither, and "No image has rendered yet" would read as a
+ * fault where nothing was ever asked to run.
+ */
+function settingsArtHealthLineHtml(health: unknown): string {
+  if (!health) return "";
+  const row = settingsSurfaceRecord(health);
+  const circuit = settingsSurfaceRecord(row.circuit);
+  const lastSuccess = row.last_success_at ? String(row.last_success_at).slice(0, 10) : "";
+  const failures = Number(row.failures_7d) || 0;
+  const parts: string[] = [
+    lastSuccess ? `Last new image ${escHtml(lastSuccess)}` : "No image has rendered yet",
+  ];
+  if (failures) parts.push(`${failures} attempt${failures === 1 ? "" : "s"} didn't come back in the last 7 days`);
+  if (circuit.open) parts.push("paused for a while, then it tries again on its own");
+  return `<div class="sess-line" style="color:var(--muted)">${parts.join(" · ")}.</div>`;
 }
 
 function settingsSourcesSliceHtml(options: SettingsSourcesSliceOptions): string {

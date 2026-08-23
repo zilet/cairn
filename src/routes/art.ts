@@ -63,5 +63,7 @@ artRouter.get("/art/manifest", (_req, res) => {
 });
 
 // Artwork spend telemetry: estimated Gemini cost since art was last enabled,
-// all-time totals, generations avoided via semantic reuse, and cache size.
+// all-time totals, generations avoided via semantic reuse, and cache size. Also
+// returns `health`: when art last rendered, failures in the last 7 days, the last
+// upstream error code, and whether the circuit breaker has paused generation.
 artRouter.get("/art/stats", (_req, res) => res.json(getArtStats()));

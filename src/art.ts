@@ -4,8 +4,9 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   getSettings, getGeminiApiKey, listExercises, listMealPlans, listFoodNotes, listActivities,
-  getArtAlias, setArtAlias, addArtAsset, listArtAssets, recordArtUsage,
+  getArtAlias, setArtAlias, addArtAsset, listArtAssets, recordArtUsage, recordDiagnosticEvent,
 } from "./repo.js";
+import { artCircuitOpen, noteArtFailure, noteArtSuccess, onArtCircuitClose } from "./artCircuit.js";
 
 // Generated artwork service: photoreal/stylized PNGs for foods, exercises, and
 // activities via Google's gemini-3.1-flash-image ("nano banana 2"), cached on
@@ -34,17 +35,55 @@ const SEED_ART_DIR = path.join(__dirname, "..", "seed-art");
 export const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
 // gemini-3.6-flash: the current stable Gemini Flash-tier model.
 export const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.6-flash";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`;
+// Optional per-kind override for EXERCISE art only. Unset (the default) means
+// exercise art uses GEMINI_IMAGE_MODEL like every other kind. The recommended
+// value is "gemini-3-pro-image" (verified against Google's published model and
+// pricing pages on 2026-08-23): the clay-figurine series reads as one set only
+// when successive figures share a sculptural language, and the pro image model
+// both holds style better and accepts reference images (see styleReferenceParts).
+export const GEMINI_EXERCISE_IMAGE_MODEL = process.env.GEMINI_EXERCISE_IMAGE_MODEL || "";
+// Setting the override is the opt-in to style references; this is the escape
+// hatch for an override model that doesn't take them.
+const EXERCISE_STYLE_REFS_ENABLED = process.env.ART_EXERCISE_STYLE_REFS !== "0";
 const GEMINI_TEXT_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent`;
 const GENERATE_TIMEOUT_MS = 60_000;
 const TEXT_TIMEOUT_MS = 20_000;
 
+/** The image model that generates this kind: the exercise override, else the default. */
+export function imageModelFor(kind: ArtKind): string {
+  return kind === "exercise" && GEMINI_EXERCISE_IMAGE_MODEL ? GEMINI_EXERCISE_IMAGE_MODEL : GEMINI_IMAGE_MODEL;
+}
+
+/** What one image of this kind costs to generate, for the spend ledger. */
+export function imageCostFor(kind: ArtKind): number {
+  return kind === "exercise" && GEMINI_EXERCISE_IMAGE_MODEL ? EXERCISE_IMAGE_COST_USD : IMAGE_COST_USD;
+}
+
+function imageUrlFor(model: string): string {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+}
+
 // Cost estimates for the spend ledger (art_usage). Flash image bills a flat
 // ~1290 output tokens per image; text rates are USD per 1M tokens. All
 // env-overridable so a price change doesn't need a code change.
-const IMAGE_COST_USD = Number(process.env.ART_IMAGE_COST_USD || 0.039);
-const TEXT_IN_USD_PER_M = Number(process.env.ART_TEXT_IN_USD_PER_M || 0.30);
-const TEXT_OUT_USD_PER_M = Number(process.env.ART_TEXT_OUT_USD_PER_M || 2.50);
+// Rates below are Google's published list prices for gemini-3.1-flash-image
+// ($0.067 per generated image) and the Gemini 3.x Flash text tier ($0.75 per M
+// input / $3.75 per M output), as of 2026-08.
+const IMAGE_COST_USD = Number(process.env.ART_IMAGE_COST_USD || 0.067);
+// A mixed-model setup is mispriced by one flat rate: with the exercise override
+// in play, exercise images bill at the override model's rate (gemini-3-pro-image
+// is $0.134 per 1K/2K image as of 2026-08) while food and activity still bill at
+// the flash rate. Unset falls back to ART_IMAGE_COST_USD, so a single-model
+// install is unchanged.
+const EXERCISE_IMAGE_COST_USD =
+  Number(process.env.ART_EXERCISE_IMAGE_COST_USD || 0) || IMAGE_COST_USD;
+const TEXT_IN_USD_PER_M = Number(process.env.ART_TEXT_IN_USD_PER_M || 0.75);
+const TEXT_OUT_USD_PER_M = Number(process.env.ART_TEXT_OUT_USD_PER_M || 3.75);
+
+// Up to this many already-generated exercise images ride along as style
+// references when the pro image model is in play.
+const STYLE_REFERENCE_LIMIT = 3;
+const STYLE_REFERENCE_MAX_BYTES = 2_000_000;
 
 export const ART_KINDS = ["food", "exercise", "activity"] as const;
 export type ArtKind = (typeof ART_KINDS)[number];
@@ -124,9 +163,15 @@ interface Job {
 
 const queue: Job[] = [];
 const inFlight = new Set<string>(); // queued or generating, by cache key
-// Keys that failed this process lifetime — don't hammer the API; a server
-// restart clears the set so a retry is allowed.
-const failed = new Set<string>();
+// Keys that failed this process lifetime, mapped to the image model that failed
+// them — don't hammer the API; a server restart clears the map so a retry is
+// allowed. So does that model's circuit breaker closing: an outage that fails
+// 300 keys must not need a restart to recover. Keys are cleared per model, so a
+// recovering flash model doesn't un-park keys still waiting on a broken pro one.
+const failed = new Map<string, string>();
+onArtCircuitClose((model) => {
+  for (const [key, failedModel] of failed) if (failedModel === model) failed.delete(key);
+});
 
 // Enqueue background generation for a cache miss. Returns true if the request
 // was queued (or already in flight); false when generation is unavailable
@@ -134,6 +179,9 @@ const failed = new Set<string>();
 export function requestArt(kind: ArtKind, text: string): boolean {
   if (!getGeminiApiKey()) return false;
   if (!getSettings().art_enabled) return false;
+  // Gate on the model THIS kind would use: a broken exercise model must not
+  // stop food and activity art from queueing.
+  if (artCircuitOpen(imageModelFor(kind))) return false; // upstream is down — don't queue into a wall
   const key = cacheKey(kind, text);
   if (failed.has(key)) return false;
   if (cachedArtPath(kind, text)) return false; // direct hit or alias-resolved hit
@@ -156,6 +204,8 @@ export async function warmExerciseArt(name: string, context?: ArtContext | null)
   if (!text) return false;
   if (!getGeminiApiKey()) return false;
   if (!getSettings().art_enabled) return false;
+  const model = imageModelFor("exercise");
+  if (artCircuitOpen(model)) return false;
   const key = cacheKey("exercise", text);
   if (failed.has(key)) return false;
   if (fs.existsSync(fileForKey(key))) return false; // already generated (enriched or name-only)
@@ -163,20 +213,48 @@ export async function warmExerciseArt(name: string, context?: ArtContext | null)
   inFlight.add(key);
   try {
     await generate({ key, kind: "exercise", text, context });
-    addArtAsset(key, "exercise", normalize(text));
-    recordArtUsage({
-      kind: "exercise", query: normalize(text), asset_key: key,
-      action: "generate", model: GEMINI_IMAGE_MODEL, est_cost_usd: IMAGE_COST_USD,
-    });
-    return true;
   } catch (e: any) {
-    failed.add(key);
-    recordArtUsage({ kind: "exercise", query: normalize(text), action: "fail", model: GEMINI_IMAGE_MODEL });
+    failed.set(key, model);
+    noteArtFailure(model, artErrorCode(e));
+    recordArtUsage({ kind: "exercise", query: normalize(text), action: "fail", model });
     console.warn(`[art] exercise art failed for "${text}": ${e?.message ?? e}`);
     return false;
   } finally {
     inFlight.delete(key);
   }
+  recordGeneration("exercise", key, normalize(text), normalize(text), model);
+  return true;
+}
+
+/**
+ * Persist a generation that already landed on disk, and only THEN tell the
+ * breaker upstream is healthy. The order matters both ways: a success recorded
+ * before the write would credit a render that isn't in the ledger, and a
+ * persistence throw is OUR fault, not the model's — counting it as an upstream
+ * failure would march a perfectly healthy model toward an open circuit. So a
+ * write failure gets its own diagnostic and touches the breaker not at all.
+ */
+function recordGeneration(kind: ArtKind, key: string, assetText: string, query: string, model: string): void {
+  try {
+    addArtAsset(key, kind, assetText);
+    recordArtUsage({
+      kind, query, asset_key: key,
+      action: "generate", model, est_cost_usd: imageCostFor(kind),
+    });
+  } catch (e: any) {
+    recordDiagnosticEvent({
+      source: "worker",
+      kind: "art_persist_error",
+      level: "error",
+      operation: "art:persist",
+      fingerprint: `worker:art_persist_error:${kind}`,
+      message: String(e?.message ?? e).slice(0, 240),
+      metadata: { model },
+    });
+    console.warn(`[art] generated ${kind} "${query}" but could not record it: ${e?.message ?? e}`);
+    return;
+  }
+  noteArtSuccess(model);
 }
 
 let draining = false;
@@ -187,6 +265,15 @@ async function drain(): Promise<void> {
   try {
     while (queue.length) {
       const job = queue.shift()!;
+      const model = imageModelFor(job.kind);
+      // The breaker for THIS job's model may have opened partway through the
+      // drain — drop the job rather than spend on a known outage, but keep
+      // draining: a broken exercise model must not abandon the food and
+      // activity backlog for the length of its cooldown.
+      if (artCircuitOpen(model)) {
+        inFlight.delete(job.key);
+        continue;
+      }
       try {
         // An earlier job this drain may have aliased this query onto an
         // asset that now exists — nothing left to do.
@@ -194,16 +281,13 @@ async function drain(): Promise<void> {
         const r = await resolveConcept(job);
         if (!r.reused) {
           await generate({ key: r.key, kind: job.kind, text: r.text });
-          addArtAsset(r.key, job.kind, normalize(r.text));
-          recordArtUsage({
-            kind: job.kind, query: normalize(job.text), asset_key: r.key,
-            action: "generate", model: GEMINI_IMAGE_MODEL, est_cost_usd: IMAGE_COST_USD,
-          });
+          recordGeneration(job.kind, r.key, normalize(r.text), normalize(job.text), model);
         }
       } catch (e: any) {
         // A failing job must never break the loop.
-        failed.add(job.key);
-        recordArtUsage({ kind: job.kind, query: normalize(job.text), action: "fail", model: GEMINI_IMAGE_MODEL });
+        failed.set(job.key, model);
+        noteArtFailure(model, artErrorCode(e));
+        recordArtUsage({ kind: job.kind, query: normalize(job.text), action: "fail", model });
         console.warn(`[art] generation failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
       } finally {
         inFlight.delete(job.key);
@@ -257,7 +341,7 @@ async function geminiText(prompt: string): Promise<{ json: any; in_tokens: numbe
       }),
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`gemini text responded ${res.status}`);
+    if (!res.ok) throw await geminiFailure(res, GEMINI_TEXT_MODEL, "canonicalize");
     body = await res.json().catch(() => null);
   } finally {
     clearTimeout(timer);
@@ -295,7 +379,7 @@ async function resolveConcept(job: Job): Promise<{ key: string; text: string; re
       setArtAlias(job.kind, norm, existing[idx].key);
       recordArtUsage({
         kind: job.kind, query: norm, asset_key: existing[idx].key,
-        action: "reuse", est_saved_usd: IMAGE_COST_USD,
+        action: "reuse", est_saved_usd: imageCostFor(job.kind),
       });
       return { key: existing[idx].key, text: existing[idx].text, reused: true };
     }
@@ -306,7 +390,7 @@ async function resolveConcept(job: Job): Promise<{ key: string; text: string; re
       // Two phrasings can canonicalize to the same phrase even when the asset
       // fell outside the comparison window — that's still a cache hit.
       if (fs.existsSync(fileForKey(key))) {
-        recordArtUsage({ kind: job.kind, query: norm, asset_key: key, action: "reuse", est_saved_usd: IMAGE_COST_USD });
+        recordArtUsage({ kind: job.kind, query: norm, asset_key: key, action: "reuse", est_saved_usd: imageCostFor(job.kind) });
         return { key, text: canonical, reused: true };
       }
       return { key, text: canonical, reused: false };
@@ -465,32 +549,192 @@ export function installSeedArt(): { installed: number; available: number; matche
 // deterministic, alias-free pack (each query → its own file, no art_aliases rows to
 // ship). Returns the absolute file path; throws on failure. `force` regenerates even
 // when the file already exists. NOT used by the runtime serve/warm path.
+//
+// Always the BASE model with no style references, whatever the local env says:
+// the shipped pack must not vary with one builder's per-kind override, and a
+// figurine seeded off whatever happened to be cached locally is not
+// reproducible. It still answers to the breaker — a builder loop that keeps
+// calling into a dead upstream is exactly the burst this round exists to stop.
 export async function pregenerate(kind: ArtKind, text: string, opts: { force?: boolean } = {}): Promise<string> {
   const key = cacheKey(kind, text);
   const file = fileForKey(key);
   if (!opts.force && fs.existsSync(file)) return file;
-  await generate({ key, kind, text });
+  const model = GEMINI_IMAGE_MODEL;
+  if (artCircuitOpen(model)) throw new Error(`art generation is paused: ${model} circuit is open`);
+  try {
+    await generate({ key, kind, text }, { model, styleRefs: false });
+  } catch (e) {
+    noteArtFailure(model, artErrorCode(e));
+    throw e;
+  }
+  noteArtSuccess(model);
   return file;
 }
 
-async function generate(job: Job): Promise<void> {
+// ---- upstream failure diagnosis ----
+// The pipeline once failed for weeks emitting only "gemini responded 400": the
+// response BODY was never captured, so the cause was undiagnosable from the
+// field. Every non-OK response now yields a short error CODE (for grouping) and
+// a truncated body (for reading), logged once per distinct code and recorded in
+// the durable diagnostic spine.
+
+const ERROR_BODY_CHARS = 500;
+// Codes already logged this process lifetime — the point is one readable line
+// per distinct fault, not one per doomed call.
+const loggedErrorCodes = new Set<string>();
+
+/** A short, groupable code for a Gemini failure: "<http>:<api status or hint>". */
+export function geminiErrorCode(status: number, rawBody: string): string {
+  let hint = "";
+  try {
+    const parsed = JSON.parse(rawBody);
+    hint = String(parsed?.error?.status ?? parsed?.error?.code ?? "").trim();
+  } catch {
+    /* non-JSON bodies (proxy/HTML errors) fall through to the text hint */
+  }
+  if (!hint) {
+    const words = rawBody.replace(/\s+/g, " ").trim().slice(0, 40);
+    hint = words ? crypto.createHash("sha1").update(words).digest("hex").slice(0, 8) : "no_body";
+  }
+  return `${status}:${hint.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 40)}`;
+}
+
+/** Gemini's own error message, when the body is its standard error envelope. */
+function geminiErrorMessage(rawBody: string): string {
+  try {
+    const parsed = JSON.parse(rawBody);
+    const message = String(parsed?.error?.message ?? "").trim();
+    if (message) return message;
+  } catch {
+    /* fall through */
+  }
+  return rawBody.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Turn a non-OK Gemini response into a throwable Error carrying the error code,
+ * logging + recording the detail exactly once per distinct (model, code).
+ * `operation` is "generate" or "canonicalize".
+ */
+async function geminiFailure(res: Response, model: string, operation: string): Promise<Error> {
+  const rawBody = await res.text().then((t) => t.slice(0, ERROR_BODY_CHARS)).catch(() => "");
+  const code = geminiErrorCode(res.status, rawBody);
+  const seenKey = `${model}:${operation}:${code}`;
+  if (!loggedErrorCodes.has(seenKey)) {
+    loggedErrorCodes.add(seenKey);
+    console.warn(`[art] ${operation} failed · ${model} · HTTP ${res.status} · ${code} · body: ${rawBody || "(empty)"}`);
+  }
+  // The sink coalesces on fingerprint, so this stays one row per fault class.
+  // Only Gemini's own error message travels — never the request body/prompt.
+  recordDiagnosticEvent({
+    source: "worker",
+    kind: "art_upstream_error",
+    level: "error",
+    operation: `art:${operation}`,
+    status: res.status,
+    fingerprint: `worker:art_upstream_error:${operation}:${model}:${code}`,
+    message: `${code}: ${geminiErrorMessage(rawBody).slice(0, 240)}`,
+    metadata: { model, error_code: code },
+  });
+  const error = new Error(`gemini ${operation} responded ${res.status} (${code})`);
+  (error as any).artErrorCode = code;
+  return error;
+}
+
+function artErrorCode(error: unknown): string | null {
+  const code = (error as any)?.artErrorCode;
+  return typeof code === "string" ? code : null;
+}
+
+// ---- style references (pro image model only) ----
+
+/** PNG/JPEG/WebP magic bytes → the mime type the API must be told. */
+function sniffImageMime(buf: Buffer): string | null {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50) return "image/png";
+  if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg";
+  if (buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
+/**
+ * Up to STYLE_REFERENCE_LIMIT already-cached exercise images as inline reference
+ * parts, so a new figurine joins an existing series instead of restarting it.
+ *
+ * Shape confirmed against Google's models.generateContent reference: one Content
+ * carries several Parts, and a binary part is
+ * `{ inlineData: { mimeType, data } }` with base64 `data` — see
+ * https://ai.google.dev/api/generate-content.
+ *
+ * The gate is the OPT-IN itself: references ride along only when
+ * GEMINI_EXERCISE_IMAGE_MODEL is set, because setting it is the deliberate act of
+ * choosing a model for the figurine series. (It used to sniff /pro/i out of the
+ * model id, which both missed a capable model named otherwise and would have
+ * fired on any future id containing "pro".) The default flash tier deliberately
+ * gets none: it is not documented to take reference images for style transfer,
+ * and sending them would change a currently working request shape for every
+ * user. ART_EXERCISE_STYLE_REFS=0 opts back out without giving up the override.
+ */
+function styleReferenceParts(kind: ArtKind, excludeKey: string): any[] {
+  if (kind !== "exercise" || !GEMINI_EXERCISE_IMAGE_MODEL || !EXERCISE_STYLE_REFS_ENABLED) return [];
+  const parts: any[] = [];
+  for (const asset of listArtAssets("exercise", 24)) {
+    if (parts.length >= STYLE_REFERENCE_LIMIT) break;
+    if (asset.key === excludeKey) continue;
+    try {
+      const file = fileForKey(asset.key);
+      if (!fs.existsSync(file)) continue;
+      const stat = fs.statSync(file);
+      if (!stat.size || stat.size > STYLE_REFERENCE_MAX_BYTES) continue;
+      const buf = fs.readFileSync(file);
+      const mimeType = sniffImageMime(buf);
+      if (!mimeType) continue;
+      parts.push({ inlineData: { mimeType, data: buf.toString("base64") } });
+    } catch {
+      /* a missing or unreadable reference is never worth failing the generation */
+    }
+  }
+  if (!parts.length) return [];
+  return [
+    {
+      text:
+        "The following images are existing figurines from this same series. Match their sculptural style, " +
+        "material, palette, lighting and framing exactly, so the new figurine reads as part of the same set. " +
+        "Do not copy their pose or subject.",
+    },
+    ...parts,
+  ];
+}
+
+// `opts` exists for the seed-pack builder, which pins the base model and refuses
+// style references so the shipped images are reproducible (see pregenerate).
+async function generate(job: Job, opts: { model?: string; styleRefs?: boolean } = {}): Promise<void> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) throw new Error("Gemini API key missing");
+  const model = opts.model ?? imageModelFor(job.kind);
+  const refs = opts.styleRefs === false ? [] : styleReferenceParts(job.kind, job.key);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
   let body: any = null;
   try {
-    const res = await fetch(GEMINI_URL, {
+    const res = await fetch(imageUrlFor(model), {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: stylePrompt(job.kind, job.text, job.context) }] }],
+        contents: [
+          {
+            parts: [
+              { text: stylePrompt(job.kind, job.text, job.context) },
+              ...refs,
+            ],
+          },
+        ],
         generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
       }),
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`gemini responded ${res.status}`);
+    if (!res.ok) throw await geminiFailure(res, model, "generate");
     body = await res.json().catch(() => null);
   } finally {
     clearTimeout(timer);

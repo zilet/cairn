@@ -1347,7 +1347,8 @@ Photoreal/stylized images for foods, exercises and activities via Google's `gemi
 (override with `GEMINI_IMAGE_MODEL`; needs `GEMINI_API_KEY`), cached in `data/art/` as
 `sha1(kind:normalized text).png`. A strictly serial in-process queue (mirrors the `enrich.ts`
 pattern: in-flight dedup by cache key, a throwing job never breaks the drain loop, plus an in-memory
-negative cache so failed keys aren't retried until restart) generates on cache miss while `GET
+negative cache so failed keys aren't retried until the durable circuit breaker closes) generates on
+cache miss while `GET
 /api/art` returns 204 immediately. It's a **direct REST call** (global fetch, 60s AbortController
 timeout, atomic tmp-then-rename write) — NOT an `agents.json` CLI run. Degrades gracefully: no key /
 `settings.art_enabled` off / known-failed → 204, nothing runs.
@@ -1363,10 +1364,60 @@ later hit. Any canonicalize failure falls back to generating under the query's o
 
 **Spend telemetry.** Every paid call (and every avoided generation) is recorded via
 `repo.recordArtUsage` into `art_usage` — actions `generate` (flat `ART_IMAGE_COST_USD`, default
-$0.039/image), `canonicalize` (token-priced via `usageMetadata` at
+$0.067/image), `canonicalize` (token-priced via `usageMetadata` at
 `ART_TEXT_IN_USD_PER_M`/`ART_TEXT_OUT_USD_PER_M`), `reuse` (carries `est_saved_usd`), `fail`.
 Surfaced by `GET /api/art/stats` / MCP `get_art_stats` with a since-`art_enabled_at` window plus
 all-time.
+
+**Per-kind image model.** `imageModelFor(kind)` picks the model per request:
+`GEMINI_EXERCISE_IMAGE_MODEL` (unset by default; recommended `gemini-3-pro-image`) applies to the
+exercise kind only, everything else uses `GEMINI_IMAGE_MODEL`. **Setting that override is itself the
+opt-in to style references** — not a `/pro/` sniff of the model id: with it set,
+`styleReferenceParts()` attaches up to 3 already-cached exercise PNGs to the same `generateContent`
+request as `inlineData` parts with an instruction to match their sculptural style — so successive
+figurines read as one series instead of restarting the look each time. `ART_EXERCISE_STYLE_REFS=0`
+opts back out without giving up the override. The default flash tier deliberately gets no reference
+parts: sending them would change a working request shape for every user. `pregenerate()` (the
+seed-pack builder) always forces the base model with no references, so the shipped pack stays
+reproducible regardless of one builder's local env. Cost follows the model: `imageCostFor(kind)`
+bills exercise images at `ART_EXERCISE_IMAGE_COST_USD` when the override is set (falling back to
+`ART_IMAGE_COST_USD`), so a mixed-model install isn't estimated at one flat rate.
+
+**Failure is diagnosable and bounded.** A non-OK Gemini response no longer collapses into "gemini
+responded 400". `geminiFailure()` captures the status plus a 500-char body, derives a groupable code
+(`geminiErrorCode`, e.g. `400:INVALID_ARGUMENT`, hashing the body when it isn't a JSON error
+envelope), logs the readable detail **once per distinct (model, operation, code)** and records a
+`worker`/`art_upstream_error` row in the diagnostic spine (Gemini's own error message only — never
+the request body or prompt).
+
+**The backoff is DURABLE, and that is the actual fix.** The 500-650 fail/day bursts landed on deploy
+days, which is the tell: the only memory of failure used to be a per-process `failed` Set, a restart
+wiped it, and `warmArt()` fires 5s after every boot (`src/server.ts`) and re-queued the entire miss
+backlog with no backoff. So `src/artCircuit.ts` keeps its failure count, cooldown and open-until
+instant in `app_state` under `art_circuit`, hydrated once per process into a local cache
+(single-process server, so no gate costs a query). 5 consecutive failures open the circuit for a
+cooldown that doubles per re-open (15 min floor → 6 h ceiling); while it's open `requestArt` /
+`warmExerciseArt` refuse and `drain()` drops the jobs that would use that model, so a boot during an
+outage costs ~5 calls instead of 600 — **including the first boot after a redeploy**, which an
+in-memory breaker would not have caught. Recovery needs no operator: the cooldown lapses on its own,
+a success resets the backoff to the floor, and **closing clears the per-key `failed` entries for that
+model**, so keys burned during the outage drain on the next pass. A corrupt or missing row reads as
+closed, never wedging the pipeline.
+
+**And it is keyed BY MODEL**, because `GEMINI_EXERCISE_IMAGE_MODEL` makes the pipeline multi-model.
+One global counter got both halves wrong: interleaved failures and successes across two models reset
+the count on every other call, so a model failing *every* time never reached the threshold; and once
+it did open, it took the healthy model's food and activity backlog down with it for up to six hours.
+So `app_state.art_circuit` holds `{models: {<id>: {...}}}`, every gate
+(`artCircuitOpen(model)` / `noteArtFailure(model, …)` / `noteArtSuccess(model)`) names the model the
+job will actually use, and a success resets only its own. `artCircuitState()` with no argument
+aggregates for the health read — open if any model is, resuming when the last one does.
+
+`getArtHealth()` (`src/repo/art-ledger.ts`) derives the whole picture at read time — no schema of its
+own — and rides in `getArtStats().health`, which the Settings artwork card renders as one calm line
+(only when art is enabled and a key is configured; a fresh install has nothing to report). That read
+*intentionally* advances the breaker: looking at health closes a cooldown that has already lapsed,
+rather than showing a pause that expired hours ago.
 
 **Warming.** `warmArt()` pre-queues every image the PWA will ask for (exercise names; the current
 non-discarded meal plan + draft's meals; ~30 recent food notes; distinct recent activity types via a

@@ -73,7 +73,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/art` | Cache hit -> the cached image, immutable-cached. Miss -> 204 immediately and a background generation is queued when generation is available; the client simply retries later. No key / disabled / known-failed also returns 204. |
 | GET | `/api/art/manifest` | Which PWA art queries already have a cached image, as "kind\|q" tokens. Not cached because readiness changes as the background queue produces images. |
-| GET | `/api/art/stats` | Artwork spend telemetry: estimated Gemini cost since art was last enabled, all-time totals, generations avoided via semantic reuse, and cache size. |
+| GET | `/api/art/stats` | Artwork spend telemetry: estimated Gemini cost since art was last enabled, all-time totals, generations avoided via semantic reuse, and cache size. Also returns `health`: when art last rendered, failures in the last 7 days, the last upstream error code, and whether the circuit breaker has paused generation. |
 | POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for. Safe no-op when generation is unavailable. |
 
 ## `/blood-pressure`

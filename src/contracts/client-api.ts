@@ -361,7 +361,25 @@ export interface ClientArtUsageTotals {
   est_saved_usd: number;
 }
 
+export interface ClientArtCircuitState {
+  open: boolean;
+  consecutive_failures: number;
+  retry_at: string | null;
+  next_cooldown_ms: number;
+  last_error_code: string | null;
+  last_failure_at: string | null;
+}
+
+export interface ClientArtHealth {
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  failures_7d: number;
+  last_error_code: string | null;
+  circuit: ClientArtCircuitState;
+}
+
 export interface ClientArtStatsResponse {
+  health: ClientArtHealth;
   art_enabled: boolean;
   gemini_configured: boolean;
   enabled_at: string | null;

@@ -135,7 +135,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_art_stats",
-    "Get generated-artwork spend telemetry: estimated Gemini cost (USD) since artwork was last enabled plus all-time, images generated, generations avoided via semantic reuse (and the estimated savings), and cache size.",
+    "Get generated-artwork spend telemetry: estimated Gemini cost (USD) since artwork was last enabled plus all-time, images generated, generations avoided via semantic reuse (and the estimated savings), and cache size. Also returns `health`: when art last rendered, failures in the last 7 days, the last upstream error code, and whether the circuit breaker has paused generation.",
     {},
     async () => asText(getArtStats())
   );

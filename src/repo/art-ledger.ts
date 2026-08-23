@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { artCircuitState, type ArtCircuitState } from "../artCircuit.js";
 import { getGeminiApiKey, getSettings } from "./settings.js";
 
 // ---------- generated-artwork bookkeeping (see src/art.ts) ----------
@@ -81,11 +82,66 @@ function artUsageTotals(since?: string | null): ArtUsageTotals {
   };
 }
 
+export interface ArtHealth {
+  /** When art last actually rendered. Null means it has never succeeded. */
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  failures_7d: number;
+  /** Short upstream error code from the diagnostic spine, e.g. "400:INVALID_ARGUMENT". */
+  last_error_code: string | null;
+  circuit: ArtCircuitState;
+}
+
+/**
+ * Art-pipeline health, derived at read time — no schema of its own. The ledger
+ * (art_usage) answers "did it work and when"; the diagnostic spine answers
+ * "why not"; the in-process breaker answers "is it currently paused".
+ */
+export function getArtHealth(): ArtHealth {
+  const lastSuccess = db
+    .prepare(`SELECT MAX(created_at) AS at FROM art_usage WHERE action = 'generate'`)
+    .get() as any;
+  const lastFailure = db
+    .prepare(`SELECT MAX(created_at) AS at FROM art_usage WHERE action = 'fail'`)
+    .get() as any;
+  const failures = db
+    .prepare(`SELECT COUNT(*) AS n FROM art_usage WHERE action = 'fail' AND created_at >= datetime('now', '-7 days')`)
+    .get() as any;
+  let lastErrorCode: string | null = null;
+  try {
+    const row = db
+      .prepare(
+        `SELECT message FROM diagnostic_events
+          WHERE source = 'worker' AND kind = 'art_upstream_error'
+          ORDER BY created_at DESC, id DESC LIMIT 1`
+      )
+      .get() as any;
+    // geminiFailure() writes "<code>: <upstream message>".
+    const code = String(row?.message ?? "").split(":").slice(0, 2).join(":").trim();
+    lastErrorCode = code || null;
+  } catch {
+    /* health must never break on a telemetry read */
+  }
+  // Aggregate across every model the pipeline has used. This READ intentionally
+  // advances the breaker: a cooldown that lapsed while nothing was generating is
+  // closed here (and its close listeners fire), so health never reports a pause
+  // that has already expired. Self-healing on read is the intended behavior.
+  const circuit = artCircuitState();
+  return {
+    last_success_at: lastSuccess?.at ?? null,
+    last_failure_at: lastFailure?.at ?? null,
+    failures_7d: Number(failures?.n ?? 0),
+    last_error_code: circuit.last_error_code ?? lastErrorCode,
+    circuit,
+  };
+}
+
 export function getArtStats() {
   const s = getSettings();
   const assets = db.prepare(`SELECT COUNT(*) AS n FROM art_assets`).get() as any;
   const aliases = db.prepare(`SELECT COUNT(*) AS n FROM art_aliases`).get() as any;
   return {
+    health: getArtHealth(),
     art_enabled: s.art_enabled,
     gemini_configured: !!getGeminiApiKey(),
     enabled_at: s.art_enabled_at,
