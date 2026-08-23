@@ -7,6 +7,7 @@ import {
   hydrateHealthDoc,
   listContextEvents,
   newestHealthDocDate,
+  planningContextEvents,
 } from "./health.js";
 import { imagingForCoach } from "./imaging.js";
 import {
@@ -116,7 +117,7 @@ import {
 import { getSettings } from "./settings.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { estimateExpenditure } from "./expenditure.js";
-import type { UnifiedSignalState } from "./signal-state.js";
+import { tomorrowHolds, type UnifiedSignalState } from "./signal-state.js";
 import { dayLoad } from "./training-read.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import { cutQualityRead } from "./cut-quality.js";
@@ -1011,8 +1012,9 @@ function buildBrainSlice(
   | "read_adherence"
   | "recent_decisions"
   | "whole_person_trajectory"
+  | "tomorrow_holds"
 > {
-  const { coachingFocusView, signalStateView, dayReadView, wholePersonTrajectoryView } = signals;
+  const { today, coachingFocusView, signalStateView, dayReadView, wholePersonTrajectoryView } = signals;
   return {
     // THE CONDUCTOR — the single sequenced WHOLE-ATHLETE focus (lead + parallel +
     // later + connections + one batched retest) arbitrated across training, running,
@@ -1023,6 +1025,29 @@ function buildBrainSlice(
     // prompt. Independent dimensions retain evidence/conflicts; only the final
     // posture is unified.
     signal_state: signalStateView,
+    // What TOMORROW already holds, resolved by the same predicate the deterministic
+    // day-read rule uses AND over the same rows. The raw events have always been in
+    // `context_events`, which is exactly why the agent could see an appointment the
+    // Brief's own rules could not — so what ships here is the ANSWER, not a second copy
+    // of the list: one question, one predicate, one shared result.
+    //
+    // `planningContextEvents` rather than the person slice's active list, because that
+    // list is filtered against TODAY: an event that resolves or ends tomorrow survives
+    // `resolved_at > today` and would be reported here as a hold, while the rule's own
+    // tomorrow arm asks `resolved_at > tomorrow` and correctly reads the day as open.
+    // Two filters is two answers, which is the drift the shared predicate exists to
+    // prevent. Null on an ordinary day, so a morning with nothing on the calendar
+    // tomorrow serializes exactly as before.
+    tomorrow_holds: (() => {
+      const tomorrow = addDaysISO(today, 1);
+      let holds: ReturnType<typeof tomorrowHolds> = [];
+      try {
+        holds = tomorrowHolds(today, planningContextEvents(today));
+      } catch {
+        holds = [];
+      }
+      return tomorrow && holds.length ? { date: tomorrow, events: holds } : null;
+    })(),
     // The standing cross-domain objective: what improved, what is deliberately
     // parked for this phase, and whether an unexplained regression requires a
     // revision. Weekly reads receive this directly instead of rediscovering it.

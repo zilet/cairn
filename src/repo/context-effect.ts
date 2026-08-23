@@ -82,6 +82,19 @@ function eventText(ev: any): string {
   return `${ev?.kind ?? ""} ${ev?.title ?? ""} ${ev?.detail ?? ""} ${impact ?? ""}`.trim();
 }
 
+/**
+ * Does this context event read as an ILLNESS, whatever kind it was filed under?
+ *
+ * The same word-bounded question `classifyEvent` asks below, exported because callers
+ * outside this file need the answer on its own — a look-ahead has to know that "Flu
+ * starts tomorrow", filed as a life_event, is a clinical shape and not a commitment.
+ * Filing is a UI affordance; this is the judgement.
+ */
+export function contextEventReadsAsIllness(ev: any): boolean {
+  const text = eventText(ev);
+  return !!text && ILLNESS_RE.test(text);
+}
+
 // Add N days to a YYYY-MM-DD string → a YYYY-MM-DD string (UTC, DST-safe for a
 // plain day count). Returns null on an unparseable date.
 function addDaysISO(iso: string, days: number): string | null {

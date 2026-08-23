@@ -1962,6 +1962,36 @@ export function listContextEvents(opts: { activeOnly?: boolean; on?: string } = 
   return rows.map((r) => annotateHealing(hydrateContextEvent(r), opts.on));
 }
 
+/**
+ * The context events a day's PLANNING may see: everything active on `date`, plus
+ * anything that STARTS the day after it.
+ *
+ * `listContextEvents({on})` answers one day at a time and asks two questions at once —
+ * has it started by `on`, and has it not already ended or been resolved by `on` — so
+ * neither day's call is a superset of the other: `on: date` drops tomorrow's new trip,
+ * and `on: tomorrow` drops a commitment that ends TODAY. Widening either query in place
+ * would silently change every other caller, so the two answers are unioned here
+ * instead, by id, with today's rows first.
+ *
+ * Every existing consumer filters on `start_date <= date` (activeContextEffect, the
+ * schedule-pressure observation), so the extra row is invisible to all of them;
+ * `tomorrowHolds` is the one reader that wants it. It lives HERE, beside the query it
+ * is composed of, because both the deterministic day read and the coach context resolve
+ * tomorrow's holds and the two have to be asking the same question — a coach-side list
+ * filtered against today would keep an event that resolves tomorrow, and answer
+ * "tomorrow is spoken for" on a morning the rule itself reads as open.
+ */
+export function planningContextEvents(date: string): any[] {
+  const rows = listContextEvents({ activeOnly: true, on: date }) as any[];
+  const tomorrow = addDaysISOLocal(date, 1);
+  if (!tomorrow) return rows;
+  const seen = new Set(rows.map((row) => row?.id));
+  for (const row of listContextEvents({ activeOnly: true, on: tomorrow }) as any[]) {
+    if (!seen.has(row?.id)) rows.push(row);
+  }
+  return rows;
+}
+
 export function getContextEvent(id: number) {
   const row = db.prepare(`SELECT * FROM context_events WHERE id = ?`).get(id) as any;
   return row ? annotateHealing(hydrateContextEvent(row)) : null;

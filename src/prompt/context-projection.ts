@@ -280,6 +280,15 @@ export const PROMPT_CONTEXT_SITES = {
       // pattern is about the very decision it is being asked to make. Compacted hard
       // (see compactReadAdherence) because it ships every morning.
       "read_adherence",
+      // What tomorrow already holds. The Brief is the ONE site that gets it: this is a
+      // read of TODAY made against the next day, and every other site either plans a
+      // whole week (where one day's commitment is noise) or answers a question with
+      // nothing to do with the calendar. `context_events` in PERSON carries the same
+      // rows here already — this is the resolved question beside them, so the model and
+      // the deterministic rule that re-times a discretionary rest see ONE answer rather
+      // than each deciding for itself what counts as tomorrow being spoken for. Null on
+      // an ordinary morning, so the payload is unchanged when nothing is on.
+      "tomorrow_holds",
     ],
     sessions: SESSIONS_RECENT,
     // The Brief READS the day; it does not prescribe the session. Every set-level

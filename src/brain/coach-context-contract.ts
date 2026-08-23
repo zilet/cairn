@@ -348,6 +348,16 @@ export interface CoachContextEnvelope {
   trajectory: CoachRecord | null;
   whole_person_trajectory: CoachRecord | null;
   context_today: CoachRecord | null;
+  // What the NEXT day already holds — the context events whose `start_date` is
+  // tomorrow, with the one judgement the look-ahead makes (`blocks_training`, by kind)
+  // already applied. `context_events` carries the same rows and always has, which is
+  // why the agent could see the appointment while the deterministic floor could not;
+  // this key is the resolved question rather than the raw list, so the prompt and the
+  // day-read rule that re-times a discretionary rest are looking at ONE answer.
+  //
+  // Additive + optional, like `read_adherence`: a partial context builder or an
+  // imported DB never synthesizes it, and it stays out of the required/array key lists.
+  tomorrow_holds?: CoachRecord | null;
   next_step: CoachRecord | null;
 }
 

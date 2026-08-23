@@ -17,7 +17,8 @@ import {
   type WearAbsenceVoiceSet,
   type WearAbsenceView,
 } from "./wear-pattern-voice.js";
-import { joinList } from "./shared.js";
+import { addDaysISO, joinList } from "./shared.js";
+import { contextEventReadsAsIllness } from "./context-effect.js";
 
 export type SignalDimension =
   | "recovery_capacity"
@@ -772,6 +773,99 @@ export function spokenSignalVoice(
 // won, which is not a commitment.
 export function lifeCapacityIsCommitment(state: UnifiedSignalState | null | undefined): boolean {
   return String(state?.dimensions?.life_capacity?.voice?.key ?? "").trim() === "commitment_pressure";
+}
+
+// ---------- what TOMORROW already holds ----------
+//
+// Every other observation in this file answers "what is true today". This one answers
+// the single question the deterministic layer had no way to ask: is the NEXT day
+// already spoken for? The Brief could suggest rest on a day the athlete wanted to
+// train, on the eve of a trip or an appointment that makes tomorrow a no-train day —
+// and the deterministic rules never saw it, because context-effect and the
+// schedule-pressure observation both drop anything whose `start_date` is in the
+// future. The agent prompt has always seen those rows (getCoachContext lists active
+// events with no date filter); only the floor was blind.
+//
+// Deliberately ONE day. This is a look-ahead, not a calendar: d+1 is what can re-time
+// today's discretionary rest, and anything further out is a plan question the weekly
+// surfaces already own.
+//
+// `blocks_training` is the only judgement made here, and it is settled in three steps.
+//
+// FIRST the clinical shapes come out, and nothing argues them back in. An injury row
+// dated tomorrow (a procedure, a constraint about to start) is carried for visibility
+// ONLY — and so is anything that READS as an illness whatever kind it was filed under.
+// "Flu starts tomorrow" is a life_event in the table and an illness in fact, and it
+// was flipping today toward training on the strength of its filing. The question goes
+// to the classifier the rest of the repo already reads illness windows with, so there
+// is one answer to "is this an illness" rather than a second regex free to drift.
+//
+// THEN the athlete's own word, if they gave one: `meta.claims_day` says outright
+// whether the event takes tomorrow's hours, and it outranks the kind in both
+// directions — a trip that claims nothing (`false`) stops blocking, an appointment
+// that claims the day (`true`) blocks where its kind alone would not. It cannot
+// promote a clinical shape; that judgement is already made and a calendar field is
+// not the place to overrule it.
+//
+// OTHERWISE by KIND: a trip, a life event or a family event starting tomorrow is a
+// claim on tomorrow's hours, so today may carry the easy work instead.
+const TOMORROW_HOLD_KINDS = /^(?:trip|life_event|family_event|injury)$/;
+const KIND_CLAIMS_DAY = /^(?:trip|life_event|family_event)$/;
+
+/**
+ * The athlete's explicit per-event answer to "does this take tomorrow?", or null when
+ * they never said. Reads `meta` parsed (hydrateContextEvent) or raw `meta_json`, and
+ * honours only a real boolean — anything else is silence, not a claim.
+ */
+function claimsDayOverride(event: any): boolean | null {
+  let meta: any = event?.meta;
+  if (meta == null && event?.meta_json) {
+    try {
+      meta = JSON.parse(String(event.meta_json));
+    } catch {
+      meta = null;
+    }
+  }
+  if (!meta || typeof meta !== "object") return null;
+  const claim = (meta as any).claims_day;
+  return claim === true ? true : claim === false ? false : null;
+}
+
+export interface TomorrowHold {
+  id: number | null;
+  kind: string;
+  title: string;
+  start_date: string;
+  end_date: string | null;
+  blocks_training: boolean;
+}
+
+/** Context events that START on the day after `date`. Never throws; absent input ⇒ []. */
+export function tomorrowHolds(date: string, contextEvents: unknown): TomorrowHold[] {
+  const tomorrow = addDaysISO(date, 1);
+  if (!tomorrow || !Array.isArray(contextEvents)) return [];
+  return contextEvents
+    .filter((event: any) => {
+      if (!event || String(event.start_date ?? "").slice(0, 10) !== tomorrow) return false;
+      if (TOMORROW_HOLD_KINDS.test(String(event.kind ?? ""))) return true;
+      // …and an event of any other shape that says outright it takes tomorrow. The
+      // kinds above are the ones that USUALLY claim a day; an explicit claim needs no
+      // such inference, and refusing to carry it would make the athlete's own word the
+      // one input the look-ahead cannot hear.
+      return claimsDayOverride(event) === true;
+    })
+    .map((event: any) => {
+      const kind = String(event.kind ?? "");
+      const clinical = kind === "injury" || contextEventReadsAsIllness(event);
+      return {
+        id: event.id != null ? Number(event.id) : null,
+        kind,
+        title: String(event.title ?? "").trim(),
+        start_date: tomorrow,
+        end_date: event.end_date ? String(event.end_date).slice(0, 10) : null,
+        blocks_training: clinical ? false : (claimsDayOverride(event) ?? KIND_CLAIMS_DAY.test(kind)),
+      };
+    });
 }
 
 const DIMENSIONS: SignalDimension[] = [
@@ -2150,6 +2244,36 @@ export function planningSignalState(input: {
         }
       )
     );
+  // The look-ahead, and the ONE observation in this file that is not about today.
+  //
+  // `context_only` is load-bearing, not decoration: tomorrow is not evidence about the
+  // athlete's capacity THIS morning, so it must reach every reader of the state without
+  // being able to move a dimension's status, the arbitration index or the posture. It
+  // is carried in `evidence` (and therefore in coverage, provenance and the prompt) and
+  // excluded from every judgement by bearingEvidence — which is exactly the split this
+  // signal needs. The day-read rule that acts on it reads it BY FIELD and applies its
+  // own bounded gate; nothing here decides anything.
+  //
+  // Dated to `date`, not to the event: freshness is "how old is this reading", and a
+  // reading dated in the future has no honest answer to that. The day it refers to
+  // rides in `start_date` on the payload instead.
+  for (const hold of tomorrowHolds(date, input.contextEvents)) {
+    observations.push(
+      observation(
+        "life_capacity",
+        "tomorrow_holds",
+        date,
+        "user_context",
+        "neutral",
+        `${hold.title || "A commitment"} starts tomorrow (${hold.start_date}); tomorrow's training window is likely spoken for.`,
+        {
+          context_only: true,
+          max_age_days: 0,
+          observation_id: `tomorrow:${hold.id ?? hold.title}`,
+        }
+      )
+    );
+  }
   if (input.completedToday)
     observations.push(
       observation(

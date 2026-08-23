@@ -33,7 +33,7 @@ import { activeContextEffect } from "./context-effect.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
-import { listContextEvents } from "./health.js";
+import { planningContextEvents } from "./health.js";
 import { plainGroupWords } from "./exercise-canon.js";
 import { suppressSaturatedDue } from "./hybrid-load.js";
 import { SENSOR_MAX_AGE_DAYS, sensorAgeDays, sensorIsCurrent } from "./sensor-freshness.js";
@@ -52,7 +52,7 @@ import { activeRecoveryWeek, getPrimaryDiscipline } from "./profile.js";
 import { getProgramState } from "./program-state.js";
 import { runIntensityDiscipline } from "./run-progression.js";
 import { programBalance } from "./progression.js";
-import { daysBetweenISO, localDateISO } from "./shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { getTrainingIntent } from "./training-intent.js";
 import {
   hasFreshBrake,
@@ -62,7 +62,9 @@ import {
   spokenSignalVoice,
   SIGNAL_VOICE_KEYS,
   SIGNAL_VOICE_REGISTRY,
+  tomorrowHolds,
   type SignalDimension,
+  type TomorrowHold,
   type SignalVoiceRef,
   type UnifiedSignalState,
 } from "./signal-state.js";
@@ -234,6 +236,21 @@ export const DAY_READ_OUTCOMES = {
       "You'd rather train than take the day off, and there's due work worth doing.",
     ],
   },
+  // The accumulated-load rest, RE-TIMED rather than answered. Same family as the push
+  // drive above and the same one shape of rest — stacked loading days, nothing else
+  // pulling the other way — but the reason is the calendar rather than a preference:
+  // tomorrow is already claimed by a trip or a commitment, so the discretionary break
+  // is better taken then. The athlete still gets their break; the read only moves which
+  // day it lands on, and only ever offers EASY work in exchange.
+  lookahead_retimed_training: {
+    code: "lookahead_retimed_training",
+    reasons: [
+      "Tomorrow is already committed, so the quiet day is better taken then.",
+      "The break still comes — tomorrow is spoken for, so it lands there instead of here.",
+      "There's something on tomorrow, which makes it the natural day to sit out.",
+      "Tomorrow already has a claim on it, so today holds the easy movement instead.",
+    ],
+  },
   low_readiness_rest: {
     code: "low_readiness_rest",
     reasons: [
@@ -385,6 +402,24 @@ const LIGHT_WORK_WHY: readonly string[] = [
   "You've already moved today — keep the rest of it easy.",
   "Something's already on the board today, so keep the rest gentle.",
   "You've moved today. That's enough — let the rest stay easy.",
+];
+// The re-timed rest: the same stacked days, read against a tomorrow that is already
+// claimed. It is NOT a second opinion about whether the athlete needs a break — they
+// do, and they still get one; it is a question about WHICH day the break lands on, and
+// it fires only when the break in question is the discretionary rhythm one.
+//
+// Every phrasing carries three things: that tomorrow is spoken for (the whole basis of
+// the read — a sentence that drops it is a train day with no explanation), that today
+// is therefore the day that can hold the movement, and that the movement is EASY. The
+// last one matters most: this rule reaches into a run of loading days, so it may offer
+// a comfortable session and must never sound like a reason to reach for more. Written
+// to fit both branches — a due plan day and a bare open one — because the sentence is
+// about the calendar either way, and the focus is what tells the two apart.
+const LOOKAHEAD_RETIME_WHY: readonly string[] = [
+  "Tomorrow is already spoken for, so today is the better day to move — keep it easy and it still counts.",
+  "Something's on tomorrow, which makes today the natural place for the gentle work. No need to make it a big one.",
+  "Tomorrow already has a claim on it, so if today is the day you move, keep the effort comfortable.",
+  "With tomorrow taken, an easy turn today fits better than waiting for a day that isn't yours.",
 ];
 const VOLUME_SPIKE_WHY: readonly string[] = [
   "Your running's ramped this week — an easy day lets it absorb.",
@@ -1006,6 +1041,7 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   recovery_dose_overrun: DOSE_OVERRUN_WHY,
   accumulated_load_rest: STACKED_LOAD_WHY,
   push_drive_targeted_training: PUSH_DRIVE_WHY.map((render) => render("quads and back")),
+  lookahead_retimed_training: LOOKAHEAD_RETIME_WHY,
   low_readiness_rest: LOW_READINESS_WHY,
   felt_run_down_rest: RUN_DOWN_WHY,
   logged_light_work_today: LIGHT_WORK_WHY,
@@ -1050,6 +1086,10 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // owed — a phrasing that drops "due" would be offering the session on the strength of
   // the preference alone, which is exactly what the gate below refuses to do.
   push_drive_targeted_training: /\bdue\b/i,
+  // The one word this read may never lose. Every other rule explains itself from
+  // today's evidence; this one's entire basis is the NEXT day, and a phrasing that
+  // stops naming it is an unexplained training day inside a run of loading days.
+  lookahead_retimed_training: /\btomorrow\b/i,
   low_readiness_rest: /\b(?:readiness|reading)\b/i,
   felt_run_down_rest: /\b(?:run-down|low)\b/i,
   logged_light_work_today: /\b(?:moved|movement|board)\b/i,
@@ -1795,8 +1835,7 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
         provided.runIntensity ??
         signalInput(() => brainSignal(`run_intensity:${date}`, () => runIntensityDiscipline(date)), null),
       context: provided.context ?? signalInput(() => activeContextEffect(date), null),
-      contextEvents:
-        provided.contextEvents ?? signalInput(() => listContextEvents({ activeOnly: true, on: date }) as any[], []),
+      contextEvents: provided.contextEvents ?? signalInput(() => planningContextEvents(date), []),
       completedToday: provided.completedToday ?? false,
     });
   });
@@ -2141,7 +2180,7 @@ export function dayRead(
   // usually train around it). Null-safe; absent context changes nothing.
   const contextEvents = (() => {
     try {
-      return listContextEvents({ activeOnly: true, on: d }) as any[];
+      return planningContextEvents(d);
     } catch {
       return [];
     }
@@ -2326,6 +2365,13 @@ export function dayRead(
       completedToday: (trainedToday || !!bigActivity) && (todayLoad === "hard" || todayLoad === "moderate"),
     });
   (signals as any).signal_state = signalState;
+  // What tomorrow already holds, published whichever rule ends up winning today. It is
+  // a FACT about the calendar, not a property of the read, so — like the health
+  // work-around probe below — it is derived once here rather than inside the one rule
+  // that acts on it: the cached row, the coach prompt and the decision ledger all carry
+  // it even on a morning where a short night or a logged session decides the day.
+  const holdsTomorrow: TomorrowHold[] = signalInput(() => tomorrowHolds(d, contextEvents), []);
+  if (holdsTomorrow.length) (signals as any).tomorrow_holds = holdsTomorrow;
   // A movement work-around is a fact about the ATHLETE, not a property of whichever
   // rule wins the morning, so it is probed once here rather than inside a rule. It
   // used to live inside the protect rule below — so the day a corroborated short
@@ -2582,6 +2628,80 @@ export function dayRead(
             // calendar compresses the window there, and a targeted day is no less
             // subject to the athlete's actual afternoon than a planned one is.
             est_minutes: commitmentPressure ? 40 : 60,
+            signals,
+          },
+        };
+      },
+    },
+    {
+      // ---- the look-ahead, RE-TIMING the accumulated-load rest ----
+      // The only rule in this file that looks past today, and it looks exactly one day.
+      //
+      // The incident: a bloodwork appointment tomorrow, an athlete who wanted to train
+      // today and rest tomorrow, and a Brief that suggested rest today because it could
+      // not see the appointment at all. The agent prompt has always had the row —
+      // getCoachContext lists active events with no date filter — but the deterministic
+      // floor read context events through two filters that both drop anything starting
+      // in the future, so the layer that decides the KIND was the one layer blind to it.
+      //
+      // What this rule may do is deliberately small: it re-times a rest the athlete was
+      // going to get anyway, and it hands back an EASY day in exchange. What it may
+      // never do is manufacture capacity. So it sits BELOW every rule that answers to a
+      // signal about the athlete — the logged session, the corroborated short night, the
+      // protective posture, the training drive — and its gate is the rhythm rest and
+      // nothing else:
+      //   1. tomorrow holds something that plausibly claims the day (`blocks_training`,
+      //      resolved once in `tomorrowHolds` — never an injury row or anything that
+      //      reads as an illness, both clinical shapes carried for visibility only),
+      //   2. today is still OPEN. The done rule above only claims a day whose work
+      //      graded hard or moderate, so a mobility session or a short shakeout logged
+      //      this morning fell straight through it and landed here — and this rule
+      //      would then offer a second session on top of the one already done. It may
+      //      re-time a rest; it may never add work to a day that has already had some,
+      //   3. the rest today would be the RHYTHM one (stacked loading days) — the same
+      //      one shape of rest the push drive above may answer,
+      //   4. and nothing else in the earned-rest branch is also true: a dose overrun, a
+      //      run-down check-in and a low readiness reading each keep their rest, because
+      //      those are signals about today that a calendar cannot re-time,
+      //   5. under the same hard ceiling on consecutive days the drive read respects,
+      //   6. with nothing clinical in play, by the same three-way probe,
+      //   7. and no fresh brake anywhere in the state — this path opens a day on the
+      //      strength of an absence rather than on positive evidence, so it inherits
+      //      the strictest of the brake checks rather than the loosest.
+      // A rest grounded in safety — symptoms, illness, a short night, a low reading —
+      // never reaches this rule at all: (2) and (3) exclude it, and the protective rules
+      // above have already won the day before it is consulted.
+      resolve: () => {
+        const blocking = holdsTomorrow.filter((hold) => hold.blocks_training);
+        if (!blocking.length) return null;
+        if (trainedToday || bigActivity) return null;
+        if (!stackedLoadingRest) return null;
+        if (yesterdayRecoveryOverdose || lowSubjective || lowReadiness) return null;
+        if (consec >= PUSH_DRIVE_CONSEC_CEILING) return null;
+        if (clinicallyDriven(signalState, healthWorkaround)) return null;
+        if (hasFreshBrake(signalState.dimensions)) return null;
+        // A due plan day gives the read a focus and a compressed clock; with nothing
+        // programmed the day still opens, as easy movement rather than a session that
+        // does not exist. Either way the words are the same — the calendar is the
+        // reason in both branches — and either way the effort offered is easy.
+        const planDay = suggestedPlanDay();
+        (signals as any).lookahead_retimed = {
+          holds: blocking,
+          consecutive_days: consec,
+          opened: planDay ? "plan_day" : "easy_movement",
+        };
+        return {
+          outcome: DAY_READ_OUTCOMES.lookahead_retimed_training,
+          read: {
+            kind: (planDay ? "train" : "easy") as "train" | "easy",
+            focus: planDay?.focus ?? null,
+            why: pickDayVariant(LOOKAHEAD_RETIME_WHY, d, "lookahead_retimed_training"),
+            // Shorter than the ordinary train day's 60 on purpose: this is a day
+            // reached for inside a run of loading days, so the offer is a comfortable
+            // session, not a full one. It carries no further clamp for a commitment
+            // squeezing today — schedule_pressure is brake evidence, and a fresh brake
+            // anywhere in the state has already turned this rule away above.
+            est_minutes: planDay ? 40 : 25,
             signals,
           },
         };
