@@ -545,9 +545,22 @@ test("multi-channel execution strain holds an earned progression in the actual n
   assert.equal(prescription.action, "hold", "the next exposure cannot add load while the fuel/performance pattern is unresolved");
   assert.equal(prescription.suggested.weight, 185);
   assert.equal(prescription.autoregulated, true);
-  assert.match(prescription.why, /fuel|meal pattern|complete/i);
+  // The card names the reason that ACTUALLY held this lift. The fueling read is a
+  // property of the day, and it speaks on a lift card only where it changed that
+  // lift — here the autoregulation brake got there first, so its own plain
+  // sentence stands rather than the day's fueling clause glued on behind it.
+  assert.match(
+    prescription.why,
+    /flat|sore|recovery|meal pattern|complete/i,
+    "the brake that actually held this lift names itself"
+  );
+  assert.doesNotMatch(
+    prescription.why,
+    /fuel/i,
+    "…and the day's fueling sentence never lands on a lift held for its own reason"
+  );
 
-  // …but in the TRAINING register. The nutrition read's own sentence is written for
+  // …in the TRAINING register. The nutrition read's own sentence is written for
   // the nutrition surfaces; concatenating it here is what put "A recent fuel
   // correction is still inside its seven-day settling window, so no second calorie
   // move is made." on a bench-press card.

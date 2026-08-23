@@ -2,7 +2,7 @@ import { getActiveDailySessionForSession } from "./adaptive-session.js";
 import { getCardioForDate, type CardioEffort } from "./activities.js";
 import { db } from "../db.js";
 import { canonicalEnduranceSport } from "./endurance-sports.js";
-import { normalizedExerciseKey } from "./exercise-canon.js";
+import { canonicalGroup, classifyMuscleGroup, type MuscleGroup, normalizedExerciseKey } from "./exercise-canon.js";
 import { isLoadRelevantEnduranceImpact, recentEnduranceImpacts } from "./hybrid-load.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { registerDailyOutcomeReconcileHook } from "./reconciliation-hooks.js";
@@ -33,7 +33,10 @@ export {
 // reviews (and the progression engine) can read. Best-effort at every call site.
 
 export interface DailySessionOutcomeFacts {
-  schema_version: 2;
+  // 3 adds per-dose comparability to every dose_evidence entry. Rows written at 2
+  // are still read: linkedDoseEligibility derives the per-lift verdict from the
+  // session reason list and the dose's own achieved/prescribed sets.
+  schema_version: 2 | 3;
   suggested_count: number;
   suggested_exercises: string[];
   logged_exercises: string[];
@@ -138,6 +141,10 @@ export interface MovementDoseEvidence {
   challenge_verdict: ChallengeVerdict;
   relevant_symptom: boolean;
   symptom_event_ids: number[];
+  // Whether THIS lift's exposure is clean progression evidence. Absent on rows
+  // written before schema_version 3; derived at read time for those.
+  comparable: boolean;
+  non_comparable_reasons: string[];
 }
 
 export interface DoseContext {
@@ -148,6 +155,9 @@ export interface DoseContext {
   symptom: boolean;
   endurance: boolean;
   partial: boolean;
+  // Session-wide TELEMETRY. `comparable:false` means the DAY carried a confounder,
+  // NOT that any particular lift's evidence is unusable — the progression engine
+  // consults the per-dose flags on `dose_evidence`, never this one.
   comparable: boolean;
   non_comparable_reasons: string[];
 }
@@ -504,6 +514,108 @@ function challengeVerdict(
   return exceeded ? "exceeded" : "met";
 }
 
+// ---- comparability, per LIFT rather than per day ----------------------------
+//
+// A session-wide verdict made progression structurally unreachable for a hybrid
+// athlete: every day carried SOME confounder — a run, a rest-day override, one
+// short accessory — and a single flag held the whole day's evidence out of the
+// comparable set, so no lift could ever earn a load step. The confounders are
+// real; what was wrong is their SCOPE. Each reason now blocks only what it
+// actually touches:
+//
+// * `partial` — the lift whose OWN dose came in short. Another movement's
+//   shortfall, or a skipped optional cardio item, says nothing about this one.
+// * `loaded_endurance` — only lifts sharing muscle with the day's endurance work.
+//   A run does not invalidate the overhead press.
+// * `athlete_override` — never. Training by choice on a day the read suggested
+//   rest is the athlete driving, not evidence corruption.
+// * `endurance_quality_not_observed` / `endurance_quality_unverified` — never.
+//   These are verdicts about the ENDURANCE dose; they carry no claim about a lift.
+// * everything else (recovery_dose, travel, illness, relevant_symptom, and any
+//   reason this table does not recognize) — the whole day, unchanged.
+//
+// Safety is untouched by all of this: acuteGate, the autoregulation brake and the
+// symptom gates run downstream and still hold a lift that should not be pushed.
+const NEVER_BLOCKS_A_LIFT = new Set([
+  "athlete_override",
+  "endurance_quality_not_observed",
+  "endurance_quality_unverified",
+]);
+
+export interface DoseComparabilityInput {
+  session_reasons: readonly string[];
+  own_dose_shortfall: boolean;
+  endurance_overlap: boolean;
+}
+
+export function doseComparability(input: DoseComparabilityInput): {
+  comparable: boolean;
+  non_comparable_reasons: string[];
+} {
+  const reasons: string[] = [];
+  for (const raw of input.session_reasons) {
+    const reason = String(raw);
+    if (NEVER_BLOCKS_A_LIFT.has(reason)) continue;
+    if (reason === "partial") {
+      if (input.own_dose_shortfall) reasons.push(reason);
+      continue;
+    }
+    if (reason === "loaded_endurance") {
+      if (input.endurance_overlap) reasons.push(reason);
+      continue;
+    }
+    // An unrecognized reason is treated as day-wide: a new confounder must not
+    // become invisible just because this table has not learned it yet.
+    reasons.push(reason);
+  }
+  if (input.own_dose_shortfall && !reasons.includes("partial")) reasons.push("partial");
+  return { comparable: reasons.length === 0, non_comparable_reasons: reasons };
+}
+
+// The muscle groups the day's endurance work actually loaded, read off the ONE
+// per-muscle attribution model (hybrid-load's EnduranceImpact.regions). Never a
+// new muscle model here.
+//
+// This is also the SCOPE test for the `loaded_endurance` reason: an empty set
+// means the day's endurance work was not load-relevant to anything, and a reason
+// that can block nothing is not a reason. A caller that has already read the
+// day's impacts passes them in rather than paying for the query twice.
+export function enduranceLoadedGroups(
+  date: string,
+  impacts?: ReturnType<typeof recentEnduranceImpacts>
+): Set<MuscleGroup> {
+  const out = new Set<MuscleGroup>();
+  const day = String(date ?? "").slice(0, 10);
+  // A malformed date would otherwise fall back to TODAY's activities and answer a
+  // question nobody asked.
+  if (!impacts && !/^\d{4}-\d{2}-\d{2}$/.test(day)) return out;
+  try {
+    for (const impact of impacts ?? recentEnduranceImpacts(1, day)) {
+      if (!isLoadRelevantEnduranceImpact(impact)) continue;
+      for (const region of impact.regions) out.add(region);
+    }
+  } catch {
+    /* an unreadable activity row never blocks a lift */
+  }
+  return out;
+}
+
+// The group a movement loads: the stored muscle group when there is one, else the
+// canon's classification of the name.
+export function movementLoadedGroup(exercise: string, storedGroup?: string | null): MuscleGroup | null {
+  return canonicalGroup(storedGroup ?? null) ?? classifyMuscleGroup(String(exercise ?? ""));
+}
+
+export function enduranceOverlapsMovement(
+  exercise: string,
+  storedGroup: string | null,
+  loaded: Set<MuscleGroup>
+): boolean {
+  if (loaded.size === 0) return false;
+  const group = movementLoadedGroup(exercise, storedGroup);
+  return group != null && loaded.has(group);
+}
+
 // Reconcile one session's daily-session composition against what was logged.
 // Idempotent: re-running for the same composition upserts the same row. Returns
 // the stored outcome, or null when the session has no daily-session composition
@@ -600,7 +712,8 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   // Full prescribed/achieved dose. Stable identity is independent of mutable
   // display order across compositions: movement + intent survive later rewrites,
   // while composition_item_key anchors the exact historical item.
-  const dose_evidence: MovementDoseEvidence[] = items.map((it: any, index: number) => {
+  type BaseDose = Omit<MovementDoseEvidence, "comparable" | "non_comparable_reasons">;
+  const base_dose_evidence: BaseDose[] = items.map((it: any, index: number) => {
     const agg = achievedMap.get(lower(it.exercise));
     const exercise = {
       name: String(it.exercise),
@@ -648,7 +761,7 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
 
   // Legacy progression_evidence remains readable for existing consumers, with
   // additive stable identity and the stricter whole-dose verdict.
-  const progression_evidence = dose_evidence.map((dose) => {
+  const progression_evidence = base_dose_evidence.map((dose) => {
     const targetWeight = dose.prescribed.target_weight;
     const targetSeconds = dose.prescribed.target_seconds;
     const achievedWeight = dose.achieved.top_weight;
@@ -780,16 +893,23 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     serverTrainAnyway(composition);
   const travel = conf.includes("travel_window");
   const illness = conf.includes("illness_window");
-  const symptom = dose_evidence.some((dose) => dose.relevant_symptom);
+  const symptom = base_dose_evidence.some((dose) => dose.relevant_symptom);
+  // The muscles the day's endurance work actually loaded — ONE test, shared by the
+  // flag and the scope below. A light shakeout run is endurance the athlete really
+  // did, but it is not a dose on any lift, so it must not raise a `loaded_endurance`
+  // reason that then blocks nothing: flag and scope have to agree or the session
+  // verdict claims a confounder the per-lift rule cannot honour.
+  const enduranceGroups = enduranceLoadedGroups(date, enduranceImpacts);
   const endurance =
-    conf.includes("other_activity") ||
-    (items.length > 0 && matchedEndurance.length > 0) ||
-    (items.length > 0 && session.kind === "cardio");
+    (conf.includes("other_activity") ||
+      (items.length > 0 && matchedEndurance.length > 0) ||
+      (items.length > 0 && session.kind === "cardio")) &&
+    enduranceGroups.size > 0;
   const partial =
     reason_codes.includes("partial_session") ||
     enduranceDoseShortfall ||
     enduranceIncomplete ||
-    dose_evidence.some((dose) => dose.prescribed.sets != null && dose.achieved.sets < dose.prescribed.sets);
+    base_dose_evidence.some((dose) => dose.prescribed.sets != null && dose.achieved.sets < dose.prescribed.sets);
   const nonComparable = [
     recovery ? "recovery_dose" : null,
     athleteOverride ? "athlete_override" : null,
@@ -809,12 +929,40 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     symptom,
     endurance,
     partial,
+    // TELEMETRY, not the progression gate. `comparable:false` here means the DAY
+    // carried at least one confounder — it says nothing about whether any given
+    // lift's evidence is usable. The engine reads the per-dose flags on
+    // `dose_evidence` instead (see doseComparability). Reading this field as a gate
+    // is what held a hybrid athlete's whole month of evidence out of the comparable
+    // set; never restore that.
     comparable: nonComparable.length === 0,
     non_comparable_reasons: nonComparable,
   };
 
+  // The same reasons, scoped to the lift each one actually touches. The session
+  // verdict above is kept as-is for telemetry and for every existing reader; the
+  // progression engine consults these.
+  const skippedLower = new Set(skipped.map(lower));
+  const dose_evidence: MovementDoseEvidence[] = base_dose_evidence.map((dose) => {
+    const own =
+      (dose.prescribed.sets != null && dose.achieved.sets < dose.prescribed.sets) ||
+      skippedLower.has(lower(dose.exercise));
+    return {
+      ...dose,
+      ...doseComparability({
+        session_reasons: nonComparable,
+        own_dose_shortfall: own,
+        endurance_overlap: enduranceOverlapsMovement(
+          dose.exercise,
+          achievedMap.get(lower(dose.exercise))?.muscle_group ?? null,
+          enduranceGroups
+        ),
+      }),
+    };
+  });
+
   const facts: DailySessionOutcomeFacts = {
-    schema_version: 2,
+    schema_version: 3,
     suggested_count: suggestedExercises.length,
     suggested_exercises: suggestedExercises,
     logged_exercises: loggedExercises,

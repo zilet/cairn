@@ -346,11 +346,23 @@ export const FUEL_HOLD_STEP: VoiceSet = [
   "Your fueling is still settling, so this one holds rather than steps up.",
 ];
 
-export const FUEL_HOLD_CLAUSE: VoiceSet = [
-  "Fueling is still settling, so this isn't the week to push it either.",
-  "Your fueling is catching up too, so there's no rush to add here.",
-  "Fueling hasn't settled yet either — no hurry to push this one.",
+// The athlete asked to be pushed, so a soft fueling read no longer takes an
+// earned step away — it takes the near-maximal top set instead, which is the part
+// of the day that actually costs something to run underfed.
+export const PUSH_FUEL_PEAK_TRIM: VoiceSet = [
+  "You've asked to keep pushing, so the step stands — the near-maximal single is the piece that waits while your fueling catches up.",
+  "The step stays, since pushing is what you asked for; skip the heavy single today and let your fueling catch up first.",
+  "Keeping the step because you asked to push — leave the near-maximal top set for a day your fueling is further along.",
 ];
+
+// NOTE: there is deliberately no "…and fueling too" CLAUSE here any more. A clause
+// is something appended to an item's OWN sentence, and the only branch that ever
+// did that was a lift already holding for its own unrelated reason — which is
+// exactly the register leak that put somebody else's explanation on a lift card.
+// Every item the fuel read actually changes now carries a whole fuel sentence of
+// its own: FUEL_HOLD_STEP when the step is held, PUSH_FUEL_PEAK_TRIM when only the
+// near-maximal single comes off, FUEL_DELOAD_CLAUSE on a dose already going down,
+// FUEL_RECOVERY_DOSE when the read cuts the dose itself.
 
 export const FUEL_DELOAD_CLAUSE: VoiceSet = [
   "Your fueling is still catching up, so the easier dose stands.",
@@ -399,6 +411,18 @@ export const ACCUMULATION_OVERLOAD: VoiceSet = [
   "Earned, and in a volume stretch the step stays small — take the little one and keep the reps piling up.",
   "That's earned. This part of the run banks work rather than chasing load, so it's a modest step.",
   "You earned the step; in a build stretch it goes up gently and the volume stays the point.",
+];
+
+// The athlete has asked to be pushed, so a strong top set at the ceiling buys the
+// step outside a sharpening stretch too. The sentence NAMES that — it must never
+// claim every set capped, because under this rule they did not have to.
+export const PUSH_TOP_SET_OVERLOAD: VoiceSet1 = [
+  (high) =>
+    `Your top set owned ${high} at RIR 2+, and you've asked to be pushed — so that buys the step up rather than waiting for every set to match.`,
+  (high) =>
+    `${high} on the top set with RIR 2+ to spare. You asked for the harder read, so the weight moves now instead of waiting on the rest of the sets.`,
+  (high) =>
+    `You asked to push, and the top set hit ${high} at RIR 2+ — take the small step up; the other sets can catch up at the new weight.`,
 ];
 
 // Intensification: a strong top set at the ceiling buys the step on its own.
@@ -541,7 +565,7 @@ export function progressionVoicePhrases(): string[] {
     JOINT_BRAKE_HOLD,
     JOINT_BRAKE_DELOAD,
     FUEL_HOLD_STEP,
-    FUEL_HOLD_CLAUSE,
+    PUSH_FUEL_PEAK_TRIM,
     FUEL_DELOAD_CLAUSE,
     FUEL_RECOVERY_DOSE,
     ACCUMULATION_OVERLOAD,
@@ -560,6 +584,7 @@ export function progressionVoicePhrases(): string[] {
     [PLATEAU_VARY_OPEN, 4],
     [REP_STAGE_OVERLOAD, 12],
     [TOP_SET_ONLY_HOLD, 12],
+    [PUSH_TOP_SET_OVERLOAD, 12],
     [PLAN_BEHIND_OVERLOAD, "50 lb"],
     [PLAN_BEHIND_HOLD, "50 lb"],
     [PLAN_UNSET_OVERLOAD, "95 lb"],

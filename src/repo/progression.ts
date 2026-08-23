@@ -38,6 +38,7 @@ import {
   type VolumeSet,
 } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
+import { getSettings } from "./settings.js";
 import { relatedLiftStart } from "./related-lift.js";
 import {
   type AcuteGateReading,
@@ -108,6 +109,11 @@ import { trainingPlaybook, type TrainingPlaybookRead } from "./training-playbook
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import type { UnderfuelingRead } from "./underfueling.js";
 import { recentMovementResponse, type RecentMovementResponseVerdict } from "./training-response.js";
+import {
+  doseComparability,
+  enduranceLoadedGroups,
+  enduranceOverlapsMovement,
+} from "./daily-reconciliation.js";
 
 export { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
 
@@ -882,7 +888,7 @@ function linkedDoseEligibility(
   if (sessionId == null) return { linked_outcome: false, eligible: true, reason: "legacy_unlinked" };
   const row = db
     .prepare(
-      `SELECT o.status, o.facts_json, s.finished_at
+      `SELECT o.status, o.date, o.facts_json, s.finished_at
          FROM daily_session_outcomes o
          JOIN sessions s ON s.id = o.session_id
         WHERE o.session_id = ? ORDER BY o.id DESC LIMIT 1`
@@ -898,16 +904,6 @@ function linkedDoseEligibility(
   } catch {
     return { linked_outcome: true, eligible: false, reason: "non_comparable" };
   }
-  if (facts?.dose_context?.partial === true) {
-    return { linked_outcome: true, eligible: false, reason: "partial" };
-  }
-  if (facts?.dose_context?.comparable !== true) {
-    return {
-      linked_outcome: true,
-      eligible: false,
-      reason: "non_comparable",
-    };
-  }
   const stored = findExercise(movement);
   const identity =
     stored?.id != null ? `exercise:${Number(stored.id)}` : `movement:${normalizedExerciseKey(movement)}`;
@@ -920,11 +916,47 @@ function linkedDoseEligibility(
     : null;
   const prescribedSets = Number(dose?.prescribed?.sets);
   const achievedSets = Number(dose?.achieved?.sets);
-  if (
-    !dose ||
-    (Number.isFinite(prescribedSets) && prescribedSets > 0 && (!Number.isFinite(achievedSets) || achievedSets < prescribedSets))
-  ) {
+  const ownShortfall =
+    Number.isFinite(prescribedSets) &&
+    prescribedSets > 0 &&
+    (!Number.isFinite(achievedSets) || achievedSets < prescribedSets);
+  if (!dose || ownShortfall) {
     return { linked_outcome: true, eligible: false, reason: "partial" };
+  }
+  // Comparability is a per-LIFT question. Rows written at facts schema_version 3
+  // carry the answer; older rows carry the session reason list and this dose's own
+  // numbers, which is enough to derive the same verdict under the same rules.
+  const sessionReasons: string[] = Array.isArray(facts?.dose_context?.non_comparable_reasons)
+    ? facts.dose_context.non_comparable_reasons.map(String)
+    : facts?.dose_context?.comparable === true
+      ? []
+      : ["non_comparable"];
+  // A dose with no prescribed set count cannot PROVE it completed: the shortfall
+  // check above only fires on a finite prescription, and the write path also
+  // consults the session's skipped list, which read time cannot see. So when the
+  // session already said `partial`, an unprovable dose KEEPS that reason rather
+  // than dropping it — it never manufactures one, because with no session
+  // `partial` there is nothing here to keep.
+  const provablyPrescribed = Number.isFinite(prescribedSets) && prescribedSets > 0;
+  const perDose =
+    typeof dose.comparable === "boolean"
+      ? { comparable: dose.comparable === true }
+      : doseComparability({
+          session_reasons: sessionReasons,
+          own_dose_shortfall: !provablyPrescribed && sessionReasons.includes("partial"),
+          // An empty scope means the day's endurance work loaded nothing worth
+          // guarding, so the reason blocks no lift — the same ONE test the write
+          // path uses to decide whether to raise `loaded_endurance` at all.
+          endurance_overlap:
+            sessionReasons.includes("loaded_endurance") &&
+            enduranceOverlapsMovement(
+              movement,
+              stored?.muscle_group ?? null,
+              enduranceLoadedGroups(String(row.date ?? "").slice(0, 10))
+            ),
+        });
+  if (!perDose.comparable) {
+    return { linked_outcome: true, eligible: false, reason: "non_comparable" };
   }
   if (dose.challenge_verdict !== "met" && dose.challenge_verdict !== "exceeded") {
     return { linked_outcome: true, eligible: false, reason: "under_prescribed" };
@@ -1383,6 +1415,23 @@ export interface PrescriptionOpts {
   block?: ActiveBlockContext | null; // the active periodization block; null = nothing periodizes this pass
   cut?: CutPressure | (() => CutPressure) | null; // the shared fuel/cut read for the pass (lazy when a thunk, recomputed when absent)
   estimate?: EstimateReader | null; // the shared, lazy per-lift calibration read for the pass
+  drive?: TrainingDrive | null; // the athlete's standing posture (settings.training_drive); read from settings when absent
+}
+
+// The athlete's own standing declaration. It buys exactly two things below — a
+// top set can earn the load step outside an intensification phase, and an earned
+// step survives a soft fueling hold. It buys nothing from a SAFETY floor: the
+// acute gate, the autoregulation brake, the symptom gates, the unverified-
+// regression hold, a load-limiting constraint note and the clinician tier are all
+// deliberately blind to it.
+export type TrainingDrive = "steady" | "push";
+
+export function readTrainingDrive(): TrainingDrive {
+  try {
+    return getSettings().training_drive === "push" ? "push" : "steady";
+  } catch {
+    return "steady";
+  }
 }
 
 export function nextPrescription(
@@ -1433,6 +1482,11 @@ export function nextPrescription(
     block: opts && "block" in opts ? (opts.block ?? null) : activeBlockContext(date),
     cut: cutPressureThunk(date, opts?.cut ?? null),
     estimate: estimateReader(date, opts?.estimate ?? null),
+    // The declaration is a property of the DAY, so a pass over many lifts reads it
+    // once and threads it in (planDayProgression does); a standalone call reads it
+    // here. Absent OR null means "whatever the athlete has standing" — there is no
+    // meaningful third state to preserve, unlike the block/cut/estimate thunks.
+    drive: opts?.drive ?? readTrainingDrive(),
   };
   if (mode === "timed")
     return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
@@ -1452,6 +1506,7 @@ interface PrescCtx {
   block: ActiveBlockContext | null; // the active periodization block, when one is running
   cut: () => CutPressure; // the fuel/cut pressure, computed at most once and only if consulted
   estimate: EstimateReader; // the calibration read, computed at most once per lift and only if consulted
+  drive: TrainingDrive; // the athlete's standing "push me" declaration; bounded authority, never over a safety floor
 }
 
 function repsPrescription(
@@ -1532,6 +1587,10 @@ function repsPrescription(
   // isolation/accessory work keeps plain double progression, and with no block
   // running `policy` is null and every line below behaves exactly as it always did.
   const mainLift = isMainLift(group, plan);
+  // Deliberate: an accessory gets NO policy even mid-block, so `holds_load` is
+  // false for it and a deload week does not restrain the push rule on accessory
+  // work. That is the existing "accessories never periodize" design, not an
+  // oversight — the easy week is about the lifts the block is actually running.
   const policy: PhaseProgressionPolicy | null =
     brakeCtx?.block && mainLift ? phaseProgressionPolicy(brakeCtx.block.phase) : null;
   // DOUBLE PROGRESSION, grounded in what was ACTUALLY logged: advance REPS within the
@@ -1562,7 +1621,14 @@ function repsPrescription(
   // progression). With no rep range, fall back to a strong top set (RIR 2+ / progressing).
   // An INTENSIFICATION phase buys the step with intensity instead of completeness: a
   // strong top set at the ceiling is enough on its own.
-  const earnedByWork = hasRange ? (policy?.top_set_earns_load ? topSetAtTop : allSetsAtTop) && strong : strong;
+  // An athlete who has asked to be pushed buys the intensification phase's own
+  // rule in ordinary phases too: a strong set at the ceiling is enough. A phase
+  // that HOLDS load (deload, realization) keeps the strict reading — the easy week
+  // is not something a declaration talks its way out of.
+  const drive = brakeCtx?.drive ?? "steady";
+  const topSetEarnsLoad = !!policy?.top_set_earns_load || (drive === "push" && !policy?.holds_load);
+  const pushEarnedTopSet = topSetEarnsLoad && !policy?.top_set_earns_load && hasRange && !allSetsAtTop;
+  const earnedByWork = hasRange ? (topSetEarnsLoad ? topSetAtTop : allSetsAtTop) && strong : strong;
   // The REP stage: strong work with a rep still to win inside the (possibly widened) range.
   const repStageEligible = hasRange && strong && roomInRange && !allSetsAtTop;
   // A recovery or peak week adds nothing new — neither load nor another rep. The
@@ -1771,8 +1837,17 @@ function repsPrescription(
       why =
         policy?.top_set_earns_load && hasRange
           ? say(voice.INTENSIFICATION_OVERLOAD, "intensification_overload")
-          : policy && policy.step_scale < 1
+          : // A volume stretch owns the sentence ahead of the declaration: the step is
+            // still gentle and the volume is still the point, which is the thing the
+            // athlete most needs to hear on an accumulation card.
+            policy && policy.step_scale < 1
             ? say(voice.ACCUMULATION_OVERLOAD, "accumulation_overload")
+            : pushEarnedTopSet
+              ? // The step came from the top set alone because the athlete asked for
+                // that, so the sentence says so rather than claiming every set capped.
+                // The bar it cleared is the CEILING (the range's top plus whatever the
+                // phase saturates on), never the plain rep_high.
+                say(voice.PUSH_TOP_SET_OVERLOAD, "push_top_set_overload")(repCeiling as number)
             : hasRange
               ? say(voice.EARNED_RANGE_OVERLOAD, "earned_range_overload")(repHigh as number, repLow as number)
               : say(voice.EARNED_OPEN_OVERLOAD, "earned_open_overload");
@@ -2160,6 +2235,8 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
   // rather than a single value — a movement appearing twice in a pass walks its
   // 400-day history once, and a movement no branch asks about never walks it.
   const estimate = estimateReader(today);
+  // The athlete's standing declaration is a property of the day too — read once.
+  const drive = readTrainingDrive();
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
@@ -2176,9 +2253,10 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
       block,
       cut,
       estimate,
+      drive,
     });
     if (p) {
-      const protectedPrescription = applyFuelProtection(p, fuelProtection, today);
+      const protectedPrescription = applyFuelProtection(p, fuelProtection, today, drive);
       out.push({ ...protectedPrescription, plan_item_id: it.plan_item_id, day_number: dayNumber });
     }
   }
@@ -2193,16 +2271,37 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
 // second calorie move is made." ended up printed under a bench press. The
 // consequence (hold this step / take a lighter dose) belongs on the lift; the
 // calorie mechanics behind it belong to the surfaces that already carry them.
-function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead, date: string): Prescription {
+function applyFuelProtection(
+  prescription: Prescription,
+  read: UnderfuelingRead,
+  date: string,
+  drive: TrainingDrive = "steady"
+): Prescription {
   const say = <T>(set: readonly T[], code: string): T => voice.liftVoice(set, date, code, prescription.exercise);
   if (read.action.training === "proceed") return prescription;
   if (read.action.training === "hold_aggression") {
-    if (!["overload", "vary", "introduce"].includes(prescription.action)) {
-      return prescription.action === "hold"
+    // The fuel read is a property of the DAY. It gets to speak on a lift card only
+    // where it actually changed THAT lift — a lift already holding for its own
+    // reason is not held by fueling, and gluing the day's clause onto it was how a
+    // per-lift sentence ended up carrying somebody else's explanation.
+    if (!["overload", "vary", "introduce"].includes(prescription.action)) return prescription;
+    // A soft fueling signal no longer erases a step the work earned when the
+    // athlete has asked to be pushed. The near-maximal top set still comes off:
+    // that is the genuinely costly piece of an underfed day, and the athlete's
+    // declaration is about training hard, not about testing a single.
+    if (drive === "push" && prescription.action === "overload") {
+      return prescription.top_set
         ? {
             ...prescription,
+            top_set: undefined,
+            // The day's read changed THIS lift, so the surfaces that ask "did
+            // something brake this?" have to see it — the decision ledger's
+            // evidence and the session primer both read this flag. NOT
+            // `fuel_protected`: that one marks a dose the fuel read REDUCED, and
+            // the restore ledger turns it into volume owed back. The step stands
+            // and no sets came off here, so there is no debt to record.
             autoregulated: true,
-            why: `${prescription.why} ${say(voice.FUEL_HOLD_CLAUSE, "fuel_hold_clause")}`,
+            why: `${prescription.why} ${say(voice.PUSH_FUEL_PEAK_TRIM, "push_fuel_peak_trim")}`,
           }
         : prescription;
     }
