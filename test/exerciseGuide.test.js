@@ -517,7 +517,9 @@ test("a photo that fails to open answers 204 with nothing cacheable attached", a
 
   const res = new FakeResponse();
   streamGuideImage(res, unreadable);
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Wait for the response to actually end — a fixed sleep races the stream's
+  // error event on a loaded runner.
+  await new Promise((resolve) => res.on("finish", resolve));
 
   assert.equal(res.statusCode, 204);
   assert.equal(res.ended, true);
