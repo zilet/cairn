@@ -116,6 +116,21 @@ type TodayPlanSurfaceRendererApi = {
     return String(note ?? "").trim().replace(EASED_PREFIX, "").trim();
   }
 
+  // The distinct decision-level narrations across the session's cards, in card order.
+  // Normally exactly one; a session touched by several decisions keeps every one of
+  // them. A cap here silently dropped a change the athlete's session actually carries
+  // — and the deduped set is small by construction, one line per decision.
+  function sessionBrainSummaries(items: TodayPlanSurfaceRendererItem[]): string[] {
+    const out: string[] = [];
+    for (const item of items) {
+      if (item.brain_decision_id == null) continue;
+      const summary = String(item.brain_change_summary ?? "").replace(/\s+/g, " ").trim();
+      if (!summary || out.includes(summary)) continue;
+      out.push(summary);
+    }
+    return out;
+  }
+
   function sameJourneyExercise(left: unknown, right: unknown): boolean {
     return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
   }
@@ -204,6 +219,14 @@ type TodayPlanSurfaceRendererApi = {
     const easedSession = easedItems.length > 1 && easedItems.every(easedNote);
     if (easedSession) {
       html += `<div class="session-eased sess-line">${surfaceDeps.escapeHtml(sessionEasedLine(options.logDate))}</div>`;
+    }
+
+    // Same rule for the brain's own narration. `brain_change_summary` describes the
+    // DECISION, not the movement, and the server copies it onto every changed
+    // exercise — so it belongs above the cards, once, while each card keeps its
+    // per-exercise reason.
+    for (const summary of sessionBrainSummaries(surfaceItems)) {
+      html += `<div class="session-brain sess-line">${surfaceDeps.escapeHtml(summary)}</div>`;
     }
 
     let cardIdx = 0;

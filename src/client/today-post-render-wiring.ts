@@ -6,6 +6,7 @@ type TodayPostRenderState = {
   logDate: string;
   day: number | null;
   dayPicked?: boolean;
+  dayPickedOn?: string | null;
   chatPrefill?: string | null;
   capturePrefill?: string | null;
 };
@@ -120,12 +121,20 @@ type TodayPostRenderWiringApi = {
       deps.state.logDate = deps.localISO();
       deps.state.day = null;
       deps.state.dayPicked = false;
+      deps.state.dayPickedOn = null;
+      // The stale ?date= outlives the state fix otherwise, and restores the day we
+      // just left on the next cold launch.
+      if (typeof syncRouteFromState === "function") syncRouteFromState("replace");
       deps.renderToday();
     });
 
     deps.root.querySelectorAll<HTMLElement>(".daybtn").forEach((button) => button.addEventListener("click", () => {
       deps.state.day = Number(button.dataset.day);
-      deps.state.dayPicked = true;
+      // Choosing which plan day to run TODAY is not "browsing another day". Leaving
+      // dayPicked set on today's own date would freeze a resumed PWA past midnight.
+      const measuredToday = deps.localISO();
+      deps.state.dayPicked = deps.state.logDate !== measuredToday;
+      deps.state.dayPickedOn = deps.state.dayPicked ? measuredToday : null;
       deps.renderToday();
     }));
   }

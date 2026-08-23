@@ -80,7 +80,10 @@ test("cached suggestions normalize for preview and are revalidated against the c
         rep_high: 100,
         target_weight: 220,
         target_seconds: null,
-        note: "C".repeat(500),
+        // cleanText clamps to 500 and MARKS the cut, so an over-long note reads as
+        // truncated instead of stopping dead. One unbroken token has no word boundary
+        // to fall back to, so the ellipsis simply takes the last character's place.
+        note: `${"C".repeat(499)}…`,
       },
       {
         exercise: "Contract Timer",

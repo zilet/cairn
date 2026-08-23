@@ -51,6 +51,7 @@ type TodayPlanSessionPrepState = {
   logDate: string;
   day: number | null;
   dayPicked?: boolean;
+  dayPickedOn?: string | null;
   plan: TodayPlanSessionPrepPlanDay[];
   planReveal?: { date: string; on: boolean; blank?: boolean } | null;
   pendingOffPlan?: Record<string, TodayPlanSessionPrepPendingOffPlan[]>;
@@ -208,6 +209,10 @@ type TodayPlanSessionPrepDataApi = {
     if (dailySession) {
       deps.state.day = linked?.day_number ?? null;
       deps.state.dayPicked = dailySession.source === "manual_plan";
+      // Anchor the pick to the day it was made on (see dayRolloverTarget). A manual
+      // pick on the calendar's own day is only stale once midnight passes; one made
+      // while looking at another day is deliberate and never rolls forward.
+      deps.state.dayPickedOn = deps.state.dayPicked && deps.isToday ? deps.state.logDate : null;
     } else {
       const hasSelectedDay = deps.state.plan.some((day) => day.day_number === deps.state.day);
       if (revealBlank && !deps.state.dayPicked) {
@@ -215,6 +220,7 @@ type TodayPlanSessionPrepDataApi = {
       } else if (!deps.state.dayPicked || deps.state.day === null || !hasSelectedDay) {
         deps.state.day = await deps.suggestedPlanDayNumber(deps.session, deps.isToday);
         deps.state.dayPicked = false;
+        deps.state.dayPickedOn = null;
       }
     }
 

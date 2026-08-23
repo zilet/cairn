@@ -1,7 +1,7 @@
 import {
   asRecord,
+  cleanIdentifier,
   cleanOptionalText,
-  cleanText,
   enumValue,
   hasOwnProperties,
   isoDate,
@@ -240,7 +240,7 @@ export function normalizeProposedExpectation(value: unknown): ProposedExpectatio
   const windowEnd = isoDate(input.window_end);
   const confidence = enumValue(input.confidence, EXPECTATION_CONFIDENCE);
   const evaluator = enumValue(input.evaluator, EXPECTATION_EVALUATORS);
-  const evaluatorVersion = cleanText(input.evaluator_version, 80);
+  const evaluatorVersion = cleanIdentifier(input.evaluator_version, 80);
   const target = normalizeJsonObject(input.target);
   if (
     !metricKey ||

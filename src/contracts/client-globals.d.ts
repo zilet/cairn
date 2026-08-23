@@ -1841,7 +1841,12 @@ declare global {
   declare function registerAppJobReconnectors(): void;
   declare function installMobileViewportGuards(): void;
   declare function installDayRolloverWatcher(): void;
-  declare function dayRolloverTarget(current: string, measured: string, dayPicked: boolean): string | null;
+  declare function dayRolloverTarget(
+    current: string,
+    measured: string,
+    dayPicked: boolean,
+    dayPickedOn?: string | null
+  ): string | null;
   declare function reconnectSessionSuggest(job?: unknown): unknown;
   declare function reconnectMealPlan(job?: unknown): unknown;
   declare function reconnectMealSwap(job?: unknown): unknown;
@@ -2400,7 +2405,7 @@ declare global {
     CairnUiHeader: {
       setTodayHeaderTitle(deps: {
         headerTitle: HTMLElement;
-        state: { tab?: unknown; logDate?: string; day?: unknown; dayPicked?: boolean };
+        state: { tab?: unknown; logDate?: string; day?: unknown; dayPicked?: boolean; dayPickedOn?: string | null };
         escapeHtml(value: unknown): string;
         dateLabel(iso: string): string;
         localISO(date?: Date): string;
@@ -3821,6 +3826,7 @@ declare global {
           logDate: string;
           day: number | null;
           dayPicked?: boolean;
+          dayPickedOn?: string | null;
           plan: Array<Record<string, unknown> & { day_number: number; items?: Array<Record<string, unknown>> | null }>;
           planReveal?: { date: string; on: boolean; blank?: boolean } | null;
           pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
@@ -4055,6 +4061,7 @@ declare global {
           logDate: string;
           day: number | null;
           dayPicked?: boolean;
+          dayPickedOn?: string | null;
           chatPrefill?: string | null;
           capturePrefill?: string | null;
         };

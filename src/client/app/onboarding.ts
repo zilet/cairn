@@ -103,6 +103,7 @@ type OnboardingSex = "female" | "male";
       state.plan = [];
       state.day = null;
       state.dayPicked = false;
+      state.dayPickedOn = null;
       ["plan", "profile", "stats", "progress:weight", "progress:energy", "supplements", "memory"].forEach(swrInvalidate);
       swrInvalidate("today:session:");
       modal.remove();

@@ -50,6 +50,22 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
 
   const ROUTE_TABS: ClientTabName[] = [...(routeDefinitions()?.tabs || ["today"])];
 
+  // "Today" is a moving target, not a bookmark. Pinning it as an absolute ?date=
+  // means the next launch restores a date that has since become yesterday, and the
+  // header then reads "Yesterday" on a fresh open. Only a deliberately chosen other
+  // day belongs in the URL.
+  function localToday(): string | null {
+    const root = (typeof window !== "undefined" ? window : globalThis) as AppRouterRoot & {
+      localISO?: (d?: Date) => string;
+    };
+    return typeof root.localISO === "function" ? root.localISO() : null;
+  }
+
+  function isLocalToday(date: unknown): boolean {
+    const today = localToday();
+    return today !== null && String(date || "") === today;
+  }
+
   function itemKey(item: RouteItem): string {
     return String(Array.isArray(item) ? item[0] : item);
   }
@@ -77,8 +93,21 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
   function applyRouteState(route: AppRoute | null | undefined, options: ApplyRouteOptions): ClientTabName {
     if (!route) return "today";
     const { state } = options;
-    if (route.date) state.logDate = route.date;
     const tab = tabKey(route.tab);
+    if (route.date) {
+      state.logDate = route.date;
+    } else if (tab === "today") {
+      // A dateless Today URL IS today — that is exactly why currentRouteState omits
+      // the date for it. Leaving logDate on the day we came from meant Back out of a
+      // ?date= day landed on the Today tab still showing that day, with no way back
+      // through history. Re-measure, and drop the pick it belonged to.
+      const today = localToday();
+      if (today) {
+        state.logDate = today;
+        state.dayPicked = false;
+        state.dayPickedOn = null;
+      }
+    }
 
     if (tab === "plan") {
       const section = routeKey(route.section, options.routeApi?.planSections || options.planSections, "edit") as ClientPlanSection;
@@ -118,7 +147,7 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     const tab = tabKey(state.tab);
     const route: Partial<AppRoute> = { tab };
     if (tab === "today") {
-      if (state.logDate) route.date = state.logDate;
+      if (state.logDate && !isLocalToday(state.logDate)) route.date = state.logDate;
     } else if (tab === "session") {
       if (state.logDate) route.date = state.logDate;
     } else if (tab === "plan") {

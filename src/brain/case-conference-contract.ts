@@ -1,5 +1,6 @@
 import {
   asRecord,
+  cleanIdentifier,
   cleanText,
   enumValue,
   hasOwnProperties,
@@ -301,7 +302,7 @@ export function normalizeCaseConferenceDecision(value: unknown): CaseConferenceD
   const conflicts: Array<{ key: string; resolution: string }> = [];
   for (const item of Array.isArray(input.resolved_conflicts) ? input.resolved_conflicts.slice(0, 12) : []) {
     const row = asRecord(item);
-    const key = cleanText(row?.key, 100);
+    const key = cleanIdentifier(row?.key, 100);
     const resolution = cleanText(row?.resolution, 500);
     if (key && resolution) conflicts.push({ key, resolution });
   }

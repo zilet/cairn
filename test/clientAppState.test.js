@@ -39,6 +39,8 @@ test("core app state initializes typed globals for the classic script graph", ()
     tab: "today",
     day: null,
     dayPicked: false,
+    // No pick yet, so no day it was anchored to (see dayRolloverTarget).
+    dayPickedOn: null,
     plan: [],
     today: {},
     logDate: "2026-06-29",

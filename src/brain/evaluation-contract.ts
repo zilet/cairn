@@ -1,5 +1,6 @@
 import {
   asRecord,
+  cleanIdentifier,
   cleanText,
   enumValue,
   hasOwnProperties,
@@ -31,7 +32,7 @@ export function normalizeBrainEvaluation(value: unknown): BrainEvaluation | null
   const expectationId = positiveInteger(input.expectation_id);
   const verdict = enumValue(input.verdict, BRAIN_EVALUATION_VERDICTS);
   const explanation = cleanText(input.explanation, 1_000);
-  const evaluatorVersion = cleanText(input.evaluator_version, 80);
+  const evaluatorVersion = cleanIdentifier(input.evaluator_version, 80);
   if (!expectationId || !verdict || !explanation || !evaluatorVersion) return null;
 
   const id = input.id == null ? undefined : positiveInteger(input.id);

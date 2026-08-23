@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { truncateAtWord } from "../brain/contract-utils.js";
 import { db } from "../db.js";
 import { clampEvidenceDate, clampProposalProvenanceDates } from "./proposal-provenance-clamp.js";
 import { addDaysISO, localDateISO } from "./shared.js";
@@ -168,6 +169,15 @@ function inferredEvidenceDate(reason: string, asOf: string, latestTrainingDate: 
   return clampEvidenceDate(inferred, asOf);
 }
 
+// A rewritten span that OPENS a sentence has to carry the capital the original word
+// carried. Sentence start = the start of the string, or the first thing after
+// sentence-ending punctuation and a space.
+function sentenceCased(replacement: string, source: string, offset: number): string {
+  const before = source.slice(0, offset);
+  const opensSentence = before.trim() === "" || /[.!?]["'’”)\]]?\s+$/.test(before);
+  return opensSentence ? replacement.charAt(0).toUpperCase() + replacement.slice(1) : replacement;
+}
+
 export function normalizeHistoricalReason(
   value: unknown,
   provenance?: Partial<ReasonProvenance> | null,
@@ -197,8 +207,19 @@ export function normalizeHistoricalReason(
       /\brecent comparable (exposures?|holds?|sessions?|sets?)\b/gi,
       (_match, noun) => `comparable ${noun} through ${evidenceLabel}`
     )
-    .replace(/\byesterday(?:'s)?\b/gi, `on ${evidenceLabel}`)
-    .replace(/\btoday(?:'s)?\b/gi, `on ${asOfLabel}`)
+    // The possessive is its own case. "today's Pull" is a NOUN PHRASE, so the plain
+    // adverbial swap turns it into "on August 19, 2026 Pull" — not a sentence. Carry
+    // the date the same way the dated-session rewrites below already do, as an
+    // attributive label after "the" — and keep the capital when the word it replaces
+    // opened the sentence, or "Today's Pull stays." loses its capital letter.
+    .replace(/\b(?:the )?yesterday['’]s\b/gi, (_match, offset: number, source: string) =>
+      sentenceCased(`the ${evidenceLabel}`, source, offset)
+    )
+    .replace(/\b(?:the )?today['’]s\b/gi, (_match, offset: number, source: string) =>
+      sentenceCased(`the ${asOfLabel}`, source, offset)
+    )
+    .replace(/\byesterday\b/gi, `on ${evidenceLabel}`)
+    .replace(/\btoday\b/gi, `on ${asOfLabel}`)
     .replace(/\bthe last session\b/gi, `the ${evidenceLabel} session`)
     .replace(/\blast session\b/gi, `the ${evidenceLabel} session`)
     .replace(/\bthe (?:previous|prior) session\b/gi, `the ${evidenceLabel} session`)
@@ -228,7 +249,7 @@ export function normalizeHistoricalReason(
     .replace(/\bearlier this week\b/gi, `earlier in the week of ${thisWeek}`)
     .replace(/\bthis week\b/gi, `the week of ${thisWeek}`)
     .replace(/\blast week\b/gi, `the week of ${lastWeek}`);
-  return reason.slice(0, 1_500);
+  return truncateAtWord(reason, 1_500);
 }
 
 function planFacts(): any[] {

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { truncateAtWord } from "../brain/contract-utils.js";
 import { db } from "../db.js";
 import { getCheckinByDate, getRecoverySummary } from "./coach.js";
 import { cardioPlanIdentity } from "./cardio-plan-identity.js";
@@ -341,6 +342,15 @@ function text(value: unknown, max = 200): string | null {
   return s ? s.slice(0, max) : null;
 }
 
+// The narration variant of `text`. A label can be clipped anywhere; a sentence the
+// athlete reads cannot — a bare slice halved the last word and ran the fragment into
+// the next line as though they were one sentence.
+function prose(value: unknown, max: number): string | null {
+  if (value == null) return null;
+  const s = String(value).replace(/\s+/g, " ").trim();
+  return s ? truncateAtWord(s, max) : null;
+}
+
 function boundedRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const out: Record<string, unknown> = {};
@@ -561,7 +571,7 @@ export function gatherDailyDecisionSnapshot(
     source: "derived" as const,
   });
 
-  const override = text(opts.override, 200);
+  const override = prose(opts.override, 200);
   const contextInjuries = (Array.isArray(injuryImpacts?.injuries) ? injuryImpacts.injuries : []).map((inj: any) => ({
     title: text(inj?.title ?? inj?.text, 120) ?? "injury",
     constraint_level: inj?.constraint_level === "soft_recheck" ? ("soft_recheck" as const) : ("protective" as const),
@@ -634,7 +644,7 @@ export function gatherDailyDecisionSnapshot(
       focus: text(selected?.focus ?? planDay?.focus ?? null, 160),
       plan_day_id: selected?.plan_day_id ?? planDay?.id ?? null,
       source: text(selected?.source ?? null, 40),
-      reason: text(selection?.reason ?? null, 300),
+      reason: prose(selection?.reason ?? null, 300),
       due: dedupe(Array.isArray(selection?.due) ? selection.due : []),
       over: dedupe(Array.isArray(selection?.over) ? selection.over : []),
     },
@@ -693,7 +703,7 @@ export function gatherDailyDecisionSnapshot(
         ? {
             soreness: finite(autoreg.soreness),
             performance: finite(autoreg.performance),
-            joint_pain: text(autoreg.joint_pain, 300),
+            joint_pain: prose(autoreg.joint_pain, 300),
             low_performance_count: recentLowPerformanceCount(d),
           }
         : null,
@@ -724,7 +734,7 @@ export function gatherDailyDecisionSnapshot(
         exercise: text(p?.exercise, 120) ?? "",
         muscle_group: null as string | null,
         action: text(p?.action, 20) ?? "hold",
-        why: text(p?.why, 240) ?? "",
+        why: prose(p?.why, 240) ?? "",
         vary_to: text(p?.vary_to ?? p?.vary_options?.[0]?.name, 120),
         current_target: prescriptionTarget(p?.current, p?.mode),
         suggested_target: prescriptionTarget(p?.suggested, p?.mode),
@@ -733,7 +743,7 @@ export function gatherDailyDecisionSnapshot(
         ...(topSetOf(p?.top_set) ? { top_set: topSetOf(p?.top_set) as DailyDecisionTopSet } : {}),
         evidence: {
           delta_text: text(p?.delta_text, 80),
-          why: text(p?.why, 240),
+          why: prose(p?.why, 240),
           reground: p?.reground === true,
           autoregulated: p?.autoregulated === true,
           movement_response: text(p?.movement_response, 40),
@@ -770,8 +780,8 @@ export function gatherDailyDecisionSnapshot(
           target_duration_min: finite(it?.target_duration_min),
           target_zone: text(it?.target_zone, 40),
           brain_decision_id: finite(it?.brain_decision_id),
-          brain_change_summary: text(it?.brain_change_summary, 500),
-          brain_change_reason: text(it?.brain_change_reason, 600),
+          brain_change_summary: prose(it?.brain_change_summary, 500),
+          brain_change_reason: prose(it?.brain_change_reason, 600),
           brain_change_reason_provenance: boundedRecord(it?.brain_change_reason_provenance),
           brain_change_reversible:
             it?.brain_change_reversible == null ? null : it.brain_change_reversible === true,

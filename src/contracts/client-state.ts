@@ -23,6 +23,10 @@ export type ClientAppState = {
   tab: ClientTabName;
   day: number | null;
   dayPicked: boolean;
+  // The calendar day measured WHEN logDate was picked. A pick made on the day it
+  // names was "today" then and merely goes stale at midnight, so it rolls forward;
+  // a pick made while looking at another day is deliberate and is left alone.
+  dayPickedOn?: string | null;
   plan: ClientPlanDay[];
   today: Record<string, unknown>;
   logDate: string;

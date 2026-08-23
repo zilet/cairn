@@ -695,10 +695,17 @@ function enterSession(date: string, response?: Record<string, unknown> | null): 
   if (daily?.source === "manual_plan") {
     const linked = todayState.plan.find((day) => Number(day.id) === Number(daily.plan_day_id));
     if (linked) todayState.day = linked.day_number;
-    todayState.dayPicked = true;
+    // Only a genuinely other day counts as picked; entering today's own session must
+    // not pin the app to this date once the calendar moves on. `dayPickedOn` anchors
+    // the pick to the day it was made on, so the rollover watcher can tell a pick that
+    // went stale at midnight from a deliberately opened past day.
+    const measuredToday = localISO();
+    todayState.dayPicked = date !== measuredToday;
+    todayState.dayPickedOn = todayState.dayPicked ? measuredToday : null;
   } else if (daily && daily.source !== "adaptive_plan") {
     todayState.day = null;
     todayState.dayPicked = false;
+    todayState.dayPickedOn = null;
   }
   todayState.planReveal = { date, on: true };
   sessionFreshNext = true;

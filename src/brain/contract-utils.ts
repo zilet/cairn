@@ -8,10 +8,47 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+// A bare .slice() cuts mid-word, and the fragment then runs into whatever follows it
+// as if it were one sentence ("…rotates to a fresh Held the load"). Cut back to the
+// last word boundary instead and mark the cut, so a truncated line still READS as
+// truncated. The result never exceeds maxLength (the ellipsis is inside the budget).
+export function truncateAtWord(text: string, maxLength: number): string {
+  if (maxLength <= 0) return "";
+  if (text.length <= maxLength) return text;
+  if (maxLength === 1) return "…";
+  const budget = maxLength - 1; // the ellipsis lives inside the caller's limit
+  const clipped = text.slice(0, budget);
+  const lastSpace = clipped.lastIndexOf(" ");
+  // The budget may already land on a word boundary — then nothing needs trimming.
+  // Otherwise fall back to the last complete word; a single very long token has no
+  // boundary worth honouring, so keep the hard cut rather than losing the budget.
+  const boundary = text[budget] === " " || lastSpace <= 0 ? clipped : clipped.slice(0, lastSpace);
+  // Trimming the cut can empty it (a leading run of punctuation, or a first "word"
+  // that is punctuation alone), and a bare "…" says nothing at all. The hard clip is
+  // the floor: less readable than a word boundary, still more than nothing.
+  const cut = trimTrailingPunctuation(boundary) || trimTrailingPunctuation(clipped) || clipped;
+  return `${cut}…`;
+}
+
+function trimTrailingPunctuation(text: string): string {
+  return text.replace(/[\s,;:.—–-]+$/, "");
+}
+
+// The identifier sibling of truncateAtWord. A version string or a row key is matched,
+// not read: a word boundary means nothing in it, and an appended "…" would become
+// part of the value and never compare equal to the same identifier clipped elsewhere.
+export function cleanIdentifier(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim().replace(/\s+/g, " ");
+  return text ? text.slice(0, maxLength) || null : null;
+}
+
+// The prose variant: anything a person reads. Machine identifiers take
+// `cleanIdentifier` instead, so no ellipsis ever lands inside a compared value.
 export function cleanText(value: unknown, maxLength: number): string | null {
   if (typeof value !== "string") return null;
   const text = value.trim().replace(/\s+/g, " ");
-  return text ? text.slice(0, maxLength) : null;
+  return text ? truncateAtWord(text, maxLength) : null;
 }
 
 export function cleanOptionalText(value: unknown, maxLength: number): string | null {

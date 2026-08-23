@@ -6,6 +6,7 @@ type UiHeaderState = {
   logDate?: string;
   day?: unknown;
   dayPicked?: boolean;
+  dayPickedOn?: string | null;
 };
 
 type UiHeaderDeps = {
@@ -42,6 +43,7 @@ type UiHeaderClientApi = {
       deps.state.logDate = inp.value;
       deps.state.day = null;
       deps.state.dayPicked = false;
+      deps.state.dayPickedOn = null;
       deps.syncRouteFromState();
       deps.renderToday();
     });

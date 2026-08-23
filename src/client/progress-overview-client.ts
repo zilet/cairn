@@ -440,6 +440,7 @@ function wireTovStart(): void {
   if (!btn) return;
   btn.addEventListener("click", () => {
     state.dayPicked = false;
+    state.dayPickedOn = null;
     if (typeof openSession === "function") void openSession(localISO(), {
       source: "adaptive_plan",
       trigger: btn,

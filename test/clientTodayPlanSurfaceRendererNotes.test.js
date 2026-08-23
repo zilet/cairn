@@ -131,3 +131,18 @@ test("the session easing line rotates by date and stays stable within a day", ()
   assert.equal(seen.size, 4, "four consecutive eased mornings never repeat a sentence");
   assert.equal([...seen].every((line) => line.length > 0), true);
 });
+
+// The decision-level narration is the session's fact too, so it prints above the
+// cards once per DECISION. It used to stop after two, so a session touched by a third
+// decision silently lost that change from the surface entirely.
+test("every decision narration reaches the surface, deduped but never capped", () => {
+  const { html } = render([
+    { exercise: "Back Squat", brain_decision_id: 1, brain_change_summary: "Held the squat load." },
+    { exercise: "Bench Press", brain_decision_id: 1, brain_change_summary: "Held the squat load." },
+    { exercise: "Seated Row", brain_decision_id: 2, brain_change_summary: "Rotated the row." },
+    { exercise: "Curl", brain_decision_id: 3, brain_change_summary: "Trimmed a set from the curl." },
+  ]);
+
+  const lines = [...html.matchAll(/<div class="session-brain sess-line">([^<]*)</g)].map((m) => m[1]);
+  assert.deepEqual(lines, ["Held the squat load.", "Rotated the row.", "Trimmed a set from the curl."]);
+});

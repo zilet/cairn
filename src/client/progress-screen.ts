@@ -489,6 +489,7 @@ function paintCalendarBody(data: ProgressRecord) {
       state.logDate = el.dataset.goto || state.logDate;
       state.day = null;
       state.dayPicked = false;
+      state.dayPickedOn = null;
       activateTab("today");
     })
   );

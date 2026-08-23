@@ -12,20 +12,40 @@
 
 // Pure decision, extracted so the rollover rule is deterministically tested with no
 // DOM, timer, or real clock. Returns the date to roll to, or null to leave as-is:
-//   - the user is deliberately browsing another day (dayPicked) -> never override it
 //   - no measurable date, or still the same calendar day -> nothing to do
-function dayRolloverTarget(current: string, measured: string, dayPicked: boolean): string | null {
-  if (dayPicked) return null;
+//   - the user is deliberately looking AHEAD of the calendar -> never override it
+//   - the user deliberately opened a PAST day -> never override it either; logging a
+//     Saturday workout on Monday must not silently re-point the next set at Monday.
+// `dayPickedOn` is the anchor that separates those two: it records the calendar day
+// that was measured WHEN the date was picked. A pick made on the day it names was
+// "today" at the time, and merely went stale when midnight passed — that one catches
+// up. A pick whose shown date never was the measured day is a deliberate visit and
+// stands. Without an anchor we cannot tell, so the picked date stands.
+function dayRolloverTarget(
+  current: string,
+  measured: string,
+  dayPicked: boolean,
+  dayPickedOn?: string | null,
+): string | null {
   if (!measured || measured === current) return null;
+  if (dayPicked && (current > measured || current !== dayPickedOn)) return null;
   return measured;
 }
 
 {
-  type RolloverState = { tab?: unknown; logDate: string; dayPicked?: boolean; brief?: unknown };
+  type RolloverState = {
+    tab?: unknown;
+    logDate: string;
+    day?: number | null;
+    dayPicked?: boolean;
+    dayPickedOn?: string | null;
+    brief?: unknown;
+  };
   const g = globalThis as typeof globalThis & {
     state?: RolloverState;
     localISO?: (d?: Date) => string;
     activateTab?: (name: unknown, opts?: { syncRoute?: boolean }) => void;
+    syncRouteFromState?: (mode?: "push" | "replace") => void;
   };
 
   let midnightTimer: ReturnType<typeof setTimeout> | null = null;
@@ -41,15 +61,25 @@ function dayRolloverTarget(current: string, measured: string, dayPicked: boolean
   function checkRollover(): void {
     const s = g.state;
     if (!s || typeof g.localISO !== "function") return;
-    const target = dayRolloverTarget(s.logDate, g.localISO(), !!s.dayPicked);
+    const target = dayRolloverTarget(s.logDate, g.localISO(), !!s.dayPicked, s.dayPickedOn ?? null);
     if (!target) return;
     s.logDate = target;
+    // Landing on the new day is the same arrival as "Back to today": the pick that
+    // named yesterday is spent, and the plan day chosen under it would otherwise
+    // survive as a stale selection Today paints and openSession reads as a manual
+    // pick. Mirror that handler rather than advancing the date alone.
+    s.dayPicked = false;
+    s.dayPickedOn = null;
+    s.day = null;
     // Clear the stale Brief so Today repaints from the new day. The Brief
     // localStorage cache (cairn.brief.v1) is already date-guarded, so it won't
     // repaint yesterday's read once logDate is right.
     s.brief = null;
     // Re-render the active tab through the tab entry the router/tabs already use.
     if (typeof g.activateTab === "function") g.activateTab(s.tab, { syncRoute: false });
+    // The URL still carries the date we just left. Replace it (never push — this is a
+    // correction, not navigation) so the next cold launch doesn't restore yesterday.
+    if (typeof g.syncRouteFromState === "function") g.syncRouteFromState("replace");
   }
 
   function armMidnightTimer(): void {

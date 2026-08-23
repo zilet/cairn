@@ -160,6 +160,77 @@ test("app router derives current route state from app state", () => {
   assert.deepEqual(plain(settingsRoute), { tab: "settings", section: "system" });
 });
 
+// "Today" is a moving target, not a bookmark. Writing it into the URL as an absolute
+// ?date= meant the next cold launch restored a date that had since become yesterday,
+// and the Today header opened reading "Yesterday".
+function loadRouterWithClock(todayISO) {
+  const routeStateSrc = readFileSync(new URL("../public/js/route-state.js", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../public/js/app-router.js", import.meta.url), "utf8");
+  const context = { window: { localISO: () => todayISO }, URL, URLSearchParams };
+  vm.runInNewContext(routeStateSrc, context, { filename: "route-state.js" });
+  vm.runInNewContext(src, context);
+  return context.window.CairnAppRouter;
+}
+
+test("app router never pins today's own date into the Today route", () => {
+  const router = loadRouterWithClock("2026-06-29");
+  const baseState = { tab: "today", day: null, dayPicked: false, plan: [], today: {} };
+
+  const todayRoute = router.currentRouteState({
+    state: { ...baseState, logDate: "2026-06-29" },
+    ...deps,
+    defaultProgressSection: "sessions",
+  });
+  assert.deepEqual(plain(todayRoute), { tab: "today" });
+
+  // A deliberately chosen other day still belongs in the URL.
+  const pastRoute = router.currentRouteState({
+    state: { ...baseState, logDate: "2026-06-27", dayPicked: true },
+    ...deps,
+    defaultProgressSection: "sessions",
+  });
+  assert.deepEqual(plain(pastRoute), { tab: "today", date: "2026-06-27" });
+
+  // The open session destination keeps its explicit date either way.
+  const sessionRoute = router.currentRouteState({
+    state: { ...baseState, tab: "session", logDate: "2026-06-29" },
+    ...deps,
+    defaultProgressSection: "sessions",
+  });
+  assert.deepEqual(plain(sessionRoute), { tab: "session", date: "2026-06-29" });
+});
+
+// The other half of that rule: if today never carries a ?date=, then a dateless Today
+// URL IS today. Reading only route.date left Back out of a ?date= day on the Today tab
+// still showing that day, with no history entry left to get home.
+test("app router returns a dateless Today route to the measured day", () => {
+  const router = loadRouterWithClock("2026-06-29");
+  const state = {
+    tab: "today",
+    day: 3,
+    dayPicked: true,
+    dayPickedOn: "2026-06-29",
+    plan: [],
+    today: {},
+    logDate: "2026-06-29",
+  };
+
+  // Forward: pick 06-27, which the URL carries.
+  assert.equal(router.applyRouteState({ tab: "today", date: "2026-06-27" }, { state, ...deps }), "today");
+  assert.equal(state.logDate, "2026-06-27");
+
+  // Back: the popped entry is the dateless Today URL.
+  assert.equal(router.applyRouteState({ tab: "today" }, { state, ...deps }), "today");
+  assert.equal(state.logDate, "2026-06-29");
+  assert.equal(state.dayPicked, false);
+  assert.equal(state.dayPickedOn, null);
+
+  // Another tab without a date says nothing about the log date.
+  state.logDate = "2026-06-27";
+  assert.equal(router.applyRouteState({ tab: "progress", section: "energy" }, { state, ...deps }), "progress");
+  assert.equal(state.logDate, "2026-06-27");
+});
+
 test("app router syncs canonical URLs through push and replace history", () => {
   const router = loadRouter();
   const calls = [];

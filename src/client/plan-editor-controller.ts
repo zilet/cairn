@@ -368,6 +368,7 @@ async function renderPlanEditor(): Promise<void> {
       wireComposeWeek(root);
       root.querySelector("#planEmptyStart")?.addEventListener("click", () => {
         state.dayPicked = false;
+        state.dayPickedOn = null;
         if (typeof openSession === "function") void openSession(localISO(), {
           source: "athlete_override",
           replace: true,
@@ -400,6 +401,9 @@ async function renderPlanEditor(): Promise<void> {
       if (!day) return;
       state.day = form.dayNumber(day);
       state.dayPicked = true;
+      // The day is trained TODAY, so the pick is anchored to the calendar's own day:
+      // it goes stale at midnight instead of pinning the app to this date forever.
+      state.dayPickedOn = localISO();
       if (typeof openSession === "function") void openSession(localISO(), {
         source: "manual_plan",
         dayNumber: state.day,

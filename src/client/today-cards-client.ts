@@ -168,6 +168,9 @@ function exerciseCardHtml(
     todayFinite(lastSetRecord.weight) != null ||
     todayFinite(lastSetRecord.duration_sec) != null;
   const note = todayCardsCleanNote(item.note, groundedDose);
+  // A changed card carries only its OWN reason. `brain_change_summary` narrates the
+  // whole decision and is copied onto every changed exercise, so repeating it here
+  // printed the same paragraph once per card; the plan surface says it once above them.
   return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${headlineDose ? ` data-dose="headline"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         ${tile}
@@ -176,7 +179,7 @@ function exerciseCardHtml(
         ${skipButton}${removeButton}
       </div>
       <div class="ex-meta">${progress}</div>
-      ${item.brain_decision_id ? `<div class="ex-flag"><b>${escHtml(item.brain_change_summary || "Cairn adjusted this exercise.")}</b>${item.brain_change_reason || note ? ` ${escHtml(item.brain_change_reason || note)}` : ""}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : note ? `<div class="ex-note">${escHtml(note)}</div>` : ""}
+      ${item.brain_decision_id ? `<div class="ex-flag">${escHtml(item.brain_change_reason || note || "Cairn adjusted this exercise.")}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : note ? `<div class="ex-note">${escHtml(note)}</div>` : ""}
       ${item.constraint_note ? `<div class="ex-flag">${escHtml(item.constraint_note)}</div>` : ""}
       ${item.journey_line ? `<div class="ex-journey" data-journey-role="${escAttr(item.journey_role || "support")}">${escHtml(item.journey_line)}</div>` : ""}
       ${!complete ? CairnTodayTraining.exRxLineHtml(rx, { supporting: headlineDose }) : ""}

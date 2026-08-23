@@ -15,7 +15,9 @@
     return el;
   })();
 
-  const appState: ClientAppState = { tab: "today", day: null, dayPicked: false, plan: [], today: {}, logDate: localISO() };
+  const appState: ClientAppState = {
+    tab: "today", day: null, dayPicked: false, dayPickedOn: null, plan: [], today: {}, logDate: localISO(),
+  };
 
   // Classic client scripts read these names directly. Defining them as explicit
   // globalThis properties avoids relying on cross-file lexical declarations.

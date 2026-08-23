@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { truncateAtWord } from "../brain/contract-utils.js";
 import { normalizePrescriptionItem, SESSION_PRESCRIPTION_LIMITS } from "../contracts/session-prescription.js";
 import { deterministicComposedSession, normalizeComposedSession } from "./daily-composition.js";
 import {
@@ -96,6 +97,16 @@ function boundedText(value: unknown, max: number): string | null {
   return text ? text.slice(0, max) : null;
 }
 
+// The narration variant of `boundedText`, for the fields the ATHLETE reads. A label
+// or an identifier can be clipped anywhere; a sentence cannot — a bare slice halves
+// the last word, and the fragment then runs into whatever follows it as if the two
+// were one sentence.
+function boundedProse(value: unknown, max: number): string | null {
+  if (value == null) return null;
+  const text = String(value).replace(/\s+/g, " ").trim();
+  return text ? truncateAtWord(text, max) : null;
+}
+
 function finite(value: unknown): number | null {
   if (value == null || value === "") return null;
   const n = Number(value);
@@ -109,15 +120,19 @@ function boundedNumber(value: unknown, min: number, max: number, integer = false
   return integer ? Math.round(bounded) : Math.round(bounded * 100) / 100;
 }
 
+// Athlete-facing narration rather than a label, so the clamp cuts at a word boundary
+// — a bare slice left the last word halved and the fragment then ran into whatever
+// the card printed next as if the two were one sentence.
 function durableSnapshotText(value: unknown, max: number): string | null {
-  const bounded = boundedText(value, max);
-  if (!bounded) return null;
-  return bounded
+  if (value == null) return null;
+  const text = String(value).replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  const rewritten = text
     .replace(/\byesterday's\b/gi, "a prior session's")
     .replace(/\byesterday\b/gi, "a prior session")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
+    .trim();
+  return truncateAtWord(rewritten, max) || null;
 }
 
 function dedupeStartLight(value: unknown): string | null {
@@ -136,7 +151,7 @@ function dedupeStartLight(value: unknown): string | null {
     sawStartLight = true;
     return true;
   });
-  return kept.join(" ").slice(0, 500) || null;
+  return truncateAtWord(kept.join(" "), 500) || null;
 }
 
 function trustedItemMetadata(
@@ -470,7 +485,7 @@ function normalizeItem(
       target_seconds: null,
       warmup_sets: null,
       mode: null,
-      note: boundedText(item.note, 500),
+      note: boundedProse(item.note, 500),
       target_distance_km: core.target_distance_km,
       target_duration_min: core.target_duration_min,
       target_zone: boundedText(item.target_zone, 80),
@@ -537,11 +552,11 @@ function normalizeSessionPayload(
     normalizeItem(item, index, agentSource, athleteSource, trustedAgentNormalized)
   );
   const title = boundedText(session.title ?? session.name, 120) ?? (allowEmpty ? "Open session" : null);
-  const why = boundedText(session.why, 600);
+  const why = boundedProse(session.why, 600);
   if (requireSummary && (!title || !why)) throw new Error("agent session name and why are required");
   return {
     title,
-    focus: boundedText(session.focus, 160),
+    focus: boundedProse(session.focus, 160),
     why,
     est_minutes: (() => {
       if (session.est_minutes != null) {
@@ -588,7 +603,7 @@ function planSnapshot(date: string, dayNumber?: number | null) {
         why:
           dayNumber != null
             ? pickDayVariant(SESSION_WHY_OVERRIDE, date, "adaptive-session:why:override")
-            : boundedText(selected?.selection?.reason, 600) ||
+            : boundedProse(selected?.selection?.reason, 600) ||
               pickDayVariant(SESSION_WHY_ROTATION, date, "adaptive-session:why:rotation"),
         items: day.items,
       },
@@ -687,8 +702,8 @@ export function buildAdaptiveDailySessionCandidate(
       est_minutes: prepared.payload.est_minutes,
       constraints: athleteFacingPreviewConstraints(decision.envelope),
       primary_rationale:
-        boundedText(decision.envelope.rationale[0]?.text, 300) ??
-        boundedText(prepared.payload.why, 300) ??
+        boundedProse(decision.envelope.rationale[0]?.text, 300) ??
+        boundedProse(prepared.payload.why, 300) ??
         "Built from today's training and recovery picture.",
     },
   };

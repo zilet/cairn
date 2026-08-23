@@ -627,6 +627,13 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 /* One easing stated once for the whole session, instead of on every card. */
 .session-eased{margin:0 0 12px;color:var(--muted)}
 
+/* Same for the decision's own narration: it describes the session, so it sits above
+   the cards once. This is CONTEXT, not a caution — it prints on ordinary days, and in
+   warn red every one of them read as an alarm. It takes the quiet inset-surface
+   register .session-eased sits in; .ex-flag keeps the red for a real per-lift flag. */
+.session-brain{margin:0 0 12px;color:var(--ink-2);border-left:3px solid var(--line-2);
+  border-radius:8px;background:var(--card-2);padding:8px 11px}
+
 /* set progress + completion */
 .ex-meta{display:flex;align-items:center;gap:9px;margin-top:5px}
 .ex-prog{font-family:var(--font-display);font-variation-settings:"opsz" 60;font-weight:600;
