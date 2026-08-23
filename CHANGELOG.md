@@ -5,6 +5,12 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.7.4] — 2026-08-23
+
+A patch about grain and horizon: progress is judged lift by lift instead of writing off a whole
+day, and the Brief reads tomorrow's calendar before spending today. Art generation now heals
+itself, and every exercise can carry an optional how-to guide.
+
 ### Added
 
 - **An optional how-to layer behind every exercise** — a pulled-in step-by-step guide, primary
@@ -33,6 +39,9 @@ Versioning](https://semver.org/) for tagged releases.
 - **Art generation recovers on its own** — a failing image model now backs off and retries
   automatically instead of needing a restart, and Settings shows a calm status line when
   something needs attention.
+- **Art model and cost overrides reach the container** — the optional `GEMINI_IMAGE_MODEL` /
+  `ART_*` settings documented in `.env.example` are now forwarded by `docker-compose.yml`;
+  previously a value set in `.env` silently never reached a Docker install.
 
 ## [1.7.3] — 2026-08-17
 
