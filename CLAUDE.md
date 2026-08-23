@@ -257,6 +257,17 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   synthesized from a label would be indistinguishable from one they actually said — the label's hour
   orders a day at read time only, and is never stored.
 
+- **Dose comparability is a per-lift question, not a per-session one.** Each `dose_evidence` entry
+  carries its own `comparable` flag and reasons in `facts_json` — a shortfall blocks only the lift
+  that fell short, an endurance day blocks only the muscles it actually loaded. `dose_context.comparable`
+  is telemetry only; the progression engine reads the per-dose flags, never that session-level rollup
+  — restoring the session-level reading is the regression to watch for. `settings.training_drive='push'`
+  has bounded mechanical authority in progression (can buy an earned overload step); every safety
+  floor ignores drive entirely. Details in `docs/ARCHITECTURE.md`.
+- **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
+  as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.
+  Details in `docs/ARCHITECTURE.md`.
+
 ## Product constraints (enforced in prompts AND UI)
 
 - The Brief and every read is a **suggestion, never a gate or verdict** — the athlete drives.

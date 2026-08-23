@@ -115,4 +115,11 @@ test("a possessive that opens a sentence keeps its capital when dated", () => {
     normalizeHistoricalReason("Rotates into today's Pull block.", provenance),
     "Rotates into the August 19, 2026 Pull block.",
   );
+
+  // The plain (non-possessive) adverbial form has the same defect when it opens
+  // the sentence: "Yesterday you held it." must not lose its capital.
+  assert.equal(
+    normalizeHistoricalReason("Yesterday you held it.", provenance),
+    "On August 18, 2026 you held it.",
+  );
 });

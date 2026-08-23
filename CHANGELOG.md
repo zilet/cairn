@@ -5,6 +5,35 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+### Added
+
+- **An optional how-to layer behind every exercise** — a pulled-in step-by-step guide, primary
+  and secondary muscles, equipment and two demonstration photos, tucked behind a quiet "How to"
+  row in the exercise detail view. Nothing is fetched until you ask for it from Settings, and a
+  movement it can't confidently match asks you a single yes/no instead of guessing.
+- **The Brief looks one day ahead** — a trip, event, or appointment on the calendar for tomorrow
+  can now gently re-time an already-planned rest day into an easy session, so today doesn't lose
+  ground to a rest that was only ever going to move by a day anyway. A rest called for your own
+  safety is never touched by this.
+
+### Changed
+
+- **Progress is judged lift by lift, not day by day** — a confounder on one exercise (a skipped
+  accessory, a shared training day) no longer keeps every other lift that day from counting
+  toward progression. A day pushed at your own request can now earn real progress under a "push"
+  training preference, while every safety check still applies exactly as before.
+- **A day you opened on purpose stays open** — returning to the app no longer silently drops you
+  back on yesterday's Brief after you deliberately looked at a different day.
+- **A session's adjustments are explained once, calmly** — instead of repeating the same
+  explanation on every affected exercise, an adapted session now says why just once, in a
+  quieter tone.
+
+### Fixed
+
+- **Art generation recovers on its own** — a failing image model now backs off and retries
+  automatically instead of needing a restart, and Settings shows a calm status line when
+  something needs attention.
+
 ## [1.7.3] — 2026-08-17
 
 The theme of this patch is a coach whose evidence discipline matches its confidence. Under lead

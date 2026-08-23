@@ -4,6 +4,60 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-23 — comparability moves to the dose, tomorrow gets a look-ahead, and art learns to fail loudly
+
+Five change sets. **Dose comparability is per-lift, not per-session:** all 14 strength outcomes in the
+last month carried `dose_context.comparable=false` because a session-wide confounder flag (a skipped
+accessory, a shared-day run, choosing to train on a rest-suggested morning) blocked every lift in the
+session regardless of how cleanly it was performed. Each `dose_evidence` entry now carries its own
+`comparable` flag and reasons: a shortfall blocks only the lift that fell short, choosing to train
+blocks nothing, endurance work blocks only the lifts whose muscles it actually loaded, and
+endurance-quality verdicts stay on the endurance side; travel, illness, recovery-dose overruns and
+relevant symptoms keep their session-wide effect. Legacy schema-v2 rows derive the same semantics
+conservatively at read time. **`dose_context.comparable` itself is now telemetry only — the engine
+reads the per-dose flags, never the session-level rollup; restoring the session-level reading is the
+regression to watch for.** `training_drive="push"` gained bounded mechanical authority (a clean top
+set can now buy an earned overload step instead of every back-off set saturating first), but every
+safety floor — acute muscle gate, autoregulation brake, symptom gates, unverified-regression hold,
+clinician tier — ignores drive entirely.
+
+**The day read learns what tomorrow already holds.** `tomorrowHolds()` resolves the d+1 question once,
+by kind, over one shared event list the Brief's rule and the coach prompt both read — a trip, life or
+family event claims the day; illness/injury is carried for visibility only, never a reason to reach for
+load today. A new bounded rule may re-time a purely rhythm-driven rest (stacked loading days, nothing
+logged today, no dose overrun, no low reading, nothing clinical, no fresh brake) into a compact easy
+session — **it sits below every rule that answers to a signal about the athlete (logged session,
+corroborated short night, protective posture, training drive) and directly above
+`accumulated_load_rest`; safety-grounded rest is never re-timed by the calendar**, and a day that
+already carried work is left alone.
+
+**The client fix: a day you opened on purpose stays open.** `state.dayPickedOn` records the day a pick
+was made ON — a pick that named its own day goes stale at midnight and catches back up automatically;
+a pick made while looking at a different day is deliberate and stands. "Today" is never pinned as an
+absolute `?date=` in the URL any more, so a restored launch or browser Back lands on the actual local
+day instead of wherever the app was left open. Session-adaptation narration was also de-duplicated:
+the decision-level explanation prints once at session level (quiet inset, not warn red, uncapped so a
+third decision's change is never silently dropped) instead of repeating per exercise card, and prose
+truncation now cuts at word boundaries.
+
+**Art failures become diagnosable and bounded per model.** The Gemini pipeline had been dying silently
+for a month — non-OK responses discarded their bodies, the failure ledger was an in-process `Set` that
+every restart cleared, and `warmArt()` re-hammered the whole miss backlog five seconds after every
+boot. Failures now carry status + a truncated error body into a fingerprinted diagnostics ledger, and
+`src/artCircuit.ts` is a durable circuit breaker **keyed by model** and persisted in `app_state`:
+consecutive failures open the circuit with exponential backoff (15m floor, 6h ceiling), a restart
+neither hammers the backlog nor is required to recover, and a success closes only its own model's
+circuit. Settings surfaces one calm diagnostic line only where art is actually configured.
+
+**An optional how-to layer sits behind every exercise**, sourced once from free-exercise-db (873
+movements, public domain) into `DATA_DIR/exercise-guides/` on an explicit Settings action — nothing is
+committed to the repo, nothing fetches until asked. Matching runs as four GLOBAL passes, strongest
+evidence first, **each tier demanding a unique hit** so near-identical variants (21 bench presses)
+cancel into silence rather than a coin-flip guess, and a weak candidate can no longer starve an exact
+name. An implement-only match is parked as a suggestion for a one-line human yes/no; **a hand-confirmed
+link and a refusal both survive re-import**, and a linked guide carries a quiet unlink. Absence — an
+un-imported library, an unmatched movement, an unreachable photo — reads as "no guide," never an error.
+
 ## 2026-08-17 (second round) — protection buys maintenance, and an unlogged day is not a small one
 
 Same-day follow-up, born live: the deployed round's first real check-in queued yet another raise

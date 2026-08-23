@@ -757,8 +757,9 @@ untouched.
 **The training drive is a standing preference that selects, never one that decides.**
 `settings.training_drive` (`steady` by default, or `push`) lets the athlete answer ONE rest — the
 accumulated-load rest, which is about rhythm rather than about a signal — with a targeted session for
-what is genuinely due. The rule sits directly above `accumulated_load_rest` in `dayRead()`'s list and
-below the done, corroborated-short-night and protect rules, so a fact, a fresh short night and a
+what is genuinely due. The rule sits directly above the tomorrow-lookahead retime rule
+(`lookahead_retimed_training`, itself sitting directly above `accumulated_load_rest`) in `dayRead()`'s
+list and below the done, corroborated-short-night and protect rules, so a fact, a fresh short night and a
 protective posture all reach the athlete before the preference is ever consulted. It withholds the
 read unless every gate holds: the stacked-days rest is the one in play and nothing else in the
 earned-rest branch is also true (a dose overrun, a run-down check-in or a low readiness reading each

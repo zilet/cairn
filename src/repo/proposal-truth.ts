@@ -218,8 +218,12 @@ export function normalizeHistoricalReason(
     .replace(/\b(?:the )?today['’]s\b/gi, (_match, offset: number, source: string) =>
       sentenceCased(`the ${asOfLabel}`, source, offset)
     )
-    .replace(/\byesterday\b/gi, `on ${evidenceLabel}`)
-    .replace(/\btoday\b/gi, `on ${asOfLabel}`)
+    .replace(/\byesterday\b/gi, (_match, offset: number, source: string) =>
+      sentenceCased(`on ${evidenceLabel}`, source, offset)
+    )
+    .replace(/\btoday\b/gi, (_match, offset: number, source: string) =>
+      sentenceCased(`on ${asOfLabel}`, source, offset)
+    )
     .replace(/\bthe last session\b/gi, `the ${evidenceLabel} session`)
     .replace(/\blast session\b/gi, `the ${evidenceLabel} session`)
     .replace(/\bthe (?:previous|prior) session\b/gi, `the ${evidenceLabel} session`)
