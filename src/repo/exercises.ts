@@ -12,6 +12,7 @@ import {
   resolveGroup,
   setExerciseAlias,
 } from "./exercise-canon.js";
+import { repointGuidesOnMerge } from "./exercise-guide.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
@@ -397,6 +398,15 @@ export function mergeExercises(
       }
     } catch {
       /* the re-test cadence is a downstream consequence, not merge integrity */
+    }
+
+    // Carry the instructional guide across before the row disappears. The FK is
+    // ON DELETE SET NULL, so skipping this would silently drop a matched guide
+    // rather than crash — quieter, and wrong. The survivor's own guide wins.
+    try {
+      repointGuidesOnMerge(from.id, into.id);
+    } catch {
+      /* an optional, re-importable guide never fails a merge */
     }
 
     // Remove the now-empty exercise row, then record the from-name → survivor alias so

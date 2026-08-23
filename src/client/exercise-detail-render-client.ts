@@ -7,6 +7,12 @@ type ExerciseDetailRenderRow = ExerciseDetailRenderRecord & {
   muscle_group?: string;
   constraint_note?: string;
   cues?: string;
+  // The optional imported how-to layer; absent until the guide library is imported
+  // and this movement matches one confidently.
+  guide?: unknown;
+  // The parked low-confidence candidate, when there is no linked guide — the one
+  // place a human can answer what the matcher would not guess at.
+  guide_suggestion?: unknown;
 };
 type ExerciseDetailRenderView = {
   timed: boolean;
@@ -52,6 +58,8 @@ function exerciseDetailModalHtml(
       ${view.sparkVals.length > 1 ? `<div class="detail-spark">${deps.sparklineSvg(view.sparkVals)}</div>` : ""}
       ${row.constraint_note ? `<div class="ex-flag">${deps.escapeHtml(row.constraint_note)}</div>` : ""}
       ${explanationHtml}
+      ${CairnExerciseGuide.sectionHtml(row.guide)}
+      ${CairnExerciseGuide.suggestionHtml(row.guide_suggestion)}
       ${row.cues ? `<div class="detail-section"><div class="lbl">Form cues</div><div class="detail-body">${deps.escapeHtml(row.cues)}</div></div>` : ""}
       ${view.appears ? `<div class="detail-section"><div class="lbl">In your plan</div><div class="detail-body">${view.appears}</div></div>` : ""}
       <div class="detail-section"><div class="lbl">Recent sets</div>

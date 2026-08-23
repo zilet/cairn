@@ -4,6 +4,7 @@
 // behavior-preserving relocation — see the individual modules for the logic.
 export * from "./repo/exercises.js";
 export * from "./repo/exercise-canon.js";
+export * from "./repo/exercise-guide.js";
 export * from "./repo/plan.js";
 export * from "./repo/proposal-truth.js"; // temporal provenance + compare-and-set evidence for enduring plan changes
 export * from "./repo/training-read.js";

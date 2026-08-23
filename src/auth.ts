@@ -83,6 +83,10 @@ export function queryTokenAllowedPath(p: string, method = "GET"): boolean {
   // The PWA renders generated artwork via <img src=…?token=…>; an <img> can't set
   // request headers, so the query token is its only auth path. (204/PNG GET only.)
   if (p === "/api/art") return true;
+  // Demonstration photos in the exercise "How to" sheet render via <img> as well.
+  // Both segments are exact: a dataset slug and a single-digit frame index, so no
+  // broader guide path (import, attach) is reachable with a query token.
+  if (/^\/api\/exercise-guides\/image\/[A-Za-z0-9_-]{1,120}\/\d$/.test(p)) return true;
   // Chat-attached photos render via <img> too; the filename is server-generated
   // and route-local, so query-token auth is the browser-compatible path.
   if (/^\/api\/chat-images\/[0-9a-f-]+\.(?:jpg|png|webp|gif|heic|heif)$/i.test(p)) return true;

@@ -54,11 +54,17 @@ function renderSettingsData(deps: SettingsDataControllerDeps): void {
         <button id="dlJson" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Download JSON backup</button>
         <button id="dlDb" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">Download SQLite snapshot</button>
 
+        <h1 class="lbl" style="margin:22px 0 8px">Exercise guide</h1>
+        <div class="sess-line" id="exGuideStatus" style="color:var(--muted)">Checking…</div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Step-by-step instructions and two demonstration photos per movement, from the public-domain free-exercise-db dataset — about 1 MB from raw.githubusercontent.com, stored locally; photos are fetched per exercise on first view. Only unambiguous name matches are attached — the rest stay unlinked rather than showing you the wrong lift.</div>
+        <button id="exGuideImport" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:10px">Fetch exercise guide</button>
+
         <h1 class="lbl" style="margin:22px 0 8px">Setup</h1>
         <button id="rerunSetup" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Re-run first-time setup</button>
       </section>`;
 
   CairnSettingsData.wirePhoneAccessCard({ api: deps.api, toast: deps.toast });
+  CairnSettingsData.wireExerciseGuideCard({ root: deps.root, api: deps.api, toast: deps.toast });
 
   settingsDataRequired<HTMLInputElement>(deps, "#updateCheckEnabled").addEventListener("change", (event) => {
     wm.update_check_enabled = (event.currentTarget as HTMLInputElement).checked;

@@ -1,19 +1,28 @@
-import { Router } from "express";
+import fs from "node:fs";
+import { type Response, Router } from "express";
 import {
   explainExercise,
   getCachedExerciseExplanation,
   reconcileExercises,
 } from "../coachOps.js";
 import {
+  attachGuide,
   buildPlanICS,
+  cachedGuideImage,
   deleteExercise,
   deletePlanDay,
+  detachGuide,
+  ensureGuideImage,
+  exerciseGuideStatus,
   getExerciseDetail,
+  getExerciseGuide,
   getPlan,
   getPlanDay,
   getPlanQuality,
+  importExerciseGuides,
   listExerciseAliases,
   listExercises,
+  listGuideSuggestions,
   mergeExercises,
   planUpcomingNote,
   reconcileExerciseGroups,
@@ -198,6 +207,93 @@ planExercisesRouter.post("/exercises/reconcile-names", async (req, res) => {
     res.json({ ok: false, error: e?.message || "reconcile failed" });
   }
 });
+
+// ---------- exercise guides (free-exercise-db, public domain) ----------
+// The optional instructional layer: step-by-step text, muscles, equipment and two
+// demonstration photos per movement. Nothing is fetched until the athlete asks, and
+// every read is absence-tolerant — an un-imported library reads as "no guide", never
+// as an error. LITERAL paths are registered BEFORE /exercise-guides/:name so
+// "status"/"import"/"image" can never be read as an exercise name.
+
+planExercisesRouter.get("/exercise-guides/status", (_req, res) => res.json(exerciseGuideStatus()));
+
+// The low-confidence name matches waiting on a human yes/no. Never auto-applied:
+// the dataset has 21 "bench press" rows, so a guess would put the wrong photos on
+// the wrong lift.
+planExercisesRouter.get("/exercise-guides/suggestions", (_req, res) => res.json(listGuideSuggestions()));
+
+// Import (or refresh) the dataset and re-run matching. Long-ish but bounded — the
+// ~1 MB metadata only; photos come later, lazily, per movement. ok:false at 200 is
+// the designed failure signal (offline, GitHub down), not an HTTP error.
+planExercisesRouter.post("/exercise-guides/import", async (req, res) => {
+  try {
+    const body = req.body ?? {};
+    res.json(
+      await importExerciseGuides({
+        refresh: body.refresh === true,
+        prefetchImages: body.prefetch_images === true,
+      })
+    );
+  } catch (e: any) {
+    res.json({ ok: false, error: e?.message || "guide import failed" });
+  }
+});
+
+// Confirm a suggestion by hand, or drop a link that reads wrong.
+planExercisesRouter.post("/exercise-guides/attach", (req, res) => {
+  const b = req.body ?? {};
+  res.json(attachGuide(String(b.exercise ?? ""), String(b.guide_id ?? "")));
+});
+
+planExercisesRouter.post("/exercise-guides/detach", (req, res) =>
+  res.json(detachGuide(String(req.body?.guide_id ?? "")))
+);
+
+// Stream one cached photo, setting the image headers only once the stream has
+// actually opened. Setting them up-front and then answering 204 on a read error
+// would emit an empty body carrying `immutable, max-age=1y` — a browser would cache
+// that nothing for a year and the photo would never appear again.
+export function streamGuideImage(res: Response, file: string): void {
+  const stream = fs.createReadStream(file);
+  stream.on("open", () => {
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    stream.pipe(res);
+  });
+  stream.on("error", () => {
+    stream.destroy();
+    if (!res.headersSent) {
+      for (const header of ["Content-Type", "Cache-Control", "X-Content-Type-Options"]) res.removeHeader(header);
+      res.status(204);
+    }
+    res.end();
+  });
+}
+
+// One demonstration photo, cache-first and fetched on demand the first time it is
+// viewed. 204 on anything missing — an unknown guide, no network, a non-image
+// response — so the sheet quietly renders its steps without a picture. Mirrors the
+// generated-art route: long immutable cache, nosniff, query-token auth (an <img>
+// cannot set a header).
+planExercisesRouter.get("/exercise-guides/image/:guideId/:index", async (req, res) => {
+  const guideId = String(req.params.guideId ?? "");
+  const index = Number(req.params.index);
+  try {
+    const file = cachedGuideImage(guideId, index) ?? (await ensureGuideImage(guideId, index));
+    if (!file || !fs.existsSync(file)) return res.status(204).end();
+    return streamGuideImage(res, file);
+  } catch {
+    return res.status(204).end();
+  }
+});
+
+// Single-row lookup: 200 + null on absence (never 404 — the PWA's api() helper
+// resolves to the body regardless of status, so a 404 error object would read as a
+// truthy hit).
+planExercisesRouter.get("/exercise-guides/:name", (req, res) =>
+  res.json(getExerciseGuide(decodeURIComponent(req.params.name)))
+);
 
 // Exercise variations / alternatives (the plateau-break + "make it interesting"
 // library). ?exercise= required; ?mode=alternatives with bodyweight=1 / avoid= for swaps.

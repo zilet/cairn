@@ -1,15 +1,21 @@
 import { z } from "zod";
 import {
+  attachGuide,
   buildPlanICS,
   deleteExercise,
   deletePlanDay,
+  detachGuide,
+  exerciseGuideStatus,
   findExercise,
   getExerciseDetail,
+  getExerciseGuide,
   getPlan,
   getPlanDay,
   getPlanQuality,
+  importExerciseGuides,
   listExerciseAliases,
   listExercises,
+  listGuideSuggestions,
   mergeExercises,
   planUpcomingNote,
   reconcileExerciseGroups,
@@ -271,5 +277,59 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "Queue a conservative reconciliation of duplicate exercise titles into canonical movements. Returns a job immediately; poll get_agent_job. It never changes logged numbers.",
     { agent: z.string().optional().describe("agent name from list_agents; omit/'auto' for the rotation") },
     async ({ agent }) => asText(queueMcpAgentJob("exercise_reconcile", {}, agent))
+  );
+
+  server.tool(
+    "get_exercise_guide",
+    "The imported how-to guide for one exercise: ordered step-by-step instructions, primary/secondary muscles, equipment, difficulty, and the URLs of two demonstration photos. Sourced from free-exercise-db (public domain). Returns null when the guide library has not been imported or nothing matched this movement confidently — both ordinary states, not errors.",
+    { exercise: z.string().describe("exercise name, as Cairn knows it") },
+    async ({ exercise }) => asText(getExerciseGuide(exercise))
+  );
+
+  server.tool(
+    "exercise_guide_status",
+    "Whether the optional exercise guide library is imported, and how much of it matched: total guides stored, how many are linked to the athlete's own exercises, how many low-confidence suggestions await confirmation, and how many demonstration photos are cached locally.",
+    {},
+    async () => asText(exerciseGuideStatus())
+  );
+
+  server.tool(
+    "import_exercise_guides",
+    "Download (or refresh) the free-exercise-db instruction dataset into local storage and match it against the athlete's exercises. Only unambiguous name matches are linked; looser ones are recorded as suggestions for confirmation rather than shown, because the dataset holds many near-identical variants and a wrong demonstration photo is worse than none. Idempotent. Demonstration photos are fetched lazily on first view unless prefetch_images is set. ok:false at the call level (offline, upstream down) is the designed failure signal.",
+    {
+      refresh: z.boolean().optional().describe("re-download the metadata instead of reusing the local cache"),
+      prefetch_images: z
+        .boolean()
+        .optional()
+        .describe("eagerly cache the demonstration photos for every linked guide (slower; default lazy)"),
+    },
+    async ({ refresh, prefetch_images }) =>
+      asText(await importExerciseGuides({ refresh, prefetchImages: prefetch_images }))
+  );
+
+  server.tool(
+    "list_exercise_guide_suggestions",
+    "The low-confidence guide matches waiting on a yes/no: each is an exercise plus the dataset movement that plausibly (but not certainly) describes it. These are never rendered to the athlete until confirmed with attach_exercise_guide.",
+    {},
+    async () => asText(listGuideSuggestions())
+  );
+
+  server.tool(
+    "attach_exercise_guide",
+    "Confirm which imported guide describes an exercise, linking it so the how-to appears in the app. Use with a guide_id from list_exercise_guide_suggestions. Replaces whatever guide that exercise had. ok:false when either the exercise or the guide is unknown.",
+    {
+      exercise: z.string().describe("exercise name, as Cairn knows it"),
+      guide_id: z.string().describe("free-exercise-db id, e.g. 'Barbell_Bench_Press_-_Medium_Grip'"),
+    },
+    async ({ exercise, guide_id }) => asText(attachGuide(exercise, guide_id))
+  );
+
+  server.tool(
+    "detach_exercise_guide",
+    "Unlink a guide from its exercise, or dismiss a suggestion that describes the wrong movement. The refusal is remembered: a later import will not re-attach this guide on its own, though attach_exercise_guide still can. The imported text itself is kept.",
+    {
+      guide_id: z.string().describe("free-exercise-db id, e.g. 'Lateral_Raise_-_With_Bands'"),
+    },
+    async ({ guide_id }) => asText(detachGuide(guide_id))
   );
 }

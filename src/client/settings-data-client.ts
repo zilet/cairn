@@ -107,9 +107,108 @@ function wirePhoneAccessCard(options: SettingsPhoneAccessWireOptions = {}): void
   }
 }
 
+type SettingsExerciseGuideWireOptions = {
+  root?: ParentNode | null;
+  api?: SettingsDataApi;
+  toast?: (message: string) => unknown;
+};
+
+type SettingsExerciseGuideStatus = {
+  imported?: unknown;
+  guides?: unknown;
+  linked?: unknown;
+  suggested?: unknown;
+  images_cached?: unknown;
+};
+
+type SettingsExerciseGuideImport = {
+  ok?: unknown;
+  error?: unknown;
+  linked?: unknown;
+  records?: unknown;
+  dropped?: unknown;
+};
+
+function guideCount(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+// One plain sentence about what the library holds — never a percentage or a grade,
+// and honest that an unmatched movement simply has no guide.
+function exerciseGuideStatusLine(status: SettingsExerciseGuideStatus | null): string {
+  if (!status || !status.imported) return "Not fetched yet — exercise detail shows no how-to section.";
+  const guides = guideCount(status.guides);
+  const linked = guideCount(status.linked);
+  const photos = guideCount(status.images_cached);
+  const movements = linked === 1 ? "1 of your movements" : `${linked} of your movements`;
+  const parts = [`${guides} movements stored, matched to ${movements}`];
+  if (photos) parts.push(`${photos} demonstration ${photos === 1 ? "photo" : "photos"} cached`);
+  return `${parts.join(" · ")}.`;
+}
+
+function wireExerciseGuideCard(options: SettingsExerciseGuideWireOptions = {}): void {
+  const root = options.root || (typeof document !== "undefined" ? document : null);
+  const apiFn = options.api || (typeof api !== "undefined" ? api : null);
+  if (!root || !apiFn) return;
+  const line = root.querySelector<HTMLElement>("#exGuideStatus");
+  const button = root.querySelector<HTMLButtonElement>("#exGuideImport");
+
+  const paint = (status: SettingsExerciseGuideStatus | null) => {
+    if (line?.isConnected) line.textContent = exerciseGuideStatusLine(status);
+    if (button?.isConnected) button.textContent = status?.imported ? "Refresh exercise guide" : "Fetch exercise guide";
+  };
+
+  apiFn("/exercise-guides/status")
+    .then((status) => paint((status || null) as SettingsExerciseGuideStatus | null))
+    .catch(() => paint(null));
+
+  button?.addEventListener("click", async () => {
+    if (!button.isConnected) return;
+    button.disabled = true;
+    button.textContent = "Fetching…";
+    if (line?.isConnected) line.textContent = "Downloading the movement library…";
+    let result: SettingsExerciseGuideImport | null = null;
+    try {
+      result = (await apiFn("/exercise-guides/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh: true }),
+      })) as SettingsExerciseGuideImport | null;
+    } catch {
+      result = null;
+    }
+    if (!button.isConnected) return;
+    button.disabled = false;
+    // ok:false at HTTP 200 is the designed failure signal here (offline, upstream
+    // down) — say so plainly and leave the app exactly as it was.
+    if (!result || !result.ok) {
+      const why = String(result?.error ?? "").trim();
+      if (line?.isConnected) line.textContent = why ? `Could not fetch the guide: ${why}` : "Could not fetch the guide.";
+      button.textContent = "Try again";
+      options.toast?.("Exercise guide unavailable");
+      return;
+    }
+    options.toast?.(`Exercise guide ready — ${guideCount(result.linked)} matched`);
+    try {
+      paint((await apiFn("/exercise-guides/status")) as SettingsExerciseGuideStatus | null);
+    } catch {
+      paint(null);
+    }
+    // Rows the upstream file no longer shapes the way we read it. Normally none, so
+    // it is said only when there are some — plainly, as a fact about the download.
+    const dropped = guideCount(result.dropped);
+    if (dropped && line?.isConnected) {
+      line.textContent = `${line.textContent} ${dropped} upstream ${dropped === 1 ? "row was" : "rows were"} skipped as unreadable.`;
+    }
+  });
+}
+
 const CAIRN_SETTINGS_DATA = {
   phoneAccessCardHtml,
   wirePhoneAccessCard,
+  exerciseGuideStatusLine,
+  wireExerciseGuideCard,
 };
 
 Object.assign(globalThis, { CairnSettingsData: CAIRN_SETTINGS_DATA });

@@ -597,6 +597,76 @@ export interface ClientExercise {
 export interface ClientExerciseDetail extends ClientExercise {
   history?: unknown[];
   progress?: unknown;
+  // The optional imported how-to layer. null whenever the guide library has not
+  // been imported, or nothing matched this movement confidently.
+  guide?: ClientExerciseGuide | null;
+  // The parked low-confidence candidate, present only while no guide is linked — the
+  // detail sheet's quiet yes/no.
+  guide_suggestion?: ClientExerciseGuideSuggestion | null;
+}
+
+/** One imported instruction guide (free-exercise-db, public domain). */
+export interface ClientExerciseGuide {
+  guide_id: string;
+  name: string;
+  level: string | null;
+  mechanic: string | null;
+  force: string | null;
+  equipment: string | null;
+  category: string | null;
+  primary_muscles: string[];
+  secondary_muscles: string[];
+  instructions: string[];
+  /** Demonstration frames, in order: start, then finish. */
+  images: Array<{ index: number; url: string }>;
+  match_confidence: string | null;
+  source: string;
+  license: string;
+  source_url: string | null;
+}
+
+export interface ClientExerciseGuideStatus {
+  imported: boolean;
+  guides: number;
+  linked: number;
+  suggested: number;
+  exercises_with_guide: number;
+  images_cached: number;
+  source: string;
+  license: string;
+  source_url: string;
+  imported_at: string | null;
+}
+
+export interface ClientExerciseGuideSuggestion {
+  exercise: string;
+  guide_id: string;
+  guide_name: string;
+  confidence: string;
+}
+
+export type ClientExerciseGuideImportResponse =
+  | {
+      ok: true;
+      source: string;
+      license: string;
+      source_url: string;
+      /** true when the metadata was reused from the local cache rather than re-fetched. */
+      cached: boolean;
+      records: number;
+      /** Upstream rows the id/name/instructions filter discarded — normally 0. */
+      dropped: number;
+      stored: number;
+      linked: number;
+      unmatched: number;
+      suggested: ClientExerciseGuideSuggestion[];
+      images_fetched: number;
+    }
+  | { ok: false; error: string };
+
+export interface ClientExerciseGuideAttachResponse {
+  ok: boolean;
+  error?: string;
 }
 
 export interface ClientExerciseExplanation {
@@ -2867,6 +2937,11 @@ export interface ClientApiResponses {
   "/api/plan": ClientPlanDay[];
   "/api/exercises": ClientExercise[];
   "/api/exercises/reconcile-names": ClientExerciseNameReconcileResponse;
+  "/api/exercise-guides/status": ClientExerciseGuideStatus;
+  "/api/exercise-guides/suggestions": ClientExerciseGuideSuggestion[];
+  "/api/exercise-guides/import": ClientExerciseGuideImportResponse;
+  "/api/exercise-guides/attach": ClientExerciseGuideAttachResponse;
+  "/api/exercise-guides/detach": ClientExerciseGuideAttachResponse;
   "/api/sessions": ClientTrainingSession[] | ClientTrainingSession | null;
   "/api/sessions/skip": ClientOkResponse;
   "/api/sets": ClientLoggedSet;
@@ -3001,6 +3076,8 @@ type ClientApiResponseForCleanPath<Path extends string> = `/api${Path}` extends 
         ? ClientPlanDay | ClientDeleteResponse
         : Path extends `/exercises/${string}`
           ? ClientExercise | ClientDeleteResponse
+          : Path extends `/exercise-guides/${string}`
+            ? ClientExerciseGuide | null
           : Path extends `/exercise/${string}/explanation`
             ? ClientExerciseExplanation
             : Path extends `/exercise/${string}`

@@ -4,6 +4,8 @@ export * from "./adaptive-session-use-case.js";
 export * from "./finish-session-use-case.js";
 export * from "./exercise-symptom-use-case.js";
 export * from "../../repo/exercise-canon.js";
+export * from "../../repo/exercise-guide.js";
+export * from "./exercise-guide-use-case.js";
 export * from "../../repo/exercise-variations.js";
 export * from "../../repo/exercises.js";
 export * from "../../repo/muscle-trajectory.js";

@@ -27,6 +27,38 @@ CREATE TABLE IF NOT EXISTS exercises (
   equipment TEXT,                         -- classified implement (e.g. 'a cable machine') — art/guide context
   enrichment_status TEXT                  -- pending|in_progress|done|failed|skipped|null (background 'exercise' enrichment)
 );
+-- Imported instructional guides for a movement: step-by-step text, muscles worked,
+-- equipment and two demonstration photos, from the public-domain free-exercise-db
+-- dataset. Entirely OPTIONAL — the table is empty until the athlete runs the import,
+-- and every read is absence-tolerant, so the app is complete without it.
+--
+-- A guide row exists for every dataset entry; exercise_id is set ONLY when the
+-- name match was confident (see src/repo/exercise-guide.ts). A merely plausible
+-- match is recorded in match_candidate and left unlinked rather than shown — a
+-- wrong demonstration photo is worse than no photo.
+CREATE TABLE IF NOT EXISTS exercise_guides (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guide_id TEXT NOT NULL UNIQUE,          -- dataset id, also the on-disk image folder (e.g. '3_4_Sit-Up')
+  name TEXT NOT NULL,                     -- dataset display name
+  name_key TEXT NOT NULL,                 -- the match key this row was indexed under
+  level TEXT,                             -- beginner | intermediate | expert
+  mechanic TEXT,                          -- compound | isolation | null
+  force TEXT,                             -- push | pull | static | null
+  equipment TEXT,                         -- dataset implement (e.g. 'dumbbell', 'body only')
+  category TEXT,                          -- strength | stretching | plyometrics | ...
+  primary_muscles TEXT,                   -- JSON string[]
+  secondary_muscles TEXT,                 -- JSON string[]
+  instructions TEXT,                      -- JSON string[] — the ordered steps
+  image_count INTEGER NOT NULL DEFAULT 0, -- demonstration photos available upstream (start/end)
+  exercise_id INTEGER REFERENCES exercises(id) ON DELETE SET NULL,
+  match_confidence TEXT,                  -- exact | key | qualified (linked) | movement (candidate only)
+                                          -- | manual (hand-confirmed) | detached (hand-refused; never auto-relinked)
+  match_candidate TEXT,                   -- exercise name a low-confidence match pointed at, never auto-linked
+  source TEXT NOT NULL,
+  license TEXT NOT NULL,
+  source_url TEXT,
+  imported_at TEXT DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS plan_days (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day_number INTEGER NOT NULL UNIQUE,
@@ -1556,6 +1588,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_request_id
 CREATE INDEX IF NOT EXISTS idx_chat_turns_build_created
   ON chat_turns(build_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_insights_intent_key ON insights(intent_key);
+CREATE INDEX IF NOT EXISTS idx_exercise_guides_exercise ON exercise_guides(exercise_id);
+CREATE INDEX IF NOT EXISTS idx_exercise_guides_name_key ON exercise_guides(name_key);
 `);
 
 // The LOCAL calendar day, never the UTC one: every caller uses this to day-key

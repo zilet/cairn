@@ -70,6 +70,8 @@ function loadSettingsDataController() {
     CairnSettingsData: {
       phoneAccessCardHtml: ({ inStandaloneApp } = {}) => (inStandaloneApp ? "" : "<details id=\"phone\"></details>"),
       wirePhoneAccessCard: (options = {}) => calls.push(["wirePhoneAccessCard", typeof options.api, typeof options.toast]),
+      wireExerciseGuideCard: (options = {}) =>
+        calls.push(["wireExerciseGuideCard", typeof options.api, typeof options.toast]),
     },
   };
   context.window = context;
@@ -107,7 +109,10 @@ test("settings data controller owns update, export, and setup wiring", async () 
   });
 
   assert.match(rootEl.innerHTML, /Data &amp; backup/);
-  assert.deepEqual(calls, [["wirePhoneAccessCard", "function", "function"]]);
+  assert.deepEqual(calls, [
+    ["wirePhoneAccessCard", "function", "function"],
+    ["wireExerciseGuideCard", "function", "function"],
+  ]);
   assert.equal(rootEl.querySelector("#updateCard").innerHTML, "card:none:true");
 
   await Promise.resolve();

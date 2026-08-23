@@ -2241,6 +2241,20 @@ declare global {
       validExerciseExplanationPayload(value: unknown, deps: ExerciseDetailControllerDeps): boolean;
     };
 
+    // The optional imported "How to" layer inside the exercise detail overlay.
+    // sectionHtml returns "" whenever there is no confidently-matched guide, and
+    // suggestionHtml "" whenever no candidate is waiting on a yes/no.
+    CairnExerciseGuide: {
+      sectionHtml(guide: unknown): string;
+      suggestionHtml(suggestion: unknown): string;
+      wire(
+        scope: ParentNode | null | undefined,
+        options?: {
+          api?: (path: string, opts?: RequestInit & { headers?: Record<string, string> }) => Promise<unknown>;
+        },
+      ): void;
+    };
+
     CairnExerciseDetailRender: {
       missingHtml(
         name: string,
@@ -3272,6 +3286,12 @@ declare global {
         navigator?: Pick<Navigator, "clipboard"> | null;
         now?: () => number;
         random?: () => number;
+        toast?: (message: string) => unknown;
+      }): void;
+      exerciseGuideStatusLine(status: Record<string, unknown> | null): string;
+      wireExerciseGuideCard(options?: {
+        root?: ParentNode | null;
+        api?: (path: string, opts?: RequestInit & { headers?: Record<string, string> }) => Promise<unknown>;
         toast?: (message: string) => unknown;
       }): void;
     };
@@ -4577,6 +4597,7 @@ declare global {
   declare const CairnExerciseDetailExplanation: Window["CairnExerciseDetailExplanation"];
   declare const CairnExerciseDetailRender: Window["CairnExerciseDetailRender"];
   declare const CairnExerciseDetailActions: Window["CairnExerciseDetailActions"];
+  declare const CairnExerciseGuide: Window["CairnExerciseGuide"];
   declare const CairnExerciseDetailController: Window["CairnExerciseDetailController"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnUiReads: Window["CairnUiReads"];

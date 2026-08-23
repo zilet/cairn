@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**311 routes** across 108 groups.
+**318 routes** across 109 groups.
 
 ## `/activities`
 
@@ -248,6 +248,18 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/exercise/:name` |  |
 | GET | `/api/exercise/:name/explanation` |  |
 | POST | `/api/exercise/:name/explanation` |  |
+
+## `/exercise-guides`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/exercise-guides/:name` | Single-row lookup: 200 + null on absence (never 404 — the PWA's api() helper resolves to the body regardless of status, so a 404 error object would read as a truthy hit). |
+| POST | `/api/exercise-guides/attach` | Confirm a suggestion by hand, or drop a link that reads wrong. |
+| POST | `/api/exercise-guides/detach` |  |
+| GET | `/api/exercise-guides/image/:guideId/:index` | One demonstration photo, cache-first and fetched on demand the first time it is viewed. 204 on anything missing — an unknown guide, no network, a non-image response — so the sheet quietly renders its steps without a picture. Mirrors the generated-art route: long immutable cache, nosniff, query-token auth (an <img> cannot set a header). |
+| POST | `/api/exercise-guides/import` | Import (or refresh) the dataset and re-run matching. Long-ish but bounded — the ~1 MB metadata only; photos come later, lazily, per movement. ok:false at 200 is the designed failure signal (offline, GitHub down), not an HTTP error. |
+| GET | `/api/exercise-guides/status` | The optional instructional layer: step-by-step text, muscles, equipment and two demonstration photos per movement. Nothing is fetched until the athlete asks, and every read is absence-tolerant — an un-imported library reads as "no guide", never as an error. LITERAL paths are registered BEFORE /exercise-guides/:name so "status"/"import"/"image" can never be read as an exercise name. |
+| GET | `/api/exercise-guides/suggestions` | The low-confidence name matches waiting on a human yes/no. Never auto-applied: the dataset has 21 "bench press" rows, so a guess would put the wrong photos on the wrong lift. |
 
 ## `/exercises`
 

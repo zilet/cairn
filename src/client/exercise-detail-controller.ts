@@ -117,6 +117,7 @@ type ExerciseDetailControllerDeps = {
       ));
       deps.runCountUps(el);
       deps.wireDetailCommon();
+      CairnExerciseGuide.wire(el, { api: deps.api });
       void hydrateExerciseExplanation(el, row, deps);
       CairnExerciseDetailActions.wireActions(el, row, name, view.timed, deps);
     });

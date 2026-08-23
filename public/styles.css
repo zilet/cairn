@@ -2515,6 +2515,47 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
   transition:transform var(--dur-1) ease}
 .mp-history[open] summary::after{transform:rotate(180deg)}
 
+/* ── Exercise "How to" — the optional imported guide (free-exercise-db) ────────
+   Collapsed by default: one quiet summary row, opened on tap. Absent entirely
+   when no guide matched the movement confidently. */
+.exguide{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+.exguide summary{cursor:pointer;list-style:none;display:flex;align-items:baseline;
+  gap:9px;flex-wrap:wrap}
+.exguide summary::-webkit-details-marker{display:none}
+.exguide summary::after{content:"\25be";color:var(--muted);font-size:.7rem;margin-left:auto;
+  transition:transform var(--dur-1) ease}
+.exguide[open] summary::after{transform:rotate(180deg)}
+.exguide-ctx{color:var(--muted);font-size:.78rem;min-width:0}
+.exguide-body{margin-top:14px}
+/* the demonstration pair: start | finish, side by side, wrapping on narrow screens */
+.exguide-shots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:16px}
+.exguide-shot{margin:0;min-width:0}
+.exguide-img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:var(--radius-sm);
+  background:var(--card-2);border:1px solid var(--line);display:block}
+.exguide-shot figcaption{margin-top:6px;text-align:center}
+.exguide-steps{margin:0;padding-left:1.25em;color:var(--ink-2);font-size:.9rem;line-height:1.6}
+.exguide-steps li{margin-bottom:9px}
+.exguide-steps li:last-child{margin-bottom:0}
+.exguide-also{margin-top:14px;color:var(--ink-2);font-size:.84rem}
+.exguide-also .lbl{margin-right:6px}
+.exguide-credit{font-size:.72rem;color:var(--muted)}
+.exguide-src{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
+.exguide-src:hover{color:var(--ink-2)}
+/* credit on the left, the way back out on the right — both quiet, and both INSIDE
+   the opened section, so an athlete who never opens "How to" is never offered an undo */
+.exguide-foot{margin-top:14px;display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.exguide-unlink{background:none;border:none;padding:0;font:inherit;font-size:.72rem;
+  color:var(--muted);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.exguide-unlink:hover{color:var(--ink-2)}
+/* the one-line ask behind a low-confidence match: a question, never a claim */
+.exguide-ask{margin-top:16px;display:flex;align-items:baseline;justify-content:space-between;
+  gap:12px;flex-wrap:wrap;color:var(--muted);font-size:.82rem}
+.exguide-ask-acts{display:flex;gap:14px;flex-shrink:0}
+.exguide-ask-btn{background:none;border:none;padding:0;font:inherit;color:var(--ink-2);
+  text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.exguide-ask-btn:hover{color:var(--ink)}
+@media (max-width:380px){.exguide-shots{grid-template-columns:1fr}}
+
 /* plan-gallery exercise names are tappable (open the detail) */
 .prog-row-name{background:none;border:none;padding:0;text-align:left;width:100%;
   font-size:.9rem;font-weight:500;color:var(--ink);

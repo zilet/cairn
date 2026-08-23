@@ -1440,6 +1440,85 @@ file serves with the honest type under `nosniff`.
 
 ---
 
+## Exercise guides (`src/repo/exercise-guide.ts`, `src/domain/training/exercise-guide-use-case.ts`)
+
+The optional instructional layer behind a movement: ordered step-by-step text, primary/secondary
+muscles, equipment, difficulty and two demonstration photos (a start and a finish frame). Sourced
+from **free-exercise-db** (873 movements, released into the public domain under the Unlicense).
+Complementary to `src/art.ts` — the generated clay-figurine tile stays the aesthetic identity of an
+exercise everywhere, and the photographs appear only *inside* the detail overlay.
+
+**Nothing is committed and nothing is fetched until the athlete asks.** The dataset is NOT vendored
+into the repo; `POST /api/exercise-guides/import` pulls the ~1 MB metadata once into
+`DATA_DIR/exercise-guides/dataset.json` and stores every row in `exercise_guides`. Photos are pulled
+**lazily, one frame at a time**, on first view of a guide that actually matched something the athlete
+trains — the full library is ~1,750 photos (~65 MB), while a real exercise list needs a few dozen of
+them. Absence is the ordinary state: an un-imported library, an unmatched movement, or a photo that
+cannot be fetched all read as "no guide" / "no photo", never as an error. The app is complete without
+any of it.
+
+**Matching is deliberately timid, and that is the whole design.** The dataset carries 21 distinct
+"bench press" rows and 56 squats, so picking one by feel would put a banded lateral raise's photos on
+a dumbbell lateral raise. `matchGuide()` runs four tiers strongest-first and **every tier demands a
+UNIQUE hit** — an ambiguous bucket answers `null` rather than flipping a coin:
+
+| Tier | Key | Auto-linked? |
+|---|---|---|
+| `exact` | `normalizeExerciseName` equality | yes |
+| `key` | `normalizedExerciseKey` after expanding Cairn's abbreviations (`DB`→dumbbell, `BB`→barbell, …) — so "Incline DB Press" meets "Incline Dumbbell Press" while a dumbbell press still cannot collapse onto a barbell one | yes |
+| `qualified` | the dataset name minus a trailing **grip/stance/attachment** qualifier ("Barbell Bench Press - Medium Grip"). An **equipment** qualifier ("Lateral Raise - With Bands") is never stripped — same name, different implement, wrong photos | yes |
+| `movement` | `movementKey` (implements stripped) — "Hip Thrust" ↔ "Barbell Hip Thrust" | **no** — recorded in `match_candidate` as a suggestion |
+
+Learned `exercise_aliases` are tried alongside the canonical name, and one dataset row can only stand
+for one exercise. `linkGuidesToExercises()` walks those tiers **globally, not per exercise**: one full
+pass claims every `exact` match in the library, then a pass for `key`, then `qualified`, then the
+suggestion tier — each pass still demanding a unique hit. Resolving one exercise at a time would let
+alphabetical order outrank evidence: "Band Crossover" reaching the row "Cable Crossover" on the
+implement-stripped tier would take the guide that "Cable Crossover" matches by name outright. Within a
+pass the first (alphabetical, hence stable) claimant keeps the row and the loser is not stranded — it
+carries on into the weaker tiers. A low-confidence suggestion is surfaced only via
+`GET /api/exercise-guides/suggestions`, `list_exercise_guide_suggestions`, or the exercise detail
+sheet's own one-line ask, for a human yes/no; it is never rendered as though it were the answer.
+Against a realistic movement library the honest summary is that roughly half auto-link, a handful
+become suggestions, the rest stay unmatched — and zero link wrongly, which is the number that matters.
+
+**Lifecycle.** `exercise_guides.exercise_id` is `ON DELETE SET NULL`, so deleting an exercise leaves
+the imported text intact and unlinked. `mergeExercises()` calls `repointGuidesOnMerge()` *before*
+deleting the losing row: the survivor keeps its own guide if it has one, otherwise the guide follows
+the history across.
+
+**Two answers outlive a re-import**, and relinking clears everything else but those. `attachGuide()`
+stamps `match_confidence='manual'` — the athlete answering what the matcher could not, so a later
+import leaves it alone (a `manual` marker whose exercise has since been deleted *is* cleared: the FK
+already nulled the id, and the marker would otherwise claim a guide with nothing behind it).
+`detachGuide()` stamps `'detached'` rather than clearing the row, because a cleared row is
+indistinguishable from one that never matched and the next import would re-attach the very guide the
+athlete just rejected. A `detached` guide is treated as spoken for: nothing auto-links it and it is
+not offered again as a suggestion. `attachGuide()` is the way back. Both `upsertGuideRecords()` and
+`linkGuidesToExercises()` run inside a `withSqliteSavepoint`, so the ~900-row library is never left
+half-written; both are synchronous by design, and an async refactor would interleave other writes
+into the open savepoint and lose that atomicity.
+
+**Surfaces.** The guide rides along on `getExerciseDetail()` as `guide` (one round-trip, `null` by
+default), so the detail overlay needs no second fetch; when nothing is linked, the parked candidate
+rides along as `guide_suggestion` instead (never both). Literal guide paths are registered BEFORE
+`/exercise-guides/:name` so "status"/"import"/"image" can never be read as an exercise name.
+`GET /api/exercise-guides/image/:guideId/:index` is cache-first, answers **204** on anything missing,
+and is on the `queryTokenAllowedPath` allowlist (both segments exact) because an `<img>` cannot set a
+header. `streamGuideImage()` sets the image headers only once the read stream has actually **opened** —
+setting them up-front and then 204-ing on a read error would emit an empty body carrying
+`immutable, max-age=1y`, which a browser caches for a year. Guide ids are validated as strict slugs
+(`[A-Za-z0-9_-]{1,120}`) on the way in and out, and a downloaded body must carry JPEG magic bytes
+before it reaches disk. In the PWA the layer is a COLLAPSED `<details class="exguide">` inside the
+detail overlay — pull, never push: one quiet "How to" row, opened on tap, absent entirely when no
+guide matched. The human door lives there too, and only there: a candidate renders as one calm line
+("Looks like … — use its guide?") with a quiet yes/no, and a linked guide carries a quiet
+"Not this movement" *inside* the opened section, so an athlete who never opens "How to" is never
+offered an undo. Both answer through `POST /api/exercise-guides/attach` / `…/detach`, mirrored by
+`attach_exercise_guide` / `detach_exercise_guide` on MCP.
+
+---
+
 ## The scheduler (`src/scheduler.ts`)
 
 The optional proactive coaching cadence: a 60s `setInterval` reads `settings` each tick (so the

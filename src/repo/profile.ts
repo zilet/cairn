@@ -19,6 +19,7 @@ import {
   rebaseDeferredExpectations,
 } from "./brain/change-expectations.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { getExerciseGuideByExerciseId, getGuideSuggestionForExercise } from "./exercise-guide.js";
 import { findExercise } from "./exercises.js";
 import { estimateExpenditure, type ExpenditureEstimate } from "./expenditure.js";
 import { lsqSlopePerDay } from "./health.js";
@@ -98,7 +99,15 @@ export function getExerciseDetail(name: string) {
        WHERE pi.exercise_id = ? ORDER BY pd.day_number`
     )
     .all(ex.id);
-  return { found: true, ...ex, progress: getProgress(ex.name), recent, appears };
+  // The instructional layer rides along on the detail the sheet already fetches —
+  // one round-trip, and `null` (the ordinary state, before any import) simply means
+  // the sheet renders without a "How to" section.
+  const guide = getExerciseGuideByExerciseId(Number(ex.id));
+  // And when nothing matched confidently, the parked candidate rides along too — the
+  // sheet is the one place a human can answer the question the matcher could not.
+  // Never both: a linked guide means there is nothing left to ask.
+  const guide_suggestion = guide ? null : getGuideSuggestionForExercise(String(ex.name));
+  return { found: true, ...ex, progress: getProgress(ex.name), recent, appears, guide, guide_suggestion };
 }
 
 // ---------- proposals ----------

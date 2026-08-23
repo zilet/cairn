@@ -153,12 +153,17 @@ function loadController() {
     window: null,
     globalThis: null,
     document,
+    // The guide layer renders through the shared escaping + authed-URL globals.
+    escHtml: escapeHtml,
+    escAttr: escapeHtml,
+    withToken: (url) => url,
   };
   context.window = context;
   context.globalThis = context;
   for (const script of [
     "exercise-detail-data-client.js",
     "exercise-detail-explanation-client.js",
+    "exercise-guide-client.js",
     "exercise-detail-render-client.js",
     "exercise-detail-actions-client.js",
     "exercise-detail-controller.js",
