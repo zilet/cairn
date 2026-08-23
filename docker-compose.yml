@@ -55,6 +55,17 @@ services:
       # coaching agent; Cairn strips it from the agent subprocess env. Without it the
       # PWA falls back to the built-in SVG illustrations.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # Optional artwork model/cost overrides (src/art.ts; documented in
+      # .env.example). Unset = the code's pinned defaults. Without these
+      # passthroughs a value in .env silently never reaches the container.
+      - GEMINI_IMAGE_MODEL=${GEMINI_IMAGE_MODEL:-}
+      - GEMINI_TEXT_MODEL=${GEMINI_TEXT_MODEL:-}
+      - GEMINI_EXERCISE_IMAGE_MODEL=${GEMINI_EXERCISE_IMAGE_MODEL:-}
+      - ART_EXERCISE_STYLE_REFS=${ART_EXERCISE_STYLE_REFS:-}
+      - ART_IMAGE_COST_USD=${ART_IMAGE_COST_USD:-}
+      - ART_EXERCISE_IMAGE_COST_USD=${ART_EXERCISE_IMAGE_COST_USD:-}
+      - ART_TEXT_IN_USD_PER_M=${ART_TEXT_IN_USD_PER_M:-}
+      - ART_TEXT_OUT_USD_PER_M=${ART_TEXT_OUT_USD_PER_M:-}
       # Optional weekly auto-draft. Set COACH_AGENT to enable (e.g. "claude").
       - COACH_AGENT=${COACH_AGENT:-}
       - COACH_DAY=${COACH_DAY:-0}    # 0=Sun .. 6=Sat
