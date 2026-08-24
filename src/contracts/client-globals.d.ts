@@ -2147,6 +2147,12 @@ declare global {
       draw(log: Element): void;
     };
 
+    CairnMealFuelContext: {
+      remainingFuelKcal(): Promise<number | null>;
+      mealFuelFitLine(itemKcal: unknown, remaining: number | null): string;
+      loadMealFuelLine(scope: ParentNode | null | undefined, itemKcal?: unknown): Promise<void>;
+    };
+
     CairnChatFuelContext: {
       clear(): void;
       current(): ChatScreenMessage[];
@@ -4590,6 +4596,7 @@ declare global {
   declare const CairnChatLayout: Window["CairnChatLayout"];
   declare const CairnChatStarterChips: Window["CairnChatStarterChips"];
   declare const CairnChatFuelContext: Window["CairnChatFuelContext"];
+  declare const CairnMealFuelContext: Window["CairnMealFuelContext"];
   declare const CairnChatEarlierHistory: Window["CairnChatEarlierHistory"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnExerciseDetailData: Window["CairnExerciseDetailData"];

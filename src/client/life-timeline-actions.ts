@@ -39,7 +39,7 @@ function renderLifeTimeline(deps: ClientLifeControllerDeps, events: LifeControll
   if (deps.state.tab !== "me" || deps.state.meSeg !== "life" || !wrap.isConnected) return;
   const helpers = lifeFormHelpers();
   if (!events.length) {
-    wrap.innerHTML = `<div class="empty">Nothing on your timeline yet.</div>`;
+    wrap.innerHTML = CairnUi.emptyStateHtml({ title: "Nothing on your timeline yet" });
     return;
   }
   const impactsById: Record<string, LifeControllerRecord> = {};

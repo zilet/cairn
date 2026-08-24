@@ -69,6 +69,9 @@ test("meal-plan helper renders planner rows with stable selectors and escaped pa
   assert.match(html, /\+ Log it/);
   assert.match(html, /data-mswap/);
   assert.match(html, /meal-swap" hidden data-di="2" data-mi="0"/);
+  // The swap panel carries a hidden slot for the quiet remaining-fuel context
+  // line, filled async once the panel opens (meal-swap-row-actions-controller).
+  assert.match(html, /<div class="meal-swap-fuel lbl" data-fuel-line hidden><\/div>/);
   assert.match(html, /aria-label="Move up" disabled/);
   assert.match(html, /Lunch &lt;bowl&gt;/);
   assert.match(html, /fish &lt;salmon&gt;/);

@@ -94,6 +94,7 @@ type MealRowPlannerContext = {
     </div>`;
     if (!planner) return row;
     return row + `<div class="meal-swap" hidden data-di="${options.di}" data-mi="${mealIndex}">
+      <div class="meal-swap-fuel lbl" data-fuel-line hidden></div>
       <input class="meal-swap-hint" type="text" maxlength="140" placeholder="Optional hint — fish, lighter, quick…">
       <div class="meal-swap-chips">${MEAL_HINT_CHIPS.map((hint) =>
         `<button type="button" class="chip hintchip" data-hint="${escAttr(hint)}">${escHtml(hint)}</button>`).join("")}</div>

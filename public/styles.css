@@ -5586,11 +5586,6 @@ button.prow-name:hover{color:var(--accent)}
 .pcap-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:7px}
 .pcap-label{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:540;
   font-size:.97rem;color:var(--ink)}
-.pcap-level{font-size:.74rem;font-weight:700;text-transform:capitalize;letter-spacing:.02em;
-  padding:2px 9px;border-radius:999px;background:var(--card-2);color:var(--ink-2)}
-.pcap-level.pcap-strong{background:var(--sage-bg);color:var(--sage)}
-.pcap-level.pcap-watch{background:color-mix(in srgb,var(--accent) 12%,var(--card));color:var(--accent-deep)}
-.pcap-level.pcap-steady{background:color-mix(in srgb,var(--gold) 16%,var(--card));color:var(--stone-taupe)}
 .pcap-sub{margin-top:7px;line-height:1.4}
 
 .pperf-aero{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);

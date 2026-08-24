@@ -53,6 +53,9 @@ function mealSwapRowActionsWireMealLog(button: HTMLElement, deps: MealSwapRowAct
     if (htmlButton) htmlButton.disabled = true;
     const generic = /^(breakfast|lunch|dinner|snack|pre[- ]?workout|post[- ]?workout)$/i.test(String(payload.name || "").trim());
     const title = generic && payload.items ? payload.items : (payload.name || payload.items || "Planned meal");
+    // Read remaining kcal BEFORE the log lands — the fit line answers "did this
+    // fit the budget I had left", not the post-log remainder.
+    const remainingBefore = await CairnMealFuelContext.remainingFuelKcal();
     try {
       await deps.api("/food-notes", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -71,7 +74,8 @@ function mealSwapRowActionsWireMealLog(button: HTMLElement, deps: MealSwapRowAct
       });
       button.textContent = "✓ Logged";
       button.classList.add("meal-log-done");
-      deps.toast(`${payload.name || "Meal"} logged`);
+      const fit = CairnMealFuelContext.mealFuelFitLine(payload.kcal, remainingBefore);
+      deps.toast(fit ? `${payload.name || "Meal"} logged — ${fit}` : `${payload.name || "Meal"} logged`);
     } catch {
       if (htmlButton) htmlButton.disabled = false;
       deps.toast("Couldn't log meal");
@@ -85,7 +89,10 @@ function mealSwapRowActionsWireSwapToggle(button: HTMLElement): void {
     const panel = mealSwapRowActionsHtmlElement(row?.nextElementSibling);
     if (!row || !panel || !panel.classList.contains("meal-swap") || row.classList.contains("meal-busy")) return;
     panel.hidden = !panel.hidden;
-    if (!panel.hidden) panel.querySelector<HTMLInputElement>(".meal-swap-hint")?.focus();
+    if (!panel.hidden) {
+      panel.querySelector<HTMLInputElement>(".meal-swap-hint")?.focus();
+      CairnMealFuelContext.loadMealFuelLine(panel);
+    }
   });
 }
 

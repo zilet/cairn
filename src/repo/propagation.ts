@@ -277,6 +277,25 @@ function foldIdentity(m: any): string {
   return (z ? z.label : String(m?.key ?? m?.name ?? "")).toLowerCase();
 }
 
+// Index of active health_directives keyed by every normalized spelling a marker
+// might carry (its raw `marker` text, the matched optimal-zone label, and its
+// canonical display name) — mirrors doctor-loop.ts's activeDirectiveMarkers,
+// but keeps the directive itself (not just membership) so a catalog row can
+// show the athlete-facing sentence, not just a flag.
+function activeDirectivesByMarker(): Map<string, ReturnType<typeof listActiveDirectives>[number]> {
+  const lc = (v: unknown) => String(v ?? "").toLowerCase().trim();
+  const map = new Map<string, ReturnType<typeof listActiveDirectives>[number]>();
+  for (const d of listActiveDirectives()) {
+    if (!d?.marker) continue;
+    const keys = new Set<string>([lc(d.marker)]);
+    const zone = matchOptimalZone(d.marker);
+    if (zone) keys.add(lc(zone.label));
+    keys.add(lc(canonicalMarker(d.marker).name));
+    for (const key of keys) if (key && !map.has(key)) map.set(key, d);
+  }
+  return map;
+}
+
 export function prioritizeMarkers() {
   const { markers: labMarkers } = getMarkerHistory();
   // Fold in wearable fitness markers (VO2max/RHR/HRV) — a LAB reading of the same
@@ -286,11 +305,18 @@ export function prioritizeMarkers() {
   const wearable = wearableFitnessMarkers().filter((m) => !haveKey.has(foldIdentity(m)));
   const markers = [...labMarkers, ...wearable];
   const profile = zoneProfile(); // personalizes the sex/age-dependent optimal bands
+  const directivesByMarker = activeDirectivesByMarker();
   let flagged_count = 0;
   const enriched = markers.map((m: any) => {
     const flagged = m?.latest?.flag === "low" || m?.latest?.flag === "high";
     if (flagged) flagged_count++;
     const z = matchOptimalZone(m?.name, profile);
+    // The one line a marker row shows when it's shaping training/meals/watch
+    // right now: the directive's OWN athlete-facing text, never re-derived here.
+    const directiveHit =
+      directivesByMarker.get(String(m?.name ?? "").toLowerCase().trim()) ||
+      (z ? directivesByMarker.get(String(z.label).toLowerCase().trim()) : undefined);
+    const active_directive = directiveHit ? String(directiveHit.directive || "").trim() || null : null;
     const numericVal = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     const hasNum = Number.isFinite(numericVal);
     const comparable = m?.latest?.unit_mismatch !== true;
@@ -324,7 +350,7 @@ export function prioritizeMarkers() {
     // have a lever for it, a floor from the lab's own flag, and the trajectory
     // nudge so a marker drifting the wrong way outranks a stable borderline one.
     const impact_score = Math.max(0, distance * (actionable ? 1 : 0.55) + (flagged ? 0.5 : 0) + trajectory);
-    return { ...m, optimal, distance, in_optimal, actionable, impact_score };
+    return { ...m, optimal, distance, in_optimal, actionable, impact_score, active_directive };
   });
 
   enriched.sort((a: any, b: any) => {

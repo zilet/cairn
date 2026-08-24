@@ -183,6 +183,24 @@ type DayFuelControllerOptions = {
     return { ...base, entries: nextEntries, count: nextEntries.length, totals, known, remaining };
   }
 
+  // The same twin context the read-only food-detail sheet shows (ingredients,
+  // the verbatim "as logged" quote, share-of-day) — so a correction happens
+  // with the original words still visible, not against five bare numbers.
+  function fuelEditContextHtml(entry: DayFuelControllerEntry, day: DayFuelControllerDay | null | undefined): string {
+    const ingredients = CairnFoodNote.foodIngredients(entry);
+    const items = ingredients.length ? ingredients.map(CairnFoodNote.ingredientLabel).join(", ") : CairnFoodNote.foodItemsText(entry);
+    const raw = String(entry.raw || "").trim();
+    const summary = String(entry.summary || "");
+    const kcal = fuelMacroValue(entry.kcal);
+    const target = fuelMacroValue(day?.target?.kcal ?? null);
+    const shareOfDay = kcal && target ? `${Math.round((kcal / target) * 100)}% of the day` : "";
+    const bits = [items ? escHtml(items) : "", shareOfDay ? escHtml(shareOfDay) : ""].filter(Boolean).join(" &middot; ");
+    return (
+      (bits ? `<div class="detail-ctx lbl">${bits}</div>` : "") +
+      (raw && raw !== summary ? `<div class="detail-section"><div class="lbl">As logged</div><div class="detail-body">&ldquo;${escHtml(raw)}&rdquo;</div></div>` : "")
+    );
+  }
+
   function openFoodEdit(id: number, fromEl: Element, options: DayFuelControllerOptions = {}): void {
     const day = state._dayFuel as DayFuelControllerDay | null | undefined;
     const entry = day && Array.isArray(day.entries) ? day.entries.find((item) => item.id === id) : null;
@@ -190,6 +208,7 @@ type DayFuelControllerOptions = {
     openDetailFrom(fromEl, () => {
       const el = mountDetail(`
         <h2 class="detail-title">Edit this meal</h2>
+        ${fuelEditContextHtml(entry, day)}
         <div class="detail-ctx lbl">correct what was logged &middot; macros are rough &mdash; fix anything off</div>
         <div class="field"><label>Description</label>
           <input id="fedSummary" type="text" value="${escAttr(entry.summary || "")}" maxlength="200"></div>

@@ -136,6 +136,12 @@ function loadController(overrides = {}) {
     view: rootEl,
     state: { logDate: overrides.logDate || "", _dayFuel: null },
     art: () => "<svg></svg>",
+    foodNum: (value) => {
+      if (value === null || value === undefined || value === "") return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    },
+    formatFoodNum: (value) => String(value),
     api: async (path, opts) => {
       requests.push({ path, opts });
       if (overrides.api) return overrides.api(path, opts);
@@ -222,6 +228,7 @@ function loadController(overrides = {}) {
   context.pollEnrichment = overrides.pollEnrichment || (async () => null);
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/food-note-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/day-fuel-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/day-fuel-controller.js"), "utf8"), context);
   return {
@@ -378,6 +385,53 @@ test("day fuel controller does not paint a stale response", async () => {
 
   assert.equal(harness.context.state._dayFuel, null);
   assert.equal(harness.slot.innerHTML, "loading");
+});
+
+test("day fuel controller edit sheet shows the read-only sheet's own twin context", async () => {
+  const harness = loadController();
+  harness.context.state._dayFuel = {
+    date: "2026-06-30",
+    count: 1,
+    totals: { kcal: 400, protein_g: 35 },
+    target: { kcal: 2000, protein_g: 150, mode: "maintain" },
+    entries: [{
+      id: 5,
+      meal: "lunch",
+      summary: "Chicken bowl",
+      kcal: 500,
+      protein_g: 35,
+      carbs_g: 20,
+      fat_g: 10,
+      items: ["chicken", "rice <white>"],
+      raw: "grilled chicken with a cup of white rice",
+    }],
+  };
+
+  harness.context.CairnDayFuelController.openFoodEdit(5, new FakeElement("button"), {});
+
+  const html = harness.mountedDetail.innerHTML;
+  assert.match(html, /chicken, rice &lt;white&gt;/);
+  assert.match(html, /25% of the day/);
+  assert.match(html, /As logged/);
+  assert.match(html, /grilled chicken with a cup of white rice/);
+});
+
+test("day fuel controller edit sheet shows nothing extra when there is no captured context", async () => {
+  const harness = loadController();
+  harness.context.state._dayFuel = {
+    date: "2026-06-30",
+    count: 1,
+    totals: { kcal: 100, protein_g: 20 },
+    entries: [{ id: 6, meal: "snack", summary: "Snack", kcal: 100, protein_g: 20, carbs_g: 10, fat_g: 3 }],
+  };
+
+  harness.context.CairnDayFuelController.openFoodEdit(6, new FakeElement("button"), {});
+
+  const html = harness.mountedDetail.innerHTML;
+  assert.doesNotMatch(html, /As logged/);
+  assert.doesNotMatch(html, /% of the day/);
+  // Only the base "correct what was logged" ctx line — no twin-context div added.
+  assert.equal((html.match(/detail-ctx/g) || []).length, 1);
 });
 
 test("day fuel controller saves corrected macros and invalidates energy", async () => {

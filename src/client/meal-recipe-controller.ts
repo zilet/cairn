@@ -126,6 +126,7 @@ function openMealSheet(current: MealRecipeControllerPlan, dayIndex: number, meal
         <h2 class="sheet-title">${escHtml(meal.name || meal.meal || "Meal")}</h2>
         ${items ? `<div class="sheet-items">${escHtml(items)}</div>` : ""}
         ${kcal || macros ? `<div class="sheet-macros">${kcal}${macros}</div>` : ""}
+        <div class="sheet-fuel lbl" data-fuel-line hidden></div>
         <div class="sheet-recipe" data-recipe>${meal.recipe ? mealRecipeControllerRecipeHtml(meal.recipe) : mealRecipeControllerRecipeCtaHtml()}</div>
       </div>
     </div>`;
@@ -137,6 +138,7 @@ function openMealSheet(current: MealRecipeControllerPlan, dayIndex: number, meal
   });
   sheet.querySelector(".sheet-x")?.addEventListener("click", () => closeMealSheet());
   wireRecipeCta(sheet, current, dayLabel, dayIndex, mealIndex);
+  CairnMealFuelContext.loadMealFuelLine(sheet, meal.kcal);
 }
 
 function wireRecipeCta(

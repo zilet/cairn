@@ -273,7 +273,8 @@ class RowActionElement {
   }
 }
 
-function loadMealSwapRowActionsController() {
+function loadMealSwapRowActionsController(overrides = {}) {
+  const fuelLineCalls = [];
   const context = {
     Array,
     Boolean,
@@ -287,10 +288,24 @@ function loadMealSwapRowActionsController() {
     HTMLButtonElement: RowActionElement,
     window: null,
     globalThis: null,
+    CairnMealFuelContext: {
+      remainingFuelKcal: async () => (overrides.remainingKcal === undefined ? null : overrides.remainingKcal),
+      mealFuelFitLine: (itemKcal, remaining) => {
+        if (remaining == null) return "";
+        const ik = Number(itemKcal);
+        if (!Number.isFinite(ik) || ik <= 0) return `today's remaining ~${remaining} kcal`;
+        return ik <= remaining ? `fits today's remaining ~${remaining} kcal` : `runs past today's remaining ~${remaining} kcal`;
+      },
+      loadMealFuelLine: (scope, itemKcal) => {
+        fuelLineCalls.push({ scope, itemKcal });
+        return Promise.resolve();
+      },
+    },
   };
   context.window = context;
   context.globalThis = context;
   runClientSource(context, "src/client/meal-swap-row-actions-controller.ts");
+  context._fuelLineCalls = fuelLineCalls;
   return context;
 }
 
@@ -428,6 +443,9 @@ test("meal swap row actions wire log, swap, hint, move, and sheet events", async
   await swapButton.click();
   assert.equal(panel.hidden, false);
   assert.equal(hintInput.focused, true);
+  // Opening the swap panel loads the quiet "today's remaining ~X kcal" context line.
+  assert.equal(context._fuelLineCalls.length, 1);
+  assert.equal(context._fuelLineCalls[0].scope, panel);
 
   await hintChip.click();
   assert.equal(hintInput.value, "more protein");
@@ -445,6 +463,36 @@ test("meal swap row actions wire log, swap, hint, move, and sheet events", async
 
   await row.click();
   assert.deepEqual(openedSheets[0], [current, 0, 1]);
+});
+
+test("meal swap row actions '+ Log it' toast names whether the meal fits today's remaining kcal", async () => {
+  const context = loadMealSwapRowActionsController({ remainingKcal: 400 });
+  const scope = new RowActionElement("section");
+  const logButton = new RowActionElement("button");
+  logButton.dataset.mlog = JSON.stringify({ name: "Dinner", i: 2, items: "Salmon", kcal: 620 });
+  scope.setQuery("[data-mlog]", [logButton]);
+  scope.setQuery("[data-mswap]", []);
+  scope.setQuery(".meal-swap-cancel", []);
+  scope.setQuery(".hintchip", []);
+  scope.setQuery(".meal-swap-hint", []);
+  scope.setQuery(".meal-swap-go", []);
+  scope.setQuery(".meal-mv", []);
+  scope.setQuery(".meal-row[data-di]", []);
+  const toasts = [];
+
+  context.CairnMealSwapRowActionsController.wireMealRows(scope, { id: "plan-1" }, {}, {
+    data: { record: (value) => value },
+    mealPlan: { mealSlotFor: (name, index) => `${String(name).toLowerCase()}:${index}` },
+    recipeController: { openMealSheet: () => {} },
+    api: async () => ({ ok: true }),
+    toast: (message) => toasts.push(message),
+    submitMealSwap: () => Promise.resolve(),
+    moveMealRow: () => Promise.resolve(),
+  });
+
+  await logButton.click();
+  // 620 kcal against 400 remaining: over budget, named plainly, not silently.
+  assert.equal(toasts.at(-1), "Dinner logged — runs past today's remaining ~400 kcal");
 });
 
 test("meal swap controller keeps compatibility shim while row handlers live in row-actions module", () => {

@@ -121,6 +121,35 @@ test("prioritizeMarkers carries optimal-zone framing (in_optimal + direction), n
   assert.equal(ldl.actionable, true);
 });
 
+test("prioritizeMarkers threads a marker's own active directive text onto its row", () => {
+  seedHealthDoc("2025-12-01", [
+    marker("LDL Cholesterol", 130, { unit: "mg/dL", flag: "high" }),
+    marker("ApoB", 70, { flag: "normal" }),
+  ]);
+  db.prepare(
+    `INSERT INTO health_directives (source, domain, marker, directive_key, directive, rationale, status)
+     VALUES ('markers', 'training', 'LDL-C', 'ldl-endurance-ease', 'Easing endurance while this recovers.', 'Confirm direction.', 'active')`
+  ).run();
+
+  const { markers } = repo.prioritizeMarkers();
+  const ldl = markers.find((m) => m.key.includes("ldl"));
+  const apob = markers.find((m) => m.key.includes("apob"));
+  assert.equal(ldl.active_directive, "Easing endurance while this recovers.");
+  // A marker with no active directive carries none — never a fabricated line.
+  assert.equal(apob.active_directive, null);
+});
+
+test("prioritizeMarkers ignores a RESOLVED directive for the same marker", () => {
+  seedHealthDoc("2025-12-01", [marker("LDL Cholesterol", 130, { unit: "mg/dL", flag: "high" })]);
+  db.prepare(
+    `INSERT INTO health_directives (source, domain, marker, directive_key, directive, rationale, status)
+     VALUES ('markers', 'training', 'LDL-C', 'ldl-endurance-ease', 'Easing endurance while this recovers.', 'Confirm direction.', 'resolved')`
+  ).run();
+
+  const ldl = repo.prioritizeMarkers().markers.find((m) => m.key.includes("ldl"));
+  assert.equal(ldl.active_directive, null);
+});
+
 test("getMarkerHistory normalizes SI/EU lipid units before optimal-zone reasoning", () => {
   seedHealthDoc("2025-12-01", [marker("LDL Cholesterol", 3.2, { unit: "mmol/L", flag: "high" })]);
   const ldl = repo.prioritizeMarkers().markers.find((m) => m.key.includes("ldl"));

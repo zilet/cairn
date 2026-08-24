@@ -179,7 +179,7 @@ function exerciseCardHtml(
         ${skipButton}${removeButton}
       </div>
       <div class="ex-meta">${progress}</div>
-      ${item.brain_decision_id ? `<div class="ex-flag">${escHtml(item.brain_change_reason || note || "Cairn adjusted this exercise.")}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : note ? `<div class="ex-note">${escHtml(note)}</div>` : ""}
+      ${item.brain_decision_id ? `<div class="ex-flag">${escHtml(item.brain_change_reason || note || "Your team adjusted this exercise.")}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : note ? `<div class="ex-note">${escHtml(note)}</div>` : ""}
       ${item.constraint_note ? `<div class="ex-flag">${escHtml(item.constraint_note)}</div>` : ""}
       ${item.journey_line ? `<div class="ex-journey" data-journey-role="${escAttr(item.journey_role || "support")}">${escHtml(item.journey_line)}</div>` : ""}
       ${!complete ? CairnTodayTraining.exRxLineHtml(rx, { supporting: headlineDose }) : ""}
