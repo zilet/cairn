@@ -293,6 +293,17 @@ function brainDecisionItems(): LearnedItem[] {
 // they only exist after the response model's evidence threshold and contradiction
 // policy have been satisfied. Keep the confidence WORD and evidence count, never
 // the internal modifier scale.
+// The evidence count, worded off PROVENANCE rather than off the raw total. Calling an
+// outcome on a change the app only weighed a "comparable decision" tells the athlete
+// they made it; `applied_n` is what separates the two, and this line is rendered to
+// them verbatim.
+function evidenceSpan(item: { evidence_n: number; applied_n: number }): string {
+  const plural = item.evidence_n === 1 ? "" : "s";
+  return item.applied_n === 0
+    ? `${item.evidence_n} decision${plural} weighed`
+    : `${item.evidence_n} comparable decision${plural}`;
+}
+
 function personalResponseItems(): LearnedItem[] {
   const out: LearnedItem[] = [];
   try {
@@ -310,7 +321,7 @@ function personalResponseItems(): LearnedItem[] {
               ? "A response Cairn is still checking"
               : "A response pattern Cairn has seen",
         detail: clip(`${statement} ${item.change}`, 420),
-        source: `personal response · ${item.domain} · ${item.confidence} · ${item.evidence_n} comparable decision${item.evidence_n === 1 ? "" : "s"}`,
+        source: `personal response · ${item.domain} · ${item.confidence} · ${evidenceSpan(item)}`,
       });
     }
   } catch {

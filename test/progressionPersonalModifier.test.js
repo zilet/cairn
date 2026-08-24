@@ -185,3 +185,54 @@ test("a fresh nutrition learning no longer shadows a live training default", () 
   assert.equal(modifier.target, "training_progression_step");
   assert.equal(modifier.subject_key, null);
 });
+
+// PROVENANCE beats subject-specificity when — and only when — the whole-athlete
+// reading is both applied-backed and more cautious.
+//
+// An observed-only reading (every outcome behind it judged a decision the athlete
+// never made) is barred from pushing, but it can still land just under 1 as it fades
+// toward the universal default with age. Preferred blindly by the lift-first lookup,
+// such a reading would displace a fresh whole-athlete ease that session feedback or
+// joint pain had earned from changes the athlete really did make — and this one lift
+// would quietly lose the more careful step.
+function observedOnlyModifier(scale) {
+  return {
+    key: "observed",
+    target: "training_progression_step",
+    stage: null,
+    subject_key: "Back Squat",
+    scale,
+    bounds: { min: 0.9, max: 1 },
+    confidence: "observed",
+    evidence_n: 5,
+    observed_only: true,
+    rationale: "test",
+    never_overrides: ["injury", "allergy", "clinical", "lean_safe"],
+  };
+}
+
+function appliedWholeAthlete(scale) {
+  return { ...observedOnlyModifier(scale), key: "applied", subject_key: null, observed_only: false };
+}
+
+test("an aged observed-only lift reading yields to a fresh applied whole-athlete ease", () => {
+  const response = { version: 2, learnings: [], modifiers: [observedOnlyModifier(0.94), appliedWholeAthlete(0.9)] };
+  const squat = trainingModifierFor("Back Squat", response);
+  assert.equal(squat.subject_key, null, "the ease the athlete actually earned reaches the squat too");
+  assert.equal(squat.scale, 0.9);
+});
+
+test("…but an observed-only lift reading still wins when it is the more cautious one", () => {
+  const response = { version: 2, learnings: [], modifiers: [observedOnlyModifier(0.9), appliedWholeAthlete(0.95)] };
+  assert.equal(trainingModifierFor("Back Squat", response).subject_key, "Back Squat");
+});
+
+test("two readings of the same provenance are unaffected — the lift's own still speaks", () => {
+  const own = { ...observedOnlyModifier(0.95), observed_only: false };
+  const response = { version: 2, learnings: [], modifiers: [own, appliedWholeAthlete(0.9)] };
+  assert.equal(
+    trainingModifierFor("Back Squat", response).subject_key,
+    "Back Squat",
+    "an applied lift-level reading is not second-guessed by a whole-athlete one"
+  );
+});

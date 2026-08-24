@@ -420,6 +420,9 @@ export function sleepBaseline(asOf: string, lookbackDays = LOOKBACK_DAYS): Sleep
   };
 }
 
+const SLEEP_GUARD_TOLERANCE_FRAC = 0.15;
+const SLEEP_GUARD_TOLERANCE_FLOOR_MIN = 20;
+
 /**
  * The SLEEP half of the endurance-load recovery guard — the third reading of the same
  * question the resting-HR and HRV guards ask, and the one that closes the
@@ -434,12 +437,16 @@ export function sleepBaseline(asOf: string, lookbackDays = LOOKBACK_DAYS): Sleep
  * "stepping weekly volume up should not send nightly sleep drifting downward across the
  * weeks that follow" — never "sleep should return to some prior level".
  *
- * The baseline sizes the tolerance and nothing else. A twentieth of the athlete's own
- * average is a personal way to say "a meaningful loss of sleep for this person", with a
- * 20-minute absolute floor so a short sleeper cannot end up with a tolerance inside
- * ordinary night-to-night noise. Deliberately more forgiving in relative terms than the
- * HRV guard's tenth: sleep duration is behavioral as much as physiological, and this
- * prediction must not read an ordinary late week as a training failure.
+ * The baseline sizes the tolerance and nothing else, and the fraction is deliberately
+ * LOOSER than the HRV guard's tenth. Sleep duration is behavioral as much as
+ * physiological — a late week, a sick child, a deadline — and its ordinary week-to-week
+ * standard error runs around 20-25 minutes. A tenth of a seven-hour average is 42
+ * minutes and a twentieth is 21, and 21 sits INSIDE that noise: at that width the guard
+ * would keep returning not_aligned for reasons that have nothing to do with the
+ * mileage, and those verdicts reach the personal-response model at full applied weight.
+ * SLEEP_GUARD_TOLERANCE_FRAC is therefore 0.15 — 63 minutes at seven hours, a real loss
+ * of sleep rather than a normal fluctuation. The absolute floor is a backstop for a
+ * pathologically short average; it does not bind at any ordinary one.
  */
 export function buildSleepGuardExpectation(
   asOf: string,
@@ -460,7 +467,9 @@ export function buildSleepGuardExpectation(
       prior_weekly_km: context.prior_weekly_km,
       new_weekly_km: context.new_weekly_km,
     },
-    target: { value: rounded(-Math.max(20, baseline.average_min * 0.05), 1) },
+    target: {
+      value: rounded(-Math.max(SLEEP_GUARD_TOLERANCE_FLOOR_MIN, baseline.average_min * SLEEP_GUARD_TOLERANCE_FRAC), 1),
+    },
     window_start: asOf,
     window_end: windowEnd,
     minimum_data: { nights: 6 },

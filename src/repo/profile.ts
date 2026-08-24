@@ -910,6 +910,27 @@ function recordAppliedProposalDecision(
         : Number.isFinite(nutritionPrevTarget)
           ? Math.round(Number(accepted?.target_kcal) - nutritionPrevTarget)
           : null;
+    // WHICH nutrition lever this decision is accountable to — the same rule the direct
+    // target writer applies (repo/nutrition.ts recordNutritionTargetDecision), because
+    // this is the same EVENT arriving through the proposal-apply path. Left hardcoded
+    // to `intake_to_weight_response` here, one athlete's target changes would split
+    // across two comparableKeys depending on which door the change came through, and
+    // neither half would reach the two-outcome floor on its own.
+    //
+    //   a delta ≠ 0  → weight_trend_lb_wk: we MOVED the target, so the trend should
+    //                  move with it, and the scale alone can falsify that;
+    //   no delta     → intake_to_weight_response: nothing moved, so the honest question
+    //                  is how this athlete's weight responds to the intake they log.
+    const nutritionMetricKey =
+      storedTargetDelta != null && storedTargetDelta !== 0 ? "weight_trend_lb_wk" : "intake_to_weight_response";
+    const nutritionIsTrendLever = nutritionMetricKey === "weight_trend_lb_wk";
+    // A trend claim needs weigh-ins only; a response claim also needs the intake days
+    // that show what was actually eaten against the target.
+    const nutritionMinimumData: Record<string, number> = nutritionIsTrendLever
+      ? { weigh_ins: 6 }
+      : { weigh_ins: 6, intake_days: 10 };
+    const nutritionEvaluator = nutritionIsTrendLever ? "weight_trend" : "intake_response";
+    const nutritionEvaluatorVersion = nutritionIsTrendLever ? "nutrition-weight-v2" : "nutrition-intake-response-v2";
     if (nutrition && accepted?.target_kcal != null) {
       try {
         const estimate = estimateExpenditure(21);
@@ -922,7 +943,7 @@ function recordAppliedProposalDecision(
           nutritionExpectationBasis = "measured_expenditure";
           const expectedTrend = ((Number(accepted.target_kcal) - estimate.tdee) * 7) / KCAL_PER_LB;
           expectations.push({
-            metric_key: "intake_to_weight_response",
+            metric_key: nutritionMetricKey,
             subject_key: null,
             direction: "within_band",
             baseline: {
@@ -941,11 +962,11 @@ function recordAppliedProposalDecision(
             },
             window_start: nutritionEffectiveDate,
             window_end: datePlusDays(nutritionEffectiveDate, 28),
-            minimum_data: { weigh_ins: 6, intake_days: 10 },
+            minimum_data: nutritionMinimumData,
             confounder_policy: "exclude_context_events",
             confidence: "tentative",
-            evaluator: "intake_response",
-            evaluator_version: "nutrition-intake-response-v2",
+            evaluator: nutritionEvaluator,
+            evaluator_version: nutritionEvaluatorVersion,
           });
         }
       } catch {
@@ -969,7 +990,7 @@ function recordAppliedProposalDecision(
         // requirement will yield inconclusive rather than a fabricated verdict.
       }
       expectations.push({
-        metric_key: "intake_to_weight_response",
+        metric_key: nutritionMetricKey,
         subject_key: null,
         direction: "within_band",
         baseline: {
@@ -985,11 +1006,11 @@ function recordAppliedProposalDecision(
         },
         window_start: nutritionEffectiveDate,
         window_end: datePlusDays(nutritionEffectiveDate, 28),
-        minimum_data: { weigh_ins: 6, intake_days: 10 },
+        minimum_data: nutritionMinimumData,
         confounder_policy: "exclude_context_events",
         confidence: "tentative",
-        evaluator: "intake_response",
-        evaluator_version: "nutrition-intake-response-v2",
+        evaluator: nutritionEvaluator,
+        evaluator_version: nutritionEvaluatorVersion,
       });
     }
     if (!nutrition && !expectations.length) {

@@ -155,7 +155,7 @@ test("a volume raise adds the sleep guard when the watch has been reporting slee
   const { keys, rows } = expectationsFor(second.id);
   assert.ok(keys.includes("sleep_duration_delta"), `the sleep guard is emitted (got: ${keys.join(", ")})`);
   const guard = rows.find((r) => r.metric_key === "sleep_duration_delta");
-  assert.equal(JSON.parse(guard.target_json).value, -21, "sized off the athlete's own average, not a constant");
+  assert.equal(JSON.parse(guard.target_json).value, -63, "sized off the athlete's own average, not a constant");
   assert.equal(JSON.parse(guard.baseline_json).sleep_avg_min, 420);
 });
 

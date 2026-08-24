@@ -244,19 +244,22 @@ test("the sleep recovery guard is written only when the watch has been producing
   assert.equal(guard.evaluator, "recovery_delta", "the registered evaluator for the metric");
   assert.equal(guard.evaluator_version, "run-recovery-sleep-guard-v1");
   assert.deepEqual(guard.minimum_data, { nights: 6 });
-  // A twentieth of the athlete's OWN average, floored at 20 minutes — deliberately
-  // more forgiving than the HRV guard's tenth, because sleep duration is behavioral
-  // as much as physiological and an ordinary late week is not a training failure.
-  assert.equal(guard.target.value, -21);
+  // 0.15 of the athlete's OWN average — deliberately LOOSER than the HRV guard's
+  // tenth, because sleep duration is behavioral as much as physiological. Ordinary
+  // week-to-week noise runs 20-25 minutes, so a band inside that would keep convicting
+  // the mileage for a late week, at full applied weight in the response model.
+  assert.equal(guard.target.value, -63);
+  assert.ok(Math.abs(guard.target.value) > 25, "the band clears ordinary night-to-night noise");
   assert.equal(guard.baseline.sleep_avg_min, 420);
   assert.equal(guard.baseline.new_weekly_km, 26, "and it records the raise it is a guard on");
 });
 
-test("a short sleeper still gets a tolerance wider than ordinary night-to-night noise", () => {
+test("the sleep band is sized off the athlete, not off a population constant", () => {
   const insert = db.prepare(`INSERT INTO daily_metrics (date, sleep_min) VALUES (?, ?)`);
   for (let daysAgo = 1; daysAgo <= 8; daysAgo++) insert.run(isoDaysAgo(daysAgo), 300);
   const guard = buildSleepGuardExpectation(localDateISO(), 28, { prior_weekly_km: 20, new_weekly_km: 26 });
-  assert.equal(guard.target.value, -20, "the absolute floor holds where the proportional band would be tighter");
+  assert.equal(guard.target.value, -45, "a five-hour sleeper gets a proportionally smaller band");
+  assert.ok(Math.abs(guard.target.value) > 25, "…and it still clears ordinary noise");
 });
 
 // ---- the evaluators actually answer these ------------------------------------

@@ -1302,6 +1302,19 @@ function trainingSymptomOnRecord(asOf = localDateISO()): boolean {
   }
 }
 
+// WHICH WAY IS CAREFUL, per target. Not uniform, and the contract says so at the
+// declaration of CoachPersonalModifierTarget: a step-size target eases BELOW 1 on a
+// disappointing outcome, while `recovery_adjustment` sizes the recovery response
+// itself and therefore rises ABOVE 1 on one. Both mean "be more careful"; they say it
+// in opposite directions, and anything that clamps a modifier has to know which.
+const CAUTIOUS_DIRECTION: Readonly<Record<CoachPersonalModifierTarget, "up" | "down">> = {
+  nutrition_step: "down",
+  training_progression_step: "down",
+  run_volume_step: "down",
+  plan_complexity: "down",
+  recovery_adjustment: "up",
+};
+
 function modifierFor(
   row: EvaluatedDecisionRow,
   verdict: EvaluatedDecisionRow["verdict"],
@@ -1318,8 +1331,13 @@ function modifierFor(
     // decision can lengthen the evidence trail without ever buying a bigger step
     // (see OBSERVED_DECISION_WEIGHT).
     applied_run_n: number;
-    // True when the whole comparable group is observed-tier — nothing in it was
-    // ever applied.
+    // Whether `row` — the ONE outcome every branch below reads its direction and its
+    // magnitude off — judged a decision the athlete actually applied. Row-scoped on
+    // purpose: a group can hold an applied outcome and still hand the scale to an
+    // observed one, because `row` is the LATEST row and not a vote of the group.
+    latest_applied: boolean;
+    // True when the whole comparable group is observed-tier — nothing in it was ever
+    // applied. Read for provenance and admission, never for the clamp.
     observed_only: boolean;
   }
 ): CoachPersonalModifier | null {
@@ -1421,23 +1439,43 @@ function modifierFor(
     scale = verdict === "not_aligned" ? 0.9 : 1;
   }
   if (!target) return null; // clinical/marker learnings stay informational
-  // OBSERVED EVIDENCE MAY SOFTEN; IT MAY NEVER PUSH.
+  // OBSERVED EVIDENCE MAY BE CAUTIOUS; IT MAY NEVER BE BOLD.
   //
-  // A group with no applied decision in it is built entirely out of outcomes the
-  // athlete never acted on — a read they were free to ignore, an advisory
-  // prediction nobody enacted. That is real evidence about how their body behaves
-  // and it is allowed to make the next step SMALLER or leave it alone. What it must
-  // never do is hand out headroom: every "go bigger" branch in this system is meant
-  // to be bought by a change the athlete actually made and then absorbed.
+  // An outcome on an observe-tier decision judged something the athlete never did —
+  // a read they were free to ignore, an advisory prediction nobody enacted. That is
+  // real evidence about how their body behaves and it is allowed to move the next
+  // step toward CAUTION or leave it alone. What it must never do is move the step the
+  // other way: every bold branch in this system is meant to be bought by a change the
+  // athlete actually made and then absorbed.
   //
-  // Two independent guards enforce it, so removing either one alone cannot open the
-  // door: every acceleration branch above counts `window.applied_run_n` (which is 0
-  // for an observed-only group), and the declared ceiling is pulled to 1.0 here.
-  // The ceiling is the one consumers read — `applyPersonalResponseModifier` clamps
-  // to `modifier.bounds` — so a floor consumer holding an observed-only modifier is
-  // arithmetically incapable of scaling its base upward. This NARROWS the clamp; no
-  // bound anywhere is widened.
-  if (window.observed_only) bounds = { min: bounds.min, max: Math.min(bounds.max, 1) };
+  // TWO THINGS THIS GETS RIGHT THAT AN EARLIER VERSION DID NOT:
+  //
+  //   • It is scoped to the ROW the scale came from, not to the group. `row` is the
+  //     LATEST outcome; every branch above reads its direction and its magnitude off
+  //     that one row. So a group holding one applied outcome and three observed ones
+  //     still hands the scale to an observed row — and the group-scoped version of
+  //     this guard stood aside for it, which let three verdicts on changes nobody
+  //     made deepen a cut step by 15%.
+  //
+  //   • It clamps toward each target's CAUTIOUS direction, which is not the same
+  //     direction for every target. A step-size target (nutrition, training load, run
+  //     volume, plan complexity) gets more careful BELOW 1; `recovery_adjustment`
+  //     sizes the recovery response itself and gets more careful ABOVE 1 — its
+  //     consumer (buildRecoveryMenu) reads >1 as "offer the quieter menu" and ignores
+  //     anything at or below 1 outright. Pulling every ceiling to 1.0 would have
+  //     deleted the only direction that target can safely move in.
+  //
+  // The bound this narrows is the one consumers read — applyPersonalResponseModifier
+  // clamps to `modifier.bounds` — so a floor consumer holding such a modifier is
+  // arithmetically incapable of moving its base the bold way. Nothing is widened, and
+  // the acceleration branches above independently count `applied_run_n`, so removing
+  // either guard alone still cannot open the door.
+  if (!window.latest_applied) {
+    bounds =
+      CAUTIOUS_DIRECTION[target] === "up"
+        ? { min: Math.max(bounds.min, 1), max: bounds.max }
+        : { min: bounds.min, max: Math.min(bounds.max, 1) };
+  }
   scale = boundedScale(scale, bounds.min, bounds.max);
   return {
     key: comparableKey(row),
@@ -1448,6 +1486,7 @@ function modifierFor(
     bounds,
     confidence,
     evidence_n: evidenceN,
+    observed_only: window.observed_only,
     rationale: modifierRationale(scale, target),
     never_overrides: [...PERSONAL_RESPONSE_GUARDRAILS],
   };
@@ -1559,6 +1598,23 @@ function effectiveEvidenceN(rows: EvaluatedDecisionRow[]): number {
   return Math.round(weighted * 1000) / 1000;
 }
 
+// HOW MANY OF WHAT, said so the sentence cannot outrun its evidence.
+//
+// "matched the expectation across 3 comparable decisions" is a true sentence about
+// three changes the athlete made and a false one about three the app only weighed —
+// and until observe-tier outcomes started counting, only the first kind could reach
+// this line. The phrase now names the provenance whenever any of the outcomes behind
+// it were never enacted, so an athlete reading the Learned timeline can tell what the
+// app is actually claiming.
+function outcomeSpan(run: EvaluatedDecisionRow[]): string {
+  const applied = run.filter(isAppliedRow).length;
+  const observed = run.length - applied;
+  const plural = run.length === 1 ? "" : "s";
+  if (observed === 0) return `${run.length} comparable decision${plural}`;
+  if (applied === 0) return `${run.length} decision${plural} the plan weighed but did not make`;
+  return `${run.length} comparable decisions, ${observed} of them weighed but not made`;
+}
+
 function learningForGroup(
   allRows: EvaluatedDecisionRow[],
   today: string
@@ -1575,6 +1631,13 @@ function learningForGroup(
     // observe-tier decisions here does not change that — it admits the observe-tier
     // rows that NOTHING else reads.
     if (row.metric_key === DAY_READ_ADHERENCE_METRIC) continue;
+    // Health directives are excluded here for the same reason, one surface along: a
+    // flagged marker already has its own place in the app (Connections), and its
+    // outcomes moved no lever from here anyway — modifierFor returns null for the
+    // clinical/marker metrics they carry. What admitting them WOULD do is spend the
+    // four athlete-facing learned slots on the one thing the athlete can already read
+    // in full elsewhere. Their prose belongs to that surface, not to this one.
+    if (row.decision_kind === "health_directive") continue;
     // `applied` and `observed` (at OBSERVED_DECISION_WEIGHT). Every other status —
     // pending, announced, review, rejected, reverted, superseded, canceled — is a
     // decision whose outcome says nothing about how the athlete responds to it, and
@@ -1623,11 +1686,12 @@ function learningForGroup(
       : "observed";
   const supersededEvidenceN = activeVerdict ? rows.filter((row) => row.verdict !== activeVerdict).length : 0;
   const label = metricLabel(latest.metric_key);
+  const span = outcomeSpan(latestRun);
   const statement = unresolvedContradiction
     ? `Recent ${label} outcomes conflict, so the standard default stays in place until the response repeats.`
     : activeVerdict === "aligned"
-      ? `${label.charAt(0).toUpperCase() + label.slice(1)} has matched the expectation across ${latestRun.length} comparable decision${latestRun.length === 1 ? "" : "s"}.`
-      : `${label.charAt(0).toUpperCase() + label.slice(1)} has missed the expectation across ${latestRun.length} comparable decisions, so the next step should change modestly and be rechecked.`;
+      ? `${label.charAt(0).toUpperCase() + label.slice(1)} has matched the expectation across ${span}.`
+      : `${label.charAt(0).toUpperCase() + label.slice(1)} has missed the expectation across ${span}, so the next step should change modestly and be rechecked.`;
   // What the ledger said IMMEDIATELY BEFORE the current run began — read off the full
   // comparable history rather than the 365-day slice, because that is the whole point:
   // a miss that has aged out of `rows` no longer shows up in `missed_n`, and without
@@ -1652,6 +1716,7 @@ function learningForGroup(
         preceding_verdict: precedingVerdict,
         overshoot_n: overshootN,
         applied_run_n: latestRun.filter(isAppliedRow).length,
+        latest_applied: isAppliedRow(latest),
         observed_only: observedOnly,
       })
     : null;
@@ -1680,6 +1745,8 @@ function learningForGroup(
       change,
       confidence,
       evidence_n: rows.length,
+      applied_n: rows.filter(isAppliedRow).length,
+      observed_only: observedOnly,
       aligned_n: alignedN,
       missed_n: missedN,
       contradictions,
@@ -1768,6 +1835,11 @@ function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLe
       change: "It shapes how confidently the morning read is offered — never what it's allowed to say.",
       confidence: window.length >= 10 ? "observed" : "tentative",
       evidence_n: window.length,
+      // A morning read is never applied — it is a suggestion — so every outcome here
+      // is observe-tier by construction. The two sentences above already say so in
+      // words ("you usually train anyway"); these fields say it to the surfaces.
+      applied_n: 0,
+      observed_only: true,
       aligned_n: followed,
       missed_n: diverged,
       contradictions: window
@@ -1845,6 +1917,40 @@ export function whatWorksForYou(): CoachWhatWorksForYou | null {
   return value ? structuredClone(value) : null;
 }
 
+// ONE SENTENCE PER STORY, for the four athlete-facing prose slots.
+//
+// A single volume raise now writes THREE recovery guards against the same event —
+// resting HR, HRV and sleep duration — and one hard week resolves all three the same
+// way. Ranked by recency they arrive together, so three of the four learned lines
+// would tell the athlete the same thing in three vocabularies. The modifier map has
+// never had this problem (all three carry the `recovery_adjustment` target and its one
+// slot dedupes them); this is the prose half of the same rule.
+//
+// Deliberately narrow: only metrics that are genuinely readings of ONE story share a
+// family. The two nutrition levers are NOT folded together — a weight trend and a
+// waist measurement are different evidence about the same phase, and the athlete is
+// entitled to hear both.
+const PROSE_FAMILY: Readonly<Record<string, string>> = {
+  recovery_hrv_delta: "recovery",
+  recovery_rhr_delta: "recovery",
+  sleep_duration_delta: "recovery",
+};
+
+function onePerProseFamily<T extends { learning: CoachOutcomeLearning }>(items: T[]): T[] {
+  const claimed = new Set<string>();
+  const out: T[] = [];
+  for (const item of items) {
+    const family = PROSE_FAMILY[item.learning.metric_key];
+    // No family means the metric speaks only for itself and is never deduped.
+    if (family) {
+      if (claimed.has(family)) continue;
+      claimed.add(family);
+    }
+    out.push(item);
+  }
+  return out;
+}
+
 function computeWhatWorksForYou(today = localDateISO()): CoachWhatWorksForYou | null {
   const allRows = evaluatedDecisionRows();
   const groups = new Map<string, EvaluatedDecisionRow[]>();
@@ -1866,9 +1972,11 @@ function computeWhatWorksForYou(today = localDateISO()): CoachWhatWorksForYou | 
   // sort would fill the whole athlete-facing list with readings of things that were
   // never changed, and the learnings that carry the modifiers would go unsaid.
   const observedOnlyRanked = ranked.filter((item) => item.observed_only).slice(0, OBSERVED_ONLY_PROSE_SLOTS);
-  const learned = [...ranked.filter((item) => !item.observed_only), ...observedOnlyRanked]
-    .sort((a, b) => b.learning.last_observed.localeCompare(a.learning.last_observed))
-    .slice(0, 4);
+  const learned = onePerProseFamily(
+    [...ranked.filter((item) => !item.observed_only), ...observedOnlyRanked].sort((a, b) =>
+      b.learning.last_observed.localeCompare(a.learning.last_observed)
+    )
+  ).slice(0, 4);
   // Selected and capped SEPARATELY, then appended. A day read is evaluated every
   // morning, so these are always the most recent rows in the ledger — folded into the
   // sort above they would win the four slots outright and starve the very learnings

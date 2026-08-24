@@ -334,3 +334,51 @@ test("full export includes all four hydrated ledger tables", () => {
   assert.deepEqual(backup.brain_evaluations[0].confounders, ["not enough exposures yet"]);
   assert.equal(backup.brain_tool_calls.length, 1);
 });
+
+// The proposal-apply path is the THIRD writer of a nutrition trend expectation, beside
+// the direct target writer and the meal-plan one. It hardcoded intake_to_weight_response
+// while the direct writer chose per intent, which split one athlete's target changes
+// across two comparableKeys depending on which door the change came through — and
+// neither half would then reach the two-outcome floor on its own.
+test("an applied target CHANGE claims the weight-trend lever, whichever door it came through", () => {
+  for (let daysAgo = 8; daysAgo >= 1; daysAgo--) {
+    seedWeight(localDaysAgo(daysAgo), 180 - (8 - daysAgo) * 0.1);
+    seedIntake(daysAgo, 2400);
+  }
+  repo.setNutritionTarget({ target_kcal: 2400, protein_g: 180, source: "manual" });
+  const proposal = repo.createProposal("stub", "weekly check-in", "", {
+    kind: "nutrition_target",
+    nutrition: {
+      target_kcal: 2600,
+      prev_target_kcal: 2400,
+      delta_kcal: 200,
+      protein_g: 180,
+      reason: "protect the training block",
+    },
+  });
+  repo.applyProposal(proposal.id);
+
+  const decision = repo.listBrainDecisions({ kind: "nutrition_target" })[0];
+  const expectation = repo.listBrainExpectations({ decisionId: decision.id })[0];
+  assert.equal(expectation.metric_key, "weight_trend_lb_wk", "a delta was applied, so the trend should move with it");
+  assert.equal(expectation.evaluator, "weight_trend");
+  assert.equal(expectation.minimum_data.intake_days, undefined, "the scale alone can falsify a trend claim");
+  assert.equal(expectation.minimum_data.weigh_ins, 6);
+});
+
+test("an applied target that does not move the number keeps the response question", () => {
+  for (let daysAgo = 8; daysAgo >= 1; daysAgo--) {
+    seedWeight(localDaysAgo(daysAgo), 180 - (8 - daysAgo) * 0.1);
+    seedIntake(daysAgo, 2400);
+  }
+  const proposal = repo.createProposal("stub", "weekly check-in", "", {
+    kind: "nutrition_target",
+    nutrition: { target_kcal: 2500, prev_target_kcal: 2500, delta_kcal: 0, protein_g: 180, reason: "hold here" },
+  });
+  repo.applyProposal(proposal.id);
+
+  const decision = repo.listBrainDecisions({ kind: "nutrition_target" })[0];
+  const expectation = repo.listBrainExpectations({ decisionId: decision.id })[0];
+  assert.equal(expectation.metric_key, "intake_to_weight_response", "nothing moved, so nothing new is claimed");
+  assert.equal(expectation.minimum_data.intake_days, 10, "…and answering it needs the intake days");
+});
