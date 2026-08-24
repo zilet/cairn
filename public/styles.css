@@ -2909,6 +2909,13 @@ body.sheet-open{overflow:hidden}
 .brief.brief-quiet::before{background:none}
 .brief-quiet .brief-headline{font-size:1.5rem}
 
+/* the morning wake-up review (W4.7) — a quiet past-tense passage ABOVE the
+   day's suggestion, set apart with its own hairline so it never reads as part
+   of today's read. Absent entirely when the server sent nothing. */
+.brief-lookback{margin:0 0 14px;padding-bottom:12px;border-bottom:1px solid var(--line);max-width:46ch}
+.brief-lookback-lbl{color:var(--muted);margin-bottom:5px}
+.brief-lookback-txt{font-size:.85rem;color:var(--ink-2);line-height:1.5;margin:0;font-style:italic}
+
 .brief-kicker{display:flex;align-items:center;gap:7px;color:var(--muted);margin-bottom:9px}
 .brief-glyph{font-size:.72rem;line-height:1}
 .brief-rest .brief-glyph{color:var(--sage)}

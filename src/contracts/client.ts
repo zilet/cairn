@@ -103,6 +103,11 @@ export interface ClientDayRead {
   // footnote, today-session-status-client.ts doneWeekHtml). Absent on train/done
   // reads and on a zero-training week — absence is not failure.
   week?: { trained_days_7: number; prs: number } | null;
+  // The morning wake-up review (W4.7): a short past-tense passage above today's
+  // suggestion covering whether yesterday's morning read held, plus an optional
+  // landed win. Absent entirely when there's nothing to say. Never persisted —
+  // derived fresh per response, same precedent as forward/arc/week/recovery.
+  look_back?: { passages: string[]; win: string | null } | null;
   periodization_context?: {
     program_block: {
       goal: string;

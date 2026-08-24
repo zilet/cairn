@@ -718,6 +718,21 @@ function morningReadsByDate(from: string, to: string): Map<string, MorningRead> 
   return out;
 }
 
+// The single morning read for one date, off the same first-ledger-entry source
+// morningReadsByDate reads for the rolling model. Exported for callers that only
+// need one day (morningReview, src/repo/brain/morning-review.ts) so they consume
+// this module's own read of "what was the athlete actually told" rather than
+// re-deriving it against `day_reads` or `suggestions` (see morningReadsByDate's
+// own comment for why both of those answer a different question).
+export function morningReadForDate(date: string): MorningRead | null {
+  if (!date) return null;
+  try {
+    return morningReadsByDate(date, date).get(date) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // How often each kind of read is followed, over a rolling window of CLOSED days.
 // Counts only — no rate, no grade, no score. It exists so the disagreement between
 // what the Brief suggests and what the athlete does becomes measurable; it changes
@@ -851,8 +866,10 @@ const NO_SOFTENING: RestOverrideSoftening = Object.freeze({
 // Did the work logged on `date` show any sign of having cost them? Only the
 // athlete's own session feedback answers this — `performance` is their 1-5 read of
 // how the session went against expectation. The WORST session of the day decides,
-// so one good lift cannot paper over a second effort that went badly.
-function trainedWithoutHarm(date: string): boolean {
+// so one good lift cannot paper over a second effort that went badly. Exported for
+// morningReview (src/repo/brain/morning-review.ts), which asks the same question
+// about a single divergence rather than a rolling window of them.
+export function trainedWithoutHarm(date: string): boolean {
   try {
     const row = db
       .prepare(`SELECT MIN(performance) AS worst FROM sessions WHERE date = ? AND performance IS NOT NULL`)

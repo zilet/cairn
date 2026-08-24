@@ -943,3 +943,53 @@ test("attachDayReadContext attaches no week-wins key for a zero-training week �
   const rest = attachDayReadContext(date, { kind: "rest" });
   assert.equal(rest.week, undefined, "no invented '0 of 7' — the key is simply absent");
 });
+
+// ---------- W4.7: the morning wake-up review threaded onto the Brief ----------
+test("attachDayReadContext threads a look_back block when yesterday's morning read has something to say", () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "brain_decisions",
+    "brain_expectations",
+    "brain_evaluations"
+  );
+  const date = localDaysAgo(0);
+  const yesterday = localDaysAgo(1);
+  repo.saveDayRead(yesterday, {
+    kind: "rest",
+    headline: "Rest.",
+    why: "A calm sentence.",
+    focus: null,
+    est_minutes: null,
+    signals: {},
+    source: "deterministic",
+    override: null,
+  });
+
+  const read = attachDayReadContext(date, { kind: "easy" });
+  assert.ok(read.look_back, "a kept rest yesterday is speakable");
+  assert.equal(Array.isArray(read.look_back.passages), true);
+  assert.equal(read.look_back.passages.length, 1);
+  assert.match(read.look_back.passages[0], /rest/i);
+});
+
+test("attachDayReadContext carries no look_back key when yesterday was genuinely unremarkable", () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "brain_decisions",
+    "brain_expectations",
+    "brain_evaluations"
+  );
+  const date = localDaysAgo(0);
+  const read = attachDayReadContext(date, { kind: "train" });
+  assert.equal(read.look_back, undefined, "no invented passage — the key is simply absent");
+});
