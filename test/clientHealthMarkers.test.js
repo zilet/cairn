@@ -114,6 +114,26 @@ test("single-reading marker with an optimal band expands to a gauge with the tar
   assert.match(gauge, />80</);
 });
 
+test("a marker row with an active directive names it in one line, escaped, with a way to act on it", () => {
+  const markers = loadHealthMarkers();
+  const html = markers.hmkRowHtml(
+    { ...markerFixture(), active_directive: "easing endurance <hard> while this recovers" },
+    0
+  );
+
+  assert.match(html, /data-directive-link/);
+  assert.match(html, /easing endurance &lt;hard&gt; while this recovers/);
+  assert.doesNotMatch(html, /<hard>/);
+});
+
+test("a marker row with no active directive carries no directive line", () => {
+  const markers = loadHealthMarkers();
+  const html = markers.hmkRowHtml(markerFixture(), 0);
+
+  assert.doesNotMatch(html, /data-directive-link/);
+  assert.doesNotMatch(html, /hmk-directive/);
+});
+
 test("single-reading marker without an optimal band stays a plain row", () => {
   const markers = loadHealthMarkers();
   const html = markers.hmkRowHtml({

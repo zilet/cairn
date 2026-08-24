@@ -38,7 +38,10 @@ type MeMemoryControllerDeps = {
     const wrap = deps.view.querySelector<HTMLElement>("#memlist");
     if (!wrap || deps.state.tab !== "me" || deps.state.meSeg !== "memory" || !wrap.isConnected) return;
     if (!items.length) {
-      wrap.innerHTML = `<div class="empty">Nothing remembered yet. As you chat and log, the coach keeps the facts and preferences that matter - they'll gather here.</div>`;
+      wrap.innerHTML = CairnUi.emptyStateHtml({
+        title: "Nothing remembered yet",
+        body: "As you chat and log, the coach keeps the facts and preferences that matter - they'll gather here.",
+      });
       return;
     }
     wrap.innerHTML = items.map((item, index) => CairnMemory.memoryRowHtml(item, index)).join("");

@@ -163,7 +163,7 @@ function pitemHtml(item: PlanEditorItem, dayIndex: number, itemIndex: number, la
   }
   return `<div class="pitem" data-d="${dayIndex}" data-i="${itemIndex}" data-kind="strength">
         <div class="pi-row1">
-          <input class="pi-ex" value="${escAttr(item.exercise)}" placeholder="Exercise">
+          <input class="pi-ex" value="${escAttr(item.exercise)}" placeholder="Exercise" list="exerciseNames">
           ${ord}
         </div>
         ${kindToggle}

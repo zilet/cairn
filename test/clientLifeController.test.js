@@ -218,6 +218,7 @@ function loadController() {
   // optimisticMutation) is exercised end-to-end, not stubbed.
   vm.runInNewContext(readFileSync(join(root, "public/js/swr-cache.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-components.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/life-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/life-form-helpers.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/life-timeline-actions.js"), "utf8"), context);

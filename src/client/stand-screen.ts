@@ -224,7 +224,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
           `<div class="stand-conn"><span class="stand-conn-i" aria-hidden="true">◇</span><span>${escHtml(String(c.text))}</span></div>`
       )
       .join("");
-    return `${wholePersonLead}<div class="stand-read reveal">
+    return `${wholePersonLead}<div class="stand-read reveal" id="standRead">
       <span class="stand-read-top"><span class="stand-read-k lbl">Your read${age}</span>${readRefreshHtml()}</span>
       ${headline ? `<p class="stand-read-lede">${escHtml(headline)}</p>` : ""}
       ${zones ? `<div class="stand-zones">${zones}</div>` : ""}
@@ -881,7 +881,10 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
       .join("");
     return (
       sections ||
-      `<p class="stand-empty">${standQuery || standOff ? "Nothing matches — clear the filter." : "No readings here yet."}</p>`
+      CairnUi.emptyStateHtml({
+        className: "stand-empty empty-state reveal",
+        title: standQuery || standOff ? "Nothing matches — clear the filter." : "No readings here yet.",
+      })
     );
   }
 
@@ -957,23 +960,37 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
       (globalThis as unknown as { viewEnter: () => void }).viewEnter();
     }
   }
+  // A jump link elsewhere (e.g. the Age view's "The full health read") asks the
+  // overview to land the athlete ON the agentic read section, not just "back
+  // where you started" — activateTab's paint is async, so the request waits in
+  // state.pendingHealthScroll until this repaint actually lands it in the DOM.
+  function consumePendingStandScroll(): void {
+    if (state.pendingHealthScroll !== "standRead") return;
+    state.pendingHealthScroll = null;
+    const el = view.querySelector<HTMLElement>("#standRead");
+    if (!el) return;
+    const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  }
   function showOverview(): void {
     curView = "overview";
     setStandSeg(null);
     // Stepped back from a self-contained tool before the overview data landed →
     // hold the calm loading state until the in-flight fetch resolves.
     if (!DATA) {
-      paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
+      paint(CairnUi.loadingStateHtml({ label: "Reading where you stand…", className: "stand-loading loadstate" }));
       (LOADP || loadStandData()).then(() => {
         if (state.tab === "stand" && !state.standSeg && DATA) {
           paint(overviewHtml());
           wireOverview();
+          consumePendingStandScroll();
         } else if (state.tab === "stand" && !state.standSeg) paint(standErrorHtml());
       });
       return;
     }
     paint(overviewHtml());
     wireOverview();
+    consumePendingStandScroll();
   }
   function showBody(): void {
     curView = "body";
@@ -1103,10 +1120,19 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
         g.CairnHealthClient?.askCoach?.(button.getAttribute("data-ask"));
       })
     );
+    wrap.querySelectorAll<HTMLElement>("[data-directive-link]").forEach((button) =>
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        showConnections();
+      })
+    );
   }
 
   function standErrorHtml(): string {
-    return `<div class="stand-error loadstate"><span class="loadstate-label">Couldn't read your standing right now.</span></div>`;
+    return CairnUi.emptyStateHtml({
+      className: "stand-error empty-state reveal",
+      title: "Couldn't read your standing right now",
+    });
   }
 
   // One fetch fills the whole overview snapshot; hosted tool views fetch their own

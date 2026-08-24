@@ -26,6 +26,9 @@ type HealthMarkersRow = {
   reference_source_url?: unknown;
   in_optimal?: unknown;
   trend?: { dir?: unknown; span_days?: unknown } | null;
+  // The active health_directive's own athlete-facing sentence when this marker
+  // is currently shaping training/meals/watch — null otherwise (propagation.ts).
+  active_directive?: unknown;
 };
 
 type HealthMarkersChartPoint = {
@@ -453,11 +456,19 @@ function hmkRowHtml(marker: HealthMarkersRow | null | undefined, index = 0): str
         <span class="hmk-val${valClass}">${escHtml(formatMarkerNumber(latest.value))}${unit}</span>
         <span class="hmk-chev${exp ? "" : " hmk-chev-ghost"}" aria-hidden="true">${exp ? "▾" : ""}</span>
       </span>`;
+  // A marker currently shaping training/meals/watch says so in one quiet line,
+  // in the directive's OWN athlete-facing words (never re-derived here) — tap
+  // to see it managed in place on Connections.
+  const directiveText = String(marker?.active_directive || "").trim();
+  const directiveLine = directiveText
+    ? `<button type="button" class="hmk-directive" data-directive-link>${escHtml(directiveText)}<span class="hmk-directive-arw" aria-hidden="true"> →</span></button>`
+    : "";
   return `<div class="hmk reveal${exp ? " hmk-x" : ""}" style="${stagger(index)}" data-mkey="${escAttr(marker?.key || "")}">
     ${exp
       ? `<button class="hmk-row" aria-expanded="false">${rowInner}</button>
         <div class="hmk-panel"><div class="hmk-panel-in">${panel}</div></div>`
       : `<div class="hmk-row">${rowInner}</div>`}
+    ${directiveLine}
   </div>`;
 }
 

@@ -2278,6 +2278,12 @@ export function getDayIntake(date?: string) {
       fat_g: p.fat_g ?? null,
       fiber_g: p.fiber_g ?? null,
       nutrition_pattern: p.nutrition_pattern ?? null,
+      // Same twin context the read-only food-detail sheet already shows
+      // (foodCapture.ts's ingredient-row shape) — threaded through so the EDIT
+      // sheet for this same entry can show it too, instead of five bare inputs.
+      items: p.items ?? null,
+      // The verbatim capture text ("as logged"), never a derived/re-typed copy.
+      raw: r.raw_output ?? null,
       enrichment_status: r.enrichment_status ?? null,
       created_at: r.created_at,
       // The clock a PERSON sees, local "1:15 PM". Prefers the stated eating time:

@@ -294,6 +294,34 @@ test("plan editor controller wires edit add reorder and save payload", async () 
   assert.deepEqual(harness.invalidations, ["plan"]);
 });
 
+test("plan editor's exercise field gets a datalist fed from the exercise catalog, and fetches it", async () => {
+  const harness = loadPlanEditorController([
+    {
+      day_number: 1,
+      name: "Upper",
+      focus: "Push",
+      items: [{ kind: "strength", exercise: "Bench", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 }],
+    },
+  ]);
+  const exerciseFetches = [];
+  harness.context.cachedApi = (path, options = {}) => {
+    if (path === "/exercises") {
+      exerciseFetches.push(path);
+      return Promise.resolve([{ name: "Bench" }, { name: "Pull-up" }]);
+    }
+    return Promise.resolve(harness.context.state.plan);
+  };
+
+  await harness.context.renderPlanEditor();
+  harness.view.querySelector("[data-editday]").click();
+
+  // Free text still works (a genuinely new exercise is legitimate) — the field
+  // just gains a `list=` pointing at the catalog datalist.
+  assert.match(harness.view.innerHTML, /<datalist id="exerciseNames">/);
+  assert.match(harness.view.querySelector("#planedit").innerHTML, /class="pi-ex"[^>]*list="exerciseNames"/);
+  assert.deepEqual(exerciseFetches, ["/exercises"]);
+});
+
 test("plan editor controller serializes cardio and filters blank rows", () => {
   const harness = loadPlanEditorController([]);
   const days = harness.context.CairnPlanEditorController.serializeDays([

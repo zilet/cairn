@@ -81,7 +81,10 @@ type FamilyControllerApi = {
     if (!wrap) return;
     if (deps.state.tab !== "me" || deps.state.meSeg !== "family" || !wrap.isConnected) return;
     if (!Array.isArray(people) || !people.length) {
-      wrap.innerHTML = `<div class="empty">No one here yet. Add the people you plan your weeks around.</div>`;
+      wrap.innerHTML = CairnUi.emptyStateHtml({
+        title: "No one here yet",
+        body: "Add the people you plan your weeks around.",
+      });
       return;
     }
     deps.state._famById = Object.fromEntries(people.map((f) => [String(f.id), f]));

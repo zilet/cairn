@@ -169,6 +169,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/chat-screen.ts", output: "public/js/09-plan-chat.js" },
   { source: "src/client/day-fuel-client.ts", output: "public/js/day-fuel-client.js" },
   { source: "src/client/day-fuel-controller.ts", output: "public/js/day-fuel-controller.js" },
+  { source: "src/client/meal-fuel-context-client.ts", output: "public/js/meal-fuel-context-client.js" },
   { source: "src/client/meal-row-client.ts", output: "public/js/meal-row-client.js" },
   { source: "src/client/meal-plan-client.ts", output: "public/js/meal-plan-client.js" },
   { source: "src/client/meal-planner-jobs-client.ts", output: "public/js/meal-planner-jobs-client.js" },
@@ -410,6 +411,7 @@ export const BUNDLES = [
     inputs: [
       "public/js/day-fuel-client.js",
       "public/js/day-fuel-controller.js",
+      "public/js/meal-fuel-context-client.js",
       "public/js/meal-row-client.js",
       "public/js/meal-plan-client.js",
       "public/js/meal-planner-jobs-client.js",

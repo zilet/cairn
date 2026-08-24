@@ -193,6 +193,33 @@ function loadPlanUpcomingNote(token: number, slotSel = "#planUpcomingSlot"): voi
     .catch(() => {});
 }
 
+// Autocomplete for the plan editor's free-text exercise field — a <datalist> fed
+// from the exercise catalog. Free text still works (a genuinely new exercise is
+// legitimate); this just makes an existing one easy to find without retyping.
+function loadExerciseNameOptions(token: number): void {
+  void cachedApi("/exercises", {
+    key: "exercises:names",
+    onUpgrade: (data, { changed }) => {
+      if (!changed || token !== pollToken || state.tab !== "plan") return;
+      paintExerciseNameOptions(data);
+    },
+  })
+    .then((data) => {
+      if (token !== pollToken || state.tab !== "plan") return;
+      paintExerciseNameOptions(data);
+    })
+    .catch(() => {});
+}
+
+function paintExerciseNameOptions(rows: unknown): void {
+  const list = $("#exerciseNames");
+  if (!list) return;
+  const names = (Array.isArray(rows) ? rows : [])
+    .map((row) => (row && typeof row === "object" ? String((row as { name?: unknown }).name || "") : ""))
+    .filter(Boolean);
+  list.innerHTML = names.map((name) => `<option value="${escAttr(name)}">`).join("");
+}
+
 function loadPlanRecoveryBanner(token: number): void {
   void api("/plan/recovery-status")
     .then((rs) => {
@@ -325,10 +352,12 @@ async function renderPlanEditor(): Promise<void> {
   const calFooter = helpers.calendarFooterHtml(plan, location.host, icsUrl);
   view.innerHTML = segBar("edit", planSeg()) + `<div id="planRecoverySlot"></div><div id="planUpcomingSlot"></div><div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
-    <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}`;
+    <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}
+    <datalist id="exerciseNames"></datalist>`;
   wireSeg(PLAN_HANDLERS);
   loadPlanRecoveryBanner(token);
   loadPlanUpcomingNote(token);
+  loadExerciseNameOptions(token);
 
   const model: PlanEditorControllerModelDay[] = (Array.isArray(plan) ? plan : []).map((day) => helpers.dayModelFromPlan(day));
   const editing = new Set<number>();

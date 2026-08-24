@@ -250,6 +250,12 @@ export interface ClientFoodEntry {
   carbs_g: number | null;
   fat_g: number | null;
   fiber_g: number | null;
+  // Ingredient rows/strings as captured (foodCapture.ts shape) — the same
+  // context the read-only food-detail sheet shows, threaded through for the
+  // edit sheet's twin. Null when nothing was captured.
+  items: unknown;
+  // The verbatim "as logged" capture text, or null.
+  raw: string | null;
   enrichment_status: string | null;
   created_at: string;
   // The clock to SHOW, already localized ("7:30 PM"): the stated eating time when

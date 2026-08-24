@@ -180,6 +180,7 @@ function loadMealRecipeController(overrides = {}) {
   const invalidations = [];
   const toasts = [];
   const captions = [];
+  const fuelLineCalls = [];
   const context = {
     Object,
     String,
@@ -191,6 +192,12 @@ function loadMealRecipeController(overrides = {}) {
     window: null,
     MEALS_KEY: "meals:plans",
     CairnUi,
+    CairnMealFuelContext: {
+      loadMealFuelLine: (scope, itemKcal) => {
+        fuelLineCalls.push({ scope, itemKcal });
+        return Promise.resolve();
+      },
+    },
     escHtml,
     escAttr,
     artImg(kind, query, className) {
@@ -217,7 +224,7 @@ function loadMealRecipeController(overrides = {}) {
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/meal-recipe-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/meal-recipe-controller.js"), "utf8"), context);
-  return { context, document, runOps, invalidations, toasts, captions };
+  return { context, document, runOps, invalidations, toasts, captions, fuelLineCalls };
 }
 
 test("meal recipe CTA preserves coach request affordance", () => {
@@ -260,7 +267,7 @@ test("meal recipe loading state carries reconnect caption class", () => {
 });
 
 test("meal recipe controller opens sheet and enqueues recipe job from CTA", () => {
-  const { context, document, runOps, invalidations } = loadMealRecipeController();
+  const { context, document, runOps, invalidations, fuelLineCalls } = loadMealRecipeController();
   const plan = {
     id: 42,
     parsed: {
@@ -275,6 +282,12 @@ test("meal recipe controller opens sheet and enqueues recipe job from CTA", () =
   assert.equal(document.body.classList.contains("sheet-open"), true);
   assert.match(sheet.innerHTML, /Bowl &lt;fast&gt;/);
   assert.match(sheet.innerHTML, /rice, beans/);
+  // The remaining-fuel context line: a slot in the markup, filled async against
+  // THIS meal's own kcal so the sheet can say "fits"/"runs past" once resolved.
+  assert.match(sheet.innerHTML, /data-fuel-line/);
+  assert.equal(fuelLineCalls.length, 1);
+  assert.equal(fuelLineCalls[0].scope, sheet);
+  assert.equal(fuelLineCalls[0].itemKcal, 550);
 
   sheet.querySelector("[data-recipe]").querySelector("[data-getrecipe]").click();
   assert.equal(runOps.length, 1);

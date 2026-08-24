@@ -149,10 +149,13 @@ type HealthStandingControllerRead = import("../contracts/client-api.js").ClientH
   }
 
   // The whole-picture read lives on the Stand overview now; a directives scroll
-  // request lands on the Connections sub-view where they're managed.
+  // request lands on the Connections sub-view where they're managed. Otherwise
+  // (the "full health read" jump link) land ON the overview's agentic read
+  // section — never just "back where you started" — once it repaints.
   function openRead(deps: ClientHealthStandingControllerDeps, opts: { scroll?: string } = {}): void {
-    deps.state.standSeg = opts.scroll === "hbDirectives" ? "connections" : null;
-    if (opts.scroll) deps.state.pendingHealthScroll = opts.scroll;
+    const toConnections = opts.scroll === "hbDirectives";
+    deps.state.standSeg = toConnections ? "connections" : null;
+    deps.state.pendingHealthScroll = toConnections ? opts.scroll || null : "standRead";
     deps.activateTab("stand");
   }
 
