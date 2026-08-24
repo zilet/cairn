@@ -21,6 +21,7 @@ import {
 } from "../../repo/intelligence.js";
 import { recordSuggestion } from "../../repo/memory.js";
 import { buildRecoveryMenu, type RecoveryMenu } from "../../repo/recovery-menu.js";
+import { weekWins } from "../../repo/sessions.js";
 import { getTrajectory } from "../../repo/trajectory.js";
 import { decideTodayAttention, type TodayAttention } from "./today-attention.js";
 
@@ -51,6 +52,12 @@ export interface DayReadResult {
   // The optional guided recovery menu on a rest/easy day (never dayRead-computed,
   // never persisted — derived fresh alongside forward/arc; see attachDayReadContext).
   recovery?: RecoveryMenu | null;
+  // The same trained-days/new-bests rollup the done card's week footnote reads
+  // (today-session-status-client.ts doneWeekHtml), threaded onto rest/easy Briefs
+  // too — the reassurance matters most on a day with no session card to carry it.
+  // Never persisted (derived fresh, same precedent as recovery); absent on a
+  // zero-training week (absence is not failure — the client renders nothing).
+  week?: { trained_days_7: number; prs: number } | null;
   periodization_context: DayReadPeriodizationContext;
   // Which Today surface earns the position of prominence (see today-attention.ts).
   // Optional by contract: absent on any non-live date and on any failure, and the
@@ -131,6 +138,23 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     recovery = null;
   }
 
+  // The week-wins reassurance: rest/easy Briefs otherwise carry no reminder that
+  // training has actually been happening. Same aggregate the done card's week
+  // footnote reads (repo/sessions.ts weekWins) — a zero-training week yields the
+  // key `undefined` here, and doneWeekHtml renders nothing for it either way.
+  let week: { trained_days_7: number; prs: number } | null = null;
+  try {
+    const kind = String(read.kind ?? "");
+    if (kind === "rest" || kind === "easy") {
+      const w = weekWins(readDate);
+      const days = Number(w?.trained_days_7 ?? 0);
+      const prs = Array.isArray(w?.prs) ? w.prs.length : 0;
+      if (days > 0 || prs > 0) week = { trained_days_7: days, prs };
+    }
+  } catch {
+    week = null;
+  }
+
   return {
     ...read,
     forward,
@@ -138,6 +162,7 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     periodization_context: periodizationContext,
     ...(attention ? { attention } : {}),
     ...(recovery ? { recovery } : {}),
+    ...(week ? { week } : {}),
   } as DayReadResult;
 }
 

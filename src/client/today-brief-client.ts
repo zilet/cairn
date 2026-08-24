@@ -234,6 +234,20 @@ type TodayBriefHtmlOptions = {
     return `<div class="brief-recovery">${line ? `<p class="brief-recovery-line">${escHtml(line)}</p>` : ""}${rows ? `<div class="brief-recovery-list">${rows}</div>` : ""}</div>`;
   }
 
+  // The week-wins reassurance, threaded from today-session-status-client.ts's done
+  // card (doneWeekHtml) onto rest/easy Briefs — the reassurance that training has
+  // actually been happening matters most on a day with no session card to carry it.
+  // Reuses the SAME sentence/rules: absent on a zero-training week, no "0 of 7".
+  function todayBriefWeekHtml(read: TodayBriefRead | null | undefined, kind: string): string {
+    if (kind !== "rest" && kind !== "easy") return "";
+    const week = read?.week;
+    if (!week || typeof week !== "object") return "";
+    const helper = (globalThis as any).CairnTodaySessionStatus?.weekHtml;
+    if (typeof helper !== "function") return "";
+    const html = helper({ week });
+    return html ? String(html).replace('class="done-week"', 'class="done-week brief-week"') : "";
+  }
+
   function todayBriefUpdatedHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
     const raw = read?.computed_at || read?.decision?.computed_at;
     const stamp = raw ? new Date(String(raw)) : null;
@@ -258,6 +272,7 @@ type TodayBriefHtmlOptions = {
     const headline = escHtml(read?.headline || meta.lead);
     const why = read?.why ? escHtml(read.why) : "";
     const recovery = todayBriefRecoveryHtml(read, kind);
+    const weekWins = todayBriefWeekHtml(read, kind);
     // The forward line rides on train days AND done days — after the work is in,
     // "Next: …" is the so-what that replaces the retired Start-session controls.
     const forward = read?.forward && (kind === "train" || kind === "done") ? escHtml(read.forward) : "";
@@ -324,6 +339,7 @@ type TodayBriefHtmlOptions = {
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
+      ${weekWins}
       ${recovery}
       ${forward ? `<button class="brief-forward" data-redirect="view-week" title="See your week"><span class="brief-forward-arrow" aria-hidden="true">↗</span><span class="brief-forward-txt">${forward}</span></button>` : ""}
       ${periodization}
@@ -357,6 +373,7 @@ type TodayBriefHtmlOptions = {
     if (mins(a.est_minutes) !== mins(b.est_minutes)) return true;
     if (todayBriefPeriodizationHtml(a) !== todayBriefPeriodizationHtml(b)) return true;
     if (todayBriefRecoveryHtml(a, todayBriefKind(a)) !== todayBriefRecoveryHtml(b, todayBriefKind(b))) return true;
+    if (todayBriefWeekHtml(a, todayBriefKind(a)) !== todayBriefWeekHtml(b, todayBriefKind(b))) return true;
     // The freshness line's REASON is content and repaints; its clock is not. A
     // bare timestamp tick was rewriting the whole Brief (replaceWith + settle
     // animation) for a minute that changed nothing the athlete is reading —

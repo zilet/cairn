@@ -166,8 +166,11 @@ function compactLiftRowHtml(lift: ProgramLift | null | undefined, index: number)
   if (!row) return "";
   const meta = [liftStatusWord(row), liftTrendFig(row)].filter(Boolean).join(" · ");
   return `<button type="button" class="prow-compact prow-good reveal" data-guide="${encodeURIComponent(row.exercise)}" style="${stagger(index)}">
-    <span class="prow-name">${escHtml(row.exercise)}</span>
-    ${meta ? `<span class="prow-compact-meta lbl">${escHtml(meta)}</span>` : ""}
+    <span class="prow-compact-head">
+      <span class="prow-name">${escHtml(row.exercise)}</span>
+      ${meta ? `<span class="prow-compact-meta lbl">${escHtml(meta)}</span>` : ""}
+    </span>
+    ${row.why ? `<span class="prow-why">${escHtml(row.why)}</span>` : ""}
   </button>`;
 }
 

@@ -16,7 +16,6 @@ import {
   exerciseGuideStatus,
   getExerciseDetail,
   getExerciseGuide,
-  getPlan,
   getPlanDay,
   getPlanQuality,
   importExerciseGuides,
@@ -35,10 +34,14 @@ import {
   updateTarget,
   upsertExercise,
 } from "../domain/training/index.js";
+import { getPlanWithPurpose } from "../repo.js";
 
 export const planExercisesRouter = Router();
 
-planExercisesRouter.get("/plan", (_req, res) => res.json(getPlan()));
+// Each day carries the same grounded purpose line the /today aggregate and the
+// week-ahead cards read (repo/day-read.ts getPlanWithPurpose) — one source, so
+// the sentence is stable across whichever endpoint fills the client's cache.
+planExercisesRouter.get("/plan", (_req, res) => res.json(getPlanWithPurpose()));
 planExercisesRouter.get("/plan/quality", (_req, res) => res.json(getPlanQuality()));
 
 // The recovery-week story for the Plan surface: a waiting draft ('drafted'), the

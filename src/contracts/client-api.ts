@@ -581,6 +581,10 @@ export interface ClientPlanDay {
   day_number: number;
   name: string;
   focus?: string | null;
+  // A single grounded "why this session" line (repo/day-read.ts planDayPurpose)
+  // tying the day to the active strength block/endurance goal. Absent — never
+  // a fabricated fallback — whenever the program state can't ground one.
+  purpose?: string | null;
   items: ClientPlanItem[];
   [key: string]: unknown;
 }

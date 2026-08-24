@@ -541,7 +541,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/plan` |  |
+| GET | `/api/plan` | Each day carries the same grounded purpose line the /today aggregate and the week-ahead cards read (repo/day-read.ts getPlanWithPurpose) — one source, so the sentence is stable across whichever endpoint fills the client's cache. |
 | PUT | `/api/plan` |  |
 | GET | `/api/plan.ics` | Subscribe-able iCal of the training template — pull-not-push. Each plan day is a weekly-recurring all-day event (Day 1 → Monday by default; ?start=0..6 to shift, JS weekday where 0=Sun). Subscribe in Apple/Google Calendar via   webcal://<host>/api/plan.ics   (append ?token=… when CAIRN_AUTH_TOKEN is set, since a calendar client can't send a custom header). Registered before /plan/:day; the literal ".ics" path never matches the :day param. |
 | DELETE | `/api/plan/:day` |  |

@@ -20,7 +20,9 @@ test("todayAggregate mirrors the independent Today cold-path reads", () => {
   const aggregate = todayAggregate("2026-01-02");
 
   assert.equal(aggregate.date, "2026-01-02");
-  assert.deepEqual(aggregate.plan, repo.getPlan());
+  // Each plan day now carries the same grounded W4.2 purpose line getPlanWithPurpose
+  // attaches for GET /plan, so the two endpoints never disagree on it.
+  assert.deepEqual(aggregate.plan, repo.getPlanWithPurpose("2026-01-02"));
   assert.deepEqual(aggregate.session, repo.getSessionByDate("2026-01-02"));
   assert.deepEqual(aggregate.stats, repo.getWeeklyStats());
   assert.deepEqual(aggregate.profile, repo.getProfile());

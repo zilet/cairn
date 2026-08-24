@@ -232,6 +232,50 @@ test("weekAheadPlan returns no days when there is no plan", () => {
   assert.deepEqual(repo.weekAheadPlan().days, []);
 });
 
+// ---------- W4.2: grounded purpose line on planned days ----------
+// weekAheadDayNote never invents a purpose: it renders only when the strength
+// mesocycle phase (lift/mixed) or the active endurance goal (run) actually
+// grounds one, and stays a rotating variant set rather than one literal.
+test("weekAheadDayNote grounds a lift/mixed purpose in the mesocycle phase, and is absent without one", () => {
+  const withPhase = repo.weekAheadDayNote("lift", "2026-03-15", { phase: "accumulation" }, null);
+  assert.ok(withPhase && withPhase.length, "accumulation phase grounds a purpose line");
+  assert.equal(repo.weekAheadDayNote("lift", "2026-03-15", { phase: null }, null), null, "no phase → no invented purpose");
+  assert.equal(repo.weekAheadDayNote("lift", "2026-03-15", null, null), null, "no mesocycle → no invented purpose");
+  assert.equal(repo.weekAheadDayNote("rest", "2026-03-15", { phase: "accumulation" }, null), null, "a rest day never carries a purpose line");
+});
+
+test("weekAheadDayNote grounds a run purpose in the active race goal, and is absent without one", () => {
+  const goal = { mode: "race", event: "Fall 10k", is_race: true, phase: "build" };
+  const note = repo.weekAheadDayNote("run", "2026-03-15", null, goal);
+  assert.match(note, /Fall 10k/);
+  assert.equal(repo.weekAheadDayNote("run", "2026-03-15", null, null), null, "no goal → no invented purpose");
+  assert.equal(
+    repo.weekAheadDayNote("run", "2026-03-15", null, { mode: "race", event: "Fall 10k", is_race: true, phase: "past" }),
+    null,
+    "a past-race phase grounds nothing forward-looking"
+  );
+  const standing = repo.weekAheadDayNote("run", "2026-03-15", null, { mode: "standing", label: "10k-ready", is_race: false, phase: "build" });
+  assert.match(standing, /10k-ready/);
+});
+
+test("weekAheadPlan attaches the grounded note per day from the live mesocycle phase", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const { days } = repo.weekAheadPlan();
+  assert.equal(days.length, 1);
+  // A fresh block reads as accumulation by default, so the lift day's purpose
+  // line is grounded even with no training history yet.
+  assert.ok(typeof days[0].note === "string" && days[0].note.length, "a real mesocycle phase grounds the note");
+});
+
+test("getPlanWithPurpose mirrors getPlan and adds a purpose field per day", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const plain = repo.getPlan();
+  const withPurpose = repo.getPlanWithPurpose();
+  assert.equal(withPurpose.length, plain.length);
+  assert.ok(Object.hasOwn(withPurpose[0], "purpose"));
+  assert.equal(withPurpose[0].name, plain[0].name);
+});
+
 // ---------- C endurance PRs ----------
 test("getEndurancePRs surfaces longest distance/duration and fastest pace per distance", () => {
   seedActivity("2026-01-01", { type: "run", duration_min: 50, distance_km: 10 });   // 5.0 min/km

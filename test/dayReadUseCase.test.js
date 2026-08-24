@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readToday, recordDayReadSuggestion } from "../dist/domain/brain/day-read-use-case.js";
+import { attachDayReadContext, readToday, recordDayReadSuggestion } from "../dist/domain/brain/day-read-use-case.js";
 import { configureDayReadRefresh, resetDayReadRefresh } from "../dist/dayread-refresh.js";
 import { buildDayReadPrompt } from "../dist/prompt.js";
 import { runWithBrainSnapshot } from "../dist/brain/snapshot.js";
@@ -913,4 +913,33 @@ test("the prompt claims today was already eased only when it actually was", () =
   assert.ok(!/ALREADY been eased/.test(untouched), "nothing was eased on a morning that reads train");
 
   assert.match(promptFor("easy", true), /ALREADY been eased/);
+});
+
+// ---------- W4.2: the week-wins reassurance carried on rest/easy reads ----------
+test("attachDayReadContext attaches a week-wins rollup on rest/easy reads with real training this week, and nothing on a zero-training week", () => {
+  resetTables("day_reads", "suggestions", "plan_days", "plan_items", "sessions", "logged_sets");
+  const date = localDaysAgo(0);
+  repo.logSetByName({ date: localDaysAgo(1), exercise: "Test Squat", weight: 185, reps: 5, rir: 2 });
+  repo.logSetByName({ date: localDaysAgo(3), exercise: "Test Squat", weight: 190, reps: 5, rir: 2 });
+
+  const rest = attachDayReadContext(date, { kind: "rest" });
+  assert.ok(rest.week, "a rest read with real trained days this week carries a week rollup");
+  assert.equal(typeof rest.week.trained_days_7, "number");
+  assert.ok(rest.week.trained_days_7 > 0);
+
+  const easy = attachDayReadContext(date, { kind: "easy" });
+  assert.ok(easy.week, "an easy read carries the same rollup");
+
+  const train = attachDayReadContext(date, { kind: "train" });
+  assert.equal(train.week, undefined, "a train read never carries the week-wins line");
+
+  const done = attachDayReadContext(date, { kind: "done" });
+  assert.equal(done.week, undefined, "a done read never carries the week-wins line");
+});
+
+test("attachDayReadContext attaches no week-wins key for a zero-training week — absence is not failure", () => {
+  resetTables("day_reads", "suggestions", "plan_days", "plan_items", "sessions", "logged_sets");
+  const date = localDaysAgo(0);
+  const rest = attachDayReadContext(date, { kind: "rest" });
+  assert.equal(rest.week, undefined, "no invented '0 of 7' — the key is simply absent");
 });

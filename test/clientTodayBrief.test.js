@@ -666,3 +666,79 @@ test("a past date's freshness line names the day, not a bare clock time", () => 
   const today = brief.briefHtml(read, { isToday: true });
   assert.match(today, /Updated \d{1,2}:\d{2}/);
 });
+
+// ---------- W4.2: the week-wins reassurance on rest/easy Briefs ----------
+// Loads today-session-status-client.js ALONGSIDE today-brief-client.js in the
+// same vm realm, since todayBriefWeekHtml reads CairnTodaySessionStatus.weekHtml
+// off globalThis at render time (a lazy cross-module reference, not an eager
+// top-level one — see CLAUDE.md's client-module load-order rule).
+function loadTodayBriefWithSessionStatus() {
+  const context = {
+    Array,
+    Math,
+    Number,
+    Object,
+    String,
+    encodeURIComponent,
+    escHtml,
+    escAttr,
+    fmtDur: (seconds) => `${seconds}s`,
+    fmtWeight: (weight) => (weight == null ? "BW" : `${weight} lb`),
+  };
+  context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-status-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
+  return context.CairnTodayBrief;
+}
+
+test("Today Brief surfaces the week-wins sentence on a rest day", () => {
+  const brief = loadTodayBriefWithSessionStatus();
+  const html = brief.briefHtml(
+    {
+      kind: "rest",
+      headline: "Rest today",
+      why: "Nothing stacked up.",
+      signals: {},
+      week: { trained_days_7: 4, prs: 2 },
+    },
+    { isToday: true }
+  );
+  assert.match(html, /Trained 4 of the last 7 days, with 2 new bests/);
+});
+
+test("Today Brief surfaces the week-wins sentence on an easy day too", () => {
+  const brief = loadTodayBriefWithSessionStatus();
+  const html = brief.briefHtml(
+    { kind: "easy", headline: "Keep it light", why: "Yesterday was heavy.", signals: {}, week: { trained_days_7: 3, prs: 0 } },
+    { isToday: true }
+  );
+  assert.match(html, /Trained 3 of the last 7 days/);
+  assert.doesNotMatch(html, /new best/);
+});
+
+test("Today Brief says nothing for a zero-training week — absence is not failure", () => {
+  const brief = loadTodayBriefWithSessionStatus();
+  const html = brief.briefHtml(
+    { kind: "rest", headline: "Rest today", why: "Nothing stacked up.", signals: {}, week: { trained_days_7: 0, prs: 0 } },
+    { isToday: true }
+  );
+  assert.doesNotMatch(html, /done-week|0 of 7/);
+});
+
+test("Today Brief never renders week-wins on a train or done day even if the payload carries it", () => {
+  const brief = loadTodayBriefWithSessionStatus();
+  const trainHtml = brief.briefHtml(
+    { kind: "train", headline: "Push day", why: "Recovered.", signals: {}, week: { trained_days_7: 5, prs: 1 } },
+    { isToday: true, showPlan: false }
+  );
+  assert.doesNotMatch(trainHtml, /Trained 5 of/);
+});
+
+test("Today Brief renders no week-wins line without the session-status module loaded (safe no-throw fallback)", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    { kind: "rest", headline: "Rest today", why: "Nothing stacked up.", signals: {}, week: { trained_days_7: 4, prs: 1 } },
+    { isToday: true }
+  );
+  assert.doesNotMatch(html, /Trained 4 of/);
+});
