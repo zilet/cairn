@@ -742,3 +742,74 @@ test("Today Brief renders no week-wins line without the session-status module lo
   );
   assert.doesNotMatch(html, /Trained 4 of/);
 });
+
+// ---------- the morning wake-up review (W4.7) ----------
+
+test("Today Brief renders the look-back passage above today's suggestion, HTML-escaped", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    {
+      kind: "rest",
+      headline: "Rest today",
+      why: "Nothing stacked up.",
+      signals: {},
+      look_back: { passages: ["You rested yesterday <script>, as the read called for."], win: null },
+    },
+    { isToday: true }
+  );
+  assert.match(html, /brief-lookback/);
+  assert.match(html, /Since yesterday/);
+  assert.match(html, /You rested yesterday &lt;script&gt;, as the read called for\./);
+  assert.doesNotMatch(html, /<script>/);
+  const lookBackIndex = html.indexOf("brief-lookback");
+  const kickerIndex = html.indexOf("brief-kicker");
+  assert.ok(lookBackIndex > -1 && kickerIndex > -1 && lookBackIndex < kickerIndex, "look-back renders ABOVE the suggestion");
+});
+
+test("Today Brief combines a passage and the win into one quiet block", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    {
+      kind: "easy",
+      headline: "Keep it light",
+      why: "Yesterday was heavy.",
+      signals: {},
+      look_back: { passages: ["The read said easy yesterday; you went past it — noted."], win: "HRV came back." },
+    },
+    { isToday: true }
+  );
+  assert.match(html, /The read said easy yesterday; you went past it — noted\. HRV came back\./);
+});
+
+test("Today Brief renders no look-back block when the server sent nothing", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    { kind: "rest", headline: "Rest today", why: "Nothing stacked up.", signals: {}, look_back: { passages: [], win: null } },
+    { isToday: true }
+  );
+  assert.doesNotMatch(html, /brief-lookback/);
+});
+
+test("Today Brief renders no look-back block when look_back is absent entirely", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    { kind: "rest", headline: "Rest today", why: "Nothing stacked up.", signals: {} },
+    { isToday: true }
+  );
+  assert.doesNotMatch(html, /brief-lookback/);
+});
+
+test("Today Brief never renders the look-back block on a routed past date", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    {
+      kind: "rest",
+      headline: "Rest today",
+      why: "Nothing stacked up.",
+      signals: {},
+      look_back: { passages: ["You rested yesterday."], win: null },
+    },
+    { isToday: false }
+  );
+  assert.doesNotMatch(html, /brief-lookback/);
+});

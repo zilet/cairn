@@ -19,6 +19,7 @@ import {
   type DayReadDecision,
   type DayReadPeriodizationContext,
 } from "../../repo/intelligence.js";
+import { morningReview, type MorningReview } from "../../repo/brain/morning-review.js";
 import { recordSuggestion } from "../../repo/memory.js";
 import { buildRecoveryMenu, type RecoveryMenu } from "../../repo/recovery-menu.js";
 import { weekWins } from "../../repo/sessions.js";
@@ -58,6 +59,11 @@ export interface DayReadResult {
   // Never persisted (derived fresh, same precedent as recovery); absent on a
   // zero-training week (absence is not failure — the client renders nothing).
   week?: { trained_days_7: number; prs: number } | null;
+  // The morning wake-up review (W4.7): one short past-tense passage above
+  // today's suggestion, plus an optional landed win. Never persisted (derived
+  // fresh, same precedent as forward/arc/week/recovery); absent entirely when
+  // there's nothing to say — silence is the calm default, not a failure state.
+  look_back?: MorningReview | null;
   periodization_context: DayReadPeriodizationContext;
   // Which Today surface earns the position of prominence (see today-attention.ts).
   // Optional by contract: absent on any non-live date and on any failure, and the
@@ -155,6 +161,17 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     week = null;
   }
 
+  // The look-back: derived fresh, same precedent as forward/arc/week above.
+  // Empty (no passages, no win) is omitted from the response entirely, exactly
+  // like `week` on a zero-training week — absence is not failure.
+  let lookBack: MorningReview | null = null;
+  try {
+    const review = morningReview(readDate);
+    if (review.passages.length || review.win) lookBack = review;
+  } catch {
+    lookBack = null;
+  }
+
   return {
     ...read,
     forward,
@@ -163,6 +180,7 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     ...(attention ? { attention } : {}),
     ...(recovery ? { recovery } : {}),
     ...(week ? { week } : {}),
+    ...(lookBack ? { look_back: lookBack } : {}),
   } as DayReadResult;
 }
 

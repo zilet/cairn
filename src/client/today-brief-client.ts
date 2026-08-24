@@ -248,6 +248,26 @@ type TodayBriefHtmlOptions = {
     return html ? String(html).replace('class="done-week"', 'class="done-week brief-week"') : "";
   }
 
+  // The morning wake-up review (W4.7): one quiet passage ABOVE today's
+  // suggestion — "since yesterday" plus one or two sentences, collapsed
+  // entirely when the server sent nothing (silence is the calm default, not a
+  // loading state). Only shown on today's own Brief: a routed past date is
+  // already looking backward, and "since yesterday" on it would misdate whose
+  // yesterday is being described.
+  function todayBriefLookBackHtml(read: TodayBriefRead | null | undefined, isToday: boolean): string {
+    if (!isToday) return "";
+    const lookBack = read?.look_back;
+    if (!lookBack || typeof lookBack !== "object") return "";
+    const passages = Array.isArray(lookBack.passages) ? lookBack.passages.filter((p) => typeof p === "string" && p.trim()) : [];
+    const win = typeof lookBack.win === "string" && lookBack.win.trim() ? lookBack.win.trim() : "";
+    const sentences = [...passages, win].filter(Boolean);
+    if (!sentences.length) return "";
+    return `<div class="brief-lookback">
+      <div class="brief-lookback-lbl lbl">Since yesterday</div>
+      <p class="brief-lookback-txt">${sentences.map((sentence) => escHtml(sentence)).join(" ")}</p>
+    </div>`;
+  }
+
   function todayBriefUpdatedHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
     const raw = read?.computed_at || read?.decision?.computed_at;
     const stamp = raw ? new Date(String(raw)) : null;
@@ -279,6 +299,7 @@ type TodayBriefHtmlOptions = {
     const periodization = todayBriefPeriodizationHtml(read);
     const arc = read?.arc && !forward && !periodization ? escHtml(read.arc) : "";
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
+    const lookBack = todayBriefLookBackHtml(read, options.isToday !== false);
 
     const actions: string[] = [];
     if (kind === "train") {
@@ -335,6 +356,7 @@ type TodayBriefHtmlOptions = {
     const band = todayBriefAttentionPrimary(read) ? ` data-attention="${yields ? "supporting" : "lead"}"` : "";
     return `<section class="brief brief-${kind}${morph}${enter}${thinking}${quiet}" style="--i:0" aria-live="polite"${busy}${band}>
       ${offline}
+      ${lookBack}
       <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${escHtml(meta.kicker ? meta.kicker.toUpperCase() : `${meta.word.toUpperCase()} DAY`)}${est ? ` · ${escHtml(est)}` : ""}</div>
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
@@ -517,6 +539,7 @@ type TodayBriefHtmlOptions = {
     updatedHtml: todayBriefUpdatedHtml,
     decisiveReason: todayBriefDecisiveReason,
     recoveryHtml: todayBriefRecoveryHtml,
+    lookBackHtml: todayBriefLookBackHtml,
   };
 
   Object.assign(globalThis, { CairnTodayBrief: CAIRN_TODAY_BRIEF });
