@@ -1342,6 +1342,66 @@ export function reconcileGarminStrength(garminActivityId: number) {
   };
 }
 
+// ---- quiet reconcile: one-tap Undo snapshot/restore (round W2.2) ----------------
+// Today used to make the athlete tap "confirm" on a merge the server already
+// computed deterministically. Under heads-up autonomy (Amendment 3) a bounded,
+// reversible change like this lands quietly and announces itself with an Undo,
+// instead of asking. These two functions are the snapshot/restore half of that:
+// today-agenda.ts snapshots BEFORE calling reconcileGarminStrength for each row,
+// stores it as a `garmin_strength` brain_rollbacks payload, and revertDecision
+// (src/domain/brain/autonomy-service.ts) calls revertGarminReconcile on Undo.
+export interface GarminReconcileRollbackSession {
+  session_id: number;
+  prior_garmin_json: string | null;
+  activity_ids: number[];
+}
+export interface GarminReconcileRollbackPayload {
+  version: 1;
+  sessions: GarminReconcileRollbackSession[];
+}
+
+// Snapshot each affected session's PRE-merge garmin_json, grouped by session
+// (same-day strength activities always merge into one session). Call this
+// BEFORE reconcileGarminStrength() runs on any of `rows`.
+export function snapshotGarminReconcileState(rows: { id: number; date?: string | null }[]): GarminReconcileRollbackPayload {
+  const bySession = new Map<number, GarminReconcileRollbackSession>();
+  for (const row of rows) {
+    const date = row.date || todayISO();
+    const session = getOrCreateSession(date) as any;
+    let entry = bySession.get(session.id);
+    if (!entry) {
+      entry = { session_id: session.id, prior_garmin_json: session.garmin_json ?? null, activity_ids: [] };
+      bySession.set(session.id, entry);
+    }
+    entry.activity_ids.push(Number(row.id));
+  }
+  return { version: 1, sessions: [...bySession.values()] };
+}
+
+// Undo a quiet reconcile: restore each affected session's garmin_json to its
+// pre-merge snapshot and unlink the activities that were merged in. Ownership-
+// guarded — a session is only restored while it still holds EXACTLY the
+// activities this snapshot linked; anything that touched it since (a re-sync, a
+// second reconcile) wins over the undo, and that session is left alone.
+export function revertGarminReconcile(payload: GarminReconcileRollbackPayload): void {
+  if (!payload || !Array.isArray(payload.sessions)) return;
+  for (const entry of payload.sessions) {
+    const linked = (
+      db.prepare(`SELECT id FROM garmin_activities WHERE session_id = ?`).all(entry.session_id) as any[]
+    ).map((r) => Number(r.id));
+    const stillOwned =
+      entry.activity_ids.length === linked.length && entry.activity_ids.every((id) => linked.includes(id));
+    if (!stillOwned) continue;
+    db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(entry.prior_garmin_json, entry.session_id);
+    for (const id of entry.activity_ids) {
+      db.prepare(`UPDATE garmin_activities SET session_id = NULL WHERE id = ?`).run(id);
+    }
+    const session = db.prepare(`SELECT date FROM sessions WHERE id = ?`).get(entry.session_id) as any;
+    if (session?.date) invalidateDayReadIfDecisionChanged(session.date);
+  }
+  bumpTrainingDataVersion();
+}
+
 // Merge the agentic narrative (summary / intensity / extrapolated flag / agent)
 // into a session's existing Garmin blob. Used by enrich.ts after the agent runs.
 export function updateSessionGarminNarrative(

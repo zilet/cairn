@@ -476,7 +476,13 @@ export function moveBrainExpectations(fromDecisionId: number, toDecisionId: numb
 // The undo snapshot kinds. 'goal_date' joined them with heads-up autonomy: a goal date
 // that adapts from the signals is only allowed to announce because putting it back is
 // one tap, so the rollback has to exist before the write does.
-export type BrainRollbackKind = "training_plan" | "nutrition_target" | "meal_plan" | "recovery_cycle" | "goal_date";
+export type BrainRollbackKind =
+  | "training_plan"
+  | "nutrition_target"
+  | "meal_plan"
+  | "recovery_cycle"
+  | "goal_date"
+  | "garmin_strength";
 
 const BRAIN_ROLLBACK_KINDS: readonly BrainRollbackKind[] = [
   "training_plan",
@@ -484,6 +490,7 @@ const BRAIN_ROLLBACK_KINDS: readonly BrainRollbackKind[] = [
   "meal_plan",
   "recovery_cycle",
   "goal_date",
+  "garmin_strength",
 ];
 
 export function saveBrainRollback(decisionId: number, kind: BrainRollbackKind, payload: unknown): boolean {
