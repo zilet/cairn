@@ -9,6 +9,8 @@ import {
 } from "../../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../../domain/health/index.js";
 import { addMemory } from "../../domain/person/index.js";
+import { deriveInsightIntentKey, splitInsightIntentKey } from "../../repo/insight-intent.js";
+import { recordDismissal } from "../../repo/surface-dismissals.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
 
@@ -97,6 +99,14 @@ export function registerDailyDriverTools(server: McpToolRegistrar) {
       if (feedback === "up") {
         const text = String(updated.text ?? "").trim();
         if (text) addMemory(text, "insight", "insight-feedback");
+      }
+      // Mirrors PUT /api/insights/:id: a dismiss is weaker than a thumbs-down, so
+      // it only enters the repetition-gated dismissal evidence stream, and only
+      // when the insight has a resolvable intent key (stored, else derived).
+      if (status === "dismissed") {
+        const stored = splitInsightIntentKey(updated.intent_key) ? String(updated.intent_key).trim() : null;
+        const key = stored ?? deriveInsightIntentKey(updated.text, updated.rationale);
+        if (key) recordDismissal("insight", key);
       }
       return asText(updated);
     }

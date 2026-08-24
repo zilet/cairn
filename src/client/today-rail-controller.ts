@@ -292,6 +292,15 @@ type TodayRailDeps = {
         const card = button.closest(".agenda-card");
         const id = button.getAttribute("data-agenda-dismiss") || card?.getAttribute("data-agenda-card") || "";
         const candidate = pending.find((item) => item.id === id);
+        // Dismissal evidence (surface_dismissals) is independent of the ack call
+        // below — it records that THIS card was dismissed today, regardless of
+        // whether the card also carries a presentation revision to retire.
+        // Fire-and-forget: never blocks the dismiss the athlete just asked for.
+        if (id) void deps.api("/today-agenda/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        }).catch(() => {});
         if (candidate?.revision) {
           button.dataset.ackPending = "1";
           void deps

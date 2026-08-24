@@ -1567,6 +1567,25 @@ CREATE INDEX IF NOT EXISTS idx_calibration_events_kind_date
 CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_events_detected
   ON calibration_events(kind, IFNULL(target_key,''), IFNULL(ref_id,0))
   WHERE ref_id IS NOT NULL;
+
+-- Dismissals as evidence (W3.2): a Today-agenda card dismiss or an insight marked
+-- 'dismissed' now writes a row here, one per (surface, item_key, date) — the UNIQUE
+-- index means repeated taps the same day collapse to one, so "distinct days
+-- dismissed" is exactly COUNT(*). surface is 'today_agenda' | 'insight'; item_key is
+-- the agenda card's stable id (e.g. 'health-focus') or the insight's intent_key. A
+-- SINGLE dismissal teaches nothing (the audit's explicit risk) — callers gate
+-- suppression on repetition, never on this table's mere presence.
+CREATE TABLE IF NOT EXISTS surface_dismissals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  surface TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  date TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_surface_dismissals_unique
+  ON surface_dismissals(surface, item_key, date);
+CREATE INDEX IF NOT EXISTS idx_surface_dismissals_lookup
+  ON surface_dismissals(surface, item_key);
 `);
 
 runMigrations(db);

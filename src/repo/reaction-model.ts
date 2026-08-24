@@ -41,6 +41,11 @@ import { weeklyTonnage, weeklyKm } from "./program-state.js";
 // imports upward and the name stays a single source of truth.
 import { DAY_READ_ADHERENCE_METRIC } from "./brain/read-adherence.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
+// Rollback-as-evidence (W3.2): brain_rollbacks was written on every reversible
+// decision but never read back as a signal about the decision KIND itself. See
+// rollbackEvidenceByKind's doc comment for why this stays a small standalone
+// read rather than folding into evaluatedDecisionRows' verdict pipeline.
+import { rollbackEvidenceByKind, ROLLBACK_EVIDENCE_WEIGHT } from "./brain-decisions.js";
 import type {
   CoachOutcomeLearning,
   CoachPersonalModifier,
@@ -917,6 +922,32 @@ function easyPaceEfficiency(): ReactionPattern | null {
   };
 }
 
+// ---- rollback evidence: a decision kind the athlete has actually undone ------
+// A single revert already means something (an athlete doesn't undo an applied
+// change idly), but this pattern only fires on a REPEAT — the same discipline
+// item 2's dismissal suppression uses — so one bad call in an otherwise sound
+// kind doesn't read as a standing pattern. `ROLLBACK_EVIDENCE_WEIGHT` rides along
+// in `params` for W3.1's kind-weighting table to read; it is internal, like every
+// params blob here, and never reaches the athlete-facing statement as a number.
+const ROLLBACK_REPEAT_THRESHOLD = 2;
+
+function rollbackSignal(): ReactionPattern | null {
+  const groups = rollbackEvidenceByKind().filter((g) => g.count >= ROLLBACK_REPEAT_THRESHOLD);
+  if (!groups.length) return null;
+  const top = [...groups].sort((a, b) => b.count - a.count)[0];
+  const label = top.kind.replace(/_/g, " ").trim() || "that";
+  return {
+    id: `rollback_${top.kind}`,
+    kind: "rollback_evidence",
+    statement: `You've undone a ${label} change more than once — worth treating the next one as a proposal to talk through rather than a quiet default.`,
+    confidence: top.count >= 3 ? "strong" : "observed",
+    evidence_n: top.count,
+    domains: [top.domain].filter(Boolean),
+    last_observed: top.last_reverted_at,
+    params: { weight: ROLLBACK_EVIDENCE_WEIGHT },
+  };
+}
+
 // ---- assembly ---------------------------------------------------------------
 
 export function buildReactionModel(): { version: number; patterns: ReactionPattern[]; built_at_note?: string } {
@@ -939,6 +970,7 @@ export function buildReactionModel(): { version: number; patterns: ReactionPatte
   candidates.push(safe(interventionMarker));
   candidates.push(safe(mileageRecovery));
   candidates.push(safe(easyPaceEfficiency));
+  candidates.push(safe(rollbackSignal));
 
   const patterns = candidates.filter((p): p is ReactionPattern => p != null);
   return { version: REACTION_MODEL_VERSION, patterns };

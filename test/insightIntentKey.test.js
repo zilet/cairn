@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 import { insightCacheKey, insightVerdict } from "../dist/coachOps.js";
 import { buildInsightPrompt } from "../dist/prompt.js";
+import { connectedBrainRouter } from "../dist/routes/connected-brain.js";
 
 const {
   parseInsightIntentKey,
@@ -455,6 +456,56 @@ test("the downvoted-key union is bounded by DOWNVOTED_KEY_LIMIT", () => {
 });
 
 // ---------------------------------------------------------------------------
+// (W3.2) repeated dismissals suppress SOFTLY, through the same corpus a
+// thumbs-down feeds — never from one idle tap.
+// ---------------------------------------------------------------------------
+
+test("one dismissal does not suppress; a second DISTINCT day does, through the same corpus a downvote uses", () => {
+  const key = `${PROTEIN_SLEEP}:same`;
+
+  repo.recordDismissal("insight", key, "2026-08-10");
+  let corpus = insightIntentCorpus();
+  assert.ok(!corpus.keys.includes(key), "one idle dismissal teaches nothing");
+
+  repo.recordDismissal("insight", key, "2026-08-11");
+  corpus = insightIntentCorpus();
+  assert.ok(corpus.keys.includes(key), "a second DISTINCT day earns soft suppression");
+  assert.equal(isDuplicateInsightIntent(key, corpus.keys), true);
+
+  // Soft, not permanent: this is the SAME dedupe/prompt-covered mechanism the
+  // downvote path already drives (verdict rejection), not a separate hard block.
+  const verdict = insightVerdict({
+    parsed: {
+      found: true,
+      text: "Sleep seems to hold up better on your higher-protein days.",
+      connection: {
+        a: { facet: "sleep.quality", direction: "down" },
+        b: { facet: "nutrition.protein", direction: "down" },
+      },
+    },
+    kind: "connection",
+    keyCorpus: corpus.keys,
+    recentTexts: [],
+  });
+  assert.equal(verdict.accept, false);
+});
+
+test("a dismissal recorded with an unresolvable item_key never contaminates the corpus", () => {
+  repo.recordDismissal("insight", "not a real intent key", "2026-08-10");
+  repo.recordDismissal("insight", "not a real intent key", "2026-08-11");
+  const corpus = insightIntentCorpus();
+  assert.ok(!corpus.keys.includes("not a real intent key"), "an unparseable key is filtered, never surfaced as-is");
+});
+
+test("dismissals on the today_agenda surface never leak into the insight corpus", () => {
+  const key = `${PROTEIN_SLEEP}:same`;
+  repo.recordDismissal("today_agenda", key, "2026-08-10");
+  repo.recordDismissal("today_agenda", key, "2026-08-11");
+  const corpus = insightIntentCorpus();
+  assert.ok(!corpus.keys.includes(key), "today_agenda dismissals are a different surface, read separately");
+});
+
+// ---------------------------------------------------------------------------
 // (10) cache identity and guard identity are the same model
 // ---------------------------------------------------------------------------
 
@@ -667,4 +718,54 @@ test("a chatty 90 days is capped before it reaches the prompt", () => {
   // Newest first: the corpus arrives id-DESC, so the cut drops the OLDEST rows.
   assert.match(prompt, /Unkeyable observation number 49/, "the newest unkeyed row survives the cut");
   assert.doesNotMatch(prompt, /Unkeyable observation number 0,/, "the oldest does not");
+});
+
+// ---------------------------------------------------------------------------
+// (W3.2) PUT /api/insights/:id — a client 'dismissed' status now also records
+// repetition-gated dismissal evidence (surface_dismissals), separate from the
+// existing feedback:'up'/'down' path this route already had.
+// ---------------------------------------------------------------------------
+
+function putInsight(id, body) {
+  const layer = connectedBrainRouter.stack.find(
+    (entry) => entry.route?.path === "/insights/:id" && entry.route?.methods?.put
+  );
+  let status = 200;
+  let payload = null;
+  const res = {
+    status(value) {
+      status = value;
+      return this;
+    },
+    json(value) {
+      payload = value;
+      return this;
+    },
+  };
+  layer.route.stack.at(-1).handle({ params: { id: String(id) }, body }, res);
+  return { status, payload };
+}
+
+test("dismissing an insight with a stored intent key writes dismissal evidence, not feedback", () => {
+  const key = `${PROTEIN_SLEEP}:same`;
+  const row = repo.addInsight({ kind: "connection", text: "Your protein intake and sleep quality look linked.", intent_key: key });
+
+  const { payload } = putInsight(row.id, { status: "dismissed" });
+  assert.equal(payload?.status, "dismissed");
+  assert.equal(payload?.feedback, null, "a dismiss is not a thumbs-down");
+  assert.equal(repo.dismissalDayCount("insight", key), 1);
+});
+
+test("dismissing an insight with no resolvable intent key records nothing (skip, never invent a key)", () => {
+  const row = repo.addInsight({ kind: "connection", text: "Something ambiguous happened this week." });
+  putInsight(row.id, { status: "dismissed" });
+  const rows = db.prepare("SELECT COUNT(*) AS n FROM surface_dismissals").get();
+  assert.equal(rows.n, 0);
+});
+
+test("marking an insight merely 'seen' never writes dismissal evidence", () => {
+  const key = `${PROTEIN_SLEEP}:same`;
+  const row = repo.addInsight({ kind: "connection", text: "Your protein intake and sleep quality look linked.", intent_key: key });
+  putInsight(row.id, { status: "seen" });
+  assert.equal(repo.dismissalDayCount("insight", key), 0);
 });

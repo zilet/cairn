@@ -5,6 +5,9 @@ import {
   getBrainDecision,
   listBrainDecisions,
   listBrainExpectations,
+  rollbackEvidenceByKind,
+  ROLLBACK_EVIDENCE_WEIGHT,
+  saveBrainRollback,
   transitionBrainDecision,
 } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation, latestBrainEvaluation, recordBrainToolCall } from "../dist/repo/brain-evaluations.js";
@@ -73,6 +76,36 @@ test("reverting a decision preserves history and cancels pending expectations", 
   assert.ok(reverted.reverted_at);
   assert.equal(getBrainDecision(recorded.decision.id).status, "reverted");
   assert.equal(listBrainExpectations({ decisionId: recorded.decision.id })[0].status, "canceled");
+});
+
+// W3.2: brain_rollbacks was previously write-only (read back only to perform the
+// undo itself). rollbackEvidenceByKind reads it as evidence about the DECISION
+// KIND — a revert is the strongest available "no" (the change already applied
+// and the athlete deliberately undid it).
+test("a reverted decision with a rollback snapshot is visible as negative evidence for its kind", () => {
+  const recorded = recordDecision(decision(), [expectation()]);
+  saveBrainRollback(recorded.decision.id, "nutrition_target", { target_kcal: 2200 });
+  transitionBrainDecision(recorded.decision.id, "reverted");
+
+  const groups = rollbackEvidenceByKind();
+  const group = groups.find((g) => g.kind === "nutrition_target");
+  assert.ok(group, "the decision's own kind ('nutrition_target') is the grouping key, not the rollback snapshot kind");
+  assert.equal(group.count, 1);
+  assert.equal(group.domain, "nutrition");
+  assert.ok(group.last_reverted_at);
+});
+
+test("rollback evidence is scoped to REVERTED decisions only — applied/kept decisions never count", () => {
+  const recorded = recordDecision(decision(), [expectation()]);
+  saveBrainRollback(recorded.decision.id, "nutrition_target", { target_kcal: 2200 });
+  // Still 'applied' — never transitioned to reverted.
+  const groups = rollbackEvidenceByKind();
+  assert.ok(!groups.some((g) => g.kind === "nutrition_target"));
+});
+
+test("ROLLBACK_EVIDENCE_WEIGHT is a real number strictly under 1 (near-applied, never above it)", () => {
+  assert.ok(Number.isFinite(ROLLBACK_EVIDENCE_WEIGHT));
+  assert.ok(ROLLBACK_EVIDENCE_WEIGHT > 0 && ROLLBACK_EVIDENCE_WEIGHT < 1);
 });
 
 test("versioned evaluations append and the newest verdict is authoritative", () => {
