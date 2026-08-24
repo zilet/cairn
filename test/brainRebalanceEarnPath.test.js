@@ -17,7 +17,7 @@
 //   5. Nothing that held the day back ever said what would open it again.
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedTrainingDay } from "./_seed.js";
+import { db, repo, resetTables, seedSleep, seedTrainingDay } from "./_seed.js";
 import {
   DAY_READ_EARN_PATH_CONCEPT,
   DAY_READ_EARN_PATH_VARIANTS,
@@ -82,10 +82,20 @@ const seedOverriddenEasy = (date, performance = 4) => {
   if (performance != null) repo.setSessionFeedback(date, { performance });
 };
 
-// A recovery summary in the shape dayRead's `recovery` parameter takes. `avg_sleep_min`
-// under six hours is what puts the chronic-sleep watch on today — an easy read, and one
-// on the softenable allowlist.
-const THIN_SLEEP = { has_data: true, recovery: { avg_sleep_min: 300 }, quality: {} };
+// A recovery summary in the shape dayRead's `recovery` parameter takes. The chronic-
+// sleep watch needs a SAMPLE-FLOORED mean under six hours AND a current night that
+// is not itself short (a short last night is the REST path). n=1, or a window with
+// no current night, is absence — never a trend.
+function thinSleep(date = REF) {
+  seedSleep(dayBefore(date, 1), 420);
+  return {
+    has_data: true,
+    recovery: { avg_sleep_min: 300 },
+    quality: {
+      sleep_min: { sample_count: 5, expected_days: 14, window_days: 14, freshness: "fresh" },
+    },
+  };
+}
 
 // ── 1. recoveryDown wants a BAND, not a sign ────────────────────────────────
 
@@ -185,7 +195,7 @@ test("the run-volume holds say what opens them again", () => {
 test("three easy mornings taken above easy without cost open today's easy read to a training day", () => {
   for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
 
   assert.equal(r.kind, "train");
   assert.equal(r.decision.rule_code, "outcome_feedback_open");
@@ -209,7 +219,7 @@ test("the opened day takes the session that was actually due", () => {
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
   for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.kind, "train");
   assert.equal(r.focus, "Lower body", "an opened day with nothing in it would be worse than the easy read");
   assert.equal(r.est_minutes, 60);
@@ -218,7 +228,7 @@ test("the opened day takes the session that was actually due", () => {
 test("two is a coincidence — the easy read stands", () => {
   for (const back of [2, 4]) seedOverriddenEasy(dayBefore(REF, back));
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.kind, "easy");
   assert.notEqual(r.decision.rule_code, "outcome_feedback_open");
   assert.equal(r.signals.easy_outcome_feedback.active, false);
@@ -231,7 +241,7 @@ test("an easy morning they actually took easy resets the count", () => {
   // ...then one they agreed with — an easy read, nothing above easy logged.
   seedMorningRead(dayBefore(REF, 4), "easy");
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.kind, "easy", "agreeing with the read starts the count over");
   assert.equal(r.signals.easy_outcome_feedback.active, false);
   assert.equal(r.signals.easy_outcome_feedback.last_honored_easy, dayBefore(REF, 4));
@@ -241,7 +251,7 @@ test("an easy morning they actually took easy resets the count", () => {
 test("sessions that went badly are not evidence that outrunning the read was fine", () => {
   for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back), 2);
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.signals.easy_outcome_feedback.active, false);
   assert.deepEqual(r.signals.easy_outcome_feedback.overridden_and_fine, []);
   assert.notEqual(r.decision.rule_code, "outcome_feedback_open");
@@ -250,7 +260,7 @@ test("sessions that went badly are not evidence that outrunning the read was fin
 test("an unrated session still counts — silence is not evidence of harm", () => {
   for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back), null);
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.decision.rule_code, "outcome_feedback_open");
   assert.equal(r.kind, "train");
 });
@@ -259,7 +269,7 @@ test("nothing clinical is ever opened, whatever the history says", () => {
   for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
   repo.addContextEvent({ kind: "injury", title: "Achilles niggle", start_date: dayBefore(REF, 5) });
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
   assert.notEqual(r.kind, "train");
   assert.equal(r.signals.easy_outcome_feedback.active, true, "the pattern is still on the board…");
   assert.equal(r.signals.easy_outcome_feedback.applied, false, "…and it is still not allowed to move this day");
@@ -276,7 +286,7 @@ test("a reduced week is a structure the athlete signed up for, not a read to out
   });
   repo.activateRecoveryCycle(cycle.id, REF);
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.signals.easy_outcome_feedback.applied, false);
   assert.notEqual(r.decision.rule_code, "outcome_feedback_open");
 });
@@ -290,7 +300,7 @@ test("the two ladders never compose into rest → train", () => {
     repo.setSessionFeedback(dayBefore(REF, back), { performance: 4 });
   }
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.signals.easy_outcome_feedback.active, false, "a softened easy morning belongs to the rest ladder");
   assert.notEqual(r.decision.rule_code, "outcome_feedback_open");
 });
@@ -304,7 +314,7 @@ test("the softening sustains itself: its own opened mornings keep the evidence a
   seedTrainingDay(dayBefore(REF, 2));
   repo.setSessionFeedback(dayBefore(REF, 2), { performance: 4 });
 
-  const r = repo.dayRead(REF, THIN_SLEEP);
+  const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.signals.easy_outcome_feedback.active, true);
   assert.equal(r.decision.rule_code, "outcome_feedback_open");
 });
@@ -347,7 +357,7 @@ const planDay = () =>
 
 test("a BOOKKEEPING caveat no longer withdraws the push", () => {
   planDay();
-  const r = repo.dayRead(REF, THIN_SLEEP, backedState(REF));
+  const r = repo.dayRead(REF, thinSleep(), backedState(REF));
 
   assert.equal(r.kind, "train");
   assert.ok(r.signals.push_bias, "a chronic sleep trend is not a statement about today's capacity");
@@ -364,7 +374,7 @@ test("a SAFETY caveat still withdraws it — an injury being worked around", () 
   planDay();
   repo.addContextEvent({ kind: "injury", title: "Shoulder strain", start_date: REF });
 
-  const r = repo.dayRead(REF, THIN_SLEEP, backedState(REF));
+  const r = repo.dayRead(REF, thinSleep(), backedState(REF));
   assert.equal(r.signals.push_bias, undefined);
   for (const push of DAY_READ_WHY_VARIANTS.planned_training_push) {
     assert.equal(r.why.includes(push), false, `a day being worked around read as a push — ${push}`);
@@ -385,7 +395,7 @@ test("…and a reduced week still withdraws it", () => {
   });
   repo.activateRecoveryCycle(cycle.id, REF);
 
-  const r = repo.dayRead(REF, THIN_SLEEP, backedState(REF));
+  const r = repo.dayRead(REF, thinSleep(), backedState(REF));
   assert.equal(r.signals.push_bias, undefined, "reaching inside a reduced week is reaching against it");
 });
 
