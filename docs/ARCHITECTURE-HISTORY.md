@@ -4,6 +4,24 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-24 — the daily open is one call, and chat stops interviewing
+
+NO schema change; `public/sw.js` `CACHE` `cairn-v551`. Two cuts so the morning open reads like a
+Garmin Morning Report rather than a dashboard of specialists. **Interview kill:** `buildChatPrompt`
+(`src/prompt/chat.ts`) drops `PROGRESSIVE UNDERSTANDING` (the one-brief-question-when-DATA-shows-a-gap
+rule) for `NO INTERVIEW` — chat logs and honors overrides, infers from signals, estimates out loud at
+stated confidence or stays silent, and the only allowed ask is a missing measurement that would
+change today's call. Skipping or training through a rest day is the answer; no why-chip, no "what
+happened?". The supplements understand-don't-interrogate spirit now covers the whole conversation.
+**Today = Brief + one action:** `TODAY_PRIMARY_MAX` is 0 (`src/repo/today-agenda.ts`, mirrored by
+`TODAY_PRIMARY_CLIENT_MAX` and REST/MCP copy), so supporting cards wait behind one quiet "more". The
+Brief stays the hero even when `today-attention` names another surface; rest days have no primary
+Start / train-anyway launch (quiet steer remains); easy days compose walk/zone-2 rather than a
+reduced lift; a shortened train day says so on the launch CTA. Clinical/conductor stay off the daily
+surface. Tests pin the prompt, the empty primary, the one-action Brief, and easy-day composition.
+
+---
+
 ## 2026-08-24 — the calendar can hold today, and a lab draw says which half
 
 The look-ahead's second act (NO schema change). The 2026-08-23 fix taught the day read what tomorrow

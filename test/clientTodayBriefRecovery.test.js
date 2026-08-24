@@ -44,7 +44,7 @@ const RECOVERY = {
   ],
 };
 
-test("Today Brief renders the recovery menu on a rest day with escaped content", () => {
+test("Today Brief renders a quiet rest line and never consolation-workout options", () => {
   const brief = loadTodayBrief();
   const hostileRecovery = {
     line: "Take it easy <script>alert(1)</script> today.",
@@ -57,33 +57,24 @@ test("Today Brief renders the recovery menu on a rest day with escaped content",
 
   assert.match(html, /brief-recovery/);
   assert.match(html, /brief-recovery-line/);
-  assert.match(html, /brief-recovery-opt/);
+  assert.match(html, /Take it easy &lt;script&gt;alert\(1\)&lt;\/script&gt; today\./);
+  assert.doesNotMatch(html, /brief-recovery-opt|data-recovery-opt/);
   assert.doesNotMatch(html, /<script>alert/);
-  assert.doesNotMatch(html, /Easy <spin>/);
-  assert.doesNotMatch(html, /20 min & <b>/);
-  assert.match(html, /Easy &lt;spin&gt;/);
-  assert.match(html, /20 min &amp; &lt;b&gt;chill&lt;\/b&gt;/);
-  assert.match(html, /brief-recovery-opt-mins">· 20 min<\/span>/, "renders the option's minutes");
+  assert.doesNotMatch(html, /Easy <spin>|Easy &lt;spin&gt;/);
 });
 
-test("Today Brief recovery options are tappable and carry their own request", () => {
+test("Today Brief rest recovery options are not the one action", () => {
   const brief = loadTodayBrief();
   const html = brief.briefHtml(
     { kind: "rest", headline: "Rest today", why: "Nothing stacked up.", signals: {}, recovery: RECOVERY },
     { isToday: true }
   );
 
-  // Each option is a real button, not a div — one tap asks for exactly this
-  // session. The label/minutes/detail ride on the element so the handler never has
-  // to parse the rendered copy back into a request.
-  assert.match(html, /<button type="button" class="brief-recovery-opt"/);
-  assert.match(html, /data-recovery-opt="Mobility"/);
-  assert.match(html, /data-recovery-min="12"/);
-  assert.match(html, /data-recovery-detail="10–15 minutes for your hips and hamstrings\."/);
-  assert.equal((html.match(/data-recovery-opt=/g) || []).length, 2, "every option is tappable");
+  assert.match(html, /brief-recovery-line/);
+  assert.doesNotMatch(html, /brief-recovery-opt|data-recovery-opt/);
 });
 
-test("Today Brief recovery option with no minutes omits the minutes hook", () => {
+test("Today Brief recovery option payload never becomes a tap target", () => {
   const brief = loadTodayBrief();
   const html = brief.briefHtml(
     {
@@ -95,8 +86,8 @@ test("Today Brief recovery option with no minutes omits the minutes hook", () =>
     },
     { isToday: true }
   );
-  assert.match(html, /data-recovery-opt="Mobility"/);
-  assert.doesNotMatch(html, /data-recovery-min=/);
+  assert.match(html, /Only if you feel like it\./);
+  assert.doesNotMatch(html, /data-recovery-opt|data-recovery-min/);
 });
 
 test("Today Brief renders no recovery menu on an easy day when the read carries none", () => {
@@ -108,13 +99,18 @@ test("Today Brief renders no recovery menu on an easy day when the read carries 
   assert.doesNotMatch(html, /brief-recovery/);
 });
 
-test("Today Brief never renders a recovery menu on a train day even if the payload carries one", () => {
+test("Today Brief never renders a recovery menu on an easy or train day even if the payload carries one", () => {
   const brief = loadTodayBrief();
-  const html = brief.briefHtml(
+  const easy = brief.briefHtml(
+    { kind: "easy", headline: "Easy today", why: "Keep it light.", signals: {}, recovery: RECOVERY },
+    { isToday: true }
+  );
+  const train = brief.briefHtml(
     { kind: "train", headline: "Push day", why: "Recovered and ready.", signals: {}, recovery: RECOVERY },
     { isToday: true }
   );
-  assert.doesNotMatch(html, /brief-recovery/);
+  assert.doesNotMatch(easy, /brief-recovery/);
+  assert.doesNotMatch(train, /brief-recovery/);
 });
 
 test("todayBriefMateriallyDiffers is true when only the recovery menu changed", () => {

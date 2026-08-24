@@ -453,10 +453,9 @@ function policyFor(need: MeasurementNeedKey, reason: string): CadencePolicy {
  * schedule says the request may be made today.
  *
  * PURE READ — never writes. The candidate's own priority (16) sits above the
- * quiet `lately` state card and below the goal check-in, so on a day with
- * anything real to show it lands behind the "more" disclosure and on a quiet day
- * it is inline — which is exactly when an ask for one small thing is welcome.
- * Whether it actually landed inline is not known until every candidate is ranked,
+ * quiet `lately` state card and below the goal check-in, so it waits behind the
+ * "more" disclosure on the daily open (primary stays empty). Whether it actually
+ * reached the seen set is not known until every candidate is ranked,
  * so this function cannot itself decide whether the request was genuinely seen;
  * call `reconcileMeasurementRequestAttention` once placement is known.
  */

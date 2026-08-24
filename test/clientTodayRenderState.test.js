@@ -31,11 +31,12 @@ function derive(input) {
   });
 }
 
-test("Today render state opens the plan from a train read or existing work", () => {
+test("Today render state opens the plan from a train or easy read or existing work", () => {
   assert.equal(derive({ read: { kind: "train" } }).showPlan, true);
   assert.equal(derive({ session: { sets: [{ exercise: "Squat" }] } }).showPlan, true);
   assert.equal(derive({ session: { garmin: { activity_id: 1 } } }).showPlan, true);
-  assert.equal(derive({ read: { kind: "easy" } }).showPlan, false);
+  assert.equal(derive({ read: { kind: "easy" } }).showPlan, true);
+  assert.equal(derive({ read: { kind: "rest" } }).showPlan, false);
 });
 
 test("Today render state keeps finished today in done mode unless explicitly revealed", () => {

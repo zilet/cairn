@@ -838,6 +838,8 @@ export interface ClientDailySessionPreview {
   focus: string | null;
   item_count: number;
   est_minutes: number | null;
+  /** Same-pattern train day shortened for sleep/soreness — Today CTA says so. */
+  shortened?: boolean;
   constraints: string[];
   primary_rationale: string;
 }

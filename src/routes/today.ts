@@ -67,9 +67,9 @@ todayRouter.get("/today-plan-day", (req, res) => {
 });
 
 // The Today salience arbiter: ONE ranking + budget pass over the whole Today
-// surface, so only the 1-2 things that matter most today render inline and the
-// rest collapse behind a quiet "more". Marking "seen" at the end (debounced)
-// powers the "since you last looked" continuity line.
+// surface. The Brief is the hero; supporting cards collapse behind a quiet
+// "more" (primary stays empty). Marking "seen" at the end (debounced) powers
+// the "since you last looked" continuity line.
 todayRouter.get("/today-agenda", (req, res) => {
   const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
     ? req.query.date

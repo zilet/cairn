@@ -6636,7 +6636,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(todayScreenRuntimeSource, /CairnTodayPlanSelection\.suggestedPlanDayNumber/);
   assert.doesNotMatch(today, /function\s+planDayNumberForSession|function\s+nextPlanDayNumber/);
-  assert.match(today, /coachingFocusThreadHtml\(conductor\)/);
+  assert.doesNotMatch(today, /coachingFocusThreadHtml\(conductor\)/);
   assert.match(todayScreenRuntimeSource, /CairnTodayTraining\.exRxLineHtml/);
   assert.match(todayCompatibilityBridges, /CairnTodayProgressionController\.scheduleRxRefresh/);
   assert.match(todayCompatibilityBridges, /CairnTodayProgressionController\.invalidateTodayProgression/);

@@ -111,12 +111,11 @@ type TodayBriefHtmlOptions = {
     return primary || "";
   }
 
-  // The Brief yields the lead only when the server says another surface earns it.
-  // It never disappears and loses nothing — it stays first on the page, carrying
-  // every control it had; `brief-quiet` is purely the emphasis hook.
+  // The Brief is always the hero of the daily open. Attention may still name a
+  // supporting surface (feedback on the done card); it never de-emphasizes the call.
   function todayBriefYieldsLead(read: TodayBriefRead | null | undefined): boolean {
-    const primary = todayBriefAttentionPrimary(read);
-    return !!primary && primary !== "brief";
+    void read;
+    return false;
   }
 
   function todayBriefAgentOffline(status: unknown): boolean {
@@ -185,53 +184,16 @@ type TodayBriefHtmlOptions = {
     return reason && normalized(reason) !== normalized(read?.why) ? reason : "";
   }
 
-  // The guided recovery menu on a rest/easy day: a short optional line + a
-  // handful of low-key rows. Each row is now a TAP — the owner asked for the menu
-  // to be actionable ("tap on that gentle mobility and get that plan running
-  // today"), so an option carries its own minutes/focus/detail and hands them to
-  // the session-suggest lane. The invitation is unchanged: nothing is required,
-  // resting is still a perfectly good answer beside every option, and the tap only
-  // happens when the athlete makes it. Rendered only for rest/easy kinds; a
-  // train/done read (or an absent/malformed payload) gets nothing. Every
-  // interpolated string is escaped.
+  // Rest day's action is rest — not a consolation workout. Keep a quiet line if
+  // the payload has one; never render tappable recovery options as the one action.
+  // Easy day's action is the walk/zone-2 launch card, not this menu.
   function todayBriefRecoveryHtml(read: TodayBriefRead | null | undefined, kind: string): string {
-    if (kind !== "rest" && kind !== "easy") return "";
-    const recovery = read?.recovery as { line?: unknown; options?: unknown } | null | undefined;
+    if (kind !== "rest") return "";
+    const recovery = read?.recovery as { line?: unknown } | null | undefined;
     if (!recovery || typeof recovery !== "object") return "";
     const line = recovery.line == null ? "" : String(recovery.line).trim();
-    const options = Array.isArray(recovery.options) ? recovery.options : [];
-    const rows = options
-      .map((opt) => {
-        const o = (opt && typeof opt === "object" ? opt : {}) as {
-          label?: unknown;
-          detail?: unknown;
-          minutes?: unknown;
-        };
-        const label = o.label == null ? "" : String(o.label).trim();
-        const detail = o.detail == null ? "" : String(o.detail).trim();
-        if (!label && !detail) return "";
-        const minutesNum = o.minutes == null ? null : Number(o.minutes);
-        const mins =
-          minutesNum != null && Number.isFinite(minutesNum) && minutesNum > 0
-            ? ` <span class="brief-recovery-opt-mins">· ${escHtml(String(Math.round(minutesNum)))} min</span>`
-            : "";
-        // minutes/detail ride on the element so the tap handler never has to
-        // re-parse the rendered copy back into a request.
-        const attrs = [
-          `data-recovery-opt="${escAttr(label)}"`,
-          minutesNum != null && Number.isFinite(minutesNum) && minutesNum > 0
-            ? `data-recovery-min="${escAttr(String(Math.round(minutesNum)))}"`
-            : "",
-          detail ? `data-recovery-detail="${escAttr(detail)}"` : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return `<button type="button" class="brief-recovery-opt" ${attrs}>${label ? `<span class="brief-recovery-opt-label">${escHtml(label)}${mins}</span>` : ""}${detail ? `<span class="brief-recovery-opt-detail">${escHtml(detail)}</span>` : ""}</button>`;
-      })
-      .filter(Boolean)
-      .join("");
-    if (!rows && !line) return "";
-    return `<div class="brief-recovery">${line ? `<p class="brief-recovery-line">${escHtml(line)}</p>` : ""}${rows ? `<div class="brief-recovery-list">${rows}</div>` : ""}</div>`;
+    if (!line) return "";
+    return `<div class="brief-recovery"><p class="brief-recovery-line">${escHtml(line)}</p></div>`;
   }
 
   function todayBriefUpdatedHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
@@ -266,8 +228,12 @@ type TodayBriefHtmlOptions = {
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
 
     const actions: string[] = [];
+    // One primary action. When the session launch card is already on Today
+    // (showPlan), it IS the action — Brief does not duplicate Start / Ask.
     if (kind === "train") {
-      actions.push(todayBriefRedirect("start-session", "Start session", true));
+      if (!options.showPlan) actions.push(todayBriefRedirect("start-session", "Start session", true));
+    } else if (kind === "easy") {
+      if (!options.showPlan) actions.push(todayBriefRedirect("start-session", "Start easy session", true));
     } else if (kind === "done") {
       // A logged activity alone (no session row) can flip the read to "done"
       // with neither the finished-session card nor a revealed plan below —
@@ -276,16 +242,20 @@ type TodayBriefHtmlOptions = {
       if (!options.showPlan && !options.showDone) {
         actions.push(todayBriefRedirect("start-session", "Log training", false));
       }
-    } else if (!options.showPlan) {
-      actions.push(todayBriefRedirect("reveal-plan", "Train anyway", false));
     }
-    if (kind !== "done") actions.push(todayBriefRedirect("ask-session", "Ask for a session", false));
+    // Rest day's action is rest. No lifting plan, no "train anyway" as the
+    // primary button. Quiet overrides (steer chips + a quiet train-anyway)
+    // may remain below.
 
     const activeOverride = String(options.activeOverride || "");
     const steered = !!activeOverride;
     const overrides = todayBriefVisibleOverrides({ kind, estMinutes, activeOverride });
+    const quietTrainAnyway =
+      options.isToday && kind === "rest" && !options.showPlan
+        ? todayBriefRedirect("reveal-plan", "Train anyway", false)
+        : "";
     let steer = "";
-    if (options.isToday && kind !== "done" && (overrides.length || steered)) {
+    if (options.isToday && kind !== "done" && (overrides.length || steered || quietTrainAnyway)) {
       const optBtns = overrides
         .map(
           (option) =>
@@ -295,7 +265,7 @@ type TodayBriefHtmlOptions = {
       const reset = steered ? `<button class="brief-steer-reset" data-steerreset>back to today's read</button>` : "";
       steer = `<div class="brief-steer">
         <span class="brief-steer-lead">${steered ? "Changed your mind?" : "Not quite right?"}</span>
-        <span class="brief-steer-opts">${optBtns}</span>
+        <span class="brief-steer-opts">${optBtns}${optBtns && quietTrainAnyway ? `<span class="brief-steer-dot" aria-hidden="true">·</span>` : ""}${quietTrainAnyway}</span>
         ${reset}
       </div>`;
     }

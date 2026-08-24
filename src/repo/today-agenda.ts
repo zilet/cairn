@@ -13,10 +13,11 @@
 // Each existing Today card has a producer here that reads the SAME repo data the
 // client uses to decide whether that card shows, and assigns a deterministic
 // `priority` (0..100) reflecting genuine importance TODAY. Empty data → the
-// candidate is omitted (priority <= 0). The Brief is ALWAYS the hero. The top
-// TODAY_PRIMARY_MAX non-hero candidates render inline; the rest collapse behind
-// one quiet "more". No scores cross to the user — `priority` is internal, exactly
-// like marker `impact_score`; the client renders placement, never the number.
+// candidate is omitted (priority <= 0). The Brief is ALWAYS the hero. Supporting
+// cards collapse behind one quiet "more" (`TODAY_PRIMARY_MAX` is 0 — the daily
+// open is Brief + one action, not a rail of specialists). No scores cross to the
+// user — `priority` is internal, exactly like marker `impact_score`; the client
+// renders placement, never the number.
 //
 // Pure, deterministic, null-safe. Every producer read is wrapped in its own
 // try/catch so one failing source never breaks the agenda — graceful: no data →
@@ -114,15 +115,16 @@ export type TodayAgenda = {
 
 // The attention budget: at most this many candidates render inline as `primary`;
 // everything else with a positive priority collapses behind the quiet "more".
-export const TODAY_PRIMARY_MAX = 2;
+// 0 = the daily open is the Brief plus one action; supporting cards wait in more.
+export const TODAY_PRIMARY_MAX = 0;
 
 // ---- the surprise budget: one NEW thing inline per day ---------------------
 // The brain already budgets material coaching changes (~1/domain/week); this is
 // the SURFACE-level counterpart. At most ONE never-before-surfaced attention
 // item — a new health revision, a fresh insight or weekly read, a waiting plan
-// draft — is introduced INLINE per local day. Later newcomers wait behind the
-// quiet "more" disclosure (pull, never push) and take the inline slot on a
-// later day. Routine state cards (fuel, reconcile, lately, week-ahead…), the
+// draft — is recorded per local day so the "· one new" whisper on more can
+// clear. Later newcomers wait behind the quiet "more" disclosure (pull, never
+// push). Routine state cards (fuel, reconcile, lately, week-ahead…), the
 // hero, and announced brain changes (accountability must never be hidden by
 // presentation) are never budgeted. The ledger lives in app_state as a bounded
 // { "<id>:<revision|title>": "YYYY-MM-DD introduced" } map.
@@ -168,8 +170,23 @@ function applySurpriseBudget(
   let slots = maxInline;
   let dirty = false;
   for (const c of ordered) {
-    if (slots <= 0) break;
-    if (SURPRISE_IDS.has(c.id) && !(introSig(c) in ledger)) {
+    const isNewcomer = SURPRISE_IDS.has(c.id) && !(introSig(c) in ledger);
+    if (slots <= 0) {
+      // No inline slots (the daily open keeps primary empty): still spend the
+      // day's one introduction so "· one new" on more clears for that item, and
+      // later newcomers wait.
+      if (isNewcomer) {
+        if (allowance > 0) {
+          allowance -= 1;
+          ledger[introSig(c)] = today;
+          dirty = true;
+        } else {
+          deferred.add(c.id);
+        }
+      }
+      continue;
+    }
+    if (isNewcomer) {
       if (allowance > 0) {
         allowance -= 1;
         ledger[introSig(c)] = today;
@@ -920,31 +937,37 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   }
 
   // Budget: the top TODAY_PRIMARY_MAX become `primary` (rendered inline); the rest
-  // become `more` (collapsed behind one quiet disclosure). The arbiter may DEMOTE a
-  // producer's suggested tier here, never promote it — placement is the arbiter's.
-  // A held-out newcomer skips the inline tier (its slot backfills) but keeps its
+  // become `more` (collapsed behind one quiet disclosure). When MAX is 0 the daily
+  // open keeps primary empty — Brief + one action — and every supporting card waits
+  // in more. The arbiter may DEMOTE a producer's suggested tier here, never promote
+  // it. A held-out newcomer skips the inline tier (its slot backfills) but keeps its
   // sorted position among "more" — waiting, never gone.
   const inline = ordered.filter((c) => !heldOut.has(c.id));
   const primary = inline.slice(0, TODAY_PRIMARY_MAX).map((c) => ({ ...c, tier: "primary" as const }));
   const primaryIds = new Set(primary.map((c) => c.id));
+  // When nothing renders inline, more is the surface a human can actually open.
+  // Spend sensor/measurement offers against that set so MAX=0 cannot burn the
+  // ladder by never counting a card as seen.
+  const seenIds = TODAY_PRIMARY_MAX > 0 ? primaryIds : new Set(ordered.map((c) => c.id));
 
-  // The sensor-recheck offer may ONLY be spent now that placement is actually
-  // known: a card the priority sort buried behind "more" was never seen, and
-  // burning one of its ~4 offers on a card nobody saw would burn the ladder out
-  // silently. Mirrors the surprise budget's own live-day / human-pass gate above;
-  // `reconcileSensorRecheckAttention` also clears a resolved episode regardless of
-  // placement (that's cleanup, not spending, so it isn't gated on `surfaced`).
+  // The sensor-recheck offer is spent now that placement is known. When MAX is
+  // 0, more is the surface a human can open, so a card there counts as seen —
+  // otherwise the ladder would never tick. When MAX > 0, only inline primary
+  // spends (a card buried in more was never shown). Mirrors the surprise
+  // budget's own live-day / human-pass gate above; `reconcileSensorRecheckAttention`
+  // also clears a resolved episode regardless of placement (that's cleanup, not
+  // spending, so it isn't gated on `surfaced`).
   if (d === localDateISO() && opts.markIntroduced !== false) {
     try {
-      reconcileSensorRecheckAttention(d, primaryIds.has("sensor-recheck"));
+      reconcileSensorRecheckAttention(d, seenIds.has("sensor-recheck"));
     } catch {
       /* presentation-only; a failed write just re-offers (or re-cleans) next time */
     }
     try {
       // Same contract, one need at a time: the ask is spent only for the request
-      // that actually reached the inline set, and every retired need is swept
+      // that actually reached the seen set, and every retired need is swept
       // regardless of placement.
-      const surfaced = [...primaryIds].find((id) => id.startsWith("measurement-request-")) ?? null;
+      const surfaced = [...seenIds].find((id) => id.startsWith("measurement-request-")) ?? null;
       reconcileMeasurementRequestAttention(d, surfaced);
     } catch {
       /* presentation-only; a failed write just re-asks (or re-cleans) next time */

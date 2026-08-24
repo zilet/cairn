@@ -69,6 +69,7 @@ export interface AdaptiveDailySessionPreview {
   focus: string | null;
   item_count: number;
   est_minutes: number | null;
+  shortened: boolean;
   constraints: string[];
   primary_rationale: string;
 }
@@ -700,6 +701,8 @@ export function buildAdaptiveDailySessionCandidate(
       focus: prepared.payload.focus,
       item_count: prepared.payload.items.length,
       est_minutes: prepared.payload.est_minutes,
+      shortened:
+        decision.envelope.kind === "train" && decision.envelope.caps.volume === "reduced",
       constraints: athleteFacingPreviewConstraints(decision.envelope),
       primary_rationale:
         boundedProse(decision.envelope.rationale[0]?.text, 300) ??

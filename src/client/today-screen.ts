@@ -91,7 +91,6 @@ const todayRenderState = (
 const {
   sessionDeps: todaySessionDeps,
   setupAddExercise,
-  loadHealthFocusBanner,
   postExerciseMode: todayRuntimePostExerciseMode,
   reconnectSessionSuggest: todayRuntimeReconnectSessionSuggest,
   reconnectDayReadOverride: todayRuntimeReconnectDayReadOverride,
@@ -133,10 +132,11 @@ async function reshapeToday(): Promise<void> {
 // can stack into a dashboard — exactly the calm-by-default pressure Era 2 relieves.
 // GET /api/today-agenda runs ONE deterministic ranking + budget pass server-side
 // (src/repo/today-agenda.ts), returning { hero, primary[], more[], total }. The
-// arbiter changes PLACEMENT, never the cards: the top 1–2 surfaces render inline,
-// the rest collapse behind one quiet "more". The rich existing cards are reused
-// verbatim — we just order their stable slots by the agenda and tuck the lower-
-// ranked ones into a disclosure. Pull, never push; it can only ever REDUCE.
+// arbiter changes PLACEMENT, never the cards: primary stays empty so the Brief
+// is the one call, and supporting cards collapse behind one quiet "more". The
+// rich existing cards are reused verbatim — we just order their stable slots
+// by the agenda and tuck them into a disclosure. Pull, never push; it can only
+// ever REDUCE.
 //
 // Which existing rail client_card maps to which loader fn (the loader binds to the
 // slot id; we only move where the slot lives). Generic Era-2 candidates (no
@@ -332,9 +332,9 @@ async function renderToday(opts: any = {}) {
   // the capture row, where the week-ahead/reads naturally sat before.
   //
   // Era 2 — the SALIENCE ARBITER governs the rail. GET /api/today-agenda runs one
-  // deterministic ranking + budget pass and tells us which 1–2 surfaces matter most
-  // today (primary, inline) vs which collapse behind one quiet "more". We build the
-  // rail from that, reusing the rich existing cards verbatim (their slots, ordered).
+  // deterministic ranking + budget pass; primary stays empty (Brief + one action)
+  // and supporting cards collapse behind one quiet "more". We build the rail from
+  // that, reusing the rich existing cards verbatim (their slots, ordered).
   // Best-effort: a null agenda (route not wired / offline) falls back to the CURRENT
   // fixed rail so Today is never broken while the arbiter is half-integrated. The
   // agenda is per-render (it reflects today's data), not SWR-cached.
@@ -353,7 +353,6 @@ async function renderToday(opts: any = {}) {
   const renderedDate = todayState.logDate;
   const railToken = pollToken;
   const agendaPromise = CairnTodayRailController.fetchTodayAgenda(todayState.logDate, todayRailDeps());
-  const conductorPromise = todayApi("/coaching-focus").catch(() => null);
 
   let html = todayMainShell.leadHtml(
     {
@@ -468,10 +467,8 @@ async function renderToday(opts: any = {}) {
   } catch {}
 
   // Phase-1 wiring covers everything the user can act on immediately (capture,
-  // Brief, session launch, day switch, drafts, wearable). The RAIL and the standalone
-  // health lever are deferred to phase two: deferRail skips both rail loaders, and
-  // conductorLeads:true holds the health-lever load so the conductor can decide whether
-  // it shows at all — one voice, and no late-write race to clean up.
+  // Brief, session launch, day switch, drafts, wearable). The RAIL is deferred
+  // to phase two. Coach/conductor and clinical levers are not the daily surface.
   CairnTodayPostRenderWiring.wirePostRender(
     todayDeps().postRender({
       read,
@@ -495,25 +492,11 @@ async function renderToday(opts: any = {}) {
 
   todayDataLoader.scheduleSoftRepaint(todayData, todayDeps().dataRefresh());
 
-  // ---- PHASE 2: hydrate the conductor thread + agenda rail as they resolve ----
-  // Everything above painted without waiting on these two network reads. Fold them in
-  // now. Bail if the surface moved on (tab switch, date change, or a newer render
-  // superseded this one) so a stale read never lands on the wrong screen.
-  const [agenda, conductor] = await Promise.all([agendaPromise, conductorPromise]);
+  // ---- PHASE 2: hydrate the agenda rail as it resolves ----
+  // Brief is the one call; supporting cards wait behind "more". Bail if the
+  // surface moved on so a stale read never lands on the wrong screen.
+  const agenda = await agendaPromise;
   if (todayState.tab !== "today" || todayState.logDate !== renderedDate || pollToken !== railToken) return;
-
-  const conductorHtml = conductor ? coachingFocusThreadHtml(conductor) : "";
-  const conductorLeads = !!conductorHtml;
-  const cfocusSlot = todayView.querySelector("#cfocusSlot");
-  if (cfocusSlot) {
-    // Clicks on the thread ride the global [data-cfocus-go] delegate, so dropping the
-    // markup into the slot is enough — no per-render wiring to re-run.
-    cfocusSlot.innerHTML = conductorHtml;
-    cfocusSlot.classList.toggle("cfocus-thread-slot", conductorLeads);
-  }
-  // The standalone health lever was held in phase one; load it only when the conductor
-  // isn't already carrying the one highest-leverage line.
-  if (!conductorLeads) loadHealthFocusBanner();
 
   // Rail: render the agenda-driven structure (or the calm fallback) into the reserved
   // .today-rail slot, then run its loaders. railHtml() fills agendaGeneric in place,
@@ -524,10 +507,9 @@ async function renderToday(opts: any = {}) {
     railEl.outerHTML = agenda
       ? CairnTodayRailController.railHtml(agenda, agendaGeneric)
       : CairnTodayRailController.fallbackRailHtml(isToday);
-    // The LEAD arbitration (read.attention, server-owned): move whichever surface
-    // earned today's position of prominence out of the rail and into the main
-    // column BEFORE the loaders run, so each loader still finds its slot by id
-    // wherever it now lives. A payload without the decision changes nothing.
+    // Brief wins: promoteAttentionLead no longer hoists specialist cards into
+    // the main column (insight/weekly/fuel stay in more). Feedback, if named,
+    // is marked in place on the done card.
     CairnTodayRailController.promoteAttentionLead(todayView, read?.attention);
     if (agenda) CairnTodayRailController.runAgendaRail(agenda, agendaGeneric, todayRailDeps());
     else CairnTodayRailController.runFallbackRail(isToday, todayRailDeps());
@@ -1125,7 +1107,14 @@ function sessionLaunchCardHtml(opts: {
     (opts.read && opts.read.est_minutes ? Number(opts.read.est_minutes) : null);
   const est = estimate ? `~${Number(estimate)} min` : "";
   const meta = [sub, est].filter(Boolean).join("  ·  ");
-  const cta = started ? "Continue" : "Start";
+  const cta = started
+    ? "Continue"
+    : opts.preview?.shortened === true ||
+        (opts.dailySession?.decision?.kind === "train" &&
+          (opts.dailySession as { provenance?: { daily_decision?: { caps?: { volume?: unknown } } } })?.provenance
+            ?.daily_decision?.caps?.volume === "reduced")
+      ? "Start the shortened session"
+      : "Start";
   const objective = opts.strengthJourney?.available ? opts.strengthJourney.objective : null;
   const hasAnchor =
     !!objective?.exercise &&

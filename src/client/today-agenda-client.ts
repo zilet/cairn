@@ -20,7 +20,7 @@ const TODAY_RAIL_SLOTS: Record<string, string> = {
   "garmin-reconcile": `<div id="garminReconcileSlot" class="garmin-reconcile-slot card-stack-item"></div>`,
   lately: `<div id="qlRecent" class="ql-recent lately-slot card-stack-item"></div>`,
 };
-const TODAY_PRIMARY_CLIENT_MAX = 2;
+const TODAY_PRIMARY_CLIENT_MAX = 0; // Brief + one action; supporting cards wait in more
 
 function todayAgendaCanRenderCard(candidate: ClientTodayAgendaCandidate | null | undefined): boolean {
   if (!candidate) return false;

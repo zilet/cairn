@@ -208,6 +208,7 @@ test("Today rail controller fallback rail omits fuel and runs non-fuel fallback 
   const html = controller.fallbackRailHtml(true);
   assert.match(html, /weekAheadSlot/);
   assert.match(html, /adjustSlot/);
+  assert.match(html, /today-more/);
   assert.doesNotMatch(html, /fuelSlot/);
 
   const rootEl = new FakeElement("section");

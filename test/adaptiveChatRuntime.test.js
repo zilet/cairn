@@ -222,3 +222,15 @@ test("legacy custom providers run with provider defaults when adaptive defaults 
   assert.equal(bound.execution, null);
   assert.match(bound.unsupported, /does not support/i);
 });
+
+test("chat prompt forbids interviewing and filling profile holes", () => {
+  const prompt = buildChatPrompt([], "How am I doing today?", undefined, { lane: "coach" });
+  assert.match(prompt, /NO INTERVIEW/);
+  assert.match(prompt, /does not interview, questionnaire/);
+  assert.match(prompt, /estimate out loud at stated confidence or stay silent/);
+  assert.match(prompt, /only allowed ask is a missing measurement/);
+  assert.match(prompt, /Skipping a rest day or training through\s+a rest day IS the answer/);
+  assert.doesNotMatch(prompt, /PROGRESSIVE UNDERSTANDING/);
+  assert.doesNotMatch(prompt, /MAY ask ONE brief/);
+  assert.match(prompt, /UNDERSTAND, DON'T INTERROGATE/);
+});

@@ -1041,6 +1041,11 @@ arbitrates the main column's lead and can only ever reorder emphasis — it neve
 one, or removes a way in. The agenda's "the Brief is ALWAYS the hero" is its rail contract; relaxing
 it for the main column is precisely why this module exists. Do not merge them.
 
+The daily open still keeps the Brief as the one call regardless: `todayBriefYieldsLead`
+never de-emphasizes it, and `promoteAttentionLead` only marks finished-session feedback
+in place — insight/weekly/fuel stay behind "more". Attention labels still travel on the
+read (REST/MCP) so other surfaces can see what was news; they do not restyle Today.
+
 `ClientTodayAttention` in `src/contracts/client.ts` mirrors these types rather than importing them,
 because that module is the client-facing contract and imports nothing outside `src/contracts/`.
 
@@ -1090,10 +1095,11 @@ commitments, let `about_me` personalize tone) and HEALTH DIRECTIVES (fold nutrit
 directives in, respect `watch` items; an `uncertain`/uncited directive is a softer nudge).
 
 `buildHealthReviewPrompt`'s `HEALTH_REVIEW_SCHEMA` emits a `directives[]` array (persisted via
-`applyReviewDirectives`). `buildChatPrompt` adds a **PROGRESSIVE UNDERSTANDING** guardrail: when the
-DATA shows an obvious gap (no `about_me`, an unknown training-time / food like-dislike) the agent MAY
-ask ONE brief low-friction question and emit an `add_memory` action for the answer — never a
-questionnaire.
+`applyReviewDirectives`). `buildChatPrompt` forbids interviewing: chat logs and honors overrides; it
+does not questionnaire or fill profile holes (`about_me`, training-time, food likes). Infer from
+signals and usage; if something is missing, estimate out loud at stated confidence or stay silent.
+The only allowed ask is a missing measurement that would change today's call. The same
+understand-don't-interrogate spirit as supplements applies to the whole conversation.
 
 ### The prompt-boundary context projection (`src/prompt/context-projection.ts`)
 

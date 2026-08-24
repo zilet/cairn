@@ -49,7 +49,13 @@ type TodayRenderStateApi = {
     );
     const isFinished = !!(input.session && input.session.finished_at);
     const hasGarmin = !!(input.session && input.session.garmin);
-    const showPlan = !input.isToday || hasLoggedSets || hasGarmin || revealOn || input.read?.kind === "train";
+    const showPlan =
+      !input.isToday ||
+      hasLoggedSets ||
+      hasGarmin ||
+      revealOn ||
+      input.read?.kind === "train" ||
+      input.read?.kind === "easy";
     const showDone = isFinished && input.isToday && !revealOn;
 
     return {

@@ -271,6 +271,46 @@ test("rest envelopes reject cardio too and the deterministic composition is item
   assert.deepEqual(deterministicComposedSession(restEnvelope).items, []);
 });
 
+test("an easy-day envelope is walk or zone-2, not a reduced lift", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.savePlanDay(1, "Lower", "Squat day", [
+    { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 7, target_weight: 225 },
+  ]);
+  const easyEnvelope = envelope({
+    kind: "easy",
+    baseline_kind: "easy",
+    template: { day_number: 1, plan_day_id: repo.getPlanDay(1).id, focus: "Lower body", intent: "template" },
+    caps: { volume: "reduced", intensity: "easy", duration_min: 30 },
+    candidates: [
+      {
+        exercise: "Back Squat",
+        muscle_group: "quads",
+        action: "hold",
+        reason_code: "low_recovery_easy",
+        substitution_for: null,
+        note: null,
+        current_target: null,
+        authorized_target: null,
+        progression_evidence: null,
+      },
+    ],
+    rationale: [{ code: "low_recovery_easy", text: "Today reads as an easy day — keep it light and short." }],
+  });
+  const session = deterministicComposedSession(easyEnvelope);
+  assert.equal(session.name, "Easy movement");
+  assert.ok(session.items.every((item) => item.kind === "cardio"));
+  assert.ok(session.items.every((item) => item.exercise !== "Back Squat"));
+  assert.match(session.items[0].exercise, /Easy (walk|movement|cardio)/i);
+
+  const sneakyLift = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 185 }]),
+    easyEnvelope
+  );
+  assert.ok(sneakyLift.session);
+  assert.ok(sneakyLift.session.items.every((item) => item.kind === "cardio"));
+  assert.ok(sneakyLift.session.items.every((item) => item.exercise !== "Back Squat"));
+});
+
 test("easy and explicit train-anyway envelopes remove hard-cardio directives", () => {
   const hardCardio = agentSession(
     [

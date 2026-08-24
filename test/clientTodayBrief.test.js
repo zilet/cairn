@@ -62,7 +62,7 @@ test("Today Brief renders calm launch and steer controls safely", () => {
   assert.match(html, /Upper &lt;body&gt;/);
   assert.match(html, /recovered &amp; ready/);
   assert.match(html, /data-redirect="start-session"/);
-  assert.match(html, /data-redirect="ask-session"/);
+  assert.doesNotMatch(html, /data-redirect="ask-session"/);
   assert.match(html, /data-override="rough night"/);
   assert.match(html, /Next: legs &lt;tomorrow&gt;/);
   assert.doesNotMatch(html, /Hidden when forward exists|Push <today>|Upper <body>/);
@@ -322,7 +322,7 @@ test("Today Brief offers one quiet entry on a done read with nothing below to st
   assert.doesNotMatch(withPlan, /data-redirect=/);
 });
 
-test("Today Brief train/easy/rest actions are unaffected by the done-state entry fix", () => {
+test("Today Brief train/easy/rest actions follow the one-action contract", () => {
   const brief = loadTodayBrief();
 
   const train = brief.briefHtml(
@@ -332,22 +332,31 @@ test("Today Brief train/easy/rest actions are unaffected by the done-state entry
   assert.match(train, /data-redirect="start-session"/);
   assert.match(train, /brief-redirect-primary/);
   assert.match(train, /Start session/);
-  assert.doesNotMatch(train, /Log training/);
+  assert.doesNotMatch(train, /Log training|Ask for a session|Train anyway/);
+
+  const trainWithLaunch = brief.briefHtml(
+    { kind: "train", headline: "Push day", why: "", signals: {} },
+    { isToday: true, showPlan: true, showDone: false }
+  );
+  assert.doesNotMatch(trainWithLaunch, /data-redirect="start-session"|Ask for a session/);
 
   const easy = brief.briefHtml(
     { kind: "easy", headline: "Easy day", why: "", signals: {} },
     { isToday: true, showPlan: false }
   );
-  assert.match(easy, /data-redirect="reveal-plan"/);
-  assert.match(easy, /Train anyway/);
-  assert.match(easy, /data-redirect="ask-session"/);
+  assert.match(easy, /data-redirect="start-session"/);
+  assert.match(easy, /Start easy session/);
+  assert.doesNotMatch(easy, /Train anyway|Ask for a session/);
 
   const rest = brief.briefHtml(
     { kind: "rest", headline: "Rest day", why: "", signals: {} },
     { isToday: true, showPlan: false }
   );
+  assert.doesNotMatch(rest, /brief-launch/);
+  assert.doesNotMatch(rest, /Ask for a session/);
   assert.match(rest, /data-redirect="reveal-plan"/);
-  assert.match(rest, /data-redirect="ask-session"/);
+  assert.match(rest, /Train anyway/);
+  assert.doesNotMatch(rest, /brief-redirect-primary/);
 });
 
 test("Today Brief stops the thinking shimmer once a fetch has terminally failed", () => {

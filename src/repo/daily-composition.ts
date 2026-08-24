@@ -283,6 +283,23 @@ function topSetItemFor(backoff: any, candidate: any, dateISO: string): Record<st
 const HARD_CARDIO_LANGUAGE =
   /\b(?:all[- ]?out|anaerobic|fast|hard|hill repeats?|intervals?|race pace|sprints?|tempo|threshold|vo2(?:\s*max)?|z(?:one\s*)?[3-5])\b/i;
 
+function easyDayActionItem(envelope: DailyDecisionEnvelope, exercise = "Easy walk"): Record<string, unknown> {
+  const minutes = Math.min(envelope.caps.duration_min ?? 30, 40);
+  return {
+    kind: "cardio",
+    exercise,
+    target_duration_min: minutes,
+    target_zone: "easy",
+    note: "Easy conversational movement",
+  };
+}
+
+function keepEasyDayAction(items: Array<Record<string, unknown>>, envelope: DailyDecisionEnvelope): Array<Record<string, unknown>> {
+  const cardio = items.filter((item) => item.kind === "cardio");
+  if (cardio.length) return cardio;
+  return [easyDayActionItem(envelope)];
+}
+
 function easyCardioName(exercise: unknown): string {
   const text = String(exercise ?? "").toLowerCase();
   if (/\b(?:run|running|jog|jogging)\b/.test(text)) return "Easy run";
@@ -497,6 +514,15 @@ export function normalizeComposedSession(
     }
     kept.push(item);
   }
+  let easySwapped = false;
+  if (envelope.kind === "easy") {
+    const easyItems = keepEasyDayAction(kept, envelope);
+    if (easyItems.length !== kept.length || easyItems.some((item, i) => item !== kept[i])) {
+      kept.length = 0;
+      kept.push(...easyItems);
+      easySwapped = true;
+    }
+  }
   if (!kept.length) {
     return {
       session: null,
@@ -506,7 +532,7 @@ export function normalizeComposedSession(
   const cap = volumeCap(envelope);
   const itemSetCap = perItemSetCap(envelope);
   let remainingSets = workingSetCap(envelope);
-  let changed = kept.length > cap;
+  let changed = kept.length > cap || easySwapped;
   const forceEasyCardio =
     envelope.request.train_anyway === true ||
     envelope.caps.intensity === "easy" ||
@@ -749,6 +775,11 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
       }
     }
   }
+  if (envelope.kind === "easy") {
+    const easyItems = keepEasyDayAction(items, envelope);
+    items.length = 0;
+    items.push(...easyItems);
+  }
   if (!items.length && !(envelope.kind === "rest" && envelope.request.train_anyway !== true)) {
     // Custom intent, or every template item was excluded: a calm, safe, low-load
     // default that always survives normalization. A true rest decision stays
@@ -765,12 +796,14 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
   const name =
     envelope.kind === "rest"
       ? "Easy recovery"
-      : envelope.template.focus
-        ? String(envelope.template.focus)
-        : "Today's session";
+      : envelope.kind === "easy"
+        ? "Easy movement"
+        : envelope.template.focus
+          ? String(envelope.template.focus)
+          : "Today's session";
   return {
     name,
-    focus: envelope.kind === "rest" ? "Recovery" : envelope.template.focus,
+    focus: envelope.kind === "rest" ? "Recovery" : envelope.kind === "easy" ? "Easy movement" : envelope.template.focus,
     why,
     est_minutes: envelope.caps.duration_min,
     items,

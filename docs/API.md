@@ -780,7 +780,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/today-agenda` | The Today salience arbiter: ONE ranking + budget pass over the whole Today surface, so only the 1-2 things that matter most today render inline and the rest collapse behind a quiet "more". Marking "seen" at the end (debounced) powers the "since you last looked" continuity line. |
+| GET | `/api/today-agenda` | The Today salience arbiter: ONE ranking + budget pass over the whole Today surface. The Brief is the hero; supporting cards collapse behind a quiet "more" (primary stays empty). Marking "seen" at the end (debounced) powers the "since you last looked" continuity line. |
 | POST | `/api/today-agenda/ack` | Presentation acknowledgement only: health-focus retires its current semantic revision without resolving/dismissing the underlying directives; the fast-loss-attention item retires the current cut-quality episode for 14 days. Materially new evidence can create a new revision and surface either item sooner. |
 
 ## `/today-plan-day`

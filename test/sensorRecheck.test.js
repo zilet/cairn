@@ -367,11 +367,10 @@ test("an agent's agenda read never spends the offer", () => {
   assert.equal(repo.getAttentionSchedule(SIGNAL_KEY), null, "nothing was filed by a read no human saw");
 });
 
-// A card buried behind "more" by the priority sort was produced but never
-// actually SEEN — spending one of its ~4 offers on it would burn the ladder out
-// silently (MEDIUM-2). Outrank it with two higher-priority candidates so, at
-// TODAY_PRIMARY_MAX = 2, it sorts into "more" instead of inline.
-test("a card the priority sort buries behind 'more' never spends the attention ladder", () => {
+// With TODAY_PRIMARY_MAX = 0, more is the only human-reachable surface. A
+// sensor-recheck that lands there still spends — otherwise the ladder would
+// never tick and the same offer would sit in more every day.
+test("a card that lands in more still spends the attention ladder", () => {
   seedEpisodicWearer();
   repo.addFoodNote("meal", "", { kcal: 600, protein_g: 40 }, undefined, { date: localDaysAgo(0) }); // fuel (~32-40)
   repo.addInsight({ kind: "connection", text: "A genuine connection." }); // connection-insight (~38-44)
@@ -379,37 +378,33 @@ test("a card the priority sort buries behind 'more' never spends the attention l
   const agenda = repo.todayAgenda(localDaysAgo(0));
   const recheck = [...agenda.primary, ...agenda.more].find((c) => c.id === "sensor-recheck");
   assert.ok(recheck, "the candidate is still produced");
+  assert.equal(agenda.primary.length, 0, "primary stays empty");
   assert.ok(
     agenda.more.some((c) => c.id === "sensor-recheck"),
     "outranked by two higher-priority candidates, it lands behind the disclosure"
   );
-  assert.equal(
-    repo.getAttentionSchedule(SIGNAL_KEY),
-    null,
-    "a card nobody actually saw must not spend one of its ~4 offers"
-  );
+  assert.ok(repo.getAttentionSchedule(SIGNAL_KEY), "more is the surface, so the offer spends");
 
-  // Tomorrow, on an equally quiet day, the exact same offer is still available —
-  // never silently burned by a day it was never actually shown.
   const tomorrow = addDaysISO(localDaysAgo(0), 1);
   const again = repo.todayAgenda(tomorrow);
   assert.ok(
-    [...again.primary, ...again.more].some((c) => c.id === "sensor-recheck"),
-    "the offer was never spent"
+    ![...again.primary, ...again.more].some((c) => c.id === "sensor-recheck"),
+    "the freshly-spent cooldown holds on tomorrow's build"
   );
 });
 
-// The mirror image: a card that genuinely reaches the visible set DOES spend the
-// ladder, exactly once, and the cooldown holds on the next day's build.
-test("a card that actually surfaces inline spends the ladder once, and the cooldown holds tomorrow", () => {
-  seedEpisodicWearer(); // the lone candidate this quiet day — lands inline
+// The quiet-day twin: the lone candidate also spends from more, exactly once,
+// and the cooldown holds on the next day's build.
+test("a card that actually surfaces in more spends the ladder once, and the cooldown holds tomorrow", () => {
+  seedEpisodicWearer(); // the lone candidate this quiet day — lands in more
   const first = repo.todayAgenda(localDaysAgo(0));
+  assert.equal(first.primary.length, 0, "primary stays empty");
   assert.ok(
-    first.primary.some((c) => c.id === "sensor-recheck"),
-    "with nothing else to outrank it, the lone candidate surfaces inline"
+    first.more.some((c) => c.id === "sensor-recheck"),
+    "with nothing else to outrank it, the lone candidate still waits in more"
   );
   const entry = repo.getAttentionSchedule(SIGNAL_KEY);
-  assert.ok(entry, "surfacing it inline advances the shared attention ladder");
+  assert.ok(entry, "surfacing it in more advances the shared attention ladder");
   assert.equal(entry.tier, "active");
   assert.ok(entry.next_due > entry.last_checked);
 

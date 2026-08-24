@@ -1,11 +1,11 @@
 // The Today salience arbiter (Era 2, §12 item 1) — src/repo/today-agenda.ts.
 // ONE deterministic ranking + budget pass over the whole Today surface: the Brief
-// is always the hero, the top TODAY_PRIMARY_MAX candidates render inline (primary),
-// the rest collapse behind one quiet "more". Constitution-critical invariants:
+// is always the hero, supporting cards collapse behind one quiet "more"
+// (TODAY_PRIMARY_MAX is 0 — the daily open is Brief + one action). Constitution-critical invariants:
 //   - empty data → ONLY the hero (no card invented to fill space)
 //   - a candidate whose data is empty is OMITTED (priority <= 0 never surfaces)
-//   - more than TODAY_PRIMARY_MAX candidates → exactly MAX in primary, rest in more
-//   - everything is sorted by priority desc (primary holds the highest)
+//   - more than 0 candidates → primary stays empty, all of them in more
+//   - everything is sorted by priority desc (more holds the ranking)
 //   - one producer throwing never breaks the agenda (each read is isolated)
 // todayAgenda is imported via the repo barrel (integrator wires the export);
 // app_state + profile are reset so the two sibling Era-2 producers (since-last /
@@ -339,10 +339,10 @@ test("the fuel candidate surfaces once there's logged food to evaluate", () => {
 
 // ---- the budget: more than MAX candidates → exactly MAX primary, rest in more,
 //      sorted by priority desc ----
-test("more than TODAY_PRIMARY_MAX candidates → exactly MAX primary, rest in more, sorted", () => {
+test("more than TODAY_PRIMARY_MAX candidates → primary empty, rest in more, sorted", () => {
   repo.setSettings({ lead_mode: "review_everything" });
   const MAX = repo.TODAY_PRIMARY_MAX;
-  assert.ok(MAX >= 1, "the budget is at least one");
+  assert.equal(MAX, 0, "the daily open keeps primary empty");
 
   // Seed FOUR distinct candidates of clearly-separated priority:
   //   reconcile  (~86) — a Garmin lift the watch logged, unlinked to a session
@@ -364,24 +364,16 @@ test("more than TODAY_PRIMARY_MAX candidates → exactly MAX primary, rest in mo
 
   const a = repo.todayAgenda();
   assert.equal(a.total, 4, "all four are surfaced");
-  assert.equal(a.primary.length, MAX, "exactly MAX render inline");
-  assert.equal(a.more.length, 4 - MAX, "the rest collapse behind 'more'");
+  assert.equal(a.primary.length, 0, "primary stays empty so the Brief is the one call");
+  assert.equal(a.more.length, 4, "supporting cards collapse behind more");
 
-  // primary holds the highest-priority candidates; every primary outranks every more.
-  const minPrimary = Math.min(...a.primary.map((c) => c.priority));
-  const maxMore = a.more.length ? Math.max(...a.more.map((c) => c.priority)) : -Infinity;
-  assert.ok(minPrimary >= maxMore, "the budget keeps the most important inline");
-
-  // each list is itself sorted by priority desc (stable).
-  for (const list of [a.primary, a.more]) {
-    for (let i = 1; i < list.length; i++) {
-      assert.ok(list[i - 1].priority >= list[i].priority, "candidates are priority-sorted");
-    }
+  // more is itself sorted by priority desc (stable).
+  for (let i = 1; i < a.more.length; i++) {
+    assert.ok(a.more[i - 1].priority >= a.more[i].priority, "candidates are priority-sorted");
   }
   // the top surface today is the reconcile card (it has the highest deterministic priority).
-  assert.equal(a.primary[0].id, "garmin-reconcile");
-  // every surfaced candidate carries a positive priority (the omit rule held).
-  assert.ok([...a.primary, ...a.more].every((c) => c.priority > 0));
+  assert.equal(a.more[0].id, "garmin-reconcile");
+  assert.ok(a.more.every((c) => c.priority > 0));
 });
 
 // ---- the arbiter only DEMOTES: a candidate's final tier matches its bucket ----
@@ -943,8 +935,8 @@ test("a throwing producer is isolated — the agenda still returns the rest", ()
   }
 });
 
-// ---- the surprise budget: one NEW attention item inline per day -------------
-test("the surprise budget introduces at most one brand-new attention item inline per day", () => {
+// ---- the surprise budget: one NEW attention item recorded per day -----------
+test("the surprise budget introduces at most one brand-new attention item per day", () => {
   repo.setSettings({ lead_mode: "review_everything" });
   // Seed three first-time attention items that would all like a Today slot:
   // a pressing health revision (~80), a waiting plan draft (~78), a weekly read (~54).
@@ -958,17 +950,24 @@ test("the surprise budget introduces at most one brand-new attention item inline
 
   const NEWCOMERS = ["health-focus", "draft-proposals", "weekly-read"];
   const first = repo.todayAgenda();
-  const inlineNew = first.primary.map((c) => c.id).filter((id) => NEWCOMERS.includes(id));
-  assert.deepEqual(inlineNew, ["health-focus"], "exactly the highest-priority newcomer is introduced inline");
-  // The deferred newcomers still exist — waiting behind the quiet disclosure, never gone.
-  const allIds = [...first.primary, ...first.more].map((c) => c.id);
-  assert.ok(allIds.includes("draft-proposals") && allIds.includes("weekly-read"));
+  assert.equal(first.primary.length, 0, "the daily open keeps primary empty");
+  const introduced = first.more.find((c) => c.id === "health-focus");
+  assert.ok(introduced, "the highest-priority newcomer is recorded");
+  assert.equal(introduced.waiting, undefined, "an introduced item never whispers as waiting");
+  const waiting = first.more.filter((c) => NEWCOMERS.includes(c.id) && c.waiting);
+  assert.deepEqual(
+    waiting.map((c) => c.id).sort(),
+    ["draft-proposals", "weekly-read"],
+    "the deferred newcomers wait behind more, never gone"
+  );
 
-  // A second fetch the same day: the introduced item keeps its slot; the others
+  // A second fetch the same day: the introduced item stays recorded; the others
   // still wait (one new thing per DAY, not per fetch).
   const second = repo.todayAgenda();
-  const secondNew = second.primary.map((c) => c.id).filter((id) => NEWCOMERS.includes(id));
-  assert.deepEqual(secondNew, ["health-focus"]);
+  assert.equal(second.primary.length, 0);
+  assert.equal(second.more.find((c) => c.id === "health-focus")?.waiting, undefined);
+  assert.equal(second.more.find((c) => c.id === "draft-proposals")?.waiting, true);
+  assert.equal(second.more.find((c) => c.id === "weekly-read")?.waiting, true);
 });
 
 test("the surprise budget never shapes a routed historical date", () => {
@@ -997,11 +996,11 @@ test("markIntroduced:false computes the same agenda without spending the day's a
   );
   assert.equal(repo.getAppState("today_agenda_intro"), null, "no ledger write from a read-only pass");
 
-  // ...so the human's next open still gets the introduction.
+  // ...so the human's next open still records the introduction.
   const humanView = repo.todayAgenda();
   assert.ok(
-    humanView.primary.some((c) => c.id === "health-focus"),
-    "the human open introduces the newcomer inline"
+    [...humanView.primary, ...humanView.more].some((c) => c.id === "health-focus"),
+    "the human open still surfaces the newcomer"
   );
   assert.ok(repo.getAppState("today_agenda_intro"), "the human pass records the introduction");
 });
@@ -1015,9 +1014,9 @@ test("a genuinely-new item behind the disclosure is stamped waiting; the introdu
   repo.addInsight({ kind: "weekly_read", text: "Solid week — held three sessions." });
 
   const a = repo.todayAgenda();
-  const introduced = a.primary.find((c) => c.id === "health-focus");
+  const introduced = [...a.primary, ...a.more].find((c) => c.id === "health-focus");
   const deferredWeekly = a.more.find((c) => c.id === "weekly-read");
-  assert.ok(introduced, "the day's one newcomer is inline");
+  assert.ok(introduced, "the day's one newcomer is recorded");
   assert.equal(introduced.waiting, undefined, "an introduced item never reads as waiting");
   assert.equal(deferredWeekly?.waiting, true, "the deferred newcomer whispers from behind the disclosure");
 

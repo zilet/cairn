@@ -97,7 +97,7 @@ const ATTENTION = (primary) => ({
 
 // ---- the Brief -------------------------------------------------------------
 
-test("the Brief yields its emphasis when another surface leads, keeping every control", () => {
+test("the Brief stays the hero even when attention names another surface", () => {
   const brief = loadTodayBrief();
   const read = {
     kind: "rest",
@@ -111,13 +111,12 @@ test("the Brief yields its emphasis when another surface leads, keeping every co
 
   const html = brief.briefHtml(read, { isToday: true, showPlan: false });
 
-  assert.match(html, /class="brief brief-rest reveal brief-quiet"/);
-  assert.match(html, /data-attention="supporting"/);
-  // Quieter, never gone: the headline, the why, and the ways in all remain.
+  assert.doesNotMatch(html, /brief-quiet/);
+  assert.match(html, /data-attention="lead"/);
   assert.match(html, /Rest today\./);
   assert.match(html, /Nothing&#039;s moved since yesterday\.|Nothing's moved since yesterday\./);
   assert.match(html, /data-redirect="reveal-plan"/);
-  assert.match(html, /data-redirect="ask-session"/);
+  assert.doesNotMatch(html, /Ask for a session/);
   assert.match(html, /class="brief-steer"/);
 });
 
@@ -153,13 +152,12 @@ test("a payload with no decision renders byte-identically to one before the fiel
   assert.doesNotMatch(before, /brief-quiet|data-attention/);
 });
 
-test("gaining or losing the lead is a material repaint; the rest of the decision is not", () => {
+test("gaining or losing the lead is not a Brief de-emphasis; attention is supporting only", () => {
   const brief = loadTodayBrief();
   const base = { kind: "rest", headline: "Rest today.", why: "Quiet.", focus: null, est_minutes: null, signals: {} };
 
   assert.equal(brief.materiallyDiffers(base, { ...base, attention: ATTENTION("brief") }), false);
-  assert.equal(brief.materiallyDiffers(base, { ...base, attention: ATTENTION("insight") }), true);
-  // Same lead, different ordering behind it → no repaint.
+  assert.equal(brief.materiallyDiffers(base, { ...base, attention: ATTENTION("insight") }), false);
   const a = { ...base, attention: ATTENTION("insight") };
   const b = {
     ...base,
@@ -175,7 +173,7 @@ test("attentionPrimary and yieldsLead are null-safe", () => {
   assert.equal(brief.attentionPrimary({ attention: {} }), "");
   assert.equal(brief.yieldsLead(undefined), false);
   assert.equal(brief.yieldsLead({ attention: { primary: "brief" } }), false);
-  assert.equal(brief.yieldsLead({ attention: { primary: "weekly" } }), true);
+  assert.equal(brief.yieldsLead({ attention: { primary: "weekly" } }), false);
 });
 
 // ---- the main-column lead container ----------------------------------------
@@ -199,22 +197,20 @@ test("the Today lead reserves the promotion container without disturbing the she
 
 // ---- promotion -------------------------------------------------------------
 
-test("the winning rail card moves into the main column — same element, marked as the lead", () => {
+test("specialist rail cards stay in more — Brief wins the daily open", () => {
   const rail = loadRailController();
   const insight = makeElement("#insightSlot");
   const lead = makeElement("#attentionLead");
   const mast = makeElement(".rail-mast");
   const railEl = makeElement(".today-rail", {
-    // Another card is still in the rail, so the masthead earns its keep.
     contains: { ".card-stack-item, .today-more, .agenda-card": makeElement("#qlRecent"), ".rail-mast": mast },
   });
   const dom = makeRoot({ "#insightSlot": insight, "#attentionLead": lead, ".today-rail": railEl });
 
   rail.promoteAttentionLead(dom, ATTENTION("insight"));
 
-  assert.equal(lead.children.length, 1);
-  assert.equal(lead.children[0], insight, "the SAME slot moved, never a copy");
-  assert.equal(insight.attrs["data-attention"], "lead");
+  assert.equal(lead.children.length, 0, "insight is not hoisted into the main column");
+  assert.equal(insight.attrs["data-attention"], undefined);
   assert.equal(railEl.removed, false);
   assert.equal(mast.removed, false);
 });
@@ -243,35 +239,34 @@ test("a card the surprise budget deferred behind 'more' stays waiting — pull, 
   assert.equal(weekly.attrs["data-attention"], undefined);
 });
 
-test("a masthead left standing over no cards retires — but never the rail itself", () => {
+test("a masthead left standing over no cards is never created by specialist promotion", () => {
   const rail = loadRailController();
   const fuel = makeElement("#fuelSlot");
   const lead = makeElement("#attentionLead");
   const mast = makeElement(".rail-mast");
-  // No card selector resolves → the promoted slot was the rail's last card.
   const railEl = makeElement(".today-rail", { contains: { ".rail-mast": mast } });
   const dom = makeRoot({ "#fuelSlot": fuel, "#attentionLead": lead, ".today-rail": railEl });
 
   rail.promoteAttentionLead(dom, ATTENTION("fuel"));
 
-  assert.equal(mast.removed, true, "an 'Also worth a look' header over nothing is litter");
-  assert.equal(railEl.removed, false, "removing the aside would take other slots with it");
-  assert.equal(lead.children[0], fuel);
+  assert.equal(mast.removed, false, "fuel is not hoisted, so the mast is untouched");
+  assert.equal(railEl.removed, false);
+  assert.equal(lead.children.length, 0);
 });
 
 // The FALLBACK rail (no agenda: offline, or the route unavailable) has no mast and
 // its slots carry no `card-stack-item` class — promotion must leave every one of
 // its remaining cards mounted and reachable.
-test("promoting out of the fallback rail leaves its other slots mounted", () => {
+test("promoting out of the fallback rail is a no-op for specialist cards", () => {
   const rail = loadRailController();
   const insight = makeElement("#insightSlot");
   const lead = makeElement("#attentionLead");
-  const railEl = makeElement(".today-rail", { contains: {} }); // no mast, no card-stack-items
+  const railEl = makeElement(".today-rail", { contains: {} });
   const dom = makeRoot({ "#insightSlot": insight, "#attentionLead": lead, ".today-rail": railEl });
 
   rail.promoteAttentionLead(dom, ATTENTION("insight"));
 
-  assert.equal(lead.children[0], insight);
+  assert.equal(lead.children.length, 0);
   assert.equal(railEl.removed, false, "the fallback rail still holds weekly / reconcile / lately");
 });
 
@@ -295,10 +290,10 @@ test("no decision, an unknown surface, a missing slot or a missing container all
   rail.promoteAttentionLead(makeRoot({ "#attentionLead": lead }), ATTENTION("insight"));
   assert.equal(lead.children.length, 0);
 
-  // Container missing (an older shell) → the slot is still marked, and stays put.
+  // Container missing (an older shell) → specialists still do not take the lead.
   const insight = makeElement("#insightSlot");
   rail.promoteAttentionLead(makeRoot({ "#insightSlot": insight }), ATTENTION("insight"));
-  assert.equal(insight.attrs["data-attention"], "lead");
+  assert.equal(insight.attrs["data-attention"], undefined);
 });
 
 test("promotion runs before the loaders so every slot is still reachable by id", () => {

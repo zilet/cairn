@@ -76,13 +76,17 @@ type TodayRailDeps = {
   }
 
   function fallbackRailHtml(isToday: boolean): string {
-    return `<aside class="today-rail">
-    ${isToday ? `<div id="weekAheadSlot" class="weekahead-slot"></div>` : ""}
-    ${isToday ? `<div id="adjustSlot" class="adjust-slot"></div>` : ""}
-    <div id="weeklySlot" class="weekly-slot"></div>
-    <div id="insightSlot" class="insight-slot"></div>
-    ${isToday ? `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>` : ""}
-    <div id="qlRecent" class="ql-recent lately-slot"></div>
+    const slots = `${isToday ? `<div id="weekAheadSlot" class="weekahead-slot card-stack-item"></div>` : ""}
+    ${isToday ? `<div id="adjustSlot" class="adjust-slot card-stack-item"></div>` : ""}
+    <div id="weeklySlot" class="weekly-slot card-stack-item"></div>
+    <div id="insightSlot" class="insight-slot card-stack-item"></div>
+    ${isToday ? `<div id="garminReconcileSlot" class="garmin-reconcile-slot card-stack-item"></div>` : ""}
+    <div id="qlRecent" class="ql-recent lately-slot card-stack-item"></div>`;
+    return `<aside class="today-rail card-stack">
+    <details class="today-more card-stack-item" id="todayMore">
+      <summary class="today-more-sum"><span class="today-more-lbl">more</span><span class="today-more-chev" aria-hidden="true">▾</span></summary>
+      <div class="today-more-body card-stack">${slots}</div>
+    </details>
   </aside>`;
   }
 
@@ -143,7 +147,10 @@ type TodayRailDeps = {
 
   function promoteAttentionLead(root: ParentNode, attention: TodayRailAttention | null | undefined): void {
     const primary = attention && typeof attention === "object" ? String(attention.primary || "") : "";
+    // Brief wins the daily open. Specialists (insight/weekly/fuel) stay in more.
+    // Feedback is marked in place on the done card, never relocated.
     if (!primary || primary === "brief") return;
+    if (primary !== "feedback") return;
     const selector = ATTENTION_LEAD_SELECTOR[primary];
     if (!selector) return; // a surface this build can't draw — leave Today untouched
     const slot = root.querySelector(selector);

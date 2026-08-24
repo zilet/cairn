@@ -34,7 +34,7 @@ function loadTodayAgendaClient() {
   return context.CairnTodayAgenda;
 }
 
-test("Today agenda skips unknown client cards and caps primary cards at two", () => {
+test("Today agenda skips unknown client cards and keeps primary empty", () => {
   const agenda = loadTodayAgendaClient();
   const buckets = agenda.renderableBuckets({
     primary: [
@@ -46,13 +46,10 @@ test("Today agenda skips unknown client cards and caps primary cards at two", ()
     more: [{ id: "late", kind: "lately", tier: "more", priority: 5, client_card: "lately" }],
   });
 
-  assert.deepEqual(
-    Array.from(buckets.primary, (c) => c.id),
-    ["fuel", "week"]
-  );
+  assert.deepEqual(Array.from(buckets.primary, (c) => c.id), []);
   assert.deepEqual(
     Array.from(buckets.more, (c) => c.id),
-    ["generic", "late"]
+    ["fuel", "week", "generic", "late"]
   );
 });
 
@@ -103,7 +100,8 @@ test("Today rail HTML collects generic cards and uses one quiet more disclosure"
   assert.match(html, /class="fuel-slot card-stack-item"/);
   assert.match(html, /class="today-more card-stack-item"/);
   assert.match(html, /class="today-more-body card-stack"/);
-  assert.match(html, /2 more/);
+  assert.match(html, /4 more/);
+  assert.doesNotMatch(html, /rail-mast/);
   assert.equal(pending.length, 1);
   assert.equal(pending[0].id, "generic");
 });
@@ -155,10 +153,10 @@ test("Today fuel card stays quiet when empty and links only to review/edit", () 
   assert.doesNotMatch(partial, /0g P|0g C|0g fiber/);
 });
 
-test("client buckets respect the server's tier split (surprise-budget deferral holds)", () => {
+test("client buckets collapse server primary into more (Brief + one action)", () => {
   const agenda = loadTodayAgendaClient();
-  // The server's surprise budget deliberately left primary under-filled: the
-  // deferred newcomer at the top of `more` must NOT be promoted inline.
+  // Even if a server still names an inline card, the client keeps primary empty
+  // so the daily open is the Brief plus one action.
   const buckets = agenda.renderableBuckets({
     primary: [{ id: "health-focus", kind: "health", tier: "primary", priority: 80, title: "Iron is the priority." }],
     more: [
@@ -166,17 +164,12 @@ test("client buckets respect the server's tier split (surprise-budget deferral h
       { id: "lately", kind: "lately", tier: "more", priority: 20, client_card: "lately" },
     ],
   });
-  assert.deepEqual(
-    Array.from(buckets.primary, (c) => c.id),
-    ["health-focus"]
-  );
+  assert.deepEqual(Array.from(buckets.primary, (c) => c.id), []);
   assert.deepEqual(
     Array.from(buckets.more, (c) => c.id),
-    ["weekly-read", "lately"]
+    ["health-focus", "weekly-read", "lately"]
   );
 
-  // Forward-compat backfill still works: an UNRENDERABLE inline card's slot is
-  // filled from `more` so the surface never starves on version skew.
   const skew = agenda.renderableBuckets({
     primary: [
       { id: "future", kind: "future", tier: "primary", priority: 90, client_card: "future-card" },
@@ -184,13 +177,10 @@ test("client buckets respect the server's tier split (surprise-budget deferral h
     ],
     more: [{ id: "lately", kind: "lately", tier: "more", priority: 5, client_card: "lately" }],
   });
-  assert.deepEqual(
-    Array.from(skew.primary, (c) => c.id),
-    ["fuel", "lately"]
-  );
+  assert.deepEqual(Array.from(skew.primary, (c) => c.id), []);
   assert.deepEqual(
     Array.from(skew.more, (c) => c.id),
-    []
+    ["fuel", "lately"]
   );
 });
 

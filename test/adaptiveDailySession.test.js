@@ -237,6 +237,7 @@ test("adaptive preview is read-only and prepare persists that exact accepted can
     "kind",
     "policy_version",
     "primary_rationale",
+    "shortened",
     "source",
     "title",
   ]);
