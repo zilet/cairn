@@ -534,6 +534,28 @@ test("a wide context's trajectory and focus reach the recorded decision", async 
   assert.deepEqual(recorded.context.parks, ["strength"]);
 });
 
+test("the recorded decision carries what the deterministic layer actually saw", async () => {
+  const result = await runCaseConference(
+    "stub",
+    { question: "Reconcile fuel and recovery.", domains: ["nutrition", "recovery"] },
+    {
+      context: () => wideContext(),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () => conductorDecision({ domain: "nutrition" }),
+    }
+  );
+  // The stored snapshot is the bounded agent-facing copy, so it cannot re-derive
+  // the conflict list. Without the inputs beside it, the ledger says which
+  // conflicts fired and nothing about why — unrecoverable once the context moves.
+  const inputs = getBrainDecision(result.recorded_decision_id).context.conflict_inputs;
+  assert.ok(inputs, "the ledger records the resolved conflict inputs");
+  assert.equal(inputs.inDeficit, true);
+  assert.equal(inputs.recoveryStrain, true);
+  assert.equal(inputs.clinicalAttention, false, "an answered no is recorded as a no, not as absence");
+  assert.equal(inputs.activeInjury, false);
+  assert.deepEqual(inputs.activeMedications, []);
+});
+
 // ---- evidence the coach context cannot carry --------------------------------
 
 test("a lifecycle symptom with no rated session since still counts as an active injury", async () => {

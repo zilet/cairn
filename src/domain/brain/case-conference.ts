@@ -30,6 +30,7 @@ import {
   type ConferenceConflictKey,
 } from "./conference-conflicts.js";
 import { getCoachContext } from "../../repo/coach.js";
+import { localDateISO } from "../../repo/shared.js";
 import { listTrainingSymptoms } from "../../repo/training-symptoms.js";
 import { getSettings } from "../../repo/settings.js";
 import { patchBrainDecision, recordDecision } from "../../repo/brain-decisions.js";
@@ -60,7 +61,10 @@ export type { ConferenceConflictKey };
  * "nothing hurts". */
 function defaultActiveSymptomAreas(on: string): string[] | null {
   try {
-    return listTrainingSymptoms({ on, include_resolved: false })
+    // seed_legacy:false — the default backfills legacy rows, and a read that
+    // decides a conflict must not write on its way past (same reason coach.ts
+    // passes it on its own lifecycle read).
+    return listTrainingSymptoms({ on, include_resolved: false, seed_legacy: false })
       .filter((event) => event.status === "active" && event.scope !== "systemic" && !event.legacy_unconfirmed)
       .map((event) => event.area_text);
   } catch {
@@ -499,7 +503,12 @@ export async function runCaseConference(
   // autoregulation rollup, so pain reported in chat with nothing trained since is
   // invisible there. Read it directly, area-scoped only (a systemic report never
   // drives movement relevance) and never from an unconfirmed legacy row.
-  const activeSymptomAreas = (deps.symptomAreas ?? defaultActiveSymptomAreas)(today);
+  //
+  // Keyed on the LOCAL day, not `today` above: that one is a UTC slice serving the
+  // agent_jobs budget query, and every evening after UTC rolls over it names
+  // tomorrow — which would resolve the lifecycle against a day that has not
+  // happened here yet.
+  const activeSymptomAreas = (deps.symptomAreas ?? defaultActiveSymptomAreas)(localDateISO());
   const conflictInputs = conferenceConflictInputs(fullContext, { activeSymptomAreas });
   const conflicts = conflictsFromInputs(conflictInputs);
   const perSpecialistCalls = Math.max(1, Math.floor(12 / Math.max(1, domains.length)));
@@ -639,11 +648,12 @@ export async function runCaseConference(
   });
   decision.autonomy_tier = policy.tier;
 
-  // From the FULL context, not the snapshot. conferenceContext appends these two
-  // keys AFTER the coach context's own 73, so the snapshot's first-50-keys bound
-  // dropped both on every production conference — every recorded decision carried
-  // a null trajectory and an empty optimizes/parks while the tests, whose contexts
-  // are small, saw them fine.
+  // From the FULL context, not the snapshot. `whole_person_trajectory` is already
+  // a coach-context key that conferenceContext overwrites in place (~index 68) and
+  // `conference_focus` is appended after all 73 — either way both sit past the
+  // snapshot's first-50-keys bound, so on every production conference the recorded
+  // decision carried a null trajectory and an empty optimizes/parks. The tests,
+  // whose contexts are small, saw them fine.
   const trajectory = (fullContext as any)?.whole_person_trajectory ?? null;
   const focus = (fullContext as any)?.conference_focus ?? {};
   const sharedContext =
@@ -652,6 +662,12 @@ export async function runCaseConference(
       question,
       conflicts: enforcedConflicts,
       unresolved_conflicts: unresolvedConflicts,
+      // WHAT THE DETERMINISTIC LAYER SAW. The stored snapshot is the bounded
+      // agent-facing copy, so it cannot re-derive this conflict list; without the
+      // resolved inputs beside it, a decision's ledger row records which conflicts
+      // fired but nothing about why, and the answer is unrecoverable after the day
+      // the context moves on.
+      conflict_inputs: conflictInputs,
       unavailable,
       review_window: decision.review_window,
       trajectory,
