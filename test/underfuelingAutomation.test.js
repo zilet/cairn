@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { runUnderfuelingControlLoop } from "../dist/domain/brain/underfueling-service.js";
+import { runEnergyDeficiencyWatch } from "../dist/domain/brain/energy-deficiency-service.js";
 import { recordDecision } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy, revertDecision } from "../dist/domain/brain/autonomy-service.js";
@@ -423,4 +424,91 @@ test("under review posture, a persistent strain never stacks more than one open 
 
   // Retry-ability preserved: persistent strain never stamps a cooldown on the held branch.
   assert.equal(repo.getAppState("underfuel_prescription_last_action"), null, "the held branch stamps no cooldown");
+});
+
+// ---------------------------------------------------------------------------
+// THE LOW-ENERGY-AVAILABILITY WATCH'S one action (src/domain/brain/energy-deficiency-service.ts).
+// The cluster read itself is pinned in underfueling.test.js; what matters here is
+// that a standing cluster produces exactly ONE bounded raise through the ordinary
+// ledger, carries falsifiable predictions about the arms recovering, explains itself
+// once, and then refuses to do it again inside the settling window.
+
+function clusterRead(overrides = {}) {
+  return {
+    as_of: today(),
+    state: "sustained_cluster",
+    arms: [],
+    met_keys: ["recovery_and_performance", "loss_pace"],
+    met_keys_before: ["recovery_and_performance", "loss_pace"],
+    sustained: true,
+    protection: {
+      raise: true,
+      from_kcal: 2200,
+      target_kcal: 2450,
+      capped: false,
+      reason: "Two independent arms have held, so the target moves 250 kcal toward measured maintenance.",
+    },
+    reason: "recovery_and_performance, loss_pace have agreed for at least 12 days while the deficit ran.",
+    signature: "cluster-sig-1",
+    ...overrides,
+  };
+}
+
+function seedRecoverySignals() {
+  for (let d = 34; d >= 1; d--) {
+    db.prepare(`INSERT INTO daily_metrics (source, date, hrv_ms) VALUES ('apple', ?, ?)`).run(
+      addDaysISO(today(), -d),
+      d <= 7 ? 55 : 70,
+    );
+  }
+  for (const d of [-12, -8, -4]) {
+    db.prepare(`INSERT INTO sessions (date, performance) VALUES (?, 3)`).run(addDaysISO(today(), d));
+  }
+}
+
+test("a standing cluster buys ONE bounded protective raise, with arm-recovery expectations and one calm explanation", () => {
+  seedTarget(2200);
+  seedRecoverySignals();
+
+  const result = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(result.action, "protective_raise_scheduled");
+  const decision = result.nutrition?.decision;
+  assert.ok(decision, "the move goes through the autonomy ledger, never straight to the table");
+  assert.equal(decision.domain, "nutrition");
+  assert.equal(decision.kind, "nutrition_target");
+  const proposal = repo.getProposal(Number(decision.source_ref_key));
+  assert.equal(proposal.parsed.nutrition.target_kcal, 2450);
+  assert.equal(proposal.parsed.nutrition.prev_target_kcal, 2200);
+  assert.equal(proposal.parsed.nutrition.protein_g, 175, "protein is carried forward, never trimmed");
+
+  // The falsifiable claim is that the arms that fired come back.
+  assert.ok(result.expectations >= 1, "at least one arm-recovery prediction is attached");
+  const metrics = repo.listBrainExpectations({ decisionId: Number(decision.id) }).map((row) => row.metric_key);
+  assert.ok(metrics.includes("recovery_hrv_delta"), "the HRV arm is asked to recover");
+
+  // One explanation, in the athlete's register, waiting in-app.
+  const insight = db.prepare(`SELECT * FROM insights ORDER BY id DESC LIMIT 1`).get();
+  assert.ok(insight, "the pattern is explained once");
+  assert.equal(insight.status, "new");
+  assert.doesNotMatch(`${insight.text} ${insight.rationale}`, /REDs|relative energy deficiency|syndrome|\d\/10/i);
+
+  // …and a second pass the same day does nothing at all.
+  const again = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(again.action, "none");
+  assert.match(again.reason, /settling window/i);
+});
+
+test("no standing cluster and no affordable raise are both no-ops", () => {
+  seedTarget(2200);
+  assert.equal(runEnergyDeficiencyWatch(today(), { read: clusterRead({ state: "emerging" }) }).action, "none");
+  assert.equal(
+    runEnergyDeficiencyWatch(today(), {
+      read: clusterRead({
+        protection: { raise: false, from_kcal: 2200, target_kcal: null, capped: true, reason: "no headroom" },
+      }),
+    }).action,
+    "none",
+  );
+  assert.equal(Number(db.prepare(`SELECT COUNT(*) AS n FROM nutrition_targets`).get().n), 1, "no target was written");
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM insights`).get().n, 0, "and nothing was explained");
 });

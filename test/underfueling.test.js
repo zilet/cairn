@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
 import { addDaysISO } from "../dist/repo/shared.js";
 import { underfuelingRead } from "../dist/repo/underfueling.js";
+import { armAnd, energyDeficiencyDecision } from "../dist/repo/energy-deficiency.js";
 
 const TODAY = "2026-07-15";
 const day = (delta) => addDaysISO(TODAY, delta);
@@ -404,4 +405,154 @@ test("a fossilized applied run plan cannot fire the compliance-drop strain", () 
     "a fossil prescription never gets to say the athlete fell short"
   );
   assert.notEqual(perf.direction, "strain");
+});
+
+// ---------------------------------------------------------------------------
+// THE LOW-ENERGY-AVAILABILITY WATCH (src/repo/energy-deficiency.ts)
+//
+// Five arms, each tri-state, over signals the athlete is already producing. Two of
+// them have to agree, and to have been agreeing for a week and a half, before the
+// only response this watch can produce — one bounded step of the calorie target back
+// toward MEASURED maintenance — is available at all.
+
+const arm = (key, verdict) => ({ key, verdict, summary: `${key}:${verdict}`, evidence_keys: [] });
+const ALL_ABSENT = [
+  arm("recovery_and_performance", "absent"),
+  arm("loss_pace", "absent"),
+  arm("mood_energy", "absent"),
+  arm("illness_recurrence", "absent"),
+  arm("lift_stall", "absent"),
+];
+function armsWith(met, notMet = []) {
+  return ALL_ABSENT.map((entry) =>
+    met.includes(entry.key) ? arm(entry.key, "met") : notMet.includes(entry.key) ? arm(entry.key, "not_met") : entry
+  );
+}
+const CUT = {
+  as_of: TODAY,
+  cut_active: true,
+  tdee_kcal: 2600,
+  tdee_basis: "logged_reality",
+  active_target_kcal: 2200,
+};
+
+test("an arm's tri-state: absent is never met, and one definite no settles the conjunction", () => {
+  assert.equal(armAnd("met", "met"), "met");
+  assert.equal(armAnd("met", "absent"), "absent", "an unanswerable half leaves the arm absent, never true");
+  assert.equal(armAnd("not_met", "absent"), "not_met", "one channel has already answered the question");
+  assert.equal(armAnd("absent", "absent"), "absent");
+});
+
+test("one arm buys nothing, and two that only just agreed are 'emerging', not a cluster", () => {
+  const single = energyDeficiencyDecision({
+    ...CUT,
+    arms: armsWith(["loss_pace"], ["mood_energy", "lift_stall"]),
+    arms_before: armsWith([]),
+  });
+  assert.equal(single.state, "clear");
+  assert.equal(single.protection.raise, false);
+
+  // Nothing readable at all is its own answer, and it is not "clear" either.
+  const blind = energyDeficiencyDecision({ ...CUT, arms: armsWith([]), arms_before: armsWith([]) });
+  assert.equal(blind.state, "insufficient_signal");
+  assert.equal(blind.protection.raise, false);
+
+  const fresh = energyDeficiencyDecision({
+    ...CUT,
+    arms: armsWith(["loss_pace", "mood_energy"]),
+    arms_before: armsWith([]),
+  });
+  assert.equal(fresh.state, "emerging", "the cluster has not been standing long enough to act on");
+  assert.equal(fresh.protection.raise, false);
+  assert.equal(fresh.sustained, false);
+});
+
+test("two arms held for the sustain window buy ONE bounded step, capped at measured maintenance", () => {
+  const met = ["loss_pace", "mood_energy"];
+  const read = energyDeficiencyDecision({ ...CUT, arms: armsWith(met), arms_before: armsWith(met) });
+  assert.equal(read.state, "sustained_cluster");
+  assert.equal(read.sustained, true);
+  assert.deepEqual(read.met_keys, met);
+  assert.equal(read.protection.raise, true);
+  assert.equal(read.protection.target_kcal, 2450, "the bounded 250 kcal ceiling, not the whole 400 kcal gap");
+  assert.ok(read.protection.target_kcal <= CUT.tdee_kcal, "protection buys maintenance, never a surplus");
+
+  // …and when maintenance is closer than the step, the cap — not the step — decides.
+  const near = energyDeficiencyDecision({
+    ...CUT,
+    active_target_kcal: 2500,
+    arms: armsWith(met),
+    arms_before: armsWith(met),
+  });
+  assert.equal(near.protection.raise, true);
+  assert.equal(near.protection.target_kcal, 2600, "the step lands exactly on measured maintenance");
+
+  // And once the target is inside a meaningful step of maintenance, the cap binds and
+  // there is nothing left for protection to buy — a hold, never a cut nobody asked for.
+  const atCeiling = energyDeficiencyDecision({
+    ...CUT,
+    active_target_kcal: 2550,
+    arms: armsWith(met),
+    arms_before: armsWith(met),
+  });
+  assert.equal(atCeiling.protection.capped, true);
+  assert.equal(atCeiling.protection.raise, false);
+  assert.equal(atCeiling.protection.target_kcal, null);
+});
+
+test("a formula-estimate maintenance is not headroom — the same standing cluster buys no raise", () => {
+  const met = ["loss_pace", "mood_energy"];
+  const read = energyDeficiencyDecision({
+    ...CUT,
+    tdee_basis: "formula_estimate",
+    arms: armsWith(met),
+    arms_before: armsWith(met),
+  });
+  assert.equal(read.state, "sustained_cluster", "the pattern is still real");
+  assert.equal(read.protection.raise, false, "but an unmeasured maintenance can authorize nothing");
+  assert.match(read.protection.reason, /estimate rather than a measurement/i);
+});
+
+test("the exit is the ordinary path: arms recover, the watch goes quiet, nothing special resumes the cut", () => {
+  const met = ["loss_pace", "mood_energy"];
+  const recovered = energyDeficiencyDecision({
+    ...CUT,
+    arms: armsWith([], met),
+    arms_before: armsWith(met),
+  });
+  assert.equal(recovered.state, "clear");
+  assert.equal(recovered.protection.raise, false);
+
+  // And with no affirmed deficit running there is nothing to read in the first place.
+  const noCut = energyDeficiencyDecision({ ...CUT, cut_active: false, arms: armsWith(met), arms_before: armsWith(met) });
+  assert.equal(noCut.state, "not_watching");
+  assert.equal(noCut.protection.raise, false);
+});
+
+test("the arms read absent off an empty record, and only a real double drift makes one met", () => {
+  resetTables("daily_metrics", "garmin_daily_metrics", "sessions", "checkins", "context_events");
+  for (const entry of repo.energyDeficiencyArms(TODAY)) {
+    assert.equal(entry.verdict, "absent", `${entry.key} says nothing off an empty record`);
+  }
+
+  // HRV drifting below its own norm AND rated sessions falling: the conjunction.
+  const hrv = (delta, ms) =>
+    db.prepare(`INSERT INTO daily_metrics (source, date, hrv_ms) VALUES ('apple', ?, ?)`).run(day(delta), ms);
+  for (let d = 34; d >= 7; d--) hrv(-d, 70);
+  for (let d = 6; d >= 0; d--) hrv(-d, 55);
+  const rate = (delta, value) =>
+    db.prepare(`INSERT INTO sessions (date, performance) VALUES (?, ?)`).run(day(delta), value);
+  for (const d of [-27, -24, -20, -17]) rate(d, 4);
+  for (const d of [-10, -7, -4, -1]) rate(d, 2);
+  const met = repo.energyDeficiencyArms(TODAY).find((entry) => entry.key === "recovery_and_performance");
+  assert.equal(met.verdict, "met");
+  assert.ok(met.evidence_keys.length >= 2, "it cites both halves");
+
+  // Hold HRV steady and the SAME session ratings can no longer carry the arm.
+  db.prepare(`DELETE FROM daily_metrics WHERE date >= ?`).run(day(-6));
+  for (let d = 6; d >= 0; d--) hrv(-d, 70);
+  assert.equal(
+    repo.energyDeficiencyArms(TODAY).find((entry) => entry.key === "recovery_and_performance").verdict,
+    "not_met"
+  );
 });
