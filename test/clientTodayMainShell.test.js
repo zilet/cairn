@@ -35,6 +35,38 @@ test("Today lead keeps bodyweight capture reachable and omits standalone typed, 
   assert.doesNotMatch(html, /id="goalSlot"|id="goalLine"/);
 });
 
+test("Today lead carries the quiet frequents strip and check-in slot on today's own date", () => {
+  const shell = loadMainShell();
+  const html = shell.leadHtml(
+    {
+      isToday: true,
+      briefHtml: `<section id="brief">Rest today.</section>`,
+      conductorHtml: "",
+      currentWeight: 172.4,
+    },
+    { escapeHtml: String }
+  );
+
+  assert.match(html, /id="freqFoods" class="freq-foods"/);
+  assert.match(html, /id="checkinSlot" class="checkin-slot"/);
+});
+
+test("Today lead omits the check-in slot when browsing a day other than today", () => {
+  const shell = loadMainShell();
+  const html = shell.leadHtml(
+    {
+      isToday: false,
+      briefHtml: `<section id="brief">Rest today.</section>`,
+      conductorHtml: "",
+      currentWeight: 172.4,
+    },
+    { escapeHtml: String }
+  );
+
+  assert.match(html, /id="freqFoods" class="freq-foods"/);
+  assert.doesNotMatch(html, /id="checkinSlot"/);
+});
+
 test("This week owns trajectory stats without rendering a standalone pace offer", () => {
   const shell = loadMainShell();
   const html = shell.weekFoldHtml(

@@ -141,6 +141,10 @@ async function renderChat(): Promise<void> {
     spawnPendingBubble,
     ensureMonitor: chatMonitorEnsure,
   });
+  // Press-to-talk dictation into the composer — scoped to Chat per the
+  // capture-in-Chat product law. Silently absent where Web Speech isn't
+  // supported (setupVoiceCapture hides #chatMic itself in that case).
+  setupVoiceCapture();
 
   const cachedMessages = peekCached<ChatScreenMessage[]>(CHAT_LIVE_CACHE_KEY);
   if (cachedMessages) {

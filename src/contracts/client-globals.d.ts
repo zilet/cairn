@@ -598,14 +598,12 @@ declare global {
     isCurrentPoll(token: number): boolean;
     suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
     updateHeaderCondense(): void;
-    quickLog(): unknown;
     wireCardioSync(root: ParentNode, onSync: () => unknown): unknown;
     applyDayProgression(button: Element | null | undefined, day: number | null | undefined): unknown;
     wireBrief(read: { _provisional?: boolean } | null | undefined, options: { isToday: boolean }): unknown;
     upgradeBriefInPlace(date: string, isToday: boolean): unknown;
     loadTableHint(): unknown;
     setupWeightChip(): unknown;
-    setupVoiceCapture(): unknown;
     loadFrequentFoods(): unknown;
     loadContextBanner(): unknown;
     loadHealthFocusBanner(): unknown;
@@ -1471,6 +1469,7 @@ declare global {
   declare function currentRouteState(): Partial<ClientRoute>;
   declare function activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function toast(message: string): void;
+  declare function setupVoiceCapture(): void;
   declare function armDelete(btn: Element, onConfirm: () => unknown, options?: { label?: string }): void;
   declare function mountSaveBar(options: {
     sentinel: Element | null;
@@ -4384,7 +4383,7 @@ declare global {
 
     CairnCaptureVoice: {
       micGlyph: string;
-      setup(deps: { root: ParentNode; quickLog(): Promise<void> }): void;
+      setup(deps: { mic: HTMLElement; input: HTMLInputElement | HTMLTextAreaElement; onDictated?(): void }): void;
     };
 
     CairnTodaySessionSuggest: {

@@ -1,10 +1,16 @@
 // @ts-check
 // Capture voice dictation: Web Speech feature detection, mic glyph, and
-// press-to-talk lifecycle for the free-text quick log.
+// press-to-talk lifecycle for free-text dictation. Mounts onto whatever
+// mic/input pair the caller hands it — the chat composer today — rather
+// than hunting a fixed id, so any surface can reuse this machinery.
 
 type CaptureVoiceDeps = {
-  root: ParentNode;
-  quickLog(): Promise<void>;
+  mic: HTMLElement;
+  input: HTMLInputElement | HTMLTextAreaElement;
+  // Called once dictation ends with new heard text still in `input`. The
+  // athlete keeps final say by default (no callback) — the transcript just
+  // sits in the field for them to review and send themselves.
+  onDictated?(): void;
 };
 
 type SpeechWindow = Window & {
@@ -23,12 +29,12 @@ const CAPTURE_SPEECH_REC: CaptureSpeechRecognitionCtor | null =
 
 let _captureVoiceRec: CaptureSpeechRecognition | null = null;
 
-// Press-to-talk dictation into #qlInput. The transcript (interim + final) flows
-// through the same quick-log routing as typed text. Degrades to text-only where
-// speech is absent.
+// Press-to-talk dictation into the given input. The transcript (interim +
+// final) is written to `input.value` and a real "input" event is dispatched
+// so the host surface's own listeners (draft-save, autosize, …) react exactly
+// as if the athlete had typed it. Degrades to text-only where speech is absent.
 function setupCaptureVoice(deps: CaptureVoiceDeps): void {
-  const mic = deps.root.querySelector<HTMLElement>("#qlMic");
-  const inp = deps.root.querySelector<HTMLInputElement>("#qlInput");
+  const { mic, input: inp } = deps;
   if (!mic || !inp) return;
   if (!CAPTURE_SPEECH_REC) { mic.hidden = true; return; }
   mic.hidden = false;
@@ -59,6 +65,7 @@ function setupCaptureVoice(deps: CaptureVoiceDeps): void {
       const said = (finalText + interim).trim();
       if (said) heard = true;
       inp.value = (base ? base + " " : "") + said;
+      inp.dispatchEvent(new Event("input", { bubbles: true }));
     };
     rec.onerror = (e: CaptureSpeechErrorEvent) => {
       if (e && (e.error === "not-allowed" || e.error === "service-not-allowed")) {
@@ -70,7 +77,7 @@ function setupCaptureVoice(deps: CaptureVoiceDeps): void {
     rec.onend = () => {
       mic.classList.remove("qlmic-live");
       _captureVoiceRec = null;
-      if (heard && inp.value.trim()) deps.quickLog();
+      if (heard && inp.value.trim()) deps.onDictated?.();
     };
     _captureVoiceRec = rec;
     mic.classList.add("qlmic-live");

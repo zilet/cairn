@@ -168,3 +168,22 @@ test("chat shell, header, starter, and divider helpers preserve selectors safely
   assert.match(chat.freshPillHtml(2), /2 things remembered/);
   assert.match(chat.freshPillHtml(0), /Fresh start/);
 });
+
+test("chat composer mounts a hidden #chatMic riding the shared .qlmic press-to-talk affordance", () => {
+  const chat = loadChatClient();
+  const html = chat.shellHtml();
+
+  assert.match(html, /<div class="chat-field">[\s\S]*id="chatInput"[\s\S]*id="chatMic" class="qlmic" type="button" hidden[\s\S]*<\/div>/);
+  assert.doesNotMatch(html, /class="qlmic-pill"|class="mic-pill"/, "reuses the existing mic affordance, not a new one-off pill");
+});
+
+test("chat composer's mic glyph comes from the reused capture-voice-client module, read lazily", () => {
+  const context = { Math, Number, String, Date, RegExp, Set, escHtml, escAttr };
+  context.window = context;
+  context.CairnCaptureVoice = { micGlyph: "<svg data-test-glyph></svg>" };
+  vm.runInNewContext(readFileSync(join(root, "public/js/chat-client.js"), "utf8"), context);
+
+  const html = context.CairnChatClient.shellHtml();
+
+  assert.match(html, /<svg data-test-glyph><\/svg>/);
+});

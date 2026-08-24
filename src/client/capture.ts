@@ -129,8 +129,16 @@ function captureVoice(): Window["CairnCaptureVoice"] {
 
 const MIC_GLYPH = (globalThis as unknown as { CairnCaptureVoice?: Window["CairnCaptureVoice"] }).CairnCaptureVoice?.micGlyph ?? "";
 
+// Voice capture is scoped to Chat (product law: photo/voice logging ONLY in
+// Chat). It mounts against whichever mic/input pair the chat composer emits
+// in the shared `view` root — when Chat is the active surface both exist, so
+// this does not early-return there; on any other tab neither exists yet and
+// it quietly no-ops.
 function setupVoiceCapture(): void {
-  captureVoice().setup({ root: view, quickLog });
+  const mic = view.querySelector<HTMLElement>("#chatMic");
+  const inp = view.querySelector<HTMLTextAreaElement>("#chatInput");
+  if (!mic || !inp) return;
+  captureVoice().setup({ mic, input: inp });
 }
 
 // hour → meal slot, used both to label the re-logged food and to query frequents

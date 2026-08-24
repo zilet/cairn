@@ -25,13 +25,19 @@ type TodayMainShellApi = {
     return currentWeight != null ? `${currentWeight}<span class="wt-mini-unit">lb</span>` : "weight";
   }
 
-  function captureRowHtml(currentWeight: unknown): string {
+  function captureRowHtml(currentWeight: unknown, isToday: boolean): string {
+    // freqFoods and checkinSlot render only when the loader has something to
+    // show (frequents for this time of day / no check-in noted yet) — both
+    // are empty <div>s here that stay quiet (`:empty{display:none}`) until
+    // their loader fills them in during post-render wiring.
     return `<div class="capture-row reveal" style="--i:1">
       <div class="wt-inline" id="wtInline" hidden>
         <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)">
         <button id="wtInlineGo" class="logbtn">+</button>
       </div>
       <button id="wtChipMini" class="wt-mini" type="button" title="Log bodyweight">${weightChipLabel(currentWeight)}<span class="stat-plus">+</span></button>
+      <div id="freqFoods" class="freq-foods"></div>
+      ${isToday ? `<div id="checkinSlot" class="checkin-slot"></div>` : ""}
     </div>`;
   }
 
@@ -43,7 +49,7 @@ type TodayMainShellApi = {
     ${options.conductorHtml ? `<div class="cfocus-slot cfocus-thread-slot" id="cfocusSlot">${options.conductorHtml}</div>` : `<div class="cfocus-slot" id="cfocusSlot"></div>`}
     <div id="attentionLead" class="card-stack"></div>
     <div id="sugSlot" class="sug-slot"></div>
-    ${captureRowHtml(options.currentWeight)}`;
+    ${captureRowHtml(options.currentWeight, options.isToday)}`;
   }
 
   function weekFoldHtml(compass: TodayMainShellCompass, deps: Pick<TodayMainShellDeps, "escapeHtml">): string {
