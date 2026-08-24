@@ -443,6 +443,27 @@ export function buildDayReadPrompt(
   } catch {
     driveBlock = "";
   }
+  // The same-day hold, named on the same terms as the drive and backed blocks above.
+  // `signals.today_holds` ships in the DETERMINISTIC SIGNALS blob either way, but
+  // nothing told the model what a lab draw MEANS for sequencing — the one thing the
+  // athlete actually needs said out loud is that movement belongs AFTER the needle —
+  // nor that an explicit claims_day is the athlete's own word rather than an inference.
+  let todayHoldBlock = "";
+  try {
+    const holds: any[] = Array.isArray((baseline.signals as any)?.today_holds)
+      ? ((baseline.signals as any).today_holds as any[])
+      : [];
+    const claimed = holds.find((hold) => hold?.claims_day);
+    const lab = holds.find((hold) => hold?.lab_draw);
+    if (claimed) {
+      todayHoldBlock += `\nTHE DAY IS SPOKEN FOR (their own word — DATA is in signals.today_holds): they marked "${String(claimed.title ?? "").trim() || "a commitment"}" as taking today. Honor it: lean rest or the gentlest movement, name the commitment as the reason in a friend's voice, and never argue the day back open.\n`;
+    }
+    if (lab) {
+      todayHoldBlock += `\nLAB DRAW TODAY (signals.today_holds): "${String(lab.title ?? "").trim() || "a blood draw"}" is on today's calendar. Sequencing matters and you should say it plainly: any movement you suggest belongs AFTER the draw, never before it — exercise beforehand can nudge the very numbers being measured, and many draws are fasted. Keep whatever follows easy, name the draw as the reason the day stays simple, and treat the appointment kindly — a normal part of looking after yourself, never a burden or a verdict.\n`;
+    }
+  } catch {
+    todayHoldBlock = "";
+  }
   const overrideBlock = opts.override?.trim()
     ? `\nUSER OVERRIDE (honor this — they're steering): "${opts.override.trim()}". Reshape the read accordingly (e.g. "rough night" → lean easy/rest; "short on time" → a compressed session; "I want to train anyway" → a train read even if the baseline leaned rest, kept appropriately light).\n`
     : "";
@@ -558,7 +579,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}${fuelDemandLine}
 ${CONTEXT_GUARDRAILS}
-${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${overrideBlock}
+${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${overrideBlock}
 ${renderJsonContract(DAY_READ_SCHEMA)}
 
 DATA:

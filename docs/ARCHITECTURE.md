@@ -777,6 +777,23 @@ default is omitted from the hash rather than nulled, so the key's first appearan
 every warm read at once; and the drive read hashes a stable token in the `focus` slot, because its
 focus is the rendered due list, which moves as the session is logged.
 
+**The calendar can hold TODAY, not just tomorrow.** `todayHolds()` (`src/repo/signal-state.ts`) is
+the same-day mirror of `tomorrowHolds()`, and deliberately narrower — two shapes only: the athlete's
+explicit `meta.claims_day: true` (their word that this day is taken; honored on the day itself, not
+just one day out), and a lab draw (`contextEventReadsAsLabDraw`, `src/repo/context-effect.ts` — a
+word-bounded classifier beside the illness one). A bare trip or life event is NOT a hold — it stays
+ordinary schedule pressure — an explicit `claims_day: false` silences both shapes, clinical shapes
+never hold, and an open-ended event holds only its own start day. Each hold ships as a context-only
+`today_hold` observation (visible everywhere, votes nowhere) and as `signals.today_holds`, and one
+day-read rule directly above the tomorrow-lookahead acts on it: a claimed day reads as the rest the
+athlete asked for (`day_claimed_rest`, yielding only to work already logged), and a lab-draw morning
+leans easy with the draw named and SEQUENCED — movement belongs after the needle, because exercise
+before a draw can nudge the very numbers it measures (`lab_draw_morning`, yielding to every rest
+grounded in a signal about the athlete, but not to the discretionary rhythm rest). The rule cannot
+gate on `hasFreshBrake`: the hold's own schedule-pressure caution IS a fresh brake, and a rule vetoed
+by the very event it answers to would never fire. `buildDayReadPrompt` carries matching blocks (`THE
+DAY IS SPOKEN FOR` / `LAB DRAW TODAY`) so the agent path says the sequencing out loud too.
+
 **The rest/easy Brief is never a void.** `src/repo/recovery-menu.ts` derives a short menu of 2–3
 low-key recovery options (easy spin / walk / mobility / core, named from recent muscle load) for a
 rest or easy read, steering clear of anything an active training symptom flags via a gentler,

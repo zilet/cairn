@@ -95,6 +95,21 @@ export function contextEventReadsAsIllness(ev: any): boolean {
   return !!text && ILLNESS_RE.test(text);
 }
 
+// A blood draw / lab visit — a MEASUREMENT-SENSITIVE commitment, which is neither an
+// illness nor a constraint on capacity. The distinction the day read needs is about
+// sequencing, not load: exercise before a draw can nudge the very numbers the draw is
+// there to measure (lipids, glucose, inflammatory markers — many draws are fasted), so
+// the morning belongs to the needle and any movement belongs after it. Word-bounded
+// like every classifier here, and exported for the same reason the illness probe is:
+// "Bloodwork — follow-up labs" is filed as a life_event, and the layer that decides
+// the day's KIND has to recognize the shape with the one regex every surface shares.
+const LAB_DRAW_RE =
+  /\b(blood ?work|blood (?:draw|test|panel|sample)|lab (?:draw|work|visit|appointment)|labs|phlebotomy|fasting (?:labs?|blood)|venipuncture)\b/i;
+export function contextEventReadsAsLabDraw(ev: any): boolean {
+  const text = eventText(ev);
+  return !!text && LAB_DRAW_RE.test(text);
+}
+
 // Add N days to a YYYY-MM-DD string → a YYYY-MM-DD string (UTC, DST-safe for a
 // plain day count). Returns null on an unparseable date.
 function addDaysISO(iso: string, days: number): string | null {

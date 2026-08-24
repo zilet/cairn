@@ -62,8 +62,10 @@ import {
   spokenSignalVoice,
   SIGNAL_VOICE_KEYS,
   SIGNAL_VOICE_REGISTRY,
+  todayHolds,
   tomorrowHolds,
   type SignalDimension,
+  type TodayHold,
   type TomorrowHold,
   type SignalVoiceRef,
   type UnifiedSignalState,
@@ -251,6 +253,28 @@ export const DAY_READ_OUTCOMES = {
       "Tomorrow already has a claim on it, so today holds the easy movement instead.",
     ],
   },
+  // The same-day mirror of the look-ahead: the calendar already owns TODAY. Two
+  // shapes, two codes. `day_claimed_rest` honors the athlete's own claims_day — their
+  // word that the day is taken, which the read accepts rather than re-litigates.
+  // `lab_draw_morning` is gentler: the day still opens, but everything it offers goes
+  // AFTER the draw, because exercise beforehand can nudge the very numbers being
+  // measured — so every phrasing puts the needle first and keeps what follows easy.
+  day_claimed_rest: {
+    code: "day_claimed_rest",
+    reasons: [
+      "You said today is taken, and that settles it.",
+      "Today is already claimed on the calendar, by your own word.",
+      "You marked today as spoken for, so the quiet day lands here.",
+    ],
+  },
+  lab_draw_morning: {
+    code: "lab_draw_morning",
+    reasons: [
+      "A blood draw is on today's calendar, so the day stays simple around it.",
+      "Today holds a lab draw, and easy movement after it is plenty.",
+      "With a blood draw today, anything worth doing comes after the draw.",
+    ],
+  },
   low_readiness_rest: {
     code: "low_readiness_rest",
     reasons: [
@@ -420,6 +444,21 @@ const LOOKAHEAD_RETIME_WHY: readonly string[] = [
   "Something's on tomorrow, which makes today the natural place for the gentle work. No need to make it a big one.",
   "Tomorrow already has a claim on it, so if today is the day you move, keep the effort comfortable.",
   "With tomorrow taken, an easy turn today fits better than waiting for a day that isn't yours.",
+];
+// The same-day holds (see the outcome note above). The claimed-day set accepts the
+// athlete's word without a trace of argument — no phrasing may bargain the day back
+// open. The lab-draw set carries the ONE sequencing fact the athlete actually needs
+// said out loud: the draw goes first, and whatever movement follows stays easy.
+const DAY_CLAIMED_WHY: readonly string[] = [
+  "You said today is spoken for, so let it be — training picks back up when the calendar hands the day back.",
+  "Today is already claimed, by your own word. A quiet day here costs nothing.",
+  "You marked today as taken, so rest is the honest read — tomorrow is soon enough.",
+];
+const LAB_DRAW_WHY: readonly string[] = [
+  "Your blood draw comes first today — keep the morning quiet, and an easy spin of the legs after it is plenty if you feel like moving.",
+  "Today holds your lab draw, so let the needle go first; easy movement afterwards still counts.",
+  "With labs on the calendar this morning, save any movement for after the draw and keep it comfortable.",
+  "The draw owns the morning — nothing before it, and if you move later, keep it easy.",
 ];
 const VOLUME_SPIKE_WHY: readonly string[] = [
   "Your running's ramped this week — an easy day lets it absorb.",
@@ -1042,6 +1081,8 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   accumulated_load_rest: STACKED_LOAD_WHY,
   push_drive_targeted_training: PUSH_DRIVE_WHY.map((render) => render("quads and back")),
   lookahead_retimed_training: LOOKAHEAD_RETIME_WHY,
+  day_claimed_rest: DAY_CLAIMED_WHY,
+  lab_draw_morning: LAB_DRAW_WHY,
   low_readiness_rest: LOW_READINESS_WHY,
   felt_run_down_rest: RUN_DOWN_WHY,
   logged_light_work_today: LIGHT_WORK_WHY,
@@ -1090,6 +1131,13 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // today's evidence; this one's entire basis is the NEXT day, and a phrasing that
   // stops naming it is an unexplained training day inside a run of loading days.
   lookahead_retimed_training: /\btomorrow\b/i,
+  // The athlete's word is this rule's entire basis, so every phrasing has to say the
+  // day is theirs and already given: a sentence that drops "claimed / taken / spoken
+  // for" is an unexplained rest.
+  day_claimed_rest: /\b(?:claimed|taken|spoken for)\b/i,
+  // The one fact this read exists to carry is the draw itself — a phrasing that stops
+  // naming it is an unexplained easy day, and the sequencing advice goes with it.
+  lab_draw_morning: /\b(?:draw|labs?|blood)\b/i,
   low_readiness_rest: /\b(?:readiness|reading)\b/i,
   felt_run_down_rest: /\b(?:run-down|low)\b/i,
   logged_light_work_today: /\b(?:moved|movement|board)\b/i,
@@ -2372,6 +2420,10 @@ export function dayRead(
   // it even on a morning where a short night or a logged session decides the day.
   const holdsTomorrow: TomorrowHold[] = signalInput(() => tomorrowHolds(d, contextEvents), []);
   if (holdsTomorrow.length) (signals as any).tomorrow_holds = holdsTomorrow;
+  // …and what already holds TODAY (the athlete's claims_day, or a lab draw whose
+  // morning belongs to the needle) — published on the same terms, whichever rule wins.
+  const holdsToday: TodayHold[] = signalInput(() => todayHolds(d, contextEvents), []);
+  if (holdsToday.length) (signals as any).today_holds = holdsToday;
   // A movement work-around is a fact about the ATHLETE, not a property of whichever
   // rule wins the morning, so it is probed once here rather than inside a rule. It
   // used to live inside the protect rule below — so the day a corroborated short
@@ -2628,6 +2680,69 @@ export function dayRead(
             // calendar compresses the window there, and a targeted day is no less
             // subject to the athlete's actual afternoon than a planned one is.
             est_minutes: commitmentPressure ? 40 : 60,
+            signals,
+          },
+        };
+      },
+    },
+    {
+      // ---- the same-day hold: the calendar already owns TODAY ----
+      // The companion to the look-ahead below, born of the same incident's second act:
+      // the appointment that was invisible one day out was still only half-visible on
+      // its own morning. A today-active event raised schedule pressure (a directive
+      // about the WINDOW) but nothing about the day's KIND or its SEQUENCE, so a
+      // morning lab draw read as an ordinary training day with no word about the draw
+      // — and the athlete's own `claims_day`, honored one day out by the look-ahead,
+      // went unread on the very day it named.
+      //
+      // Two arms, in order of the athlete's word:
+      //   • CLAIMED: they said outright this day is taken. The read accepts it as the
+      //     rest it is — their word is itself a signal about the athlete, so it yields
+      //     only to reality (work already logged today; the done/light rules own a
+      //     moved day). Rest is the floor's safest read; there is nothing to gate.
+      //   • LAB DRAW: not a claim on the day but on its SEQUENCE — movement belongs
+      //     after the needle, so the day leans easy around it. This arm OPENS a day
+      //     shape rather than closing one, so like the look-ahead it steps aside for
+      //     every rest grounded in a signal about the athlete: a dose overrun, a
+      //     run-down check-in, a low reading and anything clinical each keep their own
+      //     rest and their own why (all compatible with a draw morning anyway). It
+      //     deliberately does NOT step aside for the discretionary rhythm rest — an
+      //     easy day placed after the draw is that same break with the appointment
+      //     named, which is the correlation this rule exists to say out loud.
+      // It does not gate on hasFreshBrake: the hold's own schedule-pressure caution
+      // IS a fresh brake, and a rule vetoed by the very event it answers to would
+      // never fire at all. The explicit gates above are the brake checks it keeps.
+      resolve: () => {
+        if (!holdsToday.length) return null;
+        if (trainedToday || bigActivity) return null;
+        const claimed = holdsToday.find((hold) => hold.claims_day);
+        if (claimed) {
+          (signals as any).same_day_hold = { hold: claimed, shape: "claimed" };
+          return {
+            outcome: DAY_READ_OUTCOMES.day_claimed_rest,
+            read: {
+              kind: "rest" as const,
+              focus: null,
+              why: pickDayVariant(DAY_CLAIMED_WHY, d, "day_claimed_rest"),
+              est_minutes: null,
+              signals,
+            },
+          };
+        }
+        if (yesterdayRecoveryOverdose || lowSubjective || lowReadiness) return null;
+        if (clinicallyDriven(signalState, healthWorkaround)) return null;
+        const lab = holdsToday.find((hold) => hold.lab_draw);
+        if (!lab) return null;
+        (signals as any).same_day_hold = { hold: lab, shape: "lab_draw" };
+        return {
+          outcome: DAY_READ_OUTCOMES.lab_draw_morning,
+          read: {
+            kind: "easy" as const,
+            focus: null,
+            why: pickDayVariant(LAB_DRAW_WHY, d, "lab_draw_morning"),
+            // The look-ahead's bare-day clock: the offer is an easy turn after the
+            // draw, never a session the appointment then has to fit around.
+            est_minutes: 25,
             signals,
           },
         };

@@ -18,7 +18,7 @@ import {
   type WearAbsenceView,
 } from "./wear-pattern-voice.js";
 import { addDaysISO, joinList } from "./shared.js";
-import { contextEventReadsAsIllness } from "./context-effect.js";
+import { contextEventReadsAsIllness, contextEventReadsAsLabDraw } from "./context-effect.js";
 
 export type SignalDimension =
   | "recovery_capacity"
@@ -866,6 +866,68 @@ export function tomorrowHolds(date: string, contextEvents: unknown): TomorrowHol
         blocks_training: clinical ? false : (claimsDayOverride(event) ?? KIND_CLAIMS_DAY.test(kind)),
       };
     });
+}
+
+// ---------- the same-day mirror: what already holds TODAY ----------
+//
+// `tomorrowHolds` above answers "is tomorrow spoken for" so a discretionary rest can
+// be re-timed. This answers the companion question the incident's second act exposed:
+// an event on the day BEING READ shaped nothing but the schedule directive, so a
+// morning lab draw still read as an ordinary training day with no word about the
+// draw, and the athlete's own `claims_day` — honored one day out — went unread on
+// the very day it named.
+//
+// A hold here is deliberately narrow. Two shapes only:
+//   • the athlete's explicit `claims_day: true` — their word that this day is taken
+//     (a bare trip or life_event does NOT hold its own day; being somewhere is not
+//     the same as the day being gone, and today's schedule pressure already carries
+//     the ordinary commitment),
+//   • a lab draw (`contextEventReadsAsLabDraw`) — not a claim on the day but on its
+//     SEQUENCE: movement belongs after the needle, so the day leans easy around it.
+// An explicit `claims_day: false` silences both — their word outranks the shape in
+// this direction too. Clinical shapes (an injury row, anything reading as illness)
+// are excluded outright: they have their own machinery and are never calendar holds.
+// An open-ended event holds only its own start day — "the day is taken" is a
+// statement about a date, and an event nobody remembered to close must not claim
+// every morning after it.
+export interface TodayHold {
+  id: number | null;
+  kind: string;
+  title: string;
+  start_date: string | null;
+  end_date: string | null;
+  claims_day: boolean; // the athlete's own word: this event takes the day
+  lab_draw: boolean; // measurement-sensitive — any movement belongs after it
+}
+
+/** Context events that HOLD the day being read. Never throws; absent input ⇒ []. */
+export function todayHolds(date: string, contextEvents: unknown): TodayHold[] {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Array.isArray(contextEvents)) return [];
+  const out: TodayHold[] = [];
+  for (const event of contextEvents as any[]) {
+    if (!event || typeof event !== "object") continue;
+    const start = String(event.start_date ?? "").slice(0, 10);
+    const end = String(event.end_date ?? "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || start > date) continue;
+    if (end ? end < date : start !== date) continue;
+    const kind = String(event.kind ?? "");
+    if (kind === "injury" || contextEventReadsAsIllness(event)) continue;
+    const claim = claimsDayOverride(event);
+    if (claim === false) continue;
+    const claims_day = claim === true;
+    const lab_draw = contextEventReadsAsLabDraw(event);
+    if (!claims_day && !lab_draw) continue;
+    out.push({
+      id: event.id != null ? Number(event.id) : null,
+      kind,
+      title: String(event.title ?? "").trim(),
+      start_date: start,
+      end_date: end || null,
+      claims_day,
+      lab_draw,
+    });
+  }
+  return out;
 }
 
 const DIMENSIONS: SignalDimension[] = [
@@ -2270,6 +2332,32 @@ export function planningSignalState(input: {
           context_only: true,
           max_age_days: 0,
           observation_id: `tomorrow:${hold.id ?? hold.title}`,
+        }
+      )
+    );
+  }
+  // The same-day mirror: an event that holds the day being read — the athlete's own
+  // claims_day, or a lab draw whose morning belongs to the needle. Context-only for
+  // the same reason as the look-ahead above: a calendar row is not evidence about the
+  // athlete's capacity, so it must reach every reader of the state without moving a
+  // dimension, the arbitration or the posture. (The ordinary commitment-pressure
+  // observation above still fires independently — that one IS about capacity.) The
+  // day-read rule that acts on this reads it by field and applies its own gates.
+  for (const hold of todayHolds(date, input.contextEvents)) {
+    observations.push(
+      observation(
+        "life_capacity",
+        "today_hold",
+        date,
+        "user_context",
+        "neutral",
+        hold.lab_draw
+          ? `${hold.title || "A lab draw"} holds today; it is a blood draw, so any training belongs after it.`
+          : `${hold.title || "A commitment"} holds today; the athlete has said the day is taken.`,
+        {
+          context_only: true,
+          max_age_days: 0,
+          observation_id: `today:${hold.id ?? hold.title}`,
         }
       )
     );

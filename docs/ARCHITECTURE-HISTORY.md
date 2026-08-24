@@ -4,6 +4,30 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-24 — the calendar can hold today, and a lab draw says which half
+
+The look-ahead's second act (NO schema change). The 2026-08-23 fix taught the day read what tomorrow
+holds; the appointment's own morning was still only half-visible — a today-active event raised
+schedule pressure (a window question), so a morning lab draw read as an ordinary training day with no
+word about the draw, and the athlete's `meta.claims_day` — honored one day out — went unread on the
+very day it named. `todayHolds()` (`src/repo/signal-state.ts`) now resolves the same-day question,
+deliberately narrower than its tomorrow sibling: only an explicit `claims_day: true` or a lab-draw
+shape (`contextEventReadsAsLabDraw`, `src/repo/context-effect.ts`) is a hold; a bare trip/life event
+stays ordinary schedule pressure, `claims_day: false` silences both shapes, clinical shapes never
+hold, and an open-ended event holds only its own start day. Each hold ships as a context-only
+`today_hold` observation plus `signals.today_holds`, and one day-read rule (directly above the
+tomorrow-lookahead) acts on it: `day_claimed_rest` accepts the athlete's word as rest (yielding only
+to work already logged), and `lab_draw_morning` leans the day easy with the draw named and SEQUENCED —
+movement after the needle, because exercise before a draw can nudge the numbers it measures (yields
+to every athlete-signal rest, but not to the discretionary rhythm rest — that break placed after the
+draw with the appointment named is the whole point). The rule cannot gate on `hasFreshBrake` (the
+hold's own schedule-pressure caution IS a fresh brake). `buildDayReadPrompt` gained the matching
+`THE DAY IS SPOKEN FOR` / `LAB DRAW TODAY` blocks so the agent path says the sequencing out loud.
+New vocabulary (`DAY_CLAIMED_WHY` / `LAB_DRAW_WHY` + ledger reasons + required concepts) rotates
+through `pickDayVariant` and holds the reading grammar. Tests: `test/dayReadTodayHold.test.js`.
+
+---
+
 ## 2026-08-23 — comparability moves to the dose, tomorrow gets a look-ahead, and art learns to fail loudly
 
 Five change sets. **Dose comparability is per-lift, not per-session:** all 14 strength outcomes in the
