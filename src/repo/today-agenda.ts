@@ -310,6 +310,23 @@ function garminReconcileAnnouncement(decision: any): TodayAgendaCandidate {
   };
 }
 
+// Every Garmin activity id named by a garmin_reconcile decision the athlete undid.
+// Bounded by the same horizon the candidate list uses (listUnreconciledGarminStrength
+// looks back 30 days), so a generous decision limit still covers every row that could
+// possibly be offered.
+function revertedReconcileActivityIds(): Set<number> {
+  const ids = new Set<number>();
+  for (const decision of listBrainDecisions({ status: "reverted", kind: "garmin_reconcile", limit: 200 })) {
+    const named = (decision.action as any)?.activity_ids;
+    if (!Array.isArray(named)) continue;
+    for (const id of named) {
+      const numeric = Number(id);
+      if (Number.isFinite(numeric)) ids.add(numeric);
+    }
+  }
+  return ids;
+}
+
 function reconcileCandidate(date: string): TodayAgendaCandidate | null {
   const today = localDateISO();
 
@@ -324,8 +341,17 @@ function reconcileCandidate(date: string): TodayAgendaCandidate | null {
 
   if (date !== today) return null; // reconciling is a "now" concern, not a historical one
 
-  const rows = listUnreconciledGarminStrength();
-  const n = Array.isArray(rows) ? rows.length : 0;
+  // An undone merge must STAY undone. revertGarminReconcile unlinks by setting
+  // garmin_activities.session_id back to NULL — which is exactly the selector
+  // listUnreconciledGarminStrength uses, so without this filter the very next Today
+  // render re-merges the activities the athlete just put back, and the ledger holds
+  // one `reverted` row misreporting the true state. The ledger already names the
+  // activities each merge touched (`action.activity_ids`), so it is the record of
+  // what was undone; no new column is needed. A later genuinely-new sync brings
+  // different activity ids and still reconciles normally.
+  const undone = revertedReconcileActivityIds();
+  const rows = listUnreconciledGarminStrength().filter((row: any) => !undone.has(Number(row.id)));
+  const n = rows.length;
   if (n <= 0) return null;
 
   const policy = decideAutonomyTier({

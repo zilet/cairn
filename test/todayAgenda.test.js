@@ -1157,4 +1157,38 @@ test("Undo restores the pre-merge state (session unlinked, garmin_json restored)
   assert.equal(repo.listUnreconciledGarminStrength().length, 1, "undo unlinks the activity again");
   const decision = repo.getBrainDecision(decisionId);
   assert.equal(decision.status, "reverted");
+
+  // THE POINT OF UNDO: it has to survive the next render. Unlinking restores exactly
+  // the state the reconcile candidate selects on (session_id IS NULL), so without the
+  // reverted-ledger filter Today silently re-merges what the athlete just put back —
+  // and the ledger keeps one `reverted` row that no longer describes reality.
+  const after = repo.todayAgenda();
+  const rerenderCard = [...after.primary, ...after.more].find((c) => c.kind === "reconcile");
+  assert.ok(!rerenderCard, "an undone merge is not re-offered or re-applied on the next render");
+  assert.equal(repo.listUnreconciledGarminStrength().length, 1, "the activity stays unlinked");
+  assert.equal(repo.getBrainDecision(decisionId).status, "reverted", "the ledger still describes reality");
+  assert.equal(
+    repo.listBrainDecisions({ status: "applied", kind: "garmin_reconcile" }).length,
+    0,
+    "no second merge decision was recorded behind the athlete's back"
+  );
+});
+
+test("a genuinely new sync after an undo still reconciles (the filter is per activity, not a mute)", () => {
+  seedUnreconciledGarminStrength(localDaysAgo(0), "ext-undone");
+  const a = repo.todayAgenda();
+  const card = [...a.primary, ...a.more].find((c) => c.kind === "reconcile");
+  assert.equal(revertDecision(Number(card.secondary_action.payload), "test undo").ok, true);
+
+  // A different activity arrives from the watch. The undo spoke for the activities it
+  // named, never for the Garmin merge as a feature.
+  seedUnreconciledGarminStrength(localDaysAgo(0), "ext-fresh");
+  const next = repo.todayAgenda();
+  const freshCard = [...next.primary, ...next.more].find((c) => c.kind === "reconcile");
+  assert.ok(freshCard, "the new activity is offered normally");
+  assert.match(freshCard.id, /^garmin-reconcile-\d+$/, "and lands as its own quiet merge with its own Undo");
+
+  const stillUnreconciled = repo.listUnreconciledGarminStrength();
+  assert.equal(stillUnreconciled.length, 1, "only the undone activity stays behind");
+  assert.equal(stillUnreconciled[0].external_id, "ext-undone", "and it is the one the athlete put back");
 });
