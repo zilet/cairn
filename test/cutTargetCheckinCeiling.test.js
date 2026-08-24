@@ -197,3 +197,36 @@ test("the same suggestion passes once that maintenance is actually measured", ()
   assert.equal(out.target_kcal, 2_800, "a logged-reality anchor behaves exactly as it did before");
   assert.equal(out.cut_anchor.protective_capped, false);
 });
+
+// ---- rule 5: a deepening does not land in a high-demand week -----------------
+//
+// The anchor has already read the training week this target would be eaten in
+// (repo/cut-target.ts). The check-in has to honor that hold, or the derivation's
+// answer would bind only the surfaces that read it directly and the model's
+// judgement would still step the deficit into the heaviest week of a block.
+
+test("a step DOWN is held while the anchor says the training week is a big one", () => {
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_100, delta_kcal: -150 }, goal(2_250), {
+    cutAnchor: anchor(2_250, { deepening_held: true }),
+  });
+  assert.equal(out.target_kcal, 2_250, "held at the target already in force");
+  assert.equal(out.cut_anchor.deepening_held, true);
+  assert.equal(out.delta_kcal, 0, "the deficit is unchanged, not cancelled — the step simply waits");
+});
+
+test("the hold binds DOWNWARD only — a raise is still protection's question", () => {
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_400 }, goal(2_250), {
+    cutAnchor: anchor(2_350, { deepening_held: true }),
+    protective: true,
+  });
+  assert.equal(out.target_kcal, 2_400, "unchanged by rule 5");
+  assert.equal(out.cut_anchor.deepening_held, false);
+});
+
+test("an ordinary week steps down exactly as it always did", () => {
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_100 }, goal(2_250), {
+    cutAnchor: anchor(2_250, { deepening_held: false }),
+  });
+  assert.equal(out.target_kcal, 2_100);
+  assert.equal(out.cut_anchor.deepening_held, false);
+});

@@ -27,6 +27,7 @@ import {
   setNutritionTarget,
   validateMealPlanForPersistence,
 } from "../../repo/nutrition.js";
+import { mealPlanDraftUnseen, mealPlanRefreshShape } from "../../repo/meal-plan-refresh.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
 import {
@@ -555,6 +556,10 @@ export function applyMealPlanWithAutonomy(
       reasons: ["meal-plan snapshot is older than 14 days; refresh it against the current picture first"],
     };
   }
+  // Is this week's draft a rotation of the plan in force, or a change to it? The
+  // classifier is deterministic and conservative (repo/meal-plan-refresh.ts): an
+  // unreadable or absent predecessor is never "bounded".
+  const refreshShape = mealPlanRefreshShape(plan.parsed, (liveAcceptedMealPlan(planId) as any)?.parsed ?? null);
   const policy = decideAutonomyTier({
     kind: "meal_plan",
     risk_class: "low",
@@ -563,36 +568,56 @@ export function applyMealPlanWithAutonomy(
     lead_mode: getSettings().lead_mode,
     user_locked: input.user_locked,
     domain_demoted: domainIsDemoted("nutrition"),
+    routine: refreshShape.bounded,
   });
   if (policy.tier === "ask" || policy.tier === "clinician" || policy.tier === "observe") {
     return { ok: true, applied: false, tier: policy.tier, plan, reasons: policy.reasons };
   }
+  // Both live tiers wait for the same natural boundary — a meal plan never changes
+  // the food day already under way. The tier decides how loudly it arrives, and
+  // which status the boundary pass reads it under (a quiet apply is 'pending', an
+  // announcement is 'announced'); it never decides whether the athlete can undo it.
+  const quiet = policy.tier === "quiet_apply";
   // A spent budget delays this plan to its natural boundary and lets the boundary pass
   // re-check the week; it never converts the plan into an ask (2026-08-17 ruling).
   const surpriseBudgetSpent =
     !input.coordinated_update && !surpriseBudgetAllows(materialChangesThisWeek("nutrition", undefined, "meal_plan"));
 
   const effectiveDate = nextMealBoundary();
-  const recorded = withSqliteSavepoint(`schedule_meal_plan_${planId}`, () => {
+  const decision = withSqliteSavepoint(`schedule_meal_plan_${planId}`, () => {
     // The freshest scheduled meal week wins. Retire its older queued alternatives
     // in the same commit as the new owner so a ledger failure cannot strand both.
+    //
+    // A DRAFT THE ATHLETE NEVER SAW IS REPLACED, NOT SUPERSEDED. The refresh runs on
+    // a standing cadence, so a week nobody opened the app during used to leave a
+    // retired plan AND a retired ledger row behind, every week — a history of
+    // decisions about food that was never in front of anyone. When the queued draft
+    // has not been seen, its ledger row is re-pointed at the new plan instead: one
+    // standing "your next week of meals" entry that stays current, rather than a
+    // stack of them. A draft that HAS been seen keeps the ordinary supersede, because
+    // by then the athlete has a memory of it that the ledger has to match.
     const queued = [
       ...listBrainDecisions({ status: "announced", kind: "meal_plan", limit: 50 }),
       ...listBrainDecisions({ status: "pending", kind: "meal_plan", limit: 50 }),
-    ];
-    for (const decision of queued) {
-      const olderPlanId = Number((decision.action as any)?.meal_plan_id);
-      if (olderPlanId > 0 && olderPlanId !== planId) {
-        if ((getMealPlan(olderPlanId) as any)?.status === "draft")
-          setMealPlanStatus(olderPlanId, "superseded", { recordDecision: false });
-        transitionBrainDecision(decision.id!, "superseded");
+    ].sort((a, b) => Number(b.id) - Number(a.id));
+    let reusable: (typeof queued)[number] | null = null;
+    for (const queuedDecision of queued) {
+      const olderPlanId = Number((queuedDecision.action as any)?.meal_plan_id);
+      if (!(olderPlanId > 0) || olderPlanId === planId) continue;
+      const older = getMealPlan(olderPlanId) as any;
+      const isDraft = older?.status === "draft";
+      if (isDraft) setMealPlanStatus(olderPlanId, "superseded", { recordDecision: false });
+      if (!reusable && isDraft && mealPlanDraftUnseen(older)) {
+        reusable = queuedDecision;
+        continue;
       }
+      transitionBrainDecision(queuedDecision.id!, "superseded");
     }
     const previous = liveAcceptedMealPlan(planId);
-    return recordDecision({
+    const fields = {
       effective_date: effectiveDate,
-      kind: "meal_plan",
-      domain: "nutrition",
+      kind: "meal_plan" as const,
+      domain: "nutrition" as const,
       summary: String(plan.parsed?.summary ?? "Your next meal plan is ready and will become current tomorrow.").slice(
         0,
         300
@@ -605,15 +630,19 @@ export function applyMealPlanWithAutonomy(
       source: plan.agent || "autonomy",
       source_ref_type: "meal_plan",
       source_ref_key: String(plan.id),
-      status: "announced",
-      autonomy_tier: "announce",
-      risk_class: "low",
+      status: quiet ? ("pending" as const) : ("announced" as const),
+      autonomy_tier: policy.tier,
+      risk_class: "low" as const,
       reversible: false,
       input_fingerprint: null,
       context: {
         natural_boundary: true,
+        ...(quiet ? { quiet: true } : {}),
+        refresh_bounded: refreshShape.bounded,
+        ...(refreshShape.reasons.length ? { refresh_reasons: refreshShape.reasons } : {}),
         surprise_budget_deferred: surpriseBudgetSpent,
         coordinated_update: input.coordinated_update === true,
+        ...(reusable ? { replaced_unseen_draft_decision_id: reusable.id ?? null } : {}),
         evidence_keys: [`meal_plan:${plan.id}`, "coach_context:nutrition"],
         evidence_observed_at: new Date().toISOString(),
       },
@@ -623,15 +652,23 @@ export function applyMealPlanWithAutonomy(
       reverted_at: null,
       superseded_by: null,
       evaluator_version: null,
-    });
+    };
+    if (reusable?.id) {
+      const patched = patchBrainDecision(Number(reusable.id), fields as any);
+      if (patched) return patched;
+      // The re-point failed: retire the stale row and fall through to a fresh one
+      // rather than leaving two live decisions pointing at different weeks.
+      transitionBrainDecision(Number(reusable.id), "superseded");
+    }
+    return recordDecision(fields as any).decision;
   });
   return {
     ok: true,
     applied: false,
-    announced: true,
-    tier: "announce",
+    ...(quiet ? { pending: true } : { announced: true }),
+    tier: policy.tier,
     effective_date: effectiveDate,
-    decision: recorded.decision,
+    decision,
     plan: getMealPlan(planId),
     ...(surpriseBudgetSpent ? { budget_deferred: true } : {}),
   };

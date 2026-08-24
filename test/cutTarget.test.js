@@ -259,6 +259,107 @@ test("protein is carried forward, never trimmed as a side effect of a calorie ch
   assert.equal(cutTargetDecision(grounded({ protein_floor_g: null })).protein_g, null);
 });
 
+// ---- rule 5: the next step of the deficit waits for an ordinary week ---------
+
+// A week the block is peaking in, and a target already in force ABOVE the step this
+// week's derivation wants — i.e. a scheduled deepening.
+function highDemand(extra = {}) {
+  return grounded({
+    active_target_kcal: 2_500,
+    training_demand: { high: true, basis: ["block_phase"], phase: "intensification" },
+    ...extra,
+  });
+}
+
+test("a scheduled deepening HOLDS during a high-demand week", () => {
+  const stepped = cutTargetDecision(grounded({ active_target_kcal: 2_500 }));
+  const held = cutTargetDecision(highDemand());
+  assert.ok(stepped && held);
+  assert.equal(stepped.deepening_held, false, "an ordinary week steps as it always did");
+  assert.equal(held.deepening_held, true);
+  assert.equal(held.target_kcal, 2_500, "the target stays exactly where the athlete already had it");
+  assert.ok(held.target_kcal > stepped.target_kcal, "the step this week wanted was deeper than the hold");
+  assert.match(held.reason, /holding at the 2500 kcal already in force/);
+  assert.equal(held.training_demand.basis[0], "block_phase");
+});
+
+test("the hold defers the increment; it never cancels the deficit", () => {
+  const held = cutTargetDecision(highDemand());
+  assert.ok(held.deficit_kcal > 0, `a held target still eats at a deficit; got ${held.deficit_kcal}`);
+  assert.equal(held.deficit_kcal, held.tdee_kcal - held.target_kcal);
+  assert.ok(held.target_kcal < held.tdee_kcal, "a hold is never a surplus");
+});
+
+test("the hold never carries the target past MEASURED maintenance", () => {
+  // A target already sitting above maintenance cannot be held there: the same
+  // ceiling capProtectiveRaise puts on protection binds this hold too.
+  const held = cutTargetDecision(highDemand({ active_target_kcal: 3_000 }));
+  assert.ok(held);
+  assert.equal(held.target_kcal, 2_800, "capped at the measured maintenance the record produced");
+  assert.equal(held.deepening_held, true);
+});
+
+test("a formula_estimate anchor cannot buy the hold either", () => {
+  // Grounding fails, so maintenance is the prior. An unmeasured maintenance is not
+  // headroom for a protective raise, and it is not headroom for this hold.
+  const thin = { window_days: 28, intake_days: 2, weigh_ins: 1, weigh_in_span_days: 0 };
+  const held = cutTargetDecision(highDemand({ coverage: thin }));
+  const stepped = cutTargetDecision(grounded({ active_target_kcal: 2_500, coverage: thin }));
+  assert.ok(held && stepped);
+  assert.equal(held.tdee_basis, "formula_estimate");
+  assert.equal(held.deepening_held, false);
+  assert.equal(held.target_kcal, stepped.target_kcal, "the high-demand week changed nothing it could not measure");
+});
+
+test("only a DEEPENING waits — a hold or a raise passes straight through", () => {
+  const raise = cutTargetDecision(highDemand({ active_target_kcal: 2_000 }));
+  assert.ok(raise);
+  assert.equal(raise.deepening_held, false);
+  assert.equal(raise.target_kcal, cutTargetDecision(grounded()).target_kcal);
+});
+
+test("an unreadable or absent training week is an ORDINARY week, never a hold", () => {
+  for (const demand of [null, undefined, { high: false, basis: [], phase: "accumulation" }]) {
+    const out = cutTargetDecision(grounded({ active_target_kcal: 2_500, training_demand: demand }));
+    assert.equal(out.deepening_held, false);
+  }
+  // And with no accepted target there is nothing a deepening could be measured
+  // against, so the derivation behaves exactly as it did before rule 5.
+  assert.equal(cutTargetDecision(highDemand({ active_target_kcal: null })).deepening_held, false);
+});
+
+test("the held week gets its own words, and they never blame the athlete", () => {
+  const held = cutTargetDecision(highDemand());
+  const body = cutTargetBody(held, TODAY);
+  assert.notEqual(body, cutTargetBody(cutTargetDecision(grounded()), TODAY));
+  assert.equal(violatesReadingGrammar(body), null);
+  const rotated = new Set();
+  for (let i = 0; i < 8; i++) rotated.add(cutTargetBody(held, addDaysISO(TODAY, i)));
+  assert.ok(rotated.size >= 3, `the hold rotates its wording; saw ${rotated.size}`);
+});
+
+test("cutTargetState reads the active block's phase as the training week", () => {
+  seedCut();
+  repo.setNutritionTarget(
+    { effective_date: localDaysAgo(3), target_kcal: 2_500, protein_g: 175 },
+    { recordDecision: false }
+  );
+  repo.createBlock({ goal: "peak", focus: "peak", phase: "realization", total_weeks: 4 });
+  const state = repo.cutTargetState(localDaysAgo(0));
+  assert.equal(state.active_target_kcal, 2_500, "the accepted row is what a deepening is measured against");
+  assert.equal(state.training_demand.high, true);
+  assert.deepEqual(state.training_demand.basis, ["block_phase"]);
+  assert.equal(state.training_demand.phase, "realization");
+});
+
+test("an accumulation block is an ordinary week", () => {
+  seedCut();
+  repo.createBlock({ goal: "build", focus: "hypertrophy", phase: "accumulation", total_weeks: 6 });
+  const state = repo.cutTargetState(localDaysAgo(0));
+  assert.equal(state.training_demand.high, false);
+  assert.deepEqual(state.training_demand.basis, []);
+});
+
 // ---- rule 1 of the owner ruling: the diet break is not a default lane --------
 
 function seedCut(extra = {}) {

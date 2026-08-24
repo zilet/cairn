@@ -37,6 +37,7 @@ export * from "./repo/request-metrics.js";
 export * from "./repo/app-state.js";
 export * from "./repo/meal-refresh-retry.js";
 export * from "./repo/meal-directive-trigger.js";
+export * from "./repo/meal-plan-refresh.js"; // is a weekly refresh a rotation or a change?
 export * from "./repo/scheduler-operations.js";
 export * from "./repo/client-tz.js"; // last-seen device zone for the TZ-correct Brief warm
 export * from "./repo/lab-units.js";

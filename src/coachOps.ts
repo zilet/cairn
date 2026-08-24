@@ -168,6 +168,18 @@ export function personalizeNutritionCheckinTarget(
     target = Math.round(Math.max(previous, anchorTarget));
     anchorClamped = true;
   }
+  // THE DEEPENING WAITS FOR AN ORDINARY WEEK (rule 5, repo/cut-target.ts). The
+  // anchor has already read the training week this target would be eaten in and
+  // held its own number; the check-in must not step past that hold on the model's
+  // judgement, or the derivation's answer would only bind the surfaces that read it
+  // directly. The hold has teeth only DOWNWARD: a raise is the protective path
+  // above, and the deficit itself is untouched — the target stays exactly where the
+  // athlete already had it, and the step comes at the next normal week.
+  let deepeningHeld = false;
+  if (opts.cutAnchor?.deepening_held === true && Number.isFinite(previous) && target < previous) {
+    target = Math.round(previous);
+    deepeningHeld = true;
+  }
   const bounded = clampNutritionFloors(
     {
       ...nutrition,
@@ -183,6 +195,7 @@ export function personalizeNutritionCheckinTarget(
               deficit_kcal: opts.cutAnchor.deficit_kcal,
               clamped: anchorClamped,
               protective_capped: protectiveCapped,
+              deepening_held: deepeningHeld,
             },
           }
         : {}),
@@ -1404,8 +1417,11 @@ export async function draftMealPlan(
   const plan = repo.createMealPlan(chosen, result.raw, safety.parsed, { dietary_instruction: instruction });
   let autonomy: any = null;
   try {
+    // No requested tier: autonomy is SERVER policy, and `requested_tier` only ever
+    // clamps toward the more restrictive answer. Asking for "announce" here meant a
+    // routine refresh — same targets, same shape of week, rotated meals — could never
+    // reach the quiet lane the policy now has for it, however bounded the diff was.
     autonomy = applyMealPlanWithAutonomy(Number(plan.id), {
-      requested_tier: "announce",
       coordinated_update: opts.coordinated_update === true,
     });
   } catch {
