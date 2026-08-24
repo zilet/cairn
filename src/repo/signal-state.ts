@@ -1138,7 +1138,7 @@ function dimensionState(
   // `advisory_brake`). On every dimension carrying none — which is all of them except a
   // live endurance-hold flag — `deciding` IS `active`, so both values are unchanged and
   // the arbitration index is byte-identical to what it has always been.
-  const deciding = active.filter((item) => !item.advisory_brake);
+  const deciding = active.filter((item) => !isAdvisoryBrake(item));
   const unchanged = deciding.length === active.length;
   const latestDate =
     bearing
@@ -1410,15 +1410,31 @@ function actionState(dimensions: Record<SignalDimension, SignalDimensionState>) 
   if (fuelPrescription)
     return { readiness: "caution" as const, posture: "modify" as const, evidence: [fuelPrescription] };
   const arbitration = privateArbitration(dimensions);
-  const brakes = active.filter((item) => item.direction === "constraint" || item.direction === "caution");
+  // The evidence a protective posture is REPORTED as resting on, and therefore what
+  // the athlete is told the day is about: `action.evidence[0]` becomes `action.voice`,
+  // which day-read's protect rule speaks as the Brief's `why`. So the list is the
+  // deciding brakes only — an advisory item did not produce this posture and may not be
+  // named as its cause. It used to be direction-only, and dimension order put
+  // training_load_tolerance second, so a day made easy by fueling and a sore joint
+  // opened by telling the athlete it was about their iron stores. The item is still in
+  // `dimension.evidence`, still in coverage, provenance and the prompt; it just cannot
+  // lead a sentence about a day it did not decide.
+  const brakes = active.filter((item) => isBrakeEvidence(item) && !isAdvisoryBrake(item));
   if (arbitration.value <= -8) return { readiness: "protect" as const, posture: "rest" as const, evidence: brakes };
   if (arbitration.value <= -4) return { readiness: "protect" as const, posture: "easy" as const, evidence: brakes };
   if (arbitration.value <= -2) return { readiness: "caution" as const, posture: "modify" as const, evidence: brakes };
-  if (!active.length) return { readiness: "unknown" as const, posture: "train" as const, evidence: [] };
+  // "Is there anything on this board at all" is a question about DECIDING evidence too.
+  // An advisory brake alone used to defeat this rung: a morning with no wearable, no
+  // check-in and one standing lab flag stopped reading "not enough fresh signal to call
+  // recovery either way" and started reading `ready` — "the current signals leave room
+  // for the planned day". A brake making an empty board read GREENER is the hazard the
+  // `context_only` note guards against, one rung up; the same answer applies.
+  const deciding = active.filter((item) => !isAdvisoryBrake(item));
+  if (!deciding.length) return { readiness: "unknown" as const, posture: "train" as const, evidence: [] };
   return {
     readiness: "ready" as const,
     posture: "train" as const,
-    evidence: active.filter((item) => item.direction === "support"),
+    evidence: deciding.filter((item) => item.direction === "support"),
   };
 }
 
@@ -1456,6 +1472,17 @@ const SUPPORT_SUFFICIENT_FIELDS: ReadonlySet<string> = new Set(["session_quality
 const isBrakeEvidence = (item: { direction: string }): boolean =>
   item.direction === "caution" || item.direction === "constraint";
 
+// THE one place `advisory_brake` is honored, so the exemption cannot be granted by
+// accident anywhere else. It only ever applies to a `caution`, and that guard is load-
+// bearing rather than defensive: the three rungs at the TOP of actionState read
+// `direction === "constraint"` and nothing else, and no arbitration exemption can reach
+// them — so an item flagged advisory at constraint strength would be excluded from the
+// weighted sum while still owning the whole day outright, which is the exemption
+// inverted. Anything that is not a caution keeps its full deciding weight. The stricter
+// reading wins, and a caller cannot soften a constraint by labelling it advisory.
+const isAdvisoryBrake = (item: { direction: string; advisory_brake?: boolean }): boolean =>
+  item.advisory_brake === true && item.direction === "caution";
+
 // Every fresh, decision-bearing item on the board, across all dimensions. Both call
 // sites below need exactly this set, so it is derived once here rather than twice
 // slightly differently.
@@ -1479,7 +1506,7 @@ export function hasFreshBrake(dimensions: Record<SignalDimension, SignalDimensio
 // whether to ADVANCE — the backed tier, the training-drive rule — and an advisory brake
 // is entitled to answer that one. See `advisory_brake` on SignalObservation.
 function hasFreshDecidingBrake(dimensions: Record<SignalDimension, SignalDimensionState>): boolean {
-  return freshBearingEvidence(dimensions).some((item) => isBrakeEvidence(item) && !item.advisory_brake);
+  return freshBearingEvidence(dimensions).some((item) => isBrakeEvidence(item) && !isAdvisoryBrake(item));
 }
 
 // Is this a train day the evidence positively BACKS? Three conditions, all of them

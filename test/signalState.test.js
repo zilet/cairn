@@ -1345,6 +1345,10 @@ test("an endurance hold cannot descend a posture rung on any board, and cannot h
       without.action.directives.training,
       `${label}: the directive moved the training directive`
     );
+    // The VOICE too, which is the half the athlete actually reads: `action.evidence[0]`
+    // becomes `action.voice`, which day-read's protect rule speaks as the Brief's `why`.
+    // A finding that cannot decide the day may not be named as its cause either.
+    assert.deepEqual(with_.action.voice, without.action.voice, `${label}: the directive took over the why`);
     return with_;
   };
 
@@ -1355,6 +1359,30 @@ test("an endurance hold cannot descend a posture rung on any board, and cannot h
   const twoBrakes = compare("two brakes", [...RECOVERY_WATCH, ...HEALTH_WATCH]);
   assert.equal(twoBrakes.action.posture, "easy");
   assert.notEqual(twoBrakes.action.posture, "rest", "and never rest");
+  // Named explicitly, because dimension order puts training_load_tolerance ahead of the
+  // dimensions that DID make this day easy: the reported cause must be one of them.
+  // `action.reasons` are the summaries of the evidence this posture is reported to rest
+  // on, in the same order `action.voice` is taken from.
+  assert.ok(twoBrakes.action.reasons.length, "the easy day still reports what it rests on");
+  assert.equal(
+    twoBrakes.action.reasons.some((reason) => /directive|iron/i.test(reason)),
+    false,
+    "the hold was listed among the brakes this posture rests on"
+  );
+  assert.equal(
+    twoBrakes.action.source_dimensions.includes("training_load_tolerance"),
+    false,
+    "…and it was credited as a dimension that drove the day"
+  );
+
+  // An otherwise-EMPTY board: no wearable, no check-in, one standing flag. A brake may
+  // never make a board read GREENER than the same board without it — this used to flip
+  // readiness from "unknown" to "ready" and swap the honestly-thin sentence for "the
+  // current signals leave room for the planned day".
+  const bare = compare("empty board", []);
+  assert.equal(bare.action.readiness, "unknown");
+  assert.match(bare.action.reason, /not enough fresh signal/i);
+  assert.equal(bare.action.support, null);
 
   // The second channel: a board with nothing pulling the other way, where the damage
   // came from the support clamp rather than from the weight.
@@ -1373,4 +1401,58 @@ test("an endurance hold cannot descend a posture rung on any board, and cannot h
     "watch",
     "the flag is still visible to every surface that shows the dimension"
   );
+});
+
+// ---- the exemption is only ever granted to a CAUTION -------------------------
+//
+// `advisory_brake` buys an exemption from the weighted sum, and the three rungs at the
+// top of actionState are direction-only — no exemption can reach them. So a future
+// caller flagging a CONSTRAINT as advisory would get the exemption inverted: excluded
+// from the arbitration while still owning the whole day. The flag is honored through
+// one predicate that requires a caution; anything stronger keeps its full weight.
+test("advisory_brake cannot soften a constraint — the stricter reading wins", async () => {
+  const { buildUnifiedSignalState } = await import("../dist/repo/signal-state.js");
+  const date = localDaysAgo(0);
+  const constraint = {
+    dimension: "training_load_tolerance",
+    field: "misflagged",
+    date,
+    source: "test",
+    direction: "constraint",
+    summary: "Something firm, mislabelled as advisory.",
+    max_age_days: 1,
+    advisory_brake: true,
+  };
+  const state = buildUnifiedSignalState(date, [constraint]);
+  // It decides exactly what an unflagged constraint decides — the flag bought nothing.
+  const honest = buildUnifiedSignalState(date, [{ ...constraint, advisory_brake: false }]);
+  assert.equal(state.action.posture, honest.action.posture);
+  assert.equal(state.action.posture, "easy", "a load constraint still owns the day");
+  assert.equal(state.dimensions.training_load_tolerance.deciding.status, "constrained");
+  assert.equal(state.dimensions.training_load_tolerance.status, "constrained");
+});
+
+// ---- and the ladder's plumbing does not reach the model ---------------------
+test("the prompt payload carries one status per dimension, not two", async () => {
+  const { projectCoachContext } = await import("../dist/prompt/context-projection.js");
+  const { buildUnifiedSignalState } = await import("../dist/repo/signal-state.js");
+  const date = localDaysAgo(0);
+  const state = buildUnifiedSignalState(date, [
+    {
+      dimension: "recovery_capacity",
+      field: "sleep",
+      date,
+      source: "test",
+      direction: "caution",
+      summary: "A short night.",
+      max_age_days: 1,
+    },
+  ]);
+  assert.ok(state.dimensions.recovery_capacity.deciding, "the state itself carries it");
+  const projected = projectCoachContext({ signal_state: state }, "day_read");
+  for (const [key, dimension] of Object.entries(projected.signal_state.dimensions)) {
+    assert.equal(dimension.deciding, undefined, `${key}: the posture ladder's plumbing reached the prompt`);
+    assert.ok(dimension.status, `${key}: the status a prompt has always read is still there`);
+  }
+  assert.equal(projected.signal_state.action.posture, state.action.posture, "nothing else is disturbed");
 });
