@@ -187,7 +187,7 @@ function nightlyByDate(column: "hrv_ms" | "resting_hr", from: string, to: string
  *
  * A wearable is optional in this app, so a thin record is ABSENT, never steady.
  */
-export function hrvTrendRead(asOf: string, recentDays = 7, baselineDays = 28): TrendRead {
+export function hrvWatchTrend(asOf: string, recentDays = 7, baselineDays = 28): TrendRead {
   const today = isoDay(asOf);
   if (!DATE_RE.test(today)) return ABSENT_TREND;
   const recentFrom = addDaysISO(today, -(Math.max(2, recentDays) - 1)) ?? today;
@@ -259,7 +259,7 @@ export function performanceTrendRead(asOf: string, windowDays = 14): TrendRead {
 // ---- the five arms ------------------------------------------------------------
 
 function recoveryAndPerformanceArm(asOf: string): EnergyDeficiencyArm {
-  const hrv = hrvTrendRead(asOf);
+  const hrv = hrvWatchTrend(asOf);
   const performance = performanceTrendRead(asOf);
   const hrvVerdict: ArmVerdict =
     hrv.direction === "absent" ? "absent" : hrv.direction === "falling" ? "met" : "not_met";

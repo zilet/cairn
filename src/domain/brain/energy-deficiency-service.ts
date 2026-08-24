@@ -32,7 +32,7 @@ import { db } from "../../db.js";
 import {
   type EnergyDeficiencyRead,
   energyDeficiencyBody,
-  hrvTrendRead,
+  hrvWatchTrend,
   SUSTAINED_DAYS,
 } from "../../repo/energy-deficiency.js";
 // The memoized read, so the scheduler pass and the coach prompt can never describe
@@ -164,7 +164,7 @@ function armRecoveryExpectations(read: EnergyDeficiencyRead, today: string): Pro
   const out: ProposedExpectation[] = [];
   const windowEnd = addDaysISO(today, EXPECTATION_WINDOW_DAYS) ?? today;
   if (read.met_keys.includes("recovery_and_performance")) {
-    const hrv = hrvTrendRead(today);
+    const hrv = hrvWatchTrend(today);
     if (hrv.direction !== "absent" && hrv.baseline_avg != null) {
       out.push({
         metric_key: "recovery_hrv_delta",
