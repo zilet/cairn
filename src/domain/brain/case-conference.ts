@@ -20,6 +20,12 @@ import {
   type SpecialistDomain,
   type SpecialistOpinion,
 } from "../../brain/specialist-contract.js";
+import {
+  citedConflictResolutions,
+  conflictParties,
+  deterministicConferenceConflicts,
+  type ConferenceConflictKey,
+} from "./conference-conflicts.js";
 import { getCoachContext } from "../../repo/coach.js";
 import { getSettings } from "../../repo/settings.js";
 import { patchBrainDecision, recordDecision } from "../../repo/brain-decisions.js";
@@ -29,28 +35,12 @@ import { changesReduceSets } from "../../repo/volume-guard.js";
 import { runChosen, runChosenWithCoachReads } from "../../runChosen.js";
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
 
-export type ConferenceConflictKey =
-  | "injury_load"
-  | "deficit_recovery"
-  | "medication_supplement"
-  | "allergy_meal"
-  | "race_strength"
-  | "clinical_autonomy";
-
-export function deterministicConferenceConflicts(context: any): ConferenceConflictKey[] {
-  const text = JSON.stringify(context ?? {}).toLowerCase();
-  const conflicts: ConferenceConflictKey[] = [];
-  if (/injur|joint.?pain|chest.?wall/.test(text) && /load|progress|volume|training/.test(text))
-    conflicts.push("injury_load");
-  if (/deficit|fat.?loss|cut/.test(text) && /poor.?recovery|low.?hrv|fatigue|declining.?performance/.test(text))
-    conflicts.push("deficit_recovery");
-  if (/medication/.test(text) && /supplement/.test(text)) conflicts.push("medication_supplement");
-  if (/allerg/.test(text) && /meal|recipe|food/.test(text)) conflicts.push("allergy_meal");
-  if (/race|marathon|10k|5k/.test(text) && /strength|hypertrophy|lifting/.test(text)) conflicts.push("race_strength");
-  if (/clinical|diagnos|medication|dose/.test(text) && /quiet_apply|announce|auto.?apply/.test(text))
-    conflicts.push("clinical_autonomy");
-  return [...new Set(conflicts)];
-}
+// The conflict layer lives in its own module (typed predicates over context
+// VALUES, never over serialized key names). Re-exported here because this is
+// where every caller already reaches for it.
+export { conferenceConflictInputs, type ConferenceConflictInputs } from "./conference-conflicts.js";
+export { citedConflictResolutions, conflictParties, deterministicConferenceConflicts };
+export type { ConferenceConflictKey };
 
 export interface CaseConferenceResult {
   ok: boolean;
@@ -230,8 +220,12 @@ const CONFERENCE_PROMPT_SCHEMA = JSON.stringify({
       type: "array",
       items: {
         type: "object",
-        required: ["key", "resolution"],
-        properties: { key: { type: "string" }, resolution: { type: "string" } },
+        required: ["key", "evidence_key", "resolution"],
+        properties: {
+          key: { type: "string" },
+          evidence_key: { type: "string" },
+          resolution: { type: "string" },
+        },
       },
     },
     deferred: { type: "array", items: { type: "string" } },
@@ -321,7 +315,18 @@ function conductorPrompt(
   opinions: SpecialistOpinion[],
   conflicts: ConferenceConflictKey[]
 ): string {
-  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object. The literal contract is ${CONFERENCE_PROMPT_SCHEMA}. kind MUST be "case_conference". Every deterministic conflict must appear in resolved_conflicts or the server will safely demote the decision. revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":1200,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
+  // Say honestly what makes a resolution VALID. The old line ("every conflict must
+  // appear in resolved_conflicts or the server will demote") trained the model to
+  // echo the server's own list, which dissolved every conflict without evidence.
+  const resolvable = conflicts
+    .map((conflict) => {
+      const parties = conflictParties(conflict);
+      return parties.length
+        ? `${conflict} (closeable only by ${parties.join("/")})`
+        : `${conflict} (NOT closeable here — it stays clinician-directed whatever you write)`;
+    })
+    .join("; ");
+  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object. The literal contract is ${CONFERENCE_PROMPT_SCHEMA}. kind MUST be "case_conference". A resolved_conflicts entry is only counted when its evidence_key is one of the evidence_keys of a specialist whose domain is a party to that conflict, and its resolution says in one line how that evidence settles it — naming a conflict without a real citation leaves it unresolved and the decision is safely demoted, so leave a conflict you cannot honestly close out of the array. ${conflicts.length ? `Conflicts open here: ${resolvable}.` : "No deterministic conflicts were detected, so resolved_conflicts should be empty."} revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":1200,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
 }
 
 const TIER_ORDER = ["observe", "quiet_apply", "announce", "ask", "clinician"] as const;
@@ -525,11 +530,14 @@ export async function runCaseConference(
   // malformed envelope. Preserve one conservative, advice-only voice, leave all
   // conflicts unresolved, and hold it for review. No mutation is synthesized.
   const decision = normalizedDecision ?? fallbackConferenceDecision(opinions, conflicts, unavailable);
-  const accounted = new Set(
-    decision.resolved_conflicts
-      .map((item) => item.key)
-      .filter((key): key is ConferenceConflictKey => conflicts.includes(key as ConferenceConflictKey))
-  );
+  // A RESOLUTION MUST CITE. Membership of the key used to be the whole test, and
+  // the prompt asked the model to list every conflict — so an echo of the server's
+  // own list dissolved every conflict it had just detected. The claim now has to
+  // name an evidence key that really appears in the opinion of a specialist party
+  // to that conflict; an uncited echo (and a legacy `string[]` payload, which
+  // normalizes away entirely) leaves the conflict unresolved and the existing
+  // demotion applies untouched.
+  const accounted = citedConflictResolutions(decision.resolved_conflicts, conflicts, opinions);
   const unresolvedConflicts = conflicts.filter((conflict) => !accounted.has(conflict));
   // The clinician floor is deterministic. The conflict is detected from the bounded
   // snapshot, and a conductor echoing "clinical_autonomy" into resolved_conflicts —

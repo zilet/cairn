@@ -20,7 +20,13 @@ export interface CaseConferenceDecision {
   reversible: boolean;
   autonomy_tier: (typeof AUTONOMY_TIERS)[number];
   parallel_actions: string[];
-  resolved_conflicts: Array<{ key: string; resolution: string }>;
+  // A resolution CITES: `evidence_key` names a key from the opinion of a
+  // specialist party to the conflict, and the server checks it (see
+  // citedConflictResolutions). Kept optional at the contract boundary so an
+  // uncited claim degrades to "unresolved" rather than voiding the whole
+  // decision; a legacy `string[]` payload normalizes away entirely, which is
+  // the same safe direction.
+  resolved_conflicts: Array<{ key: string; evidence_key: string | null; resolution: string }>;
   deferred: string[];
   expectations: ProposedExpectation[];
   review_window: string;
@@ -299,12 +305,15 @@ export function normalizeCaseConferenceDecision(value: unknown): CaseConferenceD
     typeof input.reversible !== "boolean"
   )
     return null;
-  const conflicts: Array<{ key: string; resolution: string }> = [];
+  const conflicts: Array<{ key: string; evidence_key: string | null; resolution: string }> = [];
   for (const item of Array.isArray(input.resolved_conflicts) ? input.resolved_conflicts.slice(0, 12) : []) {
     const row = asRecord(item);
     const key = cleanIdentifier(row?.key, 100);
     const resolution = cleanText(row?.resolution, 500);
-    if (key && resolution) conflicts.push({ key, resolution });
+    // 160 is the specialist contract's own evidence_keys cap, so a citation is
+    // compared against the stored key byte-for-byte rather than a truncation of it.
+    const evidenceKey = cleanIdentifier(row?.evidence_key, 160);
+    if (key && resolution) conflicts.push({ key, evidence_key: evidenceKey, resolution });
   }
   const expectations: ProposedExpectation[] = [];
   for (const item of Array.isArray(input.expectations) ? input.expectations.slice(0, 10) : []) {
