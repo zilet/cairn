@@ -20,7 +20,18 @@ import {
   type SpecialistDomain,
   type SpecialistOpinion,
 } from "../../brain/specialist-contract.js";
+import {
+  citedConflictResolutions,
+  clinicalAutonomyFromRevision,
+  conferenceConflictInputs,
+  conflictParties,
+  conflictsFromInputs,
+  deterministicConferenceConflicts,
+  type ConferenceConflictKey,
+} from "./conference-conflicts.js";
 import { getCoachContext } from "../../repo/coach.js";
+import { localDateISO } from "../../repo/shared.js";
+import { listTrainingSymptoms } from "../../repo/training-symptoms.js";
 import { getSettings } from "../../repo/settings.js";
 import { patchBrainDecision, recordDecision } from "../../repo/brain-decisions.js";
 import { MAX_DEFERRED_EXPECTATIONS } from "../../repo/brain/change-expectations.js";
@@ -29,27 +40,36 @@ import { changesReduceSets } from "../../repo/volume-guard.js";
 import { runChosen, runChosenWithCoachReads } from "../../runChosen.js";
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
 
-export type ConferenceConflictKey =
-  | "injury_load"
-  | "deficit_recovery"
-  | "medication_supplement"
-  | "allergy_meal"
-  | "race_strength"
-  | "clinical_autonomy";
+// The conflict layer lives in its own module (typed predicates over context
+// VALUES, never over serialized key names). Re-exported here because this is
+// where every caller already reaches for it.
+export { type ConferenceConflictInputs } from "./conference-conflicts.js";
+export {
+  citedConflictResolutions,
+  clinicalAutonomyFromRevision,
+  conferenceConflictInputs,
+  conflictParties,
+  conflictsFromInputs,
+  deterministicConferenceConflicts,
+};
+export type { ConferenceConflictKey };
 
-export function deterministicConferenceConflicts(context: any): ConferenceConflictKey[] {
-  const text = JSON.stringify(context ?? {}).toLowerCase();
-  const conflicts: ConferenceConflictKey[] = [];
-  if (/injur|joint.?pain|chest.?wall/.test(text) && /load|progress|volume|training/.test(text))
-    conflicts.push("injury_load");
-  if (/deficit|fat.?loss|cut/.test(text) && /poor.?recovery|low.?hrv|fatigue|declining.?performance/.test(text))
-    conflicts.push("deficit_recovery");
-  if (/medication/.test(text) && /supplement/.test(text)) conflicts.push("medication_supplement");
-  if (/allerg/.test(text) && /meal|recipe|food/.test(text)) conflicts.push("allergy_meal");
-  if (/race|marathon|10k|5k/.test(text) && /strength|hypertrophy|lifting/.test(text)) conflicts.push("race_strength");
-  if (/clinical|diagnos|medication|dose/.test(text) && /quiet_apply|announce|auto.?apply/.test(text))
-    conflicts.push("clinical_autonomy");
-  return [...new Set(conflicts)];
+/** Lifecycle symptoms currently ACTIVE and area-scoped, as display labels. Never
+ * a systemic report (which must not drive movement relevance) and never a legacy
+ * row nobody confirmed (absence of evidence). Best-effort: a read that throws
+ * leaves the conflict layer with `null` — nothing looked — rather than a false
+ * "nothing hurts". */
+function defaultActiveSymptomAreas(on: string): string[] | null {
+  try {
+    // seed_legacy:false — the default backfills legacy rows, and a read that
+    // decides a conflict must not write on its way past (same reason coach.ts
+    // passes it on its own lifecycle read).
+    return listTrainingSymptoms({ on, include_resolved: false, seed_legacy: false })
+      .filter((event) => event.status === "active" && event.scope !== "systemic" && !event.legacy_unconfirmed)
+      .map((event) => event.area_text);
+  } catch {
+    return null;
+  }
 }
 
 export interface CaseConferenceResult {
@@ -86,6 +106,8 @@ export interface CaseConferenceDeps {
   conductorRun?: (agent: string | undefined, prompt: string) => Promise<unknown>;
   chosenWithReads?: typeof runChosenWithCoachReads;
   chosen?: typeof runChosen;
+  /** Active area-scoped symptom labels — evidence the coach context cannot carry. */
+  symptomAreas?: (on: string) => string[] | null;
   now?: () => Date;
   /** Running durable job, excluded when counting prior daily attempts. */
   jobId?: number;
@@ -230,8 +252,12 @@ const CONFERENCE_PROMPT_SCHEMA = JSON.stringify({
       type: "array",
       items: {
         type: "object",
-        required: ["key", "resolution"],
-        properties: { key: { type: "string" }, resolution: { type: "string" } },
+        required: ["key", "evidence_key", "resolution"],
+        properties: {
+          key: { type: "string" },
+          evidence_key: { type: "string" },
+          resolution: { type: "string" },
+        },
       },
     },
     deferred: { type: "array", items: { type: "string" } },
@@ -321,7 +347,18 @@ function conductorPrompt(
   opinions: SpecialistOpinion[],
   conflicts: ConferenceConflictKey[]
 ): string {
-  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object. The literal contract is ${CONFERENCE_PROMPT_SCHEMA}. kind MUST be "case_conference". Every deterministic conflict must appear in resolved_conflicts or the server will safely demote the decision. revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":1200,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
+  // Say honestly what makes a resolution VALID. The old line ("every conflict must
+  // appear in resolved_conflicts or the server will demote") trained the model to
+  // echo the server's own list, which dissolved every conflict without evidence.
+  const resolvable = conflicts
+    .map((conflict) => {
+      const parties = conflictParties(conflict);
+      return parties.length
+        ? `${conflict} (closeable only by ${parties.join("/")})`
+        : `${conflict} (NOT closeable here — it stays clinician-directed whatever you write)`;
+    })
+    .join("; ");
+  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object. The literal contract is ${CONFERENCE_PROMPT_SCHEMA}. kind MUST be "case_conference". A resolved_conflicts entry is only counted when its evidence_key is one of the evidence_keys of a specialist whose domain is a party to that conflict, and its resolution says in one line how that evidence settles it — naming a conflict without a real citation leaves it unresolved and the decision is safely demoted, so leave a conflict you cannot honestly close out of the array. ${conflicts.length ? `Conflicts open here: ${resolvable}.` : "No deterministic conflicts were detected, so resolved_conflicts should be empty."} revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":1200,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
 }
 
 const TIER_ORDER = ["observe", "quiet_apply", "announce", "ask", "clinician"] as const;
@@ -451,8 +488,29 @@ export async function runCaseConference(
       decision: null,
       error: "daily conference budget exhausted",
     };
-  const snapshot = createImmutableBrainSnapshot(conferenceContext((deps.context ?? getCoachContext)(), input), now);
-  const conflicts = deterministicConferenceConflicts(snapshot.context);
+  // THE FULL CONTEXT IS THE DETERMINISTIC LAYER'S INPUT; THE SNAPSHOT IS THE AGENT'S.
+  // createImmutableBrainSnapshot bounds what an agent may be handed, and part of
+  // that bound is normalizeJsonObject keeping only the first 50 keys of an object.
+  // The real coach context has 73, and signal_state (64), health_focus (56),
+  // directives (55), health (52) and supplements (62) all sit past the cut — so a
+  // conflict layer reading the SNAPSHOT could never see recovery strain, a clinical
+  // finding, a medication or an allergy on record, whatever the athlete's picture
+  // actually was. Everything deterministic therefore reads `fullContext`; only the
+  // prompts read `snapshot.context`.
+  const fullContext = conferenceContext((deps.context ?? getCoachContext)(), input);
+  const snapshot = createImmutableBrainSnapshot(fullContext, now);
+  // The symptom lifecycle reaches the coach context only THROUGH a rated session's
+  // autoregulation rollup, so pain reported in chat with nothing trained since is
+  // invisible there. Read it directly, area-scoped only (a systemic report never
+  // drives movement relevance) and never from an unconfirmed legacy row.
+  //
+  // Keyed on the LOCAL day, not `today` above: that one is a UTC slice serving the
+  // agent_jobs budget query, and every evening after UTC rolls over it names
+  // tomorrow — which would resolve the lifecycle against a day that has not
+  // happened here yet.
+  const activeSymptomAreas = (deps.symptomAreas ?? defaultActiveSymptomAreas)(localDateISO());
+  const conflictInputs = conferenceConflictInputs(fullContext, { activeSymptomAreas });
+  const conflicts = conflictsFromInputs(conflictInputs);
   const perSpecialistCalls = Math.max(1, Math.floor(12 / Math.max(1, domains.length)));
   const specialistRun =
     deps.specialistRun ??
@@ -525,24 +583,36 @@ export async function runCaseConference(
   // malformed envelope. Preserve one conservative, advice-only voice, leave all
   // conflicts unresolved, and hold it for review. No mutation is synthesized.
   const decision = normalizedDecision ?? fallbackConferenceDecision(opinions, conflicts, unavailable);
-  const accounted = new Set(
-    decision.resolved_conflicts
-      .map((item) => item.key)
-      .filter((key): key is ConferenceConflictKey => conflicts.includes(key as ConferenceConflictKey))
-  );
-  const unresolvedConflicts = conflicts.filter((conflict) => !accounted.has(conflict));
-  // The clinician floor is deterministic. The conflict is detected from the bounded
-  // snapshot, and a conductor echoing "clinical_autonomy" into resolved_conflicts —
-  // or down-classifying its own risk_class — must never lower that floor: a
-  // clinical decision stays clinician-directed even when the clinical specialist
-  // was absent or permissive.
+  // The clinical lever's second arm, which only exists once the decision does: an
+  // act-now clinical finding plus a conference that actually proposes a change is
+  // the tension, whether or not a directive row happened to be filed under
+  // training/nutrition (a flagged marker often yields only a `watch` row). The
+  // conflict list the SERVER enforces from here on therefore includes it.
+  const enforcedConflicts =
+    clinicalAutonomyFromRevision(conflictInputs, decision.revision != null) && !conflicts.includes("clinical_autonomy")
+      ? [...conflicts, "clinical_autonomy" as ConferenceConflictKey]
+      : conflicts;
+  // A RESOLUTION MUST CITE. Membership of the key used to be the whole test, and
+  // the prompt asked the model to list every conflict — so an echo of the server's
+  // own list dissolved every conflict it had just detected. The claim now has to
+  // name an evidence key that really appears in the opinion of a specialist party
+  // to that conflict; an uncited echo (and a legacy `string[]` payload, which
+  // normalizes away entirely) leaves the conflict unresolved and the existing
+  // demotion applies untouched.
+  const accounted = citedConflictResolutions(decision.resolved_conflicts, enforcedConflicts, opinions);
+  const unresolvedConflicts = enforcedConflicts.filter((conflict) => !accounted.has(conflict));
+  // The clinician floor is deterministic. A conductor echoing "clinical_autonomy"
+  // into resolved_conflicts — or down-classifying its own risk_class — must never
+  // lower that floor: a clinical decision stays clinician-directed even when the
+  // clinical specialist was absent or permissive.
   const clinicalActionText = JSON.stringify({
     summary: decision.summary,
     revision: decision.revision,
     parallel_actions: decision.parallel_actions,
   }).toLowerCase();
   const deterministicClinical =
-    conflicts.includes("clinical_autonomy") || /diagnos|medication|dosage|\bdose\b|prescri/.test(clinicalActionText);
+    enforcedConflicts.includes("clinical_autonomy") ||
+    /diagnos|medication|dosage|\bdose\b|prescri/.test(clinicalActionText);
   if (deterministicClinical && decision.risk_class !== "clinical") decision.risk_class = "clinical";
   let specialistCeiling = opinions.reduce<(typeof TIER_ORDER)[number]>(
     (ceiling, opinion) => moreRestrictiveTier(ceiling, opinion.autonomy_ceiling),
@@ -578,14 +648,26 @@ export async function runCaseConference(
   });
   decision.autonomy_tier = policy.tier;
 
-  const trajectory = (snapshot.context as any).whole_person_trajectory ?? null;
-  const focus = (snapshot.context as any).conference_focus ?? {};
+  // From the FULL context, not the snapshot. `whole_person_trajectory` is already
+  // a coach-context key that conferenceContext overwrites in place (~index 68) and
+  // `conference_focus` is appended after all 73 — either way both sit past the
+  // snapshot's first-50-keys bound, so on every production conference the recorded
+  // decision carried a null trajectory and an empty optimizes/parks. The tests,
+  // whose contexts are small, saw them fine.
+  const trajectory = (fullContext as any)?.whole_person_trajectory ?? null;
+  const focus = (fullContext as any)?.conference_focus ?? {};
   const sharedContext =
     normalizeJsonObject({
       snapshot_id: snapshot.id,
       question,
-      conflicts,
+      conflicts: enforcedConflicts,
       unresolved_conflicts: unresolvedConflicts,
+      // WHAT THE DETERMINISTIC LAYER SAW. The stored snapshot is the bounded
+      // agent-facing copy, so it cannot re-derive this conflict list; without the
+      // resolved inputs beside it, a decision's ledger row records which conflicts
+      // fired but nothing about why, and the answer is unrecoverable after the day
+      // the context moves on.
+      conflict_inputs: conflictInputs,
       unavailable,
       review_window: decision.review_window,
       trajectory,
@@ -668,7 +750,7 @@ export async function runCaseConference(
         snapshot_id: snapshot.id,
         opinions,
         unavailable,
-        conflicts,
+        conflicts: enforcedConflicts,
         unresolved_conflicts: unresolvedConflicts,
         decision,
         recorded_decision_id: autonomyDecision.id,
@@ -739,7 +821,7 @@ export async function runCaseConference(
       snapshot_id: snapshot.id,
       opinions,
       unavailable,
-      conflicts,
+      conflicts: enforcedConflicts,
       unresolved_conflicts: unresolvedConflicts,
       decision,
       recorded_decision_id: held.decision.id,
@@ -806,7 +888,7 @@ export async function runCaseConference(
     snapshot_id: snapshot.id,
     opinions,
     unavailable,
-    conflicts,
+    conflicts: enforcedConflicts,
     unresolved_conflicts: unresolvedConflicts,
     decision,
     recorded_decision_id: recorded.decision.id,

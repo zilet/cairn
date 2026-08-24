@@ -199,6 +199,81 @@ test("scheduler revision stamps are committed only after a successful conference
   assert.equal(repo.getAppState("brain_revision_phase_sig"), '{"name":"build"}');
   assert.equal(repo.getAppState("brain_revision_regression_sig"), "recovery_wellbeing");
   assert.equal(repo.getAppState("unrelated_key"), null);
+
+  // A conference held at the deterministic clinical floor is COMPLETE work: no
+  // citation can close clinical_autonomy, so a retry would spend the month's
+  // budget reaching the same clinician-directed decision, which is already
+  // recorded and already waiting for the human.
+  repo.setAppState("brain_revision_last_month", "2026-06");
+  assert.equal(
+    applyCaseConferenceSchedulerSuccess(input, { ...complete, unresolved_conflicts: ["clinical_autonomy"] }),
+    true,
+    "holding for the clinician is the conference doing its job"
+  );
+  assert.equal(repo.getAppState("brain_revision_last_month"), "2026-07");
+
+  // …but the clinical hold does not excuse a conflict that genuinely failed to
+  // reconcile alongside it.
+  repo.setAppState("brain_revision_last_month", "2026-06");
+  assert.equal(
+    applyCaseConferenceSchedulerSuccess(input, {
+      ...complete,
+      unresolved_conflicts: ["clinical_autonomy", "injury_load"],
+    }),
+    false
+  );
+  assert.equal(repo.getAppState("brain_revision_last_month"), "2026-06");
+});
+
+test("an incomplete conference records the reason it was actually incomplete", () => {
+  const base = {
+    ok: true,
+    opinions: [{ domain: "training" }, { domain: "nutrition" }],
+    unavailable: [],
+    unresolved_conflicts: [],
+    decision: {
+      kind: "case_conference",
+      domain: "cross_domain",
+      summary: "Hold the bounded course.",
+      rationale: "Both specialists agree on the next step.",
+      risk_class: "low",
+      reversible: false,
+      autonomy_tier: "ask",
+      parallel_actions: [],
+      resolved_conflicts: [],
+      deferred: [],
+      expectations: [],
+      review_window: "Review in two weeks.",
+      user_explanation: "I am holding the bounded course.",
+      revision: null,
+    },
+  };
+  // Each case takes its own slot so it gets a fresh claim rather than a retry.
+  const failureFor = (slot, result) => {
+    const claim = repo.claimSchedulerOperation("brain_revision_conference", slot, {
+      maxAttempts: 3,
+      leaseMs: 6 * 60 * 60_000,
+    });
+    assert.ok(claim);
+    const input = {
+      domains: ["training", "nutrition"],
+      scheduler_success: { brain_revision_last_month: "2026-07" },
+      scheduler_operation: {
+        operation: claim.operation,
+        slot_stamp: claim.slot_stamp,
+        claim_token: claim.claim_token,
+        attempts: claim.attempts,
+      },
+    };
+    assert.equal(applyCaseConferenceSchedulerSuccess(input, result), false);
+    return repo.getSchedulerOperation("brain_revision_conference", slot).last_error;
+  };
+
+  const unresolved = failureFor("b".repeat(64), { ...base, unresolved_conflicts: ["deficit_recovery"] });
+  assert.match(unresolved, /unresolved: deficit_recovery/, "it names the conflict that did not reconcile");
+  assert.doesNotMatch(unresolved, /unavailable/, "every specialist showed up — that is not what went wrong");
+
+  assert.match(failureFor("c".repeat(64), { ...base, unavailable: ["nutrition"] }), /unavailable: nutrition/);
 });
 
 test("an incomplete scheduled conference enters persisted bounded retry ownership", () => {

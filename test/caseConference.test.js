@@ -1,9 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deterministicConferenceConflicts, runCaseConference } from "../dist/domain/brain/case-conference.js";
+import {
+  citedConflictResolutions,
+  deterministicConferenceConflicts,
+  runCaseConference,
+} from "../dist/domain/brain/case-conference.js";
 import { getBrainDecision } from "../dist/repo/brain-decisions.js";
 import { applyDueAnnouncedDecisions } from "../dist/domain/brain/autonomy-service.js";
 import { normalizeStrictCaseConferenceDecision } from "../dist/brain/case-conference-contract.js";
+import { normalizeSpecialistOpinion } from "../dist/brain/specialist-contract.js";
+import { normalizeJsonObject } from "../dist/brain/contract-utils.js";
 import { runAgentWithFallback } from "../dist/agents.js";
 import { db, repo } from "./_seed.js";
 
@@ -24,6 +30,100 @@ function seedPlan() {
   repo.savePlanDay(1, "Push", "Chest", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 },
   ]);
+}
+
+// ---- conference-context fixtures -------------------------------------------
+// Shaped like the real coach context, because the conflict layer reads VALUES
+// out of it. A healthy athlete eating in a surplus with nothing hurt: every key
+// the old stringify-and-regex detector tripped over (`cut_quality`, the day-read
+// `fatigue` block, `allergies`, `meal_plan`) is present and empty.
+const healthyContext = () => ({
+  goal_mode: "gain",
+  goal: { ok: true, goal_mode: "gain", tdee: 2_800, effective_target: { target_kcal: 3_050 } },
+  cut_quality: { active: false },
+  day_read: { signals: { fatigue: { anticipate_deload: false, low_readiness: false, acute_load: null } } },
+  signal_state: {
+    dimensions: { recovery_capacity: { status: "supportive", reason: "Sleep and HRV both read normal." } },
+    action: { readiness: "ready", directives: { training: "proceed", fueling: "normal", schedule: "normal" } },
+  },
+  context_events: [],
+  training_signals: {
+    progression: [{ exercise: "Barbell Bench Press", progress_ready: true }],
+    autoregulation: null,
+  },
+  progression: [{ exercise: "Barbell Bench Press", action: "overload" }],
+  health: [],
+  supplements: [],
+  directives: [],
+  health_focus: { priorities: [], surfaced: [], lead: null, act_now: 0, track: 0 },
+  profile: { allergies: null },
+  family: [],
+  meal_plan: null,
+  day_intake: { count: 0 },
+  endurance_goal: null,
+  training_intent: { priorities: ["muscle", "strength"], endurance_role: "none" },
+  discipline: { primary: "strength", endurance_sport: null },
+});
+
+// The same context with every VALUE emptied out — only the key names survive.
+// This is what defeated the old regexes; nothing here may fire a conflict.
+const keyNamesOnlyContext = () => ({
+  goal: null,
+  cut_quality: null,
+  day_read: { signals: { fatigue: null } },
+  signal_state: null,
+  context_events: [],
+  training_signals: { progression: [], autoregulation: null },
+  progression: [],
+  health: [],
+  supplements: [],
+  directives: [],
+  health_focus: null,
+  profile: { allergies: null },
+  family: [],
+  meal_plan: null,
+  day_intake: null,
+  endurance_goal: null,
+  training_intent: null,
+  discipline: null,
+});
+
+const injuryContext = () => ({ ...healthyContext(), context_events: [{ kind: "injury", title: "Left shoulder" }] });
+
+const deficitStrainContext = () => ({
+  ...healthyContext(),
+  goal_mode: "lose",
+  goal: { ok: true, goal_mode: "lose", tdee: 2_800, effective_target: { target_kcal: 2_200 } },
+  cut_quality: { active: true, regressing: 1, considered: 4 },
+  signal_state: {
+    dimensions: { recovery_capacity: { status: "constrained", reason: "HRV has run below norm for four days." } },
+    action: { readiness: "protect", directives: { training: "recover", fueling: "protect", schedule: "compress" } },
+  },
+});
+
+// A clinical priority the brain is being asked to act on, propagated into a
+// domain it can change by itself.
+const clinicalContext = () => ({
+  ...healthyContext(),
+  health_focus: {
+    priorities: [],
+    surfaced: [],
+    lead: { group: "Iron & Blood", tier: "act_now", flagged: true },
+    act_now: 1,
+    track: 0,
+  },
+  directives: [{ domain: "nutrition", marker: "Ferritin", directive: "Pair iron-rich food with vitamin C." }],
+});
+
+// The production shape the compact fixtures above cannot reproduce: the real
+// coach context has 73 top-level keys and createImmutableBrainSnapshot keeps only
+// the first 50, so every conflict-bearing slice (signal_state, health_focus,
+// directives, health, supplements) sits BELOW the cut. Filler keys go first, so
+// everything the conflict layer needs is past index 50.
+function wideContext(base = deficitStrainContext()) {
+  const filler = {};
+  for (let i = 0; i < 60; i += 1) filler[`coach_slice_${String(i).padStart(2, "0")}`] = { note: "a context slice" };
+  return { ...filler, ...base };
 }
 
 function conductorDecision(overrides = {}) {
@@ -53,9 +153,8 @@ test("case conference shares one snapshot, runs specialists in parallel, and emi
     { question: "How should the cut and race build coexist?", domains: ["training", "nutrition", "recovery"] },
     {
       context: () => ({
-        profile: { goal: "fat loss" },
-        recovery: { state: "poor recovery" },
-        plan: { race: "10k", strength: true },
+        ...healthyContext(),
+        endurance_goal: { mode: "race", is_race: true, distance_km: 10, phase: "build", weeks_to_race: 8 },
       }),
       specialistRun: async (_agent, _prompt, domain, snapshot) => {
         snapshots.add(snapshot.id);
@@ -70,7 +169,13 @@ test("case conference shares one snapshot, runs specialists in parallel, and emi
         reversible: true,
         autonomy_tier: "quiet_apply",
         parallel_actions: ["hold strength volume"],
-        resolved_conflicts: [{ key: "race_strength", resolution: "Park hypertrophy progression temporarily." }],
+        resolved_conflicts: [
+          {
+            key: "race_strength",
+            evidence_key: "training:evidence",
+            resolution: "Park hypertrophy progression temporarily.",
+          },
+        ],
         deferred: [],
         expectations: [],
         review_window: "Review in two weeks.",
@@ -102,7 +207,7 @@ test("an unaccounted deterministic conflict demotes an executable revision to re
       parks: ["strength"],
     },
     {
-      context: () => ({ injury: "shoulder pain", training: "progress load" }),
+      context: injuryContext,
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
       conductorRun: async () =>
         conductorDecision({
@@ -141,12 +246,18 @@ test("a resolved bounded plan update executes through autonomy and keeps traject
       parks: trajectory.phase.parks,
     },
     {
-      context: () => ({ injury: "shoulder pain", training: "progress load" }),
+      context: injuryContext,
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
       conductorRun: async () =>
         conductorDecision({
           domain: "training",
-          resolved_conflicts: [{ key: "injury_load", resolution: "Use only the already-cleared small load step." }],
+          resolved_conflicts: [
+            {
+              key: "injury_load",
+              evidence_key: "training:evidence",
+              resolution: "Use only the already-cleared small load step.",
+            },
+          ],
           revision: {
             type: "plan_update",
             summary: "Small bench step",
@@ -170,6 +281,72 @@ test("a resolved bounded plan update executes through autonomy and keeps traject
   assert.ok(repo.getBrainRollback(recorded.id));
 });
 
+// ---- a resolution has to CITE ------------------------------------------------
+// Echoing the server's own conflict list back at it used to be the entire
+// resolution test, which is the false negative the citation requirement closes.
+async function conferenceResolving(claims) {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  return runCaseConference(
+    "stub",
+    { question: "Should bench load move despite shoulder pain?", domains: ["training", "recovery"] },
+    {
+      context: injuryContext,
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          resolved_conflicts: claims,
+          revision: {
+            type: "plan_update",
+            summary: "Small bench step",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
+          },
+        }),
+    }
+  );
+}
+
+test("a conductor echoing a conflict key without a citation is demoted like an unresolved one", async () => {
+  const echoed = await conferenceResolving([{ key: "injury_load", resolution: "Handled by the training plan." }]);
+  assert.deepEqual(echoed.unresolved_conflicts, ["injury_load"]);
+  assert.equal(echoed.execution.tier, "ask");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115, "the echo bought nothing");
+});
+
+test("a citation that names no real specialist evidence is not a resolution", async () => {
+  const invented = await conferenceResolving([
+    { key: "injury_load", evidence_key: "training:the-shoulder-is-fine", resolution: "Cleared." },
+  ]);
+  assert.deepEqual(invented.unresolved_conflicts, ["injury_load"]);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
+});
+
+test("a citation from a specialist who is not party to the conflict is not a resolution", async () => {
+  // `recovery` and `training` are parties to injury_load; a nutrition key is not —
+  // and no nutrition specialist even sat in this conference.
+  const offParty = await conferenceResolving([
+    { key: "injury_load", evidence_key: "nutrition:evidence", resolution: "Fuel covers it." },
+  ]);
+  assert.deepEqual(offParty.unresolved_conflicts, ["injury_load"]);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
+});
+
+test("a cited resolution from a party to the conflict closes it and the revision lands", async () => {
+  const cited = await conferenceResolving([
+    { key: "injury_load", evidence_key: "recovery:evidence", resolution: "The cleared step stays under the limit." },
+  ]);
+  assert.deepEqual(cited.unresolved_conflicts, []);
+  assert.equal(cited.execution.applied, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 120);
+});
+
+test("a legacy string[] resolved_conflicts payload leaves every conflict unresolved", async () => {
+  const legacy = await conferenceResolving(["injury_load"]);
+  assert.deepEqual(legacy.unresolved_conflicts, ["injury_load"]);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115, "an old-shape payload never applies a change");
+});
+
 test("a plan restructure announcement always points at an executable proposal", async () => {
   seedPlan();
   repo.setSettings({ lead_mode: "lead" });
@@ -177,7 +354,7 @@ test("a plan restructure announcement always points at an executable proposal", 
     "stub",
     { question: "Move to a two-day split.", domains: ["training", "recovery"] },
     {
-      context: () => ({ training: "stable" }),
+      context: healthyContext,
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
       conductorRun: async () =>
         conductorDecision({
@@ -214,21 +391,310 @@ test("a plan restructure announcement always points at an executable proposal", 
   assert.equal(repo.getPlan().length, 2);
 });
 
-test("deterministic conflicts cover the material cross-domain matrix", () => {
+test("a healthy, surplus-eating athlete with nothing hurt detects ZERO conflicts", () => {
+  assert.deepEqual(deterministicConferenceConflicts(healthyContext()), []);
+});
+
+test("a context carrying only key names — no values — detects ZERO conflicts", () => {
+  assert.deepEqual(deterministicConferenceConflicts(keyNamesOnlyContext()), []);
+  assert.deepEqual(deterministicConferenceConflicts({}), []);
+  assert.deepEqual(deterministicConferenceConflicts(null), []);
+});
+
+// For each conflict: it fires on a genuinely conflicting fixture, stays silent on
+// the absent/null fixture, and stays silent on the key-names-only one.
+const conflictCases = [
+  {
+    key: "injury_load",
+    firing: () => injuryContext(),
+    // The injury is there but nothing is being pushed — no conflict to arbitrate.
+    quiet: () => ({
+      ...injuryContext(),
+      training_signals: { progression: [{ exercise: "Barbell Bench Press", progress_ready: false }] },
+      progression: [{ exercise: "Barbell Bench Press", action: "hold" }],
+    }),
+  },
+  {
+    key: "deficit_recovery",
+    firing: () => deficitStrainContext(),
+    // Same measured deficit, recovery reading fine.
+    quiet: () => ({ ...deficitStrainContext(), signal_state: healthyContext().signal_state }),
+  },
+  {
+    key: "medication_supplement",
+    firing: () => ({
+      ...healthyContext(),
+      health: [{ kind: "medication_list", clinical_facts: [{ kind: "medication", name: "Atorvastatin" }] }],
+      supplements: [{ name: "Creatine monohydrate" }],
+    }),
+    // A medication on record, nothing taken alongside it.
+    quiet: () => ({
+      ...healthyContext(),
+      health: [{ kind: "medication_list", clinical_facts: [{ kind: "medication", name: "Atorvastatin" }] }],
+      supplements: [],
+    }),
+  },
+  {
+    key: "allergy_meal",
+    firing: () => ({
+      ...healthyContext(),
+      profile: { allergies: "peanuts" },
+      meal_plan: { days: [{ date: "2026-07-09", meals: [] }] },
+    }),
+    // The allergy is on file but no food is being planned.
+    quiet: () => ({ ...healthyContext(), profile: { allergies: "peanuts" } }),
+  },
+  {
+    key: "race_strength",
+    firing: () => ({
+      ...healthyContext(),
+      endurance_goal: { mode: "race", is_race: true, distance_km: 10, phase: "build", weeks_to_race: 8 },
+    }),
+    // The race has been run; the build is over.
+    quiet: () => ({
+      ...healthyContext(),
+      endurance_goal: { mode: "race", is_race: true, distance_km: 10, phase: "past", weeks_to_race: 0 },
+    }),
+  },
+  {
+    key: "clinical_autonomy",
+    firing: () => clinicalContext(),
+    // An act-now finding that only asks the athlete to WATCH something changes
+    // nothing the brain could apply on its own.
+    quiet: () => ({
+      ...clinicalContext(),
+      directives: [{ domain: "watch", marker: "Ferritin", directive: "Recheck ferritin with your doctor." }],
+    }),
+  },
+];
+
+for (const { key, firing, quiet } of conflictCases) {
+  test(`${key} fires on real evidence and on nothing else`, () => {
+    assert.ok(deterministicConferenceConflicts(firing()).includes(key), "the conflicting fixture fires it");
+    assert.ok(!deterministicConferenceConflicts(quiet()).includes(key), "the non-conflicting fixture does not");
+    assert.ok(!deterministicConferenceConflicts(keyNamesOnlyContext()).includes(key), "key names alone do not");
+    assert.ok(!deterministicConferenceConflicts(healthyContext()).includes(key), "a healthy athlete does not");
+  });
+}
+
+// ---- the snapshot bound must not blind the deterministic layer ---------------
+
+test("the immutable snapshot really does drop a wide context's conflict-bearing keys", () => {
+  const wide = wideContext();
+  assert.ok(Object.keys(wide).length >= 73, "the fixture is at least as wide as the real coach context");
+  const bounded = normalizeJsonObject(wide);
+  assert.equal(bounded.signal_state, undefined, "signal_state is past the 50-key bound");
+  assert.equal(bounded.health_focus, undefined);
+  assert.equal(bounded.directives, undefined);
+  assert.equal(bounded.cut_quality, undefined);
+  assert.deepEqual(
+    deterministicConferenceConflicts(bounded),
+    [],
+    "reading the SNAPSHOT is what made three conflicts undetectable in production"
+  );
+});
+
+test("a conference over a wide context still detects conflicts the snapshot cannot carry", async () => {
+  const result = await runCaseConference(
+    "stub",
+    { question: "Reconcile fuel and recovery.", domains: ["nutrition", "recovery"] },
+    {
+      context: () => wideContext(),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () => conductorDecision({ domain: "nutrition" }),
+    }
+  );
+  assert.deepEqual(result.conflicts, ["deficit_recovery"], "detection reads the full context, not the snapshot");
+  assert.deepEqual(result.unresolved_conflicts, ["deficit_recovery"]);
+});
+
+test("a wide context's trajectory and focus reach the recorded decision", async () => {
+  const trajectory = { objective: "everything better", phase: { optimizes: ["recovery"], parks: ["strength"] } };
+  const result = await runCaseConference(
+    "stub",
+    {
+      question: "Make the next bounded adjustment.",
+      domains: ["nutrition", "recovery"],
+      trajectory,
+      optimizes: trajectory.phase.optimizes,
+      parks: trajectory.phase.parks,
+    },
+    {
+      context: () => wideContext(),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () => conductorDecision({ domain: "nutrition" }),
+    }
+  );
+  const recorded = getBrainDecision(result.recorded_decision_id);
+  // conferenceContext appends these AFTER the context's own keys, so on a wide
+  // context the snapshot bound dropped both and every production conference
+  // recorded a null trajectory.
+  assert.deepEqual(recorded.context.trajectory, trajectory);
+  assert.deepEqual(recorded.context.optimizes, ["recovery"]);
+  assert.deepEqual(recorded.context.parks, ["strength"]);
+});
+
+test("the recorded decision carries what the deterministic layer actually saw", async () => {
+  const result = await runCaseConference(
+    "stub",
+    { question: "Reconcile fuel and recovery.", domains: ["nutrition", "recovery"] },
+    {
+      context: () => wideContext(),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () => conductorDecision({ domain: "nutrition" }),
+    }
+  );
+  // The stored snapshot is the bounded agent-facing copy, so it cannot re-derive
+  // the conflict list. Without the inputs beside it, the ledger says which
+  // conflicts fired and nothing about why — unrecoverable once the context moves.
+  const inputs = getBrainDecision(result.recorded_decision_id).context.conflict_inputs;
+  assert.ok(inputs, "the ledger records the resolved conflict inputs");
+  assert.equal(inputs.inDeficit, true);
+  assert.equal(inputs.recoveryStrain, true);
+  assert.equal(inputs.clinicalAttention, false, "an answered no is recorded as a no, not as absence");
+  assert.equal(inputs.activeInjury, false);
+  assert.deepEqual(inputs.activeMedications, []);
+});
+
+// ---- evidence the coach context cannot carry --------------------------------
+
+test("a lifecycle symptom with no rated session since still counts as an active injury", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const result = await runCaseConference(
+    "stub",
+    { question: "Should squat load move?", domains: ["training", "recovery"] },
+    {
+      // Nothing in the context knows: no injury event, and the autoregulation
+      // rollup is empty because nothing has been trained since the report.
+      context: healthyContext,
+      symptomAreas: () => ["left knee"],
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          revision: {
+            type: "plan_update",
+            summary: "Small bench step",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
+          },
+        }),
+    }
+  );
+  assert.deepEqual(result.conflicts, ["injury_load"]);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115, "the change is held, not applied");
+});
+
+test("a symptom read that finds nothing is not the same as one that never looked", () => {
+  assert.deepEqual(deterministicConferenceConflicts(healthyContext(), { activeSymptomAreas: [] }), []);
+  assert.deepEqual(deterministicConferenceConflicts(healthyContext(), { activeSymptomAreas: null }), []);
+  assert.deepEqual(deterministicConferenceConflicts(healthyContext(), { activeSymptomAreas: ["left knee"] }), [
+    "injury_load",
+  ]);
+});
+
+// ---- the clinical lever's second arm ----------------------------------------
+
+test("an act-now clinical finding plus a proposed revision is a clinical conflict without a directive row", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  // A flagged marker whose propagation produced only a `watch` row — no
+  // training/nutrition directive exists, but the brain is about to change training.
+  const watchOnly = () => ({
+    ...clinicalContext(),
+    directives: [{ domain: "watch", marker: "Ferritin", directive: "Recheck ferritin with your doctor." }],
+  });
+  assert.deepEqual(deterministicConferenceConflicts(watchOnly()), [], "no lever before a revision exists");
+
+  const result = await runCaseConference(
+    "stub",
+    { question: "Tune training around the flagged panel.", domains: ["training"] },
+    {
+      context: watchOnly,
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          revision: {
+            type: "plan_update",
+            summary: "Small bench step",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
+          },
+        }),
+    }
+  );
+  assert.ok(result.conflicts.includes("clinical_autonomy"), "the revision itself is the lever");
+  assert.deepEqual(result.unresolved_conflicts, ["clinical_autonomy"]);
+  assert.equal(result.decision.risk_class, "clinical");
+  assert.equal(result.decision.autonomy_tier, "clinician");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
+});
+
+test("an advice-only conference over the same finding is not forced to clinician", async () => {
+  const result = await runCaseConference(
+    "stub",
+    { question: "What should I watch?", domains: ["training"] },
+    {
+      context: () => ({
+        ...clinicalContext(),
+        directives: [{ domain: "watch", marker: "Ferritin", directive: "Recheck ferritin with your doctor." }],
+      }),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () => conductorDecision({ domain: "training", revision: null }),
+    }
+  );
+  assert.ok(!result.conflicts.includes("clinical_autonomy"), "there is no change for the lever to ride");
+});
+
+// ---- deadbands and comparability --------------------------------------------
+
+test("a target a few calories under an estimated maintenance is not a deficit", () => {
+  const nearMaintenance = {
+    ...deficitStrainContext(),
+    cut_quality: { active: false },
+    goal_mode: "maintain",
+    goal: { ok: true, goal_mode: "maintain", tdee: 2_800, effective_target: { target_kcal: 2_780 } },
+  };
+  assert.deepEqual(deterministicConferenceConflicts(nearMaintenance), [], "20 kcal is two estimates landing close");
   assert.deepEqual(
     deterministicConferenceConflicts({
-      injury: "shoulder",
-      training: "progress load",
-      deficit: true,
-      recovery: "low HRV fatigue",
-      medication: "x",
-      supplement: "y",
-      allergies: "nuts",
-      meal: "plan",
-      race: "10k",
-      strength: true,
-      clinical: true,
-      autonomy: "auto-apply",
+      ...nearMaintenance,
+      goal: { ok: true, goal_mode: "maintain", tdee: 2_800, effective_target: { target_kcal: 2_600 } },
+    }),
+    ["deficit_recovery"],
+    "a margin that means something does read as a deficit"
+  );
+});
+
+test("a citation longer than the evidence-key cap still compares equal to its own key", () => {
+  const longKey = `sessions:${"bench-press-and-a-very-long-provenance-tail ".repeat(6)}n=4`;
+  assert.ok(longKey.length > 160, "the fixture exceeds the 160-char cap both sides normalize to");
+  const stored = normalizeSpecialistOpinion(opinion("training", { evidence_keys: [longKey] }));
+  const decision = normalizeStrictCaseConferenceDecision(
+    conductorDecision({
+      resolved_conflicts: [{ key: "injury_load", evidence_key: longKey, resolution: "Cleared under the cap." }],
+    })
+  );
+  assert.ok(decision, "the decision still normalizes");
+  const resolved = citedConflictResolutions(decision.resolved_conflicts, ["injury_load"], [stored]);
+  assert.ok(resolved.has("injury_load"), "both sides truncate the same way, so the citation matches");
+});
+
+test("every conflict can be detected at once when the evidence is genuinely there", () => {
+  assert.deepEqual(
+    deterministicConferenceConflicts({
+      ...deficitStrainContext(),
+      ...clinicalContext(),
+      goal_mode: "lose",
+      goal: { ok: true, goal_mode: "lose", tdee: 2_800, effective_target: { target_kcal: 2_200 } },
+      cut_quality: { active: true },
+      signal_state: deficitStrainContext().signal_state,
+      context_events: [{ kind: "injury", title: "Left shoulder" }],
+      health: [{ kind: "medication_list", clinical_facts: [{ kind: "medication", name: "Atorvastatin" }] }],
+      supplements: [{ name: "Creatine monohydrate" }],
+      profile: { allergies: "peanuts" },
+      meal_plan: { days: [] },
+      endurance_goal: { mode: "race", is_race: true, distance_km: 10, phase: "build" },
     }),
     ["injury_load", "deficit_recovery", "medication_supplement", "allergy_meal", "race_strength", "clinical_autonomy"]
   );
@@ -243,17 +709,28 @@ test("a conductor cannot self-attest away the clinical floor", async () => {
     { question: "Should the iron supplement change alongside the medication?", domains: ["training", "nutrition"] },
     {
       context: () => ({
-        clinical: "ferritin flagged, medication adjusted",
-        autonomy: "quiet_apply candidate",
+        ...clinicalContext(),
+        health: [{ kind: "medication_list", clinical_facts: [{ kind: "medication", name: "Ferrous sulfate" }] }],
+        supplements: [{ name: "Iron bisglycinate" }],
       }),
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
       conductorRun: async () =>
         conductorDecision({
           domain: "training",
           risk_class: "low",
+          // Adversarial: BOTH claims carry a citation that really exists in a
+          // specialist's evidence. The clinical conflict must still not close.
           resolved_conflicts: [
-            { key: "clinical_autonomy", resolution: "The clinical side is handled." },
-            { key: "medication_supplement", resolution: "No interaction expected." },
+            {
+              key: "clinical_autonomy",
+              evidence_key: "nutrition:evidence",
+              resolution: "The clinical side is handled.",
+            },
+            {
+              key: "medication_supplement",
+              evidence_key: "nutrition:evidence",
+              resolution: "No interaction expected.",
+            },
           ],
           revision: {
             type: "plan_update",
@@ -269,6 +746,14 @@ test("a conductor cannot self-attest away the clinical floor", async () => {
   assert.equal(result.decision.autonomy_tier, "clinician");
   assert.equal(result.execution.applied, false, "nothing clinical ever applies autonomously");
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 115, "the plan is untouched");
+  assert.ok(
+    result.unresolved_conflicts.includes("clinical_autonomy"),
+    "no citation can close a clinical conflict — the floor is the server's"
+  );
+  assert.ok(
+    !result.unresolved_conflicts.includes("medication_supplement"),
+    "an ordinary conflict with a real citation does close"
+  );
 });
 
 test("a decision whose own action carries medication changes is clinician-directed even without a flagged snapshot", async () => {
@@ -278,7 +763,7 @@ test("a decision whose own action carries medication changes is clinician-direct
     "stub",
     { question: "Tune training around the new phase.", domains: ["training"] },
     {
-      context: () => ({ training: "stable" }),
+      context: healthyContext,
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
       conductorRun: async () =>
         conductorDecision({
@@ -304,7 +789,7 @@ test("a malformed conductor envelope preserves specialist findings as degraded a
     "stub",
     { question: "How should fueling respond to fatigue?", domains: ["nutrition", "recovery"] },
     {
-      context: () => ({ deficit: true, recovery: "fatigue" }),
+      context: deficitStrainContext,
       specialistRun: async (_agent, _prompt, domain) =>
         opinion(domain, { recommendation: domain === "nutrition" ? "Raise fuel modestly." : "Protect recovery." }),
       conductorRun: async () => ({ malformed: true }),
@@ -327,7 +812,7 @@ test("default specialist and conductor dispatch enforce literal contracts and pr
     "auto",
     { question: "Reconcile fuel and recovery.", domains: ["nutrition", "recovery"] },
     {
-      context: () => ({ deficit: true, recovery: "fatigue" }),
+      context: deficitStrainContext,
       chosenWithReads: async (_agent, prompt, opts) => {
         assert.equal(opts.signal, controller.signal);
         specialistPrompts.push(prompt);
@@ -350,7 +835,9 @@ test("default specialist and conductor dispatch enforce literal contracts and pr
         const invalid = { kind: "case_conference" };
         const parsed = conductorDecision({
           domain: "nutrition",
-          resolved_conflicts: [{ key: "deficit_recovery", resolution: "Keep the adjustment bounded." }],
+          resolved_conflicts: [
+            { key: "deficit_recovery", evidence_key: "nutrition:evidence", resolution: "Keep the adjustment bounded." },
+          ],
         });
         assert.equal(opts.acceptParsed(invalid), false);
         assert.equal(opts.acceptParsed({ ...parsed, kind: "training_target" }), false);
@@ -396,7 +883,7 @@ test("post-run specialist validation rejects incomplete opinions before conducto
     "stub",
     { question: "Reconcile the next training step.", domains: ["training", "recovery"] },
     {
-      context: () => ({ training: "stable" }),
+      context: healthyContext,
       specialistRun: async (_agent, _prompt, domain) => {
         const incomplete = opinion(domain);
         delete incomplete.risks;
@@ -509,7 +996,7 @@ test("conductor repair rejects wrong kind and malformed revision before rotating
     "auto",
     { question: "Reconcile the next fuel step.", domains: ["nutrition", "recovery"] },
     {
-      context: () => ({ recovery: "stable" }),
+      context: healthyContext,
       specialistRun: async (_agent, _prompt, domain) => opinion(domain),
       chosen: async (_agent, prompt, opts) =>
         runAgentWithFallback(["stub", "stub"], prompt, {
@@ -544,7 +1031,7 @@ test("a malformed nested conductor revision degrades to advice and never becomes
     "auto",
     { question: "Adjust fuel carefully.", domains: ["nutrition", "recovery"] },
     {
-      context: () => ({ deficit: true, recovery: "fatigue" }),
+      context: deficitStrainContext,
       specialistRun: async (_agent, _prompt, domain) => opinion(domain),
       chosen: async (_agent, prompt, opts) =>
         runAgentWithFallback(["stub"], prompt, {
@@ -582,7 +1069,7 @@ test("cancellation after specialist work propagates and persists no proposal or 
       "auto",
       { question: "Make a bounded bench adjustment.", domains: ["training", "recovery"] },
       {
-        context: () => ({ training: "stable" }),
+        context: healthyContext,
         specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
         conductorRun: async () => {
           controller.abort();
@@ -611,7 +1098,7 @@ test("all invalid conductor attempts preserve valid specialists as safe degraded
     "auto",
     { question: "Reconcile fuel and recovery.", domains: ["nutrition", "recovery"] },
     {
-      context: () => ({ deficit: true, recovery: "fatigue" }),
+      context: deficitStrainContext,
       specialistRun: async (_agent, _prompt, domain) => opinion(domain),
       chosen: async () => {
         throw new Error("all conductor contracts invalid");
@@ -652,12 +1139,18 @@ test("a conference can route a typed nutrition target through the proposal and a
     "stub",
     { question: "Adjust the cut fuel target.", domains: ["nutrition", "recovery"] },
     {
-      context: () => ({ deficit: true, recovery: "fatigue" }),
+      context: deficitStrainContext,
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
       conductorRun: async () =>
         conductorDecision({
           domain: "nutrition",
-          resolved_conflicts: [{ key: "deficit_recovery", resolution: "Use a small carb-led increase." }],
+          resolved_conflicts: [
+            {
+              key: "deficit_recovery",
+              evidence_key: "nutrition:evidence",
+              resolution: "Use a small carb-led increase.",
+            },
+          ],
           revision: {
             type: "nutrition_target",
             summary: "Fuel the work",

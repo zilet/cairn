@@ -236,18 +236,26 @@ function conferenceSchedulerClaim(input: any): repo.SchedulerOperationClaim | nu
   } as repo.SchedulerOperationClaim;
 }
 
-function completeCaseConferenceResult(input: any, result: any): boolean {
-  if (
-    result?.ok !== true ||
-    result?.degraded === true ||
-    normalizeStrictCaseConferenceDecision(result?.decision) === null ||
-    !Array.isArray(result?.opinions) ||
-    !Array.isArray(result?.unavailable) ||
-    result.unavailable.length > 0 ||
-    !Array.isArray(result?.unresolved_conflicts) ||
-    result.unresolved_conflicts.length > 0
-  )
-    return false;
+/**
+ * Why a conference was not a complete piece of work — `null` when it was.
+ *
+ * A conference HELD AT THE CLINICAL FLOOR is complete work. `clinical_autonomy`
+ * is unresolvable by design (no citation can close it; the server owns that
+ * floor), so retrying cannot change the outcome — it would spend the month's
+ * whole budget arriving at the same clinician-directed decision, which is already
+ * recorded and already waiting for the human. Holding for the clinician IS the
+ * conference doing its job. Every OTHER unresolved conflict is a real failure to
+ * reconcile and keeps its retry.
+ */
+function conferenceIncompleteReason(input: any, result: any): string | null {
+  if (result?.ok !== true) return "no usable result";
+  if (result?.degraded === true) return "degraded conductor envelope";
+  if (normalizeStrictCaseConferenceDecision(result?.decision) === null) return "no valid decision";
+  if (!Array.isArray(result?.opinions) || !Array.isArray(result?.unavailable)) return "malformed result";
+  if (result.unavailable.length > 0) return `unavailable: ${result.unavailable.join(",")}`;
+  if (!Array.isArray(result?.unresolved_conflicts)) return "malformed result";
+  const blocking = result.unresolved_conflicts.filter((conflict: unknown) => conflict !== "clinical_autonomy");
+  if (blocking.length > 0) return `unresolved: ${blocking.join(",")}`;
   const requested = [
     ...new Set<string>(
       (Array.isArray(input.domains) ? input.domains : [])
@@ -260,7 +268,8 @@ function completeCaseConferenceResult(input: any, result: any): boolean {
       .map((opinion: any) => String(opinion?.domain ?? ""))
       .filter((domain: string) => requested.includes(domain))
   );
-  return requested.length > 0 && delivered.size === requested.length;
+  if (!requested.length) return "no specialist domains requested";
+  return delivered.size === requested.length ? null : "no opinion from every requested specialist";
 }
 
 export function failCaseConferenceSchedulerOperation(input: any, error: unknown): boolean {
@@ -274,9 +283,13 @@ export function failCaseConferenceSchedulerOperation(input: any, error: unknown)
 
 /** Stamp scheduler success only after a conference returned a valid result. */
 export function applyCaseConferenceSchedulerSuccess(input: any, result: any): boolean {
-  if (!completeCaseConferenceResult(input, result)) {
-    const missing = Array.isArray(result?.unavailable) ? result.unavailable.join(",") : "unknown";
-    failCaseConferenceSchedulerOperation(input, new Error(`case conference incomplete; unavailable=${missing}`));
+  // The recorded reason is the REAL one. It used to report `unavailable=` for
+  // every kind of incompleteness, so an unresolved conflict was logged as an
+  // empty list of missing specialists — a message that named the one thing that
+  // had not gone wrong.
+  const incomplete = conferenceIncompleteReason(input, result);
+  if (incomplete) {
+    failCaseConferenceSchedulerOperation(input, new Error(`case conference incomplete; ${incomplete}`));
     return false;
   }
   if (!input?.scheduler_success || typeof input.scheduler_success !== "object") return false;
