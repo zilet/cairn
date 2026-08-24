@@ -310,9 +310,13 @@ export function normalizeCaseConferenceDecision(value: unknown): CaseConferenceD
     const row = asRecord(item);
     const key = cleanIdentifier(row?.key, 100);
     const resolution = cleanText(row?.resolution, 500);
-    // 160 is the specialist contract's own evidence_keys cap, so a citation is
-    // compared against the stored key byte-for-byte rather than a truncation of it.
-    const evidenceKey = cleanIdentifier(row?.evidence_key, 160);
+    // Normalized through the SAME function as the keys it will be compared
+    // against: normalizeSpecialistOpinion runs evidence_keys through
+    // cleanText(item, 160), which truncates at a word boundary and appends an
+    // ellipsis, while cleanIdentifier hard-slices. A key longer than 160 chars
+    // would then never compare equal to its own citation, leaving the conflict
+    // unclosable through no fault of the conductor.
+    const evidenceKey = cleanText(row?.evidence_key, 160);
     if (key && resolution) conflicts.push({ key, evidence_key: evidenceKey, resolution });
   }
   const expectations: ProposedExpectation[] = [];

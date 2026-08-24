@@ -97,7 +97,7 @@ function both(first: Evidence, second: Evidence): boolean {
 
 // ---------- per-input derivations ----------
 
-function readActiveInjury(context: Record<string, unknown>): Evidence {
+function readActiveInjury(context: Record<string, unknown>, symptomAreas: readonly string[] | null): Evidence {
   // `context_events` is already the ACTIVE list (listContextEvents({activeOnly:true})),
   // so an injury row here is an open injury.
   const events = context.context_events;
@@ -106,9 +106,14 @@ function readActiveInjury(context: Record<string, unknown>): Evidence {
   // areas out before the rollup), so this is stated freshness, not an old note.
   const autoregulation = record(record(context.training_signals)?.autoregulation);
   const joints = list(autoregulation?.joint_areas).filter((area) => text(area).length > 0);
-  if (injuries.length > 0 || joints.length > 0) return true;
-  // Only claim "no injury" when something in the context actually answered.
-  return Array.isArray(events) || record(context.training_signals) ? false : null;
+  // The lifecycle itself, which the context can only show THROUGH a rated session:
+  // pain reported in chat on Monday with nothing trained since is live evidence the
+  // autoregulation rollup has no way to carry. Supplied by the caller (the context
+  // does not hold it); `null` when nothing looked.
+  const stated = symptomAreas == null ? [] : symptomAreas.filter((area) => text(area).length > 0);
+  if (injuries.length > 0 || joints.length > 0 || stated.length > 0) return true;
+  // Only claim "no injury" when something actually answered.
+  return Array.isArray(events) || record(context.training_signals) || symptomAreas != null ? false : null;
 }
 
 function readPlannedLoadIncrease(context: Record<string, unknown>): Evidence {
@@ -120,18 +125,25 @@ function readPlannedLoadIncrease(context: Record<string, unknown>): Evidence {
   return signals.length > 0 || prescriptions.length > 0 ? false : null;
 }
 
+// Maintenance is an ESTIMATE with its own error bars, so a target a handful of
+// calories under it is not evidence of a deficit — it is two numbers that landed
+// close. A declared loss phase needs no margin; it has already said what it is.
+const DEFICIT_MARGIN_KCAL = 100;
+
 function readInDeficit(context: Record<string, unknown>): Evidence {
   // A measured cut in flight — cutQualityRead is only `active` on a genuine
   // measured downtrend during a declared loss phase.
   const cutQuality = record(context.cut_quality);
   if (cutQuality?.active === true) return true;
-  // Otherwise: the EFFECTIVE target the surfaces read against measured maintenance.
   const goal = record(context.goal);
   if (!goal || goal.ok !== true) return cutQuality ? false : null;
+  if (text(goal.goal_mode) === "lose") return true;
+  // Otherwise: the EFFECTIVE target the surfaces read, against measured
+  // maintenance, by a margin big enough to mean something.
   const target = finite(record(goal.effective_target)?.target_kcal);
   const maintenance = finite(goal.tdee);
   if (target == null || maintenance == null) return false;
-  return target < maintenance;
+  return maintenance - target >= DEFICIT_MARGIN_KCAL;
 }
 
 function readRecoveryStrain(context: Record<string, unknown>): Evidence {
@@ -233,12 +245,28 @@ function readAllergies(context: Record<string, unknown>): string[] {
   return [...new Set(names)];
 }
 
+/** Evidence a conference has that the coach context does not carry. */
+export interface ConferenceConflictEvidence {
+  /** Display labels of lifecycle symptoms currently ACTIVE and area-scoped.
+   * `null` (the default) means nothing looked, not that nothing hurts. */
+  activeSymptomAreas?: readonly string[] | null;
+}
+
 /** Read the typed conflict question sheet out of a conference context. Pure and
- * null-safe: an unrecognizable context answers nothing, and nothing fires. */
-export function conferenceConflictInputs(context: unknown): ConferenceConflictInputs {
+ * null-safe: an unrecognizable context answers nothing, and nothing fires.
+ *
+ * MUST be given the FULL context, not a bounded snapshot of it. The snapshot the
+ * specialists receive is truncated to its first 50 keys, which silently drops
+ * signal_state, health_focus, directives, health and supplements from the real
+ * 73-key coach context — every reader below them would answer `null` forever.
+ */
+export function conferenceConflictInputs(
+  context: unknown,
+  evidence: ConferenceConflictEvidence = {}
+): ConferenceConflictInputs {
   const root = record(context) ?? {};
   return {
-    activeInjury: readActiveInjury(root),
+    activeInjury: readActiveInjury(root, evidence.activeSymptomAreas ?? null),
     plannedLoadIncrease: readPlannedLoadIncrease(root),
     inDeficit: readInDeficit(root),
     recoveryStrain: readRecoveryStrain(root),
@@ -276,10 +304,33 @@ export const CONFERENCE_CONFLICT_RULES: ReadonlyArray<{
   { key: "clinical_autonomy", fires: (i) => both(i.clinicalAttention, i.clinicalLever) },
 ];
 
-/** The deterministic cross-domain conflicts a conference must reconcile. */
-export function deterministicConferenceConflicts(context: unknown): ConferenceConflictKey[] {
-  const inputs = conferenceConflictInputs(context);
+/** Apply the rules to an already-read question sheet. */
+export function conflictsFromInputs(inputs: ConferenceConflictInputs): ConferenceConflictKey[] {
   return CONFERENCE_CONFLICT_RULES.filter((rule) => rule.fires(inputs)).map((rule) => rule.key);
+}
+
+/** The deterministic cross-domain conflicts a conference must reconcile. Give it
+ * the FULL context — see the note on conferenceConflictInputs. */
+export function deterministicConferenceConflicts(
+  context: unknown,
+  evidence: ConferenceConflictEvidence = {}
+): ConferenceConflictKey[] {
+  return conflictsFromInputs(conferenceConflictInputs(context, evidence));
+}
+
+/**
+ * The SECOND arm of the clinical lever, which can only be asked once the decision
+ * exists.
+ *
+ * `clinicalLever` above wants a directive already propagated into training or
+ * nutrition, but deriveDirectives frequently emits only a `watch` row for a flagged
+ * marker — and the tension the conflict models (an act-now clinical finding while
+ * the brain is about to change something on its own) is fully present without that
+ * row. So a conference that has ACTUALLY produced a revision is itself the lever.
+ * Broadening, never narrowing: a clinical floor may only ever gain reasons to hold.
+ */
+export function clinicalAutonomyFromRevision(inputs: ConferenceConflictInputs, hasRevision: boolean): boolean {
+  return hasRevision && inputs.clinicalAttention === true;
 }
 
 /** Which specialist domains may close a conflict. */

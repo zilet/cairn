@@ -1,9 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deterministicConferenceConflicts, runCaseConference } from "../dist/domain/brain/case-conference.js";
+import {
+  citedConflictResolutions,
+  deterministicConferenceConflicts,
+  runCaseConference,
+} from "../dist/domain/brain/case-conference.js";
 import { getBrainDecision } from "../dist/repo/brain-decisions.js";
 import { applyDueAnnouncedDecisions } from "../dist/domain/brain/autonomy-service.js";
 import { normalizeStrictCaseConferenceDecision } from "../dist/brain/case-conference-contract.js";
+import { normalizeSpecialistOpinion } from "../dist/brain/specialist-contract.js";
+import { normalizeJsonObject } from "../dist/brain/contract-utils.js";
 import { runAgentWithFallback } from "../dist/agents.js";
 import { db, repo } from "./_seed.js";
 
@@ -108,6 +114,17 @@ const clinicalContext = () => ({
   },
   directives: [{ domain: "nutrition", marker: "Ferritin", directive: "Pair iron-rich food with vitamin C." }],
 });
+
+// The production shape the compact fixtures above cannot reproduce: the real
+// coach context has 73 top-level keys and createImmutableBrainSnapshot keeps only
+// the first 50, so every conflict-bearing slice (signal_state, health_focus,
+// directives, health, supplements) sits BELOW the cut. Filler keys go first, so
+// everything the conflict layer needs is past index 50.
+function wideContext(base = deficitStrainContext()) {
+  const filler = {};
+  for (let i = 0; i < 60; i += 1) filler[`coach_slice_${String(i).padStart(2, "0")}`] = { note: "a context slice" };
+  return { ...filler, ...base };
+}
 
 function conductorDecision(overrides = {}) {
   return {
@@ -459,6 +476,187 @@ for (const { key, firing, quiet } of conflictCases) {
     assert.ok(!deterministicConferenceConflicts(healthyContext()).includes(key), "a healthy athlete does not");
   });
 }
+
+// ---- the snapshot bound must not blind the deterministic layer ---------------
+
+test("the immutable snapshot really does drop a wide context's conflict-bearing keys", () => {
+  const wide = wideContext();
+  assert.ok(Object.keys(wide).length >= 73, "the fixture is at least as wide as the real coach context");
+  const bounded = normalizeJsonObject(wide);
+  assert.equal(bounded.signal_state, undefined, "signal_state is past the 50-key bound");
+  assert.equal(bounded.health_focus, undefined);
+  assert.equal(bounded.directives, undefined);
+  assert.equal(bounded.cut_quality, undefined);
+  assert.deepEqual(
+    deterministicConferenceConflicts(bounded),
+    [],
+    "reading the SNAPSHOT is what made three conflicts undetectable in production"
+  );
+});
+
+test("a conference over a wide context still detects conflicts the snapshot cannot carry", async () => {
+  const result = await runCaseConference(
+    "stub",
+    { question: "Reconcile fuel and recovery.", domains: ["nutrition", "recovery"] },
+    {
+      context: () => wideContext(),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () => conductorDecision({ domain: "nutrition" }),
+    }
+  );
+  assert.deepEqual(result.conflicts, ["deficit_recovery"], "detection reads the full context, not the snapshot");
+  assert.deepEqual(result.unresolved_conflicts, ["deficit_recovery"]);
+});
+
+test("a wide context's trajectory and focus reach the recorded decision", async () => {
+  const trajectory = { objective: "everything better", phase: { optimizes: ["recovery"], parks: ["strength"] } };
+  const result = await runCaseConference(
+    "stub",
+    {
+      question: "Make the next bounded adjustment.",
+      domains: ["nutrition", "recovery"],
+      trajectory,
+      optimizes: trajectory.phase.optimizes,
+      parks: trajectory.phase.parks,
+    },
+    {
+      context: () => wideContext(),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () => conductorDecision({ domain: "nutrition" }),
+    }
+  );
+  const recorded = getBrainDecision(result.recorded_decision_id);
+  // conferenceContext appends these AFTER the context's own keys, so on a wide
+  // context the snapshot bound dropped both and every production conference
+  // recorded a null trajectory.
+  assert.deepEqual(recorded.context.trajectory, trajectory);
+  assert.deepEqual(recorded.context.optimizes, ["recovery"]);
+  assert.deepEqual(recorded.context.parks, ["strength"]);
+});
+
+// ---- evidence the coach context cannot carry --------------------------------
+
+test("a lifecycle symptom with no rated session since still counts as an active injury", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const result = await runCaseConference(
+    "stub",
+    { question: "Should squat load move?", domains: ["training", "recovery"] },
+    {
+      // Nothing in the context knows: no injury event, and the autoregulation
+      // rollup is empty because nothing has been trained since the report.
+      context: healthyContext,
+      symptomAreas: () => ["left knee"],
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          revision: {
+            type: "plan_update",
+            summary: "Small bench step",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
+          },
+        }),
+    }
+  );
+  assert.deepEqual(result.conflicts, ["injury_load"]);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115, "the change is held, not applied");
+});
+
+test("a symptom read that finds nothing is not the same as one that never looked", () => {
+  assert.deepEqual(deterministicConferenceConflicts(healthyContext(), { activeSymptomAreas: [] }), []);
+  assert.deepEqual(deterministicConferenceConflicts(healthyContext(), { activeSymptomAreas: null }), []);
+  assert.deepEqual(deterministicConferenceConflicts(healthyContext(), { activeSymptomAreas: ["left knee"] }), [
+    "injury_load",
+  ]);
+});
+
+// ---- the clinical lever's second arm ----------------------------------------
+
+test("an act-now clinical finding plus a proposed revision is a clinical conflict without a directive row", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  // A flagged marker whose propagation produced only a `watch` row — no
+  // training/nutrition directive exists, but the brain is about to change training.
+  const watchOnly = () => ({
+    ...clinicalContext(),
+    directives: [{ domain: "watch", marker: "Ferritin", directive: "Recheck ferritin with your doctor." }],
+  });
+  assert.deepEqual(deterministicConferenceConflicts(watchOnly()), [], "no lever before a revision exists");
+
+  const result = await runCaseConference(
+    "stub",
+    { question: "Tune training around the flagged panel.", domains: ["training"] },
+    {
+      context: watchOnly,
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          revision: {
+            type: "plan_update",
+            summary: "Small bench step",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
+          },
+        }),
+    }
+  );
+  assert.ok(result.conflicts.includes("clinical_autonomy"), "the revision itself is the lever");
+  assert.deepEqual(result.unresolved_conflicts, ["clinical_autonomy"]);
+  assert.equal(result.decision.risk_class, "clinical");
+  assert.equal(result.decision.autonomy_tier, "clinician");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
+});
+
+test("an advice-only conference over the same finding is not forced to clinician", async () => {
+  const result = await runCaseConference(
+    "stub",
+    { question: "What should I watch?", domains: ["training"] },
+    {
+      context: () => ({
+        ...clinicalContext(),
+        directives: [{ domain: "watch", marker: "Ferritin", directive: "Recheck ferritin with your doctor." }],
+      }),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () => conductorDecision({ domain: "training", revision: null }),
+    }
+  );
+  assert.ok(!result.conflicts.includes("clinical_autonomy"), "there is no change for the lever to ride");
+});
+
+// ---- deadbands and comparability --------------------------------------------
+
+test("a target a few calories under an estimated maintenance is not a deficit", () => {
+  const nearMaintenance = {
+    ...deficitStrainContext(),
+    cut_quality: { active: false },
+    goal_mode: "maintain",
+    goal: { ok: true, goal_mode: "maintain", tdee: 2_800, effective_target: { target_kcal: 2_780 } },
+  };
+  assert.deepEqual(deterministicConferenceConflicts(nearMaintenance), [], "20 kcal is two estimates landing close");
+  assert.deepEqual(
+    deterministicConferenceConflicts({
+      ...nearMaintenance,
+      goal: { ok: true, goal_mode: "maintain", tdee: 2_800, effective_target: { target_kcal: 2_600 } },
+    }),
+    ["deficit_recovery"],
+    "a margin that means something does read as a deficit"
+  );
+});
+
+test("a citation longer than the evidence-key cap still compares equal to its own key", () => {
+  const longKey = `sessions:${"bench-press-and-a-very-long-provenance-tail ".repeat(6)}n=4`;
+  assert.ok(longKey.length > 160, "the fixture exceeds the 160-char cap both sides normalize to");
+  const stored = normalizeSpecialistOpinion(opinion("training", { evidence_keys: [longKey] }));
+  const decision = normalizeStrictCaseConferenceDecision(
+    conductorDecision({
+      resolved_conflicts: [{ key: "injury_load", evidence_key: longKey, resolution: "Cleared under the cap." }],
+    })
+  );
+  assert.ok(decision, "the decision still normalizes");
+  const resolved = citedConflictResolutions(decision.resolved_conflicts, ["injury_load"], [stored]);
+  assert.ok(resolved.has("injury_load"), "both sides truncate the same way, so the citation matches");
+});
 
 test("every conflict can be detected at once when the evidence is genuinely there", () => {
   assert.deepEqual(
