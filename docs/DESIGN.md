@@ -207,11 +207,12 @@ New/changed components (CSS must implement, the client JS must emit):
 - Chat `.bubble.user` = ink on `--ink` (cream text); `.bubble.assistant` = card.
 - Health **Standing** (Stand, the hero read): `.hstand*` — the momentum-led capacity read
   (three-age strip, `.hstand-bc-*` live body-composition, `.hstand-lever` terracotta well = the one
-  health lever, momentum chips, percentile comparisons). Blood-pressure **capture** lives in a sheet
+  health lever, momentum chips, level-ladder comparisons — strong / solid / building, never a
+  printed population percentile). Blood-pressure **capture** lives in a sheet
   (`.bpsheet*`), never inline in the read. Connected-brain rail: `.hb-section` cards (directives,
   `.supp-*` supplements, and `.symlink-card` symptom↔marker connections — gold left-spine, `.symlink` /
   `.symlink-note` / `.symlink-mk`; a quiet "worth mentioning to your doctor" read, hidden when empty).
-- **Cardiovascular risk** (Stand → Age, `#hRisk` above the standing percentile read): `.hrisk*` — the
+- **Cardiovascular risk** (Stand → Age, `#hRisk` above the standing read): `.hrisk*` — the
   AHA PREVENT (2023) clinical read. `.hrisk-vage` is the vascular-age headline, ALWAYS paired in the
   same card with `.hrisk-enh` (the enhancer overlay — ApoB/Lp(a)/hs-CRP/body-fat/VO2max/family-history,
   the residual risk the base equation misses); `.hrisk-enh-lede-tension` is the honesty guard that
@@ -224,12 +225,12 @@ New/changed components (CSS must implement, the client JS must emit):
   wellness score; `.hrisk-frame` always closes with the informational-not-medical-advice line.
 - **Performance** read (Train → Program, the athletic counterpart to Standing): `.pperf*` — the
   "where you stand" capacity benchmark. `.pperf-hero` (sage left-spine, headline + sub + `.pperf-chip`
-  momentum chips); `.pperf-caps` of `.pcap` rows (movement label + `.pcap-level` chip + a `.pcap-bar`
-  with a `.pcap-mark` percentile dot + the plain "Nth pct for your 40s" sub); `.pperf-lever` terracotta
+  momentum chips); `.pperf-caps` of `.pcap` rows (movement label + shared `.level-chip` with the
+  beginner→elite ladder word, never a percentile number, bar, or mark); `.pperf-lever` terracotta
   well = the one training lever; `.pperf-block` for imbalances / re-tests; `.pperf-variety`;
   `.pperf-aero` aerobic line; `.pperf-balance` italic holistic note. Tone classes `-strong` (sage) /
-  `-watch` (terracotta) / `-steady` (gold). Percentile + the beginner→elite level ladder are reference
-  reads, NEVER a 0-100 score (constitution).
+  `-watch` (terracotta) / `-steady` (gold). Level-ladder words only; population-percentile numbers
+  never print (constitution). Clinical risk % and vascular age stay the `.hrisk*` exemption.
 - Keep ALL other existing class names working (`.sess`, `.modal*`, `.heat*`, `.vol*`, `.mem*`,
   `.hdoc*`, `.life*`, `.enr*`, `.seg*`, `.daybtn`, `.logrow`, `.field`, `.toast`, `.rest*`,
   `.ob-*`, `.agentrow` family) — restyled to the Atelier language, same selectors.
@@ -508,8 +509,8 @@ The collapsed `This week` fold owns the `.statstrip`: discipline-aware training 
 weight pace, and its bodyweight tile. Pace is trajectory here, never a standalone warning
 or prewritten coach ask. A second small `#wtChipMini` bodyweight quick action stays above
 the fold beside its hidden inline input/save row, so one-tap weight capture is always
-reachable; saving updates both visible weight controls. Typed and microphone capture live
-in Chat rather than as separate Today controls. Stat numerals count up via `data-cu`.
+reachable; saving updates both visible weight controls. Typed capture lives in Chat rather than as a separate Today control; voice
+capture is planned. Stat numerals count up via `data-cu`.
 
 ## Marker trends (Stand → Markers)
 

@@ -57,10 +57,11 @@ test("progress performance renders standing safely", () => {
   assert.match(html, /class="level-chip"/);
   assert.match(html, /Advanced &lt;level&gt;/);
   assert.match(html, /Back squat &lt;bar&gt;/);
-  // Population-relative GEOMETRY is banned (VISION.md Amendment 2) — no width/left
-  // percentile bar or mark survives; the number lives on only as prose below.
+  // Population-relative GEOMETRY and NUMBERS are banned (VISION.md Amendment 2) —
+  // no width/left percentile bar or mark survives; prose speaks the ladder word.
   assert.doesNotMatch(html, /style="width:|style="left:|pcap-bar|pcap-fill|pcap-mark/);
-  assert.match(html, /stronger than 99% of men your age/);
+  assert.match(html, /Advanced &lt;level&gt; among men your age/);
+  assert.doesNotMatch(html, /stronger than \d+% of |% of men your age/);
   assert.match(html, /\+20 &lt;bad&gt; lb → Elite &lt;next&gt;/);
   assert.match(html, /VO2 &lt;good&gt;/);
   assert.match(html, /Pulling balance &lt;focus&gt;/);

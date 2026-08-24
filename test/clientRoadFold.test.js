@@ -176,3 +176,9 @@ test("tovJfoldHtml is empty when neither card has anything to say", () => {
   const ctx = loadRoadFold();
   assert.equal(ctx.tovJfoldHtml({ journey: null, journeyMilestones: [], timeline: [] }, {}), "");
 });
+
+test("train overview masthead never surfaces a day streak", () => {
+  const overview = readFileSync(join(root, "src/client/progress-overview-client.ts"), "utf8");
+  assert.doesNotMatch(overview, /day streak/);
+  assert.match(overview, /sessions · week/);
+});

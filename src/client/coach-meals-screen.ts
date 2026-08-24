@@ -96,9 +96,13 @@ async function renderCoach(): Promise<void> {
       <div class="field" id="customwrap" style="display:none">
         <textarea id="custominstr" rows="3" class="form-textarea" placeholder="e.g. focus on lower body; hold everything else\u2026"></textarea>
       </div>
-      <button id="runbtn" class="logbtn" style="width:100%;height:46px;font-size:1rem;letter-spacing:.05em">ASK TEAM TO REVIEW PROGRAM</button>
+      <div class="meals-actions">
+        <button id="runbtn" class="pillbtn pill-accent">Ask team to review program</button>
+      </div>
       <div id="runstatus" style="margin-top:10px;color:var(--muted);font-size:.85rem"></div>
-      <button id="mealbtn" class="draftbtn" style="width:100%;height:46px;font-size:1rem;margin-top:14px;letter-spacing:.05em">ASK TEAM TO REFRESH MEALS</button>
+      <div class="meals-actions">
+        <button id="mealbtn" class="pillbtn pill-accent">Ask team to refresh meals</button>
+      </div>
       <div id="mealstatus" style="margin-top:10px;color:var(--muted);font-size:.85rem"></div>
     </details>`;
   });
