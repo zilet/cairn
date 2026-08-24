@@ -289,6 +289,13 @@ export interface CoachContextEnvelope {
   fueling: CoachFuelingFeedback[];
   underfueling: CoachRecord | null;
   cut_quality: CoachRecord | null;
+  // The low-energy-availability watch, when a deficit is actually running: which
+  // channels agree, whether the pattern is standing, and whether the fuel target has
+  // been moved to protect it. Additive + optional, exactly like `fuel_demand`, so a
+  // partial context builder or an imported DB never synthesizes one — and NULL when
+  // nothing is being watched, so the block carries no key rather than a row of
+  // falses. It never carries a target: the accepted target stays authoritative.
+  energy_deficiency?: CoachRecord | null;
   // Which of the coming days carry the week's biggest work (a long run, a quality
   // session, a heavy lower day, a strength+run double) — so carbohydrate can be
   // biased toward them instead of one flat number being spread across seven very

@@ -578,3 +578,36 @@ test("only the Brief summarizes: every other site keeps its full set rows", () =
     }
   }
 });
+
+// A new context key reaches NO prompt until it joins a site's allowlist, which is
+// exactly how a protective change can land on the athlete's plate with no prompt able
+// to say why it happened. The deficit-cost watch rides the FUEL bundle, so every site
+// that already reasons about food carries it.
+test("the low-energy-availability watch reaches every site that already sees fuel", () => {
+  seedDemo();
+  const ctx = repo.getCoachContext();
+  assert.ok(Object.hasOwn(ctx, "energy_deficiency"), "the context carries the key (null when nothing is watched)");
+  const standing = {
+    ...ctx,
+    energy_deficiency: {
+      watching: true,
+      standing: true,
+      agreeing_channels: ["recovery_and_performance", "loss_pace"],
+      fuel_protected: true,
+    },
+  };
+  for (const site of ["meal_plan", "day_read", "chat", "coach", "weekly_read"]) {
+    const projected = projectCoachContext(standing, site);
+    assert.deepEqual(
+      projected.energy_deficiency,
+      standing.energy_deficiency,
+      `${site} can explain why the target moved`,
+    );
+  }
+  // …and the machine-register evidence dump never travels with it: the projection
+  // carries which channels agree, not the numbers behind them.
+  assert.ok(
+    !JSON.stringify(projectCoachContext(standing, "chat").energy_deficiency).includes("ms)"),
+    "no measurement prose rides into a prompt",
+  );
+});

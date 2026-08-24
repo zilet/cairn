@@ -1434,3 +1434,122 @@ test("movement risk demotes a flagged vary candidate below an otherwise lower-ra
   );
   assert.equal(violatesReadingGrammar(after.why), null);
 });
+
+// ---------------------------------------------------------------------------
+// THE PAIN TRAFFIC LIGHT — per movement, never per session (src/repo/pain-band.ts).
+// Amber holds the load and waits for the next exposure to answer the settling
+// question; red takes a bounded step off THAT movement. Everything the symptom does
+// not cover keeps training exactly as it was.
+
+function earnedOverload(name, group) {
+  makeExercise(name, { muscle_group: group });
+  planWith(group === "chest" ? 2 : 1, {
+    exercise: name,
+    sets: 3,
+    rep_low: 6,
+    rep_high: 8,
+    target_weight: 185,
+    focus: group === "chest" ? "Push" : "Legs",
+  });
+  logSet(name, isoDaysAgo(28), { weight: 175, reps: 8, rir: 2 });
+  logSet(name, isoDaysAgo(21), { weight: 180, reps: 8, rir: 2 });
+  logSet(name, isoDaysAgo(10), { weight: 185, reps: 8, rir: 2 });
+}
+
+function statePain(area, onsetDaysAgo, movement, exerciseId, days) {
+  const event = repo.reportTrainingSymptom({ area_text: area, onset_on: isoDaysAgo(onsetDaysAgo) });
+  for (const { at, painFree } of days) {
+    repo.recordMovementTolerance({
+      symptom_event_id: event.id,
+      movement,
+      exercise_id: exerciseId,
+      observed_on: isoDaysAgo(at),
+      pain_free: painFree,
+    });
+  }
+  return event;
+}
+
+test("pain amber holds the earned step on that movement while the rest of the session proceeds", () => {
+  earnedOverload("Back Squat", "quads");
+  earnedOverload("Barbell Bench Press", "chest");
+  const squat = repo.findExercise("Back Squat");
+  statePain("left knee", 6, "Back Squat", squat.id, [{ at: 4, painFree: false }]);
+
+  const braked = nextPrescription("Back Squat");
+  assert.equal(braked.action, "hold", "an open settling question holds the load");
+  assert.equal(braked.suggested.weight, 185, "the load stays where it is — the step waits, it is not lost");
+  assert.ok(braked.autoregulated, "a safety brake shaped this");
+  assert.match(braked.why, /next (go|session|time)|settled/i);
+
+  const untouched = nextPrescription("Barbell Bench Press");
+  assert.equal(untouched.action, "overload", "one hurting movement never blocks the session");
+  assert.equal(untouched.suggested.weight, 190);
+});
+
+test("pain red reduces THAT movement's load, and a settled report leaves the step alone", () => {
+  earnedOverload("Back Squat", "quads");
+  const squat = repo.findExercise("Back Squat");
+  statePain("left knee", 9, "Back Squat", squat.id, [
+    { at: 6, painFree: false },
+    { at: 2, painFree: false },
+  ]);
+  const red = nextPrescription("Back Squat");
+  assert.equal(red.action, "deload", "it did not settle between exposures, so the load comes down");
+  assert.ok(red.suggested.weight < 185, "a bounded step down on this movement");
+  assert.match(red.why, /rest of the session|Nothing else|everything else/i, "the sentence says the day still runs");
+
+  reset();
+  earnedOverload("Back Squat", "quads");
+  const again = repo.findExercise("Back Squat");
+  statePain("left knee", 9, "Back Squat", again.id, [
+    { at: 6, painFree: false },
+    { at: 4, painFree: true },
+  ]);
+  const green = nextPrescription("Back Squat");
+  assert.equal(green.action, "overload", "a report that settled by the next exposure does not brake anything");
+  assert.equal(green.suggested.weight, 190);
+});
+
+test("a pain deload stays out of the repeat-deload audit trail, and says nothing it cannot do", () => {
+  earnedOverload("Back Squat", "quads");
+  const squat = repo.findExercise("Back Squat");
+  statePain("left knee", 9, "Back Squat", squat.id, [
+    { at: 6, painFree: false },
+    { at: 2, painFree: false },
+  ]);
+  const red = nextPrescription("Back Squat");
+  assert.equal(red.action, "deload");
+  assert.equal(red.pain_protected, true);
+
+  // The repeat-deload ladder asks "is cutting load failing this lift?". A cut the
+  // athlete's own pain asked for is no evidence about that, so it never becomes the
+  // "first" deload that makes the next ordinary one a repeat (and escalates a rep
+  // wave, or rotates the movement out). Same exemption fuel-protection cuts carry.
+  const proposal = buildProgressionProposal(1);
+  assert.equal(proposal.ok, true);
+  const change = proposal.proposal.parsed.changes.find((c) => c.exercise === "Back Squat");
+  assert.ok(change, "the cut is still proposed and applied like any other");
+  assert.equal(change.progression_action, undefined, "but it does not stamp the repeat-deload marker");
+
+  // An assisted or bodyweight lift has no external load to take off, so red degrades
+  // to the HOLD's sentence rather than printing a cut over a number that never moved.
+  reset();
+  makeExercise("Assisted Pull-up", { muscle_group: "back" });
+  planWith(1, { exercise: "Assisted Pull-up", sets: 3, rep_low: 6, rep_high: 8, target_weight: null, focus: "Pull" });
+  logSet("Assisted Pull-up", isoDaysAgo(21), { weight: null, reps: 8, rir: 2 });
+  logSet("Assisted Pull-up", isoDaysAgo(10), { weight: null, reps: 8, rir: 2 });
+  const pullup = repo.findExercise("Assisted Pull-up");
+  statePain("elbow", 9, "Assisted Pull-up", pullup.id, [
+    { at: 6, painFree: false },
+    { at: 2, painFree: false },
+  ]);
+  const bodyweight = nextPrescription("Assisted Pull-up");
+  assert.equal(bodyweight.action, "hold", "nothing to ease, so the honest answer is a hold");
+  assert.equal(bodyweight.pain_protected, undefined, "and nothing claims a cut happened");
+  assert.doesNotMatch(bodyweight.why, /comes down|step off|Easing the load/i);
+  // …and it is RED's hold, not amber's: amber is still waiting to hear how it
+  // settled, and this movement has already answered that.
+  assert.match(bodyweight.why, /hasn't settled|still speaking up|Still unsettled/i);
+  assert.doesNotMatch(bodyweight.why, /next (go|session|time) tells us|whether it settled/i);
+});

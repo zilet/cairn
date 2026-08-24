@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { runUnderfuelingControlLoop } from "../dist/domain/brain/underfueling-service.js";
+import { runEnergyDeficiencyWatch } from "../dist/domain/brain/energy-deficiency-service.js";
 import { recordDecision } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy, revertDecision } from "../dist/domain/brain/autonomy-service.js";
@@ -423,4 +424,191 @@ test("under review posture, a persistent strain never stacks more than one open 
 
   // Retry-ability preserved: persistent strain never stamps a cooldown on the held branch.
   assert.equal(repo.getAppState("underfuel_prescription_last_action"), null, "the held branch stamps no cooldown");
+});
+
+// ---------------------------------------------------------------------------
+// THE LOW-ENERGY-AVAILABILITY WATCH'S one action (src/domain/brain/energy-deficiency-service.ts).
+// The cluster read itself is pinned in underfueling.test.js; what matters here is
+// that a standing cluster produces exactly ONE bounded raise through the ordinary
+// ledger, carries falsifiable predictions about the arms recovering, explains itself
+// once, and then refuses to do it again inside the settling window.
+
+function clusterRead(overrides = {}) {
+  return {
+    as_of: today(),
+    state: "sustained_cluster",
+    arms: [],
+    met_keys: ["recovery_and_performance", "loss_pace"],
+    met_keys_before: ["recovery_and_performance", "loss_pace"],
+    sustained: true,
+    protection: {
+      raise: true,
+      from_kcal: 2200,
+      target_kcal: 2450,
+      capped: false,
+      reason: "Two independent arms have held, so the target moves 250 kcal toward measured maintenance.",
+    },
+    reason: "recovery_and_performance, loss_pace have agreed for at least 12 days while the deficit ran.",
+    signature: "cluster-sig-1",
+    ...overrides,
+  };
+}
+
+function seedRecoverySignals() {
+  for (let d = 34; d >= 1; d--) {
+    db.prepare(`INSERT INTO daily_metrics (source, date, hrv_ms) VALUES ('apple', ?, ?)`).run(
+      addDaysISO(today(), -d),
+      d <= 7 ? 55 : 70,
+    );
+  }
+  for (const d of [-12, -8, -4]) {
+    db.prepare(`INSERT INTO sessions (date, performance) VALUES (?, 3)`).run(addDaysISO(today(), d));
+  }
+}
+
+test("a standing cluster buys ONE bounded protective raise, with arm-recovery expectations and one calm explanation", () => {
+  seedTarget(2200);
+  seedRecoverySignals();
+
+  const result = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(result.action, "protective_raise_scheduled");
+  const decision = result.nutrition?.decision;
+  assert.ok(decision, "the move goes through the autonomy ledger, never straight to the table");
+  assert.equal(decision.domain, "nutrition");
+  assert.equal(decision.kind, "nutrition_target");
+  const proposal = repo.getProposal(Number(decision.source_ref_key));
+  assert.equal(proposal.parsed.nutrition.target_kcal, 2450);
+  assert.equal(proposal.parsed.nutrition.prev_target_kcal, 2200);
+  assert.equal(proposal.parsed.nutrition.protein_g, 175, "protein is carried forward, never trimmed");
+
+  // The falsifiable claim is that the arms that fired come back.
+  assert.ok(result.expectations >= 1, "at least one arm-recovery prediction is attached");
+  const metrics = repo.listBrainExpectations({ decisionId: Number(decision.id) }).map((row) => row.metric_key);
+  assert.ok(metrics.includes("recovery_hrv_delta"), "the HRV arm is asked to recover");
+
+  // One explanation, in the athlete's register, waiting in-app.
+  const insight = db.prepare(`SELECT * FROM insights ORDER BY id DESC LIMIT 1`).get();
+  assert.ok(insight, "the pattern is explained once");
+  assert.equal(insight.status, "new");
+  assert.doesNotMatch(`${insight.text} ${insight.rationale}`, /REDs|relative energy deficiency|syndrome|\d\/10/i);
+
+  // A queued move has NOT stamped the cooldown — the fortnight starts when the change
+  // lands — so what stops a second pass minting a second proposal is the in-flight guard.
+  const again = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(again.action, "none");
+  assert.match(again.reason, /waiting for the next food-day boundary/i);
+  const drafts = repo.listProposals(20).filter((p) => String(p.agent) === "energy-deficiency-brain");
+  assert.equal(drafts.length, 1, "no second protective draft is minted while the first waits");
+});
+
+// A protective raise never lands the moment it is decided: it waits for a food-day
+// boundary, and the boundary re-validates it and may set it aside. Stamping the
+// fortnight at decision time meant a raise that never happened still bought silence —
+// the watch slept while the cluster stood and the athlete's food had not moved.
+test("the fortnight of silence starts when the change LANDS, not when it is decided", () => {
+  seedTarget(2200);
+  seedRecoverySignals();
+  const scheduled = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(scheduled.action, "protective_raise_scheduled");
+
+  const due = applyDueAnnouncedDecisions("2099-01-01");
+  assert.ok(due.applied.length >= 1, "the boundary applies the queued raise");
+  assert.equal(repo.getActiveNutritionTarget().target_kcal, 2450);
+
+  // With the raise in force, the same standing cluster is now held off by the cooldown
+  // rather than by the in-flight guard — and the cooldown is what a fortnight of
+  // repeated passes runs into.
+  const after = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(after.action, "none");
+  assert.match(after.reason, /settling window/i);
+});
+
+test("no standing cluster and no affordable raise are both no-ops", () => {
+  seedTarget(2200);
+  assert.equal(runEnergyDeficiencyWatch(today(), { read: clusterRead({ state: "emerging" }) }).action, "none");
+  assert.equal(
+    runEnergyDeficiencyWatch(today(), {
+      read: clusterRead({
+        protection: { raise: false, from_kcal: 2200, target_kcal: null, capped: true, reason: "no headroom" },
+      }),
+    }).action,
+    "none",
+  );
+  assert.equal(Number(db.prepare(`SELECT COUNT(*) AS n FROM nutrition_targets`).get().n), 1, "no target was written");
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM insights`).get().n, 0, "and nothing was explained");
+});
+
+// The baseline every protective step is measured FROM has to be the number the
+// athlete is actually eating to. An accepted row goes `review_due` once its adaptive
+// window elapses, and from that moment the goal's effective target — the formula —
+// is what is in force. Reading the stale row instead put the baseline BELOW the
+// number in force, and `capProtectiveRaise` waves a "raise" at or under its previous
+// straight through as the ordinary path: a stale 1,500 row under a formula target of
+// ~1,988 turned a protective raise into a CUT of several hundred calories.
+test("the raise is measured from the target in force, never from a review-overdue row", () => {
+  setMidCutProfile();
+  db.prepare(
+    `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, carbs_g, fat_g, source)
+     VALUES (?, 1500, 175, 150, 50, 'adaptive')`,
+  ).run(addDaysISO(today(), -60));
+
+  const stale = repo.getLatestNutritionTarget(today());
+  assert.equal(stale.target_kcal, 1500);
+  assert.equal(stale.review_due, true, "the accepted row is past its review window");
+  const inForce = Number(repo.computeGoalCheck().effective_target.target_kcal);
+  assert.ok(inForce > 1500, "so the formula target is what the athlete eats to");
+
+  const state = repo.energyDeficiencyState(today());
+  assert.equal(state.active_target_kcal, inForce, "the watch baselines on the same ladder the boundary uses");
+
+  // And with that baseline, the only thing this watch can produce is a move UP.
+  const read = repo.energyDeficiencyDecision({
+    ...state,
+    cut_active: true,
+    tdee_kcal: 2600,
+    tdee_basis: "logged_reality",
+    arms: [
+      { key: "loss_pace", verdict: "met", summary: "", evidence_keys: [] },
+      { key: "mood_energy", verdict: "met", summary: "", evidence_keys: [] },
+    ],
+    arms_before: [
+      { key: "loss_pace", verdict: "met", summary: "", evidence_keys: [] },
+      { key: "mood_energy", verdict: "met", summary: "", evidence_keys: [] },
+    ],
+  });
+  assert.equal(read.protection.raise, true);
+  assert.ok(
+    read.protection.target_kcal > inForce,
+    `a protective move may only ever raise: ${read.protection.target_kcal} vs ${inForce} in force`,
+  );
+});
+
+// A SET-ASIDE and a DECLINE are different answers. The boundary setting a raise aside
+// is the evidence declining it, and the watch may come back tomorrow with a
+// re-derived one. The ATHLETE declining it is an answer, and asking again tomorrow is
+// nagging — which is exactly what happened while the settling window counted only
+// `applied`: a discarded raise cleared the in-flight guard and was re-proposed every
+// single day, forever.
+test("an athlete's no buys the same fortnight of quiet an applied change buys", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  seedTarget(2200);
+  seedRecoverySignals();
+
+  const ourDrafts = () => repo.listProposals(50).filter((p) => String(p.agent) === "energy-deficiency-brain");
+  for (let pass = 0; pass < 5; pass++) {
+    runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+    // The athlete discards whatever is waiting on them.
+    for (const draft of ourDrafts()) {
+      if (draft.status === "draft") repo.setProposalStatus(Number(draft.id), "rejected");
+    }
+  }
+  assert.equal(ourDrafts().length, 1, "exactly one ask per settling window, however many passes run");
+  assert.equal(
+    repo.listBrainDecisions({ domain: "nutrition", limit: 20 }).filter((d) => d.status === "rejected").length,
+    1,
+    "and exactly one decline was recorded",
+  );
+
+  // A set-aside is deliberately NOT this case: when the boundary declines a raise the
+  // EVIDENCE said no, and the watch may return with a re-derived one.
 });

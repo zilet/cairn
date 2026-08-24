@@ -29,6 +29,7 @@ import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
 import { runWithTimeZone } from "./tz.js";
 import { addDaysISO, nowContext } from "./repo/shared.js";
 import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
+import { runEnergyDeficiencyWatch } from "./domain/brain/energy-deficiency-service.js";
 import {
   MEAL_REFRESH_INSTRUCTION_KEY,
   MEAL_REFRESH_REQUEST_KEY,
@@ -534,6 +535,12 @@ export function startScheduler() {
     // pass. It normally holds; only multi-channel agreement schedules a bounded
     // target/meal/recovery action through the existing autonomy ledger.
     const underfuelDue = dailySlotDue(now, "underfuel_control_last_date");
+    // The low-energy-availability watch reads the same kind of deterministic
+    // evidence, and answers "no cluster" on almost every pass. It runs on its own
+    // daily slot rather than inside the fuel loop because the two ask different
+    // questions: that one reads the plate against the scale, this one reads five
+    // independent channels for a pattern neither of them can see alone.
+    const deficitWatchDue = dailySlotDue(now, "energy_deficiency_watch_date");
 
     if (
       !insightDue &&
@@ -547,7 +554,8 @@ export function startScheduler() {
       !benchmarkAttnDue &&
       !checkupAttnDue &&
       !recoveryAutoDue &&
-      !underfuelDue
+      !underfuelDue &&
+      !deficitWatchDue
     )
       return;
     proactiveBusy = true;
@@ -556,6 +564,14 @@ export function startScheduler() {
         await runScheduled("underfuel_control_last_date", localToday(now), "underfuel_control_last_date", () => {
           const result = runUnderfuelingControlLoop(localToday(now));
           if (result.action !== "none") console.log(`[proactive] fuel-protection loop scheduled ${result.action}.`);
+          return { outcome: result.action === "none" ? "no_op" : "succeeded", value: result };
+        });
+      }
+      if (deficitWatchDue) {
+        await runScheduled("energy_deficiency_watch_date", localToday(now), "energy_deficiency_watch_date", () => {
+          const result = runEnergyDeficiencyWatch(localToday(now));
+          if (result.action !== "none")
+            console.log(`[proactive] low-energy-availability watch scheduled ${result.action}.`);
           return { outcome: result.action === "none" ? "no_op" : "succeeded", value: result };
         });
       }

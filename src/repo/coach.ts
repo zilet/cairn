@@ -122,6 +122,7 @@ import { estimateExpenditure } from "./expenditure.js";
 import { tomorrowHolds, type UnifiedSignalState } from "./signal-state.js";
 import { dayLoad } from "./training-read.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
+import { energyDeficiencyForCoach } from "./energy-deficiency-snapshot.js";
 import { cutQualityRead } from "./cut-quality.js";
 import { getTrainingIntent } from "./training-intent.js";
 import { getEnduranceCapacity } from "./endurance-capacity.js";
@@ -710,6 +711,7 @@ function buildNutritionSlice(
   | "fueling"
   | "underfueling"
   | "cut_quality"
+  | "energy_deficiency"
   | "fuel_demand"
 > {
   const { profile, journeyView, expenditureView, underfuelingView, cutQualityView, today, runPlanView, flexibleTrainingAgendaView } =
@@ -754,6 +756,9 @@ function buildNutritionSlice(
     // Goal-aware complement: during an active cut (losing), is strength holding while
     // the weight comes down? { active:false } off a cut. Adherence-neutral; no score.
     cut_quality: cutQualityView,
+    // The deficit-cost watch, so a coach asked "why has my target gone up?" can
+    // answer from the same read that moved it instead of guessing. Null off a cut.
+    energy_deficiency: energyDeficiencyForCoach(today),
     // Which of the coming seven days carry the biggest work, so the week's food can
     // be periodized to the week's training instead of one flat number landing on a
     // long-run day and a rest day alike. Forward-looking only — it never grades a day
