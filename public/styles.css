@@ -1505,6 +1505,11 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   border-radius:21px;padding:11px 16px;font-size:.92rem;line-height:1.4;box-shadow:var(--shadow-sm);
   resize:none;max-height:140px;overflow-y:hidden;display:block}
 .chatbar .logbtn{border-radius:999px;font-size:1.1rem}
+/* Wraps the textarea so the reused .qlmic press-to-talk button (see the
+   "effortless capture" block below) can ride its trailing edge, same as it
+   once did on Today's quick-log field. */
+.chat-field{position:relative;display:flex;flex:1;min-width:0}
+.chat-field:has(#chatMic:not([hidden])) #chatInput{padding-right:42px}
 .chatnote{text-align:center;color:var(--muted);font-size:.72rem;margin-top:8px;line-height:1.45;text-wrap:balance}
 
 /* day dividers — slim centered date rules between conversation days */

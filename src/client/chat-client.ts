@@ -50,6 +50,13 @@ function chatImagePayload(dataUrl: unknown): ChatImagePayload {
   return { dataUrl: full, base64, mime: "image/jpeg", bytes: base64DecodedBytes(base64) };
 }
 
+// Reused mic glyph from capture-voice-client.ts (loaded earlier in bundle
+// order) — a function, not a top-level const, so it's read lazily at render
+// time rather than at module-parse time.
+function chatMicGlyph(): string {
+  return (globalThis as unknown as { CairnCaptureVoice?: Window["CairnCaptureVoice"] }).CairnCaptureVoice?.micGlyph ?? "";
+}
+
 function chatShellHtml(): string {
   return `<div class="chatview">
       <div class="chatlog-wrap">
@@ -72,7 +79,10 @@ function chatShellHtml(): string {
             </svg>
           </button>
           <input id="chatFile" type="file" accept="image/*" hidden>
-          <textarea id="chatInput" rows="1" autocomplete="off" aria-label="Message Cairn" placeholder="Ask, log, or snap a plate…"></textarea>
+          <div class="chat-field">
+            <textarea id="chatInput" rows="1" autocomplete="off" aria-label="Message Cairn" placeholder="Ask, log, or snap a plate…"></textarea>
+            <button id="chatMic" class="qlmic" type="button" hidden aria-label="Dictate" title="Say it out loud">${chatMicGlyph()}</button>
+          </div>
           <button id="chatSend" class="logbtn" aria-label="Send">↑</button>
         </div>
         <div class="chatnote">Logs save instantly. Small coaching adjustments land quietly in your plan; bigger restructures wait for review.</div>

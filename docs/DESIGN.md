@@ -509,8 +509,23 @@ The collapsed `This week` fold owns the `.statstrip`: discipline-aware training 
 weight pace, and its bodyweight tile. Pace is trajectory here, never a standalone warning
 or prewritten coach ask. A second small `#wtChipMini` bodyweight quick action stays above
 the fold beside its hidden inline input/save row, so one-tap weight capture is always
-reachable; saving updates both visible weight controls. Typed capture lives in Chat rather than as a separate Today control; voice
-capture is planned. Stat numerals count up via `data-cu`.
+reachable; saving updates both visible weight controls. Typed capture lives in Chat rather
+than as a separate Today control. Stat numerals count up via `data-cu`.
+
+Below the bodyweight chip, the capture row carries two quiet, optional surfaces fed by
+their own loaders and empty by default (`:empty{display:none}`, so neither draws anything
+until it has something worth a tap): `#freqFoods` ("Usual around now") one-tap re-logs
+the foods most often eaten near this time of day, and `#checkinSlot` (today only) is a
+single dismissible "how are you feeling?" row that expands to one-tap mood/energy dots —
+never a form, never a nag. The check-in feeds `dayRead` directly, so it stays load-bearing
+even though it renders as one line.
+
+Voice capture lives in the Chat composer (`#chatMic`, press-to-talk on the reused
+`capture-voice-client.ts` machinery), not on Today — capture is scoped to Chat per product
+law. It rides the trailing edge of `#chatInput` the same way the mic once rode Today's
+quick-log field, hidden outright where the browser has no Web Speech support. Dictated
+text lands in the composer for the athlete to review and send themselves; it never
+auto-submits.
 
 ## Marker trends (Stand → Markers)
 
