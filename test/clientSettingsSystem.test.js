@@ -33,4 +33,11 @@ test("System health is lazy, explicitly windowed, and isolated from Settings edi
   assert.match(systemSlice, /readinessStatus/);
   assert.doesNotMatch(systemSlice, /markDirty|persistSettings|savebar/, "diagnostic exploration never opens the Settings save bar");
   assert.match(saveBar, /closest\("\[data-save-ignore\]"\)/, "shared save tracking ignores explicitly non-editing controls");
+
+  // The System tab is entirely operator diagnostics — it collapses behind ONE
+  // "Under the hood" fold, closed by default, whose open/closed state survives a
+  // day/source/severity re-render (tracked in diagnosticsState.foldOpen).
+  assert.match(systemSlice, /<details class="route-card"\$\{diagnosticsState\.foldOpen \? " open" : ""\}>/);
+  assert.match(systemSlice, /Under the hood/);
+  assert.match(systemSlice, /diagnosticsState\.foldOpen = \(event\.currentTarget as HTMLDetailsElement\)\.open;/);
 });

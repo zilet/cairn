@@ -100,4 +100,5 @@ type SettingsDiagnosticsUiState = {
   issuePage: number;
   recentPage: number;
   requestToken: number;
+  foldOpen: boolean;
 };

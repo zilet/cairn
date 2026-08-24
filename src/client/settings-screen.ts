@@ -96,6 +96,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
     issuePage: 0,
     recentPage: 0,
     requestToken: 0,
+    foldOpen: false,
   };
 
   // Side cards (built once; folded into the Agents slice). All degrade to "" when the
@@ -118,7 +119,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
     return false;
   })();
 
-  if (!state.setSeg || !SET_SEG.some(([k]) => k === state.setSeg)) state.setSeg = "agents";
+  if (!state.setSeg || !SET_SEG.some(([k]) => k === state.setSeg)) state.setSeg = "you";
 
   // ---- Stable shell. The sub-nav band + a #setSlice container persist across slice
   // swaps (only #setSlice's innerHTML changes), so the save-bar sentinel below — which
@@ -285,18 +286,27 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       diagnosticsState.readinessStatus = "loading";
       void loadSystemDiagnostics();
     }
-    slot.innerHTML = `<div class="reveal">${CairnSettingsClient.diagnosticsCard(diagnosticsState.data, {
-      status: diagnosticsState.status,
-      readinessStatus: diagnosticsState.readinessStatus === "idle" ? "loading" : diagnosticsState.readinessStatus,
-      readiness: diagnosticsState.readiness,
-      days: diagnosticsState.days,
-      source: diagnosticsState.source,
-      severity: diagnosticsState.severity,
-      issuePage: diagnosticsState.issuePage,
-      recentPage: diagnosticsState.recentPage,
-      relTime,
-      absDate,
-    })}</div>`;
+    slot.innerHTML = `<div class="reveal">
+      <p class="set-group-sub">Operator diagnostics — Cairn's own runtime health, not something you need to check day to day.</p>
+      <details class="route-card"${diagnosticsState.foldOpen ? " open" : ""}>
+        <summary><h1 class="lbl" style="display:inline">Under the hood</h1></summary>
+        ${CairnSettingsClient.diagnosticsCard(diagnosticsState.data, {
+          status: diagnosticsState.status,
+          readinessStatus: diagnosticsState.readinessStatus === "idle" ? "loading" : diagnosticsState.readinessStatus,
+          readiness: diagnosticsState.readiness,
+          days: diagnosticsState.days,
+          source: diagnosticsState.source,
+          severity: diagnosticsState.severity,
+          issuePage: diagnosticsState.issuePage,
+          recentPage: diagnosticsState.recentPage,
+          relTime,
+          absDate,
+        })}
+      </details>
+    </div>`;
+    optionalEl<HTMLDetailsElement>("#setSlice > .reveal > details")?.addEventListener("toggle", (event) => {
+      diagnosticsState.foldOpen = (event.currentTarget as HTMLDetailsElement).open;
+    });
     slot.querySelectorAll<HTMLButtonElement>("[data-diag-days]").forEach((button) =>
       button.addEventListener("click", () => {
         const days = Number(button.dataset.diagDays);
@@ -380,7 +390,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
   }
 
   const SLICES: Record<SettingsScreenSliceKey, () => void> = { you: renderYouSlice, agents: renderAgentsSlice, system: renderSystemSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
-  const paintSlice = (key: ClientSettingsSection | undefined): void => (SLICES[key || "agents"] || renderAgentsSlice)();
+  const paintSlice = (key: ClientSettingsSection | undefined): void => (SLICES[key || "you"] || renderYouSlice)();
 
   // Sub-tab switch: slide the thumb, swap ONLY #setSlice from the working model (no
   // refetch, edits preserved), keep the save bar mounted on the stable sentinel.

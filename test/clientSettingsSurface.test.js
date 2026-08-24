@@ -30,11 +30,11 @@ test("settings surface normalizes API data into the working model", () => {
   const surface = loadSettingsSurface();
   assert.deepEqual(JSON.parse(JSON.stringify(surface.SET_SEG)), [
     ["you", "You"],
-    ["agents", "Agents"],
-    ["system", "System"],
     ["sources", "Sources"],
     ["automation", "Automation"],
     ["data", "Data"],
+    ["agents", "Agents"],
+    ["system", "System"],
   ]);
   const data = surface.settingsData({
     settings: {
@@ -210,4 +210,18 @@ test("settings surface exposes status helpers and art spend card", () => {
   assert.match(spend, /\$0\.0040/);
   assert.match(spend, /1 image generated/);
   assert.match(spend, /5 cached/);
+});
+
+test("Settings opens onto You by default, with Agents & System pushed to the end", () => {
+  const surface = loadSettingsSurface();
+  const keys = JSON.parse(JSON.stringify(surface.SET_SEG)).map(([key]) => key);
+  assert.equal(keys[0], "you");
+  assert.deepEqual(keys.slice(-2), ["agents", "system"]);
+
+  const screen = readFileSync(join(root, "src/client/settings-screen.ts"), "utf8");
+  assert.match(screen, /if \(!state\.setSeg \|\| !SET_SEG\.some\(\(\[k\]\) => k === state\.setSeg\)\) state\.setSeg = "you";/);
+
+  const router = readFileSync(join(root, "src/client/app/router.ts"), "utf8");
+  assert.match(router, /state\.setSeg = routeKey\(route\.section, options\.settingsSections, state\.setSeg \|\| "you"\)/, "a remembered/deep-linked segment is still honored — only the fallback default changed");
+  assert.match(router, /route\.section = routeKey\(state\.setSeg, options\.settingsSections, "you"\)/);
 });

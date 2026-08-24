@@ -60,11 +60,11 @@ type SettingsAutomationSliceOptions = {
 
 const SETTINGS_SURFACE_SEGMENTS: readonly ClientSegment[] = [
   ["you", "You"],
-  ["agents", "Agents"],
-  ["system", "System"],
   ["sources", "Sources"],
   ["automation", "Automation"],
   ["data", "Data"],
+  ["agents", "Agents"],
+  ["system", "System"],
 ];
 
 function settingsSurfaceRecord(value: unknown): Record<string, unknown> {

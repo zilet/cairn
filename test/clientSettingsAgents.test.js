@@ -151,6 +151,57 @@ test("settings agent list renders escaped cards with state, controls, details, a
   assert.match(html, /data-down="Gemini" disabled/);
 });
 
+test("the Agents slice keeps login/toggle affordances outside the collapsed operator fold", () => {
+  const settingsAgents = loadSettingsAgents();
+  const html = settingsAgents.agentsSliceHtml({
+    agentStrategy: "priority",
+    routeSummary: "Route tasks to agents · 2 pinned",
+    routeRowsHtml: `<div data-route="chat">Claude</div>`,
+    agentHealthHtml: `<div class="agenthealth">health</div>`,
+    agentActivityHtml: `<div class="agentactivity">activity</div>`,
+    noticedHtml: `<div class="noticed">noticed</div>`,
+    coachDay: 2,
+    coachHour: 14,
+    timeZone: "America/New_York",
+    dayNames: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    chatRoutingMode: "adaptive",
+    chatProfileBindings: {},
+    chatProfileAgents: [],
+  });
+
+  // Collapsed by default: exactly one top-level fold, unopened.
+  assert.match(html, /<details class="route-card" style="margin-top:18px">/);
+  assert.doesNotMatch(html, /<details class="route-card" style="margin-top:18px" open>/);
+  assert.match(html, /Under the hood/);
+
+  const foldStart = html.indexOf("Under the hood");
+  assert.ok(foldStart > -1, "fold summary present");
+
+  // Essential, always-visible controls (login/connect/order/enable state, plus the
+  // agent-facing insight card and the weekly review schedule) sit BEFORE the fold.
+  const agentListIndex = html.indexOf('id="agentlist"');
+  const noticedIndex = html.indexOf("noticed");
+  const weeklyIndex = html.indexOf("Weekly review cadence");
+  assert.ok(agentListIndex > -1 && agentListIndex < foldStart, "#agentlist stays above the fold");
+  assert.ok(noticedIndex > -1 && noticedIndex < foldStart, "the noticed card stays above the fold");
+  assert.ok(weeklyIndex > -1 && weeklyIndex < foldStart, "weekly review cadence stays above the fold");
+
+  // Operator content — selection strategy, adaptive chat, CLI install stream, health &
+  // activity cards (incl. brain diagnostics), route pinning, and per-lane model pins —
+  // all move inside the fold.
+  const stratIndex = html.indexOf('id="strat"');
+  const chatModeIndex = html.indexOf('id="chatRoutingMode"');
+  const cliStatusIndex = html.indexOf('id="agentCliUpdateStatus"');
+  const cliLogIndex = html.indexOf('id="agentCliUpdateLog"');
+  const healthIndex = html.indexOf("agenthealth");
+  const activityIndex = html.indexOf("agentactivity");
+  const routeSummaryIndex = html.indexOf("Route tasks to agents");
+  const modelProfilesIndex = html.indexOf("Advanced model profiles");
+  for (const index of [stratIndex, chatModeIndex, cliStatusIndex, cliLogIndex, healthIndex, activityIndex, routeSummaryIndex, modelProfilesIndex]) {
+    assert.ok(index > foldStart, `operator control at ${index} is inside the fold (fold starts at ${foldStart})`);
+  }
+});
+
 test("an uninstalled provider is always Off and cannot be enabled before install", () => {
   const settingsAgents = loadSettingsAgents();
   const html = settingsAgents.agentListHtml({
