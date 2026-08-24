@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**322 routes** across 110 groups.
+**324 routes** across 111 groups.
 
 ## `/activities`
 
@@ -75,6 +75,13 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/art/manifest` | Which PWA art queries already have a cached image, as "kind\|q" tokens. Not cached because readiness changes as the background queue produces images. |
 | GET | `/api/art/stats` | Artwork spend telemetry: estimated Gemini cost since art was last enabled, all-time totals, generations avoided via semantic reuse, and cache size. Also returns `health`: when art last rendered, failures in the last 7 days, the last upstream error code, and whether the circuit breaker has paused generation. |
 | POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for. Safe no-op when generation is unavailable. |
+
+## `/beliefs`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/beliefs` | One calm, grouped list over learned models / felt-signal correlations / personal-response modifiers, each row in athlete voice with evidence in words (never a number) and a dispute affordance. Active directives already render in Connections — linked, not duplicated. |
+| PUT | `/api/beliefs/:id` | "That's not right" / restore. Never a one-tap inversion — only active\|disputed. 404 on an id that resolves to no row after the write (a malformed/unknown id). |
 
 ## `/blood-pressure`
 

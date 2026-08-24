@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**262 tools.**
+**265 tools.**
 
 | Tool | Description |
 |---|---|
@@ -50,6 +50,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `discard_proposal` | Discard a draft proposal without applying it. |
 | `dismiss_anchor_objective_suggestion` | Quiet the anchor-lift comeback suggestion for a long while. A suggestion is never a gate; this only stops it from resurfacing until well later. |
 | `dismiss_goal_checkin` | Wave off the gentle goal check-in (Era 2): starts a long cooldown so it stays quiet. Dismissible to silence; pull-never-push. |
+| `dispute_belief` | Mark one coach belief 'that's not right' by its id (from list_beliefs). This is NEVER a one-tap inversion — it only sets the belief aside: it stops feeding prompts/personal-response modifiers and is recorded as a negative outcome for the pattern that produced it, but stays visible under set_aside for transparency. Reversible via undispute_belief. |
 | `draft_meal_plan` | Queue a durable goal-aware weekly meal-plan refresh and bounded verification pass. Returns a job immediately; poll get_agent_job. In Lead mode the result announces and becomes current at the next food-day boundary with Undo; review posture keeps a draft. Lean-safe, protein, fiber, and longevity floors always apply. |
 | `draft_plan_update` | Run a coaching agent over recent logs and route the plan update through Cairn's autonomy policy. In Lead mode bounded reversible changes land now or at a natural boundary and structural changes announce first; review posture keeps a draft. Returns the proposal and autonomy outcome. |
 | `ensure_active_block` | Ensure ONE active periodization block exists — auto-creates a sensible default aligned to the user's goal (strength base, or an endurance-base/peak block sized to an approaching race) when none is running. Idempotent: returns the existing active block untouched if the user is mid-block. Keeps periodization live. |
@@ -171,6 +172,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `list_activities` | List recent logged activities. |
 | `list_agent_models` | List the models a CLI exposes (grok/antigravity declare a catalog). Informational only — no pinning. Returns an empty list for a CLI with no catalog (claude/codex), ok:false for an unknown agent. |
 | `list_agents` | List coaching agents with enabled/order state, CLI presence, lazy-install availability, the tri-state login probe (configured: true\|false\|null), installed version, and login/model-catalog capabilities. usable rolls these up; missing or known-logged-out tools stay out of rotation. |
+| `list_beliefs` | The coach's inspectable beliefs: one calm, grouped list over learned cross-domain models, felt-signal correlations, and personal-response modifiers (how THIS athlete tends to respond) — each row in athlete voice with its evidence in plain words (never a number/score) and its dispute status. Active connected-brain directives already show via list_directives (linked here via a count, not duplicated). Disputed beliefs stay listed under set_aside — transparent, not deleted. |
 | `list_blocks` | List periodization blocks (newest first) with status (active/completed/abandoned). |
 | `list_blood_pressure` | List blood pressure readings newest-first. BP is point-in-time, so trends come from repeated readings rather than a single profile value. |
 | `list_brain_decisions` | Read recent meaningful coaching decisions and their accountable status. Bounded, pull-only, with no raw prompts or hidden reasoning. |
@@ -251,6 +253,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `sync_garmin` | Run a manual Garmin Connect sync using local GARMIN_USERNAME/GARMIN_PASSWORD or stored token files. Experimental unofficial connector. The scheduler also auto-syncs ~every 6h when configured; the result is recorded as garmin_last_sync_at/garmin_last_sync_status (visible via get_settings). |
 | `synthesize_health` | Queue and cache the elite-coach whole-picture synthesis across labs, body composition, training, recovery, nutrition, supplements, and life. Returns a job immediately; poll get_agent_job. Informational and pull-only. |
 | `understand_supplements` | Capture supplements from plain words ('creatine daily, omega-3, some D, whey occasionally') — the system approximates each into name + typical dose + cadence + related markers and stores it (dedup by name). NOT a daily log; say it once. Returns the understood items. |
+| `undispute_belief` | Restore a disputed belief (from list_beliefs' set_aside) back to active. |
 | `unskip_exercise` | Restore a previously skipped exercise to a date's session plan. |
 | `update_block` | Update a periodization block's fields (goal/focus/phase/week_index/total_weeks/status). |
 | `update_context_event` | Update a life-timeline event by id (any subset of fields). Set archived=true to retire it. |
