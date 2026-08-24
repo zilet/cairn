@@ -27,6 +27,7 @@ import {
   renderRunZones,
   renderSignalState,
   renderTodayFuel,
+  renderTrainingConstraints,
   renderTrainingSignals,
   renderTrajectory,
   renderStreamingContract,
@@ -580,7 +581,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}${fuelDemandLine}
 ${CONTEXT_GUARDRAILS}
-${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${overrideBlock}
+${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${overrideBlock}
 ${renderJsonContract(DAY_READ_SCHEMA)}
 
 DATA:
@@ -683,7 +684,7 @@ ${ELITE_STRENGTH_GUARDRAILS}
 ${CONTEXT_GUARDRAILS}
 ${renderCoachingFocus(context)}${COACHING_STANCE}
 
-${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderHybridSequencing(hybrid, dateISO)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderHybridSequencing(hybrid, dateISO)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${
   wants.length
     ? `
 WHAT THE USER ASKED FOR:
@@ -767,7 +768,7 @@ ${MECHANICS_ENCODING}
 
 ${ELITE_STRENGTH_GUARDRAILS}
 
-${CONTEXT_GUARDRAILS}${COACHING_STANCE}
+${CONTEXT_GUARDRAILS}${COACHING_STANCE}${renderTrainingConstraints(context)}
 
 ${renderStreamingContract(
   'write ONE or two plain sentences on why this session fits them today (the same thought that goes in the JSON\'s "why")',

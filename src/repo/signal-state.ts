@@ -7,6 +7,7 @@
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { SENSOR_MAX_AGE_DAYS, type SensorSignal, sensorIsCurrent } from "./sensor-freshness.js";
 import { recoveryTrendBars } from "./recovery-trend.js";
+import { hrvTrendRead, performanceChannelRead } from "./recovery-science.js";
 import type { SensorCadence } from "./sensor-cadence.js";
 import {
   dominantSensorCadenceEntry,
@@ -333,6 +334,20 @@ export const SIGNAL_VOICE = {
       "Resting heart rate on your most recent reading is well off your normal range, and that is worth respecting.",
     ],
   },
+  // The SATURATION voice: the number looks good and the work says otherwise. It must
+  // lead with the divergence rather than with the number, because an athlete told
+  // "your variability is high, take it easy" hears a contradiction — and it must stay
+  // a suggestion, so every phrasing names what is being believed rather than issuing
+  // an instruction about what today is.
+  hrv_saturation: {
+    concept: /\b(?:costing|harder|work)\b/i,
+    variants: [
+      "Your recovery numbers look fine, but the work itself has been costing you more lately — that's the truer signal of the two.",
+      "The variability reading is healthy while the training has been feeling harder, and where those two disagree the training usually has it right.",
+      "Your numbers say recovered and the sessions say otherwise. When that happens it's worth going with what the work is telling you.",
+      "Recovery is reading well, but recent work has been harder than it should be — that's worth more attention than the number is.",
+    ],
+  },
   resting_hr_up: {
     concept: /\bheart rate\b/i,
     variants: [
@@ -494,6 +509,22 @@ export const SIGNAL_VOICE = {
       "Every recent run has sat above where easy lives for you — under {} — and one genuinely easy outing is worth more right now than another middling one.",
       "Your easy pace has drifted up toward the hard end; keeping one run under {} protects the sessions you want to be sharp for.",
       "The easy days have been coming in about as hard as the hard days. Under {} is where easy actually sits for you, if there's room to give one back.",
+    ],
+  },
+  // The CHRONIC drift voice. Its sibling above speaks for a fortnight in which
+  // NOTHING read easy; this one speaks for the commoner shape — some easy running
+  // survives, most of it has crept up. So no phrasing here may claim "nothing" or
+  // "every run", and the suggestion is the same one that pays: easy days buy the
+  // hard ones.
+  run_intensity_chronic_drift: {
+    concept: /\beasy\b/i,
+    sample: "148 bpm",
+    variants: [
+      "Most of your running over the past few weeks has drifted above where easy sits for you — under {} — and easy days are what buy the hard ones.",
+      "The easy end has crept up on you lately: more of your runs finish above {} than under it, and the quality days are what pay for that.",
+      "Your easy runs have mostly been landing above {} this past few weeks. Letting more of them settle under it is what makes the hard sessions land.",
+      "Across the last few weeks the majority of your running has sat above {}, which is the easy ceiling doing the work of a moderate day.",
+      "More of your recent runs have finished above {} than below it — giving the easy ones back their easiness is worth more than another middling week.",
     ],
   },
   hybrid_interference: {
@@ -1711,7 +1742,11 @@ export function planningSignalState(input: {
     // from verified readings only, so a provisional mid-day estimate arriving later
     // must not lend the claim its (fresher) date. Everything else passes nothing and
     // keeps the newest-reading date it always had.
-    claimDate?: string | null
+    claimDate?: string | null,
+    // Anything else the observation carries. Only ever used to mark an observation
+    // ADVISORY (the saturation cross-check below) — a recovery reading's standing is
+    // otherwise fully determined by its direction and its age.
+    extra?: Partial<SignalObservation>
   ) => {
     const q = quality[qualityField] ?? {};
     observations.push(
@@ -1730,6 +1765,7 @@ export function planningSignalState(input: {
             window_days: q.window_days ?? null,
           },
           max_age_days: maxAgeDays,
+          ...(extra ?? {}),
         }
       )
     );
@@ -1823,7 +1859,14 @@ export function planningSignalState(input: {
   const EXCURSION_RUN_FOR_CAUTION = 2;
   const baselineHrv = Number(input.recovery?.baseline?.hrv);
   const baselineRhr = Number(input.recovery?.baseline?.rhr);
-  const { hrv: hrvTrendBar, rhr: rhrTrendBar } = recoveryTrendBars(input.recovery?.baseline);
+  // The band is the smallest worthwhile change against the athlete's OWN dispersion
+  // wherever the baseline window carried enough readings to take one (round W3.4,
+  // rule 1) — a fraction of their night-to-night spread rather than a fraction of the
+  // metric. It only ever widens: absent dispersion, these are the bars they were.
+  const { hrv: hrvTrendBar, rhr: rhrTrendBar } = recoveryTrendBars(
+    input.recovery?.baseline,
+    input.recovery?.dispersion
+  );
 
   // How many of the NEWEST verified readings in a row sit beyond the excursion band.
   // Consecutive READINGS, not calendar days: on an episodically-worn watch two nights
@@ -1889,24 +1932,69 @@ export function planningSignalState(input: {
     (value, norm) => value > norm + Math.max(5, norm * 0.08)
   );
 
-  if (input.recovery?.delta?.hrv != null) {
-    const trendDown = Number(input.recovery.delta.hrv) < -hrvTrendBar;
+  // ---------- PARASYMPATHETIC SATURATION: a rising number is not always good news ----------
+  //
+  // High or rising HRV normally reads as recovered, and that reading is right almost
+  // always. The exception is the one an athlete most needs named: deep fatigue can
+  // present as parasympathetic SATURATION — the variability climbs while the work
+  // itself gets harder. Read alone, the HRV channel then hands out a green light on
+  // exactly the morning it should be withdrawing one.
+  //
+  // The cross-check is a DIVERGENCE, so it needs both halves and invents neither:
+  // the trend channel reading high (the 7-day median above the athlete's own band,
+  // rule 1's comparison), AND the performance channel visibly declining out of
+  // signals that already exist — the athlete's own session ratings, and easy running
+  // that keeps finishing above their own easy ceiling (performanceChannelRead). A
+  // fresh strong rating settles it the other way outright.
+  //
+  // What it does is bounded to the claim it can support: the HRV dimension may not
+  // read SUPPORTIVE while its own performance evidence points down, so the
+  // observation becomes a caution and the dimension reads watch. It is an
+  // `advisory_brake` — the same standing an active health directive gets: it holds
+  // the backed/push tier shut and shows at watch on every surface, and it is excluded
+  // from the posture ladder. This is an argument about what the HRV number MEANS, not
+  // an acute finding about today's capacity, and it must not be able to walk the day
+  // down a rung on a divergence the athlete may already know about.
+  const performance = performanceChannelRead(input);
+  // ONE read of where the 7-day rolling median sits against the athlete's own band,
+  // shared with every other consumer of the same question rather than re-derived from
+  // the delta at each site.
+  const hrvTrend = hrvTrendRead(input.recovery, hrvTrendBar);
+  if (hrvTrend) {
+    const trendDown = hrvTrend.direction === "below";
+    const trendHigh = hrvTrend.direction === "high";
     const excursion = hrvTrust.run >= EXCURSION_RUN_FOR_CAUTION;
     const unsettled = hrvTrust.run === 1;
+    // Only ever considered on the branch that would otherwise read supportive: a
+    // downward trend or an excursion is already a caution and already says the truer
+    // thing, and layering a second explanation over it would be two claims about one
+    // number.
+    const saturation = !excursion && !trendDown && !unsettled && trendHigh && performance.declining;
     addRecovery(
       "hrv",
       "hrv_ms",
-      excursion || trendDown ? "caution" : unsettled ? "neutral" : "support",
+      excursion || trendDown || saturation ? "caution" : unsettled ? "neutral" : "support",
       (excursion
         ? "The most recent verified HRV readings sit unusually far below the athlete's own norm, whatever the wider trend says."
         : unsettled
           ? "One verified HRV reading sits unusually far below the athlete's own norm; a single reading is being watched, not concluded from."
           : trendDown
             ? "HRV is below the athlete's recent norm."
-            : "HRV is steady against the athlete's norm.") + provisionalAside(hrvTrust.provisional, "HRV"),
-      excursion ? "hrv_excursion" : unsettled ? "hrv_unsettled" : trendDown ? "hrv_below" : "hrv_steady",
+            : saturation
+              ? `HRV is running above the athlete's own norm while the work itself is costing more (${performance.reasons.join("; ")}); a rising variability trend beside a declining performance channel is read as the performance channel, not as recovery.`
+              : "HRV is steady against the athlete's norm.") + provisionalAside(hrvTrust.provisional, "HRV"),
+      excursion
+        ? "hrv_excursion"
+        : unsettled
+          ? "hrv_unsettled"
+          : trendDown
+            ? "hrv_below"
+            : saturation
+              ? "hrv_saturation"
+              : "hrv_steady",
       SENSOR_MAX_AGE_DAYS.hrv,
-      hrvTrust.claim_date
+      hrvTrust.claim_date,
+      saturation ? { advisory_brake: true } : undefined
     );
   }
   if (input.recovery?.delta?.rhr != null) {
@@ -2243,6 +2331,46 @@ export function planningSignalState(input: {
           // A fortnight-shaped pattern, re-derived every morning from the same window.
           // Short enough that a scoped state built for an older date lets it expire.
           max_age_days: 3,
+        }
+      )
+    );
+  // The CHRONIC counterpart (round W3.4, rule 3): most of three weeks' running has
+  // drifted above the athlete's own easy ceiling, though some of it still reads easy.
+  // ONE quiet observation on the SAME surface as the acute read — the same field, so
+  // the two can never both be shown, and the acute one wins when both would fire
+  // (it is the sharper claim, and `compressed` already speaks the same lane).
+  //
+  // ADVISORY, unlike its acute sibling, and the difference is deliberate. The
+  // compressed read is a fortnight in which nothing was easy at all, which is
+  // systemic recovery debt and is allowed to hold aggression everywhere. A majority
+  // drift over three weeks is a DISCIPLINE finding about one lane: it should withdraw
+  // the reach and show at watch, and it should not be able to walk a lifting day down
+  // a rung. Never per-run: nothing here fires on a single outing, and the read is
+  // silent below its own six-run floor.
+  else if (
+    runIntensity?.chronic?.drifting &&
+    runIntensity?.chronic_summary &&
+    Number.isFinite(Number(runIntensity.z2_top))
+  )
+    observations.push(
+      observation(
+        "training_load_tolerance",
+        "run_intensity_discipline",
+        date,
+        "cairn_hr_model",
+        "caution",
+        String(runIntensity.chronic_summary),
+        {
+          voice: {
+            key: "run_intensity_chronic_drift",
+            subject: `${Math.round(Number(runIntensity.z2_top))} bpm`,
+          },
+          coverage: {
+            samples: Number(runIntensity.chronic.runs_classified) || 1,
+            window_days: Number(runIntensity.chronic.window_days) || null,
+          },
+          max_age_days: 3,
+          advisory_brake: true,
         }
       )
     );

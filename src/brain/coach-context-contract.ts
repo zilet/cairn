@@ -370,6 +370,15 @@ export interface CoachContextEnvelope {
   // asking — null on thin history (nothing to derive from yet). Additive + optional,
   // like `tomorrow_holds`: a partial context builder never synthesizes it.
   typical_training_hour?: CoachRecord | null;
+  // Round W3.4: the ADVISORY session constraints the recovery science produces —
+  // short sleep downgrading injury-exposed elements (no PR attempts, no plyometrics)
+  // while the session itself is KEPT, and a sustained stressful stretch trimming SETS
+  // while intensity holds. Each item names what to TRADE, never what to cancel: they
+  // inform selection and never override progression (the standing law for subjective
+  // and recovery signals), and nothing renders them to the athlete as a verdict.
+  // Null on an ordinary day. Additive + optional, like `tomorrow_holds`: a partial
+  // context builder or an imported DB never synthesizes it.
+  training_constraints?: CoachRecord | null;
   next_step: CoachRecord | null;
   // Cheap, athlete-volunteered context tags (travel/drinks/rough sleep/work crunch/
   // feeling off) over a trailing window — evidence for the quiet cross-domain insight

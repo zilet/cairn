@@ -60,6 +60,8 @@ export * from "./repo/sensor-freshness.js"; // how old a wearable reading may be
 export * from "./repo/sensor-cadence.js"; // how MUCH of a wearable series there is before it may describe a trend
 export * from "./repo/wear-pattern-voice.js"; // how absence is SAID: episodic cadence vs a lapsed series vs no wearable
 export * from "./repo/sensor-recheck.js"; // when the recovery picture has aged enough that one night would sharpen it
+export * from "./repo/recovery-science.js"; // smallest-worthwhile-change bands, the performance channel, sleep-debt + life-stress constraints
+export * from "./repo/recovery-trend.js"; // the ONE definition of "meaningfully off this athlete's own norm"
 export * from "./repo/measurement-request.js"; // ONE calm in-app ask for the measurement a live derivation is blocked on
 export * from "./repo/propagation.js";
 export * from "./repo/marker-response.js"; // the lab loop: anchor an applied plan/meal change to its marker + learn which change coincided with which direction

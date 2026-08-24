@@ -70,7 +70,18 @@ const SITES = [
   {
     site: "session",
     build: () => buildSessionPrompt(undefined, { minutes: 45 }),
-    kept: ["training_intent", "endurance_capacity", "plan", "recent_sessions", "program_state", "recovery", "context_events"],
+    kept: [
+      "training_intent",
+      "endurance_capacity",
+      "plan",
+      "recent_sessions",
+      "program_state",
+      "recovery",
+      "context_events",
+      // The site rule 4 is written for: this prompt prescribes the actual session, so
+      // it is where "keep the session, downgrade the exposed elements" has to land.
+      "training_constraints",
+    ],
     dropped: ["signal_state", "garmin", "day_read", "recent_decisions"],
   },
   {
@@ -78,7 +89,7 @@ const SITES = [
     build: () => buildDailyCompositionPrompt(ENVELOPE),
     // The envelope has already decided kind/muscles/caps/candidates; this prompt
     // only needs the guardrail keys plus enough history to carry loads over.
-    kept: ["plan", "recent_sessions", "context_events", "directives", "health"],
+    kept: ["plan", "recent_sessions", "context_events", "directives", "health", "training_constraints"],
     dropped: ["recovery", "program_state", "performance", "signal_state", "coaching_focus", "run_plan", "journey"],
   },
   {

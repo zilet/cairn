@@ -25,6 +25,7 @@ import {
   renderRunZones,
   renderSignalState,
   renderStrengthJourney,
+  renderTrainingConstraints,
   renderTrainingSignals,
   renderTrajectory,
   renderJsonContract,
@@ -153,7 +154,7 @@ ${buildEliteGuardrails(ctx)}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date and for every reason_provenance.as_of_date.
 
@@ -318,7 +319,7 @@ ${buildEliteGuardrails(ctx)}
 ${variationBlock}${equipBlock}${weakBlock}${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date and for every reason_provenance.as_of_date.
 
@@ -435,7 +436,7 @@ ${buildEliteGuardrails(ctx)}
 ${equipBlock}${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderTrajectory(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
 TASK: ${userInstruction?.trim() || "Compose their first training week — both lanes, placed so the week composes rather than collides, at a dose they can finish."}
 PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date.
 

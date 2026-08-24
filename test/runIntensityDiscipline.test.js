@@ -439,3 +439,118 @@ test("this read ships its own numbers and does not widen hr_model's two sites", 
     assert.ok(!Object.hasOwn(projectCoachContext(ctx, site), "hr_model"), `${site} still does not carry hr_model`);
   }
 });
+
+// ── the CHRONIC read (round W3.4, rule 3) ────────────────────────────────────
+//
+// The acute `compressed` status is absolute — a fortnight in which NOTHING read
+// easy. It misses the far commoner shape: the occasional genuine easy run survives
+// while most of the easy days creep above the ceiling. These pin the proportional
+// read that catches it, and the floor that keeps it from firing on a normal
+// polarized block.
+
+// Easy at −2 and −5 keeps the ACUTE window polarized, so the chronic finding is the
+// only thing that can speak. Seven hot runs spread across three weeks (plus the
+// day −20 threshold effort the model basis itself contributes) put the majority
+// above the ceiling.
+function seedChronicDrift(anchor) {
+  const at = (days) => shift(anchor, -days);
+  for (const days of [2, 5]) logRun({ date: at(days), minutes: 45, km: 8, avgHr: 144, maxHr: 160 });
+  for (const days of [1, 3, 6, 9, 12, 16, 19]) logRun({ date: at(days), minutes: 40, km: 8, avgHr: 158, maxHr: 172 });
+}
+
+test("a three-week majority above the easy ceiling reads as chronic drift", () => {
+  seedModelBasis(REF);
+  seedChronicDrift(REF);
+
+  const read = runIntensityDiscipline(REF);
+  assert.equal(read.status, "polarized", "real easy runs exist, so the acute read is not compressed");
+  assert.ok(read.chronic, "the wider window cleared its own sample floor");
+  assert.equal(read.chronic.window_days, 21);
+  assert.equal(read.chronic.drifting, true);
+  assert.ok(
+    read.chronic.above_easy_count * 2 > read.chronic.runs_classified,
+    "the finding is a strict majority, not a count"
+  );
+  assert.match(read.chronic_summary, /148 bpm/);
+  assert.match(read.chronic_summary, /21 days/);
+});
+
+test("three hot runs inside a large easy block is a polarized month, not a compressed one", () => {
+  seedModelBasis(REF);
+  const at = (days) => shift(REF, -days);
+  for (const days of [1, 4, 7]) logRun({ date: at(days), minutes: 40, km: 8, avgHr: 158, maxHr: 172 });
+  for (const days of [2, 3, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+    logRun({ date: at(days), minutes: 45, km: 8, avgHr: 144, maxHr: 160 });
+
+  const read = runIntensityDiscipline(REF);
+  assert.ok(read.chronic, "there is plenty of data — this is a judgement, not an absence");
+  assert.equal(read.chronic.drifting, false, "a handful of hard days in a big easy block is the healthy shape");
+  assert.equal(read.chronic_summary, null);
+  assert.equal(
+    loadObservation(dayPlanningSignalState(REF)),
+    undefined,
+    "and nothing at all reaches the signal state"
+  );
+});
+
+test("below the chronic sample floor the wider window says nothing", () => {
+  seedModelBasis(REF);
+  const at = (days) => shift(REF, -days);
+  // Four classified runs inside the window (the model basis contributes a fifth at
+  // day −20), every one of them hot — a clean majority, and still under the six-run
+  // floor. Absence is neutral here exactly as it is for the acute read.
+  for (const days of [2, 6, 10, 15]) logRun({ date: at(days), minutes: 40, km: 8, avgHr: 158, maxHr: 172 });
+  const read = runIntensityDiscipline(REF);
+  assert.equal(read.chronic, null);
+  assert.equal(read.chronic_summary, null);
+});
+
+test("the chronic observation is advisory: visible at watch, unable to move the day", () => {
+  seedModelBasis(REF);
+  seedChronicDrift(REF);
+  prescribeEasyRunning();
+
+  const state = dayPlanningSignalState(REF);
+  const obs = loadObservation(state);
+  assert.ok(obs, "the finding reaches the planning state");
+  assert.equal(obs.direction, "caution");
+  assert.equal(obs.advisory_brake, true, "a discipline finding about one lane may not decide what today is");
+  assert.equal(obs.voice.key, "run_intensity_chronic_drift");
+  assert.equal(obs.voice.subject, "148 bpm");
+  assert.equal(obs.summary, runIntensityDiscipline(REF).chronic_summary, "one summary, written once");
+  assert.equal(state.dimensions.training_load_tolerance.status, "watch", "it IS visible");
+  assert.notEqual(
+    state.dimensions.training_load_tolerance.deciding.status,
+    "watch",
+    "and the posture ladder reads past it"
+  );
+  assert.equal(state.action.posture, "train");
+  assert.equal(state.action.directives.training, "proceed", "it may hold the reach back; it may not hold the day");
+});
+
+test("the acute compressed read still owns the surface when both would fire", () => {
+  seedModelBasis(REF);
+  // Every run hot, across three weeks: compressed AND drifting. One observation, and
+  // it is the sharper claim — two rows about one lane would be the same finding twice.
+  const at = (days) => shift(REF, -days);
+  for (const days of [1, 3, 6, 9, 12, 16, 19]) logRun({ date: at(days), minutes: 40, km: 8, avgHr: 158, maxHr: 172 });
+
+  const read = runIntensityDiscipline(REF);
+  assert.equal(read.status, "compressed");
+  assert.equal(read.chronic.drifting, true);
+
+  const evidence = (dayPlanningSignalState(REF).dimensions.training_load_tolerance.evidence ?? []).filter(
+    (item) => item.field === "run_intensity_discipline"
+  );
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0].voice.key, "run_intensity_compressed");
+});
+
+test("the chronic voice speaks the athlete's own ceiling and clears the reading grammar", () => {
+  for (const variant of SIGNAL_VOICE_REGISTRY.run_intensity_chronic_drift.variants) {
+    assert.equal(violatesReadingGrammar(variant), null, `chronic drift voice: ${variant}`);
+  }
+  const spoken = spokenSignalVoice({ key: "run_intensity_chronic_drift", subject: "148 bpm" }, REF, "chronic");
+  assert.match(spoken, /148 bpm/);
+  assert.doesNotMatch(spoken, /\bevery run\b|\bnothing\b/i, "some easy running survives — the words may not deny it");
+});

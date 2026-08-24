@@ -942,6 +942,28 @@ export function renderActiveContext(ctx: any): string {
   return `\n${out.join("\n")}\n`;
 }
 
+// The ADVISORY session constraints (round W3.4's rules 4 and 5). Rendered rather
+// than left to the DATA block alone because both say something a model reliably gets
+// BACKWARDS on its own: short sleep reads as a reason to cancel (it is not — the
+// session is kept and only the injury-exposed elements come down), and a stressful
+// stretch reads as a reason to go lighter (it is not — volume is what a stressed
+// stretch cannot afford, and intensity is what keeps the adaptation).
+//
+// Empty on an ordinary day, so every prompt is byte-identical when nothing applies.
+// Never rendered to the ATHLETE: this is the machine register, for the coach prompt.
+export function renderTrainingConstraints(ctx: any): string {
+  const items = Array.isArray(ctx?.training_constraints?.items) ? ctx.training_constraints.items : [];
+  const lines = items
+    .map((item: any) => {
+      const reason = String(item?.reason ?? "").trim();
+      const constraint = String(item?.constraint ?? "").trim();
+      return reason && constraint ? `- ${reason} ${constraint}` : "";
+    })
+    .filter(Boolean);
+  if (!lines.length) return "";
+  return `\nSESSION CONSTRAINTS (deterministic, from DATA.training_constraints — advisory: they shape WHICH work you pick, and never cancel the session, never override progression, and never reach the athlete as a verdict):\n${lines.join("\n")}\n`;
+}
+
 export function renderTodayFuel(ctx: any): string {
   const intake = ctx?.day_intake;
   const entries = Array.isArray(intake?.entries) ? intake.entries : [];

@@ -1755,6 +1755,35 @@ const RUN_INTENSITY_MIN_CLASSIFIED = 3;
 // nor above the ceiling, a single hard run must still not read as a pattern.
 const RUN_INTENSITY_MIN_ABOVE_EASY = 2;
 
+// ---- the CHRONIC read (round W3.4, rule 3) ----
+// `compressed` above is an ACUTE, absolute finding: a fortnight in which NOTHING
+// read easy. That is the right shape for an athlete who has stopped running easy
+// altogether, and it says nothing at all about the far commoner one — who still
+// logs the occasional genuine easy run while the majority of their easy days creep
+// above the ceiling. That is intensity compression too, and it is the version that
+// actually costs the hard days.
+//
+// So a second, wider window asks the proportional question: over ~3 weeks, did MOST
+// classified runs finish above this athlete's own easy ceiling? Deliberately a
+// MAJORITY rather than a count, because a count is what turns "three hot runs in a
+// twenty-run block" into a caution — a block like that is a normal polarized month,
+// not a compressed one.
+//
+// The floor is higher than the acute read's for the same reason the window is wider:
+// six classified runs is where "most of them" starts describing a habit.
+const RUN_INTENSITY_CHRONIC_WINDOW_DAYS = 21;
+const RUN_INTENSITY_CHRONIC_MIN_CLASSIFIED = 6;
+
+/** The proportional, multi-week counterpart to `compressed`. Null below its floor. */
+export interface RunIntensityChronic {
+  window_days: number;
+  runs_classified: number;
+  easy_count: number;
+  above_easy_count: number;
+  /** Strictly MORE than half of the classified runs finished above the easy ceiling. */
+  drifting: boolean;
+}
+
 export interface RunIntensityDiscipline {
   /** `compressed` is the finding: hard work everywhere, easy work nowhere. */
   status: "polarized" | "compressed" | "insufficient";
@@ -1767,8 +1796,19 @@ export interface RunIntensityDiscipline {
   lthr: number;
   /** Whether the plan actually asks for easy running (see easyRunningIsPrescribed). */
   easy_prescribed: boolean;
+  /**
+   * The wider PROPORTIONAL read beside the acute one. Null below its own sample
+   * floor — absence is neutral here exactly as it is for the acute status.
+   */
+  chronic: RunIntensityChronic | null;
   /** MACHINE register — third-person evidence prose. The athlete hears SIGNAL_VOICE. */
   summary: string;
+  /**
+   * MACHINE register for the CHRONIC finding, when there is one. Separate from
+   * `summary` because they are different claims about different windows, and the
+   * observation that speaks one must never be able to pick up the other's numbers.
+   */
+  chronic_summary: string | null;
 }
 
 /** The compact form that rides in `run_variety` for the weekly read + insight sites. */
@@ -1822,35 +1862,56 @@ export function runIntensityDiscipline(date?: string): RunIntensityDiscipline | 
   // −1: the SQL range is inclusive of both `since` and the read date, so a span of
   // WINDOW−1 back is what makes the window actually hold fourteen days, not fifteen.
   const since = isoDaysAgo(d, RUN_INTENSITY_WINDOW_DAYS - 1);
+  // ONE bounded pass over the WIDER of the two windows, sliced by date for the
+  // narrower — the same shape getRecoverySummary uses for its 7/30-day pair, and one
+  // query rather than two against the same table for the same rows.
+  const chronicSince = isoDaysAgo(d, RUN_INTENSITY_CHRONIC_WINDOW_DAYS - 1);
 
-  let rows: Array<{ avg_hr: number | null; minutes: number | null }> = [];
+  let rows: Array<{ date: string; avg_hr: number | null; minutes: number | null }> = [];
   try {
     rows = db
       .prepare(
-        `SELECT avg_hr, COALESCE(moving_min, duration_min) AS minutes
+        `SELECT date, avg_hr, COALESCE(moving_min, duration_min) AS minutes
            FROM garmin_activities
           WHERE ${RUN_TYPE_SQL} AND avg_hr IS NOT NULL AND avg_hr > 0
             AND date >= ? AND date <= ?
           ORDER BY date`
       )
-      .all(since, d) as Array<{ avg_hr: number | null; minutes: number | null }>;
+      .all(chronicSince, d) as Array<{ date: string; avg_hr: number | null; minutes: number | null }>;
   } catch {
     return null;
   }
 
-  let runs_classified = 0;
-  let easy_count = 0;
-  let above_easy_count = 0;
-  for (const row of rows) {
-    const hr = Number(row.avg_hr);
-    if (!Number.isFinite(hr)) continue;
-    const minutes = row.minutes == null ? null : Number(row.minutes);
-    const effort = classifyRunEffort(hr, minutes, model);
-    if (effort === "unknown") continue;
-    runs_classified += 1;
-    if (effort === "easy") easy_count += 1;
-    if (hr > z2Top) above_easy_count += 1;
-  }
+  const tally = (list: typeof rows) => {
+    let runs_classified = 0;
+    let easy_count = 0;
+    let above_easy_count = 0;
+    for (const row of list) {
+      const hr = Number(row.avg_hr);
+      if (!Number.isFinite(hr)) continue;
+      const minutes = row.minutes == null ? null : Number(row.minutes);
+      const effort = classifyRunEffort(hr, minutes, model);
+      if (effort === "unknown") continue;
+      runs_classified += 1;
+      if (effort === "easy") easy_count += 1;
+      if (hr > z2Top) above_easy_count += 1;
+    }
+    return { runs_classified, easy_count, above_easy_count };
+  };
+
+  const acute = tally(rows.filter((row) => String(row.date) >= String(since)));
+  const { runs_classified, easy_count, above_easy_count } = acute;
+  const chronicTally = tally(rows);
+  const chronic: RunIntensityChronic | null =
+    chronicTally.runs_classified >= RUN_INTENSITY_CHRONIC_MIN_CLASSIFIED
+      ? {
+          window_days: RUN_INTENSITY_CHRONIC_WINDOW_DAYS,
+          ...chronicTally,
+          // STRICTLY more than half. An even split is not a majority, and on the
+          // small counts this read runs on that boundary is one run wide.
+          drifting: chronicTally.above_easy_count * 2 > chronicTally.runs_classified,
+        }
+      : null;
 
   const easy_prescribed = easyRunningIsPrescribed();
   const status: RunIntensityDiscipline["status"] =
@@ -1869,6 +1930,10 @@ export function runIntensityDiscipline(date?: string): RunIntensityDiscipline | 
         ? `Across the last ${RUN_INTENSITY_WINDOW_DAYS} days, ${easy_count} of ${runs_classified} classified ${plural(runs_classified)} read easy and ${above_easy_count} sat above the ${z2Top} bpm easy ceiling.`
         : `Only ${runs_classified} ${plural(runs_classified)} in the last ${RUN_INTENSITY_WINDOW_DAYS} days can be read against this athlete's heart-rate model — too thin to describe the easy/hard split.`;
 
+  const chronic_summary = chronic?.drifting
+    ? `Across the last ${RUN_INTENSITY_CHRONIC_WINDOW_DAYS} days, ${chronic.above_easy_count} of ${chronic.runs_classified} classified ${plural(chronic.runs_classified)} finished above this athlete's own easy ceiling of ${z2Top} bpm — most of the easy running has drifted up${prescribed}.`
+    : null;
+
   return {
     status,
     window_days: RUN_INTENSITY_WINDOW_DAYS,
@@ -1878,7 +1943,9 @@ export function runIntensityDiscipline(date?: string): RunIntensityDiscipline | 
     z2_top: z2Top,
     lthr,
     easy_prescribed,
+    chronic,
     summary,
+    chronic_summary,
   };
 }
 
