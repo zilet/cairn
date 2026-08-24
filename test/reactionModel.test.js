@@ -20,6 +20,8 @@ import {
   saveReactionModel,
   setReactionNarrative,
 } from "../dist/repo/reaction-model.js";
+import { recordDecision } from "../dist/domain/brain/decision-service.js";
+import { saveBrainRollback, transitionBrainDecision } from "../dist/repo/brain-decisions.js";
 
 // ---- local seeding (kept in-file; we never touch the shared _seed.js) ----
 function reset() {
@@ -208,6 +210,70 @@ test("data_gap is silent when sleep/HRV is fresh", () => {
     model.patterns.find((p) => p.id === "data_gap"),
     undefined
   );
+});
+
+// W3.2: rollback-as-evidence — brain_rollbacks was write-only until now. A
+// decision the athlete deliberately REVERTED (after it applied) is a stronger
+// "no" than an unprompted verdict, but ONE revert says nothing about a standing
+// pattern — the producer only fires on a REPEAT of the same decision kind.
+function rollbackDecision(overrides = {}) {
+  return {
+    effective_date: "2026-07-10",
+    kind: "nutrition_target",
+    domain: "nutrition",
+    summary: "Raise the daily target slightly.",
+    rationale: "Weight trend moved below the expected band.",
+    source: "nutrition_checkin",
+    source_ref_type: "nutrition_target",
+    source_ref_key: String(overrides.source_ref_key ?? "1"),
+    status: "applied",
+    autonomy_tier: "quiet_apply",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: {},
+    action: { target_kcal: 2450 },
+    specialist: null,
+    applied_at: "2026-07-09T16:00:00.000Z",
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: "nutrition-weight-v1",
+    ...overrides,
+  };
+}
+
+test("rollback_evidence is silent after a single revert of a decision kind", () => {
+  const recorded = recordDecision(rollbackDecision({ source_ref_key: "1" }), []);
+  saveBrainRollback(recorded.decision.id, "nutrition_target", { target_kcal: 2200 });
+  transitionBrainDecision(recorded.decision.id, "reverted");
+
+  const model = buildReactionModel();
+  assert.equal(
+    model.patterns.find((p) => p.kind === "rollback_evidence"),
+    undefined,
+    "one revert is not yet a standing pattern"
+  );
+});
+
+test("rollback_evidence fires once the SAME decision kind is reverted twice", () => {
+  for (let i = 1; i <= 2; i++) {
+    const recorded = recordDecision(
+      rollbackDecision({ source_ref_key: String(i), input_fingerprint: `fp-${i}` }),
+      []
+    );
+    saveBrainRollback(recorded.decision.id, "nutrition_target", { target_kcal: 2200 });
+    transitionBrainDecision(recorded.decision.id, "reverted");
+  }
+
+  const model = buildReactionModel();
+  const p = model.patterns.find((pattern) => pattern.kind === "rollback_evidence");
+  assert.ok(p, "a repeated revert of the same decision kind earns a pattern");
+  assert.equal(p.evidence_n, 2);
+  assert.equal(p.domains.includes("nutrition"), true);
+  assert.match(p.statement, /nutrition target/i);
+  // No numeric grade in the athlete-facing statement — the weight lives only in
+  // the internal params blob, which reactionModelForCoach strips (GOLDEN below).
+  assert.doesNotMatch(p.statement, /\d/);
 });
 
 test("repeated explicit late caffeine learns an observational next-sleep pattern", () => {

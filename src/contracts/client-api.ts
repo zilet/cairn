@@ -31,6 +31,10 @@ export interface ClientTodayAgendaAckResponse extends ClientOkResponse {
   stale?: boolean;
 }
 
+export interface ClientTodayAgendaDismissResponse extends ClientOkResponse {
+  id: string;
+}
+
 // One failed agent attempt recorded by the propose→apply loop (`runAgentWithFallback`
 // → `runChosen`): every agentic op that can fall through a rotation carries this as
 // its `tried` list so a surface can say which CLIs were attempted before giving up.
@@ -3003,6 +3007,7 @@ export interface ClientApiResponses {
   "/api/week-ahead": ClientWeekAheadResponse;
   "/api/today-agenda": ClientTodayAgenda;
   "/api/today-agenda/ack": ClientTodayAgendaAckResponse;
+  "/api/today-agenda/dismiss": ClientTodayAgendaDismissResponse;
   "/api/learned-timeline": ClientLearnedTimeline;
   "/api/team-week": ClientTeamWeek;
   "/api/health/next-checkup": ClientNextCheckup;

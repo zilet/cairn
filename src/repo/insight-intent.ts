@@ -18,6 +18,11 @@
 // text guard — so when the text does not name exactly one clean cross-domain pair,
 // this module says nothing and the caller keeps the status quo.
 import { db } from "../db.js";
+// Repetition-gated dismissal evidence (W3.2): a theme dismissed on repeat days is
+// a SOFTER cousin of a thumbs-down, folded into the same corpus below rather than
+// given its own hard suppression — see repeatedlyDismissedKeys' own doc comment
+// for the repetition gate itself.
+import { repeatedlyDismissedKeys } from "./surface-dismissals.js";
 
 export type InsightDomain = "training" | "endurance" | "nutrition" | "sleep" | "recovery" | "labs" | "body" | "life";
 
@@ -632,6 +637,18 @@ export function insightIntentCorpus(): InsightIntentCorpus {
     if (text && !seenTexts.has(text)) {
       seenTexts.add(text);
       unkeyedTexts.push(text);
+    }
+  }
+  // Repetition-gated dismissal evidence (W3.2): a theme dismissed on >=2 distinct
+  // days joins the SAME corpus a thumbs-down feeds — soft suppression via the
+  // dedupe/prompt-covered list, never a hard block, and never from ONE idle tap.
+  // item_key here is already a canonical intent key (surface-dismissals only ever
+  // stores one when the insight route resolved it), so no re-derivation.
+  for (const key of repeatedlyDismissedKeys("insight")) {
+    if (!splitInsightIntentKey(key)) continue;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      keys.push(key);
     }
   }
   return { keys, unkeyedTexts };

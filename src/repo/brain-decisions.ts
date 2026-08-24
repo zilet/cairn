@@ -533,6 +533,69 @@ export function getBrainRollback(decisionId: number): { kind: BrainRollbackKind;
   }
 }
 
+// ---------------------------------------------------------------------------
+// Rollback evidence (W3.2): `brain_rollbacks` is written on every reversible
+// decision but, until now, was only ever READ BACK to perform the undo itself —
+// never as evidence about whether that DECISION KIND belongs in the coaching
+// loop at all. A revert is the strongest "no" available: the change already
+// applied, and the athlete deliberately walked it back, which is stronger
+// evidence than an unprompted day-read verdict the athlete never acted on. So it
+// gets a weight NEAR (not above) an applied/kept decision's own weight — an undo
+// can never outrank the athlete's affirmative record for the same kind.
+//
+// This is intentionally a small, standalone read (not folded into
+// evaluatedDecisionRows' verdict pipeline): W3.1's kind-weighting table lands in
+// parallel and is expected to call/extend this rather than duplicate the query,
+// which is why the join and the weight constant live here as one seam.
+// ---------------------------------------------------------------------------
+
+// `brain_decisions.kind` grouping — the decision KIND being reverted (e.g.
+// 'nutrition_target', 'training_plan_change'), never `brain_rollbacks.kind`
+// (the undo-snapshot shape from BrainRollbackKind above — a different vocabulary).
+export interface RollbackEvidenceGroup {
+  kind: string;
+  domain: string;
+  count: number;
+  last_reverted_at: string | null;
+}
+
+// Near-`applied` weight, deliberately just under 1 — see the section doc above.
+export const ROLLBACK_EVIDENCE_WEIGHT = 0.9;
+
+// Every decision kind with at least one REVERTED decision that carries a rollback
+// snapshot, most-recently-reverted first. Bounded and read-only; callers gate
+// their own "is this repeated" threshold (a single revert is a real signal on its
+// own — unlike a dismissal, an athlete does not revert idly — but a repeat is
+// what the reaction-model producer below actually surfaces).
+export function rollbackEvidenceByKind(limit = 200): RollbackEvidenceGroup[] {
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT d.kind AS kind, d.domain AS domain, d.reverted_at AS reverted_at
+           FROM brain_rollbacks r
+           JOIN brain_decisions d ON d.id = r.decision_id
+          WHERE d.status = 'reverted'
+          ORDER BY d.reverted_at DESC
+          LIMIT ?`
+      )
+      .all(Math.max(1, Math.trunc(limit))) as any[];
+  } catch {
+    return [];
+  }
+  const groups = new Map<string, RollbackEvidenceGroup>();
+  for (const row of rows) {
+    const kind = String(row?.kind ?? "").trim();
+    if (!kind) continue;
+    const g = groups.get(kind) ?? { kind, domain: String(row?.domain ?? ""), count: 0, last_reverted_at: null };
+    g.count++;
+    const at = row?.reverted_at ? String(row.reverted_at) : null;
+    if (at && (!g.last_reverted_at || at > g.last_reverted_at)) g.last_reverted_at = at;
+    groups.set(kind, g);
+  }
+  return [...groups.values()];
+}
+
 export function insertBrainExpectation(decisionId: number, value: ProposedExpectation | unknown): BrainExpectation {
   const proposed = normalizeProposedExpectation(value);
   if (!proposed) throw new Error("invalid brain expectation");

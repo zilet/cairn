@@ -2025,6 +2025,29 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 93,
+    name: "surface-dismissals",
+    // A Today-agenda card dismiss or an insight marked 'dismissed' is now evidence,
+    // not a client-only removal — see src/repo/surface-dismissals.ts. New table, so
+    // this is CREATE TABLE IF NOT EXISTS (also in db.ts for fresh DBs); idempotent by
+    // construction.
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS surface_dismissals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          surface TEXT NOT NULL,
+          item_key TEXT NOT NULL,
+          date TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_surface_dismissals_unique
+          ON surface_dismissals(surface, item_key, date);
+        CREATE INDEX IF NOT EXISTS idx_surface_dismissals_lookup
+          ON surface_dismissals(surface, item_key);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

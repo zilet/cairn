@@ -104,6 +104,7 @@ export * from "./repo/since-last.js"; // honest "since you last looked" continui
 export * from "./repo/goal-checkin.js"; // gentle periodic "is this still your goal?"
 export * from "./repo/learned-timeline.js"; // legible "what Cairn has learned about you"
 export * from "./repo/team-week.js"; // the deterministic "here's what your team did this week" read
+export * from "./repo/surface-dismissals.js"; // dismissals as evidence: repetition-gated (never one tap)
 export { guidelineFor, allGuidelines, type GuidelineEntry } from "./guidelines.js"; // offline trusted-guidelines pack
 // The "knows-me" layer (docs/VISION.md — the personal coaching team):
 export * from "./repo/reaction-model.js"; // how THIS athlete actually reacts (the personalization foundation)

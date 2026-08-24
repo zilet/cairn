@@ -29,6 +29,7 @@ import {
   revertDecision,
 } from "../dist/domain/brain/autonomy-service.js";
 import { todayRouter } from "../dist/routes/today.js";
+import { localDateISO } from "../dist/repo/shared.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
 // arbiter sees exactly (and only) what each test seeds.
@@ -863,6 +864,54 @@ test("Today agenda acknowledgement route returns 409 for a stale fast-loss revis
   assert.equal(status, 409);
   assert.equal(payload?.stale, true);
   assert.notEqual(payload?.revision, first.revision);
+});
+
+// W3.2: a Today-agenda card dismiss is now evidence, not a client-only removal
+// (src/repo/surface-dismissals.ts). This exercises the route directly, the same
+// way the ack route is exercised above.
+function callTodayRoute(path, body) {
+  const layer = todayRouter.stack.find((entry) => entry.route?.path === path && entry.route?.methods?.post);
+  let status = null;
+  let payload = null;
+  const res = {
+    status(value) {
+      status = value;
+      return this;
+    },
+    json(value) {
+      payload = value;
+      return this;
+    },
+  };
+  layer.route.stack.at(-1).handle({ body }, res);
+  return { status, payload };
+}
+
+test("dismissing a Today-agenda card records one row per distinct day", () => {
+  resetTables("surface_dismissals");
+
+  const first = callTodayRoute("/today-agenda/dismiss", { id: "standing-momentum" });
+  assert.equal(first.payload?.ok, true);
+  assert.deepEqual(
+    db.prepare("SELECT surface, item_key, date FROM surface_dismissals").all().map((r) => ({ ...r })),
+    [{ surface: "today_agenda", item_key: "standing-momentum", date: localDateISO() }]
+  );
+
+  // A second tap the SAME day is a no-op on the count — the unique index
+  // collapses it, so mashing dismiss once cannot manufacture repetition.
+  callTodayRoute("/today-agenda/dismiss", { id: "standing-momentum" });
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS n FROM surface_dismissals").get().n,
+    1,
+    "a repeat tap the same day does not add a second row"
+  );
+  assert.equal(repo.isRepeatedlyDismissed("today_agenda", "standing-momentum"), false);
+});
+
+test("dismiss route requires an id", () => {
+  const { status, payload } = callTodayRoute("/today-agenda/dismiss", {});
+  assert.equal(status, 400);
+  assert.equal(payload?.ok, false);
 });
 
 test("rest or easy Brief suppresses plan-forward agenda cards", () => {

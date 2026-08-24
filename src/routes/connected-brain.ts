@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { generateInsight, reconcileMarkers, runHealthReview, runResearch, synthesizeHealth } from "../coachOps.js";
+import { deriveInsightIntentKey, splitInsightIntentKey } from "../repo/insight-intent.js";
+import { recordDismissal } from "../repo/surface-dismissals.js";
 import {
   activeContextEffect,
   getCoachingFocus,
@@ -341,11 +343,22 @@ connectedBrainRouter.post("/insights/generate", async (req, res) => {
 // of connection lands. 404 on unknown id (a real lookup, unlike the soft reads).
 connectedBrainRouter.put("/insights/:id", (req, res) => {
   const b = req.body ?? {};
-  const updated = updateInsight(Number(req.params.id), { status: b.status, feedback: b.feedback });
+  const updated = updateInsight(Number(req.params.id), { status: b.status, feedback: b.feedback }) as any;
   if (!updated) return res.status(404).json({ error: "not found" });
   if (b.feedback === "up") {
-    const text = String((updated as any).text ?? "").trim();
+    const text = String(updated.text ?? "").trim();
     if (text) addMemory(text, "insight", "insight-feedback");
+  }
+  // A dismiss is a WEAKER signal than a thumbs-down, so it does not touch
+  // `feedback` — it only enters the repetition-gated dismissal evidence stream
+  // (surface_dismissals). Only rows with a resolvable intent key can be learned
+  // from; a stored key wins, otherwise fall back to derivation from text/
+  // rationale (same legacy-row treatment as insightIntentCorpus). No key →
+  // skip learning for it rather than inventing one.
+  if (b.status === "dismissed") {
+    const stored = splitInsightIntentKey(updated.intent_key) ? String(updated.intent_key).trim() : null;
+    const key = stored ?? deriveInsightIntentKey(updated.text, updated.rationale);
+    if (key) recordDismissal("insight", key);
   }
   res.json(updated);
 });

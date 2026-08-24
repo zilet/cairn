@@ -15,6 +15,7 @@ import { getProfile } from "../domain/person/index.js";
 import { getSessionByDate, getWeeklyStats, listExercises, selectedPlanDayForDate } from "../domain/training/index.js";
 import { getPlanWithPurpose } from "../repo.js";
 import { localDateISO } from "../repo/shared.js";
+import { recordDismissal } from "../repo/surface-dismissals.js";
 
 export const todayRouter = Router();
 
@@ -98,6 +99,20 @@ todayRouter.post("/today-agenda/ack", (req, res) => {
   const revision = typeof req.body?.revision === "string" ? req.body.revision : null;
   const result = acknowledgeTodayAgendaCandidate(id, revision);
   res.status(result.stale ? 409 : result.ok ? 200 : 404).json(result);
+});
+
+// A dismiss is DIFFERENT from an ack: ack is a presentation-only revision retire
+// (health-focus / fast-loss-attention only, and it can 409 stale). Dismiss is the
+// generic "hide this card" affordance every dismissible agenda candidate already
+// has client-side — this just also records the evidence row (surface_dismissals)
+// so a REPEATED dismissal of the same card can, over time, feed the same soft
+// suppression a thumbs-down already drives for insights. Fire-and-forget from the
+// client; always 200 (recording is best-effort, never blocks the dismiss itself).
+todayRouter.post("/today-agenda/dismiss", (req, res) => {
+  const id = String(req.body?.id ?? "").trim();
+  if (!id) return res.status(400).json({ ok: false, error: "id required" });
+  recordDismissal("today_agenda", id);
+  res.json({ ok: true, id });
 });
 
 // The team's-week digest — the deterministic "here's what your team did this
