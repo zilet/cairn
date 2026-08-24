@@ -111,36 +111,9 @@ function settingsAgentsSliceHtml(options: SettingsAgentsSliceOptions): string {
       <section class="set-group set-group--flush">
         <p class="set-group-sub">The agent brain. Cairn ships lean: install only the provider tools you use, connect your account, then Auto rotates across the agents you enable here.</p>
 
-        <div class="field" style="margin-top:14px"><label>Selection strategy</label>
-          <select id="strat">
-            ${settingsAgentStrategyOption(options.agentStrategy, "round_robin", "Round-robin · even rotation")}
-            ${settingsAgentStrategyOption(options.agentStrategy, "random", "Random · dice")}
-            ${settingsAgentStrategyOption(options.agentStrategy, "priority", "Priority · top first, fall back on failure")}
-          </select></div>
-
-        <div class="field" style="margin-top:14px"><label>Adaptive chat</label>
-          <select id="chatRoutingMode">
-            <option value="adaptive" ${options.chatRoutingMode === "adaptive" ? "selected" : ""}>Adaptive · recommended</option>
-            <option value="single" ${options.chatRoutingMode === "single" ? "selected" : ""}>Single profile · legacy</option>
-          </select>
-          <div class="sess-line" style="color:var(--muted);margin-top:6px">Routine capture uses low reasoning, ordinary coaching stays balanced, and deeper or safety work gets more care. Provider pins and fallback still apply.${options.chatRoutingMode === "single" ? " Saved profiles stay ready, but are inactive in Single profile mode." : ""}</div>
-        </div>
-
         <h1 class="lbl" style="margin:18px 0 8px">Agents</h1>
         <div id="agentlist"></div>
-        <div id="agentCliUpdateStatus" class="sess-line agent-update-status" role="status"></div>
-        <pre id="agentCliUpdateLog" class="agent-install-log" aria-label="Agent installation progress" hidden></pre>
-        ${options.agentHealthHtml}
-        ${options.agentActivityHtml}
         ${options.noticedHtml}
-
-        <details class="route-card">
-          <summary><h1 class="lbl" style="margin:22px 0 8px;display:inline">${escHtml(options.routeSummary)}</h1></summary>
-          <p class="set-group-sub" style="margin-top:2px">Optional. Pin a specific agent to a task — say chat to one, meal drafts to another. Leave any task on <b>Auto</b> to use the rotation above. Only enabled agents appear.</p>
-          <div id="routelist" class="route-list">${options.routeRowsHtml}</div>
-        </details>
-
-        ${settingsChatProfilesHtml(options)}
 
         <h1 class="lbl" style="margin:22px 0 8px">Weekly review cadence</h1>
         <p class="set-group-sub">Cairn keeps learning from your input in the background. This is its weekly whole-picture review; bounded changes follow your autonomy setting and stay visible and reversible.</p>
@@ -149,6 +122,39 @@ function settingsAgentsSliceHtml(options: SettingsAgentsSliceOptions): string {
           <select id="coachHour" class="selflex">${settingsAgentHourOptions(options.coachHour)}</select>
         </div>
         <div class="sess-line" style="color:var(--muted);margin-top:6px">Times follow <b>${escHtml(options.timeZone || "the server timezone until this device reports one")}</b>. Cairn updates this automatically when your device timezone changes.</div>
+
+        <details class="route-card" style="margin-top:18px">
+          <summary><h1 class="lbl" style="display:inline">Under the hood</h1></summary>
+          <p class="set-group-sub" style="margin-top:2px">How the agent rotation is tuned, and what it's been doing. Nothing here needs your attention day to day.</p>
+
+          <div class="field" style="margin-top:14px"><label>Selection strategy</label>
+            <select id="strat">
+              ${settingsAgentStrategyOption(options.agentStrategy, "round_robin", "Round-robin · even rotation")}
+              ${settingsAgentStrategyOption(options.agentStrategy, "random", "Random · dice")}
+              ${settingsAgentStrategyOption(options.agentStrategy, "priority", "Priority · top first, fall back on failure")}
+            </select></div>
+
+          <div class="field" style="margin-top:14px"><label>Adaptive chat</label>
+            <select id="chatRoutingMode">
+              <option value="adaptive" ${options.chatRoutingMode === "adaptive" ? "selected" : ""}>Adaptive · recommended</option>
+              <option value="single" ${options.chatRoutingMode === "single" ? "selected" : ""}>Single profile · legacy</option>
+            </select>
+            <div class="sess-line" style="color:var(--muted);margin-top:6px">Routine capture uses low reasoning, ordinary coaching stays balanced, and deeper or safety work gets more care. Provider pins and fallback still apply.${options.chatRoutingMode === "single" ? " Saved profiles stay ready, but are inactive in Single profile mode." : ""}</div>
+          </div>
+
+          <div id="agentCliUpdateStatus" class="sess-line agent-update-status" role="status"></div>
+          <pre id="agentCliUpdateLog" class="agent-install-log" aria-label="Agent installation progress" hidden></pre>
+          ${options.agentHealthHtml}
+          ${options.agentActivityHtml}
+
+          <details class="route-card" style="margin-top:14px">
+            <summary><h1 class="lbl" style="margin:22px 0 8px;display:inline">${escHtml(options.routeSummary)}</h1></summary>
+            <p class="set-group-sub" style="margin-top:2px">Optional. Pin a specific agent to a task — say chat to one, meal drafts to another. Leave any task on <b>Auto</b> to use the rotation above. Only enabled agents appear.</p>
+            <div id="routelist" class="route-list">${options.routeRowsHtml}</div>
+          </details>
+
+          ${settingsChatProfilesHtml(options)}
+        </details>
       </section>`;
 }
 

@@ -134,7 +134,7 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
       }
       state.meSeg = routeKey(route.section, options.meSections, "profile") as ClientMeSection;
     } else if (tab === "settings") {
-      state.setSeg = routeKey(route.section, options.settingsSections, state.setSeg || "agents") as ClientSettingsSection;
+      state.setSeg = routeKey(route.section, options.settingsSections, state.setSeg || "you") as ClientSettingsSection;
     } else if (tab === "chat") {
       state.pendingChatSession = route.session || null;
     }
@@ -162,7 +162,7 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     } else if (tab === "me") {
       route.section = routeKey(state.meSeg, options.meSections, "profile") as AppRoute["section"];
     } else if (tab === "settings") {
-      route.section = routeKey(state.setSeg, options.settingsSections, "agents") as AppRoute["section"];
+      route.section = routeKey(state.setSeg, options.settingsSections, "you") as AppRoute["section"];
     } else if (tab === "chat" && state.pendingChatSession) {
       route.session = state.pendingChatSession;
     }
