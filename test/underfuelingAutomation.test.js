@@ -582,3 +582,33 @@ test("the raise is measured from the target in force, never from a review-overdu
     `a protective move may only ever raise: ${read.protection.target_kcal} vs ${inForce} in force`,
   );
 });
+
+// A SET-ASIDE and a DECLINE are different answers. The boundary setting a raise aside
+// is the evidence declining it, and the watch may come back tomorrow with a
+// re-derived one. The ATHLETE declining it is an answer, and asking again tomorrow is
+// nagging — which is exactly what happened while the settling window counted only
+// `applied`: a discarded raise cleared the in-flight guard and was re-proposed every
+// single day, forever.
+test("an athlete's no buys the same fortnight of quiet an applied change buys", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  seedTarget(2200);
+  seedRecoverySignals();
+
+  const ourDrafts = () => repo.listProposals(50).filter((p) => String(p.agent) === "energy-deficiency-brain");
+  for (let pass = 0; pass < 5; pass++) {
+    runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+    // The athlete discards whatever is waiting on them.
+    for (const draft of ourDrafts()) {
+      if (draft.status === "draft") repo.setProposalStatus(Number(draft.id), "rejected");
+    }
+  }
+  assert.equal(ourDrafts().length, 1, "exactly one ask per settling window, however many passes run");
+  assert.equal(
+    repo.listBrainDecisions({ domain: "nutrition", limit: 20 }).filter((d) => d.status === "rejected").length,
+    1,
+    "and exactly one decline was recorded",
+  );
+
+  // A set-aside is deliberately NOT this case: when the boundary declines a raise the
+  // EVIDENCE said no, and the watch may return with a re-derived one.
+});

@@ -740,6 +740,13 @@ function pickVariant<T>(variants: readonly T[], date: string, key = ""): T {
  * from this number and `capProtectiveRaise` only ever caps a raise — a `target` at or
  * below `previous` is waved straight through as the ordinary path.
  *
+ * ONE WRINKLE, stated rather than hidden: rung 1 (`computeGoalCheck`) takes no date
+ * and always answers for TODAY, while rungs 2 and 3 honor `asOf`. A backdated call
+ * therefore gets today's effective target rather than that day's. Harmless where this
+ * is used — the watch and its protective step both run for the current day, and the
+ * `arms_before` pass reads arms, never this — but a future caller reconstructing an
+ * old day's target must not lean on it.
+ *
  * The accepted row is NOT that number. It goes `review_due` once its adaptive window
  * elapses, and from that moment the goal's `effective_target` falls back to the
  * FORMULA, which is what the athlete eats to. Reading the stale row instead put the

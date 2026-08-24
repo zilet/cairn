@@ -2038,10 +2038,12 @@ function repsPrescription(
     const painAction = painBrake.action === "deload" && !loadCanEase ? "hold" : painBrake.action;
     autoregulated = true; // a brake shaped this, so the escalation ladder stays out of it
     action = painAction;
+    // A red band that cannot ease the load still says RED's sentence, not amber's:
+    // amber is waiting to hear how it settled, and this one already has its answer.
     why =
       painAction === painBrake.action
         ? painBrake.why
-        : voice.liftVoice(voice.PAIN_AMBER_HOLD, date, "pain_amber_hold", name);
+        : voice.liftVoice(voice.PAIN_RED_HOLD, date, "pain_red_hold", name);
     repStep = false;
     topSet = undefined;
     if (painAction === "hold") nextWeight = baseWeight;
@@ -2271,7 +2273,7 @@ function timedPrescription(
     why =
       painAction === painBrake.action
         ? painBrake.why
-        : voice.liftVoice(voice.PAIN_AMBER_HOLD, date, "pain_amber_hold", name);
+        : voice.liftVoice(voice.PAIN_RED_HOLD, date, "pain_red_hold", name);
     if (painAction === "hold") nextSeconds = baseSeconds;
     else {
       painProtected = true;

@@ -24,7 +24,7 @@
 // target, and two ways to set one number is how they come to disagree.
 
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
-import { insertBrainExpectation, listBrainDecisions } from "../../repo/brain-decisions.js";
+import { hasRecentDecisionVeto, insertBrainExpectation, listBrainDecisions } from "../../repo/brain-decisions.js";
 import { addInsight } from "../../repo/coach.js";
 import { getActiveNutritionTarget } from "../../repo/nutrition.js";
 import { createProposal, getProposal } from "../../repo/profile.js";
@@ -70,7 +70,8 @@ export interface EnergyDeficiencyWatchResult {
 }
 
 /**
- * Has one of this watch's protective moves actually LANDED inside the settling window?
+ * Has one of this watch's protective moves already been SETTLED inside the window —
+ * either by landing, or by the athlete saying no?
  *
  * Read off the ledger rather than a stamp written at decision time, and that is the
  * whole point. A nutrition target never applies when it is decided — it waits for a
@@ -79,12 +80,28 @@ export interface EnergyDeficiencyWatchResult {
  * a change that might never happen: the watch slept while the cluster still stood and
  * the athlete's food had not moved. The ledger cannot lie about that, and it needs no
  * second write to stay true — the boundary that applies the decision IS the stamp.
+ *
+ * A DECLINE COUNTS THE SAME AS A LANDING, and it is a different thing from a
+ * set-aside. When the boundary sets a raise aside, the EVIDENCE declined it and the
+ * watch may legitimately come back tomorrow with a re-derived one. When the ATHLETE
+ * declines it — rejected, reverted after applying, or held on the announcement — they
+ * have answered the question, and asking again tomorrow is nagging. Counting only
+ * `applied` here meant a declined raise was re-proposed every single day forever
+ * (a discard also clears the in-flight guard, so nothing else stopped it). So every
+ * terminal status of our own opens the same fortnight: the athlete's answer buys the
+ * quiet that an applied change buys.
  */
-function landedWithinCooldown(today: string): boolean {
+const SETTLED_STATUSES = ["applied", "rejected", "reverted", "canceled"];
+
+function settledWithinCooldown(today: string): boolean {
   try {
-    return ourDecisions(["applied"]).some((decision) => {
-      const landed = String((decision as any).applied_at ?? decision.effective_date ?? "").slice(0, 10);
-      const age = /^\d{4}-\d{2}-\d{2}$/.test(landed) ? daysBetweenISO(today, landed) : null;
+    return ourDecisions(SETTLED_STATUSES).some((decision) => {
+      // Only an applied row carries `applied_at`; a decline is dated by when it was
+      // decided. The effective date is the last resort, for a row carrying neither.
+      const settled = String(
+        (decision as any).applied_at ?? (decision as any).created_at ?? decision.effective_date ?? ""
+      ).slice(0, 10);
+      const age = /^\d{4}-\d{2}-\d{2}$/.test(settled) ? daysBetweenISO(today, settled) : null;
       return age != null && age >= 0 && age < ACTION_COOLDOWN_DAYS;
     });
   } catch {
@@ -256,8 +273,16 @@ export function runEnergyDeficiencyWatch(
   });
 
   if (read.state !== "sustained_cluster") return none(read.reason);
-  if (landedWithinCooldown(today))
-    return none(`A protective move is already in force inside the ${ACTION_COOLDOWN_DAYS}-day settling window.`);
+  if (settledWithinCooldown(today))
+    return none(
+      `A protective move has already been decided one way or the other inside the ${ACTION_COOLDOWN_DAYS}-day settling window.`
+    );
+  // …and a recent "no" to ANY calorie-target change is the athlete telling the whole
+  // nutrition lane to leave their target alone. The same read the orphan-adoption path
+  // consults, for the same reason: a veto is an answer, and re-asking around it is how
+  // a bounded protective system turns into a nag.
+  if (hasRecentDecisionVeto("nutrition_target", ACTION_COOLDOWN_DAYS))
+    return none("You recently declined a change to your calorie target, so this one waits rather than asking again.");
   // A queued move has not stamped the cooldown (see below), so THIS is what stops a
   // daily pass minting a second proposal for the same standing cluster while the
   // first one waits for its food-day boundary.

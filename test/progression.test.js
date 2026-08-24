@@ -1548,4 +1548,8 @@ test("a pain deload stays out of the repeat-deload audit trail, and says nothing
   assert.equal(bodyweight.action, "hold", "nothing to ease, so the honest answer is a hold");
   assert.equal(bodyweight.pain_protected, undefined, "and nothing claims a cut happened");
   assert.doesNotMatch(bodyweight.why, /comes down|step off|Easing the load/i);
+  // …and it is RED's hold, not amber's: amber is still waiting to hear how it
+  // settled, and this movement has already answered that.
+  assert.match(bodyweight.why, /hasn't settled|still speaking up|Still unsettled/i);
+  assert.doesNotMatch(bodyweight.why, /next (go|session|time) tells us|whether it settled/i);
 });

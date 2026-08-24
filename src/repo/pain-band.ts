@@ -322,7 +322,7 @@ function changesFor(
  * Is this movement NEW to the athlete right now, and does THE WATCH THAT REPORTED
  * THE PAIN read as muscle-belly soreness rather than a joint?
  *
- * Both halves are structural rather than diagnostic, and three things about the
+ * Both halves are structural rather than diagnostic, and four things about the
  * symmetry half are deliberate, because each of them is a way this excuse could be
  * handed out to a report that never earned it:
  *
@@ -335,6 +335,10 @@ function changesFor(
  *     column off the events table, which does not exist — the query threw on every
  *     call, the catch read `symmetric = false`, and the whole DOMS carve-out was
  *     dead code that froze every newly-introduced movement at amber for three weeks).
+ *   • SYMMETRY IS SAID, NOT INFERRED. A muscle NAME cannot establish it — "chest"
+ *     is one word for a bilateral muscle group and for the left side of one person's
+ *     chest — so the athlete has to have said both sides, and injury-event vocabulary
+ *     ("sharp", "strained", "pulled", "popped") is excluded the way joints are.
  *   • A JOINT IS NEVER DOMS. "Both knees" is bilateral JOINT pain, which is a reason
  *     to be MORE careful, not less — and `canonicalGroup` happily maps "shoulder" or
  *     "wrist" onto a muscle group, so the joint vocabulary is excluded first and
@@ -345,18 +349,29 @@ function changesFor(
  * this read can only ever REMOVE a brake.
  *
  * HOW NARROW THIS IS, so nobody reads it as broken later. A band only opens for an
- * area the relevance map can attach to a lift at all, and that map is built from
- * JOINT vocabulary plus a few muscle names ("calf", "glutes", "chest", "forearm").
- * The commonest DOMS report of all — "quads are wrecked" — matches nothing there, so
- * no exposure is ever marked relevant, no band opens, and progression proceeds
- * untouched. That is the same outcome this carve-out produces, reached by absence
- * rather than by excuse, which is why widening the relevance map to catch it would be
- * a change with real risk and no benefit here.
+ * area the relevance map can attach to a lift at all, and that map is built out of
+ * JOINT vocabulary — the muscle words it does carry are incidental and unreliable
+ * ("calf" attaches to a squat, "calves" and "both calves" attach to nothing). So the
+ * commonest DOMS reports of all — "quads are wrecked", "both calves are toast" —
+ * mark no exposure relevant, open no band, and leave progression untouched. That is
+ * the same outcome this carve-out produces, reached by absence rather than by excuse,
+ * which is why widening the relevance map to catch them would be a change with real
+ * risk and no benefit here. In practice this branch fires for the handful of labels
+ * that are both bilateral-muscle and map-reachable (rear delts, glutes, chest).
  */
 // Joint / tendon vocabulary. A label carrying any of it can never read as the
 // symmetric muscle soreness a novel dose produces, whatever else the words say.
 const JOINT_FLAVOR_RE =
   /\b(knee|knees|elbow|elbows|wrist|wrists|ankle|ankles|shoulder|shoulders|hip|hips|joint|joints|tendon|tendons|achilles|plantar|rotator|cuff|\bac\b|\bsi\b|sacro|spine|lumbar|back|neck|groin|impinge\w*)\b/i;
+// Words that describe an INJURY EVENT rather than an ache. Excluded outright, exactly
+// as the joint vocabulary is: "the left side of my chest is sharp when I press" names
+// a muscle, follows a novel session, and is the last report on earth that should be
+// trained through.
+const ACUTE_FLAVOR_RE = /\b(sharp|sharply|stab\w*|strain\w*|pulled|tear|torn|tore|pop|popped|snap\w*|shooting|spasm\w*)\b/i;
+// The only thing that can ESTABLISH symmetry: the athlete saying it is on both sides.
+// A muscle name alone cannot — "chest" is one word for a bilateral muscle group and
+// for the left side of one person's chest, and only one of those is DOMS.
+const BILATERAL_RE = /\b(both|bilateral(?:ly)?|either side|each side|two sides|l ?(?:and|\/|&) ?r|left and right)\b/i;
 
 function domsShapeFor(
   eventId: number | null,
@@ -384,7 +399,16 @@ function domsShapeFor(
           )
           .all(eventId, eventId, from, asOf) as any[];
         const words = `${label} ${said.map((row) => String(row.text ?? "")).join(" ")}`.toLowerCase();
-        symmetric = !JOINT_FLAVOR_RE.test(words) && (/\bboth\b/.test(words) || canonicalGroup(label) != null);
+        // Symmetry has to be SAID. The muscle-canonical arm used to assert it from the
+        // label alone, which read "the left side of my chest is sharp when I press" as
+        // bilateral soreness and trained through it; the label now only decides whether
+        // the place is a muscle at all, and the athlete's words decide whether it is on
+        // both sides. Either flavor of exclusion, anywhere in the words, ends it.
+        symmetric =
+          !JOINT_FLAVOR_RE.test(words) &&
+          !ACUTE_FLAVOR_RE.test(words) &&
+          BILATERAL_RE.test(words) &&
+          (canonicalGroup(label) != null || /\bboth\b/.test(words));
       }
     } catch {
       symmetric = false;

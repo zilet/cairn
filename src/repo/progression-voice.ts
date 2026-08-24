@@ -345,6 +345,16 @@ export const PAIN_AMBER_HOLD: VoiceSet = [
   "Holding here rather than adding — you flagged this movement recently, and how it feels next time is the thing worth knowing.",
 ];
 
+// Red, on a lift with no external load to take off (bodyweight, assisted, or a hold
+// with no duration on record). The load cannot come down, so the sentence must not
+// say it did — but this is NOT the amber sentence either: amber is waiting to hear
+// how it settled, and here the athlete has already told us it did not.
+export const PAIN_RED_HOLD: VoiceSet = [
+  "That one hasn't settled between sessions, so it stays exactly where it is today rather than going up — nothing else in the session changes.",
+  "This movement is still speaking up between sessions, so it holds here for now. Everything else runs as planned.",
+  "Still unsettled on this one, so it stays put today — no added work on it, and the rest of the day is untouched.",
+];
+
 export const PAIN_RED_REDUCE: VoiceSet = [
   "This one hasn't settled between sessions, so it comes down a step — just this movement; the rest of the session runs as planned.",
   "Easing the load on this movement since it's still speaking up between sessions. Nothing else in the day changes.",
@@ -583,6 +593,7 @@ export function progressionVoicePhrases(): string[] {
     JOINT_BRAKE_HOLD,
     JOINT_BRAKE_DELOAD,
     PAIN_AMBER_HOLD,
+    PAIN_RED_HOLD,
     PAIN_RED_REDUCE,
     FUEL_HOLD_STEP,
     PUSH_FUEL_PEAK_TRIM,

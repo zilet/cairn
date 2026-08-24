@@ -914,3 +914,42 @@ test("a systemic watch cannot drive a movement band even when its label names a 
     "a watch that names no place still may never load one lift",
   );
 });
+
+// Symmetry has to be SAID. Asserting it from a muscle NAME read "the left side of my
+// chest is sharp when I press" — one-sided, sharp, right after a new movement — as
+// bilateral soreness and trained straight through it.
+test("a muscle name alone is not symmetry, and injury words are never DOMS", () => {
+  const bench = repo.findExercise("Bench Press");
+  const novel = (date) => {
+    const session = repo.getOrCreateSession(date);
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 8)`,
+    ).run(session.id, bench.id);
+  };
+  const report = (label, text, on) => {
+    const event = repo.reportTrainingSymptom({ area_text: label, report_text: text, onset_on: on });
+    repo.recordMovementTolerance({
+      symptom_event_id: event.id,
+      movement: "Bench Press",
+      exercise_id: bench.id,
+      observed_on: on,
+      pain_free: false,
+    });
+    return event;
+  };
+
+  novel("2034-09-10");
+  report("chest", "the left side of my chest is sharp when I press", "2034-09-11");
+  const oneSided = painBandForMovement({ id: bench.id, name: "Bench Press", muscle_group: "chest" }, "2034-09-12");
+  assert.equal(oneSided.doms, false, "one side, and 'sharp' — this is the report to be careful with");
+  assert.equal(oneSided.band, "amber");
+
+  // The genuine article still trains through: bilateral, muscle-belly, day after a
+  // movement that has just been introduced.
+  resetTables("movement_tolerance_observations", "training_symptom_events", "symptom_reports", "logged_sets", "sessions");
+  novel("2034-10-10");
+  report("rear delts", "rear delts are sore on both sides after that new press", "2034-10-11");
+  const doms = painBandForMovement({ id: bench.id, name: "Bench Press", muscle_group: "chest" }, "2034-10-12");
+  assert.equal(doms.doms, true);
+  assert.equal(doms.band, "green");
+});
