@@ -1456,3 +1456,162 @@ test("the prompt payload carries one status per dimension, not two", async () =>
   }
   assert.equal(projected.signal_state.action.posture, state.action.posture, "nothing else is disturbed");
 });
+
+// ---------------------------------------------------------------------------
+// Round W3.4 — the recovery science
+// ---------------------------------------------------------------------------
+
+// ---- (1) the decision band is the athlete's own smallest worthwhile change ----
+test("the trend band widens to the athlete's own dispersion and never narrows below the floors", async () => {
+  const { recoveryTrendBars } = await import("../dist/repo/recovery-trend.js");
+  const baseline = { hrv: 60, rhr: 50, sleep: 420 };
+
+  const flat = recoveryTrendBars(baseline);
+  assert.equal(flat.hrv, 3, "with no dispersion the bar is exactly what it always was");
+
+  // A NOISY athlete: half of a 14 ms spread is 7 ms, well past the 5%-of-baseline bar.
+  const noisy = recoveryTrendBars(baseline, { hrv: 14 });
+  assert.equal(noisy.hrv, 7, "the smallest worthwhile change is half their own SD");
+
+  // A CONSISTENT one: half of a 2 ms spread is 1 ms, and the floor holds. The band may
+  // only ever widen — narrowing it would mint cautions for the athlete Cairn knows best.
+  const consistent = recoveryTrendBars(baseline, { hrv: 2 });
+  assert.equal(consistent.hrv, flat.hrv, "dispersion can widen the band, never tighten it");
+
+  // Nonsense dispersion is absence, not a band of zero.
+  for (const bad of [null, 0, -5, "many", Number.NaN]) {
+    assert.equal(recoveryTrendBars(baseline, { hrv: bad }).hrv, flat.hrv, `dispersion ${String(bad)}`);
+  }
+});
+
+test("a drop inside the athlete's own noise is not a finding; one outside it still is", () => {
+  const date = localDaysAgo(0);
+  const recovery = (delta, dispersion) => ({
+    baseline: { hrv: 60 },
+    dispersion,
+    delta: { hrv: delta },
+    quality: { hrv_ms: { latest_date: date, source: "garmin", sample_count: 7, window_days: 14 } },
+  });
+  const hrvOf = (state) =>
+    (state.dimensions.recovery_capacity.evidence ?? []).find((item) => item.field === "hrv");
+
+  // −5 ms against a 3 ms bar was a caution, and for a steady athlete it still is.
+  assert.equal(hrvOf(repo.planningSignalState({ date, recovery: recovery(-5, null) })).direction, "caution");
+  // The SAME −5 ms for an athlete whose own nights swing 14 ms is ordinary variation.
+  assert.equal(
+    hrvOf(repo.planningSignalState({ date, recovery: recovery(-5, { hrv: 14 }) })).direction,
+    "support",
+    "half their own SD is 7 ms, and 5 does not clear it"
+  );
+  // Past their own band it speaks again — a wider band is not a silenced one.
+  assert.equal(hrvOf(repo.planningSignalState({ date, recovery: recovery(-9, { hrv: 14 }) })).direction, "caution");
+});
+
+// ---- (2) parasympathetic saturation ----
+const hrvRecovery = (date, delta) => ({
+  baseline: { hrv: 60 },
+  delta: { hrv: delta },
+  quality: { hrv_ms: { latest_date: date, source: "garmin", sample_count: 7, window_days: 14 } },
+});
+// The run-intensity channel's chronic finding, in the shape runIntensityDiscipline
+// returns it — "the same easy work is costing more pulse", the only pace-at-heart-rate
+// reading this system actually takes.
+const driftingRuns = {
+  status: "polarized",
+  z2_top: 148,
+  window_days: 14,
+  runs_classified: 4,
+  chronic: { window_days: 21, runs_classified: 10, easy_count: 2, above_easy_count: 8, drifting: true },
+  chronic_summary: "Most of the athlete's recent running finished above their own easy ceiling of 148 bpm.",
+};
+const decliningSignals = {
+  autoregulation: { low_performance_flag: true, low_performance_date: null, joint_areas: [], soreness_flag: false },
+};
+
+test("rising HRV beside a declining performance channel reads watch, not green", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    recovery: hrvRecovery(date, 9),
+    trainingSignals: decliningSignals,
+  });
+  const hrv = (state.dimensions.recovery_capacity.evidence ?? []).find((item) => item.field === "hrv");
+  assert.ok(hrv, "the HRV observation is still made");
+  assert.notEqual(hrv.direction, "support", "a rising number may not endorse a day the work is arguing with");
+  assert.equal(hrv.direction, "caution");
+  assert.equal(hrv.voice.key, "hrv_saturation");
+  assert.match(hrv.summary, /costing more/i, "the machine reason names the divergence");
+  assert.match(hrv.summary, /below the athlete's usual/i, "…and cites the channel it read");
+  assert.equal(state.dimensions.recovery_capacity.status, "watch");
+});
+
+test("saturation is advisory: it withdraws the reach and cannot take the day", () => {
+  const date = localDaysAgo(0);
+  // The performance evidence here is the run-intensity channel rather than a rated
+  // session, because a low-performance RATING is itself a safety constraint and would
+  // own the day on its own — which would prove nothing about this brake's standing.
+  const state = repo.planningSignalState({
+    date,
+    recovery: hrvRecovery(date, 9),
+    runIntensity: driftingRuns,
+  });
+  const hrv = (state.dimensions.recovery_capacity.evidence ?? []).find((item) => item.field === "hrv");
+  assert.equal(hrv.voice.key, "hrv_saturation");
+  assert.equal(hrv.advisory_brake, true);
+  assert.equal(state.dimensions.recovery_capacity.status, "watch", "it IS visible");
+  assert.notEqual(state.dimensions.recovery_capacity.deciding.status, "watch", "the posture ladder reads past it");
+  assert.equal(state.action.posture, "train", "an argument about what a number MEANS is not a rest verdict");
+  assert.equal(state.action.support, null, "but the backed tier is withdrawn");
+});
+
+test("saturation needs BOTH halves — either alone changes nothing", () => {
+  const date = localDaysAgo(0);
+  const hrvOf = (input) =>
+    (repo.planningSignalState(input).dimensions.recovery_capacity.evidence ?? []).find(
+      (item) => item.field === "hrv"
+    );
+
+  // Rising HRV alone is exactly what it looks like.
+  const risingOnly = hrvOf({ date, recovery: hrvRecovery(date, 9) });
+  assert.equal(risingOnly.direction, "support");
+  assert.equal(risingOnly.voice.key, "hrv_steady");
+
+  // A declining performance channel beside a STEADY trend is not saturation either —
+  // the finding is a divergence, and there is nothing here to diverge from.
+  const steady = hrvOf({ date, recovery: hrvRecovery(date, 1), trainingSignals: decliningSignals });
+  assert.equal(steady.voice.key, "hrv_steady");
+
+  // And a FRESH strong rating settles it the other way outright: the most recent thing
+  // the athlete said about their own training outranks the inference.
+  const strong = hrvOf({
+    date,
+    recovery: hrvRecovery(date, 9),
+    trainingSignals: { ...decliningSignals, session_quality: { strong_flag: true, strong_date: date } },
+  });
+  assert.equal(strong.voice.key, "hrv_steady");
+});
+
+test("a FALLING trend keeps its own words — saturation never layers a second claim", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    recovery: hrvRecovery(date, -9),
+    trainingSignals: decliningSignals,
+  });
+  const hrv = (state.dimensions.recovery_capacity.evidence ?? []).find((item) => item.field === "hrv");
+  assert.equal(hrv.voice.key, "hrv_below");
+  assert.equal(hrv.advisory_brake, undefined, "the ordinary trend caution keeps its full standing");
+});
+
+test("absent HRV fires nothing at all, whatever the performance channel says", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    recovery: { ...hrvRecovery(date, 0), delta: {} },
+    trainingSignals: decliningSignals,
+  });
+  assert.equal(
+    (state.dimensions.recovery_capacity.evidence ?? []).find((item) => item.field === "hrv"),
+    undefined
+  );
+});

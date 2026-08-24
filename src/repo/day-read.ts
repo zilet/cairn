@@ -759,8 +759,8 @@ const LOW_SLEEP_CAVEAT: readonly string[] = [
 // So no phrasing here may suggest cutting the session, and none may name a number.
 const SLEEP_EXPOSURE_CAVEAT: readonly string[] = [
   "short sleep is the wrong night to chase a personal best or do much jumping, so keep the session and leave the risky edges out",
-  "the session stands, but a short night isn't the time for a max attempt or hard plyometrics — keep the volume and the technique work",
-  "keep today as planned and just take the sharp edges off it: no maxing out, nothing explosive, the rest stays",
+  "the session stands, but a short night isn't the time for a max attempt or hard plyometrics, so keep the volume and the technique work instead",
+  "keep today as planned and just take the sharp edges off it: no maxing out, nothing explosive, and the rest stays",
   "a night this short mostly costs you on the risky stuff, so skip the max attempts and the jumping and keep everything else",
 ];
 // The pronoun in the first phrasing ("until that settles") points at the sentence
