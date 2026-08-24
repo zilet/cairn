@@ -3277,3 +3277,46 @@ test("the prompt tells the agent the athlete CHOSE to push, on a drive day only"
   // And it stays inside the same rules as every neighbouring block.
   assert.match(drive, /no score, no gate/);
 });
+
+// ---------- round W3.4, rule 4: a short night downgrades EXPOSURE ----------
+// One bad night never forces rest (the standing law) — and it used not to do anything
+// else either. A short night on top of a short WINDOW is the rest path
+// (`acute_sleep_corroborated`); a short night on an otherwise-normal window reached
+// the planned-training rule and passed through in total silence, because the existing
+// sleep caveat speaks only for the chronic trend. What it costs is injury exposure,
+// which is exactly what the coach prompt is now told through `training_constraints`,
+// and the athlete is owed the same sentence.
+test("an acute short night keeps the session and says what it takes off it", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  seedCurrentNight(REF, 300); // 5h last night, and no chronic window behind it
+  const r = repo.dayRead(REF, { has_data: true, recovery: {} });
+
+  assert.equal(r.kind, "train", "the session is KEPT — this is not a soft rest read");
+  assert.equal(r.focus, "Lower body");
+  assert.equal(r.signals.low_sleep, false, "there is no chronic trend here, only one night");
+  assert.equal(r.decision.rule_code, "planned_training");
+  const caveat = saysOneCaveat(r.why, "planned_training:sleep_exposure");
+  assert.doesNotMatch(caveat, /\brest\b|\bskip\b|\bshorter\b/i, "it downgrades exposure; it never cancels");
+});
+
+test("a normal night adds no exposure caveat at all", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  seedCurrentNight(REF, 460);
+  const r = repo.dayRead(REF, { has_data: true, recovery: {} });
+  assert.equal(r.kind, "train");
+  for (const variant of DAY_READ_CAVEAT_VARIANTS["planned_training:sleep_exposure"]) {
+    assert.ok(!r.why.includes(variant), `absence is neutral: ${variant}`);
+  }
+});
+
+test("the chronic sleep caveat still owns a chronically short sleeper — never both at once", () => {
+  // Two claims about one night's worth of sleep would be the same finding charged
+  // twice; the chronic trend is the wider statement and keeps the surface.
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  seedCurrentNight(REF);
+  const r = repo.dayRead(REF, sleepMean(300)); // 5h mean, 7h last night
+  saysOneCaveat(r.why, "planned_training:low_sleep");
+  for (const variant of DAY_READ_CAVEAT_VARIANTS["planned_training:sleep_exposure"]) {
+    assert.ok(!r.why.includes(variant), "the exposure caveat does not pile on");
+  }
+});

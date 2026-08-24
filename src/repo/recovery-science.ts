@@ -16,7 +16,7 @@
 //     A constraint downgrades EXPOSURE or trims VOLUME; none of them cancels a
 //     session, and none of them is a score.
 // ---------------------------------------------------------------------------
-import { SENSOR_MAX_AGE_DAYS, sensorIsCurrent } from "./sensor-freshness.js";
+import { sensorIsCurrent } from "./sensor-freshness.js";
 
 // ---------- (1) the HRV decision band ----------
 //
