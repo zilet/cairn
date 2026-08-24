@@ -698,6 +698,32 @@ function compactCoachingFocus(focus: unknown): unknown {
   return out;
 }
 
+// The signal state, minus the posture ladder's own plumbing. Every dimension carries a
+// `deciding` pair — the same status/confidence recomputed without the advisory brakes
+// (src/repo/signal-state.ts) — because the arbitration index and the seconded-watch
+// count must read past a one-lane informational finding. That is a fact about HOW the
+// server decided, not evidence about the athlete, and shipping it would put a second,
+// unexplained status beside the real one on all five dimensions: a model reading
+// "watch" next to "unknown" for one dimension on one morning can only guess which of
+// them it is meant to reason from. The prompt gets `status`/`confidence` — the pair
+// every prompt has always read — and the evidence they were computed from.
+function compactSignalState(state: unknown): unknown {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return state;
+  const row = state as Record<string, unknown>;
+  const dimensions = row.dimensions;
+  if (!dimensions || typeof dimensions !== "object" || Array.isArray(dimensions)) return row;
+  return {
+    ...row,
+    dimensions: Object.fromEntries(
+      Object.entries(dimensions as Record<string, unknown>).map(([key, dimension]) => {
+        if (!dimension || typeof dimension !== "object" || Array.isArray(dimension)) return [key, dimension];
+        const { deciding: _deciding, ...rest } = dimension as Record<string, unknown>;
+        return [key, rest];
+      })
+    ),
+  };
+}
+
 // The read-adherence model, cut to what a prompt can act on. The full model carries a
 // 42-day window and up to fourteen recent days; the Brief needs the standing counts
 // (which read kind gets followed, and the plain-words test behind each count — the
@@ -744,7 +770,9 @@ export function projectCoachContext(ctx: PartialCoachContext, site: PromptSite):
             ? compactCoachingFocus(value)
             : key === "read_adherence"
               ? compactReadAdherence(value)
-              : value;
+              : key === "signal_state"
+                ? compactSignalState(value)
+                : value;
   }
   return out as PartialCoachContext;
 }

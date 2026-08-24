@@ -1225,3 +1225,234 @@ test("an unvoiced fallback follows the direction of the day, not the protective 
   const named = { key: "sleep_night_short" };
   assert.equal(spokenSignalVoice(named, date, "k", "train"), spokenSignalVoice(named, date, "k", "rest"));
 });
+
+// ---- an active health directive reaches the morning read as a BRAKE ---------
+//
+// A flagged lab finding propagates into an active training directive, and the run
+// builder caps the week off it. This state saw no directives at all, so on the same
+// morning the Brief could resolve `push_bias` and offer room the week had denied. The
+// firm hold now weighs on the dimension it touches; the uncertain one informs and
+// decides nothing, which is the softer weight the directive system already draws.
+// (The end-to-end agreement between the two layers is pinned in runProgression.test.js.)
+test("a firm endurance hold brakes load tolerance; an uncertain one only informs", async () => {
+  const { dayPlanningSignalState } = await import("../dist/repo/day-read.js");
+  const { spokenSignalVoice, SIGNAL_VOICE_REGISTRY } = await import("../dist/repo/signal-state.js");
+  const date = localDaysAgo(0);
+  const holdOf = (state) =>
+    state.dimensions.training_load_tolerance.evidence.find((e) => e.field === "endurance_hold_directive");
+
+  assert.equal(holdOf(dayPlanningSignalState(date)), undefined, "no directive, no observation");
+
+  repo.addDirective({
+    source: "markers",
+    domain: "training",
+    marker: "low ferritin",
+    directive: "Hold endurance volume while ferritin recovers.",
+    citation: "IOC consensus on iron in athletes",
+    uncertain: true,
+    status: "active",
+  });
+  const soft = dayPlanningSignalState(date);
+  const softHold = holdOf(soft);
+  assert.ok(softHold, "an uncertain hold is still visible in the state");
+  assert.equal(softHold.context_only, true, "…and it decides nothing");
+  assert.notEqual(soft.dimensions.training_load_tolerance.status, "watch", "an uncertain nudge is not a finding");
+
+  db.prepare(`UPDATE health_directives SET uncertain = 0`).run();
+  const firm = dayPlanningSignalState(date);
+  const firmHold = holdOf(firm);
+  assert.equal(firmHold.direction, "caution", "a brake, never a constraint — it may hold the reach, not the day");
+  assert.ok(!firmHold.context_only);
+  assert.equal(firm.dimensions.training_load_tolerance.status, "watch", "visibly a watch for every surface…");
+  assert.equal(firm.dimensions.training_load_tolerance.deciding.status, "unknown", "…and invisible to the ladder");
+  assert.equal(firmHold.advisory_brake, true);
+  // MACHINE register names the directive; the athlete hears the registered voice.
+  assert.match(firm.dimensions.training_load_tolerance.reason, /directive/i);
+  assert.match(firmHold.summary, /iron stores/);
+  const spoken = spokenSignalVoice(firmHold.voice, date, "planned_training:noted");
+  assert.ok(
+    SIGNAL_VOICE_REGISTRY.endurance_hold_flagged.variants.some((variant) => variant.includes("your iron stores")),
+    "the voice names what the hold is waiting on"
+  );
+  assert.match(spoken, /iron stores/);
+  assert.doesNotMatch(spoken, /directive|flag|marker/i, "the athlete never hears the machinery");
+
+  // A directive the athlete resolved contributes nothing.
+  db.prepare(`UPDATE health_directives SET status = 'resolved'`).run();
+  assert.equal(holdOf(dayPlanningSignalState(date)), undefined);
+});
+
+// ---- …and it may not move the day on ANY board ------------------------------
+//
+// The first cut made the directive an ordinary `caution`, and an ordinary caution
+// WEIGHS: STATUS_VALUE × dimension weight × confidence, plus a second, subtler channel
+// — arming the arbitration's support clamp, which zeroes every positive contribution.
+// The isolated arithmetic was safe (one caution at low confidence sits above the modify
+// threshold) but boards are not isolated: on a board already carrying brakes the extra
+// weight descended a posture rung, and on a supported board the clamp did it by
+// cancelling the support instead. Either way an informational finding about ONE lane
+// was deciding what the whole day is, which it may never do.
+//
+// These build the boards out of the REAL production observation — pulled from
+// dayPlanningSignalState rather than hand-copied — and compare each against the same
+// board without it. The invariant is equality, not a threshold: same posture, same
+// planning directive, whatever else is on the board.
+test("an endurance hold cannot descend a posture rung on any board, and cannot hold aggression", async () => {
+  const { dayPlanningSignalState } = await import("../dist/repo/day-read.js");
+  const { buildUnifiedSignalState } = await import("../dist/repo/signal-state.js");
+  const date = localDaysAgo(0);
+  repo.addDirective({
+    source: "markers",
+    domain: "training",
+    marker: "low ferritin+low hemoglobin",
+    directive: "Hold endurance volume while iron and hemoglobin recover.",
+    citation: "IOC consensus on iron in athletes",
+    uncertain: false,
+    status: "active",
+  });
+  const hold = dayPlanningSignalState(date).dimensions.training_load_tolerance.evidence.find(
+    (e) => e.field === "endurance_hold_directive"
+  );
+  assert.ok(hold, "the production observation is what these boards are built from");
+
+  const obs = (dimension, field, direction, extra = {}) => ({
+    dimension,
+    field,
+    date,
+    source: "test",
+    direction,
+    summary: `${field} reads ${direction}.`,
+    max_age_days: 1,
+    ...extra,
+  });
+  // A recovery dimension at watch with three fields and no conflict: high confidence,
+  // which is the heaviest an ordinary brake gets.
+  const RECOVERY_WATCH = [
+    obs("recovery_capacity", "sleep", "caution"),
+    obs("recovery_capacity", "hrv", "neutral"),
+    obs("recovery_capacity", "rhr", "neutral"),
+  ];
+  const HEALTH_WATCH = [obs("health_constraints", "joint_pain", "caution")];
+  const SUPPORTED = [obs("training_load_tolerance", "session_quality", "support")];
+
+  const compare = (label, board) => {
+    const without = buildUnifiedSignalState(date, board);
+    const with_ = buildUnifiedSignalState(date, [...board, hold]);
+    assert.equal(with_.action.posture, without.action.posture, `${label}: the directive moved the posture`);
+    assert.equal(with_.action.readiness, without.action.readiness, `${label}: the directive moved readiness`);
+    assert.equal(
+      with_.action.directives.training,
+      without.action.directives.training,
+      `${label}: the directive moved the training directive`
+    );
+    // The VOICE too, which is the half the athlete actually reads: `action.evidence[0]`
+    // becomes `action.voice`, which day-read's protect rule speaks as the Brief's `why`.
+    // A finding that cannot decide the day may not be named as its cause either.
+    assert.deepEqual(with_.action.voice, without.action.voice, `${label}: the directive took over the why`);
+    return with_;
+  };
+
+  // One brake on the board (the day already reads modify), two brakes (easy) — the two
+  // boards the reviewer's counter-example was built on. Neither may descend a rung.
+  const oneBrake = compare("one brake", RECOVERY_WATCH);
+  assert.equal(oneBrake.action.posture, "modify", "the fixture is the board it claims to be");
+  const twoBrakes = compare("two brakes", [...RECOVERY_WATCH, ...HEALTH_WATCH]);
+  assert.equal(twoBrakes.action.posture, "easy");
+  assert.notEqual(twoBrakes.action.posture, "rest", "and never rest");
+  // Named explicitly, because dimension order puts training_load_tolerance ahead of the
+  // dimensions that DID make this day easy: the reported cause must be one of them.
+  // `action.reasons` are the summaries of the evidence this posture is reported to rest
+  // on, in the same order `action.voice` is taken from.
+  assert.ok(twoBrakes.action.reasons.length, "the easy day still reports what it rests on");
+  assert.equal(
+    twoBrakes.action.reasons.some((reason) => /directive|iron/i.test(reason)),
+    false,
+    "the hold was listed among the brakes this posture rests on"
+  );
+  assert.equal(
+    twoBrakes.action.source_dimensions.includes("training_load_tolerance"),
+    false,
+    "…and it was credited as a dimension that drove the day"
+  );
+
+  // An otherwise-EMPTY board: no wearable, no check-in, one standing flag. A brake may
+  // never make a board read GREENER than the same board without it — this used to flip
+  // readiness from "unknown" to "ready" and swap the honestly-thin sentence for "the
+  // current signals leave room for the planned day".
+  const bare = compare("empty board", []);
+  assert.equal(bare.action.readiness, "unknown");
+  assert.match(bare.action.reason, /not enough fresh signal/i);
+  assert.equal(bare.action.support, null);
+
+  // The second channel: a board with nothing pulling the other way, where the damage
+  // came from the support clamp rather than from the weight.
+  const supported = compare("supported", SUPPORTED);
+  assert.equal(supported.action.posture, "train");
+  // …and here is the authority it DOES have: the reach is withdrawn on that same board.
+  assert.ok(buildUnifiedSignalState(date, SUPPORTED).action.support, "the control day is backed");
+  assert.equal(supported.action.support, null, "the hold withdraws the reach — that is its whole authority");
+
+  // A single ordinary caution plus the hold must not become the "second opinion" that
+  // holds aggression for the week: an iron flag may not cap a squat session.
+  const lift = buildUnifiedSignalState(date, [...RECOVERY_WATCH, hold]);
+  assert.equal(lift.action.directives.training, "proceed", "one caution and a flag is still one caution");
+  assert.equal(
+    lift.dimensions.training_load_tolerance.status,
+    "watch",
+    "the flag is still visible to every surface that shows the dimension"
+  );
+});
+
+// ---- the exemption is only ever granted to a CAUTION -------------------------
+//
+// `advisory_brake` buys an exemption from the weighted sum, and the three rungs at the
+// top of actionState are direction-only — no exemption can reach them. So a future
+// caller flagging a CONSTRAINT as advisory would get the exemption inverted: excluded
+// from the arbitration while still owning the whole day. The flag is honored through
+// one predicate that requires a caution; anything stronger keeps its full weight.
+test("advisory_brake cannot soften a constraint — the stricter reading wins", async () => {
+  const { buildUnifiedSignalState } = await import("../dist/repo/signal-state.js");
+  const date = localDaysAgo(0);
+  const constraint = {
+    dimension: "training_load_tolerance",
+    field: "misflagged",
+    date,
+    source: "test",
+    direction: "constraint",
+    summary: "Something firm, mislabelled as advisory.",
+    max_age_days: 1,
+    advisory_brake: true,
+  };
+  const state = buildUnifiedSignalState(date, [constraint]);
+  // It decides exactly what an unflagged constraint decides — the flag bought nothing.
+  const honest = buildUnifiedSignalState(date, [{ ...constraint, advisory_brake: false }]);
+  assert.equal(state.action.posture, honest.action.posture);
+  assert.equal(state.action.posture, "easy", "a load constraint still owns the day");
+  assert.equal(state.dimensions.training_load_tolerance.deciding.status, "constrained");
+  assert.equal(state.dimensions.training_load_tolerance.status, "constrained");
+});
+
+// ---- and the ladder's plumbing does not reach the model ---------------------
+test("the prompt payload carries one status per dimension, not two", async () => {
+  const { projectCoachContext } = await import("../dist/prompt/context-projection.js");
+  const { buildUnifiedSignalState } = await import("../dist/repo/signal-state.js");
+  const date = localDaysAgo(0);
+  const state = buildUnifiedSignalState(date, [
+    {
+      dimension: "recovery_capacity",
+      field: "sleep",
+      date,
+      source: "test",
+      direction: "caution",
+      summary: "A short night.",
+      max_age_days: 1,
+    },
+  ]);
+  assert.ok(state.dimensions.recovery_capacity.deciding, "the state itself carries it");
+  const projected = projectCoachContext({ signal_state: state }, "day_read");
+  for (const [key, dimension] of Object.entries(projected.signal_state.dimensions)) {
+    assert.equal(dimension.deciding, undefined, `${key}: the posture ladder's plumbing reached the prompt`);
+    assert.ok(dimension.status, `${key}: the status a prompt has always read is still there`);
+  }
+  assert.equal(projected.signal_state.action.posture, state.action.posture, "nothing else is disturbed");
+});

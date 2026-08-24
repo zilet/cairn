@@ -376,6 +376,89 @@ test("weeklyRunPlan consumes an active anemia directive from the ledger (listAct
   assert.match(plan.rationale.join(" "), /iron|hemoglobin/i);
 });
 
+// ── the two layers must agree about the SAME directive on the SAME morning ────
+//
+// The run builder honored an active endurance-hold directive and capped the week, and
+// the day-planning signal state had no directive input at all — so on the very morning
+// the plan was holding the running back, the Brief could resolve `push_bias` and offer
+// the athlete room the week had already denied. Two layers, one athlete, opposite
+// answers, both citing "the connected brain".
+
+// A plan day plus two strongly-rated sessions: the ONLY thing that earns the backed
+// tier, and it is earned from the training log alone (no wearable anywhere).
+function seedBackedLifter() {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const day = repo.getPlanDay(1);
+  const ex = repo.findExercise("Squat") ?? repo.upsertExercise({ name: "Squat", muscle_group: "quads" });
+  for (const off of [4, 2]) {
+    const session = repo.getOrCreateSession(back(off), day.id);
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, 185, 8, 2)`
+    ).run(session.id, ex.id);
+    repo.setSessionFeedback(back(off), { performance: 5 });
+  }
+}
+
+test("an active endurance hold caps the week AND closes the same morning's push", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  // The running history ends a week back, deliberately: a run inside the last few days
+  // raises its OWN interference caution, and a morning already braked cannot show that
+  // the directive is what closed the push. The base is still a real runner's base.
+  seedRunner({ weeks: 8, perWeek: 3, km: 12, from: back(6) });
+  seedBackedLifter();
+
+  // Before the directive: the week carries a quality session and the morning offers
+  // the reach. Both halves of the baseline matter — without them the assertions below
+  // would pass on a fixture that never had anything to take away.
+  const openPlan = repo.weeklyRunPlan(REF, { block: { week_index: 1 } });
+  const openRead = repo.dayRead(REF);
+  assert.notEqual(openPlan.quality_focus, null, "the base week has a quality session to drop");
+  assert.ok(openRead.signals.push_bias, "the base morning is one the evidence positively backs");
+
+  repo.addDirective({
+    source: "markers",
+    domain: "training",
+    marker: "low ferritin+low hemoglobin+low MCV",
+    directive: "While this anemia pattern is present, hold endurance volume and keep easy days genuinely easy.",
+    citation: "IOC consensus on iron in athletes",
+    uncertain: false,
+    status: "active",
+  });
+
+  const heldPlan = repo.weeklyRunPlan(REF, { block: { week_index: 1 } });
+  const heldRead = repo.dayRead(REF);
+
+  // The week is capped, exactly as before…
+  assert.equal(heldPlan.quality_focus, null);
+  assert.ok(totalRunKm(heldPlan) < totalRunKm(openPlan), "the firm hold still caps the build");
+  // …and now the morning agrees instead of contradicting it.
+  assert.equal(heldRead.signals.push_bias, undefined, "the Brief must not offer room the week has denied");
+  assert.equal(heldRead.signals.signal_state.action.support, null);
+
+  // It arrives as a BRAKE on the dimension it touches — a watch, never a constraint,
+  // so it can hold the reach back without making the day easy or rest by itself.
+  const load = heldRead.signals.signal_state.dimensions.training_load_tolerance;
+  assert.equal(load.status, "watch");
+  const item = load.evidence.find((e) => e.field === "endurance_hold_directive");
+  assert.ok(item, "the directive rides in the dimension's evidence");
+  assert.equal(item.direction, "caution");
+  assert.match(load.reason, /directive/i, "the machine register records the directive");
+  // The read is still a suggestion: the day is not turned easy or rest by a directive.
+  assert.equal(heldRead.kind, "train");
+  NO_SCORE(heldRead.signals.signal_state, "signal state with an endurance hold");
+
+  // And a directive the athlete has dismissed contributes nothing at all.
+  db.prepare(`UPDATE health_directives SET status = 'dismissed'`).run();
+  const dismissed = repo.dayRead(REF);
+  assert.ok(dismissed.signals.push_bias, "a dismissed directive is not evidence");
+  assert.equal(
+    dismissed.signals.signal_state.dimensions.training_load_tolerance.evidence.some(
+      (e) => e.field === "endurance_hold_directive"
+    ),
+    false
+  );
+});
+
 // ── runVarietyRead ────────────────────────────────────────────────────────────
 
 test("runVarietyRead flags mono-stimulus (all-easy) running and names the missing stimulus", () => {

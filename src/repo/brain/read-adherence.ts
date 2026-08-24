@@ -967,7 +967,16 @@ export interface EasyOverrideSoftening {
 
 export interface EasyOutcomeFeedbackSignal extends EasyOverrideSoftening {
   applied: boolean;
+  // The athlete said something about THIS morning — a run-down or sore check-in, a
+  // symptom they reported today — and that newer word held the softening shut. Written
+  // only when the pattern would otherwise have opened the day, so it reads as "what
+  // stopped this", never as a standing note about the check-in.
+  held_by_statement?: FreshStatementField;
 }
+
+// Which same-day statement held a softening. Their own words, by kind — the four
+// shapes the athlete can put on record about the morning being read.
+export type FreshStatementField = "felt_energy" | "felt_soreness" | "sleep_feel" | "symptom_report";
 
 const NO_EASY_SOFTENING: EasyOverrideSoftening = Object.freeze({
   active: false,
