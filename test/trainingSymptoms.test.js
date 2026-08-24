@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { db, isoDaysAgo, repo, resetTables } from "./_seed.js";
 // pain-relevance is not barrelled through repo.js — import the module directly.
 import { muscleGroupsForPainArea, painAreaLoadsExercise } from "../dist/repo/pain-relevance.js";
+import { painBandDecision, painBandForMovement } from "../dist/repo/pain-band.js";
 
 beforeEach(() => {
   resetTables("movement_tolerance_observations", "training_symptom_events", "logged_sets", "sessions", "exercises");
@@ -674,4 +675,143 @@ test("AC joint and SI keep the relevance pain-relevance maps for them", () => {
   const again = repo.reportTrainingSymptom({ area_text: "sacroiliac", onset_on: "2034-10-02" });
   assert.equal(again.id, first.id);
   assert.equal(again.area_text, "SI joint", "the first wording stands");
+});
+
+// ---------------------------------------------------------------------------
+// THE PAIN TRAFFIC LIGHT (src/repo/pain-band.ts)
+//
+// Cairn's capture contract carries no 0-10 severity and this deliberately does not
+// add one, so the three bands are mapped onto the vocabulary capture already
+// produces: a stated pain_present exposure with the settling question still open is
+// AMBER, one the athlete's own words or a later exposure settled is GREEN, and
+// 'worse' / two painful days inside a week is RED. Absence is none of the three.
+test("pain bands: absent, amber, settled-green, worse-red and unsettled-red", () => {
+  const band = (input) => painBandDecision({ as_of: "2034-03-20", changes: [], doms: null, ...input });
+
+  assert.equal(band({ exposures: [] }), null, "nothing stated → ABSENT, not green");
+  assert.equal(
+    band({ exposures: [{ on: "2034-03-18", outcome: "pain_present", evidence: "inferred" }] }),
+    null,
+    "quiet training is never a statement about how it felt"
+  );
+
+  const amber = band({ exposures: [{ on: "2034-03-18", outcome: "pain_present", evidence: "stated" }] });
+  assert.equal(amber.band, "amber");
+  assert.equal(amber.settled, null, "the 24-hour question is still open");
+
+  const settled = band({
+    exposures: [
+      { on: "2034-03-18", outcome: "pain_present", evidence: "stated" },
+      { on: "2034-03-19", outcome: "pain_free", evidence: "stated" },
+    ],
+  });
+  assert.equal(settled.band, "green", "it settled by the next exposure");
+  assert.equal(settled.settled, true);
+
+  const better = band({
+    exposures: [{ on: "2034-03-18", outcome: "pain_present", evidence: "stated" }],
+    changes: [{ on: "2034-03-19", change: "better" }],
+  });
+  assert.equal(better.band, "green", "the athlete's own word settles it too");
+
+  const worse = band({
+    exposures: [{ on: "2034-03-18", outcome: "pain_present", evidence: "stated" }],
+    changes: [{ on: "2034-03-19", change: "worse" }],
+  });
+  assert.equal(worse.band, "red");
+  assert.equal(worse.settled, false);
+
+  const unsettled = band({
+    exposures: [
+      { on: "2034-03-16", outcome: "pain_present", evidence: "stated" },
+      { on: "2034-03-19", outcome: "pain_present", evidence: "stated" },
+    ],
+  });
+  assert.equal(unsettled.band, "red", "two painful days inside a week is week-over-week unsettled");
+
+  const old = band({
+    exposures: [
+      { on: "2034-03-01", outcome: "pain_present", evidence: "stated" },
+      { on: "2034-03-19", outcome: "pain_present", evidence: "stated" },
+    ],
+  });
+  assert.equal(old.band, "amber", "a painful day a fortnight earlier is not this episode");
+});
+
+test("DOMS: symmetric soreness a day after a novel dose is NOT amber, and one 'worse' word ends that", () => {
+  const doms = { novel_exposure_on: "2034-03-17", symmetric: true };
+  const trainThrough = painBandDecision({
+    as_of: "2034-03-20",
+    exposures: [{ on: "2034-03-19", outcome: "pain_present", evidence: "stated" }],
+    changes: [],
+    doms,
+  });
+  assert.equal(trainThrough.band, "green");
+  assert.equal(trainThrough.doms, true);
+
+  // One-sided, so the shape is indistinguishable from a symptom → err amber (safe).
+  const oneSided = painBandDecision({
+    as_of: "2034-03-20",
+    exposures: [{ on: "2034-03-19", outcome: "pain_present", evidence: "stated" }],
+    changes: [],
+    doms: { novel_exposure_on: "2034-03-17", symmetric: false },
+  });
+  assert.equal(oneSided.band, "amber");
+
+  // A week after the novel dose is outside the 24-72h peak → not the DOMS shape.
+  const tooLate = painBandDecision({
+    as_of: "2034-03-26",
+    exposures: [{ on: "2034-03-25", outcome: "pain_present", evidence: "stated" }],
+    changes: [],
+    doms,
+  });
+  assert.equal(tooLate.band, "amber");
+
+  const gotWorse = painBandDecision({
+    as_of: "2034-03-20",
+    exposures: [{ on: "2034-03-19", outcome: "pain_present", evidence: "stated" }],
+    changes: [{ on: "2034-03-19", change: "worse" }],
+    doms,
+  });
+  assert.equal(gotWorse.band, "red", "the DOMS reading can never survive the athlete saying it got worse");
+});
+
+test("a systemic report drives no movement band, and one movement's band is its own", () => {
+  const squat = repo.findExercise("Back Squat");
+  const bench = repo.findExercise("Bench Press");
+  const systemic = repo.reportTrainingSymptom({
+    area_text: "everything feels off",
+    onset_on: "2034-04-01",
+    scope: "systemic",
+  });
+  repo.recordMovementTolerance({
+    symptom_event_id: systemic.id,
+    movement: "Back Squat",
+    exercise_id: squat.id,
+    observed_on: "2034-04-02",
+    pain_free: false,
+  });
+  assert.equal(
+    painBandForMovement({ id: squat.id, name: "Back Squat", muscle_group: "quads" }, "2034-04-03"),
+    null,
+    "a watch that names no place can never load one lift"
+  );
+
+  const knee = repo.reportTrainingSymptom({ area_text: "left knee", onset_on: "2034-04-05" });
+  repo.recordMovementTolerance({
+    symptom_event_id: knee.id,
+    movement: "Back Squat",
+    exercise_id: squat.id,
+    observed_on: "2034-04-06",
+    pain_free: false,
+  });
+  assert.equal(
+    painBandForMovement({ id: squat.id, name: "Back Squat", muscle_group: "quads" }, "2034-04-07").band,
+    "amber"
+  );
+  assert.equal(
+    painBandForMovement({ id: bench.id, name: "Bench Press", muscle_group: "chest" }, "2034-04-07"),
+    null,
+    "one hurting movement never speaks for another"
+  );
 });
