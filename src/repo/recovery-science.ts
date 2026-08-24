@@ -72,7 +72,13 @@ export interface HrvTrendRead {
  * this and the observation that voices it can never disagree.
  */
 export function hrvTrendRead(recovery: any, bar: number): HrvTrendRead | null {
-  const delta = Number(recovery?.delta?.hrv);
+  // `delta.hrv` is NULL exactly when getRecoverySummary's sample floors refused the
+  // comparison — that null IS the floor, and it must reach here as "no read". Coercing
+  // first would turn it into 0, a finite number that reads "steady", and a thin series
+  // would speak as supportive evidence. Absent data fires nothing.
+  const raw = recovery?.delta?.hrv;
+  if (raw == null) return null;
+  const delta = Number(raw);
   if (!Number.isFinite(delta)) return null;
   const sd = Number(recovery?.dispersion?.hrv);
   return {
