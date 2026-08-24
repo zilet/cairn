@@ -425,7 +425,12 @@ export const PROMPT_CONTEXT_SITES = {
   // so nothing is dropped here on purpose. It still benefits from the shared
   // per-set field projection below (~20 KB). The narrow capture lane has its own
   // purpose-built slice in prompt/chat.ts and never reaches this path.
-  chat: { keys: ALL_KEYS, sessions: SESSIONS_FULL },
+  //
+  // `typical_training_hour` is added on top of ALL_KEYS rather than folded into a
+  // shared bundle: only chat's PROGRESSIVE UNDERSTANDING text names it (the thing
+  // it must consult before asking when the athlete trains), so no other site earns
+  // it under this file's own allowlist rule.
+  chat: { keys: [...ALL_KEYS, "typical_training_hour"], sessions: SESSIONS_FULL },
 
   // The lab review. Leads with its own PRIORITY MARKERS + MARKER HISTORY blocks, and
   // reasons across labs, body composition, training, nutrition, goals and life context.

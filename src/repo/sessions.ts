@@ -2439,3 +2439,48 @@ function composePace(ws: any): { status: "on" | "behind" | "fast" | null; label:
   else if (raw === "drifting_down") tail = " — drifting down a little";
   return { status, label: `${phrase}${tail}` };
 }
+
+// Round W2.2: chat used to ASK when the athlete typically trains even though the
+// answer is sitting right in session timestamps — the model must consult data it
+// has before asking. The most common hour (by session count) over recent sessions,
+// bucketed into a plain part-of-day label. Thin history (fewer than the floor) reads
+// as absent, never guessed — chat is still free to ask once, same as any other gap.
+const TYPICAL_TRAINING_HOUR_MIN_SESSIONS = 5;
+const TYPICAL_TRAINING_HOUR_LOOKBACK = 60;
+
+export interface TypicalTrainingHour {
+  hour: number; // 0-23, the most common hour sessions were logged
+  sessions: number; // how many recent sessions informed this
+  label: string; // "early morning" | "morning" | "midday" | "afternoon" | "evening" | "night"
+}
+
+function trainingHourLabel(hour: number): string {
+  if (hour < 6) return "night";
+  if (hour < 9) return "early morning";
+  if (hour < 12) return "morning";
+  if (hour < 15) return "midday";
+  if (hour < 18) return "afternoon";
+  return "evening";
+}
+
+export function typicalTrainingHour(lookback = TYPICAL_TRAINING_HOUR_LOOKBACK): TypicalTrainingHour | null {
+  const rows = db
+    .prepare(`SELECT created_at FROM sessions WHERE created_at IS NOT NULL ORDER BY id DESC LIMIT ?`)
+    .all(Math.max(1, Math.trunc(lookback))) as any[];
+  if (rows.length < TYPICAL_TRAINING_HOUR_MIN_SESSIONS) return null; // thin history — absent, never a guess
+  const counts = new Map<number, number>();
+  for (const r of rows) {
+    const hh = Number(String(r.created_at ?? "").slice(11, 13));
+    if (Number.isFinite(hh) && hh >= 0 && hh <= 23) counts.set(hh, (counts.get(hh) ?? 0) + 1);
+  }
+  if (!counts.size) return null;
+  let hour = 0;
+  let best = -1;
+  for (const [h, c] of counts) {
+    if (c > best) {
+      best = c;
+      hour = h;
+    }
+  }
+  return { hour, sessions: rows.length, label: trainingHourLabel(hour) };
+}

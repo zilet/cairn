@@ -81,7 +81,7 @@ import { CADENCE_WINDOW_DAYS, classifyWearPattern, type WearPattern } from "./se
 import { sensorAgeDays } from "./sensor-freshness.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { readAdherenceModel } from "./brain/read-adherence.js";
-import { getProgress, getRecentSessions, vouchedRunCompliance } from "./sessions.js";
+import { getProgress, getRecentSessions, typicalTrainingHour, vouchedRunCompliance } from "./sessions.js";
 import { symptomAreaKey } from "./symptom-area.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import { addDaysISO, localDateISO, nowContext } from "./shared.js";
@@ -619,6 +619,7 @@ function buildPersonSlice(
   | "learned_models"
   | "what_works_for_you"
   | "context_today"
+  | "typical_training_hour"
 > {
   const { profile, locationView, trainingIntentView, contextEventsView, contextTodayView } = signals;
   return {
@@ -675,6 +676,9 @@ function buildPersonSlice(
     // Active life-context effect (a late concert / travel / illness mentioned once) →
     // expect worse sleep / a transient inflammation bump (don't alarm) / plan around it.
     context_today: contextTodayView,
+    // The most common hour recent sessions were logged, so chat can answer "when do
+    // you usually train?" from data instead of asking. Null on thin history.
+    typical_training_hour: typicalTrainingHour(),
   };
 }
 
