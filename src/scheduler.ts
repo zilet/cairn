@@ -296,6 +296,11 @@ export function startScheduler() {
       const result = applyDueAnnouncedDecisions(today);
       if (result.applied.length)
         console.log(`[brain] applied ${result.applied.length} announced change(s) at their natural boundary.`);
+      // Also not a failure: the draft's evidence had moved, so the producing op was
+      // re-run against the current picture and the replacement is in the ledger under
+      // its own freshly earned tier. Nobody was asked to adjudicate a diff.
+      if (result.regenerated.length)
+        console.log(`[brain] regenerated ${result.regenerated.length} stale draft(s) against current evidence.`);
       // A refusal, not a failure: the change was judged against the evidence in force
       // on the day it came due, declined, and given a receipt. It never reaches the
       // async-failure counter, which exists to say something is broken.

@@ -863,3 +863,212 @@ test("a stale nutrition_target is held for review rather than quiet-applied", ()
   assert.deepEqual(result.decision.context.proposal_freshness.changed_components, ["nutrition"]);
   assert.equal(repo.getProposal(Number(proposal.id)).status, "draft");
 });
+
+// ---- REGENERATE, DON'T ASK ---------------------------------------------------
+//
+// The two evidence-staleness holds above (compare-and-set at apply time, and the
+// same gate at the apply boundary) used to hand the athlete a fingerprint diff and
+// ask them to adjudicate it. When the producing op is deterministic and its inputs
+// are still on the row, the draft is REGENERATED against current evidence instead —
+// once, and never in a loop. The floors that belong to the athlete are untouched.
+
+// A plan item with NO target and real logged work: nextPrescription reads it as a
+// re-grounding hold, which buildProgressionProposal emits as a genuine change. It is
+// the smallest stable auto-progression fixture that produces a draft every time.
+function seedRegroundableDay(name = "Regen Bench Press") {
+  repo.savePlanDay(1, "Push", "Chest", [
+    { exercise: name, sets: 3, rep_low: 8, rep_high: 10, target_weight: null },
+  ]);
+  for (const back of [8, 2])
+    for (let setNum = 1; setNum <= 3; setNum++)
+      repo.logSetByName({
+        exercise: name,
+        weight: 95,
+        reps: 9,
+        rir: 1,
+        set_number: setNum,
+        date: addDaysISO(localDateISO(), -back),
+      });
+  return name;
+}
+
+function regenerationReceipts() {
+  return repo
+    .listBrainDecisions({ limit: 200 })
+    .filter((decision) => decision.context?.regeneration_receipt === true);
+}
+
+test("a stale auto-progression draft is regenerated against current evidence, not turned into an ask", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const exercise = seedRegroundableDay();
+  const draft = repo.buildProgressionProposal(1);
+  assert.equal(draft.ok, true, "the fixture produces a real auto-progression draft");
+
+  // The picture moves under the waiting draft — exactly the situation that used to ask.
+  repo.logSetByName({
+    exercise,
+    weight: 95,
+    reps: 9,
+    rir: 1,
+    set_number: 1,
+    date: addDaysISO(localDateISO(), -1),
+  });
+  assert.equal(repo.verifyProposalEvidenceFreshness(draft.proposal.parsed, localDateISO()).status, "changed");
+
+  const result = applyProposalWithAutonomy(Number(draft.proposal.id), { requested_tier: "quiet_apply" });
+  assert.equal(result.regenerated, true, "the producer was re-run instead of the athlete being asked");
+  assert.equal(result.review_required, undefined, "no ask was created");
+  assert.ok(result.regenerated_proposal_id > 0);
+  assert.notEqual(result.regenerated_proposal_id, Number(draft.proposal.id));
+  assert.equal(repo.getProposal(Number(draft.proposal.id)).status, "superseded");
+
+  // The replacement was written against the picture as it stands, so it LANDS — at a
+  // tier earned by policy at that moment, never inherited from the draft it replaced.
+  assert.equal(result.ok, true);
+  assert.equal(result.tier, "quiet_apply");
+  assert.equal(repo.getProposal(result.regenerated_proposal_id).status, "applied");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 95, "the fresh read reached the plan");
+
+  // …and the receipt says why, naming the components that moved.
+  const receipts = regenerationReceipts();
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].status, "superseded");
+  assert.equal(receipts[0].action.proposal_id, Number(draft.proposal.id));
+  assert.equal(receipts[0].action.regenerated_proposal_id, result.regenerated_proposal_id);
+  assert.deepEqual(receipts[0].context.changed_components, ["training"]);
+  assert.equal(receipts[0].context.regenerated_reason, "evidence_moved");
+  assert.match(receipts[0].rationale, /training/i);
+  assert.equal(
+    repo.listBrainDecisions({ status: "review", limit: 50 }).length,
+    0,
+    "nothing was left for the athlete to adjudicate"
+  );
+});
+
+test("a stale draft at the apply boundary regenerates, and the retired decision points at its replacement", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const exercise = seedRegroundableDay();
+  const draft = repo.buildProgressionProposal(1);
+  assert.equal(draft.ok, true);
+  const scheduled = applyProposalWithAutonomy(Number(draft.proposal.id), { requested_tier: "announce" });
+  assert.equal(scheduled.announced, true);
+
+  repo.logSetByName({
+    exercise,
+    weight: 95,
+    reps: 9,
+    rir: 1,
+    set_number: 1,
+    date: addDaysISO(localDateISO(), -1),
+  });
+
+  const boundary = applyDueAnnouncedDecisions(scheduled.effective_date);
+  assert.deepEqual(boundary.regenerated, [scheduled.decision.id], "the boundary rewrote it rather than parking it");
+  assert.deepEqual(boundary.failed, []);
+  const retired = repo.getBrainDecision(scheduled.decision.id);
+  assert.equal(retired.status, "superseded");
+  assert.equal(repo.getProposal(Number(draft.proposal.id)).status, "superseded");
+
+  const receipt = regenerationReceipts()[0];
+  assert.ok(receipt, "the boundary regeneration left a receipt");
+  const replacementDecisionId = receipt.action.regenerated_decision_id;
+  assert.ok(replacementDecisionId > 0, "the replacement earned its own ledger row");
+  assert.equal(retired.superseded_by, replacementDecisionId, "the retired row points at what replaced it");
+  assert.equal(receipt.superseded_by, replacementDecisionId);
+  assert.equal(
+    repo.listBrainDecisions({ status: "review", limit: 50 }).length,
+    0,
+    "no ask row was created at the boundary"
+  );
+});
+
+test("churning evidence falls back to the hold: exactly one regeneration per draft, never a loop", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const exercise = seedRegroundableDay();
+  const draft = repo.buildProgressionProposal(1);
+  assert.equal(draft.ok, true);
+
+  // A live session today with logged work is what makes a quiet apply WAIT for the
+  // next boundary — which is how the replacement stays a live draft to go stale again.
+  repo.logSetByName({ exercise, weight: 95, reps: 9, rir: 1, set_number: 1, date: localDateISO() });
+
+  const first = applyProposalWithAutonomy(Number(draft.proposal.id), { requested_tier: "quiet_apply" });
+  assert.equal(first.regenerated, true);
+  assert.equal(first.pending, true, "the replacement waits for the next boundary");
+  const replacementId = first.regenerated_proposal_id;
+
+  // The picture moves AGAIN, under the replacement this time.
+  repo.logSetByName({ exercise, weight: 95, reps: 9, rir: 1, set_number: 2, date: localDateISO() });
+
+  const boundary = applyDueAnnouncedDecisions(first.effective_date);
+  assert.deepEqual(boundary.regenerated, [], "a replacement that goes stale is held, never regenerated again");
+  assert.deepEqual(boundary.failed, [first.decision.id]);
+  const held = repo.getBrainDecision(first.decision.id);
+  assert.equal(held.status, "review");
+  assert.equal(held.context.review_reason_code, "stale_snapshot");
+  assert.equal(repo.getProposal(replacementId).status, "draft");
+  assert.equal(regenerationReceipts().length, 1, "exactly one regeneration attempt was recorded");
+});
+
+test("a clinical stale draft still asks — regeneration never crosses the clinician floor", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const exercise = seedRegroundableDay();
+  const draft = repo.buildProgressionProposal(1);
+  assert.equal(draft.ok, true);
+  repo.logSetByName({
+    exercise,
+    weight: 95,
+    reps: 9,
+    rir: 1,
+    set_number: 1,
+    date: addDaysISO(localDateISO(), -1),
+  });
+
+  const result = applyProposalWithAutonomy(Number(draft.proposal.id), { clinical: true });
+  assert.equal(result.regenerated, undefined, "a clinical decision is the athlete's, not the system's to rewrite");
+  assert.equal(result.review_required, true);
+  assert.equal(result.tier, "clinician");
+  assert.equal(result.review_reason_code, "stale_snapshot");
+  assert.equal(repo.getProposal(Number(draft.proposal.id)).status, "draft");
+  assert.equal(regenerationReceipts().length, 0);
+});
+
+test("a user-locked stale draft still asks, and review_everything regenerates nothing", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const exercise = seedRegroundableDay();
+  const locked = repo.buildProgressionProposal(1);
+  assert.equal(locked.ok, true);
+  repo.logSetByName({
+    exercise,
+    weight: 95,
+    reps: 9,
+    rir: 1,
+    set_number: 1,
+    date: addDaysISO(localDateISO(), -1),
+  });
+  const lockedResult = applyProposalWithAutonomy(Number(locked.proposal.id), { user_locked: true });
+  assert.equal(lockedResult.regenerated, undefined);
+  assert.equal(lockedResult.review_required, true);
+  assert.equal(repo.getProposal(Number(locked.proposal.id)).status, "draft");
+
+  repo.setSettings({ lead_mode: "review_everything" });
+  const posture = applyProposalWithAutonomy(Number(locked.proposal.id), {});
+  assert.equal(posture.regenerated, undefined, "the athlete asked to see everything; nothing is rewritten for them");
+  assert.equal(posture.review_required, true);
+  assert.equal(regenerationReceipts().length, 0);
+  repo.setSettings({ lead_mode: "lead" });
+});
+
+test("an agent-authored stale draft has no mechanical producer, so its hold is unchanged", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedPlan();
+  const proposal = createFreshnessProposal("agent authored");
+  repo.logSetByName({ exercise: "Temporal Bench Press", weight: 100, reps: 8, rir: 2, date: localDateISO() });
+
+  const result = applyProposalWithAutonomy(Number(proposal.id), { requested_tier: "quiet_apply" });
+  assert.equal(result.regenerated, undefined, "nothing is invented for a producer that cannot be re-run");
+  assert.equal(result.review_required, true);
+  assert.equal(result.review_reason_code, "stale_snapshot");
+  assert.equal(repo.getProposal(Number(proposal.id)).status, "draft");
+  assert.equal(regenerationReceipts().length, 0);
+});

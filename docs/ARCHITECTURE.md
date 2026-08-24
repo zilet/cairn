@@ -1756,6 +1756,26 @@ this week" into something the athlete has to answer. Termination stays with the 
 decisions through today's policy, skipping anything held behind a floor and stamping
 `thaw_attempted` so each is retried once rather than every sweep.
 
+**REGENERATE, DON'T ASK — the two evidence-staleness holds no longer produce an ask.** A draft whose
+compare-and-set snapshot moved, or that simply waited past its age horizon, was parking as an `ask`
+describing `changed_components` — handing the athlete an evidence diff they never saw and asking them
+to adjudicate arithmetic the system did (in production 43 of 54 ask-tier decisions expired
+unanswered). Both holds — at apply time in `applyProposalWithAutonomy()` and again at the boundary in
+`applyDueAnnouncedDecisions()` — now first try `attemptStaleDraftRegeneration()`: the PRODUCING op is
+re-run against current evidence, the stale draft is retired with a receipt naming what moved
+(`context.regeneration_receipt`, `action.regenerated_proposal_id`, `superseded_by` pointing at the
+replacement's decision), and the replacement goes back through the whole pipeline earning its tier
+fresh — it never inherits the stale draft's. `applyDueAnnouncedDecisions()` returns those in a
+`regenerated` list, which is neither a failure nor a refusal. Which producers qualify is
+`src/domain/brain/draft-regeneration.ts` alone: only DETERMINISTIC, offline ops whose inputs are still
+on the row (`auto-progression` by day, `auto-run-plan`, `volume-restore` by cause). An agent-authored
+draft cannot be re-run without spawning a CLI mid-tick and inventing the inputs it was given, so those
+producers keep their existing holds — and so do the asks that are genuinely the athlete's (clinical,
+`user_locked`, the `review_everything` posture, and any explicit current-turn request). The bound is
+ONE regeneration per draft: the receipt is the durable lineage record
+(`regenerationReceiptForDraft()`), so a replacement that goes stale in its turn falls back to the
+ordinary hold and evidence churn can never loop.
+
 **Training volume has no ladder back up, so a cut has to be owed back.** Progressive overload only
 ever moves load and reps; nothing in the push ladder can raise a plan item's `sets`, so a repeated
 fuel-protection deload (`applyFuelProtection`, `src/repo/progression.ts`) used to halve it forever —
