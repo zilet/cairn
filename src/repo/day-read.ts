@@ -29,6 +29,7 @@ import {
   type RestOverrideSoftening,
 } from "./brain/read-adherence.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
+import { RECOVERY_SAMPLE_FLOOR, recoveryTrendBars } from "./recovery-trend.js";
 import { activeContextEffect } from "./context-effect.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { estimateExpenditure } from "./expenditure.js";
@@ -1822,7 +1823,7 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
     // Recovery is NOT memoized under getCoachContext's `recovery:14` key: that key
     // holds a summary built over an explicitly-passed Garmin window, and silently
     // seeding it from here would let a differently-scoped fetch win the race.
-    const recovery = provided.recovery ?? signalInput(() => getRecoverySummary(14), null);
+    const recovery = provided.recovery ?? signalInput(() => getRecoverySummary(14, undefined, date), null);
     // Today keeps the BARE memo keys below — they ARE getCoachContext's, and sharing
     // them is what keeps one Brief request from building these expensive producers
     // twice no matter which consumer asks first. A read of an EARLIER date gets its
@@ -2134,9 +2135,11 @@ export function dayRead(
 
   // Recovery signal (unified). "clearly low" = short sleep or a low subjective
   // check-in for the day. All optional — absent signals never force rest. The
-  // window is always "last 14 days from now" (date-independent), so a caller that
-  // already has it (getCoachContext) can pass it in to avoid a redundant fetch.
-  const rec = recovery ?? getRecoverySummary(14);
+  // window is the 14 days ending on the day being read — a past-dated read must
+  // not see wearables that arrived after it. A caller that already has the
+  // matching summary (getCoachContext, for today) can pass it in to avoid a
+  // redundant fetch.
+  const rec = recovery ?? getRecoverySummary(14, undefined, d);
   const checkin = getCheckinByDate(d) as any;
   // "Last night" must actually be RECENT. A wearable can stop syncing sleep for weeks
   // (a 25-day-old night is not last night), and feeding a stale night to the Brief is
@@ -2148,10 +2151,21 @@ export function dayRead(
   // second caller cannot forget it the way an outside gate invited.
   const lastNight = latestSleep(SENSOR_MAX_AGE_DAYS.sleep, d);
   const avgSleepMin = rec?.recovery?.avg_sleep_min ?? null;
-  const lowSleep = avgSleepMin != null && avgSleepMin > 0 && avgSleepMin < 360; // <6h average
+  const sleepQuality = rec?.quality?.sleep_min ?? rec?.recovery?.quality?.sleep_min ?? null;
+  const sleepSamples = Number(sleepQuality?.sample_count);
+  // A 14-day mean with n=1 is not a chronic pattern — the neighbouring delta
+  // block already refuses to compare below this floor. Missing a genuine chronic
+  // case is acceptable; absence reads neutral.
+  const sleepMeanReady = Number.isFinite(sleepSamples) && sleepSamples >= RECOVERY_SAMPLE_FLOOR;
+  const lowSleep = avgSleepMin != null && avgSleepMin > 0 && avgSleepMin < 360 && sleepMeanReady;
   const freshShortSleep =
     lastNight?.total_min != null && Number(lastNight.total_min) > 0 && Number(lastNight.total_min) < 360;
   const corroboratedLowSleep = lowSleep && freshShortSleep;
+  // Chronic watch / train-day caveat: the mean is real AND a current night exists
+  // so the window is not a stale leftover. Last night being SHORT as well is the
+  // REST path (`corroboratedLowSleep` / acute_sleep_corroborated) and would make
+  // these two rules unreachable if they shared that predicate.
+  const chronicLowSleep = lowSleep && lastNight != null;
   const lowSubjective =
     checkin &&
     ((checkin.energy != null && checkin.energy <= 2) || (checkin.sleep_feel != null && checkin.sleep_feel <= 2));
@@ -2164,18 +2178,14 @@ export function dayRead(
   // you'll likely want a reset"). Null-safe: no baseline → no anticipation.
   const dl = rec?.delta ?? null;
   let recoveryDrift = 0; // count of signals pointing the wrong way vs the athlete's own norm
-  // HRV running meaningfully below baseline (>~5% of baseline) is a fatigue tell.
-  if (
-    dl?.hrv != null &&
-    rec?.baseline?.hrv != null &&
-    rec.baseline.hrv > 0 &&
-    dl.hrv < -Math.max(2, rec.baseline.hrv * 0.05)
-  )
+  const trendBars = recoveryTrendBars(rec?.baseline);
+  // HRV running meaningfully below baseline is a fatigue tell.
+  if (dl?.hrv != null && rec?.baseline?.hrv != null && rec.baseline.hrv > 0 && dl.hrv < -trendBars.hrv)
     recoveryDrift++;
-  // Resting HR running above baseline (>~2 bpm) the same way.
-  if (dl?.rhr != null && dl.rhr > 2) recoveryDrift++;
+  // Resting HR running above the athlete's own norm the same way.
+  if (dl?.rhr != null && dl.rhr > trendBars.rhr) recoveryDrift++;
   // Sleep running short vs their norm.
-  if (dl?.sleep != null && dl.sleep < -25) recoveryDrift++;
+  if (dl?.sleep != null && dl.sleep < -trendBars.sleep) recoveryDrift++;
   // Acute training load is a CURRENT number the coach reasons and speaks from, but
   // `getRecoverySummary` resolves it as "the newest non-null row in the last 14 days"
   // — so a watch that stopped syncing kept handing the prompt a fortnight-old load as
@@ -3008,7 +3018,7 @@ export function dayRead(
         // rolling average sat under six hours was never offered a due plan day at all
         // — permanent rest traded for permanent easy. The watch still gets voiced (and
         // the rule survives below, for a day with nothing programmed to soften).
-        if (lowSleep) caveats.push(pickDayVariant(LOW_SLEEP_CAVEAT, d, "planned_training:low_sleep"));
+        if (chronicLowSleep) caveats.push(pickDayVariant(LOW_SLEEP_CAVEAT, d, "planned_training:low_sleep"));
         const holdAggression = signalState.action.directives.training === "hold_aggression";
         // Same rule as the protect read above: the athlete hears the athlete voice,
         // never the machine-facing summary. This is the second (and only other) path by
@@ -3172,7 +3182,7 @@ export function dayRead(
         // The chronic-sleep watch, DEMOTED below the plan day it used to preempt: it
         // now only speaks when there is no session to caveat, where it still beats the
         // bare unprogrammed floor at explaining why today reads easy.
-        if (!lowSleep) return null;
+        if (!chronicLowSleep) return null;
         return {
           outcome: DAY_READ_OUTCOMES.chronic_sleep_watch,
           read: {

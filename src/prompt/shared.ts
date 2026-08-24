@@ -7,6 +7,7 @@ import * as repo from "../repo.js";
 import { extractJson } from "../agents.js";
 import type { CoachContext, PartialCoachContext } from "../repo/coach-context.js";
 import { type SensorSignal, sensorIsCurrent } from "../repo/sensor-freshness.js";
+import { RECOVERY_SAMPLE_FLOOR } from "../repo/recovery-trend.js";
 import { localDateISO } from "../repo/shared.js";
 
 // getCoachContext deliberately describes the host's current local day. Dated
@@ -623,10 +624,21 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     if (rec.avg_respiration != null) bits.push(`respiration ~${rec.avg_respiration}/min`);
     if (rec.avg_spo2 != null) bits.push(`SpO2 ~${rec.avg_spo2}%`);
     if (skinTempDev != null) bits.push(`skin-temp dev ${skinTempDev > 0 ? "+" : ""}${skinTempDev}°C`);
-    if (rec.avg_training_readiness != null) {
-      const tr = Math.round(rec.avg_training_readiness);
+    const trQuality = quality?.training_readiness;
+    const trSamples = Number(trQuality?.sample_count);
+    const trAvg = rec.avg_training_readiness;
+    // Same freshness law as day-read: a stale readiness reading is absent, never
+    // present-tense "low training readiness". A thin average is the same — the
+    // delta block already refuses to compare below this floor.
+    if (
+      trAvg != null &&
+      sensorIsCurrent("training_readiness", trQuality?.latest_date ?? null, asOf) &&
+      Number.isFinite(trSamples) &&
+      trSamples >= RECOVERY_SAMPLE_FLOOR
+    ) {
+      const tr = Math.round(trAvg);
       const word = tr < 40 ? "low" : tr <= 65 ? "moderate" : "high";
-      bits.push(`${word} training readiness`);
+      bits.push(`${word} training readiness${nOf("training_readiness")}`);
     }
     if (acuteLoad != null) bits.push(`acute training load ~${Math.round(acuteLoad)}`);
     if (vo2max != null) bits.push(`VO2max ${vo2max}`);
@@ -1063,24 +1075,24 @@ export function renderProgramState(ctx: PartialCoachContext, opts: { brief?: boo
   const st = ctx?.program_state as any;
   const bal = ctx?.program_balance as any;
   const adj = Array.isArray(ctx?.program_adjustments) ? ctx.program_adjustments : [];
-  if (!st && !bal && !adj.length) return "";
+  // ACUTE recovery — the gate, not the 2-day recency window. `recent_load` only
+  // REPORTS groups touched inside that window, so a group the deterministic gate
+  // is still holding (a 3-day-old saturating ride) never appeared in the block
+  // whose header says "do NOT program these". Saturated groups only, so the
+  // prompt does not bloat with every residual.
+  const gates: any[] = Array.isArray(ctx?.acute_gates) ? (ctx.acute_gates as any[]) : [];
+  const recovering = gates.filter((g: any) => g?.saturated);
+  if (!st && !bal && !adj.length && !recovering.length) return "";
   const lines: string[] = [];
 
   // Headline — the one-sentence program read, always safe to show.
   if (st?.headline) lines.push(`PROGRAM STATE (deterministic read of the logged history — evidence for the block focus above; plain words, no scores): ${st.headline}`);
 
-  // ACUTE recovery — which muscles are smoked from the last day or two (a long
-  // ride/run that never touched logged_sets, or a heavy session). The coach must
-  // plan AROUND these, never recommend them for the next session even when the
-  // weekly ledger says they're due. This is the connected read that keeps the
-  // next-day pick honest (legs are toast after a 3 h ride → train something fresh).
-  const recentLoad: any[] = Array.isArray(ctx?.recent_load) ? ctx.recent_load as any[] : [];
-  const heavy = recentLoad.filter((r: any) => r?.heavy);
-  const recoveringSet = new Set<string>(heavy.map((r: any) => String(r.group)));
+  const recoveringSet = new Set<string>(recovering.map((r: any) => String(r.group)));
   let recoveringLine = "";
-  if (heavy.length) {
+  if (recovering.length) {
     const groups = [...recoveringSet];
-    const lead = heavy.find((r: any) => r.activity) ?? heavy[0];
+    const lead = recovering.find((r: any) => r.activity) ?? recovering[0];
     const ago = (d: number) => (d <= 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`);
     const cause = lead?.activity
       ? `${lead.detail ? `${lead.detail} ` : ""}${lead.activity} ${ago(Number(lead.days_ago) || 0)}`

@@ -115,7 +115,14 @@ import {
   enduranceOverlapsMovement,
 } from "./daily-reconciliation.js";
 
-export { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
+export {
+  loadPhrase,
+  recentMuscleLoad,
+  muscleLoadPayload,
+  type RecentLoad,
+  type MuscleLoadPayload,
+  type MuscleLoadGroup,
+} from "./hybrid-load.js";
 
 // ---- progression-step caps (mirrors applyProposal's clamp intent, tighter) ---
 // A per-session step is a SMALL earned nudge, never a jump. The cap is the

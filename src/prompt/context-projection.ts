@@ -68,6 +68,7 @@ const TRAINING_FULL = [
   "program_balance",
   "program_adjustments",
   "recent_load",
+  "acute_gates",
   "strength_journey",
   "groups_trajectory",
   "test_week",

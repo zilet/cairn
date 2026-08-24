@@ -51,6 +51,23 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const REF = "2026-03-15";
 const dayBefore = (base, n) => new Date(new Date(base + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
 
+// A 14-day sleep mean only speaks once it has the same sample floor as the
+// neighbouring delta block, and a current night so the window is not a stale leftover.
+function sleepMean(avgMin, extra = {}) {
+  return {
+    has_data: true,
+    recovery: { avg_sleep_min: avgMin, ...(extra.recovery || {}) },
+    quality: {
+      sleep_min: { sample_count: extra.samples ?? 5, expected_days: 14, window_days: 14, freshness: "fresh" },
+      ...(extra.quality || {}),
+    },
+    ...(extra.delta ? { delta: extra.delta } : {}),
+  };
+}
+function seedCurrentNight(date, minutes = 420) {
+  return seedSleep(dayBefore(date, 1), minutes);
+}
+
 // Every rule now speaks in SEVERAL calm phrasings of the same judgement, rotated by
 // calendar day (a stable input used to print one literal forever). So a case pins the
 // rule's whole vocabulary, not the sentence that happened to land on this date.
@@ -537,9 +554,21 @@ test("poor recovery owns an injury-overlap day while the movement work-around su
   assert.doesNotMatch(r.why, /\bthe athlete\b/i);
 });
 
+test("a single short night does not claim a chronic sleep pattern", () => {
+  // n=1 used to be a legal mean: one 5-hour night in a fortnight printed "sleeping
+  // under six hours on average" and turned an unprogrammed day easy.
+  seedSleep(dayBefore(REF, 1), 300);
+  const r = repo.dayRead(REF, sleepMean(300, { samples: 1 }));
+  assert.equal(r.signals.low_sleep, false);
+  assert.notEqual(r.decision.rule_code, "chronic_sleep_watch");
+  assert.notEqual(r.decision.rule_code, "acute_sleep_corroborated");
+});
+
 test("a short rolling sleep average is a chronic EASY watch when nothing is programmed", () => {
   // A 14-day pattern matters, but it is not fresh evidence about this morning.
-  const r = repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 300 } }); // 5h
+  // Last night is current and NOT short, so the REST rule does not consume this.
+  seedCurrentNight(REF);
+  const r = repo.dayRead(REF, sleepMean(300)); // 5h mean, 7h last night
   assert.equal(r.kind, "easy");
   assert.equal(r.signals.low_sleep, true);
   assert.equal(r.decision.rule_code, "chronic_sleep_watch");
@@ -552,7 +581,8 @@ test("a chronically short sleeper is still OFFERED a due plan day, with the slee
   // traded for permanent easy. It is a caveat on the train read now, like a volume
   // spike: the concern is voiced, the athlete still gets their day.
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
-  const r = repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 300 } }); // 5h
+  seedCurrentNight(REF);
+  const r = repo.dayRead(REF, sleepMean(300)); // 5h mean, 7h last night
 
   assert.equal(r.kind, "train");
   assert.equal(r.focus, "Lower body");
@@ -628,17 +658,17 @@ test("a caution-led train day leads with the BRAKE's voice, never a support voic
 test("three caveats at once still compose into one grammatical sentence", () => {
   for (let i = 1; i <= 2; i++) seedTrainingDay(dayBefore(REF, i));
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  seedCurrentNight(REF);
   const r = repo.dayRead(
     REF,
-    {
-      has_data: true,
-      recovery: { avg_sleep_min: 300, exercise_min: 51, distance_km: 8.4 },
+    sleepMean(300, {
+      recovery: { exercise_min: 51, distance_km: 8.4 },
       delta: { rhr: 5 }, // recovery drifting the wrong way → the deload anticipation
       quality: {
         exercise_min: { latest_date: REF, source: "apple", freshness: "fresh", sample_count: 1 },
         distance_km: { latest_date: REF, source: "apple", freshness: "fresh", sample_count: 1 },
       },
-    },
+    }),
     undefined,
     // The second watch the hold has needed since the 2026-08-17 ruling. Fuelling adds
     // no caveat of its own here, so this is still exactly three caveats composing.
@@ -671,7 +701,7 @@ test("a fresh short night corroborating the short rolling average can suggest RE
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
   db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(dayBefore(REF, 1));
 
-  const r = repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 330 } });
+  const r = repo.dayRead(REF, sleepMean(330));
 
   assert.equal(r.kind, "rest");
   assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
@@ -696,7 +726,7 @@ test("a corroborated short night on an injury day still names the work-around", 
   });
   db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(dayBefore(REF, 1));
 
-  const r = repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 330 } });
+  const r = repo.dayRead(REF, sleepMean(330));
 
   assert.equal(r.kind, "rest");
   assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
@@ -1802,7 +1832,7 @@ test("the reading grammar also clears every sentence the live floor composes", (
   });
   const reads = [
     repo.dayRead(REF, { has_data: false, recovery: {} }),
-    repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 300 } }),
+    repo.dayRead(REF, sleepMean(300)),
     repo.dayRead(dayBefore(REF, 1), { has_data: true, recovery: { training_readiness: 20 } }),
   ];
   for (const read of reads) {
@@ -2174,7 +2204,7 @@ function pickIndexFor(key, span) {
 
 // The cross-day cases run on REAL recent dates on purpose: saveDayRead prunes rows
 // older than 21 days, so a fixed historical REF would delete its own history.
-const CHRONIC_SHORT_SLEEP = { has_data: true, recovery: { avg_sleep_min: 300 } }; // 5h nightly
+const CHRONIC_SHORT_SLEEP = sleepMean(300); // 5h nightly mean, sample-gated
 
 // Live the same unchanging day `n` times in a row, persisting each read the way the
 // real Brief does so the next morning can read yesterday back.
@@ -2182,6 +2212,9 @@ function liveConsecutiveDays(n, recovery = CHRONIC_SHORT_SLEEP) {
   const reads = [];
   for (let back = n - 1; back >= 0; back--) {
     const date = localDaysAgo(back);
+    // A current night that is NOT short, so the REST rule does not consume the
+    // chronic mean — the watch is about the pattern, not last night.
+    seedSleep(date, 420);
     const read = repo.dayRead(date, recovery);
     repo.saveDayRead(date, { ...read, headline: "Take it easy.", source: "deterministic", override: null });
     reads.push({ date, read });
@@ -2385,6 +2418,7 @@ test("a quiet stretch stops being the subject once they have actually moved toda
 });
 
 test("a day the Brief never saw breaks the quiet run (an unknown day is not a quiet day)", () => {
+  seedSleep(localDaysAgo(0), 420);
   const read = repo.dayRead(localDaysAgo(0), CHRONIC_SHORT_SLEEP);
   assert.equal(read.signals.continuity.quiet_streak, 0);
   assert.equal(read.signals.continuity.yesterday, null);
@@ -2408,7 +2442,8 @@ test("each reachable rule branch reports its own code and reason, never a generi
   assert.ok(UNPROGRAMMED_EASY_DAY.reasons.includes(bare.decision.reason));
 
   // Chronic short sleep with nothing programmed → the (demoted) sleep watch.
-  const chronic = record(repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 300 } }));
+  seedCurrentNight(REF);
+  const chronic = record(repo.dayRead(REF, sleepMean(300)));
   assert.equal(chronic.decision.rule_code, "chronic_sleep_watch");
 
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
@@ -2416,8 +2451,8 @@ test("each reachable rule branch reports its own code and reason, never a generi
   assert.equal(planned.decision.rule_code, "planned_training");
 
   // A corroborating fresh short night still reaches rest.
-  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(dayBefore(REF, 1));
-  const acute = record(repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 330 } }));
+  seedSleep(dayBefore(REF, 1), 300);
+  const acute = record(repo.dayRead(REF, sleepMean(330)));
   assert.equal(acute.decision.rule_code, "acute_sleep_corroborated");
   resetTables("daily_metrics");
 
@@ -2550,6 +2585,28 @@ test("recovery telemetry that cannot move the decision leaves the fingerprint al
     signals: { ...base.signals, endurance_volume: { last_week_km: 41, volume_spike: false } },
   };
   assert.equal(repo.dayReadInputFingerprint(REF, mileageOnly), before);
+});
+
+test("recoveryDrift uses the same norm-relative RHR bar as signal-state", () => {
+  for (let i = 1; i <= 2; i++) seedTrainingDay(dayBefore(REF, i));
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  // Shared bar is max(3, baseline * 0.05). A 50 bpm athlete's bar is 3 bpm; 2.5
+  // used to trip the flat `> 2` while signal-state said nothing was wrong.
+  const quiet = repo.dayRead(REF, {
+    has_data: true,
+    recovery: {},
+    baseline: { rhr: 50 },
+    delta: { rhr: 2.5 },
+  });
+  assert.equal(quiet.signals.fatigue.recovery_drift_signals, 0, "2.5 bpm is inside the shared bar");
+
+  const drifted = repo.dayRead(REF, {
+    has_data: true,
+    recovery: {},
+    baseline: { rhr: 50 },
+    delta: { rhr: 4 },
+  });
+  assert.equal(drifted.signals.fatigue.recovery_drift_signals, 1, "4 bpm clears the shared 3 bpm floor");
 });
 
 test("hybrid lookahead truth participates in the cache identity without hashing narration", () => {
@@ -2936,7 +2993,7 @@ test("a corroborated short night is fresh evidence about TODAY — history canno
   for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i));
   db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(dayBefore(REF, 1));
 
-  const r = repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 330 } });
+  const r = repo.dayRead(REF, sleepMean(330));
   assert.equal(r.kind, "rest");
   assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
   assert.equal(r.signals.outcome_feedback.active, true, "the pattern is there; the rule is simply out of reach");

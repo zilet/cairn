@@ -292,6 +292,12 @@ export interface CoachContextEnvelope {
   performance: CoachRecord | null;
   program_balance: CoachRecord | null;
   recent_load: CoachRecord[];
+  // Saturated groups from acuteGates() — the decision input the "do NOT program
+  // these" prompt block reads. `recent_load` stays the descriptive recency list
+  // (groups touched in the last two days); this is the gate, looking back over
+  // the residual's own window. Additive so a partial context builder never has
+  // to synthesize it.
+  acute_gates?: CoachRecord[];
   progression: CoachRecord[];
   strength_journey: CoachRecord | null;
   program_adjustments: CoachAdjustment[];
@@ -405,6 +411,7 @@ export const COACH_CONTEXT_ARRAY_KEYS = [
   "family",
   "supplements",
   "recent_load",
+  "acute_gates",
   "progression",
   "program_adjustments",
   "endurance_tests",

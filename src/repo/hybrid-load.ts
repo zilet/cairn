@@ -501,6 +501,75 @@ export function acuteGates(date = localDateISO()): Map<MuscleGroup, AcuteGateRea
   return out;
 }
 
+// The athlete-facing / prompt-facing gate: saturated groups only, with the INTERNAL
+// residual stripped. Callers that need the float read acuteGate() directly.
+export type AcuteGatePublic = Omit<AcuteGateReading, "residual">;
+
+export function saturatedGates(date = localDateISO()): AcuteGatePublic[] {
+  return [...acuteGates(date).values()]
+    .filter((g) => g.saturated)
+    .map(({ residual: _residual, ...rest }) => rest);
+}
+
+// What the Train overview (and MCP) consume: the recency window PLUS any group the
+// gate is still holding, so a Saturday ride still reads recovering on Monday even
+// though it sits outside the default 2-day list. `saturated` is the acuteGate
+// answer — consumers must not re-derive it from days_ago + heavy.
+export interface MuscleLoadGroup {
+  group: MuscleGroup;
+  last_date: string | null;
+  days_ago: number | null;
+  heavy: boolean;
+  saturated: boolean;
+  band: AcuteBand;
+  source: MuscleResidual["source"];
+  activity: string | null;
+  detail: string;
+}
+
+export interface MuscleLoadPayload {
+  days: number;
+  groups: MuscleLoadGroup[];
+}
+
+export function muscleLoadPayload(days = 2, date = localDateISO()): MuscleLoadPayload {
+  const window = Math.max(1, Math.min(7, Number(days) || 2));
+  const recent = recentMuscleLoad(window, date);
+  const gates = acuteGates(date);
+  const groups: MuscleLoadGroup[] = [];
+  const seen = new Set<MuscleGroup>();
+  for (const [group, load] of recent) {
+    const gate = gates.get(group);
+    groups.push({
+      group,
+      last_date: load.last_date,
+      days_ago: load.days_ago,
+      heavy: load.heavy,
+      saturated: gate?.saturated === true,
+      band: gate?.band ?? residualBand(0),
+      source: load.source,
+      activity: load.activity,
+      detail: load.detail,
+    });
+    seen.add(group);
+  }
+  for (const [group, gate] of gates) {
+    if (!gate.saturated || seen.has(group)) continue;
+    groups.push({
+      group,
+      last_date: gate.last_date,
+      days_ago: gate.days_ago,
+      heavy: true,
+      saturated: true,
+      band: gate.band,
+      source: gate.source,
+      activity: gate.activity,
+      detail: gate.detail,
+    });
+  }
+  return { days: window, groups };
+}
+
 // Drop the groups a "due" list should not be naming today, because they are still
 // carrying the work that made them tired. Volume balance answers "has this group
 // had enough work lately" over two WEEKS; the gate answers "can it take work
