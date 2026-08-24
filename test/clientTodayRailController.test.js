@@ -321,7 +321,10 @@ test("revision dismiss waits for durable acknowledgement and stays visible when 
   assert.equal(card.removed, false, "the UI does not claim durable dismissal before the request settles");
   await flushRailLoaders();
   assert.equal(card.removed, false, "a failed acknowledgement leaves the attention item available");
-  assert.deepEqual(calls, [["api", "/today-agenda/ack"]]);
+  // The surface-dismissal POST rides alongside as fire-and-forget: it is not awaited
+  // and swallows its own rejection, so a failing dismiss (this api stub answers
+  // {ok:false} to BOTH calls) leaves the durable ack path — and the card — untouched.
+  assert.deepEqual(calls, [["api", "/today-agenda/dismiss"], ["api", "/today-agenda/ack"]]);
 
   deps.api = async (path) => {
     calls.push(["api", path]);
@@ -332,7 +335,9 @@ test("revision dismiss waits for durable acknowledgement and stays visible when 
   await flushRailLoaders();
   assert.equal(card.removed, true);
   assert.deepEqual(calls, [
+    ["api", "/today-agenda/dismiss"],
     ["api", "/today-agenda/ack"],
+    ["api", "/today-agenda/dismiss"],
     ["api", "/today-agenda/ack"],
     ["collapse", card],
   ]);
