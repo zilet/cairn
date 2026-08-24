@@ -334,14 +334,16 @@ function tovMastHtml(data: TovData, rows: TovRow[]): string {
   const planned = CairnProgressData.number(stats.week_planned);
   const sets = CairnProgressData.number(stats.week_sets);
   const tonnage = CairnProgressData.number(stats.week_tonnage);
-  const streak = CairnProgressData.number(stats.streak);
+  // Honest continuity, not a streak: sessions / sets / load. A reset-on-miss
+  // consecutive-day count is the chain-you-fear-breaking mechanic the constitution
+  // rules out — §2/§6C of VISION.md. The deterministic streak value still exists
+  // in getWeeklyStats for agent context; it is not surfaced here.
   const stat = (n: string, l: string, cu?: number) =>
     `<div class="stat"><div class="stat-n"${cu != null ? ` data-cu="${cu}"` : ""}>${escHtml(n)}</div><div class="stat-l">${escHtml(l)}</div></div>`;
   const strip = [
     planned > 0 ? stat(`${done}/${planned}`, "sessions · week") : stat(String(done), "sessions · week"),
     stat(String(sets), "sets · 7d", sets),
     stat(tonnage >= 1000 ? `${(tonnage / 1000).toFixed(1)}k` : String(Math.round(tonnage)), "lb moved · 7d"),
-    streak > 1 ? stat(String(streak), "day streak", streak) : "",
   ].filter(Boolean).join("");
   return `<div class="tov-mast reveal" style="${stagger(0)}">
     <div class="lbl">This week</div>

@@ -45,7 +45,7 @@ function hstandBandTone(percentile: unknown): string {
 // A calm qualitative capacity word derived from an age-band percentile, using the
 // SAME thresholds as hstandBandTone (75 / 50) — the reading-grammar replacement for
 // the retired percentile fill bar (VISION.md Amendment 2 bans population-relative
-// geometry; the number lives on as prose in the read line). "" when there's no
+// geometry; the number feeds this ladder and never prints). "" when there's no
 // percentile to read.
 function hstandLevelWord(percentile: unknown): string {
   const value = Number(percentile);
@@ -57,7 +57,6 @@ function hstandCompHtml(comparison: HealthStandingPrimitiveComparison, sexWord: 
   const percentile = hstandPct(comparison.percentile);
   const tone = hstandBandTone(percentile);
   const value = comparison.value == null ? "—" : CairnHealthClient.formatMarkerNumber(comparison.value);
-  const verb = comparison.verb || "ahead of";
   const equivalentAge = Number(comparison.equivalent_age);
   const showEquivalent =
     !comparison.estimated &&
@@ -84,22 +83,27 @@ function hstandCompHtml(comparison: HealthStandingPrimitiveComparison, sexWord: 
     comparison.reference_age_band &&
     comparison.actual_age_band &&
     comparison.reference_age_band !== comparison.actual_age_band;
-  const referenceLine = referenceDiff && referencePercentile != null
-    ? `<div class="hstand-comp-ref lbl">vs your ${escHtml(comparison.reference_age_band)}: ${escHtml(verb)} ${referencePercentile}%</div>`
+  const referenceWord = hstandLevelWord(referencePercentile);
+  const referenceLine = referenceDiff && referenceWord
+    ? `<div class="hstand-comp-ref lbl">vs your ${escHtml(comparison.reference_age_band)}: ${escHtml(referenceWord)}</div>`
     : "";
   const reading = comparison.reading || {};
   const provenance = [
     comparison.source,
     reading.source ? `${String(reading.source)}${reading.date ? `, ${relAge(String(reading.date))}` : ""}` : "",
   ].filter(Boolean).join(" · ");
-  const levelChip = CairnUiReads.levelChipHtml({ label: hstandLevelWord(percentile) });
+  const levelWord = hstandLevelWord(percentile);
+  const levelChip = CairnUiReads.levelChipHtml({ label: levelWord });
+  const read = levelWord
+    ? `<div class="hstand-comp-read"><b>${escHtml(levelWord)}</b> among ${escHtml(sexWord)} your age</div>`
+    : "";
   return `<div class="hstand-comp hstand-comp-${tone}">
       <div class="hstand-comp-head">
         <span><b>${escHtml(comparison.label || comparison.key || "")}</b> <span class="lbl">${escHtml(value)}${comparison.unit ? ` ${escHtml(comparison.unit)}` : ""}</span></span>
         ${equivalentChip}
       </div>
       ${levelChip ? `<div class="hstand-comp-bar">${levelChip}</div>` : ""}
-      <div class="hstand-comp-read">${escHtml(verb)} <b>${percentile == null ? "—" : `${percentile}%`}</b> of ${escHtml(sexWord)} your age</div>
+      ${read}
       ${where}
       ${referenceLine}
       ${provenance ? `<div class="hstand-source lbl">${escHtml(provenance)}</div>` : ""}
@@ -121,18 +125,15 @@ function hstandRefSummaryHtml(
   const isPeers = actualDecade != null && Number(referenceAge) === Number(actualDecade);
   const head = isPeers
     ? `Among ${escHtml(sexWord)} your age`
-    : `If you stood among ${escHtml(sexWord)} in their ${escHtml(String(referenceAge))}s`;
+    : `Among ${escHtml(sexWord)} in their ${escHtml(String(referenceAge))}s`;
   const rows = list.map((comparison) => {
     const referencePercentile = hstandPct(comparison.reference_percentile);
-    const verb = comparison.verb || "ahead of";
-    // Qualitative level word in the middle column where the percentile bar was;
-    // the number stays as prose in the read column (Amendment 2: geometry banned,
-    // words allowed).
-    const levelChip = CairnUiReads.levelChipHtml({ label: hstandLevelWord(referencePercentile) });
+    const levelWord = hstandLevelWord(referencePercentile);
+    const levelChip = CairnUiReads.levelChipHtml({ label: levelWord });
     return `<div class="hstand-refsum-row">
         <span class="hstand-refsum-metric">${escHtml(comparison.label || comparison.key || "")}</span>
         <span class="hstand-refsum-bar">${levelChip}</span>
-        <span class="hstand-refsum-read">${escHtml(verb)} <b>${referencePercentile == null ? "—" : `${referencePercentile}%`}</b></span>
+        <span class="hstand-refsum-read">${levelWord ? `<b>${escHtml(levelWord)}</b>` : "—"}</span>
       </div>`;
   }).join("");
   return `<div class="hstand-refsum">

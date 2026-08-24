@@ -34,16 +34,14 @@ function pctClamp(value: unknown): number {
 }
 
 function capacityRowHtml(capacity: PerformanceCapacity, sexWord: string): string {
-  const pct = pctClamp(capacity.percentile);
   const sub: string[] = [];
   if (capacity.exercise) sub.push(escHtml(capacity.exercise));
   if (capacity.est_1rm) sub.push(`~${escHtml(String(capacity.est_1rm))} lb 1RM`);
-  // The population comparison lives on as PROSE only — never a percentile fill bar
-  // (VISION.md Amendment 2 bans population-relative geometry).
-  sub.push(`stronger than ${pct}% of ${escHtml(sexWord || "people")} your age`);
+  // Speak the strength-standards ladder word — never a population-percentile
+  // number (VISION.md Amendment 2). The percentile still feeds levelForPercentile
+  // on the server; it just never prints.
+  if (capacity.level) sub.push(`${escHtml(capacity.level)} among ${escHtml(sexWord || "people")} your age`);
   if (capacity.to_next) sub.push(`+${escHtml(String(capacity.to_next.lb))} lb → ${escHtml(capacity.to_next.level)}`);
-  // The qualitative strength-standards level word, on the shared level chip — the
-  // reading-grammar replacement for the retired percentile bar/mark geometry.
   const chip = CairnUiReads.levelChipHtml({ label: capacity.level });
   return `<div class="pcap">
     <div class="pcap-top"><span class="pcap-label">${escHtml(capacity.label)}</span>${chip}</div>

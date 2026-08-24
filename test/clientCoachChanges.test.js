@@ -15,6 +15,11 @@ test("Plan Changes is history-first and keeps manual reviews secondary", () => {
   assert.match(source, /<summary class="lbl">Manual review<\/summary>/);
   assert.ok(source.indexOf("Program change history") < source.indexOf("Manual review"));
   assert.match(source, /state\.planSeg = "coach"/, "the internal review route remains stable");
+  assert.match(source, /id="runbtn" class="pillbtn pill-accent"/);
+  assert.match(source, /Ask team to review program/);
+  assert.match(source, /id="mealbtn" class="pillbtn pill-accent"/);
+  assert.match(source, /Ask team to refresh meals/);
+  assert.doesNotMatch(source, /ASK TEAM TO REVIEW PROGRAM|ASK TEAM TO REFRESH MEALS|class="logbtn"/);
 });
 
 test("meal-plan Hold and Undo use the durable decision rollback path", () => {

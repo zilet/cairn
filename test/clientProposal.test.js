@@ -136,6 +136,11 @@ test("proposal helper renders Coach proposal list with actions, folds, and escap
 
   assert.match(html, /data-apply="draft&lt;1&gt;"/);
   assert.match(html, /data-discard="draft&lt;1&gt;"/);
+  assert.match(html, /class="pillbtn pill-accent" data-apply=/);
+  assert.match(html, />Apply</);
+  assert.match(html, /class="pillbtn" data-discard=/);
+  assert.match(html, />Discard</);
+  assert.doesNotMatch(html, />APPLY<|>DISCARD<|class="logbtn"/);
   assert.match(html, /coach&lt;script&gt;/);
   assert.match(html, /Push &lt;carefully&gt;/);
   assert.match(html, /Bench &lt;Press&gt;/);

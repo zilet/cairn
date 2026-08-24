@@ -2472,7 +2472,7 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 .meals-empty-title{font-family:var(--font-display);font-style:italic;font-weight:520;
   font-variation-settings:"opsz" 50;font-size:1.35rem}
 .meals-empty-sub{font-size:.86rem;color:var(--muted);max-width:330px;margin:6px auto 0;line-height:1.5}
-.meals-cta{width:auto;padding:0 24px;height:46px;font-size:.85rem;letter-spacing:.06em;margin-top:18px}
+.meals-empty .pillbtn{margin-top:18px}
 .meals-status{margin-top:10px;color:var(--muted);font-size:.82rem;min-height:1em}
 .meals-redraft{margin:6px 0 4px}
 
@@ -5545,9 +5545,10 @@ button.prow-name:hover{color:var(--accent)}
 .padj-why{margin-top:4px;font-size:.85rem;line-height:1.45;color:var(--ink-2)}
 
 /* ── Performance standing — the "where you stand" capacity read on Progress→Program.
-   The athletic counterpart to the health Standing: benchmarked level/percentile per
+   The athletic counterpart to the health Standing: benchmarked level-ladder word per
    movement, the lever, imbalances, re-tests, variety. Atelier tokens only, no scores
-   surfaced as a grade — percentile + the level ladder are reference reads. ───────── */
+   surfaced as a grade — the level ladder is a reference read, never a printed
+   population percentile. ───────── */
 .pperf-slot:empty{display:none}
 .pperf{display:flex;flex-direction:column;gap:14px;margin:2px 0 16px}
 .pperf-hero{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
@@ -5561,8 +5562,8 @@ button.prow-name:hover{color:var(--accent)}
   background:var(--card-2);color:var(--ink-2);letter-spacing:.01em}
 .pperf-chip-good{background:var(--sage-bg);color:var(--sage)}
 
-/* capacity rows — one per benchmark movement: label, level chip, a bar with the
-   percentile marker, and the plain "X lb · Nth pct for your 40s · +Y → advanced". */
+/* capacity rows — one per benchmark movement: label, shared level-chip with the
+   qualitative ladder word, and a calm sub (exercise · 1RM · next rung). */
 .pperf-caps{display:flex;flex-direction:column;gap:13px;background:var(--card);
   box-shadow:var(--shadow-sm);border-radius:var(--radius);padding:16px 18px}
 .pcap-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:7px}
@@ -5573,13 +5574,6 @@ button.prow-name:hover{color:var(--accent)}
 .pcap-level.pcap-strong{background:var(--sage-bg);color:var(--sage)}
 .pcap-level.pcap-watch{background:color-mix(in srgb,var(--accent) 12%,var(--card));color:var(--accent-deep)}
 .pcap-level.pcap-steady{background:color-mix(in srgb,var(--gold) 16%,var(--card));color:var(--stone-taupe)}
-.pcap-bar{position:relative;height:7px;border-radius:99px;background:var(--card-2);overflow:visible}
-.pcap-fill{position:absolute;left:0;top:0;bottom:0;border-radius:99px;background:var(--stone-taupe);opacity:.55}
-.pcap-fill-strong{background:var(--sage)}
-.pcap-fill-watch{background:var(--accent)}
-.pcap-fill-steady{background:var(--gold)}
-.pcap-mark{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;
-  background:var(--card);border:2.5px solid var(--ink);transform:translate(-50%,-50%);box-shadow:var(--shadow-sm)}
 .pcap-sub{margin-top:7px;line-height:1.4}
 
 .pperf-aero{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);

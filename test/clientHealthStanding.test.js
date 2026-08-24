@@ -137,18 +137,20 @@ test("health standing renderer preserves calm standing sections and escapes data
   assert.match(html, /Health standing/);
   assert.match(html, /biological age/);
   assert.match(html, /class="hstand-refbtn active" data-refage="30"/);
-  assert.match(html, /If you stood among men in their 30s/);
+  assert.match(html, /Among men in their 30s/);
+  assert.doesNotMatch(html, /If you stood among/);
   assert.match(html, /VO2 &lt;max&gt;/);
   assert.match(html, /ml\/kg\/min &lt;unit&gt;/);
   assert.match(html, /moves like age 35/);
   assert.match(html, /where to head/);
-  // Population-relative GEOMETRY is banned (VISION.md Amendment 2): the percentile
-  // fill bar/track is gone, replaced by the qualitative level chip; the number
-  // survives ONLY as prose ("ahead of 82% / 70% …").
+  // Population-relative GEOMETRY and NUMBERS are banned (VISION.md Amendment 2):
+  // the percentile fill bar/track is gone; the number feeds the level ladder and
+  // never prints. Prose speaks the word (strong / solid / building).
   assert.doesNotMatch(html, /hstand-fill|hstand-track|style="width:/);
   assert.match(html, /class="level-chip"/);
-  assert.match(html, /ahead of <b>82%<\/b> of men your age/);
-  assert.match(html, /ahead of <b>70%<\/b>/);
+  assert.match(html, /<b>strong<\/b> among men your age/);
+  assert.match(html, /<b>solid<\/b>/);
+  assert.doesNotMatch(html, /82%|70%|ahead of <b>|\d+% of men/);
   assert.match(html, /hstand-bc-win/);
   assert.match(html, /≈ 7 lb of fat off since the scan/);
   assert.match(html, /113\/72/);
@@ -166,5 +168,5 @@ test("health standing renderer keeps quiet empty states", () => {
   assert.match(standing.hstandBpRows([]), /No readings yet/);
   const html = standing.renderHealthStandingHtml({ subject: { age: null }, comparisons: [] }, {});
   assert.match(html, /Your standing read will sharpen as data lands/);
-  assert.match(html, /VO2max or a DEXA\/body-fat anchor unlocks real age-band percentiles/);
+  assert.match(html, /VO2max or a DEXA\/body-fat anchor unlocks your age-band standing/);
 });

@@ -134,8 +134,8 @@ type ApplyResultMessage = {
         (parsed.notes ? `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.notes)}</div>` : "")
       : `<div class="sess-line" style="color:var(--warn)">Unparseable output</div><div class="sess-line" style="color:var(--muted);font-size:.78rem">${escHtml(String(p.raw_output || "").slice(0, 200))}…</div>`;
     const actions = isOpenProposal(p)
-      ? `<div class="logrow" style="margin-top:10px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-apply="${escAttr(p.id)}">APPLY</button>
-         <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${escAttr(p.id)}">DISCARD</button></div>`
+      ? `<div class="logrow"><button class="pillbtn pill-accent" data-apply="${escAttr(p.id)}">Apply</button>
+         <button class="pillbtn" data-discard="${escAttr(p.id)}">Discard</button></div>`
       : "";
     const autonomy = proposalRecord(p.autonomy);
     const autonomyOwned = p.status === "draft" && (autonomy.status === "announced" || autonomy.status === "pending");

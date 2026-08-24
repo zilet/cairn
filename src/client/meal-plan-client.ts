@@ -249,8 +249,10 @@ type MealPlannerPaint = {
     const actions =
       p.status === "draft" && !autonomy
         ? `<div class="sess-line" style="color:var(--muted);margin-top:10px"><span class="lbl">NEEDS YOUR DECISION</span> · Nothing changes until you choose.</div>
-         <div class="logrow" style="margin-top:8px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-accept="${escAttr(p.id)}">USE THIS PLAN</button>
-         <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${escAttr(p.id)}">DISCARD</button></div>`
+         <div class="meals-actions">
+           <button class="pillbtn pill-accent" data-accept="${escAttr(p.id)}">Use this plan</button>
+           <button class="pillbtn" data-discard="${escAttr(p.id)}">Discard</button>
+         </div>`
         : autonomy
           ? `<div class="sess-line" style="color:var(--muted);margin-top:10px">Becomes current ${escHtml(mealBoundaryLabel(autonomy.effective_date))} · automatic and reversible</div>`
           : "";
@@ -296,7 +298,7 @@ type MealPlannerPaint = {
         <div class="artile artile-xl meals-empty-art">${art("food", "meal plate")}</div>
         <div class="meals-empty-title">No meal plan yet</div>
         <div class="meals-empty-sub">Your expert team can build the first week around your training, health context, preferences, and lean-safe targets.</div>
-        <button id="mealDraftBtn" class="logbtn meals-cta">ASK TEAM TO PLAN THIS WEEK</button>
+        <button id="mealDraftBtn" class="pillbtn pill-accent">Ask team to plan this week</button>
         <div id="mealDraftStatus" class="meals-status"></div>
       </div>${mealPrefsHtml(mealPrefs, 1)}`;
   }

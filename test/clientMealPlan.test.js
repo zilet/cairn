@@ -106,6 +106,11 @@ test("meal-plan helper renders history cards, actions, and folded settled plans"
 
   assert.match(html, /data-accept="draft&lt;1&gt;"/);
   assert.match(html, /data-discard="draft&lt;1&gt;"/);
+  assert.match(html, /class="pillbtn pill-accent" data-accept=/);
+  assert.match(html, />Use this plan</);
+  assert.match(html, /class="pillbtn" data-discard=/);
+  assert.match(html, />Discard</);
+  assert.doesNotMatch(html, /USE THIS PLAN|DISCARD|class="logbtn"/);
   assert.match(html, /chef&lt;script&gt;/);
   assert.match(html, /Build &lt;lean&gt;/);
   assert.match(html, /eggs &lt;toast&gt;/);
@@ -185,6 +190,9 @@ test("meal-plan helper renders planner preferences and empty state safely", () =
   assert.doesNotMatch(prefsHtml, /Fasted <AM>/);
   assert.match(emptyHtml, /No meal plan yet/);
   assert.match(emptyHtml, /id="mealDraftBtn"/);
+  assert.match(emptyHtml, /class="pillbtn pill-accent"/);
+  assert.match(emptyHtml, /Ask team to plan this week/);
+  assert.doesNotMatch(emptyHtml, /ASK TEAM TO PLAN THIS WEEK|logbtn meals-cta/);
   assert.match(emptyHtml, /fish &amp; rice/);
 });
 
