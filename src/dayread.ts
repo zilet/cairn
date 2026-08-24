@@ -422,6 +422,10 @@ export function decodeDayReadAgentProse<T>(value: T): T {
 // floor would pin an easy morning to a session length.
 const EST_MINUTES_SLACK_MIN = 15;
 const EST_MINUTES_SLACK_RATIO = 0.25;
+// Kind-mismatch path: do not inherit the floor's clock, but still bound a
+// misbehaving agent (easy + 300 minutes) to a sane absolute range.
+const EST_MINUTES_KIND_CHANGE_MIN = 10;
+const EST_MINUTES_KIND_CHANGE_MAX = 120;
 
 export function clampAgentEstMinutes(
   agentValue: unknown,
@@ -436,7 +440,9 @@ export function clampAgentEstMinutes(
   const floorOk = Number.isFinite(floor) && floor > 0;
   if (!Number.isFinite(agent) || agent <= 0) return floorOk ? Math.round(floor) : null;
   const rounded = Math.round(agent);
-  if (kind && typeof floorKind === "string" && kind !== floorKind) return rounded;
+  if (kind && typeof floorKind === "string" && kind !== floorKind) {
+    return Math.max(EST_MINUTES_KIND_CHANGE_MIN, Math.min(EST_MINUTES_KIND_CHANGE_MAX, rounded));
+  }
   if (!floorOk) return rounded;
   const slack = Math.max(EST_MINUTES_SLACK_MIN, Math.round(floor * EST_MINUTES_SLACK_RATIO));
   if (rounded < floor - slack || rounded > floor + slack) return Math.round(floor);

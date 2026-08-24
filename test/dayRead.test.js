@@ -1312,6 +1312,9 @@ test("agent est_minutes is banded around the deterministic floor, not stored raw
   // A conservative kind change keeps its own clock.
   assert.equal(clampAgentEstMinutes(20, 40, "easy", "train"), 20);
   assert.equal(clampAgentEstMinutes(90, 40, "rest", "train"), null);
+  // Kind-mismatch still has an absolute band — 300-minute "easy" must not bypass.
+  assert.equal(clampAgentEstMinutes(300, 40, "easy", "train"), 120);
+  assert.equal(clampAgentEstMinutes(-10, 40, "easy", "train"), 40);
 });
 
 test("Today agent-result validation rejects parseable off-contract JSON", async () => {
