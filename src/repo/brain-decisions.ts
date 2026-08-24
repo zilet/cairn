@@ -59,6 +59,25 @@ export function getBrainDecision(id: number): BrainDecision | null {
   return hydrateDecision(db.prepare(`SELECT * FROM brain_decisions WHERE id = ?`).get(id));
 }
 
+// The receipt that RETIRED an older draft in favour of this one, when this draft was
+// written by a regeneration rather than by an ordinary producer run. That receipt is
+// the only durable record of the lineage — the replacement row itself is an ordinary
+// draft — and reading it back is how the regeneration bound survives a restart: a
+// replacement that goes stale in its turn is held the old way, never regenerated again.
+export function regenerationReceiptForDraft(proposalId: number): BrainDecision | null {
+  const id = Math.trunc(Number(proposalId));
+  if (!(id > 0)) return null;
+  return hydrateDecision(
+    db
+      .prepare(
+        `SELECT * FROM brain_decisions
+          WHERE json_extract(action_json, '$.regenerated_proposal_id') = ?
+          ORDER BY id DESC LIMIT 1`
+      )
+      .get(id)
+  );
+}
+
 export function findBrainDecisionByFingerprint(fingerprint: string): BrainDecision | null {
   const key = String(fingerprint || "")
     .trim()

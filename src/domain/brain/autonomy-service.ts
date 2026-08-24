@@ -48,6 +48,12 @@ import { buildProgressionProposal } from "../../repo/progression.js";
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { capProtectiveRaise, cutReaffirmation, deriveCutTarget } from "../../repo/cut-target.js";
 import { getSettings } from "../../repo/settings.js";
+import {
+  draftIsRegenerationProduct,
+  regenerableProducer,
+  regenerationEmptyRationale,
+  regenerationReceiptRationale,
+} from "./draft-regeneration.js";
 import { setAppStateStrict } from "../../repo/app-state.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
@@ -642,6 +648,143 @@ function supersedePriorReviewHolds(proposalId: number): void {
   supersedeReviewDecisionsForProposal(proposalId);
 }
 
+// ---- REGENERATE, DON'T ASK ----------------------------------------------------
+//
+// A draft held because its evidence snapshot moved — or because it simply waited past
+// its freshness horizon — is asking the athlete to adjudicate a diff only the producer
+// can act on. Both holds already KNOW what changed; what they do with that knowledge is
+// hand it to the one person who cannot use it. So when the producing op can be re-run
+// mechanically (src/domain/brain/draft-regeneration.ts owns that question), it IS re-run
+// against current evidence, the stale draft is retired with a receipt naming why, and the
+// replacement earns its own tier through this same pipeline.
+//
+// The bound is absolute: ONE regeneration per draft. The receipt carries the lineage, so
+// a replacement that goes stale in ITS turn falls back to the ordinary hold. Nothing here
+// touches an ask that is genuinely the athlete's — clinical, user-locked, and the
+// review_everything posture all return unregenerated, and every floor below still runs.
+type RegenerationAttempt =
+  | { regenerated: false }
+  | { regenerated: true; result: any };
+
+function attemptStaleDraftRegeneration(
+  proposal: any,
+  shape: ProposalShape,
+  input: {
+    freshness: ProposalFreshness | null;
+    aged: boolean;
+    clinical: boolean;
+    user_locked?: boolean;
+    asOf: string;
+    parked?: { id?: number | null } | null;
+  }
+): RegenerationAttempt {
+  // The athlete's own asks are untouched: a clinical ceiling stays clinician-directed, a
+  // locked target stays theirs, and under 'review_everything' nothing may be set aside on
+  // their behalf (the same floor thawParkedReviewDecisions honours).
+  if (input.clinical || input.user_locked === true) return { regenerated: false };
+  if (getSettings().lead_mode === "review_everything") return { regenerated: false };
+  const staleId = Number(proposal?.id);
+  if (!(staleId > 0)) return { regenerated: false };
+  const producer = regenerableProducer(proposal);
+  if (!producer) return { regenerated: false };
+  if (draftIsRegenerationProduct(staleId)) return { regenerated: false };
+  const changed = input.freshness?.changed_components ?? [];
+  try {
+    return withSqliteSavepoint(`regenerate_stale_draft_${staleId}`, () => {
+      // Retire the stale draft FIRST: every deterministic producer retires its own prior
+      // drafts on the way in, and `recordDecision:false` keeps the receipt below the one
+      // ledger row for this transition rather than filing a vaguer second one beside it.
+      setProposalStatus(staleId, "superseded", { recordDecision: false });
+      const rebuilt = producer.rerun();
+      const replacement = rebuilt.ok ? rebuilt.proposal : null;
+      // A replacement that is already stale the moment it is written means the evidence
+      // is churning, or that this producer's payload cannot carry a compare-and-set
+      // snapshot at all. Throwing unwinds the retirement and the caller's ordinary hold
+      // stands — regeneration never gets a second swing at the same draft.
+      if (replacement && verifyProposalEvidenceFreshness(replacement.parsed, localDateISO()).status !== "current") {
+        throw new Error("the regenerated draft is not current");
+      }
+      // A regenerated draft earns its tier FRESH. No requested_tier, no inherited
+      // coordination: it goes through the whole pipeline as if it had just been written,
+      // which is exactly what it is.
+      const autonomy = replacement
+        ? applyProposalWithAutonomy(Number(replacement.id), { skip_regeneration: true })
+        : null;
+      const replacementDecisionId = Number(autonomy?.decision?.id) || null;
+      const receipt = recordDecision({
+        effective_date: input.asOf,
+        kind: shape.kind,
+        domain: shape.domain,
+        summary: replacement
+          ? "A stale draft was rewritten against your current picture."
+          : "A stale draft was set aside; reading it again found nothing to change.",
+        rationale: (replacement
+          ? regenerationReceiptRationale(changed, input.aged, input.asOf)
+          : regenerationEmptyRationale(changed, input.aged, input.asOf)
+        ).slice(0, 1_500),
+        source: proposal.agent || "autonomy",
+        source_ref_type: "plan_proposal",
+        source_ref_key: String(staleId),
+        status: "superseded",
+        autonomy_tier: "observe",
+        risk_class: shape.risk,
+        reversible: false,
+        input_fingerprint: null,
+        context: {
+          regeneration_receipt: true,
+          review_reason_code: "stale_snapshot",
+          regenerated_reason: input.aged ? "aged_out" : "evidence_moved",
+          changed_components: changed,
+          producer_key: producer.key,
+          proposal_freshness: input.freshness ?? null,
+          superseded_review_decision_id: input.parked?.id ?? null,
+        },
+        action: {
+          proposal_id: staleId,
+          regenerated_proposal_id: replacement ? Number(replacement.id) : null,
+          regenerated_decision_id: replacementDecisionId,
+          outcome: replacement ? "regenerated_from_current_evidence" : "superseded_stale_evidence",
+          reason_provenance: proposalReasonProvenance(proposal),
+        },
+        specialist: null,
+        applied_at: null,
+        reverted_at: null,
+        // The superseded draft's row points at what replaced it, through the same
+        // mechanism every other supersede in this module uses.
+        superseded_by: replacementDecisionId,
+        evaluator_version: null,
+      }).decision;
+      // A decision that was already waiting on the stale draft (the boundary case) is
+      // retired against the replacement rather than left canceled by the retirement above.
+      if (input.parked?.id) {
+        try {
+          transitionBrainDecision(Number(input.parked.id), "superseded", {
+            supersededBy: replacementDecisionId ?? (Number(receipt?.id) || null),
+          });
+        } catch {
+          /* the receipt is the authoritative record; a failed relink must not undo it */
+        }
+      }
+      const provenance = {
+        regenerated: true,
+        regenerated_from_proposal_id: staleId,
+        regenerated_proposal_id: replacement ? Number(replacement.id) : null,
+        regeneration_receipt_decision_id: Number(receipt?.id) || null,
+      };
+      return {
+        regenerated: true as const,
+        result: replacement
+          ? { ...(autonomy ?? {}), ...provenance }
+          : { ok: true, applied: false, superseded: true, decision: receipt, ...provenance },
+      };
+    });
+  } catch {
+    // Fail-soft by design: anything that goes wrong here unwinds to the state the
+    // ordinary hold expects, and the caller holds the draft exactly as it used to.
+    return { regenerated: false };
+  }
+}
+
 export function applyProposalWithAutonomy(
   proposalId: number,
   input: {
@@ -669,6 +812,10 @@ export function applyProposalWithAutonomy(
     // together without each half consuming the other's surprise budget.
     coordination_key?: string;
     coordinated_update?: boolean;
+    // INTERNAL. Set only on the routing of a draft this layer has just regenerated, so
+    // the regeneration bound holds inside the pass that created it (the receipt carrying
+    // the lineage is not written until that routing returns). No surface passes this.
+    skip_regeneration?: boolean;
   } = {}
 ): any {
   const proposal = getProposal(proposalId);
@@ -699,6 +846,18 @@ export function applyProposalWithAutonomy(
     !input.explicit_user_request &&
     (proposalFreshness.status === "changed" || proposalFreshness.status === "unverified")
   ) {
+    // Regenerate rather than ask: the athlete cannot adjudicate a fingerprint diff, and
+    // the producer can simply read the question again from where they are now.
+    if (!input.skip_regeneration) {
+      const regenerated = attemptStaleDraftRegeneration(proposal, shape, {
+        freshness: proposalFreshness,
+        aged: false,
+        clinical,
+        user_locked: input.user_locked,
+        asOf: localDateISO(),
+      });
+      if (regenerated.regenerated) return regenerated.result;
+    }
     const changed = proposalFreshness.changed_components.join(" and ");
     return holdProposalForReview(proposal, shape, {
       code: "stale_snapshot",
@@ -720,6 +879,20 @@ export function applyProposalWithAutonomy(
   const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
   const freshnessDays = shape.kind === "training_structure" ? 14 : 7;
   if (ageDays > freshnessDays) {
+    // Same ruling as the compare-and-set gate above: "this waited too long" is the
+    // system's own observation about its own draft, so the answer is a fresh read, not
+    // a question. An explicit current-turn request is left alone — the athlete is
+    // looking at THIS draft, and swapping it underneath them would be the surprise.
+    if (!input.skip_regeneration && !input.explicit_user_request) {
+      const regenerated = attemptStaleDraftRegeneration(proposal, shape, {
+        freshness: proposalFreshness,
+        aged: true,
+        clinical,
+        user_locked: input.user_locked,
+        asOf: localDateISO(),
+      });
+      if (regenerated.regenerated) return regenerated.result;
+    }
     return holdProposalForReview(proposal, shape, {
       code: "stale_snapshot",
       reasons: [
@@ -1759,10 +1932,29 @@ export function userSetNutritionTarget(
   });
 }
 
+// Which of the two floors regeneration must never cross, read off a decision that is
+// already in the queue (the apply-time path knows them from its own inputs). A clinical
+// ceiling and a user lock are the athlete's ask, not the system's bookkeeping.
+function decisionIsTheAthletes(decision: { risk_class?: string; context?: any; autonomy_tier?: string }): {
+  clinical: boolean;
+  user_locked: boolean;
+} {
+  const context = (decision.context ?? {}) as Record<string, any>;
+  return {
+    clinical:
+      decision.risk_class === "clinical" || decision.autonomy_tier === "clinician" || context.clinical === true,
+    user_locked: context.user_locked === true || context.policy_inputs?.user_locked === true,
+  };
+}
+
 export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
   applied: number[];
   failed: number[];
   delayed: number[];
+  // A stale draft the system rewrote against current evidence instead of asking about.
+  // Not a failure and not a refusal: the decision is retired against its replacement,
+  // which is in the ledger under its own freshly earned tier.
+  regenerated: number[];
   // A REFUSAL is not an error. `failed` means the pass tried and could not — a
   // payload that threw, a plan that had moved, a decision that would not transition
   // — and a caller reading it as "something went wrong" is reading it correctly.
@@ -1793,6 +1985,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
   const failed: number[] = [];
   const delayed: number[] = [];
   const setAside: number[] = [];
+  const regeneratedIds: number[] = [];
   // A sibling that lands earlier in THIS pass changes the plan and therefore makes
   // later siblings look CAS-stale. Track only those pass-local budget consumers so
   // their policy reason can win that expected collision. A budget spent before this
@@ -1975,6 +2168,18 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         boundaryFreshness &&
         (boundaryFreshness.status === "changed" || boundaryFreshness.status === "unverified")
       ) {
+        const regenerated = attemptStaleDraftRegeneration(proposal, shape, {
+          freshness: boundaryFreshness,
+          aged: false,
+          clinical: decisionIsTheAthletes(announced).clinical,
+          user_locked: decisionIsTheAthletes(announced).user_locked,
+          asOf,
+          parked: announced,
+        });
+        if (regenerated.regenerated) {
+          regeneratedIds.push(announced.id!);
+          continue;
+        }
         const changed = boundaryFreshness.changed_components.join(" and ");
         patchBrainDecision(announced.id!, {
           status: "review",
@@ -2007,6 +2212,18 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
       const freshnessDays = shape.kind === "training_structure" ? 14 : 7;
       const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
       if (ageDays > freshnessDays) {
+        const regenerated = attemptStaleDraftRegeneration(proposal, shape, {
+          freshness: boundaryFreshness,
+          aged: true,
+          clinical: decisionIsTheAthletes(announced).clinical,
+          user_locked: decisionIsTheAthletes(announced).user_locked,
+          asOf,
+          parked: announced,
+        });
+        if (regenerated.regenerated) {
+          regeneratedIds.push(announced.id!);
+          continue;
+        }
         patchBrainDecision(announced.id!, {
           status: "rejected",
           autonomy_tier: "ask",
@@ -2134,7 +2351,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
       parkForReview(announced, String(error?.message ?? error ?? "unexpected apply error"));
     }
   }
-  return { applied, failed, delayed, set_aside: setAside };
+  return { applied, failed, delayed, regenerated: regeneratedIds, set_aside: setAside };
 }
 
 // A veto teaches the brain DETERMINISTICALLY, not anecdotally: the reverted
