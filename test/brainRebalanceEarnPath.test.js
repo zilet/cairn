@@ -334,6 +334,143 @@ test("the derivation is null-safe and window-bounded", () => {
   assert.equal(easyOverrideSoftening({ recent: outside }, REF).active, false, "ten closed days, and no further");
 });
 
+// ── 2b. …and what the athlete said THIS MORNING outranks all of it ─────────
+//
+// The clinical floor the ladder consults (`clinicallyDriven`) probes
+// `health_constraints`, and a morning check-in does not land there — energy and
+// sleep_feel go to `recovery_capacity`, soreness to `training_load_tolerance`. So an
+// athlete who had just reported feeling wrecked could have their easy read opened into
+// a full session by a twelve-day pattern, with a `why` that never mentioned the thing
+// they had said an hour earlier. Check-ins INFORM; they are never the thing overruled.
+//
+// A fresh same-day statement now HOLDS the softening. It is a veto and nothing else:
+// the read stays exactly where the rules put it, and the sentence gains a clause
+// saying whose word kept it there.
+
+// The documented `unifiedState` seam: a state built from no observations at all, so
+// what the DB check-in does to the read is the veto's doing rather than the posture's.
+const openState = (date) => buildUnifiedSignalState(date, []);
+
+test("a sore morning holds the softening, and the read says whose word held it", () => {
+  // The live production path. soreness >= 4 is a constraint on load tolerance, which
+  // makes the day easy through the protect rule — a SOFTENABLE_EASY code — so this is
+  // exactly the shape the defect was reported against: the athlete says they are wrecked
+  // and a twelve-day pattern hands them a sixty-minute session anyway.
+  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  repo.addCheckin(REF, { energy: 3, sleep_feel: 3, mood: 3, soreness: 5 });
+
+  const r = repo.dayRead(REF, thinSleep());
+
+  assert.equal(r.kind, "easy", "the day they said was heavy is not opened by a fortnight of other days");
+  assert.equal(r.decision.rule_code, "acute_signal_protection", "the rule's own read stands, untouched");
+  assert.equal(r.signals.easy_outcome_feedback.active, true, "the pattern is still on the board…");
+  assert.equal(r.signals.easy_outcome_feedback.applied, false, "…and it did not get to move this day");
+  assert.equal(r.signals.easy_outcome_feedback.held_by_statement, "felt_soreness");
+  // The rule still says what today is about, and the held clause says why history did
+  // not argue with it — a registered phrasing, not a literal, holding the grammar.
+  assert.ok(
+    signalVoice({ key: "soreness_high" }).some((variant) => r.why.startsWith(variant)),
+    `the rule's own sentence should open the read: ${JSON.stringify(r.why)}`
+  );
+  assert.ok(
+    DAY_READ_WHY_VARIANTS.outcome_feedback_held.some((variant) => r.why.endsWith(variant)),
+    `no registered held phrasing closed the read: ${JSON.stringify(r.why)}`
+  );
+  assert.equal(violatesReadingGrammar(r.why), null, r.why);
+});
+
+test("a run-down check-in is never opened into a session, by either mechanism", () => {
+  // energy/sleep_feel at the severe end can never reach the easy ladder at all:
+  // `lowSubjective` forces a rest read from a rule ABOVE it, so the pattern has no easy
+  // day to open. The veto carries those two arms anyway (see freshStatementHold) so the
+  // hole cannot reopen if that rule ever eases — this case pins the law the two of them
+  // enforce between them, which is the one the athlete actually experiences.
+  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  repo.addCheckin(REF, { energy: 2, sleep_feel: 3, mood: 3, soreness: 2 });
+
+  const r = repo.dayRead(REF, thinSleep(), openState(REF));
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "felt_run_down_rest");
+  assert.equal(r.signals.easy_outcome_feedback.applied, false);
+});
+
+test("a symptom they reported TODAY holds it; the same watch left unspoken does not", () => {
+  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  repo.reportTrainingSymptom({ area_text: "left knee", onset_on: REF, report_text: "left knee is grumbling today" });
+
+  const spoken = repo.dayRead(REF, thinSleep(), openState(REF));
+  assert.equal(spoken.kind, "easy");
+  assert.equal(spoken.signals.easy_outcome_feedback.held_by_statement, "symptom_report");
+
+  // The SAME open watch, last spoken about a fortnight ago. `stated_freshness` is the
+  // ladder that means "how current is their own account", and an old account is not a
+  // statement about this morning — so the pattern opens the day exactly as it would
+  // with no watch at all.
+  resetTables(...WORLD, "training_symptom_events", "symptom_reports", "movement_tolerance_observations");
+  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  repo.reportTrainingSymptom({ area_text: "left knee", onset_on: dayBefore(REF, 14) });
+
+  const stale = repo.dayRead(REF, thinSleep(), openState(REF));
+  assert.equal(stale.kind, "train", "a fortnight-old account cannot hold today");
+  assert.equal(stale.signals.easy_outcome_feedback.applied, true);
+  assert.equal(stale.signals.easy_outcome_feedback.held_by_statement, undefined);
+});
+
+test("no check-in changes nothing — absence of a statement is not a statement", () => {
+  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+
+  const r = repo.dayRead(REF, thinSleep(), openState(REF));
+  assert.equal(r.kind, "train", "the softening behaves exactly as it did before the veto existed");
+  assert.equal(r.decision.rule_code, "outcome_feedback_open");
+  assert.equal(r.signals.easy_outcome_feedback.applied, true);
+  assert.equal(r.signals.easy_outcome_feedback.held_by_statement, undefined);
+});
+
+test("a fine morning is not a veto — a good check-in still opens the day", () => {
+  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  repo.addCheckin(REF, { energy: 4, sleep_feel: 4, mood: 4, soreness: 2 });
+
+  const r = repo.dayRead(REF, thinSleep(), openState(REF));
+  assert.equal(r.kind, "train");
+  assert.equal(r.decision.rule_code, "outcome_feedback_open");
+  assert.equal(r.signals.easy_outcome_feedback.applied, true);
+  assert.equal(r.signals.easy_outcome_feedback.held_by_statement, undefined);
+});
+
+test("the veto only ever HOLDS — it never brakes a day the rules read as train", () => {
+  // Nothing for the pattern to open: the day already reads train off the plan, and the
+  // athlete has a symptom on record they spoke about this morning. A veto that could
+  // reach here would be a new rule, and it is not one.
+  planDay();
+  repo.reportTrainingSymptom({ area_text: "left knee", onset_on: REF });
+
+  const r = repo.dayRead(REF, thinSleep(), openState(REF));
+  assert.equal(r.kind, "train");
+  assert.equal(r.decision.rule_code, "planned_training");
+  assert.equal(r.signals.easy_outcome_feedback?.held_by_statement, undefined);
+  assert.ok(
+    !DAY_READ_WHY_VARIANTS.outcome_feedback_held.some((variant) => r.why.includes(variant)),
+    "the held sentence belongs to a held softening, not to every read with a check-in"
+  );
+});
+
+test("the held sentence is a rotation that credits the athlete, and it holds the constitution", () => {
+  const set = DAY_READ_WHY_VARIANTS.outcome_feedback_held;
+  assert.ok(set.length >= 3, "a stable input fires a stable rule — one literal reads as a broken app");
+  assert.equal(new Set(set).size, set.length);
+  for (const text of set) {
+    assert.equal(violatesReadingGrammar(text), null, `breaks the reading grammar: ${JSON.stringify(text)}`);
+    assert.match(text, DAY_READ_REQUIRED_CONCEPT.outcome_feedback_held, `lost the sentence's own meaning: ${text}`);
+    assert.match(text, /[.!?]$/);
+    assert.doesNotMatch(text, /\b(?:must|have to|need to|should)\b/i, `reads as an instruction: ${text}`);
+  }
+  const days = ["2026-03-15", "2026-03-16", "2026-03-17", "2026-03-18"];
+  const landed = days.map((day) => pickDayVariant(set, day, "outcome_feedback_held"));
+  for (let i = 1; i < landed.length; i++) {
+    assert.notEqual(landed[i], landed[i - 1], `${days[i]} repeated the previous morning's sentence`);
+  }
+});
+
 // ── 3. the push, and which caveats may still withdraw it ────────────────────
 
 // A signal state the evidence positively backs, built from one strongly-rated session

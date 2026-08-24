@@ -95,7 +95,13 @@ export function enduranceHoldSubject(d: any): string {
   const blood = keys.some((k) =>
     ["hemoglobin", "hematocrit", "red blood cell count", "mean corpuscular volume"].includes(k)
   );
-  return iron && blood ? "your iron and hemoglobin" : iron ? "your iron stores" : blood ? "your hemoglobin" : "your bloodwork";
+  return iron && blood
+    ? "your iron and hemoglobin"
+    : iron
+      ? "your iron stores"
+      : blood
+        ? "your hemoglobin"
+        : "your bloodwork";
 }
 
 export function directiveKey(d: any): string {

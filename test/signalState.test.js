@@ -1225,3 +1225,59 @@ test("an unvoiced fallback follows the direction of the day, not the protective 
   const named = { key: "sleep_night_short" };
   assert.equal(spokenSignalVoice(named, date, "k", "train"), spokenSignalVoice(named, date, "k", "rest"));
 });
+
+// ---- an active health directive reaches the morning read as a BRAKE ---------
+//
+// A flagged lab finding propagates into an active training directive, and the run
+// builder caps the week off it. This state saw no directives at all, so on the same
+// morning the Brief could resolve `push_bias` and offer room the week had denied. The
+// firm hold now weighs on the dimension it touches; the uncertain one informs and
+// decides nothing, which is the softer weight the directive system already draws.
+// (The end-to-end agreement between the two layers is pinned in runProgression.test.js.)
+test("a firm endurance hold brakes load tolerance; an uncertain one only informs", async () => {
+  const { dayPlanningSignalState } = await import("../dist/repo/day-read.js");
+  const { spokenSignalVoice, SIGNAL_VOICE_REGISTRY } = await import("../dist/repo/signal-state.js");
+  const date = localDaysAgo(0);
+  const holdOf = (state) =>
+    state.dimensions.training_load_tolerance.evidence.find((e) => e.field === "endurance_hold_directive");
+
+  assert.equal(holdOf(dayPlanningSignalState(date)), undefined, "no directive, no observation");
+
+  repo.addDirective({
+    source: "markers",
+    domain: "training",
+    marker: "low ferritin",
+    directive: "Hold endurance volume while ferritin recovers.",
+    citation: "IOC consensus on iron in athletes",
+    uncertain: true,
+    status: "active",
+  });
+  const soft = dayPlanningSignalState(date);
+  const softHold = holdOf(soft);
+  assert.ok(softHold, "an uncertain hold is still visible in the state");
+  assert.equal(softHold.context_only, true, "…and it decides nothing");
+  assert.notEqual(soft.dimensions.training_load_tolerance.status, "watch", "an uncertain nudge is not a finding");
+
+  db.prepare(`UPDATE health_directives SET uncertain = 0`).run();
+  const firm = dayPlanningSignalState(date);
+  const firmHold = holdOf(firm);
+  assert.equal(firmHold.direction, "caution", "a brake, never a constraint — it may hold the reach, not the day");
+  assert.ok(!firmHold.context_only);
+  assert.equal(firm.dimensions.training_load_tolerance.status, "watch");
+  assert.notEqual(firm.action.posture, "rest", "a directive never forces rest");
+  assert.notEqual(firm.action.posture, "easy");
+  // MACHINE register names the directive; the athlete hears the registered voice.
+  assert.match(firm.dimensions.training_load_tolerance.reason, /directive/i);
+  assert.match(firmHold.summary, /iron stores/);
+  const spoken = spokenSignalVoice(firmHold.voice, date, "planned_training:noted");
+  assert.ok(
+    SIGNAL_VOICE_REGISTRY.endurance_hold_flagged.variants.some((variant) => variant.includes("your iron stores")),
+    "the voice names what the hold is waiting on"
+  );
+  assert.match(spoken, /iron stores/);
+  assert.doesNotMatch(spoken, /directive|flag|marker/i, "the athlete never hears the machinery");
+
+  // A directive the athlete resolved contributes nothing.
+  db.prepare(`UPDATE health_directives SET status = 'resolved'`).run();
+  assert.equal(holdOf(dayPlanningSignalState(date)), undefined);
+});

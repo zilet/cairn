@@ -3416,11 +3416,7 @@ export function dayRead(
             // (DAY_READ_REQUIRED_CONCEPT is checked per rule code, and this sentence is
             // registered under its own key beside it).
             ...ruleRead,
-            why: `${endStopped(ruleRead.why)} ${pickDayVariant(
-              OUTCOME_FEEDBACK_HELD_WHY,
-              d,
-              "outcome_feedback_held"
-            )}`,
+            why: `${endStopped(ruleRead.why)} ${pickDayVariant(OUTCOME_FEEDBACK_HELD_WHY, d, "outcome_feedback_held")}`,
           }
         : ruleRead;
   // The health work-around closes EVERY protective read, whichever rule produced it
