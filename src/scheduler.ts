@@ -36,6 +36,7 @@ import {
   runOwnedMealRefreshAttempt,
 } from "./repo/meal-refresh-retry.js";
 import { isPlanProposalResult } from "./agent-contracts.js";
+import { autoImportExerciseGuidesIfEmpty } from "./domain/training/exercise-guide-use-case.js";
 import { createHash } from "node:crypto";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
@@ -1231,5 +1232,21 @@ export function startScheduler() {
       }
     }),
     15_000
+  );
+
+  // Round W2.2: the exercise-guide library used to wait on a manual tap in Settings
+  // before any how-to section existed at all — a bounded (~1 MB), idempotent
+  // download that never overwrites a hand-confirmed link or refusal (both survive
+  // re-import). Run it once at boot, only while the table is genuinely empty; the
+  // Settings button remains the explicit re-import.
+  setTimeout(
+    inOwnerTimeZone(() => {
+      autoImportExerciseGuidesIfEmpty()
+        .then((result) => {
+          if (result?.ok) console.log(`[exercise-guide] auto-imported ${result.records} movements at boot.`);
+        })
+        .catch((error) => recordSchedulerFailure("exercise_guide_auto_import", error));
+    }),
+    10_000
   );
 }

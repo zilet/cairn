@@ -22,6 +22,7 @@ import {
   EXERCISE_GUIDES_DIR,
   type ExerciseGuideRecord,
   type GuideLinkSuggestion,
+  exerciseGuideStatus,
   guideImageCount,
   isValidGuideId,
   linkedGuideIds,
@@ -150,6 +151,24 @@ export async function importExerciseGuides(
     suggested: link.suggested,
     images_fetched: imagesFetched,
   };
+}
+
+/**
+ * Round W2.2: the athlete used to have to tap "Fetch exercise guide" before any
+ * how-to section existed at all — a manual confirm for a bounded (~1 MB), idempotent
+ * download that never touches an exercise the matcher isn't SURE about. Run it once,
+ * quietly, whenever the library is genuinely empty (the scheduler's boot pass calls
+ * this); the Settings button remains as an explicit re-import once it has run. A safe
+ * no-op once `exercise_guides` holds anything — including a prior failed/partial
+ * import that still stored SOME rows, so this never retries in a loop on a flaky
+ * network. Never throws; a fetch failure degrades to "not imported yet", same as if
+ * the athlete's own tap had failed.
+ */
+export async function autoImportExerciseGuidesIfEmpty(
+  options: ExerciseGuideImportOptions = {}
+): Promise<ExerciseGuideImportResult | null> {
+  if (exerciseGuideStatus().imported) return null; // already has guides — nothing to do
+  return importExerciseGuides(options);
 }
 
 /**
