@@ -488,8 +488,8 @@ plan, falls back to the newest draft):
 - `.mealday` — one section per day: `.mealday-head` (tiny caps date + `.mealday-name`
   big display day name, per-day kcal/protein `.mealday-total`) over a `.mealday-card`
   of `.meal-row`s (artImg food plate | name + items | kcal numeral + P/C/F caps).
-- `.meals-empty` — illustration plate + italic display title + "Draft weekly meal plan"
-  CTA (`.meals-cta`), with `.meals-status` for run feedback.
+- `.meals-empty` — illustration plate + italic display title + an "Ask team to plan
+  this week" CTA on the shared `.pillbtn pill-accent`, with `.meals-status` for run feedback.
 - `.mp-history` — `<details>` keeping the classic `.mp-card` list as collapsed history.
 - `.shop-chips` — the plan's shopping list as cream chips.
 
