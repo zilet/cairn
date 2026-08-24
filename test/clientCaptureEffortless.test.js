@@ -235,6 +235,7 @@ test("Today post-render wiring surfaces frequents and check-in again (no longer 
     loadHealthFocusBanner() {},
     loadWearable() {},
     loadCheckin: () => calls.push("loadCheckin"),
+    loadTagChips: () => calls.push("loadTagChips"),
     runAgendaRail() {},
     runFallbackRail() {},
     todayRailDeps: () => ({}),
@@ -247,5 +248,5 @@ test("Today post-render wiring surfaces frequents and check-in again (no longer 
 
   context.CairnTodayPostRenderWiring.wirePostRender(deps);
 
-  assert.deepEqual(calls, ["loadFrequentFoods", "loadCheckin"]);
+  assert.deepEqual(calls, ["loadFrequentFoods", "loadCheckin", "loadTagChips"]);
 });
