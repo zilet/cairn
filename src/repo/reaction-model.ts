@@ -1313,6 +1313,14 @@ function modifierFor(
     // How many of the most recent windows in the current run were cleared by a
     // clear margin rather than just met. Read by the run-volume branch only.
     overshoot_n?: number;
+    // How many decisions in the current run the athlete actually APPLIED. Every
+    // acceleration branch below counts THIS and never `evidenceN`, so an observed
+    // decision can lengthen the evidence trail without ever buying a bigger step
+    // (see OBSERVED_DECISION_WEIGHT).
+    applied_run_n: number;
+    // True when the whole comparable group is observed-tier — nothing in it was
+    // ever applied.
+    observed_only: boolean;
   }
 ): CoachPersonalModifier | null {
   let target: CoachPersonalModifierTarget | null = null;
@@ -1356,7 +1364,7 @@ function modifierFor(
         ? 0.9
         : verdict === "aligned" &&
             ACCELERATING_TRAINING_METRICS.has(row.metric_key) &&
-            evidenceN >= ACCELERATION_MIN_RUN &&
+            window.applied_run_n >= ACCELERATION_MIN_RUN &&
             window.missed_n === 0 &&
             !trainingSymptomOnRecord()
           ? bounds.max
@@ -1397,7 +1405,10 @@ function modifierFor(
     scale =
       verdict === "not_aligned"
         ? 0.9
-        : verdict === "aligned" && evidenceN >= requiredRun && window.missed_n === 0 && !trainingSymptomOnRecord()
+        : verdict === "aligned" &&
+            window.applied_run_n >= requiredRun &&
+            window.missed_n === 0 &&
+            !trainingSymptomOnRecord()
           ? bounds.max
           : 1;
   } else if (["recovery_hrv_delta", "recovery_rhr_delta", "sleep_duration_delta"].includes(row.metric_key)) {
@@ -1410,6 +1421,23 @@ function modifierFor(
     scale = verdict === "not_aligned" ? 0.9 : 1;
   }
   if (!target) return null; // clinical/marker learnings stay informational
+  // OBSERVED EVIDENCE MAY SOFTEN; IT MAY NEVER PUSH.
+  //
+  // A group with no applied decision in it is built entirely out of outcomes the
+  // athlete never acted on — a read they were free to ignore, an advisory
+  // prediction nobody enacted. That is real evidence about how their body behaves
+  // and it is allowed to make the next step SMALLER or leave it alone. What it must
+  // never do is hand out headroom: every "go bigger" branch in this system is meant
+  // to be bought by a change the athlete actually made and then absorbed.
+  //
+  // Two independent guards enforce it, so removing either one alone cannot open the
+  // door: every acceleration branch above counts `window.applied_run_n` (which is 0
+  // for an observed-only group), and the declared ceiling is pulled to 1.0 here.
+  // The ceiling is the one consumers read — `applyPersonalResponseModifier` clamps
+  // to `modifier.bounds` — so a floor consumer holding an observed-only modifier is
+  // arithmetically incapable of scaling its base upward. This NARROWS the clamp; no
+  // bound anywhere is widened.
+  if (window.observed_only) bounds = { min: bounds.min, max: Math.min(bounds.max, 1) };
   scale = boundedScale(scale, bounds.min, bounds.max);
   return {
     key: comparableKey(row),
@@ -1477,20 +1505,82 @@ function agedModifier(
   };
 }
 
+// ---- what a verdict is WORTH, by the kind of decision it judged ------------
+// This filter used to read `decision_status !== "applied" → skip`, and on a live
+// ledger that one line discarded roughly three quarters of every conclusive verdict
+// the evaluators had produced. Observe-tier decisions — an advisory case-conference
+// prediction, a recovery read nobody enacted — are evaluated exactly like applied
+// ones, against the same evidence, by the same evaluator, and then were thrown away.
+//
+// They are not worth the same, though, and pretending otherwise would be worse than
+// dropping them. An applied decision is a change the athlete MADE: its verdict is a
+// read on an intervention. An observed one is a read on what happened anyway. So:
+//
+//   weight(applied)  = 1.0
+//   weight(observed) = 0.4
+//
+// …and the observed class's TOTAL contribution to any one comparable group is capped:
+//
+//   effective_n = applied_n + min(observed_n × 0.4, 2.0)
+//
+// The cap is what stops volume from becoming authority. Worked, with the shape the
+// live ledger actually has:
+//
+//   30 observed verdicts, 0 applied  → 0 + min(12.0, 2.0) = 2.0   (just clears the floor)
+//    3 applied,           0 observed → 3 + 0               = 3.0   (outweighs all 30)
+//    3 applied,          30 observed → 3 + 2.0             = 5.0   (observed is a minority)
+//    5 observed,          0 applied  → 0 + min(2.0, 2.0)   = 2.0   (the 6th adds nothing)
+//
+// Two consequences fall straight out of the arithmetic and are load-bearing:
+//   • an observed-only group needs FIVE verdicts to reach the two-outcome floor an
+//     applied group reaches with two, and can never exceed it however many arrive;
+//   • `strong` confidence needs an effective run of 4, which the cap of 2.0 puts
+//     permanently out of an observed-only group's reach. Volume cannot manufacture
+//     certainty.
+// Acceleration is guarded separately and absolutely — see modifierFor's
+// observed-only clamp; the cap here is about evidence, not authority.
+const OBSERVED_DECISION_WEIGHT = 0.4;
+const OBSERVED_EFFECTIVE_CAP = 2;
+const LEARNING_MIN_EFFECTIVE_N = 2;
+// At most one of the four athlete-facing prose slots may go to an observed-only
+// learning. Observe-tier rows are the freshest thing in any ledger, so a plain
+// recency sort would hand them the whole list and the learnings that actually carry
+// modifiers would lose their sentence.
+const OBSERVED_ONLY_PROSE_SLOTS = 1;
+
+function isAppliedRow(row: EvaluatedDecisionRow): boolean {
+  return row.decision_status === "applied";
+}
+
+function effectiveEvidenceN(rows: EvaluatedDecisionRow[]): number {
+  const applied = rows.filter(isAppliedRow).length;
+  const observed = rows.length - applied;
+  const weighted = applied + Math.min(observed * OBSERVED_DECISION_WEIGHT, OBSERVED_EFFECTIVE_CAP);
+  return Math.round(weighted * 1000) / 1000;
+}
+
 function learningForGroup(
   allRows: EvaluatedDecisionRow[],
   today: string
-): { learning: CoachOutcomeLearning; modifier: CoachPersonalModifier | null } | null {
+): { learning: CoachOutcomeLearning; modifier: CoachPersonalModifier | null; observed_only: boolean } | null {
   // Evidence counts decisions, not expectations. A single decision may carry two
   // windows for the same metric; treating those as two independent trials would
   // let one intervention manufacture confidence.
   const byDecision = new Map<number, EvaluatedDecisionRow>();
   for (const row of allRows) {
-    // `applied` only. A day read is never applied — it is a suggestion the athlete
-    // may take or leave — so those rows are excluded here and read separately by
-    // dayReadAdherenceLearnings() below, which is also where the reason they must
-    // NOT produce a modifier is written down.
-    if (row.decision_status !== "applied" || row.superseded_by != null || row.confounders.length > 0) continue;
+    // Day-read adherence is still read ONLY by dayReadAdherenceLearnings() below,
+    // which is where the reason it must never produce a modifier is written down:
+    // restOverrideSoftening already acts on these exact rows, so a second lever
+    // moved from the same evidence would be one pattern counted as two. Admitting
+    // observe-tier decisions here does not change that — it admits the observe-tier
+    // rows that NOTHING else reads.
+    if (row.metric_key === DAY_READ_ADHERENCE_METRIC) continue;
+    // `applied` and `observed` (at OBSERVED_DECISION_WEIGHT). Every other status —
+    // pending, announced, review, rejected, reverted, superseded, canceled — is a
+    // decision whose outcome says nothing about how the athlete responds to it, and
+    // superseded-by / confounded rows stay excluded exactly as they always were.
+    if (row.decision_status !== "applied" && row.decision_status !== "observed") continue;
+    if (row.superseded_by != null || row.confounders.length > 0) continue;
     const prior = byDecision.get(row.decision_id);
     if (!prior || row.evaluated_at >= prior.evaluated_at) byDecision.set(row.decision_id, row);
   }
@@ -1505,8 +1595,16 @@ function learningForGroup(
   while (runStart > 0 && rows[runStart - 1].verdict === latest.verdict) runStart--;
   const latestRun = rows.slice(runStart);
   const hasContradiction = rows.some((row) => row.verdict !== latest.verdict);
-  const strongSingle = rows.length === 1 && latest.expectation_confidence === "strong" && measurementCount(latest) >= 6;
-  if (rows.length < 2 && !strongSingle) return null;
+  // The single-outcome exemption belongs to APPLIED decisions only: it exists so one
+  // densely-measured intervention can speak, and an observed row is not an
+  // intervention. An observed-only group reaches the floor the long way or not at all.
+  const strongSingle =
+    rows.length === 1 &&
+    isAppliedRow(latest) &&
+    latest.expectation_confidence === "strong" &&
+    measurementCount(latest) >= 6;
+  const observedOnly = !rows.some(isAppliedRow);
+  if (effectiveEvidenceN(rows) < LEARNING_MIN_EFFECTIVE_N && !strongSingle) return null;
 
   const alignedN = rows.filter((row) => row.verdict === "aligned").length;
   const missedN = rows.length - alignedN;
@@ -1517,7 +1615,10 @@ function learningForGroup(
   const activeVerdict = unresolvedContradiction ? null : latest.verdict;
   const confidence: CoachPersonalResponseConfidence = unresolvedContradiction
     ? "tentative"
-    : (latestRun.length >= 4 && contradictions === 0) || (strongSingle && measurementCount(latest) >= 12)
+    : // Weighted, so the observed cap keeps `strong` out of an observed-only group's
+      // reach: its effective run can never exceed OBSERVED_EFFECTIVE_CAP (2.0).
+      (effectiveEvidenceN(latestRun) >= 4 && contradictions === 0) ||
+        (strongSingle && measurementCount(latest) >= 12)
       ? "strong"
       : "observed";
   const supersededEvidenceN = activeVerdict ? rows.filter((row) => row.verdict !== activeVerdict).length : 0;
@@ -1550,6 +1651,8 @@ function learningForGroup(
         missed_n: missedN,
         preceding_verdict: precedingVerdict,
         overshoot_n: overshootN,
+        applied_run_n: latestRun.filter(isAppliedRow).length,
+        observed_only: observedOnly,
       })
     : null;
   const modifier = agedModifier(earnedModifier, latest.evaluated_at, today);
@@ -1584,6 +1687,7 @@ function learningForGroup(
       last_observed: latest.evaluated_at,
     },
     modifier,
+    observed_only: observedOnly,
   };
 }
 
@@ -1688,7 +1792,11 @@ function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLe
 // brain-decisions.ts bumps it, and an evaluator writing overnight would otherwise
 // serve yesterday's model. The backstop carries
 //   • COUNT + MAX(id) over the three ledger tables the query reads (inserts, deletes);
-//   • two status aggregates over brain_decisions — `applied` and superseded — because
+//   • three status aggregates over brain_decisions — `applied`, `observed` and
+//     superseded (observed joined them when observe-tier verdicts started counting as
+//     weighted evidence: an observed→rejected transition moves no count the row-level
+//     terms above can see, and would otherwise serve a retired outcome all day) —
+//     because
 //     those fields are edited IN PLACE by transitionBrainDecision/patchBrainDecision
 //     and are exactly the fields the grouping filters on;
 //   • the safety read itself. trainingSymptomOnRecord() withholds every acceleration,
@@ -1712,10 +1820,11 @@ function personalResponseBackstop(): string {
            (SELECT COUNT(*) FROM brain_expectations) AS xc, (SELECT COALESCE(MAX(id),0) FROM brain_expectations) AS xm,
            (SELECT COUNT(*) FROM brain_decisions) AS dc, (SELECT COALESCE(MAX(id),0) FROM brain_decisions) AS dm,
            (SELECT COUNT(*) FROM brain_decisions WHERE status = 'applied') AS dap,
+           (SELECT COUNT(*) FROM brain_decisions WHERE status = 'observed') AS dobs,
            (SELECT COUNT(*) FROM brain_decisions WHERE superseded_by IS NOT NULL) AS dsup`
       )
       .get() as any;
-    return [r?.ec, r?.em, r?.xc, r?.xm, r?.dc, r?.dm, r?.dap, r?.dsup].join("|");
+    return [r?.ec, r?.em, r?.xc, r?.xm, r?.dc, r?.dm, r?.dap, r?.dobs, r?.dsup].join("|");
   } catch {
     // A partial/imported DB without the ledger tables: never cache rather than risk
     // serving a stale model.
@@ -1752,7 +1861,14 @@ function computeWhatWorksForYou(today = localDateISO()): CoachWhatWorksForYou | 
     .map((rows) => learningForGroup(rows, today))
     .filter((item): item is NonNullable<typeof item> => item != null)
     .sort((a, b) => b.learning.last_observed.localeCompare(a.learning.last_observed));
-  const learned = ranked.slice(0, 4);
+  // …with at most ONE of the four reserved for an observed-only learning. Observe-tier
+  // decisions are recorded far more often than applied ones, so an unguarded recency
+  // sort would fill the whole athlete-facing list with readings of things that were
+  // never changed, and the learnings that carry the modifiers would go unsaid.
+  const observedOnlyRanked = ranked.filter((item) => item.observed_only).slice(0, OBSERVED_ONLY_PROSE_SLOTS);
+  const learned = [...ranked.filter((item) => !item.observed_only), ...observedOnlyRanked]
+    .sort((a, b) => b.learning.last_observed.localeCompare(a.learning.last_observed))
+    .slice(0, 4);
   // Selected and capped SEPARATELY, then appended. A day read is evaluated every
   // morning, so these are always the most recent rows in the ledger — folded into the
   // sort above they would win the four slots outright and starve the very learnings
@@ -1765,10 +1881,19 @@ function computeWhatWorksForYou(today = localDateISO()): CoachWhatWorksForYou | 
   // ModifierFor takes the first match, so measurement evidence only sets the
   // nutrition step when the weight signal hasn't itself earned one. Stable sort keeps
   // the last_observed ordering within each rank; only body-measurement is demoted.
+  // …and within one rank, a learning built on decisions the athlete APPLIED precedes
+  // an observed-only one. There is one slot per target and the first match wins it, so
+  // without this the freshest observe-tier reading — and observe-tier rows are almost
+  // always the freshest — would claim a target's slot ahead of the applied evidence
+  // for the same target. Recency still decides between two readings of the same class.
   const measurementRank = (metricKey: string): number => (metricKey === "body_measurement_direction" ? 1 : 0);
   const carriers = [...ranked]
     .filter((item) => item.modifier)
-    .sort((a, b) => measurementRank(a.learning.metric_key) - measurementRank(b.learning.metric_key));
+    .sort(
+      (a, b) =>
+        measurementRank(a.learning.metric_key) - measurementRank(b.learning.metric_key) ||
+        (a.observed_only ? 1 : 0) - (b.observed_only ? 1 : 0)
+    );
 
   // ONE SLOT PER TARGET, and the target claims it before any second reading of the same
   // target does.

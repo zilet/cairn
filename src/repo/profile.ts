@@ -14,6 +14,7 @@ import {
 import {
   buildHrvGuardExpectation,
   buildLiftProgressionExpectations,
+  buildSleepGuardExpectation,
   buildTrainingFeedbackExpectations,
   liftProgressionSubjects,
   rebaseDeferredExpectations,
@@ -873,11 +874,19 @@ function recordAppliedProposalDecision(
           // whose watch has actually been producing it. A wearable is optional
           // here, so its absence writes nothing rather than an expectation that
           // could never mature.
-          const hrvGuard = buildHrvGuardExpectation(today, runWindowDays, {
+          const guardContext = {
             prior_weekly_km: Math.round(priorWeeklyKm * 10) / 10,
             new_weekly_km: newWeeklyKm,
-          });
+          };
+          const hrvGuard = buildHrvGuardExpectation(today, runWindowDays, guardContext);
           if (hrvGuard) expectations.push(hrvGuard);
+          // …and the same guard read through overnight SLEEP DURATION, under the same
+          // flowing-data rule. This is the one creator of `sleep_duration_delta`: the
+          // metric and its evaluator were declared with nothing ever writing an
+          // expectation against them, so the model carried a registered sleep lever it
+          // could never learn from.
+          const sleepGuard = buildSleepGuardExpectation(today, runWindowDays, guardContext);
+          if (sleepGuard) expectations.push(sleepGuard);
         }
       }
     }
