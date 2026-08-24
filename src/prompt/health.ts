@@ -595,6 +595,7 @@ ${promptData(context, "health_synthesis")}`;
 // The day-read, projected: a calm sketch of the next several days so the user
 // knows roughly when to lift, run, and rest — balancing their split with the
 // endurance base they're building. A SUGGESTION to reshape, never a fixed schedule.
+// Prose twin of agent-contracts.ts WEEK_AHEAD_SCHEMA — keep the named fields in lockstep.
 const WEEK_AHEAD_SCHEMA = `{
   "days": [
     { "day": "<weekday, e.g. 'Wed', or 'Today'/'Tomorrow'>", "kind": "lift|run|mixed|rest",

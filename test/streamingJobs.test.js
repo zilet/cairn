@@ -353,21 +353,26 @@ test("jobStreamsDeltas: only the prose-bearing kinds stream", () => {
 });
 
 // ---------------- the one-shot (non-streamed) path parses marker-aware too ----------------
-// Post-integration review finding: the reshaped prompts invite free prose, and a stray
-// `{` in that prose anchors plain extractJson's first-brace scan on a non-JSON span —
-// blanking the parse even though the real JSON sits complete after the data marker.
-// runChosen therefore threads extractMarkedJson through runAgentWithFallback via
-// RunOpts.extract, so the contract is honored on EVERY call path, not just the one
-// that streams. These tests pin both the failure mode and the plumbing.
+// The reshaped prompts invite free prose. A narration brace (`{1800-2000}`) is no
+// longer a death sentence for extractJson — it skips non-JSON spans — but a VALID
+// JSON object in the prose is still the FIRST object extractJson returns, which is
+// the wrong payload. extractMarkedJson slices past the markers first so the op
+// still parses the contract sitting after the data marker. runChosen threads it
+// through runAgentWithFallback via RunOpts.extract.
 
-test("a stray brace in the prose blanks plain extractJson but not extractMarkedJson", () => {
+test("extractJson skips a narration brace; extractMarkedJson still wins when prose holds real JSON", () => {
   const good = '{"change":false,"summary":"holding steady"}';
   const braceInProse = `${CHAT_REPLY_SENTINEL}\nYou sit in the {1800-2000} kcal window most days.\n${CHAT_ACTION_SENTINEL}\n${good}`;
   const braceInNarration = `I will query the {sessions} table first.\n${CHAT_REPLY_SENTINEL}\nSteady week.\n${CHAT_ACTION_SENTINEL}\n${good}`;
   for (const text of [braceInProse, braceInNarration]) {
-    assert.equal(extractJson(text), null, "plain extractJson misses the real JSON (the regression this guards)");
+    assert.deepEqual(extractJson(text), { change: false, summary: "holding steady" });
     assert.deepEqual(extractMarkedJson(text), { change: false, summary: "holding steady" });
   }
+  // Prose that itself contains a complete JSON object: extractJson takes that first
+  // object; the marker-aware parser still returns the contract after the data marker.
+  const jsonInProse = `${CHAT_REPLY_SENTINEL}\nThe old target was {"kcal":1800}.\n${CHAT_ACTION_SENTINEL}\n${good}`;
+  assert.deepEqual(extractJson(jsonInProse), { kcal: 1800 });
+  assert.deepEqual(extractMarkedJson(jsonInProse), { change: false, summary: "holding steady" });
 });
 
 test("runAgentWithFallback honors RunOpts.extract on a real (stub) run", async () => {

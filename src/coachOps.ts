@@ -51,6 +51,7 @@ import {
 import { personalizedNutritionStep } from "./domain/brain/underfueling-service.js";
 import {
   DAILY_SESSION_SUGGESTION_NORMALIZATION,
+  INSIGHT_SCHEMA,
   MEAL_PLAN_STRUCTURE_SCHEMA,
   MEAL_SWAP_SCHEMA,
   PLAN_PROPOSAL_SCHEMA,
@@ -1945,6 +1946,7 @@ export async function generateInsight(
       onDelta: hooks?.onDelta,
       boundedReads: true,
       acceptParsed: isInsightResult,
+      schema: INSIGHT_SCHEMA,
     });
     chosen = run.agent;
     result = run.result;

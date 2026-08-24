@@ -37,6 +37,7 @@ import {
 } from "./shared.js";
 
 // ---------- the day read (Phase 1A — the soul) ----------
+// Prose twin of agent-contracts.ts DAY_READ_SCHEMA — keep the named fields in lockstep.
 const DAY_READ_SCHEMA = `{
   "kind": "train|easy|rest|done",
   "headline": "<2-5 word plain-language state. Prospective when train/easy/rest ('Long run today.'); past-tense acknowledgement when done ('Long run done.')>",
@@ -778,12 +779,11 @@ ${promptData(context, "daily_composition")}`;
 }
 
 // ---------- quiet cross-domain insight (Phase 6A — pull, never push) ----------
-// TRAP, if anyone later wires JSON-schema structured output for the insight op:
-// `connection` MUST be named in that schema. Constrained decoding drops fields the
-// schema does not name, and `additionalProperties: true` does NOT prevent it (see
-// docs/ARCHITECTURE.md on agent structured output) — the model would emit prose with
-// no connection object, every insight would fall back to text-only derivation, and
-// the dedup regression would be silent.
+// Prose twin of agent-contracts.ts INSIGHT_SCHEMA. `connection` MUST stay named
+// there — constrained decoding drops unnamed fields (additionalProperties: true
+// does not prevent it), and every insight would then fall back to text-only
+// derivation. The JSON Schema also names `requests` so the coach-read loop can
+// forward the same object without amputating a read request.
 const INSIGHT_SCHEMA = `{
   "kind": "connection",
   "found": true,
@@ -882,6 +882,7 @@ ${promptData(context, "insight")}`;
 }
 
 // ---------- standing weekly read (Phase 6B — a read that waits, not a nag) ----------
+// Prose twin of agent-contracts.ts INSIGHT_SCHEMA (weekly_read omits `connection`).
 const WEEKLY_READ_SCHEMA = `{
   "kind": "weekly_read",
   "found": true,

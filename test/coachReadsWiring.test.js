@@ -16,7 +16,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runChosenWithCoachReads, runChosenStreaming } from "../dist/runChosen.js";
 import { computeDayRead, isValidDayReadAgentResult } from "../dist/dayread.js";
-import { isHealthReviewResult, isInsightResult } from "../dist/agent-contracts.js";
+import { DAY_READ_SCHEMA, isHealthReviewResult, isInsightResult } from "../dist/agent-contracts.js";
 import "./_seed.js";
 
 function chosen(parsed, agent = "terra") {
@@ -36,6 +36,30 @@ const trainingResult = (data = { events: [] }) => ({
 });
 
 // ---- Day read: the exact predicate flows through the bounded loop ----
+
+test("day-read: RunOpts.schema is forwarded through the coach-read loop", async () => {
+  let seen;
+  const finalRead = { kind: "train", why: "Recovery held through the block — good to train." };
+  await runChosenWithCoachReads(
+    "auto",
+    "DAY READ SNAPSHOT",
+    {
+      op: "day_read",
+      mode: "ordinary",
+      timeoutMs: 5_000,
+      acceptParsed: (parsed) => isValidDayReadAgentResult(parsed),
+      schema: DAY_READ_SCHEMA,
+    },
+    {},
+    {
+      run: async (_agent, _prompt, opts) => {
+        seen = opts.schema;
+        return chosen(finalRead);
+      },
+    }
+  );
+  assert.equal(seen, DAY_READ_SCHEMA);
+});
 
 test("day-read: a coach_read round-trip terminating in a valid day-read payload is accepted", async () => {
   const finalRead = { kind: "train", why: "Recovery held through the block — good to train.", headline: "Good to train." };

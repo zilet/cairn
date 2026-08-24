@@ -10,6 +10,8 @@ import { runChosenWithCoachReads } from "./runChosen.js";
 import { localDateISO } from "./repo/shared.js";
 import { isValidTimeZone } from "./tz.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
+import { DAY_READ_SCHEMA } from "./agent-contracts.js";
+import { matchesJsonSchema } from "./json-schema.js";
 import {
   dayReadHeadline,
   dayReadPolicyReason,
@@ -457,6 +459,7 @@ export function isValidDayReadAgentResult(
   // which is the same evidence by another route — see feltStrongWithNoBrake.
   trainingSignals?: Record<string, any> | null
 ): boolean {
+  if (!matchesJsonSchema(DAY_READ_SCHEMA, value, { coerce: true })) return false;
   const validShape = !!(
     value &&
     typeof value === "object" &&
@@ -530,6 +533,7 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
       mode: "ordinary",
       timeoutMs: repo.interactiveTimeoutForOp("day_read"),
       acceptParsed: (parsed) => isValidDayReadAgentResult(decodeDayReadAgentProse(parsed), baseline),
+      schema: DAY_READ_SCHEMA,
     });
     // Decoded HERE, once, before both the predicate and the write — so what is
     // validated is exactly what is stored, and the athlete never reads an entity.

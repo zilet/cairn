@@ -71,3 +71,41 @@ test("a fully valid object always round-trips to the same value", () => {
   const obj = { changes: [{ exercise: "Squat", target_weight: 225 }], summary: "ok" };
   assert.deepEqual(extractJson(JSON.stringify(obj)), obj);
 });
+
+test("skips a narration brace span and still finds the real object", () => {
+  // Live CLIs narrate before the contract ("I'll set {kind} to train") — the first
+  // `{` is NOT JSON, and the old first-brace scan blanked the payload that followed.
+  const captured = [
+    'I will emit {kind} as train.\n{"kind":"train","why":"Recovery held."}',
+    "You sit in the {1800-2000} kcal window.\n{\"change\":false,\"summary\":\"holding steady\"}",
+    "Looking at the {sessions} table first.\n{\"found\":true,\"text\":\"Easy runs protect the lifts.\"}",
+  ];
+  assert.deepEqual(extractJson(captured[0]), { kind: "train", why: "Recovery held." });
+  assert.deepEqual(extractJson(captured[1]), { change: false, summary: "holding steady" });
+  assert.deepEqual(extractJson(captured[2]), { found: true, text: "Easy runs protect the lifts." });
+});
+
+test("strips a leading BOM and C0 controls between tokens", () => {
+  assert.deepEqual(extractJson("\uFEFF{\"ok\":true}"), { ok: true });
+  assert.deepEqual(extractJson("{\"ok\":\u0001true}"), { ok: true });
+  assert.deepEqual(extractJson("\u0007{\"a\":1}\u0008"), { a: 1 });
+});
+
+test("finds JSON in an unclosed ```json fence (truncated close)", () => {
+  const out = "Here:\n```json\n{\"kind\":\"rest\",\"why\":\"Three loading days.\"}\n";
+  assert.deepEqual(extractJson(out), { kind: "rest", why: "Three loading days." });
+});
+
+test("prefers a later fenced payload over an earlier closed fence of prose", () => {
+  const out = "```\nnot json\n```\n```json\n{\"v\":9}\n```";
+  assert.deepEqual(extractJson(out), { v: 9 });
+});
+
+test("trailing junk after a complete object is ignored", () => {
+  assert.deepEqual(extractJson('{"found":false}\nThanks! {not json}'), { found: false });
+});
+
+test("does not accept trailing-comma JSON as a repair", () => {
+  assert.equal(extractJson('{"a":1,}'), null);
+  assert.equal(extractJson("Here is the plan: {kind: \"train\"}"), null);
+});
