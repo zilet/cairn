@@ -749,6 +749,20 @@ const LOW_SLEEP_CAVEAT: readonly string[] = [
   "the nights have been short for a while now, so keep today measured and stop shy of failure",
   "sleep hasn't been generous recently, so hold the session steady and finish a rep or two early",
 ];
+// Round W3.4, rule 4: what short sleep actually costs is INJURY EXPOSURE, not the
+// session. LOW_SLEEP_CAVEAT above asks for a controlled session, which is the right
+// general instinct and stops one step short of the specific one — the coach prompt is
+// being told to strip the PR attempts and the plyometric work while the easy volume
+// and the technique work stay, and the athlete deserves to be told the same thing
+// rather than being handed a session that quietly lost its top set.
+//
+// So no phrasing here may suggest cutting the session, and none may name a number.
+const SLEEP_EXPOSURE_CAVEAT: readonly string[] = [
+  "short sleep is the wrong night to chase a personal best or do much jumping, so keep the session and leave the risky edges out",
+  "the session stands, but a short night isn't the time for a max attempt or hard plyometrics — keep the volume and the technique work",
+  "keep today as planned and just take the sharp edges off it: no maxing out, nothing explosive, the rest stays",
+  "a night this short mostly costs you on the risky stuff, so skip the max attempts and the jumping and keep everything else",
+];
 // The pronoun in the first phrasing ("until that settles") points at the sentence
 // before it — the brake's own spoken voice, named by action.directives.training_source.
 // The middle two name the thing outright, so a short lead still leaves a caveat that
@@ -792,6 +806,7 @@ export const DAY_READ_CAVEAT_VARIANTS: Readonly<Record<string, readonly string[]
   "planned_training:anticipate_deload": ANTICIPATE_DELOAD_CAVEAT,
   "planned_training:volume_spike": VOLUME_SPIKE_CAVEAT,
   "planned_training:low_sleep": LOW_SLEEP_CAVEAT,
+  "planned_training:sleep_exposure": SLEEP_EXPOSURE_CAVEAT,
   "planned_training:hold_aggression": HOLD_AGGRESSION_CAVEAT,
   "planned_training:commitment_pressure": COMMITMENT_PRESSURE_CAVEAT,
   "planned_training:life_pressure": LIFE_PRESSURE_CAVEAT,
@@ -807,6 +822,10 @@ export const DAY_READ_CAVEAT_CONCEPT: Readonly<Record<string, RegExp>> = {
   "planned_training:anticipate_deload": /\brecovery(?:'s)?\b/i,
   "planned_training:volume_spike": /\b(?:running|miles)\b/i,
   "planned_training:low_sleep": /\b(?:sleep|nights?)\b/i,
+  // The exposure caveat must stay about the RISKY ELEMENTS, never about shortening
+  // or skipping the day — that disjointness is what keeps rule 4's "downgrade
+  // exposure, never cancel" from drifting back into a soft rest read.
+  "planned_training:sleep_exposure": /\b(?:max(?:ing)?|personal best|jumping|plyometrics|explosive|edges)\b/i,
   "planned_training:hold_aggression": /\b(?:load|volume)\b/i,
   // The commitment caveat must stay about the CLOCK, and the life-pressure one about
   // RECOVERY. Keeping the two concepts disjoint is what stops the false-commitment
@@ -2315,7 +2334,11 @@ export function dayRead(
   // you'll likely want a reset"). Null-safe: no baseline → no anticipation.
   const dl = rec?.delta ?? null;
   let recoveryDrift = 0; // count of signals pointing the wrong way vs the athlete's own norm
-  const trendBars = recoveryTrendBars(rec?.baseline);
+  // Judged against the athlete's OWN dispersion where the baseline window carried
+  // enough of it (round W3.4, rule 1) — the same call the signal state makes with the
+  // same two arguments, so the two layers keep agreeing about what "meaningfully off
+  // the norm" means. Absent dispersion, these are the bars they always were.
+  const trendBars = recoveryTrendBars(rec?.baseline, rec?.dispersion);
   // HRV running meaningfully below baseline is a fatigue tell.
   if (dl?.hrv != null && rec?.baseline?.hrv != null && rec.baseline.hrv > 0 && dl.hrv < -trendBars.hrv)
     recoveryDrift++;
@@ -3156,6 +3179,18 @@ export function dayRead(
         // — permanent rest traded for permanent easy. The watch still gets voiced (and
         // the rule survives below, for a day with nothing programmed to soften).
         if (chronicLowSleep) caveats.push(pickDayVariant(LOW_SLEEP_CAVEAT, d, "planned_training:low_sleep"));
+        // ...and the ACUTE short night, which had nothing to say here at all. A short
+        // night ON TOP of a short window is the rest path (`corroboratedLowSleep`) and
+        // never reaches this rule; a short night on an otherwise-normal window reached
+        // it and passed through silently, because the existing sleep caveat speaks only
+        // for the chronic trend. That silence is what rule 4 names: one bad night never
+        // forces rest, and it must not vanish either — what it costs is injury
+        // EXPOSURE, which is the same thing the coach prompt is being told through
+        // `training_constraints`. Bookkeeping, not a veto: the `backed` tier is already
+        // withdrawn by the same night's own recovery caution in the signal state, so a
+        // second veto here would be the one finding charged twice.
+        else if (freshShortSleep)
+          caveats.push(pickDayVariant(SLEEP_EXPOSURE_CAVEAT, d, "planned_training:sleep_exposure"));
         const holdAggression = signalState.action.directives.training === "hold_aggression";
         // Same rule as the protect read above: the athlete hears the athlete voice,
         // never the machine-facing summary. This is the second (and only other) path by

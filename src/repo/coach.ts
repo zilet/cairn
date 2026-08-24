@@ -79,6 +79,7 @@ export {
 } from "./directives-read.js";
 import { CADENCE_WINDOW_DAYS, classifyWearPattern, type WearPattern } from "./sensor-cadence.js";
 import { sensorAgeDays } from "./sensor-freshness.js";
+import { sampleSd, STRESS_WINDOW_DAYS, trainingConstraintsRead } from "./recovery-science.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { readAdherenceModel } from "./brain/read-adherence.js";
 import { getProgress, getRecentSessions, typicalTrainingHour, vouchedRunCompliance } from "./sessions.js";
@@ -1578,6 +1579,24 @@ function getCoachContextFromSnapshot(): CoachContext {
     body_metrics: brainSignal("body_metrics", () => {
       try {
         return bodyMetricsContextSlice();
+      } catch {
+        return null;
+      }
+    }),
+    // The two ADVISORY session constraints the recovery science owes the coach
+    // prompts: short sleep downgrades injury-exposed elements without cancelling the
+    // session, and a sustained stressful stretch trims sets while intensity holds.
+    // Null on an ordinary day, so the payload is unchanged when nothing applies —
+    // and null-safe by construction (a pure read over snapshots already built here).
+    // The check-in window is the STRESS read's own 14 days, not the person slice's 7.
+    training_constraints: brainSignal(`training_constraints:${today}`, () => {
+      try {
+        return trainingConstraintsRead({
+          date: today,
+          recovery,
+          checkins: listCheckins(STRESS_WINDOW_DAYS),
+          contextEvents: contextEventsView,
+        });
       } catch {
         return null;
       }
@@ -3095,6 +3114,19 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
   });
   const recent = medians(recentRows);
   const baseline = medians(baselineRows);
+  // The athlete's OWN night-to-night spread over the same baseline window the
+  // medians above are taken from — the input to the smallest-worthwhile-change band
+  // (recoveryTrendBars). Taken over exactly the rows the median is taken over, so a
+  // contradicted mid-day estimate cannot inflate the spread it is already excluded
+  // from, and null below its own sample floor. Null is the whole of its authority:
+  // absent it, every band is byte-identical to what it was before.
+  const valuesOf = (field: Signal, list: ResolvedRow[]): number[] =>
+    list.map((row) => Number(row.values[field])).filter((value) => Number.isFinite(value));
+  const dispersion = {
+    sleep: sampleSd(valuesOf("sleep_min", baselineRows)),
+    hrv: sampleSd(valuesOf("hrv_ms", trustworthy(baselineRows, "hrv_ms"))),
+    rhr: sampleSd(valuesOf("resting_hr", trustworthy(baselineRows, "resting_hr"))),
+  };
   const diff = (a: number | null, b: number | null) => (a != null && b != null ? round1(a - b) : null);
   // The floor lands HERE and nowhere else: a delta that has not earned its
   // coverage is null, and every consumer downstream already reads null as "no
@@ -3168,6 +3200,7 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
     recent,
     baseline,
     delta,
+    dispersion,
     verified,
     activities: (garmin?.activities ?? []).filter((activity: any) => {
       const date = String(activity?.date ?? activity?.last_date ?? "");

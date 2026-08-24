@@ -200,6 +200,11 @@ const PLAN_SITE: PromptSiteSpec = {
     "coaching_focus",
     "signal_state",
     "garmin",
+    // The advisory session constraints (short sleep downgrades injury-exposed work;
+    // a sustained stressful stretch trims sets and holds intensity). Earned under
+    // rule 1: renderTrainingConstraints ships at every site that carries this key,
+    // and it names the key as the thing the constraint comes from.
+    "training_constraints",
   ],
   sessions: SESSIONS_FULL,
 };
@@ -242,6 +247,7 @@ export const PROMPT_CONTEXT_SITES = {
       "trajectory",
       "coaching_focus",
       "signal_state",
+      "training_constraints",
     ],
     sessions: SESSIONS_RECENT,
   },
@@ -290,6 +296,11 @@ export const PROMPT_CONTEXT_SITES = {
       // than each deciding for itself what counts as tomorrow being spoken for. Null on
       // an ordinary morning, so the payload is unchanged when nothing is on.
       "tomorrow_holds",
+      // The advisory session constraints. The Brief does not prescribe the session,
+      // but it DOES say what shape today has — and a caveat about easing off the
+      // exposed work has to match the constraint the session prompt will be handed,
+      // or the two surfaces disagree about the same morning.
+      "training_constraints",
     ],
     sessions: SESSIONS_RECENT,
     // The Brief READS the day; it does not prescribe the session. Every set-level
@@ -319,6 +330,9 @@ export const PROMPT_CONTEXT_SITES = {
       // opening a due test folds into (a quality slot, a first heavy set).
       "hr_model",
       "calibration",
+      // THE site rule 4 is written for: this prompt prescribes the actual session,
+      // so it is where "keep the session, downgrade the exposed elements" has to land.
+      "training_constraints",
     ],
     sessions: SESSIONS_RECENT,
   },
@@ -331,7 +345,19 @@ export const PROMPT_CONTEXT_SITES = {
   // deterministic read layer (recovery, program_state, performance, signal_state,
   // coaching_focus, run plan, journey, day_read, …) that the envelope already encodes.
   daily_composition: {
-    keys: [...PERSON, ...TRAINING_LOG, "directives", "health", "health_review", "imaging", "supplements"],
+    keys: [
+      ...PERSON,
+      ...TRAINING_LOG,
+      "directives",
+      "health",
+      "health_review",
+      "imaging",
+      "supplements",
+      // The one read-layer key this site earns: the constraints are about session
+      // COMPOSITION (which elements to downgrade, which sets to trim), which is
+      // precisely and only what this prompt decides.
+      "training_constraints",
+    ],
     sessions: SESSIONS_MINIMAL,
   },
 
