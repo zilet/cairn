@@ -190,6 +190,9 @@ test("meal-plan helper renders planner preferences and empty state safely", () =
   assert.doesNotMatch(prefsHtml, /Fasted <AM>/);
   assert.match(emptyHtml, /No meal plan yet/);
   assert.match(emptyHtml, /id="mealDraftBtn"/);
+  assert.match(emptyHtml, /class="pillbtn pill-accent"/);
+  assert.match(emptyHtml, /Ask team to plan this week/);
+  assert.doesNotMatch(emptyHtml, /ASK TEAM TO PLAN THIS WEEK|logbtn meals-cta/);
   assert.match(emptyHtml, /fish &amp; rice/);
 });
 

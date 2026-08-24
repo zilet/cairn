@@ -168,5 +168,5 @@ test("health standing renderer keeps quiet empty states", () => {
   assert.match(standing.hstandBpRows([]), /No readings yet/);
   const html = standing.renderHealthStandingHtml({ subject: { age: null }, comparisons: [] }, {});
   assert.match(html, /Your standing read will sharpen as data lands/);
-  assert.match(html, /VO2max or a DEXA\/body-fat anchor unlocks real age-band percentiles/);
+  assert.match(html, /VO2max or a DEXA\/body-fat anchor unlocks your age-band standing/);
 });

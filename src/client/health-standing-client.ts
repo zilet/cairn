@@ -81,7 +81,7 @@ function renderHealthStandingHtml(data: HealthStandingRead | null | undefined, o
   const sexWord = subject.sex === "female" ? "women" : "men";
   const comparisons = Array.isArray(standing.comparisons) && standing.comparisons.length
     ? standing.comparisons.map((comparison) => hstandCompHtml(comparison, sexWord, ageNumber)).join("")
-    : `<div class="hstand-empty">VO2max or a DEXA/body-fat anchor unlocks real age-band percentiles.</div>`;
+    : `<div class="hstand-empty">VO2max or a DEXA/body-fat anchor unlocks your age-band standing.</div>`;
   const dimensions = Array.isArray(standing.dimensions)
     ? standing.dimensions
         .filter((dimension) => dimension.id !== "bp" && dimension.id !== "body")

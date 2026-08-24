@@ -298,7 +298,7 @@ type MealPlannerPaint = {
         <div class="artile artile-xl meals-empty-art">${art("food", "meal plate")}</div>
         <div class="meals-empty-title">No meal plan yet</div>
         <div class="meals-empty-sub">Your expert team can build the first week around your training, health context, preferences, and lean-safe targets.</div>
-        <button id="mealDraftBtn" class="logbtn meals-cta">ASK TEAM TO PLAN THIS WEEK</button>
+        <button id="mealDraftBtn" class="pillbtn pill-accent">Ask team to plan this week</button>
         <div id="mealDraftStatus" class="meals-status"></div>
       </div>${mealPrefsHtml(mealPrefs, 1)}`;
   }

@@ -2472,7 +2472,7 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 .meals-empty-title{font-family:var(--font-display);font-style:italic;font-weight:520;
   font-variation-settings:"opsz" 50;font-size:1.35rem}
 .meals-empty-sub{font-size:.86rem;color:var(--muted);max-width:330px;margin:6px auto 0;line-height:1.5}
-.meals-cta{width:auto;padding:0 24px;height:46px;font-size:.85rem;letter-spacing:.06em;margin-top:18px}
+.meals-empty .pillbtn{margin-top:18px}
 .meals-status{margin-top:10px;color:var(--muted);font-size:.82rem;min-height:1em}
 .meals-redraft{margin:6px 0 4px}
 
