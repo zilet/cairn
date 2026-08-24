@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**318 routes** across 109 groups.
+**321 routes** across 110 groups.
 
 ## `/activities`
 
@@ -191,6 +191,14 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | DELETE | `/api/context-events/:id` |  |
 | PUT | `/api/context-events/:id` |  |
 | POST | `/api/context-events/:id/resolve` | Close a context event as healed/over (one-tap resolve) without hard-deleting it — it stays on the timeline and in exports but stops gating the day-read/conductor. |
+
+## `/context-tags`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/context-tags` |  |
+| POST | `/api/context-tags/toggle` | Tap = tag today, tap again = untag (archives the row). Body: { key, date? }. |
+| GET | `/api/context-tags/vocab` | The vocabulary itself (travel/drinks/rough sleep/work crunch/feeling off). |
 
 ## `/daily-session`
 

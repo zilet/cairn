@@ -2,14 +2,17 @@ import { z } from "zod";
 import {
   addContextEvent,
   addFamily,
+  CONTEXT_TAG_VOCAB,
   deleteContextEvent,
   deleteFamily,
   deleteSupplement,
   getInjuryImpacts,
   listContextEvents,
+  listContextTags,
   listFamily,
   listSupplements,
   resolveContextEvent,
+  toggleContextTag,
   understandSupplements,
   updateContextEvent,
   updateFamily,
@@ -84,6 +87,25 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
     "For each ACTIVE injury on the life timeline, the planned exercises it loads (with where they appear in the plan + any existing constraint note) and a few safe alternative exercises to consider. Deterministic, offline. Suggestions only — it never changes the plan.",
     {},
     async () => asText(getInjuryImpacts())
+  );
+
+  // ---- context tags (cheap one-tap life context, controlled vocabulary) ----
+  const contextTagKeys = CONTEXT_TAG_VOCAB.map((t) => t.key) as [string, ...string[]];
+  server.tool(
+    "list_context_tags",
+    `List the context tags (${CONTEXT_TAG_VOCAB.map((t) => t.key).join("/")}) tapped for a given day (default today). Cheap volunteered life context the insight generator quietly tests against outcomes — never advice, never surfaced as a lecture.`,
+    { date: z.string().nullable().optional().describe("YYYY-MM-DD; defaults to today") },
+    async ({ date }) => asText(listContextTags(date ?? undefined))
+  );
+
+  server.tool(
+    "toggle_context_tag",
+    `Tag or untag one day with a controlled-vocabulary context tag (${CONTEXT_TAG_VOCAB.map((t) => t.key).join("/")}). Tapping an already-tagged day untags it (archives the row). Never invent a key outside the vocabulary.`,
+    {
+      key: z.enum(contextTagKeys),
+      date: z.string().nullable().optional().describe("YYYY-MM-DD; defaults to today"),
+    },
+    async ({ key, date }) => asText(toggleContextTag(key, date ?? undefined))
   );
 
   // ---- family roster (people the coach plans life around) ----

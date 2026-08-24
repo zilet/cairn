@@ -11,6 +11,11 @@ type CaptureFrequentFood = import("../contracts/client.js").ClientFrequentFood &
   kcal?: number | string | null;
 };
 type CaptureCheckin = import("../contracts/client.js").ClientCheckin & { error?: string };
+type CaptureContextTagDef = import("../contracts/client.js").ClientContextTagDef;
+type CaptureContextTag = import("../contracts/client.js").ClientContextTag;
+type CaptureContextTagToggleResponse = import("../contracts/client.js").ClientContextTagToggleResponse & {
+  error?: string;
+};
 type CaptureInsight = import("../contracts/client.js").ClientInsight & {
   confidence?: unknown;
   kind?: string | null;

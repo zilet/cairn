@@ -68,7 +68,7 @@ export interface CoachDayIntake {
   entries: CoachDayIntakeEntry[];
 }
 
-export type CoachContextEventKind = "trip" | "injury" | "life_event" | "family_event" | (string & {});
+export type CoachContextEventKind = "trip" | "injury" | "life_event" | "family_event" | "tag" | (string & {});
 
 export interface CoachContextEvent extends CoachRecord {
   id?: number;
@@ -371,6 +371,14 @@ export interface CoachContextEnvelope {
   // like `tomorrow_holds`: a partial context builder never synthesizes it.
   typical_training_hour?: CoachRecord | null;
   next_step: CoachRecord | null;
+  // Cheap, athlete-volunteered context tags (travel/drinks/rough sleep/work crunch/
+  // feeling off) over a trailing window — evidence for the quiet cross-domain insight
+  // search to test against outcomes ("three travel weeks each preceded a flat HRV
+  // stretch"). `context_events` only ever carries what's ACTIVE today; a tag is a
+  // single day that's over by tomorrow, so a durable window needs its own key.
+  // Additive + optional, like `tomorrow_holds`: a partial context builder or an
+  // imported DB never synthesizes it.
+  recent_context_tags?: CoachRecord[] | null;
 }
 
 export type CoachContext = CoachContextEnvelope;

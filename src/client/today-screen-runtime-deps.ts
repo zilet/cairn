@@ -97,6 +97,7 @@ function createTodayScreenRuntimeDependencies(input: TodayScreenRuntimeDepsInput
     loadHealthFocusBanner: () => bridge().loadHealthFocusBanner(),
     loadWearable: (isToday) => bridge().loadWearable(isToday),
     loadCheckin,
+    loadTagChips,
     viewEnter,
     invalidateTodayProgression: () => bridge().invalidateTodayProgression(),
     scheduleRxRefresh: () => bridge().scheduleRxRefresh(),

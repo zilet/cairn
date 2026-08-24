@@ -154,6 +154,19 @@ test("an explicitly dated event overlapping the window confounds it exactly as b
   assert.equal(verdict().verdict, "inconclusive");
 });
 
+test("a context tag overlapping the window is a confounder even though its key never matches the disruptive-text regex", () => {
+  recordDecision(decision(), [weightExpectation()]);
+  // "alcohol" contains none of trip/travel/injur/ill/sick/stress/medicat/surgery/
+  // hospital/bereave/grief — it would fall through the text regex if kind:'tag'
+  // weren't registered explicitly, which is exactly the gap this closes.
+  contextEvent({ kind: "tag", title: "alcohol", start_date: "2026-01-05", end_date: "2026-01-05" });
+
+  const evaluation = verdict();
+  assert.equal(evaluation.verdict, "inconclusive");
+  // The athlete-facing label ("drinks"), never the raw vocabulary key.
+  assert.match(evaluation.confounders.join(" "), /Context event 'drinks' overlapped the evaluation window\./);
+});
+
 test("aging past the horizon is visible to an operator rather than silent", () => {
   contextEvent({ start_date: "2025-10-01", end_date: null, title: "Right hand joint pain" });
   contextEvent({ start_date: "2026-01-10", end_date: null, title: "Tweaked calf" });

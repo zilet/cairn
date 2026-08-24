@@ -4,6 +4,7 @@ import { emitBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { activeTimeZone } from "../tz.js";
+import { contextTagLabel, isContextTagKey } from "../contextTags.js";
 import { safeUploadPath } from "../uploadPaths.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { sensorAgeDays } from "./sensor-freshness.js";
@@ -1881,9 +1882,10 @@ export function defaultInjuryWindow(severity?: string | null): number {
   return INJURY_WINDOW_BY_SEVERITY[s] ?? DEFAULT_INJURY_WINDOW_DAYS;
 }
 
+const CONTEXT_EVENT_KINDS = ["trip", "injury", "life_event", "family_event", "tag"];
+
 export function addContextEvent(input: ContextEventInput) {
-  const kind =
-    input.kind && ["trip", "injury", "life_event", "family_event"].includes(input.kind) ? input.kind : "life_event";
+  const kind = input.kind && CONTEXT_EVENT_KINDS.includes(input.kind) ? input.kind : "life_event";
   // Injuries get an expected healing window so the brain can let them fade: honor an
   // explicit value, else default from severity. Non-injury events stay open-ended.
   let erd: number | null = null;
@@ -2000,8 +2002,7 @@ export function getContextEvent(id: number) {
 export function updateContextEvent(id: number, patch: ContextEventInput) {
   const cur = db.prepare(`SELECT * FROM context_events WHERE id = ?`).get(id) as any;
   if (!cur) return null;
-  const kind =
-    patch.kind && ["trip", "injury", "life_event", "family_event"].includes(patch.kind) ? patch.kind : cur.kind;
+  const kind = patch.kind && CONTEXT_EVENT_KINDS.includes(patch.kind) ? patch.kind : cur.kind;
   const merged = {
     kind,
     title: patch.title !== undefined ? patch.title : cur.title,
@@ -2051,6 +2052,73 @@ export function updateContextEvent(id: number, patch: ContextEventInput) {
     clinical: kind === "injury",
   });
   return row;
+}
+
+// ---------- context tags (WHOOP-journal pattern: cheap, athlete-volunteered life
+// context that outcomes get quietly tested against — never advice, never a lecture) ----
+// Reuses context_events with kind='tag'; `title` holds the vocabulary key (never free
+// text). One row per (tag, day): a second tap untags by archiving the row rather than
+// deleting it, so a retracted tap still exists on record just like every other archive.
+// The vocabulary itself lives in contextTags.ts (ONE contract shared with chat/UI).
+export { CONTEXT_TAG_VOCAB, contextTagLabel, isContextTagKey } from "../contextTags.js";
+
+// Tags tapped on `date` (default today), not archived — the one-tap chip row's state.
+export function listContextTags(date?: string): Array<{ id: number; key: string; label: string; date: string }> {
+  const day = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateISO();
+  const rows = db
+    .prepare(`SELECT id, title, start_date FROM context_events WHERE kind = 'tag' AND archived = 0 AND start_date = ?`)
+    .all(day) as any[];
+  return rows
+    .filter((r) => isContextTagKey(r.title))
+    .map((r) => ({ id: r.id, key: r.title as string, label: contextTagLabel(r.title), date: r.start_date }));
+}
+
+// Tag context_events over the trailing `days` (inclusive of today), archived ones
+// excluded — a retracted tap never happened. Feeds the insight generator's search
+// for tag<->outcome co-occurrence ("three travel weeks each preceded a flat stretch").
+export function recentContextTags(days = 30): Array<{ date: string; key: string; label: string }> {
+  const today = localDateISO();
+  const since = addDaysISOLocal(today, -Math.max(1, days)) ?? today;
+  const rows = db
+    .prepare(
+      `SELECT title, start_date FROM context_events
+       WHERE kind = 'tag' AND archived = 0 AND start_date >= ? AND start_date <= ?
+       ORDER BY start_date DESC, id DESC`
+    )
+    .all(since, today) as any[];
+  return rows
+    .filter((r) => isContextTagKey(r.title))
+    .map((r) => ({ date: r.start_date, key: r.title as string, label: contextTagLabel(r.title) }));
+}
+
+// One-tap toggle: tap tags today, tap again untags (archives). Throws on an
+// unrecognized key — the chip row only ever sends a value from CONTEXT_TAG_VOCAB.
+export function toggleContextTag(key: string, date?: string): { on: boolean; row: ReturnType<typeof getContextEvent> } {
+  if (!isContextTagKey(key)) throw new Error(`unknown context tag: ${key}`);
+  const day = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateISO();
+  const existing = db
+    .prepare(`SELECT id FROM context_events WHERE kind = 'tag' AND title = ? AND start_date = ? AND archived = 0`)
+    .get(key, day) as any;
+  if (existing) {
+    updateContextEvent(existing.id, { archived: true });
+    return { on: false, row: null };
+  }
+  const row = addContextEvent({ kind: "tag", title: key, start_date: day, end_date: day });
+  return { on: true, row };
+}
+
+// Idempotent add for the CHAT path: a conversational mention should only ever ADD a
+// tag, never remove one — a toggle would make re-stating the same thing later in a
+// thread silently untag it, which is not what "also, drinks tonight" means. Returns
+// the existing row on a re-mention (no duplicate) or the freshly added one.
+export function ensureContextTag(key: string, date?: string): ReturnType<typeof getContextEvent> {
+  if (!isContextTagKey(key)) throw new Error(`unknown context tag: ${key}`);
+  const day = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateISO();
+  const existing = db
+    .prepare(`SELECT id FROM context_events WHERE kind = 'tag' AND title = ? AND start_date = ? AND archived = 0`)
+    .get(key, day) as any;
+  if (existing) return getContextEvent(existing.id);
+  return addContextEvent({ kind: "tag", title: key, start_date: day, end_date: day });
 }
 
 // Close a context event as healed/over WITHOUT hard-deleting it: stamp resolved_at so

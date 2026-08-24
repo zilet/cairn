@@ -84,7 +84,7 @@ const SITES = [
   {
     site: "insight",
     build: () => buildInsightPrompt(undefined, []),
-    kept: ["recovery", "directives", "health", "recent_sessions", "day_intake", "whole_person_trajectory"],
+    kept: ["recovery", "directives", "health", "recent_sessions", "day_intake", "whole_person_trajectory", "recent_context_tags"],
     dropped: ["garmin", "signal_state", "coaching_focus", "day_read", "recent_decisions"],
   },
   {

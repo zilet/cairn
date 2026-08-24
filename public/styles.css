@@ -3284,6 +3284,23 @@ body.swr-busy::after{
   font-size:.8rem;font-style:italic;padding:4px 2px}
 .checkin-done-mark{color:var(--sage);font-style:normal}
 
+/* context tags — cheap, one-tap life context (travel/drinks/rough sleep/work crunch/
+   feeling off). Quiet by default; a tap toggles on/off. No streaks, no history guilt —
+   evidence for the insight generator, never advice. */
+.tags-slot{margin:2px 0 4px}
+.tags-slot:empty{display:none}
+.tags-chips{display:flex;flex-wrap:wrap;gap:7px}
+.tag-chip{
+  display:inline-flex;align-items:center;background:transparent;
+  border:1px solid var(--line);border-radius:999px;
+  padding:5px 12px;cursor:pointer;color:var(--muted);font-size:.8rem;
+  transition:border-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);
+}
+.tag-chip:hover{border-color:var(--line-2);color:var(--ink-2)}
+.tag-chip:active{transform:var(--press-xs)}
+.tag-chip-on{background:var(--sage);border-color:var(--sage);color:var(--on-accent)}
+
 /* fueling follow-through — after a target change, one calm 1-tap read (no numbers) */
 .fueling-slot{margin:0}
 .fueling-slot:empty{display:none}
