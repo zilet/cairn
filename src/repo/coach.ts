@@ -8,6 +8,7 @@ import {
   listContextEvents,
   newestHealthDocDate,
   planningContextEvents,
+  recentContextTags,
 } from "./health.js";
 import { imagingForCoach } from "./imaging.js";
 import {
@@ -620,6 +621,7 @@ function buildPersonSlice(
   | "what_works_for_you"
   | "context_today"
   | "typical_training_hour"
+  | "recent_context_tags"
 > {
   const { profile, locationView, trainingIntentView, contextEventsView, contextTodayView } = signals;
   return {
@@ -679,6 +681,18 @@ function buildPersonSlice(
     // The most common hour recent sessions were logged, so chat can answer "when do
     // you usually train?" from data instead of asking. Null on thin history.
     typical_training_hour: typicalTrainingHour(),
+    // Cheap volunteered context tags over the last 30 days (travel/drinks/rough sleep/
+    // work crunch/feeling off) — evidence for the insight generator's search, never
+    // advice. Null when nothing's been tagged, so a quiet history serializes as before.
+    recent_context_tags: (() => {
+      let tags: ReturnType<typeof recentContextTags> = [];
+      try {
+        tags = recentContextTags(30);
+      } catch {
+        tags = [];
+      }
+      return tags.length ? tags : null;
+    })(),
   };
 }
 

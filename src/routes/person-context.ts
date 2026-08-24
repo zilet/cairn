@@ -4,14 +4,17 @@ import {
   addContextEvent,
   addFamily,
   addSupplement,
+  CONTEXT_TAG_VOCAB,
   deleteContextEvent,
   deleteFamily,
   deleteSupplement,
   getInjuryImpacts,
   listContextEvents,
+  listContextTags,
   listFamily,
   listSupplements,
   resolveContextEvent,
+  toggleContextTag,
   understandSupplements,
   updateContextEvent,
   updateFamily,
@@ -69,6 +72,28 @@ personContextRouter.delete("/context-events/:id", (req, res) =>
 // Structured injury timeline: for each active injury, the planned exercises it
 // touches + calm swap suggestions. Deterministic read: suggestion, never a gate.
 personContextRouter.get("/injury-impacts", (_req, res) => res.json(getInjuryImpacts()));
+
+// ---- context tags: cheap one-tap life context, a controlled vocabulary reusing context_events kind='tag' ----
+// The vocabulary itself (travel/drinks/rough sleep/work crunch/feeling off).
+personContextRouter.get("/context-tags/vocab", (_req, res) => res.json(CONTEXT_TAG_VOCAB));
+
+personContextRouter.get("/context-tags", (req, res) => {
+  const date = typeof req.query.date === "string" ? req.query.date : undefined;
+  res.json(listContextTags(date));
+});
+
+// Tap = tag today, tap again = untag (archives the row). Body: { key, date? }.
+personContextRouter.post("/context-tags/toggle", (req, res) => {
+  const b = req.body ?? {};
+  const key = String(b.key ?? "");
+  if (!CONTEXT_TAG_VOCAB.some((t) => t.key === key)) return res.status(400).json({ error: "unknown tag" });
+  const date = typeof b.date === "string" ? b.date : undefined;
+  try {
+    res.json(toggleContextTag(key, date));
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error)?.message || e) });
+  }
+});
 
 // ---- family roster (Me -> Family; recurring commitments live as family_event context_events) ----
 personContextRouter.get("/family", (_req, res) => res.json(listFamily()));

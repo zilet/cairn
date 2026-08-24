@@ -609,6 +609,7 @@ declare global {
     loadHealthFocusBanner(): unknown;
     loadWearable(isToday: boolean): unknown;
     loadCheckin(): unknown;
+    loadTagChips(): unknown;
     viewEnter(): void;
     invalidateTodayProgression(): void;
     scheduleRxRefresh(): void;
@@ -4113,6 +4114,7 @@ declare global {
         loadHealthFocusBanner(): unknown;
         loadWearable(isToday: boolean): unknown;
         loadCheckin(): unknown;
+        loadTagChips(): unknown;
         runAgendaRail(
           agenda: Partial<ClientTodayAgenda> | null | undefined,
           genericPending: ClientTodayAgendaCandidate[],

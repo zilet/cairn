@@ -2592,6 +2592,26 @@ export interface ClientContextEvent {
   [key: string]: unknown;
 }
 
+// Cheap one-tap life context (travel/drinks/rough sleep/work crunch/feeling off) —
+// a controlled vocabulary reusing context_events with kind:'tag'. Evidence for the
+// insight generator, never advice; never rendered as a lecture.
+export interface ClientContextTagDef {
+  key: string;
+  label: string;
+}
+
+export interface ClientContextTag {
+  id: number;
+  key: string;
+  label: string;
+  date: ISODateString;
+}
+
+export interface ClientContextTagToggleResponse {
+  on: boolean;
+  row: ClientContextEvent | null;
+}
+
 export interface ClientFamilyMember {
   id: number;
   name: string;
@@ -3077,6 +3097,9 @@ export interface ClientApiResponses {
   "/api/health-docs/imaging": ClientHealthDocument;
   "/api/health-docs/imaging/dicom-imports": ClientDicomImportJob;
   "/api/context-events": ClientContextEvent[];
+  "/api/context-tags": ClientContextTag[];
+  "/api/context-tags/vocab": ClientContextTagDef[];
+  "/api/context-tags/toggle": ClientContextTagToggleResponse;
   "/api/injury-impacts": ClientInjuryImpactsResponse;
   "/api/family": ClientFamilyMember[];
   "/api/learnings": ClientOutcomeLearningsResponse;

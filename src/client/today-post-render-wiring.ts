@@ -45,6 +45,7 @@ type TodayPostRenderWiringDeps = {
   loadHealthFocusBanner(): unknown;
   loadWearable(isToday: boolean): unknown;
   loadCheckin(): unknown;
+  loadTagChips(): unknown;
   runAgendaRail(
     agenda: Partial<ClientTodayAgenda> | null | undefined,
     genericPending: ClientTodayAgendaCandidate[],
@@ -105,11 +106,14 @@ type TodayPostRenderWiringApi = {
     deps.loadTableHint();
     deps.setupWeightChip();
     // Frequents ("Usual around now") + the ambient "how are you feeling?" check-in
-    // ride the capture row, quiet by default (they render nothing until their
-    // loader finds something worth a tap). The check-in also feeds dayRead, so
-    // it stays load-bearing even though it's easy to miss at a glance.
+    // + the quiet context-tag chip row ride the capture row, quiet by default (they
+    // render nothing until their loader finds something worth a tap). The check-in
+    // also feeds dayRead, so it stays load-bearing even though it's easy to miss at
+    // a glance; the tag chips never feed dayRead — they're evidence for the insight
+    // generator only.
     deps.loadFrequentFoods();
     deps.loadCheckin();
+    deps.loadTagChips();
     deps.loadContextBanner();
     if (!deps.conductorLeads) deps.loadHealthFocusBanner();
     deps.loadWearable(deps.isToday);

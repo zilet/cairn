@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**319 routes** across 109 groups.
+**321 routes** across 110 groups.
 
 ## `/activities`
 
@@ -191,6 +191,14 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | DELETE | `/api/context-events/:id` |  |
 | PUT | `/api/context-events/:id` |  |
 | POST | `/api/context-events/:id/resolve` | Close a context event as healed/over (one-tap resolve) without hard-deleting it — it stays on the timeline and in exports but stops gating the day-read/conductor. |
+
+## `/context-tags`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/context-tags` |  |
+| POST | `/api/context-tags/toggle` | Tap = tag today, tap again = untag (archives the row). Body: { key, date? }. |
+| GET | `/api/context-tags/vocab` | The vocabulary itself (travel/drinks/rough sleep/work crunch/feeling off). |
 
 ## `/daily-session`
 
@@ -782,7 +790,6 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/today-agenda` | The Today salience arbiter: ONE ranking + budget pass over the whole Today surface, so only the 1-2 things that matter most today render inline and the rest collapse behind a quiet "more". Marking "seen" at the end (debounced) powers the "since you last looked" continuity line. |
 | POST | `/api/today-agenda/ack` | Presentation acknowledgement only: health-focus retires its current semantic revision without resolving/dismissing the underlying directives; the fast-loss-attention item retires the current cut-quality episode for 14 days. Materially new evidence can create a new revision and surface either item sooner. |
-| POST | `/api/today-agenda/dismiss` | A dismiss is DIFFERENT from an ack: ack is a presentation-only revision retire (health-focus / fast-loss-attention only, and it can 409 stale). Dismiss is the generic "hide this card" affordance every dismissible agenda candidate already has client-side — this just also records the evidence row (surface_dismissals) so a REPEATED dismissal of the same card can, over time, feed the same soft suppression a thumbs-down already drives for insights. Fire-and-forget from the client; always 200 (recording is best-effort, never blocks the dismiss itself). |
 
 ## `/today-plan-day`
 

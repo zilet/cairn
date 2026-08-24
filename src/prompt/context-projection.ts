@@ -396,6 +396,7 @@ export const PROMPT_CONTEXT_SITES = {
       ...RECOVERY,
       "insights",
       "whole_person_trajectory",
+      "recent_context_tags",
     ],
     sessions: SESSIONS_FULL,
   },

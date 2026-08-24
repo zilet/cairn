@@ -21,6 +21,7 @@ import {
 import { addDaysISO, localDateISO } from "../../repo/shared.js";
 import { insertBrainEvaluation, latestBrainEvaluation } from "../../repo/brain-evaluations.js";
 import { RETIRED_EXPECTATION_STATUSES } from "../../repo/brain/expectation-arbitration.js";
+import { contextTagLabel, isContextTagKey } from "../../contextTags.js";
 
 const TERMINAL_DECISION_STATUSES = new Set(["rejected", "reverted", "superseded", "canceled"]);
 const DISRUPTIVE_CONTEXT = /\b(trip|travel|injur|ill|sick|stress|medicat|supplement|surgery|hospital|bereave|grief)\b/i;
@@ -231,7 +232,11 @@ function contextEventConfounders(expectation: BrainExpectation): string[] {
   });
   const material = overlapping.filter((row) => {
     const kind = String(row.kind ?? "");
-    if (kind === "trip" || kind === "injury") return true;
+    // Tags are athlete-VOLUNTEERED confounder candidates by design (the whole point of
+    // tapping "travel" is that it becomes exculpatory evidence on an overlapping
+    // window) — registered explicitly rather than left to the text regex below, which
+    // several vocabulary keys (alcohol, work_crunch, poor_sleep_env) wouldn't match.
+    if (kind === "trip" || kind === "injury" || kind === "tag") return true;
     let meta = "";
     try {
       meta = JSON.stringify(row.meta_json ? JSON.parse(String(row.meta_json)) : {});
@@ -241,7 +246,9 @@ function contextEventConfounders(expectation: BrainExpectation): string[] {
     return DISRUPTIVE_CONTEXT.test(`${kind} ${String(row.title ?? "")} ${String(row.detail ?? "")} ${meta}`);
   });
   return material.map((row) => {
-    const label = String(row.title ?? row.kind ?? "context event").trim();
+    const kind = String(row.kind ?? "");
+    const label =
+      kind === "tag" && isContextTagKey(row.title) ? contextTagLabel(String(row.title)) : String(row.title ?? row.kind ?? "context event").trim();
     return `Context event '${label.slice(0, 100)}' overlapped the evaluation window.`;
   });
 }

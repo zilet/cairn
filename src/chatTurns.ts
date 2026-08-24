@@ -3294,6 +3294,23 @@ export function applyChatActions(
             },
           });
           break;
+        case "log_context_tag": {
+          // Cheap, athlete-volunteered life context (travel/drinks/rough sleep/work
+          // crunch/feeling off) — evidence for the insight generator and the
+          // confounder machinery, never advice. Idempotent ADD only: a conversational
+          // re-mention must never silently untag (that's the one-tap chip's job, a
+          // deliberate second tap — chat has no equivalent deliberate "remove" signal).
+          const day = stringOrUndefined(a.date);
+          const results = (Array.isArray(a.tags) ? a.tags : []).map((tag) => {
+            try {
+              return { tag, result: repo.ensureContextTag(String(tag), day) };
+            } catch (e) {
+              return { tag, error: String((e as Error)?.message || e) };
+            }
+          });
+          applied.push({ type: a.type, result: results });
+          break;
+        }
         case "log_supplement": {
           // Supplement UNDERSTANDING (not a daily log): the athlete mentioned what
           // they take. Prefer the agent's already-structured items (long tail); fall

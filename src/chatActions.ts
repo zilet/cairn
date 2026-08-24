@@ -5,6 +5,7 @@ import {
   FOOD_CAPTURE_GUARDRAILS,
 } from "./foodCapture.js";
 import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocumentKind } from "./healthDocumentKinds.js";
+import { CONTEXT_TAG_VOCAB, isContextTagKey } from "./contextTags.js";
 
 type ChatActionRecord = Record<string, unknown>;
 
@@ -32,6 +33,7 @@ export const CHAT_ACTION_TYPES = [
   "log_health",
   "add_context_event",
   "resolve_context_event",
+  "log_context_tag",
   "log_supplement",
   "log_measurement",
   "report_training_symptom",
@@ -254,6 +256,12 @@ export interface ResolveContextEventAction extends ChatActionBase {
   date?: unknown;
 }
 
+export interface LogContextTagAction extends ChatActionBase {
+  type: "log_context_tag";
+  tags: string[]; // keys from CONTEXT_TAG_VOCAB — never free text
+  date?: unknown;
+}
+
 export interface LogSupplementAction extends ChatActionBase {
   type: "log_supplement";
   items?: ChatActionRecord[];
@@ -303,6 +311,7 @@ export type ChatAction =
   | LogHealthAction
   | AddContextEventAction
   | ResolveContextEventAction
+  | LogContextTagAction
   | LogSupplementAction
   | LogMeasurementAction
   | ReportTrainingSymptomAction
@@ -531,6 +540,16 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `resolve_context_event closes a healed injury / finished trip / passed life event on their timeline WITHOUT deleting it — it stays on record but stops making the plan work around it. Use it when the user confirms an injury/niggle is no longer bothering them (e.g. you gently asked about a past-window injury and they said it's fine). Only emit it for an id that is actually in DATA.context_events, and only when they've confirmed — never guess it's healed.`,
     ],
   },
+  log_context_tag: {
+    type: "log_context_tag",
+    applyMode: "immediate",
+    shape: `{ "type": "log_context_tag", "tags": ["${CONTEXT_TAG_VOCAB.map((t) => t.key).join('", "')}"], "date": "YYYY-MM-DD|omit" }`,
+    guidance: [
+      `log_context_tag tags TODAY (or a named day) with cheap, controlled-vocabulary life context — ${CONTEXT_TAG_VOCAB.map((t) => `${t.key} (${t.label})`).join(", ")}. It exists ONLY so the insight generator can later test outcomes against this context ("the mornings after travel ran a flatter HRV") and so a rough recovery reading with an overlapping tag reads as explained rather than concerning — it is NOT advice and NEVER produces a comment, warning, or lecture in your reply.`,
+      `Use it when the athlete mentions something in this vocabulary in passing ("flying to Denver today", "drinks tonight", "brutal week at work", "slept on a friend's couch", "feeling a bit off") — tag it quietly and move on; do not ask follow-up questions just to fill a tag. tags MUST be keys from the vocabulary above verbatim — never invent a new key, and never use this for an injury, a trip needing dates, or anything add_context_event already covers (those stay on the timeline; a tag is same-day and disposable).`,
+      `Omit "date" for today. Never say the tag was "logged" or "noted" in a way that reads as tracking/surveillance — a brief acknowledgment in the flow of the reply, if any, is enough.`,
+    ],
+  },
   log_supplement: {
     type: "log_supplement",
     applyMode: "immediate",
@@ -747,6 +766,10 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       return nonBlank(value.kind) ? { ...value, type: "add_context_event", kind: value.kind } : null;
     case "resolve_context_event":
       return finiteId(value.id) ? { ...value, type: "resolve_context_event", id: value.id } : null;
+    case "log_context_tag": {
+      const tags = arrayOrEmpty(value.tags).filter(isContextTagKey);
+      return tags.length ? { ...value, type: "log_context_tag", tags } : null;
+    }
     case "log_supplement": {
       const items = Array.isArray(value.items) ? value.items.filter(isRecord) : undefined;
       return items?.length ? { ...value, type: "log_supplement", items } : { ...value, type: "log_supplement" };

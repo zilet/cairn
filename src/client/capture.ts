@@ -284,6 +284,57 @@ function renderCheckinDone(slot: HTMLElement, c: CaptureCheckin): void {
   slot.innerHTML = `<div class="checkin-done chip-in"><span class="checkin-done-mark" aria-hidden="true">✓</span> ${escHtml(parts.join(" · "))}</div>`;
 }
 
+// ---------- context tags: cheap one-tap life context (WHOOP-journal pattern) ----------
+// A quiet row of chips — travel / drinks / rough sleep setup / work crunch / feeling
+// off. Tap tags today, tap again untags. No streaks, no history guilt: this is
+// evidence the insight generator quietly tests against outcomes, never advice, and
+// never gates anything. Renders nothing until the vocab + today's state are both in.
+let _tagToggleInFlight = false;
+async function loadTagChips(): Promise<void> {
+  const slot = view.querySelector<HTMLElement>("#tagsSlot");
+  if (!slot) return;
+  let vocab: CaptureContextTagDef[] = [];
+  let tagged: CaptureContextTag[] = [];
+  try {
+    [vocab, tagged] = await Promise.all([
+      api("/context-tags/vocab") as Promise<CaptureContextTagDef[]>,
+      api("/context-tags?date=" + localISO()) as Promise<CaptureContextTag[]>,
+    ]);
+  } catch { return; }
+  if (state.tab !== "today" || !slot.isConnected) return;
+  if (!Array.isArray(vocab) || !vocab.length) { slot.innerHTML = ""; return; }
+  const onKeys = new Set((Array.isArray(tagged) ? tagged : []).map((t) => t.key));
+  renderTagChips(slot, vocab, onKeys);
+}
+
+function renderTagChips(slot: HTMLElement, vocab: CaptureContextTagDef[], onKeys: Set<string>): void {
+  const chips = vocab.map((t) =>
+    `<button class="tag-chip${onKeys.has(t.key) ? " tag-chip-on" : ""}" data-tag="${escAttr(t.key)}" type="button">${escHtml(t.label)}</button>`
+  ).join("");
+  slot.innerHTML = `<div class="tags-chips">${chips}</div>`;
+  slot.querySelectorAll<HTMLElement>("[data-tag]").forEach((b) =>
+    b.addEventListener("click", () => toggleTagChip(b)));
+}
+
+async function toggleTagChip(chip: HTMLElement): Promise<void> {
+  if (_tagToggleInFlight) return;
+  const key = chip.dataset.tag;
+  if (!key) return;
+  _tagToggleInFlight = true;
+  try {
+    const res = await api("/context-tags/toggle", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key }),
+    }) as CaptureContextTagToggleResponse;
+    if (res && !res.error) {
+      chip.classList.toggle("tag-chip-on", !!res.on);
+    } else {
+      toast("Couldn't save that — try again.");
+    }
+  } catch { toast("Couldn't save that — try again."); }
+  _tagToggleInFlight = false;
+}
+
 let _captureReads: ReturnType<CaptureReadsRuntime["createController"]> | null = null;
 
 function captureReads(): ReturnType<CaptureReadsRuntime["createController"]> {
@@ -325,6 +376,7 @@ Object.assign(globalThis, {
   loadFrequentFoods,
   relogFrequent,
   loadCheckin,
+  loadTagChips,
   loadTodayReads,
   reconnectInsight,
 });
