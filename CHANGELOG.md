@@ -5,6 +5,28 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.7.5] — 2026-08-24
+
+A small patch finishing what 1.7.4's look-ahead started: the calendar can now hold *today*, not
+just tomorrow — and a lab draw knows which half of the day it owns.
+
+### Added
+
+- **The Brief reads today's calendar, not just tomorrow's** — an appointment you've explicitly
+  marked as taking the day now reads as the rest you asked for on that very day, instead of only
+  being honored one day out. A plain errand or trip still just compresses the window; your word
+  is what makes a day yours.
+- **A blood-draw morning is sequenced, not just softened** — a lab draw on today's calendar
+  leans the day easy *and says the draw comes first*: movement belongs after the needle, because
+  exercise beforehand can nudge the very numbers being measured. A rest earned by your own
+  signals — a short night, a run-down check-in, a low reading — always keeps its own reasons.
+
+### Fixed
+
+- **A progression sentence stopped contradicting itself** — one rotating phrasing of the
+  push-earned load step mentioned "every set" on a day whose whole point was that not every set
+  had to cap; it now says what it means.
+
 ## [1.7.4] — 2026-08-23
 
 A patch about grain and horizon: progress is judged lift by lift instead of writing off a whole
