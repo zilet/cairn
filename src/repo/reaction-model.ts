@@ -46,6 +46,7 @@ import { currentTrainingDataVersion, registerTrainingCacheClear } from "./traini
 // rollbackEvidenceByKind's doc comment for why this stays a small standalone
 // read rather than folding into evaluatedDecisionRows' verdict pipeline.
 import { rollbackEvidenceByKind, ROLLBACK_EVIDENCE_WEIGHT } from "./brain-decisions.js";
+import { beliefDispositionMap, personalModifierBeliefId } from "./belief-dispositions.js";
 import type {
   CoachOutcomeLearning,
   CoachPersonalModifier,
@@ -1755,7 +1756,9 @@ function personalResponseBackstop(): string {
   }
 }
 
-export function whatWorksForYou(): CoachWhatWorksForYou | null {
+// Cached raw model (modifiers unfiltered by dispute) — shared by the public,
+// filtered read below and the belief-inspection listing.
+function cachedWhatWorksForYouRaw(): CoachWhatWorksForYou | null {
   const today = localDateISO();
   const key = `${currentTrainingDataVersion()}|${today}|${trainingSymptomOnRecord(today) ? 1 : 0}|${personalResponseBackstop()}`;
   if (whatWorksCache && whatWorksCache.key === key) {
@@ -1766,6 +1769,41 @@ export function whatWorksForYou(): CoachWhatWorksForYou | null {
   const value = computeWhatWorksForYou(today);
   whatWorksCache = { key, value };
   return value ? structuredClone(value) : null;
+}
+
+// The public read every consumer (progression/nutrition/recovery modifier
+// application) calls. A user-disputed modifier ("that's not right") is excluded
+// here — filtering at this single choke point removes it from every
+// personalResponseModifierFor() lookup at once, since they all read through
+// whatWorksForYou().
+export function whatWorksForYou(): CoachWhatWorksForYou | null {
+  const value = cachedWhatWorksForYouRaw();
+  if (!value) return null;
+  const dispositions = beliefDispositionMap();
+  return {
+    ...value,
+    modifiers: value.modifiers.filter((m) => dispositions.get(personalModifierBeliefId(m.key)) !== "disputed"),
+  };
+}
+
+// The belief-inspection read: every learned modifier (active and disputed
+// alike), each tagged with its dispute status, for the Stand → Learned
+// "beliefs" surface. Learnings are read-only evidence prose (no dispute
+// affordance in this round) and pass through unfiltered.
+export function whatWorksForYouForBeliefs(): {
+  learnings: CoachOutcomeLearning[];
+  modifiers: Array<CoachPersonalModifier & { disputed: boolean }>;
+} | null {
+  const value = cachedWhatWorksForYouRaw();
+  if (!value) return null;
+  const dispositions = beliefDispositionMap();
+  return {
+    learnings: value.learnings,
+    modifiers: value.modifiers.map((m) => ({
+      ...m,
+      disputed: dispositions.get(personalModifierBeliefId(m.key)) === "disputed",
+    })),
+  };
 }
 
 function computeWhatWorksForYou(today = localDateISO()): CoachWhatWorksForYou | null {

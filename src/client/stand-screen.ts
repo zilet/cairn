@@ -680,7 +680,13 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     // Cached-first, like Overview/Share: paint the last-known timeline instantly
     // (skeleton only on a true cold start), then revalidate in the background.
     const peek = peekCached<unknown>("health:learned");
-    paint(toolShellHtml("Learned", `<div id="standLearned">${peek ? "" : skelLines(4)}</div>`));
+    paint(
+      toolShellHtml(
+        "Learned",
+        `<div id="standLearned">${peek ? "" : skelLines(4)}</div>
+     <div id="standBeliefs" style="margin-top:28px"></div>`
+      )
+    );
     wireBack();
     if (peek) paintLearned(peek.data, pollToken);
     const token = pollToken;
@@ -692,6 +698,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     }).catch(() => {
       if (!peek) paintLearned({ items: [] }, token);
     });
+    void CairnHealthBeliefsLoader.load(token);
   }
   function paintLearned(data: unknown, token: number): void {
     const wrap = view.querySelector<HTMLElement>("#standLearned");

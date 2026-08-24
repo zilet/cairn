@@ -2048,6 +2048,29 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 94,
+    name: "belief-dispositions",
+    // Brand-new table (W3.6 inspectable beliefs) — db.ts's own CREATE TABLE IF NOT
+    // EXISTS already covers every boot, migrated or not, so this entry is a
+    // reservation/marker rather than a functional requirement: it exists so the
+    // round's version ledger accounts for the schema change, and so a DB that
+    // somehow ran an older db.ts snapshot without the table still gets it on the
+    // next boot. Idempotent by construction (IF NOT EXISTS); no db.ts counterpart
+    // beyond the CREATE TABLE that already lives there.
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS belief_dispositions (
+          id TEXT PRIMARY KEY,
+          source TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disputed')),
+          disputed_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

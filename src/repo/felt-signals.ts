@@ -25,6 +25,7 @@
 import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { localDateISO } from "./shared.js";
+import { beliefDispositionMap, feltSignalBeliefId } from "./belief-dispositions.js";
 
 export interface FeltSignalPattern {
   id: string;
@@ -353,9 +354,9 @@ export function saveFeltSignals(): void {
   setAppState("felt_signals_built_at", new Date().toISOString());
 }
 
-// The public read for getCoachContext: cached patterns (params stripped), fresh
-// fallback on a cache miss. Calm + bounded — a few patterns at most.
-export function feltSignalsForCoach(): { patterns: FeltSignalPattern[]; built_at: string | null } {
+// Cached patterns (unfiltered by dispute) + built_at, fresh fallback on a cache
+// miss. Shared by the coach-facing read below and the belief-inspection listing.
+function readFeltSignalPatterns(): { patterns: FeltSignalPattern[]; built_at: string | null } {
   let patterns: FeltSignalPattern[] = [];
   let builtAt: string | null = null;
   const cached = getAppState("felt_signals");
@@ -371,7 +372,30 @@ export function feltSignalsForCoach(): { patterns: FeltSignalPattern[]; built_at
     }
   }
   if (!patterns.length && !cached) patterns = buildFeltSignals().patterns;
-  return { patterns: patterns.map(publicPattern), built_at: builtAt };
+  return { patterns, built_at: builtAt };
+}
+
+// The public read for getCoachContext: cached patterns (params stripped), fresh
+// fallback on a cache miss. Calm + bounded — a few patterns at most. A
+// user-disputed pattern ("that's not right") is excluded here — this is the ONE
+// consumer prompt sites read through (src/repo/coach.ts), so filtering here
+// removes it from every prompt/day-line consumer in one place.
+export function feltSignalsForCoach(): { patterns: FeltSignalPattern[]; built_at: string | null } {
+  const { patterns, built_at } = readFeltSignalPatterns();
+  const dispositions = beliefDispositionMap();
+  const active = patterns.filter((p) => dispositions.get(feltSignalBeliefId(p.id)) !== "disputed");
+  return { patterns: active.map(publicPattern), built_at };
+}
+
+// The belief-inspection read: EVERY pattern (active and disputed alike), each
+// tagged with its dispute status, for the Stand → Learned "beliefs" surface.
+export function feltSignalsForBeliefs(): Array<FeltSignalPattern & { disputed: boolean }> {
+  const { patterns } = readFeltSignalPatterns();
+  const dispositions = beliefDispositionMap();
+  return patterns.map((p) => ({
+    ...publicPattern(p),
+    disputed: dispositions.get(feltSignalBeliefId(p.id)) === "disputed",
+  }));
 }
 
 // The day-read consumption: the calm lines relevant to `date`. A weekday-anchored

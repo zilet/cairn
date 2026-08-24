@@ -44,6 +44,7 @@ import {
 } from "../domain/health/index.js";
 import { addMemory } from "../domain/person/index.js";
 import { backgroundOp } from "./background-op.js";
+import { disputeBelief, listBeliefs, undisputeBelief } from "../repo.js";
 
 export const connectedBrainRouter = Router();
 
@@ -168,6 +169,26 @@ connectedBrainRouter.post("/markers/reconcile", async (req, res) => {
   } catch (e: any) {
     res.json({ ok: false, error: e?.message || "reconcile failed" });
   }
+});
+
+// ---- inspectable beliefs (W3.6): what the coach currently believes, correctable ----
+// One calm, grouped list over learned models / felt-signal correlations /
+// personal-response modifiers, each row in athlete voice with evidence in words
+// (never a number) and a dispute affordance. Active directives already render in
+// Connections — linked, not duplicated.
+connectedBrainRouter.get("/beliefs", (_req, res) => res.json(listBeliefs()));
+
+// "That's not right" / restore. Never a one-tap inversion — only active|disputed.
+// 404 on an id that resolves to no row after the write (a malformed/unknown id).
+connectedBrainRouter.put("/beliefs/:id", (req, res) => {
+  const status = String(req.body?.status ?? "");
+  if (!["active", "disputed"].includes(status)) {
+    return res.status(400).json({ error: "status must be active | disputed" });
+  }
+  const id = String(req.params.id);
+  const updated = status === "disputed" ? disputeBelief(id) : undisputeBelief(id);
+  if (!updated) return res.status(404).json({ error: "belief not found" });
+  res.json({ ok: true, belief: updated });
 });
 
 // ---- the "knows-me" layer: personal model, trajectory, life-context, next-step ----
