@@ -94,6 +94,22 @@ export interface SignalObservation {
   // observation still makes `active` non-empty, which flips an otherwise-evidence-free
   // day's readiness from "unknown" to "ready" and changes the fallback voice with it.
   context_only?: boolean;
+  // A BRAKE THAT CANNOT MOVE THE DAY. One rung firmer than `context_only`: it is real
+  // decision-bearing evidence — it raises its dimension to `watch`, it is a fresh brake
+  // for `hasFreshBrake`, and it therefore withdraws the backed/push tier exactly like
+  // any other caution — but it is excluded from the POSTURE ladder: the arbitration sum
+  // (`privateArbitration`), the sum's own support clamp, and the seconded-watch count
+  // that holds aggression (`planningDirectives`) all read past it.
+  //
+  // It exists because a standing health finding is a statement about ONE lane, and the
+  // arbitration is a whole-day number: an endurance-hold flag added to a board that
+  // already carried two brakes descended the day a rung (train → easy → rest), which is
+  // an informational finding gating a day it never claimed to be about — and, through
+  // the seconded-watch count, capping a squat session on the strength of ferritin.
+  //
+  // "It may hold the reach back; it may not take the day away." Everything that decides
+  // WHETHER TO ADVANCE reads it; nothing that decides WHAT TODAY IS may.
+  advisory_brake?: boolean;
 }
 
 export interface ResolvedSignalEvidence extends SignalObservation {
@@ -106,6 +122,13 @@ export interface ResolvedSignalEvidence extends SignalObservation {
 export interface SignalDimensionState {
   dimension: SignalDimension;
   status: "unknown" | "supportive" | "steady" | "watch" | "constrained";
+  // The dimension as the POSTURE LADDER sees it: `status` and `confidence` recomputed
+  // WITHOUT the advisory brakes (see `advisory_brake`). The arbitration index and the
+  // seconded-watch count read these, so an informational finding can be visibly at
+  // `watch` for every surface that shows the dimension while being unable to move what
+  // today IS. Identical to the pair beside it on every dimension carrying no advisory
+  // evidence — which is all of them except a live endurance-hold flag.
+  deciding: { status: SignalDimensionState["status"]; confidence: SignalConfidence };
   confidence: SignalConfidence;
   latest_date: string | null;
   coverage: {
@@ -1071,39 +1094,52 @@ function dimensionState(
   // whole decided half of a dimension is byte-identical with and without it.
   const bearing = bearingEvidence(all);
   const active = bearing.filter((item) => item.freshness !== "stale");
-  const strongest = [...active].sort((a, b) => {
-    const safety = Number(!!b.safety_override) - Number(!!a.safety_override);
-    return safety || DIRECTION_RANK[b.direction] - DIRECTION_RANK[a.direction];
-  })[0];
-  const status: SignalDimensionState["status"] = !strongest
-    ? "unknown"
-    : strongest.direction === "constraint"
-      ? "constrained"
-      : strongest.direction === "caution"
-        ? "watch"
-        : strongest.direction === "support"
-          ? "supportive"
-          : "steady";
-  const directions = new Set(active.map((item) => item.direction));
-  const conflicts: string[] = [];
-  if (directions.has("support") && (directions.has("caution") || directions.has("constraint"))) {
-    const support = active.find((item) => item.direction === "support");
+  const rank = (items: ResolvedSignalEvidence[]): ResolvedSignalEvidence | undefined =>
+    [...items].sort((a, b) => {
+      const safety = Number(!!b.safety_override) - Number(!!a.safety_override);
+      return safety || DIRECTION_RANK[b.direction] - DIRECTION_RANK[a.direction];
+    })[0];
+  const strongest = rank(active);
+  const statusOf = (item: ResolvedSignalEvidence | undefined): SignalDimensionState["status"] =>
+    !item
+      ? "unknown"
+      : item.direction === "constraint"
+        ? "constrained"
+        : item.direction === "caution"
+          ? "watch"
+          : item.direction === "support"
+            ? "supportive"
+            : "steady";
+  const status = statusOf(strongest);
+  // The conflict prose reads the whole active set — a dimension pulling two ways is
+  // worth saying however soft the brake is — but the CONFIDENCE it suppresses is
+  // recomputed below for the deciding subset, so an advisory item cannot move the
+  // arbitration by demoting a dimension's confidence either.
+  const conflictsIn = (items: ResolvedSignalEvidence[]): string[] => {
+    const directions = new Set(items.map((item) => item.direction));
+    if (!(directions.has("support") && (directions.has("caution") || directions.has("constraint")))) return [];
+    const support = items.find((item) => item.direction === "support");
     const brake =
-      active.find((item) => item.direction === "constraint") ?? active.find((item) => item.direction === "caution");
-    if (support && brake) conflicts.push(`${support.summary} But ${joinedCase(brake.summary)}`);
-  }
+      items.find((item) => item.direction === "constraint") ?? items.find((item) => item.direction === "caution");
+    return support && brake ? [`${support.summary} But ${joinedCase(brake.summary)}`] : [];
+  };
+  const conflicts = conflictsIn(active);
   const activeFields = [...new Set(active.map((item) => item.field))];
   const staleFields = [...new Set(bearing.filter((item) => item.freshness === "stale").map((item) => item.field))];
-  let confidence: SignalConfidence = "none";
-  if (bearing.length)
-    confidence =
-      active.length === 0
-        ? "low"
-        : activeFields.length >= 3 && conflicts.length === 0
-          ? "high"
-          : activeFields.length >= 2
-            ? "medium"
-            : "low";
+  const confidenceOf = (items: ResolvedSignalEvidence[], itemConflicts: string[]): SignalConfidence => {
+    if (!bearing.length) return "none";
+    if (items.length === 0) return "low";
+    const fields = new Set(items.map((item) => item.field)).size;
+    return fields >= 3 && itemConflicts.length === 0 ? "high" : fields >= 2 ? "medium" : "low";
+  };
+  const confidence = confidenceOf(active, conflicts);
+  // The dimension as the POSTURE LADDER sees it: the same two questions asked of the
+  // evidence that may decide a day, which is everything except the advisory brakes (see
+  // `advisory_brake`). On every dimension carrying none — which is all of them except a
+  // live endurance-hold flag — `deciding` IS `active`, so both values are unchanged and
+  // the arbitration index is byte-identical to what it has always been.
+  const deciding = active.filter((item) => !item.advisory_brake);
+  const unchanged = deciding.length === active.length;
   const latestDate =
     bearing
       .map((item) => item.date)
@@ -1113,6 +1149,9 @@ function dimensionState(
   return {
     dimension,
     status,
+    deciding: unchanged
+      ? { status, confidence }
+      : { status: statusOf(rank(deciding)), confidence: confidenceOf(deciding, conflictsIn(deciding)) },
     confidence,
     latest_date: latestDate,
     coverage: {
@@ -1194,13 +1233,21 @@ const CONFIDENCE_WEIGHT: Record<SignalConfidence, number> = { none: 0, low: 0.5,
 // still raises confidence, still owns the voice — it just stops voting the brake down.
 // With no fresh brake on the board, `Math.min(0, …)` never binds and the sum is
 // byte-identical to what it always was.
+//
+// ADVISORY BRAKES ARE INVISIBLE HERE, on both halves of the sum. They read past
+// `deciding_status`, and the support clamp asks `hasFreshDecidingBrake` rather than
+// `hasFreshBrake` — because the clamp is the second way a brake moves this number, and
+// leaving it armed would have let an informational finding descend a posture rung by
+// cancelling a supportive dimension instead of by weighing against it. With the two
+// together, a board whose only new brake is advisory produces a byte-identical index,
+// which is the invariant: such a finding may withdraw the reach, never take the day.
 function privateArbitration(dimensions: Record<SignalDimension, SignalDimensionState>) {
-  const braked = hasFreshBrake(dimensions);
+  const braked = hasFreshDecidingBrake(dimensions);
   const components = DIMENSIONS.map((dimension) => {
     const raw =
-      STATUS_VALUE[dimensions[dimension].status] *
+      STATUS_VALUE[dimensions[dimension].deciding.status] *
       DIMENSION_WEIGHT[dimension] *
-      CONFIDENCE_WEIGHT[dimensions[dimension].confidence];
+      CONFIDENCE_WEIGHT[dimensions[dimension].deciding.confidence];
     return { dimension, contribution: braked ? Math.min(0, raw) : raw };
   });
   return {
@@ -1215,12 +1262,17 @@ function privateArbitration(dimensions: Record<SignalDimension, SignalDimensionS
   };
 }
 
+// Every read here is `deciding.status` — the dimension without its advisory brakes.
+// This function decides what the WEEK may ask of the athlete, which is the one thing a
+// one-lane informational finding must never set (see `advisory_brake`); it also means
+// such a finding can never be NAMED as the reason a hold fired. Identical to `status`
+// on every dimension that carries no advisory evidence, which is the ordinary morning.
 function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionState>) {
-  const recovery = dimensions.recovery_capacity.status;
-  const trainingLoad = dimensions.training_load_tolerance.status;
-  const health = dimensions.health_constraints.status;
-  const energy = dimensions.energy_fueling.status;
-  const life = dimensions.life_capacity.status;
+  const recovery = dimensions.recovery_capacity.deciding.status;
+  const trainingLoad = dimensions.training_load_tolerance.deciding.status;
+  const health = dimensions.health_constraints.deciding.status;
+  const energy = dimensions.energy_fueling.deciding.status;
+  const life = dimensions.life_capacity.deciding.status;
   // ---- WHAT IT TAKES TO HOLD AGGRESSION (owner ruling, 2026-08-17) ----
   //
   // A single dimension at `watch` used to counsel holding load and volume everywhere,
@@ -1240,10 +1292,17 @@ function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionS
   // own (it drives `schedule`, below), and a busy calendar is not a second physiological
   // opinion about whether today can carry load. Counting it would have made the new bar
   // easier to clear than the old one in exactly the cases the ruling is about.
+  //
+  // The count reads `deciding.status`, so an ADVISORY brake cannot be the second
+  // opinion (see `advisory_brake`). It is one lane's standing finding, not a physiological
+  // opinion about today: counting it let an endurance-hold flag turn one ordinary caution
+  // into a week-wide hold on aggression, capping a squat session on the strength of
+  // ferritin. The dimension is still visibly at `watch`, and the surfaces that speak a
+  // lone caution still speak this one.
   const WATCHES_TO_HOLD = 2;
   const holdWatchCount = (
     ["recovery_capacity", "training_load_tolerance", "health_constraints", "energy_fueling"] as const
-  ).filter((dimension) => dimensions[dimension].status === "watch").length;
+  ).filter((dimension) => dimensions[dimension].deciding.status === "watch").length;
   const secondedWatch = holdWatchCount >= WATCHES_TO_HOLD;
   // ONE ordered precedence chain, evaluated once: each rung carries both the verdict
   // and the dimension whose status produced it, so the directive and its cause can
@@ -1413,6 +1472,14 @@ function freshBearingEvidence(dimensions: Record<SignalDimension, SignalDimensio
 // so the two can never come to disagree about what counts as a brake.
 export function hasFreshBrake(dimensions: Record<SignalDimension, SignalDimensionState>): boolean {
   return freshBearingEvidence(dimensions).some(isBrakeEvidence);
+}
+
+// The same question asked of the brakes that may DECIDE a day. Only the arbitration's
+// support clamp asks it: everything else that consults `hasFreshBrake` is deciding
+// whether to ADVANCE — the backed tier, the training-drive rule — and an advisory brake
+// is entitled to answer that one. See `advisory_brake` on SignalObservation.
+function hasFreshDecidingBrake(dimensions: Record<SignalDimension, SignalDimensionState>): boolean {
+  return freshBearingEvidence(dimensions).some((item) => isBrakeEvidence(item) && !item.advisory_brake);
 }
 
 // Is this a train day the evidence positively BACKS? Three conditions, all of them
@@ -1978,13 +2045,15 @@ export function planningSignalState(input: {
   // directives at all, so the same morning's Brief could resolve `push_bias` and speak
   // room the week had already denied — two layers, one athlete, opposite answers.
   //
-  // It enters as a BRAKE and nothing more. `caution` is the softest decision-bearing
-  // direction there is: it can never reach the `constraint` rungs in actionState (so it
-  // cannot make a day easy or rest on its own), it holds the `backed` support tier shut
-  // through the same `hasFreshBrake` predicate every other brake uses, and it weighs on
-  // `training_load_tolerance` — the dimension that answers "how much load can today
-  // carry", which is exactly what an endurance hold is about. It never gates, and there
-  // is no verdict and no number anywhere in it.
+  // It enters as an ADVISORY brake, which is the whole of its authority: it holds the
+  // `backed` support tier shut through the same `hasFreshBrake` predicate every other
+  // brake uses, and it raises `training_load_tolerance` to a visible `watch` — but it is
+  // excluded from the posture ladder and from the seconded-watch count that holds
+  // aggression (see `advisory_brake` on SignalObservation). Without that exclusion it
+  // was neither: added to a board already carrying two brakes it weighed the day down a
+  // rung into easy — and, with one ordinary caution beside it, capped a squat session on
+  // the strength of ferritin. A standing finding about ONE lane may withdraw the reach.
+  // It may not decide what today is, and it is never a gate, a verdict or a number.
   //
   // UNCERTAIN / uncited holds are `context_only`: visible in the state, the coverage and
   // the prompt, deciding nothing. That is the softer weight the directive system already
@@ -2017,6 +2086,7 @@ export function planningSignalState(input: {
           // true for as long as the row is active, and the athlete resolving it is what
           // ends it. Dating it to the read keeps it fresh without inventing a reading.
           max_age_days: 0,
+          advisory_brake: true,
           context_only: !firmHold,
           observation_id: `directive:${speakingHold.id ?? enduranceHoldSubject(speakingHold)}`,
         }

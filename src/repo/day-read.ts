@@ -500,11 +500,26 @@ const OUTCOME_FEEDBACK_OPEN_WHY: readonly string[] = [
 // says why a fortnight of history did not argue with it. Every phrasing credits the
 // athlete's own word and none of them bargains: this is a day standing where it is,
 // not a day being talked down.
+//
+// TWO sets, because the veto has two doors and the sentence must not describe the wrong
+// one. A check-in is something they filled in this morning and may be named as such; a
+// symptom they reported is not a check-in, and the first cut told athletes who had never
+// opened one that their check-in had held the day. The arm is already known
+// (`held_by_statement`), so the words follow it rather than hedging across both.
 const OUTCOME_FEEDBACK_HELD_WHY: readonly string[] = [
   "You said this morning was a heavy one, and that's the newer word — today keeps its easier shape.",
   "Your own check-in this morning is the most current thing on record, so today stays where it is.",
   "You told the app how today actually feels, and that counts for more than the last couple of weeks.",
   "What you said about this morning still stands, so today stays the gentler one.",
+];
+// The symptom arm: they put something on record about how a part of them is feeling.
+// Never "check-in" — there may not be one — and never a name for what they reported,
+// which is the winning rule's job rather than this sentence's.
+const OUTCOME_FEEDBACK_HELD_SYMPTOM_WHY: readonly string[] = [
+  "You put something on record about today, and that's the newer word — today keeps its easier shape.",
+  "You told the app how something is feeling today, so today stays where it is.",
+  "What you said about today is the most current thing on record, and it counts for more than the last fortnight.",
+  "You said something was up today, so today stays the gentler one.",
 ];
 const UNPROGRAMMED_WHY: readonly string[] = [
   "Nothing programmed — some easy movement is plenty today.",
@@ -1105,11 +1120,12 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   chronic_sleep_watch: CHRONIC_SLEEP_WHY,
   outcome_feedback_soften: OUTCOME_FEEDBACK_SOFTEN_WHY,
   outcome_feedback_open: OUTCOME_FEEDBACK_OPEN_WHY,
-  // Not a rule code — a SENTENCE appended to whichever rule kept the day, exactly as
-  // the signal-voice keys below are not rule codes either. It is registered here so the
-  // constitution guards (grammar, several phrasings, a declared meaning) hold over it
-  // like every other athlete-facing string.
+  // Not rule codes — SENTENCES appended to whichever rule kept the day, exactly as the
+  // signal-voice keys below are not rule codes either. Registered here so the
+  // constitution guards (grammar, several phrasings, a declared meaning) hold over both
+  // arms like every other athlete-facing string.
   outcome_feedback_held: OUTCOME_FEEDBACK_HELD_WHY,
+  outcome_feedback_held_symptom: OUTCOME_FEEDBACK_HELD_SYMPTOM_WHY,
   unprogrammed_easy_day: UNPROGRAMMED_WHY,
   planned_training: TRAIN_CLEAR_WHY,
   // The backed train day. It keeps the `planned_training` LEDGER code — the decision
@@ -1173,9 +1189,11 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // own recent mornings AND how they turned out. A phrasing that keeps the history and
   // drops the outcome would be opening the day on a hunch.
   outcome_feedback_open: /\b(?:sessions?|training|work)\b(?=[\s\S]*\b(?:well|held up|landing|fine)\b)/i,
-  // The whole point of this sentence is WHOSE word held the day. A phrasing that stops
-  // crediting the athlete's own account is an unexplained refusal to move.
+  // The whole point of these sentences is WHOSE word held the day. A phrasing that stops
+  // crediting the athlete's own account is an unexplained refusal to move. The symptom
+  // arm additionally may not claim a check-in, which its own case pins.
   outcome_feedback_held: /\b(?:you said|you told|your own|you(?:'ve)? put)\b/i,
+  outcome_feedback_held_symptom: /\b(?:you said|you told|your own|you(?:'ve)? put)\b/i,
   planned_reduced_training: /\b(?:reduced|light|lighter)\b/i,
   planned_training: /\b(?:due|train|session)\b/i,
   // A push read that forgets to offer the reach is just a clear day with extra words.
@@ -3415,8 +3433,16 @@ export function dayRead(
             // rather than substituted so the rule's own registered meaning survives
             // (DAY_READ_REQUIRED_CONCEPT is checked per rule code, and this sentence is
             // registered under its own key beside it).
+            //
+            // The set follows the door the veto came through: only a check-in arm may
+            // say "check-in", since a symptom report is not one and the athlete may
+            // never have opened one.
             ...ruleRead,
-            why: `${endStopped(ruleRead.why)} ${pickDayVariant(OUTCOME_FEEDBACK_HELD_WHY, d, "outcome_feedback_held")}`,
+            why: `${endStopped(ruleRead.why)} ${
+              heldByStatement === "symptom_report"
+                ? pickDayVariant(OUTCOME_FEEDBACK_HELD_SYMPTOM_WHY, d, "outcome_feedback_held_symptom")
+                : pickDayVariant(OUTCOME_FEEDBACK_HELD_WHY, d, "outcome_feedback_held")
+            }`,
           }
         : ruleRead;
   // The health work-around closes EVERY protective read, whichever rule produced it

@@ -380,11 +380,13 @@ test("a sore morning holds the softening, and the read says whose word held it",
 });
 
 test("a run-down check-in is never opened into a session, by either mechanism", () => {
-  // energy/sleep_feel at the severe end can never reach the easy ladder at all:
-  // `lowSubjective` forces a rest read from a rule ABOVE it, so the pattern has no easy
-  // day to open. The veto carries those two arms anyway (see freshStatementHold) so the
-  // hole cannot reopen if that rule ever eases — this case pins the law the two of them
-  // enforce between them, which is the one the athlete actually experiences.
+  // TWO mechanisms answer this morning, and the athlete is entitled to both. On the
+  // ordinary path `lowSubjective` produces a rest read from a rule ABOVE the easy
+  // ladder, which is what this case pins; the veto's own energy arm is what answers the
+  // day a caller SCOPES the state past that rule (the documented `unifiedState` seam,
+  // where a protect posture can land on easy with a run-down check-in still in the DB).
+  // Neither is redundant, and the law they enforce between them is the one the athlete
+  // experiences: a morning they called wrecked is never opened into a session.
   for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
   repo.addCheckin(REF, { energy: 2, sleep_feel: 3, mood: 3, soreness: 2 });
 
@@ -401,6 +403,15 @@ test("a symptom they reported TODAY holds it; the same watch left unspoken does 
   const spoken = repo.dayRead(REF, thinSleep(), openState(REF));
   assert.equal(spoken.kind, "easy");
   assert.equal(spoken.signals.easy_outcome_feedback.held_by_statement, "symptom_report");
+  // The sentence follows the door the veto came through. There is no check-in on this
+  // morning at all, so a phrasing that named one would be describing something the
+  // athlete never did.
+  assert.ok(
+    DAY_READ_WHY_VARIANTS.outcome_feedback_held_symptom.some((variant) => spoken.why.endsWith(variant)),
+    `no registered symptom-arm phrasing closed the read: ${JSON.stringify(spoken.why)}`
+  );
+  assert.doesNotMatch(spoken.why, /check-in/i, "there is no check-in on this morning to credit");
+  assert.equal(violatesReadingGrammar(spoken.why), null, spoken.why);
 
   // The SAME open watch, last spoken about a fortnight ago. `stated_freshness` is the
   // ladder that means "how current is their own account", and an old account is not a
@@ -449,21 +460,37 @@ test("the veto only ever HOLDS — it never brakes a day the rules read as train
   assert.equal(r.decision.rule_code, "planned_training");
   assert.equal(r.signals.easy_outcome_feedback?.held_by_statement, undefined);
   assert.ok(
-    !DAY_READ_WHY_VARIANTS.outcome_feedback_held.some((variant) => r.why.includes(variant)),
-    "the held sentence belongs to a held softening, not to every read with a check-in"
+    ![...DAY_READ_WHY_VARIANTS.outcome_feedback_held, ...DAY_READ_WHY_VARIANTS.outcome_feedback_held_symptom].some(
+      (variant) => r.why.includes(variant)
+    ),
+    "the held sentence belongs to a held softening, not to every read with a statement on it"
   );
 });
 
-test("the held sentence is a rotation that credits the athlete, and it holds the constitution", () => {
-  const set = DAY_READ_WHY_VARIANTS.outcome_feedback_held;
-  assert.ok(set.length >= 3, "a stable input fires a stable rule — one literal reads as a broken app");
-  assert.equal(new Set(set).size, set.length);
-  for (const text of set) {
-    assert.equal(violatesReadingGrammar(text), null, `breaks the reading grammar: ${JSON.stringify(text)}`);
-    assert.match(text, DAY_READ_REQUIRED_CONCEPT.outcome_feedback_held, `lost the sentence's own meaning: ${text}`);
-    assert.match(text, /[.!?]$/);
-    assert.doesNotMatch(text, /\b(?:must|have to|need to|should)\b/i, `reads as an instruction: ${text}`);
+test("both held sets rotate, credit the athlete, and hold the constitution", () => {
+  for (const key of ["outcome_feedback_held", "outcome_feedback_held_symptom"]) {
+    const arm = DAY_READ_WHY_VARIANTS[key];
+    assert.ok(arm.length >= 3, `${key}: a stable input fires a stable rule — one literal reads as a broken app`);
+    assert.equal(new Set(arm).size, arm.length);
+    for (const text of arm) {
+      assert.equal(violatesReadingGrammar(text), null, `${key} breaks the reading grammar: ${JSON.stringify(text)}`);
+      assert.match(text, DAY_READ_REQUIRED_CONCEPT[key], `${key} lost the sentence's own meaning: ${text}`);
+      assert.match(text, /[.!?]$/);
+      assert.doesNotMatch(text, /\b(?:must|have to|need to|should)\b/i, `${key} reads as an instruction: ${text}`);
+    }
+    const rotation = ["2026-03-15", "2026-03-16", "2026-03-17", "2026-03-18"].map((day) =>
+      pickDayVariant(arm, day, key)
+    );
+    for (let i = 1; i < rotation.length; i++) {
+      assert.notEqual(rotation[i], rotation[i - 1], `${key}: repeated the previous morning's sentence`);
+    }
   }
+  // The symptom arm may never claim a check-in — the veto fires there with no check-in
+  // row on the day at all, which is the defect this split exists for.
+  for (const text of DAY_READ_WHY_VARIANTS.outcome_feedback_held_symptom) {
+    assert.doesNotMatch(text, /check-in/i, `the symptom arm named a check-in that may not exist: ${text}`);
+  }
+  const set = DAY_READ_WHY_VARIANTS.outcome_feedback_held;
   const days = ["2026-03-15", "2026-03-16", "2026-03-17", "2026-03-18"];
   const landed = days.map((day) => pickDayVariant(set, day, "outcome_feedback_held"));
   for (let i = 1; i < landed.length; i++) {

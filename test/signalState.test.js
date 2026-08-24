@@ -1263,9 +1263,9 @@ test("a firm endurance hold brakes load tolerance; an uncertain one only informs
   const firmHold = holdOf(firm);
   assert.equal(firmHold.direction, "caution", "a brake, never a constraint — it may hold the reach, not the day");
   assert.ok(!firmHold.context_only);
-  assert.equal(firm.dimensions.training_load_tolerance.status, "watch");
-  assert.notEqual(firm.action.posture, "rest", "a directive never forces rest");
-  assert.notEqual(firm.action.posture, "easy");
+  assert.equal(firm.dimensions.training_load_tolerance.status, "watch", "visibly a watch for every surface…");
+  assert.equal(firm.dimensions.training_load_tolerance.deciding.status, "unknown", "…and invisible to the ladder");
+  assert.equal(firmHold.advisory_brake, true);
   // MACHINE register names the directive; the athlete hears the registered voice.
   assert.match(firm.dimensions.training_load_tolerance.reason, /directive/i);
   assert.match(firmHold.summary, /iron stores/);
@@ -1280,4 +1280,97 @@ test("a firm endurance hold brakes load tolerance; an uncertain one only informs
   // A directive the athlete resolved contributes nothing.
   db.prepare(`UPDATE health_directives SET status = 'resolved'`).run();
   assert.equal(holdOf(dayPlanningSignalState(date)), undefined);
+});
+
+// ---- …and it may not move the day on ANY board ------------------------------
+//
+// The first cut made the directive an ordinary `caution`, and an ordinary caution
+// WEIGHS: STATUS_VALUE × dimension weight × confidence, plus a second, subtler channel
+// — arming the arbitration's support clamp, which zeroes every positive contribution.
+// The isolated arithmetic was safe (one caution at low confidence sits above the modify
+// threshold) but boards are not isolated: on a board already carrying brakes the extra
+// weight descended a posture rung, and on a supported board the clamp did it by
+// cancelling the support instead. Either way an informational finding about ONE lane
+// was deciding what the whole day is, which it may never do.
+//
+// These build the boards out of the REAL production observation — pulled from
+// dayPlanningSignalState rather than hand-copied — and compare each against the same
+// board without it. The invariant is equality, not a threshold: same posture, same
+// planning directive, whatever else is on the board.
+test("an endurance hold cannot descend a posture rung on any board, and cannot hold aggression", async () => {
+  const { dayPlanningSignalState } = await import("../dist/repo/day-read.js");
+  const { buildUnifiedSignalState } = await import("../dist/repo/signal-state.js");
+  const date = localDaysAgo(0);
+  repo.addDirective({
+    source: "markers",
+    domain: "training",
+    marker: "low ferritin+low hemoglobin",
+    directive: "Hold endurance volume while iron and hemoglobin recover.",
+    citation: "IOC consensus on iron in athletes",
+    uncertain: false,
+    status: "active",
+  });
+  const hold = dayPlanningSignalState(date).dimensions.training_load_tolerance.evidence.find(
+    (e) => e.field === "endurance_hold_directive"
+  );
+  assert.ok(hold, "the production observation is what these boards are built from");
+
+  const obs = (dimension, field, direction, extra = {}) => ({
+    dimension,
+    field,
+    date,
+    source: "test",
+    direction,
+    summary: `${field} reads ${direction}.`,
+    max_age_days: 1,
+    ...extra,
+  });
+  // A recovery dimension at watch with three fields and no conflict: high confidence,
+  // which is the heaviest an ordinary brake gets.
+  const RECOVERY_WATCH = [
+    obs("recovery_capacity", "sleep", "caution"),
+    obs("recovery_capacity", "hrv", "neutral"),
+    obs("recovery_capacity", "rhr", "neutral"),
+  ];
+  const HEALTH_WATCH = [obs("health_constraints", "joint_pain", "caution")];
+  const SUPPORTED = [obs("training_load_tolerance", "session_quality", "support")];
+
+  const compare = (label, board) => {
+    const without = buildUnifiedSignalState(date, board);
+    const with_ = buildUnifiedSignalState(date, [...board, hold]);
+    assert.equal(with_.action.posture, without.action.posture, `${label}: the directive moved the posture`);
+    assert.equal(with_.action.readiness, without.action.readiness, `${label}: the directive moved readiness`);
+    assert.equal(
+      with_.action.directives.training,
+      without.action.directives.training,
+      `${label}: the directive moved the training directive`
+    );
+    return with_;
+  };
+
+  // One brake on the board (the day already reads modify), two brakes (easy) — the two
+  // boards the reviewer's counter-example was built on. Neither may descend a rung.
+  const oneBrake = compare("one brake", RECOVERY_WATCH);
+  assert.equal(oneBrake.action.posture, "modify", "the fixture is the board it claims to be");
+  const twoBrakes = compare("two brakes", [...RECOVERY_WATCH, ...HEALTH_WATCH]);
+  assert.equal(twoBrakes.action.posture, "easy");
+  assert.notEqual(twoBrakes.action.posture, "rest", "and never rest");
+
+  // The second channel: a board with nothing pulling the other way, where the damage
+  // came from the support clamp rather than from the weight.
+  const supported = compare("supported", SUPPORTED);
+  assert.equal(supported.action.posture, "train");
+  // …and here is the authority it DOES have: the reach is withdrawn on that same board.
+  assert.ok(buildUnifiedSignalState(date, SUPPORTED).action.support, "the control day is backed");
+  assert.equal(supported.action.support, null, "the hold withdraws the reach — that is its whole authority");
+
+  // A single ordinary caution plus the hold must not become the "second opinion" that
+  // holds aggression for the week: an iron flag may not cap a squat session.
+  const lift = buildUnifiedSignalState(date, [...RECOVERY_WATCH, hold]);
+  assert.equal(lift.action.directives.training, "proceed", "one caution and a flag is still one caution");
+  assert.equal(
+    lift.dimensions.training_load_tolerance.status,
+    "watch",
+    "the flag is still visible to every surface that shows the dimension"
+  );
 });
