@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { truncateAtWord } from "../brain/contract-utils.js";
 import { db } from "../db.js";
+import { estimateExpenditure } from "./expenditure.js";
 import { clampEvidenceDate, clampProposalProvenanceDates } from "./proposal-provenance-clamp.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 
@@ -26,13 +27,14 @@ export interface ProposalEvidenceSnapshot {
   plan_fingerprint: string;
   training_fingerprint: string;
   context_fingerprint?: string;
+  nutrition_fingerprint?: string;
 }
 
 export interface ProposalFreshness {
   status: "current" | "changed" | "unverified";
   expected_fingerprint: string | null;
   actual_fingerprint: string | null;
-  changed_components: Array<"plan" | "training" | "context">;
+  changed_components: Array<"plan" | "training" | "context" | "nutrition">;
   as_of_date: string | null;
   checked_at: string;
 }
@@ -608,6 +610,47 @@ function contextFacts(windowStart: string, throughDate: string): Record<string, 
   }) as Record<string, unknown>;
 }
 
+const MEASURED_TDEE_BASES = new Set(["outcome_trend", "blended_outcome_prior"]);
+const NUTRITION_TDEE_BAND_KCAL = 50;
+const NUTRITION_TREND_BAND_LB_WK = 0.1;
+const NUTRITION_EVIDENCE_WINDOW_DAYS = 21;
+
+function bandNumber(value: number | null | undefined, step: number): number | null {
+  if (value == null || !Number.isFinite(value) || step <= 0) return null;
+  return Math.round(value / step) * step;
+}
+
+function nutritionFacts(asOf: string): Record<string, unknown> {
+  // Scoped on purpose: fingerprinting the whole coach context would churn every
+  // check-in and stall every nutrition change. The body actually moving is the
+  // weigh-in trend and the measured maintenance that trend produces.
+  const estimate = estimateExpenditure(NUTRITION_EVIDENCE_WINDOW_DAYS, { asOf, syncMeasuredRmr: false });
+  const measured = MEASURED_TDEE_BASES.has(String(estimate.tdee_basis));
+  return {
+    tdee_basis: estimate.tdee_basis ?? null,
+    measured_tdee: measured ? bandNumber(estimate.tdee, NUTRITION_TDEE_BAND_KCAL) : null,
+    trend_lb_wk: bandNumber(estimate.trend_lb_wk, NUTRITION_TREND_BAND_LB_WK),
+  };
+}
+
+export function captureNutritionProposalEvidence(
+  asOf = localDateISO(),
+  windowStart = addDaysISO(asOf, -(NUTRITION_EVIDENCE_WINDOW_DAYS - 1)) ?? asOf
+): ProposalEvidenceSnapshot {
+  const nutritionFingerprint = hash(nutritionFacts(asOf));
+  return {
+    version: 1,
+    as_of_date: asOf,
+    window_start: windowStart,
+    observed_through_date: asOf,
+    latest_training_date: null,
+    fingerprint: nutritionFingerprint,
+    plan_fingerprint: "",
+    training_fingerprint: "",
+    nutrition_fingerprint: nutritionFingerprint,
+  };
+}
+
 export function captureProposalEvidence(
   asOf = localDateISO(),
   windowStart = addDaysISO(asOf, -42) ?? asOf
@@ -738,10 +781,23 @@ function trainingProposal(payload: Record<string, any>): boolean {
   );
 }
 
+function nutritionTargetProposal(payload: Record<string, any>): boolean {
+  return payload.kind === "nutrition_target";
+}
+
 export function prepareProposalPayload(parsed: unknown): unknown {
   const source = object(parsed);
   if (!source) return parsed;
   const payload = clone(source);
+  if (nutritionTargetProposal(payload)) {
+    const asOf = localDateISO();
+    if (payload.as_of_date != null && isoDate(payload.as_of_date) !== asOf) {
+      throw new Error("proposal as_of_date must match the server date");
+    }
+    payload.as_of_date = asOf;
+    payload.proposal_truth = { version: 1, evidence: captureNutritionProposalEvidence(asOf) };
+    return payload;
+  }
   if (!trainingProposal(payload)) return payload;
   const asOf = localDateISO();
   if (payload.as_of_date != null && isoDate(payload.as_of_date) !== asOf) {
@@ -756,7 +812,18 @@ export function prepareProposalPayload(parsed: unknown): unknown {
 
 export function normalizeStoredProposalPayload(parsed: unknown, createdAt?: unknown): unknown {
   const source = object(parsed);
-  if (!source || !trainingProposal(source)) return parsed;
+  if (!source) return parsed;
+  if (nutritionTargetProposal(source)) {
+    const payload = clone(source);
+    const stored = object(payload.proposal_truth)?.evidence as ProposalEvidenceSnapshot | undefined;
+    const asOf = isoDate(payload.as_of_date) ?? isoDate(stored?.as_of_date) ?? datePart(createdAt) ?? localDateISO();
+    payload.as_of_date = asOf;
+    if (stored && stored.version === 1 && typeof stored.nutrition_fingerprint === "string") {
+      payload.proposal_truth = { version: 1, evidence: stored };
+    }
+    return payload;
+  }
+  if (!trainingProposal(source)) return parsed;
   const payload = clone(source);
   const stored = object(payload.proposal_truth)?.evidence as ProposalEvidenceSnapshot | undefined;
   const asOf = isoDate(payload.as_of_date) ?? isoDate(stored?.as_of_date) ?? datePart(createdAt) ?? localDateISO();
@@ -817,8 +884,20 @@ export function verifyProposalEvidenceSnapshot(
   expected: ProposalEvidenceSnapshot,
   checkedAt = localDateISO()
 ): ProposalFreshness {
+  if (expected.nutrition_fingerprint) {
+    const current = captureNutritionProposalEvidence(checkedAt, expected.window_start);
+    const changed = current.nutrition_fingerprint !== expected.nutrition_fingerprint;
+    return {
+      status: changed ? "changed" : "current",
+      expected_fingerprint: expected.fingerprint,
+      actual_fingerprint: current.fingerprint,
+      changed_components: changed ? ["nutrition"] : [],
+      as_of_date: expected.as_of_date,
+      checked_at: checkedAt,
+    };
+  }
   const current = captureProposalEvidence(checkedAt, expected.window_start);
-  const changedComponents: Array<"plan" | "training" | "context"> = [];
+  const changedComponents: Array<"plan" | "training" | "context" | "nutrition"> = [];
   if (current.plan_fingerprint !== expected.plan_fingerprint) changedComponents.push("plan");
   if (current.training_fingerprint !== expected.training_fingerprint) changedComponents.push("training");
   if (expected.context_fingerprint && current.context_fingerprint !== expected.context_fingerprint) {

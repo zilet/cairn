@@ -8,6 +8,7 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
+import { localDateISO } from "../dist/repo/shared.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import {
   LEG_LOAD_LONG_DEFER_VARIANTS,
@@ -88,6 +89,38 @@ test("runZones stays quiet when there's nothing to ground it in (no age, no watc
   assert.equal(z.available, false);
   assert.equal(z.method, null);
   assert.deepEqual(z.zones, []);
+});
+
+function garminSource() {
+  const existing = db.prepare(`SELECT id FROM garmin_sources LIMIT 1`).get();
+  if (existing) return existing.id;
+  return Number(
+    db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin', 'run-zone-rhr')`).run().lastInsertRowid
+  );
+}
+
+test("runZones ignores a stale Garmin resting HR and does not Karvonen from it", () => {
+  const src = garminSource();
+  const today = localDateISO();
+  const stale = new Date(Date.parse(`${today}T00:00:00Z`) - 10 * 864e5).toISOString().slice(0, 10);
+  db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date, resting_hr) VALUES (?, ?, ?)`).run(src, stale, 48);
+  const z = repo.runZones({ profile: { age: 40 } });
+  assert.equal(z.available, true);
+  assert.equal(z.reserve, false, "a 10-day-old night is absent, so zones stay %HRmax");
+  assert.equal(z.rest_hr, null);
+  assert.doesNotMatch(z.note, /resting HR/i);
+});
+
+test("runZones still Karvonens from a current Garmin resting HR", () => {
+  const src = garminSource();
+  const today = localDateISO();
+  const fresh = new Date(Date.parse(`${today}T00:00:00Z`) - 1 * 864e5).toISOString().slice(0, 10);
+  db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date, resting_hr) VALUES (?, ?, ?)`).run(src, fresh, 52);
+  const z = repo.runZones({ profile: { age: 40 } });
+  assert.equal(z.available, true);
+  assert.equal(z.reserve, true);
+  assert.equal(z.rest_hr, 52);
+  assert.match(z.note, /resting HR 52/);
 });
 
 // ── weeklyRunPlan ─────────────────────────────────────────────────────────────

@@ -54,6 +54,7 @@ import {
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { classifyRunEffort, getHrModel, type HrModel, hrZoneLabel, type HrZoneKey, RUN_TYPE_SQL } from "./hr-model.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
+import { sensorIsCurrent } from "./sensor-freshness.js";
 import { localDateISO } from "./shared.js";
 import { lowerBodyPlanDayNumbers } from "./training-read.js";
 import { getTrainingIntent, type ResolvedTrainingIntent } from "./training-intent.js";
@@ -179,11 +180,25 @@ function latestGarminMaxHr(): number | null {
   }
 }
 
-function latestGarminRestHr(): number | null {
+// Newest Garmin rest HR that may still speak for `asOf`. The dangerous shape
+// this used to be — "give me the most recent row" with no lower bound — is
+// exactly the one sensor-freshness.ts names: a watch that goes quiet would
+// keep personalising every easy-run band off a month-old night. Stale rest HR
+// behaves as ABSENT (call sensorIsCurrent; never re-derive an age window).
+//
+// Absence is neutral and matches hr-model.ts: we do not Karvonen
+// (`useReserve` stays false) and the formula bands from max HR remain. We do
+// not hold the last Karvonen bands, because that would keep a non-current
+// pulse as today's reserve. The zone `note` already says whether resting HR
+// was used; when it wasn't, the bands are %HRmax.
+function latestGarminRestHr(asOf = localDateISO()): number | null {
   try {
     const r = db
-      .prepare(`SELECT resting_hr FROM garmin_daily_metrics WHERE resting_hr IS NOT NULL ORDER BY date DESC LIMIT 1`)
+      .prepare(
+        `SELECT date, resting_hr FROM garmin_daily_metrics WHERE resting_hr IS NOT NULL ORDER BY date DESC LIMIT 1`
+      )
       .get() as any;
+    if (!sensorIsCurrent("resting_hr", r?.date, asOf)) return null;
     const n = Number(r?.resting_hr);
     return Number.isFinite(n) && n >= 25 && n <= 90 ? Math.round(n) : null;
   } catch {
