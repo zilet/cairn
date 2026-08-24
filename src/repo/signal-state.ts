@@ -6,6 +6,7 @@
 // arbitration index that emits plain-language posture/reasons (never a score).
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { SENSOR_MAX_AGE_DAYS, type SensorSignal, sensorIsCurrent } from "./sensor-freshness.js";
+import { recoveryTrendBars } from "./recovery-trend.js";
 import type { SensorCadence } from "./sensor-cadence.js";
 import {
   dominantSensorCadenceEntry,
@@ -1651,15 +1652,10 @@ export function planningSignalState(input: {
   // ---------- HRV and resting HR: verified, continuous, and only then a caution ----------
   //
   // TEST ONE, the trend, is `delta` — median(recent) minus median(baseline), built in
-  // getRecoverySummary. It used to be compared against flat constants (5 ms, 3 bpm)
-  // while day-read, reading the same delta four hundred lines away, already used
-  // norm-relative bands. Flat constants are two different mistakes at once: on a 40 ms
-  // athlete a real 10% collapse never registered, and on a 120 ms athlete 5 ms of
-  // ordinary noise read as fatigue every other day. The bands are the athlete's own
-  // now, with the former constant kept as the floor so a tiny or missing norm can
-  // never make the test hypersensitive. HRV's floor is day-read's 2 ms rather than the
-  // old 5, deliberately — matching day-read is the point, and 5 would have left the
-  // 40 ms athlete exactly where they were.
+  // getRecoverySummary. The bars live in recoveryTrendBars() so this layer and
+  // day-read's recoveryDrift cannot quietly disagree about what "meaningfully off
+  // the athlete's own norm" means. Former constants are floors: a tiny or missing
+  // norm can never make the test hypersensitive.
   //
   // TEST TWO, the excursion, is the one that did not exist. Direction came only from
   // the trend, but the observation's DATE and freshness came from the LATEST reading —
@@ -1688,8 +1684,7 @@ export function planningSignalState(input: {
   const EXCURSION_RUN_FOR_CAUTION = 2;
   const baselineHrv = Number(input.recovery?.baseline?.hrv);
   const baselineRhr = Number(input.recovery?.baseline?.rhr);
-  const hrvTrendBar = Number.isFinite(baselineHrv) && baselineHrv > 0 ? Math.max(2, baselineHrv * 0.05) : 5;
-  const rhrTrendBar = Number.isFinite(baselineRhr) && baselineRhr > 0 ? Math.max(3, baselineRhr * 0.05) : 3;
+  const { hrv: hrvTrendBar, rhr: rhrTrendBar } = recoveryTrendBars(input.recovery?.baseline);
 
   // How many of the NEWEST verified readings in a row sit beyond the excursion band.
   // Consecutive READINGS, not calendar days: on an episodically-worn watch two nights

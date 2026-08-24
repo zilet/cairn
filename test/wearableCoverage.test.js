@@ -324,3 +324,23 @@ test("the DATA block flags training-day clustering, and tells the agent not to r
   assert.match(text, /SAMPLING NOTE: recent HRV and resting HR readings cluster on days with logged training/);
   assert.match(text, /do NOT let this alone move the day toward rest/);
 });
+
+test("a stale training-readiness average is omitted from the prompt, not banded as low", () => {
+  garminDay(5, { training_readiness: 22 });
+  garminDay(6, { training_readiness: 24 });
+  garminDay(7, { training_readiness: 20 });
+  const text = recoveryBlock(repo.getRecoverySummary(14));
+  assert.ok(!/training readiness/.test(text), `stale readiness must not be banded: ${text}`);
+});
+
+test("a thin training-readiness average is omitted, not banded", () => {
+  garminDay(0, { training_readiness: 22 });
+  const text = recoveryBlock(repo.getRecoverySummary(14));
+  assert.ok(!/training readiness/.test(text), `n=1 must not become "low training readiness": ${text}`);
+});
+
+test("a fresh, covered training-readiness average is banded in the DATA block", () => {
+  for (let i = 0; i < 5; i++) garminDay(i, { training_readiness: 22 });
+  const text = recoveryBlock(repo.getRecoverySummary(14));
+  assert.match(text, /low training readiness/);
+});

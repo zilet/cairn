@@ -1170,6 +1170,27 @@ export interface ClientProgramBalance {
   broad_low: boolean;
 }
 
+export type ClientAcuteBand = "fresh" | "loaded" | "saturated";
+
+export interface ClientMuscleLoadGroup {
+  group: string;
+  last_date: ISODateString | string | null;
+  days_ago: number | null;
+  heavy: boolean;
+  // The server's acuteGate() answer. The client must read this rather than
+  // re-deriving a freshness heuristic from days_ago + heavy.
+  saturated: boolean;
+  band: ClientAcuteBand;
+  source: "strength" | "endurance" | "both" | "none";
+  activity: string | null;
+  detail: string;
+}
+
+export interface ClientMuscleLoad {
+  days: number;
+  groups: ClientMuscleLoadGroup[];
+}
+
 export interface ClientProgramAdjustment {
   kind: "progression" | "balance" | "deload" | "gap" | "cardio" | "dexa" | "test";
   title: string;
@@ -3007,6 +3028,7 @@ export interface ClientApiResponses {
   "/api/program/swap/apply": ClientProposalResult;
   "/api/program/variations": ClientExerciseVariation[];
   "/api/program/balance": ClientProgramBalance;
+  "/api/muscle-load": ClientMuscleLoad;
   "/api/program/adjustments": ClientProgramAdjustment[];
   "/api/program/blocks": ClientProgramBlock[] | ClientProgramBlock;
   "/api/program/blocks/active": ClientProgramBlock | null;

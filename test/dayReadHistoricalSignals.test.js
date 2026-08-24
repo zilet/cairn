@@ -116,3 +116,23 @@ test("expenditure is anchored to the day being read, not to today", () => {
   assert.ok(anchored.coverage.weigh_in_days >= 10, JSON.stringify(anchored.coverage));
   assert.equal(unanchored.coverage.weigh_in_days, 0, "today's window cannot see months-old weigh-ins");
 });
+
+test("a past-dated read treats a wearable dated after it as absent and a reading dated the day before as present", () => {
+  reset();
+  resetTables("garmin_daily_metrics", "garmin_sources", "daily_metrics");
+  const D = REF;
+  repo.upsertGarminDailyMetric({ date: shift(D, 1), training_readiness: 20 });
+  const futureOnly = repo.dayRead(D);
+  assert.equal(
+    futureOnly.signals.fatigue.readiness.current,
+    null,
+    "a reading dated D+1 must not speak for a read of D"
+  );
+  assert.equal(futureOnly.signals.fatigue.low_readiness, false);
+
+  repo.upsertGarminDailyMetric({ date: shift(D, -1), training_readiness: 22 });
+  const withPrior = repo.dayRead(D);
+  assert.equal(withPrior.signals.fatigue.readiness.current, 22, "a reading dated D-1 is inside the freshness horizon");
+  assert.equal(withPrior.signals.fatigue.low_readiness, true);
+  assert.equal(withPrior.signals.fatigue.readiness.freshness, "fresh");
+});

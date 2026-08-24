@@ -11,7 +11,14 @@
 
 type TovBalanceGroup = { group?: unknown; sets?: unknown; band?: unknown; last_trained?: unknown; status?: unknown };
 type TovTrajectoryGroup = { group?: unknown; label?: unknown; verdict?: unknown; trend?: unknown; note?: unknown };
-type TovLoadGroup = { group?: unknown; days_ago?: unknown; heavy?: unknown; activity?: unknown; detail?: unknown };
+type TovLoadGroup = {
+  group?: unknown;
+  days_ago?: unknown;
+  heavy?: unknown;
+  saturated?: unknown;
+  activity?: unknown;
+  detail?: unknown;
+};
 type TovAdjustment = { kind?: unknown; title?: unknown; why?: unknown };
 type TovFocusItem = { domain?: unknown; title?: unknown; why?: unknown; move?: unknown };
 type TovData = {
@@ -177,16 +184,23 @@ function tovFoldRows(data: TovData): TovRow[] {
     const sets = CairnProgressData.number(b?.sets);
     const band = String(b?.band || "");
     const status = String(b?.status || "");
-    const fresh = !!l && CairnProgressData.number(l.days_ago, 9) <= 1 && !!l.heavy;
-    const tone = fresh ? "recover"
+    // `saturated` is the server's acuteGate() answer. Do not re-derive it from
+    // days_ago + heavy — that was one of the four retired heuristics the gate
+    // replaced, and a Saturday ride then read "due" on Monday while the Brief
+    // had already suppressed it.
+    const recovering = !!l?.saturated;
+    const tone = recovering ? "recover"
       : status === "due" ? "due"
       : band === "high" || status === "high" ? "high"
       : band === "productive" || sets > 0 ? "ok"
       : "none";
     let loadNote = "";
-    if (fresh && l) {
-      const when = CairnProgressData.number(l.days_ago, 0) <= 0 ? "today" : "yesterday";
-      const what = l.activity ? `${when}'s ${l.detail ? `${l.detail} ` : ""}${l.activity}` : `${when}'s session`;
+    if (recovering && l) {
+      const ago = CairnProgressData.number(l.days_ago, 0);
+      const when = ago <= 0 ? "today" : ago === 1 ? "yesterday" : `${ago} days ago`;
+      const what = l.activity
+        ? (ago <= 1 ? `${when}'s ${l.detail ? `${l.detail} ` : ""}${l.activity}` : `${l.detail ? `${l.detail} ` : ""}${l.activity} ${when}`)
+        : (ago <= 1 ? `${when}'s session` : `a session ${when}`);
       loadNote = `recovering from ${what}`;
     }
     rows.push({

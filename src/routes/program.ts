@@ -27,7 +27,7 @@ import {
   planDayProgression,
   programAdjustments,
   programBalance,
-  recentMuscleLoad,
+  muscleLoadPayload,
   runZones,
   setEquipmentProfile,
   setProposalStatus,
@@ -147,7 +147,7 @@ programRouter.get("/program/balance", (_req, res) => res.json(programBalance()))
 // of "undertrained" on a group that's simply resting. Plain words, no scores.
 programRouter.get("/muscle-load", (req, res) => {
   const days = Number(req.query.days) > 0 ? Math.min(7, Number(req.query.days)) : 2;
-  res.json({ days, groups: [...recentMuscleLoad(days).values()] });
+  res.json(muscleLoadPayload(days));
 });
 
 // Per-lift next-session prescription for every strength item on a plan day.

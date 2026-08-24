@@ -29,7 +29,7 @@ import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { dexaTargeting } from "./dexa-targeting.js";
 import { muscleGroupTrajectory, planExerciseNames, testWeekDue } from "./muscle-trajectory.js";
 import { coachingFocus } from "./coaching-focus.js";
-import { acuteGates } from "./hybrid-load.js";
+import { type AcuteGateReading, acuteGates } from "./hybrid-load.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
@@ -564,6 +564,7 @@ interface CoachContextSignals {
   dayReadView: any;
   programBal: any;
   recentLoad: any;
+  acuteLoad: any;
   fullProgramState: ProgramState;
   strengthJourneyView: any;
   runZonesView: any;
@@ -765,6 +766,7 @@ function buildTrainingSlice(
   | "performance"
   | "program_balance"
   | "recent_load"
+  | "acute_gates"
   | "progression"
   | "strength_journey"
   | "program_adjustments"
@@ -780,6 +782,7 @@ function buildTrainingSlice(
     dayReadView,
     programBal,
     recentLoad,
+    acuteLoad,
     fullProgramState,
     strengthJourneyView,
     performanceView,
@@ -826,6 +829,12 @@ function buildTrainingSlice(
     // strength. Lets the coach plan AROUND smoked muscles instead of recommending a
     // group the athlete just torched. Plain words, no score.
     recent_load: [...recentLoad.values()],
+    // The gate, not the recency window: groups the coach must plan AROUND today,
+    // including ones last loaded outside the two-day `recent_load` list. Residual
+    // is stripped — INTERNAL, never rendered.
+    acute_gates: [...(acuteLoad as Map<string, AcuteGateReading>).values()]
+      .filter((g) => g.saturated)
+      .map(({ residual: _residual, ...rest }) => rest),
     // The next session's auto-progression — the adapted target per strength lift
     // on the day this read points at ("+5 lb", "hold 50 — stalled", "−10%"), so
     // the plan visibly FOLLOWS what was logged. Bounded to the active day. [] when
@@ -1521,6 +1530,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     dayReadView,
     programBal,
     recentLoad,
+    acuteLoad,
     fullProgramState,
     strengthJourneyView,
     runZonesView,

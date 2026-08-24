@@ -14,9 +14,11 @@ import {
   acuteGate,
   acuteGates,
   legLoadGroupsPhrase,
+  muscleLoadPayload,
   strengthLegLoad,
   suppressSaturatedDue,
 } from "../dist/repo/hybrid-load.js";
+import { renderProgramState } from "../dist/prompt/shared.js";
 import { forwardLook, weekAheadPlan } from "../dist/repo/day-read.js";
 import { programAdjustments, programBalance } from "../dist/repo/progression.js";
 import { gatherDailyDecisionSnapshot } from "../dist/repo/daily-decision.js";
@@ -388,4 +390,45 @@ test("lower-body lifting fades: the same session read a week later no longer def
     repo.logSetByName({ exercise: "Romanian Deadlift", weight: 185, reps: 8, rir: 2, date: weekAgo });
   assert.equal(strengthLegLoad(weekAgo).saturated, true, "on the day, it defers");
   assert.equal(strengthLegLoad(REF).saturated, false, "a week later it does not");
+});
+
+test("muscle-load payload carries the gate for a group last loaded outside the 2-day window", () => {
+  seedSplit();
+  const threeBack = new Date(new Date(`${REF}T00:00:00Z`).getTime() - 3 * 864e5).toISOString().slice(0, 10);
+  const ex = repo.upsertExercise({ name: "Romanian Deadlift", muscle_group: "hamstrings", mode: "reps" });
+  const sess = repo.getOrCreateSession(threeBack, null);
+  for (let i = 1; i <= 14; i++) {
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(sess.id, ex.id, i, 225, 8, 1);
+  }
+  assert.equal(acuteGate("hamstrings", REF).saturated, true, "that much work is still present three days on");
+
+  const payload = muscleLoadPayload(2, REF);
+  const hams = payload.groups.find((g) => g.group === "hamstrings");
+  assert.ok(hams, "the payload includes a group the 2-day recency window would have dropped");
+  assert.equal(hams.saturated, true, "saturated is the acuteGate answer, not a days_ago heuristic");
+  assert.equal(hams.heavy, true);
+});
+
+test("the do-NOT-program prompt block names a group the 2-day window would have hidden", () => {
+  seedSplit();
+  const threeBack = new Date(new Date(`${REF}T00:00:00Z`).getTime() - 3 * 864e5).toISOString().slice(0, 10);
+  const ex = repo.upsertExercise({ name: "Romanian Deadlift", muscle_group: "hamstrings", mode: "reps" });
+  const sess = repo.getOrCreateSession(threeBack, null);
+  for (let i = 1; i <= 14; i++) {
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(sess.id, ex.id, i, 225, 8, 1);
+  }
+  const gates = [...acuteGates(REF).values()].filter((g) => g.saturated);
+  assert.ok(gates.some((g) => g.group === "hamstrings"));
+
+  const text = renderProgramState({
+    program_state: { headline: "the program is in a productive stretch." },
+    acute_gates: gates.map(({ residual: _residual, ...rest }) => rest),
+    recent_load: [],
+  });
+  assert.match(text, /do NOT program these/i);
+  assert.match(text, /hamstrings/);
 });

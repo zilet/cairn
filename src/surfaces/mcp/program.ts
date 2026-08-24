@@ -26,7 +26,7 @@ import {
   planDayProgression,
   programAdjustments,
   programBalance,
-  recentMuscleLoad,
+  muscleLoadPayload,
   runZones,
   setEquipmentProfile,
   setProposalStatus,
@@ -314,7 +314,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "get_muscle_load",
     "Acute per-muscle freshness over the last ~2 days — recent strength sets AND endurance sessions folded onto the regions they fatigue (a long ride loads the legs). heavy:true means a real dose (the muscle wants a day). Plain words, no scores.",
     { days: z.number().int().min(1).max(7).optional().describe("window in days (default 2)") },
-    async ({ days }) => asText({ days: days ?? 2, groups: [...recentMuscleLoad(days ?? 2).values()] })
+    async ({ days }) => asText(muscleLoadPayload(days ?? 2))
   );
 
   server.tool(
