@@ -2666,6 +2666,30 @@ export interface ClientLearnedTimeline {
   items: ClientLearnedItem[];
 }
 
+// ---- inspectable beliefs (W3.6): what the coach currently believes, correctable ----
+export type ClientBeliefGroupKind = "learned_model" | "felt_signal" | "personal_modifier";
+
+export interface ClientBeliefRow {
+  id: string;
+  group: ClientBeliefGroupKind;
+  statement: string;
+  why: string; // evidence provenance in plain words — never a number/score
+  confidence: string; // confidence WORD only
+  disputed: boolean;
+}
+
+export interface ClientBeliefGroupView {
+  kind: ClientBeliefGroupKind;
+  label: string;
+  rows: ClientBeliefRow[];
+}
+
+export interface ClientBeliefsView {
+  groups: ClientBeliefGroupView[];
+  set_aside: ClientBeliefRow[];
+  directives: { active_count: number; note: string };
+}
+
 // ---- the team's-week digest (GET /api/team-week) ----------------------------
 export interface ClientTeamWeekChange {
   text: string;
@@ -3004,6 +3028,7 @@ export interface ClientApiResponses {
   "/api/today-agenda": ClientTodayAgenda;
   "/api/today-agenda/ack": ClientTodayAgendaAckResponse;
   "/api/learned-timeline": ClientLearnedTimeline;
+  "/api/beliefs": ClientBeliefsView;
   "/api/team-week": ClientTeamWeek;
   "/api/health/next-checkup": ClientNextCheckup;
   "/api/since-last": ClientTodayAgendaCandidate | null;

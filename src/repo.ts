@@ -109,6 +109,8 @@ export { guidelineFor, allGuidelines, type GuidelineEntry } from "./guidelines.j
 export * from "./repo/reaction-model.js"; // how THIS athlete actually reacts (the personalization foundation)
 export * from "./repo/felt-signals.js"; // learns from subjective felt signals (overrides / check-ins / fueling feedback)
 export * from "./repo/learned-models.js"; // learned cross-domain coincidences (endurance→strength interference, short-sleep→fueling)
+export * from "./repo/belief-dispositions.js"; // the durable "that's not right" ledger over the derived belief sources
+export * from "./repo/beliefs.js"; // W3.6 inspectable beliefs — one grouped, correctable list over learned/felt/personal-response models
 export * from "./repo/trajectory.js"; // one periodized arc to the goals, today as the next step
 export * from "./repo/whole-person-trajectory.js"; // standing "everything better" objective, per-domain words not a score
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation

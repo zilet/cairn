@@ -1567,6 +1567,27 @@ CREATE INDEX IF NOT EXISTS idx_calibration_events_kind_date
 CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_events_detected
   ON calibration_events(kind, IFNULL(target_key,''), IFNULL(ref_id,0))
   WHERE ref_id IS NOT NULL;
+
+-- Inspectable beliefs (W3.6): user corrections over the coach's DERIVED belief
+-- sources (learned models, felt-signal correlations, personal-response
+-- modifiers). None of those sources is a row store of its own — each is a
+-- deterministically REBUILT patterns[] cached as JSON in app_state, keyed by a
+-- stable pattern/modifier id — so a dispute cannot live as a column on a row
+-- that gets thrown away and recomputed every night. This table is the durable
+-- side-channel: one disposition per stable belief id, independent of rebuilds.
+-- 'disputed' is the one non-default status a user's "that's not right" writes;
+-- the belief's own consumer (learnedModelsForCoach / feltSignalsForCoach /
+-- whatWorksForYou) filters it out by checking this table, and the induction
+-- that produced a disputed learned/felt pattern will not resurrect the exact
+-- same statement verbatim on its next rebuild (see beliefWouldResurface).
+CREATE TABLE IF NOT EXISTS belief_dispositions (
+  id TEXT PRIMARY KEY,          -- e.g. 'learned_model:sleep_fuel_correlation'
+  source TEXT NOT NULL,         -- learned_model | felt_signal | personal_modifier
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disputed')),
+  disputed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 runMigrations(db);

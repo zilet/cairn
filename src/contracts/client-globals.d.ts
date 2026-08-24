@@ -23,6 +23,7 @@ import type {
   ClientLearnedItem,
   ClientLearnedKind,
   ClientLearnedTimeline,
+  ClientBeliefsView,
   ClientNextCheckup,
   ClientMemory,
   ClientMemoryKind,
@@ -3020,6 +3021,14 @@ declare global {
       learnedTimelineHtml(data: ClientLearnedTimeline | null | undefined): string;
     };
 
+    CairnHealthBeliefs: {
+      beliefsViewHtml(data: ClientBeliefsView | null | undefined): string;
+    };
+
+    CairnHealthBeliefsLoader: {
+      load(token: number): Promise<void>;
+    };
+
     CairnHealthCheckup: {
       checkupHtml(data: ClientNextCheckup | null | undefined): string;
     };
@@ -4663,6 +4672,8 @@ declare global {
   declare const CairnMealRecipeController: Window["CairnMealRecipeController"];
   declare const CairnProposal: Window["CairnProposal"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
+  declare const CairnHealthBeliefs: Window["CairnHealthBeliefs"];
+  declare const CairnHealthBeliefsLoader: Window["CairnHealthBeliefsLoader"];
   declare const CairnMemory: Window["CairnMemory"];
   declare const CairnMeMemoryController: Window["CairnMeMemoryController"];
   declare const CairnFamily: Window["CairnFamily"];

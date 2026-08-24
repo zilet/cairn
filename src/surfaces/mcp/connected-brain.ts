@@ -39,6 +39,7 @@ import {
 import { getOutcomeLearnings } from "../../domain/person/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
+import { disputeBelief, listBeliefs, undisputeBelief } from "../../repo.js";
 
 export function registerConnectedBrainTools(server: McpToolRegistrar) {
   server.tool(
@@ -303,6 +304,27 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "Make the evidence cache DISCOVERABLE without an N-fetch fan-out: returns { research_enabled, total, by_marker:[{marker, count}] } — the per-marker count of cited rows on file, so a UI can show a 'see the evidence (N)' hint and know up-front where evidence exists. Reads the cache only (never the network). INFORMATIONAL, not medical advice.",
     {},
     async () => asText(evidenceSummary())
+  );
+
+  server.tool(
+    "list_beliefs",
+    "The coach's inspectable beliefs: one calm, grouped list over learned cross-domain models, felt-signal correlations, and personal-response modifiers (how THIS athlete tends to respond) — each row in athlete voice with its evidence in plain words (never a number/score) and its dispute status. Active connected-brain directives already show via list_directives (linked here via a count, not duplicated). Disputed beliefs stay listed under set_aside — transparent, not deleted.",
+    {},
+    async () => asText(listBeliefs())
+  );
+
+  server.tool(
+    "dispute_belief",
+    "Mark one coach belief 'that's not right' by its id (from list_beliefs). This is NEVER a one-tap inversion — it only sets the belief aside: it stops feeding prompts/personal-response modifiers and is recorded as a negative outcome for the pattern that produced it, but stays visible under set_aside for transparency. Reversible via undispute_belief.",
+    { id: z.string() },
+    async ({ id }) => asText(disputeBelief(id))
+  );
+
+  server.tool(
+    "undispute_belief",
+    "Restore a disputed belief (from list_beliefs' set_aside) back to active.",
+    { id: z.string() },
+    async ({ id }) => asText(undisputeBelief(id))
   );
 
   server.tool(

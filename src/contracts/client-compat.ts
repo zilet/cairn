@@ -26,6 +26,7 @@ import type {
   getSettings,
   getOutcomeLearnings,
   learnedTimeline,
+  listBeliefs,
   listExercises,
   listHealthDocuments,
   listMemory,
@@ -57,6 +58,7 @@ import type {
   ClientGuidelineEntry,
   ClientHealthStanding,
   ClientInjuryImpactsResponse,
+  ClientBeliefsView,
   ClientLearnedTimeline,
   ClientMemory,
   ClientMuscleGroupTrajectory,
@@ -144,6 +146,7 @@ export type HealthDocumentMatchesClientContract = AssertAssignable<
 >;
 export type MemoryMatchesClientContract = AssertAssignable<ReturnType<typeof listMemory>[number], ClientMemory>;
 export type LearnedTimelineMatchesClientContract = AssertAssignable<ReturnType<typeof learnedTimeline>, ClientLearnedTimeline>;
+export type BeliefsMatchesClientContract = AssertAssignable<ReturnType<typeof listBeliefs>, ClientBeliefsView>;
 export type OutcomeLearningsMatchesClientContract = AssertAssignable<
   ReturnType<typeof getOutcomeLearnings>,
   ClientOutcomeLearningsResponse

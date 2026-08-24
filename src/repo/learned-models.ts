@@ -30,6 +30,7 @@ import { localDateISO } from "./shared.js";
 import { weeklyKm } from "./program-state.js";
 import { RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { canonicalGroup } from "./exercise-canon.js";
+import { beliefDispositionMap, learnedModelBeliefId } from "./belief-dispositions.js";
 
 export interface LearnedPattern {
   id: string;
@@ -324,9 +325,10 @@ export function saveLearnedModels(): void {
   setAppState("learned_models_built_at", new Date().toISOString());
 }
 
-// The public read for getCoachContext: cached patterns (params stripped), fresh
-// fallback on a cold cache. Calm + bounded — a couple of humble patterns at most.
-export function learnedModelsForCoach(): { patterns: LearnedPattern[]; built_at: string | null } {
+// Cached patterns (WITH params, unfiltered by dispute) + built_at, fresh fallback
+// on a cold cache. Shared by the coach-facing read below and the belief-inspection
+// listing, which need the same source of truth but different filtering.
+function readLearnedModelPatterns(): { patterns: LearnedPattern[]; built_at: string | null } {
   let patterns: LearnedPattern[] = [];
   let builtAt: string | null = null;
   // Distinguish "cache present but unparseable/misshapen" from "cache validly empty":
@@ -348,7 +350,32 @@ export function learnedModelsForCoach(): { patterns: LearnedPattern[]; built_at:
   // Rebuild live when there is no cache OR the cache is corrupt/misshapen; a validly
   // empty cache is honored (no rebuild).
   if (!patterns.length && !cacheValid) patterns = buildLearnedModels().patterns;
-  return { patterns: patterns.map(publicPattern), built_at: builtAt };
+  return { patterns, built_at: builtAt };
+}
+
+// The public read for getCoachContext: cached patterns (params stripped), fresh
+// fallback on a cold cache. Calm + bounded — a couple of humble patterns at most.
+// A user-disputed pattern ("that's not right") is excluded here — this is the
+// ONE consumer prompt sites read through (src/repo/coach.ts), so filtering here
+// removes it from every prompt/day-line consumer in one place.
+export function learnedModelsForCoach(): { patterns: LearnedPattern[]; built_at: string | null } {
+  const { patterns, built_at } = readLearnedModelPatterns();
+  const dispositions = beliefDispositionMap();
+  const active = patterns.filter((p) => dispositions.get(learnedModelBeliefId(p.id)) !== "disputed");
+  return { patterns: active.map(publicPattern), built_at };
+}
+
+// The belief-inspection read: EVERY pattern (active and disputed alike), each
+// tagged with its dispute status, for the Stand → Learned "beliefs" surface.
+// Disputed rows stay visible under a collapsed "set aside" group — transparency,
+// not deletion.
+export function learnedModelsForBeliefs(): Array<LearnedPattern & { disputed: boolean }> {
+  const { patterns } = readLearnedModelPatterns();
+  const dispositions = beliefDispositionMap();
+  return patterns.map((p) => ({
+    ...publicPattern(p),
+    disputed: dispositions.get(learnedModelBeliefId(p.id)) === "disputed",
+  }));
 }
 
 // The day-read consumption: the calm lines relevant to `date`. The interference

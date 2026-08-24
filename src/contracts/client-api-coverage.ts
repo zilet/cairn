@@ -103,6 +103,8 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/today-agenda",
   "/today-agenda/ack",
   "/learned-timeline",
+  "/beliefs",
+  "/beliefs/:id",
   "/team-week",
   "/since-last",
   "/guidelines",
