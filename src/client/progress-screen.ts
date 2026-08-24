@@ -302,26 +302,28 @@ function goalPaceChartHtml(gp: unknown): string {
 
 // Inject (or refresh) the goal-pace card into the current Weight body. The body
 // itself is painted by CairnProgressTrendWeight.paintWeightBody in a sibling
-// module, so we compose from the route here: drop the SVG card in above the
-// weigh-in canvas and hide that canvas (the goal-pace chart supersedes it). When
-// there's nothing honest to draw we remove any prior card and restore the canvas,
-// so the Weight view is byte-for-byte its old self whenever the endpoint is absent.
+// module, so we compose from the route here. The card's own read line is the
+// most honest lead sentence the Weight screen has, so it's unified to lead —
+// mounted into #weightLeadMount, ahead of the numeral hero — rather than
+// duplicated below it, and the weigh-in canvas it supersedes stays hidden.
+// When there's nothing honest to draw we remove any prior card and restore
+// the canvas, so the Weight view is byte-for-byte its old self without it.
 function mountGoalPaceChart(token: number, gp: unknown): void {
   if (token !== pollToken || state.tab !== "progress" || state.progressSeg !== "weight") return;
   const prior = view.querySelector(".gpace-mount");
   if (prior) prior.remove();
   const canvas = view.querySelector<HTMLCanvasElement>("#chart");
+  const anchor = view.querySelector("#weightLeadMount");
   const html = goalPaceChartHtml(gp);
   if (!html) {
     if (canvas) canvas.hidden = false;
     return;
   }
-  const parent = canvas?.parentNode;
-  if (!canvas || !parent) return;
+  if (!canvas || !anchor) return;
   const mount = document.createElement("div");
   mount.className = "gpace-mount";
   mount.innerHTML = html; // fully escaped inside goalPaceChartHtml
-  parent.insertBefore(mount, canvas);
+  anchor.appendChild(mount);
   canvas.hidden = true;
 }
 
@@ -391,15 +393,18 @@ function paintVolumeBody(data: ProgressRecord) {
     </div>`
     )
     .join("");
+  // The balance read (its `summary` line especially) is the honest plain-language
+  // account of what volume has done — unified to LEAD, ahead of the numeral hero,
+  // same precedent as the Weight screen's goal-pace read (Amendment 2).
   view.innerHTML =
     head +
+    `<div id="volBalanceSlot" class="vol-balance-slot reveal" style="${stagger(0)}"></div>` +
     hero +
-    `<div id="volBalanceSlot" class="vol-balance-slot reveal" style="${stagger(1)}"></div>` +
     `<div class="vol-kicker lbl reveal" style="${stagger(2)}">Last ${CairnProgressData.number(data.days, 30)} days · ranked by sets</div>` +
     rows;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
-  // The balance read settles in above the bars (best-effort, async) — the engine
+  // The balance read settles in above the numbers (best-effort, async) — the engine
   // reads your volume per canonical muscle group, names what's DUE and what's
   // running high, and flags the patterns (core / grip / mobility) that are absent.
   loadVolumeBalance();
@@ -632,4 +637,5 @@ Object.assign(globalThis, {
   renderMeasurements,
   goalPaceChartHtml,
   mountGoalPaceChart,
+  paintVolumeBody,
 });

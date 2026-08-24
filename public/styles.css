@@ -2736,6 +2736,11 @@ body.sheet-open{overflow:hidden}
 /* -------------------------------------------------------------------
    34 · Progress — premium editorial
    ------------------------------------------------------------------- */
+/* The reading-grammar lead sentence ahead of a Progress hero/chart (1RM trend,
+   Volume) — plain words before the numbers, matching Energy/Intake's pattern.
+   Empty (no text) collapses invisibly via :empty. */
+.progress-read{font-size:.92rem;color:var(--ink-2);line-height:1.5;margin:4px 2px 2px;max-width:52ch}
+.progress-read:empty{margin:0}
 .phero{padding:4px 2px 18px}
 .phero-title{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 80;
   font-size:1.55rem;line-height:1.1;letter-spacing:-.01em;color:var(--ink)}
@@ -2916,6 +2921,10 @@ body.sheet-open{overflow:hidden}
   font-variation-settings:"opsz" 50;font-size:1.05rem;color:var(--accent);margin-top:5px;
 }
 .brief-why{font-size:.92rem;color:var(--ink-2);line-height:1.5;margin:11px 0 0;max-width:46ch}
+
+/* the week-wins reassurance on a rest/easy Brief — same sentence + rules as the
+   done card's week footnote (.done-week), just repositioned here. */
+.brief-week.done-week{margin:9px 0 0;font-size:.78rem}
 
 /* the optional guided recovery menu on a rest/easy day — never a prescription,
    just a few low-key ways to move if the athlete feels like it (VISION.md:
@@ -3698,6 +3707,7 @@ body.swr-busy::after{
   font-weight:540;font-size:1.4rem;line-height:1.08;margin:0;color:var(--ink);letter-spacing:-.01em;
 }
 .session-focus{color:var(--muted);font-weight:430;font-style:italic}
+.session-purpose{margin:5px 0 0;font-size:.83rem;color:var(--muted);line-height:1.4;max-width:44ch}
 .session-head-side{display:flex;align-items:center;gap:11px;flex:none}
 .session-prog{
   font-family:var(--font-display);font-variation-settings:"opsz" 40;
@@ -5259,13 +5269,15 @@ button.prow-name:hover{color:var(--accent)}
 /* Curated program surface (Wave E2): compact "Climbing" rows, a quiet "N more"
    summary line, and the family-grouped long tail behind "Everything you train". */
 .prow-compact{
-  display:flex;align-items:baseline;justify-content:space-between;gap:10px;width:100%;
+  display:block;width:100%;
   background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow-sm);
   border:0;border-left:3px solid var(--sage);padding:11px 16px;margin-bottom:8px;
   text-align:left;cursor:pointer;
 }
+.prow-compact-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;width:100%}
 .prow-compact .prow-name{font-size:.92rem}
 .prow-compact-meta{font-size:.78rem;color:var(--muted);white-space:nowrap;flex-shrink:0}
+.prow-compact .prow-why{display:block;margin-top:6px}
 .prow-more{color:var(--muted);padding:2px 2px 4px}
 .prow-fam{margin-bottom:14px}
 .prow-fam-head{

@@ -60,3 +60,45 @@ test("lastSetLineHtml renders nothing when the lastSetLineText dep isn't wired y
   // typecheck (it's optional on TodayPlanSurfaceDeps) and get a clean no-render.
   assert.equal(surface.lastSetLineHtml({ weight: 165, reps: 10 }, { escapeHtml: escHtml }), "");
 });
+
+// ---- sessionHeadHtml: the W4.2 purpose line ----
+
+const sessionHeadDeps = { escapeHtml: escHtml, cardioLabel: () => "", cardioPrescription: () => "" };
+
+test("sessionHeadHtml renders the day's purpose as a quiet line under the title, escaped", () => {
+  const surface = loadTodayPlanSurface();
+
+  const html = surface.sessionHeadHtml(
+    {
+      isRunDay: false,
+      isToday: true,
+      cardioItems: [],
+      day: { name: "Lower body", focus: "Squat", purpose: "part of the block's <base>-building work" },
+      exDone: 0,
+      exTotal: 4,
+      hasSyncedCardioToday: false,
+    },
+    sessionHeadDeps,
+  );
+
+  assert.match(html, /class="session-purpose">part of the block's &lt;base&gt;-building work<\/p>/);
+});
+
+test("sessionHeadHtml renders no purpose line when the program state couldn't ground one", () => {
+  const surface = loadTodayPlanSurface();
+
+  const html = surface.sessionHeadHtml(
+    {
+      isRunDay: false,
+      isToday: true,
+      cardioItems: [],
+      day: { name: "Lower body", focus: "Squat", purpose: null },
+      exDone: 0,
+      exTotal: 4,
+      hasSyncedCardioToday: false,
+    },
+    sessionHeadDeps,
+  );
+
+  assert.doesNotMatch(html, /session-purpose/);
+});

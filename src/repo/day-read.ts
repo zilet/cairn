@@ -40,6 +40,7 @@ import { suppressSaturatedDue } from "./hybrid-load.js";
 import { SENSOR_MAX_AGE_DAYS, sensorAgeDays, sensorIsCurrent } from "./sensor-freshness.js";
 import { getRecentSessions } from "./sessions.js";
 import { getSettings } from "./settings.js";
+import { getPlan } from "./plan.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { activeRecoveryWeekLedger, RECOVERY_WEEK_ACTIVE_DAYS } from "./recovery-week-ledger.js";
 import {
@@ -49,8 +50,8 @@ import {
   resolveSessionPlanDay,
   selectAdaptivePlanDay,
 } from "./plan-selection.js";
-import { activeRecoveryWeek, getPrimaryDiscipline } from "./profile.js";
-import { getProgramState } from "./program-state.js";
+import { activeRecoveryWeek, getEnduranceGoal, getPrimaryDiscipline } from "./profile.js";
+import { getProgramState, type MesoPhase, type MesocycleState } from "./program-state.js";
 import { runIntensityDiscipline } from "./run-progression.js";
 import { programBalance } from "./progression.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
@@ -3449,6 +3450,64 @@ export interface WeekAheadDay {
   label: string; // e.g. "Lower body" / "Easy 5k" / "Rest"
   note?: string | null;
 }
+// One quiet purpose line tying a planned day to the block/goal it serves —
+// GROUNDED only: a lift/mixed day speaks to the strength mesocycle's phase, a
+// run day speaks to the active race/endurance goal, and either is entirely
+// absent (not a fallback literal) when the program state can't ground it. Each
+// phase gets its own small variant set so a phase that lasts for weeks doesn't
+// print the identical sentence every day.
+const WEEK_AHEAD_MESO_NOTE: Partial<Record<NonNullable<MesoPhase>, readonly string[]>> = {
+  accumulation: [
+    "part of the block's base-building work",
+    "building volume for the block ahead",
+    "laying down the block's foundation",
+  ],
+  intensification: [
+    "the block's sharpening work",
+    "pushing toward the block's peak",
+    "intensifying toward the block's target",
+  ],
+  "deload-due": [
+    "easing the load — the block's recovery stretch is close",
+    "lighter work while the block nears its reset",
+  ],
+  deload: [
+    "easing the load — the block's recovery stretch",
+    "lighter work while the block resets",
+    "recovery work for the block",
+  ],
+};
+
+const WEEK_AHEAD_RACE_NOTE: Record<"base" | "build" | "sharpen" | "taper", readonly string[]> = {
+  base: [
+    "building the aerobic base for {goal}",
+    "base miles toward {goal}",
+    "laying down the base ahead of {goal}",
+  ],
+  build: ["building toward {goal}", "part of the build for {goal}", "adding toward {goal}"],
+  sharpen: ["sharpening toward {goal}", "quality work ahead of {goal}", "sharpening work for {goal}"],
+  taper: ["taper work ahead of {goal}", "easing in before {goal}", "holding fitness into {goal}"],
+};
+
+export function weekAheadDayNote(kind: WeekAheadDay["kind"], date: string, meso: MesocycleState | null, goal: ReturnType<typeof getEnduranceGoal>): string | null {
+  if (kind === "rest") return null;
+  if (kind === "run") {
+    if (!goal) return null;
+    const phase = goal.phase;
+    if (phase !== "base" && phase !== "build" && phase !== "sharpen" && phase !== "taper") return null;
+    const label = (goal.is_race ? goal.event : goal.label) || null;
+    if (!label) return null;
+    const variants = WEEK_AHEAD_RACE_NOTE[phase];
+    return pickDayVariant(variants, date, `weekahead-note:run:${phase}`).replace("{goal}", label);
+  }
+  // lift or mixed
+  const phase = meso?.phase;
+  if (!phase) return null;
+  const variants = WEEK_AHEAD_MESO_NOTE[phase];
+  if (!variants) return null;
+  return pickDayVariant(variants, date, `weekahead-note:lift:${phase}`);
+}
+
 export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; summary: string } {
   const d = String(date).slice(0, 10);
   const planDays = db.prepare(`SELECT id, day_number, name, focus FROM plan_days ORDER BY day_number`).all() as any[];
@@ -3468,16 +3527,31 @@ export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; su
     .all() as any[]) {
     counts.set(Number(r.id), { cardio: Number(r.cardio) || 0, strength: Number(r.strength) || 0 });
   }
-  const days: WeekAheadDay[] = planDays.map((d) => {
-    const c = counts.get(Number(d.id)) || { cardio: 0, strength: 0 };
+  // Grounded once, defensively: a purpose-line failure must never break the
+  // deterministic week-ahead floor (same posture as the `notes` block below).
+  let meso: MesocycleState | null = null;
+  try {
+    meso = getProgramState(d)?.mesocycle ?? null;
+  } catch {
+    meso = null;
+  }
+  let goal: ReturnType<typeof getEnduranceGoal> = null;
+  try {
+    goal = getEnduranceGoal(d);
+  } catch {
+    goal = null;
+  }
+  const days: WeekAheadDay[] = planDays.map((pd) => {
+    const c = counts.get(Number(pd.id)) || { cardio: 0, strength: 0 };
     const kind: WeekAheadDay["kind"] = c.cardio > 0 ? (c.strength > 0 ? "mixed" : "run") : "lift";
     return {
       day: null,
       kind,
-      label: String(d.focus || d.name || `Day ${d.day_number}`)
+      label: String(pd.focus || pd.name || `Day ${pd.day_number}`)
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 60),
+      note: weekAheadDayNote(kind, d, meso, goal),
     };
   });
   // Reflect PROGRAM STATE in the floor's summary (plain words, never a fabricated
@@ -3511,6 +3585,43 @@ export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; su
     days,
     summary: notes.length ? `${base} This week: ${notes.join("; ")}.` : base,
   };
+}
+
+// The SAME grounded purpose line (weekAheadDayNote), for a single plan day —
+// so today's session surface can carry the same "why this session" sentence
+// the week-ahead card does, not a second drifted implementation. Never throws;
+// null on any failure or when the program state can't ground a purpose.
+export function planDayPurpose(planDayId: number, date = localDateISO()): string | null {
+  try {
+    const d = String(date).slice(0, 10);
+    const row = db
+      .prepare(
+        `SELECT SUM(CASE WHEN kind='cardio' THEN 1 ELSE 0 END) AS cardio,
+                SUM(CASE WHEN kind='cardio' THEN 0 ELSE 1 END) AS strength
+           FROM plan_items WHERE plan_day_id = ?`
+      )
+      .get(planDayId) as any;
+    const cardio = Number(row?.cardio) || 0;
+    const strength = Number(row?.strength) || 0;
+    if (cardio === 0 && strength === 0) return null;
+    const kind: WeekAheadDay["kind"] = cardio > 0 ? (strength > 0 ? "mixed" : "run") : "lift";
+    const meso = getProgramState(d)?.mesocycle ?? null;
+    const goal = getEnduranceGoal(d);
+    return weekAheadDayNote(kind, d, meso, goal);
+  } catch {
+    return null;
+  }
+}
+
+// getPlan(), with the SAME purpose line attached per day — the one source both
+// GET /plan and the /today aggregate read, so the sentence never appears from
+// one endpoint and vanishes when the client's background /plan revalidation
+// lands (see today-data-loader.ts, which overwrites the cached "plan" key).
+export function getPlanWithPurpose(date = localDateISO()): Array<Record<string, unknown>> {
+  return getPlan().map((day: any) => ({
+    ...day,
+    purpose: day?.id != null ? planDayPurpose(Number(day.id), date) : null,
+  }));
 }
 
 // ---------- Day-read cache (the Brief) ----------

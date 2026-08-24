@@ -12,7 +12,8 @@ import {
 } from "../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../domain/health/index.js";
 import { getProfile } from "../domain/person/index.js";
-import { getPlan, getSessionByDate, getWeeklyStats, listExercises, selectedPlanDayForDate } from "../domain/training/index.js";
+import { getSessionByDate, getWeeklyStats, listExercises, selectedPlanDayForDate } from "../domain/training/index.js";
+import { getPlanWithPurpose } from "../repo.js";
 import { localDateISO } from "../repo/shared.js";
 
 export const todayRouter = Router();
@@ -27,7 +28,11 @@ export function todayAggregate(dateQuery?: unknown) {
   const date = todayDateParam(dateQuery);
   return {
     date,
-    plan: getPlan(),
+    // One quiet purpose line per plan day (Amendment 2: "why this session" tied
+    // to the strength block/endurance goal) — same source GET /plan reads, so
+    // the sentence never appears here then vanishes on the client's background
+    // /plan revalidation. See repo/day-read.ts getPlanWithPurpose.
+    plan: getPlanWithPurpose(date),
     session: getSessionByDate(date),
     stats: getWeeklyStats(),
     profile: getProfile(),

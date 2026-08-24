@@ -212,6 +212,17 @@ test("Today done card leads with PRs when highlights carry them", () => {
   assert.match(html, /class="done-week">Trained 4 of the last 7 days, with 2 new bests</);
 });
 
+// W4.2: weekHtml is exported standalone so today-brief-client.ts can thread the
+// same sentence onto rest/easy Briefs (todayBriefWeekHtml reads it off
+// CairnTodaySessionStatus at render time).
+test("weekHtml is exported and renders the same week-context sentence the done card uses", () => {
+  const status = loadTodaySessionStatus();
+  assert.equal(typeof status.weekHtml, "function");
+  assert.match(status.weekHtml({ week: { trained_days_7: 4, prs: 2 } }), /Trained 4 of the last 7 days, with 2 new bests/);
+  assert.equal(status.weekHtml({ week: { trained_days_7: 0, prs: 0 } }), "", "a zero-training week renders nothing");
+  assert.equal(status.weekHtml({}), "");
+});
+
 test("Today done card leads with a forward comparison when there are no PRs", () => {
   const status = loadTodaySessionStatus();
   const html = status.sessionDoneCardHtml(

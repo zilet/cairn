@@ -5,6 +5,10 @@ type TodayPlanSurfaceDay = {
   day_number?: unknown;
   name?: unknown;
   focus?: unknown;
+  // A single quiet "why this session" line tying the day to the strength
+  // block/endurance goal (repo/day-read.ts planDayPurpose). Absent whenever
+  // the program state can't ground one — never a fallback literal.
+  purpose?: unknown;
 };
 type TodayPlanSurfaceCardioItem = Record<string, unknown>;
 type TodayPlanSurfaceSession = {
@@ -68,6 +72,7 @@ type TodayPlanSurfaceApi = {
 
     const sessionName = options.day?.name ? String(options.day.name) : "Today's session";
     const sessionFocus = options.day?.focus ? String(options.day.focus) : "";
+    const sessionPurpose = options.day?.purpose ? String(options.day.purpose) : "";
     const mixed = options.cardioItems.length > 0 || options.hasSyncedCardioToday;
     const kicker = mixed
       ? (options.isToday ? "TODAY · LIFT + RUN" : "LIFT + RUN")
@@ -76,6 +81,7 @@ type TodayPlanSurfaceApi = {
           <div class="session-head-main">
             <div class="session-kicker lbl">${kicker}</div>
             <h2 class="session-title">${deps.escapeHtml(sessionName)}${sessionFocus ? `<span class="session-focus"> · ${deps.escapeHtml(sessionFocus)}</span>` : ""}</h2>
+            ${sessionPurpose ? `<p class="session-purpose">${deps.escapeHtml(sessionPurpose)}</p>` : ""}
           </div>
           <div class="session-head-side">
             ${options.exTotal ? `<span class="session-prog" title="exercises with a logged set"><b>${options.exDone}</b><span class="session-prog-sep">/</span>${options.exTotal}</span>` : ""}

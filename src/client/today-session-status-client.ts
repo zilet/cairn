@@ -552,6 +552,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
     sessionDoneCardHtml: todaySessionDoneCardHtml,
     outcomeReadHtml: doneOutcomeReadHtml,
     hydrateOutcome: hydrateDoneOutcome,
+    weekHtml: doneWeekHtml,
     hasFeedback: todaySessionHasFeedback,
     feedbackOpenHtml: todayFeedbackOpenHtml,
     feedbackScaleHtml: todayFeedbackScaleHtml,

@@ -127,6 +127,24 @@ test("curated read: climbing shows the steepest three, then a calm summary line"
   assert.match(html, /2 more lifts are climbing/);
 });
 
+test("climbing rows show their why, same as needs-a-look rows", () => {
+  const summary = loadProgramSummaryClient();
+  const html = summary.compactLiftRowHtml(
+    liftFixture({ exercise: "Climb <up>", status: "progressing", trend_per_wk: 2, why: "Top set felt fast <today>" }),
+    3,
+  );
+  assert.match(html, /prow-compact prow-good/);
+  assert.match(html, /Climb &lt;up&gt;/);
+  assert.match(html, /Top set felt fast &lt;today&gt;/);
+  assert.doesNotMatch(html, /<up>|<today>/);
+});
+
+test("a climbing row with no why omits the why line", () => {
+  const summary = loadProgramSummaryClient();
+  const html = summary.compactLiftRowHtml(liftFixture({ status: "progressing", trend_per_wk: 1, why: "" }), 0);
+  assert.doesNotMatch(html, /class="prow-why"/);
+});
+
 test("curated read: the long tail groups by movement family, single-lift families stay plain", () => {
   const summary = loadProgramSummaryClient();
   const lifts = [

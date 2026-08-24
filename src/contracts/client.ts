@@ -99,6 +99,10 @@ export interface ClientDayRead {
     line: string;
     options: Array<{ label: string; detail: string; minutes: number | null }>;
   } | null;
+  // The week-wins reassurance on a rest/easy read (mirrors the done card's week
+  // footnote, today-session-status-client.ts doneWeekHtml). Absent on train/done
+  // reads and on a zero-training week — absence is not failure.
+  week?: { trained_days_7: number; prs: number } | null;
   periodization_context?: {
     program_block: {
       goal: string;

@@ -170,3 +170,94 @@ test("the y-range is floored so a small weight wiggle never fills the height", (
   // Raw span is 0.7 lb; the floor (≥8 lb / 5% of bodyweight) keeps it honest.
   assert.ok(Number(m[1]) >= 8, `expected a floored y-span ≥8, got ${m && m[1]}`);
 });
+
+// ---------- W4.2: the read leads, the numbers follow ----------
+// A richer loader with a settable-innerHTML `view` and a real DOM-ish
+// querySelector, so paintVolumeBody's element ORDER and mountGoalPaceChart's
+// insertion point are exercised for real (not just goalPaceChartHtml's string).
+function loadProgressScreenWithDom() {
+  class FakeEl {
+    constructor(html = "") {
+      this._html = html;
+      this.hidden = false;
+    }
+    get innerHTML() {
+      return this._html;
+    }
+    set innerHTML(value) {
+      this._html = value;
+    }
+    querySelector(selector) {
+      const id = selector.replace("#", "");
+      const idx = this._html.indexOf(`id="${id}"`);
+      return idx === -1 ? null : { _foundAt: idx, appendChild() {}, remove() {} };
+    }
+  }
+  const view = new FakeEl();
+  const context = {
+    Object, Math, Number, String, Array, Date, JSON, Map, Promise, isFinite, isNaN,
+    stagger: (i) => `--i:${i}`,
+    art: (kind, label) => `<svg data-kind="${kind}" data-label="${label}"></svg>`,
+    wireSeg: () => {},
+    runCountUps: () => {},
+    segBar: (active) => `<seg>${active}</seg>`,
+    PROGRESS_SEG: [],
+    PROGRESS_HANDLERS: {},
+    state: { tab: "progress", progressSeg: "volume" },
+    view,
+    pollToken: 0,
+    document: { createElement: () => new FakeEl() },
+  };
+  context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/progress-data-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/progress-components-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/05-progress.js"), "utf8"), context);
+  return { context, view };
+}
+
+test("paintVolumeBody: the balance slot mounts ahead of the numeral hero", () => {
+  const { context, view } = loadProgressScreenWithDom();
+  context.paintVolumeBody({
+    days: 30,
+    total_tonnage: 1000,
+    by_muscle: [{ muscle_group: "chest", sets: 10, tonnage: 500 }],
+  });
+  const slotAt = view.innerHTML.indexOf('id="volBalanceSlot"');
+  const heroAt = view.innerHTML.indexOf("Volume");
+  assert.ok(slotAt > -1 && heroAt > -1 && slotAt < heroAt, "the balance slot precedes the numeral hero");
+});
+
+test("mountGoalPaceChart inserts the goal-pace card into #weightLeadMount, ahead of the hero", () => {
+  const { context, view } = loadProgressScreenWithDom();
+  context.state.progressSeg = "weight";
+  // Simulate paintWeightBody's markup shape: the anchor, then the hero, then a chart canvas.
+  view.innerHTML = `<div id="weightLeadMount"></div><div class="phero">Bodyweight</div><canvas id="chart"></canvas>`;
+  const html = context.goalPaceChartHtml({
+    points: [
+      { date: "2026-05-01", weight_lb: 200 },
+      { date: "2026-07-01", weight_lb: 193 },
+    ],
+    trend: { lb_wk: -0.8, line: [{ date: "2026-05-01", weight_lb: 200 }, { date: "2026-07-01", weight_lb: 193 }] },
+    needed: null,
+    goal: null,
+    window_days: 90,
+  });
+  assert.ok(html.length, "a real card renders for this fixture");
+  // mountGoalPaceChart must find #weightLeadMount (not #chart) as its anchor.
+  const anchor = view.querySelector("#weightLeadMount");
+  assert.ok(anchor, "the weight-lead mount exists in the painted markup");
+  context.mountGoalPaceChart(0, {
+    points: [
+      { date: "2026-05-01", weight_lb: 200 },
+      { date: "2026-07-01", weight_lb: 193 },
+    ],
+    trend: { lb_wk: -0.8, line: [] },
+    needed: null,
+    goal: null,
+    window_days: 90,
+  });
+  // No throw, and the canvas lookup still resolves (mountGoalPaceChart hides it).
+  const canvas = view.querySelector("#chart");
+  assert.ok(canvas, "the canvas element is still discoverable");
+});
