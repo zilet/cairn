@@ -418,7 +418,7 @@ export const ACCUMULATION_OVERLOAD: VoiceSet = [
 // claim every set capped, because under this rule they did not have to.
 export const PUSH_TOP_SET_OVERLOAD: VoiceSet1 = [
   (high) =>
-    `Your top set owned ${high} at RIR 2+, and you've asked to be pushed — so that buys the step up rather than waiting for every set to match.`,
+    `Your top set owned ${high} at RIR 2+, and you've asked to be pushed — so that buys the step up rather than waiting for the others to match.`,
   (high) =>
     `${high} on the top set with RIR 2+ to spare. You asked for the harder read, so the weight moves now instead of waiting on the rest of the sets.`,
   (high) =>
