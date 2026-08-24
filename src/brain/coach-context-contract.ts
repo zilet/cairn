@@ -364,6 +364,12 @@ export interface CoachContextEnvelope {
   // Additive + optional, like `read_adherence`: a partial context builder or an
   // imported DB never synthesizes it, and it stays out of the required/array key lists.
   tomorrow_holds?: CoachRecord | null;
+  // Round W2.2: the most common hour recent sessions were logged, bucketed into a
+  // plain part-of-day label. Derived from session timestamps so chat (and any other
+  // site that carries it) can answer "when do they usually train?" itself instead of
+  // asking — null on thin history (nothing to derive from yet). Additive + optional,
+  // like `tomorrow_holds`: a partial context builder never synthesizes it.
+  typical_training_hour?: CoachRecord | null;
   next_step: CoachRecord | null;
 }
 

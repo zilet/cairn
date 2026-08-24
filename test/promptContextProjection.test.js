@@ -97,7 +97,7 @@ const SITES = [
     // Chat is the free-form surface — any question can land, so nothing is dropped.
     site: "chat",
     build: () => buildChatPrompt([], "how did my week go?"),
-    kept: ["memory", "supplements", "goal", "day_read", "garmin", "recent_decisions", "imaging"],
+    kept: ["memory", "supplements", "goal", "day_read", "garmin", "recent_decisions", "imaging", "typical_training_hour"],
     dropped: [],
   },
   {

@@ -58,6 +58,7 @@ import {
 import { setAppStateStrict } from "../../repo/app-state.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
+import { revertGarminReconcile } from "../../repo/activities.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 import {
   captureNutritionProposalEvidence,
@@ -2494,6 +2495,12 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
           Number(cycle?.overlay?.source_decision_id) === id;
         if (!ownsCycle) throw new Error("recovery-cycle rollback ownership no longer matches");
         cancelRecoveryCycle(cycleId, localDateISO());
+      } else if (rollback?.kind === "garmin_strength" && rollback.payload?.version === 1) {
+        // Ownership-guarded per session inside revertGarminReconcile itself — a
+        // session touched again since the merge (re-sync, second reconcile) wins
+        // over the undo and is silently left alone rather than erroring the whole
+        // batch, since a partial undo across several days is still useful.
+        revertGarminReconcile(rollback.payload);
       } else {
         throw new Error("rollback snapshot unavailable");
       }

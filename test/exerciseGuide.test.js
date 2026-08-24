@@ -23,7 +23,11 @@ import {
 } from "../dist/repo/exercise-guide.js";
 import { findOrCreateExercise, mergeExercises } from "../dist/repo/exercises.js";
 import { getExerciseDetail } from "../dist/repo/profile.js";
-import { ensureGuideImage, importExerciseGuides } from "../dist/domain/training/exercise-guide-use-case.js";
+import {
+  autoImportExerciseGuidesIfEmpty,
+  ensureGuideImage,
+  importExerciseGuides,
+} from "../dist/domain/training/exercise-guide-use-case.js";
 import { queryTokenAllowedPath } from "../dist/auth.js";
 import { streamGuideImage } from "../dist/routes/plan-exercises.js";
 
@@ -417,6 +421,66 @@ test("import is idempotent and reuses the cached metadata on a second run", asyn
   const third = await importExerciseGuides({ fetchImpl, refresh: true });
   assert.equal(third.cached, false);
   assert.equal(fetchImpl.calls.length, 2);
+  clearGuideFiles();
+});
+
+// ---- Round W2.2: the scheduler runs the import itself once, quietly, instead of
+// waiting on the athlete's tap — but ONLY while the library is genuinely empty. ----
+test("auto-import runs once when the library is empty, then leaves it alone", async () => {
+  clearGuideFiles();
+  seedExercises(["Barbell Curl", "Leg Extension"]);
+  assert.equal(exerciseGuideStatus().imported, false, "starts empty");
+  const fetchImpl = stubFetch((url) => (url.endsWith("exercises.json") ? jsonResponse(DATASET) : null));
+
+  const first = await autoImportExerciseGuidesIfEmpty({ fetchImpl });
+  assert.ok(first?.ok, "runs the import when empty");
+  assert.equal(first.records, DATASET.length);
+  assert.equal(fetchImpl.calls.length, 1);
+  assert.equal(exerciseGuideStatus().imported, true);
+
+  // Once populated, a second boot pass is a quiet no-op — never re-fetches.
+  const second = await autoImportExerciseGuidesIfEmpty({ fetchImpl });
+  assert.equal(second, null, "a populated library is left alone");
+  assert.equal(fetchImpl.calls.length, 1, "no second network call");
+  clearGuideFiles();
+});
+
+test("auto-import never runs once the athlete has already imported (idempotent, not repeated on every boot)", async () => {
+  clearGuideFiles();
+  seedExercises(["Barbell Curl"]);
+  const fetchImpl = stubFetch((url) => (url.endsWith("exercises.json") ? jsonResponse(DATASET) : null));
+  await importExerciseGuides({ fetchImpl }); // the athlete's own manual import
+  assert.equal(fetchImpl.calls.length, 1);
+
+  const result = await autoImportExerciseGuidesIfEmpty({ fetchImpl });
+  assert.equal(result, null);
+  assert.equal(fetchImpl.calls.length, 1, "the boot pass never re-fetches a populated library");
+  clearGuideFiles();
+});
+
+test("auto-import degrades to absence on a fetch failure, never throws, and stays retryable next boot", async () => {
+  clearGuideFiles();
+  seedExercises(["Barbell Curl"]);
+  const offline = stubFetch(() => {
+    throw new Error("getaddrinfo ENOTFOUND");
+  });
+  const result = await autoImportExerciseGuidesIfEmpty({ fetchImpl: offline });
+  assert.equal(result.ok, false);
+  assert.equal(exerciseGuideStatus().imported, false, "still empty — eligible for another boot attempt");
+});
+
+test("auto-import never disturbs a hand-confirmed link or refusal that already exists", async () => {
+  clearGuideFiles();
+  seedExercises(["Barbell Curl", "Leg Extension"]);
+  const fetchImpl = stubFetch((url) => (url.endsWith("exercises.json") ? jsonResponse(DATASET) : null));
+  await importExerciseGuides({ fetchImpl }); // seed the library so it's no longer empty
+  assert.equal(getExerciseGuide("Leg Extension")?.guide_id, "Leg_Extensions", "linked by the import");
+  detachGuide("Leg_Extensions"); // athlete explicitly refused this one
+
+  // A later boot pass must be a no-op (library is non-empty) — the refusal survives.
+  const result = await autoImportExerciseGuidesIfEmpty({ fetchImpl });
+  assert.equal(result, null);
+  assert.equal(getExerciseGuide("Leg Extension"), null, "the hand-refusal still holds");
   clearGuideFiles();
 });
 

@@ -23,7 +23,11 @@ import {
   seedIntake,
   marker,
 } from "./_seed.js";
-import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
+import {
+  applyDueAnnouncedDecisions,
+  applyProposalWithAutonomy,
+  revertDecision,
+} from "../dist/domain/brain/autonomy-service.js";
 import { todayRouter } from "../dist/routes/today.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
@@ -1024,4 +1028,84 @@ test("a genuinely-new item behind the disclosure is stamped waiting; the introdu
   // A routed historical date renders archival state — nothing waits there.
   const past = repo.todayAgenda("2026-01-07");
   assert.ok([...past.primary, ...past.more].every((c) => !c.waiting));
+});
+
+// ---- Garmin reconcile: heads-up autonomy (round W2.2) ----------------------
+// reconcileGarminStrength() is deterministic, idempotent, and guarded against
+// overwriting hand-logged sets — a bounded reversible change under Amendment 3.
+// Under lead_mode (the default), it lands quietly and announces with Undo;
+// under review_everything it stays the original tap-to-confirm card.
+function seedUnreconciledGarminStrength(date = localDaysAgo(0), externalId = "ext-9101") {
+  const src = repo.upsertGarminSource({ label: "default" });
+  db.prepare(
+    `INSERT INTO garmin_activities (source_id, external_id, type, name, date, session_id)
+     VALUES (?, ?, 'strength_training', 'Strength', ?, NULL)`
+  ).run(src.id, externalId, date);
+  return src;
+}
+
+test("under lead_mode, a Garmin strength merge lands quietly and announces with Undo", () => {
+  seedUnreconciledGarminStrength();
+  assert.equal(repo.listUnreconciledGarminStrength().length, 1, "starts unreconciled");
+
+  const a = repo.todayAgenda();
+  const card = [...a.primary, ...a.more].find((c) => c.kind === "reconcile");
+  assert.ok(card, "the reconcile candidate surfaces");
+  assert.match(card.id, /^garmin-reconcile-\d+$/, "an applied decision carries its own stable id");
+  assert.equal(card.kicker, "GARMIN SYNCED");
+  assert.ok(!card.client_card, "an applied announcement is a generic card, not the manual tap slot");
+  assert.equal(card.secondary_action?.kind, "undo-decision");
+  assert.ok(Number(card.secondary_action.payload) > 0);
+
+  // The merge actually ran — the watch data is no longer "unreconciled".
+  assert.equal(repo.listUnreconciledGarminStrength().length, 0, "the merge applied");
+  const decision = repo.getBrainDecision(Number(card.secondary_action.payload));
+  assert.equal(decision.kind, "garmin_reconcile");
+  assert.equal(decision.status, "applied");
+  assert.equal(decision.reversible, true);
+  assert.notEqual(decision.autonomy_tier, "ask");
+});
+
+test("under review_everything, the Garmin merge stays an ask (unchanged tap-to-confirm)", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  seedUnreconciledGarminStrength();
+
+  const a = repo.todayAgenda();
+  const card = [...a.primary, ...a.more].find((c) => c.kind === "reconcile");
+  assert.ok(card, "the reconcile candidate still surfaces");
+  assert.equal(card.id, "garmin-reconcile", "the original stable id — unchanged manual card");
+  assert.equal(card.client_card, "garmin-reconcile");
+  assert.ok(!card.secondary_action, "no undo — nothing was applied");
+
+  // Nothing was merged — the athlete still has to tap.
+  assert.equal(repo.listUnreconciledGarminStrength().length, 1, "the merge did NOT apply under review_everything");
+});
+
+test("the announcement stays reachable across a same-day re-render (no duplicate decision)", () => {
+  seedUnreconciledGarminStrength();
+  const first = repo.todayAgenda();
+  const firstCard = [...first.primary, ...first.more].find((c) => c.kind === "reconcile");
+  assert.ok(firstCard);
+
+  const second = repo.todayAgenda();
+  const secondCard = [...second.primary, ...second.more].find((c) => c.kind === "reconcile");
+  assert.equal(secondCard.id, firstCard.id, "the same announcement persists, not a fresh one");
+
+  const applied = repo.listBrainDecisions({ status: "applied", kind: "garmin_reconcile" });
+  assert.equal(applied.length, 1, "re-rendering Today never re-records the merge");
+});
+
+test("Undo restores the pre-merge state (session unlinked, garmin_json restored)", () => {
+  seedUnreconciledGarminStrength();
+  const a = repo.todayAgenda();
+  const card = [...a.primary, ...a.more].find((c) => c.kind === "reconcile");
+  const decisionId = Number(card.secondary_action.payload);
+
+  assert.equal(repo.listUnreconciledGarminStrength().length, 0, "merged");
+  const result = revertDecision(decisionId, "test undo");
+  assert.equal(result.ok, true, result.error);
+
+  assert.equal(repo.listUnreconciledGarminStrength().length, 1, "undo unlinks the activity again");
+  const decision = repo.getBrainDecision(decisionId);
+  assert.equal(decision.status, "reverted");
 });

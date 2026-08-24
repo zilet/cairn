@@ -210,6 +210,32 @@ type TodayRailDeps = {
           })();
           return;
         }
+        if (kind === "undo-decision") {
+          // Same server revert path as "hold-decision", but for a change that
+          // ALREADY landed quietly (e.g. a Garmin reconcile) rather than one still
+          // waiting at its natural boundary — same one tap, different wording.
+          const decisionId = Number(payload);
+          if (!Number.isFinite(decisionId) || button.dataset.busy === "1") return;
+          button.dataset.busy = "1";
+          button.setAttribute("aria-busy", "true");
+          void (async () => {
+            try {
+              const result = (await deps.api(`/brain/decisions/${decisionId}/revert`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reason: "undo — put it back" }),
+              })) as { ok?: boolean; error?: string } | null;
+              if (!result?.ok) throw new Error(result?.error || "That change could not be undone.");
+              deps.toast("Undone");
+              await deps.refreshToday({ soft: true });
+            } catch (error) {
+              deps.toast(error instanceof Error ? error.message : "Could not undo that change");
+              button.dataset.busy = "";
+              button.removeAttribute("aria-busy");
+            }
+          })();
+          return;
+        }
         if (kind.startsWith("chat")) {
           deps.gotoChatWith(typeof payload === "string" ? payload : candidate?.title || "");
           return;

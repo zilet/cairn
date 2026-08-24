@@ -27,6 +27,7 @@ export const BRAIN_DECISION_KINDS = [
   "lifestyle_adjustment",
   "goal_change",
   "case_conference",
+  "garmin_reconcile",
 ] as const;
 export type BrainDecisionKind = (typeof BRAIN_DECISION_KINDS)[number];
 

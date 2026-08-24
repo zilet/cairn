@@ -51,7 +51,11 @@ import { listActiveDirectives } from "./directives-read.js";
 import { acuteGates } from "./hybrid-load.js";
 import { programAdjustments, programBalance } from "./progression.js";
 import { getWeeklyStats, vouchedRunCompliance } from "./sessions.js";
-import { listUnreconciledGarminStrength } from "./activities.js";
+import {
+  listUnreconciledGarminStrength,
+  reconcileGarminStrength,
+  snapshotGarminReconcileState,
+} from "./activities.js";
 import { healthFocus } from "./propagation.js";
 // The health-standing momentum read — the SAME wins-in-motion the top-level Me→Standing
 // view shows, surfaced here as a quiet pull-only "you're trending the right way" card.
@@ -72,7 +76,8 @@ import { reconcileSensorRecheckAttention, sensorRecheckCandidate } from "./senso
 // as the sensor recheck: a pure producer here, and the attention ladder is only
 // ever spent once placement is known.
 import { measurementRequestCandidate, reconcileMeasurementRequestAttention } from "./measurement-request.js";
-import { listBrainDecisions } from "./brain-decisions.js";
+import { listBrainDecisions, recordDecision, saveBrainRollback } from "./brain-decisions.js";
+import { decideAutonomyTier } from "../brain/autonomy.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { getSettings } from "./settings.js";
@@ -284,19 +289,84 @@ function fuelingFollowupCandidate(date: string): TodayAgendaCandidate | null {
 }
 
 // ---- reconcile: Garmin synced a strength activity that isn't linked to a Cairn
-// session yet. High — the watch has data the user genuinely needs reconciled, and
-// the action is one tap. Reads listUnreconciledGarminStrength like the client. ----
-function reconcileCandidate(): TodayAgendaCandidate | null {
-  const rows = listUnreconciledGarminStrength();
-  const n = Array.isArray(rows) ? rows.length : 0;
-  if (n <= 0) return null;
+// session yet. reconcileGarminStrength() is deterministic, idempotent, and guarded
+// against overwriting hand-logged sets — under Amendment 3 (heads-up autonomy)
+// that makes it a bounded reversible change, so it lands QUIETLY instead of
+// waiting on a tap: applied now, announced with one-tap Undo. Only under
+// lead_mode='review_everything' does decideAutonomyTier clamp to "ask", which
+// keeps the original tap-to-confirm card exactly as it was. ----
+function garminReconcileAnnouncement(decision: any): TodayAgendaCandidate {
   return {
-    id: "garmin-reconcile",
+    id: `garmin-reconcile-${decision.id}`,
     kind: "reconcile",
     tier: "primary",
     priority: 86,
-    client_card: "garmin-reconcile",
+    kicker: "GARMIN SYNCED",
+    title: decision.summary,
+    body: "Merged automatically from your watch — undo any time.",
+    // Deterministic one-tap undo through the same server revert path as every
+    // other quiet_apply/announce decision; no agent turn involved.
+    secondary_action: { label: "Undo", kind: "undo-decision", payload: decision.id },
   };
+}
+
+function reconcileCandidate(date: string): TodayAgendaCandidate | null {
+  const today = localDateISO();
+
+  // A merge applied earlier today keeps its Undo window open across re-renders
+  // (a page refresh must not silently lose the announcement).
+  if (date === today) {
+    const appliedToday = listBrainDecisions({ status: "applied", kind: "garmin_reconcile", limit: 20 })
+      .filter((row: any) => row.reversible && String(row.applied_at || "").slice(0, 10) === today)
+      .sort((a: any, b: any) => Number(b.id) - Number(a.id));
+    if (appliedToday.length) return garminReconcileAnnouncement(appliedToday[0]);
+  }
+
+  if (date !== today) return null; // reconciling is a "now" concern, not a historical one
+
+  const rows = listUnreconciledGarminStrength();
+  const n = Array.isArray(rows) ? rows.length : 0;
+  if (n <= 0) return null;
+
+  const policy = decideAutonomyTier({
+    kind: "garmin_reconcile",
+    risk_class: "low",
+    reversible: true,
+    lead_mode: getSettings().lead_mode,
+  });
+
+  if (policy.tier === "ask") {
+    // review_everything: unchanged behavior — a manual tap-to-confirm card.
+    return {
+      id: "garmin-reconcile",
+      kind: "reconcile",
+      tier: "primary",
+      priority: 86,
+      client_card: "garmin-reconcile",
+    };
+  }
+
+  // Bounded + reversible: apply now, snapshot first so Undo is available the
+  // instant the decision is recorded.
+  const snapshot = snapshotGarminReconcileState(rows);
+  for (const row of rows) reconcileGarminStrength(row.id);
+  const { decision } = recordDecision({
+    effective_date: today,
+    kind: "garmin_reconcile",
+    domain: "training",
+    summary: `Merged ${n} Garmin strength ${n === 1 ? "workout" : "workouts"} into your sessions.`,
+    rationale: "Deterministic physiology merge from the watch — bounded and reversible.",
+    source: "garmin-reconcile",
+    status: "applied",
+    autonomy_tier: policy.tier,
+    risk_class: "low",
+    reversible: true,
+    applied_at: new Date().toISOString(),
+    context: { evidence_keys: rows.map((r: any) => `garmin_activity:${r.id}`) },
+    action: { activity_ids: rows.map((r: any) => Number(r.id)) },
+  });
+  saveBrainRollback(decision.id!, "garmin_strength", snapshot);
+  return garminReconcileAnnouncement(decision);
 }
 
 // ---- announced change: a structural coaching decision that will land at its
@@ -870,7 +940,7 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
 
   add(safe(() => fuelCandidate(d)));
   add(safe(() => fuelingFollowupCandidate(d)));
-  add(safe(() => reconcileCandidate()));
+  add(safe(() => reconcileCandidate(d)));
   try {
     for (const announced of announcedChangeCandidates(d)) add(announced);
   } catch {
