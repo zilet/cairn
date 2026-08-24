@@ -48,6 +48,18 @@ const PLAN_PAYLOAD = script(
   "process.stdout.write(JSON.stringify({ summary: 'Nudge the squat.', changes: [{ day_number: 1, exercise: 'Back Squat', target_weight: 195, reason: 'progression' }] }))"
 );
 const PROSE_ONLY = script("prose-only.cjs", "process.stdout.write('I am prose, not JSON.')");
+const ECHO_BARE_PAYLOAD = script(
+  "echo-bare-payload.cjs",
+  "process.stdout.write(JSON.stringify({ ok: true, from: 'bare' }))"
+);
+const ECHO_INSIGHT_BARE = script(
+  "echo-insight-bare.cjs",
+  "process.stdout.write(JSON.stringify({ found: true, text: 'Your sleep tracks your easy runs.' }))"
+);
+const ECHO_ENVELOPE_STRING = script(
+  "echo-envelope-string.cjs",
+  "process.stdout.write(JSON.stringify({ structuredOutput: '{\"ok\":true,\"from\":\"string\"}', thought: 'noise', usage: {} }))"
+);
 
 const inlineFlag = { flag: ["--json-schema", "{schema}"], arg: "inline" };
 
@@ -106,6 +118,26 @@ fs.writeFileSync(
       args: [PROSE_ONLY, "{prompt}"],
       input: "arg",
     },
+    // Flag placed (envelope declared) but the CLI still emits the contract directly.
+    envelopedBare: {
+      command: "node",
+      args: [ECHO_BARE_PAYLOAD, "{schema_args}", "{prompt}"],
+      input: "arg",
+      structured_output: { ...inlineFlag, envelope: { structured_key: "structuredOutput", text_key: "text" } },
+    },
+    // Insight-shaped payload: its own `text` field collides with grok's text_key.
+    envelopedInsightBare: {
+      command: "node",
+      args: [ECHO_INSIGHT_BARE, "{schema_args}", "{prompt}"],
+      input: "arg",
+      structured_output: { ...inlineFlag, envelope: { structured_key: "structuredOutput", text_key: "text" } },
+    },
+    envelopedString: {
+      command: "node",
+      args: [ECHO_ENVELOPE_STRING, "{schema_args}", "{prompt}"],
+      input: "arg",
+      structured_output: { ...inlineFlag, envelope: { structured_key: "structuredOutput", text_key: "text" } },
+    },
   }),
   "utf8"
 );
@@ -116,11 +148,15 @@ const { matchesJsonSchema } = await import("../dist/json-schema.js");
 const {
   MEAL_PLAN_STRUCTURE_SCHEMA,
   MEAL_SWAP_SCHEMA,
+  DAY_READ_SCHEMA,
+  INSIGHT_SCHEMA,
   PLAN_PROPOSAL_SCHEMA,
   WEEK_AHEAD_SCHEMA,
+  isInsightResult,
   isMealPlanStructureResult,
   isMealSwapResult,
   isPlanProposalResult,
+  isWeekAheadResult,
 } = await import("../dist/agent-contracts.js");
 
 const SCHEMA = { type: "object", additionalProperties: true, properties: { ok: { type: "boolean" } } };
@@ -178,6 +214,21 @@ test("the envelope unwrap is inert when the flag could not reach the CLI", async
   assert.deepEqual(res.parsed, { ok: true, from: "plain" });
 });
 
+test("an enveloping provider that still emits the bare payload yields the payload", async () => {
+  const res = await runAgent("envelopedBare", "hello", { schema: SCHEMA });
+  assert.deepEqual(res.parsed, { ok: true, from: "bare" });
+});
+
+test("a bare insight payload is not discarded because its text field collides with grok's text_key", async () => {
+  const res = await runAgent("envelopedInsightBare", "hello", { schema: SCHEMA });
+  assert.deepEqual(res.parsed, { found: true, text: "Your sleep tracks your easy runs." });
+});
+
+test("a string-valued structured field is re-parsed into the payload", async () => {
+  const res = await runAgent("envelopedString", "hello", { schema: SCHEMA });
+  assert.deepEqual(res.parsed, { ok: true, from: "string" });
+});
+
 test("an op carrying a schema still succeeds on a provider that cannot enforce one", async () => {
   const { agent, result } = await runAgentWithFallback(["broken", "plainProposal"], "propose", {
     schema: PLAN_PROPOSAL_SCHEMA,
@@ -196,6 +247,8 @@ test("every shipped schema is a single top-level object", () => {
     WEEK_AHEAD_SCHEMA,
     MEAL_PLAN_STRUCTURE_SCHEMA,
     MEAL_SWAP_SCHEMA,
+    DAY_READ_SCHEMA,
+    INSIGHT_SCHEMA,
   })) {
     assert.equal(schema.type, "object", `${name} must declare a top-level object type`);
     assert.equal(schema.anyOf, undefined, `${name} must not use a top-level anyOf`);
@@ -233,6 +286,16 @@ test("every field the prose contract solicits is NAMED in the schema", () => {
   for (const field of ["day", "note"]) {
     assert.ok(props(WEEK_AHEAD_SCHEMA.properties.days.items).includes(field), `a week-ahead day must name ${field}`);
   }
+  for (const field of ["kind", "headline", "why", "focus", "est_minutes", "requests"]) {
+    assert.ok(props(DAY_READ_SCHEMA).includes(field), `day-read must name ${field}`);
+  }
+  for (const field of ["found", "text", "connection", "rationale", "next_step", "requests"]) {
+    assert.ok(props(INSIGHT_SCHEMA).includes(field), `insight must name ${field}`);
+  }
+  const insightSide = INSIGHT_SCHEMA.properties.connection.properties.a;
+  for (const field of ["facet", "direction"]) {
+    assert.ok(props(insightSide).includes(field), `insight connection.a must name ${field}`);
+  }
 });
 
 test("every object node stays open, as a floor under the naming above", () => {
@@ -248,6 +311,8 @@ test("every object node stays open, as a floor under the naming above", () => {
   openEverywhere(WEEK_AHEAD_SCHEMA, "WEEK_AHEAD_SCHEMA");
   openEverywhere(MEAL_PLAN_STRUCTURE_SCHEMA, "MEAL_PLAN_STRUCTURE_SCHEMA");
   openEverywhere(MEAL_SWAP_SCHEMA, "MEAL_SWAP_SCHEMA");
+  openEverywhere(DAY_READ_SCHEMA, "DAY_READ_SCHEMA");
+  openEverywhere(INSIGHT_SCHEMA, "INSIGHT_SCHEMA");
 });
 
 test("the schema evaluator reads the keyword subset the contracts use", () => {
@@ -335,4 +400,89 @@ test("the acceptance predicates accept numeric strings end to end", () => {
   assert.equal(isMealSwapResult({ name: "Bowl", kcal: "0", protein_g: "40", fiber_g: "9" }), false);
   assert.equal(isMealSwapResult({ name: "   ", kcal: "520", protein_g: "40", fiber_g: "9" }), false);
   assert.equal(isPlanProposalResult({ summary: "x", changes: [{ day_number: "nope", exercise: "Squat" }] }), false);
+});
+
+function namedFields(schema, trail = "") {
+  const out = [];
+  if (!schema || typeof schema !== "object") return out;
+  if (schema.items) out.push(...namedFields(schema.items, trail ? `${trail}[]` : "[]"));
+  for (const [key, sub] of Object.entries(schema.properties ?? {})) {
+    const path = trail ? `${trail}.${key}` : key;
+    out.push(path);
+    out.push(...namedFields(sub, path));
+  }
+  return out;
+}
+
+test("parser-read fields are a subset of the schema's named fields", () => {
+  // Constrained decoding DROPS unnamed fields. The lists below are the fields each
+  // op's parser actually reads (acceptance predicate + post-accept sanitizer /
+  // persist). Every one must appear in the schema the CLI is handed.
+  const coachReadArgs = [
+    "requests[].args.exercise",
+    "requests[].args.start_date",
+    "requests[].args.end_date",
+    "requests[].args.limit",
+    "requests[].args.weeks",
+    "requests[].args.marker",
+    "requests[].args.days",
+    "requests[].args.kind",
+    "requests[].args.subject_key",
+    "requests[].args.scope",
+    "requests[].args.day_number",
+    "requests[].args.day",
+  ];
+  const cases = [
+    {
+      name: "DAY_READ_SCHEMA",
+      schema: DAY_READ_SCHEMA,
+      parserFields: [
+        "kind",
+        "headline",
+        "why",
+        "focus",
+        "est_minutes",
+        "requests",
+        "requests[].tool",
+        "requests[].args",
+        ...coachReadArgs,
+      ],
+    },
+    {
+      name: "INSIGHT_SCHEMA",
+      schema: INSIGHT_SCHEMA,
+      parserFields: [
+        "kind",
+        "found",
+        "text",
+        "rationale",
+        "next_step",
+        "connection",
+        "connection.a",
+        "connection.a.facet",
+        "connection.a.direction",
+        "connection.b",
+        "connection.b.facet",
+        "connection.b.direction",
+        "requests",
+        "requests[].tool",
+        "requests[].args",
+        ...coachReadArgs,
+      ],
+    },
+    {
+      name: "WEEK_AHEAD_SCHEMA",
+      schema: WEEK_AHEAD_SCHEMA,
+      parserFields: ["summary", "days", "days[].kind", "days[].label", "days[].day", "days[].note"],
+    },
+  ];
+  for (const { name, schema, parserFields } of cases) {
+    const named = new Set(namedFields(schema));
+    for (const field of parserFields) {
+      assert.ok(named.has(field), `${name} must name parser field ${field}`);
+    }
+  }
+  assert.equal(isWeekAheadResult({ summary: "Lift then rest.", days: [{ kind: "lift", label: "Lower" }] }), false);
+  assert.equal(isInsightResult({ found: true, text: "Your easy runs are protecting the lifts." }), true);
+  assert.equal(isInsightResult({ found: false }), true);
 });

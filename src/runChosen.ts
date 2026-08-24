@@ -361,11 +361,11 @@ export async function runChosenWithCoachReads(
     // what lets runAgentWithFallback repair/rotate on a parseable-but-wrong
     // specialist result instead of incorrectly treating it as success.
     //
-    // For the same reason `schema` is deliberately NOT forwarded below. A turn here may
-    // legitimately be EITHER the op's final contract or a coach_read request, and the
-    // enforcing CLIs cannot express that union (claude rejects a top-level anyOf: the
-    // schema must be one top-level object). Pinning the final contract would make a
-    // read request structurally impossible and silently kill depth-on-demand.
+    // `schema` is forwarded: claude rejects a top-level anyOf, so ops that use this
+    // loop (day_read, insight) declare ONE object that names BOTH the final contract
+    // AND the coach_read protocol (`requests`, plus every arg the read-tool
+    // normalizer reads). Pinning a final-only schema would drop `requests` under
+    // constrained decoding and silently kill depth-on-demand.
     const acceptParsed = (parsed: unknown): boolean => {
       if (isCoachReadQueryTurn(parsed)) return normalizeCoachReadQueryTurn(parsed) !== null;
       if (!opts.acceptParsed) return true;
@@ -386,6 +386,7 @@ export async function runChosenWithCoachReads(
         model: opts.model,
         reasoning: opts.reasoning,
         profile: opts.profile,
+        schema: opts.schema,
       })
     );
   };

@@ -563,48 +563,102 @@ function scanBalanced(text: string, start: number): { json: string | null; lastC
   return { json: null, lastClose };
 }
 
-// Pull the FIRST complete top-level JSON object out of a CLI's stdout. Tries a
-// ```json fenced block first, then a balanced-brace scan of the raw text. If no
-// object ever closes (a truncated reply), salvages by trimming to the last
-// balanced `}` — this recovers correct-but-cut-off responses that the old naive
-// first-{…}-last-} slice silently lost.
+// CLIs leak C0 controls and a UTF-8 BOM onto stdout (progress spinners, a Windows
+// pipe). JSON.parse rejects unescaped C0 even BETWEEN tokens, so a perfectly good
+// payload after a spinner dies as invalid_json. Tabs/LF/CR stay — they are JSON
+// whitespace. Characters inside strings that needed to be escaped were already
+// invalid JSON, so stripping them cannot accept bad JSON, only find good JSON.
+function normalizeAgentStdout(text: string): string {
+  let s = String(text ?? "");
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1);
+  return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+}
+
+// A JSON object is `{` + ws + (`"` of the first key, or `}` of `{}`). `{kind}` or
+// `{1800-2000}` in narration is a complete brace span that JSON.parse rejects;
+// treating it as "the" object blanked the real payload that followed.
+function indexOfPlausibleObjectStart(text: string, from: number): number {
+  let i = from;
+  while (i < text.length) {
+    const open = text.indexOf("{", i);
+    if (open === -1) return -1;
+    let j = open + 1;
+    while (j < text.length && (text[j] === " " || text[j] === "\t" || text[j] === "\n" || text[j] === "\r")) j++;
+    const ch = text[j];
+    if (ch === '"' || ch === "}") return open;
+    i = open + 1;
+  }
+  return -1;
+}
+
+function collectFencedBodies(text: string): string[] {
+  const bodies: string[] = [];
+  const re = /```(?:json[a-z]*)?[ \t]*\r?\n?([\s\S]*?)```/gi;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    bodies.push(m[1]);
+    last = m.index + m[0].length;
+  }
+  const tail = text.slice(last);
+  const unclosed = tail.match(/```(?:json[a-z]*)?[ \t]*\r?\n?([\s\S]*)$/i);
+  if (unclosed) bodies.push(unclosed[1]);
+  return bodies;
+}
+
+function pushObjectCandidates(candidates: string[], text: string): void {
+  let from = 0;
+  let firstPlausible = -1;
+  while (from < text.length) {
+    const open = indexOfPlausibleObjectStart(text, from);
+    if (open === -1) break;
+    if (firstPlausible === -1) firstPlausible = open;
+    const { json, lastClose } = scanBalanced(text, open);
+    if (json) {
+      candidates.push(json);
+      from = open + json.length;
+    } else {
+      // Truncated / never closed. Salvage is a last-ditch parse of THIS span, not
+      // a license to return a nested inner object as the payload.
+      if (lastClose > open) candidates.push(text.slice(open, lastClose + 1));
+      break;
+    }
+  }
+  if (firstPlausible !== -1) {
+    const last = text.lastIndexOf("}");
+    if (last > firstPlausible) candidates.push(text.slice(firstPlausible, last + 1));
+  }
+}
+
+function parseJsonObject(candidate: string): any | null {
+  try {
+    const v = JSON.parse(candidate);
+    if (v && typeof v === "object") return v;
+  } catch {
+    /* not JSON */
+  }
+  return null;
+}
+
+// Pull the FIRST complete top-level JSON object out of a CLI's stdout. Tries
+// fenced ```json blocks first (closed, then an unclosed opener — truncation
+// often eats the closing fence), then a balanced-brace scan of the raw text
+// that SKIPS narration braces (`{kind}`, `{1800-2000}`) rather than anchoring
+// on them. If no object ever closes, salvages by trimming to the last balanced
+// `}`. Never "repairs" invalid JSON (trailing commas, unquoted keys).
 export function extractJson(text: string): any | null {
+  const normalized = normalizeAgentStdout(text);
   const candidates: string[] = [];
 
-  // 1. Fenced block — scan inside it for a balanced object (the fence may wrap
-  //    prose around the JSON, or the closing ``` may be missing on truncation).
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) {
-    const body = fence[1];
-    const open = body.indexOf("{");
-    if (open !== -1) {
-      const { json, lastClose } = scanBalanced(body, open);
-      if (json) candidates.push(json);
-      else if (lastClose > open) candidates.push(body.slice(open, lastClose + 1)); // truncation salvage
-    }
-    candidates.push(body); // last resort: the whole fenced body
+  for (const body of collectFencedBodies(normalized)) {
+    pushObjectCandidates(candidates, body);
+    if (body.trim()) candidates.push(body);
   }
-
-  // 2. Raw text — first balanced top-level object, with truncation salvage.
-  const open = text.indexOf("{");
-  if (open !== -1) {
-    const { json, lastClose } = scanBalanced(text, open);
-    if (json) candidates.push(json);
-    else if (lastClose > open) candidates.push(text.slice(open, lastClose + 1)); // trim to last balanced }
-
-    // 3. Legacy fallback: greedy first-{ … last-} slice (the rare case where the
-    //    object opens inside a quoted span the scanner correctly skipped).
-    const last = text.lastIndexOf("}");
-    if (last > open) candidates.push(text.slice(open, last + 1));
-  }
+  pushObjectCandidates(candidates, normalized);
 
   for (const c of candidates) {
-    try {
-      const v = JSON.parse(c);
-      if (v && typeof v === "object") return v;
-    } catch {
-      /* next candidate */
-    }
+    const v = parseJsonObject(c);
+    if (v) return v;
   }
   return null;
 }
@@ -756,17 +810,41 @@ function resolveStructuredOutput(def: AgentDef | undefined): AgentStructuredOutp
  * repair, whereas null is the ordinary "no valid JSON" signal the ladder already
  * recovers from.
  */
+function looksLikeStructuredEnvelope(
+  rec: Record<string, unknown>,
+  envelope: NonNullable<AgentStructuredOutput["envelope"]>
+): boolean {
+  if (envelope.structured_key in rec) return true;
+  // grok: {text, thought, usage, structuredOutput}; agy: conversation_id + status + duration_seconds.
+  // An insight payload also has a `text` field, so text_key alone is NOT an envelope signal.
+  if ("thought" in rec && "usage" in rec) return true;
+  if ("conversation_id" in rec && "status" in rec && "duration_seconds" in rec) return true;
+  return false;
+}
+
 function unwrapStructuredEnvelope(parsed: unknown, envelope: NonNullable<AgentStructuredOutput["envelope"]>): any | null {
-  if (!parsed || typeof parsed !== "object") return null;
-  const direct = (parsed as Record<string, unknown>)[envelope.structured_key];
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const rec = parsed as Record<string, unknown>;
+  const direct = rec[envelope.structured_key];
   if (direct && typeof direct === "object") return direct;
+  if (typeof direct === "string") {
+    const inner = extractJson(direct);
+    if (inner && typeof inner === "object") return inner;
+  }
   const textKey = envelope.text_key;
-  const text = textKey ? (parsed as Record<string, unknown>)[textKey] : undefined;
+  const text = textKey ? rec[textKey] : undefined;
   if (typeof text === "string") {
     const inner = extractJson(text);
     if (inner && typeof inner === "object") return inner;
   }
-  return null;
+  // The flag was placed but the CLI still emitted the contract directly (older grok,
+  // a truncated envelope, a payload whose `text` field is athlete-facing prose).
+  // Handing the operation a telemetry envelope would be a contract miss; handing it
+  // the domain object is success. Returning null here was a systematic invalid_json:
+  // insight's own `text` field collides with grok's text_key, so extractJson on the
+  // prose failed and the whole payload was discarded.
+  if (looksLikeStructuredEnvelope(rec, envelope)) return null;
+  return rec;
 }
 
 const REASONING_LEVELS: readonly ReasoningLevel[] = ["low", "medium", "high", "xhigh", "max"];

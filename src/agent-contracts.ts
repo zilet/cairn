@@ -305,6 +305,102 @@ export function isWeekAheadResult(value: unknown): boolean {
   return p.days.every((raw: unknown) => text(object(raw)?.label));
 }
 
+// A coach_read protocol turn and the op's final payload share ONE schema: claude
+// rejects a top-level anyOf, so runChosenWithCoachReads forwards this object as-is.
+// Every arg the read-tool normalizer reads is NAMED — constrained decoding drops
+// unnamed fields even with additionalProperties: true.
+const COACH_READ_ARGS_PROPERTIES: Record<string, JsonSchema> = {
+  exercise: { type: ["string", "null"] },
+  start_date: { type: ["string", "null"] },
+  end_date: { type: ["string", "null"] },
+  limit: { type: ["integer", "null"] },
+  weeks: { type: ["integer", "null"] },
+  marker: { type: ["string", "null"] },
+  days: { type: ["integer", "null"] },
+  kind: { type: ["string", "null"] },
+  subject_key: { type: ["string", "null"] },
+  scope: { type: ["string", "null"] },
+  day_number: { type: ["integer", "null"] },
+  day: { type: ["string", "null"] },
+};
+
+const COACH_READ_PROTOCOL_PROPERTIES: Record<string, JsonSchema> = {
+  requests: {
+    type: "array",
+    items: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        tool: { type: "string" },
+        args: {
+          type: "object",
+          additionalProperties: true,
+          properties: COACH_READ_ARGS_PROPERTIES,
+        },
+      },
+    },
+  },
+};
+
+// The Brief day-read (src/prompt/day.ts DAY_READ_SCHEMA is its prose twin).
+// `kind` includes "coach_read" because this schema is forwarded through the
+// bounded read loop — an enum of only train|easy|rest|done would make a read
+// request structurally impossible under constrained decoding.
+export const DAY_READ_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["kind"],
+  properties: {
+    kind: { type: "string", enum: ["train", "easy", "rest", "done", "coach_read"] },
+    headline: { type: ["string", "null"] },
+    why: { type: ["string", "null"] },
+    focus: { type: ["string", "null"] },
+    est_minutes: { type: ["number", "null"] },
+    ...COACH_READ_PROTOCOL_PROPERTIES,
+  },
+};
+
+// Quiet cross-domain insight AND the weekly read (prompt/day.ts INSIGHT_SCHEMA /
+// WEEKLY_READ_SCHEMA). `connection` MUST be named: constrained decoding dropped
+// it when it wasn't, and every insight then fell back to text-only derivation.
+// `found` is NOT required — a coach_read turn has none, and {found:false} is
+// the designed silence. Residual checks in isInsightResult still require it
+// for a final payload.
+export const INSIGHT_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    kind: { type: "string" },
+    found: { type: "boolean" },
+    text: { type: ["string", "null"] },
+    rationale: { type: ["string", "null"] },
+    next_step: { type: ["string", "null"] },
+    connection: {
+      type: ["object", "null"],
+      additionalProperties: true,
+      properties: {
+        a: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            facet: { type: "string" },
+            direction: { type: "string" },
+          },
+        },
+        b: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            facet: { type: "string" },
+            direction: { type: "string" },
+          },
+        },
+      },
+    },
+    ...COACH_READ_PROTOCOL_PROPERTIES,
+  },
+};
+
 // A meal is the payload's leaf shape, shared by the weekly plan and the one-off swap.
 // `items`/`carbs_g`/`fat_g` are named because the prose twins solicit them
 // (prompt/nutrition.ts MEAL_SCHEMA and SWAP_SCHEMA) — see the note above
@@ -438,6 +534,7 @@ export function isHealthSynthesisResult(value: unknown): boolean {
 // acceptance ladder in generateInsight falls back to deriving the key from the text.
 // Whether a supplied connection is VALID is judged there, not at this parse gate.
 export function isInsightResult(value: unknown): boolean {
+  if (!matchesJsonSchema(INSIGHT_SCHEMA, value, { coerce: true })) return false;
   const p = object(value);
   if (!p || typeof p.found !== "boolean") return false;
   return p.found === false || text(p.text);
