@@ -204,6 +204,13 @@ export interface CoachPersonalModifier {
   bounds: { min: number; max: number };
   confidence: CoachPersonalResponseConfidence;
   evidence_n: number;
+  // PROVENANCE. True when every outcome behind this modifier came from a decision the
+  // athlete never made — an observe-tier read, an advisory prediction nobody enacted.
+  // Such a modifier is deliberately hobbled at the producer (it may only move toward
+  // its target's cautious direction, never away from it), and a consumer choosing
+  // between two candidate modifiers must be able to prefer the one that describes a
+  // change actually made.
+  observed_only: boolean;
   rationale: string;
   never_overrides: CoachPersonalSafetyGuardrail[];
 }
@@ -220,6 +227,13 @@ export interface CoachOutcomeLearning {
   change: string;
   confidence: CoachPersonalResponseConfidence;
   evidence_n: number;
+  // How many of those `evidence_n` outcomes judged a decision the athlete actually
+  // MADE, and the shorthand for "none of them did". Both are here because every
+  // surface that renders `evidence_n` was saying "comparable decisions" about
+  // outcomes on decisions that were only ever considered — a sentence outrunning its
+  // evidence. A surface that cannot tell the two apart cannot word itself honestly.
+  applied_n: number;
+  observed_only: boolean;
   aligned_n: number;
   missed_n: number;
   contradictions: number;

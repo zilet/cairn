@@ -385,6 +385,101 @@ export function buildHrvGuardExpectation(
   };
 }
 
+export interface SleepBaseline {
+  nights: number;
+  average_min: number | null;
+}
+
+/**
+ * The athlete's own overnight SLEEP level before a change, merged exactly the way
+ * hrvBaseline merges its nights (one row per date, a non-null Garmin value winning)
+ * so the baseline and the evaluator read the same picture.
+ *
+ * A wearable is OPTIONAL here too: no nights means no baseline, which means no
+ * expectation. A watchless athlete is never judged for silence.
+ */
+export function sleepBaseline(asOf: string, lookbackDays = LOOKBACK_DAYS): SleepBaseline {
+  const end = addDaysISO(asOf, -1) ?? asOf;
+  const start = addDaysISO(asOf, -Math.max(1, Math.trunc(lookbackDays))) ?? asOf;
+  const byDate = new Map<string, number>();
+  for (const table of ["daily_metrics", "garmin_daily_metrics"]) {
+    const rows = db
+      .prepare(
+        `SELECT date, sleep_min FROM ${table} WHERE date BETWEEN ? AND ? AND sleep_min IS NOT NULL ORDER BY date LIMIT 500`
+      )
+      .all(start, end) as Array<{ date: string; sleep_min: number }>;
+    for (const row of rows) {
+      const value = Number(row.sleep_min);
+      if (Number.isFinite(value) && value > 0) byDate.set(String(row.date), value);
+    }
+  }
+  const values = [...byDate.values()];
+  return {
+    nights: values.length,
+    average_min: values.length ? rounded(values.reduce((sum, value) => sum + value, 0) / values.length, 1) : null,
+  };
+}
+
+const SLEEP_GUARD_TOLERANCE_FRAC = 0.15;
+const SLEEP_GUARD_TOLERANCE_FLOOR_MIN = 20;
+
+/**
+ * The SLEEP half of the endurance-load recovery guard — the third reading of the same
+ * question the resting-HR and HRV guards ask, and the one that closes the
+ * `sleep_duration_delta` metric's loop. The evaluator for it has been registered since
+ * the metric family was written and NO site ever created an expectation against it, so
+ * a declared lever sat inert: the model could never learn what a volume raise costs
+ * this athlete's sleep.
+ *
+ * WHAT IS ACTUALLY CHECKED is the same within-window drift read as its two siblings:
+ * `recovery_delta` compares the first half of the window's nights against the second
+ * half and asks whether the drift stayed at or above `target.value`. The claim is
+ * "stepping weekly volume up should not send nightly sleep drifting downward across the
+ * weeks that follow" — never "sleep should return to some prior level".
+ *
+ * The baseline sizes the tolerance and nothing else, and the fraction is deliberately
+ * LOOSER than the HRV guard's tenth. Sleep duration is behavioral as much as
+ * physiological — a late week, a sick child, a deadline — and its ordinary week-to-week
+ * standard error runs around 20-25 minutes. A tenth of a seven-hour average is 42
+ * minutes and a twentieth is 21, and 21 sits INSIDE that noise: at that width the guard
+ * would keep returning not_aligned for reasons that have nothing to do with the
+ * mileage, and those verdicts reach the personal-response model at full applied weight.
+ * SLEEP_GUARD_TOLERANCE_FRAC is therefore 0.15 — 63 minutes at seven hours, a real loss
+ * of sleep rather than a normal fluctuation. The absolute floor is a backstop for a
+ * pathologically short average; it does not bind at any ordinary one.
+ */
+export function buildSleepGuardExpectation(
+  asOf: string,
+  windowDays: number,
+  context: { prior_weekly_km: number; new_weekly_km: number },
+  baseline = sleepBaseline(asOf)
+): ProposedExpectation | null {
+  if (baseline.nights < 6 || baseline.average_min == null) return null;
+  const windowEnd = addDaysISO(asOf, Math.max(1, Math.trunc(windowDays)));
+  if (!windowEnd) return null;
+  return {
+    metric_key: "sleep_duration_delta",
+    subject_key: null,
+    direction: "at_least",
+    baseline: {
+      sleep_avg_min: baseline.average_min,
+      nights: baseline.nights,
+      prior_weekly_km: context.prior_weekly_km,
+      new_weekly_km: context.new_weekly_km,
+    },
+    target: {
+      value: rounded(-Math.max(SLEEP_GUARD_TOLERANCE_FLOOR_MIN, baseline.average_min * SLEEP_GUARD_TOLERANCE_FRAC), 1),
+    },
+    window_start: asOf,
+    window_end: windowEnd,
+    minimum_data: { nights: 6 },
+    confounder_policy: "exclude_context_events",
+    confidence: "tentative",
+    evaluator: "recovery_delta",
+    evaluator_version: "run-recovery-sleep-guard-v1",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The LONG-HORIZON aerobic read.
 //

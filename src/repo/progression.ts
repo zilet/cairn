@@ -525,11 +525,23 @@ export function trainingModifierFor(
   if (!response) return null;
   const name = exerciseName.trim().toLowerCase();
   const candidates = response.modifiers.filter((modifier) => modifier.target === "training_progression_step");
-  return (
-    candidates.find((modifier) => modifier.subject_key?.trim().toLowerCase() === name) ??
-    candidates.find((modifier) => modifier.subject_key == null) ??
-    null
-  );
+  const own = candidates.find((modifier) => modifier.subject_key?.trim().toLowerCase() === name) ?? null;
+  const wholeAthlete = candidates.find((modifier) => modifier.subject_key == null) ?? null;
+  if (!own) return wholeAthlete;
+  // …with ONE exception to the lift-first preference, and it turns on provenance.
+  //
+  // An observed-only reading — every outcome behind it judged a decision the athlete
+  // never made — is barred from pushing, but it can still land slightly UNDER 1 as it
+  // fades toward the universal default with age. Preferred blindly, such a reading
+  // would displace a fresh whole-athlete ease that session feedback or joint pain had
+  // earned from changes the athlete really did make, and this lift alone would quietly
+  // lose the more careful step. So when the whole-athlete reading is applied-backed
+  // AND more cautious, it wins. Two readings of the same provenance are unaffected:
+  // the lift's own still speaks for the lift.
+  if (own.observed_only && wholeAthlete && !wholeAthlete.observed_only && wholeAthlete.scale < own.scale) {
+    return wholeAthlete;
+  }
+  return own;
 }
 
 // Clamp a desired LOADED step to the safe cap, rounded to a sane plate. Only

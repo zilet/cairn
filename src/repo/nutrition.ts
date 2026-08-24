@@ -256,11 +256,27 @@ function previousNutritionTargetKcal(saved: AcceptedNutritionTarget): number | n
 function recordNutritionTargetDecision(saved: AcceptedNutritionTarget): void {
   try {
     const previousKcal = previousNutritionTargetKcal(saved);
+    const targetDeltaKcal = previousKcal == null || saved.target_kcal == null ? null : saved.target_kcal - previousKcal;
+    // WHICH of the two nutrition levers this decision is actually about.
+    //
+    // They are different questions and the ledger learns them separately (both stage
+    // per recomposition phase in reaction-model.ts):
+    //
+    //   • `weight_trend_lb_wk` — "we MOVED the target, so the weekly trend should move
+    //     with it." Falsifiable off the scale alone (minimum_data: weigh_ins only), and
+    //     it is the honest metric whenever there is a delta to be accountable for. This
+    //     branch was designed, accepted by nutritionTrendExpectation, and never once
+    //     chosen by a call site — so the evaluator existed and never ran.
+    //
+    //   • `intake_to_weight_response` — "this is the target now; how does THIS athlete's
+    //     weight respond to the intake they actually log against it?" That question needs
+    //     intake days as well as weigh-ins, and it is the right one when nothing moved:
+    //     a first target, or a re-affirmation at the same number, makes no claim about a
+    //     change, so asking whether a change landed would be asking about nothing.
+    const metric = targetDeltaKcal != null && targetDeltaKcal !== 0 ? "weight_trend_lb_wk" : "intake_to_weight_response";
     const response =
       saved.target_kcal != null
-        ? nutritionTrendExpectation(saved.target_kcal, saved.effective_date, "intake_to_weight_response", {
-            targetDeltaKcal: previousKcal == null ? null : saved.target_kcal - previousKcal,
-          })
+        ? nutritionTrendExpectation(saved.target_kcal, saved.effective_date, metric, { targetDeltaKcal })
         : null;
     const stage = response?.expectation.baseline?.recomposition_stage ?? null;
     // The composition half of the same change, when — and only when — tape is flowing.
@@ -1494,6 +1510,12 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
         : dayKcal.length
           ? Math.round(dayKcal.reduce((sum: number, value: number) => sum + value, 0) / dayKcal.length)
           : Number.NaN;
+    // Deliberately `intake_to_weight_response` (the default), not the weight-trend
+    // lever the target-change site now uses. An accepted meal plan does not move a
+    // number the way a target change does — it is a way of EATING the target already
+    // in force, and its kcal figure is what the plan proposes rather than a delta the
+    // athlete committed to. The falsifiable claim is therefore about response to real
+    // logged intake, which is why this one needs intake days as well as weigh-ins.
     const response =
       accepted && Number.isFinite(kcal) && kcal > 0 ? nutritionTrendExpectation(kcal, localDateISO()) : null;
     // Close the lab loop for meals: an accepted plan applied while a nutrition marker-directive

@@ -136,3 +136,36 @@ test("a duration-only run plan (no prescribed km) falls back to plan_day_adheren
   assert.ok(!keys.includes("run_volume_adherence"), "no volume-adherence without a prescribed distance");
   assert.ok(keys.includes("plan_day_adherence"), `falls back to the generic adherence proxy (got: ${keys.join(", ")})`);
 });
+
+// The sleep half of the same guard. `sleep_duration_delta` had a registered evaluator
+// and no creator anywhere in the app, so a whole declared lever sat inert. It rides the
+// volume RAISE alongside the resting-HR and HRV guards, under the flowing-data rule the
+// HRV guard already follows: a wearable is optional, and silence is never a miss.
+test("a volume raise adds the sleep guard when the watch has been reporting sleep", () => {
+  asRunner();
+  const insert = db.prepare(`INSERT INTO daily_metrics (date, sleep_min) VALUES (?, ?)`);
+  const today = new Date();
+  for (let daysAgo = 1; daysAgo <= 8; daysAgo++) {
+    insert.run(new Date(today.getTime() - daysAgo * 864e5).toISOString().slice(0, 10), 420);
+  }
+  assert.equal(repo.applyProposal(cardioProposal(8, 12).id).ok, true); // prior ~20 km
+  const second = cardioProposal(13, 19); // ~32 km — a clear raise
+  assert.equal(repo.applyProposal(second.id).ok, true);
+
+  const { keys, rows } = expectationsFor(second.id);
+  assert.ok(keys.includes("sleep_duration_delta"), `the sleep guard is emitted (got: ${keys.join(", ")})`);
+  const guard = rows.find((r) => r.metric_key === "sleep_duration_delta");
+  assert.equal(JSON.parse(guard.target_json).value, -63, "sized off the athlete's own average, not a constant");
+  assert.equal(JSON.parse(guard.baseline_json).sleep_avg_min, 420);
+});
+
+test("an athlete whose watch reports no sleep gets no sleep prediction", () => {
+  asRunner();
+  assert.equal(repo.applyProposal(cardioProposal(8, 12).id).ok, true);
+  const second = cardioProposal(13, 19);
+  assert.equal(repo.applyProposal(second.id).ok, true);
+  assert.ok(
+    !expectationsFor(second.id).keys.includes("sleep_duration_delta"),
+    "absence of a watch is neutral, never an expectation that could only mature as a miss"
+  );
+});
