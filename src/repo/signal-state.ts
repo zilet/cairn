@@ -18,6 +18,7 @@ import {
   type WearAbsenceVoiceSet,
   type WearAbsenceView,
 } from "./wear-pattern-voice.js";
+import { enduranceHoldSubject, isEnduranceHoldDirective } from "./directives-read.js";
 import { addDaysISO, joinList } from "./shared.js";
 import { contextEventReadsAsIllness, contextEventReadsAsLabDraw } from "./context-effect.js";
 
@@ -441,6 +442,20 @@ export const SIGNAL_VOICE = {
       "Your training load is sitting inside what you've built for.",
       "The load you're carrying is within your usual range.",
       "Nothing about your recent load is out of the ordinary.",
+    ],
+  },
+  // A flagged lab finding the connected brain has turned into an active hold on
+  // endurance volume. The athlete never hears the machinery — no stored-record talk, no
+  // clinical claim, no instruction — only what is being waited on and what that makes
+  // this stretch worth. Subject is the marker family in plain words ("your iron stores").
+  endurance_hold_flagged: {
+    concept: /\b(?:recover|mend|catching up|coming back)\b/i,
+    sample: "your iron stores",
+    variants: [
+      "With {} still catching up, keeping the running where it is serves you better than building on it.",
+      "Your recent lab work has {} still on the mend, so steady endurance suits this stretch better than more of it.",
+      "While {} recover, there's more to gain from holding the running steady than from adding to it.",
+      "With {} still coming back, this is a better stretch for keeping the endurance where it is than for stretching it.",
     ],
   },
   // Easy running that is not easy. The subject is the athlete's OWN easy ceiling in
@@ -1551,6 +1566,12 @@ export function planningSignalState(input: {
   completedToday?: boolean;
   /** runIntensityDiscipline's read (src/repo/run-progression.ts); null when the model can't speak. */
   runIntensity?: any;
+  /**
+   * The ACTIVE health directives (`listActiveDirectives`, both sources). Absent or
+   * empty changes nothing — absence is never evidence. Only the endurance-hold shape
+   * is read here, through the same predicate the run builder caps the week with.
+   */
+  directives?: any[];
 }): UnifiedSignalState {
   const date = input.date;
   const observations: SignalObservation[] = [];
@@ -1947,6 +1968,57 @@ export function planningSignalState(input: {
           voice: { key: Number(checkin.soreness) >= 4 ? "soreness_high" : "soreness_ok" },
           safety_override: Number(checkin.soreness) >= 4,
           max_age_days: 0,
+        }
+      )
+    );
+
+  // ---- the connected brain reaches the morning read ----
+  // A flagged lab finding propagates into an ACTIVE training directive, and the run
+  // builder already caps the week off it (run-progression.ts). This state did not see
+  // directives at all, so the same morning's Brief could resolve `push_bias` and speak
+  // room the week had already denied — two layers, one athlete, opposite answers.
+  //
+  // It enters as a BRAKE and nothing more. `caution` is the softest decision-bearing
+  // direction there is: it can never reach the `constraint` rungs in actionState (so it
+  // cannot make a day easy or rest on its own), it holds the `backed` support tier shut
+  // through the same `hasFreshBrake` predicate every other brake uses, and it weighs on
+  // `training_load_tolerance` — the dimension that answers "how much load can today
+  // carry", which is exactly what an endurance hold is about. It never gates, and there
+  // is no verdict and no number anywhere in it.
+  //
+  // UNCERTAIN / uncited holds are `context_only`: visible in the state, the coverage and
+  // the prompt, deciding nothing. That is the softer weight the directive system already
+  // draws (an uncertain directive is a nudge, not a finding), and this layer has exactly
+  // two rungs — decide or inform — so the soft one takes the informing rung. The run
+  // builder keeps its own softer treatment of the same row unchanged.
+  //
+  // Status is not re-checked here: `listActiveDirectives` returns only status='active'
+  // rows, so a resolved or dismissed directive never arrives.
+  const enduranceHolds = (input.directives ?? []).filter(isEnduranceHoldDirective);
+  const firmHold = enduranceHolds.find((d: any) => !d.uncertain) ?? null;
+  const speakingHold = firmHold ?? enduranceHolds[0] ?? null;
+  if (speakingHold)
+    observations.push(
+      observation(
+        "training_load_tolerance",
+        "endurance_hold_directive",
+        date,
+        "health_directive",
+        firmHold ? "caution" : "neutral",
+        // MACHINE REGISTER: the directive itself, named as such, for the coach context
+        // and the provenance trail. The athlete hears the `endurance_hold_flagged`
+        // voice instead — this sentence is never rendered to them.
+        `An active${firmHold ? "" : ", uncertain"} health directive counsels holding endurance volume while ${enduranceHoldSubject(
+          speakingHold
+        )} recover; a brake on endurance load, not a gate.`,
+        {
+          voice: { key: "endurance_hold_flagged", subject: enduranceHoldSubject(speakingHold) },
+          // A directive is a standing statement about today, not a dated reading: it is
+          // true for as long as the row is active, and the athlete resolving it is what
+          // ends it. Dating it to the read keeps it fresh without inventing a reading.
+          max_age_days: 0,
+          context_only: !firmHold,
+          observation_id: `directive:${speakingHold.id ?? enduranceHoldSubject(speakingHold)}`,
         }
       )
     );

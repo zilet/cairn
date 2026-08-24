@@ -35,6 +35,69 @@ export function listActiveDirectives() {
   ).reverse();
 }
 
+// ---- the connected brain: endurance-limiting health directives ----
+// Iron / oxygen-transport markers whose depletion caps endurance capacity — the
+// canonical keys (marker-canon) an anemia/iron directive is built on. Matching on the
+// structured `marker` field (canonicalized, so lab-name variants + a "low "/"high "
+// label prefix all resolve) is robust where brittle text matching is not.
+//
+// This classification lives HERE, in the leaf, because two layers now act on the same
+// morning's directive and they must not be able to disagree about which rows they are
+// acting on: the run builder caps the week (run-progression.ts) and the day-planning
+// signal state raises a brake on the same dimension (signal-state.ts). A second copy
+// of the predicate is exactly how the Brief came to speak room the week already denied.
+const ENDURANCE_LIMITING_MARKER_KEYS = new Set<string>([
+  "ferritin",
+  "hemoglobin",
+  "hematocrit",
+  "mean corpuscular volume",
+  "serum iron",
+  "transferrin saturation",
+  "total iron binding capacity",
+  "transferrin",
+  "red blood cell count",
+]);
+
+// A cluster directive stores its marker as a "+"-joined label ("low ferritin+low
+// hemoglobin+low MCV"). Split it, drop any leading flag word, and canonicalize each
+// token to its stable merge key.
+export function directiveMarkerKeys(marker: string | null | undefined): string[] {
+  return String(marker ?? "")
+    .split("+")
+    .map((tok) => tok.replace(/^\s*(?:low|high|elevated|borderline|reduced|raised)\s+/i, "").trim())
+    .filter(Boolean)
+    .map((tok) => canonicalMarker(tok).key)
+    .filter(Boolean);
+}
+
+// Does an active TRAINING directive counsel HOLDING endurance volume? Primary signal
+// is the structured marker (an iron/oxygen-transport limiter); a conservative text
+// fallback catches an explicitly-worded endurance hold when no marker resolves. A
+// directive that ENCOURAGES aerobic work ("keep regular aerobic work") carries no hold
+// verb and never matches, so a CV-cluster nudge to move more is left untouched.
+export function isEnduranceHoldDirective(d: any): boolean {
+  if (!d || String(d.domain) !== "training") return false;
+  if (directiveMarkerKeys(d.marker).some((k) => ENDURANCE_LIMITING_MARKER_KEYS.has(k))) return true;
+  const text = String(d.directive ?? "").toLowerCase();
+  const holdVerb = /\b(hold|reduce|limit|cap|cut|lower|ease|scale back|pull back)\b/;
+  const enduranceObj = /\b(endurance|aerobic|mileage|running|run volume|cardio)\b/;
+  return holdVerb.test(text) && enduranceObj.test(text);
+}
+
+// WHAT the hold is waiting on, in plain words ("your iron stores"). One derivation,
+// shared by the plan's own note and by the athlete-facing voice the signal state
+// speaks, so the two surfaces name the same thing on the same morning.
+export function enduranceHoldSubject(d: any): string {
+  const keys = directiveMarkerKeys(d?.marker);
+  const iron = keys.some((k) =>
+    ["ferritin", "serum iron", "transferrin saturation", "total iron binding capacity", "transferrin"].includes(k)
+  );
+  const blood = keys.some((k) =>
+    ["hemoglobin", "hematocrit", "red blood cell count", "mean corpuscular volume"].includes(k)
+  );
+  return iron && blood ? "your iron and hemoglobin" : iron ? "your iron stores" : blood ? "your hemoglobin" : "your bloodwork";
+}
+
 export function directiveKey(d: any): string {
   return [
     String(d?.domain || "watch").toLowerCase(),

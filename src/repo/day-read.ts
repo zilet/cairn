@@ -20,6 +20,7 @@ import {
   type EasyOutcomeFeedbackSignal,
   easyOverrideSoftening,
   type EasyOverrideSoftening,
+  type FreshStatementField,
   OUTCOME_SOFTENING_WINDOW_DAYS,
   type OutcomeFeedbackSignal,
   readAdherenceModel,
@@ -31,6 +32,7 @@ import {
 import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
 import { RECOVERY_SAMPLE_FLOOR, recoveryTrendBars } from "./recovery-trend.js";
 import { activeContextEffect } from "./context-effect.js";
+import { listActiveDirectives } from "./directives-read.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
@@ -55,6 +57,7 @@ import { runIntensityDiscipline } from "./run-progression.js";
 import { programBalance } from "./progression.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { getTrainingIntent } from "./training-intent.js";
+import { listTrainingSymptoms } from "./training-symptoms.js";
 import {
   hasFreshBrake,
   lifeCapacityIsCommitment,
@@ -491,6 +494,17 @@ const OUTCOME_FEEDBACK_OPEN_WHY: readonly string[] = [
   "The last handful of days like this turned into real training and held up — so today reads as a training day.",
   "You've been turning these into proper sessions lately and coming out fine, so today's open for one.",
   "Easy mornings have been becoming real work for you and it's been landing, so today can be a session rather than a stroll.",
+];
+// …and the sentence for the morning that pattern does NOT get to open. It is appended
+// to the winning rule's own `why` — the rule still says what today is about, and this
+// says why a fortnight of history did not argue with it. Every phrasing credits the
+// athlete's own word and none of them bargains: this is a day standing where it is,
+// not a day being talked down.
+const OUTCOME_FEEDBACK_HELD_WHY: readonly string[] = [
+  "You said this morning was a heavy one, and that's the newer word — today keeps its easier shape.",
+  "Your own check-in this morning is the most current thing on record, so today stays where it is.",
+  "You told the app how today actually feels, and that counts for more than the last couple of weeks.",
+  "What you said about this morning still stands, so today stays the gentler one.",
 ];
 const UNPROGRAMMED_WHY: readonly string[] = [
   "Nothing programmed — some easy movement is plenty today.",
@@ -1091,6 +1105,11 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   chronic_sleep_watch: CHRONIC_SLEEP_WHY,
   outcome_feedback_soften: OUTCOME_FEEDBACK_SOFTEN_WHY,
   outcome_feedback_open: OUTCOME_FEEDBACK_OPEN_WHY,
+  // Not a rule code — a SENTENCE appended to whichever rule kept the day, exactly as
+  // the signal-voice keys below are not rule codes either. It is registered here so the
+  // constitution guards (grammar, several phrasings, a declared meaning) hold over it
+  // like every other athlete-facing string.
+  outcome_feedback_held: OUTCOME_FEEDBACK_HELD_WHY,
   unprogrammed_easy_day: UNPROGRAMMED_WHY,
   planned_training: TRAIN_CLEAR_WHY,
   // The backed train day. It keeps the `planned_training` LEDGER code — the decision
@@ -1154,6 +1173,9 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // own recent mornings AND how they turned out. A phrasing that keeps the history and
   // drops the outcome would be opening the day on a hunch.
   outcome_feedback_open: /\b(?:sessions?|training|work)\b(?=[\s\S]*\b(?:well|held up|landing|fine)\b)/i,
+  // The whole point of this sentence is WHOSE word held the day. A phrasing that stops
+  // crediting the athlete's own account is an unexplained refusal to move.
+  outcome_feedback_held: /\b(?:you said|you told|your own|you(?:'ve)? put)\b/i,
   planned_reduced_training: /\b(?:reduced|light|lighter)\b/i,
   planned_training: /\b(?:due|train|session)\b/i,
   // A push read that forgets to offer the reach is just a clear day with extra words.
@@ -1857,6 +1879,7 @@ export interface DayPlanningSignalInputs {
   contextEvents?: any[];
   completedToday?: boolean;
   runIntensity?: any;
+  directives?: any[];
 }
 
 function signalInput<T>(compute: () => T, fallback: T): T {
@@ -1932,6 +1955,12 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
       runIntensity:
         provided.runIntensity ??
         signalInput(() => brainSignal(`run_intensity:${date}`, () => runIntensityDiscipline(date)), null),
+      // The active directive set, so the morning read brakes on the same finding the
+      // run builder caps the week with. Memoized under a bare key: it is a whole-table
+      // read of what the athlete is acting on RIGHT NOW, with no date window of its own,
+      // so a read of an earlier date sees the same rows (the alternative — reconstructing
+      // which directives were active last Tuesday — is not something the table records).
+      directives: provided.directives ?? signalInput(() => brainSignal("active_directives", listActiveDirectives), []),
       context: provided.context ?? signalInput(() => activeContextEffect(date), null),
       contextEvents: provided.contextEvents ?? signalInput(() => planningContextEvents(date), []),
       completedToday: provided.completedToday ?? false,
@@ -2037,6 +2066,46 @@ function clinicallyDriven(signalState: UnifiedSignalState, healthWorkaround: unk
     health.status === "constrained" ||
     health.status === "watch"
   );
+}
+
+// ---------- the athlete's own morning outranks a fortnight of history ----------
+// `clinicallyDriven` above is the ONLY floor the outcome-softening ladders used to
+// consult, and it probes `health_constraints` — which is not where a morning check-in
+// lands. A run-down or sore check-in filed for the day being read sits in
+// `recovery_capacity` / `training_load_tolerance`, so the athlete who said they felt
+// wrecked could have their easy read opened into a full session by a twelve-day
+// override pattern, with a `why` that never mentioned what they had just told us. That
+// inverts the constitution's own rule: check-ins INFORM, and they are never the thing
+// that gets overruled.
+//
+// So a FRESH statement about the day being read vetoes the softening. Strictly scoped:
+//   • SAME DAY ONLY. A check-in row for `date`, or a symptom whose last STATED day is
+//     `date`. `stated_freshness` is the ladder that means "how current is their own
+//     account" — quiet training refreshes `freshness` and deliberately never this, so
+//     an inferred exposure can no longer read as the athlete speaking (see
+//     src/repo/training-symptoms.ts).
+//   • The SEVERE end of each scale, matching the thresholds the signal state already
+//     treats as a constraint (energy/sleep_feel <= 2, soreness >= 4) rather than a new
+//     bar of this rule's own.
+//   • Absence changes nothing. No check-in, no symptom, no veto — absence of a
+//     statement is not a statement.
+// It can only ever HOLD a read where the rules put it. It never brakes a day, never
+// creates a read, and never turns anything into rest.
+function freshStatementHold(date: string, checkin: any): FreshStatementField | null {
+  if (checkin && checkin.energy != null && Number(checkin.energy) <= 2) return "felt_energy";
+  if (checkin && checkin.sleep_feel != null && Number(checkin.sleep_feel) <= 2) return "sleep_feel";
+  if (checkin && checkin.soreness != null && Number(checkin.soreness) >= 4) return "felt_soreness";
+  // `seed_legacy: false` on purpose: this is the morning-open path and it must not
+  // write. The legacy import runs from the surfaces that own the symptom lifecycle;
+  // a row it has not reached yet simply does not veto, which is the safe direction.
+  const spokeToday = signalInput(
+    () =>
+      listTrainingSymptoms({ on: date, seed_legacy: false }).some(
+        (event) => event.status === "active" && event.last_stated_on === date
+      ),
+    false
+  );
+  return spokeToday ? "symptom_report" : null;
 }
 
 // Deterministic baseline (T1 layers the agentic sentence + buildDayReadPrompt on
@@ -3288,13 +3357,21 @@ export function dayRead(
   // `!softenRest` is belt-and-braces rather than arithmetic: a rest read cannot be in
   // SOFTENABLE_EASY_CODES anyway, but stating it here makes it impossible for the two
   // ladders to compose into rest → train by way of a future code appearing in both.
-  const softenEasy =
+  //
+  // …and a fresh word from the athlete about THIS morning is the last condition. It is
+  // written as a separate `heldByStatement` rather than folded into the conjunction
+  // because the read has to be able to SAY it held: the sentence below is appended only
+  // on the mornings where the pattern was live and their own account is what kept the
+  // day. See freshStatementHold() for the scope — same day, severe end, absence inert.
+  const softenEasyEarned =
     !softenRest &&
     easyFeedback?.active === true &&
     ruleRead.kind === "easy" &&
     SOFTENABLE_EASY_CODES.has(ruleOutcome.code) &&
     !recoveryWeek &&
     !clinicallyDriven(signalState, healthWorkaround);
+  const heldByStatement = softenEasyEarned ? freshStatementHold(d, checkin) : null;
+  const softenEasy = softenEasyEarned && !heldByStatement;
   // The opened day gets the focus and the clock of the session that was actually due,
   // when one is: the easy reads this rule may open sit ABOVE the planned-training rule
   // and preempt it, so without this an athlete who has been outrunning the quiet reads
@@ -3306,6 +3383,7 @@ export function dayRead(
     (signals as any).easy_outcome_feedback = {
       ...easyFeedback,
       applied: softenEasy,
+      ...(heldByStatement ? { held_by_statement: heldByStatement } : {}),
     } satisfies EasyOutcomeFeedbackSignal;
   }
   const outcome = softenRest
@@ -3329,7 +3407,22 @@ export function dayRead(
           why: pickDayVariant(OUTCOME_FEEDBACK_OPEN_WHY, d, "outcome_feedback_open"),
           est_minutes: openedPlanDay ? 60 : 45,
         }
-      : ruleRead;
+      : heldByStatement
+        ? {
+            // The read is the rule's, untouched — same kind, same focus, same clock.
+            // Only the sentence grows: the rule still says what today is about, and the
+            // held phrasing says why a fortnight of history did not open it. Appended
+            // rather than substituted so the rule's own registered meaning survives
+            // (DAY_READ_REQUIRED_CONCEPT is checked per rule code, and this sentence is
+            // registered under its own key beside it).
+            ...ruleRead,
+            why: `${endStopped(ruleRead.why)} ${pickDayVariant(
+              OUTCOME_FEEDBACK_HELD_WHY,
+              d,
+              "outcome_feedback_held"
+            )}`,
+          }
+        : ruleRead;
   // The health work-around closes EVERY protective read, whichever rule produced it
   // — a short night, stacked load, a light walk already logged, or the bare floor. It
   // used to be spoken by one rule only, so the athlete's constraint guidance disappeared
