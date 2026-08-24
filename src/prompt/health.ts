@@ -201,6 +201,14 @@ const HEALTH_REVIEW_SCHEMA = `{
   "headline": "<one-sentence whole-picture read, plain language>",
   "wins": ["<what's going well>"],
   "watchlist": [{"marker": "Ferritin", "status": "low|high|watch", "why": "<plain words>", "action": "<concrete food/training/lifestyle step>", "citation": "<source for the guidance when you consulted one, else null>"}],
+  "not_worried": {
+    // The de-escalation passage: which out-of-optimal (or borderline-flagged) markers
+    // are explicitly NOT worrisome, and why — training-driven CK/ALT, stable long-term,
+    // recheck-not-act, etc. "" / [] when nothing out-of-optimal reads as calm right now
+    // (never pad this with in-optimal markers — they get no mention at all, see below).
+    "markers": ["<marker name, e.g. 'CK'>"],
+    "note": "<ONE short, athlete-readable passage explaining why these are not a concern right now — informational, never medical advice>"
+  },
   "focus": [{"title": "<short focus area>", "why": "...", "action": "<this week's concrete step>"}],
   "followups": [{"what": "<e.g. retest ferritin>", "when": "<e.g. in 8-12 weeks>"}],
   "training_impact": "<how this should shape training, 1-2 sentences>",
@@ -341,6 +349,21 @@ OPTIMAL zone (not just the lab's normal range) and how actionable it is. Open th
 list with the highest-impact, most-actionable markers first; a value sitting "in range" but well
 outside optimal still deserves attention. Never show or invent a numeric grade/score — speak in plain
 "in / out of optimal" terms.
+
+DE-ESCALATE, DON'T JUST ESCALATE: a whole-picture review that only ever raises concerns teaches the
+reader to dread it. In "not_worried", explicitly NAME the out-of-optimal or borderline-flagged markers
+that are genuinely NOT worth worrying about right now, and say why in one short, calm passage — e.g. a
+CK or ALT elevation that's plainly training-driven (recent hard sessions explain it), a marker that has
+sat stable at the same level for years, or one whose right next step is simply a recheck, not action.
+This is as real a part of the read as the watchlist — a clinician-quality review says what's fine, not
+only what isn't. Leave "not_worried" empty when nothing out-of-optimal genuinely reads as calm.
+
+OPTIMAL-SILENCE IS A BUDGET: a marker that sits INSIDE its optimal zone gets NO recommendation, NO
+directive, and no mention anywhere in this review beyond "wins" (a marker firmly in optimal and trending
+well can be named there) — never in "watchlist", "focus", "not_worried" or "directives". Attention is
+scarce; spend it only on what's actually out-of-optimal or genuinely uncertain. Silence on a good marker
+is the correct, deliberate answer — do not manufacture a watch-item or directive for something already
+optimal just to have something to say about it.
 
 EVIDENCE & THE CONNECTED BRAIN (this is what makes the review act across the whole picture):
 - When a finding is CONSEQUENTIAL (a clearly out-of-range or out-of-optimal marker, a concerning

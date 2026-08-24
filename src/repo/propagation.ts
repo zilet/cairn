@@ -1299,6 +1299,14 @@ export function applyReviewDirectives(directives: any[]) {
     // Current context for THIS marker (null when we can't resolve a numeric value
     // or there's no optimal band to judge against — e.g. a watch-only marker).
     const ctx = marker ? (markerCtxByName.get(marker.toLowerCase()) ?? null) : null;
+    // Optimal-silence, enforced server-side: an agent-emitted directive for a marker
+    // that resolves to a zone and is NOT actually off-optimal (same test the
+    // deterministic 'markers' engine gates buildOffMarkers on) is dropped rather than
+    // trusted — attention is a budget, and a model occasionally drifts into nudging on
+    // an already-optimal reading despite the prompt's instruction not to. Only fires
+    // when a zone/value actually resolved; a watch-only or unresolved marker is left
+    // to the agent's judgment, same as everywhere else in this function.
+    if (ctx && !offOptimal(ctx.value, ctx.zone, ctx.flag)) continue;
     // Keep suppressing prior feedback UNLESS the marker is now clearly worse than
     // it was when last handled. Conservative: with no resolvable context we can't
     // prove a worsening, so we honor the prior dismiss/resolve (skip).

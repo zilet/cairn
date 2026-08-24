@@ -33,16 +33,19 @@ import {
   DAY_READ_POLICY_REASON_VARIANTS,
   DAY_READ_REQUIRED_CONCEPT,
   DAY_READ_WHY_VARIANTS,
+  FORWARD_LOADED_SOON,
+  FORWARD_LOADED_TOMORROW,
   PUSH_DRIVE_WHY,
   QUIET_STREAK_GUARDED_WHY,
   QUIET_STREAK_WHY,
   RECOVERY_WEEK_SOFTEN_WHY,
+  THIN_SIGNAL_COVERAGE_WHY,
   dayReadHeadline,
   quietOrdinal,
   violatesReadingGrammar,
 } from "../dist/repo/day-read.js";
 import { UNPROGRAMMED_EASY_DAY, pickDayVariant } from "../dist/repo/brain/day-read-rules.js";
-import { SIGNAL_VOICE_REGISTRY, signalVoice } from "../dist/repo/signal-state.js";
+import { SIGNAL_VOICE_REGISTRY, signalVoice, thinSignalCoverage } from "../dist/repo/signal-state.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -939,6 +942,96 @@ test("forwardLook is null-safe with no plan (degrades, never throws)", () => {
   const fl = repo.forwardLook(REF);
   assert.equal(fl.next_focus, null);
   assert.equal(fl.text, null);
+  assert.equal(fl.loaded_soon, null);
+});
+
+// The Brief reads the shape of coming days (W4.6): a quality/long run landing
+// TOMORROW is a loaded near-future, spoken as a forecast-shaped SUGGESTION — never
+// a red day, never gate language. A single weekly-run entry always projects onto
+// tomorrow (see test/hybridRunLookahead.test.js), so this needs no flexible-agenda
+// seeding — the same pure template lookahead the hybrid sequencing signal reads.
+test("forwardLook speaks a loaded-near-future forecast when a quality run lands tomorrow", () => {
+  repo.setWeeklyRuns([{ day_number: 1, label: "Tempo run", target_distance_km: 8, target_zone: "Z3" }]);
+  const fl = repo.forwardLook(REF);
+  assert.deepEqual(fl.loaded_soon, { when: "tomorrow", run_kind: "quality" });
+  assert.match(fl.text, /quality/i);
+  assert.equal(violatesReadingGrammar(fl.text), null, fl.text);
+});
+
+test("forwardLook speaks a loaded-near-future forecast when a long run lands tomorrow", () => {
+  repo.setWeeklyRuns([{ day_number: 1, label: "Long run", target_distance_km: 16, target_zone: "Z2" }]);
+  const fl = repo.forwardLook(REF);
+  assert.deepEqual(fl.loaded_soon, { when: "tomorrow", run_kind: "long" });
+  assert.match(fl.text, /long/i);
+  assert.equal(violatesReadingGrammar(fl.text), null, fl.text);
+});
+
+test("forwardLook's loaded-near-future phrasing rotates and never breaks the reading grammar", () => {
+  for (const render of [...FORWARD_LOADED_TOMORROW, ...FORWARD_LOADED_SOON]) {
+    const text = render("long");
+    assert.equal(violatesReadingGrammar(text), null, `"${text}" must read as a suggestion, not a gate`);
+  }
+  // Every day of a full week rotates a variant (never throws, never empty).
+  repo.setWeeklyRuns([{ day_number: 1, label: "Tempo run", target_distance_km: 8, target_zone: "Z3" }]);
+  const seen = new Set();
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(new Date(`${REF}T00:00:00Z`).getTime() + i * 864e5).toISOString().slice(0, 10);
+    const fl = repo.forwardLook(date);
+    assert.ok(fl.loaded_soon, `day ${date} still sees tomorrow's run`);
+    seen.add(fl.text);
+  }
+  assert.ok(seen.size > 1, "the forecast line rotates across the week rather than repeating one literal");
+});
+
+// Thin-signal honesty (W4.6): when visibly less of the board is backing today's read
+// than usual, the Brief's `why` says so instead of projecting a confidence the
+// evidence doesn't have. Gated to the genuinely bare `dayRead(date)` call — the real
+// Brief-serving path (dayread.ts's cache layer) — because that is the one path where
+// `signalState` is the true DB-scanned rich state; a caller handing in its own
+// recovery/signal-state override (as most of this file's fixtures do, to drive a
+// specific deterministic branch) is supplying its own narrower evidence shape, and
+// reading thinness off that would describe the override, not the athlete's week.
+test("a bare dayRead with nothing at all on record names the read as thin", () => {
+  const r = repo.dayRead(isoDaysAgo(0));
+  assert.ok(
+    THIN_SIGNAL_COVERAGE_WHY.some((variant) => r.why.endsWith(variant)),
+    `expected a thin-signal acknowledgment, got ${JSON.stringify(r.why)}`
+  );
+});
+
+test("a bare dayRead with real evidence on the board does not call itself thin", () => {
+  seedSleep(isoDaysAgo(1), 420);
+  seedTrainingDay(isoDaysAgo(1));
+  const r = repo.dayRead(isoDaysAgo(0));
+  assert.ok(
+    !THIN_SIGNAL_COVERAGE_WHY.some((variant) => r.why.includes(variant)),
+    `did not expect a thin-signal acknowledgment, got ${JSON.stringify(r.why)}`
+  );
+});
+
+test("a dayRead given its own recovery override never appends the thin-signal note (it isn't the bare path)", () => {
+  // Same empty DB as the first case above, but with an explicit override — the
+  // signature CLAUDE.md documents (only unifiedState scopes the whole state; a
+  // bare `recovery` override still reaches dayPlanningSignalState, in a shape
+  // narrower than the full DB scan). Thinness must stay off the override path.
+  const r = repo.dayRead(isoDaysAgo(0), sleepMean(300));
+  assert.ok(
+    !THIN_SIGNAL_COVERAGE_WHY.some((variant) => r.why.includes(variant)),
+    `did not expect a thin-signal acknowledgment on an override call, got ${JSON.stringify(r.why)}`
+  );
+});
+
+test("thinSignalCoverage is a pure function of active_fields across the five dimensions", () => {
+  const dim = (fields) => ({ coverage: { active_fields: fields } });
+  const empty = {
+    recovery_capacity: dim([]),
+    training_load_tolerance: dim([]),
+    energy_fueling: dim([]),
+    health_constraints: dim([]),
+    life_capacity: dim([]),
+  };
+  assert.equal(thinSignalCoverage(empty), true);
+  assert.equal(thinSignalCoverage({ ...empty, recovery_capacity: dim(["sleep"]) }), false);
 });
 
 test("absent signals never throw and never force rest (graceful degradation)", () => {

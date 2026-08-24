@@ -26,11 +26,17 @@ type HealthPictureFollowup = {
   when?: unknown;
 };
 
+type HealthPictureNotWorried = {
+  markers?: unknown;
+  note?: unknown;
+};
+
 type HealthPictureParsed = {
   headline?: unknown;
   focus?: unknown;
   watchlist?: unknown;
   wins?: unknown;
+  not_worried?: unknown;
   followups?: unknown;
   training_impact?: unknown;
   nutrition_impact?: unknown;
@@ -122,6 +128,20 @@ function reviewHtml(review: HealthPictureReview, stale: unknown, errorHtml: unkn
     .filter(Boolean)
     .map((win) => `<li>${hz(win)}</li>`)
     .join("");
+  // The de-escalation passage: named markers that are out-of-optimal/borderline but
+  // explicitly NOT worrisome right now, plus the one calm sentence saying why.
+  const notWorried = asObject(parsed.not_worried) as HealthPictureNotWorried | null;
+  const notWorriedMarkers = (Array.isArray(notWorried?.markers) ? notWorried.markers : [])
+    .filter(Boolean)
+    .map((m) => escHtml(String(m)))
+    .join(", ");
+  const notWorriedHtml =
+    notWorried && (notWorriedMarkers || notWorried.note)
+      ? `<div class="hnotworried">
+      ${notWorriedMarkers ? `<div class="hnotworried-markers">${notWorriedMarkers}</div>` : ""}
+      ${notWorried.note ? `<div class="hnotworried-note">${hz(notWorried.note)}</div>` : ""}
+    </div>`
+      : "";
   const followups = (Array.isArray(parsed.followups) ? parsed.followups : [])
     .map(asObject)
     .filter((item): item is HealthPictureFollowup => !!item && !!item.what)
@@ -145,6 +165,7 @@ function reviewHtml(review: HealthPictureReview, stale: unknown, errorHtml: unkn
     ${asOf}
     ${focus ? `<span class="hpic-sub lbl">This week's focus</span><div class="hfocus-list">${focus}</div>` : ""}
     ${watch ? `<span class="hpic-sub lbl">Watchlist</span><div class="hwatch-list">${watch}</div>` : ""}
+    ${notWorriedHtml ? `<span class="hpic-sub lbl">Not worried about</span>${notWorriedHtml}` : ""}
     ${wins ? `<span class="hpic-sub lbl">Going well</span><ul class="hwins">${wins}</ul>` : ""}
     ${followups ? `<span class="hpic-sub lbl">Follow-ups</span><div class="hfu-list">${followups}</div>` : ""}
     ${impacts ? `<div class="himpacts">${impacts}</div>` : ""}
