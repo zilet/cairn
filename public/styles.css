@@ -3860,7 +3860,7 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hpic{overflow:hidden}
 .hpic-headline,.hfocus-title,.hfocus-why,.hfocus-act,
 .hwatch-name,.hwatch-why,.hwatch-act,.hfu-what,.himpact-t,
-.hwins li,.hdoc .sess-line{overflow-wrap:anywhere;word-break:break-word}
+.hwins li,.hnotworried-markers,.hnotworried-note,.hdoc .sess-line{overflow-wrap:anywhere;word-break:break-word}
 .hfu-what{min-width:0}
 .hm-name,.hm-val{overflow-wrap:anywhere;word-break:break-word}
 
@@ -4257,6 +4257,12 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hwins{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 .hwins li{position:relative;padding-left:20px;font-size:.84rem;color:var(--ink-2);line-height:1.45}
 .hwins li::before{content:"✓";position:absolute;left:0;top:0;color:var(--sage);font-weight:700}
+
+/* not-worried — the de-escalation passage: a calm, quiet note, deliberately NOT styled
+   like a watch item (no dot, no warn color — this is the reassurance, not a flag) */
+.hnotworried{display:grid;gap:4px}
+.hnotworried-markers{font-size:.8rem;font-weight:600;color:var(--ink-2)}
+.hnotworried-note{font-size:.84rem;color:var(--ink-2);line-height:1.5}
 
 /* follow-ups */
 .hfu-list{display:grid;gap:7px}

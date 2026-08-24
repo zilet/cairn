@@ -1509,6 +1509,30 @@ function hasFreshDecidingBrake(dimensions: Record<SignalDimension, SignalDimensi
   return freshBearingEvidence(dimensions).some((item) => isBrakeEvidence(item) && !isAdvisoryBrake(item));
 }
 
+// Is this a THIN week for signals — is today's read leaning on visibly less evidence
+// than usual? Deterministic and code-derived from the SAME per-dimension coverage
+// this module already computes (`coverage.active_fields`, filled in dimensionState
+// below): a wearable gap or an unlogged stretch already empties `active_fields` for
+// the dimensions it touches, so nothing new has to be probed here. Simple on purpose
+// — "how many of the five dimensions carry ANY current evidence" rather than a new
+// per-sensor census — because the point is honesty about the read's CONFIDENCE, not
+// a precise accounting of which watch synced when.
+//
+// The bar (NO dimension currently carries any evidence) is deliberately strict: most
+// days some corner of the picture is speaking — a synced wearable, a logged session —
+// even when most of the board is quiet, and that ordinary quiet is not what this line
+// is for. It fires only when the read is genuinely running on nothing tracked at all
+// (a real wearable gap, a fully unlogged stretch), which is the "thin week" the athlete
+// actually needs told apart from a normal light-tracking day. It is never about the
+// athlete's LOGGING — a day with no felt check-in and a synced watch still counts as
+// covered, and a thin day never reads as a rebuke (VISION.md: absent data is never
+// "low"/"behind").
+export function thinSignalCoverage(dimensions: Record<SignalDimension, SignalDimensionState>): boolean {
+  const dims = Object.values(dimensions);
+  if (!dims.length) return false;
+  return dims.every((dim) => dim.coverage.active_fields.length === 0);
+}
+
 // Is this a train day the evidence positively BACKS? Three conditions, all of them
 // about what is actually on record:
 //   • the arbitration already landed on a plain train day with evidence behind it

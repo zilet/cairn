@@ -197,3 +197,88 @@ test("a dismissed review finding RESURFACES when the marker is materially worse"
   assert.equal(back[0].resurfaced_from_id, dir.id, "links back to the dismissed directive");
   assert.equal(back[0].trigger_value, 140, "stamps the new (worse) trigger value");
 });
+
+// ---- optimal-silence, enforced server-side (applyReviewDirectives) ----------
+// W4.6: the deterministic 'markers' engine already only fires on off-optimal markers
+// (see "an in-optimal, unflagged marker yields no directives at all" above). This
+// mirrors that guard onto the agent-emitted 'health_review' path, which has no such
+// discipline of its own beyond the prompt's instruction — a model that drifts into
+// nudging on an already-optimal reading must not have that directive persisted.
+test("a health-review directive for an IN-OPTIMAL marker is dropped, not persisted", () => {
+  seedHealthDoc("2025-12-01", [marker("ApoB", 65, { unit: "mg/dL", flag: "normal" })]); // inside [40,80]
+  const saved = repo.addHealthReview(
+    {
+      headline: "Whole-picture read",
+      directives: [
+        {
+          domain: "nutrition",
+          marker: "ApoB",
+          directive: "Keep leaning on soluble fiber to nudge ApoB lower.",
+          rationale: "Every little bit helps.",
+        },
+      ],
+    },
+    "stub"
+  );
+  assert.ok(saved, "the review itself still saves");
+  assert.equal(
+    repo.listActiveDirectives().filter((d) => d.source === "health_review" && (d.marker || "") === "ApoB").length,
+    0,
+    "an in-optimal marker gets no directive, even one the agent emitted"
+  );
+});
+
+test("a health-review directive for an OUT-OF-OPTIMAL marker still persists", () => {
+  seedHealthDoc("2025-12-01", [marker("ApoB", 120, { unit: "mg/dL", flag: "high" })]);
+  repo.addHealthReview(
+    {
+      headline: "Whole-picture read",
+      directives: [
+        {
+          domain: "nutrition",
+          marker: "ApoB",
+          directive: "Lower saturated fat and add soluble fiber to bring ApoB toward optimal.",
+          rationale: "ApoB is the atherogenic-particle lever.",
+        },
+      ],
+    },
+    "stub"
+  );
+  assert.equal(
+    repo.listActiveDirectives().filter((d) => d.source === "health_review" && (d.marker || "") === "ApoB").length,
+    1,
+    "a genuinely off-optimal finding still gets its directive"
+  );
+});
+
+// ---- the de-escalation passage (addHealthReview → not_worried) --------------
+test("addHealthReview coerces and caps the not_worried de-escalation passage", () => {
+  const saved = repo.addHealthReview(
+    {
+      headline: "Whole-picture read",
+      not_worried: {
+        markers: ["CK", "ALT", 42, null, ""],
+        note: "Both are elevated from recent hard training and have tracked this way before — nothing to act on.",
+      },
+    },
+    "stub"
+  );
+  assert.ok(saved, "a headline alone is enough to save");
+  assert.deepEqual(saved.parsed.not_worried.markers, ["CK", "ALT", "42"], "non-strings coerce, blanks drop");
+  assert.match(saved.parsed.not_worried.note, /recent hard training/);
+});
+
+test("addHealthReview stores not_worried as null when the agent has nothing to de-escalate", () => {
+  const saved = repo.addHealthReview(
+    { headline: "Whole-picture read", not_worried: { markers: [], note: "" } },
+    "stub"
+  );
+  assert.equal(saved.parsed.not_worried, null);
+});
+
+test("addHealthReview tolerates a missing/malformed not_worried field", () => {
+  const saved = repo.addHealthReview({ headline: "Whole-picture read" }, "stub");
+  assert.equal(saved.parsed.not_worried, null);
+  const malformed = repo.addHealthReview({ headline: "Whole-picture read", not_worried: "not an object" }, "stub");
+  assert.equal(malformed.parsed.not_worried, null);
+});

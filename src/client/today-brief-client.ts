@@ -297,7 +297,12 @@ type TodayBriefHtmlOptions = {
     // "Next: …" is the so-what that replaces the retired Start-session controls.
     const forward = read?.forward && (kind === "train" || kind === "done") ? escHtml(read.forward) : "";
     const periodization = todayBriefPeriodizationHtml(read);
-    const arc = read?.arc && !forward && !periodization ? escHtml(read.arc) : "";
+    // arc used to be silently discarded whenever a forward line was present — dead
+    // code, since forwardLook() speaks on train/done days too and the two rarely say
+    // the same thing (arc is the plan's trajectory; forward is the next session/
+    // due-groups/forecast). Render both compactly: forward still leads, arc still
+    // yields to periodization (a richer version of the same "plan's shape" idea).
+    const arc = read?.arc && !periodization ? escHtml(read.arc) : "";
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
     const lookBack = todayBriefLookBackHtml(read, options.isToday !== false);
 

@@ -88,6 +88,7 @@ test("health picture review renderer escapes agent output and stale refresh stat
         headline: "ApoB <watch> on 2026-06-01",
         focus: [{ title: "Lower ApoB <risk>", why: "measured on 2026-06-01", action: "add fiber <daily>" }],
         watchlist: [{ marker: "LDL <bad>", status: "high", why: "recorded on 2026-06-01", action: "retest <soon>" }],
+        not_worried: { markers: ["CK <flag>"], note: "Training-driven and stable <note>" },
         wins: ["VO2 held <steady>"],
         followups: [{ what: "Discuss with clinician <pcp>", when: "next visit <soon>" }],
         training_impact: "Keep hard days modest <for now>",
@@ -100,6 +101,9 @@ test("health picture review renderer escapes agent output and stale refresh stat
 
   assert.match(html, /This week's focus/);
   assert.match(html, /Watchlist/);
+  assert.match(html, /Not worried about/);
+  assert.match(html, /CK &lt;flag&gt;/);
+  assert.match(html, /Training-driven and stable &lt;note&gt;/);
   assert.match(html, /Going well/);
   assert.match(html, /Follow-ups/);
   assert.match(html, /Training/);
@@ -108,5 +112,15 @@ test("health picture review renderer escapes agent output and stale refresh stat
   assert.match(html, /New results/);
   assert.match(html, /coach &lt;bot&gt;/);
   assert.match(html, /Retry later/);
-  assert.doesNotMatch(html, /<watch>|<risk>|<bad>|<steady>|<pcp>|<for now>|<slowly>|<bot>/);
+  assert.doesNotMatch(html, /<watch>|<risk>|<bad>|<steady>|<pcp>|<for now>|<slowly>|<bot>|<flag>|<note>/);
+});
+
+test("health picture review renderer omits the not-worried section when the review has none", () => {
+  const picture = loadHealthPicture();
+  const html = picture.reviewHtml(
+    { created_at: "2026-06-30T04:00:00Z", parsed: { headline: "All quiet" } },
+    false,
+    ""
+  );
+  assert.doesNotMatch(html, /Not worried about/);
 });

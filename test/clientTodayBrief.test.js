@@ -50,7 +50,9 @@ test("Today Brief renders calm launch and steer controls safely", () => {
       why: "recovered & ready",
       est_minutes: 45,
       forward: "Next: legs <tomorrow>",
-      arc: "Hidden when forward exists",
+      // arc used to be silently discarded whenever forward existed (dead code) — the
+      // two now render together (compactly), so this asserts arc actually appears.
+      arc: "Week 2 of 6 arc <line>",
       signals: {},
     },
     { isToday: true, showPlan: false }
@@ -65,7 +67,8 @@ test("Today Brief renders calm launch and steer controls safely", () => {
   assert.match(html, /data-redirect="ask-session"/);
   assert.match(html, /data-override="rough night"/);
   assert.match(html, /Next: legs &lt;tomorrow&gt;/);
-  assert.doesNotMatch(html, /Hidden when forward exists|Push <today>|Upper <body>/);
+  assert.match(html, /Week 2 of 6 arc &lt;line&gt;/, "arc renders alongside forward, not discarded");
+  assert.doesNotMatch(html, /Push <today>|Upper <body>|Week 2 of 6 arc <line>/);
 });
 
 test("Today Brief suppresses irrelevant steer chips and exposes reset when steered", () => {

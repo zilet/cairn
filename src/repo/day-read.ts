@@ -65,6 +65,7 @@ import {
   planningSignalState,
   signalVoice,
   spokenSignalVoice,
+  thinSignalCoverage,
   SIGNAL_VOICE_KEYS,
   SIGNAL_VOICE_REGISTRY,
   todayHolds,
@@ -3484,15 +3485,50 @@ export function dayRead(
           why: `${resolvedRead.why} ${endStopped(spokenSignalVoice(workaroundVoice, d, SIGNAL_VOICE_KEYS.injury))}`,
         }
       : resolvedRead;
+  // Honest about the evidence itself, not just the posture: when visibly less of
+  // the board is currently backing today's read than usual (a wearable gap, an
+  // unlogged stretch), say so instead of letting the read project a confidence the
+  // evidence doesn't have. `done` is excluded — that read is a fact about work
+  // already logged, not a forward confidence call. Never about the athlete's
+  // LOGGING itself (VISION.md: absent data is never "low"/"behind") — the sentence
+  // is about the READ leaning on how the athlete feels, not a rebuke.
+  //
+  // Gated to the genuinely bare call (no recovery/unifiedState/underfueling
+  // override) — the real Brief-serving path (dayread.ts's cache layer calls
+  // dayRead(date) with nothing else), where `signalState` is the true DB-scanned
+  // RICH state. A caller that hands in its own recovery/signal-state snapshot
+  // (prompt building, an earlier-computed baseline) is by definition supplying
+  // its OWN evidence, often in a narrower shape than the full scan produces —
+  // reading thinness off THAT would describe the shape of the override, not the
+  // athlete's actual week.
+  const thin =
+    base.kind !== "done" &&
+    recovery === undefined &&
+    unifiedState === undefined &&
+    underfuelingSnapshot === undefined &&
+    thinSignalCoverage(signalState.dimensions);
+  const withThinness = thin
+    ? { ...base, why: `${base.why} ${pickDayVariant(THIN_SIGNAL_COVERAGE_WHY, d, "thin_signal_coverage")}` }
+    : base;
   // Cross-day memory: yesterday reached this same conclusion by this same route,
   // so today has nothing new to report and should say so rather than re-deriving
   // the sentence as though it were news.
   continuity.repeat_of_yesterday =
     !!continuity.yesterday &&
-    continuity.yesterday.kind === base.kind &&
+    continuity.yesterday.kind === withThinness.kind &&
     continuity.yesterday.rule_code === outcome.code;
-  return finalizeDeterministicRead(d, outcome, applyContinuityVoice(d, outcome, base, continuity));
+  return finalizeDeterministicRead(d, outcome, applyContinuityVoice(d, outcome, withThinness, continuity));
 }
+
+// A thin week for signals: less current evidence backing today's read than usual
+// (see thinSignalCoverage). Acknowledges the read's own CONFIDENCE — never the
+// athlete's logging — and leans on how they feel over what's tracked. Rotated like
+// every other athlete-facing sentence in this file.
+export const THIN_SIGNAL_COVERAGE_WHY: readonly string[] = [
+  "It's a thin week for signals, so today leans more on how you feel than what's on the record.",
+  "There's not much on the record lately, so today's read leans on your own sense of things over the numbers.",
+  "Signals have been quiet this week — today trusts how you feel more than what's logged.",
+];
 
 // ---------- the forward look (day-ahead heads-up) ----------
 // The Program-tab intelligence, woven onto the Brief so the athlete never has to
@@ -3503,8 +3539,24 @@ export function dayRead(
 export interface ForwardLook {
   next_focus: string | null; // the next session's character ("Lower body")
   due: string[]; // groups under their productive range this week
+  loaded_soon: { when: "tomorrow" | "soon"; run_kind: "quality" | "long" } | null;
   text: string | null; // a single plain-words line, or null when there's nothing to say
 }
+// The shape of a loaded near-future — a forecast-shaped SUGGESTION, never a red day
+// or a gate. Rule-based over the SAME flexible-agenda lookahead the hybrid sequencing
+// signal already computes (day-read.ts's `hc.planned_run_next`); no new prediction
+// machinery. Each variant is rendered with the run's plain word ("long"/"quality"),
+// same precedent as EARN_PATH_INTENSITY above. Every phrasing holds the reading
+// grammar (violatesReadingGrammar): no gate language, no score.
+export const FORWARD_LOADED_TOMORROW: ReadonlyArray<(runKind: string) => string> = [
+  (runKind) => `Tomorrow leans ${runKind} — today's a good day to stay easy and bank it.`,
+  (runKind) => `Tomorrow's the ${runKind} one — worth keeping today light for it.`,
+  (runKind) => `The ${runKind} work lands tomorrow, so today's the natural day to ease up.`,
+];
+export const FORWARD_LOADED_SOON: ReadonlyArray<(runKind: string) => string> = [
+  (runKind) => `A ${runKind} run is coming up this week — worth staying easy in the days before it.`,
+  (runKind) => `The week's ${runKind} run is on the horizon — a good stretch to bank some ease.`,
+];
 export function forwardLook(date?: string): ForwardLook {
   const d = date || localDateISO();
   let next_focus: string | null = null;
@@ -3548,10 +3600,36 @@ export function forwardLook(date?: string): ForwardLook {
   } catch {
     /* no balance → no due groups */
   }
+  // The shape of coming days: does the near future already hold a loaded run (a
+  // quality or long session) tomorrow, or in the next couple of days? Reuses the
+  // SAME flexible-agenda lookahead the hybrid sequencing signal computes elsewhere
+  // in this file (`hc.planned_run_next`) — no new prediction machinery, just prose
+  // over existing look-ahead state.
+  let loaded_soon: ForwardLook["loaded_soon"] = null;
+  try {
+    const hc = withFlexibleRunLookahead(hybridDayContext(d), d);
+    const next = hc.planned_run_next;
+    if (next && (next.kind === "quality" || next.kind === "long")) {
+      const tomorrow = addDaysISO(d, 1);
+      const dayAfter = addDaysISO(d, 2);
+      if (next.date === tomorrow) loaded_soon = { when: "tomorrow", run_kind: next.kind };
+      else if (next.date === dayAfter) loaded_soon = { when: "soon", run_kind: next.kind };
+    }
+  } catch {
+    /* no agenda → no forecast */
+  }
   const parts: string[] = [];
   if (next_focus) parts.push(`Next: ${next_focus}`);
   if (due.length) parts.push(`${plainGroupWords(due, 2) ?? due.join(" & ")} due this week`);
-  return { next_focus, due, text: parts.length ? parts.join(" · ") : null };
+  if (loaded_soon) {
+    const runWord = loaded_soon.run_kind === "long" ? "long" : "quality";
+    const render =
+      loaded_soon.when === "tomorrow"
+        ? pickDayVariant(FORWARD_LOADED_TOMORROW, d, "forward_loaded_near_future:tomorrow")
+        : pickDayVariant(FORWARD_LOADED_SOON, d, "forward_loaded_near_future:soon");
+    parts.push(render(runWord));
+  }
+  return { next_focus, due, loaded_soon, text: parts.length ? parts.join(" · ") : null };
 }
 
 // ---------- the week ahead (deterministic floor) ----------

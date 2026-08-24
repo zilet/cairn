@@ -1789,6 +1789,17 @@ export function addHealthReview(parsed: any, agent: string | null, raw?: string)
     }))
     .filter((w: any) => w.marker)
     .slice(0, 8);
+  // The de-escalation passage: which out-of-optimal/borderline markers are explicitly
+  // NOT worrisome, and why. A single named field (not free-floating prose) so it can
+  // be validated, capped and rendered like every other review section. Absent/empty
+  // input collapses to null rather than an empty-but-present object.
+  const notWorriedRaw = parsed.not_worried && typeof parsed.not_worried === "object" ? parsed.not_worried : null;
+  const notWorriedMarkers = (Array.isArray(notWorriedRaw?.markers) ? notWorriedRaw.markers : [])
+    .map((m: any) => capStr(m, 60))
+    .filter(Boolean)
+    .slice(0, 8);
+  const notWorriedNote = capStr(notWorriedRaw?.note, 400);
+  const not_worried = notWorriedMarkers.length || notWorriedNote ? { markers: notWorriedMarkers, note: notWorriedNote } : null;
   const focus = (Array.isArray(parsed.focus) ? parsed.focus : [])
     .filter((f: any) => f && typeof f === "object")
     .map((f: any) => ({ title: capStr(f.title, 80), why: capStr(f.why, 240), action: capStr(f.action, 240) }))
@@ -1818,7 +1829,7 @@ export function addHealthReview(parsed: any, agent: string | null, raw?: string)
     .filter((d: any) => d.directive)
     .slice(0, 12);
   if (!headline && !focus.length && !watchlist.length) return null;
-  const clean = { headline, wins, watchlist, focus, followups, training_impact, nutrition_impact, directives };
+  const clean = { headline, wins, watchlist, not_worried, focus, followups, training_impact, nutrition_impact, directives };
   const info = db
     .prepare(`INSERT INTO health_reviews (agent, parsed_json, raw_output) VALUES (?, ?, ?)`)
     .run(agent ?? null, JSON.stringify(clean), raw ?? null);
