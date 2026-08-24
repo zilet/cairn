@@ -46,6 +46,8 @@ import {
   leannessAwareLossRates,
 } from "./profile.js";
 import { getAttentionSchedule } from "./attention.js";
+import { activeBlockContext } from "./program-blocks.js";
+import { getProgramState, strengthBlockPeaking } from "./program-state.js";
 import { getLatestNutritionTarget, intakeLoggingMode, type KnownIntakeLoggingMode } from "./nutrition.js";
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { addDaysISO, localDateISO } from "./shared.js";
@@ -87,6 +89,35 @@ const TARGET_ROUNDING_KCAL = 25;
 export type CutTdeeBasis = "logged_reality" | "formula_estimate";
 export type CutTargetConfidence = "low" | "moderate" | "high";
 
+// ---- rule 5: the next step of the deficit waits for an ordinary week ---------
+//
+// The derivation used to read expenditure, the scale and the calendar and NOTHING
+// about the training week the deficit would land in, so a deeper cut could be set
+// against the heaviest week of a block. The only thing downstream that noticed was
+// the under-fuelling controller, whose trigger by construction needs two poor
+// sessions to have already happened — a correction after the cost, not before it.
+//
+// So the derivation now reads the week it is prescribing INTO. During a high-demand
+// week the deficit does not deepen: the target HOLDS at the number already in force
+// and the next step happens at the next ordinary week. The deficit itself is never
+// cancelled — only its next increment waits.
+//
+// `capProtectiveRaise` below stays the ONE authority on lifting a target, so the
+// hold is expressed by calling it rather than by a second ceiling of its own. Two
+// consequences fall straight out of that, both deliberate: a hold can never carry
+// the target past MEASURED maintenance, and on a `formula_estimate` anchor it can
+// buy nothing at all — an unmeasured maintenance is not headroom, here either.
+export type CutTrainingDemandBasis = "block_phase" | "combined_load";
+
+export interface CutTrainingDemand {
+  /** True when this week is one of the block's big asks, or both lanes are ramped. */
+  high: boolean;
+  /** MACHINE register: which read said so. Empty when the week is ordinary. */
+  basis: CutTrainingDemandBasis[];
+  /** The active block's phase word, when a block is running. */
+  phase: string | null;
+}
+
 export interface CutTargetCoverage {
   window_days: number;
   intake_days: number;
@@ -122,6 +153,15 @@ export interface CutTargetState {
   // The protein figure already in force. The derivation moves calories only —
   // protein is carried forward, never trimmed as a side effect of a kcal change.
   protein_floor_g: number | null;
+  // The calorie target the athlete is eating to today, when one has been accepted.
+  // Rule 5 needs it because a "deepening" is only nameable against the number
+  // already in force; absent it there is nothing to hold and the derivation
+  // behaves exactly as it did before rule 5 existed.
+  active_target_kcal?: number | null;
+  // The training week this target would be eaten in. Optional for the same reason:
+  // a caller that hands over no week gets the pre-rule-5 answer rather than a
+  // guess about one.
+  training_demand?: CutTrainingDemand | null;
 }
 
 export interface CutGoalDateAdaptation {
@@ -154,6 +194,12 @@ export interface CutTargetDerivation {
   // Carried through so the words a person reads (`cutTargetBody`) can tell a
   // record that is still filling in from one that is deliberately not being kept.
   intake_mode: KnownIntakeLoggingMode | null;
+  // Rule 5: the week this target lands in, and whether the next step of the
+  // deficit is waiting for an ordinary one. `deepening_held` is false whenever the
+  // derivation stepped normally — including a week too demanding to step in that
+  // had no measured maintenance to hold against.
+  training_demand: CutTrainingDemand | null;
+  deepening_held: boolean;
   // MACHINE register — third-person evidence prose for the target note and the
   // provenance trail.
   reason: string;
@@ -293,7 +339,23 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
 
   // ---- the number itself ----------------------------------------------------
   const rawTarget = roundTo(tdee - deficit, TARGET_ROUNDING_KCAL);
-  const target = Math.max(KCAL_ABSOLUTE_FLOOR, rawTarget);
+  const steppedTarget = Math.max(KCAL_ABSOLUTE_FLOOR, rawTarget);
+
+  // ---- rule 5: does this week get the step, or hold? ------------------------
+  // Only a DEEPENING waits. A target that would rise, or stay where it is, is not
+  // the increment this rule is about and passes straight through.
+  const demand = state?.training_demand ?? null;
+  const activeTarget = finite(state?.active_target_kcal);
+  let deepeningHeld = false;
+  let target = steppedTarget;
+  if (demand?.high === true && activeTarget != null && steppedTarget < activeTarget) {
+    // The hold is a RAISE relative to the step this week wanted, so it goes through
+    // the one function allowed to lift a target. Measured maintenance is therefore
+    // the ceiling of the hold as well, and an unmeasured one refuses it outright.
+    const held = capProtectiveRaise(activeTarget, steppedTarget, tdee, tdeeBasis);
+    target = Math.round(held.target_kcal);
+    deepeningHeld = target > steppedTarget;
+  }
   // Read the delivered deficit back off the target that survived every clamp, so
   // the pace reported is the pace this number actually buys — not the one asked
   // for before the kcal floor had its say.
@@ -335,6 +397,15 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
         : "a formula and activity estimate, because the logged record is not yet thick enough to measure maintenance";
   const proteinFloor = finite(state?.protein_floor_g);
 
+  // MACHINE register, appended rather than substituted: the basis sentence is what
+  // the provenance trail is read for, and the hold is a second fact about the same
+  // number, not a replacement for the first.
+  const holdWords = deepeningHeld
+    ? ` The next step down is holding at the ${target} kcal already in force — this week is one of the block's bigger asks (${
+        demand?.basis?.length ? demand.basis.join(", ") : "high training demand"
+      }) — and it comes at the next ordinary week.`
+    : "";
+
   return {
     target_kcal: target,
     protein_g: proteinFloor == null ? null : Math.round(proteinFloor),
@@ -350,7 +421,9 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
     goal_date_adaptation: adaptation,
     coverage,
     intake_mode: intakeMode,
-    reason: `Maintenance estimated at ${tdee} kcal from ${basisWords}; the cut target holds a ${deliveredDeficit} kcal deficit, about ${(Math.round(paceDelivered * 100) / 100).toFixed(2)} lb a week.`,
+    training_demand: demand,
+    deepening_held: deepeningHeld,
+    reason: `Maintenance estimated at ${tdee} kcal from ${basisWords}; the cut target holds a ${deliveredDeficit} kcal deficit, about ${(Math.round(paceDelivered * 100) / 100).toFixed(2)} lb a week.${holdWords}`,
   };
 }
 
@@ -391,9 +464,9 @@ export interface ProtectiveRaiseCap {
  * caller's own bounded step is the only bound. A present-but-formula figure is not
  * silence — it is a positive statement that maintenance is unmeasured.
  *
- * PURE. Shared by the check-in boundary (`personalizeNutritionCheckinTarget`) and
- * the apply-time revalidation at a natural boundary, so the two can never disagree
- * about what protection is allowed to buy.
+ * PURE. Shared by the check-in boundary (`personalizeNutritionCheckinTarget`), the
+ * apply-time revalidation at a natural boundary, and rule 5's high-demand hold
+ * above, so no two of them can disagree about what a lift is allowed to buy.
  */
 export function capProtectiveRaise(
   target: number,
@@ -445,9 +518,19 @@ const OUTCOME_LED_BODIES: readonly string[] = [
   "Built from the scale and the tape rather than the diary, which is a perfectly good way to run a cut.",
 ];
 
+// Rule 5 in the athlete's register. The week is described, never scored, and the
+// hold is a choice the coach made rather than something the athlete has to do.
+const DEEPENING_HELD_BODIES: readonly string[] = [
+  "Your training week is one of the bigger ones, so your food stays where it is — the next step down can wait for a quieter week.",
+  "There's a lot of work in this week, so this number is staying put rather than dropping again; it'll step when the week is an ordinary one.",
+  "Heavy week on the training side, so your fuel holds here. The next step happens once the block eases off.",
+  "This week asks a lot of you, so the calories stay steady instead of tightening — the step is only waiting, not gone.",
+];
+
 export function cutTargetBody(derivation: CutTargetDerivation, date: string): string {
-  const set =
-    derivation.tdee_basis === "logged_reality"
+  const set = derivation.deepening_held
+    ? DEEPENING_HELD_BODIES
+    : derivation.tdee_basis === "logged_reality"
       ? GROUNDED_BODIES
       : derivation.intake_mode === "quiet"
         ? OUTCOME_LED_BODIES
@@ -471,7 +554,7 @@ function pickVariant<T>(variants: readonly T[], date: string, key = ""): T {
 // One flat pool of every athlete-facing literal this module can produce, so a
 // grammar test can enumerate the vocabulary wholesale rather than sampling it.
 export function cutTargetGrammarPool(): string[] {
-  return [...GROUNDED_BODIES, ...ESTIMATE_BODIES, ...OUTCOME_LED_BODIES];
+  return [...GROUNDED_BODIES, ...ESTIMATE_BODIES, ...OUTCOME_LED_BODIES, ...DEEPENING_HELD_BODIES];
 }
 
 // ---- the thin DB-facing read -------------------------------------------------
@@ -505,11 +588,17 @@ export function cutTargetState(
   }
 
   let proteinFloor: number | null = null;
+  let activeTarget: number | null = null;
   try {
-    // The protein already in force wins; the goal formula only ever floors it.
-    proteinFloor = finite(getLatestNutritionTarget(today)?.protein_g);
+    // The protein already in force wins; the goal formula only ever floors it. The
+    // same accepted row carries the calories rule 5 measures a deepening against,
+    // so one read answers both.
+    const accepted = getLatestNutritionTarget(today);
+    proteinFloor = finite(accepted?.protein_g);
+    activeTarget = finite(accepted?.target_kcal);
   } catch {
     proteinFloor = null;
+    activeTarget = null;
   }
   if (proteinFloor == null && weight != null) proteinFloor = Math.round(weight);
 
@@ -557,7 +646,50 @@ export function cutTargetState(
     },
     intake_mode: mode,
     protein_floor_g: proteinFloor,
+    active_target_kcal: activeTarget,
+    training_demand: cutTrainingDemand(today),
   };
+}
+
+/**
+ * Is the week this target would be eaten in one of training's big asks?
+ *
+ * Two reads, neither of them re-derived here:
+ *
+ *   - the BLOCK's own phase, through `strengthBlockPeaking` — the shared predicate
+ *     the combined-load policy and run-progression's race-ramp pull already read.
+ *     A third copy of "which phases are the heavy ones" is exactly how those two
+ *     would drift apart.
+ *   - the COMBINED stress budget (`hybrid.combined_load`, program-state.ts), which
+ *     is non-null only when BOTH lanes' acute:chronic ratios sit in their upper
+ *     caution band at once — the acute top band, already computed, already floored
+ *     against a thin base.
+ *
+ * Consulted in that order and short-circuited, so the cheap block read answers the
+ * common case and the heavier (memoized) program-state read is only paid for when
+ * it can still change the answer.
+ *
+ * Fail-SOFT: an unreadable week is an ORDINARY week, never a hold. A hold that
+ * fires on a read error would quietly park the cut.
+ */
+function cutTrainingDemand(today: string): CutTrainingDemand {
+  let phase: string | null = null;
+  const basis: CutTrainingDemandBasis[] = [];
+  try {
+    const block = activeBlockContext(today);
+    phase = block?.phase ?? null;
+    if (strengthBlockPeaking(block)) basis.push("block_phase");
+  } catch {
+    phase = null;
+  }
+  if (basis.length === 0) {
+    try {
+      if (getProgramState(today)?.hybrid?.combined_load) basis.push("combined_load");
+    } catch {
+      /* an unreadable stress budget is an ordinary week */
+    }
+  }
+  return { high: basis.length > 0, basis, phase };
 }
 
 // The whole derivation in one call: assemble, then decide. Read-only.
