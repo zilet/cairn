@@ -7,7 +7,7 @@
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { SENSOR_MAX_AGE_DAYS, type SensorSignal, sensorIsCurrent } from "./sensor-freshness.js";
 import { recoveryTrendBars } from "./recovery-trend.js";
-import { performanceChannelRead } from "./recovery-science.js";
+import { hrvTrendRead, performanceChannelRead } from "./recovery-science.js";
 import type { SensorCadence } from "./sensor-cadence.js";
 import {
   dominantSensorCadenceEntry,
@@ -1932,9 +1932,13 @@ export function planningSignalState(input: {
   // an acute finding about today's capacity, and it must not be able to walk the day
   // down a rung on a divergence the athlete may already know about.
   const performance = performanceChannelRead(input);
-  if (input.recovery?.delta?.hrv != null) {
-    const trendDown = Number(input.recovery.delta.hrv) < -hrvTrendBar;
-    const trendHigh = Number(input.recovery.delta.hrv) > hrvTrendBar;
+  // ONE read of where the 7-day rolling median sits against the athlete's own band,
+  // shared with every other consumer of the same question rather than re-derived from
+  // the delta at each site.
+  const hrvTrend = hrvTrendRead(input.recovery, hrvTrendBar);
+  if (hrvTrend) {
+    const trendDown = hrvTrend.direction === "below";
+    const trendHigh = hrvTrend.direction === "high";
     const excursion = hrvTrust.run >= EXCURSION_RUN_FOR_CAUTION;
     const unsettled = hrvTrust.run === 1;
     // Only ever considered on the branch that would otherwise read supportive: a
