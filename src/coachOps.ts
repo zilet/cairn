@@ -1417,8 +1417,11 @@ export async function draftMealPlan(
   const plan = repo.createMealPlan(chosen, result.raw, safety.parsed, { dietary_instruction: instruction });
   let autonomy: any = null;
   try {
+    // No requested tier: autonomy is SERVER policy, and `requested_tier` only ever
+    // clamps toward the more restrictive answer. Asking for "announce" here meant a
+    // routine refresh — same targets, same shape of week, rotated meals — could never
+    // reach the quiet lane the policy now has for it, however bounded the diff was.
     autonomy = applyMealPlanWithAutonomy(Number(plan.id), {
-      requested_tier: "announce",
       coordinated_update: opts.coordinated_update === true,
     });
   } catch {

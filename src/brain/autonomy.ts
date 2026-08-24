@@ -18,6 +18,17 @@ export interface AutonomyPolicyInput {
   user_locked?: boolean;
   clamp_refused?: boolean;
   domain_demoted?: boolean;
+  /**
+   * A STANDING refresh whose diff against what is already in force is bounded — the
+   * weekly meal plan rebuilt with the same targets and the same shape of week, with
+   * different food in the slots. Deterministic and caller-supplied (repo's
+   * `mealPlanRefreshShape`), never a model's own assessment of itself.
+   *
+   * It lowers the DEFAULT tier for `meal_plan` only. Everything else still applies on
+   * top: announce_first announces it, review_everything asks, a demoted domain
+   * announces, and a lock or a refused safety clamp still asks.
+   */
+  routine?: boolean;
 }
 
 export interface AutonomyPolicyDecision {
@@ -48,7 +59,7 @@ function headsUpAutonomy(leadMode: CairnLeadMode): boolean {
 }
 
 export function defaultAutonomyTier(
-  input: Pick<AutonomyPolicyInput, "kind" | "risk_class" | "reversible" | "magnitude" | "lead_mode">
+  input: Pick<AutonomyPolicyInput, "kind" | "risk_class" | "reversible" | "magnitude" | "lead_mode" | "routine">
 ): AutonomyTier {
   const headsUp = headsUpAutonomy(input.lead_mode ?? DEFAULT_LEAD_MODE);
   if (input.risk_class === "clinical") return "clinician";
@@ -58,6 +69,13 @@ export function defaultAutonomyTier(
   if (input.risk_class === "high") return headsUp ? "announce" : "ask";
   if (["day_read", "session_suggestion", "health_directive"].includes(input.kind)) return "observe";
   if (["goal_change"].includes(input.kind)) return headsUp ? "announce" : "ask";
+  // A ROUTINE meal refresh is the plan staying fresh, not a change to it: same
+  // targets, same shape of week, different food in the slots. Announcing that every
+  // week made the standing refresh feel like a decision the athlete had to make, and
+  // the ritual is what the drafts kept waiting on. It still lands at the next food
+  // boundary, still carries the one-tap undo, and any refresh that moves the targets
+  // or the structure of the week is not routine and announces exactly as before.
+  if (input.kind === "meal_plan" && input.routine === true) return "quiet_apply";
   if (["training_structure", "meal_plan", "case_conference"].includes(input.kind)) return "announce";
   if (input.kind === "nutrition_target" && Math.abs(Number(input.magnitude) || 0) > 250) return "announce";
   return "quiet_apply";
@@ -68,6 +86,8 @@ export function decideAutonomyTier(input: AutonomyPolicyInput): AutonomyPolicyDe
   const leadMode = input.lead_mode ?? DEFAULT_LEAD_MODE;
   const headsUp = headsUpAutonomy(leadMode);
   let tier = defaultAutonomyTier({ ...input, lead_mode: leadMode });
+  if (input.kind === "meal_plan" && input.routine === true && tier === "quiet_apply")
+    reasons.push("a routine refresh keeps the plan fresh without asking");
   if (input.requested_tier) {
     const clamped = moreRestrictive(tier, input.requested_tier);
     if (clamped !== input.requested_tier)
