@@ -4,6 +4,59 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-24 — the Quiet Coach Round
+
+Twenty packages across four waves, schema 92 → 94 (m93 `surface_dismissals`, m94 `belief_dispositions`),
+sw `CACHE` v550 → v554. The theme is a coach that says less and means more of it: fewer questions the
+athlete cannot answer, fewer sentences that outrun their evidence, and more of the deterministic layer
+reading the truth it already had.
+
+**Wave 1 — one truth, and a conflict layer that means it.** Case-conference conflicts stopped being
+regexes over `JSON.stringify(context)` (which matched KEY NAMES, so `deficit_recovery` fired on every
+conference from the spelling of two null fields) and became typed predicates over
+`ConferenceConflictInputs`, read from the UNTRUNCATED context — the bounded agent snapshot is cut to
+50 keys and silently drops `signal_state`, `directives` and `health` — under the law that absent
+evidence never fires a conflict. A resolution now has to CITE a party specialist's `evidence_key`;
+`clinical_autonomy` has no parties and cannot be closed by a conductor, and a conference held at that
+floor is finished work that stamps its month rather than a failure that burns three retries. Recovery,
+readiness and the acute muscle gates collapsed to one source of truth apiece; `extractJson` learned to
+find the JSON the CLI actually wrote and to name every field it must keep; and the guardrail/constitution
+bundle took the streak off the masthead, the percentiles out of empty copy, and every one-off CTA onto
+the shared pill.
+
+**Wave 2 — resolve quietly instead of asking.** A stale draft from a DETERMINISTIC producer is now
+regenerated against current evidence with a receipt, not turned into an ask nobody could answer (43 of
+54 such asks had expired unanswered). The signal state gained the `advisory_brake` rung — a one-lane
+finding that withdraws reach and push without naming the day, honored in exactly one place — plus
+`thinSignalCoverage` so a state built from almost nothing says so. A fresh same-day word holds the
+softening; an active endurance hold brakes the morning read without deciding it; the Garmin strength
+reconcile and a routine meal refresh both land quietly with one-tap Undo; and chat consults
+`typical_training_hour` and the logged data before asking anything it could have known.
+
+**Wave 3 — learning that is honest about where it came from.** Observe-tier verdicts now teach at
+reduced weight (0.4, effective contribution capped at 2.0) and an observed-only modifier is clamped
+row-scoped toward its own target's cautious direction, with `applied_n` / `observed_only` riding the
+contract so no surface says "comparable decisions" about decisions nobody made. Dismissals became
+evidence — repetition-gated over distinct days, never from one tap (m93). Athlete-volunteered context
+tags (travel, drinks, rough sleep, work crunch, feeling off) got one contract and persist as
+`kind='tag'` context events for the confounder machinery to test quietly. `recovery-science.ts`
+replaced three drifting opinions of the same physiology with SWC dispersion bands, a saturation
+cross-check, chronic intensity drift and advisory `training_constraints`. The LEA cluster watch
+(`energy-deficiency.ts`) buys one bounded step back toward MEASURED maintenance through
+`capProtectiveRaise` and nothing else, and pain reports decide one movement's load through three bands
+whose deciding question is whether it settled by the next exposure. Beliefs became inspectable and
+disputable (m94) — set aside, never deleted.
+
+**Wave 4 — the surfaces catch up.** Capture got voice, frequents and the check-in back with voice
+living in Chat; Progress leads with readings before charts and puts wins where they reassure; fuel
+context appears where meals are actually decided and marker directives became visible; Settings put
+"You" first and folded the operator console under the hood; the de-escalation package added optimal
+silence, forward reading and thin-signal honesty; and the Brief gained a morning look-back — one quiet
+past-tense passage about yesterday, spoken only in the two shapes that are safe to say, silent
+otherwise.
+
+---
+
 ## 2026-08-24 — the calendar can hold today, and a lab draw says which half
 
 The look-ahead's second act (NO schema change). The 2026-08-23 fix taught the day read what tomorrow

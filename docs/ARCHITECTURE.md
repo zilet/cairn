@@ -468,6 +468,21 @@ hold rung of its own, and a busy calendar is not a second physiological opinion.
 still reaches the athlete through the dimension's own status and voice; it just no longer stops the
 week by itself.
 
+**A finding can be worth carrying without being worth braking for.** `SignalObservation.advisory_brake`
+(`src/repo/signal-state.ts`) is the rung between `context_only` (visible, decides nothing) and an
+ordinary caution: the observation still reaches its dimension's status, voice and coverage, but it is
+excluded from the posture ladder, so it can neither name the day nor soften a constraint someone else
+raised. `isAdvisoryBrake(item)` is THE single honoring site — the exemption is granted in one place and
+only for `direction === "caution"`, so a producer cannot widen it by flagging a stop — and every
+consumer that asks "is anything braking?" (`hasFreshBrake`, and the deciding-evidence filters in
+`dimensionState`/`actionState`/`supportState`) reads through it rather than the raw evidence list. It
+exists because a one-lane standing finding — a parasympathetic-saturation read, an active endurance
+hold — is a real thing to say and a wrong thing to decide a whole day on: it withdraws the athlete's
+reach and push without claiming the day is a rest day, and it must not green an empty board either
+(withdrawing reach is not evidence that the athlete is fine). `thinSignalCoverage(dimensions)` is the
+paired honesty test: a state assembled from almost nothing reports that it is thin, so the surfaces
+above it can decline to sound confident rather than voicing a posture derived from silence.
+
 **One directive, two unrelated causes.** `directives.schedule === "compress"` fires whenever the
 `life_capacity` dimension sits at `watch`, and that can mean either a real dated commitment (the
 CLOCK is the constraint) or `context.expect_worse_sleep` — a late night or a stressful stretch, which
@@ -830,6 +845,52 @@ the session, not a reason to make it longer. The safety clamp is unaffected eith
 `enforceDayReadSafetyPosture` only ever clamps a read DOWN, so push logic has to live in this
 deterministic rule ahead of that clamp to have any effect at all.
 
+**The morning look-back: what already happened, above what is suggested.** `morningReview(date)`
+(`src/repo/brain/morning-review.ts`) builds the short past-tense passage the Brief renders ABOVE
+today's read (`look_back` on the day-read use case's payload, `src/domain/brain/day-read-use-case.ts`
+→ `src/client/today-brief-client.ts`). It predicts nothing and derives nothing new: the divergence half
+consumes `read-adherence.ts`'s own answers (`morningReadForDate`, `readAdherenceOutcome`) and never
+re-grades a day itself, and the win half reads a `brain_expectation` the ledger has ALREADY matured
+and evaluated `aligned`, never a fresh claim. **Silence is the default** — an unremarkable yesterday
+returns nothing at all. Only two shapes are ever spoken: a quiet read that was HONORED, and a quiet
+read that was OVERRIDDEN with nothing visible costing the athlete for it. A genuine miss is never
+stated here (VISION.md bans "you didn't train" as a judgment; the read-adherence softening ladders are
+the only consumers allowed to reason about one), and `day_read_adherence` is excluded from the win
+allowlist because the divergence half already speaks that same evidence in its own voice. Every
+sentence is a rotating variant set through `pickDayVariant`, the same rule as `day-read-rules.ts`.
+
+**Recovery science lives in one module so three consumers cannot each grow an opinion of it.**
+`src/repo/recovery-science.ts` holds the evidence-graded physiology reads the signal state, the Brief
+and the prompt constraints all needed: the HRV decision band is now the smallest worthwhile change —
+`SWC_SD_FRACTION` (0.5) of the athlete's OWN dispersion, over a `DISPERSION_MIN_N` sample — so a noisy
+athlete stops being told their noise is a finding, and the former flat constants stay as FLOORS in
+`recovery-trend.ts` so the band can only ever widen (a band that could narrow would manufacture
+cautions out of a consistent watch); `performanceChannelRead` is the saturation cross-check, asking "is
+the work itself costing more?" only from channels that already exist (the athlete's own session ratings,
+and the personal HR model's read of easy-run drift), where a fresh STRONG rating settles the question
+outright; and the sleep-debt and sustained-stress reads produce `training_constraints` — advisory
+session constraints that name what to TRADE (short sleep downgrades injury-exposed elements, a stressful
+stretch trims sets while intensity holds), never what to cancel. Every function is PURE over snapshots
+the caller already holds (no DB, no clock, so an earlier date reads that date's inputs), every read
+returns a null/false shape on thin evidence, and **nothing here is a gate or a score**.
+
+**The low-energy-availability watch is the one cluster nothing else catches.** `src/repo/energy-deficiency.ts`
+asks five narrow tri-state questions (`met`/`not_met`/`absent`, and absent is never met) of signals the
+athlete is already producing, and fires only when at least `MIN_CLUSTER_ARMS` (2) have agreed for
+`SUSTAINED_DAYS` (12) — one drifting channel is a Tuesday. The decision core is pure and re-runnable for
+an earlier date, which is what makes "sustained" a measurement rather than a guess (the accepted overlap
+of the two evaluation windows is documented in the module head, and it errs toward a LATER exit).
+`src/domain/brain/energy-deficiency-service.ts` is the only actuator, and it is allowed exactly two
+things: ONE bounded protective raise of the calorie target through the ordinary propose → apply path
+(so it carries a ledger row, one-tap Undo and boundary re-validation) and ONE calm insight that waits
+in-app. The size is `capProtectiveRaise`'s (`src/repo/cut-target.ts`) and is never re-derived here — so
+protection buys measured maintenance and never a surplus, and on a `formula_estimate` anchor it buys
+NOTHING. There is no "recovery mode" exit path on purpose: when the arms recover the watch simply stops
+finding a cluster and the ordinary cut derivation resumes, because two ways to set one number is how
+they come to disagree. `src/repo/energy-deficiency-snapshot.ts` memoizes the read (it is the module's
+one expensive evaluation) so the scheduler pass and the coach prompt can never describe the same day
+differently, and projects the small `CoachEnergyDeficiency` a person's coach is allowed to see.
+
 ### Person, memory, chat
 
 - Memory CRUD (`addMemory`/`listMemory`/`updateMemory`/`deleteMemory` — `addMemory` dedupes exact
@@ -859,6 +920,19 @@ deterministic rule ahead of that clamp to have any effect at all.
 - Family roster (`addFamily`/`listFamily`/`getFamilyMember`/`updateFamily`/`deleteFamily`);
   life-context events (`addContextEvent`/`listContextEvents`/`updateContextEvent`/
   `deleteContextEvent` — trips/injuries/life events the coach plans around).
+- **Context tags: cheap, volunteered life context, tested quietly against outcomes.** `src/contextTags.ts`
+  is the ONE contract — a small controlled vocabulary (`CONTEXT_TAG_VOCAB`: travel, drinks, a rough
+  sleep environment, a work crunch, feeling off) shared by the chat action (`log_context_tag`,
+  `src/chatActions.ts`), the one-tap Today chips, and the MCP pair (`list_context_tags`/
+  `toggle_context_tag`). Never re-declare the list anywhere else. They persist as ordinary
+  `context_events` with `kind='tag'` and the vocabulary key in `title` (never free text), so the
+  existing confounder machinery registers them without a new table. A tag is a single DAY that is over
+  by tomorrow, while `context_events` only ever carries what is ACTIVE today — so the durable trailing
+  window reaches prompts as its own coach-context key, `recent_context_tags`. Their only purpose is
+  evidence: the insight generator gets to test outcomes against them ("the mornings after travel ran a
+  flatter HRV"), and a rough recovery reading with an overlapping tag reads as explained rather than
+  concerning. A tag is never advice, and logging one never earns a comment, warning or lecture in the
+  reply.
 - `setProfile()` carries `about_me` (trimmed, capped 8000; `''` clears, `undefined` leaves intact).
 - Settings/agent-selection (`getSettings`/`setSettings`/`getAgentConfig`/`pickAgentOrder`).
 - Health documents (`addHealthDocument`/`listHealthDocuments`/`getHealthDocumentRaw` (incl.
@@ -872,6 +946,18 @@ Assembles the full snapshot fed to coaching agents: bounded `health` summaries +
 `context_events`, plus `directives` (condensed cross-domain consequences), `recovery` (unified
 Garmin+other view), `checkins`, `family`, `day_read` (so chat echoes the Brief) and `insights`
 (recent visible reads). Additive by design — every existing consumer keeps working untouched.
+
+Five keys joined it this round, all additive + optional exactly like `tomorrow_holds` — so a partial
+context builder or an imported DB never synthesizes one, and they stay out of the required-key lists
+(`acute_gates` is the one that also joins `COACH_CONTEXT_ARRAY_KEYS`): `typical_training_hour` (the
+part-of-day label recent session timestamps imply, so chat can answer "when do they usually train?"
+itself instead of asking, null on thin history); `training_constraints` (the advisory session
+constraints from `recovery-science.ts` — what to trade, never what to cancel, null on an ordinary day);
+`energy_deficiency` (the LEA watch's projection, null unless a deficit is actually running, and it
+never carries a target — the accepted target stays authoritative); `recent_context_tags` (the trailing
+tag window described above); and `acute_gates` (the saturated groups from `acuteGates()` — the DECISION
+input behind the "do NOT program these" prompt block, where `recent_load` stays the descriptive recency
+list it always was).
 
 Consumers get the whole snapshot; **prompts do not**. Serializing it into a `DATA:` block goes
 through the per-site allowlist in `src/prompt/context-projection.ts` — so adding a key here does not
@@ -1698,6 +1784,51 @@ the strength consumer once had; it now composes an earned acceleration only on a
 (never taper, deload, recovery-down, a mileage spike, or a scheduled/detraining rebuild) under a hard
 `MAX_WEEKLY_BUILD_FACTOR` of 1.15 on the week's total factor.
 
+**Observed evidence may be cautious; it may never be bold.** A verdict on an OBSERVE-tier decision
+judges a change the athlete never made, so counting it like an applied one lets a drawer of
+never-enacted advisories teach the model as loudly as real coaching. The reaction model instead
+weights it: `effective_n = applied_n + min(observed_n × OBSERVED_DECISION_WEIGHT, OBSERVED_EFFECTIVE_CAP)`
+(0.4, capped at 2.0), so thirty observed verdicts with nothing applied land exactly on the floor and can
+never reach a `strong` confidence run on their own, while observed evidence beside real applied outcomes
+stays a minority voice. A modifier built only from observed outcomes is additionally clamped ROW-SCOPED
+— it may move only toward its own target's cautious direction (`CAUTIOUS_DIRECTION`, which is per-target
+because a step size and a recovery allowance are careful in opposite directions), never away from it,
+and the clamp follows the row that actually set the scale rather than the family it belongs to. The
+provenance rides the contract: `observed_only` on `CoachPersonalModifier` and both `applied_n` +
+`observed_only` on `CoachOutcomeLearning`, because every surface rendering `evidence_n` was saying
+"comparable decisions" about outcomes on decisions that were only ever considered — a sentence
+outrunning its evidence — and a surface that cannot tell the two apart cannot word itself honestly.
+Prose slots are rationed the same way (`OBSERVED_ONLY_PROSE_SLOTS`).
+
+**A dismissal is evidence, but never from one tap.** `src/repo/surface-dismissals.ts` is the ONE
+write/read surface for the trace a dismiss leaves (`surface_dismissals`, m93): a Today-agenda card
+dismiss was previously client-only — removed from the DOM, nothing written — and an insight marked
+`dismissed` only flipped a status column, so the coaching loop learned nothing from the feedback the
+athlete actually gives (125 of 144 insights got zero explicit feedback; thumbs-down goes unused). Every
+consumer gates on REPETITION — at least `DISMISSAL_REPEAT_THRESHOLD` (2) DISTINCT DAYS for the same
+`(surface, item_key)` — never on the presence of a row, and the unique index on
+`(surface, item_key, date)` makes "distinct days" exactly `COUNT(*)`, so somebody mashing the button
+cannot manufacture repetition. It is a soft signal, not a silence: `repeatedlyDismissedKeys("insight")`
+feeds the SAME dedupe/prompt mechanism a thumbs-down already drives (`src/repo/insight-intent.ts`),
+bounded like every other corpus read. The rail's dismiss and Undo are server-owned throughout — the
+agenda's `undo-decision` action kind is the one-tap reversal of a decision the brain landed quietly,
+carried on the card as a secondary action beside the reconcile it undoes.
+
+**The coach's beliefs are inspectable, and a tap can set one aside.** `src/repo/beliefs.ts` assembles
+one calm, grouped list over the three derived belief sources — learned cross-domain models, felt-signal
+correlations, and personal-response modifiers — each row in athlete voice with its evidence in plain
+words and never a number or a score (`GET /api/beliefs`, `list_beliefs`, rendered under Stand →
+Learned via `src/client/health-beliefs-client.ts`). Dispute status lives in its own table
+(`belief_dispositions`, m94, `src/repo/belief-dispositions.ts`) rather than on the belief rows, because
+none of those sources persists rows at all — each is a deterministically REBUILT `patterns[]` cached in
+`app_state`, so a dispute has to live somewhere a nightly rebuild cannot erase it. Ids are namespaced by
+source (`learned_model:` / `felt_signal:` / `personal_modifier:`) so a short pattern id can never collide
+across them, and absence from `beliefDispositionMap()` is exactly "not disputed", so no consumer
+special-cases a miss. **Disputing is never a one-tap inversion**: it sets the belief aside — it stops
+feeding prompts and personal-response modifiers and is recorded as a negative outcome for the pattern
+that produced it — and the row stays visible under `set_aside`, reversible via `setBeliefActive`.
+Transparent, not deleted.
+
 **Every declared modifier target has a consumer, and directions are not uniform.** Each member of
 `CoachPersonalModifierTarget` names its live consumer in that type's own doc comment
 (`src/brain/coach-context-contract.ts`) — a modifier the nightly model computes and nothing reads is a
@@ -1744,6 +1875,34 @@ decision parks in `review`, never blocks the pass) with exact three-way-merge Un
 3-material-change/domain/week surprise budget (`SURPRISE_BUDGET_PER_DOMAIN_WEEK`), and 90-day
 veto-rate demotion. The clinician floor is deterministic — a conductor cannot self-attest it away
 (`src/domain/brain/case-conference.ts`).
+
+**A conflict is a typed predicate, and a resolution has to cite.** The case-conference conflict layer
+lives in its own module (`src/domain/brain/conference-conflicts.ts`). Conflicts used to be detected by
+running regexes over `JSON.stringify(context)`, which matches KEY NAMES as readily as values — so
+`cut_quality` (an unconditional key of the nutrition slice) plus `fatigue` (an unconditional key of the
+day-read signals) fired `deficit_recovery` on EVERY conference, flooring the risk class and tightening
+the tier ceiling from the spelling of two null fields. They are now small named predicates over
+`ConferenceConflictInputs`, a typed question sheet read out of context VALUES, under the intake rules'
+own law: **absent evidence never fires a conflict** — `null` ("nothing in the context answers this") is
+silent, and only `true` on both sides of a rule speaks. The reader MUST be given the UNTRUNCATED
+context: the bounded snapshot the specialists receive is cut to its first 50 keys, which silently drops
+`signal_state`, `health_focus`, `directives`, `health` and `supplements`, so every reader below them
+would answer `null` forever. A resolution is then counted only when its `evidence_key` really appears
+in the opinion of a specialist whose domain is a PARTY to that conflict (`conflictParties`,
+`citedConflictResolutions`) — membership of the key used to be the whole test, and the prompt asked the
+model to list every conflict, so an echo of the server's own list dissolved every conflict it had just
+detected. Uncited claims (and the legacy `string[]` payload, which normalizes away entirely) leave the
+conflict unresolved and the existing demotion applies untouched. `enforcedConflicts` is the post-decision
+arm the server reasons from: the clinical lever's second half can only be evaluated once a decision
+exists (an act-now clinical finding plus a conference that actually proposes a change IS the tension,
+whether or not a directive row happened to be filed under training/nutrition), so
+`clinicalAutonomyFromRevision()` may ADD `clinical_autonomy` to the enforced list after the fact —
+broadening only, since a clinical floor may gain reasons to hold and never lose one. And a conference
+held at that floor is FINISHED WORK, not a failure: `clinical_autonomy` is unresolvable by design, so
+retrying would spend the month's whole budget arriving at the same clinician-directed decision that is
+already recorded and already waiting for the human. `conferenceIncompleteReason()` (`src/agentJobs.ts`)
+therefore treats it as a clean terminal outcome — the month signature is stamped and the run stops —
+while every OTHER unresolved conflict keeps its retry and is now recorded under its real cause.
 
 `applyDueAnnouncedDecisions()` handles THREE action types, not two: `proposal_id`, `meal_plan_id`,
 and a `goal_date_adaptation` (see the goal-date path in `docs/ELITE-BRAIN-IMPLEMENTATION.md`), which
@@ -2011,6 +2170,25 @@ the EXISTING repo writers only (`reportTrainingSymptom`, `recurTrainingSymptom`,
 epoch semantics and the proposal-truth snapshot are unchanged. Execution is the `symptom` enrichment
 kind (`processSymptomJob` / `applySymptomExtraction`); the repo reaches the queue through
 `src/repo/symptom-extraction-hooks.ts` rather than importing the engine.
+
+**The pain traffic light: what a report on ONE movement does to that movement.** `src/repo/pain-band.ts`
+turns what the athlete has actually said into three bands for a single lift — `green` (nothing stated,
+or pain that SETTLED by the next exposure), `amber` (a stated painful exposure whose settling question
+is still open — the movement holds its load and the next exposure answers it), `red` (the athlete said
+`worse`, or the movement drew pain on two separate days inside a week). That is the tendon-rehab
+monitoring model's own finding: pain during loading is not a stop sign by itself; what decides it is
+whether it settled by the next day. **The 0-10 scale deliberately does not exist here** — adding a
+required severity question would turn the athlete's own sentence into a form and put a numeric score on
+a surface a person reads — so the bands map onto the vocabulary `symptomCapture.ts` already produces.
+It is PURE (no clock, no DB) and reads straight off the tables rather than through the lifecycle
+hydrate, and it inherits rather than re-derives the standing laws: `scope='systemic'` never decides a
+movement, only STATED evidence speaks to acuity (an `inferred` exposure can neither raise a band nor
+clear one), and the effect is per-lift exactly like dose comparability — one hurting movement brakes
+ITSELF, with no session-level rollup on purpose. **Absent is not green and not amber**: nothing stated
+returns null and every caller leaves the prescription exactly as it found it. DOMS gets its own shape
+(`DomsShape`) so a novel dose's 24-72h ache is not read as an unsettled pain report, and a deload the
+band caused is marked `pain_protected` so it is excluded from the repeat ladder — a protective step is
+not evidence the athlete keeps failing the lift.
 
 ---
 
