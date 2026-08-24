@@ -223,7 +223,11 @@ function conductorDecision(revision) {
     reversible: true,
     autonomy_tier: "quiet_apply",
     parallel_actions: [],
-    resolved_conflicts: [{ key: "injury_load", resolution: "Use only the already-cleared small step." }],
+    // Cited from a party to the conflict, so it genuinely resolves and the tier
+    // under test is the volume guard's own rather than a conflict clamp.
+    resolved_conflicts: [
+      { key: "injury_load", evidence_key: "training:evidence", resolution: "Use only the already-cleared small step." },
+    ],
     deferred: [],
     expectations: [],
     review_window: "Review in two weeks.",
@@ -237,7 +241,15 @@ async function conferenceWith(revision) {
     "stub",
     { question: "Make the next bounded adjustment.", domains: ["training", "recovery"] },
     {
-      context: () => ({ injury: "shoulder pain", training: "progress load" }),
+      // An open injury event plus a lift ready for a bigger dose — the typed
+      // evidence the injury_load conflict actually reads.
+      context: () => ({
+        context_events: [{ kind: "injury", title: "Left shoulder" }],
+        training_signals: {
+          progression: [{ exercise: "Barbell Bench Press", progress_ready: true }],
+          autoregulation: null,
+        },
+      }),
       specialistRun: async (_agent, _prompt, domain) => opinion(domain),
       conductorRun: async () => conductorDecision(revision),
     }

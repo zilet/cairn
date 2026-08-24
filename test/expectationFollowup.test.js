@@ -19,10 +19,7 @@ import { getAttentionSchedule, listAttentionBySource } from "../dist/repo/attent
 import { teamWeekRead } from "../dist/repo/team-week.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import { localDateISO } from "../dist/repo/shared.js";
-import {
-  releaseStaleExpectationFollowups,
-  surfaceExpectationMisses,
-} from "../dist/brainEvaluator.js";
+import { releaseStaleExpectationFollowups, surfaceExpectationMisses } from "../dist/brainEvaluator.js";
 
 const opinion = (domain, overrides = {}) => ({
   domain,
@@ -89,7 +86,13 @@ async function conference(question, overrides, extraInput = {}) {
     "stub",
     { question, domains: ["training", "recovery"], ...extraInput },
     {
-      context: () => ({ training: "progress load", ...(extraInput.context ?? {}) }),
+      context: () => ({
+        training_signals: {
+          progression: [{ exercise: "Barbell Bench Press", progress_ready: true }],
+          autoregulation: null,
+        },
+        ...(extraInput.context ?? {}),
+      }),
       specialistRun: async (_agent, _prompt, domain) => opinion(domain),
       conductorRun: async () => conductorDecision(overrides),
     }
@@ -102,7 +105,13 @@ test("a conference revision that LANDS keeps its predictions live", async () => 
   seedPlan();
   repo.setSettings({ lead_mode: "lead" });
   const result = await conference("Make the next bounded adjustment.", {
-    resolved_conflicts: [{ key: "injury_load", resolution: "Use only the already-cleared small load step." }],
+    resolved_conflicts: [
+      {
+        key: "injury_load",
+        evidence_key: "training:evidence",
+        resolution: "Use only the already-cleared small load step.",
+      },
+    ],
     revision: benchStep,
   });
   const recorded = getBrainDecision(result.recorded_decision_id);
@@ -119,7 +128,7 @@ test("a conference revision HELD for review parks its predictions instead of ass
   const result = await conference(
     "Should bench load move despite shoulder pain?",
     { revision: benchStep },
-    { context: { injury: "shoulder pain" } }
+    { context: { context_events: [{ kind: "injury", title: "Left shoulder" }] } }
   );
   const recorded = getBrainDecision(result.recorded_decision_id);
   assert.equal(recorded.status, "review");
@@ -140,7 +149,7 @@ test("a parked prediction thaws onto the decision that finally applies the propo
   const result = await conference(
     "Should bench load move despite shoulder pain?",
     { revision: benchStep },
-    { context: { injury: "shoulder pain" } }
+    { context: { context_events: [{ kind: "injury", title: "Left shoulder" }] } }
   );
   assert.equal(repo.getProposal(result.proposal_id).status, "draft");
 
@@ -171,7 +180,7 @@ test("parked predictions are consumed exactly once, however many park rows exist
   const result = await conference(
     "Should bench load move despite shoulder pain?",
     { revision: benchStep },
-    { context: { injury: "shoulder pain" } }
+    { context: { context_events: [{ kind: "injury", title: "Left shoulder" }] } }
   );
   const parked = getBrainDecision(result.recorded_decision_id).action.deferred_expectations;
   assert.ok(Array.isArray(parked) && parked.length === 1);
