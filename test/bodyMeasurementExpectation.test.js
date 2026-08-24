@@ -244,3 +244,128 @@ test("a window with only ONE reading stays inconclusive rather than guessing", (
   assert.equal(result.verdict, "inconclusive", "one reading cannot settle a direction");
   assert.ok(result.confounders.length > 0, "and it says why");
 });
+
+// ---------------------------------------------------------------------------
+// WHICH nutrition lever a target change is accountable to.
+//
+// `nutritionTrendExpectation` has accepted `weight_trend_lb_wk` since it was written
+// and both call sites passed `intake_to_weight_response`, so the weight-trend
+// evaluator was fully built, registered, and never once created — the nutrition step
+// learned from one of its two designed levers. A target CHANGE now claims the lever it
+// is actually accountable to: we moved the number, so the trend should move with it,
+// and that is falsifiable off the scale alone.
+import { whatWorksForYou } from "../dist/repo/reaction-model.js";
+import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
+import { addDaysISO } from "../dist/repo/shared.js";
+
+const trendExpectations = () =>
+  db
+    .prepare(
+      `SELECT * FROM brain_expectations
+        WHERE metric_key IN ('weight_trend_lb_wk','intake_to_weight_response') ORDER BY id`
+    )
+    .all()
+    .map((row) => ({
+      ...row,
+      baseline: JSON.parse(row.baseline_json || "null"),
+      target: JSON.parse(row.target_json || "{}"),
+      minimum_data: JSON.parse(row.minimum_data_json || "null"),
+    }));
+
+const hydrateExpectation = (row) => ({
+  id: row.id,
+  decision_id: row.decision_id,
+  metric_key: row.metric_key,
+  subject_key: row.subject_key,
+  direction: row.direction,
+  baseline: row.baseline,
+  target: row.target,
+  window_start: row.window_start,
+  window_end: row.window_end,
+  minimum_data: row.minimum_data,
+  confounder_policy: row.confounder_policy,
+  confidence: row.confidence,
+  evaluator: row.evaluator,
+  evaluator_version: row.evaluator_version,
+  status: "mature",
+});
+
+test("the FIRST nutrition target asks how this athlete responds to intake", () => {
+  seedCuttingProfile();
+  setCut();
+  const [row] = trendExpectations();
+  assert.equal(row.metric_key, "intake_to_weight_response", "nothing moved, so no change is being claimed");
+  assert.deepEqual(row.minimum_data, { weigh_ins: 6, intake_days: 10 }, "…and answering it needs intake days");
+});
+
+test("a target CHANGE predicts a weight TREND, and is falsifiable off the scale alone", () => {
+  seedCuttingProfile();
+  setCut();
+  repo.setNutritionTarget({ target_kcal: 2000, protein_g: 180, source: "checkin" });
+
+  const rows = trendExpectations();
+  assert.equal(rows.length, 2);
+  const change = rows[1];
+  assert.equal(change.metric_key, "weight_trend_lb_wk", "the lever that was never once created");
+  assert.equal(change.evaluator, "weight_trend");
+  assert.equal(change.evaluator_version, "nutrition-weight-v2");
+  assert.deepEqual(change.minimum_data, { weigh_ins: 6 }, "no intake days required — the scale settles this one");
+  assert.equal(change.baseline.target_delta_kcal, -200, "and it records the step it is accountable for");
+});
+
+test("re-affirming the same number is not a change, so it keeps the response question", () => {
+  seedCuttingProfile();
+  setCut();
+  repo.setNutritionTarget({ target_kcal: 2200, protein_g: 180, source: "checkin" });
+
+  const rows = trendExpectations();
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].metric_key, "intake_to_weight_response", "a target that did not move claims nothing new");
+});
+
+test("the weight-trend lever now runs end to end and reaches the nutrition step", () => {
+  // create → mature → evaluate → the learned default the nutrition step reads.
+  seedCuttingProfile();
+  setCut();
+  repo.setNutritionTarget({ target_kcal: 2000, protein_g: 180, source: "checkin" });
+  repo.setNutritionTarget({ target_kcal: 1900, protein_g: 180, source: "checkin" });
+
+  const changes = trendExpectations().filter((row) => row.metric_key === "weight_trend_lb_wk");
+  assert.equal(changes.length, 2, "both target changes wrote the trend lever");
+
+  const insertWeight = db.prepare(`INSERT INTO bodyweight_log (date, weight_lb) VALUES (?, ?)`);
+  for (const row of changes) {
+    // A flat scale across the window: the athlete cut and the weight did not move, so
+    // the prediction misses — the case the nutrition step exists to respond to.
+    db.prepare(`DELETE FROM bodyweight_log`).run();
+    let day = row.window_start;
+    for (let i = 0; i < 8; i++) {
+      insertWeight.run(day, 200);
+      day = addDaysISO(day, 3);
+    }
+    const expectation = hydrateExpectation(row);
+    const observation = observeExpectation({ expectation, decision: {}, as_of: row.window_end });
+    assert.ok(observation.actual, "the registered weight-trend evaluator produced a real observation");
+    assert.equal(EVALUATOR_REGISTRY[row.metric_key].evaluator, "weight_trend");
+    const result = evaluateMetricObservation(expectation, observation);
+    assert.equal(result.verdict, "not_aligned", "a flat scale under a deficit target misses the predicted band");
+    insertBrainEvaluation({
+      expectation_id: row.id,
+      verdict: result.verdict,
+      actual: observation.actual,
+      evidence_keys: observation.evidence_keys,
+      confounders: result.confounders ?? [],
+      explanation: "The observed weight trend stayed outside the expected band.",
+      evaluator_version: row.evaluator_version,
+    });
+  }
+
+  const learned = whatWorksForYou();
+  assert.ok(learned, "two comparable outcomes on the new lever earn a learning");
+  const modifier = learned.modifiers.find((item) => item.target === "nutrition_step");
+  assert.ok(modifier, "…and the nutrition step finally reads a default it learned from the trend lever");
+  assert.ok(
+    learned.learnings.some((item) => item.metric_key === "weight_trend_lb_wk"),
+    "the learning names the lever it came from"
+  );
+});

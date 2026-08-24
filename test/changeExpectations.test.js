@@ -11,6 +11,7 @@ import { localDateISO } from "../dist/repo/shared.js";
 import {
   buildAerobicTrendExpectation,
   buildHrvGuardExpectation,
+  buildSleepGuardExpectation,
   buildLiftProgressionExpectations,
   buildTrainingFeedbackExpectations,
   liftProgressionSubjects,
@@ -224,6 +225,38 @@ test("the HRV recovery guard is written only when the watch has been producing H
   // A tenth of the athlete's OWN level, not a population constant.
   assert.equal(guard.target.value, -6);
   assert.equal(guard.baseline.hrv_avg_ms, 60);
+});
+
+// `sleep_duration_delta` was registered in the evaluator table with NO site ever
+// creating an expectation against it — a declared lever the model could never learn
+// from. It is now the third reading of the same volume-raise guard, under the same
+// flowing-data rule as the HRV one.
+test("the sleep recovery guard is written only when the watch has been producing sleep", () => {
+  const today = localDateISO();
+  const context = { prior_weekly_km: 20, new_weekly_km: 26 };
+  assert.equal(buildSleepGuardExpectation(today, 28, context), null, "a watchless athlete is never judged for silence");
+
+  const insert = db.prepare(`INSERT INTO daily_metrics (date, sleep_min) VALUES (?, ?)`);
+  for (let daysAgo = 1; daysAgo <= 8; daysAgo++) insert.run(isoDaysAgo(daysAgo), 420);
+  const guard = buildSleepGuardExpectation(today, 28, context);
+  assert.ok(guard, "eight logged nights is a real baseline");
+  assert.equal(guard.metric_key, "sleep_duration_delta");
+  assert.equal(guard.evaluator, "recovery_delta", "the registered evaluator for the metric");
+  assert.equal(guard.evaluator_version, "run-recovery-sleep-guard-v1");
+  assert.deepEqual(guard.minimum_data, { nights: 6 });
+  // A twentieth of the athlete's OWN average, floored at 20 minutes — deliberately
+  // more forgiving than the HRV guard's tenth, because sleep duration is behavioral
+  // as much as physiological and an ordinary late week is not a training failure.
+  assert.equal(guard.target.value, -21);
+  assert.equal(guard.baseline.sleep_avg_min, 420);
+  assert.equal(guard.baseline.new_weekly_km, 26, "and it records the raise it is a guard on");
+});
+
+test("a short sleeper still gets a tolerance wider than ordinary night-to-night noise", () => {
+  const insert = db.prepare(`INSERT INTO daily_metrics (date, sleep_min) VALUES (?, ?)`);
+  for (let daysAgo = 1; daysAgo <= 8; daysAgo++) insert.run(isoDaysAgo(daysAgo), 300);
+  const guard = buildSleepGuardExpectation(localDateISO(), 28, { prior_weekly_km: 20, new_weekly_km: 26 });
+  assert.equal(guard.target.value, -20, "the absolute floor holds where the proportional band would be tighter");
 });
 
 // ---- the evaluators actually answer these ------------------------------------

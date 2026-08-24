@@ -1888,7 +1888,14 @@ function computeWhatWorksForYou(today = localDateISO()): CoachWhatWorksForYou | 
   // for the same target. Recency still decides between two readings of the same class.
   const measurementRank = (metricKey: string): number => (metricKey === "body_measurement_direction" ? 1 : 0);
   const carriers = [...ranked]
-    .filter((item) => item.modifier)
+    // An observed-only reading that lands on the universal default is not admitted at
+    // all. It would move no number — every consumer multiplies by its scale — but it
+    // WOULD claim its target's one slot, and `trainingModifierFor` prefers a
+    // subject-specific modifier over the whole-athlete one, so an inert observed-only
+    // reading of a single lift could shadow an applied whole-athlete reading that
+    // eases. Observed evidence earns a place in the map by softening something; saying
+    // "carry on as normal" is what the absence of a modifier already says.
+    .filter((item) => item.modifier && !(item.observed_only && item.modifier.scale === 1))
     .sort(
       (a, b) =>
         measurementRank(a.learning.metric_key) - measurementRank(b.learning.metric_key) ||

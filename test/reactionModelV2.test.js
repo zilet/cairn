@@ -356,3 +356,262 @@ test("session feedback and joint pain never vouch for a lift's progression", () 
   });
   assert.deepEqual(liftLedgerRead("Back Squat").verdicts, []);
 });
+
+// ---------------------------------------------------------------------------
+// OBSERVE-TIER VERDICTS, AT REDUCED WEIGHT.
+//
+// The group filter used to read `decision_status !== "applied" → skip`, which on a
+// live ledger threw away roughly three quarters of every conclusive verdict the
+// evaluators had produced: advisory conference predictions and every other
+// observe-tier decision were evaluated in full and then dropped at one line.
+//
+// They now count, at 0.4 each, with the observed class's total contribution to one
+// comparable group capped at 2.0 effective observations:
+//
+//   effective_n = applied_n + min(observed_n × 0.4, 2.0)
+//
+// Everything below pins one consequence of that arithmetic, plus the two independent
+// guards that keep observed evidence from ever buying a bigger step.
+
+function observedOutcome(key, verdict, opts = {}) {
+  return recordOutcome(key, verdict, {
+    ...opts,
+    decision: { status: "observed", applied_at: null, autonomy_tier: "observe", ...opts.decision },
+  });
+}
+
+function nutritionModifier() {
+  const learned = whatWorksForYou();
+  return learned?.modifiers.find((modifier) => modifier.target === "nutrition_step") ?? null;
+}
+
+test("four observed verdicts are below the floor two applied ones clear", () => {
+  // 4 × 0.4 = 1.6, under the effective-n floor of 2. Volume has to be real before it
+  // speaks: an observed-only group needs FIVE outcomes to say what two applied ones do.
+  for (const key of ["1", "2", "3", "4"]) observedOutcome(key, "not_aligned");
+  assert.equal(whatWorksForYou(), null);
+
+  observedOutcome("5", "not_aligned");
+  const learned = whatWorksForYou();
+  assert.ok(learned, "the fifth observed outcome reaches exactly 2.0 effective and qualifies");
+  assert.equal(learned.learnings[0].evidence_n, 5);
+});
+
+test("a sixth observed verdict adds nothing — the cap is a real ceiling", () => {
+  for (const key of ["1", "2", "3", "4", "5", "6", "7", "8"]) observedOutcome(key, "aligned");
+  const learned = whatWorksForYou();
+  assert.ok(learned);
+  // min(8 × 0.4, 2.0) = 2.0, the same as five — so `strong` (which needs an effective
+  // run of 4) stays permanently out of an observed-only group's reach. Volume cannot
+  // manufacture certainty.
+  assert.notEqual(learned.learnings[0].confidence, "strong");
+});
+
+test("three applied verdicts outweigh thirty observed ones", () => {
+  // The swamping case the cap exists for: 30 × 0.4 would be 12.0 unbounded, against
+  // 3.0 for the applied history. Capped, the observed side contributes 2.0 and the
+  // applied evidence is the majority of the group it sits in.
+  for (let i = 0; i < 30; i++) observedOutcome(`obs${i}`, "aligned");
+  for (const key of ["a", "b", "c"]) recordOutcome(key, "not_aligned");
+
+  const modifier = nutritionModifier();
+  assert.ok(modifier, "the group qualifies");
+  assert.equal(modifier.scale, 1.15, "the applied misses still set the learned default");
+  assert.equal(modifier.bounds.max, 1.15, "and the group is not observed-only, so its ceiling is untouched");
+});
+
+test("observed evidence softens the next step and can never enlarge it", () => {
+  // Five observed MISSES on a nutrition group. The miss scale for this shape is 1.15 —
+  // a push — and the observed-only ceiling pulls it back to the universal default,
+  // which leaves nothing to say, so no modifier is admitted at all.
+  for (const key of ["1", "2", "3", "4", "5"]) observedOutcome(key, "not_aligned");
+  const learned = whatWorksForYou();
+  assert.ok(learned, "the learning is visible");
+  assert.equal(learned.learnings[0].metric_key, "weight_trend_lb_wk");
+  assert.equal(nutritionModifier(), null, "an observed-only group cannot hand out a bigger step");
+
+  // …while the SOFTENING half is untouched: the same evidence on a lever whose miss
+  // scale eases still eases, at full strength.
+  db.prepare(`DELETE FROM brain_evaluations`).run();
+  db.prepare(`DELETE FROM brain_expectations`).run();
+  db.prepare(`DELETE FROM brain_decisions`).run();
+  for (const key of ["6", "7", "8", "9", "10"]) {
+    observedOutcome(key, "not_aligned", {
+      expectation: {
+        metric_key: "exercise_target_completion",
+        evaluator: "exercise_completion",
+        direction: "complete",
+        baseline: { sets: 3 },
+        target: { rate: 0.8 },
+      },
+      actual: { value: 0.4, completion_rate: 0.4, exposures: 5 },
+    });
+  }
+  const training = whatWorksForYou().modifiers.find((item) => item.target === "training_progression_step");
+  assert.ok(training);
+  assert.equal(training.scale, 0.9, "easing keeps its full power — the asymmetry is the point");
+  assert.equal(training.bounds.min, 0.9);
+});
+
+test("observed-only aligned verdicts never earn the acceleration applied ones do", () => {
+  // Five aligned observed outcomes on the one training metric that CAN accelerate,
+  // with nothing missed and no symptom on record: every condition except the one that
+  // matters is met.
+  for (const key of ["1", "2", "3", "4", "5"]) {
+    observedOutcome(key, "aligned", {
+      expectation: {
+        metric_key: "exercise_target_completion",
+        evaluator: "exercise_completion",
+        direction: "complete",
+        baseline: { sets: 3 },
+        target: { rate: 0.8 },
+      },
+      actual: { value: 1, completion_rate: 1, exposures: 5 },
+    });
+  }
+  const learned = whatWorksForYou();
+  assert.ok(
+    learned.learnings.some((item) => item.metric_key === "exercise_target_completion"),
+    "the learning is real and visible as prose"
+  );
+  assert.equal(
+    learned.modifiers.find((item) => item.target === "training_progression_step"),
+    undefined,
+    "but headroom is bought by a change the athlete actually made, so no lever moves"
+  );
+});
+
+test("a floor consumer cannot be accelerated by observed-only evidence", () => {
+  // The end-to-end half of the same guarantee, read through the clamp the consumers
+  // actually apply. The only observed-only modifier that exists at all is one that
+  // softens, and its declared ceiling is the universal default — so base × scale can
+  // never come out above the base, even if the scale itself is tampered with.
+  for (const key of ["1", "2", "3", "4", "5"]) {
+    observedOutcome(key, "not_aligned", {
+      expectation: {
+        metric_key: "exercise_target_completion",
+        evaluator: "exercise_completion",
+        direction: "complete",
+        baseline: { sets: 3 },
+        target: { rate: 0.8 },
+      },
+      actual: { value: 0.4, completion_rate: 0.4, exposures: 5 },
+    });
+  }
+  const modifier = whatWorksForYou().modifiers.find((item) => item.target === "training_progression_step");
+  assert.ok(modifier, "the softening reading is admitted");
+  assert.equal(applyPersonalResponseModifier({ base: 10, modifier, max: 20 }), 9);
+  // …and a modifier that lies about its own scale is still clamped by its bounds.
+  const forged = { ...modifier, scale: 1.4 };
+  assert.equal(applyPersonalResponseModifier({ base: 10, modifier: forged, max: 20 }), 10);
+});
+
+test("an inert observed-only reading of one lift never shadows an applied whole-athlete ease", () => {
+  // The shadowing case the admission rule exists for: trainingModifierFor prefers a
+  // subject-specific modifier over the whole-athlete one, so an observed-only "carry
+  // on as normal" reading of the squat would otherwise displace an applied session-
+  // feedback reading that says ease — and the squat would silently lose the ease.
+  recordOutcome("g1", "not_aligned", {
+    expectation: {
+      metric_key: "session_performance_feedback",
+      evaluator: "session_feedback",
+      direction: "maintain",
+      baseline: { rating: 3 },
+      target: { rating: "okay_or_better" },
+    },
+    actual: { value: 2, sessions: 6 },
+  });
+  recordOutcome("g2", "not_aligned", {
+    expectation: {
+      metric_key: "session_performance_feedback",
+      evaluator: "session_feedback",
+      direction: "maintain",
+      baseline: { rating: 3 },
+      target: { rating: "okay_or_better" },
+    },
+    actual: { value: 2, sessions: 6 },
+  });
+  for (const key of ["1", "2", "3", "4", "5"]) {
+    observedOutcome(key, "aligned", {
+      expectation: {
+        metric_key: "exercise_target_completion",
+        subject_key: "Back Squat",
+        evaluator: "exercise_completion",
+        direction: "complete",
+        baseline: { sets: 3 },
+        target: { rate: 0.8 },
+      },
+      actual: { value: 1, completion_rate: 1, exposures: 5 },
+    });
+  }
+
+  const learned = whatWorksForYou();
+  const training = learned.modifiers.filter((item) => item.target === "training_progression_step");
+  assert.equal(training.length, 1, "only the applied reading claims the training slot");
+  assert.equal(training[0].subject_key, null);
+  assert.equal(training[0].scale, 0.9, "…so the ease still reaches every lift, the squat included");
+});
+
+test("one applied verdict plus observed ones reaches the floor, but not the acceleration bar", () => {
+  // 1 + (3 × 0.4) = 2.2 effective, so the group qualifies where one applied outcome
+  // alone would not. The acceleration branch counts APPLIED outcomes in the run and
+  // sees exactly one, which is under its bar of two.
+  recordOutcome("1", "aligned", {
+    expectation: {
+      metric_key: "exercise_target_completion",
+      evaluator: "exercise_completion",
+      direction: "complete",
+      baseline: { sets: 3 },
+      target: { rate: 0.8 },
+    },
+    actual: { value: 1, completion_rate: 1, exposures: 5 },
+  });
+  for (const key of ["2", "3", "4"]) {
+    observedOutcome(key, "aligned", {
+      expectation: {
+        metric_key: "exercise_target_completion",
+        evaluator: "exercise_completion",
+        direction: "complete",
+        baseline: { sets: 3 },
+        target: { rate: 0.8 },
+      },
+      actual: { value: 1, completion_rate: 1, exposures: 5 },
+    });
+  }
+  const modifier = whatWorksForYou().modifiers.find((item) => item.target === "training_progression_step");
+  assert.ok(modifier, "the mixed group qualifies on effective evidence");
+  assert.equal(modifier.bounds.max, 1.1, "it is not observed-only, so the declared ceiling stands");
+  assert.equal(modifier.scale, 1, "…and one applied outcome is still one, however much observed evidence surrounds it");
+});
+
+test("confounded and superseded observed verdicts stay excluded exactly as before", () => {
+  for (const key of ["1", "2", "3", "4", "5"]) {
+    observedOutcome(key, "not_aligned", { confounders: ["illness"] });
+  }
+  assert.equal(whatWorksForYou(), null, "a confounded outcome is not evidence, whatever tier recorded it");
+
+  const superseding = observedOutcome("6", "not_aligned");
+  db.prepare(`UPDATE brain_decisions SET superseded_by = ? WHERE superseded_by IS NULL AND id <> ?`).run(
+    superseding.decision.id,
+    superseding.decision.id
+  );
+  assert.equal(whatWorksForYou(), null);
+});
+
+test("decisions the athlete refused are not evidence about how they respond", () => {
+  for (const key of ["1", "2", "3", "4", "5"]) {
+    observedOutcome(key, "not_aligned", { decision: { status: "rejected" } });
+  }
+  assert.equal(whatWorksForYou(), null, "only applied and observed decisions carry weight");
+});
+
+test("an applied group keeps exactly the behaviour it had before observed rows counted", () => {
+  // The regression guard on the whole change: two applied misses still earn 1.15 with
+  // `observed` confidence and an untouched 1.15 ceiling.
+  recordOutcome("1", "not_aligned");
+  recordOutcome("2", "not_aligned");
+  const modifier = nutritionModifier();
+  assert.equal(modifier.scale, 1.15);
+  assert.deepEqual(modifier.bounds, { min: 0.85, max: 1.15 });
+  assert.equal(modifier.confidence, "observed");
+});
