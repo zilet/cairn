@@ -113,12 +113,14 @@ test("Today Brief never renders a recovery menu on an easy or train day even if 
   assert.doesNotMatch(train, /brief-recovery/);
 });
 
-test("todayBriefMateriallyDiffers is true when only the recovery menu changed", () => {
+test("todayBriefMateriallyDiffers tracks the rest line, not a consolation menu", () => {
   const brief = loadTodayBrief();
   const base = { kind: "rest", headline: "Rest today", why: "Nothing stacked up.", signals: {} };
   const a = { ...base, recovery: RECOVERY };
   const b = { ...base, recovery: { ...RECOVERY, options: [RECOVERY.options[0]] } };
+  const c = { ...base, recovery: { ...RECOVERY, line: "A quieter rest line." } };
 
   assert.equal(brief.materiallyDiffers(a, a), false);
-  assert.equal(brief.materiallyDiffers(a, b), true);
+  assert.equal(brief.materiallyDiffers(a, b), false, "unrendered consolation options are not content");
+  assert.equal(brief.materiallyDiffers(a, c), true);
 });

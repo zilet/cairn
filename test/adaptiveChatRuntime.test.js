@@ -228,7 +228,7 @@ test("chat prompt forbids interviewing and filling profile holes", () => {
   assert.match(prompt, /NO INTERVIEW/);
   assert.match(prompt, /does not interview, questionnaire/);
   assert.match(prompt, /estimate out loud at stated confidence or stay silent/);
-  assert.match(prompt, /only allowed ask is a missing measurement/);
+  assert.match(prompt, /only\s+allowed ask is a missing measurement/);
   assert.match(prompt, /Skipping a rest day or training through\s+a rest day IS the answer/);
   assert.doesNotMatch(prompt, /PROGRESSIVE UNDERSTANDING/);
   assert.doesNotMatch(prompt, /MAY ask ONE brief/);
