@@ -13,6 +13,7 @@ import {
 } from "../dist/domain/brain/autonomy-service.js";
 import * as repo from "../dist/repo.js";
 import { db } from "../dist/db.js";
+import { localDateISO } from "../dist/repo/shared.js";
 
 // HEADS-UP AUTONOMY (owner ruling, 2026-08-17). Under lead_mode 'lead' only, a goal
 // change and a REVERSIBLE high-risk change land with a heads-up and a one-tap undo
@@ -259,6 +260,14 @@ test("the thaw supersedes a stale-evidence draft with a receipt instead of adopt
     summary: "Move intake toward maintenance for a week",
     nutrition: { target_kcal: 2600, protein_g: 170 },
   });
+  // Nutrition drafts now carry a bodyweight/maintenance snapshot; a weigh-in trend
+  // that wasn't there when the draft was written is the contradiction this case
+  // exists for (legacy unverified drafts with no snapshot still supersede too).
+  const today = localDateISO();
+  const ago = (n) => new Date(Date.parse(`${today}T00:00:00Z`) - n * 864e5).toISOString().slice(0, 10);
+  repo.logWeight(180, ago(14));
+  repo.logWeight(176, ago(7));
+  repo.logWeight(172, ago(1));
   const held = heldReviewDecision(proposal.id);
   assert.equal(held.decision.status, "review");
 
@@ -289,6 +298,14 @@ test("the thaw does nothing at all under review_everything", () => {
   assert.deepEqual(result, { thawed: 0, superseded: 0, skipped: 0 });
   assert.equal(repo.getBrainDecision(Number(held.decision.id)).status, "review");
   assert.equal(repo.getProposal(Number(proposal.id)).status, "draft");
+});
+
+test("an explicit review_everything still demotes everything to ask", () => {
+  const ask = { kind: "training_target", risk_class: "low", reversible: true, lead_mode: "review_everything" };
+  assert.equal(decideAutonomyTier(ask).tier, "ask");
+  assert.equal(decideAutonomyTier({ ...ask, kind: "training_structure" }).tier, "ask");
+  assert.equal(decideAutonomyTier({ ...ask, kind: "nutrition_target", magnitude: 50 }).tier, "ask");
+  assert.equal(defaultAutonomyTier({ ...ask, lead_mode: undefined }), "quiet_apply");
 });
 
 test("the adoption sweep runs the thaw on the same tick", () => {

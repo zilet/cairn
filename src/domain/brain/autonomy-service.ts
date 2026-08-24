@@ -53,6 +53,7 @@ import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 import {
+  captureNutritionProposalEvidence,
   captureProposalEvidence,
   proposalEvidenceSnapshot,
   type ProposalFreshness,
@@ -75,6 +76,14 @@ type ProposalShape = {
   domain: "nutrition" | "training" | "recovery";
   risk: "low" | "moderate";
 };
+
+function proposalNeedsEvidenceFreshness(shape: ProposalShape): boolean {
+  return shape.domain === "training" || shape.domain === "recovery" || shape.kind === "nutrition_target";
+}
+
+function captureEvidenceForShape(shape: ProposalShape, asOf: string) {
+  return shape.kind === "nutrition_target" ? captureNutritionProposalEvidence(asOf) : captureProposalEvidence(asOf);
+}
 
 function proposalShape(proposal: any): ProposalShape {
   if (proposal?.parsed?.kind === "nutrition_target")
@@ -669,17 +678,16 @@ export function applyProposalWithAutonomy(
     serverClinicalProvenance(input.clinical_provenance) ??
     serverClinicalProvenance(proposal.parsed?.clinical_provenance);
   const clinical = input.clinical === true || clinicalProvenance !== null;
-  const proposalFreshness =
-    shape.domain === "training" || shape.domain === "recovery"
-      ? verifyProposalEvidenceFreshness(proposal.parsed, localDateISO())
-      : null;
+  const proposalFreshness = proposalNeedsEvidenceFreshness(shape)
+    ? verifyProposalEvidenceFreshness(proposal.parsed, localDateISO())
+    : null;
   const storedProposalEvidence = proposalEvidenceSnapshot(proposal.parsed);
   const scheduledProposalEvidence =
     storedProposalEvidence ??
     (proposalFreshness?.status === "unverified" &&
     input.explicit_user_request &&
-    (shape.domain === "training" || shape.domain === "recovery")
-      ? captureProposalEvidence(localDateISO())
+    proposalNeedsEvidenceFreshness(shape)
+      ? captureEvidenceForShape(shape, localDateISO())
       : null);
   // Compare-and-set is the primary autonomous freshness gate. A proposal whose
   // source plan or training evidence moved is preserved for review; it is never
@@ -1958,12 +1966,11 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         announced.context.proposal_evidence.version === 1
           ? announced.context.proposal_evidence
           : null;
-      const boundaryFreshness =
-        shape.domain === "training" || shape.domain === "recovery"
-          ? decisionEvidence
-            ? verifyProposalEvidenceSnapshot(decisionEvidence as any, asOf)
-            : verifyProposalEvidenceFreshness(proposal.parsed, asOf)
-          : null;
+      const boundaryFreshness = proposalNeedsEvidenceFreshness(shape)
+        ? decisionEvidence
+          ? verifyProposalEvidenceSnapshot(decisionEvidence as any, asOf)
+          : verifyProposalEvidenceFreshness(proposal.parsed, asOf)
+        : null;
       if (
         boundaryFreshness &&
         (boundaryFreshness.status === "changed" || boundaryFreshness.status === "unverified")

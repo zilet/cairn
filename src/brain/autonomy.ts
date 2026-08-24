@@ -2,6 +2,10 @@ import { AUTONOMY_TIERS, type AutonomyTier, type BrainDecisionKind, type BrainRi
 
 export type CairnLeadMode = "lead" | "announce_first" | "review_everything";
 
+// Forgotten call sites used to inherit review_everything (maximum-ask). The
+// product default is lead — the same value the settings row and DB column use.
+export const DEFAULT_LEAD_MODE: CairnLeadMode = "lead";
+
 export interface AutonomyPolicyInput {
   kind: BrainDecisionKind;
   risk_class: BrainRiskClass;
@@ -46,7 +50,7 @@ function headsUpAutonomy(leadMode: CairnLeadMode): boolean {
 export function defaultAutonomyTier(
   input: Pick<AutonomyPolicyInput, "kind" | "risk_class" | "reversible" | "magnitude" | "lead_mode">
 ): AutonomyTier {
-  const headsUp = headsUpAutonomy(input.lead_mode ?? "review_everything");
+  const headsUp = headsUpAutonomy(input.lead_mode ?? DEFAULT_LEAD_MODE);
   if (input.risk_class === "clinical") return "clinician";
   // Irreversibility is checked BEFORE risk: a high-risk change may now announce, but
   // one that cannot be taken back still has to be asked about at every lead mode.
@@ -61,7 +65,7 @@ export function defaultAutonomyTier(
 
 export function decideAutonomyTier(input: AutonomyPolicyInput): AutonomyPolicyDecision {
   const reasons: string[] = [];
-  const leadMode = input.lead_mode ?? "review_everything";
+  const leadMode = input.lead_mode ?? DEFAULT_LEAD_MODE;
   const headsUp = headsUpAutonomy(leadMode);
   let tier = defaultAutonomyTier({ ...input, lead_mode: leadMode });
   if (input.requested_tier) {

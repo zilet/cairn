@@ -1,7 +1,7 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { db, repo, resetTables } from "./_seed.js";
+import { db, repo, resetTables, seedWeight } from "./_seed.js";
 import { isPlanProposalResult } from "../dist/agent-contracts.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
@@ -812,4 +812,54 @@ test("a targeted target step records the prescription it overwrote", () => {
   assert.equal(change.before.target_weight, 100, "the value it replaced");
   assert.equal(change.before.sets, 3);
   assert.equal(change.change, "updated");
+});
+
+function nutritionTargetProposal(kcal = 2400) {
+  return repo.createProposal("stub", "nutrition: adaptive check-in", "", {
+    kind: "nutrition_target",
+    summary: `Hold the target at ${kcal} kcal.`,
+    nutrition: { target_kcal: kcal, protein_g: 170, reason: "The current picture supports this." },
+  });
+}
+
+test("nutrition_target proposals capture a bodyweight/maintenance evidence snapshot", () => {
+  resetTables("bodyweight_log", "food_notes", "plan_proposals", "profile");
+  const proposal = nutritionTargetProposal();
+  const evidence = proposal.parsed.proposal_truth.evidence;
+  assert.equal(evidence.version, 1);
+  assert.equal(typeof evidence.nutrition_fingerprint, "string");
+  assert.ok(evidence.nutrition_fingerprint);
+  assert.equal(repo.verifyProposalEvidenceFreshness(proposal.parsed, localDateISO()).status, "current");
+});
+
+test("a bodyweight trend move stales a nutrition_target proposal", () => {
+  resetTables("bodyweight_log", "food_notes", "plan_proposals", "profile", "brain_decisions");
+  const today = localDateISO();
+  const ago = (n) => addDaysISO(today, -n) ?? today;
+  const proposal = nutritionTargetProposal();
+  assert.equal(repo.verifyProposalEvidenceFreshness(proposal.parsed, today).status, "current");
+
+  seedWeight(ago(14), 180);
+  seedWeight(ago(7), 176);
+  seedWeight(ago(1), 172);
+  const freshness = repo.verifyProposalEvidenceFreshness(proposal.parsed, today);
+  assert.equal(freshness.status, "changed");
+  assert.deepEqual(freshness.changed_components, ["nutrition"]);
+});
+
+test("a stale nutrition_target is held for review rather than quiet-applied", () => {
+  resetTables("bodyweight_log", "food_notes", "plan_proposals", "profile", "brain_decisions", "nutrition_targets");
+  repo.setSettings({ lead_mode: "lead" });
+  const today = localDateISO();
+  const ago = (n) => addDaysISO(today, -n) ?? today;
+  const proposal = nutritionTargetProposal();
+  seedWeight(ago(14), 180);
+  seedWeight(ago(7), 176);
+  seedWeight(ago(1), 172);
+
+  const result = applyProposalWithAutonomy(Number(proposal.id), { requested_tier: "quiet_apply" });
+  assert.equal(result.review_required, true);
+  assert.equal(result.review_reason_code, "stale_snapshot");
+  assert.deepEqual(result.decision.context.proposal_freshness.changed_components, ["nutrition"]);
+  assert.equal(repo.getProposal(Number(proposal.id)).status, "draft");
 });

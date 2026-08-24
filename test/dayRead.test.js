@@ -1297,6 +1297,23 @@ test("the recovery-week softening variants read as calm plain language, distinct
   }
 });
 
+test("agent est_minutes is banded around the deterministic floor, not stored raw", async () => {
+  const { clampAgentEstMinutes } = await import("../dist/dayread.js");
+
+  // The compressed commitment day: floor 40, agent 90 is outside the band.
+  assert.equal(clampAgentEstMinutes(90, 40, "train", "train"), 40);
+  assert.equal(clampAgentEstMinutes(0, 40, "train", "train"), 40);
+  assert.equal(clampAgentEstMinutes(-10, 40, "train", "train"), 40);
+  assert.equal(clampAgentEstMinutes(null, 40, "train", "train"), 40);
+  // Inside the band the agent's number is kept — an exact pin would make every
+  // agentic read indistinguishable from the floor.
+  assert.equal(clampAgentEstMinutes(45, 40, "train", "train"), 45);
+  assert.equal(clampAgentEstMinutes(55, 60, "train", "train"), 55);
+  // A conservative kind change keeps its own clock.
+  assert.equal(clampAgentEstMinutes(20, 40, "easy", "train"), 20);
+  assert.equal(clampAgentEstMinutes(90, 40, "rest", "train"), null);
+});
+
 test("Today agent-result validation rejects parseable off-contract JSON", async () => {
   const { isValidDayReadAgentResult } = await import("../dist/dayread.js");
 
@@ -2725,6 +2742,32 @@ test("the brake's identity does not churn the fingerprint, but the directives do
   renarrated.signals.signal_state.action.reason = "The athlete reports workable energy today.";
   renarrated.signals.signal_state.action.confidence = "high";
   assert.equal(repo.dayReadInputFingerprint(REF, renarrated), base, "narration is churn, not a decision");
+});
+
+test("a today_holds change moves the day-read fingerprint", () => {
+  const base = {
+    kind: "train",
+    focus: "Lower body",
+    signals: { today_load: "none", trained_today: null },
+  };
+  const before = repo.dayReadInputFingerprint(REF, base);
+  const held = {
+    ...base,
+    signals: {
+      ...base.signals,
+      today_holds: [{ kind: "appointment", title: "Morning labs", claims_day: false, lab_draw: true }],
+    },
+  };
+  assert.notEqual(repo.dayReadInputFingerprint(REF, held), before);
+  // Title is narration: the same hold with a different label is the same decision.
+  const renamed = {
+    ...held,
+    signals: {
+      ...held.signals,
+      today_holds: [{ kind: "appointment", title: "Bloodwork at 8am", claims_day: false, lab_draw: true }],
+    },
+  };
+  assert.equal(repo.dayReadInputFingerprint(REF, renamed), repo.dayReadInputFingerprint(REF, held));
 });
 
 // ---------------------------------------------------------------------------

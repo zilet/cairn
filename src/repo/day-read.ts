@@ -1534,6 +1534,42 @@ function compactRecentLoadFingerprint(
   }));
 }
 
+function compactTodayHoldsFingerprint(
+  value: unknown
+): Array<{ kind: string | null; claims_day: boolean; lab_draw: boolean }> | null {
+  if (!Array.isArray(value) || !value.length) return null;
+  return value
+    .map((hold: any) => ({
+      kind: typeof hold?.kind === "string" ? hold.kind : null,
+      claims_day: !!hold?.claims_day,
+      lab_draw: !!hold?.lab_draw,
+    }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+}
+
+function compactTomorrowHoldsFingerprint(
+  value: unknown
+): Array<{ kind: string | null; blocks_training: boolean }> | null {
+  if (!Array.isArray(value) || !value.length) return null;
+  return value
+    .map((hold: any) => ({
+      kind: typeof hold?.kind === "string" ? hold.kind : null,
+      blocks_training: !!hold?.blocks_training,
+    }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+}
+
+function compactHealthWorkaroundFingerprint(value: unknown): { field: string | null } | null {
+  if (!value || typeof value !== "object") return null;
+  const field = (value as { field?: unknown }).field;
+  return { field: typeof field === "string" ? field : null };
+}
+
+function compactOutcomeAppliedFingerprint(value: unknown): boolean | null {
+  if (!value || typeof value !== "object") return null;
+  return !!(value as { applied?: unknown }).applied;
+}
+
 function compactFlexibleAgendaFingerprint(
   value: unknown
 ): NonNullable<DayReadFingerprintContext["flexible_training_agenda"]> | null {
@@ -1736,6 +1772,19 @@ export function dayReadInputFingerprint(
         }
       : null,
     plan_selection: signals.plan_selection ?? null,
+    // Calendar holds and the health work-around are decision inputs (day_claimed_rest,
+    // lab_draw_morning, lookahead_retimed_training, guarded quiet-streak prose). They
+    // used to ride on the writers calling invalidateDayRead() unconditionally; a future
+    // hold writer that forgets would serve a warm stale read that serve-time
+    // reconciliation cannot detect. Compacted to the predicates the rules branch on,
+    // not titles or summaries (those are narration).
+    today_holds: compactTodayHoldsFingerprint(signals.today_holds),
+    tomorrow_holds: compactTomorrowHoldsFingerprint(signals.tomorrow_holds),
+    health_workaround: compactHealthWorkaroundFingerprint(signals.health_workaround),
+    // `applied` is the fact the outcome loop acted; `active` is only the argument
+    // for it. The easy-ladder sibling is the same hole one rung up.
+    outcome_feedback_applied: compactOutcomeAppliedFingerprint(signals.outcome_feedback),
+    easy_outcome_feedback_applied: compactOutcomeAppliedFingerprint(signals.easy_outcome_feedback),
   };
   return createHash("sha256")
     .update(JSON.stringify(stableValue(input)))

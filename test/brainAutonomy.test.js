@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideAutonomyTier, domainShouldDemote, surpriseBudgetAllows } from "../dist/brain/autonomy.js";
+import {
+  decideAutonomyTier,
+  defaultAutonomyTier,
+  domainShouldDemote,
+  surpriseBudgetAllows,
+} from "../dist/brain/autonomy.js";
 
 const base = {
   kind: "training_target",
@@ -13,6 +18,16 @@ test("low-risk reversible target changes may quiet-apply only in lead mode", () 
   assert.equal(decideAutonomyTier(base).tier, "quiet_apply");
   assert.equal(decideAutonomyTier({ ...base, lead_mode: "announce_first" }).tier, "announce");
   assert.equal(decideAutonomyTier({ ...base, lead_mode: "review_everything" }).tier, "ask");
+});
+
+test("a missing lead_mode resolves as lead, not as review-everything", () => {
+  const { lead_mode: _omitted, ...without } = base;
+  assert.equal(without.lead_mode, undefined);
+  assert.equal(defaultAutonomyTier(without), "quiet_apply");
+  assert.equal(decideAutonomyTier(without).tier, "quiet_apply");
+  assert.equal(decideAutonomyTier({ ...without, lead_mode: null }).tier, "quiet_apply");
+  assert.equal(decideAutonomyTier({ ...without, risk_class: "high" }).tier, "announce");
+  assert.equal(decideAutonomyTier({ ...without, kind: "goal_change" }).tier, "announce");
 });
 
 test("model tier can be demoted by policy but never promoted", () => {

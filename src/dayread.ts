@@ -413,6 +413,36 @@ export function decodeDayReadAgentProse<T>(value: T): T {
   return (changed ? out : value) as T;
 }
 
+// The agent may wander the clock a little; it may not invent a 90-minute
+// commitment day the floor compressed to 40, or a 0 / negative duration.
+// Band around the floor rather than pinning — an exact pin would make every
+// agentic read indistinguishable from the deterministic one. Non-positive
+// values are rejected outright (the floor wins). A conservative kind change
+// (train → easy) keeps its own clock: banding that against the train-day
+// floor would pin an easy morning to a session length.
+const EST_MINUTES_SLACK_MIN = 15;
+const EST_MINUTES_SLACK_RATIO = 0.25;
+
+export function clampAgentEstMinutes(
+  agentValue: unknown,
+  floorValue: unknown,
+  agentKind?: unknown,
+  floorKind?: unknown
+): number | null {
+  const kind = typeof agentKind === "string" ? agentKind : null;
+  if (kind === "rest" || kind === "done") return null;
+  const agent = Number(agentValue);
+  const floor = Number(floorValue);
+  const floorOk = Number.isFinite(floor) && floor > 0;
+  if (!Number.isFinite(agent) || agent <= 0) return floorOk ? Math.round(floor) : null;
+  const rounded = Math.round(agent);
+  if (kind && typeof floorKind === "string" && kind !== floorKind) return rounded;
+  if (!floorOk) return rounded;
+  const slack = Math.max(EST_MINUTES_SLACK_MIN, Math.round(floor * EST_MINUTES_SLACK_RATIO));
+  if (rounded < floor - slack || rounded > floor + slack) return Math.round(floor);
+  return rounded;
+}
+
 export function isValidDayReadAgentResult(
   value: any,
   baseline?: { kind?: unknown; signals?: Record<string, any> },
@@ -513,7 +543,7 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
               dayReadHeadline({ kind: p.kind, focus: p.focus ?? null, signals: baseline.signals }, resolvedDate),
         why: String(p.why).trim(),
         focus: p.focus == null ? null : String(p.focus).trim() || null,
-        est_minutes: Number.isFinite(Number(p.est_minutes)) ? Number(p.est_minutes) : baseline.est_minutes,
+        est_minutes: clampAgentEstMinutes(p.est_minutes, baseline.est_minutes, p.kind, baseline.kind),
         signals: baseline.signals,
         source: "agent",
         agent: chosen,
