@@ -492,10 +492,35 @@ test("a standing cluster buys ONE bounded protective raise, with arm-recovery ex
   assert.equal(insight.status, "new");
   assert.doesNotMatch(`${insight.text} ${insight.rationale}`, /REDs|relative energy deficiency|syndrome|\d\/10/i);
 
-  // …and a second pass the same day does nothing at all.
+  // A queued move has NOT stamped the cooldown — the fortnight starts when the change
+  // lands — so what stops a second pass minting a second proposal is the in-flight guard.
   const again = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
   assert.equal(again.action, "none");
-  assert.match(again.reason, /settling window/i);
+  assert.match(again.reason, /waiting for the next food-day boundary/i);
+  const drafts = repo.listProposals(20).filter((p) => String(p.agent) === "energy-deficiency-brain");
+  assert.equal(drafts.length, 1, "no second protective draft is minted while the first waits");
+});
+
+// A protective raise never lands the moment it is decided: it waits for a food-day
+// boundary, and the boundary re-validates it and may set it aside. Stamping the
+// fortnight at decision time meant a raise that never happened still bought silence —
+// the watch slept while the cluster stood and the athlete's food had not moved.
+test("the fortnight of silence starts when the change LANDS, not when it is decided", () => {
+  seedTarget(2200);
+  seedRecoverySignals();
+  const scheduled = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(scheduled.action, "protective_raise_scheduled");
+
+  const due = applyDueAnnouncedDecisions("2099-01-01");
+  assert.ok(due.applied.length >= 1, "the boundary applies the queued raise");
+  assert.equal(repo.getActiveNutritionTarget().target_kcal, 2450);
+
+  // With the raise in force, the same standing cluster is now held off by the cooldown
+  // rather than by the in-flight guard — and the cooldown is what a fortnight of
+  // repeated passes runs into.
+  const after = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(after.action, "none");
+  assert.match(after.reason, /settling window/i);
 });
 
 test("no standing cluster and no affordable raise are both no-ops", () => {
@@ -511,4 +536,49 @@ test("no standing cluster and no affordable raise are both no-ops", () => {
   );
   assert.equal(Number(db.prepare(`SELECT COUNT(*) AS n FROM nutrition_targets`).get().n), 1, "no target was written");
   assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM insights`).get().n, 0, "and nothing was explained");
+});
+
+// The baseline every protective step is measured FROM has to be the number the
+// athlete is actually eating to. An accepted row goes `review_due` once its adaptive
+// window elapses, and from that moment the goal's effective target — the formula —
+// is what is in force. Reading the stale row instead put the baseline BELOW the
+// number in force, and `capProtectiveRaise` waves a "raise" at or under its previous
+// straight through as the ordinary path: a stale 1,500 row under a formula target of
+// ~1,988 turned a protective raise into a CUT of several hundred calories.
+test("the raise is measured from the target in force, never from a review-overdue row", () => {
+  setMidCutProfile();
+  db.prepare(
+    `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, carbs_g, fat_g, source)
+     VALUES (?, 1500, 175, 150, 50, 'adaptive')`,
+  ).run(addDaysISO(today(), -60));
+
+  const stale = repo.getLatestNutritionTarget(today());
+  assert.equal(stale.target_kcal, 1500);
+  assert.equal(stale.review_due, true, "the accepted row is past its review window");
+  const inForce = Number(repo.computeGoalCheck().effective_target.target_kcal);
+  assert.ok(inForce > 1500, "so the formula target is what the athlete eats to");
+
+  const state = repo.energyDeficiencyState(today());
+  assert.equal(state.active_target_kcal, inForce, "the watch baselines on the same ladder the boundary uses");
+
+  // And with that baseline, the only thing this watch can produce is a move UP.
+  const read = repo.energyDeficiencyDecision({
+    ...state,
+    cut_active: true,
+    tdee_kcal: 2600,
+    tdee_basis: "logged_reality",
+    arms: [
+      { key: "loss_pace", verdict: "met", summary: "", evidence_keys: [] },
+      { key: "mood_energy", verdict: "met", summary: "", evidence_keys: [] },
+    ],
+    arms_before: [
+      { key: "loss_pace", verdict: "met", summary: "", evidence_keys: [] },
+      { key: "mood_energy", verdict: "met", summary: "", evidence_keys: [] },
+    ],
+  });
+  assert.equal(read.protection.raise, true);
+  assert.ok(
+    read.protection.target_kcal > inForce,
+    `a protective move may only ever raise: ${read.protection.target_kcal} vs ${inForce} in force`,
+  );
 });

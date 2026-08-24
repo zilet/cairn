@@ -290,6 +290,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_movement_tolerance_null_session_exposure
   WHERE session_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_movement_tolerance_symptom
   ON movement_tolerance_observations(symptom_event_id, relevant, outcome, observed_on DESC);
+-- The other direction of the same table: "what has this ONE MOVEMENT drawn lately".
+-- The pain traffic light (src/repo/pain-band.ts) asks that per lift on every Today
+-- render, and the index above cannot answer it — that one leads with the symptom
+-- event, so a movement-keyed lookup degrades to a scan whose cost grows with the
+-- athlete's whole history instead of with the three-week window being read.
+CREATE INDEX IF NOT EXISTS idx_movement_tolerance_movement
+  ON movement_tolerance_observations(movement_key, observed_on DESC);
 CREATE TABLE IF NOT EXISTS logged_sets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

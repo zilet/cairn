@@ -18,6 +18,19 @@
 //     confidence and blames nobody).
 //   • TWO ARMS, NOT ONE. One drifting channel is a Tuesday. Two independent ones,
 //     held for ten days, is a pattern.
+//
+//     ACCEPTED LIMITATION, stated so nobody rediscovers it as a bug: "held" is two
+//     evaluations twelve days apart, and each arm reads a trailing window of its own
+//     (a fortnight, a month). The two evaluations therefore OVERLAP — much of the
+//     evidence behind "two arms today" is also behind "two arms twelve days ago", so
+//     the test is closer to "this pattern is not a single bad week" than to two
+//     independent observations, and a cluster can go on satisfying it for a while
+//     after the underlying drift stops. That direction is the tolerable one: it
+//     delays the exit, and the exit costs nothing but a slightly later resumption of
+//     the deficit, while the cooldown and the maintenance ceiling bound everything
+//     the delay could buy. Making it genuinely independent means either arms with
+//     non-overlapping windows or a stored per-day arm history, and neither is worth
+//     a table for the precision it buys.
 //   • ONE DIRECTION ONLY. The response this watch can produce is a raise of the
 //     calorie target toward MEASURED maintenance and one calm explanation. It can
 //     never deepen a deficit, never gate training, and never accelerate anything.
@@ -43,7 +56,8 @@ import { db } from "../db.js";
 import { createHash } from "node:crypto";
 import { capProtectiveRaise, type CutTdeeBasis, cutReaffirmation, deriveCutTarget } from "./cut-target.js";
 import { estimateExpenditure } from "./expenditure.js";
-import { getLatestNutritionTarget } from "./nutrition.js";
+import { getActiveNutritionTarget, getLatestNutritionTarget } from "./nutrition.js";
+import { computeGoalCheck } from "./profile.js";
 import { getProgramState } from "./program-state.js";
 import { recoveryTrendBars } from "./recovery-trend.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
@@ -363,12 +377,38 @@ function moodEnergyArm(asOf: string): EnergyDeficiencyArm {
 }
 
 /**
- * Illness-SHAPED signals, repeated. Two separate resting-HR spike episodes against
+ * Illness-SHAPED signals, repeated. Two separate resting-HR spike EPISODES against
  * the athlete's own norm inside a month, or two logged illness windows inside two.
  *
- * Two SEPARATE episodes, never two consecutive mornings of one — a single bad night
- * spanning two dates is one event written twice.
+ * WHAT AN EPISODE IS, AND WHY EACH BOUND EXISTS. The first draft of this arm fired on
+ * 21 of 21 evaluable days on a real athlete's record — an always-on arm, which in a
+ * two-of-five cluster is worse than no arm at all, because it silently lowers the
+ * whole watch to "any one other arm". Three things were wrong, and all three are
+ * about telling ILLNESS apart from ordinary night-to-night variation:
+ *
+ *   • THE BAR. `recoveryTrendBars` sizes a MEANINGFUL DRIFT of a multi-day average
+ *     (~5% of the norm, floored at 3 bpm) — roughly one standard deviation of a
+ *     single night's noise, so about a third of all nights clear it. An infection's
+ *     resting-HR signature is far larger, so this arm keeps the norm-relative shape
+ *     and asks for a real one: a tenth of the athlete's own resting HR, floored at
+ *     6 bpm and never above 10.
+ *   • DURATION. One high morning is a late meal, a warm room, a glass of wine. An
+ *     illness holds the rate up for days, so an episode must span at least two
+ *     CONSECUTIVE mornings above the bar.
+ *   • SEPARATION. A single illness dips under the bar and comes back; a 2-day
+ *     splitter counted that as two episodes and produced "recurrence" from one cold.
+ *     Two episodes must start at least a week apart to be two illnesses.
  */
+// A real resting-HR excursion, norm-relative: a tenth of the athlete's own resting
+// rate, bounded so neither a very low nor a very high norm makes it meaningless.
+const RHR_EPISODE_MIN_BPM = 6;
+const RHR_EPISODE_MAX_BPM = 10;
+const RHR_EPISODE_FRAC = 0.1;
+/** Consecutive mornings above the bar before an excursion is an episode at all. */
+const RHR_EPISODE_MIN_DAYS = 2;
+/** How far apart two episodes must START before they are two illnesses, not one. */
+const RHR_EPISODE_SEPARATION_DAYS = 7;
+
 function illnessArm(asOf: string): EnergyDeficiencyArm {
   const from = addDaysISO(asOf, -27) ?? asOf;
   const baselineTo = addDaysISO(from, -1) ?? from;
@@ -379,17 +419,38 @@ function illnessArm(asOf: string): EnergyDeficiencyArm {
   let baselineAvg: number | null = null;
   if (baselineValues.length >= 6 && recent.size) {
     baselineAvg = mean(baselineValues)!;
-    const bar = recoveryTrendBars({ rhr: baselineAvg }).rhr;
+    const bar = Math.min(RHR_EPISODE_MAX_BPM, Math.max(RHR_EPISODE_MIN_BPM, baselineAvg * RHR_EPISODE_FRAC));
     const spikeDays = [...recent.entries()]
       .filter(([, value]) => value >= baselineAvg! + bar)
       .map(([date]) => date)
       .sort();
-    let previous: string | null = null;
+    // Walk the spike days into RUNS of consecutive mornings, keep the runs long
+    // enough to be an illness, then count only those that start a week or more after
+    // the last one counted.
+    let runStart: string | null = null;
+    let runEnd: string | null = null;
+    let lastCountedStart: string | null = null;
+    const closeRun = (): void => {
+      if (runStart == null || runEnd == null) return;
+      const span = (daysBetweenISO(runEnd, runStart) ?? 0) + 1;
+      if (span < RHR_EPISODE_MIN_DAYS) return;
+      const since = lastCountedStart == null ? null : daysBetweenISO(runStart, lastCountedStart);
+      if (lastCountedStart == null || (since != null && since >= RHR_EPISODE_SEPARATION_DAYS)) {
+        episodes++;
+        lastCountedStart = runStart;
+      }
+    };
     for (const day of spikeDays) {
-      const gap = previous == null ? null : daysBetweenISO(day, previous);
-      if (previous == null || (gap != null && gap >= 2)) episodes++;
-      previous = day;
+      const gap = runEnd == null ? null : daysBetweenISO(day, runEnd);
+      if (runEnd != null && gap === 1) {
+        runEnd = day;
+        continue;
+      }
+      closeRun();
+      runStart = day;
+      runEnd = day;
     }
+    closeRun();
   }
 
   let illnessWindows = 0;
@@ -568,6 +629,12 @@ export function energyDeficiencyDecision(input: EnergyDeficiencyInput): EnergyDe
     // Toward maintenance, in the same bounded 100-250 kcal step every other fuel move
     // uses — then through the ONE function allowed to lift a target, which is what
     // makes measured maintenance the ceiling and a formula anchor a refusal.
+    //
+    // ONE-DIRECTIONALITY IS ONLY AS GOOD AS `active_target_kcal`. Everything below is
+    // a delta from it, and `capProtectiveRaise` waves through anything at or under its
+    // `previous` as the ordinary path — so a baseline BELOW the number in force turns
+    // this whole block into a cut. That is why the caller reads it off the shared
+    // in-force ladder (`targetKcalInForce`) rather than off the accepted row.
     const room = tdee - active;
     const wanted = active + Math.min(MAX_PROTECTIVE_STEP_KCAL, Math.max(MIN_PROTECTIVE_STEP_KCAL, Math.round(room)));
     const capped = capProtectiveRaise(wanted, active, tdee, input?.tdee_basis ?? null);
@@ -619,11 +686,16 @@ export function energyDeficiencyDecision(input: EnergyDeficiencyInput): EnergyDe
 // score, and nothing the athlete has to do — the change has already been made for
 // them and can be undone with one tap.
 
+// TENSE IS A TRUTH CLAIM HERE. A calorie change never lands the moment it is decided
+// — it waits for a natural food-day boundary, and the boundary re-checks it against
+// the evidence in force that day and may set it aside. So these sentences say what is
+// COMING at the next day's boundary rather than what has already happened; "your food
+// has moved" would be a statement the athlete could check and find untrue.
 const CLUSTER_BODIES: readonly string[] = [
-  "A few things have been drifting the same way at once — recovery, how sessions feel, how fast the scale is moving. Taken together, the deficit looks like it's costing more than fat, so your food has moved back toward where you hold steady.",
-  "Several separate signals have been pointing the same direction for a week and a half now. That pattern usually means the deficit is buying more than fat loss, so your calories step back toward maintenance for a while.",
-  "Recovery, training and the scale have all been leaning the same way lately. That combination is worth easing rather than pushing through, so your target moves up toward the level you maintain on.",
-  "The last stretch has a shape to it: things that normally move independently have all softened together. Rather than press on, your food goes back toward steady ground and we watch what recovers.",
+  "A few things have been drifting the same way at once — recovery, how sessions feel, how fast the scale is moving. Taken together, the deficit looks like it's costing more than fat, so from your next day your food steps back toward where you hold steady.",
+  "Several separate signals have been pointing the same direction for a week and a half now. That pattern usually means the deficit is buying more than fat loss, so your calories are heading back toward maintenance from the next day's start.",
+  "Recovery, training and the scale have all been leaning the same way lately. That combination is worth easing rather than pushing through, so your target is on its way up toward the level you maintain on.",
+  "The last stretch has a shape to it: things that normally move independently have all softened together. Rather than press on, your food is going back toward steady ground from the start of your next day, and we watch what recovers.",
 ];
 
 export function energyDeficiencyBody(read: EnergyDeficiencyRead, date: string): string {
@@ -658,6 +730,42 @@ function pickVariant<T>(variants: readonly T[], date: string, key = ""): T {
  * evidence of an estimate — which is the same reason the protective raise refuses to
  * ride one.
  */
+/**
+ * THE NUMBER THE ATHLETE IS ACTUALLY EATING TO — the same ladder, in the same
+ * precedence order, that the apply boundary measures a queued raise against
+ * (`activeTargetKcalAtBoundary`, autonomy-service.ts) and that the check-in seam
+ * derives its `previous` from.
+ *
+ * Not merely similar: identical, because every "raise" here is expressed as a delta
+ * from this number and `capProtectiveRaise` only ever caps a raise — a `target` at or
+ * below `previous` is waved straight through as the ordinary path.
+ *
+ * The accepted row is NOT that number. It goes `review_due` once its adaptive window
+ * elapses, and from that moment the goal's `effective_target` falls back to the
+ * FORMULA, which is what the athlete eats to. Reading the stale row instead put the
+ * baseline below the number in force: a stale 1,500 row under a formula target of
+ * 1,988 turned a protective "raise" to 1,750 into a 238 kcal CUT — the one outcome a
+ * one-directional safety system may never produce.
+ */
+function targetKcalInForce(asOf: string): number | null {
+  const ladder: Array<() => unknown> = [
+    () => (computeGoalCheck() as any)?.effective_target?.target_kcal,
+    () => (getActiveNutritionTarget(asOf) as any)?.target_kcal,
+    () => (getLatestNutritionTarget(asOf) as any)?.target_kcal,
+  ];
+  for (const read of ladder) {
+    try {
+      // `Number(null)` is 0 and a macro-only row stores a null kcal, so absence has to
+      // fall THROUGH the rung rather than land as a target of zero.
+      const value = finite(read());
+      if (value != null && value > 0) return value;
+    } catch {
+      // Each rung is independently fail-soft; a broken read falls to the next.
+    }
+  }
+  return null;
+}
+
 function deficitIsRunning(asOf: string, derivation: ReturnType<typeof deriveCutTarget>, active: number | null): boolean {
   let reaffirmed = false;
   try {
@@ -680,12 +788,7 @@ export function energyDeficiencyState(asOf: string = localDateISO()): EnergyDefi
   } catch {
     derivation = null;
   }
-  let active: number | null = null;
-  try {
-    active = finite((getLatestNutritionTarget(today) as any)?.target_kcal);
-  } catch {
-    active = null;
-  }
+  const active = targetKcalInForce(today);
   const cutActive = deficitIsRunning(today, derivation, active);
   // The earlier evaluation is what turns "two arms today" into "two arms that have
   // been standing", and it is the same function rather than a proxy for it. Skipped

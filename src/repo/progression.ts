@@ -215,6 +215,15 @@ export interface Prescription {
   // `cause`, so the fuel loop's climb back speaks about fuel and never re-tells that
   // story over a cut something else asked for. See repo/volume-guard.ts.
   fuel_protected?: boolean;
+  // A RED pain band took this movement's load down. Recorded for the same reason
+  // `fuel_protected` is, and it earns the same exemption from the deload audit
+  // trail: the repeat-deload ladder exists to notice that CUTTING LOAD is not
+  // working for a lift, and a cut the athlete's own pain report asked for says
+  // nothing about that. Marking it would make the next ordinary deload read as a
+  // "repeat" and escalate a rep wave or rotate the movement out — a structural
+  // change nobody's knee asked for. Informational only; nothing on the apply path
+  // acts on it.
+  pain_protected?: boolean;
   movement_response?: RecentMovementResponseVerdict; // repeated comparable dose evidence that supported or braked the step
   rep_step?: boolean; // double-progression REP advance (load held, reps climb in-range) — no plan change
   // The active training block's phase, when one shaped this prescription. Purely
@@ -1966,6 +1975,10 @@ function repsPrescription(
   // second cut is not the lever), but it may never hand back load a brake asked to
   // take off — those are two different claims about the same number.
   let brakedDeload = false;
+  // Whether a RED pain band is what took the load off. Kept apart from `brakedDeload`
+  // because they answer different questions: one is "did a brake make this deload",
+  // the other is "may the repeat-deload ladder count it".
+  let painProtected = false;
   const response = recentMovementResponse(name, {
     intent_key: `strength:reps:${repLow ?? "open"}-${repHigh ?? repLow ?? "open"}`,
   });
@@ -2010,17 +2023,32 @@ function repsPrescription(
   // PAIN TRAFFIC LIGHT — this movement only. Runs after the autoregulation gate for
   // the same reason that gate runs after the earned step: a safety floor is applied
   // last so nothing above it can spend what it took off.
+  //
+  // A RED band on a movement carrying no external load (bodyweight, or assisted work,
+  // where `baseWeight` is null or negative) has NOTHING to take off — the deload
+  // arithmetic below is a no-op there, an inherited hole this file's autoregulation
+  // twin has too. Rather than print "it comes down a step" over a number that did not
+  // move, the red band DEGRADES TO A HOLD on those lifts and says the hold's sentence.
+  // The protection is weaker, and it is honest about being weaker; fixing it properly
+  // means teaching the ladder to ease assisted and bodyweight work, which is a change
+  // to both brakes and out of scope here.
   const painBrake = brakeCtx ? painBandBrake(action, brakeCtx.pain, name, date) : null;
   if (painBrake) {
+    const loadCanEase = baseWeight != null && baseWeight > 0;
+    const painAction = painBrake.action === "deload" && !loadCanEase ? "hold" : painBrake.action;
     autoregulated = true; // a brake shaped this, so the escalation ladder stays out of it
-    action = painBrake.action;
-    why = painBrake.why;
+    action = painAction;
+    why =
+      painAction === painBrake.action
+        ? painBrake.why
+        : voice.liftVoice(voice.PAIN_AMBER_HOLD, date, "pain_amber_hold", name);
     repStep = false;
     topSet = undefined;
-    if (painBrake.action === "hold") nextWeight = baseWeight;
+    if (painAction === "hold") nextWeight = baseWeight;
     else {
       brakedDeload = true;
-      nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
+      painProtected = true; // a cut PAIN asked for; see `pain_protected` on Prescription
+      nextWeight = round5(baseWeight! * (1 - DELOAD_FRAC));
     }
     varyTo = undefined;
     varyOptions = undefined;
@@ -2130,6 +2158,7 @@ function repsPrescription(
     vary_to: varyTo,
     vary_options: varyOptions,
     autoregulated: autoregulated || undefined,
+    pain_protected: painProtected || undefined,
     movement_response: response.verdict,
     rep_step: repStep || undefined,
     block_phase: brakeCtx?.block?.phase,
@@ -2228,14 +2257,26 @@ function timedPrescription(
   }
 
   // PAIN TRAFFIC LIGHT (timed): the same per-movement bands, eased in SECONDS —
-  // timed work never carries load, so a red band shortens the hold instead.
+  // timed work never carries load, so a red band shortens the hold instead. With no
+  // duration on record there is nothing to shorten, so red degrades to the hold's
+  // sentence rather than claiming a cut that did not happen (the reps path does the
+  // same for bodyweight and assisted work).
   const painBrake = brakeCtx ? painBandBrake(action, brakeCtx.pain, name, date) : null;
+  let painProtected = false;
   if (painBrake) {
+    const canEase = baseSeconds != null && baseSeconds > 10;
+    const painAction = painBrake.action === "deload" && !canEase ? "hold" : painBrake.action;
     autoregulated = true;
-    action = painBrake.action;
-    why = painBrake.why;
-    if (painBrake.action === "hold") nextSeconds = baseSeconds;
-    else nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;
+    action = painAction;
+    why =
+      painAction === painBrake.action
+        ? painBrake.why
+        : voice.liftVoice(voice.PAIN_AMBER_HOLD, date, "pain_amber_hold", name);
+    if (painAction === "hold") nextSeconds = baseSeconds;
+    else {
+      painProtected = true;
+      nextSeconds = Math.max(10, Math.round(baseSeconds! * (1 - DELOAD_FRAC)));
+    }
   }
 
   const suggested: PrescriptionTarget = { sets, seconds: nextSeconds ?? undefined };
@@ -2245,6 +2286,7 @@ function timedPrescription(
     exercise: ex_name(name),
     mode: "timed",
     autoregulated: autoregulated || undefined,
+    pain_protected: painProtected || undefined,
     movement_response: response.verdict,
     action,
     suggested,
@@ -2524,11 +2566,15 @@ export function buildProgressionProposal(
       // claims it — a fuel-protection dose is a cut about fuel, and a lift should not
       // inherit an escalation for a week the kitchen was the problem. Nothing on the
       // apply path reads this field; it is history, not an instruction.
-      ...(p.action === "deload" && !p.fuel_protected ? { progression_action: "deload" } : {}),
+      ...(p.action === "deload" && !p.fuel_protected && !p.pain_protected
+        ? { progression_action: "deload" }
+        : {}),
       // …and the SHAPE change, when the repeat escalated into one. Without it the
       // wave has no audit trail of its own, so the next repeat would escalate again
       // on top of a wave that has not had time to work. Read back by waveRunning().
-      ...(p.escalated === "rep_wave" && !p.fuel_protected ? { progression_escalation: "rep_wave" } : {}),
+      ...(p.escalated === "rep_wave" && !p.fuel_protected && !p.pain_protected
+        ? { progression_escalation: "rep_wave" }
+        : {}),
     };
     if (p.mode === "timed") {
       if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;

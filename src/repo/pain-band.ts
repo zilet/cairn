@@ -222,31 +222,46 @@ export function painBandDecision(input: PainBandInput): PainBandRead | null {
 
 // ---- the thin DB-facing reads -------------------------------------------------
 
+/** An exposure plus the watch it was recorded against, which owns its words. */
+interface ExposureRow extends PainExposure {
+  event_id: number | null;
+}
+
 /**
- * Every STATED tolerance exposure recorded for this movement inside the window,
- * across watches. `relevant = 1` only: an observation the relevance map already
- * ruled out is not about this lift.
+ * Every tolerance exposure recorded for this movement inside the window.
+ *
+ * Three filters, and all three are load-bearing. `relevant = 1` drops an observation
+ * the relevance map already ruled out. The join onto the watch drops `scope='systemic'`
+ * — `recordMovementTolerance` writes a `relevant` flag from the AREA LABEL alone and
+ * asks nothing about scope, so "everything aches, mostly shoulders" lands as a
+ * relevant, systemic-scoped exposure and would otherwise drive a movement band
+ * through the one door the law closes everywhere else. And the window bounds it.
  *
  * Both spellings of the movement key are read, exactly as movement-risk.ts does — a
  * row written before the exercise was resolved carries the name slug rather than the
  * id. Absence (an imported or partial DB with no table) reads as no evidence, which
  * leaves the ladder untouched.
  */
-function exposuresFor(exerciseId: number | null, name: string, from: string, to: string): PainExposure[] {
+function exposuresFor(exerciseId: number | null, name: string, from: string, to: string): ExposureRow[] {
   try {
     const rows = db
       .prepare(
-        `SELECT observed_on, outcome, evidence FROM movement_tolerance_observations
-          WHERE movement_key IN (?, ?)
-            AND relevant = 1
-            AND observed_on BETWEEN ? AND ?
-          ORDER BY observed_on LIMIT 200`
+        `SELECT o.observed_on AS observed_on, o.outcome AS outcome, o.evidence AS evidence,
+                o.symptom_event_id AS symptom_event_id
+           FROM movement_tolerance_observations o
+           JOIN training_symptom_events e ON e.id = o.symptom_event_id
+          WHERE o.movement_key IN (?, ?)
+            AND o.relevant = 1
+            AND o.observed_on BETWEEN ? AND ?
+            AND COALESCE(e.scope, 'area') <> 'systemic'
+          ORDER BY o.observed_on LIMIT 200`
       )
       .all(exerciseId == null ? "exercise:-1" : `exercise:${exerciseId}`, movementSlug(name), from, to) as any[];
     return rows.map((row) => ({
       on: isoDay(row.observed_on),
       outcome: String(row.outcome) === "pain_present" ? "pain_present" : "pain_free",
       evidence: String(row.evidence) === "inferred" ? "inferred" : "stated",
+      event_id: Number.isFinite(Number(row.symptom_event_id)) ? Number(row.symptom_event_id) : null,
     }));
   } catch {
     return [];
@@ -304,41 +319,76 @@ function changesFor(
 }
 
 /**
- * Is this movement NEW to the athlete right now, and does the covering watch read as
- * muscle-belly soreness rather than a joint?
+ * Is this movement NEW to the athlete right now, and does THE WATCH THAT REPORTED
+ * THE PAIN read as muscle-belly soreness rather than a joint?
  *
- * Both halves are structural rather than diagnostic. "Symmetric" is read off the
- * words: a report naming both sides, or naming a muscle Cairn can canonicalize
- * ("quads", "hamstrings") rather than a joint or tendon. "Novel" is the movement's
- * first logged day, or its return after a month away. Where the data cannot say,
- * the caller errs AMBER — the safe direction — because this read can only ever
- * REMOVE a brake.
+ * Both halves are structural rather than diagnostic, and three things about the
+ * symmetry half are deliberate, because each of them is a way this excuse could be
+ * handed out to a report that never earned it:
+ *
+ *   • ONE WATCH, THE ONE THAT SPOKE. The shape is read from the event the painful
+ *     exposure was recorded against — not OR'd across every open watch that happens
+ *     to cover this lift. Otherwise an unrelated "both quads" would mark a "left
+ *     knee" report symmetric and train straight through it.
+ *   • ITS OWN WORDS. `training_symptom_events` stores a short LABEL; the athlete's
+ *     sentence lives in `symptom_reports.text` (this used to select a `report_text`
+ *     column off the events table, which does not exist — the query threw on every
+ *     call, the catch read `symmetric = false`, and the whole DOMS carve-out was
+ *     dead code that froze every newly-introduced movement at amber for three weeks).
+ *   • A JOINT IS NEVER DOMS. "Both knees" is bilateral JOINT pain, which is a reason
+ *     to be MORE careful, not less — and `canonicalGroup` happily maps "shoulder" or
+ *     "wrist" onto a muscle group, so the joint vocabulary is excluded first and
+ *     outright rather than left to that map.
+ *
+ * "Novel" is the movement's first logged day, or its return after a month away.
+ * Where the data cannot say, the caller errs AMBER — the safe direction — because
+ * this read can only ever REMOVE a brake.
+ *
+ * HOW NARROW THIS IS, so nobody reads it as broken later. A band only opens for an
+ * area the relevance map can attach to a lift at all, and that map is built from
+ * JOINT vocabulary plus a few muscle names ("calf", "glutes", "chest", "forearm").
+ * The commonest DOMS report of all — "quads are wrecked" — matches nothing there, so
+ * no exposure is ever marked relevant, no band opens, and progression proceeds
+ * untouched. That is the same outcome this carve-out produces, reached by absence
+ * rather than by excuse, which is why widening the relevance map to catch it would be
+ * a change with real risk and no benefit here.
  */
+// Joint / tendon vocabulary. A label carrying any of it can never read as the
+// symmetric muscle soreness a novel dose produces, whatever else the words say.
+const JOINT_FLAVOR_RE =
+  /\b(knee|knees|elbow|elbows|wrist|wrists|ankle|ankles|shoulder|shoulders|hip|hips|joint|joints|tendon|tendons|achilles|plantar|rotator|cuff|\bac\b|\bsi\b|sacro|spine|lumbar|back|neck|groin|impinge\w*)\b/i;
+
 function domsShapeFor(
+  eventId: number | null,
   exerciseId: number | null,
-  exercise: { name: string; muscle_group: string | null },
   from: string,
   asOf: string
 ): DomsShape {
   let symmetric = false;
-  try {
-    const rows = db
-      .prepare(
-        `SELECT area_text, report_text FROM training_symptom_events
-          WHERE COALESCE(scope, 'area') <> 'systemic'
-            AND onset_on <= ?
-            AND last_reported_on >= ?
-          ORDER BY last_reported_on DESC, id DESC LIMIT 50`
-      )
-      .all(asOf, from) as any[];
-    for (const row of rows) {
-      const label = String(row.area_text ?? "");
-      if (!painAreaLoadsExercise(label, exercise)) continue;
-      const words = `${label} ${String(row.report_text ?? "")}`.toLowerCase();
-      if (/\bboth\b/.test(words) || canonicalGroup(label) != null) symmetric = true;
+  if (eventId != null) {
+    try {
+      const event = db.prepare(`SELECT area_text, scope FROM training_symptom_events WHERE id = ?`).get(eventId) as any;
+      const label = String(event?.area_text ?? "");
+      if (event && String(event.scope ?? "area") !== "systemic" && !JOINT_FLAVOR_RE.test(label)) {
+        // The athlete's own sentence for THIS watch, newest first. Both attributions
+        // are read — the primary column and the many-to-many — exactly as the rest of
+        // the symptom layer does, because a sentence naming two places lands in one
+        // column and two link rows.
+        const said = db
+          .prepare(
+            `SELECT r.text AS text FROM symptom_reports r
+              WHERE (r.symptom_event_id = ?
+                     OR r.id IN (SELECT symptom_report_id FROM symptom_report_events WHERE symptom_event_id = ?))
+                AND r.reported_on BETWEEN ? AND ?
+              ORDER BY r.reported_on DESC, r.id DESC LIMIT 5`
+          )
+          .all(eventId, eventId, from, asOf) as any[];
+        const words = `${label} ${said.map((row) => String(row.text ?? "")).join(" ")}`.toLowerCase();
+        symmetric = !JOINT_FLAVOR_RE.test(words) && (/\bboth\b/.test(words) || canonicalGroup(label) != null);
+      }
+    } catch {
+      symmetric = false;
     }
-  } catch {
-    symmetric = false;
   }
 
   let novelOn: string | null = null;
@@ -389,11 +439,15 @@ export function painBandForMovement(
   const exposures = exposuresFor(id, name, from, asOf);
   // Nothing stated about this movement at all: return before paying for the two
   // heavier reads. Absence is the common answer and must be the cheap one.
-  if (!exposures.some((row) => row.outcome === "pain_present" && row.evidence === "stated")) return null;
+  const stated = exposures.filter((row) => row.outcome === "pain_present" && row.evidence === "stated");
+  if (!stated.length) return null;
+  // The DOMS shape belongs to the watch that reported the LATEST pain, since that is
+  // the report the band is about.
+  const latest = stated.reduce((best, row) => (row.on >= best.on ? row : best), stated[0]);
   return painBandDecision({
     as_of: asOf,
     exposures,
     changes: changesFor(identity, from, asOf),
-    doms: domsShapeFor(id, identity, from, asOf),
+    doms: domsShapeFor(latest.event_id, id, from, asOf),
   });
 }

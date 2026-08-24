@@ -115,6 +115,7 @@ export * from "./repo/whole-person-trajectory.js"; // standing "everything bette
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation
 export * from "./repo/cut-target.js"; // the cut's calorie target, derived from logged intake + the measured weight trend
 export * from "./repo/energy-deficiency.js"; // the male low-energy-availability symptom-cluster watch (protective, one-directional)
+export * from "./repo/energy-deficiency-snapshot.js"; // its memoized read + the small projection a prompt sees
 export * from "./repo/recomposition.js"; // phase-aware fat-loss + muscle/fuel protection synthesis
 export * from "./repo/cut-quality.js"; // is the weight-loss phase preserving muscle? (goal-aware complement to under-fueling)
 export * from "./repo/forward-timeline.js"; // the road ahead: one dated forward-looking timeline read

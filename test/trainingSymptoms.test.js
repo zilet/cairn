@@ -815,3 +815,102 @@ test("a systemic report drives no movement band, and one movement's band is its 
     "one hurting movement never speaks for another"
   );
 });
+
+// The DOMS carve-out, through the DATABASE rather than the pure core. It used to
+// select a `report_text` column off training_symptom_events — a column that does not
+// exist (the athlete's words live in symptom_reports.text and are hydrated in) — so
+// the query threw on every single call, the catch read `symmetric = false`, and the
+// whole carve-out was dead code: a newly introduced movement plus ordinary bilateral
+// soreness froze that lift at amber for three weeks.
+test("DOMS reads the athlete's own words from where they actually live", () => {
+  const squat = repo.findExercise("Back Squat");
+  const session = repo.getOrCreateSession("2034-06-10");
+  db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 8)`).run(
+    session.id,
+    squat.id,
+  );
+  const sore = repo.reportTrainingSymptom({
+    area_text: "both glutes",
+    report_text: "both glutes are wrecked two days after that first squat session",
+    onset_on: "2034-06-11",
+  });
+  repo.recordMovementTolerance({
+    symptom_event_id: sore.id,
+    movement: "Back Squat",
+    exercise_id: squat.id,
+    observed_on: "2034-06-11",
+    pain_free: false,
+  });
+
+  const band = painBandForMovement({ id: squat.id, name: "Back Squat", muscle_group: "quads" }, "2034-06-12");
+  assert.ok(band, "the exposure is relevant and stated, so a band is read");
+  assert.equal(band.doms, true, "symmetric soreness a day after a first exposure is the DOMS shape");
+  assert.equal(band.band, "green", "…and DOMS trains through");
+});
+
+test("bilateral JOINT pain is never DOMS, and one watch's symmetry never speaks for another", () => {
+  const squat = repo.findExercise("Back Squat");
+  const session = repo.getOrCreateSession("2034-07-10");
+  db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 8)`).run(
+    session.id,
+    squat.id,
+  );
+  // "Both knees" is bilateral and follows a novel dose — and is a reason to be MORE
+  // careful, not less.
+  const knees = repo.reportTrainingSymptom({
+    area_text: "both knees",
+    report_text: "both knees ache after the squats",
+    onset_on: "2034-07-11",
+  });
+  repo.recordMovementTolerance({
+    symptom_event_id: knees.id,
+    movement: "Back Squat",
+    exercise_id: squat.id,
+    observed_on: "2034-07-11",
+    pain_free: false,
+  });
+  const jointBand = painBandForMovement({ id: squat.id, name: "Back Squat", muscle_group: "quads" }, "2034-07-12");
+  assert.equal(jointBand.doms, false);
+  assert.equal(jointBand.band, "amber");
+
+  // An unrelated symmetric watch covering the same lift must not launder that one.
+  repo.reportTrainingSymptom({
+    area_text: "both glutes",
+    report_text: "both glutes are just sore from the new squats",
+    onset_on: "2034-07-11",
+  });
+  const stillAmber = painBandForMovement({ id: squat.id, name: "Back Squat", muscle_group: "quads" }, "2034-07-12");
+  assert.equal(stillAmber.doms, false, "the shape belongs to the watch that reported the pain");
+  assert.equal(stillAmber.band, "amber");
+});
+
+// recordMovementTolerance derives `relevant` from the AREA LABEL alone and asks
+// nothing about scope, so a systemic watch whose label happens to name a place lands
+// as a relevant exposure. The scope law has to be re-applied where the band is read,
+// or "everything aches, mostly my shoulders" drives one lift's load.
+test("a systemic watch cannot drive a movement band even when its label names a place", () => {
+  const bench = repo.findExercise("Bench Press");
+  const systemic = repo.reportTrainingSymptom({
+    area_text: "shoulders",
+    report_text: "everything aches today, mostly my shoulders",
+    onset_on: "2034-08-01",
+    scope: "systemic",
+  });
+  const observed = repo.recordMovementTolerance({
+    symptom_event_id: systemic.id,
+    movement: "Bench Press",
+    exercise_id: bench.id,
+    observed_on: "2034-08-02",
+    pain_free: false,
+  });
+  assert.ok(observed, "the exposure is written — this is not about refusing to record it");
+  const relevant = db
+    .prepare(`SELECT relevant FROM movement_tolerance_observations WHERE symptom_event_id = ? LIMIT 1`)
+    .get(systemic.id);
+  assert.equal(relevant.relevant, 1, "and the label DID pass the relevance map, which is the trap");
+  assert.equal(
+    painBandForMovement({ id: bench.id, name: "Bench Press", muscle_group: "chest" }, "2034-08-03"),
+    null,
+    "a watch that names no place still may never load one lift",
+  );
+});

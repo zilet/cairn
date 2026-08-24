@@ -24,33 +24,37 @@
 // target, and two ways to set one number is how they come to disagree.
 
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
-import { getAppState, setAppStateStrict } from "../../repo/app-state.js";
-import { insertBrainExpectation } from "../../repo/brain-decisions.js";
+import { insertBrainExpectation, listBrainDecisions } from "../../repo/brain-decisions.js";
 import { addInsight } from "../../repo/coach.js";
 import { getActiveNutritionTarget } from "../../repo/nutrition.js";
-import { createProposal } from "../../repo/profile.js";
+import { createProposal, getProposal } from "../../repo/profile.js";
 import { db } from "../../db.js";
 import {
   type EnergyDeficiencyRead,
   energyDeficiencyBody,
-  energyDeficiencyRead,
   hrvTrendRead,
   SUSTAINED_DAYS,
 } from "../../repo/energy-deficiency.js";
+// The memoized read, so the scheduler pass and the coach prompt can never describe
+// the same day differently.
+import { currentEnergyDeficiencyRead } from "../../repo/energy-deficiency-snapshot.js";
 import { buildTrainingFeedbackExpectations } from "../../repo/brain/change-expectations.js";
 import type { ProposedExpectation } from "../../brain/expectation-contract.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "../../repo/shared.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 
-const ACTION_STATE_KEY = "energy_deficiency_last_action";
 // One protective move, then a fortnight before another can even be considered. The
 // cluster this watch reads is a CHRONIC state, not an event: without this, every
 // daily pass would find the same standing cluster and add another bounded step.
 const ACTION_COOLDOWN_DAYS = 14;
 const WATCH_AGENT = "energy-deficiency-brain";
 const WATCH_INSTRUCTION = "auto: protective fuel raise, sustained deficit cost";
-// The insight's territorial identity, so the same explanation is never told twice.
-const INSIGHT_INTENT_KEY = "fuel~recovery:same";
+// The insight's territorial identity, so the same explanation is never told twice —
+// including by a DIFFERENT generator that reaches the same connection. The key is
+// `<facetA>~<facetB>:<polarity>` with the facets sorted and each one a real dotted
+// facet from src/repo/insight-intent.ts; an invented pair ("fuel~recovery") parses to
+// nothing, and cross-generator dedup then silently does not apply to this insight at all.
+const INSIGHT_INTENT_KEY = "nutrition.calories~recovery.readiness:same";
 const INSIGHT_KIND = "connection";
 // How long the arms have to recover before the ledger asks whether this worked.
 const EXPECTATION_WINDOW_DAYS = 21;
@@ -65,22 +69,70 @@ export interface EnergyDeficiencyWatchResult {
   reason: string;
 }
 
-function recentlyActed(today: string): boolean {
-  const raw = String(getAppState(ACTION_STATE_KEY) ?? "");
-  let stamped: string | null = null;
+/**
+ * Has one of this watch's protective moves actually LANDED inside the settling window?
+ *
+ * Read off the ledger rather than a stamp written at decision time, and that is the
+ * whole point. A nutrition target never applies when it is decided — it waits for a
+ * food-day boundary, which re-validates it against that day's evidence and may set it
+ * aside. A stamp written at decision time therefore bought a fortnight of silence for
+ * a change that might never happen: the watch slept while the cluster still stood and
+ * the athlete's food had not moved. The ledger cannot lie about that, and it needs no
+ * second write to stay true — the boundary that applies the decision IS the stamp.
+ */
+function landedWithinCooldown(today: string): boolean {
   try {
-    const parsed = JSON.parse(raw);
-    stamped = String(parsed?.date ?? "").slice(0, 10) || null;
+    return ourDecisions(["applied"]).some((decision) => {
+      const landed = String((decision as any).applied_at ?? decision.effective_date ?? "").slice(0, 10);
+      const age = /^\d{4}-\d{2}-\d{2}$/.test(landed) ? daysBetweenISO(today, landed) : null;
+      return age != null && age >= 0 && age < ACTION_COOLDOWN_DAYS;
+    });
   } catch {
-    stamped = /^\d{4}-\d{2}-\d{2}$/.test(raw.slice(0, 10)) ? raw.slice(0, 10) : null;
+    return false;
   }
-  if (!stamped) return false;
-  const age = daysBetweenISO(today, stamped);
-  return age != null && age >= 0 && age < ACTION_COOLDOWN_DAYS;
+}
+
+/**
+ * This watch's own decisions in the given statuses.
+ *
+ * Identity is `decision.source`, which the autonomy layer copies from the proposal's
+ * agent and which SURVIVES apply. The proposal reference does not: applying a
+ * nutrition target re-points `source_ref_type`/`source_ref_key` at the
+ * `nutrition_targets` row it wrote, so a guard that reached back through the proposal
+ * silently stopped recognising its own landed moves — and a settling window that
+ * cannot see the change it is settling is not a settling window at all.
+ */
+function ourDecisions(statuses: string[]): any[] {
+  return listBrainDecisions({ domain: "nutrition", kind: "nutrition_target", limit: 50 }).filter(
+    (decision) => statuses.includes(String(decision.status)) && String(decision.source) === WATCH_AGENT
+  );
 }
 
 function decisionIsOwned(decision: any): boolean {
   return !!decision && ["pending", "announced", "applied"].includes(String(decision.status));
+}
+
+/**
+ * Is one of THIS watch's protective moves already decided and waiting to land?
+ *
+ * Matched by the proposal's agent + instruction, the same single-source identity the
+ * under-fuelling controller keys its own dedup off, so a rename cannot silently break
+ * it. Only the un-landed statuses count: an applied move is the cooldown's business.
+ */
+function moveAlreadyInFlight(): boolean {
+  try {
+    return ourDecisions(["pending", "announced", "review"]).some((decision) => {
+      // Before it lands the decision still points at its draft, and the draft's
+      // instruction is the second half of the identity.
+      if (String(decision.source_ref_type) !== "plan_proposal") return true;
+      const proposal = getProposal(Number(decision.source_ref_key)) as any;
+      return !!proposal && proposal.status === "draft" && String(proposal.instruction) === WATCH_INSTRUCTION;
+    });
+  } catch {
+    // Unreadable ledger: fall through to proposing. The boundary cap and the
+    // maintenance ceiling still bound whatever this produces.
+    return false;
+  }
 }
 
 /**
@@ -192,7 +244,7 @@ export function runEnergyDeficiencyWatch(
   today = localDateISO(),
   opts: { read?: EnergyDeficiencyRead } = {}
 ): EnergyDeficiencyWatchResult {
-  const read = opts.read ?? energyDeficiencyRead(today);
+  const read = opts.read ?? currentEnergyDeficiencyRead(today);
   const none = (reason: string): EnergyDeficiencyWatchResult => ({
     ok: true,
     read,
@@ -204,8 +256,12 @@ export function runEnergyDeficiencyWatch(
   });
 
   if (read.state !== "sustained_cluster") return none(read.reason);
-  if (recentlyActed(today))
+  if (landedWithinCooldown(today))
     return none(`A protective move is already in force inside the ${ACTION_COOLDOWN_DAYS}-day settling window.`);
+  // A queued move has not stamped the cooldown (see below), so THIS is what stops a
+  // daily pass minting a second proposal for the same standing cluster while the
+  // first one waits for its food-day boundary.
+  if (moveAlreadyInFlight()) return none("A protective move is already waiting for the next food-day boundary.");
   if (!read.protection.raise) return none(read.protection.reason);
 
   let scheduled: any = null;
@@ -232,7 +288,10 @@ export function runEnergyDeficiencyWatch(
         }
       }
       insightId = explainOnce(read, today);
-      setAppStateStrict(ACTION_STATE_KEY, JSON.stringify({ date: today, key: read.signature }));
+      // Nothing is stamped here. The settling window is measured off the ledger row
+      // the boundary writes when the change actually lands (`landedWithinCooldown`),
+      // and until then the in-flight guard above is what keeps a daily pass from
+      // minting a second proposal for the same standing cluster.
       return result;
     });
   } catch {

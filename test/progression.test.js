@@ -1510,3 +1510,42 @@ test("pain red reduces THAT movement's load, and a settled report leaves the ste
   assert.equal(green.action, "overload", "a report that settled by the next exposure does not brake anything");
   assert.equal(green.suggested.weight, 190);
 });
+
+test("a pain deload stays out of the repeat-deload audit trail, and says nothing it cannot do", () => {
+  earnedOverload("Back Squat", "quads");
+  const squat = repo.findExercise("Back Squat");
+  statePain("left knee", 9, "Back Squat", squat.id, [
+    { at: 6, painFree: false },
+    { at: 2, painFree: false },
+  ]);
+  const red = nextPrescription("Back Squat");
+  assert.equal(red.action, "deload");
+  assert.equal(red.pain_protected, true);
+
+  // The repeat-deload ladder asks "is cutting load failing this lift?". A cut the
+  // athlete's own pain asked for is no evidence about that, so it never becomes the
+  // "first" deload that makes the next ordinary one a repeat (and escalates a rep
+  // wave, or rotates the movement out). Same exemption fuel-protection cuts carry.
+  const proposal = buildProgressionProposal(1);
+  assert.equal(proposal.ok, true);
+  const change = proposal.proposal.parsed.changes.find((c) => c.exercise === "Back Squat");
+  assert.ok(change, "the cut is still proposed and applied like any other");
+  assert.equal(change.progression_action, undefined, "but it does not stamp the repeat-deload marker");
+
+  // An assisted or bodyweight lift has no external load to take off, so red degrades
+  // to the HOLD's sentence rather than printing a cut over a number that never moved.
+  reset();
+  makeExercise("Assisted Pull-up", { muscle_group: "back" });
+  planWith(1, { exercise: "Assisted Pull-up", sets: 3, rep_low: 6, rep_high: 8, target_weight: null, focus: "Pull" });
+  logSet("Assisted Pull-up", isoDaysAgo(21), { weight: null, reps: 8, rir: 2 });
+  logSet("Assisted Pull-up", isoDaysAgo(10), { weight: null, reps: 8, rir: 2 });
+  const pullup = repo.findExercise("Assisted Pull-up");
+  statePain("elbow", 9, "Assisted Pull-up", pullup.id, [
+    { at: 6, painFree: false },
+    { at: 2, painFree: false },
+  ]);
+  const bodyweight = nextPrescription("Assisted Pull-up");
+  assert.equal(bodyweight.action, "hold", "nothing to ease, so the honest answer is a hold");
+  assert.equal(bodyweight.pain_protected, undefined, "and nothing claims a cut happened");
+  assert.doesNotMatch(bodyweight.why, /comes down|step off|Easing the load/i);
+});

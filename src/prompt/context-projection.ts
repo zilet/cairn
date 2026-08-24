@@ -96,7 +96,15 @@ const ENDURANCE = [
 ] as const;
 
 // Fuel: today's real intake, the planned food, and the deterministic nutrition reads.
-const FUEL = ["day_intake", "meal_plan", "fueling", "underfueling", "cut_quality", "journey"] as const;
+const FUEL = [
+  "day_intake",
+  "meal_plan",
+  "fueling",
+  "underfueling",
+  "cut_quality",
+  "energy_deficiency",
+  "journey",
+] as const;
 
 // The CONDENSED health reads — what the connected brain concluded, plus body
 // composition. No raw records.

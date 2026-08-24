@@ -570,3 +570,48 @@ test("the watch's athlete-facing prose is a variant set that obeys the reading g
   const said = new Set([TODAY, day(1), day(2), day(3)].map((date) => repo.energyDeficiencyBody(read, date)));
   assert.ok(said.size > 1, "the sentence moves with the day");
 });
+
+// An arm that is on every day is worse than no arm: in a two-of-five cluster it
+// quietly lowers the whole watch to "any one other arm". The first draft of this one
+// fired on 21 of 21 evaluable days on a real record, because the drift bar it used
+// sizes a meaningful move of a multi-day AVERAGE (about one standard deviation of a
+// single night) and because a 2-day splitter counted one illness as two episodes.
+test("the illness arm needs real, multi-day, separated resting-HR excursions", () => {
+  resetTables("daily_metrics", "garmin_daily_metrics", "context_events");
+  const rhr = (delta, bpm) =>
+    db.prepare(`INSERT INTO daily_metrics (source, date, resting_hr) VALUES ('apple', ?, ?)`).run(day(delta), bpm);
+  const arm = () => repo.energyDeficiencyArms(TODAY).find((entry) => entry.key === "illness_recurrence");
+
+  // A month of norm behind, then a month of ordinary noise around it.
+  for (let d = 55; d >= 28; d--) rhr(-d, 50);
+  for (let d = 27; d >= 0; d--) rhr(-d, d % 3 === 0 ? 53 : 50);
+  assert.equal(arm().verdict, "not_met", "ordinary night-to-night variation is not an illness");
+
+  // Two isolated single-day spikes, well clear of the bar but one morning each.
+  db.prepare(`DELETE FROM daily_metrics WHERE date >= ?`).run(day(-27));
+  for (let d = 27; d >= 0; d--) rhr(-d, d === 20 || d === 6 ? 62 : 50);
+  assert.equal(arm().verdict, "not_met", "one high morning is a late meal, not an infection");
+
+  // One real illness — five consecutive mornings up — dipping under the bar and
+  // returning is still ONE illness, not a recurrence.
+  db.prepare(`DELETE FROM daily_metrics WHERE date >= ?`).run(day(-27));
+  for (let d = 27; d >= 0; d--) rhr(-d, [20, 19, 18, 17, 16, 14, 13].includes(d) ? 62 : 50);
+  assert.equal(arm().verdict, "not_met", "one illness that wobbles is not two episodes");
+
+  // Two genuine episodes, a fortnight apart.
+  db.prepare(`DELETE FROM daily_metrics WHERE date >= ?`).run(day(-27));
+  for (let d = 27; d >= 0; d--) rhr(-d, [24, 23, 22, 8, 7, 6].includes(d) ? 62 : 50);
+  const met = arm();
+  assert.equal(met.verdict, "met");
+  assert.match(met.summary, /2 separate resting-HR spike episode/);
+
+  // Two logged illness windows say the same thing without a wearable at all.
+  db.prepare(`DELETE FROM daily_metrics`).run();
+  for (const [delta, title] of [[-40, "Head cold"], [-10, "Flu, off training"]]) {
+    db.prepare(`INSERT INTO context_events (kind, title, detail, start_date) VALUES ('life_event', ?, '', ?)`).run(
+      title,
+      day(delta),
+    );
+  }
+  assert.equal(arm().verdict, "met", "the athlete's own logged illness windows count too");
+});
