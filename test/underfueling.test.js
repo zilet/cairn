@@ -4,6 +4,7 @@ import { db, repo, resetTables } from "./_seed.js";
 import { addDaysISO } from "../dist/repo/shared.js";
 import { underfuelingRead } from "../dist/repo/underfueling.js";
 import { armAnd, energyDeficiencyDecision } from "../dist/repo/energy-deficiency.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 
 const TODAY = "2026-07-15";
 const day = (delta) => addDaysISO(TODAY, delta);
@@ -555,4 +556,17 @@ test("the arms read absent off an empty record, and only a real double drift mak
     repo.energyDeficiencyArms(TODAY).find((entry) => entry.key === "recovery_and_performance").verdict,
     "not_met"
   );
+});
+
+test("the watch's athlete-facing prose is a variant set that obeys the reading grammar", () => {
+  const pool = repo.energyDeficiencyGrammarPool();
+  assert.ok(pool.length >= 3, "a rotating set, never one literal printed for weeks");
+  for (const phrase of pool) {
+    assert.equal(violatesReadingGrammar(phrase), null, `reading grammar: ${phrase}`);
+    assert.doesNotMatch(phrase, /REDs|relative energy deficiency|syndrome|deficiency|\b\d{1,3}\s*(?:\/|out of)\s*\d{1,3}\b/i);
+  }
+  // The rotation is keyed on the day, so two consecutive days do not repeat.
+  const read = energyDeficiencyDecision({ ...CUT, arms: armsWith([]), arms_before: armsWith([]) });
+  const said = new Set([TODAY, day(1), day(2), day(3)].map((date) => repo.energyDeficiencyBody(read, date)));
+  assert.ok(said.size > 1, "the sentence moves with the day");
 });
