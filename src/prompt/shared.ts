@@ -9,6 +9,7 @@ import type { CoachContext, PartialCoachContext } from "../repo/coach-context.js
 import { type SensorSignal, sensorIsCurrent } from "../repo/sensor-freshness.js";
 import { RECOVERY_SAMPLE_FLOOR } from "../repo/recovery-trend.js";
 import { localDateISO } from "../repo/shared.js";
+import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 
 // getCoachContext deliberately describes the host's current local day. Dated
 // prompts are historical/forward planning surfaces, so patch only their compact
@@ -889,6 +890,17 @@ export function renderTrajectory(ctx: any): string {
   return `\nTHE ARC (where today sits on the path to their goals — voice at most ONE natural clause when it fits, never a milestone list-dump or a date wall): ${line}${journeyLine}\n`;
 }
 
+// A rotating set of plain-language ways to state (not ask) that an injury reads as
+// healed, so the same literal sentence never prints verbatim every time it comes up
+// (day-read-rules.ts's pickDayVariant pattern). Each invites correction without
+// posing an open question.
+const HEALED_INFERENCE_INVITE_VARIANTS = [
+  "looks healed from here — say the word if not",
+  "reads as healed by now — flag it if that's not right",
+  "seems past it, going by the training since — let me know if it's still around",
+  "looks like it's behind you — speak up if it isn't",
+] as const;
+
 // LIFE CONTEXT — a one-mention event shaping today, then fading. Never a forced rest.
 export function renderActiveContext(ctx: any): string {
   const c = ctx?.context_today;
@@ -905,13 +917,26 @@ export function renderActiveContext(ctx: any): string {
     out.push(`LIFE CONTEXT RIGHT NOW (${bits.join("; ") || "an active life event"}): ${flags.join("; ")}. Plan AROUND it kindly — it fades on its own; never a verdict, never a forced rest.`);
   }
   // A past-window injury that hasn't been confirmed healed → invite ONE gentle
-  // confirm (pull, never nag). If it's already likely-resolved, say so softly; a
-  // "yes it's healed" closes it (resolve_context_event) in one tap/one sentence.
+  // confirm (pull, never nag). `likely_resolved` is already computed on the next
+  // line down from where this used to just re-ask blindly — the check reads its
+  // own answer now: when it's true, STATE the inference and invite correction
+  // rather than posing an open question; a "yes" or silence closes it
+  // (resolve_context_event) in one tap/one sentence. Unknown/false keeps the
+  // original open ask, since there's nothing computed to state yet.
   const rc = Array.isArray(c.resolve_candidates) ? c.resolve_candidates : [];
   if (rc.length) {
     const cand = rc[0];
-    const healed = cand.likely_resolved ? " (it looks healed from the training since)" : "";
-    out.push(`HEALING CHECK (informational, ask at most ONCE, never a nag): the "${String(cand.title).trim()}" injury is past its expected recovery window${healed}. If it comes up naturally, gently confirm whether it's still bothering them — if they say it's fine, mark it resolved (resolve_context_event) so the plan stops working around it. Do NOT keep programming around it as a hard constraint.`);
+    const title = String(cand.title).trim();
+    if (cand.likely_resolved) {
+      const invite = pickDayVariant(
+        HEALED_INFERENCE_INVITE_VARIANTS,
+        String(ctx?.today || localDateISO()),
+        `healing:${title}`
+      );
+      out.push(`HEALING CHECK (informational, ask at most ONCE, never a nag): the "${title}" injury is past its expected recovery window and reads as healed from the training since. STATE that plainly instead of asking an open question — something like "${invite}" — and if they confirm (or don't push back), mark it resolved (resolve_context_event) so the plan stops working around it. Do NOT keep programming around it as a hard constraint.`);
+    } else {
+      out.push(`HEALING CHECK (informational, ask at most ONCE, never a nag): the "${title}" injury is past its expected recovery window. If it comes up naturally, gently confirm whether it's still bothering them — if they say it's fine, mark it resolved (resolve_context_event) so the plan stops working around it. Do NOT keep programming around it as a hard constraint.`);
+    }
   }
   if (!out.length) return "";
   return `\n${out.join("\n")}\n`;
