@@ -333,6 +333,24 @@ export const STRAIN_BRAKE_HOLD: VoiceSet1 = [
   (reason) => `The load stays put today — ${reason}. Recovery shapes the plan, and none of this is a penalty.`,
 ];
 
+// ---- the pain traffic light, per movement -----------------------------------
+// Amber is a WAIT, not a verdict: the load holds and the next exposure answers the
+// question. Red is a step down on THIS movement only — everything else in the
+// session keeps training, which is the law and also what the sentence must convey.
+// No numbers, no diagnosis, and never an instruction to rest.
+
+export const PAIN_AMBER_HOLD: VoiceSet = [
+  "You mentioned this one bothering you and nothing since has said how it settled — holding the load here until the next go tells us.",
+  "Keeping this load where it is: the last note said it bothered you, and the next session is what answers whether it settled.",
+  "Holding here rather than adding — you flagged this movement recently, and how it feels next time is the thing worth knowing.",
+];
+
+export const PAIN_RED_REDUCE: VoiceSet = [
+  "This one hasn't settled between sessions, so it comes down a step — just this movement; the rest of the session runs as planned.",
+  "Easing the load on this movement since it's still speaking up between sessions. Nothing else in the day changes.",
+  "Taking a step off this lift while it's still unsettled — everything else you're doing stays exactly where it is.",
+];
+
 // ---- fuel protection, in the TRAINING register ------------------------------
 // The consequence is a training one, so the sentence on a lift card is a training
 // sentence. The calorie mechanics behind it (the size of the move, the settling
@@ -564,6 +582,8 @@ export function progressionVoicePhrases(): string[] {
     TIMED_RESPONSE_DELOAD,
     JOINT_BRAKE_HOLD,
     JOINT_BRAKE_DELOAD,
+    PAIN_AMBER_HOLD,
+    PAIN_RED_REDUCE,
     FUEL_HOLD_STEP,
     PUSH_FUEL_PEAK_TRIM,
     FUEL_DELOAD_CLAUSE,

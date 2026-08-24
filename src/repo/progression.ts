@@ -75,6 +75,7 @@ import {
 // it in, so every branch below has to be correct for both.
 import { type UnverifiedRegressionHold, unverifiedRegressionHold } from "./calibration.js";
 import { movementRiskFor } from "./movement-risk.js";
+import { type PainBandRead, painBandForMovement } from "./pain-band.js";
 import { cutQualityRead } from "./cut-quality.js";
 import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";
 import { applyPersonalResponseModifier, liftLedgerRead, whatWorksForYou } from "./reaction-model.js";
@@ -398,6 +399,42 @@ function autoregBrake(
       action: "hold",
       why: voice.liftVoice(voice.STRAIN_BRAKE_HOLD, date, "strain_brake_hold", name)(reason),
     };
+  }
+  return null;
+}
+
+// ---- the pain traffic light (per movement, never per session) ---------------
+//
+// The three bands (src/repo/pain-band.ts) decide ONE movement's load and nothing
+// else — the same shape per-lift dose comparability already has, and for the same
+// reason: one hurting movement must never block a session, and everything the
+// symptom does not cover keeps training exactly as planned.
+//
+//   amber → the settling question is still open, so the load HOLDS and the next
+//           exposure answers it. An earned step waits; it is not lost.
+//   red   → it did not settle, or the athlete said it got worse, so this movement's
+//           load comes DOWN one bounded step.
+//
+// A green band (nothing stated, or a report that settled) and an ABSENT read are
+// both no-ops: silence never brakes a lift, and it never clears one either.
+//
+// This is a SAFETY floor, so it is blind to `training_drive`, and it runs after the
+// autoregulation gate — a brake may lose precision, never effect.
+type PainBrakeResult = { action: "hold" | "deload"; why: string } | null;
+function painBandBrake(
+  action: ProgressionAction,
+  band: PainBandRead | null,
+  name: string,
+  date: string
+): PainBrakeResult {
+  if (!band || band.band === "green") return null;
+  if (band.band === "red") {
+    return { action: "deload", why: voice.liftVoice(voice.PAIN_RED_REDUCE, date, "pain_red_reduce", name) };
+  }
+  // Amber never manufactures a cut. It stops an ADDITION; a deload the ladder
+  // already chose stands on its own reasons.
+  if (action === "overload") {
+    return { action: "hold", why: voice.liftVoice(voice.PAIN_AMBER_HOLD, date, "pain_amber_hold", name) };
   }
   return null;
 }
@@ -1494,6 +1531,10 @@ export function nextPrescription(
     // here. Absent OR null means "whatever the athlete has standing" — there is no
     // meaningful third state to preserve, unlike the block/cut/estimate thunks.
     drive: opts?.drive ?? readTrainingDrive(),
+    // The band is a property of THIS movement on THIS day, so it is read per lift.
+    // The read returns null before touching its heavier queries when nothing has
+    // been stated about the movement, which is the ordinary case.
+    pain: painBandForMovement({ id: ex?.id ?? null, name: exerciseName, muscle_group: group }, date),
   };
   if (mode === "timed")
     return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
@@ -1514,6 +1555,7 @@ interface PrescCtx {
   cut: () => CutPressure; // the fuel/cut pressure, computed at most once and only if consulted
   estimate: EstimateReader; // the calibration read, computed at most once per lift and only if consulted
   drive: TrainingDrive; // the athlete's standing "push me" declaration; bounded authority, never over a safety floor
+  pain: PainBandRead | null; // this movement's traffic-light band; null = nothing stated (absent, not green)
 }
 
 function repsPrescription(
@@ -1965,6 +2007,25 @@ function repsPrescription(
     varyOptions = undefined;
   }
 
+  // PAIN TRAFFIC LIGHT — this movement only. Runs after the autoregulation gate for
+  // the same reason that gate runs after the earned step: a safety floor is applied
+  // last so nothing above it can spend what it took off.
+  const painBrake = brakeCtx ? painBandBrake(action, brakeCtx.pain, name, date) : null;
+  if (painBrake) {
+    autoregulated = true; // a brake shaped this, so the escalation ladder stays out of it
+    action = painBrake.action;
+    why = painBrake.why;
+    repStep = false;
+    topSet = undefined;
+    if (painBrake.action === "hold") nextWeight = baseWeight;
+    else {
+      brakedDeload = true;
+      nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
+    }
+    varyTo = undefined;
+    varyOptions = undefined;
+  }
+
   // ESCALATION. A second light deload on the same lift inside a couple of months is
   // the definition of doing the same thing again: the first one already told us that
   // taking a tenth off and rebuilding is not what this lift needs. So the repeat
@@ -2163,6 +2224,17 @@ function timedPrescription(
     action = brake.action;
     why = brake.why;
     if (brake.action === "hold") nextSeconds = baseSeconds;
+    else nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;
+  }
+
+  // PAIN TRAFFIC LIGHT (timed): the same per-movement bands, eased in SECONDS —
+  // timed work never carries load, so a red band shortens the hold instead.
+  const painBrake = brakeCtx ? painBandBrake(action, brakeCtx.pain, name, date) : null;
+  if (painBrake) {
+    autoregulated = true;
+    action = painBrake.action;
+    why = painBrake.why;
+    if (painBrake.action === "hold") nextSeconds = baseSeconds;
     else nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;
   }
 
