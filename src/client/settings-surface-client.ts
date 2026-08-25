@@ -324,6 +324,14 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
     !wm.research_enabled && researchEligible?.eligible
       ? `<div class="sess-line" id="researchSuggest" style="margin-top:6px">✦ ${researchEligible.reason === "web_agent_connected" ? "Your coach agent can browse — turn this on for live, cited research." : "An agent is connected — you can try live evidence research."}</div>`
       : "";
+  // Screen wake lock is a DEVICE preference, not an account one — it lives in
+  // this browser's localStorage and applies the moment it's flipped, so it is
+  // deliberately not part of the working model the Save button posts.
+  const wakeLockOk = typeof wakeLockSupported === "function" && wakeLockSupported();
+  const wakeLockOn = wakeLockOk && typeof wakeLockEnabled === "function" && wakeLockEnabled();
+  const wakeLockNote = wakeLockOk
+    ? "This device only. Applies while a session is open, and lets the screen sleep again the moment you finish or leave. On iPhone it needs iOS 18.4+ with Cairn added to the Home Screen."
+    : "This browser can't hold the screen awake. On iPhone that needs iOS 18.4+ with Cairn added to the Home Screen.";
   return `
       <section class="set-group set-group--flush">
         <p class="set-group-sub">Background touches that make logging effortless. Everything falls back gracefully when off.</p>
@@ -346,6 +354,11 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
           </select>
         </div>
         <div class="sess-line" style="color:var(--muted);margin-top:6px">Steady keeps the usual rhythm — a run of loading days reads as a rest day. Push asks Cairn to favour a targeted session for the muscle groups that are due instead, and only while the recovery evidence is good. A long enough run of days, anything clinical, or a signal pulling the other way still reads as rest.</div>
+
+        <h1 class="lbl" style="margin:22px 0 8px">While you train</h1>
+        <label class="toggle"><input type="checkbox" id="wakeLockEnabled"${wakeLockOn ? " checked" : ""}${wakeLockOk ? "" : " disabled"}>
+          <span>Keep the screen awake while a session is open</span></label>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">${wakeLockNote}</div>
 
         <h1 class="lbl" style="margin:22px 0 8px">Agentic enrichment</h1>
         <label class="toggle"><input type="checkbox" id="enrichEnabled" ${wm.enrich_enabled ? "checked" : ""}>

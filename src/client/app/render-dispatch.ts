@@ -8,6 +8,18 @@
     if (tab !== "chat") document.body.classList.remove("kb-open", "kb-geometry-open");
     document.body.dataset.tab = tab;
     updateHeaderCondense();
+    // Leaving the session surface drops any screen wake lock it was holding;
+    // renderSession retakes one on the way in.
+    if (tab !== "session" && typeof releaseWakeLock === "function") void releaseWakeLock();
+    // The rest bar belongs on Session (where sets are logged) and Today (where
+    // you land between sets). Anywhere else it would float over Chat's composer
+    // (and keep body.resting padding app-wide); the deadline stays persisted so
+    // returning to Session or Today restores it.
+    if (tab === "session" || tab === "today") {
+      if (typeof surfaceRestBar === "function") surfaceRestBar();
+    } else if (typeof hideRestBar === "function") {
+      hideRestBar();
+    }
 
     if (tab === "today") return renderToday();
     if (tab === "session") return renderSession();

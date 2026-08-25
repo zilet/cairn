@@ -109,13 +109,29 @@ type TodaySessionSkipOutboxGlobals = {
     line.classList.remove("skipline-empty");
   }
 
-  function removeSkipName(name: string, deps: TodaySessionSkipDeps): void {
+  // Lift this lift's name(s) off the skip line and hand back the undo. Keeping the
+  // ORIGINAL nodes (rather than re-rendering them) is what lets a refused restore
+  // put the line back exactly as it was, down to the element the athlete tapped.
+  function detachSkipNames(name: string, deps: TodaySessionSkipDeps): () => void {
     const line = deps.root.querySelector("#skipLine");
-    if (!line) return;
-    [...line.querySelectorAll<HTMLElement>("[data-unskip]")]
+    if (!line) return () => {};
+    const detached = [...line.querySelectorAll<HTMLElement>("[data-unskip]")]
       .filter((button) => decodeURIComponent(button.dataset.unskip || "").toLowerCase() === name.toLowerCase())
-      .forEach((button) => button.remove());
+      .map((node) => ({ node, parent: node.parentElement, anchor: node.nextElementSibling }));
+    for (const { node } of detached) node.remove();
     if (!line.querySelector("[data-unskip]")) line.classList.add("skipline-empty");
+    return () => {
+      for (const { node, parent, anchor } of detached) {
+        if (!parent) continue;
+        if (anchor && anchor.parentElement === parent) parent.insertBefore(node, anchor);
+        else parent.appendChild(node);
+      }
+      if (line.querySelector("[data-unskip]")) line.classList.remove("skipline-empty");
+    };
+  }
+
+  function removeSkipName(name: string, deps: TodaySessionSkipDeps): void {
+    detachSkipNames(name, deps);
   }
 
   // A skip is recorded against the LIFT, by name — the server has no notion of a
@@ -131,6 +147,82 @@ type TodaySessionSkipOutboxGlobals = {
     return all.length ? all : [card];
   }
 
+  // The athlete-facing message for a skip/restore that did NOT take, or null when
+  // it did. A queued write took: it is durably held and will replay.
+  function skipFailureMessage(
+    mutation: { status: string; value?: unknown; reason?: unknown },
+    action: "skip" | "restore",
+    date: string,
+  ): string | null {
+    const refused = action === "skip" ? "Couldn't skip — try again" : "Couldn't restore — try again";
+    if (mutation.status === "sent") {
+      const result = responseRecord(mutation.value);
+      const responseDateMatches = result.date == null || String(result.date) === date;
+      if (action === "skip" && (result.ok !== true || !responseDateMatches)) {
+        return result.error ? "Sets already logged — delete them first" : refused;
+      }
+      if (action === "restore" && (result.ok === false || result.error)) return refused;
+      return null;
+    }
+    if (mutation.status === "queued") return null;
+    if (mutation.status === "blocked") return prepareBarrierMessage(mutation.reason, action);
+    if (mutation.status === "storage_error") {
+      return action === "skip"
+        ? "Couldn’t save that skip on this device — free storage and try again."
+        : "Couldn’t save that restore on this device — free storage and try again.";
+    }
+    return refused;
+  }
+
+  // Cards leave the surface on the tap, so an Undo tapped in the same breath can
+  // outrun the skip it undoes. The restore waits on the skip's own promise rather
+  // than letting a DELETE and a POST for one lift race to the server. Outcomes
+  // stay readable after the promise settles so a refused skip's Undo can no-op
+  // instead of DELETEing a skip that never existed.
+  type SkipMutationResult = Awaited<ReturnType<typeof runSkipMutation>>;
+  const pendingSkips = new Map<string, Promise<SkipMutationResult>>();
+  const skipOutcomes = new Map<string, SkipMutationResult>();
+
+  function pendingSkipKey(date: string, exercise: string): string {
+    return `${date}|${exercise.toLowerCase()}`;
+  }
+
+  function removeCards(cards: HTMLElement[], exercise: string, deps: TodaySessionSkipDeps, guard: () => boolean): void {
+    let outstanding = cards.length;
+    for (const el of cards) {
+      deps.collapseEl(el, () => {
+        if (!guard()) return;
+        el.remove();
+        if (--outstanding > 0) return;
+        addSkipName(exercise, deps);
+      });
+    }
+  }
+
+  // The DOM half of an undo, shared by the Undo action and by a skip that the
+  // server refused. Returns false when the cards can't be put back by surgery
+  // (their anchor is gone with the surface), which is the caller's cue to repaint.
+  function restoreCards(
+    cards: HTMLElement[],
+    anchor: Element | null,
+    exercise: string,
+    deps: TodaySessionSkipDeps,
+  ): boolean {
+    removeSkipName(exercise, deps);
+    const detached = cards.filter((el) => !el.isConnected);
+    if (detached.length) {
+      const before = anchor && anchor.isConnected ? anchor : deps.root.querySelector(".addex");
+      if (!before || !before.parentNode) return false;
+      for (const el of detached) before.parentNode.insertBefore(el, before);
+    }
+    for (const el of cards) deps.expandEl(el);
+    return true;
+  }
+
+  // OPTIMISTIC: "not today" is the athlete's own decision, so the card collapses on
+  // the tap and the write follows. The one thing the server can refuse — sets are
+  // already logged against the lift — puts the card straight back, which is the
+  // same restore the Undo toast performs.
   async function skipFromCard(
     card: HTMLElement | null,
     exercise: string,
@@ -139,45 +231,50 @@ type TodaySessionSkipOutboxGlobals = {
     actionTab: string | undefined,
   ): Promise<void> {
     if (!card) return;
-    const body = { date: actionDate, exercise };
-    const mutation = await runSkipMutation("skip", "POST", body, actionDate, deps);
-    let result: Record<string, unknown> = { ok: true, _queued: true };
-    if (mutation.status === "sent") {
-      result = responseRecord(mutation.value);
-      const responseDateMatches = result.date == null || String(result.date) === actionDate;
-      if (result.ok !== true || !responseDateMatches) {
-        if (surfaceStillCurrent(deps, actionDate, actionTab)) {
-          deps.toast(result.error ? "Sets already logged — delete them first" : "Couldn't skip — try again");
-        }
-        return;
-      }
-      CairnTodaySessionSetModel.rememberMutationSessionId(deps, actionDate, result);
-    } else if (mutation.status !== "queued") {
-      if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-      if (mutation.status === "blocked") deps.toast(prepareBarrierMessage(mutation.reason, "skip"));
-      else if (mutation.status === "storage_error") {
-        deps.toast("Couldn’t save that skip on this device — free storage and try again.");
-      } else deps.toast("Couldn't skip — try again");
-      return;
-    }
-    if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-    if (result._queued !== true) deps.invalidate("today:session:" + actionDate);
     const cards = siblingCards(card, deps);
     const anchor = cards[cards.length - 1].nextElementSibling;
-    let outstanding = cards.length;
-    for (const el of cards) {
-      deps.collapseEl(el, () => {
-        if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-        el.remove();
-        if (--outstanding > 0) return;
-        addSkipName(exercise, deps);
-        if (result._queued !== true && deps.state.tab === "today") void deps.renderToday({ soft: true });
-      });
-    }
-    deps.toast(result._queued === true ? `${exercise} skip saved — will sync` : `${exercise} skipped today`, {
+    const guard = () => surfaceStillCurrent(deps, actionDate, actionTab);
+    removeCards(cards, exercise, deps, guard);
+    // Undo rides on BOTH toasts: a queued skip is still a skip the athlete may want
+    // back, and dropping the affordance when the network is down is exactly the
+    // wrong time to drop it.
+    const undo = {
       action: "Undo",
       onAction: () => { void undoSkip(cards, anchor, exercise, deps, actionDate, actionTab); },
-    });
+    };
+    deps.toast(`${exercise} skipped today`, undo);
+
+    const key = pendingSkipKey(actionDate, exercise);
+    const inFlight = runSkipMutation("skip", "POST", { date: actionDate, exercise }, actionDate, deps);
+    pendingSkips.set(key, inFlight.catch(() => ({ status: "failed" as const })));
+    let mutation: SkipMutationResult = { status: "failed" };
+    try {
+      mutation = await inFlight;
+    } catch {
+      mutation = { status: "failed" };
+    } finally {
+      skipOutcomes.set(key, mutation);
+      Promise.resolve().then(() => {
+        if (pendingSkips.get(key)) pendingSkips.delete(key);
+      });
+    }
+
+    const failure = skipFailureMessage(mutation, "skip", actionDate);
+    if (failure) {
+      if (!restoreCards(cards, anchor, exercise, deps) && guard()) void deps.renderToday();
+      if (guard()) deps.toast(failure);
+      return;
+    }
+    if (mutation.status === "sent") {
+      CairnTodaySessionSetModel.rememberMutationSessionId(deps, actionDate, responseRecord(mutation.value));
+    }
+    if (!guard()) return;
+    if (mutation.status === "queued") {
+      deps.toast(`${exercise} skip saved — will sync`, undo);
+      return;
+    }
+    deps.invalidate("today:session:" + actionDate);
+    if (deps.state.tab === "today") void deps.renderToday({ soft: true });
   }
 
   async function undoSkip(
@@ -189,38 +286,35 @@ type TodaySessionSkipOutboxGlobals = {
     actionTab: string | undefined,
   ): Promise<void> {
     if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-    const body = { date: actionDate, exercise };
-    const mutation = await runSkipMutation("restore", "DELETE", body, actionDate, deps);
-    const queued = mutation.status === "queued";
-    if (mutation.status === "sent") {
-      const result = responseRecord(mutation.value);
-      if (result.ok === false || result.error) {
-        if (surfaceStillCurrent(deps, actionDate, actionTab)) deps.toast("Couldn't restore — try again");
-        return;
-      }
-    } else if (!queued) {
-      if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-      if (mutation.status === "blocked") deps.toast(prepareBarrierMessage(mutation.reason, "restore"));
-      else if (mutation.status === "storage_error") {
-        deps.toast("Couldn’t save that restore on this device — free storage and try again.");
-      } else deps.toast("Couldn't restore — try again");
+    const guard = () => surfaceStillCurrent(deps, actionDate, actionTab);
+    // The cards come back first, for the same reason they left first.
+    const restored = restoreCards(cards, anchor, exercise, deps);
+
+    const key = pendingSkipKey(actionDate, exercise);
+    const pending = pendingSkips.get(key);
+    const skipMutation = pending ? await pending : skipOutcomes.get(key);
+    if (skipMutation && skipFailureMessage(skipMutation, "skip", actionDate)) {
+      // The skip never landed. The card is already back (this restore, or the
+      // skip's own failure branch). A DELETE would 404 and then collapse it again.
       return;
     }
-    if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-    if (!queued) deps.invalidate("today:session:" + actionDate);
-    if (deps.state.tab !== "today") return;
-    removeSkipName(exercise, deps);
-    const detached = cards.filter((el) => !el.isConnected);
-    if (detached.length) {
-      const before = anchor && anchor.isConnected ? anchor : deps.root.querySelector(".addex");
-      if (!before || !before.parentNode) {
-        deps.renderToday();
-        return;
-      }
-      for (const el of detached) before.parentNode.insertBefore(el, before);
+    skipOutcomes.delete(key);
+    const mutation = await runSkipMutation("restore", "DELETE", { date: actionDate, exercise }, actionDate, deps);
+    const failure = skipFailureMessage(mutation, "restore", actionDate);
+    if (failure) {
+      if (restored) removeCards(cards, exercise, deps, guard);
+      if (guard()) deps.toast(failure);
+      return;
     }
-    for (const el of cards) deps.expandEl(el);
-    if (queued) deps.toast(`${exercise} restore saved — will sync`);
+    if (!guard()) return;
+    if (mutation.status !== "queued") deps.invalidate("today:session:" + actionDate);
+    // Surgery couldn't seat the cards (their anchor left with the surface) — a
+    // repaint is the only way back.
+    if (!restored) {
+      void deps.renderToday({ soft: true });
+      return;
+    }
+    if (mutation.status === "queued") deps.toast(`${exercise} restore saved — will sync`);
   }
 
   function removeOffPlanCard(card: HTMLElement | null, deps: TodaySessionSkipDeps): void {
@@ -259,28 +353,28 @@ type TodaySessionSkipOutboxGlobals = {
         const button = (event.target as Element | null)?.closest<HTMLElement>("[data-unskip]");
         if (!button) return;
         const exercise = decodeURIComponent(button.dataset.unskip || "");
-        const body = { date: surfaceDate, exercise };
-        const mutation = await runSkipMutation("restore", "DELETE", body, surfaceDate, deps);
-        const queued = mutation.status === "queued";
-        if (mutation.status === "sent") {
-          const result = responseRecord(mutation.value);
-          if (result.ok === false || result.error) {
-            if (surfaceStillCurrent(deps, surfaceDate, surfaceTab)) deps.toast("Couldn't restore — try again");
-            return;
+        // The name leaves the skip line on the tap; only the card itself has to
+        // wait, and it can't be put back by surgery — nothing rendered it while
+        // the lift was skipped, so there is no node to re-seat. A SOFT repaint
+        // brings it back without the entrance stagger or a scroll jump.
+        const putBack = detachSkipNames(exercise, deps);
+        deps.toast(`${exercise} is back on`);
+        const mutation = await runSkipMutation("restore", "DELETE", { date: surfaceDate, exercise }, surfaceDate, deps);
+        const failure = skipFailureMessage(mutation, "restore", surfaceDate);
+        if (failure) {
+          if (surfaceStillCurrent(deps, surfaceDate, surfaceTab)) {
+            putBack();
+            deps.toast(failure);
           }
-        } else if (!queued) {
-          if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
-          if (mutation.status === "blocked") deps.toast(prepareBarrierMessage(mutation.reason, "restore"));
-          else if (mutation.status === "storage_error") {
-            deps.toast("Couldn’t save that restore on this device — free storage and try again.");
-          } else deps.toast("Couldn't restore — try again");
           return;
         }
         if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
-        if (!queued) deps.invalidate("today:session:" + surfaceDate);
-        removeSkipName(exercise, deps);
-        deps.toast(queued ? `${exercise} restore saved — will sync` : `${exercise} is back on`);
-        if (!queued) deps.renderToday();
+        if (mutation.status === "queued") {
+          deps.toast(`${exercise} restore saved — will sync`);
+          return;
+        }
+        deps.invalidate("today:session:" + surfaceDate);
+        void deps.renderToday({ soft: true });
       });
     }
   }

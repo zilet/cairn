@@ -73,7 +73,9 @@ Theme-color / manifest background: `#f4efe7`. Color-scheme: light. Status bar: `
   `rise` = translateY(14px) + fade. Cap `--i` at ~12.
 - Chips/log entries pop in with a soft scale-fade.
 - Buttons compress slightly on press (`transform: scale(.97)`).
-- Rest bar slides up; fill animates linearly.
+- Rest bar slides up; fill animates linearly. When the countdown lands the bar stays put and flips
+  to `.rest.rested` — a quiet count-UP of the rest actually taken ("Rested 2:40"), fill settled
+  full-width in the hairline tone, ±15 retired, Skip reading "Done".
 - All motion wrapped in `@media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important} }`.
 
 ## Illustration library — `public/art.js`

@@ -206,6 +206,17 @@
       researchEligible,
     });
 
+    // Device-local, and applied on the spot: it never rides the Save button with
+    // the server-backed settings around it.
+    const wakeLockToggle = settingsSourcesAutomationOptional<HTMLInputElement>(deps.root, "#wakeLockEnabled");
+    if (wakeLockToggle && !wakeLockToggle.disabled) {
+      wakeLockToggle.addEventListener("change", (event) => {
+        if (typeof setWakeLockEnabled === "function") {
+          setWakeLockEnabled(settingsSourcesAutomationInput(event).checked);
+        }
+      });
+    }
+
     settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#enrichEnabled").addEventListener(
       "change",
       (event) => {

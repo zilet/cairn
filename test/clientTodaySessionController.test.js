@@ -221,6 +221,12 @@ class FakeElement {
     return Object.hasOwn(this.dataset, key);
   }
 
+  removeAttribute(name) {
+    if (!name.startsWith("data-")) return;
+    const key = name.slice(5).replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+    delete this.dataset[key];
+  }
+
   closest(selector) {
     let node = this;
     while (node) {
@@ -233,6 +239,9 @@ class FakeElement {
   matches(selector) {
     if (selector.startsWith("#")) return this.id === selector.slice(1);
     if (selector === ".ex .logrow") return this.classList.contains("logrow") && this.parentElement?.classList.contains("ex");
+    if (selector === ".ex[data-card]") return this.classList.contains("ex") && Object.hasOwn(this.dataset, "card");
+    if (selector === ".logrow input") return this.tag === "input" && Boolean(this.parentElement?.classList.contains("logrow"));
+    if (selector === "input") return this.tag === "input";
     if (selector === "[data-logged] .chip") return this.classList.contains("chip") && Object.hasOwn(this.parentElement?.dataset || {}, "logged");
     if (selector === ".ex [data-logged] .chip") return this.classList.contains("chip") &&
       Object.hasOwn(this.parentElement?.dataset || {}, "logged") &&
@@ -240,6 +249,11 @@ class FakeElement {
     if (selector === ".feel-dot[data-feel=\"soreness\"]") return this.classList.contains("feel-dot") && this.dataset.feel === "soreness";
     if (selector === ".in-w, .in-dur, .in-r") {
       return this.classList.contains("in-w") || this.classList.contains("in-dur") || this.classList.contains("in-r");
+    }
+    const classAndData = selector.match(/^\.([a-zA-Z0-9_-]+)\[data-([a-z0-9-]+)="([^"]*)"\]$/i);
+    if (classAndData) {
+      const key = classAndData[2].replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+      return this.classList.contains(classAndData[1]) && String(this.dataset[key] ?? "") === classAndData[3];
     }
     if (selector.startsWith(".")) return this.classList.contains(selector.slice(1));
     if (selector === ".ex") return this.classList.contains("ex");
@@ -351,8 +365,19 @@ function loadController({ apiImpl, contextOverrides } = {}) {
     },
     document: {
       createElement: (tag) => tag === "template" ? new FakeTemplate() : new FakeElement(tag),
+      // Set by the draft-rescue case; absent activeElement means "nothing focused",
+      // which is what every other case wants.
+      activeElement: null,
     },
-    setTimeout: (fn) => fn(),
+    // Delayed timers (the 400ms log re-arm) stay pending unless a case fires them.
+    // Zero-delay / omitted-ms callbacks still run inline, matching the old harness.
+    setTimeout: (fn, ms) => {
+      if (typeof ms === "number" && ms > 0) return 0;
+      fn();
+      return 0;
+    },
+    clearTimeout: () => {},
+    CairnOutbox: { list: () => outbox },
   };
   context.window = context;
   context.globalThis = context;
@@ -444,16 +469,20 @@ function loadController({ apiImpl, contextOverrides } = {}) {
       feedbackFormHtml: () => `<div class="feedback-form"><button class="feel-dot" data-feel="soreness" data-val="1"></button><button class="feel-dot" data-feel="soreness" data-val="2"></button><button id="feedbackDismiss"></button></div>`,
       feedbackOpenHtml: () => `<button id="feedbackOpen"></button>`,
       hasFeedback: (session) => session?.soreness != null,
-      setChipHtml: (set) => `<span class="chip" data-set="${set.id}">#${set.set_number} ${set.weight} <span>×</span> ${set.reps}<button data-del="${set.id}"></button></span>`,
+      // Mirrors todaySetChipHtml: a row with no id yet renders an EMPTY id, which
+      // is what keeps a pending chip's × inert until the server answers.
+      setChipHtml: (set) => `<span class="chip" data-set="${set.id ?? ""}">#${set.set_number} ${set.weight} <span>×</span> ${set.reps}<button data-del="${set.id ?? ""}"></button></span>`,
       skipLineHtml: () => "",
       skipNameHtml: (name) => `<button data-unskip="${encodeURIComponent(String(name))}">${name}</button>`,
     },
   };
 
   return {
+    context,
     controller: context.CairnTodaySessionController,
     feedback: context.CairnTodaySessionFeedback,
     setModel: context.CairnTodaySessionSetModel,
+    setActions: context.CairnTodaySessionSetActions,
     rootEl,
     deps,
     requests,
@@ -471,11 +500,11 @@ function loadController({ apiImpl, contextOverrides } = {}) {
   };
 }
 
-function addLoggingCard(rootEl) {
-  const card = rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Push-up" } }));
+function addLoggingCard(rootEl, name = "Push-up") {
+  const card = rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: name } }));
   const row = card.appendChild(new FakeElement("div", {
     className: "logrow",
-    dataset: { ex: encodeURIComponent("Push-up"), day: "1", mode: "reps" },
+    dataset: { ex: encodeURIComponent(name), day: "1", mode: "reps" },
   }));
   row.appendChild(new FakeElement("input", { className: "in-w", value: "20" }));
   row.appendChild(new FakeElement("input", { className: "in-r", value: "8" }));
@@ -613,7 +642,7 @@ test("timed stopwatch updates the last-time line and only lets one timed row run
   assert.equal(harness.stops.length, 2, "each newly started hold stops the rest countdown");
 });
 
-test("a queued timed log keeps the captured duration paused and resumable", async () => {
+test("a queued timed log keeps its chip and frees the stopwatch for the next hold", async () => {
   let now = 300_000;
   let timerId = 0;
   const intervals = new Map();
@@ -633,7 +662,7 @@ test("a queued timed log keeps the captured duration paused and resumable", asyn
       clearInterval: (id) => intervals.delete(id),
     },
   });
-  const { row, durationEl, timer, button } = addTimedLoggingCard(harness.rootEl);
+  const { row, durationEl, timer, button, logged } = addTimedLoggingCard(harness.rootEl);
   harness.deps.parseDur = (value) => Number(String(value).replace(/s$/, "")) || null;
   harness.controller.wireLogRow(row, harness.deps);
 
@@ -642,21 +671,25 @@ test("a queued timed log keeps the captured duration paused and resumable", asyn
   [...intervals.values()].forEach((tick) => tick());
   button.click();
   await flushAsync();
+  // The hold is durably queued AND on the card, so the row is free for the next
+  // one — there is nothing left to resume, and nothing was lost.
   assert.equal(harness.outbox.length, 1);
+  assert.equal(logged.children.length, 1);
+  assert.equal(logged.children[0].dataset.pending, "1", "the chip stays marked pending until the outbox replays it");
   assert.equal(durationEl.value, "3s");
-  assert.equal(timer.textContent, "Resume");
+  assert.equal(timer.textContent, "Start");
 
   timer.click();
   now += 2_100;
   [...intervals.values()].forEach((tick) => tick());
-  assert.equal(durationEl.value, "5s");
+  assert.equal(durationEl.value, "2s", "the next hold starts from zero");
 });
 
 function addLastSetLine(card, text) {
   return card.appendChild(new FakeElement("div", { className: "ex-lastset", textContent: text }));
 }
 
-test("Today session controller logs a set only after a successful POST and wires delete", async () => {
+test("Today session controller logs a set optimistically and wires delete once the id lands", async () => {
   const harness = loadController();
   const { card, row, button, logged } = addLoggingCard(harness.rootEl);
 
@@ -712,18 +745,62 @@ test("Today session controller rolls back an optimistic set delete when the DELE
   assert.equal(harness.toasts.at(-1).message, "Couldn't remove that — try again.");
 });
 
-test("Today session controller keeps card unchanged when set POST fails", async () => {
+test("Today session controller rolls the card back when the set POST is refused", async () => {
   const harness = loadController({ apiImpl: async () => ({ ok: false, error: "bad set" }) });
-  const { row, button, logged } = addLoggingCard(harness.rootEl);
+  const { card, row, button, logged } = addLoggingCard(harness.rootEl);
 
   harness.controller.wireLogRow(row, harness.deps);
   button.click();
   await flushAsync();
 
+  // The chip was painted, then removed again — along with everything it implied:
+  // the card's progress is re-tallied and the skip ✕ it retired comes back.
   assert.equal(logged.children.length, 0);
-  assert.deepEqual(harness.invalidations, []);
+  assert.ok(card.querySelector(".ex-skip"), "the skip control is restored with the card");
+  assert.equal(card.querySelector("[data-prog]").innerHTML, "0 / 3 <span>sets</span>");
+  // The optimistic pass already dropped the set-truth caches; a refused write just
+  // means the next read re-fetches, which is harmless and still correct.
+  assert.deepEqual(harness.invalidations, ["today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progression"]);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["bad set"]);
   assert.equal(button.disabled, false);
+  assert.equal(harness.starts.length, 1);
+  assert.equal(harness.stops.length, 1, "a refused write stops the optimistic rest");
+});
+
+test("Today session controller shows the set chip before the POST resolves", async () => {
+  let resolveSet;
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") return new Promise((resolve) => { resolveSet = resolve; });
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  const { card, row, button, logged } = addLoggingCard(harness.rootEl);
+  harness.controller.wireLogRow(row, harness.deps);
+
+  button.click();
+  await flushAsync();
+
+  // Nothing here has waited on the network: the set is on the card, the card's
+  // progress moved and rest is running. The button stays disabled until the
+  // mutation resolves or the 400ms re-arm window, so a double-tap cannot write twice.
+  assert.equal(logged.children.length, 1, "the chip is painted while the POST is still in flight");
+  assert.equal(logged.children[0].dataset.pending, "1");
+  assert.equal(logged.children[0].dataset.set, "", "no server id yet");
+  assert.equal(card.querySelector("[data-prog]").innerHTML, "1 / 3 <span>sets</span>");
+  assert.equal(button.disabled, true);
+  assert.equal(harness.starts.length, 1);
+  // The pending chip's × is inert — there is no row to delete yet.
+  logged.querySelector("[data-del]").click();
+  await flushAsync();
+  assert.equal(harness.requests.length, 1, "no DELETE is attempted against a set with no id");
+
+  resolveSet({ ok: true, id: 10, session_id: 94, date: "2026-06-30", set_number: 1, weight: 20, reps: 8, rir: 2 });
+  await flushAsync();
+
+  assert.equal(logged.children[0].dataset.pending, undefined, "the chip settles once the server answers");
+  assert.equal(logged.children[0].dataset.set, "10");
+  assert.equal(logged.querySelector("[data-del]").dataset.del, "10");
 });
 
 test("Today session controller does not poison the outbox on a permanent set rejection", async () => {
@@ -744,6 +821,8 @@ test("Today session controller does not poison the outbox on a permanent set rej
   assert.equal(row.querySelector(".in-r").value, "8");
   assert.equal(button.disabled, false);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Couldn't log that set."]);
+  assert.equal(harness.starts.length, 1);
+  assert.equal(harness.stops.length, 1, "a failed write stops the optimistic rest");
 });
 
 test("offline set logging carries the current staged prepare dependency", async () => {
@@ -766,6 +845,8 @@ test("offline set logging carries the current staged prepare dependency", async 
     depends_on: "prepare-local-1",
     group_id: "date:2026-06-30",
   }]);
+  assert.equal(harness.starts.length, 1);
+  assert.equal(harness.stops.length, 0, "a queued write keeps the rest — the set is durably held");
 });
 
 test("a reloaded staged session queues its new set behind reconciliation before any direct POST", async () => {
@@ -790,6 +871,8 @@ test("a reloaded staged session queues its new set behind reconciliation before 
     group_id: "date:2026-06-30",
   }]);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Set saved — reconciling this session"]);
+  assert.equal(harness.starts.length, 1);
+  assert.equal(harness.stops.length, 0, "a queued write keeps the rest — the set is durably held");
 });
 
 test("cross-tab prepare barriers prevent direct set and finish POSTs in every shared queue state", async () => {
@@ -809,6 +892,8 @@ test("cross-tab prepare barriers prevent direct set and finish POSTs in every sh
     assert.deepEqual(setHarness.toasts.map((toast) => toast.message), [
       "This session is being prepared in another tab or view — refresh before logging more sets.",
     ]);
+    assert.equal(setHarness.starts.length, 1);
+    assert.equal(setHarness.stops.length, 1, "a blocked write stops the optimistic rest");
 
     const finishHarness = loadController({
       apiImpl: async () => { throw new Error("direct finish POST must stay blocked"); },
@@ -1063,10 +1148,13 @@ test("an in-flight set response stays scoped to its request date after navigatio
   assert.equal(harness.deps.state.sessionIdsByDate["2026-06-30"], "94");
   assert.equal(harness.deps.state.sessionIdsByDate["2026-07-01"], undefined);
   assert.equal(harness.setModel.sessionPathId({}, harness.deps, "2026-07-01"), null);
-  assert.equal(logged.children.length, 0);
-  assert.deepEqual(harness.invalidations, []);
-  assert.deepEqual(harness.toasts, []);
-  assert.deepEqual(harness.starts, []);
+  // The chip and the cache drops belong to the date the set was logged on — they
+  // happened on that surface, before the navigation. What must NOT follow the
+  // athlete to the new date is anything the late response triggers.
+  assert.equal(logged.children.length, 1);
+  assert.deepEqual(harness.invalidations, ["today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progression"]);
+  assert.deepEqual(harness.toasts, [], "the late response never toasts onto the next date");
+  assert.deepEqual(harness.starts, [true], "rest started with the set, not with the response");
 });
 
 test("an in-flight skip response cannot mutate the next date's surface", async () => {
@@ -1095,10 +1183,12 @@ test("an in-flight skip response cannot mutate the next date's surface", async (
 
   assert.equal(harness.deps.state.sessionIdsByDate["2026-06-30"], "95");
   assert.equal(harness.deps.state.sessionIdsByDate["2026-07-01"], undefined);
-  assert.equal(card.isConnected, true);
+  // The card left on the tap, on its own date's surface. The late response must
+  // not reach the next date: no cache drop, no toast, no repaint.
+  assert.equal(card.isConnected, false);
+  assert.deepEqual(harness.collapses, [card]);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Squat skipped today"]);
   assert.deepEqual(harness.invalidations, []);
-  assert.deepEqual(harness.collapses, []);
-  assert.deepEqual(harness.toasts, []);
   assert.deepEqual(harness.renders, []);
 });
 
@@ -1357,6 +1447,75 @@ test("Reopen leaves the current UI intact when ID recovery or the POST fails", a
   assert.equal(rejected.renders.length, 0);
   assert.equal(rejected.transitions.length, 0);
   assert.equal(rejectedReopen.disabled, false);
+});
+
+test("FINISH re-render does not re-take the wake lock; Reopen does", async () => {
+  const wake = [];
+  const harness = loadController({
+    contextOverrides: {
+      acquireWakeLock: () => { wake.push("acquire"); },
+      releaseWakeLock: () => { wake.push("release"); },
+    },
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/44/finish" && opts?.method === "POST") {
+        return {
+          id: 44,
+          date: "2026-06-30",
+          finished_at: "2026-06-30T15:00:00Z",
+          sets: [{ exercise: "Push-up" }],
+          summary: { sets: 1, tonnage: 160 },
+        };
+      }
+      if (path === "/sessions/44/reopen" && opts?.method === "POST") {
+        return {
+          id: 44,
+          date: "2026-06-30",
+          finished_at: null,
+          sets: [{ exercise: "Push-up" }],
+        };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "session";
+  // The live path is finish → releaseWakeLock → 300ms settle → renderToday →
+  // renderSession → wireSessionSurface. Reproduce that re-render here with the
+  // cached session, the same object renderSession would pass.
+  harness.deps.renderToday = () => {
+    harness.renders.push({});
+    const cached = harness.cachedWrites.at(-1)?.data;
+    harness.controller.wireSessionSurface({
+      session: cached,
+      hasLoggedSets: true,
+    }, harness.deps);
+  };
+
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+  const reopen = surface.appendChild(new FakeElement("button", { id: "reopenBtn" }));
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [{ exercise: "Push-up" }] },
+    hasLoggedSets: true,
+  }, harness.deps);
+  assert.deepEqual(wake, ["acquire"]);
+
+  finish.click();
+  await flushAsync();
+  assert.ok(wake.includes("release"), "FINISH drops the lock");
+  assert.deepEqual(
+    wake.filter((step) => step === "acquire"),
+    ["acquire"],
+    "the finished re-render must not take the lock back",
+  );
+
+  reopen.click();
+  await flushAsync();
+  assert.deepEqual(
+    wake.filter((step) => step === "acquire"),
+    ["acquire", "acquire"],
+    "Reopen must take the lock again",
+  );
 });
 
 test("Today session controller finishes into cached done mode immediately", async () => {
@@ -1728,10 +1887,14 @@ test("cross-tab prepare states block direct skip and restore with refresh guidan
 
     assert.deepEqual(harness.requests, [], state);
     assert.deepEqual(harness.outbox, [], state);
+    // Both surfaces moved optimistically and were put back by the barrier — the
+    // very node the athlete tapped, not a re-rendered copy of it.
     assert.equal(plan.isConnected, true);
     assert.equal(restore.isConnected, true);
     assert.deepEqual(harness.toasts.map((toast) => toast.message), [
+      "Squat skipped today",
       "This session is being prepared in another tab or view — refresh before skipping.",
+      "Bench is back on",
       "This session is being prepared in another tab or view — refresh before restoring.",
     ]);
   }
@@ -1902,4 +2065,454 @@ test("Today session controller's lastSets wiring is a no-op for an exercise miss
   row.querySelector(".in-r").dispatch("input");
   assert.equal(line.classList.contains("ex-lastset-beat"), false);
   assert.equal(line.dataset.wired, undefined);
+});
+
+test("skipping a plan exercise collapses the card before the POST resolves", async () => {
+  let resolveSkip;
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/skip" && opts?.method === "POST") return new Promise((resolve) => { resolveSkip = resolve; });
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  const card = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
+  const skip = card.appendChild(new FakeElement("button", {
+    className: "ex-skip",
+    dataset: { skip: encodeURIComponent("Squat") },
+  }));
+  const line = harness.rootEl.appendChild(new FakeElement("div", { id: "skipLine", className: "skipline skipline-empty" }));
+  line.appendChild(new FakeElement("span", { className: "skipline-names" }));
+
+  harness.controller.wireSkips(harness.deps);
+  skip.click();
+  await flushAsync();
+
+  // "Not today" is the athlete's own decision — the card is gone and the name is on
+  // the skip line while the write is still in flight.
+  assert.equal(card.isConnected, false);
+  assert.deepEqual(harness.collapses, [card]);
+  assert.equal(line.querySelector("[data-unskip]") !== null, true);
+  assert.equal(harness.toasts.at(-1).message, "Squat skipped today");
+  assert.equal(harness.toasts.at(-1).options.action, "Undo");
+
+  resolveSkip({ ok: true, date: "2026-06-30", exercise: "Squat", skips: ["Squat"] });
+  await flushAsync();
+  assert.equal(card.isConnected, false, "an accepted skip leaves the card off the surface");
+});
+
+test("a refused skip puts the card back on the surface", async () => {
+  const harness = loadController({
+    apiImpl: async () => ({ ok: false, error: "sets logged" }),
+  });
+  const card = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
+  const skip = card.appendChild(new FakeElement("button", {
+    className: "ex-skip",
+    dataset: { skip: encodeURIComponent("Squat") },
+  }));
+  const line = harness.rootEl.appendChild(new FakeElement("div", { id: "skipLine", className: "skipline skipline-empty" }));
+  line.appendChild(new FakeElement("span", { className: "skipline-names" }));
+
+  harness.controller.wireSkips(harness.deps);
+  skip.click();
+  await flushAsync();
+
+  assert.equal(card.isConnected, true, "the card is re-seated where it sat");
+  assert.deepEqual(harness.expands, [card]);
+  assert.equal(line.querySelector("[data-unskip]"), null, "the skip line is clean again");
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), [
+    "Squat skipped today",
+    "Sets already logged — delete them first",
+  ]);
+  assert.deepEqual(harness.invalidations, [], "a refused skip never drops the session cache");
+});
+
+test("log-row drafts and the caret survive a full repaint of the surface", () => {
+  const harness = loadController();
+  const build = (weight, reps) => {
+    const card = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
+    const row = card.appendChild(new FakeElement("div", { className: "logrow", dataset: { ex: "Squat", mode: "reps" } }));
+    row.appendChild(new FakeElement("input", { className: "in-w", value: weight }));
+    row.appendChild(new FakeElement("input", { className: "in-r", value: reps }));
+    row.appendChild(new FakeElement("input", { className: "in-rir", value: "" }));
+    return { card, row };
+  };
+  // A peak day renders one lift twice, so drafts are keyed by name AND ordinal.
+  const top = build("225", "3");
+  const backOff = build("185", "");
+  top.row.children[0].dataset.dirty = "1";
+  top.row.children[1].dataset.dirty = "1";
+  backOff.row.children[0].dataset.dirty = "1";
+  const active = backOff.row.children[1];
+  active.selectionStart = 0;
+  active.selectionEnd = 0;
+  harness.context.document.activeElement = active;
+  const setActions = harness.setActions;
+
+  const snapshot = setActions.captureExDrafts(harness.rootEl);
+
+  // The repaint: every card is replaced by a freshly-rendered, empty one.
+  top.card.remove();
+  backOff.card.remove();
+  const freshTop = build("", "");
+  const freshBackOff = build("", "");
+  setActions.restoreExDrafts(harness.rootEl, snapshot);
+
+  assert.equal(freshTop.row.children[0].value, "225");
+  assert.equal(freshTop.row.children[1].value, "3");
+  assert.equal(freshBackOff.row.children[0].value, "185");
+  assert.equal(freshBackOff.row.children[1].value, "");
+  assert.equal(freshBackOff.row.children[1].focusCount, 1, "the caret returns to the field it was in");
+});
+
+test("an untouched prefill is not restored over a new prefill; a typed value is", () => {
+  const harness = loadController();
+  const build = (weight, reps, dirty) => {
+    const card = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
+    const row = card.appendChild(new FakeElement("div", { className: "logrow", dataset: { ex: "Squat", mode: "reps" } }));
+    const weightEl = row.appendChild(new FakeElement("input", { className: "in-w", value: weight }));
+    const repsEl = row.appendChild(new FakeElement("input", { className: "in-r", value: reps }));
+    row.appendChild(new FakeElement("input", { className: "in-rir", value: "" }));
+    if (dirty) {
+      weightEl.dataset.dirty = "1";
+      repsEl.dataset.dirty = "1";
+    }
+    return { card, row };
+  };
+  const setActions = harness.setActions;
+
+  const untouched = build("225", "3", false);
+  const snapshotUntouched = setActions.captureExDrafts(harness.rootEl);
+  untouched.card.remove();
+  const adapted = build("235", "5", false);
+  setActions.restoreExDrafts(harness.rootEl, snapshotUntouched);
+  assert.equal(adapted.row.children[0].value, "235", "untouched prefill does not overwrite a newer prefill");
+  assert.equal(adapted.row.children[1].value, "5");
+  adapted.card.remove();
+
+  const typed = build("225", "3", true);
+  const snapshotTyped = setActions.captureExDrafts(harness.rootEl);
+  typed.card.remove();
+  const replaced = build("235", "5", false);
+  setActions.restoreExDrafts(harness.rootEl, snapshotTyped);
+  assert.equal(replaced.row.children[0].value, "225", "a typed value wins over the new prefill");
+  assert.equal(replaced.row.children[1].value, "3");
+});
+
+test("double-tapping + logs one set; a tap after the re-arm window logs another", async () => {
+  const timers = [];
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") {
+        return new Promise(() => {});
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+    contextOverrides: {
+      setTimeout: (fn, ms) => {
+        const id = timers.push({ fn, ms });
+        return id;
+      },
+      clearTimeout: (id) => {
+        if (id) timers[id - 1] = null;
+      },
+    },
+  });
+  const { row, button } = addLoggingCard(harness.rootEl);
+  harness.controller.wireLogRow(row, harness.deps);
+
+  const original = harness.context.runSessionMutation;
+  const mutationCalls = [];
+  harness.context.runSessionMutation = (...args) => {
+    mutationCalls.push(args[0]);
+    return original(...args);
+  };
+
+  button.click();
+  button.click();
+  await flushAsync();
+  assert.equal(mutationCalls.length, 1, "two synchronous clicks → exactly one runSessionMutation call");
+  assert.equal(button.disabled, true);
+
+  for (const timer of timers) {
+    if (timer && timer.ms === 400) timer.fn();
+  }
+  assert.equal(button.disabled, false, "the re-arm window frees the button");
+  button.click();
+  await flushAsync();
+  assert.equal(mutationCalls.length, 2, "a click after the window → a second call");
+});
+
+test("a queued pending chip is put back after a session re-wire", async () => {
+  const harness = loadController({
+    apiImpl: async () => { throw new Error("offline"); },
+    contextOverrides: { CairnApiCache: { isTransientApiFailure: () => true } },
+  });
+  const { row, button, logged } = addLoggingCard(harness.rootEl);
+  harness.controller.wireLogRow(row, harness.deps);
+
+  button.click();
+  await flushAsync();
+  assert.equal(logged.children.length, 1);
+  assert.equal(logged.children[0].dataset.pending, "1");
+  assert.equal(harness.outbox[0].kind, "set");
+
+  logged.children.slice().forEach((chip) => chip.remove());
+  assert.equal(logged.children.length, 0, "a full render would have wiped the chip");
+
+  harness.controller.wireSessionSurface({ session: {}, hasLoggedSets: false }, harness.deps);
+  assert.equal(logged.children.length, 1, "the queued chip is still present after the repaint");
+  assert.equal(logged.children[0].dataset.pending, "1");
+});
+
+test("a needs_attention set is not reprojected after a session re-wire", () => {
+  const harness = loadController();
+  const { logged } = addLoggingCard(harness.rootEl);
+  harness.outbox.push({
+    id: "att-1",
+    kind: "set",
+    path: "/sets",
+    state: "needs_attention",
+    session_date: "2026-06-30",
+    body: { exercise: "Push-up", weight: 20, reps: 8, date: "2026-06-30" },
+  });
+  harness.controller.wireSessionSurface({ session: {}, hasLoggedSets: false }, harness.deps);
+  assert.equal(logged.children.length, 0, "the review sheet owns needs_attention rows");
+});
+
+test("a queued set is reprojected after a session re-wire", () => {
+  const harness = loadController();
+  const { logged } = addLoggingCard(harness.rootEl);
+  harness.outbox.push({
+    id: "q-1",
+    kind: "set",
+    path: "/sets",
+    session_date: "2026-06-30",
+    body: { exercise: "Push-up", weight: 20, reps: 8, date: "2026-06-30" },
+  });
+  harness.controller.wireSessionSurface({ session: {}, hasLoggedSets: false }, harness.deps);
+  assert.equal(logged.children.length, 1);
+  assert.equal(logged.children[0].dataset.pending, "1");
+  assert.equal(logged.children[0].dataset.mutationId, "q-1");
+  assert.match(harness.rootEl.querySelector("[data-finishstat]").textContent, /1 sets/);
+});
+
+test("an explicit pending set is reprojected after a session re-wire", () => {
+  const harness = loadController();
+  const { logged } = addLoggingCard(harness.rootEl);
+  harness.outbox.push({
+    id: "p-1",
+    kind: "set",
+    path: "/sets",
+    state: "pending",
+    session_date: "2026-06-30",
+    body: { exercise: "Push-up", weight: 20, reps: 8, date: "2026-06-30" },
+  });
+  harness.controller.wireSessionSurface({ session: {}, hasLoggedSets: false }, harness.deps);
+  assert.equal(logged.children.length, 1);
+  assert.equal(logged.children[0].dataset.pending, "1");
+  assert.equal(logged.children[0].dataset.mutationId, "p-1");
+});
+
+function installInFlightSetMutation(harness, { id, settle }) {
+  harness.context.runSessionMutation = async (input, send) => {
+    harness.outbox.push({
+      id,
+      kind: input.kind,
+      path: input.path,
+      body: input.body,
+      session_date: input.date,
+      state: "sending",
+    });
+    try {
+      const value = await send(id);
+      const index = harness.outbox.findIndex((item) => item.id === id);
+      if (index >= 0) harness.outbox.splice(index, 1);
+      return { status: "sent", value, groupId: "date:2026-06-30" };
+    } catch (error) {
+      const current = harness.outbox.find((item) => item.id === id);
+      if (current) current.state = "needs_attention";
+      if (settle === "failed") return { status: "failed", error, groupId: "date:2026-06-30" };
+      throw error;
+    }
+  };
+}
+
+function replaceLoggingCard(harness, card, name = "Push-up") {
+  card.remove();
+  const next = addLoggingCard(harness.rootEl, name);
+  harness.controller.wireSessionSurface({ session: {}, hasLoggedSets: false }, harness.deps);
+  return next;
+}
+
+test("a mid-flight repaint still commits the live chip when the mutation lands", async () => {
+  let resolveSend;
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") {
+        return new Promise((resolve) => { resolveSend = resolve; });
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  installInFlightSetMutation(harness, { id: "mut-flight-1", settle: "sent" });
+  const original = addLoggingCard(harness.rootEl);
+  harness.controller.wireLogRow(original.row, harness.deps);
+
+  original.button.click();
+  await flushAsync();
+  assert.equal(original.logged.children.length, 1);
+  assert.equal(original.logged.children[0].dataset.pending, "1");
+  assert.equal(original.logged.children[0].dataset.mutationId, "mut-flight-1");
+
+  const fresh = replaceLoggingCard(harness, original.card);
+  assert.equal(original.card.isConnected, false);
+  assert.equal(fresh.logged.children.length, 1, "the sending chip is reprojected onto the new card");
+  assert.equal(fresh.logged.children[0].dataset.pending, "1");
+  assert.equal(fresh.logged.children[0].dataset.mutationId, "mut-flight-1");
+
+  resolveSend({ ok: true, id: 99, set_number: 1, weight: 20, reps: 8, rir: 2, date: "2026-06-30" });
+  await flushAsync();
+  assert.equal(fresh.logged.children.length, 1);
+  assert.equal(fresh.logged.children[0].dataset.pending, undefined);
+  assert.equal(fresh.logged.children[0].dataset.set, "99");
+  assert.equal(fresh.logged.children[0].dataset.mutationId, undefined);
+  assert.equal(fresh.logged.children[0].querySelector("[data-del]").dataset.del, "99");
+});
+
+test("a mid-flight repaint still removes the live chip when the mutation fails", async () => {
+  let rejectSend;
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") {
+        return new Promise((_, reject) => { rejectSend = reject; });
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  installInFlightSetMutation(harness, { id: "mut-flight-fail", settle: "failed" });
+  const original = addLoggingCard(harness.rootEl);
+  harness.controller.wireLogRow(original.row, harness.deps);
+
+  original.button.click();
+  await flushAsync();
+  const fresh = replaceLoggingCard(harness, original.card);
+  assert.equal(fresh.logged.children.length, 1);
+  assert.equal(fresh.logged.children[0].dataset.mutationId, "mut-flight-fail");
+
+  rejectSend(new Error("refused"));
+  await flushAsync();
+  assert.equal(fresh.logged.children.length, 0, "the visible reprojected chip is rolled back");
+  assert.equal(harness.starts.length, 1);
+  assert.equal(harness.stops.length, 1, "a failed write stops the optimistic rest");
+});
+
+test("a mid-flight repaint still reconciles the live chip when the mutation queues", async () => {
+  let resolveQueue;
+  const harness = loadController();
+  harness.context.runSessionMutation = async (input) => {
+    const item = {
+      id: "mut-queued-1",
+      kind: input.kind,
+      path: input.path,
+      body: input.body,
+      session_date: input.date,
+      state: "pending",
+    };
+    harness.outbox.push(item);
+    await new Promise((resolve) => { resolveQueue = resolve; });
+    return { status: "queued", item, groupId: "date:2026-06-30" };
+  };
+  const original = addLoggingCard(harness.rootEl);
+  harness.controller.wireLogRow(original.row, harness.deps);
+
+  original.button.click();
+  await flushAsync();
+  assert.equal(original.logged.children.length, 1);
+  assert.equal(original.logged.children[0].dataset.pending, "1");
+  assert.equal(original.logged.children[0].dataset.mutationId, undefined, "queued never calls send, so the chip has no id yet");
+
+  const fresh = replaceLoggingCard(harness, original.card);
+  assert.equal(fresh.logged.children.length, 1, "the queued chip is reprojected onto the new card");
+  assert.equal(fresh.logged.children[0].dataset.pending, "1");
+  assert.equal(fresh.logged.children[0].dataset.mutationId, "mut-queued-1");
+
+  resolveQueue();
+  await flushAsync();
+  assert.equal(fresh.logged.children.length, 1, "queued writes keep the visible chip");
+  assert.equal(fresh.logged.children[0].dataset.pending, "1");
+  assert.equal(fresh.logged.children[0].dataset.mutationId, "mut-queued-1");
+  assert.equal(harness.starts.length, 1);
+  assert.equal(harness.stops.length, 0, "a queued write keeps the rest — the set is durably held");
+});
+
+test("two concurrent set taps on different exercises adopt their own ids out of order", async () => {
+  const resolvers = [];
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") {
+        return new Promise((resolve) => { resolvers.push(resolve); });
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  const bench = addLoggingCard(harness.rootEl, "Bench");
+  const squat = addLoggingCard(harness.rootEl, "Squat");
+  harness.controller.wireLogRow(bench.row, harness.deps);
+  harness.controller.wireLogRow(squat.row, harness.deps);
+
+  bench.button.click();
+  squat.button.click();
+  await flushAsync();
+  assert.equal(resolvers.length, 2);
+  assert.equal(bench.logged.children[0].dataset.pending, "1");
+  assert.equal(squat.logged.children[0].dataset.pending, "1");
+
+  resolvers[1]({ ok: true, id: 22, set_number: 1, weight: 20, reps: 8, rir: 2, date: "2026-06-30" });
+  await flushAsync();
+  assert.equal(squat.logged.children[0].dataset.set, "22");
+  assert.equal(bench.logged.children[0].dataset.set, "", "the first chip waits on its own response");
+
+  resolvers[0]({ ok: true, id: 11, set_number: 1, weight: 20, reps: 8, rir: 2, date: "2026-06-30" });
+  await flushAsync();
+  assert.equal(bench.logged.children[0].dataset.set, "11");
+  assert.equal(squat.logged.children[0].dataset.set, "22");
+});
+
+test("undoing a refused skip leaves the card restored", async () => {
+  let resolveSkip;
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/skip" && opts?.method === "POST") {
+        return new Promise((resolve) => { resolveSkip = resolve; });
+      }
+      if (path === "/sessions/skip" && opts?.method === "DELETE") {
+        return { ok: false, error: "not skipped" };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  const card = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
+  const skip = card.appendChild(new FakeElement("button", {
+    className: "ex-skip",
+    dataset: { skip: encodeURIComponent("Squat") },
+  }));
+  const addex = harness.rootEl.appendChild(new FakeElement("div", { className: "addex" }));
+  const line = harness.rootEl.appendChild(new FakeElement("div", { id: "skipLine", className: "skipline skipline-empty" }));
+  line.appendChild(new FakeElement("span", { className: "skipline-names" }));
+
+  harness.controller.wireSkips(harness.deps);
+  skip.click();
+  await flushAsync();
+  assert.equal(card.isConnected, false);
+
+  harness.toasts.at(-1).options.onAction();
+  await flushAsync();
+  assert.equal(card.isConnected, true, "Undo restored the card while the skip was in flight");
+  assert.equal(harness.rootEl.children.indexOf(card) < harness.rootEl.children.indexOf(addex), true);
+
+  resolveSkip({ ok: false, error: "sets logged" });
+  await flushAsync();
+
+  assert.equal(card.isConnected, true, "a refused skip's Undo does not collapse the card again");
+  assert.equal(harness.requests.filter((request) => request.opts?.method === "DELETE").length, 0);
 });

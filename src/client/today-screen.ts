@@ -439,6 +439,9 @@ async function renderToday(opts: any = {}) {
   const todayWrappedHtml = todayMainShell.wrapHtml(html, {
     railHtml: `<aside class="today-rail" aria-busy="true"></aside>`,
   });
+  // Cold path: the data loader paints a skeleton before we get here, so this
+  // capture is empty on that path by design — drafts only survive a warm repaint.
+  const todayDrafts = CairnTodaySessionSetActions.captureExDrafts(todayView);
   todayView.innerHTML = todayWrappedHtml;
   if (soft) {
     try {
@@ -492,6 +495,9 @@ async function renderToday(opts: any = {}) {
   CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets, lastSets }, todaySessionDeps());
 
   setupAddExercise();
+
+  // After wiring, so a restored draft's input event reaches the live last-set line.
+  CairnTodaySessionSetActions.restoreExDrafts(todayView, todayDrafts);
 
   todayDataLoader.scheduleSoftRepaint(todayData, todayDeps().dataRefresh());
 
@@ -1325,6 +1331,7 @@ async function renderSession(opts: any = {}): Promise<void> {
   // Same stale-render bail as renderToday: the loads above can outlast leaving
   // the Session destination, and this paint must never land on another tab.
   if (todayState.tab !== "session" || todayState.logDate !== enteredDate) return;
+  const sessionDrafts = CairnTodaySessionSetActions.captureExDrafts(todayView);
   todayView.innerHTML = sessionShellHtml(surface, {
     fresh,
     kicker,
@@ -1346,9 +1353,17 @@ async function renderSession(opts: any = {}): Promise<void> {
     todaySessionDeps()
   );
   wireExerciseDecisionUndo(todayView, () => renderSession({ soft: true }));
+  // Opt-in and device-local: keep the screen lit while this surface is open, so
+  // a long rest between heavy sets doesn't end on a locked phone. A no-op when
+  // the preference is off, the browser has no wake-lock API, or the session is
+  // already finished — FINISH re-renders this destination ~300ms later with
+  // tab still "session", and that paint must not quietly take the lock back.
+  if (!isFinished && typeof acquireWakeLock === "function") void acquireWakeLock();
   setupAddExercise();
   wireGuides(view);
   wireSessionDestination();
+  // After wiring, so a restored draft's input event reaches the live last-set line.
+  CairnTodaySessionSetActions.restoreExDrafts(todayView, sessionDrafts);
 
   // A fresh entry places assistive-tech focus on the one session heading. The
   // visual scroll remains at the top and reduced-motion users get no animation.

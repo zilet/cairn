@@ -18,7 +18,7 @@ function escAttr(value) {
   return escHtml(value).replaceAll('"', "&quot;");
 }
 
-function loadTodayCards() {
+function loadTodayCardsContext() {
   const context = {
     Array,
     Math,
@@ -26,6 +26,7 @@ function loadTodayCards() {
     Object,
     String,
     encodeURIComponent,
+    decodeURIComponent,
     escHtml,
     escAttr,
     fmtDur: (seconds) => `${seconds}s`,
@@ -50,7 +51,11 @@ function loadTodayCards() {
   vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-surface-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-cards-client.js"), "utf8"), context);
-  return context.CairnTodayCards;
+  return context;
+}
+
+function loadTodayCards() {
+  return loadTodayCardsContext().CairnTodayCards;
 }
 
 test("Today exercise card helper preserves selectors, escaping, and timed mode", () => {
@@ -476,4 +481,53 @@ test("A single card per exercise emits no card key and keeps its skip affordance
     null
   );
   assert.equal(keyedSameName, plain);
+});
+
+test("typed RIR on a real rendered card reaches the POST body", () => {
+  const context = loadTodayCardsContext();
+  const html = context.CairnTodayCards.exerciseCardHtml(
+    { fromPlan: true, exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+    [],
+    { weight: 185, reps: 5, rir: "" },
+    null,
+    null,
+    {},
+  );
+  assert.match(html, /class="in-rir"/, "the renderer emits the class logPayloadFromRow reads");
+  assert.doesNotMatch(html, /data-mode="timed"/);
+
+  const logrow = html.match(/<div class="logrow"[^>]*>[\s\S]*?<\/div>/)?.[0] || "";
+  assert.match(logrow, /class="in-rir"/);
+  const dataEx = logrow.match(/data-ex="([^"]*)"/)?.[1] || "";
+  const dataDay = logrow.match(/data-day="([^"]*)"/)?.[1] ?? "";
+
+  function inputEl(className, value) {
+    return {
+      className,
+      value,
+      classList: { contains: (name) => className.split(/\s+/).includes(name) },
+    };
+  }
+  const children = [
+    inputEl("in-w", "185"),
+    inputEl("in-r", "5"),
+    inputEl("in-rir", "3"),
+  ];
+  const row = {
+    dataset: { ex: dataEx, day: dataDay },
+    querySelector(selector) {
+      const cls = selector.startsWith(".") ? selector.slice(1) : "";
+      return children.find((el) => el.classList.contains(cls)) || null;
+    },
+  };
+  const payload = context.CairnTodaySessionSetModel.logPayloadFromRow(row, {
+    state: { logDate: "2026-06-30" },
+    parseDur: () => null,
+    fmtDur: (seconds) => String(seconds),
+  });
+  assert.equal(payload.ok, true);
+  assert.equal(payload.body.rir, 3, "a typed RIR from the rendered .in-rir field reaches the POST body");
+  assert.equal(payload.body.weight, 185);
+  assert.equal(payload.body.reps, 5);
+  assert.equal(payload.body.exercise, "Bench Press");
 });

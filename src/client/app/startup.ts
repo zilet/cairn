@@ -29,6 +29,7 @@
     setTimeout(() => { jobReconnect(); }, 0);
     installMobileViewportGuards();
     installDayRolloverWatcher();
+    installWakeLockWatcher();
   }
 
   Object.assign(globalThis, { startAppShell });

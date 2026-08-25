@@ -659,6 +659,10 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   padding:4px 11px;color:var(--ink);
 }
 .chip span{color:var(--muted)}
+/* a set that is already on the card but not yet acknowledged by the server:
+   present and readable, just quieter — never a doubt about whether it saved */
+.chip[data-pending="1"]{opacity:.62;border-style:dashed}
+.chip[data-pending="1"] .chip-x,.chip[data-pending="1"] [data-del]{display:none}
 .chip-n{color:var(--accent);font-weight:620;margin-right:1px}
 /* destructive remove → .xbtn; delta = faint glyph that warms to --warn */
 .chip-x{color:var(--faint);font-size:1rem;padding:0 0 0 4px}
@@ -836,6 +840,15 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .rest-btn{background:var(--card-2);border:1px solid var(--line-2);color:var(--ink);
   border-radius:999px;padding:6px 14px;font-size:.8rem;font-weight:600}
 .rest-skip{color:var(--muted)}
+
+/* The countdown has landed and the bar has flipped to a quiet count-UP of the
+   rest actually taken ("Rested 2:40") — the readout that matters on a heavy
+   lift. Same bar, same geometry: the line simply settles full-width in the
+   hairline tone instead of the terracotta, the clock drops to secondary ink,
+   and the ±15 buttons retire (there is no deadline left to move). */
+.rest.rested .rest-fill{background:var(--line-2);transition:none}
+.rest.rested .rest-time{color:var(--ink-2)}
+.rest.rested .rest-btn:not(.rest-skip){visibility:hidden}
 
 /* while the rest bar is up, give the page enough bottom clearance that the
    content above it (FINISH row, chatbar) can always scroll clear of the bar */
@@ -5179,10 +5192,13 @@ button.hmk-row:active{background:var(--card-2)}
 /* .sheet-x is intentionally NOT here — it's already position:absolute (pinned to the
    sheet card's top-right corner), and listing it would override that to relative,
    dropping the ✕ into normal flow at the top-left where it clips. Its ::before tap
-   overlay below still anchors correctly to the absolutely-positioned button. */
-.feel-dot,.iconbtn,.delbtn,.ex-skip,.togglebtn,.agent-detail-link{position:relative}
+   overlay below still anchors correctly to the absolutely-positioned button.
+   .logbtn is the app-wide primary button (44×42 in the set row; other surfaces override
+   its size) and .rest-btn the rest-bar ±15/Skip — both sat under the 44 px hit floor. */
+.feel-dot,.iconbtn,.delbtn,.ex-skip,.togglebtn,.agent-detail-link,.logbtn,.rest-btn{position:relative}
 .feel-dot::before,.iconbtn::before,.delbtn::before,
-.ex-skip::before,.togglebtn::before,.agent-detail-link::before,.sheet-x::before{
+.ex-skip::before,.togglebtn::before,.agent-detail-link::before,.sheet-x::before,
+.logbtn::before,.rest-btn::before{
   content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
   min-width:44px;min-height:44px;width:100%;height:100%;
 }

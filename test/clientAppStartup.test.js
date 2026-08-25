@@ -26,6 +26,7 @@ function loadStartup(options = {}) {
     globalThis: null,
     installMobileViewportGuards: () => calls.push(["installMobileViewportGuards"]),
     installDayRolloverWatcher: () => calls.push(["installDayRolloverWatcher"]),
+    installWakeLockWatcher: () => calls.push(["installWakeLockWatcher"]),
     jobReconnect: () => calls.push(["jobReconnect"]),
     location: {
       href: options.href || "http://cairn.local/app/chat",
@@ -92,6 +93,7 @@ test("app startup activates direct app routes without canonicalizing", () => {
     ["jobReconnect"],
     ["installMobileViewportGuards"],
     ["installDayRolloverWatcher"],
+    ["installWakeLockWatcher"],
   ]);
 });
 

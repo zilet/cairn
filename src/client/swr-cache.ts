@@ -6,7 +6,12 @@ type ClientApiResponse<Path extends string> = import("../contracts/client.js").C
 type ClientSwrEntry<T> = { data: T; ts: number };
 type ClientSwrPeek<T> = { data: T; fresh: boolean };
 type ClientSwrUpgradeMeta = { changed: boolean };
-type ClientCachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: ClientSwrUpgradeMeta) => void };
+type ClientCachedApiOptions<T> = {
+  key?: string;
+  freshFor?: number;
+  serveFreshFor?: number;
+  onUpgrade?: (data: T, meta: ClientSwrUpgradeMeta) => void;
+};
 type ClientOptimisticMutationOptions<T, R = unknown> = {
   key: string;
   apply: (current: T | null) => T;
@@ -23,6 +28,7 @@ type ClientPaintSwrOptions<T> = {
   render?: (data: T, meta: { warm: boolean }) => void;
   token?: unknown;
   freshFor?: number;
+  serveFreshFor?: number;
   tab?: string | null;
 };
 
@@ -169,13 +175,25 @@ function _swrSame(a: unknown, b: unknown): boolean {
 // swallowed (api() already surfaced the offline hairline) and the stale value is
 // returned so callers never blank out. Returns a promise of the fresh data so a
 // deliberate caller can still `await cachedApi(...)` like a plain fetch.
+//
+// A VERY-fresh entry short-circuits without touching the network. `serveFreshFor`
+// (default 3s) is that skip-the-network window — long enough to collapse duplicate
+// reads in one paint, short enough that a scheduler/MCP/other-device write is not
+// pinned for the caller's `freshFor` (60s / 300s), which still means "paint without
+// the refreshing hairline". `freshFor: 0` still forces a fetch (min of the two).
+// Staleness is not the only invalidator: every mutating write already drops the
+// keys it touches (`swrInvalidate` / `invalidateSetTruth`), and a dropped key
+// never peeks fresh, so a write is still reflected on the very next read.
+// `onUpgrade` deliberately does NOT fire on a skip — it means "the network
+// answered", and nothing was asked.
 function cachedApi<Path extends string>(
   path: Path,
   options: ClientCachedApiOptions<ClientApiResponse<Path>> = {},
 ): Promise<ClientApiResponse<Path>> {
-  const { key, freshFor = 60000, onUpgrade } = options;
+  const { key, freshFor = 60000, serveFreshFor = 3000, onUpgrade } = options;
   const k = key || path;
-  const prior = peekCached<ClientApiResponse<Path>>(k, freshFor);
+  const prior = peekCached<ClientApiResponse<Path>>(k, Math.min(freshFor, serveFreshFor));
+  if (prior && prior.fresh) return Promise.resolve(prior.data);
   const revisionAtStart = _swrRevision(k);
   const prefixAtStart = _swrPrefixStamp(k);
   return api(path)
@@ -210,7 +228,7 @@ function cachedApi<Path extends string>(
 function paintSWR<Path extends string>(
   options: ClientPaintSwrOptions<ClientApiResponse<Path>> & { path?: Path } = {},
 ): Promise<ClientApiResponse<Path> | undefined> {
-  const { key, path, peek, render, token, freshFor = 60000, tab } = options;
+  const { key, path, peek, render, token, freshFor = 60000, serveFreshFor, tab } = options;
   if (!key || !path || typeof render !== "function") return Promise.resolve(undefined);
   const p = peek !== undefined ? peek : peekCached<ClientApiResponse<Path>>(key, freshFor);
   const tabAtStart = tab !== undefined ? tab : state.tab;
@@ -223,6 +241,7 @@ function paintSWR<Path extends string>(
   return cachedApi(path, {
     key,
     freshFor,
+    serveFreshFor,
     onUpgrade: (data, { changed }) => {
       if (stale()) return;
       markRefreshing(false);

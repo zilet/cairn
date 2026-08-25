@@ -409,10 +409,21 @@ declare global {
       deps: Pick<ClientTodaySessionControllerDeps, "parseDur">
     ): void;
   };
+  // What one repaint of a logging surface must NOT cost the athlete: the values
+  // typed into each card's log row, and the caret sitting in one of them.
+  // Untouched prefills are stored as null so a later adapted Rx is not overwritten.
+  type ClientTodayExDraftSnapshot = {
+    drafts: Map<string, Array<string | null>>;
+    focus: { key: string; index: number; start: number | null; end: number | null } | null;
+  };
+
   type ClientTodaySessionSetActionsApi = {
     wireDeletes(deps: ClientTodaySessionControllerDeps): void;
     wireLogRow(row: Element | null | undefined, deps: ClientTodaySessionControllerDeps): void;
-    refreshFinishStat(deps: ClientTodaySessionControllerDeps): boolean;
+    refreshFinishStat(deps: ClientTodaySessionControllerDeps, options?: { repaint?: boolean }): boolean;
+    captureExDrafts(root: ParentNode | null | undefined): ClientTodayExDraftSnapshot | null;
+    restoreExDrafts(root: ParentNode | null | undefined, snapshot: ClientTodayExDraftSnapshot | null): void;
+    reprojectPendingSets(deps: ClientTodaySessionControllerDeps): void;
   };
 
   type ClientTodayBriefControllerDeps = {
@@ -1427,7 +1438,12 @@ declare global {
 
   type SwrPeek<T> = { data: T; fresh: boolean };
   type SwrUpgradeMeta = { changed: boolean };
-  type CachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: SwrUpgradeMeta) => void };
+  type CachedApiOptions<T> = {
+    key?: string;
+    freshFor?: number;
+    serveFreshFor?: number;
+    onUpgrade?: (data: T, meta: SwrUpgradeMeta) => void;
+  };
   type OptimisticMutationOptions<T, R = unknown> = {
     key: string;
     apply: (current: T | null) => T;
@@ -1444,6 +1460,7 @@ declare global {
     render?: (data: T, meta: { warm: boolean }) => void;
     token?: unknown;
     freshFor?: number;
+    serveFreshFor?: number;
     tab?: string | null;
   };
   declare function peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
@@ -1803,6 +1820,9 @@ declare global {
   declare function paintRest(): void;
   declare function startRest(seconds?: number): void;
   declare function stopRest(): void;
+  declare function hideRestBar(): void;
+  declare function surfaceRestBar(): void;
+  declare function reconcileRest(): void;
   declare function artImg(kind: string, text: string, className?: string, svg?: string | null): string;
   declare function setsTonnage(sets: unknown): number;
   declare function enrichBadge(status: unknown): string;
@@ -1842,6 +1862,12 @@ declare global {
   declare function registerAppJobReconnectors(): void;
   declare function installMobileViewportGuards(): void;
   declare function installDayRolloverWatcher(): void;
+  declare function installWakeLockWatcher(): void;
+  declare function acquireWakeLock(): Promise<void>;
+  declare function releaseWakeLock(): Promise<void>;
+  declare function wakeLockSupported(): boolean;
+  declare function wakeLockEnabled(): boolean;
+  declare function setWakeLockEnabled(on: boolean): void;
   declare function dayRolloverTarget(
     current: string,
     measured: string,
@@ -1988,6 +2014,14 @@ declare global {
     registerAppJobReconnectors(): void;
     installMobileViewportGuards(): void;
     installDayRolloverWatcher(): void;
+    installWakeLockWatcher(): void;
+    acquireWakeLock(): Promise<void>;
+    releaseWakeLock(): Promise<void>;
+    wakeLockSupported(): boolean;
+    wakeLockEnabled(): boolean;
+    setWakeLockEnabled(on: boolean): void;
+    hideRestBar(): void;
+    surfaceRestBar(): void;
     registerServiceWorkerLifecycle(): void;
     primeDiscipline(): void;
     maybeOnboard(): Promise<void>;
@@ -3372,6 +3406,10 @@ declare global {
       paintRest(): void;
       startRest(seconds?: number): void;
       stopRest(): void;
+      hideRestBar(): void;
+      surfaceRestBar(): void;
+      reconcileRest(): void;
+      restoreRest(): void;
     };
 
     CairnProgressData: {

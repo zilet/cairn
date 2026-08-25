@@ -27,6 +27,7 @@ type TodayAddExerciseDeps = {
   escapeHtml(value: unknown): string;
   escapeAttr(value: unknown): string;
   parseDur(value: string): number | null;
+  fmtDur?(seconds: number): string;
 };
 
 (() => {
@@ -84,59 +85,155 @@ type TodayAddExerciseDeps = {
     }
   }
 
-  async function replaceEmptyExistingCard(existing: HTMLElement, name: string, mode: string, deps: TodayAddExerciseDeps): Promise<HTMLElement | null> {
-    const lastSet = await fetchLastSet(name, deps);
+  // The plan surface primes GET /last-set under exactly this key (loadLastSets in
+  // today-plan-session-data-client.ts). A warm entry therefore already knows the
+  // last time for most movements, and the card can render its line and prefill in
+  // the same frame as the tap instead of waiting on a round-trip.
+  function peekLastSet(name: string): Record<string, unknown> | null {
+    try {
+      if (typeof peekCached !== "function") return null;
+      const peek = peekCached<unknown>("last-set:" + name);
+      const data = peek ? peek.data : null;
+      return data && typeof data === "object" ? data as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function prefillFromLastSet(lastSet: Record<string, unknown> | null): Record<string, unknown> {
+    return {
+      weight: lastSet?.weight ?? null,
+      reps: lastSet?.reps ?? null,
+      rir: lastSet?.rir ?? null,
+      duration_sec: lastSet?.duration_sec ?? null,
+    };
+  }
+
+  function buildCard(
+    name: string,
+    mode: string | null,
+    lastSet: Record<string, unknown> | null,
+    deps: TodayAddExerciseDeps,
+  ): HTMLElement | null {
     const tpl = document.createElement("template");
-    tpl.innerHTML = deps.exCard({ exercise: name, fromPlan: false, mode }, [], {
-      weight: null,
-      reps: null,
-      rir: null,
-      duration_sec: null,
-    }, null, null, lastSet).trim();
-    const fresh = tpl.content.firstElementChild as HTMLElement | null;
-    if (!fresh) return null;
-    existing.replaceWith(fresh);
-    deps.wireGuides(fresh);
-    const logRow = fresh.querySelector(".logrow");
+    tpl.innerHTML = deps
+      .exCard({ exercise: name, fromPlan: false, mode }, [], prefillFromLastSet(lastSet), null, null, lastSet)
+      .trim();
+    return tpl.content.firstElementChild as HTMLElement | null;
+  }
+
+  function wireCard(cardEl: HTMLElement, lastSet: Record<string, unknown> | null, deps: TodayAddExerciseDeps): void {
+    deps.wireGuides(cardEl);
+    const logRow = cardEl.querySelector(".logrow");
     deps.wireLogRow(logRow);
     CairnTodaySessionSetModel.wireLastSetLine(logRow, lastSet, deps);
     deps.wireSkips();
+  }
+
+  function fillInput(el: HTMLInputElement | null | undefined, value: unknown): void {
+    if (!el || value == null) return;
+    if (el.dataset.dirty === "1") return;
+    if (typeof document !== "undefined" && document.activeElement === el) return;
+    const next = String(value);
+    if (el.value === next) return;
+    el.value = next;
+  }
+
+  function applyPrefill(
+    logRow: HTMLElement,
+    lastSet: Record<string, unknown>,
+    deps: TodayAddExerciseDeps,
+  ): void {
+    if (logRow.dataset.mode === "timed") {
+      const seconds = Number(lastSet.duration_sec);
+      const text = lastSet.duration_sec == null || !Number.isFinite(seconds)
+        ? null
+        : deps.fmtDur
+          ? deps.fmtDur(seconds)
+          : String(seconds);
+      fillInput(logRow.querySelector<HTMLInputElement>(".in-dur"), text);
+      return;
+    }
+    fillInput(logRow.querySelector<HTMLInputElement>(".in-w"), lastSet.weight);
+    fillInput(logRow.querySelector<HTMLInputElement>(".in-r"), lastSet.reps);
+    fillInput(logRow.querySelector<HTMLInputElement>(".in-rir"), lastSet.rir);
+  }
+
+  function lastSetLineText(lastSet: Record<string, unknown>, deps: TodayAddExerciseDeps): string {
+    try {
+      return CairnTodaySessionSetModel.lastSetLineText(lastSet, deps as never) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  // The "Last time: …" line is the ONLY part of a fresh card that needs the network,
+  // so the card is inserted from a (possibly stale) peek and this reconciles when
+  // GET /last-set answers. If that never resolves the card is still complete — it
+  // just doesn't carry a target. Typed fields (dataset.dirty) and the focused
+  // input are left alone; an untouched peek prefill is replaced when the network
+  // row differs, and the last-time line is rebuilt so its beat-this wiring tracks
+  // the fresh baseline.
+  function hydrateLastSet(
+    cardEl: HTMLElement | null,
+    lastSet: Record<string, unknown> | null,
+    deps: TodayAddExerciseDeps,
+  ): void {
+    if (!cardEl || !lastSet || cardEl.isConnected === false) return;
+    const logRow = cardEl.querySelector<HTMLElement>(".logrow");
+    if (!logRow) return;
+    applyPrefill(logRow, lastSet, deps);
+    const text = lastSetLineText(lastSet, deps);
+    const existing = cardEl.querySelector<HTMLElement>(".ex-lastset");
+    if (!text) {
+      existing?.remove();
+      return;
+    }
+    const line = document.createElement("div");
+    line.classList.add("ex-lastset");
+    line.textContent = text;
+    if (existing) existing.replaceWith(line);
+    else logRow.before(line);
+    CairnTodaySessionSetModel.wireLastSetLine(logRow, lastSet, deps);
+  }
+
+  async function hydrateFromNetwork(cardEl: HTMLElement | null, name: string, deps: TodayAddExerciseDeps): Promise<void> {
+    if (!cardEl) return;
+    hydrateLastSet(cardEl, await fetchLastSet(name, deps), deps);
+  }
+
+  function replaceEmptyExistingCard(existing: HTMLElement, name: string, mode: string, deps: TodayAddExerciseDeps): HTMLElement | null {
+    const cached = peekLastSet(name);
+    const fresh = buildCard(name, mode, cached, deps);
+    if (!fresh) return null;
+    existing.replaceWith(fresh);
+    wireCard(fresh, cached, deps);
     fresh.scrollIntoView({ behavior: "smooth", block: "center" });
     (fresh.querySelector<HTMLElement>(".in-dur") || fresh.querySelector<HTMLElement>(".in-r"))?.focus();
     return fresh;
   }
 
-  async function appendOffPlanCard(name: string, mode: string | null | undefined, deps: TodayAddExerciseDeps): Promise<void> {
+  function insertOffPlanCard(name: string, mode: string | null | undefined, deps: TodayAddExerciseDeps): HTMLElement | null {
     deps.state.pendingOffPlan ??= {};
     const list = (deps.state.pendingOffPlan[deps.state.logDate] ??= []);
     if (!list.some((pending) => pending.name.toLowerCase() === name.toLowerCase())) {
       list.push({ name, mode: mode || "reps" });
     }
 
-    const lastSet = await fetchLastSet(name, deps);
-    const prefill: Record<string, unknown> = lastSet
-      ? {
-          weight: lastSet.weight ?? null,
-          reps: lastSet.reps ?? null,
-          rir: lastSet.rir ?? null,
-          duration_sec: lastSet.duration_sec ?? null,
-        }
-      : { weight: null, reps: null, rir: null, duration_sec: null };
-
-    const tpl = document.createElement("template");
-    tpl.innerHTML = deps.exCard({ exercise: name, fromPlan: false, mode: mode || null }, [], prefill, null, null, lastSet).trim();
-    const cardEl = tpl.content.firstElementChild as HTMLElement | null;
-    if (!cardEl) return;
+    const cached = peekLastSet(name);
+    const cardEl = buildCard(name, mode || null, cached, deps);
+    if (!cardEl) return null;
     const addBlock = deps.root.querySelector(".addex");
     if (addBlock) addBlock.before(cardEl);
     else (deps.root.querySelector(".plansurface") || deps.root).appendChild(cardEl);
-    deps.wireGuides(cardEl);
-    const logRow = cardEl.querySelector(".logrow");
-    deps.wireLogRow(logRow);
-    CairnTodaySessionSetModel.wireLastSetLine(logRow, lastSet, deps);
-    deps.wireSkips();
+    wireCard(cardEl, cached, deps);
     cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
     (cardEl.querySelector<HTMLElement>(".in-r") || cardEl.querySelector<HTMLElement>(".in-dur"))?.focus();
+    return cardEl;
+  }
+
+  async function appendOffPlanCard(name: string, mode: string | null | undefined, deps: TodayAddExerciseDeps): Promise<void> {
+    await hydrateFromNetwork(insertOffPlanCard(name, mode, deps), name, deps);
   }
 
   async function setupAddExercise(deps: TodayAddExerciseDeps): Promise<void> {
@@ -170,7 +267,10 @@ type TodayAddExerciseDeps = {
       if (knownMode) chooseMode(knownMode);
     });
 
-    const add = async () => {
+    // Everything the athlete sees happens in this synchronous pass: the card is
+    // inserted and the form is reset before any request is made. Only the
+    // "Last time" hydration trails behind, and it is never awaited here.
+    const addNow = (): void => {
       const name = (input.value || "").trim();
       if (!name) {
         input.focus();
@@ -188,12 +288,14 @@ type TodayAddExerciseDeps = {
           if (curMode !== mode && hasSets) deps.toast(`${name} already has sets — delete them to change its type`);
           return;
         }
-        try {
-          await deps.postExerciseMode(name, mode);
-          (deps.state.exModes ??= {})[name] = mode;
-        } catch {}
-        await replaceEmptyExistingCard(existing, name, mode, deps);
+        // The mode is the athlete's own statement about the movement, and the card
+        // is rebuilt from it locally either way — so paint it now and let the write
+        // catch up. A failed POST costs only the server-side memory of the mode.
+        (deps.state.exModes ??= {})[name] = mode;
+        deps.postExerciseMode(name, mode).catch(() => {});
+        const fresh = replaceEmptyExistingCard(existing, name, mode, deps);
         resetAddForm(input, form, btn, modeWrap);
+        void hydrateFromNetwork(fresh, name, deps);
         return;
       }
 
@@ -215,20 +317,24 @@ type TodayAddExerciseDeps = {
         (deps.state.exModes ??= {})[name] = mode || "reps";
         deps.postExerciseMode(name, mode || "reps").catch(() => {});
       } else if (mode === "timed" && known !== "timed") {
-        // Known reps exercise being re-added as timed — await so the card renders
-        // with the right mode.
-        try {
-          await deps.postExerciseMode(name, "timed");
-          (deps.state.exModes ??= {})[name] = "timed";
-        } catch {}
+        // Known reps exercise being re-added as timed — the card is built with the
+        // requested mode locally, so this write never gates the insertion either.
+        (deps.state.exModes ??= {})[name] = "timed";
+        deps.postExerciseMode(name, "timed").catch(() => {});
       }
-      await appendOffPlanCard(name, mode, deps);
+      const cardEl = insertOffPlanCard(name, mode, deps);
       resetAddForm(input, form, btn, modeWrap);
+      void hydrateFromNetwork(cardEl, name, deps);
     };
 
-    go.addEventListener("click", () => { void add(); });
+    // One tap means one card. Insertion is synchronous, and addNow() no-ops when
+    // the name already has a card (existingCardFor), so a tap+Enter in the same
+    // breath still lands as one insert.
+    const add = (): void => { addNow(); };
+
+    go.addEventListener("click", () => { add(); });
     input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") void add();
+      if (event.key === "Enter") add();
     });
   }
 

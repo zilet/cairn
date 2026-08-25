@@ -93,6 +93,7 @@ type TodayDataLoaderApi = {
       );
     };
 
+    // Intentional: a cold skeleton wipe happens before captureExDrafts in renderToday.
     if (!warm && !deps.root.querySelector(".today-wrap")) deps.root.innerHTML = deps.todaySkeleton();
 
     const isToday = deps.state.logDate === deps.localISO();

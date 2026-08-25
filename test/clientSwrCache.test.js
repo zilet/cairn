@@ -32,12 +32,12 @@ function storageFrom(initial = {}) {
   };
 }
 
-function loadSwrCache({ storage = storageFrom(), apiImpl } = {}) {
+function loadSwrCache({ storage = storageFrom(), apiImpl, now } = {}) {
   let response = { ok: true };
   const calls = [];
   const renders = [];
   const context = {
-    Date,
+    Date: now ? { now } : Date,
     JSON,
     Map,
     Math,
@@ -178,9 +178,13 @@ test("paintSWR renders warm data first and upgrades only changed payloads", asyn
   await loaded.context.cachedApi("/profile", { key: "profile" });
   loaded.setResponse({ ok: true, name: "updated" });
 
+  // freshFor:0 is what makes this a REVALIDATION: a peek that still reads fresh
+  // answers from cache and never asks the network at all (see the fresh-hit test
+  // below), so there would be nothing to upgrade from.
   await loaded.context.paintSWR({
     key: "profile",
     path: "/profile",
+    freshFor: 0,
     render: (data, meta) => loaded.renders.push({ data, meta }),
   });
 
@@ -188,6 +192,21 @@ test("paintSWR renders warm data first and upgrades only changed payloads", asyn
     { data: { ok: true }, meta: { warm: true } },
     { data: { ok: true, name: "updated" }, meta: { warm: false } },
   ]);
+});
+
+test("paintSWR paints a fresh peek once and asks the network nothing", async () => {
+  const loaded = loadSwrCache();
+  await loaded.context.cachedApi("/profile", { key: "profile" });
+  loaded.setResponse({ ok: true, name: "updated" });
+
+  await loaded.context.paintSWR({
+    key: "profile",
+    path: "/profile",
+    render: (data, meta) => loaded.renders.push({ data, meta }),
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(loaded.renders)), [{ data: { ok: true }, meta: { warm: true } }]);
+  assert.deepEqual(loaded.calls, ["/profile"], "the warm paint costs no round-trip");
 });
 
 test("swrSweep evicts stale rows and caps retained localStorage entries", () => {
@@ -202,4 +221,60 @@ test("swrSweep evicts stale rows and caps retained localStorage entries", () => 
 
   assert.equal(loaded.storage.has("cairn.swr.v1.old"), false);
   assert.equal(loaded.storage.keys().filter((key) => key.startsWith("cairn.swr.v1.")).length, 40);
+});
+
+test("a FRESH cache hit answers without touching the network", async () => {
+  const loaded = loadSwrCache();
+
+  await loaded.context.cachedApi("/profile", { key: "profile" });
+  assert.deepEqual(loaded.calls, ["/profile"]);
+
+  // Same key, still inside the serveFreshFor window (default 3s): a paint that
+  // re-reads what it stored milliseconds ago pays nothing.
+  const again = await loaded.context.cachedApi("/profile", { key: "profile" });
+  assert.deepEqual(again, { ok: true });
+  assert.deepEqual(loaded.calls, ["/profile"], "no second request for a fresh entry");
+
+  // freshFor: 0 still forces a fetch (skip window is min(freshFor, serveFreshFor)).
+  const upgrades = [];
+  await loaded.context.cachedApi("/profile", { key: "profile", freshFor: 0, onUpgrade: (_d, meta) => upgrades.push(meta) });
+  assert.deepEqual(loaded.calls, ["/profile", "/profile"], "a stale entry still revalidates");
+  assert.deepEqual(JSON.parse(JSON.stringify(upgrades)), [{ changed: false }]);
+});
+
+test("serveFreshFor skips the network; freshFor still means paint-without-hairline", async () => {
+  let now = 1_000_000;
+  const loaded = loadSwrCache({ now: () => now });
+
+  await loaded.context.cachedApi("/profile", { key: "profile" });
+  assert.deepEqual(loaded.calls, ["/profile"]);
+
+  now += 1_000;
+  const within = await loaded.context.cachedApi("/profile", { key: "profile" });
+  assert.deepEqual(within, { ok: true });
+  assert.deepEqual(loaded.calls, ["/profile"], "fresh within 3s → no fetch");
+
+  now += 9_000; // 10s old
+  loaded.setResponse({ ok: true, name: "updated" });
+  const renders = [];
+  await loaded.context.paintSWR({
+    key: "profile",
+    path: "/profile",
+    freshFor: 60_000,
+    render: (data, meta) => renders.push({ data, meta }),
+  });
+
+  assert.equal(renders[0].meta.warm, true, "10s old with freshFor 60s still paints warm");
+  assert.deepEqual(loaded.calls, ["/profile", "/profile"], "and still fetches");
+  assert.ok(renders.some((entry) => entry.data.name === "updated"), "the revalidate upgrades in place");
+});
+
+test("a write invalidation beats freshness — the next read refetches", async () => {
+  const loaded = loadSwrCache();
+
+  await loaded.context.cachedApi("/stats", { key: "stats" });
+  loaded.context.swrInvalidate("stats");
+  await loaded.context.cachedApi("/stats", { key: "stats" });
+
+  assert.deepEqual(loaded.calls, ["/stats", "/stats"], "an invalidated key never peeks fresh");
 });

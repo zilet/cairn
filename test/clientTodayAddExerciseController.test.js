@@ -38,6 +38,10 @@ class FakeClassList {
     return this.names.has(name);
   }
 
+  add(name) {
+    this.toggle(name, true);
+  }
+
   toggle(name, on) {
     if (on) this.names.add(name);
     else this.names.delete(name);
@@ -61,6 +65,11 @@ class FakeElement {
     this.focusCount = 0;
     this.scrolls = [];
     this.clicks = 0;
+    this.parentNode = null;
+  }
+
+  get isConnected() {
+    return Boolean(this.parentElement);
   }
 
   set innerHTML(value) {
@@ -77,6 +86,7 @@ class FakeElement {
 
   appendChild(child) {
     child.parentElement = this;
+    child.parentNode = this;
     this.children.push(child);
     return child;
   }
@@ -84,6 +94,7 @@ class FakeElement {
   before(child) {
     if (!this.parentElement) return;
     child.parentElement = this.parentElement;
+    child.parentNode = this.parentElement;
     const index = this.parentElement.children.indexOf(this);
     this.parentElement.children.splice(index < 0 ? this.parentElement.children.length : index, 0, child);
   }
@@ -93,9 +104,18 @@ class FakeElement {
     const index = this.parentElement.children.indexOf(this);
     if (index >= 0) {
       fresh.parentElement = this.parentElement;
+      fresh.parentNode = this.parentElement;
       this.parentElement.children[index] = fresh;
       this.parentElement = null;
+      this.parentNode = null;
     }
+  }
+
+  remove() {
+    if (!this.parentElement) return;
+    this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
+    this.parentElement = null;
+    this.parentNode = null;
   }
 
   addEventListener(type, handler) {
@@ -172,14 +192,29 @@ class FakeTemplate {
         mode: decodeAttr(html.match(/data-mode="([^"]*)"/)?.[1] || "reps"),
       },
     });
-    const logrow = card.appendChild(new FakeElement("div", { className: "logrow" }));
+    const logrow = card.appendChild(new FakeElement("div", {
+      className: "logrow",
+      dataset: { mode: card.dataset.mode || "reps" },
+    }));
     card.appendChild(new FakeElement("div", { className: "logged" }));
-    logrow.appendChild(new FakeElement("input", { className: html.includes("in-dur") ? "in-dur" : "in-r" }));
+    const inputMatches = [...html.matchAll(/<input[^>]*class="([^"]*)"[^>]*>/g)];
+    if (inputMatches.length) {
+      for (const match of inputMatches) {
+        const value = match[0].match(/value="([^"]*)"/)?.[1] ?? "";
+        logrow.appendChild(new FakeElement("input", { className: match[1], value: decodeAttr(value) }));
+      }
+    } else {
+      logrow.appendChild(new FakeElement("input", { className: html.includes("in-dur") ? "in-dur" : "in-r" }));
+    }
     // Mirrors exerciseCardHtml's real .ex-lastset element — the mocked exCard below
     // marks its presence so wireLastSetLine (loaded alongside the controller) has a
     // real element to find via row.closest(".ex").querySelector(".ex-lastset").
+    const lastsetText = html.match(/class="ex-lastset"[^>]*>([^<]*)/);
     if (html.includes('class="ex-lastset"')) {
-      card.appendChild(new FakeElement("div", { className: "ex-lastset", textContent: "Last time: mock" }));
+      card.appendChild(new FakeElement("div", {
+        className: "ex-lastset",
+        textContent: lastsetText?.[1] || "Last time: mock",
+      }));
     }
     this.content.firstElementChild = card;
   }
@@ -217,7 +252,9 @@ function loadController() {
     globalThis: null,
     document: {
       createElement: (tag) => tag === "template" ? new FakeTemplate() : new FakeElement(tag),
+      activeElement: null,
     },
+    peekCached: () => null,
   };
   context.window = context;
   context.globalThis = context;
@@ -244,8 +281,15 @@ function loadController() {
       modes.push({ name, mode });
       return { ok: true };
     },
-    exCard: (item, _logged, prefill, _revealIdx, _rx, lastSet) =>
-      `<article class="ex" data-card="${item.exercise}" data-mode="${item.mode || "reps"}"><div class="logrow"></div><div class="logged"></div><input class="${item.mode === "timed" ? "in-dur" : "in-r"}" value="${prefill.reps ?? ""}">${lastSet ? `<div class="ex-lastset">Last time: mock</div>` : ""}</article>`,
+    exCard: (item, _logged, prefill, _revealIdx, _rx, lastSet) => {
+      const last = lastSet
+        ? `<div class="ex-lastset">Last time: ${lastSet.weight ?? lastSet.duration_sec ?? ""} × ${lastSet.reps ?? ""}</div>`
+        : "";
+      if (item.mode === "timed") {
+        return `<article class="ex" data-card="${item.exercise}" data-mode="timed"><div class="logrow"><input class="in-dur" value="${prefill.duration_sec ?? ""}"></div><div class="logged"></div>${last}</article>`;
+      }
+      return `<article class="ex" data-card="${item.exercise}" data-mode="reps"><div class="logrow"><input class="in-w" value="${prefill.weight ?? ""}"><input class="in-r" value="${prefill.reps ?? ""}"><input class="in-rir" value="${prefill.rir ?? ""}"></div><div class="logged"></div>${last}</article>`;
+    },
     wireGuides: (card) => guides.push(card),
     wireLogRow: (row) => logRows.push(row),
     wireSkips: () => { skipWires += 1; },
@@ -259,6 +303,7 @@ function loadController() {
   };
 
   return {
+    context,
     controller: context.CairnTodayAddExerciseController,
     rootEl,
     addBlock,
@@ -425,4 +470,117 @@ test("Today add-exercise controller fetches and wires the last-time line on the 
   const line = card.querySelector(".ex-lastset");
   assert.ok(line, "the replaced card carries the .ex-lastset line");
   assert.equal(line.dataset.wired, "1", "wireLastSetLine wired the live beat state on the replace path too");
+});
+
+test("Today add-exercise controller inserts the card before /last-set answers", async () => {
+  const harness = loadController();
+  let resolveLastSet;
+  harness.deps.api = async (path) => {
+    harness.requests.push(path);
+    if (path === "/exercises") return [];
+    return new Promise((resolve) => { resolveLastSet = resolve; });
+  };
+  await harness.controller.setupAddExercise(harness.deps);
+
+  harness.input.value = "Zercher squat";
+  harness.go.click();
+
+  // No await: the card, the form reset and the focus are all done by the time the
+  // tap handler returns. Only the "Last time" line waits on the network.
+  const card = harness.rootEl.querySelector(".ex[data-card]");
+  assert.ok(card, "the card is on the surface before the request resolves");
+  assert.equal(card.querySelector(".ex-lastset"), null);
+  assert.equal(harness.form.hidden, true);
+  assert.equal(harness.input.value, "");
+
+  resolveLastSet({ weight: 30, reps: 10, rir: 2, duration_sec: null });
+  await flushAsync();
+  assert.ok(card.querySelector(".ex-lastset"), "the line lands when /last-set answers");
+});
+
+test("Today add-exercise controller creates ONE card for a double tap", async () => {
+  const harness = loadController();
+  await harness.controller.setupAddExercise(harness.deps);
+
+  harness.input.value = "Zercher squat";
+  // A tap and an Enter in the same breath — the shape that used to produce two
+  // identical cards while the first insertion was still in flight.
+  harness.go.click();
+  harness.input.dispatch("keydown", { key: "Enter" });
+  harness.go.click();
+  await flushAsync();
+
+  assert.equal(harness.rootEl.querySelectorAll(".ex[data-card]").length, 1);
+  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Zercher squat", mode: "reps" }]);
+  assert.deepEqual(harness.modes, [{ name: "Zercher squat", mode: "reps" }], "the exercise is persisted once");
+});
+
+test("Today add-exercise controller updates a stale peeked last-set once the network row arrives", async () => {
+  const harness = loadController();
+  harness.context.peekCached = (key) => {
+    if (key === "last-set:Zercher squat") {
+      return { data: { weight: 30, reps: 10, rir: 2, duration_sec: null }, fresh: false };
+    }
+    return null;
+  };
+  let resolveLastSet;
+  harness.deps.api = async (path) => {
+    harness.requests.push(path);
+    if (path === "/exercises") return [];
+    return new Promise((resolve) => { resolveLastSet = resolve; });
+  };
+  await harness.controller.setupAddExercise(harness.deps);
+
+  harness.input.value = "Zercher squat";
+  harness.go.click();
+
+  const card = harness.rootEl.querySelector(".ex[data-card]");
+  const logRow = card.querySelector(".logrow");
+  assert.ok(card.querySelector(".ex-lastset"), "a stale peek still paints a last-time line");
+  assert.equal(logRow.querySelector(".in-w").value, "30");
+  assert.equal(logRow.querySelector(".in-r").value, "10");
+  assert.equal(logRow.querySelector(".in-rir").value, "2");
+
+  resolveLastSet({ weight: 40, reps: 8, rir: 1, duration_sec: null });
+  await flushAsync();
+
+  const line = card.querySelector(".ex-lastset");
+  assert.match(line.textContent, /40/);
+  assert.match(line.textContent, /8/);
+  assert.equal(line.dataset.wired, "1", "wireLastSetLine re-ran against the network row");
+  assert.equal(logRow.querySelector(".in-w").value, "40");
+  assert.equal(logRow.querySelector(".in-r").value, "8");
+  assert.equal(logRow.querySelector(".in-rir").value, "1");
+});
+
+test("Today add-exercise controller keeps a typed prefill when the network last-set arrives", async () => {
+  const harness = loadController();
+  harness.context.peekCached = (key) => {
+    if (key === "last-set:Zercher squat") {
+      return { data: { weight: 30, reps: 10, rir: 2, duration_sec: null }, fresh: false };
+    }
+    return null;
+  };
+  let resolveLastSet;
+  harness.deps.api = async (path) => {
+    harness.requests.push(path);
+    if (path === "/exercises") return [];
+    return new Promise((resolve) => { resolveLastSet = resolve; });
+  };
+  await harness.controller.setupAddExercise(harness.deps);
+
+  harness.input.value = "Zercher squat";
+  harness.go.click();
+
+  const logRow = harness.rootEl.querySelector(".logrow");
+  const reps = logRow.querySelector(".in-r");
+  reps.value = "12";
+  reps.dataset.dirty = "1";
+
+  resolveLastSet({ weight: 40, reps: 8, rir: 1, duration_sec: null });
+  await flushAsync();
+
+  assert.equal(reps.value, "12", "a typed value is not overwritten by the network last-set");
+  assert.equal(logRow.querySelector(".in-w").value, "40", "untouched fields still take the network prefill");
+  assert.equal(logRow.querySelector(".in-rir").value, "1");
 });

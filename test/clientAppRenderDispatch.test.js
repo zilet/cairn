@@ -40,6 +40,7 @@ function loadRenderDispatch(options = {}) {
     renderPlanEditor: () => calls.push(["renderPlanEditor"]),
     renderPlanEndurance: () => calls.push(["renderPlanEndurance"]),
     renderSettings: () => calls.push(["renderSettings"]),
+    renderSession: () => calls.push(["renderSession"]),
     renderToday: () => calls.push(["renderToday"]),
     showEnduranceTab: () => !!options.showEnduranceTab,
     state: {
@@ -48,6 +49,9 @@ function loadRenderDispatch(options = {}) {
     },
     updateHeaderCondense: () => calls.push(["updateHeaderCondense"]),
     window: {},
+    hideRestBar: options.hideRestBar,
+    surfaceRestBar: options.surfaceRestBar,
+    releaseWakeLock: options.releaseWakeLock,
   };
   context.globalThis = context;
   vm.runInNewContext(source, context, { filename: "app-render-dispatch.js" });
@@ -79,6 +83,29 @@ test("render dispatcher routes plan jumps and clears one-shot planJump", () => {
 
   assert.equal(env.context.state.planJump, null);
   assert.equal(env.calls.at(-1)[0], "renderMeals");
+});
+
+test("render dispatcher hides the rest bar off other tabs and restores it on session/today", () => {
+  const rest = [];
+  const env = loadRenderDispatch({
+    hideRestBar: () => rest.push("hide"),
+    surfaceRestBar: () => rest.push("surface"),
+  });
+
+  env.context.renderTab("chat");
+  assert.deepEqual(rest, ["hide"]);
+
+  env.context.renderTab("session");
+  assert.equal(rest.at(-1), "surface");
+
+  env.context.renderTab("today");
+  assert.equal(rest.at(-1), "surface", "Today is where you land between sets — keep the bar");
+
+  env.context.renderTab("plan");
+  assert.equal(rest.at(-1), "hide");
+
+  env.context.renderTab("session");
+  assert.equal(rest.at(-1), "surface", "returning to session restores a still-fresh rest");
 });
 
 test("render dispatcher respects endurance visibility and progress fallback", () => {

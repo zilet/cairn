@@ -54,22 +54,47 @@ test("Today SWR-caches progression and invalidates it when set truth changes", (
   assert.ok((todaySessionSetActions.match(/invalidateSetTruth\(deps\)/g) || []).length >= 2, "set create/delete paths invalidate progression");
 });
 
-test("Today set logging only mutates the card after a successful POST", () => {
+// The set is on the card before the write leaves the device — the athlete just did
+// it, so it is not the set that's in doubt, it's the network. The contract this
+// pins is the reconciliation: adopt the server row on success, roll the card back
+// on a real failure, and KEEP a queued chip (the outbox holds it durably, and
+// blanking it there is what read as "the app ate my set").
+test("Today set logging mutates the card BEFORE the POST, and reconciles after", () => {
   const body = functionBody(todaySessionSetActions, "wireLogRow");
-  const apiCall = body.indexOf('deps.api("/sets"');
+  const chipAppend = body.indexOf("appendPendingChip(card, payload.body, deps)");
+  const mutation = body.indexOf("await runtime.runSessionMutation");
   const errorGuard = body.indexOf("!result || result.ok === false || result.error || result.id == null");
-  const chipAppend = body.indexOf("loggedWrap.appendChild(chipEl)");
-  assert.ok(apiCall > -1, "wireLogRow posts the set through the API helper");
-  assert.ok(errorGuard > apiCall, "wireLogRow checks the parsed error response after the POST");
-  assert.ok(chipAppend > errorGuard, "wireLogRow appends the chip only after the error guard");
-  assert.match(body, /if\s*\(logBtn\.disabled\)\s*return;/);
+  assert.ok(chipAppend > -1, "wireLogRow paints the chip through the optimistic helper");
+  assert.ok(mutation > chipAppend, "the chip is on the card before the write leaves the device");
+  assert.ok(errorGuard > mutation, "the parsed error response is still checked after the write");
+  assert.ok(
+    body.indexOf("commitPendingChip(pending, result, deps)") > errorGuard,
+    "the real set id is adopted only after the error guard"
+  );
+  // Rest, the stopwatch reset and the local stat repaint are part of the
+  // optimistic pass — none of them wait on the network. The log button stays
+  // disabled until the mutation resolves or a ~400ms re-arm window, so a
+  // double-tap cannot allocate a second idempotency key.
+  const optimisticPass = body.slice(chipAppend, mutation);
+  for (const painted of [
+    "stopwatch?.reset();",
+    "deps.startRest();",
+    "const finishSurfaceMissing = refreshFinishStat(deps, { repaint: false });",
+  ]) {
+    assert.ok(optimisticPass.includes(painted), `${painted} is part of the optimistic pass`);
+  }
+  assert.equal(optimisticPass.includes("logBtn.disabled = false;"), false, "the button is not re-armed in the same synchronous pass");
+  assert.match(body, /if\s*\(logBtn\.disabled\s*\|\|\s*row\.dataset\.logging\s*===\s*"1"\)\s*return;/);
   assert.match(body, /logBtn\.disabled\s*=\s*true;/);
-  // The shared mutation runner owns the direct request and any transient outbox
-  // fallback under one lock. Every non-sent outcome re-enables the button, while
-  // only a validated sent response reaches the card mutation below.
-  assert.match(body, /await\s+runtime\.runSessionMutation\s*\(\s*\{[\s\S]*?kind:\s*"set"[\s\S]*?path:\s*"\/sets"[\s\S]*?body:\s*payload\.body[\s\S]*?\},\s*\(idempotencyKey\)\s*=>\s*deps\.api\s*\(\s*"\/sets"/);
+  assert.match(body, /row\.dataset\.logging\s*=\s*"1"/);
+  assert.match(body, /setTimeout\(\s*rearmLog,\s*400\s*\)/);
+  // The shared mutation runner still owns the direct request and any transient
+  // outbox fallback under one lock, with the idempotency key allocated inside it,
+  // ahead of the network.
+  assert.match(body, /await\s+runtime\.runSessionMutation\s*\(\s*\{[\s\S]*?kind:\s*"set"[\s\S]*?path:\s*"\/sets"[\s\S]*?body:\s*payload\.body[\s\S]*?\},\s*\(idempotencyKey\)\s*=>\s*\{[\s\S]*?stampPendingMutationId\(pending,\s*idempotencyKey,\s*deps\)[\s\S]*?deps\.api\s*\(\s*"\/sets"/);
+  assert.match(body, /if\s*\(mutation\.status\s*===\s*"queued"\)\s*stampPendingMutationId\(pending,\s*mutation\.item\?\.id,\s*deps\)/);
   assert.match(body, /"X-Idempotency-Key":\s*idempotencyKey/);
-  assert.match(body, /if\s*\(mutation\.status\s*!==\s*"sent"\)\s*\{[\s\S]*?logBtn\.disabled\s*=\s*false;[\s\S]*?return;/);
+  assert.match(body, /if\s*\(mutation\.status\s*!==\s*"queued"\)\s*\{\s*rollbackPendingChip\(pending, deps\);\s*deps\.stopRest\(\);/);
   assert.match(body, /const\s+result\s*=\s*CairnTodaySessionSetModel\.responseRecord\(mutation\.value\)/);
   assert.match(body, /"Set saved — will sync/);
   assert.match(body, /Couldn’t save that set on this device/);

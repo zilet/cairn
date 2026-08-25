@@ -4203,6 +4203,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(pwaInstallSource, /CairnPwaInstall/);
   assert.match(restTimerSource, /function startRest\(seconds\?: number\): void/);
   assert.match(restTimerSource, /function stopRest\(\): void/);
+  assert.match(restTimerSource, /function hideRestBar\(\): void/);
+  assert.match(restTimerSource, /function surfaceRestBar\(\): void/);
   assert.match(restTimerSource, /Object\.assign\(globalThis, \{/);
   assert.match(restTimerSource, /CairnRestTimer/);
   assert.match(
@@ -4370,6 +4372,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(todaySessionControllerSource, /function skipFromCard/);
   assert.doesNotMatch(todaySessionControllerSource, /function wireLogRow|function wireDeletes|function bumpProgress/);
   assert.match(todaySessionControllerSource, /CairnTodaySessionController/);
+  assert.match(
+    todaySessionControllerSource,
+    /deps\.state\.tab === "session" && !session\.finished_at && typeof acquireWakeLock === "function"/
+  );
   assert.match(todayProgramAdjustmentsSource, /function todayAdjustmentPlanRequest\(value: unknown\): string/);
   assert.match(todayProgramAdjustmentsSource, /function todayProgramAdjustmentsBannerHtml\(rows: unknown\): string/);
   assert.match(todayProgramAdjustmentsSource, /CairnTodayProgramAdjustments/);
@@ -4521,6 +4527,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     /pendingOffPlan\?: Record<string, Array<\{ name: string; mode\?: string \| null \}>>/
   );
   assert.match(todayScreenSource, /const todayState = state as TodayState/);
+  assert.match(
+    todayScreenSource,
+    /if \(!isFinished && typeof acquireWakeLock === "function"\) void acquireWakeLock\(\)/
+  );
   assert.match(proposalSource, /function runTargetText\(run: unknown\): string/);
   assert.match(
     proposalSource,
@@ -5712,6 +5722,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appRenderDispatchSource, /state\.planJump = null/);
   assert.match(appRenderDispatchSource, /PROGRESS_HANDLERS\[defaultProgressSeg\(\)\] \|\| renderHistory/);
   assert.match(appRenderDispatchSource, /window\.renderTab = renderAppTab/);
+  assert.match(appRenderDispatchSource, /tab === "session" \|\| tab === "today"/);
+  assert.match(appRenderDispatchSource, /typeof hideRestBar === "function"/);
+  assert.match(appRenderDispatchSource, /typeof surfaceRestBar === "function"/);
   assert.match(appTabsSource, /function defaultProgressSeg\(\): string/);
   assert.match(appTabsSource, /function switchTab\(tab: unknown, opts: TabSwitchOptions = \{\}\): void/);
   assert.match(appTabsSource, /function registerTabBarHandlers\(\): void/);
