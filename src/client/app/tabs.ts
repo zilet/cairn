@@ -7,6 +7,19 @@ type TabSwitchOptions = {
 {
   const TAB_NAMES: ClientTabName[] = [...(window.CairnAppRouter?.ROUTE_TABS || ["today"])];
 
+  // An API failure that escapes a renderer was ALREADY reported by api() as an
+  // api_failure. Reporting it again as a render_error produced a duplicate row
+  // per outage whose top frame was the CairnApiError constructor — telemetry
+  // pointing at the reporter rather than at anything broken. The tab still
+  // paints its error state; only the second diagnostic is suppressed. The class
+  // lives in another client module sharing one global scope, so the lookup must
+  // be lazy (a top-level reference would not be hoisted across script tags).
+  function isApiFailure(err: unknown): boolean {
+    const ctor = (globalThis as { CairnApiError?: unknown }).CairnApiError;
+    if (typeof ctor === "function" && err instanceof (ctor as new (...args: never[]) => Error)) return true;
+    return !!err && typeof err === "object" && (err as { name?: unknown }).name === "CairnApiError";
+  }
+
   function normalizeTabName(tab: unknown): ClientTabName {
     const candidate = String(tab || "");
     return TAB_NAMES.includes(candidate as ClientTabName) ? candidate as ClientTabName : "today";
@@ -86,8 +99,9 @@ type TabSwitchOptions = {
       Promise.resolve(renderTab(next)).catch((err) => {
         console.error("[cairn] render failed", err);
         try {
-          (globalThis as { CairnClientDiagnostics?: { reportError?(kind: string, error: unknown, extra?: unknown): unknown } })
-            .CairnClientDiagnostics?.reportError?.("render_error", err, { tab: next, level: "error" });
+          if (!isApiFailure(err))
+            (globalThis as { CairnClientDiagnostics?: { reportError?(kind: string, error: unknown, extra?: unknown): unknown } })
+              .CairnClientDiagnostics?.reportError?.("render_error", err, { tab: next, level: "error" });
         } catch {}
         tabErrorState(next);
       });

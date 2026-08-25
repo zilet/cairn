@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { getBuildStamp } from "./build-info.js";
+import type { ProviderUnavailableError } from "./provider-unavailable.js";
 import { recordDiagnosticEvent } from "./repo/diagnostics.js";
 import { normalizeServerApiRouteTemplate, recordRequestMetric } from "./repo/request-metrics.js";
 import {
   genericFailureMessage,
   telemetryErrorName,
   telemetryIdentifier,
+  telemetryRequestPathLabel,
   telemetryStackFrames,
 } from "./telemetry-privacy.js";
 
@@ -76,17 +78,24 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
     // Auth failures are intentionally excluded from durable HTTP-error telemetry.
     // They still receive X-Request-ID and remain visible to the caller.
     if (status >= 400 && status !== 401 && status !== 403 && !unexpectedErrorRequests.has(req)) {
+      // A 404 that matched no router carries no route template at all, so the event
+      // would read as a bare "/api/unknown". Name the path instead — the ONLY place a
+      // caller-supplied path enters telemetry, hence sanitized: query string dropped,
+      // ids collapsed, characters allowlisted, length capped.
+      const unmatched = status === 404 && !req.route;
       recordDiagnosticEvent({
         source: "api",
         kind: "http_error",
-        level: status >= 500 ? "error" : "warning",
+        // A conflict (409) and an unmatched path are EXPECTED outcomes a caller
+        // resolves, not defects — visible in the list without counting as errors.
+        level: status >= 500 ? "error" : status === 409 || unmatched ? "info" : "warning",
         operation: req.method,
         route,
         status,
         duration_ms: duration,
         request_id: id,
         fingerprint: `api:http_error:${req.method}:${route || "unknown"}:${status}`,
-        message: `HTTP ${status}`,
+        message: unmatched ? `HTTP 404 ${telemetryRequestPathLabel(req.originalUrl)}` : `HTTP ${status}`,
         release: getBuildStamp(),
         trusted_route_template: true,
       });
@@ -150,6 +159,44 @@ export function recordSchedulerFailure(
   });
 }
 
+/**
+ * The typed carrier for a boundary-apply ending that could not be applied. Its NAME is
+ * what `telemetryErrorName` keeps, so a fingerprint reads
+ * `worker:final_failure:apply:announced_boundary:<class>:BoundaryApplyError` instead of
+ * the bare "Error" every ending used to collapse into.
+ */
+export class BoundaryApplyError extends Error {
+  override readonly name = "BoundaryApplyError";
+  constructor(outcomeClass: string) {
+    // Taxonomy only — never the per-decision apply_error, which is free text.
+    super(`announced change did not apply: ${telemetryIdentifier(outcomeClass, 40, "unknown_outcome")}`);
+  }
+}
+
+/**
+ * Provider exhaustion, recorded as AVAILABILITY rather than as a code defect: its own
+ * kind and a `warning` level, so /api/diagnostics can count "nothing could run tonight"
+ * separately from "something is broken". The fingerprint carries the availability class,
+ * so a weekly-limit night and an auth-expiry night are different rows.
+ */
+export function recordProviderUnavailable(
+  operation: string,
+  error: ProviderUnavailableError,
+  sink: typeof recordDiagnosticEvent = recordDiagnosticEvent
+): void {
+  const safeOperation = telemetryIdentifier(operation, 80, "scheduler_task");
+  const state = telemetryIdentifier(error.dominantState, 40, "unknown_state");
+  sink({
+    source: "scheduler",
+    kind: "provider_unavailable",
+    level: "warning",
+    operation: safeOperation,
+    fingerprint: `scheduler:provider_unavailable:${safeOperation}:${state}`,
+    message: `every configured agent was unavailable: ${state}`,
+    release: getBuildStamp(),
+  });
+}
+
 /** Terminal async-worker failure, coalesced by component/kind/error class. */
 export function recordAsyncFailure(component: string, operation: string, error: unknown): void {
   const safeComponent = telemetryIdentifier(component, 50, "worker");
@@ -163,6 +210,27 @@ export function recordAsyncFailure(component: string, operation: string, error: 
     fingerprint: `worker:final_failure:${safeComponent}:${safeOperation}:${errorName}`,
     message: genericFailureMessage(`${safeComponent}_${safeOperation}`, error),
     stack: diagnosticStackFrames(error),
+    release: getBuildStamp(),
+  });
+}
+
+/**
+ * A background operation that COMPLETED, but on its deterministic path only —
+ * the agent step yielded nothing usable. Not a failure (the user has real data,
+ * and the surface says so honestly), so it lands at warning level under its own
+ * kind, coalesced by the taxonomy reason rather than by an error string.
+ */
+export function recordDegradedOperation(component: string, operation: string, reason: string): void {
+  const safeComponent = telemetryIdentifier(component, 50, "worker");
+  const safeOperation = telemetryIdentifier(operation, 80, "operation");
+  const safeReason = telemetryIdentifier(reason, 60, "unknown");
+  recordDiagnosticEvent({
+    source: "worker",
+    kind: "degraded",
+    level: "warning",
+    operation: `${safeComponent}:${safeOperation}`,
+    fingerprint: `worker:degraded:${safeComponent}:${safeOperation}:${safeReason}`,
+    message: `${safeComponent}_${safeOperation} completed without the agent step: ${safeReason}`,
     release: getBuildStamp(),
   });
 }

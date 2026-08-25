@@ -33,6 +33,10 @@ function loadSettingsAgents() {
         if (agent.configured === false) return { cls: "agent-chip-connect", label: "Connect" };
         return { cls: "agent-chip-installed", label: "Installed" };
       },
+      agentAvailabilityNote(agent) {
+        const availability = agent.availability || null;
+        return availability ? `${availability.detail}. Cairn routes around it until then.` : "";
+      },
     },
   };
   context.window = context;

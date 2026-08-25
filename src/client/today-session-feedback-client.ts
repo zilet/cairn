@@ -158,6 +158,15 @@ type ClientTrainingSymptom = import("../contracts/client-api.js").ClientTraining
     </article>`;
   }
 
+  // `/training-symptoms` requires a calendar day; a session row missing `date`
+  // (or a state without a logDate) used to send the literal "undefined", which
+  // the server answered 400 — a self-inflicted api_failure in the operator log
+  // for a request that could never succeed. No valid day, no request.
+  function symptomLifecycleDate(session: Record<string, unknown>, deps: TodaySessionFeedbackDeps): string {
+    const candidate = String(session.date || deps.state.logDate || "").trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(candidate) ? candidate : "";
+  }
+
   function responseSymptoms(value: unknown): ClientTrainingSymptom[] {
     return Array.isArray(value)
       ? value.filter((entry): entry is ClientTrainingSymptom => !!entry && typeof entry === "object")
@@ -171,10 +180,13 @@ type ClientTrainingSymptom = import("../contracts/client-api.js").ClientTraining
   ): Promise<void> {
     const host = slot.querySelector<HTMLElement>("[data-symptom-lifecycle]");
     if (!host) return;
+    const viewedDate = symptomLifecycleDate(session, deps);
+    if (!viewedDate) return;
     let symptoms: ClientTrainingSymptom[];
     try {
-      const viewedDate = encodeURIComponent(String(session.date || deps.state.logDate));
-      symptoms = responseSymptoms(await deps.api(`/training-symptoms?on=${viewedDate}&include_resolved=1`));
+      symptoms = responseSymptoms(
+        await deps.api(`/training-symptoms?on=${encodeURIComponent(viewedDate)}&include_resolved=1`)
+      );
     } catch {
       host.innerHTML = `<section class="symptom-lifecycle symptom-lifecycle-error" aria-label="Pain and injury"><div class="feedback-prompt lbl">Pain &amp; injury</div><p>Notes couldn't load right now.</p></section>`;
       return;
@@ -203,7 +215,7 @@ type ClientTrainingSymptom = import("../contracts/client-api.js").ClientTraining
           await deps.api(`/training-symptoms/${button.dataset.symptomResolve}/resolve`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ on: String(session.date || deps.state.logDate) }),
+            body: JSON.stringify({ on: viewedDate }),
           });
           deps.toast("Marked resolved");
           await reload();

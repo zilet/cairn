@@ -33,6 +33,14 @@ import {
 } from "./repo/run-edit.js";
 import { runWithTimeZone } from "./tz.js";
 import {
+  availabilityHolds,
+  classifyAgentFailure,
+  classifyLimitBannerText,
+  isAuthFailureText,
+  parseStreamRateLimitEvent,
+  type AgentFailure,
+} from "./agentAvailability.js";
+import {
   runAgent,
   runAgentStreaming,
   agentSupportsStream,
@@ -285,6 +293,11 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
   try {
     const { agent, raw, attempts } = await runChatCompletion(id, turn, history, controller.signal);
     const { reply: replyText, actions } = parseChatReply(raw);
+    // Clearing a hold is a claim that the provider ANSWERED, so it waits for the
+    // reply to actually come out of the raw output. A run that returned only a
+    // limit banner never gets here (it classifies as a failure), and a run whose
+    // output carried no reply at all is not evidence of health either.
+    if (replyText) clearChatAvailability(agent);
     const proposedReply = replyText || "(no reply)";
 
     repo.setChatTurnPhase(id, "applying");
@@ -2231,32 +2244,63 @@ function displayAgent(name: string | null | undefined): string {
   return s ? s[0].toUpperCase() + s.slice(1) : "Agent";
 }
 
+/** Record a chat-path provider hold. Failure-safe — telemetry never kills a turn. */
+function noteChatAvailability(agent: string, failure: AgentFailure): void {
+  try {
+    repo.noteAgentFailure(agent, failure, "chat");
+  } catch {
+    /* availability is advisory; a write failure must not fail the turn */
+  }
+}
+
+/** A completed reply is proof the provider answers — drop any stale hold. */
+function clearChatAvailability(agent: string): void {
+  try {
+    repo.clearAgentAvailability(agent);
+  } catch {
+    /* advisory */
+  }
+}
+
 export function classifyChatAgentResult(agent: string, result: AgentResult): ChatAgentAttempt | null {
   const raw = String(result.raw || "");
   const stderr = String(result.stderr || "");
-  const combined = `${raw}\n${stderr}`;
-  const infraSized = combined.trim().length <= 800;
-  const lower = combined.toLowerCase();
-  const authLike =
-    /\bnot logged in\b/.test(lower) ||
-    /\blogged out\b/.test(lower) ||
-    /\bplease (run )?\/?(log|sign)in\b/.test(lower) ||
-    /\b(run|use) .{0,24}\/?(log|sign)in\b/.test(lower) ||
-    /\bauth(entication|orization)? (required|failed|error)\b/.test(lower) ||
-    /\bunauthenticated\b/.test(lower) ||
-    /\bapi key\b.{0,40}\b(missing|required|invalid)\b/.test(lower) ||
-    /\b(missing|required|invalid)\b.{0,40}\bapi key\b/.test(lower);
-  if (authLike && infraSized) {
+  const usage = {
+    exit_code: result.code,
+    model: result.usage?.model ?? null,
+    input_tokens: result.usage?.input_tokens ?? null,
+    output_tokens: result.usage?.output_tokens ?? null,
+  };
+  // Availability is read ONLY when the run did not produce a reply (or the CLI
+  // emitted its machine-readable rate-limit event). A real coaching answer that
+  // happens to contain the words "rate limit" is a reply, not a failure — the
+  // same reason the auth rule has always carried its infra-sized guard.
+  const suspect = result.code !== 0 || !raw.trim() || !!parseStreamRateLimitEvent(`${raw}\n${stderr}`);
+  let failure = suspect ? classifyAgentFailure(agent, { code: result.code, raw, stderr }, new Date()) : null;
+  // A clean-exit LIMIT banner is the same shape of problem as a clean-exit login
+  // banner, and several CLIs print exactly that: "You've hit your weekly limit ·
+  // resets 8am" on stdout, exit 0. `suspect` is false for that run, so the banner
+  // became the chat bubble AND the turn cleared the provider's hold. Read the
+  // limit/payment arms unconditionally, behind the same infra-sized guard the auth
+  // rule uses — never the broad rate arms, whose words live in coaching prose.
+  if (!failure) failure = classifyLimitBannerText(raw, stderr, new Date());
+  // A clean-exit login banner has always been caught here, and still is: the auth
+  // rule carries its own infra-sized guard, so a long reply that merely mentions
+  // signing in stays a reply.
+  if (!failure && isAuthFailureText(raw, stderr)) {
+    failure = { state: "auth_required", window: null, resets_at: null, detail: "Not connected" };
+  }
+  if (failure && (availabilityHolds(failure.state) || failure.state === "permission_denied")) {
+    // A limited/unpaid/signed-out provider is durable news: recording it here is
+    // what lets the NEXT chat turn route around it before spawning anything.
+    if (availabilityHolds(failure.state)) noteChatAvailability(agent, failure);
     return {
       agent,
       ok: false,
-      status: "auth_required",
-      error_class: "auth_required",
-      error_message: "Not connected",
-      exit_code: result.code,
-      model: result.usage?.model ?? null,
-      input_tokens: result.usage?.input_tokens ?? null,
-      output_tokens: result.usage?.output_tokens ?? null,
+      status: failure.state,
+      error_class: failure.state,
+      error_message: failure.detail,
+      ...usage,
     };
   }
   if (result.code !== 0) {
@@ -2266,10 +2310,7 @@ export function classifyChatAgentResult(agent: string, result: AgentResult): Cha
       status: "error",
       error_class: "process_exit",
       error_message: "Agent process exited",
-      exit_code: result.code,
-      model: result.usage?.model ?? null,
-      input_tokens: result.usage?.input_tokens ?? null,
-      output_tokens: result.usage?.output_tokens ?? null,
+      ...usage,
     };
   }
   if (!raw.trim()) {
@@ -2279,10 +2320,7 @@ export function classifyChatAgentResult(agent: string, result: AgentResult): Cha
       status: "empty_reply",
       error_class: "empty_reply",
       error_message: "Agent returned no reply",
-      exit_code: result.code,
-      model: result.usage?.model ?? null,
-      input_tokens: result.usage?.input_tokens ?? null,
-      output_tokens: result.usage?.output_tokens ?? null,
+      ...usage,
     };
   }
   return null;
@@ -2388,6 +2426,21 @@ export function buildChatProviderOrder(
     return [...new Set([selected, ...web, ...base])];
   }
   return [...web, ...base.filter((name) => !web.includes(name))];
+}
+
+/** Healthy providers first; anything under a live availability hold goes last. */
+export function orderChatProvidersByAvailability(order: string[], now: Date = new Date()): string[] {
+  if (order.length < 2) return order;
+  const heldNames = new Set<string>();
+  for (const name of order) {
+    try {
+      if (repo.getAgentAvailability(name, now)) heldNames.add(name);
+    } catch {
+      /* availability is advisory — an unreadable hold never reorders anything */
+    }
+  }
+  if (!heldNames.size) return order;
+  return [...order.filter((n) => !heldNames.has(n)), ...order.filter((n) => heldNames.has(n))];
 }
 
 type RuntimeChatProfile = {
@@ -2596,7 +2649,7 @@ export async function runChatCompletion(
   const definitions = loadAgents();
   const attempts: ChatAgentAttempt[] = [];
   let decision: ChatRoutingDecision | null = turn.routing ?? null;
-  const order = buildChatProviderOrder(chosen, repo.pickAgentOrder(), {
+  const baseOrder = buildChatProviderOrder(chosen, repo.pickAgentOrder(), {
     preferWeb: decision?.reason_codes.includes("current_research") === true,
     // A named provider is an explicit athlete choice. A Settings route pin is
     // still eligible as fallback, but current research starts with an enabled
@@ -2604,6 +2657,12 @@ export async function runChatCompletion(
     preserveSelectedFirst: Boolean(turn.agent && turn.agent !== "auto"),
     definitions,
   });
+  // A provider that just told us it is out of quota / credit / signed out moves
+  // BEHIND the healthy ones, so the streaming primary and the rotation both skip
+  // it without spawning. It is still in the list: if every healthy provider
+  // fails, it becomes the only remaining option and gets probed — a hold is a
+  // prediction, never an exclusion.
+  const order = orderChatProvidersByAvailability(baseOrder);
   if (!order.length) throw new Error("No agents enabled — turn one on in Settings.");
   const adaptive = !!decision;
   const bindings = adaptive ? repo.getSettings().chat_profile_bindings : {};

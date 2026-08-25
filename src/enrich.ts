@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { db } from "./db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
 import * as repo from "./repo.js";
-import { extractJson, runAgentWithFallback } from "./agents.js";
+import { AgentFallbackError, extractJson, runAgentWithFallback } from "./agents.js";
 import {
   clampFoodMacro,
   coerceFoodIngredients,
@@ -26,8 +26,10 @@ import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, bui
 import { explainExercise, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 import { GEMINI_TEXT_MODEL, warmExerciseArt } from "./art.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
-import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
+import { diagnosticErrorName, recordAsyncFailure, recordDegradedOperation } from "./diagnostics.js";
 import { safeUploadPath } from "./uploadPaths.js";
+import { agentErrorClass } from "./telemetry-privacy.js";
+import { activeTimeZone, runWithTimeZone } from "./tz.js";
 
 // Live status-transition bus for background enrichment. The emit is wired into the
 // repo status setters (the choke point every write flows through — see enrichBus.ts);
@@ -165,6 +167,37 @@ const ZIP_MAX_FILES = 3000;
 function looksLikeZip(fp: string, mime?: string | null): boolean {
   const m = (mime || "").toLowerCase();
   return m === "application/zip" || m === "application/x-zip-compressed" || /\.zip$/i.test(fp);
+}
+
+const INVENTORY_MAX_FILES = 200;
+const INVENTORY_SKIP_EXT = new Set([".css", ".xsl", ".xslt", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico"]);
+
+// The readable files inside an unpacked export, as "<absolute path>  (N bytes)"
+// lines for the ingest prompt. Handed to the agent so it never needs a directory
+// listing of its own — a headless CLI cannot get the `command` permission for
+// one, and asking it to try is how an ingest ends up exiting 0 with no output.
+// Presentation only: stylesheets, scripts and images carry no health data, and
+// the count is bounded so a huge export can't crowd out the instructions.
+export function buildHealthSourceInventory(root: string): string[] {
+  const out: string[] = [];
+  const visit = (fp: string) => {
+    if (out.length >= INVENTORY_MAX_FILES) return;
+    const base = path.basename(fp);
+    if (base.startsWith(".") || base.toLowerCase() === "__macosx") return;
+    let st: fs.Stats;
+    try { st = fs.statSync(fp); } catch { return; }
+    if (st.isDirectory()) {
+      let entries: string[] = [];
+      try { entries = fs.readdirSync(fp).sort(); } catch { return; }
+      for (const entry of entries) visit(path.join(fp, entry));
+      return;
+    }
+    if (!st.isFile()) return;
+    if (INVENTORY_SKIP_EXT.has(path.extname(fp).toLowerCase())) return;
+    out.push(`${fp}  (${st.size} bytes)`);
+  };
+  visit(root);
+  return out;
 }
 
 // Unzip an uploaded archive into an isolated sibling folder under uploads, after
@@ -312,6 +345,19 @@ repo.registerSymptomExtractionHook((reportId) => enqueueEnrich("symptom", report
  */
 export { symptomTextMentionsBody };
 
+/**
+ * The enrichment queue drains OUTSIDE any request, so nothing has ever put a zone
+ * in scope for it — and everything it calls that frames a local day (a CCDA draw
+ * stamped `20260824233000-0500`, a food note's `eaten_at`) then fell back to the
+ * container's own clock. On a UTC container that files a Saturday-evening blood
+ * draw on Sunday. The scheduler already answers this by running each tick inside
+ * the owner's recorded zone; the queue now does the same, and defers to a live
+ * request zone when a drain happens to start inside one.
+ */
+export function inOwnerTimeZone<T>(fn: () => T): T {
+  return runWithTimeZone(activeTimeZone() ?? repo.recordedClientTimeZone(), fn);
+}
+
 async function drain(): Promise<void> {
   if (draining) return;
   draining = true;
@@ -319,7 +365,7 @@ async function drain(): Promise<void> {
     while (queue.length) {
       const job = queue.shift()!;
       try {
-        await processJob(job);
+        await inOwnerTimeZone(() => processJob(job));
       } catch (e: any) {
         // A failing job must never break the loop. Mark it failed (regex data
         // is left intact) and continue with the next.
@@ -380,6 +426,108 @@ function healthDocHasStructuredContent(id: number): boolean {
   );
 }
 
+// ---------- honest degrade ----------
+// A health import that completed on its deterministic path alone is NOT the same
+// thing as an analyzed one: the labs, vitals and facts are real, but the written
+// read never happened. The source row carries that distinction so the card can
+// say so plainly instead of showing "✦ analyzed" over a half-finished ingest.
+export interface DeterministicIngestState {
+  mode: "deterministic";
+  reason: string;
+  detail: string;
+  at: string;
+}
+
+const AVAILABILITY_WORDS: Record<string, string> = {
+  weekly_limit: "weekly limit reached",
+  usage_limit: "usage limit reached",
+  rate_limited: "rate limited",
+  needs_credit: "needs credit",
+  needs_login: "needs sign-in",
+  quota_exhausted: "out of quota",
+  unavailable: "unavailable",
+};
+
+function agentLabel(name: string): string {
+  const raw = String(name ?? "").trim();
+  if (!raw) return "An agent";
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+// Why the agent step produced nothing, in the athlete's words. Prefers the
+// availability read a sibling stream attaches to each attempt (it knows about
+// resets and holds); with no availability it falls back to the attempt's error
+// CLASS, never its text.
+//
+// The text arm is gone on purpose: on the throw path `attempt.error` is raw
+// stderr, and this string is persisted into `health_documents.parsed_json.ingest
+// .detail` and rendered on the card. A CLI stack trace, a home-directory path or
+// a provider URL has no business in a durable health row.
+export function describeAgentDegrade(error: unknown): { reason: string; detail: string } {
+  const tried = Array.isArray((error as any)?.tried) ? ((error as any).tried as any[]) : [];
+  const states = new Map<string, number>();
+  const parts: string[] = [];
+  for (const attempt of tried) {
+    const availability = attempt?.availability && typeof attempt.availability === "object" ? attempt.availability : null;
+    const state = typeof availability?.state === "string" ? availability.state : null;
+    if (state) states.set(state, (states.get(state) ?? 0) + 1);
+    const errorClass = state ? null : agentErrorClass(attempt?.status, attempt?.error);
+    const words =
+      (typeof availability?.detail === "string" && availability.detail.trim()) ||
+      (state ? AVAILABILITY_WORDS[state] ?? state.replace(/_/g, " ") : "") ||
+      (errorClass ? AVAILABILITY_WORDS[errorClass] ?? errorClass.replace(/_/g, " ") : "") ||
+      "no usable output";
+    parts.push(`${agentLabel(attempt?.agent)}: ${words.replace(/\s+/g, " ").slice(0, 80)}`);
+  }
+  let dominant = "";
+  let best = 0;
+  for (const [state, n] of states) {
+    if (n > best) {
+      best = n;
+      dominant = state;
+    }
+  }
+  const detail = parts.join(" · ").slice(0, 240);
+  return {
+    reason: dominant || "no_valid_output",
+    detail: detail || "No agent returned a usable read.",
+  };
+}
+
+function noteDeterministicIngest(id: number, reason: string, detail: string): void {
+  try {
+    const row = repo.getHealthDocumentRaw(id) as any;
+    if (!row) return;
+    let parsed: any = {};
+    try {
+      const raw = row.parsed_json;
+      const decoded = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (decoded && typeof decoded === "object" && !Array.isArray(decoded)) parsed = decoded;
+    } catch { /* an unreadable parsed_json is replaced, not preserved */ }
+    const ingest: DeterministicIngestState = {
+      mode: "deterministic",
+      reason: String(reason || "no_valid_output").slice(0, 60),
+      detail: String(detail || "").slice(0, 240),
+      at: new Date().toISOString(),
+    };
+    repo.updateHealthDocFields(id, { parsed_json: { ...parsed, ingest } });
+  } catch (e: any) {
+    console.warn(`[enrich] health#${id}: could not record the degraded ingest state (${e?.message ?? e}).`);
+  }
+  recordDegradedOperation("enrichment", "health", reason);
+}
+
+function clearDeterministicIngest(id: number): void {
+  try {
+    const row = repo.getHealthDocumentRaw(id) as any;
+    if (!row?.parsed_json) return;
+    const parsed = typeof row.parsed_json === "string" ? JSON.parse(row.parsed_json) : row.parsed_json;
+    if (!parsed || typeof parsed !== "object" || !parsed.ingest) return;
+    const { ingest: _dropped, ...rest } = parsed;
+    repo.updateHealthDocFields(id, { parsed_json: rest });
+  } catch { /* the mark is advisory; failing to clear it must not fail the job */ }
+}
+
 async function processJob(job: Job): Promise<void> {
   if (job.kind === "review") return processReviewJob();
   if (job.kind === "garmin_strength") return processGarminStrengthJob(job.id);
@@ -395,7 +543,8 @@ async function processJob(job: Job): Promise<void> {
     if (job.kind === "health") {
       const backfill = repo.backfillCcdaHealthDocument(job.id);
       if (backfill.wrote) {
-        console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (agent enrichment off).`);
+        console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (agent enrichment off).`);
+        noteDeterministicIngest(job.id, "enrichment_off", "Agent analysis is switched off in Settings.");
         markStatus(job, "done");
         try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
@@ -416,7 +565,8 @@ async function processJob(job: Job): Promise<void> {
     if (job.kind === "health") {
       const backfill = repo.backfillCcdaHealthDocument(job.id);
       if (backfill.wrote) {
-        console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (no usable agent).`);
+        console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (no usable agent).`);
+        noteDeterministicIngest(job.id, "no_agent_enabled", "No agent is enabled — turn one on in Settings.");
         markStatus(job, "done");
         try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
@@ -502,7 +652,9 @@ async function processJob(job: Job): Promise<void> {
         console.warn(`[enrich] health#${job.id}: deterministic CCDA extraction skipped (${e?.message ?? e}).`);
         ccdaExtraction = null;
       }
-      prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other");
+      prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other", {
+        inventory: isDir ? buildHealthSourceInventory(target) : undefined,
+      });
       timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
     }
   } else {
@@ -520,14 +672,20 @@ async function processJob(job: Job): Promise<void> {
   }
 
   let parsed: any = null;
+  // Kept so a deterministic-only completion can say WHY the agent step produced
+  // nothing (out of quota, needs sign-in, no usable output) instead of quietly
+  // presenting a half-finished import as analyzed.
+  let agentFailure: unknown = null;
   try {
     // Effort/model are server policy (repo.TASK_EXECUTION_PROFILES), not whatever the
     // CLI's home settings happen to say: ingestion is a deep/high transcription read,
     // ordinary enrichment is cheap structuring.
     const fb = await runAgentWithFallback(order, prompt, { timeoutMs, profile: repo.executionProfileForTask(task) });
     parsed = fb.result?.parsed ?? null;
-  } catch {
+    if (!parsed) agentFailure = new AgentFallbackError(order, [{ agent: fb.agent ?? "agent", error: "no usable output" }]);
+  } catch (e: unknown) {
     parsed = null;
+    agentFailure = e;
   } finally {
     // Always remove an unpacked archive dir (could be hundreds of MB) once the
     // agent has read it — whether the run succeeded, failed, or threw.
@@ -541,7 +699,9 @@ async function processJob(job: Job): Promise<void> {
     if (job.kind === "health" && ccdaExtraction) {
       const backfill = repo.applyCcdaHealthBackfill(job.id, ccdaExtraction);
       if (backfill.wrote) {
-        console.warn(`[enrich] health#${job.id}: agent returned no usable JSON; deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s).`);
+        const degrade = describeAgentDegrade(agentFailure);
+        console.warn(`[enrich] health#${job.id}: agent returned no usable JSON (${degrade.reason}); deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s).`);
+        noteDeterministicIngest(job.id, degrade.reason, degrade.detail);
         markStatus(job, "done");
         try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
@@ -551,7 +711,9 @@ async function processJob(job: Job): Promise<void> {
     if (job.kind === "health") {
       const fallback = applyTextVisitNoteFallback(job.id, healthSource);
       if (fallback.applied) {
-        console.warn(`[enrich] health#${job.id}: agent returned no usable JSON; deterministic visit-note fallback wrote ${fallback.facts} fact(s).`);
+        const degrade = describeAgentDegrade(agentFailure);
+        console.warn(`[enrich] health#${job.id}: agent returned no usable JSON (${degrade.reason}); deterministic visit-note fallback wrote ${fallback.facts} fact(s).`);
+        noteDeterministicIngest(job.id, degrade.reason, degrade.detail);
         markStatus(job, "done");
         try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
@@ -630,7 +792,7 @@ async function processJob(job: Job): Promise<void> {
   const ccdaBackfill =
     job.kind === "health" && ccdaExtraction ? repo.applyCcdaHealthBackfill(job.id, ccdaExtraction) : null;
   if (ccdaBackfill?.wrote) {
-    console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${ccdaBackfill.clinicalFacts} fact(s), ${ccdaBackfill.vitalMarkers} vital marker(s), ${ccdaBackfill.bpReadings}/${ccdaBackfill.extractedBpReadings} BP row(s).`);
+    console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${ccdaBackfill.clinicalFacts} fact(s), ${ccdaBackfill.resultMarkers} lab marker(s) across ${ccdaBackfill.resultPanels} panel(s), ${ccdaBackfill.vitalMarkers} vital marker(s), ${ccdaBackfill.bpReadings}/${ccdaBackfill.extractedBpReadings} BP row(s).`);
   }
 
   // Add each genuinely-new memory item (the prompt instructs the agent to skip
@@ -679,6 +841,16 @@ async function processJob(job: Job): Promise<void> {
       return;
     }
     console.warn(`[enrich] ${job.kind}#${job.id}: agent returned parseable JSON but nothing usable (wrong shape?) — kept regex parse.`);
+  }
+
+  // The agent ran, but only the deterministic passes actually wrote: the import
+  // is real and complete as far as it goes, and the card must say which read it
+  // got. A genuine agent apply clears any earlier mark.
+  if (job.kind === "health" && !healthSource?.imaging) {
+    if (appliedFields) clearDeterministicIngest(job.id);
+    else if (ccdaBackfill?.wrote || fallbackApplied) {
+      noteDeterministicIngest(job.id, "no_valid_output", "The agent's answer wasn't a usable health read.");
+    }
   }
 
   markStatus(job, "done");

@@ -1298,6 +1298,63 @@ REST surface: `GET /api/chat/turns/:id/stream` (SSE: a `snapshot` then `phase`/`
 
 ---
 
+## Provider availability (`src/agentAvailability.ts` + `src/repo/agent-availability.ts`)
+
+Every provider failure used to look identical (`invalid_json`), so a CLI that was out of weekly quota
+was re-probed on every operation — probe plus JSON-repair retry, several seconds of the op's timeout
+each time — while Settings still showed it "✓ Connected" and an exhausted rotation was swallowed by
+callers that degrade to a deterministic result.
+
+**`src/agentAvailability.ts` is the one classifier.** It is dependency-free (only `tz.ts`) precisely
+so `agents.ts` can import it without reaching `repo.ts`. `classifyAgentFailure(agent, {code, raw,
+stderr}, now)` reads the CLI's own words once and returns one of
+`quota_exhausted | rate_limited | auth_required | payment_required | permission_denied |
+process_error | invalid_output`, plus the limit `window` (`5h`/`7d`) and an ISO `resets_at` when the
+provider stated one. Claude's `stream-json` `rate_limit_event` line is read *first* (it carries the
+exact reset instant and window); prose like `resets 8am (America/New_York)` is parsed as the NEXT
+occurrence of that wall time in the zone the CLI named, and codex's `try again at Sep 18th, 2026 4:23
+PM` in the app zone. A named usage/weekly limit outranks the upgrade link on the same line — the
+primary condition is the limit, not the payment. The auth rule (with its infra-sized guard) lives
+here now; `chatTurns.classifyChatAgentResult` calls into it rather than keeping a second copy.
+`detail` is short and user-safe: recognized phrases only, never raw CLI text.
+
+`holdUntil(failure, streak, now)` is the policy: quota waits for the provider's own reset (capped at
+8 days; +1 h when unknown), rate limiting backs off 5 min × 2^streak to 1 h, payment 24 h, auth
+30 min. Everything else returns `null` — the process-local circuit breaker in `agents.ts` still owns
+transient noise and is deliberately unchanged.
+
+**The hold is persisted** in `agent_availability` (`src/repo/agent-availability.ts`, one row per
+agent) because a weekly limit outlives a container restart, which the breaker deliberately does not.
+Reads return `null` once `hold_until` passes; any success — or a completed in-app login, via
+`invalidateAgentConfigured` — deletes the row.
+
+**The rotation reaches it through sinks**, the same pattern as `setAgentRunSink` and for the same
+circular-import reason: `setAgentAvailabilitySink` and `setAgentDiagnosticSink`, both registered in
+`startScheduler()`. The defaults are no-ops that never hold, so any caller running the rotation
+without a registered sink behaves exactly as before. In `runAgentWithFallback` a held provider is
+moved behind the healthy ones and **skipped without spawning** while any non-held candidate remains;
+it still appears in `tried` with an `availability` field so the caller can say why. If every other
+candidate fails, the held ones become the only remaining option and are probed anyway — a hold is a
+prediction, never an exclusion, and that second pass is how a wrong hold self-corrects. A failure
+whose class holds (or is `permission_denied`) also **skips the JSON-repair retry**: re-asking a
+rate-limited CLI for "only the JSON" cannot succeed. The chat path applies the same rule by ordering
+held providers last (`orderChatProvidersByAvailability`), so the streaming primary picks a healthy
+provider too.
+
+When a rotation exhausts, ONE `warning` diagnostic is filed — `source: "agent"`, `kind:
+"rotation_exhausted"`, fingerprinted by op and dominant state — in taxonomy words only, honoring
+`src/telemetry-privacy.ts` (raw CLI output is never a telemetry input). `ERROR_CLASSES` and
+`agentErrorClass` carry the four new classes, and `getAgentStats().by_agent` counts them per agent.
+
+**Where the UI reads it:** `getAgentConfig()` attaches `availability` (state / detail / resets_at /
+hold_until / window, or `null`), so `GET /api/agents`, `GET /api/settings` and the mirrored MCP tools
+all carry it. Settings renders it as an amber chip — `Limit reached · resets Tue 8:00 AM`, `Busy ·
+retry in 12m`, `Needs credit` — with one muted line under the row ("Cairn routes around it until
+then."). Amber, never red: a provider limit is a schedule, not a fault, and the athlete is never
+asked to do anything about it. A hold never changes `usable`.
+
+---
+
 ## Agent execution profiles (`src/repo/settings.ts` + `src/agents.ts`)
 
 *Which* agent runs an op is `TASK_POLICY`; *how* it runs is `TASK_EXECUTION_PROFILES`, its sibling in
@@ -1630,6 +1687,22 @@ schedule is toggleable live) and, when `coach_enabled` and the configured `coach
 match, creates one weekly proposal via the auto rotation and routes it through the shared autonomy
 policy. First-run settings seed from the legacy `COACH_AGENT`/`COACH_DAY`/`COACH_HOUR` env vars.
 
+**Provider exhaustion is availability, not a defect.** Every agentic task body ends the same way when
+no CLI can answer: the op returns its designed `{ok:false, agent_status:'all_failed'|'unconfigured',
+tried}`. Those bodies throw a typed `ProviderUnavailableError` (`src/provider-unavailable.ts`, a leaf
+module importing only the privacy contract, so `repo/` can see it without an import cycle) via
+`schedulerTaskError()`; anything else still throws an ordinary `Error`. `runSchedulerOperation` returns
+the thrown object as `cause` beside the sanitized `last_error`, and `runScheduled` records THAT — so
+the class survives instead of being re-wrapped into the bare `Error` that made three different nightly
+jobs report `scheduler:task_failure:<slot>:Error` on a night when the honest answer was "claude weekly
+limit, codex usage limit, grok out of credit". Availability lands as `kind:'provider_unavailable'`,
+`level:'warning'`, fingerprint `scheduler:provider_unavailable:<operation>:<dominantState>`, where the
+state comes from `tried[].availability.state` when the agent layer published one and from
+`agentErrorClass()` otherwise (ties broken alphabetically, so the fingerprint is stable). The retry
+ladder also stops hammering: on its default schedule a provider-unavailable failure waits at least
+`PROVIDER_UNAVAILABLE_MIN_BACKOFF_MS` (4 h), or until the `resets_at`/`hold_until` a provider itself
+published, instead of coming back in fifteen minutes. A caller's explicit `backoffMs` always wins.
+
 The proactive tick (gated on `proactive_enabled`) also creates a **continuous plan-evolution**
 proposal on two cadences: the WEEKLY slot (calendar), and a **data-triggered** EARLY proposal when
 the athlete's logged training has materially shifted (`repo.programEvolutionTrigger()` — a lift
@@ -1913,7 +1986,23 @@ announced/pending for the next pass to re-offer, rather than parking at `review`
 this week" into something the athlete has to answer. Termination stays with the ceilings that own it
 (the proposal age gate, evidence freshness). `thawParkedReviewDecisions()` re-offers already-parked
 decisions through today's policy, skipping anything held behind a floor and stamping
-`thaw_attempted` so each is retried once rather than every sweep.
+`thaw_attempted` so each is retried once rather than every sweep. It also leaves the **conference door**
+alone: a `case_conference` decision with a LIVE DRAFT behind it is a question the conductor put to the
+athlete, so the sweep never adopts it, sets it aside, or even stamps it. An ADVISORY conference (no
+draft behind it) still thaws to `observed`, per the 2026-08-17 no-parking-above-ask ruling.
+
+**Every non-applying ending names itself.** `failed` is one bucket holding six very different endings,
+so the pass also returns `failed_outcomes` — one `{id, class, calm}` per failed id, classed
+`canceled_moot` / `stale_plan` / `stale_snapshot` / `stale_proposal` / `missing_proposal` /
+`apply_threw`, `calm:true` for the four that are the system working as designed. The scheduler records
+ONE async-failure event per non-calm class
+(`worker:final_failure:apply:announced_boundary:<class>:BoundaryApplyError`) and logs the calm ones
+rather than counting them as breakage; the old single generic `Error` per pass produced one operator
+error a day that nothing could act on. The two TERMINAL endings (`stale_plan`, `stale_proposal`) also
+retire the draft/plan they refused — left live, an age-rejected draft was re-adopted by the next
+orphan sweep, re-announced, and refused again at the next boundary, which is what made that daily
+event daily. `hydrateProposal` surfaces a `rejected` autonomy row for the same reason, so adoption can
+see that a ceiling has already refused a draft.
 
 **REGENERATE, DON'T ASK — the two evidence-staleness holds no longer produce an ask.** A draft whose
 compare-and-set snapshot moved, or that simply waited past its age horizon, was parking as an `ask`
@@ -2094,6 +2183,50 @@ A modern panel like Function Health lists 100+ markers; a weaker model used to c
 
 The per-panel cap is `repo.MAX_MARKERS_PER_PANEL` (250). The chat `log_health` action carries the
 same "no curation" instruction and points big pastes at the Health tab's paste box.
+
+### A MyChart export is read deterministically FIRST, and the card says which read it got
+
+A MyChart/CCDA "IHE_XDM" bundle is structured data, not prose: `src/repo/ccda.ts` reads the clinical
+facts, the vitals (+ BP rows) **and every lab result** out of the XML with no agent involved.
+
+- **Results.** Each `<section>` whose code is `30954-2` (or whose title says Results) holds
+  `<organizer classCode="BATTERY">` entries, one `<observation>` per analyte with a LOINC code, a
+  typed `<value>`, an `interpretationCode` and a printed `referenceRange`. `extractCcdaHealthData`
+  returns them as `results_panels` — **one panel per collection DATE**, `type: CCDA_RESULTS_TYPE`
+  (`"ccda_results"`), deduped across the four or five encounter summaries that repeat the same
+  battery. `applyCcdaHealthBackfill` writes them through `replaceHealthPanelsByType`, so a re-run
+  replaces its own stream and never disturbs the agent's dated timeline.
+- **What stays the agent's job**: an `xsi:type="ED"` narrative, an imaging/ECG battery, a
+  `nullFlavor` value. Those are readings, not results.
+- **Flags.** `H`/`L`/`N` map straight through. `A` (abnormal) is NOT in the marker vocabulary — it is
+  resolved against the printed range, and left `null` when the range cannot settle the direction.
+- **Dates.** A CCDA stamp is a wall clock plus an offset (`20260223233000-0500`). `ccdaLocalDate()`
+  converts it to the real instant, then to the app-local day via `localDateISO` — a 23:30 draw stays
+  on its own evening. A stamp with no clock, or no zone to anchor one, is taken as printed.
+- **Names.** MyChart prints verbatim order names ("LOW DENSITY LIPOPROTEIN DIRECT") that the alias KB
+  does not recognize, which would split one analyte into a parallel series. `LOINC_CANONICAL_NAMES`
+  resolves the common codes to the canonical label `marker-canon.ts` already keys on; the verbatim
+  label stays on the marker's `source_name`. An unknown code keeps a title-cased `originalText`.
+- **Coexistence.** When an agent ALSO read the import, the deterministic reading of an analyte wins
+  for its date: `dropDuplicateMarkersByDate` (matching on the canonical marker key) drops the agent's
+  copy of that same analyte and keeps everything it added, so one panel never shows twice.
+
+**The prompt lists the folder for the agent.** Handed only a folder path, an autonomous CLI reaches
+for `ls`/`find`, headless mode auto-denies the command permission, and the run exits 0 with EMPTY
+stdout. `buildHealthSourceInventory` (enrich.ts) walks the unpacked export (≤200 files, no
+stylesheets/scripts/images/dotfiles/`__MACOSX`) and `buildHealthIngestPrompt` inserts it as a FILE
+INVENTORY with an explicit "do NOT run shell commands — use ONLY your file-reading tool on these
+exact paths", plus a note that the structured data is already extracted so the agent spends its pass
+on the PDF/HTML narratives, imaging reports and visit notes.
+
+**Honest degrade.** When the agent step yields nothing and only the deterministic pass wrote, the
+source row's `parsed_json.ingest` records `{mode:"deterministic", reason, detail, at}` —
+`describeAgentDegrade` builds those from the `AgentFallbackError`'s `tried[]` ledger (preferring each
+attempt's `availability` read, else its error text), and ONE
+`worker:degraded:enrichment:health:<reason>` diagnostic event is recorded at warning level. The
+Health card then reads **`read from data`** instead of "✦ analyzed", and says so in words. A later
+full agent apply replaces `parsed_json` and the mark goes with it (`clearDeterministicIngest` also
+clears it explicitly).
 
 ---
 

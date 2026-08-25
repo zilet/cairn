@@ -7,6 +7,13 @@ import { fileURLToPath } from "node:url";
 import { agentCliPath, agentDataDir, buildAgentSpawnOptions, promptReferencesDataDir } from "./agentExecution.js";
 import type { JsonSchema } from "./json-schema.js";
 import { telemetryModelName } from "./telemetry-privacy.js";
+import {
+  availabilityHolds,
+  availabilityReason,
+  classifyAgentFailure,
+  type AgentAvailabilityState,
+  type AgentFailure,
+} from "./agentAvailability.js";
 export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -333,6 +340,9 @@ export function agentConfigured(name: string): boolean | null {
 // shows without a restart).
 export function invalidateAgentConfigured(name?: string): void {
   _codexModel = undefined; // codex model is read from ~/.codex/config.toml
+  // A completed login is exactly the event a persisted auth hold was waiting for
+  // — drop it here rather than making the person wait out the re-probe leash.
+  for (const agent of name ? [name] : Object.keys(loadAgents())) availabilityClear(agent);
   if (name) {
     configuredCache.delete(name);
     modelsRawCache.delete(name);
@@ -571,7 +581,13 @@ function scanBalanced(text: string, start: number): { json: string | null; lastC
 function normalizeAgentStdout(text: string): string {
   let s = String(text ?? "");
   if (s.charCodeAt(0) === 0xfeff) s = s.slice(1);
-  return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) continue;
+    out += s[i];
+  }
+  return out;
 }
 
 // A JSON object is `{` + ws + (`"` of the first key, or `}` of `{}`). `{kind}` or
@@ -1186,10 +1202,25 @@ export interface AgentResult {
   usage?: AgentUsage;
 }
 
+/** What a skipped/failed candidate told us, when it told us anything durable. */
+export interface AgentTriedAvailability {
+  state: AgentAvailabilityState;
+  resets_at: string | null;
+  hold_until: string | null;
+  detail: string | null;
+}
+
+export interface AgentTriedEntry {
+  agent: string;
+  error: string;
+  /** Present when the agent was held (or newly observed) as unavailable. */
+  availability?: AgentTriedAvailability;
+}
+
 export interface FallbackResult {
   agent: string;          // the agent that actually produced the output
   result: AgentResult;
-  tried: { agent: string; error: string }[]; // agents attempted before this one that failed
+  tried: AgentTriedEntry[]; // agents attempted before this one that failed
 }
 
 // Structured terminal failure for an exhausted rotation. Callers that degrade
@@ -1198,9 +1229,9 @@ export interface FallbackResult {
 // so a user Stop is never mistaken for an availability failure.
 export class AgentFallbackError extends Error {
   readonly order: string[];
-  readonly tried: { agent: string; error: string }[];
+  readonly tried: AgentTriedEntry[];
 
-  constructor(order: string[], tried: { agent: string; error: string }[], message?: string) {
+  constructor(order: string[], tried: AgentTriedEntry[], message?: string) {
     super(
       message ??
         `All ${order.length} agent(s) failed: ${tried.map((t) => `${t.agent}: ${t.error}`).join("; ")}`
@@ -1239,6 +1270,70 @@ function emitAgentRun(r: AgentRunRecord) {
   try { agentRunSink(r); } catch { /* telemetry never breaks the loop */ }
 }
 
+// ---------- availability sink ----------
+// Same shape as the run sink and for the same reason (no repo import here). The
+// DEFAULT never holds anything, so any caller that runs the rotation without a
+// registered sink (tests, a bare script) behaves exactly as it did before.
+export interface AgentAvailabilityHold {
+  state: AgentAvailabilityState;
+  detail: string | null;
+  hold_until: string | null;
+  resets_at: string | null;
+}
+export interface AgentAvailabilitySink {
+  held(name: string, now: Date): AgentAvailabilityHold | null;
+  noteFailure(name: string, failure: AgentFailure, op: string): void;
+  clear(name: string): void;
+}
+const NO_AVAILABILITY: AgentAvailabilitySink = { held: () => null, noteFailure: () => {}, clear: () => {} };
+let availabilitySink: AgentAvailabilitySink = NO_AVAILABILITY;
+export function setAgentAvailabilitySink(sink: AgentAvailabilitySink | null) {
+  availabilitySink = sink ?? NO_AVAILABILITY;
+}
+function availabilityHeld(name: string, now: Date): AgentAvailabilityHold | null {
+  try { return availabilitySink.held(name, now); } catch { return null; }
+}
+function availabilityNote(name: string, failure: AgentFailure, op: string): void {
+  try { availabilitySink.noteFailure(name, failure, op); } catch { /* never breaks the loop */ }
+}
+function availabilityClear(name: string): void {
+  try { availabilitySink.clear(name); } catch { /* never breaks the loop */ }
+}
+
+// ---------- diagnostic sink ----------
+// ONE warning when a whole rotation comes back empty, so an exhausted set of
+// providers stops being swallowed silently by callers that degrade to a
+// deterministic result. Taxonomy words only — raw CLI output is never a
+// telemetry input (src/telemetry-privacy.ts).
+export interface AgentDiagnosticEvent {
+  source: "agent";
+  kind: string;
+  level: "warning" | "error";
+  operation: string;
+  fingerprint: string;
+  message: string;
+}
+type AgentDiagnosticSink = (e: AgentDiagnosticEvent) => void;
+let agentDiagnosticSink: AgentDiagnosticSink | null = null;
+export function setAgentDiagnosticSink(sink: AgentDiagnosticSink | null) { agentDiagnosticSink = sink; }
+function emitAgentDiagnostic(e: AgentDiagnosticEvent) {
+  if (!agentDiagnosticSink) return;
+  try { agentDiagnosticSink(e); } catch { /* telemetry never breaks the loop */ }
+}
+
+/** The state most of the rotation reported — what the one warning is ABOUT. */
+export function dominantTriedState(tried: AgentTriedEntry[]): AgentAvailabilityState {
+  const counts = new Map<AgentAvailabilityState, number>();
+  for (const t of tried) {
+    if (!t.availability) continue;
+    counts.set(t.availability.state, (counts.get(t.availability.state) ?? 0) + 1);
+  }
+  let best: AgentAvailabilityState = "invalid_output";
+  let bestN = 0;
+  for (const [state, n] of counts) if (n > bestN) { best = state; bestN = n; }
+  return best;
+}
+
 // Try each agent in `order` until one returns a usable result: JSON-parseable,
 // and (when the operation supplies `acceptParsed`) semantically valid too.
 // Powers "auto" agent selection: a dead login or timeout falls through to the
@@ -1259,22 +1354,26 @@ export async function runAgentWithFallback(
   const baseTimeout = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const op = o.op ?? "auto";
   const signal = o.signal;
-  const tried: { agent: string; error: string }[] = [];
+  const tried: AgentTriedEntry[] = [];
+  const startedAt = new Date();
 
-  // Prefer agents whose breaker is closed; tripped ones go to the back so they're
-  // only probed when nothing healthier is available.
-  const healthy = order.filter((n) => !breakerIsOpen(n));
-  const tripped = order.filter((n) => breakerIsOpen(n));
-  const sequence = [...healthy, ...tripped];
+  // Availability first, breaker second. A HELD provider (out of quota, out of
+  // credit, throttled, signed out) is not spawned at all while any other
+  // candidate remains — re-asking a rate-limited CLI costs seconds of this op's
+  // timeout and cannot succeed. But a hold is a PREDICTION: if every other
+  // candidate fails, the held ones become the only remaining option and are
+  // probed anyway, which is how a wrong hold self-corrects.
+  const holds = new Map<string, AgentAvailabilityHold | null>();
+  for (const n of order) holds.set(n, availabilityHeld(n, startedAt));
+  const isHeld = (n: string) => !!holds.get(n);
+  const healthy = order.filter((n) => !isHeld(n) && !breakerIsOpen(n));
+  const trippedOnly = order.filter((n) => !isHeld(n) && breakerIsOpen(n));
+  const heldAgents = order.filter(isHeld);
 
-  for (let i = 0; i < sequence.length; i++) {
-    // Abort = a deliberate Stop: bail the whole rotation, never fall through to
-    // the next agent (the caller wants the turn killed, not retried elsewhere).
+  const attempt = async (name: string): Promise<FallbackResult | null> => {
     if (signal?.aborted) throw new Error("canceled");
-    const name = sequence[i];
-    const isProbe = breakerIsOpen(name);
-    // A tripped agent is probed only on a short leash; if healthier agents exist
-    // and this one is tripped, it's already at the back of the line.
+    const isProbe = breakerIsOpen(name) || isHeld(name);
+    // A tripped/held agent is probed only on a short leash.
     const timeoutMs = isProbe ? Math.min(baseTimeout, BREAKER_PROBE_TIMEOUT_MS) : baseTimeout;
     const started = Date.now();
     let triedJson = false;
@@ -1294,9 +1393,13 @@ export async function runAgentWithFallback(
       });
       const parsedBeforeRepair = !!result.parsed;
       const acceptedBeforeRepair = acceptsParsed(result, o.acceptParsed);
-      // One-shot repair retry: recover both malformed JSON and parseable JSON
-      // that missed this operation's semantic contract before rotating onward.
-      if (!acceptedBeforeRepair && !signal?.aborted) {
+      // Why the output is missing decides whether a retry is worth anything. A
+      // provider that said "weekly limit" / "402" / "not logged in" / "permission
+      // denied" will say it again — re-asking it for "only the JSON" is pure
+      // waste. Only a chatty-but-willing model earns the one-shot repair.
+      const failure = acceptedBeforeRepair ? null : classifyAgentFailure(name, result, new Date());
+      const wasteful = !!failure && (availabilityHolds(failure.state) || failure.state === "permission_denied");
+      if (!acceptedBeforeRepair && !wasteful && !signal?.aborted) {
         triedJson = true;
         try {
           result = await runAgent(name, prompt + (parsedBeforeRepair ? CONTRACT_REPAIR_SUFFIX : JSON_REPAIR_SUFFIX), {
@@ -1315,6 +1418,9 @@ export async function runAgentWithFallback(
       }
       if (acceptsParsed(result, o.acceptParsed)) {
         breakerNoteSuccess(name);
+        // A success is proof the provider answers — any hold on it is stale.
+        availabilityClear(name);
+        holds.set(name, null);
         emitAgentRun({
           op,
           agent: name,
@@ -1332,9 +1438,20 @@ export async function runAgentWithFallback(
       }
       breakerNoteFail(name);
       const parsed = !!result.parsed;
+      // A second run after the repair can fail for a NEW reason; re-read it.
+      const finalFailure = triedJson ? classifyAgentFailure(name, result, new Date()) : failure;
+      // Parseable-but-off-contract stays `invalid_contract`; plain unparseable
+      // output stays `invalid_json`. Everything else now carries its real cause.
+      const errorClass = parsed
+        ? "invalid_contract"
+        : finalFailure && finalFailure.state !== "invalid_output"
+          ? finalFailure.state
+          : "invalid_json";
       const error = parsed
         ? `ran but returned JSON outside the requested contract (exit ${result.code})`
-        : `ran but returned no valid JSON (exit ${result.code})`;
+        : finalFailure && finalFailure.state !== "invalid_output"
+          ? availabilityReason(finalFailure)
+          : `ran but returned no valid JSON (exit ${result.code})`;
       emitAgentRun({
         op,
         agent: name,
@@ -1342,18 +1459,36 @@ export async function runAgentWithFallback(
         parsed,
         latency_ms: Date.now() - started,
         tried_json: triedJson,
-        status: "invalid_output",
-        error_class: parsed ? "invalid_contract" : "invalid_json",
+        status: errorClass === "invalid_contract" || errorClass === "invalid_json" ? "invalid_output" : errorClass,
+        error_class: errorClass,
         error_message: error,
         exit_code: result.code,
         model: result.usage?.model ?? null,
         input_tokens: result.usage?.input_tokens ?? null,
         output_tokens: result.usage?.output_tokens ?? null,
       });
-      tried.push({ agent: name, error });
+      const entry: AgentTriedEntry = { agent: name, error };
+      if (!parsed && finalFailure) {
+        if (availabilityHolds(finalFailure.state)) availabilityNote(name, finalFailure, op);
+        entry.availability = {
+          state: finalFailure.state,
+          resets_at: finalFailure.resets_at,
+          hold_until: null,
+          detail: finalFailure.detail,
+        };
+      }
+      tried.push(entry);
+      return null;
     } catch (e: any) {
       if (signal?.aborted) throw e; // canceled mid-run — stop the rotation
       breakerNoteFail(name);
+      const message = String(e?.message || "");
+      const timedOut = /timed out/i.test(message);
+      // A thrown run still carries the CLI's own words on stderr in most cases;
+      // classify them so a quota failure that also exits non-zero is not filed
+      // as a generic process error.
+      const failure = timedOut ? null : classifyAgentFailure(name, { code: null, raw: "", stderr: message }, new Date());
+      const errorClass = timedOut ? "timeout" : (failure?.state ?? "process_error");
       emitAgentRun({
         op,
         agent: name,
@@ -1361,13 +1496,65 @@ export async function runAgentWithFallback(
         parsed: false,
         latency_ms: Date.now() - started,
         tried_json: triedJson,
-        status: "error",
-        error_class: /timed out/i.test(String(e?.message || "")) ? "timeout" : "process_error",
+        status: errorClass === "process_error" ? "error" : errorClass,
+        error_class: errorClass,
         error_message: e?.message,
       });
-      tried.push({ agent: name, error: e.message });
+      const entry: AgentTriedEntry = { agent: name, error: e.message };
+      if (failure && availabilityHolds(failure.state)) {
+        availabilityNote(name, failure, op);
+        entry.availability = {
+          state: failure.state,
+          resets_at: failure.resets_at,
+          hold_until: null,
+          detail: failure.detail,
+        };
+      }
+      tried.push(entry);
+      return null;
+    }
+  };
+
+  // Pass 1: everything not currently held. A held provider is recorded as
+  // skipped (never spawned) for as long as a non-held candidate remains, so a
+  // caller that succeeds elsewhere can still say WHY the preferred agent sat out.
+  const openCandidates = [...healthy, ...trippedOnly];
+  if (openCandidates.length) {
+    for (const name of heldAgents) {
+      const hold = holds.get(name)!;
+      tried.push({
+        agent: name,
+        error: availabilityReason({ state: hold.state, resets_at: hold.resets_at }),
+        availability: { ...hold },
+      });
     }
   }
+  for (const name of openCandidates) {
+    const hit = await attempt(name);
+    if (hit) return hit;
+  }
+  // Pass 2: nothing else answered, so the held providers are now the only
+  // remaining option and the prediction gets tested. A stale hold can never
+  // strand an operation.
+  if (heldAgents.length) {
+    for (let i = tried.length - 1; i >= 0; i--) {
+      if (heldAgents.includes(tried[i].agent) && !openCandidates.includes(tried[i].agent)) tried.splice(i, 1);
+    }
+    for (const name of heldAgents) {
+      const hit = await attempt(name);
+      if (hit) return hit;
+    }
+  }
+
+  const dominant = dominantTriedState(tried);
+  emitAgentDiagnostic({
+    source: "agent",
+    kind: "rotation_exhausted",
+    level: "warning",
+    operation: op,
+    fingerprint: `agent:rotation_exhausted:${op}:${dominant}`,
+    message: `no provider available (${dominant})`,
+  });
   throw new AgentFallbackError(order, tried);
 }
 

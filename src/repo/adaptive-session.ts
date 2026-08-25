@@ -88,6 +88,12 @@ function fail(code: string, message: string, preview?: AdaptiveDailySessionPrevi
   throw new DailySessionError(code, message, preview);
 }
 
+// "This date has no weekly template day to build an adaptive candidate from." A routine
+// ABSENCE, not malformed input: the PWA asks for a preview on EVERY Today render, so the
+// read surfaces answer it with `200 + null` — the same absence contract the other
+// single-row reads use — rather than a 400 that reads as a defect in operator telemetry.
+export const DAILY_SESSION_NO_TEMPLATE = "daily_session_no_template";
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PLAN_SOURCES = new Set<DailySessionSource>(["adaptive_plan", "manual_plan"]);
 
@@ -616,10 +622,18 @@ function adaptiveSnapshotFromDecision(envelope: DailyDecisionEnvelope) {
   if (envelope.kind !== "rest" && envelope.template.intent !== "template") {
     // Preserve the existing adaptive-plan contract: without a weekly template,
     // callers use athlete_override for an open session. Rest is the one useful
-    // exception because its recovery composition is intentionally plan-free.
-    throw new Error("session items are required");
+    // exception because its recovery composition is intentionally plan-free. This is a
+    // routine ABSENCE, so it carries the code the preview surfaces answer with null.
+    fail(DAILY_SESSION_NO_TEMPLATE, "no weekly template day is available for this date");
   }
   const session = deterministicComposedSession(envelope);
+  // The same absence one step later: a template day that composes to nothing has no
+  // candidate to preview either, and normalizeSessionPayload would report it as
+  // "session items are required" — a malformed-input message for what is in fact an
+  // empty day. Rest keeps its intentionally item-free composition.
+  if (envelope.kind !== "rest" && !(Array.isArray(session.items) && session.items.length)) {
+    fail(DAILY_SESSION_NO_TEMPLATE, "no weekly template day is available for this date");
+  }
   return {
     // A true rest decision intentionally severs the weekly-template link: the
     // accepted prescription is the deterministic recovery composition, not a

@@ -56,6 +56,7 @@ import {
   regenerationReceiptRationale,
 } from "./draft-regeneration.js";
 import { setAppStateStrict } from "../../repo/app-state.js";
+import { recordAsyncFailure } from "../../diagnostics.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { revertGarminReconcile } from "../../repo/activities.js";
@@ -1474,6 +1475,58 @@ function supersedeStaleDraftOnThaw(proposal: any, decision: ParkedDecision, fres
   setProposalStatus(Number(proposal.id), "superseded");
 }
 
+/**
+ * The SAME receipt the thaw writes, for the boundary's own terminal retire endings.
+ *
+ * The age ceiling leaves its decision at `rejected`, and no athlete-facing list reads
+ * that status (the ledger reads announced|pending|review|observed|applied) — so a draft
+ * the athlete had been told about simply stopped existing, with nothing anywhere saying
+ * why. The rejection stays put as the machine record; this superseded row is the part a
+ * person can read.
+ */
+function recordRetiredDraftReceipt(args: {
+  shape: { kind: string; domain: BrainDomain; risk: any };
+  outcome: "stale_proposal" | "stale_plan";
+  why: string;
+  source: string;
+  sourceRefType: "plan_proposal" | "meal_plan";
+  sourceRefKey: string | number;
+  reviewDecisionId: number | null;
+  action: Record<string, any>;
+}): void {
+  try {
+    recordDecision({
+      effective_date: localDateISO(),
+      kind: args.shape.kind as any,
+      domain: args.shape.domain,
+      summary: "A held draft was set aside instead of applied.",
+      rationale: `${args.why} Nothing changed; a fresh read can pick this up from where you are now.`.slice(0, 1_500),
+      source: args.source || "autonomy",
+      source_ref_type: args.sourceRefType,
+      source_ref_key: String(args.sourceRefKey),
+      status: "superseded",
+      autonomy_tier: "ask",
+      risk_class: args.shape.risk,
+      reversible: false,
+      input_fingerprint: null,
+      context: {
+        thaw_receipt: true,
+        review_reason_code: args.outcome,
+        superseded_review_decision_id: args.reviewDecisionId,
+      },
+      action: args.action,
+      specialist: null,
+      applied_at: null,
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: null,
+    });
+  } catch (err) {
+    // The receipt is the athlete-facing half; losing it must not abort the sweep.
+    recordAsyncFailure("apply", "retire_draft_receipt", err);
+  }
+}
+
 // Thaw for decisions frozen at `status: 'review'`. A decision parked under an older,
 // stricter policy — or by a surprise budget that has since rolled over — used to sit in
 // the queue forever showing "NEEDS YOUR DECISION", because nothing re-read it when the
@@ -1512,15 +1565,26 @@ export function thawParkedReviewDecisions(): { thawed: number; superseded: numbe
         skipped += 1;
         continue;
       }
+      const proposalId =
+        Number((decision.action as any)?.proposal_id) ||
+        (decision.source_ref_type === "plan_proposal" ? Number(decision.source_ref_key) : 0);
+      const proposal = proposalId > 0 ? getProposal(proposalId) : null;
+      // THE CONFERENCE DOOR. A case_conference revision held with a LIVE DRAFT behind it
+      // is a question the conductor put to the athlete and is waiting on
+      // (docs/ELITE-BRAIN-IMPLEMENTATION.md). The sweep may not answer it for them — not
+      // by re-offering the draft into the autonomy ledger, not by setting it aside, not
+      // even by stamping the decision, which would be churn on a row the athlete has not
+      // touched. An ADVISORY conference (no draft behind it) is untouched by this and
+      // still thaws to `observed`, per the 2026-08-17 no-parking-above-ask ruling.
+      if (decision.kind === "case_conference" && proposal?.status === "draft") {
+        skipped += 1;
+        continue;
+      }
       const stamped =
         patchBrainDecision(decision.id!, {
           context: { ...context, thaw_attempted: true, thaw_attempted_at: new Date().toISOString() },
         }) ?? decision;
       const stampedContext = (stamped.context ?? {}) as Record<string, any>;
-      const proposalId =
-        Number((decision.action as any)?.proposal_id) ||
-        (decision.source_ref_type === "plan_proposal" ? Number(decision.source_ref_key) : 0);
-      const proposal = proposalId > 0 ? getProposal(proposalId) : null;
       if (!proposal || proposal.status !== "draft") {
         // No live draft behind it: this is a reading, not a pending change.
         if (reofferParkedAdvisory(stamped, stampedContext)) thawed += 1;
@@ -1608,7 +1672,10 @@ export function adoptOrphanedDrafts(): {
       if (handledIntents.has(handlingKey)) continue;
       // Already scheduled/applied? A review decision is intentionally re-evaluated when
       // posture changes; a pending/announced/applied decision already owns its boundary.
-      if (["pending", "announced", "applied"].includes(String(proposal.autonomy?.status ?? ""))) {
+      // `rejected` is terminal in the other direction: a ceiling (the boundary pass's age
+      // gate) has already refused this draft once. Re-adopting it would re-announce a
+      // change whose next boundary can only refuse it again — the daily-failure loop.
+      if (["pending", "announced", "applied", "rejected"].includes(String(proposal.autonomy?.status ?? ""))) {
         handledIntents.add(handlingKey);
         skipped += 1;
         continue;
@@ -1985,9 +2052,53 @@ function decisionIsTheAthletes(decision: { risk_class?: string; context?: any; a
   };
 }
 
+// WHY A DECISION DID NOT APPLY, AS A TAXONOMY RATHER THAN ONE WORD.
+//
+// `failed[]` is a single bucket holding six different endings, and the boundary tick
+// used to report all of them as one generic `Error`. FOUR of those endings are the
+// system working exactly as designed (the athlete moved the goal date themselves; the
+// draft was applied or vetoed elsewhere; an age ceiling retired it; the evidence moved
+// before the boundary), and reporting them as breakage produced one operator error
+// event every single day that nothing could ever act on.
+//
+// So every non-applying ending names itself. `calm: true` means "this is the designed
+// answer, not a defect" — a caller that reports failures records those at most as
+// information, and keeps `error` for the endings that really are anomalies (a payload
+// that threw, a ledger row pointing at a proposal that no longer exists).
+export type BoundaryOutcomeClass =
+  /** The change became moot before its boundary: the athlete moved the goal date by hand,
+   *  the meal plan is no longer a draft, the proposal was applied/vetoed elsewhere. */
+  | "canceled_moot"
+  /** A meal plan that waited past its 14-day ceiling. */
+  | "stale_plan"
+  /** The compare-and-set evidence snapshot moved (or was never taken) before the boundary. */
+  | "stale_snapshot"
+  /** The proposal waited past its 7/14-day age ceiling. */
+  | "stale_proposal"
+  /** The decision points at a proposal that no longer exists — a broken reference. */
+  | "missing_proposal"
+  /** The apply itself threw: the one ending that means something is actually wrong. */
+  | "apply_threw";
+
+export interface BoundaryOutcome {
+  id: number;
+  class: BoundaryOutcomeClass;
+  /** True when this ending is a designed outcome rather than a defect. */
+  calm: boolean;
+}
+
+const CALM_BOUNDARY_OUTCOMES = new Set<BoundaryOutcomeClass>([
+  "canceled_moot",
+  "stale_plan",
+  "stale_snapshot",
+  "stale_proposal",
+]);
+
 export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
   applied: number[];
   failed: number[];
+  /** One entry per id in `failed`, in the same order, saying WHICH ending it was. */
+  failed_outcomes: BoundaryOutcome[];
   delayed: number[];
   // A stale draft the system rewrote against current evidence instead of asking about.
   // Not a failure and not a refusal: the decision is retired against its replacement,
@@ -2021,9 +2132,15 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
     .sort((a, b) => Number(a.id) - Number(b.id));
   const applied: number[] = [];
   const failed: number[] = [];
+  const failedOutcomes: BoundaryOutcome[] = [];
   const delayed: number[] = [];
   const setAside: number[] = [];
   const regeneratedIds: number[] = [];
+  // The one seam that writes `failed`, so an id can never land there without saying why.
+  const recordFailure = (id: number, cls: BoundaryOutcomeClass) => {
+    failed.push(id);
+    failedOutcomes.push({ id, class: cls, calm: CALM_BOUNDARY_OUTCOMES.has(cls) });
+  };
   // A sibling that lands earlier in THIS pass changes the plan and therefore makes
   // later siblings look CAS-stale. Track only those pass-local budget consumers so
   // their policy reason can win that expected collision. A budget spent before this
@@ -2033,17 +2150,22 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
   // Leaving it announced/pending would re-select it on every future pass, and a
   // throwing payload would otherwise wedge the boundary applier for every
   // later decision in the queue.
-  const parkForReview = (decision: (typeof due)[number], reason: string) => {
+  const parkForReview = (decision: (typeof due)[number], reason: string, cls: BoundaryOutcomeClass) => {
     try {
       patchBrainDecision(decision.id!, {
         status: "review",
         reversible: false,
-        context: { ...(decision.context ?? {}), review_required: true, apply_error: reason.slice(0, 300) },
+        context: {
+          ...(decision.context ?? {}),
+          review_required: true,
+          apply_error: reason.slice(0, 300),
+          boundary_outcome: cls,
+        },
       });
     } catch {
       /* the pass must survive even when the parking write fails */
     }
-    failed.push(decision.id!);
+    recordFailure(decision.id!, cls);
   };
   // A spent surprise budget DELAYS a due change by a day and leaves it announced/pending
   // (2026-08-17 ruling): the next pass re-offers it, and it lands as soon as the rolling
@@ -2079,7 +2201,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         const currentGoalDate = isoDateOnly((getProfile() as any)?.goal_date);
         if (currentGoalDate !== goalDate.from) {
           transitionBrainDecision(announced.id!, "canceled");
-          failed.push(announced.id!);
+          recordFailure(announced.id!, "canceled_moot");
           continue;
         }
         withSqliteSavepoint(`due_goal_date_${announced.id}`, () => {
@@ -2111,7 +2233,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         const plan = getMealPlan(mealPlanId) as any;
         if (!plan || plan.status !== "draft" || !Array.isArray(plan.parsed?.days)) {
           transitionBrainDecision(announced.id!, "canceled");
-          failed.push(announced.id!);
+          recordFailure(announced.id!, "canceled_moot");
           continue;
         }
         const coordinated = (announced.context as any)?.coordinated_update === true;
@@ -2125,13 +2247,52 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         const createdAt = Date.parse(String(plan.created_at ?? ""));
         const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
         if (ageDays > 14) {
+          // The age ceiling is TERMINAL, so the draft it rejected must be retired with
+          // it. Left at `draft`, a plan this pass has already refused stays eligible to
+          // be re-offered and re-announced, and every later boundary refuses it again —
+          // one identical refusal a day, forever, over a plan nothing can ever apply.
+          // Retire FIRST, for the same reason as the proposal path above.
+          try {
+            setMealPlanStatus(mealPlanId, "superseded", { recordDecision: false });
+          } catch (err) {
+            recordAsyncFailure("apply", "retire_draft", err);
+            patchBrainDecision(announced.id!, {
+              status: "review",
+              autonomy_tier: "ask",
+              reversible: false,
+              context: {
+                ...(announced.context ?? {}),
+                review_required: true,
+                stale_plan: true,
+                boundary_outcome: "stale_plan",
+                retire_failed: true,
+              },
+            });
+            recordFailure(announced.id!, "stale_plan");
+            continue;
+          }
           patchBrainDecision(announced.id!, {
             status: "rejected",
             autonomy_tier: "ask",
             reversible: false,
-            context: { ...(announced.context ?? {}), review_required: true, stale_plan: true },
+            context: {
+              ...(announced.context ?? {}),
+              review_required: true,
+              stale_plan: true,
+              boundary_outcome: "stale_plan",
+            },
           });
-          failed.push(announced.id!);
+          recordRetiredDraftReceipt({
+            shape: { kind: announced.kind, domain: "nutrition", risk: announced.risk_class },
+            outcome: "stale_plan",
+            why: "This meal-plan draft sat unapplied for more than 14 days, so it no longer describes where you are.",
+            source: plan.agent || "autonomy",
+            sourceRefType: "meal_plan",
+            sourceRefKey: mealPlanId,
+            reviewDecisionId: announced.id ?? null,
+            action: { meal_plan_id: mealPlanId, outcome: "superseded_stale_plan" },
+          });
+          recordFailure(announced.id!, "stale_plan");
           continue;
         }
         const previousId = Number((announced.action as any)?.previous_meal_plan_id) || null;
@@ -2161,7 +2322,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
       const proposalId = Number((announced.action as any)?.proposal_id);
       const proposal = getProposal(proposalId);
       if (!proposal) {
-        parkForReview(announced, "the linked proposal no longer exists");
+        parkForReview(announced, "the linked proposal no longer exists", "missing_proposal");
         continue;
       }
       if (proposal.status !== "draft") {
@@ -2170,7 +2331,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         // is moot and must NEVER apply at the boundary — a boundary pass re-applying a
         // vetoed replacePlan would be the worst possible surprise.
         transitionBrainDecision(announced.id!, "canceled");
-        failed.push(announced.id!);
+        recordFailure(announced.id!, "canceled_moot");
         continue;
       }
       const shape = proposalShape(proposal);
@@ -2233,9 +2394,15 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
                 : "the proposal has no compare-and-set evidence snapshot",
             ],
             proposal_freshness: boundaryFreshness as any,
+            boundary_outcome: "stale_snapshot",
           },
         });
-        failed.push(announced.id!);
+        // The draft is deliberately LEFT LIVE here. The thaw owns this ending: on the
+        // next deterministic sweep it re-reads the same evidence and either re-offers
+        // the draft under today's policy or sets it aside with the receipt the athlete
+        // reads. Retiring it here would also retire this very review hold
+        // (setProposalStatus supersedes review decisions pointing at the draft).
+        recordFailure(announced.id!, "stale_snapshot");
         continue;
       }
       // Age is a secondary ceiling after the evidence compare-and-set above. A
@@ -2262,6 +2429,37 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
           regeneratedIds.push(announced.id!);
           continue;
         }
+        // TERMINAL, so the draft goes with the decision. This is the loop that produced
+        // one boundary failure a day on the live deployment: an age-rejected decision is
+        // never re-read by the thaw (it only walks `review`), while the draft behind it
+        // stayed at `draft` — so the very next orphan-adoption tick re-adopted it, the
+        // autonomy layer announced it again, and the next boundary rejected it again for
+        // exactly the same reason. Retiring the draft ends the cycle at its source.
+        //
+        // Retire FIRST: if it throws, the draft is still live, so rejecting the decision
+        // would strand exactly the pair this ending exists to break. The decision stays
+        // at `review` instead — still adoptable, still visible — and the failure is
+        // recorded rather than swallowed.
+        try {
+          setProposalStatus(proposalId, "superseded", { recordDecision: false });
+        } catch (err) {
+          recordAsyncFailure("apply", "retire_draft", err);
+          patchBrainDecision(announced.id!, {
+            status: "review",
+            autonomy_tier: "ask",
+            reversible: false,
+            context: {
+              ...(announced.context ?? {}),
+              review_required: true,
+              stale_proposal: true,
+              stale_after_days: freshnessDays,
+              boundary_outcome: "stale_proposal",
+              retire_failed: true,
+            },
+          });
+          recordFailure(announced.id!, "stale_proposal");
+          continue;
+        }
         patchBrainDecision(announced.id!, {
           status: "rejected",
           autonomy_tier: "ask",
@@ -2271,9 +2469,26 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
             review_required: true,
             stale_proposal: true,
             stale_after_days: freshnessDays,
+            boundary_outcome: "stale_proposal",
           },
         });
-        failed.push(announced.id!);
+        // `rejected` is invisible to every athlete-facing list, so the ending gets the
+        // same receipt the thaw writes for a stale snapshot.
+        recordRetiredDraftReceipt({
+          shape,
+          outcome: "stale_proposal",
+          why: `This draft sat unapplied for more than ${freshnessDays} days, so it no longer describes where you are.`,
+          source: proposal.agent || "autonomy",
+          sourceRefType: "plan_proposal",
+          sourceRefKey: proposalId,
+          reviewDecisionId: announced.id ?? null,
+          action: {
+            proposal_id: proposalId,
+            outcome: "superseded_stale_proposal",
+            reason_provenance: proposalReasonProvenance(proposal),
+          },
+        });
+        recordFailure(announced.id!, "stale_proposal");
         continue;
       }
       // A pending change is judged against the evidence in force on the day it applies.
@@ -2386,10 +2601,17 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         budgetLandedInPass.add(boundaryBudgetKey);
       }
     } catch (error: any) {
-      parkForReview(announced, String(error?.message ?? error ?? "unexpected apply error"));
+      parkForReview(announced, String(error?.message ?? error ?? "unexpected apply error"), "apply_threw");
     }
   }
-  return { applied, failed, delayed, regenerated: regeneratedIds, set_aside: setAside };
+  return {
+    applied,
+    failed,
+    failed_outcomes: failedOutcomes,
+    delayed,
+    regenerated: regeneratedIds,
+    set_aside: setAside,
+  };
 }
 
 // A veto teaches the brain DETERMINISTICALLY, not anecdotally: the reverted

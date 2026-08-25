@@ -219,7 +219,13 @@ function hydrateProposal(row: any) {
       `SELECT id, status, autonomy_tier, effective_date, summary, context_json
        FROM brain_decisions
        WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ?
-         AND status IN ('review','announced','pending','applied')
+         -- 'rejected' is here so a draft a ceiling has already refused (the boundary
+         -- pass's age gate) carries that verdict on its face: the orphan-adoption sweep
+         -- reads this status to decide whether a draft is still free to be re-offered,
+         -- and a refused draft that looked unowned was re-announced and refused again
+         -- every day. Every consumer tests for an explicit status, so a rejected row
+         -- reads as "not owned, not a review hold" without changing any other branch.
+         AND status IN ('review','announced','pending','applied','rejected')
        ORDER BY id DESC LIMIT 1`
     )
     .get(String(row.id)) as any;

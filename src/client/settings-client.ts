@@ -74,6 +74,14 @@ function settingsAttemptStatus(row: Record<string, unknown>): { label: string; c
   const status = String(row.status || row.error_class || "");
   if (status === "auth_required")
     return { label: "connect", cls: "actlog-auth", title: String(row.error_message || "Agent is not connected") };
+  if (status === "quota_exhausted")
+    return { label: "limit", cls: "actlog-limit", title: String(row.error_message || "The provider's usage limit was reached") };
+  if (status === "rate_limited")
+    return { label: "busy", cls: "actlog-retry", title: String(row.error_message || "The provider was busy") };
+  if (status === "payment_required")
+    return { label: "credit", cls: "actlog-limit", title: String(row.error_message || "The provider needs credit") };
+  if (status === "permission_denied")
+    return { label: "permission", cls: "actlog-retry", title: String(row.error_message || "A headless permission rule blocked the run") };
   if (status === "empty_reply")
     return { label: "empty", cls: "actlog-retry", title: String(row.error_message || "No assistant text returned") };
   if (status === "timeout")
@@ -119,13 +127,15 @@ function agentHealthCard(stats: unknown): string {
       const word = total ? settingsAgentWord((Number(row.ok) || 0) / total) : null;
       const lat = row.p50_ms != null ? ` · ${settingsLatency(row.p50_ms)} typical` : "";
       const auth = Number(row.auth_required) ? ` · ${Number(row.auth_required)} connect` : "";
+      const limit = Number(row.quota_exhausted) ? ` · ${Number(row.quota_exhausted)} limit` : "";
+      const credit = Number(row.payment_required) ? ` · ${Number(row.payment_required)} credit` : "";
       const tokens =
         Number(row.input_tokens) || Number(row.output_tokens)
           ? ` · ${settingsCompactCount((Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0))} tok`
           : "";
       return `<div class="agenthealth-row">
         <span class="agenthealth-name">${escHtml(String(row.agent))}</span>
-        <span class="agenthealth-stat">${word || "—"}${lat}${auth}${tokens}</span>
+        <span class="agenthealth-stat">${word || "—"}${lat}${auth}${limit}${credit}${tokens}</span>
       </div>`;
     })
     .join("");
@@ -564,14 +574,27 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
       const where = String(event.route || event.operation || "unknown route");
       const duration = event.duration_ms == null ? "" : settingsLatency(event.duration_ms);
       const requestId = String(event.request_id || "");
+      // A coalesced row bumps created_at on every hit, so a stream that has been
+      // running for nine days reads as one instant unless first_seen is shown
+      // beside it. Only widen the row when the two actually differ.
+      const occurrences = Math.max(1, Number(event.occurrence_count) || 1);
+      const firstSeen = String(event.first_seen || "");
+      const lastSeen = String(event.created_at || "");
+      const spans = occurrences > 1 && !!firstSeen && firstSeen !== lastSeen;
       return `<details class="sysdiag-item sysdiag-${level}">
-        <summary><span class="actlog-flag actlog-${level}">${escHtml(level)}</span><span class="sysdiag-summary-main"><b>${escHtml(kind)}</b><span>${escHtml(where)}</span></span>${duration ? `<span class="sysdiag-duration">${escHtml(duration)}</span>` : ""}</summary>
+        <summary><span class="actlog-flag actlog-${level}">${escHtml(level)}</span><span class="sysdiag-summary-main"><b>${escHtml(kind)}</b><span>${escHtml(where)}</span></span>${occurrences > 1 ? `<span class="sysdiag-count">${occurrences}×</span>` : ""}${duration ? `<span class="sysdiag-duration">${escHtml(duration)}</span>` : ""}</summary>
         <dl class="sysdiag-fields">
           ${settingsDiagnosticValue("Source", event.source || "system")}${settingsDiagnosticValue("Kind", event.kind || "event")}
           ${settingsDiagnosticValue("Route", event.route, "sysdiag-break")}${settingsDiagnosticValue("Operation", event.operation)}
           ${settingsDiagnosticValue("Status", event.status)}${settingsDiagnosticValue("Duration", duration)}
           ${settingsDiagnosticValue("Release", event.release)}
-          <div class="sysdiag-field"><dt>Captured</dt><dd>${settingsDiagnosticTime(event.created_at, options)}</dd></div>
+          ${
+            spans
+              ? `<div class="sysdiag-field"><dt>First seen</dt><dd>${settingsDiagnosticTime(firstSeen, options)}</dd></div>
+          <div class="sysdiag-field"><dt>Last seen</dt><dd>${settingsDiagnosticTime(lastSeen, options)}</dd></div>`
+              : `<div class="sysdiag-field"><dt>Captured</dt><dd>${settingsDiagnosticTime(event.created_at, options)}</dd></div>`
+          }
+          ${occurrences > 1 ? settingsDiagnosticValue("Occurrences", occurrences) : ""}
           ${requestId ? `<div class="sysdiag-field sysdiag-wide sysdiag-break"><dt>Request ID</dt><dd><code>${escHtml(requestId)}</code><button class="btn-sm sysdiag-copy" type="button" data-copy-request="${escAttr(requestId)}" aria-label="Copy request ID">Copy</button></dd></div>` : ""}
           ${settingsDiagnosticValue("Message", event.message, "sysdiag-wide sysdiag-break")}
           ${settingsDiagnosticValue("Stack", event.stack, "sysdiag-wide sysdiag-break")}
@@ -608,11 +631,71 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
   </section>`;
 }
 
-function agentChipState(agent: Record<string, unknown>): SettingsChipState {
+// "Tue 8:00 AM" / "Sep 18, 4:23 PM" — the browser's own clock, since the person
+// reading the chip is the person whose limit it is.
+function settingsResetLabel(iso: unknown, now: Date): string {
+  const at = new Date(String(iso ?? ""));
+  if (Number.isNaN(at.getTime())) return "";
+  const soon = at.getTime() - now.getTime() < 6 * 86400000;
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      ...(soon ? { weekday: "short" } : { month: "short", day: "numeric" }),
+      hour: "numeric",
+      minute: "2-digit",
+    })
+      .format(at)
+      .replace(/,\s*/, " ");
+  } catch {
+    return "";
+  }
+}
+
+function settingsRetryLabel(iso: unknown, now: Date): string {
+  const at = new Date(String(iso ?? ""));
+  if (Number.isNaN(at.getTime())) return "";
+  const mins = Math.max(1, Math.round((at.getTime() - now.getTime()) / 60000));
+  return mins >= 60 ? `${Math.round(mins / 60)}h` : `${mins}m`;
+}
+
+// A provider under a live hold says so on its own chip. Amber, never red: a
+// weekly limit is a schedule, not a fault — Cairn simply uses another provider.
+function agentAvailabilityChip(agent: Record<string, unknown>, now: Date): SettingsChipState | null {
+  const availability =
+    agent.availability && typeof agent.availability === "object"
+      ? (agent.availability as Record<string, unknown>)
+      : null;
+  if (!availability) return null;
+  const state = String(availability.state || "");
+  if (state === "quota_exhausted") {
+    const when = settingsResetLabel(availability.resets_at, now);
+    return { cls: "agent-chip-limit", label: when ? `Limit reached · resets ${when}` : "Limit reached" };
+  }
+  if (state === "rate_limited") {
+    const retry = settingsRetryLabel(availability.hold_until, now);
+    return { cls: "agent-chip-limit", label: retry ? `Busy · retry in ${retry}` : "Busy" };
+  }
+  if (state === "payment_required") return { cls: "agent-chip-limit", label: "Needs credit" };
+  return null; // auth_required keeps the existing Connect → affordance
+}
+
+function agentChipState(agent: Record<string, unknown>, now: Date = new Date()): SettingsChipState {
   if (agent.present === false) return { cls: "agent-chip-absent", label: "Not installed" };
+  const held = agentAvailabilityChip(agent, now);
+  if (held) return held;
   if (agent.configured === true) return { cls: "agent-chip-ok", label: "✓ Connected" };
   if (agent.configured === false) return { cls: "agent-chip-connect", label: "Connect →" };
   return { cls: "agent-chip-installed", label: "Installed" };
+}
+
+// The muted reassurance under a held provider's row: the athlete never has to act.
+function agentAvailabilityNote(agent: Record<string, unknown>, now: Date = new Date()): string {
+  const availability =
+    agent.availability && typeof agent.availability === "object"
+      ? (agent.availability as Record<string, unknown>)
+      : null;
+  if (!availability || !agentAvailabilityChip(agent, now)) return "";
+  const detail = String(availability.detail || "").trim();
+  return `${detail ? `${detail}. ` : ""}Cairn routes around it until then.`;
 }
 
 function updateCardHtml(status: unknown, options: SettingsUpdateOptions): string {
@@ -654,6 +737,7 @@ Object.assign(globalThis, {
     brainDiagnosticsCard,
     diagnosticsCard,
     agentChipState,
+    agentAvailabilityNote,
     updateCardHtml,
   },
 });

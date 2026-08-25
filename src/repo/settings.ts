@@ -11,6 +11,7 @@ import {
   type ReasoningLevel,
 } from "../agents.js";
 import crypto from "node:crypto";
+import { getAgentAvailability } from "./agent-availability.js";
 import { recordedClientTimeZone } from "./client-tz.js";
 import {
   normalizeChatProfileBindings,
@@ -754,6 +755,24 @@ export function getGeminiApiKey() {
   return readStoredSecret(row, "gemini_api_key") || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY || "";
 }
 
+// The live hold for one agent, shaped for the client contract. Failure-safe: a
+// telemetry table problem must never take down Settings.
+function availabilityFor(name: string, now: Date) {
+  try {
+    const row = getAgentAvailability(name, now);
+    if (!row) return null;
+    return {
+      state: row.state,
+      detail: row.detail,
+      resets_at: row.resets_at,
+      hold_until: row.hold_until,
+      window: row.window,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // agents.json merged with settings: effective order + enabled/usable flags.
 // `present` reports whether the agent's CLI binary is actually installed (cached
 // probe in agents.ts); `configured` is the tri-state login probe (true logged-in /
@@ -766,6 +785,7 @@ export function getGeminiApiKey() {
 // public contract, so do not expose the underlying CLI definition or argv here.
 export function getAgentConfig() {
   const s = getSettings();
+  const now = new Date();
   const all = listAgents() as any[];
   const byName = new Map(all.map((a) => [a.name, a]));
   const ordered: string[] = [];
@@ -797,6 +817,11 @@ export function getAgentConfig() {
       install_version: a.install_version ?? null,
       web_access: !!a.web_access,
       capabilities: a.capabilities,
+      // Why this provider is sitting out right now (out of quota / credit /
+      // throttled / signed out) and until when — null when it is available.
+      // A hold never changes `usable`: it is a prediction the rotation prefers
+      // around, not an exclusion (see src/agentAvailability.ts).
+      availability: availabilityFor(name, now),
       usable: enabled && present && env_ok && configured !== false,
     };
   });

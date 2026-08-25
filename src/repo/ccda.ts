@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { cleanClinicalFacts, getHealthDocumentRaw, replaceHealthPanelsByType, updateHealthDocFields, upsertBloodPressureReading, type HealthPanelInput } from "./health.js";
+import { cleanClinicalFacts, dropDuplicateMarkersByDate, getHealthDocumentRaw, replaceHealthPanelsByType, updateHealthDocFields, upsertBloodPressureReading, type HealthPanelInput } from "./health.js";
+import { canonicalMarker, normalizeMarkerName } from "./marker-canon.js";
+import { localDateISO } from "./shared.js";
 
 export const CCDA_VITALS_TYPE = "ccda_vitals";
 
@@ -35,6 +37,7 @@ export interface CcdaHealthExtraction {
   files: number;
   clinical_facts: any[];
   vitals_panels: HealthPanelInput[];
+  results_panels: HealthPanelInput[];
   blood_pressure_readings: Array<{
     measured_at: string;
     systolic: number;
@@ -51,6 +54,8 @@ export interface CcdaBackfillResult {
   storedClinicalFacts: number;
   vitalsPanels: number;
   vitalMarkers: number;
+  resultPanels: number;
+  resultMarkers: number;
   bpReadings: number;
   extractedBpReadings: number;
   wrote: boolean;
@@ -372,6 +377,7 @@ export function extractCcdaHealthData(rootPath: string): CcdaHealthExtraction {
     files: files.length,
     clinical_facts: extractClinicalFacts(sections),
     vitals_panels: panelsFromVitals(vitals),
+    results_panels: extractResultPanels(files),
     blood_pressure_readings: vitals
       .filter((v) => v.systolic != null && v.diastolic != null)
       .map((v) => ({
@@ -385,6 +391,19 @@ export function extractCcdaHealthData(rootPath: string): CcdaHealthExtraction {
   };
 }
 
+const EMPTY_BACKFILL = (files: number): CcdaBackfillResult => ({
+  files,
+  clinicalFacts: 0,
+  storedClinicalFacts: 0,
+  vitalsPanels: 0,
+  vitalMarkers: 0,
+  resultPanels: 0,
+  resultMarkers: 0,
+  bpReadings: 0,
+  extractedBpReadings: 0,
+  wrote: false,
+});
+
 function parsedJson(row: any): any {
   try {
     const parsed = row?.parsed_json ? JSON.parse(row.parsed_json) : null;
@@ -397,7 +416,7 @@ function parsedJson(row: any): any {
 export function applyCcdaHealthBackfill(sourceId: number, extraction: CcdaHealthExtraction): CcdaBackfillResult {
   const row = getHealthDocumentRaw(sourceId) as any;
   if (!row) {
-    return { files: extraction.files, clinicalFacts: 0, storedClinicalFacts: 0, vitalsPanels: 0, vitalMarkers: 0, bpReadings: 0, extractedBpReadings: 0, wrote: false };
+    return EMPTY_BACKFILL(extraction.files);
   }
 
   const facts = cleanClinicalFacts(extraction.clinical_facts, 200);
@@ -413,6 +432,18 @@ export function applyCcdaHealthBackfill(sourceId: number, extraction: CcdaHealth
 
   const panels = extraction.vitals_panels.filter((p) => Array.isArray(p.markers) && p.markers.length);
   const created = panels.length ? replaceHealthPanelsByType(sourceId, CCDA_VITALS_TYPE, panels, row.original_name ?? null) : [];
+
+  // Lab results, read straight out of the CCDA <organizer classCode="BATTERY">
+  // entries — one derived panel per collection date, refreshed as its own typed
+  // stream so a re-run is idempotent and the agent's dated timeline is untouched.
+  const resultPanels = extraction.results_panels.filter((p) => Array.isArray(p.markers) && p.markers.length);
+  const resultsCreated = resultPanels.length
+    ? replaceHealthPanelsByType(sourceId, CCDA_RESULTS_TYPE, resultPanels, row.original_name ?? null)
+    : [];
+  // …then the same analyte transcribed by an agent for that date steps aside, so
+  // one panel never reads twice.
+  if (resultPanels.length) dropDuplicateMarkersByDate(sourceId, CCDA_RESULTS_TYPE, resultMarkerKeysByDate(resultPanels));
+
   let bpCreated = 0;
   for (const bp of extraction.blood_pressure_readings) {
     try {
@@ -423,15 +454,18 @@ export function applyCcdaHealthBackfill(sourceId: number, extraction: CcdaHealth
     }
   }
   const vitalMarkers = panels.reduce((n, p) => n + (Array.isArray(p.markers) ? p.markers.length : 0), 0);
+  const resultMarkers = resultPanels.reduce((n, p) => n + (Array.isArray(p.markers) ? p.markers.length : 0), 0);
   return {
     files: extraction.files,
     clinicalFacts: facts.length,
     storedClinicalFacts: facts.length,
     vitalsPanels: created.length,
     vitalMarkers,
+    resultPanels: resultsCreated.length,
+    resultMarkers,
     bpReadings: bpCreated,
     extractedBpReadings: extraction.blood_pressure_readings.length,
-    wrote: wroteFacts || panels.length > 0 || extraction.blood_pressure_readings.length > 0,
+    wrote: wroteFacts || panels.length > 0 || resultPanels.length > 0 || extraction.blood_pressure_readings.length > 0,
   };
 }
 
@@ -458,7 +492,7 @@ export function backfillCcdaHealthDocument(sourceId: number): CcdaBackfillResult
   const row = getHealthDocumentRaw(sourceId) as any;
   const source = materializeHealthDocSource(String(row?.file_path ?? ""));
   if (!source) {
-    return { files: 0, clinicalFacts: 0, storedClinicalFacts: 0, vitalsPanels: 0, vitalMarkers: 0, bpReadings: 0, extractedBpReadings: 0, wrote: false };
+    return EMPTY_BACKFILL(0);
   }
   try {
     const extraction = extractCcdaHealthData(source.root);
@@ -466,4 +500,409 @@ export function backfillCcdaHealthDocument(sourceId: number): CcdaBackfillResult
   } finally {
     try { source.cleanup?.(); } catch { /* best-effort temp cleanup */ }
   }
+}
+
+// ---------- CCDA Results (lab panels) ----------
+//
+// The `Results` section of a CCDA document is fully structured: one
+// <organizer classCode="BATTERY"> per ordered panel, one <observation> per
+// analyte, each with a LOINC code, a typed <value>, an interpretation flag and
+// a printed reference range. That is a deterministic read — it needs no agent,
+// and it is the part of a MyChart export the athlete most cares about.
+//
+// What deliberately STAYS the agent's job: imaging/ECG narratives (an <ED>
+// blob or an "XR Chest 2 views" battery), the PDF/HTML summaries, and visit
+// prose. Those are readings, not results.
+
+export const CCDA_RESULTS_TYPE = "ccda_results";
+
+export interface CcdaResultMarker {
+  name: string;
+  value: number | string;
+  unit: string | null;
+  flag: "low" | "normal" | "high" | null;
+  ref_low: number | null;
+  ref_high: number | null;
+  loinc: string | null;
+  source_name: string;
+}
+
+// A battery (or a single observation) that carries a narrative rather than a
+// result. Its content is prose an agent reads, never a marker series.
+const NARRATIVE_BATTERY_RE = /\b(xr|x-ray|xray|ct|mri|ultrasound|us|ekg|ecg|echo|radiology|imaging)\b/i;
+
+// LOINC → the canonical analyte label Cairn already keys series by
+// (marker-canon.ts). MyChart prints verbatim upper-case order names ("LOW
+// DENSITY LIPOPROTEIN DIRECT", "HIGH DENSITY LIPOPROTEIN") that the alias KB
+// does NOT recognize, which would split one analyte's history into a parallel
+// series per lab. The code is unambiguous where the printed name is not, so it
+// resolves the name; the verbatim label stays on `source_name`.
+const LOINC_CANONICAL_NAMES: Record<string, string> = {
+  // Lipids
+  "2093-3": "Total Cholesterol",
+  "2571-8": "Triglycerides",
+  "2085-9": "HDL Cholesterol",
+  "18262-6": "LDL-C (Direct)",
+  "13457-7": "LDL-C",
+  // Metabolic / vitamins
+  "4548-4": "Hemoglobin A1c",
+  "1989-3": "25-OH Vitamin D",
+  "2132-9": "Vitamin B12",
+  "2284-8": "Folate",
+  // BMP / CMP
+  "2951-2": "Sodium",
+  "2823-3": "Potassium",
+  "2075-0": "Chloride",
+  "2028-9": "CO2",
+  "2345-7": "Glucose",
+  "3094-0": "Blood Urea Nitrogen (BUN)",
+  "2160-0": "Creatinine",
+  "17861-6": "Calcium",
+  "1742-6": "ALT",
+  "1920-8": "AST",
+  "6768-6": "Alkaline Phosphatase",
+  "1975-2": "Total Bilirubin",
+  "2885-2": "Total Protein",
+  "1751-7": "Albumin",
+  // CBC
+  "718-7": "Hemoglobin",
+  "4544-3": "Hematocrit",
+  "6690-2": "WBC",
+  "789-8": "Red Blood Cell Count",
+  "777-3": "Platelets",
+  "787-2": "Mean Corpuscular Volume",
+  "785-6": "Mean Corpuscular Hemoglobin",
+  "786-4": "Mean Corpuscular Hemoglobin Concentration",
+  "788-0": "Red Cell Distribution Width (RDW)",
+};
+
+// Depth-aware element scan. A CCDA <section> nests <section>s (and an
+// <organizer> can nest), so a non-greedy `<tag>...</tag>` regex silently
+// truncates at the FIRST close tag. Counting depth keeps each block whole.
+function elementBlocks(xml: string, tag: string): string[] {
+  const re = new RegExp(`<(/?)${tag}\\b([^>]*)>`, "gi");
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  for (const m of xml.matchAll(re)) {
+    const closing = m[1] === "/";
+    const selfClosing = /\/\s*$/.test(m[2] ?? "");
+    if (closing) {
+      if (depth === 0) continue;
+      depth--;
+      if (depth === 0 && start >= 0) {
+        out.push(xml.slice(start, (m.index ?? 0) + m[0].length));
+        start = -1;
+      }
+      continue;
+    }
+    if (selfClosing) continue;
+    if (depth === 0) start = m.index ?? 0;
+    depth++;
+  }
+  return out;
+}
+
+function attr(tagText: string, name: string): string | null {
+  const m = tagText.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, "i"));
+  return m ? decodeEntities(m[1]) : null;
+}
+
+// The FIRST occurrence of `<tag ...>` (its whole start tag) inside a block.
+function firstTag(block: string, tag: string): string | null {
+  const m = block.match(new RegExp(`<${tag}\\b[^>]*>`, "i"));
+  return m ? m[0] : null;
+}
+
+// The <code>…</code> element with children, or "" when the code is self-closing
+// (a bare `<code …/>` has no originalText, and a greedy match would otherwise
+// run to some LATER element's closing tag).
+function codeBlockOf(block: string): string {
+  const tag = firstTag(block, "code");
+  if (!tag || /\/\s*>$/.test(tag)) return "";
+  return block.match(/<code\b[^>]*>[\s\S]*?<\/code>/i)?.[0] ?? "";
+}
+
+function innerText(block: string, tag: string): string | null {
+  const m = block.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+  if (!m) return null;
+  const text = xmlText(m[1]);
+  return text || null;
+}
+
+// A CCDA timestamp is a local wall clock plus an OFFSET ("20260224114303-0500").
+// Convert it to the real instant, then to the app's local calendar day — a
+// 23:30-05:00 draw is still that evening at home, never the next morning.
+export function ccdaLocalDate(stamp: string | null | undefined): string | null {
+  const raw = String(stamp ?? "").trim();
+  const m = raw.match(/^(\d{4})(\d{2})(\d{2})(?:(\d{2})(\d{2})(\d{2})?)?(?:\.\d+)?(Z|[+-]\d{4})?$/);
+  if (!m) return null;
+  const [, y, mo, d, hh, mm, ss, zone] = m;
+  const year = Number(y);
+  const month = Number(mo);
+  const day = Number(d);
+  if (year < 1900 || year > 2200 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const dateISO = `${y}-${mo}-${d}`;
+  // No clock time, or no zone to anchor it: the printed calendar day IS the
+  // answer — inventing an instant would be guessing at which day it belongs to.
+  if (!hh || !zone) return dateISO;
+  const offset = zone === "Z" ? "+00:00" : `${zone.slice(0, 3)}:${zone.slice(3)}`;
+  const t = Date.parse(`${dateISO}T${hh}:${mm}:${ss ?? "00"}${offset}`);
+  if (!Number.isFinite(t)) return dateISO;
+  return localDateISO(new Date(t));
+}
+
+/**
+ * The same stamp as an INSTANT, for ordering two readings of one analyte on one
+ * day. Null when the stamp carries no clock time or no offset — an unorderable
+ * pair falls back to "last seen wins".
+ */
+export function ccdaInstant(stamp: string | null | undefined): number | null {
+  const raw = String(stamp ?? "").trim();
+  const m = raw.match(/^(\d{4})(\d{2})(\d{2})(?:(\d{2})(\d{2})(\d{2})?)?(?:\.\d+)?(Z|[+-]\d{4})?$/);
+  if (!m) return null;
+  const [, y, mo, d, hh, mm, ss, zone] = m;
+  if (!hh || !zone) return null;
+  const offset = zone === "Z" ? "+00:00" : `${zone.slice(0, 3)}:${zone.slice(3)}`;
+  const t = Date.parse(`${y}-${mo}-${d}T${hh}:${mm}:${ss ?? "00"}${offset}`);
+  return Number.isFinite(t) ? t : null;
+}
+
+function titleCased(raw: string): string {
+  const text = String(raw ?? "").trim();
+  // Only rewrite a SHOUTED order name; a mixed-case label is already how the
+  // lab prints it, and lowercasing it would lose real casing ("pH", "HbA1c").
+  if (!/[a-z]/.test(text)) {
+    return text
+      .toLowerCase()
+      .replace(/\b([a-z])/g, (c) => c.toUpperCase())
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  return text.replace(/\s+/g, " ").trim();
+}
+
+// "136 - 145" / "4.6-" / "<130" / ">= 40" → numeric bounds.
+function parseRangeText(text: string | null): { low: number | null; high: number | null } {
+  const raw = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return { low: null, high: null };
+  const between = raw.match(/^(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)$/);
+  if (between) return { low: Number(between[1]), high: Number(between[2]) };
+  const openHigh = raw.match(/^(-?\d+(?:\.\d+)?)\s*-\s*$/);
+  if (openHigh) return { low: Number(openHigh[1]), high: null };
+  const openLow = raw.match(/^-\s*(-?\d+(?:\.\d+)?)$/);
+  if (openLow) return { low: null, high: Number(openLow[1]) };
+  const lt = raw.match(/^<\s*=?\s*(-?\d+(?:\.\d+)?)$/);
+  if (lt) return { low: null, high: Number(lt[1]) };
+  const gt = raw.match(/^>\s*=?\s*(-?\d+(?:\.\d+)?)$/);
+  if (gt) return { low: Number(gt[1]), high: null };
+  return { low: null, high: null };
+}
+
+function numericAttr(tagText: string | null, name: string): number | null {
+  if (!tagText) return null;
+  const raw = attr(tagText, name);
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function xsiType(tagText: string | null): string {
+  return String(attr(tagText ?? "", "xsi:type") ?? "").trim().toUpperCase();
+}
+
+// H/L/N are unambiguous. "A" (abnormal) is NOT in Cairn's marker vocabulary —
+// it says "off" without saying which way — so it is resolved against the
+// printed range, and left null when the range cannot settle it.
+function resolveFlag(code: string | null, value: number | string, refLow: number | null, refHigh: number | null): "low" | "normal" | "high" | null {
+  const c = String(code ?? "").trim().toUpperCase();
+  if (!c) return null;
+  if (/^H/.test(c)) return "high";
+  if (/^L/.test(c)) return "low";
+  if (c === "N") return "normal";
+  if (/^A/.test(c) && typeof value === "number") {
+    if (refHigh != null && value > refHigh) return "high";
+    if (refLow != null && value < refLow) return "low";
+  }
+  return null;
+}
+
+function resultObservation(
+  block: string,
+  batteryName: string,
+  fallbackDate: string | null
+): { date: string | null; at: number | null; marker: CcdaResultMarker } | null {
+  // The reference range carries its own <value>; strip it before reading the
+  // observation's own result so the two can never be confused.
+  const ranges = block.match(/<referenceRange\b[\s\S]*?<\/referenceRange>/gi) ?? [];
+  const body = block.replace(/<referenceRange\b[\s\S]*?<\/referenceRange>/gi, " ");
+
+  const codeTag = firstTag(body, "code");
+  const loinc =
+    codeTag && /2\.16\.840\.1\.113883\.6\.1/.test(codeTag) ? (attr(codeTag, "code") || null) : null;
+  const sourceName =
+    innerText(codeBlockOf(body), "originalText") || (codeTag ? attr(codeTag, "displayName") : null) || "";
+  if (!sourceName && !loinc) return null;
+  const name = (loinc && LOINC_CANONICAL_NAMES[loinc]) || titleCased(sourceName);
+  if (!name) return null;
+  if (NARRATIVE_BATTERY_RE.test(name) || NARRATIVE_BATTERY_RE.test(batteryName)) return null;
+
+  const valueTag = firstTag(body, "value");
+  if (!valueTag) return null;
+  if (attr(valueTag, "nullFlavor")) return null;
+  const type = xsiType(valueTag);
+  // An embedded narrative (ED) is a report, not a result — the agent's job.
+  if (type === "ED") return null;
+  let value: number | string | null = null;
+  let unit: string | null = null;
+  if (type === "PQ" || type === "REAL" || type === "INT") {
+    const n = numericAttr(valueTag, "value");
+    if (n == null) return null;
+    value = n;
+    unit = attr(valueTag, "unit");
+  } else if (type === "ST" || type === "" || type === "CD") {
+    const text = innerText(body, "value") || attr(valueTag, "displayName");
+    if (!text) return null;
+    value = text.slice(0, 80);
+  } else {
+    return null;
+  }
+  if (value == null || value === "") return null;
+
+  let refLow: number | null = null;
+  let refHigh: number | null = null;
+  for (const range of ranges) {
+    const low = firstTag(range, "low");
+    const high = firstTag(range, "high");
+    if (low || high) {
+      refLow = numericAttr(low, "value");
+      refHigh = numericAttr(high, "value");
+    }
+    if (refLow == null && refHigh == null) {
+      const parsed = parseRangeText(innerText(range, "text"));
+      refLow = parsed.low;
+      refHigh = parsed.high;
+    }
+    if (refLow != null || refHigh != null) break;
+  }
+
+  const interpretation = firstTag(body, "interpretationCode");
+  const flag = resolveFlag(interpretation ? attr(interpretation, "code") : null, value, refLow, refHigh);
+  const effective = firstTag(body, "effectiveTime");
+  const effectiveValue = effective ? attr(effective, "value") : null;
+  const date = ccdaLocalDate(effectiveValue) ?? fallbackDate;
+
+  return {
+    date,
+    at: ccdaInstant(effectiveValue),
+    marker: {
+      name: name.slice(0, 120),
+      value,
+      unit: unit ? unit.slice(0, 40) : null,
+      flag,
+      ref_low: refLow,
+      ref_high: refHigh,
+      loinc,
+      source_name: (sourceName || name).slice(0, 120),
+    },
+  };
+}
+
+function isResultsSection(section: string): boolean {
+  const codeTag = firstTag(section, "code");
+  if (codeTag && attr(codeTag, "code") === "30954-2") return true;
+  const title = innerText(section, "title");
+  return !!title && /results/i.test(title);
+}
+
+// One panel per collection DATE, markers deduped across the four or five
+// encounter summaries a MyChart export repeats the same lipid panel in.
+function extractResultPanels(files: Array<{ file: string; xml: string }>): HealthPanelInput[] {
+  const byDate = new Map<
+    string,
+    {
+      markers: Array<{ marker: CcdaResultMarker; at: number | null }>;
+      batteries: string[];
+      seen: Map<string, { index: number }>;
+    }
+  >();
+  for (const { xml } of files) {
+    for (const section of elementBlocks(xml, "section")) {
+      if (!isResultsSection(section)) continue;
+      for (const organizer of elementBlocks(section, "organizer")) {
+        if (!/classCode\s*=\s*"BATTERY"/i.test(organizer.slice(0, 200))) continue;
+        const codeTag = firstTag(organizer, "code");
+        const batteryName =
+          innerText(codeBlockOf(organizer), "originalText") || (codeTag ? attr(codeTag, "displayName") : null) || "";
+        if (NARRATIVE_BATTERY_RE.test(batteryName)) continue;
+        const effective = organizer.match(/<effectiveTime\b[\s\S]*?<\/effectiveTime>/i)?.[0] ?? "";
+        const lowTag = effective ? firstTag(effective, "low") : null;
+        const selfTag = firstTag(organizer, "effectiveTime");
+        const organizerDate =
+          ccdaLocalDate(lowTag ? attr(lowTag, "value") : null) ??
+          ccdaLocalDate(selfTag ? attr(selfTag, "value") : null);
+        for (const observation of elementBlocks(organizer, "observation")) {
+          const parsed = resultObservation(observation, batteryName, organizerDate);
+          if (!parsed || !parsed.date) continue;
+          let bucket = byDate.get(parsed.date);
+          if (!bucket) {
+            bucket = { markers: [], batteries: [], seen: new Map() };
+            byDate.set(parsed.date, bucket);
+          }
+          const m = parsed.marker;
+          // The key identifies the ANALYTE, not the reading. With the value in it,
+          // an amended (or merely re-rounded) repeat of one analyte on one date —
+          // the same battery arriving in two exported documents — read as two
+          // separate markers and the panel showed the athlete both.
+          const key = `${m.loinc || normalizeMarkerName(m.name)}|${parsed.date}|${m.unit ?? ""}`;
+          const prior = bucket.seen.get(key);
+          if (prior) {
+            // Duplicates that agree cost nothing either way. When they disagree the
+            // LATER observation is the amendment, so it wins; an unorderable pair
+            // (no clock time or no offset on either stamp) falls back to last seen.
+            const priorAt = bucket.markers[prior.index]?.at ?? null;
+            if (priorAt !== null && parsed.at !== null && parsed.at < priorAt) continue;
+            bucket.markers[prior.index] = { marker: m, at: parsed.at };
+            continue;
+          }
+          bucket.seen.set(key, { index: bucket.markers.length });
+          bucket.markers.push({ marker: m, at: parsed.at });
+          const battery = titleCased(batteryName);
+          if (battery && !bucket.batteries.includes(battery)) bucket.batteries.push(battery);
+        }
+      }
+    }
+  }
+  return [...byDate.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    .map(([date, bucket]) => ({
+      doc_date: date,
+      kind: "bloodwork",
+      type: CCDA_RESULTS_TYPE,
+      summary: bucket.batteries.length ? bucket.batteries.join(" · ").slice(0, 1000) : null,
+      markers: bucket.markers.map((entry) => entry.marker),
+    }))
+    .filter((p) => p.markers.length > 0);
+}
+
+// The analyte key a deterministic result and an agent's transcription of the
+// same reading are matched on — canonical, so "HDL Cholesterol" and "HDL-C" are
+// recognized as one analyte rather than two.
+export function resultMarkerKeysByDate(panels: HealthPanelInput[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const panel of panels) {
+    const date = String(panel?.doc_date ?? "");
+    if (!date) continue;
+    let keys = out.get(date);
+    if (!keys) {
+      keys = new Set<string>();
+      out.set(date, keys);
+    }
+    for (const marker of Array.isArray(panel.markers) ? panel.markers : []) {
+      const name = String((marker as any)?.name ?? "");
+      if (!name) continue;
+      keys.add(canonicalMarker(name).key || normalizeMarkerName(name));
+    }
+  }
+  return out;
 }

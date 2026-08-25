@@ -252,18 +252,42 @@ function responseRequestId(response: Response | { headers?: unknown }): string {
   }
 }
 
+// One coalesced identity for "Cairn is unreachable". A restart or a dropped
+// connection fails every in-flight route at once; reporting one row per route
+// made a single deploy read as ~15 separate issues in the operator list. The
+// server honours this fingerprint (see CLIENT_NETWORK_UNREACHABLE_FINGERPRINT
+// in src/repo/diagnostics.ts) so the burst folds into one occurrence_count.
+const API_UNREACHABLE_FINGERPRINT = "network_unreachable";
+
 function reportApiError(error: CairnApiError): void {
   try {
-    (globalThis as { CairnClientDiagnostics?: { report?(event: unknown): unknown } }).CairnClientDiagnostics?.report?.({
+    const report = (globalThis as { CairnClientDiagnostics?: { report?(event: unknown): unknown } })
+      .CairnClientDiagnostics?.report;
+    if (!report) return;
+    const online = typeof navigator === "undefined" ? undefined : navigator.onLine;
+    if (error.kind === "network" || error.kind === "timeout") {
+      report({
+        kind: "api_failure",
+        level: "warning",
+        fingerprint: API_UNREACHABLE_FINGERPRINT,
+        message: "network: Could not reach Cairn",
+        duration_ms: error.durationMs,
+        online,
+      });
+      return;
+    }
+    report({
       kind: "api_failure",
       level: error.kind === "http" && error.status != null && error.status < 500 ? "warning" : "error",
       message: `${error.kind}: ${error.message}`,
       route: diagnosticApiRoute(error.route),
       method: error.method,
+      // A status only means something for a request that actually got a
+      // response. Reporting it for an outage is what printed `/api/x:200`.
       status: error.status ?? undefined,
       duration_ms: error.durationMs,
       request_id: error.requestId || undefined,
-      online: typeof navigator === "undefined" ? undefined : navigator.onLine,
+      online,
     });
   } catch {}
 }
@@ -429,16 +453,25 @@ function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<
         if (r.status === 401 || r.status === 204) return base;
         try {
           return { ...base, body: await r.json() };
-        } catch {
+        } catch (cause) {
+          // Reading the body can fail for three different reasons, and only one
+          // of them is malformed JSON. The 20s GET timeout can fire DURING the
+          // body read (AbortError), and the body stream can break outright when
+          // the server restarts or iOS backgrounds the tab (TypeError). Both are
+          // outages: rethrow so the fetch catch below classifies them as
+          // timeout/network. Calling them `invalid_json` is what produced
+          // api_failure rows carrying a 200 status.
+          const name = cause && typeof cause === "object" ? String((cause as { name?: unknown }).name || "") : "";
+          if (name === "AbortError" || name === "TimeoutError" || name === "TypeError") throw cause;
           return { ...base, invalidJson: true };
         }
       })
       .catch((cause) => {
         const error = new CairnApiError({
-          kind:
-            cause && typeof cause === "object" && (cause as { name?: unknown }).name === "AbortError"
-              ? "timeout"
-              : "network",
+          kind: (() => {
+            const name = cause && typeof cause === "object" ? String((cause as { name?: unknown }).name || "") : "";
+            return name === "AbortError" || name === "TimeoutError" ? "timeout" : "network";
+          })(),
           method,
           route: p,
           durationMs: elapsed(),

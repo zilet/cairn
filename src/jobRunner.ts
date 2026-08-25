@@ -56,9 +56,18 @@ export function createSerialRunner(
     }
   }
   return {
+    // ENQUEUE MUST NOT RUN WORK. `drain()` is async, but an async function still runs
+    // synchronously up to its FIRST await — and `process` (a chat turn, an agent job)
+    // reaches its first await only after building the whole coach context: seconds of
+    // synchronous SQLite. Called from a route whose entire contract is persist-and-
+    // return, that cost landed on the HTTP request's own stack, so the caller waited
+    // for the very work it handed off. Deferring the kick to the next macrotask makes
+    // enqueue O(1) for every caller; the drain is otherwise unchanged, and its
+    // `draining` guard still keeps it strictly serial (a second enqueue arriving
+    // before the tick lands on the same queue).
     enqueue(id: number): void {
       queue.push(id);
-      if (!draining) void drain();
+      if (!draining) setImmediate(() => void drain());
     },
   };
 }

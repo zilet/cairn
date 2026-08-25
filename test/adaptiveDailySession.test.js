@@ -982,7 +982,13 @@ test("athlete override may deliberately open an empty session but adaptive plan 
 
   const otherDate = "2031-04-18";
   repo.savePlanDay(1, "Empty template", null, []);
-  assert.throws(() => prepare({ date: otherDate, source: "adaptive_plan" }), /session items are required/);
+  // An empty template day is an ABSENCE ("nothing to build for this date"), not a
+  // malformed request — it carries the code the preview surfaces answer with null.
+  assert.throws(() => prepare({ date: otherDate, source: "adaptive_plan" }), (error) => {
+    assert.equal(error.code, "daily_session_no_template");
+    assert.match(error.message, /no weekly template day is available/);
+    return true;
+  });
 });
 
 test("trust boundary rejects malformed payloads and bounds untrusted fields", () => {

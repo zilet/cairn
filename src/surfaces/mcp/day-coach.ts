@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   dailySessionErrorBody,
+  isDailySessionAbsence,
   prepareDailySessionUseCase,
   previewAdaptiveDailySessionUseCase,
 } from "../../domain/training/index.js";
@@ -84,20 +85,28 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
 
   server.tool(
     "preview_daily_session",
-    "Preview the exact read-only adaptive session candidate Cairn would persist for this date and intent. Returns calm athlete-facing constraints and rationale plus an input fingerprint for compare-and-set prepare. Never records a decision or creates a workout session.",
+    "Preview the exact read-only adaptive session candidate Cairn would persist for this date and intent. Returns calm athlete-facing constraints and rationale plus an input fingerprint for compare-and-set prepare, or null when the date has no weekly template day to build one from. Never records a decision or creates a workout session.",
     {
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       override: z.string().optional().describe("exact day steer used for this preview"),
       train_anyway: z.boolean().optional().describe("explicit athlete choice to train within current safety caps"),
     },
-    async ({ date, override, train_anyway }) =>
-      asText(
-        previewAdaptiveDailySessionUseCase({
-          date,
-          constraints: override ? { day_read_override: override } : {},
-          train_anyway: train_anyway === true,
-        })
-      )
+    async ({ date, override, train_anyway }) => {
+      try {
+        return asText(
+          previewAdaptiveDailySessionUseCase({
+            date,
+            constraints: override ? { day_read_override: override } : {},
+            train_anyway: train_anyway === true,
+          })
+        );
+      } catch (error) {
+        // Mirrors GET /api/daily-session/preview: an absent template day is null, not a
+        // failure. Malformed input still surfaces as a tool error.
+        if (isDailySessionAbsence(error)) return asText(null);
+        throw error;
+      }
+    }
   );
 
   server.tool(

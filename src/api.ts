@@ -23,6 +23,7 @@ import { bodyMetricsRouter } from "./routes/body-metrics.js";
 import { journeyRouter } from "./routes/journey.js";
 import { appleHealthRouter } from "./routes/apple-health.js";
 import { diagnosticErrorName, recordUnexpectedApiError, requestId } from "./diagnostics.js";
+import { registerMountedApiRouteFamilies } from "./repo/diagnostics.js";
 import { idempotencyGuard } from "./idempotency.js";
 
 export const api = Router();
@@ -55,6 +56,50 @@ api.use("/chat", chatRouter);
 api.use("/agent-jobs", agentJobsRouter);
 
 api.use("/health-docs", healthDocsRouter);
+
+// The three mounts above that carry a PREFIX. A prefixed mount contributes exactly
+// one route family — its own prefix — and Express keeps the mount path inside a
+// closure, so it is the one part of the map that cannot be read back off the router.
+const PREFIXED_MOUNTS = ["chat", "agent-jobs", "health-docs"];
+
+/**
+ * The route families THIS build serves: the first path segment of every route the
+ * root-mounted routers define, plus the prefixed mounts above.
+ *
+ * Why it exists: client telemetry records a route FAMILY into a durable table, and
+ * the string comes from the browser. The shared allowlist covers the families the
+ * client knows; this covers the ones this build actually mounts, so a brand-new
+ * endpoint is visible in telemetry the day it ships while an invented segment files
+ * under "unknown" instead of minting a row of its own.
+ */
+function mountedApiRouteFamilies(): string[] {
+  const families = new Set<string>();
+  const add = (value: unknown): void => {
+    const segment = String(value ?? "").split("/").filter(Boolean)[0];
+    if (segment && !segment.startsWith(":") && !segment.includes("*")) families.add(segment.toLowerCase());
+  };
+  const walkRoutes = (stack: any[]): void => {
+    for (const layer of stack ?? []) {
+      const paths = layer?.route?.path;
+      if (paths != null) {
+        for (const path of Array.isArray(paths) ? paths : [paths]) add(path);
+        continue;
+      }
+      if (Array.isArray(layer?.handle?.stack)) walkRoutes(layer.handle.stack);
+    }
+  };
+  // `slash` is Express's own marker for a router mounted at "/" — the routers whose
+  // route paths ARE the family names. Anything else is prefixed and named above.
+  for (const layer of (api as any).stack ?? []) {
+    if (layer?.slash === true && Array.isArray(layer?.handle?.stack)) walkRoutes(layer.handle.stack);
+  }
+  // A future Express could drop `slash` and leave this empty. Registering nothing is
+  // the safe degradation (the shape bound stands alone, i.e. today's behavior); the
+  // route-family test is what catches it rather than a silent telemetry blind spot.
+  return families.size ? [...families, ...PREFIXED_MOUNTS] : [];
+}
+
+registerMountedApiRouteFamilies(mountedApiRouteFamilies());
 
 // Global JSON error handler — registered LAST so any uncaught route error
 // returns JSON, not Express's default HTML error page (the PWA's api() helper

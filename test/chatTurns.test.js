@@ -86,6 +86,36 @@ test("chat classifies CLI login banners as auth failures, not replies", () => {
   assert.equal(attempt.error_message, "Not connected");
 });
 
+test("a clean-exit LIMIT banner is a hold, not a chat bubble — and never clears one", () => {
+  // Several CLIs print their limit banner to stdout and exit 0. `suspect` (exit
+  // code / empty output / a stream rate-limit event) is false for exactly that
+  // run, so the banner became the athlete's reply AND the turn wiped the hold the
+  // provider had just earned. The limit arms now read regardless of exit code,
+  // behind the same infra-sized guard the auth rule uses.
+  repo.clearAgentAvailability("claude");
+  const attempt = classifyChatAgentResult("claude", {
+    code: 0,
+    raw: "You've hit your weekly limit · resets 8am (America/New_York)",
+    stderr: "",
+    parsed: null,
+  });
+  assert.equal(attempt.ok, false, "not a reply");
+  assert.equal(attempt.status, "quota_exhausted");
+  assert.equal(attempt.error_class, "quota_exhausted");
+  assert.match(attempt.error_message, /Weekly limit/);
+
+  // …and the hold is on the record, so the NEXT turn routes around it.
+  const held = repo.getAgentAvailability("claude");
+  assert.ok(held, "the limit was noted");
+  assert.equal(held.state, "quota_exhausted");
+  assert.ok(held.hold_until, "a quota hold waits for the provider's own reset");
+
+  // A REAL coaching answer that discusses limits is still a reply — the guard is
+  // length, the same one that keeps "please login" prose out of auth_required.
+  const chatty = `${"word ".repeat(300)} you've hit your weekly limit on squats`;
+  assert.equal(classifyChatAgentResult("claude", { code: 0, raw: chatty, stderr: "", parsed: null }), null);
+});
+
 test("listActiveChatTurns returns queued+running oldest-first, excludes terminal", () => {
   const a = repo.createChatTurn({ message: "a" });
   const b = repo.createChatTurn({ message: "b" });

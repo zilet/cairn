@@ -5,6 +5,8 @@ import { readToday } from "../domain/brain/index.js";
 import { createAgentJob } from "../domain/person/index.js";
 import {
   dailySessionErrorBody,
+  isDailySessionAbsence,
+  isDailySessionConflict,
   prepareDailySessionUseCase,
   previewAdaptiveDailySessionUseCase,
 } from "../domain/training/index.js";
@@ -152,6 +154,11 @@ dayCoachRouter.get("/daily-session", (req, res) => {
 // Read-only, authoritative candidate shown immediately before Start. This is
 // built by the same adaptive seam prepare persists and never records a decision
 // or creates a workout session.
+//
+// A date with no weekly template day has nothing to preview — the ordinary case on a
+// rest/unplanned day, and the PWA asks on EVERY Today render. That absence answers
+// `200 + null` like every other single-row read here; 400 is reserved for malformed
+// input (a bad date or constraint).
 dayCoachRouter.get("/daily-session/preview", (req, res) => {
   try {
     const override = req.query.override != null ? String(req.query.override) : null;
@@ -163,6 +170,7 @@ dayCoachRouter.get("/daily-session/preview", (req, res) => {
       })
     );
   } catch (error: any) {
+    if (isDailySessionAbsence(error)) return res.json(null);
     res.status(400).json(dailySessionErrorBody(error));
   }
 });
@@ -216,9 +224,11 @@ dayCoachRouter.post("/daily-session/prepare", (req, res) => {
       })
     );
   } catch (error: any) {
-    const status =
-      error?.code === "daily_session_preview_stale" || error?.code === "daily_session_active_changed" ? 409 : 400;
-    res.status(status).json(dailySessionErrorBody(error));
+    // A stale preview, a moved/absent active composition and a session already logged
+    // against are all the same answer — "your copy is stale, re-read and retry" — so
+    // they share one CONFLICT status instead of some of them reading as malformed
+    // input. 400 stays for a genuinely bad request body.
+    res.status(isDailySessionConflict(error) ? 409 : 400).json(dailySessionErrorBody(error));
   }
 });
 

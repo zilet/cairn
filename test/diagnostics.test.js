@@ -17,6 +17,8 @@ import {
   parseClientDiagnosticBatch,
   pruneDiagnosticEvents,
   recordDiagnosticEvent,
+  registerMountedApiRouteFamilies,
+  resetMountedApiRouteFamilies,
   sanitizeDiagnosticText,
 } from "../dist/repo/diagnostics.js";
 import { clientTelemetryHandler } from "../dist/routes/operator.js";
@@ -86,16 +88,107 @@ test("diagnostic storage scrubs sensitive detail and normalizes routes", () => {
 test("client telemetry validation rejects malformed and oversized batches", () => {
   assert.equal(parseClientDiagnosticBatch({ events: [] }), null);
   assert.equal(parseClientDiagnosticBatch({ events: Array.from({ length: 21 }, () => ({})) }), null);
-  assert.equal(
+  assert.equal(parseClientDiagnosticBatch({ events: "not-an-array" }), null);
+  assert.deepEqual(
     parseClientDiagnosticBatch({ events: [{ kind: "made_up", level: "error", message: "x", fingerprint: "x" }] }),
-    null
+    []
   );
-  assert.equal(
+  assert.deepEqual(
     parseClientDiagnosticBatch({
       events: [{ kind: "render_error", level: "error", message: "x", fingerprint: "x", route: "/not-api?secret=y" }],
     }),
-    null
+    []
   );
+});
+
+test("one unacceptable client event is dropped without shedding the rest of the batch", () => {
+  const parsed = parseClientDiagnosticBatch({
+    events: [
+      { kind: "render_error", level: "error", message: "good first", fingerprint: "a", route: "/api/today" },
+      { kind: "made_up", level: "error", message: "bad kind", fingerprint: "b" },
+      { kind: "render_error", level: "error", message: "bad route", fingerprint: "c", route: "/not-api" },
+      { kind: "api_failure", level: "error", message: "good last", fingerprint: "d", route: "/api/settings" },
+    ],
+  });
+  assert.ok(parsed);
+  // Whole-batch rejection answered 400, and the client's 400 branch drops its
+  // queue head — so one unknown route family could erase a real error.
+  assert.deepEqual(
+    parsed.map((event) => event.route),
+    ["/api/today", "/api/settings"]
+  );
+
+  const accepted = responseDouble();
+  clientTelemetryHandler(
+    { body: { events: [{ kind: "made_up", level: "error", message: "x", fingerprint: "x" }] } },
+    accepted
+  );
+  assert.equal(accepted.statusCode, 204, "an all-dropped batch is still accepted, not answered 400");
+});
+
+test("client route families are recorded by name, known or newly added", () => {
+  const missingFromServer = [
+    "week-wins", "team-week", "strength-journey", "session-primer",
+    "apple-health", "today-plan-day", "training-symptoms", "training-agenda",
+  ];
+  // Pinned rather than inherited: whether the API module happens to have been
+  // imported by an earlier file in this shard must not decide what this asserts.
+  registerMountedApiRouteFamilies([...missingFromServer, "shipped-after-this-build"]);
+  let parsed;
+  try {
+    parsed = parseClientDiagnosticBatch({
+      events: [
+        ...missingFromServer.map((family) => ({
+          kind: "api_failure", level: "error", message: "x", fingerprint: "x", route: `/api/${family}?on=2026-08-25`,
+        })),
+        // An endpoint added after the shared allowlist was last touched still lands
+        // under its own name — it is mounted, so it is real.
+        { kind: "api_failure", level: "error", message: "x", fingerprint: "x", route: "/api/shipped-after-this-build" },
+        // One this server does not serve collapses into a single bucket: the route
+        // is client-supplied and diagnostic_events is keyed by it, so an invented
+        // segment must not be able to mint a row of its own.
+        { kind: "api_failure", level: "error", message: "x", fingerprint: "x", route: "/api/zzz-invented" },
+        { kind: "api_failure", level: "error", message: "x", fingerprint: "x", route: "/api/Private Family Detail" },
+      ],
+    });
+  } finally {
+    resetMountedApiRouteFamilies();
+  }
+  assert.deepEqual(
+    parsed.map((event) => event.route),
+    [...missingFromServer.map((family) => `/api/${family}`), "/api/shipped-after-this-build", "/api/unknown"]
+  );
+  assert.doesNotMatch(JSON.stringify(parsed), /Private|on=2026/);
+});
+
+test("a network-unreachable burst coalesces into one row instead of one row per route", () => {
+  const parsed = parseClientDiagnosticBatch({
+    events: [
+      { kind: "api_failure", level: "warning", message: "network: Could not reach Cairn",
+        fingerprint: "network_unreachable", duration_ms: 12, online: false },
+      { kind: "api_failure", level: "warning", message: "network: Could not reach Cairn",
+        fingerprint: "network_unreachable", duration_ms: 31, online: false },
+      // The marker is honoured ONLY for a route-less api_failure; anything else
+      // keeps the server-derived fingerprint, so it cannot be used to merge rows.
+      { kind: "render_error", level: "error", message: "x", fingerprint: "network_unreachable", route: "/api/today" },
+      { kind: "api_failure", level: "error", message: "x", fingerprint: "network_unreachable",
+        route: "/api/today", method: "GET", status: 500 },
+    ],
+  });
+  assert.deepEqual(
+    parsed.map((event) => event.fingerprint),
+    [
+      "client:api_failure:network:none",
+      "client:api_failure:network:none",
+      "client:render_error:none:/api/today:none",
+      "client:api_failure:GET:/api/today:500",
+    ]
+  );
+  ingestClientDiagnosticEvents(parsed, "1.0.0@build-a");
+  const row = db
+    .prepare("SELECT occurrence_count FROM diagnostic_events WHERE fingerprint='client:api_failure:network:none'")
+    .get();
+  assert.equal(Number(row.occurrence_count), 2, "the 5-minute coalesce window folds the burst into one row");
 });
 
 test("operator telemetry endpoint validates batches and returns 204", () => {
@@ -413,4 +506,60 @@ test("diagnostics preserve history but mark and isolate the current build", () =
   assert.equal(stats.current_build.total, 1);
   assert.equal(stats.current_build.prior_build_total, 1);
   assert.deepEqual(stats.current_build.issues.map((issue) => issue.fingerprint), ["current"]);
+});
+
+test("an expected conflict and an unmatched path are recorded as info, and the 404 names its sanitized path", () => {
+  const record = (request, statusCode) => {
+    const response = responseDouble();
+    apiDiagnosticMiddleware(request, response, () => {});
+    response.statusCode = statusCode;
+    response.emit("finish");
+    return db.prepare("SELECT * FROM diagnostic_events WHERE kind = 'http_error' ORDER BY id DESC LIMIT 1").get();
+  };
+
+  // 409 is the compare-and-set answer the PWA already handles — an expected outcome,
+  // not a defect, so it must not raise the operator list's warning count.
+  const conflict = record(
+    { method: "POST", baseUrl: "/api", route: { path: "/daily-session/prepare" }, originalUrl: "/api/daily-session/prepare", url: "/daily-session/prepare" },
+    409
+  );
+  assert.equal(conflict.level, "info");
+  assert.equal(conflict.route, "/api/daily-session/prepare");
+  assert.equal(conflict.message, "HTTP 409");
+
+  // A 4xx that is NOT a conflict still reads as a warning.
+  const badRequest = record(
+    { method: "GET", baseUrl: "/api", route: { path: "/daily-session/preview" }, originalUrl: "/api/daily-session/preview", url: "/daily-session/preview" },
+    400
+  );
+  assert.equal(badRequest.level, "warning");
+  assert.equal(badRequest.message, "HTTP 400");
+
+  // The 404 fall-through matched no router, so it has no route template: name the
+  // path instead — query string dropped whole, ids collapsed, characters allowlisted.
+  const unmatched = record(
+    { method: "GET", baseUrl: "/api", route: undefined, originalUrl: "/api/health-docs/4821/notes?token=secret&marker=LDL", url: "/health-docs/4821/notes?token=secret" },
+    404
+  );
+  assert.equal(unmatched.level, "info");
+  assert.equal(unmatched.route, "/api/unknown");
+  assert.equal(unmatched.message, "HTTP 404 /api/health-docs/:id/notes");
+  assert.ok(!unmatched.message.includes("secret"));
+  assert.ok(!unmatched.message.includes("?"));
+
+  // A 500 is always an error, matched route or not.
+  assert.equal(record({ method: "GET", baseUrl: "/api", route: undefined, originalUrl: "/api/nope", url: "/nope" }, 500).level, "error");
+});
+
+test("the request-path label is bounded, query-free and allowlisted", async () => {
+  const { telemetryRequestPathLabel } = await import("../dist/telemetry-privacy.js");
+  assert.equal(telemetryRequestPathLabel("/api/markers/12?token=abc#frag"), "/api/markers/:id");
+  assert.equal(telemetryRequestPathLabel("/api/food notes/<script>"), "/api/food_notes/_script_");
+  assert.equal(telemetryRequestPathLabel("/api/x/"), "/api/x");
+  assert.equal(telemetryRequestPathLabel("/"), "/");
+  assert.equal(telemetryRequestPathLabel(""), "/");
+  assert.equal(telemetryRequestPathLabel(null), "/");
+  const long = telemetryRequestPathLabel(`/api/${"a".repeat(400)}`);
+  assert.ok(long.length <= 80, long.length);
+  assert.match(long, /^[A-Za-z0-9/_.:-]+$/);
 });

@@ -87,7 +87,7 @@ import { getProgress, getRecentSessions, typicalTrainingHour, vouchedRunComplian
 import { symptomAreaKey } from "./symptom-area.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import { addDaysISO, localDateISO, nowContext } from "./shared.js";
-import { bumpTrainingDataVersion, currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
+import { bumpTrainingDataVersion, coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
 import { currentMarkerDataVersion } from "./marker-cache.js";
 import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-context.js";
 // The "knows-me" layer — additive context keys (function-level cycle, same shape as
@@ -1139,8 +1139,51 @@ function buildBrainSlice(
   };
 }
 
+// PROCESS-WIDE MEMO for the whole coach context.
+//
+// The brainSignal memo INSIDE a build is request-scoped (src/brain/snapshot.ts — one
+// scope opened per request in server.ts), so every consumer that wants any part of this
+// context pays for the ENTIRE ~50-producer assembly again: the coaching-focus GET, the
+// chat prompt, the coach/day/nutrition prompt builders, the MCP read tools. On the Pi
+// that is seconds, on one SQLite thread, and Today fires several of them at once, so
+// they queue behind each other. This lets all of them share ONE build.
+//
+// The KEY is what makes that safe. coachContextBackstopSignature() is a row count +
+// high-water mark over every table this assembly reads, plus the profile and settings
+// rows by value, so a write to any of them invalidates the build — no write path has to
+// remember to bump a counter it has never heard of. The marker counter rides along for
+// free. The local DATE and HOUR cover the time-of-day framing (`now`, the fuel bucket,
+// the hour-based copy) that no write touches, along with the device zone that frames
+// them. The TTL is the last backstop, so even an input none of those catch can only be
+// stale for a minute.
+//
+// A build's OWN incidental writes are folded in by re-reading the key after it returns:
+// the assembly is synchronous, so nothing else can have interleaved, and the value is
+// by construction consistent with the state it produced.
+let coachContextMemo: { key: string; at: number; value: CoachContext } | null = null;
+const COACH_CONTEXT_MEMO_TTL_MS = 60_000;
+registerTrainingCacheClear(() => {
+  coachContextMemo = null;
+});
+
+function coachContextMemoKey(): string {
+  const now = nowContext();
+  return [coachContextBackstopSignature(), currentMarkerDataVersion(), now.date, now.hour, now.tz ?? ""].join("|");
+}
+
 export function getCoachContext(): CoachContext {
-  return runWithBrainSnapshot(() => getCoachContextFromSnapshot());
+  const key = coachContextMemoKey();
+  if (coachContextMemo && coachContextMemo.key === key && Date.now() - coachContextMemo.at < COACH_CONTEXT_MEMO_TTL_MS) {
+    return coachContextMemo.value;
+  }
+  const value = runWithBrainSnapshot(() => getCoachContextFromSnapshot());
+  coachContextMemo = { key: coachContextMemoKey(), at: Date.now(), value };
+  return value;
+}
+
+/** Drop the shared build — for tests and for any caller that must not read a memo. */
+export function resetCoachContextMemo(): void {
+  coachContextMemo = null;
 }
 
 function getCoachContextFromSnapshot(): CoachContext {
@@ -1627,41 +1670,16 @@ function getCoachContextFromSnapshot(): CoachContext {
 // whole-athlete focus. Reuses the canonical getCoachContext assembly so it can never
 // drift from what the prompts see. On-demand only; degrades to {available:false}.
 //
-// Cross-request MEMO (same pattern as getProgramState/getWeeklyStats): the standalone
-// GET builds the ENTIRE coach context just to pluck one key — ~400ms on a Pi — and the
-// PWA asks for it from three surfaces (Today thread, Stand, Program). Keyed on the
-// training + marker write counters and the local date, with a short TTL backstop for
-// the few signals outside both counters (e.g. a directive status flip). PROMPTS are
-// untouched — getCoachContext itself is never memoized, so coaching always sees fresh.
-let coachingFocusMemo: { key: string; at: number; value: unknown } | null = null;
-const COACHING_FOCUS_MEMO_TTL_MS = 120_000;
-registerTrainingCacheClear(() => {
-  coachingFocusMemo = null;
-});
-
+// This GET builds the ENTIRE coach context just to pluck one key, and the PWA asks for
+// it from three surfaces (Today thread, Stand, Program). It used to carry its own
+// cross-request memo for that; the shared getCoachContext memo above now covers it —
+// with a STRICTER key (a write to anything the coach reads invalidates it, where this
+// one waited on a training/marker counter that no settings or directive write ever
+// bumped) and a shorter TTL. ONE memo, so coaching-focus and the prompts can never be
+// looking at two different builds of the same day.
 export function getCoachingFocus() {
-  // lead_mode + proactive_enabled are in the key so flipping either setting (both
-  // change `acts` and the recovery/stall copy) busts the memo without waiting for
-  // a training/marker write.
-  let leadMode = "lead";
-  let proactive = "on";
   try {
-    const s = getSettings();
-    leadMode = s.lead_mode;
-    proactive = s.proactive_enabled !== false ? "on" : "off";
-  } catch {}
-  const key = `${currentTrainingDataVersion()}:${currentMarkerDataVersion()}:${localDateISO()}:${leadMode}:${proactive}`;
-  if (
-    coachingFocusMemo &&
-    coachingFocusMemo.key === key &&
-    Date.now() - coachingFocusMemo.at < COACHING_FOCUS_MEMO_TTL_MS
-  ) {
-    return coachingFocusMemo.value;
-  }
-  try {
-    const value = getCoachContext().coaching_focus;
-    coachingFocusMemo = { key, at: Date.now(), value };
-    return value;
+    return getCoachContext().coaching_focus;
   } catch {
     return {
       available: false,

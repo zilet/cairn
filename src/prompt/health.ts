@@ -73,18 +73,36 @@ export function buildHealthIngestPrompt(
   absPath: string,
   isDir: boolean,
   kindHint: string,
-  opts?: { emphasizeCompleteness?: boolean; missed?: { got: number; expected: number } }
+  opts?: { emphasizeCompleteness?: boolean; missed?: { got: number; expected: number }; inventory?: string[] }
 ): string {
   const profile = repo.getProfile();
   const recentMemory = (repo.listMemory(40) as any[]).map((m) => m.content);
+  // A bare folder path is a dead end for an autonomous CLI: it reaches for `ls`
+  // or `find`, headless mode auto-denies the command permission, and the run
+  // exits 0 with EMPTY stdout — the whole import silently degrades. Listing the
+  // files for it turns the job back into pure file reading, which every CLI can
+  // do unattended.
+  const inventory =
+    isDir && opts?.inventory?.length
+      ? `
+
+FILE INVENTORY (already listed for you — do NOT run shell commands or directory listings; use ONLY
+your file-reading tool on these exact paths):
+${opts.inventory.join("\n")}`
+      : "";
   const target = isDir
     ? `READ EVERY RELEVANT FILE IN THIS FOLDER (recursively):
-${absPath}
+${absPath}${inventory}
 
 It is an unpacked health-records export (likely a MyChart / CCDA / "IHE_XDM" bundle). Look at the
 CCDA XML documents (the structured lab/result data — richest source), the HTML summary, and any
 lab/scan PDFs. Ignore stylesheets, logos, and boilerplate. When the same result appears in more
-than one file, record it ONCE.`
+than one file, record it ONCE.
+
+The structured lab results, vitals and clinical facts have ALREADY been extracted deterministically
+from the CCDA XML; still transcribe them (the panels are reconciled server-side), and focus your
+reading on what XML cannot give: PDF/HTML narratives, imaging reports, visit notes, the summary and
+the memory.`
     : `READ THE FILE AT THIS ABSOLUTE PATH:
 ${absPath}
 

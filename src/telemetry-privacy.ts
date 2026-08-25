@@ -3,6 +3,10 @@
 const ERROR_CLASSES = new Set([
   "abort_error",
   "auth_required",
+  "payment_required",
+  "permission_denied",
+  "quota_exhausted",
+  "rate_limited",
   "empty_output",
   "invalid_contract",
   "invalid_json",
@@ -32,6 +36,26 @@ export function telemetryModelName(value: unknown): string | null {
     : null;
 }
 
+/**
+ * A raw request path is UNTRUSTED input (an Express route TEMPLATE is trusted; a path
+ * the caller typed is not), so it never reaches telemetry verbatim. This reduces one to
+ * a bounded, low-cardinality label: the query string and fragment are dropped whole
+ * (they carry values), numeric segments collapse to `:id` the way a route template
+ * writes them, every remaining character is allowlisted, and the result is capped. Used
+ * only for the 404 fall-through, where the operator otherwise cannot tell WHICH path missed.
+ */
+export function telemetryRequestPathLabel(value: unknown, max = 80): string {
+  const raw = typeof value === "string" ? value : "";
+  const path = raw.split("?")[0].split("#")[0].trim();
+  const segments = path
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => (/^\d+$/.test(segment) ? ":id" : segment.replace(/[^A-Za-z0-9_.:-]/g, "_")));
+  if (!segments.length) return "/";
+  const label = `/${segments.join("/")}`.slice(0, Math.max(1, max));
+  return label.length > 1 ? label.replace(/\/+$/, "") || "/" : label;
+}
+
 export function telemetryErrorName(error: unknown): string {
   if (!(error instanceof Error)) return "Error";
   const name = String(error.name || "").trim();
@@ -55,6 +79,16 @@ export function agentErrorClass(status: unknown, errorClass: unknown): string | 
   const raw = telemetryIdentifier(errorClass || status, 64, "unknown_error").toLowerCase();
   if (raw === "ok" || raw === "success") return null;
   if (ERROR_CLASSES.has(raw)) return raw;
+  // Provider availability is read BEFORE the generic buckets: "usage limit" must
+  // not be swallowed by the auth keyword, and a 402 is not a rate limit.
+  if (raw.includes("quota") || raw.includes("limit_reached") || raw.includes("usage_limit") || raw.includes("weekly"))
+    return "quota_exhausted";
+  if (raw.includes("402") || raw.includes("payment") || raw.includes("billing") || raw.includes("credit"))
+    return "payment_required";
+  if (raw.includes("429") || raw.includes("rate") || raw.includes("throttle") || raw.includes("overload"))
+    return "rate_limited";
+  if (raw.includes("permission") || raw.includes("denied")) return "permission_denied";
+  if (raw.includes("limit")) return "quota_exhausted";
   if (raw.includes("auth")) return "auth_required";
   if (raw.includes("timeout") || raw.includes("timed_out")) return "timeout";
   if (raw.includes("json")) return "invalid_json";

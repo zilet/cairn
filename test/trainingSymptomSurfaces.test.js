@@ -721,7 +721,10 @@ test("client lifecycle renders the athlete's own words, escaped, and offers no m
   assert.match(feedback, /symptom-watching">Watching/);
   assert.match(feedback, /<details class="symptom-history">/);
   assert.match(feedback, /A whole-body note — it isn't tied to any one movement\./);
-  assert.match(feedback, /\/training-symptoms\?on=\$\{viewedDate\}&include_resolved=1/);
+  assert.match(feedback, /\/training-symptoms\?on=\$\{encodeURIComponent\(viewedDate\)\}&include_resolved=1/);
+  // The viewed day is validated BEFORE it is asked for: a session without a date
+  // used to send the literal "undefined" and collect a 400 in the operator log.
+  assert.match(feedback, /\/\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$\/\.test\(candidate\)/);
   assert.match(status, /data-symptom-lifecycle/);
   // EVERY mini-UI is gone: the composer, the movement picker, the pain-free /
   // pain-present pair, the recurrence form, and the per-card movement check.

@@ -66,12 +66,14 @@ test("daily-session REST routes functionally cover null/read, success, coded ref
   const changed = await routerRequest("POST", "/daily-session/prepare", {
     body: { date, expected_active_id: created.body.daily_session.id + 1 },
   });
-  assert.equal(changed.status, 400);
+  // A stale/absent/already-trained active composition is a state CONFLICT, not a
+  // malformed request: the body is well-formed and the caller re-reads and retries.
+  assert.equal(changed.status, 409);
   assert.equal(changed.body.code, "daily_session_changed");
   const missing = await routerRequest("POST", "/daily-session/prepare", {
     body: { date: "2032-03-20", expected_active_id: created.body.daily_session.id },
   });
-  assert.equal(missing.status, 400);
+  assert.equal(missing.status, 409);
   assert.equal(missing.body.code, "daily_session_missing");
   assert.deepEqual(
     db
@@ -85,7 +87,7 @@ test("daily-session REST routes functionally cover null/read, success, coded ref
   const locked = await routerRequest("POST", "/daily-session/prepare", {
     body: { date, source: "athlete_override", replace: true, session: session("Replacement") },
   });
-  assert.equal(locked.status, 400);
+  assert.equal(locked.status, 409);
   assert.equal(locked.body.code, "daily_session_locked");
 
   const agentDate = "2032-03-03";
@@ -416,4 +418,40 @@ test("REST and MCP share the read-only preview and stale compare-and-set truth",
     await client.close();
     await server.close();
   }
+});
+
+test("a date with no template day is an absence on both preview surfaces, not a bad request", async () => {
+  const date = "2032-04-09";
+  // Nothing seeded: no weekly template day exists for this date, which is what the
+  // PWA hits on every Today render of an unplanned day. That is an absence, so the
+  // read answers 200 + null like the other single-row reads — not a 400 that lands
+  // in operator telemetry as a defect.
+  const restPreview = await routerRequest("GET", "/daily-session/preview", { query: { date } });
+  assert.equal(restPreview.status, 200);
+  assert.equal(restPreview.body, null);
+
+  const { client, server } = await mcpHarness();
+  try {
+    const mcpPreview = toolJson(
+      await client.callTool({ name: "preview_daily_session", arguments: { date } })
+    );
+    assert.equal(mcpPreview, null, "MCP mirrors REST");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+
+  // Malformed input still refuses — the absence contract must not swallow a bad date.
+  const invalid = await routerRequest("GET", "/daily-session/preview", { query: { date: "2032-02-31" } });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.ok, false);
+
+  // And a real template day still previews, so the null is genuinely about absence.
+  repo.savePlanDay(1, "Surface strength", "Full body", [
+    { exercise: "Surface Squat", sets: 4, rep_low: 5, rep_high: 8, target_weight: 135 },
+  ]);
+  const present = await routerRequest("GET", "/daily-session/preview", { query: { date } });
+  assert.equal(present.status, 200);
+  assert.equal(present.body.source, "adaptive_plan");
+  assert.match(present.body.input_fingerprint, /^[a-f0-9]{64}$/);
 });

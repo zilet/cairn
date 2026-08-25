@@ -178,6 +178,7 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
   const present = agent.present !== false;
   const off = options.disabled.has(name) || !present;
   const chip = CairnSettingsClient.agentChipState(agent);
+  const availabilityNote = CairnSettingsClient.agentAvailabilityNote(agent);
   const cached = options.agentInfo[name];
   const infoLine = settingsAgentInfoLine(cached);
   const models = options.agentModels[name];
@@ -209,6 +210,7 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
         </div>
         ${!present && agent.installable ? `<div class="agent-card-note">Optional · installs into your persistent Cairn tools volume only when you choose it.</div>` : ""}
         ${agent.configured === false ? `<div class="agent-card-note">Not in rotation until connected${agent.can_login ? " — tap Connect" : ""}.</div>` : ""}
+        ${availabilityNote ? `<div class="agent-card-note agent-card-note-limit">${escHtml(availabilityNote)}</div>` : ""}
         ${infoLine ? `<div class="agent-info-line">${infoLine}</div>` : ""}
         ${Array.isArray(models) ? `<ul class="agent-models">${modelsList}</ul>` : ""}
       </div>`;

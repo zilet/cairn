@@ -3226,7 +3226,8 @@ declare global {
           recentPage?: number;
         }
       ): string;
-      agentChipState(agent: Record<string, unknown>): { cls: string; label: string };
+      agentChipState(agent: Record<string, unknown>, now?: Date): { cls: string; label: string };
+      agentAvailabilityNote(agent: Record<string, unknown>, now?: Date): string;
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;
     };
 

@@ -8,10 +8,18 @@ type HealthDocMarker = {
   flag?: unknown;
 };
 
+type HealthDocIngestState = {
+  mode?: unknown;
+  reason?: unknown;
+  detail?: unknown;
+  at?: unknown;
+};
+
 type HealthDocParsed = {
   markers?: HealthDocMarker[];
   clinical_facts?: unknown[];
   type?: unknown;
+  ingest?: HealthDocIngestState;
 };
 
 type HealthDocRow = {
@@ -84,6 +92,14 @@ function markersTable(parsed: HealthDocParsed | null | undefined): string {
   return `<table class="hmarkers"><tbody>${rows}</tbody></table>`;
 }
 
+// This import completed on its deterministic read alone — the labs, vitals and
+// facts came straight out of the export, and the written summary never happened.
+// Saying "analyzed" over that would be the card claiming a read it didn't get.
+function deterministicIngest(parsed: HealthDocParsed | null | undefined): HealthDocIngestState | null {
+  const ingest = parsed && parsed.ingest && typeof parsed.ingest === "object" ? parsed.ingest : null;
+  return ingest && ingest.mode === "deterministic" ? ingest : null;
+}
+
 function docCollapsible(doc: HealthDocRow | null | undefined): boolean {
   const parsed = parsedDoc(doc);
   const markers = parsed && Array.isArray(parsed.markers) ? parsed.markers : [];
@@ -99,13 +115,22 @@ function healthDocInner(doc: HealthDocRow): string {
   if (enrichmentActive(status)) analysisBadge = `<span class="enr enr-pending">analyzing...</span>`;
   else if (status === "failed") analysisBadge = `<span class="enr" style="color:var(--warn)">analysis failed</span>`;
   else if (status === "skipped") analysisBadge = `<span class="enr enr-done">not analyzed</span>`;
-  else if (status === "done") analysisBadge = `<span class="enr enr-done" title="analyzed">✦ analyzed</span>`;
+  const readFromData = status === "done" ? deterministicIngest(parsed) : null;
+  if (status === "done") {
+    analysisBadge = readFromData
+      ? `<span class="enr enr-done" title="read straight from the export">read from data</span>`
+      : `<span class="enr enr-done" title="analyzed">✦ analyzed</span>`;
+  }
 
   let detail = "";
   if (status === "done") {
     if (doc.summary) detail += `<div class="sess-line" style="margin-top:7px">${escHtml(doc.summary)}</div>`;
     detail += markersTable(parsed);
     if (parsed && parsed.type && !doc.summary) detail += `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.type)}</div>`;
+    if (readFromData) {
+      const why = String(readFromData.detail || "").trim();
+      detail += `<div class="sess-line" style="color:var(--muted);margin-top:7px">Labs, vitals and facts were read straight from the export. The written summary is waiting for a coach${why ? ` — ${escHtml(why)}` : ""}. Re-analyze once one is available.</div>`;
+    }
   } else if (enrichmentActive(status)) {
     detail = `<div class="sess-line" style="color:var(--muted)">Reading the document and splitting it by date...</div>`;
   } else if (status === "failed") {
@@ -122,10 +147,12 @@ function healthDocInner(doc: HealthDocRow): string {
     return flag && flag !== "normal" && flag !== "optimal" && flag !== "in range" && flag !== "in-range";
   }).length;
   const teaser = markers.length
-    ? `${markers.length} marker${markers.length === 1 ? "" : "s"}${flagged ? ` · ${flagged} flagged` : " · all in range"}`
+    ? `${markers.length} marker${markers.length === 1 ? "" : "s"}${flagged ? ` · ${flagged} flagged` : " · all in range"}${readFromData ? " · read from data" : ""}`
     : facts.length
-      ? `${facts.length} fact${facts.length === 1 ? "" : "s"}`
-    : "Analyzed";
+      ? `${facts.length} fact${facts.length === 1 ? "" : "s"}${readFromData ? " · labs and vitals filed by date" : ""}`
+      : readFromData
+        ? "Read from data"
+        : "Analyzed";
 
   const head = `<div class="sess-head${collapsible ? " hdoc-head" : ""}"${collapsible ? ` data-hdoc-toggle role="button" tabindex="0" aria-label="Toggle record detail"` : ""}>
       <span class="sess-date">${escHtml(healthKindLabel(doc.kind))}${doc.doc_date ? ` · ${escHtml(doc.doc_date)}` : ""}${derived ? `<span class="hdoc-tag">from import</span>` : ""}</span>

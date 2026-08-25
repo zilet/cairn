@@ -225,6 +225,15 @@ export interface ClientRouteTask {
   label: string;
 }
 
+/** Why a provider is sitting out, and until when. Null when it is available. */
+export interface ClientAgentAvailability {
+  state: string;
+  detail: string | null;
+  resets_at: string | null;
+  hold_until: string | null;
+  window: string | null;
+}
+
 export interface ClientAgentInfo {
   name?: string;
   description?: string | null;
@@ -233,6 +242,7 @@ export interface ClientAgentInfo {
   usable?: boolean;
   present?: boolean;
   configured?: boolean | null;
+  availability?: ClientAgentAvailability | null;
   auth_state?: string | null;
   default_model?: string | null;
   models?: string[];
@@ -3044,7 +3054,7 @@ export interface ClientApiResponses {
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/session-suggest": ClientSessionSuggestResponse;
   "/api/daily-session": ClientDailySessionComposition | null;
-  "/api/daily-session/preview": ClientDailySessionPreview;
+  "/api/daily-session/preview": ClientDailySessionPreview | null;
   "/api/daily-session/prepare": ClientDailySessionPrepareResponse;
   "/api/daily-session/outcome": ClientDailySessionOutcomeRead | null;
   "/api/session-primer": ClientSessionPrimer | null;

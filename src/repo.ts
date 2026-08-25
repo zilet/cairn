@@ -32,6 +32,7 @@ export * from "./repo/settings.js";
 export * from "./repo/apple-health.js";
 export * from "./repo/art-ledger.js";
 export * from "./repo/agent-telemetry.js";
+export * from "./repo/agent-availability.js"; // durable provider holds (quota/rate/payment/auth)
 export * from "./repo/diagnostics.js";
 export * from "./repo/request-metrics.js";
 export * from "./repo/app-state.js";

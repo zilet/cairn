@@ -529,3 +529,38 @@ test("renderFeedback: a failed save rolls back the dots and does NOT collapse", 
   assert.doesNotMatch(slot.innerHTML, /Noted — it'll shape next week\./);
   assert.deepEqual(toasts, ["Couldn't save that — try again."]);
 });
+
+// `/training-symptoms` needs a calendar day. A session row without `date` and a
+// state without `logDate` used to send the literal string "undefined", which the
+// server answered 400 — a self-inflicted api_failure in the operator log for a
+// request that could never have succeeded.
+test("pain lifecycle: no valid date means no request at all", async () => {
+  const ctx = loadFeedback();
+  const slot = makeDoneSlot();
+  const { deps, requests } = makeLifecycleDeps(ctx, [symptom(7, "active")]);
+  deps.state.logDate = undefined;
+  ctx.CairnTodaySessionFeedback.renderFeedback(slot, { soreness: 2 }, deps);
+  await flush();
+  assert.equal(
+    requests.filter((request) => request.path.includes("training-symptoms")).length,
+    0,
+    "a day Cairn cannot name is never asked for"
+  );
+});
+
+test("pain lifecycle: a malformed session date is refused before it reaches the API", async () => {
+  const ctx = loadFeedback();
+  const slot = makeDoneSlot();
+  const { deps, requests } = makeLifecycleDeps(ctx, [symptom(7, "active")]);
+  ctx.CairnTodaySessionFeedback.renderFeedback(slot, { date: "yesterday", soreness: 2 }, deps);
+  await flush();
+  assert.equal(requests.filter((request) => request.path.includes("training-symptoms")).length, 0);
+
+  // …and a well-formed one still goes through unchanged.
+  const fresh = makeLifecycleDeps(ctx, [symptom(7, "active")]);
+  ctx.CairnTodaySessionFeedback.renderFeedback(makeDoneSlot(), { date: "2026-07-16", soreness: 2 }, fresh.deps);
+  await flush();
+  assert.ok(
+    fresh.requests.some((request) => request.path === "/training-symptoms?on=2026-07-16&include_resolved=1")
+  );
+});

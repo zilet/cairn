@@ -480,3 +480,42 @@ test("current-build diagnostics determine health while prior-build incidents rem
   assert.match(currentWarning, /current slow/);
   assert.match(currentWarning, /9 earlier-build events remain/);
 });
+
+// The sink bumps created_at on every hit of a coalesced row, so a stream that
+// has been running for nine days reads as a one-second burst unless first_seen
+// is shown next to it.
+test("a coalesced diagnostic row shows the span it covers, not just its last hit", () => {
+  const settings = loadSettingsClient();
+  const options = { relTime: (value) => `rel(${value})`, source: "all", severity: "all", readinessStatus: "ready" };
+  const card = (event) =>
+    settings.diagnosticsCard({ window_days: 30, total: 9, issues: [], recent: [event], slow: [] }, options);
+
+  const spanning = card({
+    source: "client",
+    kind: "api_failure",
+    level: "warning",
+    route: "/api/insights",
+    occurrence_count: 9,
+    first_seen: "2026-08-16 09:00:00",
+    created_at: "2026-08-25 09:00:00",
+  });
+  assert.match(spanning, /First seen/);
+  assert.match(spanning, /datetime="2026-08-16T09:00:00Z"/);
+  assert.match(spanning, /Last seen/);
+  assert.match(spanning, /datetime="2026-08-25T09:00:00Z"/);
+  assert.match(spanning, /9×/, "the summary says how many hits the row stands for");
+  assert.doesNotMatch(spanning, /Captured/, "a nine-day stream is not one capture");
+
+  // A genuine single event keeps the simpler, quieter line.
+  const single = card({
+    source: "client",
+    kind: "render_error",
+    level: "error",
+    route: "/api/today",
+    occurrence_count: 1,
+    first_seen: "2026-08-25 09:00:00",
+    created_at: "2026-08-25 09:00:00",
+  });
+  assert.match(single, /Captured/);
+  assert.doesNotMatch(single, /First seen/);
+});

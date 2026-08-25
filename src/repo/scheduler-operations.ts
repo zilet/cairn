@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "../db.js";
+import { PROVIDER_UNAVAILABLE_MIN_BACKOFF_MS, ProviderUnavailableError } from "../provider-unavailable.js";
 
 export type SchedulerOperationStatus = "pending" | "running" | "retry_wait" | "succeeded" | "no_op" | "exhausted";
 
@@ -33,6 +34,16 @@ export interface SchedulerRunResult<T = unknown> {
   operation: SchedulerOperation;
   value?: T;
   error: string | null;
+  /**
+   * The ERROR OBJECT the task threw, alongside the sanitized `last_error` line.
+   *
+   * `last_error` is a redacted string, so a caller that wanted to REPORT the failure had
+   * to re-wrap it in a fresh `new Error(...)` — which discarded the class and left
+   * telemetry naming every scheduled failure "Error", provider exhaustion included.
+   * Present only on the attempt that actually failed; a row read back from an earlier
+   * attempt still carries `last_error` and no cause.
+   */
+  cause?: unknown;
 }
 
 export interface SchedulerClaimResult {
@@ -338,12 +349,26 @@ export async function runSchedulerOperation<T>(
       error: null,
     };
   } catch (error) {
-    const failed = failSchedulerOperation(claim, error, opts) ?? getSchedulerOperation(operation, slotStamp)!;
+    // A PROVIDER OUTAGE IS WAITED OUT, NOT HAMMERED. The ordinary ladder retries in
+    // fifteen minutes, which is the right answer for a transient fault and the wrong one
+    // for a weekly usage limit: five attempts inside a day, five identical rows, and the
+    // provider no closer to being available. When the ladder is on its defaults, a typed
+    // provider-unavailable failure waits hours instead — at least PROVIDER_UNAVAILABLE_
+    // MIN_BACKOFF_MS, and longer when a provider itself said when it resets. A caller
+    // that passed its own backoff schedule (the tests do) keeps it exactly.
+    const providerBackoff =
+      error instanceof ProviderUnavailableError && !opts.backoffMs?.length
+        ? [Math.max(PROVIDER_UNAVAILABLE_MIN_BACKOFF_MS, error.retryAfterMs ?? 0)]
+        : undefined;
+    const failed =
+      failSchedulerOperation(claim, error, providerBackoff ? { ...opts, backoffMs: providerBackoff } : opts) ??
+      getSchedulerOperation(operation, slotStamp)!;
     return {
       attempted: true,
       status: failed.status,
       operation: failed,
       error: failed.last_error,
+      cause: error,
     };
   }
 }

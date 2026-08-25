@@ -1683,6 +1683,8 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .actlog-warning{color:var(--gold-deep);background:rgba(184,132,35,.12);border:1px solid rgba(184,132,35,.24)}
 .actlog-error{color:var(--warn);background:rgba(161,67,52,.11);border:1px solid rgba(161,67,52,.23)}
 .actlog-auth{color:var(--rust);background:rgba(150,81,56,.12);border:1px solid rgba(150,81,56,.22)}
+/* A provider limit is a schedule, not a fault — amber (gold-deep), never --warn. */
+.actlog-limit{color:var(--gold-deep);background:rgba(138,109,46,.11);border:1px solid rgba(138,109,46,.24)}
 .actlog-retry{color:var(--ink-2);background:var(--card-2);border:1px solid var(--line-2)}
 @media (max-width:440px){
   .actlog-row{flex-wrap:wrap;gap:4px 8px}
@@ -3703,9 +3705,13 @@ body.swr-busy::after{
 .agent-chip-connect{color:var(--accent);background:var(--accent-wash)}
 .agent-chip-installed{color:var(--ink-2);background:var(--card);border:1px solid var(--line-2)}
 .agent-chip-absent{color:var(--muted);background:var(--card);border:1px solid var(--line-2)}
+/* Out of quota / credit / throttled: readable amber, quiet. Cairn is already
+   routing around it, so the chip informs — it never asks for anything. */
+.agent-chip-limit{color:var(--gold-deep);background:rgba(138,109,46,.1)}
 
 /* read-only info line + lazy models disclosure (visibility only, no model picker) */
 .agent-card-note{margin-top:9px;font-size:.74rem;color:var(--muted);font-style:italic}
+.agent-card-note-limit{color:var(--gold-deep);font-style:normal}
 .agent-info-line{margin-top:9px;padding-top:9px;border-top:1px solid var(--line);
   font-size:.76rem;color:var(--ink-2);font-variant-numeric:lining-nums}
 .agent-upd{color:var(--gold);font-weight:600}

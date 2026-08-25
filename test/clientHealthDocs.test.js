@@ -94,3 +94,40 @@ test("health document teaser names structured clinical facts", () => {
   assert.match(inner, /Visit Note/);
   assert.match(inner, /2 facts/);
 });
+
+test("a deterministically-read import says so instead of claiming it was analyzed", () => {
+  const docs = loadHealthDocs();
+  const row = {
+    id: 4,
+    kind: "clinical_summary",
+    doc_date: "2026-08-24",
+    original_name: "health_summary_mychart.zip",
+    has_file: true,
+    enrichment_status: "done",
+    parsed_json: JSON.stringify({
+      markers: [],
+      clinical_facts: [{ kind: "allergy", name: "No known active allergies" }],
+      ingest: {
+        mode: "deterministic",
+        reason: "weekly_limit",
+        detail: "Claude: weekly limit, resets Tue 8:00 AM · Grok: <needs credit>",
+        at: "2026-08-24T12:00:00.000Z",
+      },
+    }),
+  };
+
+  const inner = docs.healthDocInner(row);
+  assert.match(inner, /read from data/);
+  assert.doesNotMatch(inner, /✦ analyzed/);
+  assert.match(inner, /Labs, vitals and facts were read straight from the export/);
+  assert.match(inner, /waiting for a coach — Claude: weekly limit, resets Tue 8:00 AM/);
+  assert.match(inner, /Re-analyze once one is available/);
+  // Every rendered string still goes through the escaper.
+  assert.match(inner, /&lt;needs credit&gt;/);
+  assert.doesNotMatch(inner, /<needs credit>/);
+
+  // An ordinary analyzed row is untouched.
+  const analyzed = { ...row, parsed_json: JSON.stringify({ markers: [{ name: "LDL-C", value: 101, flag: "high" }] }) };
+  assert.match(docs.healthDocInner(analyzed), /✦ analyzed/);
+  assert.doesNotMatch(docs.healthDocInner(analyzed), /read from data/);
+});

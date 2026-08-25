@@ -1374,7 +1374,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   parsed INTEGER,                     -- 1 = output parsed as JSON
   latency_ms INTEGER,                 -- wall-clock for this attempt
   tried_json INTEGER,                 -- 1 = the one-shot JSON-repair retry was used
-  status TEXT,                        -- ok | auth_required | invalid_output | empty_reply | error | timeout | ...
+  status TEXT,                        -- ok | auth_required | quota_exhausted | rate_limited | payment_required |
+                                      -- permission_denied | invalid_output | empty_reply | error | timeout | ...
   error_class TEXT,                   -- compact machine-readable cause, e.g. auth_required/process_error
   error_message TEXT,                 -- short sanitized operator-facing detail; never prompt/output bodies
   exit_code INTEGER,
@@ -1396,15 +1397,33 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at);
 
+-- Provider availability: the durable half of "can this CLI answer right now?".
+-- The circuit breaker in agents.ts is process-local BY DESIGN (a fresh boot
+-- deserves a fresh chance), but a weekly quota outlives a container restart, so
+-- the provider's own stated reset is persisted here. One row per agent; a
+-- success clears it. Regenerable operator state — never health data, never raw
+-- CLI output (only the small taxonomy in src/agentAvailability.ts).
+CREATE TABLE IF NOT EXISTS agent_availability (
+  agent TEXT PRIMARY KEY,
+  state TEXT NOT NULL,                -- quota_exhausted | rate_limited | auth_required | payment_required | ...
+  detail TEXT,                        -- short, user-safe sentence (never raw CLI text)
+  "window" TEXT,                      -- 5h | 7d when the provider named its limit window
+  resets_at TEXT,                     -- ISO instant the provider said the limit lifts
+  hold_until TEXT,                    -- ISO instant until which the rotation prefers others
+  observed_at TEXT NOT NULL,
+  op TEXT,                            -- the operation that observed it
+  streak INTEGER NOT NULL DEFAULT 0   -- consecutive observations of this same state
+);
+
 -- Local-first diagnostic spine for browser/API/process failures. Every write is
 -- bounded + sanitized before it reaches this table; payload bodies, query values,
 -- prompts, health data, credentials and raw agent output never belong here.
 -- Regenerable operator telemetry, retained for 30 days by the repo write path.
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  source TEXT NOT NULL,                -- client | api | process | scheduler
+  source TEXT NOT NULL,                -- agent | client | api | mcp | process | scheduler | worker
   kind TEXT NOT NULL,                  -- api_failure | render_error | http_error | slow_request | ...
-  level TEXT NOT NULL,                 -- warning | error
+  level TEXT NOT NULL,                 -- info | warning | error
   operation TEXT,
   route TEXT,
   status INTEGER,

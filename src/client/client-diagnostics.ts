@@ -39,21 +39,37 @@ const CLIENT_DIAGNOSTIC_BATCH = 20;
 const CLIENT_DIAGNOSTIC_DEDUPE_MS = 30_000;
 const CLIENT_DIAGNOSTIC_FLUSH_MS = 750;
 const PERMANENT_PAYLOAD_FAILURES = new Set([400, 413, 422]);
-const CLIENT_API_ROUTE_FAMILIES = new Set([
-  "activities", "agent", "agent-clis", "agent-jobs", "agent-stats", "agents", "art", "blood-pressure",
-  "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "calibration", "cardio", "chat", "chat-images",
-  "checkins", "coach", "coaching-focus", "context-effect", "context-events", "dexa-targeting", "diagnostics",
-  "directives", "endurance-goal", "endurance-prs", "evidence", "exercise", "exercises", "export", "family",
-  "food-notes", "frequent-foods", "garmin", "goal", "goal-checkin", "guidelines", "health", "health-docs",
-  "health-export", "health-metrics", "health-report", "injury-impacts", "insights", "journey", "last-set",
-  "learned-timeline", "learnings", "markers", "meal-plans", "mealplans", "memory", "muscle-load",
-  "muscle-trajectory", "next-step", "nutrition", "onboard", "performance", "plan", "profile", "program",
-  "program-state", "progress", "proposals", "reaction-model", "ready", "recent-training", "recovery", "research",
-  "reset", "run-compliance", "run-plan", "run-zones", "search", "session-suggest", "sessions", "sets", "settings",
-  "since-last", "stats", "suggestions", "supplements", "symptom-links", "telemetry", "test-week", "today",
-  "today-agenda", "today-read", "training-agenda", "trajectory", "turns", "update-check", "update-status", "version", "volume",
-  "week-ahead", "whole-person-trajectory",
-]);
+// MIRROR of DIAGNOSTIC_ROUTE_FAMILIES in src/contracts/diagnostic-route-families.ts.
+// The client build transpiles each module in isolation (no imports, no bundler),
+// so this copy cannot be an import; test/diagnosticRouteFamilies.test.js fails
+// if the two lists ever diverge. Add a family in the contract first.
+const CLIENT_API_ROUTE_FAMILIES = [
+  "activities", "agent", "agent-clis", "agent-jobs", "agent-stats", "agents", "apple-health", "art",
+  "blood-pressure", "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "calibration",
+  "cardio", "chat", "chat-images", "checkins", "coach", "coaching-focus", "context-effect",
+  "context-events", "dexa-targeting", "diagnostics", "directives", "endurance-goal", "endurance-prs",
+  "evidence", "exercise", "exercises", "export", "family", "food-notes", "frequent-foods", "garmin",
+  "goal", "goal-checkin", "guidelines", "health", "health-docs", "health-export", "health-metrics",
+  "health-report", "injury-impacts", "insights", "journey", "last-set", "learned-timeline", "learnings",
+  "markers", "meal-plans", "mealplans", "memory", "muscle-load", "muscle-trajectory", "next-step",
+  "nutrition", "onboard", "performance", "plan", "profile", "program", "program-state", "progress",
+  "proposals", "reaction-model", "ready", "recent-training", "recovery", "research", "reset",
+  "run-compliance", "run-plan", "run-zones", "search", "session-primer", "session-suggest", "sessions",
+  "sets", "settings", "since-last", "stats", "strength-journey", "suggestions", "supplements",
+  "symptom-links", "team-week", "telemetry", "test-week", "today", "today-agenda", "today-plan-day",
+  "today-read", "training-agenda", "training-symptoms", "trajectory", "turns", "update-check",
+  "update-status", "version", "volume", "week-ahead", "week-wins", "whole-person-trajectory",
+];
+const CLIENT_API_ROUTE_FAMILY_SET = new Set(CLIENT_API_ROUTE_FAMILIES);
+// Same bound as the contract's DIAGNOSTIC_ROUTE_SEGMENT: an unknown family is
+// still recorded under its own name (bounded to lowercase/digits/hyphen, <=40)
+// rather than disappearing, which is what made the server print "none".
+const CLIENT_API_ROUTE_SEGMENT = /^[a-z0-9][a-z0-9-]{0,39}$/;
+// Frames from the api() plumbing itself: a network outage builds its
+// CairnApiError there, so an error that escapes a renderer would otherwise
+// point at the constructor instead of the code that actually failed.
+const CLIENT_DIAGNOSTIC_INTERNAL_FRAME =
+  /^\s*at\s+(?:new\s+)?(?:CairnApiError|reportApiError|diagnosticApiRoute|normalizeApiRoute|isTransientApiFailure)\b/;
 
 function clientDiagnosticBound(value: unknown, max: number): string {
   const withoutControls = Array.from(String(value ?? ""), (char) => {
@@ -69,8 +85,9 @@ function clientDiagnosticNormalizeRoute(value: unknown): string {
   try {
     const parsed = new URL(raw, "https://cairn.invalid");
     const segments = parsed.pathname.replace(/\/{2,}/g, "/").split("/").filter(Boolean);
-    const family = segments[0] === "api" ? segments[1] : segments[0];
-    return CLIENT_API_ROUTE_FAMILIES.has(family) ? `/api/${family}` : "";
+    const family = String((segments[0] === "api" ? segments[1] : segments[0]) || "").toLowerCase();
+    if (CLIENT_API_ROUTE_FAMILY_SET.has(family)) return `/api/${family}`;
+    return CLIENT_API_ROUTE_SEGMENT.test(family) ? `/api/${family}` : "";
   } catch {
     return "";
   }
@@ -223,7 +240,9 @@ function createClientDiagnosticReporter(
     // in bounded stack frames after dropping Error.stack's message-bearing line.
     const name = clientDiagnosticBound(row?.name || "Error", 60);
     const message = row ? `${name}: browser operation failed` : "Unhandled promise rejection";
-    const stack = row?.stack == null ? undefined : String(row.stack).split(/\r?\n/).slice(1).join("\n");
+    const frames = row?.stack == null ? [] : String(row.stack).split(/\r?\n/).slice(1);
+    while (frames.length && CLIENT_DIAGNOSTIC_INTERNAL_FRAME.test(frames[0])) frames.shift();
+    const stack = row?.stack == null ? undefined : frames.join("\n");
     return report({
       kind,
       level: "error",
@@ -311,6 +330,7 @@ Object.assign(globalThis, {
   CairnClientDiagnostics,
   CairnClientDiagnosticsCore: {
     createClientDiagnosticReporter,
+    families: CLIENT_API_ROUTE_FAMILIES,
     normalizeRoute: clientDiagnosticNormalizeRoute,
     sanitize: clientDiagnosticSanitize,
     hash: clientDiagnosticHash,

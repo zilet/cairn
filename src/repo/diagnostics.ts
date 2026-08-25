@@ -1,9 +1,13 @@
+import {
+  boundedDiagnosticRouteFamily,
+  DIAGNOSTIC_ROUTE_FAMILY_SET,
+} from "../contracts/diagnostic-route-families.js";
 import { db } from "../db.js";
 import { getBuildInfo } from "../build-info.js";
 import { getRequestPerformance, normalizeServerApiRouteTemplate, REQUEST_METRIC_LIMITS } from "./request-metrics.js";
 
-export type DiagnosticSource = "client" | "api" | "mcp" | "process" | "scheduler" | "worker";
-export type DiagnosticLevel = "warning" | "error";
+export type DiagnosticSource = "agent" | "client" | "api" | "mcp" | "process" | "scheduler" | "worker";
+export type DiagnosticLevel = "info" | "warning" | "error";
 
 export interface DiagnosticEventInput {
   source: DiagnosticSource;
@@ -40,8 +44,8 @@ export interface ClientDiagnosticEvent {
   fingerprint: string;
 }
 
-const SOURCES = new Set<DiagnosticSource>(["client", "api", "mcp", "process", "scheduler", "worker"]);
-const LEVELS = new Set<DiagnosticLevel>(["warning", "error"]);
+const SOURCES = new Set<DiagnosticSource>(["agent", "client", "api", "mcp", "process", "scheduler", "worker"]);
+const LEVELS = new Set<DiagnosticLevel>(["info", "warning", "error"]);
 const CLIENT_KINDS = new Set<ClientDiagnosticEvent["kind"]>([
   "api_failure",
   "render_error",
@@ -49,21 +53,6 @@ const CLIENT_KINDS = new Set<ClientDiagnosticEvent["kind"]>([
   "unhandled_rejection",
 ]);
 const CLIENT_TABS = new Set(["today", "progress", "stand", "plan", "chat", "settings", "session", "me"]);
-const CLIENT_API_CATEGORIES = new Set([
-  "activities", "agent", "agent-clis", "agent-jobs", "agent-stats", "agents", "art", "blood-pressure",
-  "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "calibration", "cardio", "chat", "chat-images",
-  "checkins", "coach", "coaching-focus", "context-effect", "context-events", "dexa-targeting", "diagnostics",
-  "directives", "endurance-goal", "endurance-prs", "evidence", "exercise", "exercises", "export", "family",
-  "food-notes", "frequent-foods", "garmin", "goal", "goal-checkin", "guidelines", "health", "health-docs",
-  "health-export", "health-metrics", "health-report", "injury-impacts", "insights", "journey", "last-set",
-  "learned-timeline", "learnings", "markers", "meal-plans", "mealplans", "memory", "muscle-load",
-  "muscle-trajectory", "next-step", "nutrition", "onboard", "performance", "plan", "profile", "program",
-  "program-state", "progress", "proposals", "reaction-model", "ready", "recent-training", "recovery", "research",
-  "reset", "run-compliance", "run-plan", "run-zones", "search", "session-suggest", "sessions", "sets", "settings",
-  "since-last", "stats", "suggestions", "supplements", "symptom-links", "telemetry", "test-week", "today",
-  "today-agenda", "today-read", "trajectory", "turns", "update-check", "update-status", "version", "volume",
-  "week-ahead", "whole-person-trajectory",
-]);
 const DIAGNOSTIC_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const DIAGNOSTIC_RETENTION_DAYS = 30;
 const DIAGNOSTIC_ROW_CAP = 20_000;
@@ -143,6 +132,24 @@ function boundedRelease(value: unknown): string | null {
   return safe || null;
 }
 
+// The route families THIS build serves, handed over by src/api.ts once the routers
+// are mounted (a value, not an import — repo must not depend on the API layer).
+// Empty until then: a context with no HTTP surface (a test, a one-off script) has
+// nothing to check against, so the bounded-segment shape stands alone there.
+let mountedApiRouteFamilies: ReadonlySet<string> = new Set<string>();
+
+export function registerMountedApiRouteFamilies(families: Iterable<string>): void {
+  mountedApiRouteFamilies = new Set([...families].map((f) => String(f).toLowerCase()).filter(Boolean));
+}
+
+/** Test seam: forget the mounted set, restoring the shape-only bound. */
+export function resetMountedApiRouteFamilies(): void {
+  mountedApiRouteFamilies = new Set<string>();
+}
+
+/** The family every route this server does not serve collapses into. */
+const UNKNOWN_ROUTE_FAMILY = "unknown";
+
 export function normalizeDiagnosticRoute(value: unknown): string | null {
   const raw = scalarText(value)?.trim();
   if (!raw) return null;
@@ -155,8 +162,18 @@ export function normalizeDiagnosticRoute(value: unknown): string | null {
   pathname = pathname.replace(/\/{2,}/g, "/");
   if (pathname === "/api" || pathname === "/api/") return "/api";
   const [root, category] = pathname.split("/").slice(1);
-  if (root !== "api" || !category || !CLIENT_API_CATEGORIES.has(category)) return null;
-  return `/api/${category}`;
+  if (root !== "api" || !category) return null;
+  // A known family passes as itself. An unrecognized one still passes when it fits
+  // the hard-bounded segment shape AND this server actually mounts it — so a brand
+  // -new endpoint appears under its own name the day it ships, while an invented
+  // segment cannot mint a new row in a durable table. `diagnostic_events` is keyed
+  // by route, so an unbounded vocabulary here is unbounded CARDINALITY there, and
+  // the client is the one supplying the string.
+  const family = boundedDiagnosticRouteFamily(category);
+  if (!family) return null;
+  if (DIAGNOSTIC_ROUTE_FAMILY_SET.has(family)) return `/api/${family}`;
+  if (!mountedApiRouteFamilies.size || mountedApiRouteFamilies.has(family)) return `/api/${family}`;
+  return `/api/${UNKNOWN_ROUTE_FAMILY}`;
 }
 
 function normalizedClientTab(value: unknown): string | null {
@@ -172,8 +189,28 @@ function normalizedClientRequestId(value: unknown): string | null {
     ? requestId : null;
 }
 
+/**
+ * The single fingerprint the browser is allowed to ASK for. A server restart or
+ * a dropped connection fails every in-flight route at once; per-route rows made
+ * one deploy read as ~15 distinct issues. The client coalesces the burst into
+ * one route-less event carrying this marker, and the server honours it so the
+ * 5-minute coalesce window folds the burst into a single row + occurrence_count.
+ */
+export const CLIENT_NETWORK_UNREACHABLE_FINGERPRINT = "network_unreachable";
+const CLIENT_NETWORK_UNREACHABLE_STORED = "client:api_failure:network:none";
+
 function clientFingerprint(event: { kind: ClientDiagnosticEvent["kind"]; method?: string | null; route?: string | null; status?: number | null }): string {
   return `client:${event.kind}:${event.method || "none"}:${event.route || "none"}:${event.status ?? "none"}`.slice(0, 120);
+}
+
+/** Server-owned fingerprint. The only client-supplied value honoured is the coalesced-outage marker. */
+function resolveClientFingerprint(
+  requested: unknown,
+  event: { kind: ClientDiagnosticEvent["kind"]; method?: string | null; route?: string | null; status?: number | null }
+): string {
+  if (event.kind === "api_failure" && requested === CLIENT_NETWORK_UNREACHABLE_FINGERPRINT && !event.route && !event.method)
+    return CLIENT_NETWORK_UNREACHABLE_STORED;
+  return clientFingerprint(event);
 }
 
 function finiteInteger(value: unknown, min: number, max: number): number | null {
@@ -347,23 +384,25 @@ export function parseClientDiagnosticBatch(body: unknown): ClientDiagnosticEvent
   if (!Array.isArray(events) || events.length < 1 || events.length > 20) return null;
   const parsed: ClientDiagnosticEvent[] = [];
   for (const value of events) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    // Validation is PER EVENT. Rejecting the whole batch over one bad row made
+    // the client shed every unrelated event queued behind it (the 400 branch of
+    // its flush drops the head item), so one unknown route family could erase a
+    // real error. A malformed event is dropped; its neighbours still land.
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const event = value as Record<string, unknown>;
-    if (!CLIENT_KINDS.has(event.kind as ClientDiagnosticEvent["kind"])) return null;
-    if (!LEVELS.has(event.level as DiagnosticLevel)) return null;
-    if (typeof event.message !== "string" || typeof event.fingerprint !== "string") return null;
-    if (!event.message.trim()) return null;
-    if (event.stack != null && typeof event.stack !== "string") return null;
-    if (event.route != null && (typeof event.route !== "string" || !normalizeDiagnosticRoute(event.route))) return null;
-    if (event.method != null && (typeof event.method !== "string" || !/^[A-Za-z]{3,10}$/.test(event.method)))
-      return null;
-    if (event.status != null && finiteInteger(event.status, 100, 599) == null) return null;
-    if (event.duration_ms != null && finiteInteger(event.duration_ms, 0, 3_600_000) == null) return null;
-    if (event.request_id != null && typeof event.request_id !== "string") return null;
-    if (event.tab != null && typeof event.tab !== "string") return null;
-    if (event.online != null && typeof event.online !== "boolean") return null;
-    if (event.release != null && (typeof event.release !== "string" || !boundedRelease(event.release)))
-      return null;
+    if (!CLIENT_KINDS.has(event.kind as ClientDiagnosticEvent["kind"])) continue;
+    if (!LEVELS.has(event.level as DiagnosticLevel)) continue;
+    if (typeof event.message !== "string" || typeof event.fingerprint !== "string") continue;
+    if (!event.message.trim()) continue;
+    if (event.stack != null && typeof event.stack !== "string") continue;
+    if (event.route != null && (typeof event.route !== "string" || !normalizeDiagnosticRoute(event.route))) continue;
+    if (event.method != null && (typeof event.method !== "string" || !/^[A-Za-z]{3,10}$/.test(event.method))) continue;
+    if (event.status != null && finiteInteger(event.status, 100, 599) == null) continue;
+    if (event.duration_ms != null && finiteInteger(event.duration_ms, 0, 3_600_000) == null) continue;
+    if (event.request_id != null && typeof event.request_id !== "string") continue;
+    if (event.tab != null && typeof event.tab !== "string") continue;
+    if (event.online != null && typeof event.online !== "boolean") continue;
+    if (event.release != null && (typeof event.release !== "string" || !boundedRelease(event.release))) continue;
     const route = event.route == null ? null : normalizeDiagnosticRoute(event.route);
     const method = event.method == null ? null : String(event.method).toUpperCase();
     const status = event.status == null ? null : finiteInteger(event.status, 100, 599);
@@ -372,7 +411,12 @@ export function parseClientDiagnosticBatch(body: unknown): ClientDiagnosticEvent
       kind: event.kind as ClientDiagnosticEvent["kind"],
       level: event.level as DiagnosticLevel,
       message: clientDiagnosticMessage(event.kind as ClientDiagnosticEvent["kind"]),
-      fingerprint: clientFingerprint({ kind: event.kind as ClientDiagnosticEvent["kind"], route, method, status }),
+      fingerprint: resolveClientFingerprint(event.fingerprint, {
+        kind: event.kind as ClientDiagnosticEvent["kind"],
+        route,
+        method,
+        status,
+      }),
       stack: event.stack == null ? null : clientStackFrames(event.stack),
       route,
       method,
@@ -484,7 +528,7 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
               latest.route, latest.operation, latest.status, grouped.count,
               grouped.first_seen, grouped.last_seen, latest.message, latest.release
          FROM grouped JOIN scoped latest ON latest.id = grouped.latest_id
-        ORDER BY CASE latest.level WHEN 'error' THEN 0 ELSE 1 END,
+        ORDER BY CASE latest.level WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
                  grouped.last_seen DESC, grouped.count DESC
         LIMIT 100`
     )
@@ -536,7 +580,7 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
               latest.route, latest.operation, latest.status, grouped.count,
               grouped.first_seen, grouped.last_seen, latest.message, latest.release
          FROM grouped JOIN scoped latest ON latest.id = grouped.latest_id
-        ORDER BY CASE latest.level WHEN 'error' THEN 0 ELSE 1 END,
+        ORDER BY CASE latest.level WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
                  grouped.last_seen DESC, grouped.count DESC LIMIT 100`
     )
     .all(since, currentRelease)

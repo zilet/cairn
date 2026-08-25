@@ -11,7 +11,7 @@ import { sensorAgeDays } from "./sensor-freshness.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
-import { canonicalMarker, canonicalMarkerForReading } from "./marker-canon.js";
+import { canonicalMarker, canonicalMarkerForReading, normalizeMarkerName } from "./marker-canon.js";
 import { bumpMarkerDataVersion, currentMarkerDataVersion, resetMarkerDataVersion } from "./marker-cache.js";
 import { syncMeasuredRmrFromHealthDocs } from "./metabolism.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
@@ -692,12 +692,22 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
       ? p.markers
           .filter((m: any) => m && typeof m === "object")
           .slice(0, MAX_MARKERS_PER_PANEL)
-          .map((m: any) => ({
-            name: String(m.name ?? "").slice(0, 120),
-            value: typeof m.value === "number" ? m.value : m.value == null ? null : String(m.value).slice(0, 80),
-            unit: m.unit == null ? null : String(m.unit).slice(0, 40),
-            flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
-          }))
+          .map((m: any) => {
+            // getMarkerHistory reads the lab's PRINTED range off the stored marker
+            // (ref_low/ref_high, rescaled with any unit conversion), so a derived panel
+            // that drops it loses the source lab's own bounds for that reading.
+            const refLow = Number(m.ref_low);
+            const refHigh = Number(m.ref_high);
+            const out: Record<string, any> = {
+              name: String(m.name ?? "").slice(0, 120),
+              value: typeof m.value === "number" ? m.value : m.value == null ? null : String(m.value).slice(0, 80),
+              unit: m.unit == null ? null : String(m.unit).slice(0, 40),
+              flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
+            };
+            if (m.ref_low != null && Number.isFinite(refLow)) out.ref_low = refLow;
+            if (m.ref_high != null && Number.isFinite(refHigh)) out.ref_high = refHigh;
+            return out;
+          })
           // Drop a physiologically-impossible numeric reading (a transcription typo / unit
           // error) so it can't poison the connected brain's directives. Conservative — only
           // CLEAR impossibilities are skipped; qualitative + unknown-family values pass.
@@ -773,6 +783,55 @@ export function replaceHealthPanelsByType(
   deleteDerivedHealthDocsByType(sourceId, type);
   const typed = (Array.isArray(panels) ? panels : []).map((p) => ({ ...p, type }));
   return insertHealthPanels(sourceId, typed, originalName);
+}
+
+// Coexistence rule for one import that was read BOTH deterministically and by an
+// agent: for a given collection date, the deterministic reading of an analyte is
+// the source of truth, and the agent's transcription of that SAME analyte is
+// dropped — so one lipid panel never shows twice. Everything the deterministic
+// pass could not reach (a marker only the PDF prints, a battery it skipped) is
+// kept exactly as the agent read it. Matching is on the canonical marker key, so
+// "HDL Cholesterol" and "HDL-C" count as the same analyte. Rows of `keepType`
+// are the deterministic stream itself and are never touched.
+export function dropDuplicateMarkersByDate(
+  sourceId: number,
+  keepType: string,
+  markerKeysByDate: Map<string, Set<string>>
+): number {
+  if (!markerKeysByDate.size) return 0;
+  const rows = db
+    .prepare(`SELECT id, doc_date, parsed_json FROM health_documents WHERE id = ? OR source_doc_id = ?`)
+    .all(sourceId, sourceId) as any[];
+  let removed = 0;
+  for (const row of rows) {
+    const date = String(row.doc_date ?? "");
+    const keys = markerKeysByDate.get(date);
+    if (!keys || !keys.size) continue;
+    let parsed: any = null;
+    try {
+      parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+    } catch {
+      parsed = null;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    if (String(parsed.type ?? "") === keepType) continue;
+    const markers = Array.isArray(parsed.markers) ? parsed.markers : [];
+    if (!markers.length) continue;
+    const kept = markers.filter((m: any) => {
+      const name = String(m?.name ?? "");
+      if (!name) return true;
+      const key = canonicalMarker(name).key || normalizeMarkerName(name);
+      return !keys.has(key);
+    });
+    if (kept.length === markers.length) continue;
+    removed += markers.length - kept.length;
+    db.prepare(`UPDATE health_documents SET parsed_json = ? WHERE id = ?`).run(
+      JSON.stringify({ ...parsed, markers: kept }),
+      row.id
+    );
+  }
+  if (removed) bumpMarkerHistoryVersion();
+  return removed;
 }
 
 // Raw row incl. file_path — for internal use (enrichment, file streaming, delete).

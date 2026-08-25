@@ -1,5 +1,5 @@
 import * as repo from "./repo.js";
-import { runAgentWithFallback, setAgentRunSink } from "./agents.js";
+import { runAgentWithFallback, setAgentAvailabilitySink, setAgentDiagnosticSink, setAgentRunSink } from "./agents.js";
 import { buildCoachPrompt } from "./prompt.js";
 import {
   draftMealPlan,
@@ -25,7 +25,13 @@ import {
 } from "./domain/brain/autonomy-service.js";
 import { lastAppliedRunPlanDate } from "./repo/sessions.js";
 import { enqueueAgentJob, ensureWeekAheadJob } from "./agentJobs.js";
-import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
+import {
+  BoundaryApplyError,
+  recordAsyncFailure,
+  recordProviderUnavailable,
+  recordSchedulerFailure,
+} from "./diagnostics.js";
+import { ProviderUnavailableError, schedulerTaskError } from "./provider-unavailable.js";
 import { runWithTimeZone } from "./tz.js";
 import { addDaysISO, nowContext } from "./repo/shared.js";
 import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
@@ -178,7 +184,11 @@ async function runScheduled<T>(
     const result = await repo.runSchedulerOperation(operation, slotStamp, task);
     if (schedulerTerminal(result.status)) repo.setAppState(legacyStateKey, slotStamp);
     if (result.attempted && result.error) {
-      recordSchedulerFailure(operation, new Error(result.error));
+      // The CAUSE, not a re-wrap of the sanitized line. Re-wrapping was the last step of
+      // the chain that turned "every CLI is rate-limited" into `task_failure:…:Error`.
+      const cause = result.cause ?? new Error(result.error);
+      if (cause instanceof ProviderUnavailableError) recordProviderUnavailable(operation, cause);
+      else recordSchedulerFailure(operation, cause);
       console.error(`[scheduler] ${operation} ${result.status}: ${result.error}`);
     }
     return result;
@@ -270,6 +280,36 @@ export function startScheduler() {
   // Wire agent-run telemetry: agents.ts can't import repo.ts (circular), so it
   // emits through a registered sink. recordAgentRun is itself failure-safe.
   setAgentRunSink((r) => repo.recordAgentRun(r));
+  // Same reason, same shape: the rotation needs the durable provider holds
+  // (a weekly quota outlives a restart, unlike the process-local breaker) and a
+  // place to file ONE warning when every provider is unavailable.
+  setAgentAvailabilitySink({
+    held: (name, now) => {
+      const row = repo.getAgentAvailability(name, now);
+      return row
+        ? {
+            state: row.state as any,
+            detail: row.detail,
+            hold_until: row.hold_until,
+            resets_at: row.resets_at,
+          }
+        : null;
+    },
+    noteFailure: (name, failure, op) => {
+      repo.noteAgentFailure(name, failure, op);
+    },
+    clear: (name) => repo.clearAgentAvailability(name),
+  });
+  setAgentDiagnosticSink((e) =>
+    repo.recordDiagnosticEvent({
+      source: e.source,
+      kind: e.kind,
+      level: e.level,
+      operation: e.operation,
+      fingerprint: e.fingerprint,
+      message: e.message,
+    })
+  );
 
   // Announced structural changes land only when their stated natural boundary
   // arrives. This is deterministic, fast, and idempotent; it never calls an
@@ -309,10 +349,33 @@ export function startScheduler() {
       if (result.set_aside.length)
         console.log(`[brain] set aside ${result.set_aside.length} change(s) the record had outrun by their boundary.`);
       if (result.failed.length) {
-        recordAsyncFailure("apply", "announced_boundary", new Error("one or more changes need review"));
-        console.error(
-          `[brain] ${result.failed.length} announced change(s) could not be applied; they remain reviewable.`
-        );
+        // ONE EVENT PER TAXONOMY CLASS, AND ONLY FOR THE ENDINGS THAT ARE DEFECTS.
+        //
+        // This used to record a single `Error` for the whole pass, so the fingerprint was
+        // `worker:final_failure:apply:announced_boundary:Error` no matter which of six
+        // very different things happened — and four of those six are the system working
+        // as designed (the athlete moved the goal date; the plan was applied elsewhere;
+        // an age ceiling retired a draft; the evidence moved before the boundary). The
+        // result was one operator error a day that nothing could ever act on.
+        //
+        // Calm endings stay in the ledger and the log, where the athlete and the operator
+        // can read the actual per-decision reason. Only a broken reference or a throwing
+        // payload reaches the error counter, which exists to say something is wrong.
+        const counts = new Map<string, number>();
+        for (const outcome of result.failed_outcomes) {
+          if (outcome.calm) continue;
+          counts.set(outcome.class, (counts.get(outcome.class) ?? 0) + 1);
+        }
+        for (const [outcomeClass, count] of counts) {
+          recordAsyncFailure("apply", `announced_boundary:${outcomeClass}`, new BoundaryApplyError(outcomeClass));
+          console.error(`[brain] ${count} announced change(s) could not be applied (${outcomeClass}).`);
+        }
+        const calm = result.failed_outcomes.filter((outcome) => outcome.calm);
+        if (calm.length)
+          console.log(
+            `[brain] ${calm.length} announced change(s) ended without applying, as designed ` +
+              `(${[...new Set(calm.map((outcome) => outcome.class))].join(", ")}); they remain reviewable.`
+          );
       }
     } catch (e: any) {
       // Keep today's stamp: per-decision failures are isolated inside
@@ -631,7 +694,8 @@ export function startScheduler() {
           // guaranteed instant hit (no agent wait on the request path), like the
           // nightly Brief precompute → saveDayRead.
           const r = await generateInsight("auto", "connection", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
-          if (!r.ok && r.agent_status !== "ok") throw new Error(String(r.error || "insight provider unavailable"));
+          if (!r.ok && r.agent_status !== "ok")
+            throw schedulerTaskError("insight_last_date", r, "insight provider unavailable");
           console.log(
             r.ok ? `[proactive] stored a quiet insight.` : `[proactive] no genuine insight tonight (calm no-op).`
           );
@@ -642,7 +706,8 @@ export function startScheduler() {
         const weeklySlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
         await runScheduled("weekly_read_last_slot", weeklySlot, "weekly_read_last_slot", async () => {
           const r = await generateInsight("auto", "weekly_read", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
-          if (!r.ok && r.agent_status !== "ok") throw new Error(String(r.error || "weekly read provider unavailable"));
+          if (!r.ok && r.agent_status !== "ok")
+            throw schedulerTaskError("weekly_read_last_slot", r, "weekly read provider unavailable");
           console.log(
             r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`
           );
@@ -660,7 +725,12 @@ export function startScheduler() {
           "weekly_health_synthesis_last_slot",
           async () => {
             const r = await synthesizeHealth("auto");
-            if (!r.ok) throw new Error("health synthesis provider unavailable");
+            if (!r.ok)
+              throw schedulerTaskError(
+                "weekly_health_synthesis_last_slot",
+                r,
+                "health synthesis provider unavailable"
+              );
             console.log(`[proactive] refreshed the health synthesis.`);
             return { outcome: "succeeded", value: r };
           }
@@ -681,7 +751,8 @@ export function startScheduler() {
           "nutrition_checkin_last_slot",
           async () => {
             const r: any = await nutritionCheckin("auto", undefined, undefined, { initiated: "auto" });
-            if (!r.ok) throw new Error(String(r.error || "nutrition check-in provider unavailable"));
+            if (!r.ok)
+              throw schedulerTaskError("nutrition_checkin_last_slot", r, "nutrition check-in provider unavailable");
             const autonomy: any = r.autonomy;
             console.log(
               r.change
@@ -743,7 +814,7 @@ export function startScheduler() {
             const r: any = await draftMealPlan("auto", mealPlanInstruction, undefined, {
               coordinated_update: nutritionChanged,
             });
-            if (!r.ok) throw new Error(String(r.error || "meal-plan provider unavailable"));
+            if (!r.ok) throw schedulerTaskError("meal_plan_refresh_last_slot", r, "meal-plan provider unavailable");
             console.log(
               r.autonomy?.announced || r.autonomy?.pending
                 ? `[proactive] prepared the next meal plan; it lands at tomorrow's food-day boundary.`
@@ -772,7 +843,8 @@ export function startScheduler() {
             return { outcome: "no_op" };
           } else {
             const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION);
-            if (!r.ok) throw new Error(String(r.error || "program evolution provider unavailable"));
+            if (!r.ok)
+              throw schedulerTaskError("program_evolution_last_slot", r, "program evolution provider unavailable");
             // A successful fresh draft retires the prior unreviewed auto one (no pile-up).
             if (r.proposal?.id) {
               repo.supersedeAutoEvolutionDrafts(r.proposal.id);
@@ -810,7 +882,8 @@ export function startScheduler() {
           });
           if (draft) {
             const r: any = await evolveProgram("auto", repo.RECOVERY_WEEK_INSTRUCTION);
-            if (!r.ok) throw new Error(String(r.error || "recovery auto-draft provider unavailable"));
+            if (!r.ok)
+              throw schedulerTaskError("recovery_auto_draft_date", r, "recovery auto-draft provider unavailable");
             console.log(
               `[proactive] lead mode: auto-drafted the recovery week (lands at the boundary; Undo from Plan).`
             );
@@ -840,7 +913,12 @@ export function startScheduler() {
             if (trig.due && sigChanged && gapOk) {
               const task = `The athlete's logged training data has materially shifted: ${trig.reasons.join(" ")} Evolve the plan to address this NOW — rotate a close variation into what has stalled (don't just add load), build toward the under-trained groups (core / grip / a lagging pattern), and keep it fresh. Prefer 1-3 focused, well-justified changes. Explain each in plain words.`;
               const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION, undefined, { task });
-              if (!r.ok) throw new Error(String(r.error || "triggered evolution provider unavailable"));
+              if (!r.ok)
+                throw schedulerTaskError(
+                  "program_evolution_trigger_date",
+                  r,
+                  "triggered evolution provider unavailable"
+                );
               if (r.proposal?.id) {
                 // Shares the weekly draft's single-slot dedup AND records the condition
                 // it covered + resets the cooldown clock.

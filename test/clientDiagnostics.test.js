@@ -174,3 +174,45 @@ test("global handlers avoid persisting arbitrary rejection content and tab bound
   assert.match(tabs, /reportError\?\.\("render_error", err/);
   assert.match(tabs, /tabErrorState\(next\)/, "the existing recovery UI remains intact");
 });
+
+test("a render error points at the renderer, not at the api-client that reported it first", () => {
+  const loaded = loadDiagnostics();
+  const reporter = loaded.context.CairnClientDiagnosticsCore.createClientDiagnosticReporter({
+    storage: loaded.context.localStorage,
+    schedule: () => {},
+  });
+  const error = new Error("failed");
+  error.name = "CairnApiError";
+  error.stack = [
+    "CairnApiError: Could not reach Cairn",
+    "    at new CairnApiError (bundle-01-core.js:1764:27)",
+    "    at reportApiError (bundle-01-core.js:1801:5)",
+    "    at renderToday (bundle-03-today.js:220:11)",
+    "    at switchTab (bundle-01-core.js:87:9)",
+  ].join("\n");
+  reporter.reportError("render_error", error, { tab: "today" });
+  const stack = reporter.pending()[0].stack;
+  assert.doesNotMatch(stack, /CairnApiError|reportApiError/, "reporting plumbing is not the fault location");
+  assert.match(stack, /renderToday/, "the top frame is the code that actually failed");
+});
+
+test("the tab boundary does not re-report a failure api() already reported", () => {
+  const tabs = readFileSync(join(root, "src/client/app/tabs.ts"), "utf8");
+  // api() already emits an api_failure for the same outage; a second
+  // render_error row per outage is duplicate telemetry, not new information.
+  assert.match(tabs, /if \(!isApiFailure\(err\)\)/);
+  assert.match(tabs, /reportError\?\.\("render_error", err/);
+  assert.match(tabs, /tabErrorState\(next\)/, "the existing recovery UI remains intact");
+  // The class lives in another client module sharing one global scope, so the
+  // lookup must be lazy — a top-level reference would not hoist across scripts.
+  assert.match(tabs, /globalThis as \{ CairnApiError\?: unknown \}\)\.CairnApiError/);
+  assert.doesNotMatch(tabs, /^const \w+ = globalThis\.CairnApiError/m);
+});
+
+test("an unknown route family is recorded under its own bounded name, never as none", () => {
+  const normalize = loadDiagnostics().context.CairnClientDiagnosticsCore.normalizeRoute;
+  assert.equal(normalize("/training-symptoms?on=2026-08-25"), "/api/training-symptoms");
+  assert.equal(normalize("/api/week-wins"), "/api/week-wins");
+  assert.equal(normalize("/brand-new-endpoint/17"), "/api/brand-new-endpoint");
+  assert.equal(normalize("/Named Private Exercise"), "");
+});

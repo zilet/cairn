@@ -1551,3 +1551,77 @@ test("capture enqueue classifier treats network, timeout, and retryable HTTP as 
   assert.equal(isTransientApiFailure(error("http", 422)), false);
   assert.equal(isTransientApiFailure(error("invalid_json", 200)), false);
 });
+
+test("an unreachable Cairn reports ONE coalesced diagnostic, not one per route", async () => {
+  const loaded = loadApiClient();
+  const events = [];
+  loaded.context.CairnClientDiagnostics = { report: (event) => events.push(event) };
+  loaded.context.fetch = async () => {
+    throw new Error("connection refused");
+  };
+
+  // A restart fails every in-flight route at once. Before, each produced its own
+  // fingerprint and the operator list read ~15 issues for one deploy.
+  for (const path of ["/today", "/settings", "/insights", "/nutrition"])
+    await assert.rejects(loaded.context.api(path));
+
+  assert.equal(events.length, 4);
+  for (const event of events) {
+    assert.equal(event.kind, "api_failure");
+    assert.equal(event.level, "warning");
+    assert.equal(event.fingerprint, "network_unreachable", "one shared identity for the whole burst");
+    assert.equal(event.message, "network: Could not reach Cairn");
+    assert.equal(event.route, undefined, "a route makes the burst look like many distinct issues");
+    assert.equal(event.method, undefined);
+    assert.equal(event.status, undefined, "an outage never got a response, so it has no status");
+    assert.equal(typeof event.duration_ms, "number");
+    assert.equal(event.online, true);
+  }
+});
+
+test("a body read that breaks is an outage, not invalid JSON", async () => {
+  const bodyFailure = (name) => async () => ({
+    status: 200,
+    headers: { get: () => "" },
+    json: async () => {
+      const error = new Error(`${name} during body read`);
+      error.name = name;
+      throw error;
+    },
+  });
+
+  // The 20s GET timeout can fire DURING the body read, and the body stream can
+  // break outright on a server restart or an iOS background. Calling either
+  // "invalid_json" is what wrote api_failure rows carrying a 200 status.
+  for (const [name, kind] of [
+    ["AbortError", "timeout"],
+    ["TimeoutError", "timeout"],
+    ["TypeError", "network"],
+  ]) {
+    const loaded = loadApiClient();
+    const events = [];
+    loaded.context.CairnClientDiagnostics = { report: (event) => events.push(event) };
+    loaded.context.fetch = bodyFailure(name);
+    await assert.rejects(loaded.context.api("/insights"), (err) => {
+      assert.equal(err.kind, kind, `${name} must classify as ${kind}`);
+      assert.equal(err.status, null);
+      return true;
+    });
+    assert.equal(events[0].status, undefined, `${name} must not report an HTTP status`);
+    assert.equal(events[0].fingerprint, "network_unreachable");
+  }
+
+  // Only a genuine parse failure remains invalid_json — and that one legitimately
+  // carries the status of the response whose body would not parse.
+  const loaded = loadApiClient();
+  const events = [];
+  loaded.context.CairnClientDiagnostics = { report: (event) => events.push(event) };
+  loaded.context.fetch = bodyFailure("SyntaxError");
+  await assert.rejects(loaded.context.api("/insights"), (err) => {
+    assert.equal(err.kind, "invalid_json");
+    return true;
+  });
+  assert.equal(events[0].status, 200);
+  assert.equal(events[0].route, "/api/insights");
+  assert.match(events[0].message, /^invalid_json:/);
+});
