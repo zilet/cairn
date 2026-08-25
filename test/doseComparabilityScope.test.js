@@ -475,7 +475,9 @@ test("a top set at the ceiling buys the step when the athlete has asked to be pu
   const push = nextPrescription("Barbell Bench Press");
   assert.equal(push.action, "overload");
   assert.equal(push.suggested.weight, 190);
-  assert.match(push.why, /push/i, "the sentence owns why the step came early");
+  // Every phrasing in the set names the athlete's own ask ("asked to push" / "asked
+  // for the harder read"); the word "push" itself is not in all of them.
+  assert.match(push.why, /you asked/i, "the sentence owns why the step came early");
   assert.doesNotMatch(push.why, /every set/i, "…and never claims every set capped, because they did not");
   assert.equal(violatesReadingGrammar(push.why), null);
 });

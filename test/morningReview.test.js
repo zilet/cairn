@@ -127,7 +127,9 @@ test("a rest read overridden without harm is spoken with curiosity, not judgment
   const review = morningReview(today);
   assert.equal(review.passages.length, 1);
   assert.match(review.passages[0], /rest/i);
-  assert.match(review.passages[0], /noted|cost/i);
+  // Curiosity, not judgment: each phrasing either notes the divergence or says it
+  // cost nothing / landed fine — the concept, since the word rotates by date.
+  assert.match(review.passages[0], /noted|cost|landed fine/i);
   assert.doesNotMatch(review.passages[0], /you must|do not train|forbidden/i);
   assert.equal(violatesReadingGrammar(review.passages[0]), null);
 });
