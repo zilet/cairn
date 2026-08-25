@@ -2461,21 +2461,33 @@ function applyFuelProtection(
       why: say(voice.FUEL_HOLD_STEP, "fuel_hold_step"),
     };
   }
-  if (prescription.action === "deload")
+  // A PROGRESSION deload is already a reduced dose — load and volume both — so fuel
+  // protection has nothing left to take and only adds its clause. A PAIN-braked deload
+  // is a different animal: it cuts LOAD and deliberately leaves the set count alone.
+  // Early-returning on it let the two floors cancel each other out — underfed plus a
+  // red pain band produced a lift with the load off and the FULL volume still on,
+  // which is the one combination neither brake would allow by itself. Fuel protection's
+  // set-halving still applies on top.
+  if (prescription.action === "deload" && !prescription.pain_protected)
     return {
       ...prescription,
       autoregulated: true,
       why: `${prescription.why} ${say(voice.FUEL_DELOAD_CLAUSE, "fuel_deload_clause")}`,
     };
-  const base = prescription.current ?? prescription.suggested;
+  // For a pain-braked deload the pain brake's own cut number IS the load to keep:
+  // `current` is the PRE-brake weight and would hand the load straight back. The two
+  // brakes must not multiply on the same number, so only the volume comes off here.
+  const base = prescription.pain_protected ? prescription.suggested : prescription.current ?? prescription.suggested;
   const reduced: PrescriptionTarget = {
     ...base,
     sets: Math.max(1, Math.ceil(Number(base.sets || prescription.suggested.sets || 1) / 2)),
   };
-  if (prescription.mode === "timed" && Number.isFinite(Number(base.seconds)))
-    reduced.seconds = Math.max(10, Math.round(Number(base.seconds) * 0.8));
-  if (prescription.mode === "reps" && Number.isFinite(Number(base.weight)) && Number(base.weight) > 0)
-    reduced.weight = Math.round(Number(base.weight) * 0.9 * 2) / 2;
+  if (!prescription.pain_protected) {
+    if (prescription.mode === "timed" && Number.isFinite(Number(base.seconds)))
+      reduced.seconds = Math.max(10, Math.round(Number(base.seconds) * 0.8));
+    if (prescription.mode === "reps" && Number.isFinite(Number(base.weight)) && Number(base.weight) > 0)
+      reduced.weight = Math.round(Number(base.weight) * 0.9 * 2) / 2;
+  }
   return {
     ...prescription,
     action: "deload",
@@ -2488,7 +2500,12 @@ function applyFuelProtection(
     starting_idea: undefined,
     autoregulated: true,
     fuel_protected: true,
-    why: say(voice.FUEL_RECOVERY_DOSE, "fuel_recovery_dose"),
+    // A pain-braked lift keeps its own sentence — that is the safety-relevant one, and
+    // the athlete reported the pain themselves — with the fuel clause appended. Only a
+    // dose fuel alone reduced gets replaced by the recovery-dose sentence outright.
+    why: prescription.pain_protected
+      ? `${prescription.why} ${say(voice.FUEL_DELOAD_CLAUSE, "fuel_deload_clause")}`
+      : say(voice.FUEL_RECOVERY_DOSE, "fuel_recovery_dose"),
   };
 }
 

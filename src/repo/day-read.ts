@@ -2097,6 +2097,12 @@ const PUSH_DRIVE_READINESS_FLOOR = 60;
 // (`source_dimensions`, which is where a health item that only contributed to the
 // arbitration shows up), and the dimension's own standing status. Any of them and
 // the day is not softenable, whichever rule produced the rest.
+//
+// The standing-status arm reads the RAW status on purpose, and that is only safe
+// while no advisory brake lands on health_constraints (today every advisory item
+// sits on recovery_capacity or training_load_tolerance). An informational finding
+// must never decide that a day cannot be softened — if a health-dimension advisory
+// brake is ever added, this arm has to read `deciding.status` instead.
 function clinicallyDriven(signalState: UnifiedSignalState, healthWorkaround: unknown): boolean {
   const health = signalState.dimensions.health_constraints;
   return (
@@ -3310,6 +3316,10 @@ export function dayRead(
           "health_constraints",
           "energy_fueling",
         ];
+        // Raw status, deliberately: an advisory brake (an endurance hold, a chronic
+        // intensity drift, an HRV saturation read) is allowed to SPEAK here — leading
+        // the day's why is exactly what a brake that cannot take the day is for. It
+        // decides nothing on this path; the kind was already settled above.
         const notedWatch =
           holdAggression || pushVetoes.length
             ? null

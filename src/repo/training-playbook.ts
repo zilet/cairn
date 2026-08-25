@@ -116,7 +116,7 @@ const ESCALATION_ACTIONS: readonly ((name: string) => string)[] = [
   (name) =>
     `${name} has already been backed off once recently — change the shape rather than the number: run a lower, heavier rep window for a few weeks, or rotate to a close variation and re-test the original.`,
   (name) =>
-    `A second light deload for ${name} would repeat what did not work; drop into a heavier rep bracket for a stretch, or swap in a near variation and come back to it.`,
+    `Backing ${name} off again would repeat what did not work; drop into a heavier rep bracket for a stretch, or swap in a near variation and come back to it.`,
   (name) =>
     `${name} was eased recently and is still stuck, so the lever is the scheme or the movement — a lower rep window for a block, or a close variation before returning to it.`,
 ];

@@ -19,6 +19,9 @@ const MATERIAL_KINDS = new Set([
   "lifestyle_adjustment",
   "goal_change",
   "case_conference",
+  // A quiet Garmin strength merge is a real autonomous write to session data (with
+  // its own Undo), so it belongs in the rollup like every other applied change.
+  "garmin_reconcile",
 ]);
 
 // Neither status is a window still waiting on an answer: `canceled` means the decision

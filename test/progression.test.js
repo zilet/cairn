@@ -1553,3 +1553,76 @@ test("a pain deload stays out of the repeat-deload audit trail, and says nothing
   assert.match(bodyweight.why, /hasn't settled|still speaking up|Still unsettled/i);
   assert.doesNotMatch(bodyweight.why, /next (go|session|time) tells us|whether it settled/i);
 });
+
+// The fuel state whose TRAINING consequence is `reduce` — a correction that has had
+// its settling week and several channels still disagreeing (persistent_strain). This
+// is the only read that asks progression to take a recovery dose, so it is the one
+// that reaches applyFuelProtection's volume branch.
+function seedPersistentStrain() {
+  db.prepare(
+    `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, source) VALUES (?, 2050, 175, 'test')`
+  ).run(isoDaysAgo(30));
+  db.prepare(
+    `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, source) VALUES (?, 2200, 175, 'test')`
+  ).run(isoDaysAgo(8));
+  for (const daysAgo of [1, 2, 3, 4, 5]) {
+    for (const [meal, kcal] of [["breakfast", 900], ["dinner", 1275]]) {
+      db.prepare(`INSERT INTO food_notes (date, meal, raw_output, parsed_json) VALUES (?, ?, '', ?)`).run(
+        isoDaysAgo(daysAgo),
+        meal,
+        JSON.stringify({ kcal })
+      );
+    }
+  }
+  for (const daysAgo of [1, 2]) {
+    db.prepare(`INSERT INTO fueling_feedback (date, energy, hunger) VALUES (?, 1, 3)`).run(isoDaysAgo(daysAgo));
+    db.prepare(`INSERT INTO sessions (date, performance, finished_at) VALUES (?, 2, datetime('now'))`).run(
+      isoDaysAgo(daysAgo)
+    );
+  }
+}
+
+test("underfed AND a red pain band: the two brakes stack on volume instead of cancelling", () => {
+  earnedOverload("Back Squat", "quads");
+  const squat = repo.findExercise("Back Squat");
+  statePain("left knee", 9, "Back Squat", squat.id, [
+    { at: 6, painFree: false },
+    { at: 2, painFree: false },
+  ]);
+
+  // planDayProgression, not nextPrescription: fuel protection is applied by the DAY
+  // pass, over a prescription the lift-level engine has already shaped.
+  const painOnly = planDayProgression(1).find((p) => p.exercise === "Back Squat");
+  assert.equal(painOnly.action, "deload");
+  assert.equal(painOnly.pain_protected, true);
+  const painLoad = painOnly.suggested.weight;
+  assert.ok(painLoad < 185, "pain alone takes the load down");
+  assert.equal(painOnly.suggested.sets, 3, "…and deliberately leaves the set count alone");
+
+  // Now the same lift on an underfed week. The pain brake cuts LOAD and the fuel read
+  // cuts VOLUME; each floor owns a different number, so neither may absorb the other.
+  // applyFuelProtection used to early-return on any `deload`, which was written for
+  // progression deloads (already reduced on BOTH axes) — a pain deload reaching it
+  // meant the load came off, the full volume stayed, and the athlete got the one dose
+  // neither brake would have allowed by itself.
+  seedPersistentStrain();
+  const both = planDayProgression(1).find((p) => p.exercise === "Back Squat");
+  assert.equal(currentUnderfuelingRead(localDateISO()).action.training, "reduce", "the fixture reaches the branch");
+  assert.equal(both.action, "deload");
+  assert.equal(both.pain_protected, true, "the pain cut is still recorded");
+  assert.equal(both.fuel_protected, true, "and the fuel read is now recorded too");
+  assert.ok(
+    both.suggested.sets < painOnly.suggested.sets,
+    `fuel protection still takes the volume: ${painOnly.suggested.sets} -> ${both.suggested.sets}`
+  );
+  assert.equal(both.suggested.sets, 2, "half the sets, rounded up");
+
+  // The two brakes must not MULTIPLY on the same number: the load stays exactly where
+  // the pain brake put it rather than taking a second cut on top.
+  assert.equal(both.suggested.weight, painLoad, "the load is not cut twice");
+
+  // The pain sentence survives — it is the safety-relevant one, and the athlete
+  // reported it themselves — with the fuel clause appended rather than replacing it.
+  assert.equal(violatesReadingGrammar(both.why), null);
+  assert.doesNotMatch(both.why, /calorie|kcal|settling window/i, "training register, not the nutrition one");
+});

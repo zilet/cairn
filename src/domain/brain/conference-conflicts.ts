@@ -150,7 +150,15 @@ function readRecoveryStrain(context: Record<string, unknown>): Evidence {
   const state = record(context.signal_state);
   if (!state) return null;
   const dimension = record(record(state.dimensions)?.recovery_capacity);
-  const status = text(dimension?.status);
+  // The DECIDING status — the dimension with its advisory brakes removed. An advisory
+  // brake (hrv_saturation) is an argument about what a number MEANS, not an acute
+  // finding about today's capacity: it shows at watch on every surface and holds the
+  // push tier shut, but it is excluded from the posture ladder and must not be able to
+  // raise a case-conference conflict either. Raising a conflict is DECIDING, not
+  // speaking. Same rule as action.evidence in src/repo/signal-state.ts.
+  // `readiness` and `directives.training` below are already derived from deciding
+  // status upstream, so this was the one raw read left on the path.
+  const status = text(record(dimension?.deciding)?.status ?? dimension?.status);
   const action = record(state.action);
   const directive = text(record(action?.directives)?.training);
   const readiness = text(action?.readiness);

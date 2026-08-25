@@ -61,13 +61,16 @@ function parseApiRoutes(src, { receiver = "api", prefix = "" } = {}) {
 
 // ---- MCP tools (src/mcp.ts) ----
 // server.tool("name", "description", …) — name + description are the first two
-// double-quoted string args (descriptions may contain apostrophes / escaped quotes).
+// string args. The description may be double-quoted (apostrophes / escaped quotes
+// allowed) or a template literal; a `${…}` interpolation inside a template is
+// rendered as its source expression, since a generated index cannot evaluate it.
 function parseMcpTools(src) {
-  const re = /server\.tool\(\s*"([a-z0-9_]+)"\s*,\s*"((?:[^"\\]|\\.)*)"/gi;
+  const re = /server\.tool\(\s*"([a-z0-9_]+)"\s*,\s*(?:"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`)/gi;
   const out = [];
   let m;
   while ((m = re.exec(src))) {
-    out.push({ name: m[1], desc: m[2].replace(/\\"/g, '"').replace(/\s+/g, " ").trim() });
+    const raw = m[2] != null ? m[2].replace(/\\"/g, '"') : m[3].replace(/\$\{([^}]*)\}/g, "<$1>");
+    out.push({ name: m[1], desc: raw.replace(/\s+/g, " ").trim() });
   }
   return out;
 }

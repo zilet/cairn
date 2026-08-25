@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**265 tools.**
+**267 tools.**
 
 | Tool | Description |
 |---|---|
@@ -179,6 +179,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `list_chat_sessions` | List past (archived) coaching conversations, newest first — each is a thread a 'fresh start' archived, with its message count, time span, and a one-line preview. Browse history without deleting anything. |
 | `list_checkins` | List recent check-ins (newest first). |
 | `list_context_events` | List life-timeline events. Pass active=true for only active/upcoming (not archived and not past their end_date). |
+| `list_context_tags` | List the context tags (travel/alcohol/poor_sleep_env/work_crunch/illness_feel) tapped for a given day (default today). Cheap volunteered life context the insight generator quietly tests against outcomes — never advice, never surfaced as a lecture. |
 | `list_directives` | List the connected-brain cross-domain health directives (a flagged finding propagated into nutrition/training/watch, with rationale, an evidence citation where well-established, and an `uncertain` flag where the lever is real but unsettled). Active by default; pass all:true for the full history incl. resolved/dismissed feedback rows. |
 | `list_exercise_aliases` | List the learned exercise-name aliases (variant → canonical movement) — the de-duplication map behind the volume/progression read. Each row is { alias, canonical, source }. The deterministic exercise-canon normalizer is always on; these are the harder synonyms learned by reconcile_exercise_names. |
 | `list_exercise_guide_suggestions` | The low-confidence guide matches waiting on a yes/no: each is an exercise plus the dataset movement that plausibly (but not certainly) describes it. These are never rendered to the athlete until confirmed with attach_exercise_guide. |
@@ -252,6 +253,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `swap_meal` | Queue one meal swap in a drafted plan, honoring an optional hint and the existing kcal/protein guardrails. Returns a job immediately; poll get_agent_job. |
 | `sync_garmin` | Run a manual Garmin Connect sync using local GARMIN_USERNAME/GARMIN_PASSWORD or stored token files. Experimental unofficial connector. The scheduler also auto-syncs ~every 6h when configured; the result is recorded as garmin_last_sync_at/garmin_last_sync_status (visible via get_settings). |
 | `synthesize_health` | Queue and cache the elite-coach whole-picture synthesis across labs, body composition, training, recovery, nutrition, supplements, and life. Returns a job immediately; poll get_agent_job. Informational and pull-only. |
+| `toggle_context_tag` | Tag or untag one day with a controlled-vocabulary context tag (travel/alcohol/poor_sleep_env/work_crunch/illness_feel). Tapping an already-tagged day untags it (archives the row). Never invent a key outside the vocabulary. |
 | `understand_supplements` | Capture supplements from plain words ('creatine daily, omega-3, some D, whey occasionally') — the system approximates each into name + typical dose + cadence + related markers and stores it (dedup by name). NOT a daily log; say it once. Returns the understood items. |
 | `undispute_belief` | Restore a disputed belief (from list_beliefs' set_aside) back to active. |
 | `unskip_exercise` | Restore a previously skipped exercise to a date's session plan. |

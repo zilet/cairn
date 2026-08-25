@@ -1415,7 +1415,12 @@ function caveatCause(state: UnifiedSignalState | null | undefined): SignalDimens
   let cause: SignalDimension = "recovery_capacity";
   let severity = 0;
   for (const dimension of CAVEAT_CAUSE_ORDER) {
-    const rank = CAVEAT_STATUS_SEVERITY[lc(state?.dimensions?.[dimension]?.status)] ?? 0;
+    // Deciding status only. Naming the cause of a modify day is the same claim
+    // `action.evidence` makes (src/repo/signal-state.ts) — an advisory brake did not
+    // produce the day and may not be named as what it is about, even though it stays
+    // visible in the dimension's own evidence and in the prompt.
+    const source = state?.dimensions?.[dimension];
+    const rank = CAVEAT_STATUS_SEVERITY[lc(source?.deciding?.status ?? source?.status)] ?? 0;
     if (rank > severity) {
       severity = rank;
       cause = dimension;
