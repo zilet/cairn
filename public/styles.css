@@ -3910,6 +3910,16 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hsyn-foot-r{display:flex;align-items:center;gap:10px}
 .hmk-ask{display:inline-flex;align-items:center;margin:2px 0 12px;min-height:30px}
 .hmk-ask-arw{margin-left:1px}
+/* A marker's live directive, in its own words — one quiet tinted line under the
+   chart, left-aligned like the reading it belongs to; tap leads to Connections. */
+.hmk-directive{display:flex;align-items:flex-start;gap:8px;width:100%;margin:2px 0 10px;
+  padding:9px 12px;border:0;border-left:2px solid var(--accent);border-radius:var(--radius-sm);
+  background:color-mix(in srgb,var(--accent) 9%,var(--card));color:var(--ink);
+  font:inherit;font-size:.84rem;line-height:1.45;text-align:left;cursor:pointer;
+  transition:background var(--dur-1) var(--ease)}
+.hmk-directive:hover{background:color-mix(in srgb,var(--accent) 14%,var(--card))}
+.hmk-directive:active{transform:var(--press-sm)}
+.hmk-directive-arw{margin-left:auto;padding-left:8px;color:var(--accent);flex:0 0 auto}
 .hsyn-onechange{margin:4px 0 12px;padding:11px 13px;
   background:color-mix(in srgb,var(--accent) 9%,var(--card))}
 .hsyn-onechange .lbl{display:block;color:var(--accent);margin-bottom:3px}

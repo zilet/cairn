@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**324 routes** across 111 groups.
+**325 routes** across 111 groups.
 
 ## `/activities`
 
@@ -397,6 +397,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | PUT | `/api/health-docs/:id/imaging-recommendations/:recommendationId/status` |  |
 | POST | `/api/health-docs/:id/reanalyze` | Re-run the agentic scan over a document's original file. |
 | GET | `/api/health-docs/:id/stream` | Live enrichment status for one health document (Server-Sent Events) — the SSE-first path the PWA uses instead of polling; snapshot then transitions, close on terminal. getHealthDocument returns the PUBLIC shape (never the raw file_path). EventSource can't set headers, so the PWA reaches this with ?token=. |
+| POST | `/api/health-docs/dedupe` | One panel per draw date, across the whole record set: fold records that carry the same draw (same date, agreeing readings) into one. A bare call only REPORTS the plan; the fold — which deletes twin records, and the file of an identical second upload — needs an explicit `apply: true`. Ingest runs the same fold scoped to its own upload. |
 | POST | `/api/health-docs/imaging` | Create the durable study shell first; files can then arrive sequentially over separate bounded requests without pretending each page/image is a new record. |
 | POST | `/api/health-docs/imaging/dicom-imports` |  |
 | GET | `/api/health-docs/imaging/dicom-imports/:jobId` |  |

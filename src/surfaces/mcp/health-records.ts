@@ -2,6 +2,7 @@ import { z } from "zod";
 import { HEALTH_DOCUMENT_KINDS } from "../../healthDocumentKinds.js";
 import {
   addHealthDocument,
+  dedupeHealthDocuments,
   deleteHealthDocument,
   deleteImagingStudy,
   deriveDirectives,
@@ -44,6 +45,23 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
         /* never fail the record */
       }
       return asText(doc);
+    }
+  );
+
+  server.tool(
+    "dedupe_health_records",
+    "Fold duplicate health records — the same lab draw filed more than once (same date, agreeing readings) — into one record per draw date. Without apply:true this only reports the plan; apply:true performs the fold (twin records are deleted).",
+    { apply: z.boolean().optional().describe("true to perform the fold; omitted = dry run") },
+    async ({ apply }) => {
+      const result = dedupeHealthDocuments({ dryRun: apply !== true });
+      if (!result.dry_run && result.merged) {
+        try {
+          deriveDirectives();
+        } catch {
+          /* never fail the fold */
+        }
+      }
+      return asText(result);
     }
   );
 

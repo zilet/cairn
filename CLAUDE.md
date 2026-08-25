@@ -224,6 +224,14 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   is not the lab's population reference interval — a value can read "in range" yet sit far from
   optimal. `prioritizeMarkers()` ranks by an INTERNAL `impact_score`; **never surface that number**.
   The UI shows in/out-of-optimal and direction only.
+- **One panel per draw date.** The same lab draw arrives more than once (a PDF and a zip of one
+  export, a re-export, the CCDA pass and the agent reading one import). `dedupeHealthDocuments()`
+  (`src/repo/health-dedupe.ts`) folds records on the same date whose shared readings AGREE into one
+  survivor (source row > deterministic read > fullest), scoped to the upload after every ingest and
+  whole-record via `POST /api/health-docs/dedupe` / `dedupe_health_records` (a dry run unless
+  `apply:true`). Evidence must be discriminating — a shared weight/BMI/pulse never makes a match;
+  records that merely share a date, or whose readings disagree, stay apart. Free-text observation rows
+  ("Lab Interpretation") are never markers (`isNonAnalyteMarkerName`).
 - **Marker grouping**: `MARKER_GROUPS` (in `propagation.ts`) matches longest-first, and its **array
   order is the display order** — conventional clinical lab-review order, mirrored by the doctor
   export and the in-app catalog. Full ordering rules and the non-clinical-marker filter live in

@@ -281,7 +281,20 @@ const MARKER_ALIASES: AliasEntry[] = [
   {
     key: "hdl cholesterol",
     canonical: "HDL Cholesterol",
-    aliases: ["hdl c", "hdl-c", "hdl cholesterol", "hdl-cholesterol", "hdl chol", "high density lipoprotein cholesterol"],
+    aliases: ["hdl c", "hdl-c", "hdl cholesterol", "hdl-cholesterol", "hdl chol", "high density lipoprotein cholesterol", "high density lipoprotein", "hdl high density lipoprotein", "hdl"],
+  },
+  {
+    // Serum total CO2 is printed as "Carbon Dioxide", "CO2" or "CO2 Total" — one
+    // analyte on every metabolic panel, and the name a CCDA export uses for a
+    // draw is not the one the same lab prints on its PDF.
+    key: "carbon dioxide",
+    canonical: "Carbon Dioxide",
+    aliases: ["carbon dioxide", "co2", "co2 total", "carbon dioxide total", "total co2", "carbon dioxide co2"],
+  },
+  {
+    key: "body mass index",
+    canonical: "Body Mass Index",
+    aliases: ["body mass index", "bmi", "body mass index bmi"],
   },
   {
     key: "triglycerides",
@@ -313,7 +326,7 @@ const MARKER_ALIASES: AliasEntry[] = [
     // gets its own key and display label. It must never fold into "LDL-C".
     key: "ldl c direct",
     canonical: "LDL-C (Direct)",
-    aliases: ["ldl c direct", "ldl-c direct", "ldl-c (direct)", "direct ldl", "direct ldl c", "direct ldl-c", "ldl cholesterol direct"],
+    aliases: ["ldl c direct", "ldl-c direct", "ldl-c (direct)", "direct ldl", "direct ldl c", "direct ldl-c", "ldl cholesterol direct", "low density lipoprotein direct", "low density lipoprotein cholesterol direct"],
   },
   {
     // Non-HDL cholesterol under its several printed names ("Non-HDL-C",
@@ -572,4 +585,23 @@ export function planMarkerMerges(
     for (const m of members) out.push({ rawNorm: normalizeMarkerName(m), canonicalKey, canonicalName });
   }
   return out;
+}
+
+// A lab's free-text observation rows ("Lab Interpretation: Abnormal", a comment
+// line) are not analytes: they carry no value that belongs in a series, and an
+// agent transcribing a PDF happily lists them beside the numbers. Filtered at
+// every marker write so they never reach a panel.
+const NON_ANALYTE_NAMES = new Set([
+  "lab interpretation",
+  "interpretation",
+  "comment",
+  "comments",
+  "note",
+  "notes",
+  "narrative",
+  "impression",
+]);
+
+export function isNonAnalyteMarkerName(raw: unknown): boolean {
+  return NON_ANALYTE_NAMES.has(normalizeMarkerName(String(raw ?? "")));
 }

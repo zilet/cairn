@@ -47,6 +47,7 @@ export * from "./repo/health.js";
 export * from "./repo/imaging.js";
 export * from "./repo/health-outcomes.js"; // intervention -> follow-up marker outcome annotations
 export * from "./repo/ccda.js";
+export * from "./repo/health-dedupe.js"; // one panel per draw date
 export * from "./repo/standing.js";
 export * from "./repo/risk.js"; // cardiovascular risk input/enhancer/counterfactual read
 export * from "./repo/doctor-loop.js"; // missing-workup + lab/DEXA retest attention policies

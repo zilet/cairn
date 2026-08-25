@@ -702,6 +702,7 @@ async function processJob(job: Job): Promise<void> {
         const degrade = describeAgentDegrade(agentFailure);
         console.warn(`[enrich] health#${job.id}: agent returned no usable JSON (${degrade.reason}); deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s).`);
         noteDeterministicIngest(job.id, degrade.reason, degrade.detail);
+        foldDuplicateHealthPanels(job.id);
         markStatus(job, "done");
         try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
@@ -714,6 +715,7 @@ async function processJob(job: Job): Promise<void> {
         const degrade = describeAgentDegrade(agentFailure);
         console.warn(`[enrich] health#${job.id}: agent returned no usable JSON (${degrade.reason}); deterministic visit-note fallback wrote ${fallback.facts} fact(s).`);
         noteDeterministicIngest(job.id, degrade.reason, degrade.detail);
+        foldDuplicateHealthPanels(job.id);
         markStatus(job, "done");
         try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
@@ -794,6 +796,7 @@ async function processJob(job: Job): Promise<void> {
   if (ccdaBackfill?.wrote) {
     console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${ccdaBackfill.clinicalFacts} fact(s), ${ccdaBackfill.resultMarkers} lab marker(s) across ${ccdaBackfill.resultPanels} panel(s), ${ccdaBackfill.vitalMarkers} vital marker(s), ${ccdaBackfill.bpReadings}/${ccdaBackfill.extractedBpReadings} BP row(s).`);
   }
+  if (job.kind === "health") foldDuplicateHealthPanels(job.id);
 
   // Add each genuinely-new memory item (the prompt instructs the agent to skip
   // anything already on record; addMemory also dedupes exact repeats).
@@ -1844,6 +1847,23 @@ export function applyHealthIngest(
   return applyHealthIngestResult(id, parsed, opts).status === "applied";
 }
 
+// One panel per draw date: an import that carries a draw the record already
+// holds (the same export uploaded twice, a re-export, the agent's read of what
+// the CCDA pass already filed) folds into the record that holds it. Scoped to
+// this upload's own rows so an ingest never rewrites what it did not touch.
+function foldDuplicateHealthPanels(id: number): void {
+  try {
+    const folded = repo.dedupeHealthDocuments({ scopeSourceId: id });
+    if (folded.merged) {
+      console.log(
+        `[enrich] health#${id}: folded ${folded.merged} duplicate panel(s) into ${folded.clusters.length} existing record(s) (+${folded.added_markers} marker(s)).`
+      );
+    }
+  } catch (e: any) {
+    console.warn(`[enrich] health#${id}: duplicate fold failed: ${e?.message ?? e}`);
+  }
+}
+
 function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: repo.CcdaHealthExtraction | null): boolean {
   const row = repo.getHealthDocumentRaw(id) as any;
   // MyChart/CCDA bundles may carry radiology reports alongside labs. Persist
@@ -1871,7 +1891,7 @@ function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: repo.CcdaHe
         unit: asStr(m.unit) ?? null,
         flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
       }))
-      .filter((m: any) => m.name)
+      .filter((m: any) => m.name && !repo.isNonAnalyteMarkerName(m.name))
       // Numeric plausibility / unit-error guard (mirrors insertHealthPanels): the
       // primary-panel ingest path writes via updateHealthDocFields, so it must run
       // the same defensive check or a transcription typo / unit mix-up would poison

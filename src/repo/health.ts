@@ -11,7 +11,7 @@ import { sensorAgeDays } from "./sensor-freshness.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
-import { canonicalMarker, canonicalMarkerForReading, normalizeMarkerName } from "./marker-canon.js";
+import { canonicalMarker, canonicalMarkerForReading, isNonAnalyteMarkerName, normalizeMarkerName } from "./marker-canon.js";
 import { bumpMarkerDataVersion, currentMarkerDataVersion, resetMarkerDataVersion } from "./marker-cache.js";
 import { syncMeasuredRmrFromHealthDocs } from "./metabolism.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
@@ -711,7 +711,7 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
           // Drop a physiologically-impossible numeric reading (a transcription typo / unit
           // error) so it can't poison the connected brain's directives. Conservative — only
           // CLEAR impossibilities are skipped; qualitative + unknown-family values pass.
-          .filter((m: any) => m.name && plausibleMarkerValue(m.name, m.value, m.unit).plausible)
+          .filter((m: any) => m.name && !isNonAnalyteMarkerName(m.name) && plausibleMarkerValue(m.name, m.value, m.unit).plausible)
       : [];
     const date = typeof p.doc_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.doc_date) ? p.doc_date : null;
     const summary = p.summary == null ? null : String(p.summary).slice(0, 1000);

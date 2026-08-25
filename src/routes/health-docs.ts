@@ -9,6 +9,7 @@ import {
   confirmPendingLab,
   correctImagingStudy,
   createImagingStudy,
+  dedupeHealthDocuments,
   deleteHealthDocument,
   deleteImagingStudy,
   deriveDirectives,
@@ -194,6 +195,26 @@ export function publicImagingDraftInput(body: any, docDate: string | null) {
     },
   };
 }
+
+// One panel per draw date, across the whole record set: fold records that
+// carry the same draw (same date, agreeing readings) into one. A bare call
+// only REPORTS the plan; the fold — which deletes twin records, and the file
+// of an identical second upload — needs an explicit `apply: true`. Ingest
+// runs the same fold scoped to its own upload.
+healthDocsRouter.post("/dedupe", (req, res) => {
+  const dryRun = !truthy(req.body?.apply ?? req.query.apply);
+  const result = dedupeHealthDocuments({ dryRun });
+  if (!dryRun && result.merged) {
+    // Folded panels withdraw nothing, but the survivor's series changed shape:
+    // re-derive so the connected brain reads the merged record, not the twins.
+    try {
+      deriveDirectives();
+    } catch {
+      /* the fold is done; the connected brain settles on the next daily pass */
+    }
+  }
+  res.json(result);
+});
 
 healthDocsRouter.get("/", (req, res) => res.json(listHealthDocuments(req.query.limit ? Number(req.query.limit) : 50)));
 

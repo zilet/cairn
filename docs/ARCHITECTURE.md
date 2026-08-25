@@ -2184,6 +2184,41 @@ A modern panel like Function Health lists 100+ markers; a weaker model used to c
 The per-panel cap is `repo.MAX_MARKERS_PER_PANEL` (250). The chat `log_health` action carries the
 same "no curation" instruction and points big pastes at the Health tab's paste box.
 
+### One panel per draw date (`src/repo/health-dedupe.ts`)
+
+The same lab draw reaches Cairn more than once: a MyChart export uploaded as a PDF and again as a
+zip, a re-export months later that carries every older panel again, or one import read BOTH by the
+deterministic CCDA pass (`parsed.type` `ccda_results` / `ccda_vitals`) and by an agent. Each arrival
+used to become its own dated record, so one lipid panel showed three times and every series held the
+same reading in triplicate.
+
+`dedupeHealthDocuments({ dryRun, scopeSourceId })` recognizes twins by their READINGS, never by file
+name or kind. Two records are the same draw when they share the date and at least one canonical
+reading agrees (numbers within 0.5 %, text case/space-insensitive) — DISCRIMINATING evidence: two
+agreeing readings of which one is a real analyte, or — between two records that are nothing but vitals — a
+whole sheet (three or more) agreeing; a
+shared weight, BMI or pulse alone never makes a match, because a DEXA and a lab panel both print the
+athlete's weight that morning — with agreement outnumbering disagreement two to one and covering half
+of the smaller record; a record one day off can join only when it is agent-authored (a model's date
+drift), with an analyte among two agreeing readings and no disagreement. The two deterministic CCDA
+streams of one export (`ccda_results`, `ccda_vitals`) never fold into each other — a re-sync refreshes
+each by type. Pairs chain into clusters, the cluster picks a
+survivor (uploaded source row > row with derived children > deterministic read > most readings >
+lowest id), and only twins that agree with the survivor DIRECTLY fold in — a twin that agrees with a
+twin but not the survivor is left alone. The survivor keeps its own slots, gains any analyte only a
+twin carried, takes the marker object that kept the lab's printed range where both agree, records the
+fold in `parsed.merged_from`, and the twins go through `deleteHealthDocument`. A twin that owns an
+uploaded file folds only when the survivor already holds every reading it has (an identical second
+upload, whose file goes with it); a twin that split out derived panels of its own never folds. Each
+call iterates to a fixed point, and a dry run reports that same end state.
+
+Records that merely share a date (an ECG beside a chemistry panel) or whose readings disagree (a
+morning and an evening blood pressure) stay separate. The ingest path runs the fold scoped to the
+upload it just wrote (`foldDuplicateHealthPanels` in `enrich.ts`) so an import never rewrites records
+it did not touch; `POST /api/health-docs/dedupe` and the `dedupe_health_records` MCP tool run it over
+the whole record set — a dry run unless `apply: true`. Free-text observation rows ("Lab Interpretation: Abnormal") are
+not analytes — `isNonAnalyteMarkerName` drops them at every marker write.
+
 ### A MyChart export is read deterministically FIRST, and the card says which read it got
 
 A MyChart/CCDA "IHE_XDM" bundle is structured data, not prose: `src/repo/ccda.ts` reads the clinical
