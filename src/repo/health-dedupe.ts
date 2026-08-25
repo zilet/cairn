@@ -39,7 +39,7 @@ export const CCDA_DERIVED_TYPES = new Set(["ccda_results", "ccda_vitals"]);
 // spelling the canon produces ("body temperature", "o2 sat", "weight lb") is
 // caught, not only the ones listed here.
 const NON_DISCRIMINATING_KEY =
-  /\b(weight|height|body mass index|bmi|pulse|heart rate|systolic|diastolic|blood pressure|bp|temperature|temp|respiratory rate|respiration|respirations|oxygen saturation|o2 sat|o2 saturation|spo2)\b/;
+  /\b(weight|height|body mass index|bmi|pulse|heart rate|systolic|diastolic|blood pressure|bp|temperature|temp|respiratory rate|respiration|respirations|oxygen saturation|o2 sat|o2 saturation|spo2|pain score|pain level|pain scale)\b/;
 
 export function isNonDiscriminatingKey(key: string): boolean {
   return NON_DISCRIMINATING_KEY.test(key);
@@ -305,7 +305,9 @@ function hasRefRange(marker: any): boolean {
 // their place; an analyte only a twin carried is appended; where both carry the
 // same reading, the one that kept the lab's printed range wins the slot.
 function mergedMarkers(survivor: DocRow, twins: DocRow[]): { markers: any[]; added: number } {
-  const markers = survivor.markers.slice();
+  // a fold is also the moment a survivor written before the non-analyte filter
+  // sheds its "Lab Interpretation" rows
+  const markers = survivor.markers.filter((marker) => markerReadingKey(marker) != null);
   const slot = new Map<string, number>();
   markers.forEach((marker, index) => {
     const key = markerReadingKey(marker);

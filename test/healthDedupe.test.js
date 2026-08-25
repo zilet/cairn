@@ -98,13 +98,14 @@ test("a shared weight or BMI is not identity: a DEXA and a lab panel the same mo
   assert.equal(repo.isNonDiscriminatingKey("hba1c"), false);
 });
 
-test("a whole vitals sheet agreeing IS the same reading", () => {
-  const sheet = doc({ doc_date: "2026-03-11", kind: "clinical_summary", file_path: "/nonexistent/summary.pdf", parsed_json: { markers: [m("Systolic Blood Pressure", 113), m("Diastolic Blood Pressure", 75), m("Pulse", 78), m("Temperature", 36.3)] } });
+test("a whole vitals sheet agreeing IS the same reading — a pain score or a stray observation row does not unmake it", () => {
+  const sheet = doc({ doc_date: "2026-03-11", kind: "clinical_summary", file_path: "/nonexistent/summary.pdf", parsed_json: { markers: [m("Systolic Blood Pressure", 113), m("Diastolic Blood Pressure", 75), m("Pulse", 78), m("Temperature", 36.3), m("Pain Score", 1, { unit: "/10" }), m("Lab Interpretation", "Abnormal")] } });
   const twin = doc({ doc_date: "2026-03-11", kind: "vitals", source_doc_id: 7, parsed_json: { type: "ccda_vitals", markers: [m("Systolic BP", 113), m("Diastolic BP", 75), m("Pulse", 78), m("Oxygen Saturation", 96)] } });
   const result = repo.dedupeHealthDocuments();
   assert.equal(result.merged, 1);
   assert.deepEqual(ids(), [sheet.id]);
   assert.ok(markersOf(sheet.id).some((x) => x.name === "Oxygen Saturation"));
+  assert.ok(!markersOf(sheet.id).some((x) => x.name === "Lab Interpretation"), "the fold sheds the survivor's observation row");
   assert.equal(markersOf(twin.id), null);
 });
 
