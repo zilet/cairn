@@ -778,7 +778,7 @@ async function processJob(job: Job): Promise<void> {
   // a dedicated apply path.
   const healthApply =
     job.kind === "health"
-      ? applyHealthIngestResult(job.id, parsed, { imagingBaseRevisionState })
+      ? applyHealthIngestResult(job.id, parsed, { imagingBaseRevisionState, ccda: ccdaExtraction })
       : null;
   if (healthApply?.status === "stale") {
     const settled = settleStaleImagingJob(job.id, healthApply.reason);
@@ -1807,7 +1807,11 @@ export type HealthIngestApplyResult =
 export function applyHealthIngestResult(
   id: number,
   parsed: any,
-  opts: { imagingBaseRevision?: string | null; imagingBaseRevisionState?: repo.ImagingStudyRevisionState | null } = {}
+  opts: {
+    imagingBaseRevision?: string | null;
+    imagingBaseRevisionState?: repo.ImagingStudyRevisionState | null;
+    ccda?: repo.CcdaHealthExtraction | null;
+  } = {}
 ): HealthIngestApplyResult {
   const row = repo.getHealthDocumentRaw(id) as any;
   if (row?.kind === "imaging") {
@@ -1825,18 +1829,22 @@ export function applyHealthIngestResult(
         ? { status: "stale", reason: result.reason }
         : { status: "not_applied" };
   }
-  return applyHealthIngestNonImaging(id, parsed) ? { status: "applied" } : { status: "not_applied" };
+  return applyHealthIngestNonImaging(id, parsed, opts.ccda) ? { status: "applied" } : { status: "not_applied" };
 }
 
 export function applyHealthIngest(
   id: number,
   parsed: any,
-  opts: { imagingBaseRevision?: string | null; imagingBaseRevisionState?: repo.ImagingStudyRevisionState | null } = {}
+  opts: {
+    imagingBaseRevision?: string | null;
+    imagingBaseRevisionState?: repo.ImagingStudyRevisionState | null;
+    ccda?: repo.CcdaHealthExtraction | null;
+  } = {}
 ): boolean {
   return applyHealthIngestResult(id, parsed, opts).status === "applied";
 }
 
-function applyHealthIngestNonImaging(id: number, parsed: any): boolean {
+function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: repo.CcdaHealthExtraction | null): boolean {
   const row = repo.getHealthDocumentRaw(id) as any;
   // MyChart/CCDA bundles may carry radiology reports alongside labs. Persist
   // those as derived first-class imaging records linked to the source artifact;
@@ -1879,7 +1887,7 @@ function applyHealthIngestNonImaging(id: number, parsed: any): boolean {
         return true;
       });
 
-  const cleaned = panels
+  let cleaned = panels
     .filter((p: any) => p && typeof p === "object")
     .map((p: any) => {
       const date = asStr(p.doc_date);
@@ -1905,6 +1913,19 @@ function applyHealthIngestNonImaging(id: number, parsed: any): boolean {
       };
     })
     .filter((p) => p.markers.length || p.summary);
+
+  // An undated panel is placed by its readings against the export's own dated
+  // panels, or dropped: a derived record with no date reads as nothing in every
+  // series and shows as "Set date" forever. The sole panel of a single-record
+  // upload keeps riding the source row, which carries the athlete's own date.
+  const undated = cleaned.filter((p) => !p.doc_date).length;
+  if (undated && cleaned.length > 1) {
+    const placed = repo.dateUndatedPanels(cleaned, ccda);
+    console.warn(
+      `[enrich] health#${id}: ${undated} undated panel(s) — ${placed.dated} placed by matching readings, ${placed.dropped} dropped.`
+    );
+    cleaned = placed.panels as typeof cleaned;
+  }
 
   const markerCount = cleaned.reduce((n, p) => n + p.markers.length, 0);
   // A health-document result with only prose is not an ingest. This catches agent

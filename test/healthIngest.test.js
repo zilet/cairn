@@ -159,3 +159,32 @@ test("replaceHealthPanels preserves bounded clinical facts on derived records", 
     },
   ]);
 });
+
+test("applyHealthIngest files an undated agent panel on its CCDA draw date and never writes one undated", async () => {
+  resetTables("health_documents");
+  const { applyHealthIngest } = await import("../dist/enrich.js");
+  const source = repo.addHealthDocument({ kind: "other", doc_date: "2026-08-24", enrichment_status: "in_progress" });
+  const ccda = {
+    files: 1,
+    clinical_facts: [],
+    blood_pressure_readings: [],
+    vitals_panels: [],
+    results_panels: [{ doc_date: "2024-04-17", kind: "bloodwork", markers: [{ name: "Cholesterol", value: 219, unit: "mg/dL" }, { name: "Vitamin D, 25-Hydroxy", value: 18, unit: "ng/mL" }] }],
+  };
+  const applied = applyHealthIngest(
+    source.id,
+    {
+      summary: "Two visits.",
+      panels: [
+        { doc_date: "2026-08-24", kind: "bloodwork", summary: "newest", markers: [{ name: "Triglycerides", value: 289, unit: "mg/dL", flag: "high" }] },
+        { doc_date: null, kind: "bloodwork", summary: "preventive visit", markers: [{ name: "Cholesterol", value: 219, unit: "mg/dL" }, { name: "Vitamin D 25-OH", value: 18, unit: "ng/mL", flag: "low" }] },
+        { doc_date: null, kind: "ecg", summary: "sinus rhythm", markers: [{ name: "Ventricular Rate", value: 61, unit: "bpm" }] },
+      ],
+    },
+    { ccda }
+  );
+  assert.equal(applied, true);
+  const derived = repo.listHealthDocuments().filter((d) => d.source_doc_id === source.id);
+  assert.deepEqual(derived.map((d) => [d.kind, d.doc_date]), [["bloodwork", "2024-04-17"]]);
+  assert.ok(!derived.some((d) => !d.doc_date), "no derived record is ever written without a date");
+});

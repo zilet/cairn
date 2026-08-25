@@ -375,3 +375,38 @@ test("background enrichment reads a CCDA date in the OWNER's zone, not the conta
     if (previous) repo.recordClientTimeZone(previous);
   }
 });
+
+test("dateUndatedPanels places an undated agent panel by its readings and drops the unplaceable", () => {
+  const extraction = {
+    results_panels: [
+      { doc_date: "2026-08-24", markers: [{ name: "Hemoglobin A1c", value: 5.4, unit: "%" }, { name: "Triglycerides", value: 289, unit: "mg/dL" }] },
+      { doc_date: "2024-04-17", markers: [{ name: "Cholesterol", value: 219, unit: "mg/dL" }, { name: "Triglycerides", value: 110, unit: "mg/dL" }, { name: "HDL Cholesterol", value: 52, unit: "mg/dL" }] },
+    ],
+    vitals_panels: [{ doc_date: "2026-03-11", markers: [{ name: "Systolic BP", value: 118, unit: "mmHg" }] }],
+  };
+  const placed = repo.dateUndatedPanels(
+    [
+      { doc_date: "2022-01-20", kind: "bloodwork", markers: [{ name: "Sodium", value: 140 }] },
+      // Same analytes, same values → the export's own draw date.
+      { doc_date: null, kind: "bloodwork", markers: [{ name: "TRIGLYCERIDES", value: "110" }, { name: "HDL-C", value: 52 }, { name: "Cholesterol", value: 219 }] },
+      // A vital places against the vitals stream too.
+      { doc_date: null, kind: "vitals", markers: [{ name: "Systolic BP", value: 118 }] },
+      // Nothing in the export carries these readings (an ECG) → dropped.
+      { doc_date: null, kind: "ecg", markers: [{ name: "Ventricular Rate", value: 61 }] },
+      // Split evenly across two dates → ambiguous → dropped.
+      { doc_date: null, kind: "bloodwork", markers: [{ name: "Hemoglobin A1c", value: 5.4 }, { name: "Cholesterol", value: 219 }] },
+    ],
+    extraction
+  );
+  assert.equal(placed.dated, 2);
+  assert.equal(placed.dropped, 2);
+  assert.deepEqual(
+    placed.panels.map((p) => [p.kind, p.doc_date]),
+    [["bloodwork", "2022-01-20"], ["bloodwork", "2024-04-17"], ["vitals", "2026-03-11"]]
+  );
+});
+
+test("dateUndatedPanels with no deterministic panels drops every undated panel", () => {
+  const placed = repo.dateUndatedPanels([{ doc_date: null, markers: [{ name: "Sodium", value: 140 }] }], null);
+  assert.deepEqual(placed, { panels: [], dated: 0, dropped: 1 });
+});

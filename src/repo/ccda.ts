@@ -906,3 +906,78 @@ export function resultMarkerKeysByDate(panels: HealthPanelInput[]): Map<string, 
   }
   return out;
 }
+
+// An agent-authored panel that came back without a date is placed by its
+// readings: the same analyte carrying the same value in a deterministic CCDA
+// panel (results or vitals) is the export's own timestamp for that reading. The
+// date that explains a strict majority of the matched readings wins; a panel no
+// deterministic reading can place, or one split across dates, is dropped rather
+// than filed undated — an undated lab reads as nothing in every series.
+export interface DatedPanelsResult {
+  panels: HealthPanelInput[];
+  dated: number;
+  dropped: number;
+}
+
+function comparableMarkerValue(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(String(value).trim());
+  if (Number.isFinite(n)) return String(n);
+  const s = String(value).trim().toLowerCase();
+  return s || null;
+}
+
+export function dateUndatedPanels(
+  panels: HealthPanelInput[],
+  extraction: Pick<CcdaHealthExtraction, "results_panels" | "vitals_panels"> | null | undefined
+): DatedPanelsResult {
+  const index = new Map<string, Map<string, string>>(); // date → analyte key → value
+  for (const panel of [...(extraction?.results_panels ?? []), ...(extraction?.vitals_panels ?? [])]) {
+    const date = String(panel?.doc_date ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    let byKey = index.get(date);
+    if (!byKey) {
+      byKey = new Map<string, string>();
+      index.set(date, byKey);
+    }
+    for (const marker of Array.isArray(panel.markers) ? panel.markers : []) {
+      const name = String((marker as any)?.name ?? "");
+      const value = comparableMarkerValue((marker as any)?.value);
+      if (!name || value == null) continue;
+      byKey.set(canonicalMarker(name).key || normalizeMarkerName(name), value);
+    }
+  }
+
+  const out: HealthPanelInput[] = [];
+  let dated = 0;
+  let dropped = 0;
+  for (const panel of panels) {
+    if (panel?.doc_date) {
+      out.push(panel);
+      continue;
+    }
+    const votes = new Map<string, number>();
+    let matched = 0;
+    for (const marker of Array.isArray(panel?.markers) ? panel.markers : []) {
+      const name = String((marker as any)?.name ?? "");
+      const value = comparableMarkerValue((marker as any)?.value);
+      if (!name || value == null) continue;
+      const key = canonicalMarker(name).key || normalizeMarkerName(name);
+      for (const [date, byKey] of index) {
+        if (byKey.get(key) === value) {
+          votes.set(date, (votes.get(date) ?? 0) + 1);
+          matched++;
+        }
+      }
+    }
+    const ranked = [...votes.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? 1 : -1));
+    const best = ranked[0];
+    if (best && best[1] * 2 > matched) {
+      out.push({ ...panel, doc_date: best[0] });
+      dated++;
+    } else {
+      dropped++;
+    }
+  }
+  return { panels: out, dated, dropped };
+}
