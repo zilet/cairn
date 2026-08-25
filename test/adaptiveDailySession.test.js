@@ -850,10 +850,26 @@ test("skip and undo target the active composition session across duplicate legac
   assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM session_skips WHERE session_id = ?`).get(earlier).n, 1);
 });
 
-test("finished and skipped session evidence lock a different replacement", () => {
+test("a finished or all-skipped session with no logged sets can still be replaced, and opens clean", () => {
   seedPlan();
   const finished = prepare({ date: DATE, source: "manual_plan", day_number: 1 });
+  repo.skipExercise("Barbell Bench Press", DATE);
   repo.finishSession(finished.session.id, null);
+  assert.ok(db.prepare(`SELECT finished_at FROM sessions WHERE id = ?`).get(finished.session.id).finished_at);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM session_skips WHERE session_id = ?`).get(finished.session.id).n, 1);
+
+  // Walking away from a day you never lifted on and picking another is allowed —
+  // the abandoned prescription's skips and finish stamp go with it.
+  const replaced = prepare({ date: DATE, source: "manual_plan", day_number: 2, replace: true });
+  assert.equal(replaced.reused, false);
+  assert.equal(replaced.daily_session.version, 2);
+  assert.equal(replaced.session_id, finished.session.id);
+  assert.equal(db.prepare(`SELECT finished_at FROM sessions WHERE id = ?`).get(finished.session.id).finished_at, null);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM session_skips WHERE session_id = ?`).get(finished.session.id).n, 0);
+  assert.equal(db.prepare(`SELECT plan_day_id FROM sessions WHERE id = ?`).get(finished.session.id).plan_day_id, replaced.daily_session.plan_day_id);
+
+  // Athlete-authored words about the session still lock it.
+  repo.finishSession(finished.session.id, "Shoulder felt off, stopped early.");
   assert.throws(
     () =>
       prepare({
@@ -862,26 +878,11 @@ test("finished and skipped session evidence lock a different replacement", () =>
         replace: true,
         session: { name: "Different", why: "Changed", items: [] },
       }),
-    /finished session/
+    /session notes/
   );
-
-  const otherDate = "2031-04-15";
-  const skipped = prepare({ date: otherDate, source: "manual_plan", day_number: 1 });
-  repo.skipExercise("Barbell Bench Press", otherDate);
-  assert.throws(
-    () =>
-      prepare({
-        date: otherDate,
-        source: "athlete_override",
-        replace: true,
-        session: { name: "Different", why: "Changed", items: [] },
-      }),
-    /session skips/
-  );
-  assert.ok(skipped.session.id);
 });
 
-test("unrelated cardio does not lock strength, while matching prepared cardio does", () => {
+test("a cardio activity never locks the day, even when it matches the prescribed run", () => {
   seedPlan();
   prepare({
     date: DATE,
@@ -905,27 +906,26 @@ test("unrelated cardio does not lock strength, while matching prepared cardio do
   });
   assert.equal(changed.daily_session.version, 2);
 
+  // A synced run that matches the day's prescribed run is a completed activity in
+  // its own row — it must not pin the athlete to the strength day it rode in on.
   const cardioDate = "2031-04-16";
   prepare({
     date: cardioDate,
     source: "athlete_override",
     session: {
-      name: "Run",
+      name: "Push + run",
       why: "Aerobic work.",
-      items: [{ kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_distance_km: 5 }],
+      items: [
+        { exercise: "Barbell Bench Press", sets: 3, rep_low: 6 },
+        { kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_distance_km: 5 },
+      ],
     },
   });
   repo.addActivity({ date: cardioDate, type: "run", duration_min: 31, distance_km: 5.1, text: "Easy run" });
-  assert.throws(
-    () =>
-      prepare({
-        date: cardioDate,
-        source: "athlete_override",
-        replace: true,
-        session: { name: "Open", why: "Changed", items: [] },
-      }),
-    /matching cardio work/
-  );
+  const switched = prepare({ date: cardioDate, source: "manual_plan", day_number: 2, replace: true });
+  assert.equal(switched.reused, false);
+  assert.equal(switched.daily_session.version, 2);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM activities WHERE date = ?`).get(cardioDate).n, 1);
 });
 
 test("strength item mode and target normalization is coherent", () => {

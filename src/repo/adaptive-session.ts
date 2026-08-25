@@ -783,18 +783,22 @@ function sessionRowsForDate(date: string): any[] {
   return db
     .prepare(
       `SELECT s.*,
-              (SELECT COUNT(*) FROM logged_sets ls WHERE ls.session_id = s.id) AS set_count,
-              (SELECT COUNT(*) FROM session_skips ss WHERE ss.session_id = s.id) AS skip_count
+              (SELECT COUNT(*) FROM logged_sets ls WHERE ls.session_id = s.id) AS set_count
          FROM sessions s WHERE s.date = ? ORDER BY s.id`
     )
     .all(date) as any[];
 }
 
+// What locks a day's composition against replacement: work the athlete actually
+// did, or words they wrote about it. Skips and a finish stamp on a session with no
+// logged sets are bookkeeping of the prescription being replaced, not evidence of
+// training — the athlete is allowed to walk away from a day they never lifted on
+// and pick another (they are cleared on replace, see prepareDailySession). A cardio
+// activity that happens to match a prescribed run is likewise never a lock: the
+// activity row is its own record and survives whatever the strength day becomes.
 function meaningfulSessionReasons(session: any): string[] {
   const reasons: string[] = [];
   if (Number(session?.set_count ?? 0) > 0) reasons.push("logged sets");
-  if (Number(session?.skip_count ?? 0) > 0) reasons.push("session skips");
-  if (session?.finished_at) reasons.push("finished session");
   if (session?.duration_min != null) reasons.push("recorded duration");
   if (boundedText(session?.notes, 1000)) reasons.push("session notes");
   if (session?.soreness != null || session?.performance != null || boundedText(session?.joint_pain, 300)) {
@@ -804,46 +808,7 @@ function meaningfulSessionReasons(session: any): string[] {
   return reasons;
 }
 
-function sportKey(value: unknown): string | null {
-  const text = String(value ?? "").toLowerCase();
-  if (/\b(run|running|jog|jogging)\b/.test(text)) return "run";
-  if (/\b(ride|riding|bike|biking|cycle|cycling)\b/.test(text)) return "ride";
-  if (/\b(row|rowing|erg)\b/.test(text)) return "row";
-  if (/\b(swim|swimming)\b/.test(text)) return "swim";
-  if (/\b(hike|hiking)\b/.test(text)) return "hike";
-  if (/\b(walk|walking)\b/.test(text)) return "walk";
-  return null;
-}
-
-function matchingCardioEvidence(date: string, items: unknown): boolean {
-  const cardioItems = (Array.isArray(items) ? items : []).filter((item: any) => item?.kind === "cardio");
-  if (!cardioItems.length) return false;
-  const activities = db
-    .prepare(`SELECT type, raw_text, duration_min, distance_km FROM activities WHERE date = ? ORDER BY id`)
-    .all(date) as any[];
-  return cardioItems.some((item: any) => {
-    const plannedSport = sportKey(item.exercise);
-    if (!plannedSport) return false;
-    return activities.some((activity) => {
-      const actualSport = sportKey(`${activity.type ?? ""} ${activity.raw_text ?? ""}`);
-      if (actualSport !== plannedSport) return false;
-      const comparisons: boolean[] = [];
-      const plannedDuration = finite(item.target_duration_min);
-      const actualDuration = finite(activity.duration_min);
-      if (plannedDuration && actualDuration)
-        comparisons.push(Math.abs(actualDuration - plannedDuration) / plannedDuration <= 0.35);
-      const plannedDistance = finite(item.target_distance_km);
-      const actualDistance = finite(activity.distance_km);
-      if (plannedDistance && actualDistance)
-        comparisons.push(Math.abs(actualDistance - plannedDistance) / plannedDistance <= 0.35);
-      // Date + sport alone is intentionally insufficient: an unrelated earlier
-      // run must not lock a strength/mixed session unless its prescription agrees.
-      return comparisons.some(Boolean);
-    });
-  });
-}
-
-function assertSessionsUnstarted(date: string, sessions: any[], compositionItems: unknown): void {
+function assertSessionsUnstarted(sessions: any[]): void {
   for (const session of sessions) {
     const reasons = meaningfulSessionReasons(session);
     if (reasons.length) {
@@ -852,9 +817,6 @@ function assertSessionsUnstarted(date: string, sessions: any[], compositionItems
         `daily session cannot be changed because session ${session.id} already has ${reasons.join(", ")}`
       );
     }
-  }
-  if (matchingCardioEvidence(date, compositionItems)) {
-    fail("daily_session_locked", "daily session cannot be changed because its matching cardio work is already logged");
   }
 }
 
@@ -1142,16 +1104,14 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
       }
     }
     const sameDateSessions = sessionRowsForDate(date);
-    const lockItems = current ? parseJson(current.items_json) : prepared.payload.items;
     if (
       current &&
       (exactPlanRetry(current, input, source) || exactAgentJobRetry(current, input, source)) &&
-      (sameDateSessions.some((session) => meaningfulSessionReasons(session).length > 0) ||
-        matchingCardioEvidence(date, lockItems))
+      sameDateSessions.some((session) => meaningfulSessionReasons(session).length > 0)
     ) {
       return { ok: true as const, daily_session: hydrate(current), session_id: current.session_id, reused: true };
     }
-    assertSessionsUnstarted(date, sameDateSessions, lockItems);
+    assertSessionsUnstarted(sameDateSessions);
     let session: any;
     if (current) {
       session = sameDateSessions.find((candidate) => Number(candidate.id) === Number(current.session_id));
@@ -1170,6 +1130,12 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
     // A plan snapshot binds the existing session to that plan day. A custom
     // suggestion owns no weekly-template provenance, so clear any stale link.
     db.prepare(`UPDATE sessions SET plan_day_id = ? WHERE id = ?`).run(prepared.plan_day_id, session.id);
+    // The session has no logged sets (assertSessionsUnstarted just proved it), so
+    // any skips and finish stamp belong to the prescription being replaced: an
+    // athlete who skipped every lift of a day they then abandoned is starting
+    // over, not continuing. Clear them so the new composition opens clean.
+    db.prepare(`DELETE FROM session_skips WHERE session_id = ?`).run(session.id);
+    db.prepare(`UPDATE sessions SET finished_at = NULL WHERE id = ?`).run(session.id);
     const nextVersion = Number(
       (
         db
