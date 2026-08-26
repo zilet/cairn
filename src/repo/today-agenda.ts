@@ -44,7 +44,7 @@ import { estimateExpenditure } from "./expenditure.js";
 import { computeGoalCheck } from "./profile.js";
 import { cutQualityRead, type CutQualityActive } from "./cut-quality.js";
 import { fuelingFollowThroughDue } from "./fueling.js";
-import { addDaysISO, clipText, localDateISO } from "./shared.js";
+import { addDaysISO, clipText, localDateISO, localDayOfStamp } from "./shared.js";
 import { getCachedDayRead } from "./intelligence.js";
 import { listVisibleInsights } from "./coach.js";
 import { listActiveDirectives } from "./directives-read.js";
@@ -334,7 +334,10 @@ function reconcileCandidate(date: string): TodayAgendaCandidate | null {
   // (a page refresh must not silently lose the announcement).
   if (date === today) {
     const appliedToday = listBrainDecisions({ status: "applied", kind: "garmin_reconcile", limit: 20 })
-      .filter((row: any) => row.reversible && String(row.applied_at || "").slice(0, 10) === today)
+      // `applied_at` is a UTC instant; `today` is a local day. Sliced, a merge applied
+      // after dinner west of Greenwich was dated tomorrow and the announcement — with
+      // its Undo — vanished on the very refresh this branch exists to survive.
+      .filter((row: any) => row.reversible && localDayOfStamp(row.applied_at) === today)
       .sort((a: any, b: any) => Number(b.id) - Number(a.id));
     if (appliedToday.length) return garminReconcileAnnouncement(appliedToday[0]);
   }

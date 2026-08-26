@@ -4,6 +4,7 @@ import { db, repo, resetTables } from "./_seed.js";
 import { buildNutritionCheckinPrompt } from "../dist/prompt.js";
 import { addDaysISO } from "../dist/repo/shared.js";
 import { flushBrainEventsForTest, resetBrainEventsForTest } from "../dist/brainEvents.js";
+import { runWithTimeZone } from "../dist/tz.js";
 
 // A fixed "today" so window math is deterministic regardless of the wall clock.
 const TODAY = "2026-07-13";
@@ -88,6 +89,42 @@ test("the 7-day window boundary is inclusive", () => {
   recordAppliedTarget(day(-7));
   logFoodOn(TODAY);
   assert.equal(repo.fuelingFollowThroughDue(TODAY).due, true, "applied exactly 7 days ago is still in-window");
+});
+
+// `applied_at` is a UTC instant while the follow-through window is measured in LOCAL
+// days. Sliced, a change applied at 6 PM west of Greenwich was dated to the next day,
+// which pulled an expired window back open for one more day.
+test("an evening apply is dated by the local day it happened on, not the next UTC one", () => {
+  const zone = "Pacific/Midway"; // UTC-11
+  // 05:00 UTC on day -7 is 18:00 on day -8 in that zone — one day past the window.
+  const decision = repo.recordDecision({
+    effective_date: null,
+    kind: "nutrition_target",
+    domain: "nutrition",
+    summary: "Nudged daily calories up ~200 to match the measured trend.",
+    rationale: null,
+    source: "test",
+    source_ref_type: "nutrition_target",
+    source_ref_key: "1",
+    status: "applied",
+    autonomy_tier: "quiet_apply",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: {},
+    action: {},
+    specialist: null,
+    applied_at: `${day(-7)}T05:00:00Z`,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+  assert.ok(decision.id > 0);
+  logFoodOn(TODAY);
+
+  const out = runWithTimeZone(zone, () => repo.fuelingFollowThroughDue(TODAY));
+  assert.equal(out.applied_on, day(-8), "the change landed on the athlete's evening, not tomorrow");
+  assert.equal(out.due, false, "so its seven-day window has closed");
 });
 
 test("a future-dated change never triggers the follow-up", () => {

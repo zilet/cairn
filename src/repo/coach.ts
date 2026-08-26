@@ -86,7 +86,7 @@ import { readAdherenceModel } from "./brain/read-adherence.js";
 import { getProgress, getRecentSessions, typicalTrainingHour, vouchedRunCompliance } from "./sessions.js";
 import { symptomAreaKey } from "./symptom-area.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
-import { addDaysISO, localDateISO, nowContext } from "./shared.js";
+import { addDaysISO, localDateISO, localDayOfStamp, nowContext } from "./shared.js";
 import { bumpTrainingDataVersion, coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
 import { currentMarkerDataVersion } from "./marker-cache.js";
 import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-context.js";
@@ -2446,7 +2446,9 @@ export interface WeeklyReadFreshness {
 // The freshness verdict for a weekly_read insight row. Legacy / mismatched rows
 // read as fresh (can't tell → never stale), matching the synthesis contract.
 export function weeklyReadFreshness(weekly: any): WeeklyReadFreshness {
-  const as_of = weekly?.created_at ? String(weekly.created_at).slice(0, 10) : null;
+  // created_at is a UTC instant; this date is shown to the athlete as the day the
+  // read was written, so it is framed in their zone rather than sliced.
+  const as_of = weekly?.created_at ? localDayOfStamp(weekly.created_at) : null;
   if (!weekly || weekly.kind !== "weekly_read") return { stale: false, as_of };
   const stored = readWeeklyReadFreshness();
   if (!stored || stored.insight_id !== Number(weekly.id)) return { stale: false, as_of };

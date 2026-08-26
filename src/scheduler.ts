@@ -33,7 +33,7 @@ import {
 } from "./diagnostics.js";
 import { ProviderUnavailableError, schedulerTaskError } from "./provider-unavailable.js";
 import { runWithTimeZone } from "./tz.js";
-import { addDaysISO, nowContext } from "./repo/shared.js";
+import { addDaysISO, localDayOfStamp, nowContext } from "./repo/shared.js";
 import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
 import { runEnergyDeficiencyWatch } from "./domain/brain/energy-deficiency-service.js";
 import {
@@ -671,7 +671,9 @@ export function startScheduler() {
             // resets one the athlete is mid-way through), then advance it a week —
             // but NOT a block that was only just created this slot (give it its week).
             const block = repo.ensureActiveBlock();
-            const startedStamp = String(block.started_at || "").slice(0, 10);
+            // started_at is a UTC ISO instant; the age below is measured against a
+            // LOCAL day, so slicing it aged an evening-created block by a day.
+            const startedStamp = localDayOfStamp(block.started_at) ?? "";
             const ageDays = startedStamp ? daysBetweenStamps(startedStamp, localToday(now)) : 0;
             if (ageDays >= 6) {
               const advanced = repo.advanceBlockWeek();

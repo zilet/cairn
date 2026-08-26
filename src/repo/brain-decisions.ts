@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { db } from "../db.js";
-import { addDaysISO, localDateISO } from "./shared.js";
+import { addDaysISO, localDateISO, localDayOfStamp } from "./shared.js";
 import { type BrainDecision, type BrainDecisionStatus, normalizeBrainDecision } from "../brain/decision-contract.js";
 import {
   type BrainExpectation,
@@ -28,6 +28,23 @@ function parsedObject(value: unknown): Record<string, unknown> | null {
 function isoTimestamp(value: unknown): string | undefined {
   if (typeof value !== "string" || !value) return undefined;
   return value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+}
+
+/**
+ * The LOCAL calendar day a ledger stamp falls on.
+ *
+ * `created_at`/`applied_at` are INSTANTS — SQLite writes them with `datetime('now')`,
+ * which is UTC — while every window below is a local calendar day. Slicing ten
+ * characters off the instant answered the question in UTC, and west of Greenwich that
+ * is tomorrow for the whole evening: a change applied at 8 PM in Boston was dated a
+ * day into the future, so it sorted above changes that landed after it and fell out of
+ * the window it belongs to the moment the window's far edge was today.
+ *
+ * `effective_date` is already a local date and is read as written; only the instants
+ * come through here, which is the same rule `localDayOfStamp` documents.
+ */
+function stampDay(stamp: unknown): string {
+  return localDayOfStamp(stamp) ?? "";
 }
 
 function hydrateDecision(row: any): BrainDecision | null {
@@ -195,7 +212,7 @@ export function landedBrainDecisions(windowDays = 7, asOf = localDateISO()): Lan
   for (const d of listBrainDecisions({ status: "applied", limit: 100 })) {
     const id = Number(d.id);
     if (!Number.isFinite(id)) continue;
-    const landed = String(d.effective_date ?? d.applied_at ?? d.created_at ?? "").slice(0, 10);
+    const landed = String(d.effective_date ?? "").slice(0, 10) || stampDay(d.applied_at) || stampDay(d.created_at);
     if (!landed || landed < floor || landed > asOf) continue;
     out.push({
       id,
@@ -257,7 +274,7 @@ export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
     const explanation = awaitingExplanation(d);
     if (!Number.isFinite(id) || !explanation) continue;
     if (AWAITING_BOOKKEEPING_KINDS.has(String(d.kind))) continue;
-    const decided = String(d.effective_date ?? d.created_at ?? "").slice(0, 10);
+    const decided = String(d.effective_date ?? "").slice(0, 10) || stampDay(d.created_at);
     if (!decided) continue;
     out.push({
       id,
@@ -294,7 +311,7 @@ export function recentAppliedRotations(days = 21, asOf = localDateISO()): Applie
   const applied = listBrainDecisions({ status: "applied", domain: "training", limit: 100 });
   const out: AppliedRotation[] = [];
   for (const d of applied) {
-    const stamp = String(d.applied_at ?? d.created_at ?? "").slice(0, 10);
+    const stamp = stampDay(d.applied_at) || stampDay(d.created_at);
     if (!stamp || stamp < cutoff) continue;
     const swaps = Array.isArray((d.action as any)?.swaps) ? ((d.action as any).swaps as any[]) : [];
     let matched = false;

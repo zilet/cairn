@@ -40,7 +40,7 @@ import {
 import { currentEnergyDeficiencyRead } from "../../repo/energy-deficiency-snapshot.js";
 import { buildTrainingFeedbackExpectations } from "../../repo/brain/change-expectations.js";
 import type { ProposedExpectation } from "../../brain/expectation-contract.js";
-import { addDaysISO, daysBetweenISO, localDateISO } from "../../repo/shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO, localDayOfStamp } from "../../repo/shared.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 
 // One protective move, then a fortnight before another can even be considered. The
@@ -93,14 +93,30 @@ export interface EnergyDeficiencyWatchResult {
  */
 const SETTLED_STATUSES = ["applied", "rejected", "reverted", "canceled"];
 
+/**
+ * The local calendar day a ledger row settled on.
+ *
+ * `applied_at`/`created_at` are INSTANTS — SQLite stamps them with `datetime('now')`,
+ * which is UTC — while `today` here is a local calendar date. Slicing the first ten
+ * characters off the instant therefore read the UTC day, which west of Greenwich is
+ * tomorrow for the whole evening: a raise that landed at 9 PM was dated a day in the
+ * FUTURE, the age came out negative, and the row was discarded as unusable. The
+ * settling window then did not exist for the rest of that evening and the same
+ * standing cluster bought a second protective raise the very next pass. So the
+ * instant goes through `localDayOfStamp`, the one place that frames a stamp in the
+ * active zone; `effective_date` is already a local date and is taken as written.
+ */
+function settledLocalDate(decision: any): string {
+  const instant = decision?.applied_at ?? decision?.created_at ?? null;
+  return localDayOfStamp(instant) ?? String(decision?.effective_date ?? "").slice(0, 10);
+}
+
 function settledWithinCooldown(today: string): boolean {
   try {
     return ourDecisions(SETTLED_STATUSES).some((decision) => {
       // Only an applied row carries `applied_at`; a decline is dated by when it was
       // decided. The effective date is the last resort, for a row carrying neither.
-      const settled = String(
-        (decision as any).applied_at ?? (decision as any).created_at ?? decision.effective_date ?? ""
-      ).slice(0, 10);
+      const settled = settledLocalDate(decision);
       const age = /^\d{4}-\d{2}-\d{2}$/.test(settled) ? daysBetweenISO(today, settled) : null;
       return age != null && age >= 0 && age < ACTION_COOLDOWN_DAYS;
     });

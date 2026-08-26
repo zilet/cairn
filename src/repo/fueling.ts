@@ -9,7 +9,7 @@ import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { listBrainDecisions } from "./brain-decisions.js";
 import { invalidateDayRead } from "./day-read.js";
-import { daysBetweenISO, localDateISO } from "./shared.js";
+import { daysBetweenISO, localDateISO, localDayOfStamp } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
 // A target change follows through for a week: long enough to feel the difference,
@@ -38,7 +38,12 @@ function latestAppliedTargetDecision(): any | null {
 // The local calendar day (YYYY-MM-DD) a decision took effect: prefer applied_at,
 // fall back to effective_date. Null when neither is a usable date.
 function appliedOnDate(decision: any): string | null {
-  const raw = String(decision?.applied_at ?? decision?.effective_date ?? "").slice(0, 10);
+  // `applied_at` is a UTC instant — framed in the active zone, not sliced, or an
+  // evening apply opens its follow-through window a day late. `effective_date` is
+  // already a local day.
+  const raw = decision?.applied_at
+    ? (localDayOfStamp(decision.applied_at) ?? "")
+    : String(decision?.effective_date ?? "").slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
 }
 

@@ -6,6 +6,8 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, seedWeight, seedTrainingDay, localDaysAgo } from "./_seed.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
+import { runWithTimeZone } from "../dist/tz.js";
 
 beforeEach(() => {
   // The isolate import wipes the whole DB before each test; this is belt-and-braces
@@ -94,4 +96,21 @@ test("an id mismatch (a newer, unstamped weekly read) reads fresh — the signat
 test("weeklyReadFreshness verdict helper is null-safe and only judges weekly_read rows", () => {
   assert.deepEqual(repo.weeklyReadFreshness(null), { stale: false, as_of: null });
   assert.equal(repo.weeklyReadFreshness({ kind: "connection", id: 1 }).stale, false);
+});
+
+// `created_at` is a UTC instant; `as_of` is the day the athlete is told the read was
+// written. Sliced, a read generated on a Sunday evening was shown as Monday's.
+test("as_of is the local day the read was written, not the next UTC one", () => {
+  const zone = "Pacific/Midway"; // UTC-11
+  const ins = addWeekly();
+  const localDay = localDateISO(new Date(), zone);
+  // 05:00 UTC on the following day is 18:00 on `localDay` in that zone.
+  db.prepare(`UPDATE insights SET created_at = ? WHERE id = ?`).run(
+    `${addDaysISO(localDay, 1)} 05:00:00`,
+    Number(ins.id),
+  );
+
+  const row = db.prepare(`SELECT * FROM insights WHERE id = ?`).get(Number(ins.id));
+  const freshness = runWithTimeZone(zone, () => repo.weeklyReadFreshness(row));
+  assert.equal(freshness.as_of, localDay);
 });

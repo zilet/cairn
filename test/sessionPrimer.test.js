@@ -13,6 +13,8 @@ import assert from "node:assert/strict";
 import { db, repo, localDaysAgo, seedSleep } from "./_seed.js";
 import { sessionPrimer } from "../dist/repo/session-primer.js";
 import { recordDecision } from "../dist/repo/brain-decisions.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
+import { runWithTimeZone } from "../dist/tz.js";
 
 function reset() {
   for (const t of [
@@ -294,6 +296,54 @@ test("an applied rotation reads as 'Swapped in X for Y' in changed[] and suppres
     "the swapped-in movement is NOT also listed as a mysteriously-fresh row"
   );
   assert.match(primer.approach, /fresh/i, "the approach reflects the fresh variation");
+});
+
+// The rotation window is "since you last trained" — a LOCAL day — while `applied_at`
+// is a UTC instant. Sliced, a swap the athlete already trained through was dated a day
+// forward into the window and re-announced as news at their next session.
+test("a rotation landed the evening BEFORE the last session is not re-announced as new", () => {
+  const zone = "Pacific/Midway"; // UTC-11
+  const localDay = localDateISO(new Date(), zone);
+  const dayAgo = (n) => addDaysISO(localDay, -n);
+
+  makeExercise("Back Squat", "quads");
+  makeExercise("Front Squat", "quads");
+  for (const d of [35, 30, 25, 20, 15, 10]) logSet("Back Squat", dayAgo(d), { weight: 225, reps: 5, rir: 2 });
+  planDay(1, "Lower", [{ exercise: "Front Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 }]);
+
+  const proposal = repo.createProposal("exercise-swap", "rotate a same-pattern variation", "", {
+    summary: "Rotated Front Squat in for Back Squat to break the plateau.",
+    changes: [
+      { day_number: 1, swap: { from: "Back Squat", to: "Front Squat" }, reason: "Rotate a same-pattern variation in." },
+    ],
+  });
+  recordDecision({
+    effective_date: null,
+    kind: "exercise_rotation",
+    domain: "training",
+    summary: "Rotated Front Squat in for Back Squat to break the plateau.",
+    rationale: null,
+    source: "exercise-swap",
+    source_ref_type: "plan_proposal",
+    source_ref_key: String(proposal.id),
+    status: "applied",
+    autonomy_tier: "quiet_apply",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: {},
+    action: { proposal_id: proposal.id },
+    specialist: null,
+    // 05:00 UTC on the last training day is 18:00 the evening BEFORE it in that zone,
+    // so the athlete already trained through this swap.
+    applied_at: `${dayAgo(10)}T05:00:00.000Z`,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+
+  const primer = runWithTimeZone(zone, () => sessionPrimer(undefined, { dayNumber: 1 }));
+  assert.ok(!primer?.changed?.some((c) => c.kind === "rotation"), "old news is not announced again");
 });
 
 test("bare inputs: no plan → null, and a plan day with no signals → null (silence beats filler)", () => {

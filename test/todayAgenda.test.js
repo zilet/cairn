@@ -29,7 +29,8 @@ import {
   revertDecision,
 } from "../dist/domain/brain/autonomy-service.js";
 import { todayRouter } from "../dist/routes/today.js";
-import { localDateISO } from "../dist/repo/shared.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
+import { runWithTimeZone } from "../dist/tz.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
 // arbiter sees exactly (and only) what each test seeds.
@@ -1142,6 +1143,32 @@ test("the announcement stays reachable across a same-day re-render (no duplicate
 
   const applied = repo.listBrainDecisions({ status: "applied", kind: "garmin_reconcile" });
   assert.equal(applied.length, 1, "re-rendering Today never re-records the merge");
+});
+
+// The announcement's Undo window is "applied earlier TODAY", and `applied_at` is a UTC
+// instant. Sliced, a merge applied after dinner west of Greenwich was dated tomorrow,
+// the equality failed, and the announcement — with its one-tap Undo — vanished on the
+// very refresh this branch exists to survive.
+test("a merge applied this evening keeps its announcement across a refresh", () => {
+  const zone = "Pacific/Midway"; // UTC-11
+  const localDay = localDateISO(new Date(), zone);
+  seedUnreconciledGarminStrength(localDay, "ext-evening");
+
+  const first = runWithTimeZone(zone, () => repo.todayAgenda());
+  const firstCard = [...first.primary, ...first.more].find((c) => c.kind === "reconcile");
+  assert.ok(firstCard, "the merge announces on the render that applied it");
+  const decisionId = Number(firstCard.secondary_action.payload);
+
+  // Re-stamp the apply as 18:00 that local evening (05:00 UTC the following day).
+  db.prepare(`UPDATE brain_decisions SET applied_at = ? WHERE id = ?`).run(
+    `${addDaysISO(localDay, 1)} 05:00:00`,
+    decisionId,
+  );
+
+  const second = runWithTimeZone(zone, () => repo.todayAgenda());
+  const secondCard = [...second.primary, ...second.more].find((c) => c.kind === "reconcile");
+  assert.ok(secondCard, "the announcement survives the refresh");
+  assert.equal(Number(secondCard.secondary_action.payload), decisionId, "the same one, not a fresh merge");
 });
 
 test("Undo restores the pre-merge state (session unlinked, garmin_json restored)", () => {

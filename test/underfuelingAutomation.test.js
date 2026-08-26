@@ -7,6 +7,7 @@ import { runEnergyDeficiencyWatch } from "../dist/domain/brain/energy-deficiency
 import { recordDecision } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy, revertDecision } from "../dist/domain/brain/autonomy-service.js";
+import { runWithTimeZone } from "../dist/tz.js";
 
 const today = () => localDateISO();
 
@@ -519,6 +520,30 @@ test("the fortnight of silence starts when the change LANDS, not when it is deci
   // rather than by the in-flight guard — and the cooldown is what a fortnight of
   // repeated passes runs into.
   const after = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(after.action, "none");
+  assert.match(after.reason, /settling window/i);
+});
+
+// `applied_at` is an INSTANT stamped by datetime('now') — UTC — while the watch runs
+// on a LOCAL calendar day. West of Greenwich the two disagree every evening: a raise
+// that landed at 6 PM carries a UTC stamp dated tomorrow, and reading the stamp's
+// first ten characters dated the landing in the future. The window then held nothing
+// at all for the rest of that evening, and the same standing cluster bought a second
+// raise on the very next pass.
+test("a raise that landed this evening is inside the window, not dated into tomorrow", () => {
+  const zone = "Pacific/Midway"; // UTC-11, so a UTC stamp is a day ahead all evening
+  seedTarget(2200);
+  seedRecoverySignals();
+  assert.equal(runEnergyDeficiencyWatch(today(), { read: clusterRead() }).action, "protective_raise_scheduled");
+  assert.ok(applyDueAnnouncedDecisions("2099-01-01").applied.length >= 1);
+
+  const zoneToday = localDateISO(new Date(), zone);
+  // 05:00 UTC on the day AFTER the local one is 6 PM of that local evening.
+  db.prepare(`UPDATE brain_decisions SET applied_at = ? WHERE status = 'applied'`).run(
+    `${addDaysISO(zoneToday, 1)} 05:00:00`,
+  );
+
+  const after = runWithTimeZone(zone, () => runEnergyDeficiencyWatch(zoneToday, { read: clusterRead() }));
   assert.equal(after.action, "none");
   assert.match(after.reason, /settling window/i);
 });

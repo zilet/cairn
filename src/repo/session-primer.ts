@@ -36,7 +36,7 @@ import {
   type Prescription,
 } from "./progression.js";
 import { directivesForCoach } from "./propagation.js";
-import { localDateISO } from "./shared.js";
+import { localDateISO, localDayOfStamp } from "./shared.js";
 import {
   activeRelevantTrainingSymptoms,
   activeSystemicTrainingSymptoms,
@@ -234,7 +234,9 @@ function appliedRotationsForDay(
     return out;
   }
   for (const decision of decisions) {
-    const when = String(decision?.applied_at ?? decision?.created_at ?? "").slice(0, 10);
+    // Both stamps are UTC instants, and `windowStart` is a local day: sliced, an
+    // evening rotation was dated tomorrow and outlived the window it belongs to.
+    const when = localDayOfStamp(decision?.applied_at ?? decision?.created_at) ?? "";
     if (!when || (windowStart && when < windowStart)) continue;
     const action = (decision?.action ?? {}) as any;
     const proposalId = Number(
