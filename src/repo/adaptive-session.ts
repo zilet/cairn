@@ -160,12 +160,29 @@ function dedupeStartLight(value: unknown): string | null {
   return truncateAtWord(kept.join(" "), 500) || null;
 }
 
+function trustedReach(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  const note = durableSnapshotText(rec.note, 500);
+  const weight = boundedNumber(rec.weight, -1000, 5000);
+  const reps = boundedNumber(rec.reps, 1, 50, true);
+  const amrap = rec.amrap === true;
+  if (note == null && weight == null && reps == null && !amrap) return null;
+  return {
+    ...(weight != null ? { weight } : {}),
+    ...(reps != null ? { reps } : {}),
+    ...(note != null ? { note } : {}),
+    ...(amrap ? { amrap: true } : {}),
+  };
+}
+
 function trustedItemMetadata(
   item: Record<string, unknown>,
   trusted: boolean
 ): Record<string, unknown> {
   if (!trusted) return {};
   const provenance = normalizeJsonValue(item.brain_change_reason_provenance);
+  const reach = trustedReach(item.reach);
   return {
     brain_decision_id: boundedNumber(item.brain_decision_id, 1, Number.MAX_SAFE_INTEGER, true),
     brain_change_summary: durableSnapshotText(item.brain_change_summary, 500),
@@ -174,6 +191,7 @@ function trustedItemMetadata(
       provenance && typeof provenance === "object" && !Array.isArray(provenance) ? provenance : null,
     brain_change_reversible:
       item.brain_change_reversible == null ? null : item.brain_change_reversible === true,
+    ...(reach ? { reach } : {}),
   };
 }
 
@@ -1009,16 +1027,18 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
           },
           decision.envelope
         ).session ??
-        deterministicComposedSession({
-          ...decision.envelope,
-          template: {
-            ...decision.envelope.template,
-            day_number:
-              input.day_number != null ? Number(input.day_number) : decision.envelope.template.day_number,
-            plan_day_id: manualPlan.plan_day_id,
-            intent: "template",
-          },
-        })
+        // Pass the live envelope so reconcile and persist share one object.
+        deterministicComposedSession(
+          Object.assign(decision.envelope, {
+            template: {
+              ...decision.envelope.template,
+              day_number:
+                input.day_number != null ? Number(input.day_number) : decision.envelope.template.day_number,
+              plan_day_id: manualPlan.plan_day_id,
+              intent: "template",
+            },
+          })
+        )
       : null;
   const boundedAgent =
     canonicalAgent && decision

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { composeDailySession } from "../dist/coachOps.js";
 import { deterministicComposedSession, normalizeComposedSession } from "../dist/repo/daily-composition.js";
+import { REACH_NO_ROOM_WHY } from "../dist/repo/daily-decision.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { db, repo, resetTables } from "./_seed.js";
 
@@ -1006,6 +1007,8 @@ test("a peak day renders BOTH tiers: the heavy single ahead of its back-off bloc
   assert.equal(top.rep_high, 1);
   assert.equal(top.mode, "reps");
   assert.match(top.note, /\S/, "and it says what to do with it");
+  assert.equal(top.reach.weight, 275);
+  assert.equal(top.reach.reps, 1);
 
   assert.equal(block.target_weight, 225, "the back-off block follows, untouched");
   assert.equal(block.sets, 3);
@@ -1150,4 +1153,371 @@ test("a fully-budgeted day never renders more items than its own cap, even with 
   assert.equal(session.items.length, 7, "no top set fits once the day is already at its own cap");
   assert.ok(!session.items.some((i) => i.target_weight === 150), "no heavy single was seated on a full day");
   assert.equal(validation.ok, true);
+});
+
+function reachCandidate(exercise, target_weight, extra = {}) {
+  return {
+    exercise,
+    muscle_group: extra.muscle_group ?? null,
+    action: extra.action ?? "overload",
+    reason_code: extra.reason_code ?? null,
+    substitution_for: null,
+    note: null,
+    current_target: {
+      mode: "reps",
+      sets: extra.sets ?? 3,
+      rep_low: extra.rep_low ?? 5,
+      rep_high: extra.rep_high ?? 7,
+      target_weight,
+      target_seconds: null,
+    },
+    authorized_target: {
+      mode: "reps",
+      sets: extra.sets ?? 3,
+      rep_low: extra.rep_low ?? 5,
+      rep_high: extra.rep_high ?? 7,
+      target_weight,
+      target_seconds: null,
+    },
+  };
+}
+
+function reachEnvelope(over = {}) {
+  return envelope({
+    reach: {
+      level: "push",
+      backed_by: ["session_quality"],
+      why: "You've earned a heavier look at this one today",
+    },
+    ...over,
+  });
+}
+
+function logWorking(exercise, weight, date = "2031-06-20") {
+  repo.logSetByName({ date, exercise, weight, reps: 5 });
+}
+
+function logBodyweight(exercise, date = "2031-06-20") {
+  repo.logSetByName({ date, exercise, reps: 8 });
+}
+
+test("a reach day injects exactly one top set on the first compound", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  logWorking("Back Squat", 225);
+  logWorking("Bench Press", 155);
+  const env = reachEnvelope({
+    candidates: [
+      reachCandidate("Back Squat", 225, { muscle_group: "quads" }),
+      reachCandidate("Bench Press", 155, { muscle_group: "chest", rep_low: 6, rep_high: 8 }),
+    ],
+  });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 },
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+    ]),
+    env
+  );
+  assert.ok(session);
+  const squats = session.items.filter((i) => i.exercise === "Back Squat");
+  assert.equal(squats.length, 2, "the first compound splits into reach + working");
+  assert.equal(squats[0].sets, 1);
+  assert.equal(squats[0].target_weight, 240, "round5(225 × 1.075)");
+  assert.equal(squats[0].rep_low, 3);
+  assert.equal(squats[0].rep_high, 5);
+  assert.equal(squats[0].reach.weight, 240);
+  assert.equal(squats[1].target_weight, 225);
+  assert.equal(squats[1].sets, 3);
+  assert.equal(session.items.filter((i) => i.exercise === "Bench Press").length, 1, "later lifts stay one card");
+  assert.equal(validation.reach_landed, true);
+  assert.equal(env.reach.level, "push");
+  assert.ok(!env.soft_preferences.some((e) => e.code === "reach_no_room"));
+});
+
+test("an assisted lift on a reach day gets an AMRAP note, not a positive load", () => {
+  repo.upsertExercise({ name: "Pull-up", muscle_group: "lats", mode: "reps" });
+  logWorking("Pull-up", -30);
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Pull-up", sets: 3, rep_low: 6, rep_high: 8, target_weight: -30 }]),
+    reachEnvelope({
+      candidates: [reachCandidate("Pull-up", -30, { muscle_group: "lats", rep_low: 6, rep_high: 8 })],
+    })
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 1, "no extra item — the last working set is the reach");
+  assert.equal(session.items[0].target_weight, -30, "assistance is unchanged");
+  assert.match(session.items[0].note, /last set|clean reps|one in reserve|one left in the tank/i);
+  assert.equal(session.items[0].reach.amrap, true);
+});
+
+test("a bodyweight lift on a reach day also gets the AMRAP note", () => {
+  repo.upsertExercise({ name: "Push-up", muscle_group: "chest", mode: "reps" });
+  logBodyweight("Push-up");
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Push-up", sets: 3, rep_low: 8, rep_high: 12, target_weight: null }]),
+    reachEnvelope({
+      candidates: [reachCandidate("Push-up", null, { muscle_group: "chest", rep_low: 8, rep_high: 12 })],
+    })
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 1);
+  assert.equal(session.items[0].target_weight, null);
+  assert.equal(session.items[0].reach.amrap, true);
+});
+
+test("a reduced first item never hosts — reach lands on the next compound", () => {
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  logWorking("Bench Press", 155);
+  logWorking("Back Squat", 225);
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Bench Press", sets: 4, rep_low: 6, rep_high: 8, target_weight: 155 },
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 },
+    ]),
+    reachEnvelope({
+      muscles: { required: [], allowed: [], reduced: ["chest"], excluded: [] },
+      candidates: [
+        reachCandidate("Bench Press", 155, { muscle_group: "chest", rep_low: 6, rep_high: 8 }),
+        reachCandidate("Back Squat", 225, { muscle_group: "quads" }),
+      ],
+    })
+  );
+  assert.ok(session);
+  const bench = session.items.filter((i) => i.exercise === "Bench Press");
+  const squats = session.items.filter((i) => i.exercise === "Back Squat");
+  assert.equal(bench.length, 1, "the reduced lift stays one card");
+  assert.equal(bench[0].sets, 2, "and is still clamped");
+  assert.equal(bench[0].reach, undefined, "it does not host");
+  assert.equal(squats.length, 2, "reach lands on the next eligible compound");
+  assert.equal(squats[0].sets, 1);
+  assert.equal(squats[0].reach.weight, 240);
+});
+
+test("when no eligible host remains, no reach item is injected", () => {
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  logWorking("Bench Press", 155);
+  const env = reachEnvelope({
+    muscles: { required: [], allowed: [], reduced: ["chest"], excluded: [] },
+    candidates: [reachCandidate("Bench Press", 155, { muscle_group: "chest", rep_low: 6, rep_high: 8 })],
+  });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([{ exercise: "Bench Press", sets: 4, rep_low: 6, rep_high: 8, target_weight: 155 }]),
+    env
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 1);
+  assert.equal(session.items[0].reach, undefined);
+  assert.equal(validation.reach_landed, false);
+  assert.equal(env.reach.level, "push");
+  assert.ok(REACH_NO_ROOM_WHY.includes(env.reach.why));
+  assert.ok(env.soft_preferences.some((e) => e.code === "reach_no_room"));
+  assert.ok(!env.precedence.includes("backed_day_reach"));
+  assert.ok(!env.precedence.includes("reach_no_room"), "no-room is soft-only");
+});
+
+test("a saturated surviving host is skipped even when it is not reduced", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  logWorking("Back Squat", 225);
+  logWorking("Bench Press", 155);
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 },
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+    ]),
+    reachEnvelope({
+      muscles: { required: [], allowed: [], reduced: [], excluded: [], saturated: ["quads"] },
+      candidates: [
+        reachCandidate("Back Squat", 225, { muscle_group: "quads" }),
+        reachCandidate("Bench Press", 155, { muscle_group: "chest", rep_low: 6, rep_high: 8 }),
+      ],
+    })
+  );
+  assert.ok(session);
+  assert.equal(session.items.filter((i) => i.exercise === "Back Squat").length, 1, "saturated squat does not host");
+  const benches = session.items.filter((i) => i.exercise === "Bench Press");
+  assert.equal(benches.length, 2, "the next unsaturated compound hosts");
+  assert.equal(benches[0].reach.weight, 165, "round5(155 × 1.075)");
+});
+
+test("a host with no muscle group is skipped — unknown is not safe", () => {
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  logWorking("Bench Press", 155);
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Mystery Lift", sets: 3, rep_low: 8, rep_high: 10, target_weight: null },
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+    ]),
+    reachEnvelope({
+      candidates: [reachCandidate("Bench Press", 155, { muscle_group: "chest", rep_low: 6, rep_high: 8 })],
+    })
+  );
+  assert.ok(session);
+  assert.equal(
+    session.items.filter((i) => i.exercise === "Mystery Lift").length,
+    1,
+    "the novel movement is kept"
+  );
+  const benches = session.items.filter((i) => i.exercise === "Bench Press");
+  assert.equal(benches.length, 2, "reach waits for a known group");
+  assert.ok(benches[0].reach);
+});
+
+test("reach load comes from logged working weight, not the stale plan number", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  logWorking("Back Squat", 50);
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 27 }]),
+    reachEnvelope({
+      candidates: [reachCandidate("Back Squat", 27, { muscle_group: "quads" })],
+    })
+  );
+  assert.ok(session);
+  assert.equal(session.items[0].target_weight, 55, "round5(50 × 1.075)");
+  assert.equal(session.items[0].reach.weight, 55);
+  assert.equal(session.items[1].target_weight, 27, "the working block keeps the item target");
+});
+
+test("a heavier look that does not exceed the item target is skipped", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  logWorking("Back Squat", 100);
+  const env = reachEnvelope({
+    candidates: [reachCandidate("Back Squat", 110, { muscle_group: "quads" })],
+  });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 110 }]),
+    env
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 1);
+  assert.equal(session.items[0].target_weight, 110);
+  assert.equal(session.items[0].reach, undefined);
+  assert.equal(validation.reach_landed, false);
+  assert.ok(REACH_NO_ROOM_WHY.includes(env.reach.why));
+});
+
+test("a first eligible host that cannot seat a heavier look does not consume — the next compound hosts", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  logWorking("Back Squat", 100);
+  logWorking("Bench Press", 155);
+  const env = reachEnvelope({
+    candidates: [
+      reachCandidate("Back Squat", 110, { muscle_group: "quads" }),
+      reachCandidate("Bench Press", 155, { muscle_group: "chest", rep_low: 6, rep_high: 8 }),
+    ],
+  });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 110 },
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+    ]),
+    env
+  );
+  assert.ok(session);
+  const squats = session.items.filter((i) => i.exercise === "Back Squat");
+  const benches = session.items.filter((i) => i.exercise === "Bench Press");
+  assert.equal(squats.length, 1, "the first compound stays one card — round5(100 × 1.075) is not above 110");
+  assert.equal(squats[0].reach, undefined);
+  assert.equal(benches.length, 2, "the next compound hosts the reach");
+  assert.equal(benches[0].sets, 1);
+  assert.equal(benches[0].target_weight, 165, "round5(155 × 1.075)");
+  assert.equal(benches[0].reach.weight, 165);
+  assert.equal(validation.reach_landed, true);
+  assert.ok(!env.soft_preferences.some((e) => e.code === "reach_no_room"));
+});
+
+test("a null-target loaded lift with no history is skipped, not AMRAP'd", () => {
+  repo.upsertExercise({ name: "Incline Press", muscle_group: "chest", mode: "reps" });
+  const env = reachEnvelope({
+    candidates: [reachCandidate("Incline Press", null, { muscle_group: "chest" })],
+  });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([{ exercise: "Incline Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: null }]),
+    env
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 1);
+  assert.equal(session.items[0].target_weight, null);
+  assert.equal(session.items[0].reach, undefined, "no AMRAP on an unlogged loaded lift");
+  assert.equal(validation.reach_landed, false);
+  assert.ok(REACH_NO_ROOM_WHY.includes(env.reach.why));
+});
+
+test("hold_aggression keeps reach but skips the challenge item", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 }]),
+    reachEnvelope({
+      candidates: [reachCandidate("Back Squat", 225, { muscle_group: "quads" })],
+      precedence: ["reach_trimmed_by_fueling"],
+      soft_preferences: [
+        { code: "reach_trimmed_by_fueling", detail: "Fueling keeps today's reach to the working sets" },
+      ],
+    })
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 1);
+  assert.equal(session.items[0].target_weight, 225);
+  assert.equal(session.items[0].reach, undefined);
+});
+
+test("a reach top set counts as one working set against the day's cap", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  logWorking("Back Squat", 225);
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 }]),
+    reachEnvelope({
+      candidates: [reachCandidate("Back Squat", 225, { muscle_group: "quads" })],
+      caps: { volume: "reduced", intensity: "normal", duration_min: 60 },
+    })
+  );
+  assert.ok(session);
+  const total = session.items.reduce((sum, i) => sum + (Number(i.sets) || 0), 0);
+  assert.ok(total <= 12, `${total} sets is inside the reduced budget`);
+  assert.equal(session.items[0].sets, 1);
+});
+
+test("a fully-budgeted reach day keeps push and says the reach lives in the working sets", () => {
+  const names = ["Lift A", "Lift B", "Lift C", "Lift D", "Lift E", "Lift F", "Lift G"];
+  const candidates = [];
+  const items = [];
+  for (const name of names) {
+    repo.upsertExercise({ name, muscle_group: "quads", mode: "reps" });
+    logWorking(name, 100);
+    candidates.push(reachCandidate(name, 100, { muscle_group: "quads", sets: 1, rep_low: 5, rep_high: 5 }));
+    items.push({ exercise: name, sets: 1, rep_low: 5, rep_high: 5, target_weight: 100 });
+  }
+  const env = reachEnvelope({
+    candidates,
+    caps: { volume: "reduced", intensity: "normal", duration_min: 90 },
+    precedence: ["backed_day_reach"],
+    rationale: [
+      { code: "template_rotation", text: "Training day." },
+      { code: "backed_day_reach", text: "You've earned a heavier look at this one today" },
+    ],
+  });
+  const { session, validation } = normalizeComposedSession(agentSession(items), env);
+  assert.ok(session);
+  assert.equal(session.items.length, 7, "no extra item fits once the day is already at its cap");
+  assert.ok(!session.items.some((i) => i.reach), "no reach metadata on a card");
+  assert.equal(validation.reach_landed, false);
+  assert.equal(env.reach.level, "push");
+  assert.ok(REACH_NO_ROOM_WHY.includes(env.reach.why));
+  assert.ok(env.rationale.some((line) => line.code === "reach_no_room"));
+  assert.ok(!env.rationale.some((line) => line.code === "backed_day_reach"));
+  assert.doesNotMatch(env.reach.why, /heavier look|top set if the bar/i);
+});
+
+test("a non-reach day is unchanged by the reach injection path", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 }]),
+    envelope({ candidates: [reachCandidate("Back Squat", 225, { muscle_group: "quads" })] })
+  );
+  assert.equal(session.items.length, 1);
+  assert.equal(session.items[0].target_weight, 225);
+  assert.equal(session.items[0].reach, undefined);
 });

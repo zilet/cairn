@@ -462,3 +462,46 @@ test("A one-card-per-exercise day degenerates to the name-keyed behaviour", () =
     { weight: 135, reps: 8, rir: 2, duration_sec: null }
   );
 });
+
+test("a reach card prefills the first row with the top-set load and later rows with the working weight", () => {
+  const context = loadPreparation();
+  const model = context.CairnTodayPlanSessionModel;
+  const item = {
+    exercise: "Back Squat",
+    sets: 4,
+    rep_low: 5,
+    rep_high: 7,
+    target_weight: 225,
+    reach: { weight: 240, reps: 3 },
+  };
+
+  assert.deepEqual(plain(model.prefillFor(item, {}, {})), {
+    weight: 240,
+    reps: 3,
+    rir: null,
+    duration_sec: null,
+  });
+
+  const afterReach = {
+    "Back Squat": [{ exercise: "Back Squat", set_number: 1, weight: 240, reps: 3, rir: 1 }],
+  };
+  assert.deepEqual(plain(model.prefillFor(item, afterReach, {})), {
+    weight: 225,
+    reps: 5,
+    rir: null,
+    duration_sec: null,
+  });
+});
+
+test("rx.top_set prefills the first unlogged row when the card has not split", () => {
+  const context = loadPreparation();
+  const model = context.CairnTodayPlanSessionModel;
+  const item = { exercise: "Back Squat", sets: 3, rep_low: 5, target_weight: 225 };
+  const rx = { top_set: { weight: 240, reps: 3 }, suggested: { weight: 225, rep_low: 5, sets: 3 } };
+  assert.deepEqual(plain(model.prefillFor(item, {}, {}, rx)), {
+    weight: 240,
+    reps: 3,
+    rir: null,
+    duration_sec: null,
+  });
+});

@@ -531,3 +531,90 @@ test("typed RIR on a real rendered card reaches the POST body", () => {
   assert.equal(payload.body.reps, 5);
   assert.equal(payload.body.exercise, "Bench Press");
 });
+
+test("a reach card renders a calm Reach line above the set rows", () => {
+  const cards = loadTodayCards();
+  const html = cards.exerciseCardHtml(
+    {
+      fromSession: true,
+      exercise: "Back Squat",
+      sets: 1,
+      rep_low: 3,
+      rep_high: 5,
+      target_weight: 240,
+      note: "If the warm-ups move well, take one heavier single-set reach here — stop with a rep in hand",
+      reach: {
+        weight: 240,
+        reps: 3,
+        note: "If the warm-ups move well, take one heavier single-set reach here — stop with a rep in hand",
+      },
+    },
+    [],
+    { weight: 240, reps: 3, rir: null },
+    0,
+    null
+  );
+  assert.match(html, />Reach · 240 lb × 3–5 — If the warm-ups move well/);
+  assert.match(html, /class="ex-note">Reach/);
+  assert.ok(html.indexOf("Reach") < html.indexOf('data-logged'), "Reach sits above the set rows");
+  assert.doesNotMatch(html, /you must/i);
+});
+
+test("rx.top_set also draws the Reach line when the composition did not split the card", () => {
+  const cards = loadTodayCards();
+  const html = cards.exerciseCardHtml(
+    { fromPlan: true, exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 },
+    [],
+    { weight: 240, reps: 3 },
+    0,
+    {
+      action: "overload",
+      suggested: { sets: 3, rep_low: 5, rep_high: 7, weight: 225 },
+      top_set: { weight: 240, reps: 3, note: "You've earned a heavier look at this one today" },
+    }
+  );
+  assert.match(html, />Reach · 240 lb × 3 — You've earned a heavier look at this one today/);
+});
+
+test("a 1-set sibling card with a note is not labeled Reach", () => {
+  const cards = loadTodayCards();
+  const html = cards.exerciseCardHtml(
+    {
+      fromSession: true,
+      exercise: "Back Squat",
+      cardKey: "Back Squat::1",
+      sets: 1,
+      rep_low: 5,
+      rep_high: 5,
+      target_weight: 225,
+      note: "Brace first",
+    },
+    [],
+    { weight: 225, reps: 5 },
+    0,
+    null
+  );
+  assert.doesNotMatch(html, />Reach/);
+  assert.match(html, /class="ex-note">Brace first/);
+});
+
+test("Reach line escapes athlete-authored note text", () => {
+  const cards = loadTodayCards();
+  const html = cards.exerciseCardHtml(
+    {
+      fromSession: true,
+      exercise: "Press <heavy>",
+      sets: 1,
+      rep_low: 3,
+      rep_high: 3,
+      target_weight: 100,
+      reach: { weight: 100, reps: 3, note: "go <after> it" },
+    },
+    [],
+    { weight: 100, reps: 3 },
+    0,
+    null
+  );
+  assert.match(html, /go &lt;after&gt; it/);
+  assert.doesNotMatch(html, /go <after> it/);
+});

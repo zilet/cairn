@@ -7,6 +7,7 @@ type TodayPlanSessionModelPlanItem = import("../contracts/client.js").ClientPlan
   target_distance_km?: number | null;
   target_duration_min?: number | null;
   target_zone?: string | null;
+  reach?: { weight?: unknown; reps?: unknown; note?: unknown; amrap?: unknown } | null;
 };
 type TodayPlanSessionModelPlanDay = {
   id?: number;
@@ -211,6 +212,25 @@ type TodayPlanSessionModelApi = {
     return value == null || !Number.isFinite(Number(value)) ? null : Number(value);
   }
 
+  function reachForCard(
+    item: TodayPlanSessionModelPlanItem,
+    rx?: TodayPlanSessionModelPrescription | null,
+    attributed?: TodayPlanSessionCardAttribution | null,
+  ): { weight: number | null; reps: number | null } | null {
+    const own = item.reach && typeof item.reach === "object" ? item.reach as Record<string, unknown> : null;
+    if (own && (finiteOrNull(own.weight) != null || finiteOrNull(own.reps) != null)) {
+      return { weight: finiteOrNull(own.weight), reps: finiteOrNull(own.reps) };
+    }
+    // A split card (peak/reach item + back-off) already carries its own target.
+    // The name-keyed rx.top_set describes the FIRST card, never the block.
+    if (attributed && attributed.siblings > 1) return null;
+    const top = rx && rx.top_set && typeof rx.top_set === "object" ? rx.top_set as unknown as Record<string, unknown> : null;
+    if (top && (finiteOrNull(top.weight) != null || finiteOrNull(top.reps) != null)) {
+      return { weight: finiteOrNull(top.weight), reps: finiteOrNull(top.reps) };
+    }
+    return null;
+  }
+
   function prefillFor(
     item: TodayPlanSessionModelPlanItem,
     loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>,
@@ -222,7 +242,18 @@ type TodayPlanSessionModelApi = {
     // Only the sets THIS card claimed. Reading the name-keyed pile instead is what
     // loaded a back-off card with the near-max single the athlete had just hit.
     const logged = attributed ? attributed.sets : loggedByEx[exercise] || [];
+    const reach = reachForCard(item, rx, attributed);
     if (logged.length) {
+      // After the reach set is in, remaining rows on a mixed card open at the
+      // working weight — not at the heavier look the athlete just logged.
+      if (reach && Number(item.sets) > 1) {
+        return {
+          weight: item.target_weight ?? null,
+          reps: item.rep_low ?? null,
+          rir: null,
+          duration_sec: item.target_seconds ?? null,
+        };
+      }
       const set = logged[logged.length - 1];
       return { weight: set.weight, reps: set.reps, rir: set.rir, duration_sec: set.duration_sec ?? null };
     }
@@ -238,6 +269,14 @@ type TodayPlanSessionModelApi = {
         duration_sec: item.target_seconds ?? null,
       };
       if (own.weight != null || own.reps != null || own.duration_sec != null) return own;
+    }
+    if (reach) {
+      return {
+        weight: reach.weight ?? item.target_weight ?? null,
+        reps: reach.reps ?? item.rep_low ?? null,
+        rir: null,
+        duration_sec: item.target_seconds ?? null,
+      };
     }
     const last = lastSets[exercise];
     if (last) return { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null };

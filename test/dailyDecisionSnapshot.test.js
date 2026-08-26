@@ -360,3 +360,24 @@ test("rest plus explicit Train anyway becomes one capped plan-backed train compo
     1
   );
 });
+
+test("an idle gather omits signal_support and the envelope reach stays null", () => {
+  seedPlan();
+  repo.setSettings({ training_drive: "steady" });
+  const snap = gatherDailyDecisionSnapshot(DATE);
+  assert.equal(snap.signal_support, undefined);
+  const env = buildDailySessionDecision(snap, { now: "2031-06-10T09:00:00.000Z" });
+  assert.equal(env.policy_version, "daily_decision_v6");
+  assert.equal(env.reach.level, null);
+  assert.deepEqual(env.reach.backed_by, []);
+});
+
+test("gather stamps signal_support when training_drive is push", () => {
+  seedPlan();
+  repo.setSettings({ training_drive: "push" });
+  const snap = gatherDailyDecisionSnapshot(DATE);
+  assert.equal(snap.signal_support.training_drive, "push");
+  assert.equal(typeof snap.signal_support.backed, "boolean");
+  assert.equal(typeof snap.signal_support.fresh_brake, "boolean");
+  repo.setSettings({ training_drive: "steady" });
+});

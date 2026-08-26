@@ -207,7 +207,25 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   queue, guarded so hand-logged sets are never overwritten and re-syncs stay idempotent.
 - **Autoregulation feedback** (`sessions.soreness`/`performance`/`joint_pain`) and subjective
   `checkins` are optional signals that INFORM coach selection — they never override progressive
-  overload, never auto-change the plan, and their absence never forces a rest read.
+  overload, never auto-change the plan, and their absence never forces a rest read. **A completed
+  log outranks a felt rating**: a performance rating of 2 counts as a low day only when the session's
+  doses were not all met (`sessionLogContradictsLowRating`, `src/repo/session-dose-log.ts`).
+- **Deload-due is earned by loaded weeks and a log-confirmed shortfall, never the calendar.**
+  `mesocycle()` (`src/repo/program-state.ts`) classifies a week as loaded only against the median of
+  the loaded weeks before it (`classifyLoadedWeeks`); a light week breaks the streak. `deload-due`
+  comes only from a six-week loaded streak, or four weeks plus a shortfall the log confirms plus
+  physiology. Ratings and notes are supporting copy; an applied recovery week only resets the count;
+  a block in weeks 1–2 or its own deload/realization phase never reads deload-due. Do not add a
+  "weeks since" trigger back.
+- **Assist is a sign, and the sign is guarded at log time.** A positive weight typed onto a
+  negative-history lift within 1.5× the recent assist band is stored negative (`assistSignContext`,
+  `src/repo/sessions.ts`; Garmin imports opt out). An exercise's NAME is never a sign — only its
+  history is. `recentWorkingWeight` ranks less assist and more reps as harder.
+- **The daily envelope's up direction is `reach`, a separate field — never a sixth posture.**
+  `SignalPosture` is a five-value safety ladder. `reach.level='push'` licenses ONE challenge top set
+  on the first eligible compound (`src/repo/daily-composition.ts`), computed from the LOGGED working
+  weight, never a plan target; composition reports back so the persisted envelope never promises a
+  reach that is not on a card. `item.reach` persists only for server-derived items.
 - **Day-read prose is a variant set, never one literal.** A stable input fires a stable rule every
   morning, so a single sentence per rule printed verbatim for weeks. Rules carry their own athlete-
   facing `reasons` (`src/repo/brain/day-read-rules.ts`), and every athlete-facing string — outcome
@@ -270,8 +288,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   that fell short, an endurance day blocks only the muscles it actually loaded. `dose_context.comparable`
   is telemetry only; the progression engine reads the per-dose flags, never that session-level rollup
   — restoring the session-level reading is the regression to watch for. `settings.training_drive='push'`
-  has bounded mechanical authority in progression (can buy an earned overload step); every safety
-  floor ignores drive entirely. Details in `docs/ARCHITECTURE.md`.
+  has bounded mechanical authority in progression (keeps an earned overload/vary/introduce step under
+  a fuel hold, top set dropped) — but every promotion still needs `mayPromoteLoad` (RIR 2+ or a
+  progressing trend, an eligible finished dose, no cut pressure), and every safety floor ignores
+  drive entirely. Details in `docs/ARCHITECTURE.md`.
 - **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
   as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.
   Details in `docs/ARCHITECTURE.md`.

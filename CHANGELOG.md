@@ -7,6 +7,14 @@ Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- **The day adapts up, not only down** — on a morning your recovery backs and nothing is holding,
+  the session carries one "Reach": a heavier single set on the main lift (or an all-out clean last
+  set on an assisted or bodyweight lift), prefilled on the card. It only appears when it is actually
+  on a card, and never on a lift that is being kept light.
+- **A recovery week is earned by the log, not the calendar** — Cairn no longer suggests a reset
+  because N weeks have passed or because two sessions felt flat; it looks for a real shortfall in
+  what you lifted plus a drift in your physiology after a run of genuinely loaded weeks. Travel-light
+  weeks no longer count as loaded weeks.
 - **Session logging paints before it waits on the network** — an added exercise, a logged set's
   chip and progress, and a skip all show up instantly, then reconcile with the server; a set
   logged offline stays visibly queued and replays once you're back.
@@ -18,6 +26,12 @@ Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- **Progression asks for more when you have earned it** — under a "push me" drive, completing every
+  set at the top of the range steps the load (and variety and new lifts are no longer held while
+  fueling settles); a plan that sat under your real working weight is re-grounded with the step,
+  not a catch-up hold. Safety floors (pain, soreness, a fresh brake, a cut) are unchanged.
+- **The training block follows your stated priorities** — a race you marked as supporting work no
+  longer turns the block into an aerobic base; strength or muscle leads until the race is close.
 - **A blood-draw morning is sequenced onto one place instead of two** — a same-day lab draw or
   duplicate export upload now folds into a single record automatically, instead of showing up as
   two separate entries with the same readings.
@@ -28,6 +42,12 @@ Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- **A missing minus sign on an assisted lift no longer flips it to weighted work** — a positive
+  weight typed onto a lift you do with assistance is stored as assist again, the plan target follows,
+  and rows already flipped are repaired.
+- **Evenings no longer date things to tomorrow** — a fuel change that landed at dinner could be
+  re-suggested the same night, an evening Garmin merge could lose its Undo on refresh, and a swap you
+  had already trained through could be announced again; all now read the local day.
 - **Switching your session no longer gets stuck** — picking a different day's workout after a
   synced run that happened to match your plan could lock you out of changing your mind; a
   synced cardio activity now stays on its own record and never locks the session it doesn't belong

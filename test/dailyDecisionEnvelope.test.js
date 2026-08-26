@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { buildDailySessionDecision, dailyDecisionFingerprint } from "../dist/repo/daily-decision.js";
+import {
+  buildDailySessionDecision,
+  dailyDecisionFingerprint,
+  REACH_NO_ROOM_WHY,
+  REACH_PUSH_WHY,
+  REACH_TRIMMED_WHY,
+} from "../dist/repo/daily-decision.js";
+import { REACH_AMRAP_NOTES, REACH_TOP_SET_NOTES } from "../dist/repo/daily-composition.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 
 // A minimal, valid decision snapshot. Tests override just the slice they exercise
 // so each scenario is isolated and the fixture stays readable.
@@ -70,7 +78,7 @@ test("same snapshot yields identical fingerprint and envelope content", () => {
   assert.equal(a.input_fingerprint, b.input_fingerprint);
   assert.equal(a.input_fingerprint, dailyDecisionFingerprint(snap));
   assert.deepEqual(a, b);
-  assert.equal(a.policy_version, "daily_decision_v5");
+  assert.equal(a.policy_version, "daily_decision_v6");
 });
 
 test("fingerprint is stable across object key insertion order", () => {
@@ -89,12 +97,12 @@ test("fingerprint changes when a load-bearing input changes", () => {
   assert.notEqual(a, b);
 });
 
-test("v5 policy identity cannot collide with the legacy snapshot-only v4 fingerprint", () => {
+test("v6 policy identity cannot collide with the legacy snapshot-only v4 fingerprint", () => {
   const snap = snapshot();
   const legacyV4 = createHash("sha256").update(stableJson(snap)).digest("hex");
   const current = dailyDecisionFingerprint(snap);
   assert.notEqual(current, legacyV4);
-  assert.equal(buildDailySessionDecision(snap, { now: NOW }).policy_version, "daily_decision_v5");
+  assert.equal(buildDailySessionDecision(snap, { now: NOW }).policy_version, "daily_decision_v6");
 });
 
 test("healthy training day carries the plan with progression reason codes", () => {
@@ -575,4 +583,125 @@ test("the peak single never becomes a plan target — it rides the candidate onl
   // the back-off numbers, which is what any plan write would read.
   assert.equal(squat(envelope).authorized_target.target_weight, 225);
   assert.notEqual(squat(envelope).authorized_target.target_weight, PEAK_TOP_SET.weight);
+});
+
+function pushSupport(over = {}) {
+  return {
+    training_drive: "push",
+    backed: true,
+    backed_by: ["session_quality"],
+    training_directive: "proceed",
+    fresh_brake: false,
+    ...over,
+  };
+}
+
+test("a backed push morning reaches inside the session", () => {
+  const env = buildDailySessionDecision(snapshot({ signal_support: pushSupport() }), { now: NOW });
+  assert.equal(env.reach.level, "push");
+  assert.deepEqual(env.reach.backed_by, ["session_quality"]);
+  assert.ok(REACH_PUSH_WHY.includes(env.reach.why), `unexpected reach why ${JSON.stringify(env.reach.why)}`);
+  assert.ok(env.precedence.includes("backed_day_reach"));
+  assert.equal(env.caps.intensity, "normal", "reach is not a sixth intensity value");
+  assert.equal(env.kind, "train");
+});
+
+test("hold_aggression keeps reach push and trims only the challenge", () => {
+  const env = buildDailySessionDecision(
+    snapshot({ signal_support: pushSupport({ training_directive: "hold_aggression" }) }),
+    { now: NOW }
+  );
+  assert.equal(env.reach.level, "push");
+  assert.ok(REACH_TRIMMED_WHY.includes(env.reach.why));
+  assert.ok(env.precedence.includes("reach_trimmed_by_fueling"));
+  assert.ok(!env.precedence.includes("backed_day_reach"));
+});
+
+test("a fresh brake withdraws reach", () => {
+  const env = buildDailySessionDecision(
+    snapshot({ signal_support: pushSupport({ fresh_brake: true }) }),
+    { now: NOW }
+  );
+  assert.equal(env.reach.level, null);
+  assert.equal(env.reach.why, "");
+  assert.ok(!env.precedence.includes("backed_day_reach"));
+});
+
+test("drive off leaves reach null", () => {
+  const env = buildDailySessionDecision(
+    snapshot({ signal_support: pushSupport({ training_drive: "steady" }) }),
+    { now: NOW }
+  );
+  assert.equal(env.reach.level, null);
+});
+
+test("an ordinary snapshot with no signal_support never reaches", () => {
+  const env = buildDailySessionDecision(snapshot(), { now: NOW });
+  assert.equal(env.reach.level, null);
+  assert.deepEqual(env.reach.backed_by, []);
+});
+
+test("a saturated main lift group withdraws reach", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      signal_support: pushSupport(),
+      muscle_load: [{ group: "quads", days_ago: 1, saturated: true, source: "strength" }],
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.reach.level, null);
+  assert.ok(env.precedence.includes("muscle_saturated"));
+  assert.ok(env.muscles.saturated.includes("quads"));
+});
+
+test("a snapshot with no muscle group still licenses reach — composition refuses the host", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      signal_support: pushSupport(),
+      plan_items: [{ exercise: "Mystery Lift", muscle_group: null, equipment: null, mode: "reps", kind: "strength" }],
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.reach.level, "push", "missing group is not an envelope-level veto");
+});
+
+test("modify and recover directives never license a reach", () => {
+  for (const training_directive of ["modify", "recover"]) {
+    const env = buildDailySessionDecision(
+      snapshot({ signal_support: pushSupport({ training_directive }) }),
+      { now: NOW }
+    );
+    assert.equal(env.reach.level, null, training_directive);
+  }
+});
+
+test("an easy or rest kind never reaches even when the day is backed", () => {
+  const rest = buildDailySessionDecision(
+    snapshot({
+      signal_support: pushSupport(),
+      day_read: {
+        kind: "rest",
+        focus: null,
+        est_minutes: null,
+        consecutive_training_days: 1,
+        recovery_week: false,
+        trained_today: false,
+      },
+    }),
+    { now: NOW }
+  );
+  assert.equal(rest.kind, "rest");
+  assert.equal(rest.reach.level, null);
+});
+
+test("reach why and notes hold the reading grammar", () => {
+  for (const line of [
+    ...REACH_PUSH_WHY,
+    ...REACH_TRIMMED_WHY,
+    ...REACH_NO_ROOM_WHY,
+    ...REACH_TOP_SET_NOTES,
+    ...REACH_AMRAP_NOTES,
+  ]) {
+    assert.equal(violatesReadingGrammar(line), null, line);
+  }
 });

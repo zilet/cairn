@@ -21,8 +21,11 @@ import { planDayProgression, recentAutoregulation } from "./progression.js";
 import { personalResponseModifierFor } from "./reaction-model.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { dayPlanningSignalState } from "./day-read.js";
+import { getSettings } from "./settings.js";
 import { sensorIsCurrent } from "./sensor-freshness.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { hasFreshBrake } from "./signal-state.js";
 import {
   getTrainingIntent,
   type EnduranceRole,
@@ -49,8 +52,14 @@ import { listTrainingSymptoms } from "./training-symptoms.js";
 // Soft training-intent bias (v5): ordered priorities and endurance_role shape
 // soft preferences and rationale only — never gates, scores, or KIND. Athlete
 // override / train_anyway / dayRead kind still win.
+//
+// Reach (v6): the envelope's UP direction, carried BESIDE the five-value safety
+// ladder (`caps.intensity` stays easy/deload/hold/normal). A backed train day
+// under `training_drive = "push"` with no fresh brake and unsaturated main lifts
+// may reach inside the session; `hold_aggression` keeps the reach flag and trims
+// only the challenge item.
 
-export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v5";
+export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v6";
 
 export const DAILY_DECISION_REASONS = [
   "injury_exclusion",
@@ -78,6 +87,9 @@ export const DAILY_DECISION_REASONS = [
   "template_rotation",
   "training_intent",
   "personal_response_ease",
+  "backed_day_reach",
+  "reach_trimmed_by_fueling",
+  "reach_no_room",
 ] as const;
 
 export type DailyDecisionReason = (typeof DAILY_DECISION_REASONS)[number];
@@ -213,6 +225,19 @@ export interface DailyDecisionSnapshot {
   // nothing learned serializes byte-for-byte as it did before this field existed
   // and every historical envelope stays readable.
   personal_response?: { plan_complexity: number };
+  // Compact reach inputs. The envelope is a pure function of the snapshot and had
+  // neither `settings.training_drive` nor the signal state's `support` / brake /
+  // training directive, so gather stamps this slice (omit-when-idle, same as
+  // personal_response) rather than reading those stores inside the decision.
+  signal_support?: DailyDecisionSignalSupport;
+}
+
+export interface DailyDecisionSignalSupport {
+  training_drive: "push" | "steady";
+  backed: boolean;
+  backed_by: string[];
+  training_directive: "proceed" | "hold_aggression" | "modify" | "recover";
+  fresh_brake: boolean;
 }
 
 export interface DailyDecisionTarget {
@@ -303,7 +328,15 @@ export interface DailyDecisionEnvelope {
     focus: string | null;
     intent: "template" | "custom";
   };
-  muscles: { required: string[]; allowed: string[]; reduced: string[]; excluded: string[] };
+  muscles: {
+    required: string[];
+    allowed: string[];
+    reduced: string[];
+    excluded: string[];
+    // Groups the acute gate (or volume-high) marked saturated. Optional so
+    // historical envelope_json remains readable; composition treats missing as [].
+    saturated?: string[];
+  };
   caps: {
     volume: "minimal" | "reduced" | "normal";
     intensity: "easy" | "deload" | "hold" | "normal";
@@ -326,6 +359,16 @@ export interface DailyDecisionEnvelope {
   // Recent athlete-reported pain is softer than an active injury, but known
   // relevant cardio still must not slip past the movement-level reduction.
   reported_joint_pain?: string | null;
+  // The envelope's UP direction. Not a sixth posture/intensity value — the
+  // SignalPosture / caps.intensity ladders stay safety ladders. `level: "push"`
+  // licenses a within-session reach; `null` is the ordinary train day.
+  reach: DailyDecisionReach;
+}
+
+export interface DailyDecisionReach {
+  level: "push" | null;
+  backed_by: string[];
+  why: string;
 }
 
 const KNEE_GROUPS = ["quads", "hamstrings", "calves", "glutes"];
@@ -807,6 +850,52 @@ export function gatherDailyDecisionSnapshot(
     // so writing the key with a null value would change every fingerprint on the
     // planet the day this shipped. Absent means absent.
     ...(planComplexityScale == null ? {} : { personal_response: { plan_complexity: planComplexityScale } }),
+    ...(compactSignalSupport(d, recoverySummary) ?? {}),
+  };
+}
+
+function compactSignalSupport(
+  date: string,
+  recovery: unknown
+): { signal_support: DailyDecisionSignalSupport } | null {
+  const drive = safe(() => (getSettings().training_drive === "push" ? "push" : "steady"), "steady") as
+    | "push"
+    | "steady";
+  const state = safe(() => dayPlanningSignalState(date, { recovery }), null);
+  if (!state) {
+    if (drive === "steady") return null;
+    return {
+      signal_support: {
+        training_drive: drive,
+        backed: false,
+        backed_by: [],
+        training_directive: "proceed",
+        fresh_brake: false,
+      },
+    };
+  }
+  const backed = state.action.support?.level === "backed";
+  const backed_by = backed
+    ? (Array.isArray(state.action.support?.fields) ? state.action.support.fields : [])
+        .map((field) => text(field, 40))
+        .filter((field): field is string => !!field)
+        .slice(0, 8)
+    : [];
+  const rawDirective = state.action.directives?.training;
+  const training_directive: DailyDecisionSignalSupport["training_directive"] =
+    rawDirective === "hold_aggression" || rawDirective === "modify" || rawDirective === "recover"
+      ? rawDirective
+      : "proceed";
+  const fresh_brake = hasFreshBrake(state.dimensions);
+  if (drive === "steady" && !backed && training_directive === "proceed" && !fresh_brake) return null;
+  return {
+    signal_support: {
+      training_drive: drive,
+      backed,
+      backed_by,
+      training_directive,
+      fresh_brake,
+    },
   };
 }
 
@@ -957,6 +1046,78 @@ const PLAN_COMPLEXITY_EASE_DETAILS: readonly string[] = [
   "Keeping today's list short, the way recent weeks have actually run",
   "A simpler shape today; the longer days haven't been fitting lately",
 ];
+
+// Athlete-facing reach lines. A backed push morning is a reason to go after a
+// little more inside the session, never a gate and never a score. Rotated so a
+// stable input does not print one sentence for weeks.
+export const REACH_PUSH_WHY: readonly [string, ...string[]] = [
+  "You've earned a heavier look at this one today",
+  "Recovery's backing you — take the top set if the bar moves fast",
+  "Recent sessions have come back clean — today's a good day to reach a little",
+  "You're carrying the work well — a heavier look fits today",
+];
+export const REACH_TRIMMED_WHY: readonly [string, ...string[]] = [
+  "Fueling keeps today's reach to the working sets",
+  "Eat a bit more and the heavier look can wait — the working sets still stand",
+  "Today's reach stays with the working sets while fueling catches up",
+  "The working sets are the reach today — fueling is still settling",
+];
+
+// Composition could not seat a distinct top set (the day is already at its
+// item cap, the heavier look does not exceed the working weight, or no
+// eligible host remains). The day is still a reach day — the working sets
+// carry it. Athlete-facing, so a set rather than one literal.
+export const REACH_NO_ROOM_WHY: readonly [string, ...string[]] = [
+  "Today's reach lives in the working sets",
+  "The working sets are the reach today",
+  "Reach stays with the working sets today",
+  "No extra top set today — the working sets still stand",
+];
+
+const EMPTY_REACH: DailyDecisionReach = { level: null, backed_by: [], why: "" };
+
+// Early-out only: if the first plan item's group is already saturated, do not
+// license a reach. Composition re-checks the ACTUAL surviving host (the first
+// plan item may have been excluded) and refuses a host with no group.
+function mainLiftGroup(snapshot: DailyDecisionSnapshot): string | null {
+  for (const item of snapshot.plan_items) {
+    if (String(item.kind ?? "").toLowerCase() === "cardio") continue;
+    if (String(item.mode ?? "").toLowerCase() === "timed") continue;
+    const group = item.muscle_group ? String(item.muscle_group).toLowerCase() : "";
+    if (group) return group;
+  }
+  return null;
+}
+
+function resolveReach(
+  snapshot: DailyDecisionSnapshot,
+  kind: DailyDecisionKind,
+  saturated: string[]
+): { reach: DailyDecisionReach; trimmed: boolean } {
+  const support = snapshot.signal_support;
+  if (!support || kind !== "train") return { reach: EMPTY_REACH, trimmed: false };
+  if (support.training_drive !== "push") return { reach: EMPTY_REACH, trimmed: false };
+  if (!support.backed) return { reach: EMPTY_REACH, trimmed: false };
+  if (support.fresh_brake) return { reach: EMPTY_REACH, trimmed: false };
+  const directive = support.training_directive;
+  if (directive !== "proceed" && directive !== "hold_aggression") return { reach: EMPTY_REACH, trimmed: false };
+  const mainGroup = mainLiftGroup(snapshot);
+  if (mainGroup && saturated.includes(mainGroup)) return { reach: EMPTY_REACH, trimmed: false };
+  const backed_by = Array.isArray(support.backed_by)
+    ? support.backed_by.filter((field) => typeof field === "string" && field.trim()).slice(0, 8)
+    : [];
+  const trimmed = directive === "hold_aggression";
+  return {
+    reach: {
+      level: "push",
+      backed_by,
+      why: trimmed
+        ? pickDayVariant(REACH_TRIMMED_WHY, snapshot.date, "daily_decision:reach_trimmed")
+        : pickDayVariant(REACH_PUSH_WHY, snapshot.date, "daily_decision:reach"),
+    },
+    trimmed,
+  };
+}
 
 type CompactTrainingIntent = {
   endurance_role: EnduranceRole;
@@ -1538,6 +1699,16 @@ export function buildDailySessionDecision(
     }
   }
 
+  // ---- Reach (up direction, beside the safety ladder) ----
+  // Reason codes fire here; the athlete-facing line trails the kind/template
+  // headline so primary_rationale stays the day's read, same as intent bias.
+  const { reach, trimmed: reachTrimmed } = resolveReach(snapshot, kind, saturated);
+  if (reach.level === "push") {
+    const reachCode: DailyDecisionReason = reachTrimmed ? "reach_trimmed_by_fueling" : "backed_day_reach";
+    fire(precedence, reachCode);
+    soft.push({ code: reachCode, detail: reach.why });
+  }
+
   // ---- Render-safe rationale ----
   rationale.push({
     code:
@@ -1557,6 +1728,12 @@ export function buildDailySessionDecision(
   });
   // Soft intent lines trail the kind/template headline so primary_rationale stays calm.
   for (const line of intentRationale) rationale.push(line);
+  if (reach.level === "push") {
+    rationale.push({
+      code: reachTrimmed ? "reach_trimmed_by_fueling" : "backed_day_reach",
+      text: reach.why,
+    });
+  }
 
   return {
     policy_version: DAILY_DECISION_POLICY_VERSION,
@@ -1572,7 +1749,7 @@ export function buildDailySessionDecision(
       focus: kind === "rest" ? "Recovery" : snapshot.plan.focus,
       intent,
     },
-    muscles: { required, allowed, reduced, excluded },
+    muscles: { required, allowed, reduced, excluded, saturated },
     caps: { volume, intensity, duration_min: duration },
     recovery_cycle: snapshot.recovery_cycle,
     candidates,
@@ -1583,6 +1760,7 @@ export function buildDailySessionDecision(
     training_intent: trainingIntent,
     protective_exclusions: protectiveExclusions,
     reported_joint_pain: snapshot.feedback?.joint_pain ?? null,
+    reach,
   };
 }
 

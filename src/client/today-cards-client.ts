@@ -47,6 +47,43 @@ const TODAY_NOTE_CLAUSE_SPLIT = /\s+[—–-]\s+/;
 // must never depend on that having happened. The cue usually hangs off a fact worth
 // keeping ("Rotated in for Bench Press — start light, …"), so cut at the clause, not
 // the sentence: only what carries the cue goes.
+function todayCardsReach(item: TodayExerciseItem, rx: TodayPrescription): Record<string, unknown> | null {
+  const own = todayRecord(item.reach);
+  if (todayString(own.note).trim() || todayFinite(own.weight) != null || todayFinite(own.reps) != null || own.amrap === true) {
+    return own;
+  }
+  const cardKey = todayString(item.cardKey);
+  const exercise = todayString(item.exercise);
+  const keyed = !!cardKey && cardKey !== exercise;
+  // A split card (same name, own key) is not the weekly-plan lift. `rx.top_set`
+  // describes the first card, never a sibling, so do not inherit it.
+  if (keyed) return null;
+  const top = todayRecord(todayRecord(rx).top_set);
+  if (todayFinite(top.weight) != null || todayFinite(top.reps) != null || todayString(top.note).trim()) return top;
+  return null;
+}
+
+function todayCardsReachLine(item: TodayExerciseItem, rx: TodayPrescription): string {
+  const reach = todayCardsReach(item, rx);
+  if (!reach) return "";
+  const note = todayString(reach.note).trim();
+  const weight = todayFinite(reach.weight);
+  const reps = todayFinite(reach.reps);
+  const low = todayFinite(item.rep_low);
+  const high = todayFinite(item.rep_high);
+  let dose = "";
+  if (weight != null && Number(item.sets) === 1 && low != null && high != null && low !== high) {
+    dose = `${fmtWeight(weight)} × ${low}–${high}`;
+  } else if (weight != null && reps != null) {
+    dose = `${fmtWeight(weight)} × ${reps}`;
+  } else if (weight != null) {
+    dose = String(fmtWeight(weight));
+  } else if (reps != null) {
+    dose = `× ${reps}`;
+  }
+  return `<div class="ex-note">${escHtml("Reach")}${dose ? ` · ${escHtml(dose)}` : ""}${note ? ` — ${escHtml(note)}` : ""}</div>`;
+}
+
 function todayCardsCleanNote(note: unknown, hasDose: boolean): string {
   const text = todayString(note).trim();
   if (!text || !hasDose) return text;
@@ -168,6 +205,10 @@ function exerciseCardHtml(
     todayFinite(lastSetRecord.weight) != null ||
     todayFinite(lastSetRecord.duration_sec) != null;
   const note = todayCardsCleanNote(item.note, groundedDose);
+  const reachLine = todayCardsReachLine(item, rx);
+  const reachNote = todayString(todayRecord(item.reach).note || todayRecord(todayRecord(rx).top_set).note).trim();
+  const splitReachCard = item.fromSession === true && Number(item.sets) === 1 && keyed;
+  const noteIsReach = !!(reachLine && note && ((reachNote && note === reachNote) || splitReachCard));
   // A changed card carries only its OWN reason. `brain_change_summary` narrates the
   // whole decision and is copied onto every changed exercise, so repeating it here
   // printed the same paragraph once per card; the plan surface says it once above them.
@@ -179,10 +220,11 @@ function exerciseCardHtml(
         ${skipButton}${removeButton}
       </div>
       <div class="ex-meta">${progress}</div>
-      ${item.brain_decision_id ? `<div class="ex-flag">${escHtml(item.brain_change_reason || note || "Your team adjusted this exercise.")}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : note ? `<div class="ex-note">${escHtml(note)}</div>` : ""}
+      ${item.brain_decision_id ? `<div class="ex-flag">${escHtml(item.brain_change_reason || note || "Your team adjusted this exercise.")}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : !noteIsReach && note ? `<div class="ex-note">${escHtml(note)}</div>` : ""}
       ${item.constraint_note ? `<div class="ex-flag">${escHtml(item.constraint_note)}</div>` : ""}
       ${item.journey_line ? `<div class="ex-journey" data-journey-role="${escAttr(item.journey_role || "support")}">${escHtml(item.journey_line)}</div>` : ""}
       ${!complete ? CairnTodayTraining.exRxLineHtml(rx, { supporting: headlineDose }) : ""}
+      ${reachLine}
       <div class="logged" data-logged>${loggedSets.map(todayCardsSetChip).join("")}</div>
       ${lastSetLine}
       ${logrow}

@@ -512,6 +512,41 @@ export function recentWorkingWeight(name: string, sessionsBack = 3): number | nu
   return best;
 }
 
+// True when the last few sessions of this lift were assisted or bodyweight
+// (negative / 0 / null working weights) — the history recentWorkingWeight
+// ignores because it only reads non-zero loaded sets. Empty history is false:
+// a lift that has never been logged is not "genuinely bodyweight".
+export function hasUnloadedWorkingHistory(name: string, sessionsBack = 3): boolean {
+  const ex = findExercise(name);
+  if (!ex) return false;
+  const dates = (
+    db
+      .prepare(
+        `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+          WHERE ls.exercise_id = ?
+          ORDER BY s.date DESC LIMIT ?`
+      )
+      .all(ex.id, sessionsBack) as any[]
+  ).map((r) => r.d);
+  if (!dates.length) return false;
+  for (const d of dates) {
+    const sets = db
+      .prepare(
+        `SELECT ls.weight AS weight FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+          WHERE ls.exercise_id = ? AND s.date = ?`
+      )
+      .all(ex.id, d) as any[];
+    if (!sets.length) return false;
+    const sessionUnloaded = sets.every((s) => {
+      if (s.weight == null || s.weight === "") return true;
+      const n = Number(s.weight);
+      return Number.isFinite(n) && n <= 0;
+    });
+    if (!sessionUnloaded) return false;
+  }
+  return true;
+}
+
 // Timed-movement twin of recentWorkingWeight. It deliberately resolves the exact
 // stored exercise row before reading history: a dead-hang duration is not a safe
 // anchor for a different grip/variation merely because the names share a movement

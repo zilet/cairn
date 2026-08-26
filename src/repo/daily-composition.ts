@@ -5,13 +5,18 @@ import { normalizeSessionSuggestionResult } from "./adaptive-session.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { cardioPlanIdentity } from "./cardio-plan-identity.js";
 import { canonicalGroup } from "./exercise-canon.js";
-import { cardioPainRelevance, type DailyDecisionEnvelope } from "./daily-decision.js";
+import { cardioPainRelevance, REACH_NO_ROOM_WHY, type DailyDecisionEnvelope } from "./daily-decision.js";
 import {
   equipmentCompatibility,
   inferExerciseEquipment,
   parseEquipmentCapability,
 } from "./equipment-capability.js";
-import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
+import {
+  findExercise,
+  hasUnloadedWorkingHistory,
+  recentWorkingSeconds,
+  recentWorkingWeight,
+} from "./exercises.js";
 import { getPlanDay } from "./plan.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 
@@ -37,6 +42,7 @@ export interface CompositionValidation {
   rejected: Array<{ exercise: string; reason: string }>;
   novel_introduced: number;
   capped: boolean;
+  reach_landed: boolean;
 }
 
 function volumeCap(envelope: DailyDecisionEnvelope): number {
@@ -232,6 +238,24 @@ const TOP_SET_NOTES: readonly [string, ...string[]] = [
   "Open with this after your warm-up singles, then the block underneath.",
 ];
 
+export const REACH_TOP_SET_NOTES: readonly [string, ...string[]] = [
+  "If the warm-ups move well, take one heavier single-set reach here — stop with a rep in hand",
+  "You've earned a heavier look at this one today — one set, leave a rep in the tank",
+  "Recovery's backing you — take the top set if the bar moves fast",
+  "If the bar moves fast, take one heavier set here and stop with a rep waiting",
+];
+
+export const REACH_AMRAP_NOTES: readonly [string, ...string[]] = [
+  "Last set: as many clean reps as you have, one in reserve",
+  "On the last set, keep going for clean reps and leave one in the tank",
+  "Finish with as many clean reps as you have — stop with one in reserve",
+  "Last set is the reach: clean reps, one left in the tank",
+];
+
+function round5(n: number): number {
+  return Math.round(n / 5) * 5;
+}
+
 // A peak single is a near-maximal effort, and every day-level brake in this file
 // exists because near-maximal is exactly what those days are not for. The
 // candidate gate in daily-decision already withdraws the top set when the LIFT
@@ -244,6 +268,77 @@ function dayAllowsTopSet(envelope: DailyDecisionEnvelope): boolean {
   if (cycle && (cycle.effective_status === "active" || cycle.effective_status === "recheck")) return false;
   if (envelope.request.train_anyway === true) return false;
   return true;
+}
+
+function reachChallengeOpen(envelope: DailyDecisionEnvelope): boolean {
+  if (envelope.reach?.level !== "push") return false;
+  if (envelope.precedence.includes("reach_trimmed_by_fueling")) return false;
+  if (envelope.soft_preferences.some((entry) => entry.code === "reach_trimmed_by_fueling")) return false;
+  if (envelope.soft_preferences.some((entry) => entry.code === "reach_no_room")) return false;
+  return dayAllowsTopSet(envelope);
+}
+
+function itemMuscleGroup(item: any): string | null {
+  const stored = findExercise(item?.exercise);
+  const raw = stored?.muscle_group ?? item?.muscle_group;
+  if (!raw) return null;
+  const group = String(raw).toLowerCase();
+  return canonicalGroup(group) ?? group;
+}
+
+function reachHostLoad(exercise: string): { kind: "loaded"; weight: number } | { kind: "unloaded" } | null {
+  const working = recentWorkingWeight(exercise);
+  if (working != null && working > 0) return { kind: "loaded", weight: working };
+  if (working != null && working < 0) return { kind: "unloaded" };
+  if (hasUnloadedWorkingHistory(exercise)) return { kind: "unloaded" };
+  return null;
+}
+
+function isReachHostItem(
+  item: any,
+  reducedExercises: Set<string>,
+  saturatedGroups: Set<string>,
+  excludedGroups: Set<string>
+): boolean {
+  if (!item) return false;
+  if (item.kind === "cardio" || item.mode === "timed") return false;
+  const exercise = String(item.exercise ?? "");
+  if (!exercise) return false;
+  if (reducedExercises.has(exercise.toLowerCase())) return false;
+  const group = itemMuscleGroup(item);
+  // Unknown area is not "safe" — skip rather than host a reach we cannot certify.
+  if (!group) return false;
+  if (excludedGroups.has(group) || excludedGroups.has(String(group).toLowerCase())) return false;
+  if (saturatedGroups.has(group) || saturatedGroups.has(String(group).toLowerCase())) return false;
+  return reachHostLoad(exercise) != null;
+}
+
+function reconcileEnvelopeReach(envelope: DailyDecisionEnvelope, landed: boolean): void {
+  if (envelope.reach?.level !== "push") return;
+  if (landed) return;
+  if (envelope.soft_preferences.some((entry) => entry.code === "reach_trimmed_by_fueling")) return;
+  if (envelope.soft_preferences.some((entry) => entry.code === "reach_no_room")) return;
+  const why = pickDayVariant(REACH_NO_ROOM_WHY, envelope.date, "daily_decision:reach_no_room");
+  // Mutate nested fields in place. Assigning `envelope.reach =` / `envelope.precedence =`
+  // would miss a shallow-copied caller, while push/splice land on the original.
+  envelope.reach.level = "push";
+  envelope.reach.why = why;
+  if (!Array.isArray(envelope.reach.backed_by)) envelope.reach.backed_by = [];
+  // Soft-only: composition already treats a precedence entry as a constraint
+  // (`reach_trimmed_by_fueling`), so a no-room code must not join that list.
+  envelope.soft_preferences.push({ code: "reach_no_room", detail: why });
+  for (let i = envelope.precedence.length - 1; i >= 0; i--) {
+    if (envelope.precedence[i] === "backed_day_reach") envelope.precedence.splice(i, 1);
+  }
+  let replaced = false;
+  for (const line of envelope.rationale) {
+    if (line.code === "backed_day_reach") {
+      line.code = "reach_no_room";
+      line.text = why;
+      replaced = true;
+    }
+  }
+  if (!replaced) envelope.rationale.push({ code: "reach_no_room", text: why });
 }
 
 // The heavy single as an item, shaped exactly like every other normalized reps
@@ -260,6 +355,7 @@ function topSetItemFor(backoff: any, candidate: any, dateISO: string): Record<st
   // than a protocol — and every clamp above may have moved the block down.
   const blockWeight = finite(backoff?.target_weight);
   if (blockWeight == null || weight <= blockWeight) return null;
+  const note = pickDayVariant(TOP_SET_NOTES, dateISO, "daily-composition:top-set");
   return {
     position: 0, // renumbered with the rest once the insertion is done
     kind: "strength",
@@ -271,13 +367,53 @@ function topSetItemFor(backoff: any, candidate: any, dateISO: string): Record<st
     target_seconds: null,
     warmup_sets: null,
     mode: "reps",
-    note: pickDayVariant(TOP_SET_NOTES, dateISO, "daily-composition:top-set"),
+    note,
     target_distance_km: null,
     target_duration_min: null,
     target_zone: null,
     interval: null,
     superset_group: null,
+    reach: { weight, reps, note },
   };
+}
+
+function reachTopSetItemFor(backoff: any, working: number, dateISO: string): Record<string, unknown> | null {
+  if (backoff?.kind === "cardio" || backoff?.mode === "timed") return null;
+  if (working == null || working <= 0) return null;
+  const weight = round5(working * 1.075);
+  if (weight <= working) return null;
+  // A "heavier look" that does not sit above the block the athlete will actually
+  // work is not a reach — skip rather than print a same-or-lighter top set.
+  const blockWeight = finite(backoff?.target_weight);
+  if (blockWeight != null && weight <= blockWeight) return null;
+  const note = pickDayVariant(REACH_TOP_SET_NOTES, dateISO, "daily-composition:reach-top-set");
+  return {
+    position: 0,
+    kind: "strength",
+    exercise: backoff.exercise,
+    sets: 1,
+    rep_low: 3,
+    rep_high: 5,
+    target_weight: weight,
+    target_seconds: null,
+    warmup_sets: null,
+    mode: "reps",
+    note,
+    target_distance_km: null,
+    target_duration_min: null,
+    target_zone: null,
+    interval: null,
+    superset_group: null,
+    reach: { weight, reps: 3, note },
+  };
+}
+
+function applyReachAmrap(item: any, dateISO: string): boolean {
+  const note = pickDayVariant(REACH_AMRAP_NOTES, dateISO, "daily-composition:reach-amrap");
+  const next = adaptationNote(item.note, note);
+  item.note = next;
+  item.reach = { note, amrap: true };
+  return true;
 }
 
 const HARD_CARDIO_LANGUAGE =
@@ -373,7 +509,14 @@ export function normalizeComposedSession(
   if (!base) {
     return {
       session: null,
-      validation: { ok: false, reason: "unparseable", rejected, novel_introduced: 0, capped: false },
+      validation: {
+        ok: false,
+        reason: "unparseable",
+        rejected,
+        novel_introduced: 0,
+        capped: false,
+        reach_landed: false,
+      },
     };
   }
   if (envelope.kind === "rest" && envelope.request.train_anyway !== true) {
@@ -388,6 +531,7 @@ export function normalizeComposedSession(
         rejected,
         novel_introduced: 0,
         capped: false,
+        reach_landed: false,
       },
     };
   }
@@ -400,6 +544,11 @@ export function normalizeComposedSession(
   // Resolved on the way past, while the stored exercise (and so its group) is in
   // hand — the clamping pass below works on item names alone.
   const reducedExercises = new Set<string>();
+  const saturatedGroups = new Set(
+    (Array.isArray(envelope.muscles.saturated) ? envelope.muscles.saturated : []).map(
+      (g) => canonicalGroup(g) ?? String(g).toLowerCase()
+    )
+  );
   const hasProtectiveExclusion = envelope.hard_constraints.some((entry) => entry.code === "injury_exclusion");
   const protectiveExclusions = Array.isArray(envelope.protective_exclusions)
     ? envelope.protective_exclusions
@@ -500,7 +649,14 @@ export function normalizeComposedSession(
   if (!kept.length) {
     return {
       session: null,
-      validation: { ok: false, reason: "all_items_excluded", rejected, novel_introduced: novelCount, capped: false },
+      validation: {
+        ok: false,
+        reason: "all_items_excluded",
+        rejected,
+        novel_introduced: novelCount,
+        capped: false,
+        reach_landed: false,
+      },
     };
   }
   const cap = volumeCap(envelope);
@@ -592,16 +748,44 @@ export function normalizeComposedSession(
   let insertedTopSet = false;
   let topSetsInserted = 0;
   const topSetsAllowed = dayAllowsTopSet(envelope);
+  const reachOpen = reachChallengeOpen(envelope);
+  let reachHostConsumed = false;
+  let reachLanded = false;
   for (const item of capped) {
+    delete item.reach;
+    const isHost =
+      !reachHostConsumed && isReachHostItem(item, reducedExercises, saturatedGroups, excluded);
+    const hostLoad = isHost ? reachHostLoad(String(item.exercise ?? "")) : null;
     if (topSetsAllowed && remainingSets >= 1 && capped.length + topSetsInserted + 1 <= cap) {
       const candidate = candidates.get(String(item.exercise ?? "").toLowerCase());
-      const top = topSetItemFor(item, candidate, envelope.date);
+      let top = topSetItemFor(item, candidate, envelope.date);
+      if (!top && reachOpen && isHost && hostLoad) {
+        if (hostLoad.kind === "unloaded") {
+          if (applyReachAmrap(item, envelope.date)) {
+            changed = true;
+            reachLanded = true;
+            reachHostConsumed = true;
+          }
+        } else {
+          top = reachTopSetItemFor(item, hostLoad.weight, envelope.date);
+        }
+      }
       if (top) {
         withTopSets.push(top);
         remainingSets -= 1;
         insertedTopSet = true;
         topSetsInserted += 1;
         changed = true;
+        if (top.reach) {
+          reachLanded = true;
+          reachHostConsumed = true;
+        }
+      }
+    } else if (reachOpen && isHost && hostLoad?.kind === "unloaded") {
+      if (applyReachAmrap(item, envelope.date)) {
+        changed = true;
+        reachLanded = true;
+        reachHostConsumed = true;
       }
     }
     withTopSets.push(item);
@@ -610,6 +794,10 @@ export function normalizeComposedSession(
   // ordinary day's items come out of here byte-for-byte as they always have.
   if (insertedTopSet) withTopSets.forEach((item, index) => (item.position = index));
   const finalItems = insertedTopSet ? withTopSets : capped;
+  // A peak single on a reach-open day is still a top set on a card, so the
+  // envelope must not claim there was no room for one.
+  if (reachOpen && insertedTopSet) reachLanded = true;
+  reconcileEnvelopeReach(envelope, reachLanded);
 
   let est = base.est_minutes;
   if (envelope.caps.duration_min != null && (est == null || est > envelope.caps.duration_min)) {
@@ -631,6 +819,7 @@ export function normalizeComposedSession(
       rejected,
       novel_introduced: novelCount,
       capped: changed,
+      reach_landed: reachLanded,
     },
   };
 }

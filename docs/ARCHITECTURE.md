@@ -59,6 +59,23 @@ and rationale, but never outrank pain/injury protection, recovery bounds, or an 
 Policy version participates in decision identity, so a cached preview or persisted decision from an
 older policy cannot be silently reused after an upgrade.
 
+**Reach is the envelope's up direction.** `DailyDecisionEnvelope.reach` (`level: "push" | null`) sits
+beside the five-value safety ladder — it is not a sixth posture or intensity. It fires when
+`training_drive` is `push`, the unified signal state is `backed`, nothing fresh is braking, training
+is `proceed` or `hold_aggression`, the kind is `train`, and the day's main-lift group is not
+`saturated` per `acuteGate` (an early-out; composition re-checks the actual host). `hold_aggression`
+keeps `level: "push"` and trims only the challenge item (`reach_trimmed_by_fueling`: fueling keeps
+today's reach to the working sets). On an open reach day, composition injects one challenge top set
+on the first *eligible* compound — never a reduced, excluded, saturated, or ungrouped item — at
+1×3–5 from the logged working weight (`round5(recentWorkingWeight × 1.075)`, `REACH_TOP_SET_NOTES`),
+counting as one working set against the volume cap; assisted and bodyweight lifts (by logged
+history) get an AMRAP note on the last working set instead. A loaded lift with no history is skipped,
+not AMRAP'd. If no item lands, the persisted envelope keeps `level: "push"` and swaps `why` to
+`REACH_NO_ROOM_WHY` (`reach_no_room` in soft preferences / rationale only — composition already
+treats a precedence entry as a constraint). The session screen labels **Reach** only from
+`item.reach` or `rx.top_set`, never by inferring a 1-set sibling card, and prefills the first
+unlogged row with the heavier look.
+
 **The muscle model reads a decaying dose, not a boolean with a cliff.** Fatigue used to be `sets >=
 4` inside a fixed 2-day window — a muscle equally smoked by 4 sets or by 30, going from smoked to
 fresh at an arbitrary midnight. `src/repo/hybrid-load.ts`'s `muscleResidual()` replaces it with

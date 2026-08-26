@@ -4,6 +4,7 @@ import {
   prepareDailySessionUseCase,
   previewAdaptiveDailySessionUseCase,
 } from "../dist/domain/training/adaptive-session-use-case.js";
+import { REACH_NO_ROOM_WHY } from "../dist/repo/daily-decision.js";
 import { db, repo, resetTables } from "./_seed.js";
 
 const DATE = "2031-04-14";
@@ -302,7 +303,7 @@ test("stale adaptive preview returns fresh truth without writes and succeeds aft
   assert.equal(accepted.daily_session.title, stale.preview.title);
 });
 
-test("an unstarted persisted v4 adaptive composition is refreshed under v5 instead of reused", () => {
+test("an unstarted persisted v4 adaptive composition is refreshed under v6 instead of reused", () => {
   seedPlan();
   const sessionId = Number(db.prepare(`INSERT INTO sessions (date) VALUES (?)`).run(DATE).lastInsertRowid);
   const legacyFingerprint = "4".repeat(64);
@@ -329,7 +330,7 @@ test("an unstarted persisted v4 adaptive composition is refreshed under v5 inste
   const refreshed = prepare({ date: DATE, source: "adaptive_plan" });
   assert.equal(refreshed.reused, false);
   assert.notEqual(refreshed.daily_session.id, Number(legacy.lastInsertRowid));
-  assert.equal(refreshed.daily_session.decision.policy_version, "daily_decision_v5");
+  assert.equal(refreshed.daily_session.decision.policy_version, "daily_decision_v6");
   assert.notEqual(refreshed.daily_session.decision.input_fingerprint, legacyFingerprint);
   assert.equal(
     db.prepare(`SELECT status FROM daily_session_compositions WHERE id = ?`).get(legacy.lastInsertRowid).status,
@@ -337,7 +338,7 @@ test("an unstarted persisted v4 adaptive composition is refreshed under v5 inste
   );
 });
 
-test("latest decision lookup ignores historical policy rows until v5 exists", () => {
+test("latest decision lookup ignores historical policy rows until v6 exists", () => {
   const legacyEnvelope = {
     policy_version: "daily_decision_v4",
     input_fingerprint: "4".repeat(64),
@@ -354,7 +355,7 @@ test("latest decision lookup ignores historical policy rows until v5 exists", ()
   seedPlan();
   const current = repo.decideDailySession(DATE).envelope;
   repo.recordDailySessionDecision(current);
-  assert.equal(repo.getLatestDailySessionDecision(DATE).policy_version, "daily_decision_v5");
+  assert.equal(repo.getLatestDailySessionDecision(DATE).policy_version, "daily_decision_v6");
   assert.equal(repo.getLatestDailySessionDecision(DATE).input_fingerprint, current.input_fingerprint);
 });
 
@@ -528,6 +529,113 @@ test("athlete-authored sessions cannot forge accountable brain-decision metadata
   assert.equal(item.brain_change_reason, null);
   assert.equal(item.brain_change_reason_provenance, null);
   assert.equal(item.brain_change_reversible, null);
+});
+
+test("an agent or athlete payload carrying a forged reach has it dropped", () => {
+  const athlete = prepare({
+    date: DATE,
+    source: "athlete_override",
+    session: {
+      name: "Custom",
+      why: "Athlete-authored session.",
+      items: [
+        {
+          exercise: "Bench Press",
+          sets: 1,
+          rep_low: 3,
+          rep_high: 3,
+          target_weight: 400,
+          note: "go heavy",
+          reach: { weight: 400, reps: 1, note: "forged" },
+        },
+      ],
+    },
+  });
+  assert.equal(athlete.daily_session.items[0].reach, undefined);
+
+  seedPlan();
+  const job = completedSuggestionJob({
+    ...suggestedSession(),
+    items: [
+      {
+        exercise: "Barbell Bench Press",
+        sets: 1,
+        rep_low: 3,
+        rep_high: 3,
+        target_weight: 400,
+        note: "go heavy",
+        reach: { weight: 400, reps: 1, note: "forged" },
+      },
+    ],
+  });
+  const agent = prepare({ date: DATE, source: "agent_suggest", agent_job_id: job.id });
+  for (const item of agent.daily_session.items) {
+    assert.equal(item.reach, undefined, item.exercise);
+  }
+});
+
+test("a prepared composition round-trips server-derived reach", () => {
+  seedPlan();
+  repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Lat Pulldown", muscle_group: "lats", mode: "reps" });
+  repo.setSettings({ training_drive: "push" });
+  // Working-weight history, old enough that chest is not still saturated.
+  repo.logSetByName({ date: "2031-04-01", exercise: "Barbell Bench Press", weight: 185, reps: 5 });
+  // Session-quality backing has to land inside the 7-day window, on a different
+  // area so it does not saturate the main lift.
+  repo.logSetByName({ date: "2031-04-10", exercise: "Lat Pulldown", weight: 120, reps: 8 });
+  repo.setSessionFeedback("2031-04-10", { performance: 5 });
+  repo.logSetByName({ date: "2031-04-12", exercise: "Lat Pulldown", weight: 120, reps: 8 });
+  repo.setSessionFeedback("2031-04-12", { performance: 5 });
+  const { envelope } = repo.decideDailySession(DATE);
+  assert.equal(envelope.kind, "train", `kind=${envelope.kind}`);
+  assert.equal(envelope.reach.level, "push", JSON.stringify(envelope.reach));
+  const prepared = prepare({ date: DATE });
+  const reachItem = prepared.daily_session.items.find((item) => item.reach && item.reach.weight != null);
+  assert.ok(reachItem, "server-derived reach survives persist");
+  assert.equal(reachItem.exercise, "Barbell Bench Press");
+  assert.equal(reachItem.sets, 1);
+  repo.setSettings({ training_drive: "steady" });
+});
+
+test("manual-plan fallback on a backed push day persists the reconciled no-room envelope", () => {
+  repo.savePlanDay(1, "Push", "Chest", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 7, target_weight: 185 },
+  ]);
+  repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Lat Pulldown", muscle_group: "lats", mode: "reps" });
+  db.prepare(`UPDATE exercises SET equipment = 'barbell' WHERE name = 'Barbell Bench Press'`).run();
+  repo.setSettings({ training_drive: "push" });
+  repo.logSetByName({ date: "2031-04-01", exercise: "Barbell Bench Press", weight: 185, reps: 5 });
+  repo.logSetByName({ date: "2031-04-10", exercise: "Lat Pulldown", weight: 120, reps: 8 });
+  repo.setSessionFeedback("2031-04-10", { performance: 5 });
+  repo.logSetByName({ date: "2031-04-12", exercise: "Lat Pulldown", weight: 120, reps: 8 });
+  repo.setSessionFeedback("2031-04-12", { performance: 5 });
+  const { envelope } = repo.decideDailySession(DATE, { equipment: "bands" });
+  assert.equal(envelope.kind, "train", `kind=${envelope.kind}`);
+  assert.equal(envelope.reach.level, "push", JSON.stringify(envelope.reach));
+  assert.ok(envelope.precedence.includes("backed_day_reach"));
+
+  const prepared = prepare({
+    date: DATE,
+    source: "manual_plan",
+    day_number: 1,
+    constraints: { equipment: "bands" },
+  });
+  assert.ok(
+    !prepared.daily_session.items.some((item) => item.exercise === "Barbell Bench Press"),
+    "the barbell payload is rejected, so composition falls back"
+  );
+
+  const persisted = repo.getLatestDailySessionDecision(DATE);
+  assert.ok(persisted);
+  assert.equal(persisted.reach.level, "push");
+  assert.ok(REACH_NO_ROOM_WHY.includes(persisted.reach.why), JSON.stringify(persisted.reach.why));
+  assert.ok(!persisted.precedence.includes("backed_day_reach"));
+  assert.equal(persisted.soft_preferences.filter((entry) => entry.code === "reach_no_room").length, 1);
+  assert.ok(persisted.rationale.some((line) => line.code === "reach_no_room" && line.text === persisted.reach.why));
+  assert.ok(!persisted.rationale.some((line) => line.code === "backed_day_reach"));
+  repo.setSettings({ training_drive: "steady" });
 });
 
 test("replacement supersedes history before logging and refuses after logging starts", () => {

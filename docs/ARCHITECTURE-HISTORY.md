@@ -4,6 +4,72 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-26 — the Elite Coach Round: signals, not schedules
+
+Schema 94 → 96 (v95 assisted-sign repair, v96 abandon a mismatched auto endurance-base block); sw
+`CACHE` v557 → v558. The round that answered "it keeps pushing me into a slow recovery week and never
+asks for more": every one of the brain's brakes was reading its own bookkeeping instead of the log.
+
+**Deload-due reads loaded weeks and a log-confirmed shortfall.** `mesocycle()` (`src/repo/program-state.ts`)
+used to mint `deload-due` from the calendar (N weeks since an applied or detected recovery week) or
+from a "fatigue" branch fed by two performance ratings of 2 (or two soreness ratings of 4), a loaded
+streak that counted travel weeks as full weeks, and one hard run — and the rolling window flipped
+the phase between morning and evening. Now a week is loaded only against the median of the loaded
+weeks before it (`classifyLoadedWeeks`, `LOADED_WEEK_FRACTION`), a light week breaks the streak,
+and deload-due comes only from a six-week loaded streak or a four-week streak plus a shortfall the
+log confirms (≥2 lifts regressing on comparable dates, or sessions with skipped/partial doses —
+`src/repo/session-dose-log.ts`) plus physiology (decision-grade HRV/RHR drift, one helper in
+`sensor-cadence.ts`, or a heavy endurance week). A block in its first two weeks or its own
+deload/realization phase never reads deload-due. A completed log outranks a felt rating:
+`sessionLogContradictsLowRating` gates both `low_performance_flag` and the fuel brain's performance
+channel. `shouldAutoDraftRecoveryWeek` requires deload-due; HRV-down + RHR-up alone is a parallel
+note, not a recovery lead.
+
+**The progression engine can reach overload under push.** `applyFuelProtection` held `vary` and
+`introduce` under `hold_aggression` even with `training_drive='push'`; a re-ground of a plan sitting
+under the real working weight spent the step on a catch-up hold; and a dose that met its own
+snapshotted prescription went `under_prescribed` because the plan moved. Push now keeps all three
+step kinds (top set dropped), the re-ground carries the step when the logged exposure tops the range,
+and the snapshot carve-out lives only in the `under_prescribed` arm after per-dose comparability.
+Both promotions still need RIR 2+ or a progressing trend, an eligible finished dose, and no cut
+pressure (`mayPromoteLoad`); pain, acute, autoreg and regression brakes keep the last word.
+**Assisted-sign integrity**: assist is a negative weight typed as a plain number, so one missing
+minus turned 25 lb of assist into 40 lb of weighted work and the trend read "regressing". A positive
+weight logged onto a negative-history lift within 1.5× the recent assist band is stored with its sign
+restored (`assistSignContext`, `normalized:"assist_sign"`; Garmin imports opt out; a deliberate move
+to weighted work is honored and then sticks); `recentWorkingWeight` ranks less assist and more reps
+as harder; the name of an exercise is never a sign. Migration v95 repairs flipped rows and targets.
+
+**The block honors a stated intent.** `chooseBlockFocus(goal, intent)` (`src/repo/program-blocks.ts`)
+opens a hypertrophy or strength block for an EXPLICIT intent whose endurance role is none/supporting
+and lets a race claim a peak only inside three weeks or its taper; co-primary/primary endurance and
+never-stated intents keep the old tree exactly. Combined load yields to the run on a strength-led
+build (`basis:"strength-led"`). Adherence counts plan days that carry strength work. v96 abandons an
+auto-labelled endurance-base block in week 1–2 that an explicit intent contradicts, and boot re-opens
+a block when a plan exists.
+
+**The day adapts up as well as down.** The daily decision envelope had a full EASE vocabulary and no
+up direction. `reach` (`src/repo/daily-decision.ts`, policy `daily_decision_v6`) is a separate field,
+not a sixth posture: `push` when drive is push, the signal state is backed, no fresh brake, the
+directive is proceed or hold_aggression, the kind is train, and the host lift's group is not
+saturated. Composition (`src/repo/daily-composition.ts`) then puts ONE challenge top set (1×3–5 at
+round5(logged working × 1.075)) on the first eligible compound — never a reduced, excluded, saturated,
+group-less or history-less lift; assisted/bodyweight lifts get an AMRAP note instead — and reports
+back so the persisted envelope never promises a reach that is not on a card (`reach_no_room`).
+`item.reach` survives persistence for server-derived items only; the session card renders a calm
+"Reach" line from it (or `rx.top_set`) with the first row prefilled at the reach load.
+
+**Also.** Nine sites sliced a UTC `created_at`/`applied_at`/`started_at` as a local day (a landed fuel
+raise fell out of its own settling window and re-minted; an evening Garmin merge lost its Undo; a
+swap re-announced as news; a block aged a day early); each now goes through `localDayOfStamp`. The
+undated-health-record and reaction-model dating sites of the same shape are deliberately left for a
+change with a live dry run. Housekeeping: real names scrubbed from fixtures, stale counts, history
+and changelog backfilled, unreferenced screenshots removed. Tests: `test/programState.test.js`,
+`test/assistedSignIntegrity.test.js`, `test/dailyComposition.test.js`, `test/periodizationLive.test.js`,
+`test/brainUpcomingRotations.test.js`.
+
+---
+
 ## 2026-08-25 — provider routing, one panel per draw date, session logging
 
 No schema change (stayed 94); sw `CACHE` v555 → v557. A day of provider resilience, health-doc

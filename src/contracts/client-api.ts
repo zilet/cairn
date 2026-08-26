@@ -796,10 +796,20 @@ export interface ClientTrainingSession {
   [key: string]: unknown;
 }
 
+export interface ClientDailySessionReach {
+  weight?: number | null;
+  reps?: number | null;
+  note?: string | null;
+  amrap?: boolean;
+}
+
 export interface ClientDailySessionItem extends ClientSessionSuggestionItem {
   position: number;
   warmup_sets?: number | null;
   superset_group?: number | null;
+  // Present on a reach top-set item (and on an assisted/bodyweight AMRAP host).
+  // Athlete-facing `note` is authored on the server; the client only labels "Reach".
+  reach?: ClientDailySessionReach | null;
 }
 
 export interface ClientDailySessionComposition {

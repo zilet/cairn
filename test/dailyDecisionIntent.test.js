@@ -494,3 +494,39 @@ test("live gather drops completed and undated key-run intentions from the compac
   );
   assert.equal(undated.open_key_run, null, "undated key intentions do not become decision protection facts");
 });
+
+test("live gather with drive off leaves reach null", () => {
+  seedLowerPlan();
+  repo.setSettings({ training_drive: "steady" });
+  const env = buildDailySessionDecision(gatherDailyDecisionSnapshot(DATE), { now: NOW });
+  assert.equal(env.reach.level, null);
+});
+
+test("live gather with drive push still needs a backed morning to reach", () => {
+  seedLowerPlan();
+  repo.setSettings({ training_drive: "push" });
+  const snap = gatherDailyDecisionSnapshot(DATE);
+  assert.equal(snap.signal_support?.training_drive, "push");
+  const env = buildDailySessionDecision(snap, { now: NOW });
+  // No rated sessions in this fixture, so the day is not backed.
+  assert.notEqual(snap.signal_support?.backed, true);
+  assert.equal(env.reach.level, null);
+  repo.setSettings({ training_drive: "steady" });
+});
+
+test("a fixture hold_aggression morning keeps reach push", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      signal_support: {
+        training_drive: "push",
+        backed: true,
+        backed_by: ["session_quality"],
+        training_directive: "hold_aggression",
+        fresh_brake: false,
+      },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.reach.level, "push");
+  assert.ok(env.precedence.includes("reach_trimmed_by_fueling"));
+});
