@@ -21,10 +21,16 @@ type DoseRow = {
 };
 
 type OutcomeFacts = {
+  schema_version?: unknown;
   dose_evidence?: DoseRow[];
   skipped?: unknown;
   dose_context?: { partial?: unknown } | null;
 };
+
+function factsSchemaVersion(facts: OutcomeFacts | null): number {
+  const n = Number(facts?.schema_version);
+  return Number.isFinite(n) ? n : 0;
+}
 
 function outcomeFactsForSession(sessionId: number): OutcomeFacts | null {
   const id = Number(sessionId);
@@ -113,6 +119,10 @@ export function sessionHasComparableDoseShortfall(sessionId: number): boolean {
   const facts = outcomeFactsForSession(sessionId);
   if (!facts) return false;
   if (hasOwnDoseShortfall(facts)) return true;
+  // Per-dose comparable is a schema-3+ field. Schema-2 rows never carried it;
+  // a repair that materialized comparable:true onto those doses must not feed
+  // this arm of deload-due.
+  if (factsSchemaVersion(facts) < 3) return false;
   return doseRows(facts)
     .filter((dose) => dose?.comparable === true)
     .some(isPartialOrUnderPrescribed);

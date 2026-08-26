@@ -93,11 +93,14 @@ test("completing the suggested work records a completed, adherence-neutral outco
   assert.equal(squat.target_sets, 3);
   assert.equal(squat.achieved_sets, 3);
   assert.equal(squat.challenge_verdict, "exceeded");
-  assert.equal(outcome.facts.schema_version, 3, "3 carries per-dose comparability");
+  assert.equal(outcome.facts.schema_version, 4, "4 carries per-dose full-load evidence");
   assert.equal(outcome.facts.dose_context.comparable, true);
   const squatDose = outcome.facts.dose_evidence.find((entry) => entry.exercise === "Back Squat");
   assert.equal(squatDose.comparable, true, "a clean day leaves the lift's own exposure comparable");
   assert.deepEqual(squatDose.non_comparable_reasons, []);
+  assert.equal(squatDose.full_load_reference.target_weight, 225);
+  assert.equal(squatDose.full_load_reference.sets, 3);
+  assert.equal(typeof squatDose.performed_at_full_load, "boolean");
   assert.equal(outcome.facts.confidence, "high");
 });
 

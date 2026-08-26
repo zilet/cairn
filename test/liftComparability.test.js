@@ -13,7 +13,16 @@ import { db, repo, resetTables } from "./_seed.js";
 const DATE = "2026-04-15";
 
 beforeEach(() => {
-  resetTables("logged_sets", "sessions", "plan_items", "plan_days", "exercises", "plan_proposals", "app_state");
+  resetTables(
+    "logged_sets",
+    "sessions",
+    "plan_items",
+    "plan_days",
+    "exercises",
+    "plan_proposals",
+    "app_state",
+    "recovery_cycles"
+  );
 });
 
 function startRecoveryWeek(appliedOn) {
@@ -49,4 +58,14 @@ test("a session's comparable-exposure answer is re-derived once more sets are lo
   logSets(3);
   assert.equal(repo.recoverySessionDose(session.id).classification, "overdose");
   assert.equal(repo.comparableLiftDates("Bench Press", DATE).has(DATE), true);
+});
+
+test("a rest-day train-anyway session with no recovery week still counts as exposure", () => {
+  repo.savePlanDay(1, "Push", "Push", [{ exercise: "Bench Press", sets: 4, rep_low: 5, rep_high: 8 }]);
+  logSets(4);
+  const session = repo.getOrCreateSession(DATE, repo.getPlanDay(1).id);
+  assert.equal(repo.activeRecoveryWeek(DATE), null);
+  assert.equal(repo.recoveryCycleAt(DATE), null);
+  assert.equal(repo.comparableLiftDates("Bench Press", DATE).has(DATE), true);
+  assert.equal(repo.recoverySessionDose(session.id).classification, "unknown");
 });

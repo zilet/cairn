@@ -792,6 +792,25 @@ test("a session with a skipped dose counts toward log-confirmed fatigue arm (b)"
   );
 });
 
+test("a schema-2 under-prescribed dose does not feed the comparable-shortfall arm", () => {
+  const date = day(-6);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  linkSessionOutcome(session.id, date, {
+    schema_version: 2,
+    skipped: [],
+    dose_context: { partial: false, comparable: true, non_comparable_reasons: [] },
+    dose_evidence: [
+      dose("Back Squat", { comparable: true, verdict: "under_prescribed", prescribedSets: 3, achievedSets: 3 }),
+    ],
+  });
+  assert.equal(
+    countComparableDoseShortfallSessions(TODAY, 14),
+    0,
+    "schema 2 never carried per-dose comparable — even a materialized flag is not this arm"
+  );
+});
+
 test("a completed comparable log outranks two low performance ratings in the fueling channel", () => {
   target(2200);
   for (const delta of [-1, -2, -3, -4, -5]) intake(delta, 2175);

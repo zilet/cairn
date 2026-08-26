@@ -477,14 +477,24 @@ export function deleteExercise(name: string) {
 // a single light day (it reads the hardest of several sessions). null when no loaded
 // history. Encoding preserved: negative = assist (closer to 0 = harder), 0/bodyweight
 // is excluded (load progression doesn't apply). sessionsBack defaults to 3.
-export function recentWorkingWeight(name: string, sessionsBack = 3): number | null {
+export function recentWorkingWeight(name: string, sessionsBack = 3, beforeExclusive?: string): number | null {
   const ex = findExercise(name);
   if (!ex) return null;
-  const dates = (db.prepare(
-    `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-      WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.weight != 0
-      ORDER BY s.date DESC LIMIT ?`
-  ).all(ex.id, sessionsBack) as any[]).map((r) => r.d);
+  const cutoff = String(beforeExclusive ?? "").slice(0, 10);
+  const dated = /^\d{4}-\d{2}-\d{2}$/.test(cutoff);
+  const dates = (
+    dated
+      ? (db.prepare(
+          `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+            WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.weight != 0 AND s.date < ?
+            ORDER BY s.date DESC LIMIT ?`
+        ).all(ex.id, cutoff, sessionsBack) as any[])
+      : (db.prepare(
+          `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+            WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.weight != 0
+            ORDER BY s.date DESC LIMIT ?`
+        ).all(ex.id, sessionsBack) as any[])
+  ).map((r) => r.d);
   if (!dates.length) return null;
   let best: number | null = null;
   for (const d of dates) {
@@ -552,20 +562,37 @@ export function hasUnloadedWorkingHistory(name: string, sessionsBack = 3): boole
 // anchor for a different grip/variation merely because the names share a movement
 // family. The hardest completed hold across the last few sessions is the trustworthy
 // baseline used when an agent proposes a new timed prescription.
-export function recentWorkingSeconds(name: string, sessionsBack = 3): number | null {
+export function recentWorkingSeconds(name: string, sessionsBack = 3, beforeExclusive?: string): number | null {
   const ex = findExercise(name);
   if (!ex) return null;
-  const row = db.prepare(
-    `SELECT MAX(recent.best_seconds) AS best_seconds
-       FROM (
-         SELECT s.date, MAX(ls.duration_sec) AS best_seconds
-           FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-          WHERE ls.exercise_id = ? AND ls.duration_sec IS NOT NULL AND ls.duration_sec > 0
-          GROUP BY s.date
-          ORDER BY s.date DESC
-          LIMIT ?
-       ) recent`
-  ).get(ex.id, sessionsBack) as any;
+  const cutoff = String(beforeExclusive ?? "").slice(0, 10);
+  const dated = /^\d{4}-\d{2}-\d{2}$/.test(cutoff);
+  const row = (
+    dated
+      ? db.prepare(
+          `SELECT MAX(recent.best_seconds) AS best_seconds
+             FROM (
+               SELECT s.date, MAX(ls.duration_sec) AS best_seconds
+                 FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+                WHERE ls.exercise_id = ? AND ls.duration_sec IS NOT NULL AND ls.duration_sec > 0
+                  AND s.date < ?
+                GROUP BY s.date
+                ORDER BY s.date DESC
+                LIMIT ?
+             ) recent`
+        ).get(ex.id, cutoff, sessionsBack)
+      : db.prepare(
+          `SELECT MAX(recent.best_seconds) AS best_seconds
+             FROM (
+               SELECT s.date, MAX(ls.duration_sec) AS best_seconds
+                 FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+                WHERE ls.exercise_id = ? AND ls.duration_sec IS NOT NULL AND ls.duration_sec > 0
+                GROUP BY s.date
+                ORDER BY s.date DESC
+                LIMIT ?
+             ) recent`
+        ).get(ex.id, sessionsBack)
+  ) as any;
   const value = Number(row?.best_seconds);
   return Number.isFinite(value) && value > 0 ? value : null;
 }

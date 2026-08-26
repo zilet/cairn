@@ -3,13 +3,33 @@ import { getCardioForDate, type CardioEffort } from "./activities.js";
 import { db } from "../db.js";
 import { canonicalEnduranceSport } from "./endurance-sports.js";
 import { canonicalGroup, classifyMuscleGroup, type MuscleGroup, normalizedExerciseKey } from "./exercise-canon.js";
+import { recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { isLoadRelevantEnduranceImpact, recentEnduranceImpacts } from "./hybrid-load.js";
+import {
+  doseComparability,
+  evaluatePerformedAtFullLoad,
+  ownDoseShortfall,
+  type FullLoadReference,
+} from "./outcome-comparability.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { registerDailyOutcomeReconcileHook } from "./reconciliation-hooks.js";
 import { recoveryCycleAt } from "./recovery-cycles.js";
+import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { localDateISO } from "./shared.js";
 import type { ChallengeVerdict } from "./training-response.js";
 import { activeRelevantTrainingSymptoms, symptomGatesComparability } from "./training-symptoms.js";
+
+export {
+  doseComparability,
+  evaluatePerformedAtFullLoad,
+  harderLoad,
+  loadAtOrAbove,
+  ownDoseShortfall,
+  repairOutcomeComparability,
+  type DoseComparabilityInput,
+  type FullLoadReference,
+  type RepairOutcomeComparabilityCtx,
+} from "./outcome-comparability.js";
 
 export {
   recentMovementResponse,
@@ -32,11 +52,14 @@ export {
 // which route to brain review; the outcome record is the additive evidence those
 // reviews (and the progression engine) can read. Best-effort at every call site.
 
+export const OUTCOME_FACTS_SCHEMA_VERSION = 4;
+
 export interface DailySessionOutcomeFacts {
-  // 3 adds per-dose comparability to every dose_evidence entry. Rows written at 2
-  // are still read: linkedDoseEligibility derives the per-lift verdict from the
-  // session reason list and the dose's own achieved/prescribed sets.
-  schema_version: 2 | 3;
+  // 4 adds per-dose full_load_reference / performed_at_full_load. Schema-4 rows
+  // store the per-dose answer and linkedDoseEligibility trusts it. Schema-3 rows
+  // still carry a stored comparable, but are re-derived live so out-of-window
+  // rows follow the new law. Schema 2 is session-level reasons only.
+  schema_version: 2 | 3 | 4;
   suggested_count: number;
   suggested_exercises: string[];
   logged_exercises: string[];
@@ -141,6 +164,10 @@ export interface MovementDoseEvidence {
   challenge_verdict: ChallengeVerdict;
   relevant_symptom: boolean;
   symptom_event_ids: number[];
+  // Un-reduced plan target + recent working load. Absent on rows written
+  // before schema_version 4.
+  full_load_reference?: FullLoadReference | null;
+  performed_at_full_load?: boolean;
   // Whether THIS lift's exposure is clean progression evidence. Absent on rows
   // written before schema_version 3; derived at read time for those.
   comparable: boolean;
@@ -464,14 +491,6 @@ function hasUnmatchedLoadRelevantEndurance(
   return false;
 }
 
-function contextMentions(value: unknown, pattern: RegExp): boolean {
-  try {
-    return pattern.test(JSON.stringify(value ?? {}).toLowerCase());
-  } catch {
-    return false;
-  }
-}
-
 function serverTrainAnyway(composition: any): boolean {
   for (const value of [composition?.constraints, composition?.provenance]) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
@@ -479,6 +498,103 @@ function serverTrainAnyway(composition: any): boolean {
     if (record.train_anyway === true || record.daily_decision?.train_anyway === true) return true;
   }
   return false;
+}
+
+// Recovery is STRUCTURED, never prose. A rest-day train-anyway envelope stores
+// caps.intensity "deload", template.focus "recovery", and rationale text
+// containing "recovery" — none of those are a recovery window. profile.ts's
+// activeRecoveryWeek is the athlete-facing source, but importing it here would
+// close a cycle (profile → sessions → this file); we compose the same two
+// primitives it already uses.
+function storedRecoveryCycle(composition: any): boolean {
+  const nodes = [composition?.constraints, composition?.provenance, composition?.decision];
+  for (const node of nodes) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) continue;
+    const record = node as Record<string, any>;
+    if (record.recovery_cycle != null) return true;
+    const nested = record.daily_decision;
+    if (nested && typeof nested === "object" && !Array.isArray(nested) && nested.recovery_cycle != null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function structuredRecovery(date: string, composition: any): boolean {
+  const cycleStatus = recoveryCycleAt(date)?.effective_status ?? "";
+  return (
+    cycleStatus === "active" ||
+    cycleStatus === "recheck" ||
+    storedRecoveryCycle(composition) ||
+    !!activeRecoveryWeekLedger(date)
+  );
+}
+
+function planLoadFor(
+  exercise: string,
+  planDayId: number | null
+): {
+  sets: number | null;
+  target_weight: number | null;
+  target_seconds: number | null;
+  rep_low: number | null;
+} | null {
+  const name = String(exercise ?? "").trim();
+  if (!name) return null;
+  if (planDayId == null || !Number.isInteger(Number(planDayId)) || Number(planDayId) <= 0) return null;
+  try {
+    const row = db
+      .prepare(
+        `SELECT pi.sets, pi.target_weight, pi.target_seconds, pi.rep_low
+           FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
+          WHERE pi.plan_day_id = ? AND e.name = ? COLLATE NOCASE LIMIT 1`
+      )
+      .get(Number(planDayId), name) as any;
+    if (!row) return null;
+    return {
+      sets: finite(row.sets),
+      target_weight: finite(row.target_weight),
+      target_seconds: finite(row.target_seconds),
+      rep_low: finite(row.rep_low),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// The un-reduced plan SETS still anchor the reference (a substitution or a
+// missing plan row must not grant full-load). The weight/seconds side is
+// resolved by harderLoad(), which is computed from the LOGGED working
+// weight, never a plan target — the plan's target_weight/target_seconds is a
+// FORWARD prescription (progression writes the next target there) and is
+// only ever a fallback when there is no logged history. Mirrors the `reach`
+// rule in CLAUDE.md.
+function fullLoadReferenceFor(
+  exercise: string,
+  date: string,
+  planDayId: number | null
+): FullLoadReference {
+  const plan = planLoadFor(exercise, planDayId);
+  let recentWeight: number | null = null;
+  let recentSeconds: number | null = null;
+  try {
+    recentWeight = recentWorkingWeight(exercise, 3, date);
+  } catch {
+    recentWeight = null;
+  }
+  try {
+    recentSeconds = recentWorkingSeconds(exercise, 3, date);
+  } catch {
+    recentSeconds = null;
+  }
+  return {
+    sets: plan?.sets ?? null,
+    target_weight: plan?.target_weight ?? null,
+    target_seconds: plan?.target_seconds ?? null,
+    rep_low: plan?.rep_low ?? null,
+    recent_working_weight: recentWeight,
+    recent_working_seconds: recentSeconds,
+  };
 }
 
 function challengeVerdict(
@@ -516,6 +632,11 @@ function challengeVerdict(
 
 // ---- comparability, per LIFT rather than per day ----------------------------
 //
+// WORK DONE IS EVIDENCE. A prescription is a suggestion; the log is the truth.
+// A dose the athlete performed at or above their full working load is comparable
+// evidence for progression no matter what the morning read suggested. Calendar
+// counts (consecutive days, weeks) never produce a brake on their own.
+//
 // A session-wide verdict made progression structurally unreachable for a hybrid
 // athlete: every day carried SOME confounder — a run, a rest-day override, one
 // short accessory — and a single flag held the whole day's evidence out of the
@@ -531,46 +652,21 @@ function challengeVerdict(
 //   rest is the athlete driving, not evidence corruption.
 // * `endurance_quality_not_observed` / `endurance_quality_unverified` — never.
 //   These are verdicts about the ENDURANCE dose; they carry no claim about a lift.
-// * everything else (recovery_dose, travel, illness, relevant_symptom, and any
-//   reason this table does not recognize) — the whole day, unchanged.
+// * `recovery_dose` — only a STRUCTURED recovery window: an active/recheck
+//   recovery cycle, a stored `recovery_cycle` on the decision context, or an
+//   applied recovery week covering the date. `caps.intensity === "deload"`
+//   produced by training on a rest-suggested morning, and the word "recovery"
+//   in rationale/template prose, are not a recovery window. A dose performed
+//   at full working load drops this reason (and `travel`) even inside a real
+//   recovery window.
+// * `travel` — the whole day, unless that lift was performed at full working load.
+// * `illness`, `relevant_symptom`, and any reason this table does not recognize
+//   — the whole day, unchanged (safety; full load does not waive them).
 //
 // Safety is untouched by all of this: acuteGate, the autoregulation brake and the
 // symptom gates run downstream and still hold a lift that should not be pushed.
-const NEVER_BLOCKS_A_LIFT = new Set([
-  "athlete_override",
-  "endurance_quality_not_observed",
-  "endurance_quality_unverified",
-]);
-
-export interface DoseComparabilityInput {
-  session_reasons: readonly string[];
-  own_dose_shortfall: boolean;
-  endurance_overlap: boolean;
-}
-
-export function doseComparability(input: DoseComparabilityInput): {
-  comparable: boolean;
-  non_comparable_reasons: string[];
-} {
-  const reasons: string[] = [];
-  for (const raw of input.session_reasons) {
-    const reason = String(raw);
-    if (NEVER_BLOCKS_A_LIFT.has(reason)) continue;
-    if (reason === "partial") {
-      if (input.own_dose_shortfall) reasons.push(reason);
-      continue;
-    }
-    if (reason === "loaded_endurance") {
-      if (input.endurance_overlap) reasons.push(reason);
-      continue;
-    }
-    // An unrecognized reason is treated as day-wide: a new confounder must not
-    // become invisible just because this table has not learned it yet.
-    reasons.push(reason);
-  }
-  if (input.own_dose_shortfall && !reasons.includes("partial")) reasons.push("partial");
-  return { comparable: reasons.length === 0, non_comparable_reasons: reasons };
-}
+// The rule table itself lives in outcome-comparability.ts so migrate.ts and the
+// write path cannot drift.
 
 // The muscle groups the day's endurance work actually loaded, read off the ONE
 // per-muscle attribution model (hybrid-load's EnduranceImpact.regions). Never a
@@ -738,14 +834,24 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     };
     const movement_key = movementIdentity(String(it.exercise));
     const intent_key = intentIdentity(it);
+    const mode: MovementDoseEvidence["mode"] =
+      it.mode === "timed" || finite(it.target_seconds) != null ? "timed" : "reps";
+    const full_load_reference = fullLoadReferenceFor(
+      String(it.exercise),
+      date,
+      composition.plan_day_id == null ? null : Number(composition.plan_day_id)
+    );
+    const performed_at_full_load = evaluatePerformedAtFullLoad(mode, achievedDose, full_load_reference);
     return {
       composition_item_key: `composition:${Number(composition.id)}:item:${Number(it.position ?? index)}`,
       movement_key,
       intent_key,
       exercise: String(it.exercise),
-      mode: it.mode === "timed" || finite(it.target_seconds) != null ? "timed" : "reps",
+      mode,
       prescribed,
       achieved: achievedDose,
+      full_load_reference,
+      performed_at_full_load,
       challenge_verdict: challengeVerdict(prescribed, achievedDose),
       // Only a CURRENT, confirmed symptom brakes comparability. A stale one and an
       // unconfirmed legacy import stay attached as context (symptom_event_ids keeps
@@ -884,10 +990,7 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
         ? "high"
         : "moderate";
 
-  const recovery =
-    ["active", "recheck"].includes(recoveryCycleAt(date)?.effective_status ?? "") ||
-    contextMentions(composition.constraints, /\brecovery\b|\bdeload\b/) ||
-    contextMentions(composition.provenance, /\brecovery\b|\bdeload\b/);
+  const recovery = structuredRecovery(date, composition);
   const athleteOverride =
     composition.source === "athlete_override" ||
     serverTrainAnyway(composition);
@@ -942,27 +1045,24 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   // The same reasons, scoped to the lift each one actually touches. The session
   // verdict above is kept as-is for telemetry and for every existing reader; the
   // progression engine consults these.
-  const skippedLower = new Set(skipped.map(lower));
   const dose_evidence: MovementDoseEvidence[] = base_dose_evidence.map((dose) => {
-    const own =
-      (dose.prescribed.sets != null && dose.achieved.sets < dose.prescribed.sets) ||
-      skippedLower.has(lower(dose.exercise));
     return {
       ...dose,
       ...doseComparability({
         session_reasons: nonComparable,
-        own_dose_shortfall: own,
+        own_dose_shortfall: ownDoseShortfall(dose, skipped),
         endurance_overlap: enduranceOverlapsMovement(
           dose.exercise,
           achievedMap.get(lower(dose.exercise))?.muscle_group ?? null,
           enduranceGroups
         ),
+        performed_at_full_load: dose.performed_at_full_load === true,
       }),
     };
   });
 
   const facts: DailySessionOutcomeFacts = {
-    schema_version: 3,
+    schema_version: OUTCOME_FACTS_SCHEMA_VERSION,
     suggested_count: suggestedExercises.length,
     suggested_exercises: suggestedExercises,
     logged_exercises: loggedExercises,

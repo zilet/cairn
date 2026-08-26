@@ -114,6 +114,7 @@ import {
   doseComparability,
   enduranceLoadedGroups,
   enduranceOverlapsMovement,
+  OUTCOME_FACTS_SCHEMA_VERSION,
 } from "./daily-reconciliation.js";
 
 export {
@@ -1026,9 +1027,14 @@ function linkedDoseEligibility(
   if (!dose || ownShortfall) {
     return { linked_outcome: true, eligible: false, reason: "partial" };
   }
-  // Comparability is a per-LIFT question. Rows written at facts schema_version 3
-  // carry the answer; older rows carry the session reason list and this dose's own
-  // numbers, which is enough to derive the same verdict under the same rules.
+  // Comparability is a per-LIFT question. Schema-4 rows store the answer
+  // (including performed_at_full_load) and we trust it. Schema-3 rows already
+  // carry a stored per-dose comparable, but they are re-derived live via
+  // doseComparability so out-of-window rows (beyond the 60-day repair) follow
+  // the new law rather than the stored verdict. Older rows carry the session
+  // reason list and this dose's own numbers, which is enough to derive the
+  // same verdict — and a stored performed_at_full_load, when present, is read
+  // here so a repaired row and a live write agree.
   const sessionReasons: string[] = Array.isArray(facts?.dose_context?.non_comparable_reasons)
     ? facts.dose_context.non_comparable_reasons.map(String)
     : facts?.dose_context?.comparable === true
@@ -1041,8 +1047,9 @@ function linkedDoseEligibility(
   // than dropping it — it never manufactures one, because with no session
   // `partial` there is nothing here to keep.
   const provablyPrescribed = Number.isFinite(prescribedSets) && prescribedSets > 0;
+  const currentSchema = Number(facts?.schema_version) >= OUTCOME_FACTS_SCHEMA_VERSION;
   const perDose =
-    typeof dose.comparable === "boolean"
+    currentSchema && typeof dose.comparable === "boolean"
       ? { comparable: dose.comparable === true }
       : doseComparability({
           session_reasons: sessionReasons,
@@ -1057,6 +1064,7 @@ function linkedDoseEligibility(
               stored?.muscle_group ?? null,
               enduranceLoadedGroups(String(row.date ?? "").slice(0, 10))
             ),
+          performed_at_full_load: dose.performed_at_full_load === true,
         });
   if (!perDose.comparable) {
     return { linked_outcome: true, eligible: false, reason: "non_comparable" };

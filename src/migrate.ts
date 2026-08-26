@@ -5,6 +5,7 @@ import { retireSupersededExpectations } from "./repo/brain/expectation-arbitrati
 // imports this file, so importing anything that imports the database back would close
 // a boot-order cycle.
 import { clampProposalProvenanceDates } from "./repo/proposal-provenance-clamp.js";
+import { repairOutcomeComparability } from "./repo/outcome-comparability.js";
 
 export interface Migration {
   version: number;
@@ -2289,6 +2290,114 @@ export const MIGRATIONS: Migration[] = [
         `);
       } catch {
         /* a DB predating program_blocks / profile has nothing to repair */
+      }
+    },
+  },
+  {
+    version: 97,
+    name: "outcome-comparability-repair",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // THE ROWS THIS EXISTS FOR. daily-reconciliation used to treat a rest-day
+    // train-anyway envelope as a recovery window because a regex ran over the
+    // stored decision JSON (caps.intensity "deload", "recovery earns tomorrow's
+    // work", template.focus "recovery"). recovery_dose then landed on every
+    // lift, day-wide, so a month of work at or above the working load never
+    // counted. Live: 0 recovery_cycles rows, yet most outcome rows carried
+    // recovery_dose on every dose.
+    //
+    // WHAT IT CHANGES. For daily_session_outcomes in the last 60 days, drop a
+    // stored recovery_dose reason when no recovery_cycles row (active/recheck
+    // as of the date) and no applied recovery-week stamp covered that date.
+    // Travel is left alone: a stored row cannot prove the prescription was a
+    // reduced one. Idempotent: a second pass finds nothing left to drop. The
+    // transform is repairOutcomeComparability so this migration and the runtime
+    // cannot drift.
+    up: (db) => {
+      const dayShift = (iso: string, days: number): string => {
+        const d = new Date(`${String(iso).slice(0, 10)}T00:00:00Z`);
+        if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+        d.setUTCDate(d.getUTCDate() + days);
+        return d.toISOString().slice(0, 10);
+      };
+      const cycleCovers = (date: string): boolean => {
+        try {
+          const row = db
+            .prepare(
+              `SELECT exit_on FROM recovery_cycles
+                WHERE effective_on <= ?
+                  AND (completed_at IS NULL OR substr(completed_at, 1, 10) > ?)
+                  AND (canceled_at IS NULL OR substr(canceled_at, 1, 10) > ?)
+                ORDER BY effective_on DESC, id DESC LIMIT 1`
+            )
+            .get(date, date, date) as { exit_on?: string } | undefined;
+          if (!row) return false;
+          return date < String(row.exit_on ?? "").slice(0, 10);
+        } catch {
+          return false;
+        }
+      };
+      // The applied-week stamp is the other structured source runtime consults
+      // (activeRecoveryWeekLedger). Read raw so this file stays free of repo/db
+      // imports. A missing table or a date-only legacy stamp still counts.
+      const appliedWeekCovers = (date: string): boolean => {
+        try {
+          const row = db
+            .prepare(`SELECT value FROM app_state WHERE key = 'recovery_week_applied'`)
+            .get() as { value?: string } | undefined;
+          if (!row?.value) return false;
+          let appliedOn = String(row.value).slice(0, 10);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(appliedOn)) {
+            try {
+              appliedOn = String(JSON.parse(row.value)?.applied_on ?? "").slice(0, 10);
+            } catch {
+              return false;
+            }
+          }
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(appliedOn)) return false;
+          const until = dayShift(appliedOn, 7);
+          return date >= appliedOn && date < until;
+        } catch {
+          return false;
+        }
+      };
+      let repaired = 0;
+      try {
+        if (!hasTable(db, "daily_session_outcomes")) return;
+        const today = new Date().toISOString().slice(0, 10);
+        const cutoff = dayShift(today, -60);
+        const rows = db
+          .prepare(
+            `SELECT id, date, facts_json FROM daily_session_outcomes
+              WHERE date >= ? AND date <= ?`
+          )
+          .all(cutoff, today) as Array<{ id: number; date: string; facts_json: string }>;
+        const update = db.prepare(`UPDATE daily_session_outcomes SET facts_json = ? WHERE id = ?`);
+        for (const row of rows) {
+          try {
+            let facts: unknown;
+            try {
+              facts = JSON.parse(row.facts_json);
+            } catch {
+              continue;
+            }
+            const on = String(row.date).slice(0, 10);
+            const next = repairOutcomeComparability(facts, {
+              recovery: cycleCovers(on) || appliedWeekCovers(on),
+            });
+            const serialized = JSON.stringify(next);
+            if (serialized === row.facts_json) continue;
+            update.run(serialized, row.id);
+            repaired++;
+          } catch {
+            /* one corrupt row never aborts the rest */
+          }
+        }
+      } catch {
+        /* daily_session_outcomes / recovery_cycles absent — nothing to repair */
+      }
+      if (repaired) {
+        console.log(`[migrate] v97 outcome-comparability-repair: ${repaired} daily_session_outcomes`);
       }
     },
   },
