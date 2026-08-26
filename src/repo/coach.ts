@@ -84,6 +84,7 @@ import { sampleSd, STRESS_WINDOW_DAYS, trainingConstraintsRead } from "./recover
 import { getAppState, setAppState } from "./app-state.js";
 import { readAdherenceModel } from "./brain/read-adherence.js";
 import { getProgress, getRecentSessions, typicalTrainingHour, vouchedRunCompliance } from "./sessions.js";
+import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { symptomAreaKey } from "./symptom-area.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import { addDaysISO, localDateISO, localDayOfStamp, nowContext } from "./shared.js";
@@ -417,7 +418,7 @@ export function trainingSignals(
   );
   const lowPerfDays = clearedByLater(
     ratedPerf,
-    (s) => Number(s.performance) <= 2,
+    (s) => Number(s.performance) <= 2 && !sessionLogContradictsLowRating(Number(s.id)),
     (s) => Number(s.performance) >= 4
   );
   // An area the athlete has explicitly CLOSED must stop speaking. The raw session

@@ -413,12 +413,17 @@ export function shouldAutoDraftRecoveryWeek(opts: {
   focus_lead_domain?: unknown;
   recovery_active?: unknown;
   status: unknown;
+  deload_due?: unknown;
+  mesocycle_phase?: unknown;
 }): boolean {
+  const deloadDue =
+    opts.deload_due === true || String(opts.mesocycle_phase ?? "") === "deload-due";
   const requested =
     String(opts.lead_mode) === "lead" &&
     String(opts.focus_lead_domain) === "recovery" &&
     opts.recovery_active !== true &&
-    opts.status == null;
+    opts.status == null &&
+    deloadDue;
   if (!requested) return false;
   return recoveryCycleCooldown(localDateISO()).allowed;
 }

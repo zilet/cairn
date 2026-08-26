@@ -3,6 +3,7 @@ import { db } from "../db.js";
 import { canonicalEnduranceSport } from "./endurance-sports.js";
 import { completedIntakeWindow, type CompletedIntakeDay } from "./intake-window.js";
 import { vouchedRunCompliance } from "./sessions.js";
+import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 
 export type UnderfuelingState =
@@ -472,10 +473,16 @@ function sustainedRunComplianceDrop(today: string): { reason: string; evidence: 
 function performanceChannel(since: string, today: string, program: any, whole: any): UnderfuelingChannel {
   const rows = db
     .prepare(
-      `SELECT date, performance FROM sessions WHERE date BETWEEN ? AND ? AND performance IS NOT NULL ORDER BY date`
+      `SELECT id, date, performance FROM sessions WHERE date BETWEEN ? AND ? AND performance IS NOT NULL ORDER BY date`
     )
     .all(since, today) as any[];
-  const lowDays = new Set(rows.filter((row) => Number(row.performance) <= 2).map((row) => String(row.date)));
+  const lowDays = new Set(
+    rows
+      .filter(
+        (row) => Number(row.performance) <= 2 && !sessionLogContradictsLowRating(Number(row.id))
+      )
+      .map((row) => String(row.date))
+  );
   const regressing = (Array.isArray(program?.lifts) ? program.lifts : []).filter(
     (lift: any) => lift?.status === "regressing"
   );

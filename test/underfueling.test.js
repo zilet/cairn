@@ -5,6 +5,10 @@ import { addDaysISO } from "../dist/repo/shared.js";
 import { underfuelingRead } from "../dist/repo/underfueling.js";
 import { armAnd, energyDeficiencyDecision } from "../dist/repo/energy-deficiency.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
+import {
+  countComparableDoseShortfallSessions,
+  sessionLogContradictsLowRating,
+} from "../dist/repo/session-dose-log.js";
 
 const TODAY = "2026-07-15";
 const day = (delta) => addDaysISO(TODAY, delta);
@@ -17,7 +21,10 @@ beforeEach(() => {
     "checkins",
     "logged_sets",
     "sessions",
-    "body_measurements"
+    "body_measurements",
+    "daily_session_outcomes",
+    "daily_session_compositions",
+    "exercises"
   );
 });
 
@@ -47,6 +54,36 @@ function lowFeedback(delta) {
 function lowSession(delta) {
   db.prepare(`INSERT INTO sessions (date, performance, soreness, finished_at) VALUES (?, 2, 4, datetime('now'))`).run(
     day(delta)
+  );
+}
+
+function linkComparableDose(sessionId, date, { comparable = true, verdict = "met", prescribedSets = 3, achievedSets = 3 } = {}) {
+  const composition = db
+    .prepare(
+      `INSERT INTO daily_session_compositions
+        (version, session_id, date, source, status, title, items_json, request_fingerprint)
+       VALUES (1, ?, ?, 'adaptive_plan', 'active', 'Dose fixture', ?, ?)`
+    )
+    .run(sessionId, date, JSON.stringify([{ exercise: "Back Squat", sets: prescribedSets }]), `dose-${sessionId}`);
+  db.prepare(
+    `INSERT INTO daily_session_outcomes (composition_id, session_id, date, status, facts_json)
+     VALUES (?, ?, ?, 'completed', ?)`
+  ).run(
+    composition.lastInsertRowid,
+    sessionId,
+    date,
+    JSON.stringify({
+      schema_version: 3,
+      dose_evidence: [
+        {
+          exercise: "Back Squat",
+          comparable,
+          prescribed: { sets: prescribedSets },
+          achieved: { sets: achievedSets },
+          challenge_verdict: verdict,
+        },
+      ],
+    })
   );
 }
 
@@ -614,4 +651,163 @@ test("the illness arm needs real, multi-day, separated resting-HR excursions", (
     );
   }
   assert.equal(arm().verdict, "met", "the athlete's own logged illness windows count too");
+});
+
+test("sessionLogContradictsLowRating: a complete comparable log outranks a 2-rating", () => {
+  const date = day(-1);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+
+  assert.equal(sessionLogContradictsLowRating(session.id), false, "no dose evidence — the rating stands");
+
+  linkComparableDose(session.id, date, { comparable: true, verdict: "met" });
+  assert.equal(sessionLogContradictsLowRating(session.id), true, "met comparable doses contradict the low rating");
+});
+
+test("sessionLogContradictsLowRating: an under-prescribed comparable dose lets the rating stand", () => {
+  const date = day(-2);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkComparableDose(session.id, date, {
+    comparable: true,
+    verdict: "under_prescribed",
+    prescribedSets: 4,
+    achievedSets: 2,
+  });
+  assert.equal(sessionLogContradictsLowRating(session.id), false);
+});
+
+function linkSessionOutcome(sessionId, date, facts) {
+  const composition = db
+    .prepare(
+      `INSERT INTO daily_session_compositions
+        (version, session_id, date, source, status, title, items_json, request_fingerprint)
+       VALUES (1, ?, ?, 'adaptive_plan', 'active', 'Dose fixture', ?, ?)`
+    )
+    .run(sessionId, date, JSON.stringify(facts.dose_evidence ?? []), `dose-${sessionId}`);
+  db.prepare(
+    `INSERT INTO daily_session_outcomes (composition_id, session_id, date, status, facts_json)
+     VALUES (?, ?, ?, 'completed', ?)`
+  ).run(composition.lastInsertRowid, sessionId, date, JSON.stringify({ schema_version: 3, ...facts }));
+}
+
+function dose(
+  exercise,
+  { comparable = true, verdict = "met", prescribedSets = 3, achievedSets = 3, non_comparable_reasons = [] } = {}
+) {
+  return {
+    exercise,
+    comparable,
+    non_comparable_reasons,
+    prescribed: { sets: prescribedSets },
+    achieved: { sets: achievedSets },
+    challenge_verdict: verdict,
+  };
+}
+
+test("sessionLogContradictsLowRating: 2 of 5 lifts done at target leaves a 2-rating standing", () => {
+  const date = day(-3);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkSessionOutcome(session.id, date, {
+    skipped: ["Romanian Deadlift", "Walking Lunge", "Calf Raise"],
+    dose_context: { partial: true, comparable: false, non_comparable_reasons: ["partial"] },
+    dose_evidence: [
+      dose("Back Squat", { comparable: true, verdict: "met" }),
+      dose("Bench Press", { comparable: true, verdict: "met" }),
+      dose("Romanian Deadlift", {
+        comparable: false,
+        verdict: "partial",
+        prescribedSets: 3,
+        achievedSets: 0,
+        non_comparable_reasons: ["partial"],
+      }),
+      dose("Walking Lunge", {
+        comparable: false,
+        verdict: "partial",
+        prescribedSets: 3,
+        achievedSets: 0,
+        non_comparable_reasons: ["partial"],
+      }),
+      dose("Calf Raise", {
+        comparable: false,
+        verdict: "partial",
+        prescribedSets: 3,
+        achievedSets: 0,
+        non_comparable_reasons: ["partial"],
+      }),
+    ],
+  });
+  assert.equal(
+    sessionLogContradictsLowRating(session.id),
+    false,
+    "abandoned lifts must not vanish behind comparable:false — the 2-rating stands"
+  );
+});
+
+test("sessionLogContradictsLowRating: all 5 lifts met discards a 2-rating", () => {
+  const date = day(-4);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkSessionOutcome(session.id, date, {
+    skipped: [],
+    dose_context: { partial: false, comparable: true, non_comparable_reasons: [] },
+    dose_evidence: [
+      dose("Back Squat"),
+      dose("Bench Press"),
+      dose("Romanian Deadlift"),
+      dose("Walking Lunge"),
+      dose("Calf Raise"),
+    ],
+  });
+  assert.equal(sessionLogContradictsLowRating(session.id), true, "a complete log outranks the felt 2");
+});
+
+test("a session with a skipped dose counts toward log-confirmed fatigue arm (b)", () => {
+  const date = day(-5);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  linkSessionOutcome(session.id, date, {
+    skipped: ["Bench Press"],
+    dose_context: { partial: true, comparable: false, non_comparable_reasons: ["partial"] },
+    dose_evidence: [
+      dose("Back Squat", { comparable: true, verdict: "met" }),
+      dose("Bench Press", {
+        comparable: false,
+        verdict: "partial",
+        prescribedSets: 3,
+        achievedSets: 0,
+        non_comparable_reasons: ["partial"],
+      }),
+    ],
+  });
+  assert.equal(
+    countComparableDoseShortfallSessions(TODAY, 14),
+    1,
+    "a skip is an own-dose shortfall even though comparable is false"
+  );
+});
+
+test("a completed comparable log outranks two low performance ratings in the fueling channel", () => {
+  target(2200);
+  for (const delta of [-1, -2, -3, -4, -5]) intake(delta, 2175);
+  for (const delta of [-1, -2]) {
+    const date = day(delta);
+    repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+    const session = repo.getOrCreateSession(date);
+    repo.setSessionFeedback(date, { performance: 2 });
+    linkComparableDose(session.id, date, { comparable: true, verdict: "met" });
+  }
+  const read = underfuelingRead(TODAY, {
+    expenditure: onPathExp,
+    goal,
+    programState: stableProgram,
+    wholePerson: stableWhole,
+  });
+  const performance = read.channels.find((channel) => channel.key === "performance");
+  assert.equal(performance.direction, "support", "met logs plus progressing lifts are support, not strain");
 });

@@ -176,3 +176,38 @@ export function hasDecisionGradeCoverage(
     : Math.max(floor, UNKNOWN_WINDOW_FLOOR);
   return samples >= required;
 }
+
+// A recent-vs-baseline recovery delta is fit to lead (or to mint deload-due)
+// only when the named series is current and dense enough to be a trend rather
+// than a stray night. Canonical summaries put the fields in `quality`;
+// `provenance` plus `coverage` is the equivalent fallback when an older caller
+// omitted that block. One helper — the conductor and the mesocycle both call
+// this, so they cannot quietly disagree.
+export function recoverySignalIsDecisionGrade(
+  recovery:
+    | {
+        quality?: Record<string, any> | null;
+        coverage?: Record<string, any> | null;
+        provenance?: Record<string, any> | null;
+      }
+    | null
+    | undefined,
+  signal: string
+): boolean {
+  const quality = recovery?.quality?.[signal];
+  const provenance = recovery?.provenance?.[signal];
+  const coverage = recovery?.coverage?.[signal];
+  const latestDate = String(quality?.latest_date ?? provenance?.latest_date ?? "");
+  const freshness = String(quality?.freshness ?? provenance?.freshness ?? "")
+    .trim()
+    .toLowerCase();
+  const samples = Number(quality?.sample_count ?? coverage?.sample_count);
+  const expected = Number(
+    quality?.expected_days ?? quality?.window_days ?? coverage?.expected_days ?? coverage?.window_days
+  );
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(latestDate) || !["fresh", "recent"].includes(freshness)) return false;
+  return hasDecisionGradeCoverage(
+    Number.isFinite(samples) ? samples : null,
+    Number.isFinite(expected) ? expected : null
+  );
+}

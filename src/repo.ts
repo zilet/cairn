@@ -9,6 +9,7 @@ export * from "./repo/plan.js";
 export * from "./repo/proposal-truth.js"; // temporal provenance + compare-and-set evidence for enduring plan changes
 export * from "./repo/training-read.js";
 export * from "./repo/sessions.js";
+export * from "./repo/session-dose-log.js"; // a completed log outranks a felt low-performance rating
 export * from "./repo/adaptive-session.js";
 export * from "./repo/profile.js";
 export * from "./repo/location-context.js";

@@ -13,7 +13,7 @@
 // athlete (and the coach proposal) drive.
 // ============================================================================
 import { db } from "../db.js";
-import { localDateISO } from "./shared.js";
+import { daysBetweenISO, localDateISO } from "./shared.js";
 import { getRecoverySummary } from "./coach.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear, trainingBackstopSignature } from "./training-cache.js";
 import {
@@ -52,6 +52,8 @@ import {
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
 import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./training-fatigue.js";
 import { getTrainingIntent } from "./training-intent.js";
+import { recoverySignalIsDecisionGrade } from "./sensor-cadence.js";
+import { countComparableDoseShortfallSessions } from "./session-dose-log.js";
 
 // ---- ACWR low-base guards ---------------------------------------------------
 // An acute-vs-chronic ratio is only meaningful once there's a real CHRONIC base
@@ -61,7 +63,21 @@ import { getTrainingIntent } from "./training-intent.js";
 // base. Below these floors we suppress the scary "spiking" read entirely.
 const TONNAGE_CHRONIC_FLOOR = 4000; // lb/wk of chronic tonnage before ACWR means anything
 export const ENDURANCE_CHRONIC_FLOOR_KM = 8; // km/wk of chronic running before ACWR means anything
-const NON_TONNAGE_WEEK_FLOOR = 3; // timed/bodyweight/endurance units before a week counts as loaded
+export const NON_TONNAGE_WEEK_FLOOR = 3; // timed/bodyweight/endurance units before a week counts as loaded
+// A completed week is LOADED only when its load is at least this fraction of the
+// median of the prior loaded weeks. Travel / light weeks used to count as loaded
+// the moment tonnage was > 0, which strung a deload-due out of a mixed block.
+export const LOADED_WEEK_FRACTION = 0.75;
+// How many prior LOADED weeks a week's median may see. Light weeks do not
+// occupy a slot — a travel stretch must keep seeing the loaded base behind it,
+// and a new heavier base can still reset the reference once it fills this many
+// loaded peers.
+export const LOADED_WEEK_LOOKBACK = 4;
+// A young block suppresses deload-due only while week_index is still 1–2 AND
+// the block actually started recently. week_index stays 1 forever when
+// background coaching is off — recency is what keeps that from silencing the
+// reset indefinitely.
+export const FRESH_BLOCK_MAX_AGE_DAYS = 14;
 // ---- the COMBINED weekly stress budget --------------------------------------
 // The two ACWR guards below are per-lane and blind to each other: tonnage checks
 // tonnage, weekly km checks weekly km, and each has its own alarm bar (1.4 → the
@@ -74,7 +90,7 @@ const NON_TONNAGE_WEEK_FLOOR = 3; // timed/bodyweight/endurance units before a w
 // Neither number is ever shown — they decide which sentence gets said, nothing else.
 const TONNAGE_ACWR_CAUTION = 1.3;
 const ENDURANCE_ACWR_CAUTION = 1.3;
-const FATIGUE_DELOAD_MIN_WEEKS = 4; // enough accumulated work that feedback can bring the reset forward
+export const FATIGUE_DELOAD_MIN_WEEKS = 4; // enough accumulated work that log-confirmed fatigue can bring the reset forward
 
 export type LiftStatus = "progressing" | "plateaued" | "regressing" | "maintaining" | "new";
 export type LiftAction = "overload" | "hold" | "deload" | "vary" | "technique" | "introduce" | null;
@@ -699,7 +715,7 @@ export function weeklyTonnage(date: string, weekBack: number): number {
 // Consecutive loaded weeks with no reset before a deload reads "about due". A reset
 // every ~4-6 weeks is the norm; string 6 loaded weeks together and a deload is due —
 // EVEN for an athlete who has NEVER deloaded (the exact case that most needs one).
-const DELOAD_DUE_CONSECUTIVE_WEEKS = 6;
+export const DELOAD_DUE_CONSECUTIVE_WEEKS = 6;
 
 function weeklyNonTonnageLoad(
   date: string,
@@ -783,43 +799,310 @@ function recentFeedbackFatigue(date: string, days = 14): { high: boolean; reason
   }
 }
 
+export interface WeekLoadSnapshot {
+  tonnage: number;
+  units: number;
+}
+
+function weekHasTrainingData(week: WeekLoadSnapshot, floor = NON_TONNAGE_WEEK_FLOOR): boolean {
+  return week.tonnage > 0 || week.units >= floor;
+}
+
+export function medianNumber(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/**
+ * Classify one completed week against the median of prior weeks ALREADY
+ * CLASSIFIED LOADED. Pure so tests can drive it with fixtures. Callers that
+ * have a sequence must walk oldest→newest (`classifyLoadedWeeks`) so each
+ * week's peers are the loaded weeks before it — passing every prior week with
+ * data (including travel) as the peer set is the defect this exists to kill.
+ *
+ * - ≥2 prior loaded weeks: LOADED when this week's tonnage (or, when
+ *   tonnage≤0, its non-tonnage units) is ≥ LOADED_WEEK_FRACTION of that median.
+ * - exactly 1 prior loaded week: the existing floor (any tonnage, or
+ *   non-tonnage units at/above NON_TONNAGE_WEEK_FLOOR).
+ * - no prior loaded week: the floor, AND when prior weeks with data exist,
+ *   ≥ LOADED_WEEK_FRACTION of the heaviest of those — so a light stretch cannot
+ *   bootstrap itself as the baseline against a heavier history that has not
+ *   yet been classified loaded.
+ */
+export function classifyWeekLoad(
+  week: WeekLoadSnapshot,
+  priorLoadedWeeks: readonly WeekLoadSnapshot[],
+  opts?: {
+    fraction?: number;
+    nonTonnageFloor?: number;
+    priorWeeksWithData?: readonly WeekLoadSnapshot[];
+  }
+): "loaded" | "light" {
+  const fraction = opts?.fraction ?? LOADED_WEEK_FRACTION;
+  const floor = opts?.nonTonnageFloor ?? NON_TONNAGE_WEEK_FLOOR;
+  const fallbackLoaded = weekHasTrainingData(week, floor);
+  const useTonnage = week.tonnage > 0;
+  const here = useTonnage ? week.tonnage : week.units;
+  if (priorLoadedWeeks.length >= 2) {
+    const peers = priorLoadedWeeks
+      .map((prior) => (useTonnage ? prior.tonnage : prior.units))
+      .filter((value) => value > 0);
+    if (peers.length < 2) return fallbackLoaded ? "loaded" : "light";
+    const med = medianNumber(peers);
+    if (med == null || med <= 0) return fallbackLoaded ? "loaded" : "light";
+    return here >= fraction * med ? "loaded" : "light";
+  }
+  if (!fallbackLoaded) return "light";
+  if (priorLoadedWeeks.length === 1) return "loaded";
+  const priorValues = (opts?.priorWeeksWithData ?? [])
+    .map((prior) => (useTonnage ? prior.tonnage : prior.units))
+    .filter((value) => value > 0);
+  if (!priorValues.length) return "loaded";
+  const heaviest = Math.max(...priorValues);
+  return here >= fraction * heaviest ? "loaded" : "light";
+}
+
+/**
+ * Classify a sequence of weeks oldest→newest. Each week's loaded peers are the
+ * already-classified loaded weeks in the lookback window before it.
+ */
+export function classifyLoadedWeeks(
+  weeksOldestFirst: readonly WeekLoadSnapshot[],
+  opts?: { fraction?: number; nonTonnageFloor?: number; lookback?: number }
+): Array<"loaded" | "light"> {
+  const lookback = opts?.lookback ?? LOADED_WEEK_LOOKBACK;
+  const kinds: Array<"loaded" | "light"> = [];
+  for (let i = 0; i < weeksOldestFirst.length; i++) {
+    const week = weeksOldestFirst[i]!;
+    const priorLoaded: WeekLoadSnapshot[] = [];
+    const priorData: WeekLoadSnapshot[] = [];
+    // Scan older→newer so the heaviest unlabeled history still reaches the
+    // 0-peer bootstrap, and collect up to `lookback` already-loaded weeks
+    // (light weeks do not consume a slot).
+    for (let j = i - 1; j >= 0; j--) {
+      const prior = weeksOldestFirst[j]!;
+      if (weekHasTrainingData(prior, opts?.nonTonnageFloor)) priorData.push(prior);
+      if (kinds[j] === "loaded" && priorLoaded.length < lookback) priorLoaded.push(prior);
+      if (priorLoaded.length >= lookback) break;
+    }
+    kinds.push(classifyWeekLoad(week, priorLoaded, { ...opts, priorWeeksWithData: priorData }));
+  }
+  return kinds;
+}
+
+// Test hook: cache misses inside the last mesocycle() week-load walk. One Map
+// per call is the whole point — without it this path re-queries the same week
+// up to 5× on every logged set.
+let lastWeekLoadMisses = 0;
+export function lastMesocycleWeekLoadMisses(): number {
+  return lastWeekLoadMisses;
+}
+
+function decisionGradeRecoveryDrifting(recovery: any): boolean {
+  const drift = recovery?.delta ?? null;
+  const hrvDown =
+    drift?.hrv != null && Number(drift.hrv) < 0 && recoverySignalIsDecisionGrade(recovery, "hrv_ms");
+  const rhrUp =
+    drift?.rhr != null && Number(drift.rhr) > 2 && recoverySignalIsDecisionGrade(recovery, "resting_hr");
+  return hrvDown || rhrUp;
+}
+
+function logConfirmedFatigue(
+  date: string,
+  lifts: LiftState[]
+): { high: boolean; reasons: string[] } {
+  const regressing = (Array.isArray(lifts) ? lifts : []).filter((lift) => lift?.status === "regressing");
+  let shortfallSessions = 0;
+  try {
+    shortfallSessions = countComparableDoseShortfallSessions(date, 14);
+  } catch {
+    shortfallSessions = 0;
+  }
+  const reasons: string[] = [];
+  if (regressing.length >= 2) reasons.push("a couple of lifts are drifting down");
+  if (shortfallSessions >= 2) reasons.push("recent sessions came in short of what was prescribed");
+  return { high: reasons.length > 0, reasons };
+}
+
+// Athlete-facing mesocycle notes — variant SETS, rotated by calendar day. A
+// stable input fires the same branch every morning; one literal would print
+// verbatim for weeks.
+export const RECOVERY_WEEK_ACTIVE_NOTE_VARIANTS = [
+  (until: string) =>
+    `Recovery week is active through ${until} — keep the programmed frequency, reduced working-set volume, and easy aerobic continuation.`,
+  (until: string) =>
+    `Recovery week is active through ${until}: same movements, about half the working volume, crisp easy efforts.`,
+  (until: string) =>
+    `Recovery week is active through ${until} — let the work absorb, don't chase a new top set.`,
+  (until: string) =>
+    `Recovery week is active through ${until}. Keep showing up, keep it light, sleep big.`,
+] as const;
+
+export const RECOVERY_WEEK_JUST_COMPLETED_NOTE_VARIANTS = [
+  "Recovery week completed — resume the build conservatively and let normal progression earn its next step.",
+  "Recovery week completed — ease back into the build and let the next step earn itself.",
+  "Recovery week completed — start the build again without jumping the dose.",
+  "Recovery week completed — pick the build back up from a conservative first step.",
+] as const;
+
+export const BUILDING_BASE_NOTE_VARIANTS = [
+  "You're rebuilding your training base — keep volume steady and conservative; the load will feel like a jump only because the base is still thin, not because you're overreaching.",
+  "This is a base-building stretch — keep the dose steady rather than stacking jumps on a thin history.",
+  "You're rebuilding your training base. Hold volume where it is; a thin recent history makes any week feel bigger than it is.",
+  "The training base is still thin — keep volume steady and conservative while it fills in.",
+] as const;
+
+export const INTENSIFICATION_NOTE_VARIANTS = [
+  "Load's ramped this block — hold the line, don't pile on.",
+  "This week's load stepped up — hold it here rather than adding more.",
+  "The block has ramped — keep the dose where it is and let it land.",
+  "Load climbed this stretch — stay with it instead of stacking another jump.",
+] as const;
+
+export const NO_DELOAD_ACCUMULATION_NOTE_VARIANTS = [
+  "No recent lighter week on record — keep building, plan a reset every 4–6 weeks.",
+  "There's no recent reset on the log — keep building, and pencil in a lighter week every 4–6 weeks.",
+  "No recent lighter week on record. Keep stacking the work, and plan a reset every 4–6 weeks.",
+  "Keep building — a lighter week every 4–6 weeks is the usual rhythm when nothing has reset lately.",
+] as const;
+
+export const FATIGUE_DELOAD_NOTE_VARIANTS = [
+  (n: number, fatigue: string, loadText: string) =>
+    `About ${n} loaded weeks plus ${fatigue} ${loadText} — a reset week is about due.`,
+  (n: number, fatigue: string, loadText: string) =>
+    `You've stacked about ${n} loaded weeks, and ${fatigue} ${loadText} — a lighter week would pay off now.`,
+  (n: number, fatigue: string, loadText: string) =>
+    `That's about ${n} loaded weeks with ${fatigue} ${loadText} — a reset week is about due.`,
+  (n: number, fatigue: string, loadText: string) =>
+    `A stretch of about ${n} loaded weeks, ${fatigue} ${loadText} — time for a lighter week.`,
+] as const;
+
+export const STREAK_DELOAD_NOTE_VARIANTS = [
+  (n: number) =>
+    `You've strung about ${n} loaded weeks together with no reset — a lighter week is about due, even though there's no prior reset on record.`,
+  (n: number) =>
+    `That's about ${n} loaded weeks without a pause — a reset week would pay off now, even without one on the log.`,
+  (n: number) => `A long stretch of loaded weeks (~${n}) with no reset — a lighter week is about due.`,
+  (n: number) =>
+    `You've been loading for about ${n} weeks straight — a recovery week is about due, even without one on record.`,
+] as const;
+
+export const STREAK_DELOAD_NONTONNAGE_NOTE_VARIANTS = [
+  (n: number) =>
+    `You've strung about ${n} loaded weeks together with no reset — timed/bodyweight/endurance work counts here even when tonnage is low. A lighter week is about due.`,
+  (n: number) =>
+    `About ${n} loaded weeks of timed/bodyweight/endurance work with no reset — that work counts here even when tonnage is low. A reset week is about due.`,
+  (n: number) =>
+    `That's about ${n} loaded weeks without a pause. Timed/bodyweight/endurance work counts here even when tonnage is low — a lighter week is about due.`,
+  (n: number) =>
+    `You've been loading for about ${n} weeks on timed/bodyweight/endurance work, which counts here even when tonnage is low. A reset week is about due.`,
+] as const;
+
+export const MESO_FEEL_SUPPORT_VARIANTS = [
+  (feel: string) => `Sessions have also been reading that way — ${feel}.`,
+  (feel: string) => `The ratings line up with that: ${feel}.`,
+  (feel: string) => `That's showing up in how sessions have felt, too (${feel}).`,
+  (feel: string) => `How the sessions have felt agrees (${feel}).`,
+] as const;
+
+export const SINCE_RECOVERY_NOTE_VARIANTS = [
+  (n: number) => `${n} week${n === 1 ? "" : "s"} since the completed recovery week — building.`,
+  (n: number) => `${n} week${n === 1 ? "" : "s"} out of the recovery week — back to building.`,
+  (n: number) => `Building again — ${n} week${n === 1 ? "" : "s"} since the completed recovery week.`,
+  (n: number) => `${n} week${n === 1 ? "" : "s"} since the recovery week wrapped — keep building.`,
+] as const;
+
+export const SINCE_DELOAD_NOTE_VARIANTS = [
+  (n: number) => `${n} week${n === 1 ? "" : "s"} since your last lighter week — building.`,
+  (n: number) => `${n} week${n === 1 ? "" : "s"} since the last reset — keep building.`,
+  (n: number) => `Building — ${n} week${n === 1 ? "" : "s"} on from the last lighter week.`,
+  (n: number) => `${n} week${n === 1 ? "" : "s"} since your last reset — stacking the work.`,
+] as const;
+
+function underChronicDeloadDetector(
+  weekBack: number,
+  week: WeekLoadSnapshot,
+  loadAt: (back: number) => WeekLoadSnapshot
+): boolean {
+  const base = [weekBack + 1, weekBack + 2, weekBack + 3].map((b) => loadAt(b).tonnage);
+  const chronic = base.reduce((a, b) => a + b, 0) / base.length;
+  return chronic > 0 && week.tonnage > 0 && week.tonnage < chronic * 0.6;
+}
+
+function appendSupportingFeel(note: string, reasons: string[], date: string): string {
+  if (!reasons.length) return note;
+  const feel = reasons.join(" and ");
+  const support = pickDayVariant(MESO_FEEL_SUPPORT_VARIANTS, date, "meso-feel-support")(feel);
+  return `${note} ${support}`;
+}
+
 function mesocycle(
   date: string,
   recovery?: any,
   recoveryWeek?: ActiveRecoveryWeek | null,
-  completedRecoveryWeek?: CompletedRecoveryWeekLedger | null
+  completedRecoveryWeek?: CompletedRecoveryWeekLedger | null,
+  lifts: LiftState[] = []
 ): MesocycleState {
-  // A "deload week" = a COMPLETED week whose tonnage fell well below the trailing
-  // base. Start at w=1 (the current week is in-progress — a half-logged week early
-  // in the week would otherwise read as a deload). Walk back up to 8 weeks.
+  // A LIGHT week breaks the loaded streak. It is the detected reset (weeksSince)
+  // only when it is ALSO under the existing 0.6× chronic detector — travel-light
+  // weeks must not keep the streak alive, and they must not mint deload-due on
+  // their own. Start at w=1 (the current week is in-progress).
+  const loadCache = new Map<number, WeekLoadSnapshot>();
+  lastWeekLoadMisses = 0;
+  const weekLoadAt = (weekBack: number): WeekLoadSnapshot => {
+    const hit = loadCache.get(weekBack);
+    if (hit) return hit;
+    lastWeekLoadMisses++;
+    const snap = {
+      tonnage: weeklyTonnage(date, weekBack),
+      units: weeklyNonTonnageLoad(date, weekBack).units,
+    };
+    loadCache.set(weekBack, snap);
+    return snap;
+  };
+  // Oldest→newest, with extra history so week 12 still has loaded peers behind it.
+  const classifyThrough = 12;
+  const oldestBack = classifyThrough + LOADED_WEEK_LOOKBACK;
+  const oldestFirst: WeekLoadSnapshot[] = [];
+  for (let w = oldestBack; w >= 1; w--) oldestFirst.push(weekLoadAt(w));
+  const kindsOldestFirst = classifyLoadedWeeks(oldestFirst);
+  const classified: { weekBack: number; load: WeekLoadSnapshot; kind: "loaded" | "light" }[] = [];
+  for (let w = 1; w <= classifyThrough; w++) {
+    const idx = oldestBack - w;
+    classified.push({ weekBack: w, load: oldestFirst[idx]!, kind: kindsOldestFirst[idx]! });
+  }
   let weeksSince: number | null = null;
-  for (let w = 1; w <= 8; w++) {
-    const here = weeklyTonnage(date, w);
-    const base = [w + 1, w + 2, w + 3].map((b) => weeklyTonnage(date, b));
-    const chronic = base.reduce((a, b) => a + b, 0) / base.length;
-    if (chronic > 0 && here > 0 && here < chronic * 0.6) {
-      weeksSince = w;
+  for (const week of classified) {
+    if (week.weekBack > 8) break;
+    if (week.kind === "light" && underChronicDeloadDetector(week.weekBack, week.load, weekLoadAt)) {
+      weeksSince = week.weekBack;
       break;
     }
   }
-  // Consecutive COMPLETED loaded weeks (from w=1) with no reset — a training gap
-  // (an empty week) or the detected deload above breaks the streak. This is what
-  // catches the never-deloaded athlete: `weeksSince` stays null for them, so the
-  // old code read "accumulation" forever no matter how long they'd been grinding.
+  // The applied/completed recovery ledger RESETS weeksSince (and therefore the
+  // streak below). It never mints deload-due on its own — that is why this merge
+  // happens before the streak is counted, not after.
+  if (!recoveryWeek && completedRecoveryWeek) {
+    weeksSince =
+      weeksSince == null
+        ? completedRecoveryWeek.weeks_since_completion
+        : Math.min(weeksSince, completedRecoveryWeek.weeks_since_completion);
+  }
+  // Consecutive COMPLETED loaded weeks from w=1. A LIGHT week (travel, untrained,
+  // or a detected reset) breaks the streak; the streak restarts after it.
   let loadedStreak = 0;
-  for (let w = 1; w <= 12; w++) {
-    if (weeksSince != null && w >= weeksSince) break; // hit the last reset — streak resets there
-    const tonnage = weeklyTonnage(date, w);
-    const nonTonnage = weeklyNonTonnageLoad(date, w);
-    if (tonnage <= 0 && nonTonnage.units < NON_TONNAGE_WEEK_FLOOR) break; // an untrained week ends the streak
+  for (const week of classified) {
+    if (weeksSince != null && week.weekBack >= weeksSince) break;
+    if (week.kind !== "loaded") break;
     loadedStreak++;
   }
-  const deloadDueByStreak = weeksSince == null && loadedStreak >= DELOAD_DUE_CONSECUTIVE_WEEKS;
   // ACWR: this week's load vs the chronic base of the FOUR PRIOR weeks (the chronic
   // window must EXCLUDE the acute week, or the ratio is biased toward 1 and a real
   // spike never crosses the threshold). Mirrors the endurance ACWR below.
-  const acute = weeklyTonnage(date, 0);
-  const chronicWeeks = [1, 2, 3, 4].map((b) => weeklyTonnage(date, b));
+  const acute = weekLoadAt(0).tonnage;
+  const chronicWeeks = [1, 2, 3, 4].map((b) => weekLoadAt(b).tonnage);
   const chronic4 = chronicWeeks.reduce((a, b) => a + b, 0) / 4;
   // LOW-BASE GUARD: a ratio off a near-zero / barely-logged chronic base is
   // meaningless (a returning athlete logging their first couple of weeks reads as
@@ -834,71 +1117,93 @@ function mesocycle(
   const buildingBase = acute > 0 && !hasChronicBase;
 
   const rec = recovery ?? getRecoverySummary(14);
-  const drift = rec?.delta ?? null;
-  const recoveryDrifting = (drift?.hrv != null && drift.hrv < 0) || (drift?.rhr != null && drift.rhr > 2);
+  const recoveryDrifting = decisionGradeRecoveryDrifting(rec);
   const feedbackFatigue = recentFeedbackFatigue(date);
   const recentHybridHeavy = recentEnduranceImpacts(7, date).some((i) => i.load === "heavy");
-  const currentNonTonnage = weeklyNonTonnageLoad(date, 0);
+  const logFatigue = logConfirmedFatigue(date, lifts);
+  // deload-due may come ONLY from a long loaded streak, or from a 4-week loaded
+  // streak plus log-confirmed fatigue plus physiology. Felt ratings never trigger.
+  const deloadDueByStreak = loadedStreak >= DELOAD_DUE_CONSECUTIVE_WEEKS;
   const fatigueDeload =
-    loadedStreak >= FATIGUE_DELOAD_MIN_WEEKS &&
-    feedbackFatigue.high &&
-    (recoveryDrifting || recentHybridHeavy || currentNonTonnage.units >= NON_TONNAGE_WEEK_FLOOR);
+    loadedStreak >= FATIGUE_DELOAD_MIN_WEEKS && logFatigue.high && (recoveryDrifting || recentHybridHeavy);
 
-  // (An athlete who is actively IN a deload this week is read from the active
-  // periodization block's phase, not from this completed-week detector.)
+  const block = (() => {
+    try {
+      return getActiveBlock();
+    } catch {
+      return null;
+    }
+  })();
+  // Active recovery week already forces phase=deload below, so block.phase here
+  // is the effective phase. A young block, or a programmed deload/realization,
+  // never reads deload-due — the block is the plan. Fresh only suppresses
+  // deload-due; intensification / base-building / accumulation notes still run.
+  const startedOn = String(block?.started_at ?? "").slice(0, 10);
+  const startedAgeDays = /^\d{4}-\d{2}-\d{2}$/.test(startedOn) ? daysBetweenISO(date, startedOn) : null;
+  const freshBlock =
+    !!block &&
+    Number(block.week_index) <= 2 &&
+    startedAgeDays != null &&
+    startedAgeDays >= 0 &&
+    startedAgeDays <= FRESH_BLOCK_MAX_AGE_DAYS;
+  const blockPhase = String(block?.phase ?? "");
+  const blockSuppressesDeloadDue = freshBlock || blockPhase === "deload" || blockPhase === "realization";
+
   let phase: MesoPhase;
   let note: string;
   if (recoveryWeek) {
     phase = "deload";
-    note = `Recovery week is active through ${recoveryWeek.until} — keep the programmed frequency, reduced working-set dose, and easy aerobic continuation.`;
+    note = pickDayVariant(RECOVERY_WEEK_ACTIVE_NOTE_VARIANTS, date, "meso-recovery-active")(recoveryWeek.until);
     weeksSince = 0;
-  } else if (completedRecoveryWeek) {
-    // Prefer whichever reset is newer: the deliberate applied recovery ledger,
-    // or a later low-load week detected from the logs.
-    weeksSince =
-      weeksSince == null
-        ? completedRecoveryWeek.weeks_since_completion
-        : Math.min(weeksSince, completedRecoveryWeek.weeks_since_completion);
-    if (weeksSince >= 4) {
+  } else {
+    const due = !blockSuppressesDeloadDue && (fatigueDeload || deloadDueByStreak);
+    if (due && fatigueDeload) {
       phase = "deload-due";
-      note = `~${weeksSince} weeks since the completed recovery week${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`;
+      const fatigue = logFatigue.reasons.join(" and ");
+      const loadText = recentHybridHeavy
+        ? "with hard endurance layered onto the block"
+        : "with recovery drifting";
+      note = appendSupportingFeel(
+        pickDayVariant(FATIGUE_DELOAD_NOTE_VARIANTS, date, "meso-fatigue-deload")(
+          loadedStreak,
+          fatigue,
+          loadText
+        ),
+        feedbackFatigue.reasons,
+        date
+      );
+    } else if (buildingBase) {
+      phase = "accumulation";
+      note = pickDayVariant(BUILDING_BASE_NOTE_VARIANTS, date, "meso-building-base");
+    } else if (due && deloadDueByStreak) {
+      phase = "deload-due";
+      const nonTonnageStreak = weekLoadAt(1).tonnage <= 0;
+      note = appendSupportingFeel(
+        pickDayVariant(
+          nonTonnageStreak ? STREAK_DELOAD_NONTONNAGE_NOTE_VARIANTS : STREAK_DELOAD_NOTE_VARIANTS,
+          date,
+          nonTonnageStreak ? "meso-streak-deload-nontonnage" : "meso-streak-deload"
+        )(loadedStreak),
+        feedbackFatigue.reasons,
+        date
+      );
+    } else if (acwr != null && acwr >= 1.4) {
+      phase = "intensification";
+      note = pickDayVariant(INTENSIFICATION_NOTE_VARIANTS, date, "meso-intensification");
+    } else if (completedRecoveryWeek && weeksSince === 0) {
+      phase = "accumulation";
+      note = pickDayVariant(RECOVERY_WEEK_JUST_COMPLETED_NOTE_VARIANTS, date, "meso-recovery-just-done");
+    } else if (weeksSince == null) {
+      phase = "accumulation";
+      note = pickDayVariant(NO_DELOAD_ACCUMULATION_NOTE_VARIANTS, date, "meso-no-deload");
     } else {
       phase = "accumulation";
-      note =
-        weeksSince === 0
-          ? "Recovery week completed — resume the build conservatively and let normal progression earn its next step."
-          : `${weeksSince} week${weeksSince === 1 ? "" : "s"} since the completed recovery week — building.`;
+      note = pickDayVariant(
+        completedRecoveryWeek ? SINCE_RECOVERY_NOTE_VARIANTS : SINCE_DELOAD_NOTE_VARIANTS,
+        date,
+        completedRecoveryWeek ? "meso-since-recovery" : "meso-since-deload"
+      )(weeksSince);
     }
-  } else if (weeksSince != null && weeksSince >= 4) {
-    phase = "deload-due";
-    note = `~${weeksSince} weeks since a deload${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`;
-  } else if (fatigueDeload) {
-    phase = "deload-due";
-    const fatigue = feedbackFatigue.reasons.join(" and ");
-    const loadText = recentHybridHeavy
-      ? "with hard endurance layered onto the block"
-      : currentNonTonnage.units >= NON_TONNAGE_WEEK_FLOOR
-        ? "with timed/bodyweight work adding fatigue beyond tonnage"
-        : "with recovery drifting";
-    note = `~${loadedStreak} loaded weeks plus ${fatigue} ${loadText} — a reset week is about due.`;
-  } else if (buildingBase) {
-    phase = "accumulation";
-    note =
-      "You're rebuilding your training base — keep volume steady and conservative; the load will feel like a jump only because the base is still thin, not because you're overreaching.";
-  } else if (deloadDueByStreak) {
-    const source =
-      weeklyTonnage(date, 1) > 0 ? "" : " — timed/bodyweight/endurance work counts here even when tonnage is low";
-    phase = "deload-due";
-    note = `You've strung ~${loadedStreak} loaded weeks together with no reset${recoveryDrifting ? " and recovery's drifting" : ""}${source} — a deload week is about due, even though there's no prior deload on record.`;
-  } else if (acwr != null && acwr >= 1.4) {
-    phase = "intensification";
-    note = "Load's ramped this block — hold the line, don't pile on.";
-  } else if (weeksSince == null) {
-    phase = "accumulation";
-    note = "No recent deload on record — keep building, plan a reset every 4–6 weeks.";
-  } else {
-    phase = "accumulation";
-    note = `${weeksSince} week${weeksSince === 1 ? "" : "s"} since your last deload — building.`;
   }
 
   return { weeks_since_deload: weeksSince, phase, acute_chronic_ratio: acwr, note };
@@ -1338,7 +1643,7 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   const volume = muscleVolume(d);
   const recoveryWeek = activeRecoveryWeek(d);
   const completedRecoveryWeek = recoveryWeek ? null : completedRecoveryWeekLedger(d);
-  const meso = mesocycle(d, recovery, recoveryWeek, completedRecoveryWeek);
+  const meso = mesocycle(d, recovery, recoveryWeek, completedRecoveryWeek, lifts);
   const endurance = enduranceConfigured ? enduranceState(d) : null;
   const hybrid = hybridState(d, endurance, enduranceConfigured, meso);
 

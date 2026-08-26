@@ -7,10 +7,25 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
 import {
+  BUILDING_BASE_NOTE_VARIANTS,
   COMBINED_LOAD_RUN_YIELDS_QUIET_VARIANTS,
   COMBINED_LOAD_RUN_YIELDS_VARIANTS,
   COMBINED_LOAD_STRENGTH_YIELDS_VARIANTS,
+  FATIGUE_DELOAD_NOTE_VARIANTS,
+  FRESH_BLOCK_MAX_AGE_DAYS,
+  INTENSIFICATION_NOTE_VARIANTS,
+  LOADED_WEEK_FRACTION,
+  MESO_FEEL_SUPPORT_VARIANTS,
+  NO_DELOAD_ACCUMULATION_NOTE_VARIANTS,
+  RECOVERY_WEEK_JUST_COMPLETED_NOTE_VARIANTS,
+  SINCE_DELOAD_NOTE_VARIANTS,
+  SINCE_RECOVERY_NOTE_VARIANTS,
+  STREAK_DELOAD_NOTE_VARIANTS,
+  STREAK_DELOAD_NONTONNAGE_NOTE_VARIANTS,
+  classifyLoadedWeeks,
+  classifyWeekLoad,
   familyLabelFromKey,
+  lastMesocycleWeekLoadMisses,
 } from "../dist/repo/program-state.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 
@@ -31,7 +46,9 @@ beforeEach(() => {
     "plan_proposals",
     "daily_metrics",
     "checkins",
-    "app_state"
+    "app_state",
+    "daily_session_outcomes",
+    "daily_session_compositions"
   );
 });
 
@@ -349,10 +366,11 @@ test("mesocycle deload due counts timed/bodyweight work, not tonnage only", () =
   assert.match(meso.note, /timed\/bodyweight\/endurance work counts/i);
 });
 
-test("mesocycle brings a reset forward when feedback fatigue stacks with hard endurance", () => {
+test("two 2-ratings plus one hard run with a complete log do not mint deload-due", () => {
   repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
-  // Four completed loaded weeks is not enough by itself for the default 6-week
-  // deload trigger, but recent joint feedback plus a heavy run is a real fatigue cue.
+  // Four loaded weeks, every prescribed set at the prescribed load, plus two low
+  // felt ratings and a heavy run. Felt ratings are supporting copy at most — they
+  // never trigger deload-due on their own (the athlete wants to be sore).
   for (const wk of [1, 2, 3, 4]) {
     for (const off of [1, 3]) {
       for (let s = 1; s <= 4; s++) {
@@ -361,15 +379,15 @@ test("mesocycle brings a reset forward when feedback fatigue stacks with hard en
     }
   }
   repo.addActivity({ type: "run", duration_min: 70, distance_km: 12, date: REF });
-  repo.setSessionFeedback(REF, { joint_pain: "left knee", soreness: 4, performance: 2 });
+  repo.setSessionFeedback(back(3), { performance: 2, soreness: 4 });
+  repo.setSessionFeedback(back(1), { performance: 2, soreness: 4 });
 
   const meso = repo.getProgramState(REF).mesocycle;
-  assert.equal(meso.phase, "deload-due");
-  assert.match(meso.note, /joint feedback|soreness|flat/i);
-  assert.match(meso.note, /hard endurance|timed\/bodyweight/i);
+  assert.notEqual(meso.phase, "deload-due", "a complete log outranks felt ratings");
+  assert.equal(meso.phase, "accumulation");
 });
 
-test("a free-text rapid-fade note participates in the same fatigue read", () => {
+test("a free-text rapid-fade note is supporting copy, never a deload-due trigger", () => {
   repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
   for (const wk of [1, 2, 3, 4]) {
     for (const off of [1, 3]) {
@@ -386,8 +404,8 @@ test("a free-text rapid-fade note participates in the same fatigue read", () => 
   );
 
   const meso = repo.getProgramState(REF).mesocycle;
-  assert.equal(meso.phase, "deload-due");
-  assert.match(meso.note, /strength-endurance fading/i);
+  assert.notEqual(meso.phase, "deload-due", "session notes never mint deload-due on their own");
+  assert.equal(meso.phase, "accumulation");
 });
 
 test("endurance ACWR low-base guard: a returning runner's first week reads 'building', not 'spiking'", () => {
@@ -552,6 +570,309 @@ test("the first post-recovery date resumes accumulation from the completed appli
   assert.doesNotMatch(state.headline, /deload|due/i);
 });
 
+test("classifyWeekLoad treats a travel-sized week as light against a loaded median", () => {
+  const loaded = [
+    { tonnage: 10000, units: 0 },
+    { tonnage: 10200, units: 0 },
+    { tonnage: 9800, units: 0 },
+    { tonnage: 10100, units: 0 },
+  ];
+  assert.equal(LOADED_WEEK_FRACTION, 0.75);
+  assert.equal(classifyWeekLoad({ tonnage: 10000, units: 0 }, loaded), "loaded");
+  assert.equal(classifyWeekLoad({ tonnage: 3700, units: 0 }, loaded), "light");
+  assert.equal(
+    classifyWeekLoad({ tonnage: 5000, units: 0 }, [{ tonnage: 10000, units: 0 }]),
+    "loaded",
+    "fewer than 2 prior loaded weeks falls back to the existing floor (any tonnage)"
+  );
+  assert.equal(classifyWeekLoad({ tonnage: 0, units: 1 }, []), "light");
+  assert.equal(classifyWeekLoad({ tonnage: 0, units: 4 }, []), "loaded");
+  assert.equal(
+    classifyWeekLoad({ tonnage: 0, units: 2 }, [
+      { tonnage: 0, units: 8 },
+      { tonnage: 0, units: 8 },
+    ]),
+    "light",
+    "non-tonnage weeks compare units to the units median"
+  );
+  // The live defect: median of ALL prior weeks with data (three 3700s + one
+  // 10000) is 3700, so a travel week classified loaded against itself. Peers
+  // are already-classified LOADED weeks — the 3700s must not be in that set.
+  assert.equal(
+    classifyWeekLoad({ tonnage: 3700, units: 0 }, [3700, 3700, 3700, 10000].map((t) => ({ tonnage: t, units: 0 }))),
+    "loaded",
+    "passing mixed weeks as 'loaded' still pulls the median down — callers must not"
+  );
+  assert.equal(
+    classifyWeekLoad(
+      { tonnage: 3700, units: 0 },
+      [],
+      { priorWeeksWithData: [3700, 3700, 3700, 10000].map((t) => ({ tonnage: t, units: 0 })) }
+    ),
+    "light",
+    "with no loaded peer, the heaviest prior week with data is the reference"
+  );
+  assert.equal(
+    classifyWeekLoad(
+      { tonnage: 3700, units: 0 },
+      [],
+      { priorWeeksWithData: [3700, 3700, 3700, 3700].map((t) => ({ tonnage: t, units: 0 })) }
+    ),
+    "loaded",
+    "with no loaded peer, a 3700 stretch that IS the athlete's base still loads"
+  );
+});
+
+test("classifyLoadedWeeks: travel after a loaded base stays light; a 3700 base then a jump resets later 3700s", () => {
+  const t = (n) => ({ tonnage: n, units: 0 });
+  // Oldest→newest: two loaded 10000s, then four travel 3700s.
+  assert.deepEqual(
+    classifyLoadedWeeks([t(10000), t(10000), t(3700), t(3700), t(3700), t(3700)]),
+    ["loaded", "loaded", "light", "light", "light", "light"]
+  );
+  // Reverse: four 3700s ARE the base (no loaded peer yet, they meet the floor
+  // and 0.75× max of themselves), then two 10000s load against that base.
+  assert.deepEqual(
+    classifyLoadedWeeks([t(3700), t(3700), t(3700), t(3700), t(10000), t(10000)]),
+    ["loaded", "loaded", "loaded", "loaded", "loaded", "loaded"]
+  );
+  // The 10000s reset the reference: a later 3700 is light against them.
+  assert.deepEqual(
+    classifyLoadedWeeks([t(3700), t(3700), t(3700), t(3700), t(10000), t(10000), t(3700)]),
+    ["loaded", "loaded", "loaded", "loaded", "loaded", "loaded", "light"]
+  );
+});
+
+test("two loaded weeks then four travel weeks stay light — they do not mint deload-due", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // Oldest: weekBack 5-6 at ~10000. Newest: weekBack 1-4 at ~3700.
+  // The old median-of-all-with-data walk classified the 3700s loaded against
+  // themselves, so the streak reached 6.
+  for (const wk of [5, 6]) {
+    for (const off of [1, 3]) {
+      for (let s = 1; s <= 4; s++) {
+        repo.logSetByName({ exercise: "Back Squat", weight: 250, reps: 5, rir: 2, date: back(wk * 7 + off) });
+      }
+    }
+  }
+  for (const wk of [1, 2, 3, 4]) {
+    for (let s = 1; s <= 4; s++) {
+      repo.logSetByName({ exercise: "Back Squat", weight: 185, reps: 5, rir: 2, date: back(wk * 7 + 1) });
+    }
+  }
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.notEqual(meso.phase, "deload-due");
+  assert.equal(meso.phase, "accumulation");
+});
+
+test("a 3700 base then two 10000 weeks loads the old weeks; a later 3700 would be light", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // Oldest four weeks ARE the athlete's base (3700); the two newest jump to 10000.
+  // Six consecutive loaded weeks → deload-due. (Later 3700s against the new
+  // reference are covered by classifyLoadedWeeks above.)
+  for (const wk of [3, 4, 5, 6]) {
+    for (let s = 1; s <= 4; s++) {
+      repo.logSetByName({ exercise: "Back Squat", weight: 185, reps: 5, rir: 2, date: back(wk * 7 + 1) });
+    }
+  }
+  for (const wk of [1, 2]) {
+    for (const off of [1, 3]) {
+      for (let s = 1; s <= 4; s++) {
+        repo.logSetByName({ exercise: "Back Squat", weight: 250, reps: 5, rir: 2, date: back(wk * 7 + off) });
+      }
+    }
+  }
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.equal(meso.phase, "deload-due");
+});
+
+test("travel-light weeks break the loaded streak without earning deload-due", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // Weeks 3-6: ~full load. Weeks 1-2: ~one third of that (travel). The old
+  // detector counted any tonnage>0 as loaded, so two travel weeks kept the streak
+  // alive. They must now break it, and they must not mint deload-due on their own.
+  for (const wk of [3, 4, 5, 6]) {
+    for (const off of [0, 2, 4]) {
+      for (let s = 1; s <= 5; s++) {
+        repo.logSetByName({ exercise: "Back Squat", weight: 315, reps: 5, rir: 2, date: back(wk * 7 + off) });
+      }
+    }
+  }
+  for (const wk of [1, 2]) {
+    for (let s = 1; s <= 5; s++) {
+      repo.logSetByName({ exercise: "Back Squat", weight: 315, reps: 5, rir: 2, date: back(wk * 7) });
+    }
+  }
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.notEqual(meso.phase, "deload-due");
+  assert.equal(meso.phase, "accumulation");
+});
+
+test("two regressing lifts plus drifting recovery after 4 loaded weeks reads deload-due", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // wk=1 is the most recent completed week, so it carries the lowest load.
+  const squat = [225, 235, 245, 255];
+  const bench = [155, 165, 175, 185];
+  [1, 2, 3, 4].forEach((wk, i) => {
+    for (const off of [1, 3]) {
+      for (let s = 1; s <= 4; s++) {
+        repo.logSetByName({ exercise: "Back Squat", weight: squat[i], reps: 5, rir: 2, date: back(wk * 7 + off) });
+        repo.logSetByName({ exercise: "Bench Press", weight: bench[i], reps: 5, rir: 2, date: back(wk * 7 + off) });
+      }
+    }
+  });
+  const drifting = {
+    delta: { hrv: -6, rhr: 4 },
+    quality: {
+      hrv_ms: { latest_date: REF, freshness: "fresh", sample_count: 8, expected_days: 14 },
+      resting_hr: { latest_date: REF, freshness: "fresh", sample_count: 8, expected_days: 14 },
+    },
+  };
+  const st = repo.getProgramState(REF, drifting);
+  const squatLift = st.lifts.find((l) => l.exercise === "Back Squat");
+  const benchLift = st.lifts.find((l) => l.exercise === "Bench Press");
+  assert.equal(squatLift.status, "regressing");
+  assert.equal(benchLift.status, "regressing");
+  assert.equal(st.mesocycle.phase, "deload-due");
+  assert.match(st.mesocycle.note, /drifting|reset|lighter/i);
+});
+
+test("block week 1 never reads deload-due even after a long loaded streak", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  for (const wk of [1, 2, 3, 4, 5, 6]) {
+    for (const off of [1, 3]) {
+      for (let s = 1; s <= 4; s++) {
+        repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(wk * 7 + off) });
+      }
+    }
+  }
+  repo.createBlock({
+    goal: "Build strength",
+    focus: "strength",
+    phase: "accumulation",
+    week_index: 1,
+    total_weeks: 6,
+    started_at: `${REF}T12:00:00.000Z`,
+  });
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.notEqual(meso.phase, "deload-due");
+  assert.equal(meso.phase, "accumulation");
+});
+
+test("a week_index-1 block started 30 days ago is not fresh and does not suppress deload-due", () => {
+  assert.equal(FRESH_BLOCK_MAX_AGE_DAYS, 14);
+  repo.setProfile({ primary_discipline: "strength" });
+  for (const wk of [1, 2, 3, 4, 5, 6]) {
+    for (const off of [1, 3]) {
+      for (let s = 1; s <= 4; s++) {
+        repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(wk * 7 + off) });
+      }
+    }
+  }
+  repo.createBlock({
+    goal: "Build strength",
+    focus: "strength",
+    phase: "accumulation",
+    week_index: 1,
+    total_weeks: 6,
+    started_at: `${back(30)}T12:00:00.000Z`,
+  });
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.equal(meso.phase, "deload-due", "stuck week_index 1 on a month-old block must not silence the reset");
+});
+
+test("a fresh block with ACWR 1.6 still reads intensification", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // Weeks 1-4 (completed): 2 days × 4 sets × 200 × 5 = 8000. Acute week: 320 × 5
+  // × 4 × 2 = 12800 → ACWR 1.6 once the chronic floor is met.
+  for (const wk of [1, 2, 3, 4]) {
+    for (const off of [1, 3]) {
+      for (let s = 1; s <= 4; s++) {
+        repo.logSetByName({ exercise: "Back Squat", weight: 200, reps: 5, rir: 2, date: back(wk * 7 + off) });
+      }
+    }
+  }
+  for (const off of [1, 3]) {
+    for (let s = 1; s <= 4; s++) {
+      repo.logSetByName({ exercise: "Back Squat", weight: 320, reps: 5, rir: 2, date: back(off) });
+    }
+  }
+  repo.createBlock({
+    goal: "Build strength",
+    focus: "strength",
+    phase: "accumulation",
+    week_index: 1,
+    total_weeks: 6,
+    started_at: `${REF}T12:00:00.000Z`,
+  });
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.equal(meso.phase, "intensification");
+  assert.ok(meso.acute_chronic_ratio >= 1.4);
+});
+
+test("mesocycle classifies each week once — a Map, not five re-queries per week", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  for (const wk of [1, 2, 3, 4]) {
+    repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(wk * 7) });
+  }
+  repo.getProgramState(REF);
+  const misses = lastMesocycleWeekLoadMisses();
+  assert.ok(misses >= 12, `expected the 12 completed weeks to be read, got ${misses}`);
+  assert.ok(misses <= 24, `week-load walk should be one Map per call (~20 unique weeks), got ${misses}`);
+});
+
+function stampAppliedRecoveryWeek(appliedOn) {
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Reduced recovery prescription.",
+    days: [],
+  });
+  repo.setProposalStatus(proposal.id, "applied");
+  repo.setAppState("recovery_week_applied", JSON.stringify({ applied_on: appliedOn, proposal_id: proposal.id }));
+}
+
+function logLoadedWeeks(weeks, weight = 225) {
+  for (const wk of weeks) {
+    for (const off of [1, 3]) {
+      for (let s = 1; s <= 4; s++) {
+        repo.logSetByName({
+          exercise: "Back Squat",
+          weight,
+          reps: 5,
+          rir: 2,
+          date: back(wk * 7 + off),
+        });
+      }
+    }
+  }
+}
+
+test("an applied recovery week whose tonnage never dipped still resets weeks-since from the ledger", () => {
+  // Active window is 7 days. applied_on 28 days back → completed 21 days ago →
+  // weeks_since_completion = 3. Same tonnage every week, so the 0.6× detector
+  // never fires; the ledger is the only reset source.
+  stampAppliedRecoveryWeek(back(28));
+  logLoadedWeeks([1, 2, 3, 4, 5, 6, 7, 8]);
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.equal(meso.weeks_since_deload, 3, "ledger supplies weeks-since when tonnage never dipped");
+  assert.equal(meso.phase, "accumulation");
+  assert.ok(
+    SINCE_RECOVERY_NOTE_VARIANTS.map((line) => line(3)).includes(meso.note),
+    `note should be from the since-recovery set, got: ${meso.note}`
+  );
+});
+
+test("calendar-only weeks since an applied recovery week with a progressing log stay accumulation", () => {
+  // Active window is 7 days. applied_on 42 days back → completed 35 days ago →
+  // weeks_since_completion = 5. Only two loaded weeks since: calendar alone
+  // never mints deload-due (the old ≥4 ladder would have).
+  stampAppliedRecoveryWeek(back(42));
+  logLoadedWeeks([1, 2]);
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.equal(meso.weeks_since_deload, 5, "the completed ledger still resets weeks-since");
+  assert.notEqual(meso.phase, "deload-due", "calendar gap after a recovery week is not itself deload-due");
+  assert.equal(meso.phase, "accumulation");
+});
+
 // ===========================================================================
 // familyLabelFromKey: display-only possessive fix. family_key strips punctuation
 // ("Farmer's Carry" keys as "farmer s carry"), so a bare title-case pass reads
@@ -711,22 +1032,41 @@ test("with nothing peaking and nothing dated, the running is the lane that holds
 // hold the same line as the rest of the athlete-facing surface.
 
 test("every combined-load phrasing is a variant set that holds the reading grammar", () => {
+  const render = (line) => {
+    if (typeof line !== "function") return line;
+    return line.length >= 3
+      ? line(6, "a couple of lifts are drifting down", "with recovery drifting")
+      : line(6);
+  };
   const sets = [
     ["COMBINED_LOAD_STRENGTH_YIELDS", COMBINED_LOAD_STRENGTH_YIELDS_VARIANTS],
     ["COMBINED_LOAD_RUN_YIELDS", COMBINED_LOAD_RUN_YIELDS_VARIANTS],
     ["COMBINED_LOAD_RUN_YIELDS_QUIET", COMBINED_LOAD_RUN_YIELDS_QUIET_VARIANTS],
+    ["BUILDING_BASE_NOTE", BUILDING_BASE_NOTE_VARIANTS],
+    ["INTENSIFICATION_NOTE", INTENSIFICATION_NOTE_VARIANTS],
+    ["NO_DELOAD_ACCUMULATION_NOTE", NO_DELOAD_ACCUMULATION_NOTE_VARIANTS],
+    ["RECOVERY_WEEK_JUST_COMPLETED_NOTE", RECOVERY_WEEK_JUST_COMPLETED_NOTE_VARIANTS],
+    ["FATIGUE_DELOAD_NOTE", FATIGUE_DELOAD_NOTE_VARIANTS],
+    ["STREAK_DELOAD_NOTE", STREAK_DELOAD_NOTE_VARIANTS],
+    ["STREAK_DELOAD_NONTONNAGE_NOTE", STREAK_DELOAD_NONTONNAGE_NOTE_VARIANTS],
+    ["MESO_FEEL_SUPPORT", MESO_FEEL_SUPPORT_VARIANTS],
+    ["SINCE_RECOVERY_NOTE", SINCE_RECOVERY_NOTE_VARIANTS],
+    ["SINCE_DELOAD_NOTE", SINCE_DELOAD_NOTE_VARIANTS],
   ];
   for (const [label, set] of sets) {
-    assert.ok(set.length >= 3, `${label}: a set, never one literal printed for weeks`);
-    assert.equal(new Set(set).size, set.length, `${label}: no duplicate phrasings`);
-    for (const line of set) {
+    const lines = [...set].map(render);
+    assert.ok(lines.length >= 3, `${label}: a set, never one literal printed for weeks`);
+    assert.equal(new Set(lines).size, lines.length, `${label}: no duplicate phrasings`);
+    for (const line of lines) {
       assert.equal(violatesReadingGrammar(line), null, `${label}: "${line}"`);
       assert.doesNotMatch(line, /acwr|ratio|residual|\bload score\b/i, `${label}: no engineering register — "${line}"`);
     }
   }
-  // The three sets say different things and must not be interchangeable.
-  const all = sets.flatMap(([, set]) => set);
-  assert.equal(new Set(all).size, all.length, "no phrasing is shared between the three answers");
+  // The three combined-load sets say different things and must not be interchangeable.
+  const combined = sets
+    .filter(([label]) => label.startsWith("COMBINED_LOAD"))
+    .flatMap(([, set]) => [...set].map(render));
+  assert.equal(new Set(combined).size, combined.length, "no phrasing is shared between the three answers");
 });
 
 test("with a supporting endurance role a race build yields the run, not strength", () => {

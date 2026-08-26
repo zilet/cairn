@@ -101,7 +101,7 @@ test("C2: an athlete who has NEVER deloaded but strung many loaded weeks reads '
   const meso = getProgramState(REF).mesocycle;
   assert.equal(meso.weeks_since_deload, null, "there is no prior deload on record");
   assert.equal(meso.phase, "deload-due", "a long unbroken loaded streak is flagged deload-due regardless of history");
-  assert.match(meso.note.toLowerCase(), /deload/);
+  assert.match(meso.note.toLowerCase(), /lighter|reset|recovery week/);
 });
 
 // ── C5: proactive variety (introduce) + tenure ───────────────────────────────

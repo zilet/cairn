@@ -11,7 +11,11 @@
 // already does: neutral. Never a caution, never a nudge toward rest.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyWearPattern, hasDecisionGradeCoverage } from "../dist/repo/sensor-cadence.js";
+import {
+  classifyWearPattern,
+  hasDecisionGradeCoverage,
+  recoverySignalIsDecisionGrade,
+} from "../dist/repo/sensor-cadence.js";
 
 const TODAY = "2026-07-30";
 // n days before TODAY, as a YYYY-MM-DD key.
@@ -182,4 +186,29 @@ test("a caller may raise the floor, and the unknown-window fallback never drops 
   assert.equal(hasDecisionGradeCoverage(6, 7, 6), true);
   assert.equal(hasDecisionGradeCoverage(6, null, 8), false);
   assert.equal(hasDecisionGradeCoverage(8, null, 8), true);
+});
+
+test("recoverySignalIsDecisionGrade is the one freshness+coverage gate", () => {
+  const fresh = {
+    quality: {
+      hrv_ms: { latest_date: TODAY, freshness: "fresh", sample_count: 8, expected_days: 14 },
+    },
+  };
+  assert.equal(recoverySignalIsDecisionGrade(fresh, "hrv_ms"), true);
+  assert.equal(
+    recoverySignalIsDecisionGrade(
+      { quality: { hrv_ms: { latest_date: TODAY, freshness: "stale", sample_count: 8, expected_days: 14 } } },
+      "hrv_ms"
+    ),
+    false,
+    "stale is not decision-grade even with coverage"
+  );
+  assert.equal(
+    recoverySignalIsDecisionGrade(
+      { quality: { hrv_ms: { latest_date: TODAY, freshness: "fresh", sample_count: 2, expected_days: 14 } } },
+      "hrv_ms"
+    ),
+    false,
+    "thin coverage is not decision-grade even when fresh"
+  );
 });

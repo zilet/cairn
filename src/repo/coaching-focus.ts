@@ -25,7 +25,7 @@
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { movementKey } from "./exercise-canon.js";
 import { type FocusCandidate, type FocusDomain, focusScore } from "./focus-candidate.js";
-import { hasDecisionGradeCoverage } from "./sensor-cadence.js";
+import { recoverySignalIsDecisionGrade } from "./sensor-cadence.js";
 import { clipText } from "./shared.js";
 import {
   lifeCapacityIsCommitment,
@@ -476,28 +476,6 @@ function weekdayOf(iso: unknown): string | null {
   return Number.isFinite(t) ? WEEKDAY_NAMES[new Date(t).getUTCDay()] : null;
 }
 
-// A recent-vs-baseline delta is fit to lead only when BOTH constituent wearable
-// series are current and have enough coverage to be a trend rather than a stray
-// night. The canonical summary puts all fields in `quality`; `provenance` plus
-// `coverage` is the equivalent fallback when an older caller omitted that block.
-function recoverySignalIsDecisionGrade(recovery: RecoveryInput | null | undefined, signal: string): boolean {
-  const quality = recovery?.quality?.[signal];
-  const provenance = recovery?.provenance?.[signal];
-  const coverage = recovery?.coverage?.[signal];
-  const latestDate = String(quality?.latest_date ?? provenance?.latest_date ?? "");
-  const freshness = lc(quality?.freshness ?? provenance?.freshness);
-  const samples = num(quality?.sample_count ?? coverage?.sample_count);
-  const expected = num(
-    quality?.expected_days ?? quality?.window_days ?? coverage?.expected_days ?? coverage?.window_days
-  );
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(latestDate) || !["fresh", "recent"].includes(freshness)) return false;
-  // The coverage half of the test — half of the available window, capped at a
-  // week, with a three-night floor, and a flat five when the window is unknown —
-  // now lives in sensor-cadence.ts, where the Brief and the prompt can hold a
-  // thin series to the same bar instead of each inventing one.
-  return hasDecisionGradeCoverage(samples, expected);
-}
-
 function varyOptionName(option: unknown): string | null {
   const raw = option && typeof option === "object" && "name" in option ? option.name : option;
   return raw ? String(raw) : null;
@@ -589,15 +567,58 @@ function leverLoadsFlagged(groupLabel: string, leadLift: string, flagged: Flagge
 
 // ---- candidate generation: one read per domain, each scored for internal ranking ----
 
+const RECOVERY_WEEK_LEAD_TITLES = [
+  "Take an earned recovery week",
+  "A lighter week has been earned",
+  "Time for a lighter recovery week",
+  "An earned lighter recovery week would pay off now",
+] as const;
+
+const RECOVERY_WEEK_LEAD_WHYS = [
+  "Your recent load and recovery signals say a lighter week now pays off — back volume off, keep the intensity crisp, and you'll come back stronger. This is the performance-building choice, not a step back.",
+  "A lighter week now lets the work you've stacked absorb — keep the movements, ease the volume, and you'll come back ready to build.",
+  "The recent stretch of loading says a reset week would pay off — keep efforts easy and crisp, and come back stronger.",
+  "You've earned a lighter week. Keep the same movements, drop the working volume, and let the adaptation land.",
+] as const;
+
+const RECOVERY_WEEK_ACTIVE_TITLES = [
+  "Recovery week — absorb the work",
+  "Recovery week is on — let it land",
+  "This is the lighter week — absorb it",
+  "Recovery week — don't chase a top set",
+] as const;
+
+const RECOVERY_WEEK_ACTIVE_WHYS = [
+  "This week is deliberately lighter: about half the working volume, same movements, crisp easy efforts. The adaptation you've been training for lands now — don't chase PRs, sleep big.",
+  "The plan is already the lighter week — same movements, reduced working volume, easy crisp efforts. Let the work absorb.",
+  "This recovery week is the lighter week you earned. Keep showing up, keep it light, and give the adaptation room.",
+  "A lighter week is running: keep the frequency, cut the working volume, and sleep big so the work lands.",
+] as const;
+
+const RECOVERY_DRIFT_TITLES = [
+  "Recovery is sliding",
+  "Give recovery some room",
+  "Recovery is asking for an easier touch",
+  "Recovery has been drifting",
+] as const;
+
+const RECOVERY_DRIFT_WHYS = [
+  "HRV is down while resting heart rate is up — keep the dose conservative and let recovery catch up, without rewriting the week.",
+  "Recovery has been sliding. Hold the loading where it is rather than piling on, and give the next nights a chance to settle.",
+  "The recovery picture is softer than it was. Keep today's work honest rather than adding more.",
+  "HRV down and resting heart rate up is a nudge to stay conservative, not a rewrite of the week.",
+] as const;
+
 function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
   const meso = inp.programState?.mesocycle;
   const phase = lc(meso?.phase);
-  const deloadDue = phase.includes("deload");
+  const deloadDue = phase === "deload-due";
   const hrv = num(inp.recovery?.delta?.hrv);
   const rhr = num(inp.recovery?.delta?.rhr);
   const recoveryEvidenceIsDecisionGrade =
     recoverySignalIsDecisionGrade(inp.recovery, "hrv_ms") && recoverySignalIsDecisionGrade(inp.recovery, "resting_hr");
   const recoveringDown = recoveryEvidenceIsDecisionGrade && hrv != null && hrv < 0 && rhr != null && rhr > 2;
+  const date = String(inp.signalState?.date ?? "");
   // The applied recovery week RUNNING is its own lead — a calm confirmation, no
   // action (the plan already is the lighter week), regardless of whether the
   // original trigger signals still read due.
@@ -609,14 +630,30 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
       slot: "lead",
       item: {
         domain: "recovery",
-        title: "Recovery week — absorb the work",
-        why: "This week is deliberately lighter: about half the working volume, same movements, crisp easy efforts. The adaptation you've been training for lands now — don't chase PRs, sleep big.",
+        title: pickDayVariant(RECOVERY_WEEK_ACTIVE_TITLES, date, "cfocus:recovery-active:title"),
+        why: pickDayVariant(RECOVERY_WEEK_ACTIVE_WHYS, date, "cfocus:recovery-active:why"),
         recovery_active: true,
         based_on: ["You applied the recovery week", "Back to building when the week is done"],
       },
     };
   }
   if (!deloadDue && !recoveringDown) return null;
+  // recoveringDown alone no longer proposes an earned recovery week — that ask
+  // needs deload-due. Without it, a quiet parallel card at most (the day-read
+  // still has its own recovery voice).
+  if (!deloadDue && recoveringDown) {
+    return {
+      key: "recovery-drift",
+      leverage: 3.2,
+      slot: "parallel",
+      item: {
+        domain: "recovery",
+        title: pickDayVariant(RECOVERY_DRIFT_TITLES, date, "cfocus:recovery-drift:title"),
+        why: pickDayVariant(RECOVERY_DRIFT_WHYS, date, "cfocus:recovery-drift:why"),
+        based_on: ["HRV is down while resting HR is up"],
+      },
+    };
+  }
   const draftPending = inp.recoveryDraftPending === true;
   const leads = coachLeads(inp);
   // The recovery lead's next-step line adapts to posture. Under LEAD mode the coach
@@ -655,16 +692,16 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
     slot: "lead",
     item: {
       domain: "recovery",
-      title: "Take an earned recovery week",
+      title: pickDayVariant(RECOVERY_WEEK_LEAD_TITLES, date, "cfocus:recovery-lead:title"),
       why:
         (meso?.note ? String(meso.note) : "") ||
-        "Your recent load and recovery signals say a lighter week now pays off — back volume off ~40%, keep the intensity crisp, and you'll come back stronger. This is the performance-building choice, not a step back.",
+        pickDayVariant(RECOVERY_WEEK_LEAD_WHYS, date, "cfocus:recovery-lead:why"),
       // draft_pending drives the review LINK (navigation) on every posture; the move
       // copy above is what changes between lead mode and the athlete-driven surfaces.
       ...(draftPending ? { draft_pending: true } : {}),
       ...(move ? { move } : {}),
       based_on: [
-        ...(deloadDue ? ["Mesocycle says deload is due"] : []),
+        "Mesocycle says deload is due",
         recoveringDown ? "HRV is down while resting HR is up" : "Recent training load has accumulated",
       ],
     },

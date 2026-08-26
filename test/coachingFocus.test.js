@@ -665,8 +665,15 @@ test("recovery drift leads only from current, adequately covered HRV and resting
   };
 
   const current = coachingFocus({ programState: { mesocycle: { phase: "accumulation" } }, recovery });
-  assert.equal(current.lead?.domain, "recovery");
-  assert.deepEqual(current.lead?.based_on, ["HRV is down while resting HR is up"]);
+  assert.notEqual(current.lead?.domain, "recovery", "recoveringDown without deload-due does not propose a recovery week");
+  assert.equal(current.available, false);
+  assert.equal(current.parallel[0]?.domain, "recovery");
+  assert.deepEqual(current.parallel[0]?.based_on, ["HRV is down while resting HR is up"]);
+  assert.doesNotMatch(current.parallel[0]?.title ?? "", /earned recovery week/i);
+
+  const due = coachingFocus({ programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } }, recovery });
+  assert.equal(due.lead?.domain, "recovery");
+  assert.match(due.lead.title, /recovery|lighter|reset/i);
 
   const stale = coachingFocus({
     programState: { mesocycle: { phase: "accumulation" } },
@@ -713,8 +720,9 @@ test("recovery drift accepts the existing provenance and coverage fallback when 
       coverage: { hrv_ms: coverage, resting_hr: coverage },
     },
   });
-  assert.equal(out.lead?.domain, "recovery");
-  assert.deepEqual(out.lead?.based_on, ["HRV is down while resting HR is up"]);
+  assert.notEqual(out.lead?.domain, "recovery", "decision-grade drift without deload-due stays a parallel card");
+  assert.equal(out.parallel[0]?.domain, "recovery");
+  assert.deepEqual(out.parallel[0]?.based_on, ["HRV is down while resting HR is up"]);
 });
 
 test("a recovery lead speaks STATE once its one-tap draft is waiting (draft_pending)", () => {

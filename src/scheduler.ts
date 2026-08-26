@@ -876,11 +876,13 @@ export function startScheduler() {
       if (recoveryAutoDue) {
         await runScheduled("recovery_auto_draft_date", localToday(now), "recovery_auto_draft_date", async () => {
           const focus: any = repo.getCoachingFocus();
+          const mesoPhase = repo.getProgramState()?.mesocycle?.phase;
           const draft = repo.shouldAutoDraftRecoveryWeek({
             lead_mode: s.lead_mode,
             focus_lead_domain: focus?.available ? focus?.lead?.domain : null,
             recovery_active: focus?.lead?.recovery_active,
             status: repo.recoveryWeekStatus(),
+            deload_due: mesoPhase === "deload-due",
           });
           if (draft) {
             const r: any = await evolveProgram("auto", repo.RECOVERY_WEEK_INSTRUCTION);
