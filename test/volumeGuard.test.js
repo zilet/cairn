@@ -423,10 +423,10 @@ test("every athlete-facing restore string holds the reading grammar", () => {
 
 // ── the trigger: a cleared fuel read is the boundary ──────────────────────────
 
-const fuelRead = (training) => ({
+const fuelRead = (training, kind = "hold") => ({
   state: "hold",
-  signature: `test-${training}`,
-  action: { kind: "hold", kcal_delta: 0, training, line: "Holding steady." },
+  signature: `test-${training}-${kind}`,
+  action: { kind, kcal_delta: 0, training, line: "Holding steady." },
   rationale: "test fixture",
   intake: {},
   correction: {},
@@ -449,6 +449,39 @@ test("the daily fuel pass gives volume back only once the hold has cleared", () 
   const decision = getBrainDecision(Number(decisionId));
   assert.equal(decision.autonomy_tier, "announce", "volume coming back is announced, never quiet");
 });
+
+// `training: "proceed"` is not by itself the boundary. A waist-only prescription
+// strain raises calories — or reshuffles the meals — while training is allowed to
+// proceed, and giving sets back on that pass would hand volume over while the fuel
+// read is still acting. Volume comes back only once nutrition has stopped moving too.
+for (const kind of ["raise_target", "reshape_meals", "recovery_package"]) {
+  test(`a ${kind} read still acting on nutrition gives no volume back, however training reads`, () => {
+    seedPlan(5);
+    repo.setSettings({ lead_mode: "lead" });
+    applySetsChange("Barbell Bench Press", 1);
+
+    const acting = runUnderfuelingControlLoop("2026-08-04", { read: fuelRead("proceed", kind) });
+    assert.equal(acting.volume_restore, undefined, "nutrition is still acting, so nothing is given back");
+    assert.equal(planSets("Barbell Bench Press"), 4, "the sets stay where the cut left them");
+    assert.deepEqual(
+      openVolumeRestoreTargets({ cause: "fuel" }).map((entry) => entry.exercise),
+      ["Barbell Bench Press"],
+      "the debt is still owed"
+    );
+  });
+}
+
+for (const kind of ["hold", "settle", "collect_signal"]) {
+  test(`a settled ${kind} read with nothing left to do on nutrition climbs volume back`, () => {
+    seedPlan(5);
+    repo.setSettings({ lead_mode: "lead" });
+    applySetsChange("Barbell Bench Press", 1);
+
+    const cleared = runUnderfuelingControlLoop("2026-08-04", { read: fuelRead("proceed", kind) });
+    assert.ok(cleared.volume_restore, "a settled read starts the climb back");
+    assert.ok(cleared.volume_restore.decision?.id, "and it rides the decision ledger");
+  });
+}
 
 // ── the cut remembers WHY, so the climb back cannot borrow another story ──────
 

@@ -637,3 +637,41 @@ test("an athlete's no buys the same fortnight of quiet an applied change buys", 
   // A set-aside is deliberately NOT this case: when the boundary declines a raise the
   // EVIDENCE said no, and the watch may return with a re-derived one.
 });
+
+test("waist-only prescription strain does not trigger the volume-restore pass", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Push", "Chest", [
+    { exercise: "Barbell Bench Press", sets: 5, rep_low: 6, rep_high: 8, target_weight: 185 },
+  ]);
+  const cut = repo.createProposal("test", "volume change", "", {
+    summary: "cut volume",
+    changes: [
+      {
+        day_number: 1,
+        exercise: "Barbell Bench Press",
+        sets: 4,
+        reason: "Fuelling is short right now.",
+        volume_cause: "fuel",
+      },
+    ],
+  });
+  assert.equal(repo.applyProposal(cut.id).ok, true);
+
+  const waistOnly = {
+    ...read("prescription_strain", "waist-only"),
+    action: {
+      kind: "raise_target",
+      kcal_delta: 150,
+      training: "proceed",
+      line: "Add one bounded carb-forward step.",
+    },
+  };
+  const result = runUnderfuelingControlLoop(today(), { read: waistOnly });
+  assert.equal(
+    result.volume_restore,
+    undefined,
+    "training may proceed while calories are still moving; volume stays down"
+  );
+  const item = repo.getPlanDay(1).items.find((entry) => entry.exercise === "Barbell Bench Press");
+  assert.equal(item.sets, 4, "the protective cut is left where it was");
+});

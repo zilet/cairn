@@ -60,6 +60,11 @@ export function classifyRecompositionStage(input: {
     freshBodyFat && input.goalBodyFat != null && input.bodyFatPct != null
       ? input.bodyFatPct <= input.goalBodyFat + 3
       : false;
+  // Leaning-out is the last stretch of a cut (within 8 lb, or ~72% of the
+  // path). Near-goal is tighter — within NEAR_GOAL_REMAINING_LB of the
+  // destination — and is the lever that stops a soft/reduce fuel hold from
+  // vetoing a promotion the log already earned. Sliding still vetoes;
+  // fast_loss does not. The two stretches are not the same.
   if (
     (input.progress != null && input.progress >= 0.72) ||
     nearBodyFatGoal ||
@@ -84,4 +89,15 @@ export function classifyRecompositionStage(input: {
     };
   }
   return { kind: "early_cut", label: "Early cut", basis: ["Most of the declared weight path is still ahead"] };
+}
+
+// Close enough to the destination that a soft fuel hold (and even a reduce)
+// should not sit on a promotion the log already earned. 2.5 lb ≈ 1.1 kg.
+// The date-aware reader is `nearGoal` in recomposition.ts — this file stays
+// free of DB/repo dependencies so nutrition can persist a phase without
+// pulling the higher-level recomposition read.
+export const NEAR_GOAL_REMAINING_LB = 2.5;
+
+export function isNearGoal(remaining: number | null | undefined): boolean {
+  return remaining != null && Number.isFinite(remaining) && remaining <= NEAR_GOAL_REMAINING_LB;
 }

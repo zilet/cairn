@@ -471,6 +471,18 @@ function scheduleNutrition(
  * — climbing it back here would tell the athlete a fuelling story about a decision
  * fuelling never made.
  */
+function fuelReadClearedForVolumeRestore(read: UnderfuelingRead): boolean {
+  if (read.action.training !== "proceed") return false;
+  // Nutrition is still acting — volume stays down until the fuel read itself
+  // has settled. `kind: "hold" | "settle" | "collect_signal"` are the cleared
+  // answers; a raise/reshape/recovery still owes the hold.
+  return (
+    read.action.kind !== "raise_target" &&
+    read.action.kind !== "reshape_meals" &&
+    read.action.kind !== "recovery_package"
+  );
+}
+
 function runVolumeRestorePass(): any | null {
   try {
     return withSqliteSavepoint("volume_restore_pass", () => {
@@ -495,10 +507,11 @@ export function runUnderfuelingControlLoop(
   opts: { read?: UnderfuelingRead } = {}
 ): UnderfuelingControlResult {
   const read = opts.read ?? currentUnderfuelingRead(today);
-  // The trigger that took volume away is this same read's training action. Once it
-  // says proceed, the hold has cleared and what it held back is owed at this
-  // boundary — checked before the branches below, all of which return early.
-  const volumeRestore = read.action.training === "proceed" ? runVolumeRestorePass() : null;
+  // Volume only comes back once the fuel read has actually settled, not merely
+  // because training is allowed to proceed. A waist-only prescription_strain
+  // still raises calories with `training: "proceed"`; climbing volume back on
+  // that pass would give sets back while the fuel read is still acting.
+  const volumeRestore = fuelReadClearedForVolumeRestore(read) ? runVolumeRestorePass() : null;
   const none = (reason = read.action.line): UnderfuelingControlResult => ({
     ok: true,
     read,

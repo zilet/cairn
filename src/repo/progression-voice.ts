@@ -151,27 +151,31 @@ export const EARNED_OPEN_OVERLOAD: VoiceSet = [
 ];
 
 export const DOSE_UNFINISHED_HOLD: VoiceSet = [
-  "This linked session is still unfinished — hold the current target until the full dose is complete.",
-  "The linked session hasn't been finished yet — hold this target until the whole dose is in.",
-  "That linked session is still open — keep the target here until the full dose lands.",
+  "This session isn't finished yet — complete the remaining sets and the weight can move.",
+  "The session is still open — finish it out and then the load is free to step.",
+  "Not done logging this one — once the rest of the sets are in, the weight can move.",
+  "Finish the rest of today's sets on this lift; that's when the load is free to move.",
 ];
 
 export const DOSE_PARTIAL_HOLD: VoiceSet = [
-  "Only part of the linked dose was completed — hold the current target until the full prescription is owned.",
-  "Part of the linked dose is missing — hold here until the whole of it is owned.",
-  "The linked dose came in partial — keep the target until all of it is done.",
+  "Log the rest of this movement's sets and the weight can move.",
+  "The other sets on this one still need logging — once they're in, the weight can move.",
+  "Finish writing down the remaining sets on this movement; that's when the load is free to step.",
+  "Until the rest of this movement's sets are logged, the weight stays put — then it can move.",
 ];
 
 export const DOSE_UNDER_HOLD: VoiceSet = [
-  "The full linked challenge was not yet completed — hold the current target until every prescribed set is owned.",
-  "The linked work came in under what was asked — hold here until every set is owned.",
-  "Not all of the linked challenge landed — keep the target until every set is yours.",
+  "Not every set landed as written — finish the range clean and it moves.",
+  "The work came in under what was asked — hold here until every set is yours.",
+  "Not all of the work landed — keep the weight until you own every set.",
+  "Hold this load and complete every set as written; that's when it steps.",
 ];
 
 export const DOSE_NON_COMPARABLE_HOLD: VoiceSet = [
-  "The latest linked dose is not comparable progression evidence — hold the current target and reassess after a clean exposure.",
-  "The last linked dose doesn't compare cleanly — hold here and read it again after a clean session.",
-  "The most recent linked dose isn't a clean comparison — hold the target and revisit it after a straightforward session.",
+  "That day didn't count the same — one clean run at this weight and it moves.",
+  "The last session isn't a clean read — hold here and take one straightforward run at this weight.",
+  "Last time wasn't a fair look at this load — keep it and earn one clean session.",
+  "Hold the weight; last session wasn't like-for-like, so one clean run here is what moves it.",
 ];
 
 export const NO_HISTORY_HOLD: VoiceSet = [
@@ -229,15 +233,15 @@ export const PLAN_UNSET_HOLD: VoiceSet1 = [
 ];
 
 export const MOVEMENT_RESPONSE_HOLD: VoiceSet = [
-  "The last two comparable exposures came in under this dose — hold it here and let the movement catch up.",
-  "Both of the last two comparable sessions landed under this dose — keep it here and let the movement catch up.",
-  "The last two comparable runs at this came in short — hold the dose and let it catch up.",
+  "The last two runs at this weight came in short — hold it here and let the movement catch up.",
+  "Both of the last two sessions landed under this load — keep it here and let the movement catch up.",
+  "The last two times at this weight came in short — hold here and let it catch up.",
 ];
 
 export const MOVEMENT_RESPONSE_DELOAD: VoiceSet = [
-  "The last two comparable exposures both came in under this held dose — ease one bounded step and rebuild.",
-  "Both recent comparable exposures came in under this held dose — ease it one small step and rebuild.",
-  "The last two comparable sessions landed under this dose while it was held — take one small step down and rebuild.",
+  "The last two runs at this held weight both came in short — ease one small step and rebuild.",
+  "Both recent sessions landed under this held load — take it down one small step and rebuild.",
+  "The last two sessions landed short while this was held — take one small step down and rebuild.",
 ];
 
 // ---- timed-mode verdicts (seconds, never load) ------------------------------
@@ -270,27 +274,31 @@ export const TIMED_OVERLOAD: VoiceSet2 = [
 ];
 
 export const TIMED_DOSE_UNFINISHED_HOLD: VoiceSet = [
-  "This linked session is still unfinished — hold the duration until the full dose is complete.",
-  "The linked session hasn't been finished yet — keep the duration until the whole dose is in.",
-  "That linked session is still open — hold this time until the full dose lands.",
+  "This session isn't finished yet — complete the remaining holds and the time can move.",
+  "The session is still open — finish it out and then the duration is free to stretch.",
+  "Not done logging this one — once the rest of the holds are in, the time can move.",
+  "Finish the rest of today's holds; that's when the duration is free to extend.",
 ];
 
 export const TIMED_DOSE_PARTIAL_HOLD: VoiceSet = [
-  "Only part of the linked timed dose was completed — hold the duration until the full prescription is owned.",
-  "Part of the linked timed dose is missing — hold the time until the whole of it is owned.",
-  "The linked timed dose came in partial — keep the duration until all of it is done.",
+  "Log the rest of this movement's holds and the time can move.",
+  "The other holds on this one still need logging — once they're in, the duration can stretch.",
+  "Finish writing down the remaining holds; that's when the time is free to extend.",
+  "Until the rest of this movement's holds are logged, the duration stays put — then it can move.",
 ];
 
 export const TIMED_DOSE_UNDER_HOLD: VoiceSet = [
-  "The full linked timed challenge was not yet completed — hold until every prescribed interval is owned.",
-  "The linked timed work came in under what was asked — hold the duration until every interval is owned.",
-  "Not all of the linked timed challenge landed — keep this time until every interval is yours.",
+  "Not every hold landed as written — finish the full time clean and it moves.",
+  "The work came in under what was asked — hold this duration until every interval is yours.",
+  "Not all of the timed work landed — keep this time until you own every hold.",
+  "Stay at this duration and complete every hold as written; that's when it extends.",
 ];
 
 export const TIMED_DOSE_NON_COMPARABLE_HOLD: VoiceSet = [
-  "The latest linked timed dose is not comparable progression evidence — hold and reassess after a clean exposure.",
-  "The last linked timed dose doesn't compare cleanly — hold here and read it again after a clean session.",
-  "The most recent linked hold isn't a clean comparison — keep the duration and revisit it after a straightforward session.",
+  "That day didn't count the same — one clean run at this time and it moves.",
+  "The last session isn't a clean read — hold this duration and take one straightforward run.",
+  "Last time wasn't a fair look at this hold — keep it and earn one clean session.",
+  "Hold the time; last session wasn't like-for-like, so one clean run here is what moves it.",
 ];
 
 export const TIMED_DEFAULT_HOLD: VoiceSet = [
@@ -300,15 +308,15 @@ export const TIMED_DEFAULT_HOLD: VoiceSet = [
 ];
 
 export const TIMED_RESPONSE_HOLD: VoiceSet = [
-  "The last two comparable holds came in under this duration — keep it here until the full dose is owned.",
-  "Both of the last two comparable holds landed under this duration — stay here until the whole dose is owned.",
-  "The last two comparable holds came in short — keep this duration until it's fully owned.",
+  "The last two holds came in under this duration — keep it here until the full time is yours.",
+  "Both of the last two holds landed under this duration — stay here until you own the whole time.",
+  "The last two holds came in short — keep this duration until it's fully yours.",
 ];
 
 export const TIMED_RESPONSE_DELOAD: VoiceSet = [
-  "The last two comparable holds both came in under this duration — ease one bounded step and rebuild.",
-  "Both recent comparable holds came in under this duration — take it down one small step and rebuild.",
-  "The last two comparable holds landed short of this duration — ease it a step and rebuild.",
+  "The last two holds both came in under this duration — ease one small step and rebuild.",
+  "Both recent holds landed under this duration — take it down one small step and rebuild.",
+  "The last two holds landed short of this duration — ease it a step and rebuild.",
 ];
 
 // ---- the autoregulation brake (recovery informs, never punishes) ------------
@@ -374,18 +382,13 @@ export const FUEL_HOLD_STEP: VoiceSet = [
   "Your fueling is still settling, so this one holds rather than steps up.",
 ];
 
-// The athlete asked to be pushed, so a soft fueling read no longer takes an
-// earned step away — it takes the near-maximal top set instead, which is the part
-// of the day that actually costs something to run underfed.
-export const PUSH_FUEL_PEAK_TRIM: VoiceSet = [
-  "You've asked to keep pushing, so the step stands — the near-maximal single is the piece that waits while your fueling catches up.",
-  "The step stays, since pushing is what you asked for; skip the heavy single today and let your fueling catch up first.",
-  "Keeping the step because you asked to push — leave the near-maximal top set for a day your fueling is further along.",
-];
-
-// Same carve-out as PUSH_FUEL_PEAK_TRIM, for a rotation or a fresh movement rather
-// than a load step. The fueling read still takes the costly near-maximal single
-// off; it does not cancel the change of movement the athlete asked to keep.
+// The athlete asked to be pushed, so a soft fueling read no longer takes an earned
+// step away — it takes the near-maximal top set instead, which is the part of the
+// day that actually costs something to run underfed. A LOAD step that survives that
+// way speaks through LOG_EARNED_FUEL_PARK_SINGLE (the sentence names the step the
+// log earned, not the push setting); this set is for a rotation or a fresh movement
+// rather than a load step. The fueling read still takes the costly near-maximal
+// single off; it does not cancel the change of movement the athlete asked to keep.
 export const PUSH_FUEL_VARIETY_KEEP: VoiceSet = [
   "You've asked to keep pushing, so this rotation still happens — skip the near-maximal single while your fueling catches up.",
   "The fresh movement still goes in, since pushing is what you asked for; leave the heavy single for a day your fueling is further along.",
@@ -397,21 +400,22 @@ export const PUSH_FUEL_VARIETY_KEEP: VoiceSet = [
 // did that was a lift already holding for its own unrelated reason — which is
 // exactly the register leak that put somebody else's explanation on a lift card.
 // Every item the fuel read actually changes now carries a whole fuel sentence of
-// its own: FUEL_HOLD_STEP when the step is held, PUSH_FUEL_PEAK_TRIM when only the
-// near-maximal single comes off, PUSH_FUEL_VARIETY_KEEP when a rotation/introduce
-// stands and only the single waits, FUEL_DELOAD_CLAUSE on a dose already going
-// down, FUEL_RECOVERY_DOSE when the read cuts the dose itself.
+// its own: FUEL_HOLD_STEP when the step is held, LOG_EARNED_FUEL_PARK when the
+// log earned a step that stands (no single mentioned), LOG_EARNED_FUEL_PARK_SINGLE
+// when a top set actually came off, PUSH_FUEL_VARIETY_KEEP when a rotation/introduce
+// stands and only the single waits, FUEL_DELOAD_CLAUSE on work already going
+// down, FUEL_RECOVERY_DOSE when the read cuts the session itself.
 
 export const FUEL_DELOAD_CLAUSE: VoiceSet = [
-  "Your fueling is still catching up, so the easier dose stands.",
-  "Fueling hasn't caught up yet, so let this lighter dose stand.",
-  "With fueling still catching up, the easier dose is the right call.",
+  "Your fueling is still catching up, so the easier session stands.",
+  "Fueling hasn't caught up yet, so let this lighter work stand.",
+  "With fueling still catching up, the easier session is the right call.",
 ];
 
 export const FUEL_RECOVERY_DOSE: VoiceSet = [
-  "Your fueling hasn't caught up with the training yet — this exposure is a lighter, easily reversed dose rather than another step.",
-  "Training is running ahead of your fueling — take this one as a lighter dose you can step straight back out of.",
-  "Fueling is behind the work right now, so this exposure goes lighter instead of taking another step.",
+  "Your fueling hasn't caught up with the training yet — this session is lighter, and easily reversed, rather than another step.",
+  "Training is running ahead of your fueling — take this one lighter, something you can step straight back out of.",
+  "Fueling is behind the work right now, so this session goes lighter instead of taking another step.",
 ];
 
 // ---- periodization: what the training phase asks of a main lift -------------
@@ -517,6 +521,26 @@ export const CUT_HOLDING_WIN: VoiceSet = [
   "Holding this weight while you're in a deficit counts as progress; stay here and keep the reps clean.",
 ];
 
+// A promotion that went through under a soft fuel hold: the log earned the
+// step, fueling is still settling. No single is mentioned — this set is for
+// lifts that never had a top set to park. Never "holding in a deficit counts
+// as progress" on a lift that just got heavier.
+export const LOG_EARNED_FUEL_PARK: VoiceSet = [
+  "The work you logged earned this step, so the load moves while your fueling catches up.",
+  "You already lifted this; the weight goes up because of that, and fueling can catch up around it.",
+  "The log is what moved this load. Keep the step you earned while fueling settles.",
+  "This one goes up because of what you actually lifted. Fueling is still catching up.",
+];
+
+// Same promotion, but a challenge top set actually came off — only the
+// applyFuelProtection push path that strips `top_set`.
+export const LOG_EARNED_FUEL_PARK_SINGLE: VoiceSet = [
+  "The work you logged earned this step, so the load moves — skip the heavy single today while your fueling catches up.",
+  "You already lifted this; the weight goes up because of that. Leave the near-maximal single for a day your fueling is further along.",
+  "The log is what moved this load. Keep the step you earned, and let the heavy top set wait while fueling settles.",
+  "This one goes up because of what you actually lifted. The heavy single can wait until your fueling is further along.",
+];
+
 // A long flat stretch that would ordinarily ask for a variation — but the athlete
 // is cutting, so patience is the right call.
 export const PLATEAU_CUT_HOLD: VoiceSet = [
@@ -606,7 +630,6 @@ export function progressionVoicePhrases(): string[] {
     PAIN_RED_HOLD,
     PAIN_RED_REDUCE,
     FUEL_HOLD_STEP,
-    PUSH_FUEL_PEAK_TRIM,
     PUSH_FUEL_VARIETY_KEEP,
     FUEL_DELOAD_CLAUSE,
     FUEL_RECOVERY_DOSE,
@@ -617,6 +640,8 @@ export function progressionVoicePhrases(): string[] {
     CUT_REGRESSION_HOLD,
     UNVERIFIED_REGRESSION_HOLD,
     CUT_HOLDING_WIN,
+    LOG_EARNED_FUEL_PARK,
+    LOG_EARNED_FUEL_PARK_SINGLE,
     PLATEAU_CUT_HOLD,
     LEDGER_PATIENCE_HOLD,
     LEDGER_MISSED_DELOAD,

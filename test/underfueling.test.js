@@ -181,9 +181,48 @@ test("near-target logs plus fast loss and weakening performance/recovery classif
   assert.equal(read.state, "prescription_strain");
   assert.equal(read.action.kind, "raise_target");
   assert.ok(read.action.kcal_delta >= 100 && read.action.kcal_delta <= 250);
+  assert.equal(read.action.training, "hold_aggression", "measured scale strain is decision-grade for training");
   assert.ok(read.agreeing_channels.includes("weight_trend"));
   assert.ok(read.agreeing_channels.includes("performance"));
   assert.ok(read.agreeing_channels.includes("recovery"));
+});
+
+test("waist strain plus felt/perf with the diary near target raises calories but does not hold training", () => {
+  target(2200);
+  for (const delta of [-1, -2, -3, -4, -5]) intake(delta, 2175);
+  db.prepare(`INSERT INTO body_measurements (date, waist_in, source) VALUES (?, 36, 'manual')`).run(day(-21));
+  db.prepare(`INSERT INTO body_measurements (date, waist_in, source) VALUES (?, 35.5, 'manual')`).run(day(-11));
+  db.prepare(`INSERT INTO body_measurements (date, waist_in, source) VALUES (?, 35, 'manual')`).run(day(-1));
+  lowSession(-1);
+  lowSession(-2);
+  const read = underfuelingRead(TODAY, {
+    expenditure: onPathExp,
+    goal,
+    programState: strainedProgram,
+    wholePerson: strainedWhole,
+  });
+  assert.equal(read.state, "prescription_strain");
+  assert.equal(read.action.kind, "raise_target");
+  assert.ok(read.action.kcal_delta >= 100 && read.action.kcal_delta <= 250, "the nutrition half is unchanged");
+  assert.equal(read.channels.find((channel) => channel.key === "body_trend").direction, "strain");
+  assert.notEqual(read.channels.find((channel) => channel.key === "weight_trend").direction, "strain");
+  assert.equal(
+    read.action.training,
+    "proceed",
+    "waist plus felt strain is not decision-grade for a training hold"
+  );
+});
+
+test("a logged shortfall still holds training aggression even without a scale trend", () => {
+  target(2200);
+  for (const delta of [-1, -2, -3, -4]) intake(delta, 1750);
+  lowSession(-1);
+  lowSession(-2);
+  const read = underfuelingRead(TODAY, { expenditure: null, goal, programState: null, wholePerson: null });
+  assert.equal(read.state, "execution_gap");
+  assert.equal(read.action.kind, "reshape_meals");
+  assert.equal(read.action.kcal_delta, 0);
+  assert.equal(read.action.training, "hold_aggression", "the diary shortfall is decision-grade");
 });
 
 test("repeated low felt energy corroborates a logged execution gap without raising calories", () => {

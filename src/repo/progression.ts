@@ -77,6 +77,7 @@ import { type UnverifiedRegressionHold, unverifiedRegressionHold } from "./calib
 import { movementRiskFor } from "./movement-risk.js";
 import { type PainBandRead, painBandForMovement } from "./pain-band.js";
 import { cutQualityRead } from "./cut-quality.js";
+import { nearGoal } from "./recomposition.js";
 import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";
 import { applyPersonalResponseModifier, liftLedgerRead, whatWorksForYou } from "./reaction-model.js";
 // createProposal + the auto-progression dedup live in profile.js; imported here (as
@@ -1339,22 +1340,68 @@ function peakTopSetFor(
 // training is being asked for more than the food supports, and the cut-quality read
 // says whether the deficit itself is running hot. Both are READ-ONLY here.
 export interface CutPressure {
-  /** The fuel read asks for aggression to be held. */
+  /** The fuel read asks for aggression to be held. Does NOT veto an earned promotion. */
   hold: boolean;
-  /** The fuel read asks for an outright lighter dose. */
+  /** The fuel read asks for an outright lighter dose. Vetoes promotion unless near_goal. */
   reduce: boolean;
-  /** The cut itself is deep: anchor lifts sliding, or losing faster than lean-safe. */
+  /**
+   * Anchor lifts are actually dropping (`cutQualityRead` verdict `sliding`), or
+   * THIS lift is regressing / has a log-confirmed shortfall. Always vetoes a
+   * promotion.
+   */
+  sliding: boolean;
+  /**
+   * Loss rate is faster than lean-safe, but the verdict is not sliding. Parks
+   * the challenge top set / heavy single; does NOT veto an earned load step
+   * backed by a comparable, eligible, strong dose, and does not hold a
+   * vary/introduce — a variation at the same load adds no load.
+   */
+  fast_loss: boolean;
+  /**
+   * Derived alias: `sliding || fast_loss`. Other readers treat either as "the
+   * cut is running hot"; promotion itself consults `sliding` / `fast_loss`.
+   */
   deep: boolean;
   /** Any of the above — the athlete is training in a genuine deficit right now. */
   any: boolean;
+  /**
+   * Within NEAR_GOAL_REMAINING_LB of goal weight on a live lose-mode cut. Lifts
+   * the reduce promotion veto so the log can still move the load; sliding
+   * still vetoes. Volume reduction from persistent strain is unchanged.
+   */
+  near_goal: boolean;
 }
 
-const NO_CUT_PRESSURE: CutPressure = { hold: false, reduce: false, deep: false, any: false };
+const NO_CUT_PRESSURE: CutPressure = {
+  hold: false,
+  reduce: false,
+  sliding: false,
+  fast_loss: false,
+  deep: false,
+  any: false,
+  near_goal: false,
+};
+
+// sliding always vetoes an earned promotion (anchors — or this lift — are
+// dropping). reduce vetoes unless we are near the destination. fast_loss never
+// vetoes a promotion backed by a comparable, eligible, strong dose — it only
+// parks the heavy single. hold never vetoes a promotion.
+function cutVetoesPromotion(
+  cut: CutPressure,
+  lift?: { status?: string; shortfall?: boolean }
+): boolean {
+  // regressing / shortfall are belt-and-braces: the ladder already deloads a
+  // slipping lift and refuses an ineligible dose before this is consulted.
+  if (cut.sliding || lift?.status === "regressing" || lift?.shortfall) return true;
+  if (cut.reduce && !cut.near_goal) return true;
+  return false;
+}
 
 function readCutPressure(date: string): CutPressure {
   let hold = false;
   let reduce = false;
-  let deep = false;
+  let sliding = false;
+  let fast_loss = false;
   try {
     const fuel = currentUnderfuelingRead(date);
     hold = fuel?.action?.training === "hold_aggression";
@@ -1364,11 +1411,21 @@ function readCutPressure(date: string): CutPressure {
   }
   try {
     const cut = cutQualityRead(date);
-    if (cut.active && (cut.verdict === "sliding" || cut.rate.vs_lean_safe === "above")) deep = true;
+    if (cut.active) {
+      sliding = cut.verdict === "sliding";
+      fast_loss = cut.rate.vs_lean_safe === "above" && cut.verdict !== "sliding";
+    }
   } catch {
     /* no cut read → no pressure claimed */
   }
-  return { hold, reduce, deep, any: hold || reduce || deep };
+  let near_goal = false;
+  try {
+    near_goal = nearGoal(date);
+  } catch {
+    /* no remaining read → not claimed near the destination */
+  }
+  const deep = sliding || fast_loss;
+  return { hold, reduce, sliding, fast_loss, deep, any: hold || reduce || deep, near_goal };
 }
 
 // The cut read is expensive (it walks the goal check and the program state), so it
@@ -1710,6 +1767,9 @@ function repsPrescription(
   let varyOptions: { name: string; why: string }[] | undefined;
   let repStep = false; // a DOUBLE-PROGRESSION rep advance (load held, reps climb in-range)
   let startingIdea = false; // the suggestion is a related-lift idea, not this lift's own history
+  // CUT_HOLDING_WIN may only replace the not-earned / top-set-only fallthrough
+  // sentence — never a plan-behind catch-up or a phase hold.
+  let fallthroughHold = false;
   // Equipment-ranked, compound-biased, plan-deduped same-pattern candidates —
   // computed ONCE and reused by the vary + introduce branches (and the introduce guard).
   const varyCandidates = rankedVaryOptions(name, brakeCtx);
@@ -2001,7 +2061,7 @@ function repsPrescription(
               ? say(voice.DOSE_UNDER_HOLD, "dose_under_hold")
               : say(voice.DOSE_NON_COMPARABLE_HOLD, "dose_non_comparable_hold");
     else if (!last) why = say(voice.NO_HISTORY_HOLD, "no_history_hold");
-    else if (hasRange && topReps != null && topReps >= (repCeiling as number) && !allSetsAtTop)
+    else if (hasRange && topReps != null && topReps >= (repCeiling as number) && !allSetsAtTop) {
       // In a volume phase the ceiling being named sits ABOVE the rep window printed
       // on the plan card — plan_items is deliberately never rewritten for a block, so
       // the card says 6–8 while the line asks for 9. The gap is real and intended;
@@ -2010,11 +2070,11 @@ function repsPrescription(
         policy && policy.rep_saturation > 0
           ? say(voice.ACCUMULATION_TOP_SET_ONLY_HOLD, "accumulation_top_set_only_hold")(repCeiling as number)
           : say(voice.TOP_SET_ONLY_HOLD, "top_set_only_hold")(repCeiling as number);
-    // A lift carrying its load through a real deficit is holding ground, not falling
-    // short of a bar. Same prescription; the athlete is told what it actually means.
-    else if ((brakeCtx?.cut?.() ?? NO_CUT_PRESSURE).any && baseWeight != null && baseWeight > 0)
-      why = say(voice.CUT_HOLDING_WIN, "cut_holding_win");
-    else why = say(voice.NOT_EARNED_HOLD, "not_earned_hold");
+      fallthroughHold = true;
+    } else {
+      why = say(voice.NOT_EARNED_HOLD, "not_earned_hold");
+      fallthroughHold = true;
+    }
   }
 
   // REGROUND does not consume the step. A plan sitting under the real working
@@ -2027,10 +2087,16 @@ function repsPrescription(
   // extra rep is still earned at the real load.
   //
   // Promotion still has to EARN the step. A grind, an unfinished/incomparable
-  // dose, or a genuine cut must stay a catch-up HOLD at the logged weight —
-  // the same floors the ladder already applied, with the plan-behind hold voice.
+  // dose, or a genuine cut (reduce away from the destination, or sliding) must
+  // stay a catch-up HOLD at the logged weight. A soft fuel hold does not veto
+  // a promotion the log already earned; near the destination, reduce does not
+  // either. fast_loss does not veto an earned load step; sliding always does.
   const cutPressure = brakeCtx?.cut?.() ?? NO_CUT_PRESSURE;
-  const mayPromoteLoad = strong && doseEligibility.eligible && !cutPressure.any;
+  const liftCut = {
+    status,
+    shortfall: doseEligibility.reason === "under_prescribed",
+  };
+  const mayPromoteLoad = strong && doseEligibility.eligible && !cutVetoesPromotion(cutPressure, liftCut);
   if (
     planBehind &&
     baseWeight != null &&
@@ -2077,6 +2143,35 @@ function repsPrescription(
       why = planUnset
         ? say(voice.PLAN_UNSET_HOLD, "plan_unset_hold")(lbl)
         : say(voice.PLAN_BEHIND_HOLD, "plan_behind_hold")(lbl);
+  }
+
+  // Cut-pressure voice follows the consequence that actually landed.
+  // CUT_HOLDING_WIN only speaks when the why is still the not-earned /
+  // top-set-only fallthrough — never a plan-behind catch-up or a phase hold.
+  // An earned promotion that went through under a soft fuel hold gets its
+  // own sentence: the log moved the load; no single is mentioned unless one
+  // actually came off, which only applyFuelProtection can know.
+  //
+  // A cut running FASTER THAN LEAN-SAFE takes nothing here: the near-maximal single
+  // it would want parked is already the one piece applyFuelProtection strips, and
+  // the peak protocol itself goes cautious under any cut pressure (see peakTopSetFor).
+  if (action === "overload" && !repStep && !topSet && cutPressure.hold && !cutVetoesPromotion(cutPressure, liftCut)) {
+    why = say(voice.LOG_EARNED_FUEL_PARK, "log_earned_fuel_park");
+  } else if (
+    action === "hold" &&
+    fallthroughHold &&
+    !planBehind &&
+    !phaseHolds &&
+    // …and ONLY where the cut is what would have held it. `reduce` and `sliding`
+    // veto a promotion; fast_loss does not, so on a fast_loss day the hold has its
+    // OWN reason and "holding through a cut is the result to want" would be claiming
+    // credit the deficit did not earn.
+    (cutPressure.reduce || cutPressure.sliding) &&
+    baseWeight != null &&
+    baseWeight > 0 &&
+    !loadConstrained
+  ) {
+    why = say(voice.CUT_HOLDING_WIN, "cut_holding_win");
   }
 
   // Repeated comparable movement-dose outcomes are the first recovery brake.
@@ -2138,9 +2233,12 @@ function repsPrescription(
     if (baseWeight == null) nextWeight = null;
     else if (baseWeight < 0) nextWeight = assistStepNext(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
     else nextWeight = clampedOverload(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
-    why = hasRange
-      ? say(voice.EARNED_RANGE_OVERLOAD, "earned_range_overload")(repHigh as number, repLow as number)
-      : say(voice.EARNED_OPEN_OVERLOAD, "earned_open_overload");
+    why =
+      cutPressure.hold && !cutVetoesPromotion(cutPressure, liftCut)
+        ? say(voice.LOG_EARNED_FUEL_PARK, "log_earned_fuel_park")
+        : hasRange
+          ? say(voice.EARNED_RANGE_OVERLOAD, "earned_range_overload")(repHigh as number, repLow as number)
+          : say(voice.EARNED_OPEN_OVERLOAD, "earned_open_overload");
   }
 
   // AUTOREGULATION GATE — one step toward safety on high soreness / low performance /
@@ -2503,6 +2601,7 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
   // once per movement.
   const block = activeBlockContext(today);
   const cut = cutPressureThunk(today);
+  const atNearGoal = nearGoal(today);
   // The calibration read is per-LIFT, not per-day, so the shared reader is a memo
   // rather than a single value — a movement appearing twice in a pass walks its
   // 400-day history once, and a movement no branch asks about never walks it.
@@ -2528,7 +2627,7 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
       drive,
     });
     if (p) {
-      const protectedPrescription = applyFuelProtection(p, fuelProtection, today, drive);
+      const protectedPrescription = applyFuelProtection(p, fuelProtection, today, drive, atNearGoal);
       out.push({ ...protectedPrescription, plan_item_id: it.plan_item_id, day_number: dayNumber });
     }
   }
@@ -2547,7 +2646,8 @@ function applyFuelProtection(
   prescription: Prescription,
   read: UnderfuelingRead,
   date: string,
-  drive: TrainingDrive = "steady"
+  drive: TrainingDrive = "steady",
+  atNearGoal = false
 ): Prescription {
   const say = <T>(set: readonly T[], code: string): T => voice.liftVoice(set, date, code, prescription.exercise);
   if (read.action.training === "proceed") return prescription;
@@ -2575,7 +2675,7 @@ function applyFuelProtection(
             // the restore ledger turns it into volume owed back. The step stands
             // and no sets came off here, so there is no debt to record.
             autoregulated: true,
-            why: `${prescription.why} ${say(voice.PUSH_FUEL_PEAK_TRIM, "push_fuel_peak_trim")}`,
+            why: say(voice.LOG_EARNED_FUEL_PARK_SINGLE, "log_earned_fuel_park_single"),
           }
         : prescription;
     }
@@ -2606,6 +2706,31 @@ function applyFuelProtection(
       starting_idea: undefined,
       autoregulated: true,
       why: say(voice.FUEL_HOLD_STEP, "fuel_hold_step"),
+    };
+  }
+  // training === "reduce" (persistent_strain) from here. Near goal lifts the
+  // PROMOTION veto only; the volume reduction stays. fast_loss never reaches
+  // this branch — it is not a fuel `reduce`.
+  // A near-goal promotion keeps the load the log just earned and only halves the
+  // sets — and it parks the near-maximal single, which is the costly part.
+  if (atNearGoal && ["overload", "vary", "introduce"].includes(prescription.action)) {
+    const parkedSingle = Boolean(prescription.top_set);
+    return {
+      ...prescription,
+      suggested: {
+        ...prescription.suggested,
+        sets: Math.max(1, Math.ceil(Number(prescription.suggested.sets || 1) / 2)),
+      },
+      top_set: undefined,
+      autoregulated: true,
+      fuel_protected: true,
+      why:
+        prescription.action === "overload"
+          ? say(
+              parkedSingle ? voice.LOG_EARNED_FUEL_PARK_SINGLE : voice.LOG_EARNED_FUEL_PARK,
+              parkedSingle ? "log_earned_fuel_park_single" : "log_earned_fuel_park"
+            )
+          : prescription.why,
     };
   }
   // A PROGRESSION deload is already a reduced dose — load and volume both — so fuel

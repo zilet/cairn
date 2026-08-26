@@ -129,6 +129,109 @@ test("a first low target is not mistaken for a recent increase and does not bloc
   assert.notEqual(read.action.kind, "settling");
 });
 
+test("isNearGoal and nearGoal mark the last 2.5 lb, not the whole leaning-out stretch", () => {
+  const { isNearGoal, NEAR_GOAL_REMAINING_LB, nearGoal } = repo;
+  assert.equal(NEAR_GOAL_REMAINING_LB, 2.5);
+  assert.equal(isNearGoal(0), true);
+  assert.equal(isNearGoal(1.2), true);
+  assert.equal(isNearGoal(2.5), true);
+  assert.equal(isNearGoal(2.51), false);
+  assert.equal(isNearGoal(8), false);
+  assert.equal(isNearGoal(null), false);
+  assert.equal(isNearGoal(undefined), false);
+
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    sex: "male",
+    activity_factor: 1.55,
+    weight_lb: 181.2,
+    start_weight_lb: 205,
+    start_date: localDaysAgo(42),
+    goal_mode: "lose",
+    goal_weight_lb: 180,
+  });
+  assert.equal(nearGoal(localDaysAgo(0)), true, "1.2 lb remaining is near the destination");
+
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    sex: "male",
+    activity_factor: 1.55,
+    weight_lb: 188,
+    start_weight_lb: 205,
+    start_date: localDaysAgo(42),
+    goal_mode: "lose",
+    goal_weight_lb: 180,
+  });
+  assert.equal(nearGoal(localDaysAgo(0)), false, "8 lb remaining is leaning out, not near goal");
+
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    sex: "male",
+    activity_factor: 1.55,
+    weight_lb: 180,
+    start_weight_lb: 170,
+    start_date: localDaysAgo(42),
+    goal_mode: "gain",
+    goal_weight_lb: 200,
+  });
+  assert.equal(nearGoal(localDaysAgo(0)), false, "a gain goal +20 lb is never near-goal");
+
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    sex: "male",
+    activity_factor: 1.55,
+    weight_lb: 180,
+    start_weight_lb: 180,
+    start_date: localDaysAgo(42),
+    goal_mode: "maintain",
+    goal_weight_lb: 180,
+  });
+  assert.equal(nearGoal(localDaysAgo(0)), false, "maintain is never near-goal");
+
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    sex: "male",
+    activity_factor: 1.55,
+    weight_lb: 181.2,
+    start_weight_lb: 205,
+    start_date: localDaysAgo(42),
+    goal_mode: "lose",
+    goal_weight_lb: 180,
+  });
+  assert.equal(nearGoal(localDaysAgo(0)), true, "lose with remaining 1.2 is near the destination");
+
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    sex: "male",
+    activity_factor: 1.55,
+    weight_lb: 183,
+    start_weight_lb: 205,
+    start_date: localDaysAgo(42),
+    goal_mode: "lose",
+    goal_weight_lb: 180,
+  });
+  assert.equal(nearGoal(localDaysAgo(0)), false, "lose with remaining 3 is not near goal");
+
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    sex: "male",
+    activity_factor: 1.55,
+    weight_lb: 180,
+    start_weight_lb: 205,
+    start_date: localDaysAgo(42),
+    goal_mode: "lose",
+    goal_weight_lb: null,
+  });
+  assert.equal(nearGoal(localDaysAgo(0)), false, "a missing goal is never 0-as-near");
+});
+
 test("a missing goal stays unknown instead of manufacturing a zero-pound destination or timeline", () => {
   seedOutcomeTrend({ weekly: -0.8 });
   db.prepare(`UPDATE profile SET goal_weight_lb = NULL, goal_bodyfat_pct = NULL`).run();

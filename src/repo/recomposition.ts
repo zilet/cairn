@@ -7,9 +7,14 @@ import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { wholePersonTrajectory, type WholePersonTrajectory } from "./whole-person-trajectory.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import type { UnderfuelingRead } from "./underfueling.js";
-import { classifyRecompositionStage, type RecompositionStageKind } from "./recomposition-stage.js";
+import {
+  classifyRecompositionStage,
+  isNearGoal,
+  type RecompositionStageKind,
+} from "./recomposition-stage.js";
 
 export type { RecompositionStageKind } from "./recomposition-stage.js";
+export { NEAR_GOAL_REMAINING_LB, isNearGoal } from "./recomposition-stage.js";
 
 export type RecompositionActionKind = "hold" | "protect_fuel" | "settling" | "stabilize" | "collect_signal";
 
@@ -81,6 +86,31 @@ const finite = (value: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+function remainingToGoalLb(current: number | null, goal: number | null): number | null {
+  if (current == null || goal == null) return null;
+  return goal < current ? round1(current - goal) : 0;
+}
+
+// Close enough to the destination that a soft/reduce fuel hold no longer vetoes
+// a promotion the log already earned. Sliding cut pressure still does; fast_loss
+// does not. Pure remaining math lives in `isNearGoal`; this is the date-aware
+// reader. Only a live lose-mode cut can be "near" — a gain/maintain athlete, a
+// missing weight/goal, or a goal already at/past current must never read as
+// near (0 remaining is at-destination display math, not a near-goal lever).
+export function nearGoal(date = localDateISO()): boolean {
+  try {
+    const profile = getProfile() as any;
+    if (effectiveGoalMode(profile) !== "lose") return false;
+    const currentResolved = resolvedCurrentBodyweight(profile, date);
+    const current = finite(currentResolved?.weight_lb ?? profile?.weight_lb);
+    const goal = finite(profile?.goal_weight_lb);
+    if (current == null || goal == null || goal >= current) return false;
+    return isNearGoal(remainingToGoalLb(current, goal));
+  } catch {
+    return false;
+  }
+}
+
 function activePhaseFallback(): PhaseLike {
   try {
     return db
@@ -135,12 +165,7 @@ export function recompositionRead(
       : start != null && current != null
         ? 0
         : null;
-  const remaining =
-    current != null && goal != null && goal < current
-      ? round1(current - goal)
-      : current != null && goal != null
-        ? 0
-        : null;
+  const remaining = remainingToGoalLb(current, goal);
   const total = start != null && goal != null && start > goal ? start - goal : null;
   const progress = total != null && lost != null ? Math.max(0, Math.min(1, lost / total)) : null;
   const stage = classifyRecompositionStage({

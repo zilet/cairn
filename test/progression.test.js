@@ -24,6 +24,8 @@ import {
   recentMuscleLoad,
 } from "../dist/repo/progression.js";
 import { progressionVoicePhrases } from "../dist/repo/progression-voice.js";
+import * as progressionVoice from "../dist/repo/progression-voice.js";
+import { cutQualityRead } from "../dist/repo/cut-quality.js";
 import * as blocks from "../dist/repo/program-blocks.js";
 import { detectStrengthCalibration, dueCalibrations, estimateConfidenceFor } from "../dist/repo/calibration.js";
 import { normalizedExerciseKey } from "../dist/repo/exercise-canon.js";
@@ -509,7 +511,7 @@ test("only a finished full comparable linked dose can earn the next overload", (
     } else {
       assert.equal(prescription.action, "hold", fixture.name);
       assert.equal(prescription.suggested.weight, 100, fixture.name);
-      assert.match(prescription.why, /linked|part|comparable|full dose/i, fixture.name);
+      assert.match(prescription.why, /finish|log|sets|clean|fair look|it moves|weight can move|stays put|count the same/i, fixture.name);
     }
   }
 });
@@ -1655,8 +1657,8 @@ function seedHoldAggressionFuel() {
     weight_lb: 200,
     start_weight_lb: 210,
     start_date: day(-60),
-    goal_weight_lb: 180,
-    goal_mode: "lose",
+    goal_weight_lb: 200,
+    goal_mode: "maintain",
     activity_factor: 1.5,
   });
   db.prepare(
@@ -1839,7 +1841,7 @@ test("an unfinished dose behind the plan stays a catch-up hold", () => {
   assert.match(p.why, /50 lb/);
 });
 
-test("a cut plateau at the ceiling is a catch-up hold, not a promoted overload", () => {
+test("a soft fuel hold no longer vetoes a plateaued promotion the log already earned", () => {
   makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
   planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
   for (const d of [18, 12, 7]) logSet("Dumbbell Curl", isoDaysAgo(d), { weight: 50, reps: 12, rir: 2 });
@@ -1849,10 +1851,357 @@ test("a cut plateau at the ceiling is a catch-up hold, not a promoted overload",
   assert.equal(state?.status, "plateaued", "the fixture is a measured plateau, not a fresh lift");
 
   const p = nextPrescription("Dumbbell Curl", undefined, {
-    cut: { hold: true, reduce: false, deep: false, any: true },
+    cut: { hold: true, reduce: false, deep: false, any: true, near_goal: false },
   });
   assert.equal(p.reground, true);
-  assert.equal(p.action, "hold", "the cut floor is not something a re-ground talks its way out of");
+  assert.equal(p.action, "overload", "a soft fuel hold does not veto a promotion the log already earned");
+  assert.equal(p.suggested.weight, 52.5, "the step is from the logged 50");
+  assert.doesNotMatch(p.why, /deficit counts as progress|holding this weight while/i);
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
+// ===========================================================================
+// CUT PRESSURE — hold never vetoes an earned promotion; reduce does unless
+// near goal; sliding always does; fast_loss does not. Safety floors keep
+// full authority.
+// ===========================================================================
+
+function cutOf({ hold = false, reduce = false, sliding = false, fast_loss = false, near_goal = false } = {}) {
+  const deep = sliding || fast_loss;
+  return { hold, reduce, sliding, fast_loss, deep, any: hold || reduce || deep, near_goal };
+}
+
+function plateauedCeilingCurl() {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  for (const d of [18, 12, 7]) logSet("Dumbbell Curl", isoDaysAgo(d), { weight: 50, reps: 12, rir: 2 });
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", isoDaysAgo(3), { weight: 50, reps: 12, rir: 2, setNum: s });
+}
+
+test("cut-pressure matrix: hold/reduce/sliding/fast_loss × near-goal × earned ceiling work", () => {
+  const cells = [
+    { cut: cutOf({}), action: "overload", label: "no pressure" },
+    { cut: cutOf({ hold: true }), action: "overload", label: "hold does not veto" },
+    { cut: cutOf({ reduce: true }), action: "hold", label: "reduce vetoes" },
+    { cut: cutOf({ sliding: true }), action: "hold", label: "sliding vetoes" },
+    { cut: cutOf({ fast_loss: true }), action: "overload", label: "fast_loss does not veto an earned load step" },
+    { cut: cutOf({ hold: true, near_goal: true }), action: "overload", label: "hold + near goal" },
+    { cut: cutOf({ reduce: true, near_goal: true }), action: "overload", label: "near goal lifts reduce" },
+    { cut: cutOf({ sliding: true, near_goal: true }), action: "hold", label: "sliding still vetoes near goal" },
+    { cut: cutOf({ fast_loss: true, near_goal: true }), action: "overload", label: "fast_loss still does not veto near goal" },
+    { cut: cutOf({ hold: true, reduce: true }), action: "hold", label: "reduce wins over hold" },
+    { cut: cutOf({ hold: true, reduce: true, near_goal: true }), action: "overload", label: "near goal lifts hold+reduce" },
+  ];
+  for (const cell of cells) {
+    reset();
+    plateauedCeilingCurl();
+    const p = nextPrescription("Dumbbell Curl", undefined, { cut: cell.cut });
+    assert.equal(p.action, cell.action, cell.label);
+    if (cell.action === "overload") {
+      assert.equal(p.suggested.weight, 52.5, `${cell.label}: step from the logged 50`);
+      assert.doesNotMatch(p.why, /deficit counts as progress/i, cell.label);
+    } else {
+      assert.equal(p.suggested.weight, 50, `${cell.label}: load stays put`);
+    }
+    assert.equal(violatesReadingGrammar(p.why), null, cell.label);
+  }
+});
+
+// The matrix ABOVE is the re-grounding path — the plan target sits under the real
+// working weight, and cut pressure has always gated the catch-up step there. The
+// PLAIN ladder is a different site: the plan already says what the athlete lifted,
+// the work cleared the top of the range at RIR 2, and no cut reading has ever taken
+// that step off. It must stay that way, or a cut turns every clean week into a hold.
+function plainEarnedLadderRow() {
+  makeExercise("Barbell Row", { muscle_group: "back" });
+  planWith(1, { exercise: "Barbell Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 100, focus: "Pull" });
+  logSet("Barbell Row", isoDaysAgo(21), { weight: 90, reps: 12, rir: 2 });
+  logSet("Barbell Row", isoDaysAgo(14), { weight: 95, reps: 12, rir: 2 });
+  for (let s = 1; s <= 3; s++) logSet("Barbell Row", isoDaysAgo(4), { weight: 100, reps: 12, rir: 2, setNum: s });
+}
+
+test("the plain earned ladder promotes under every cut pressure", () => {
+  const cells = [
+    { cut: cutOf({}), label: "no pressure" },
+    { cut: cutOf({ hold: true }), label: "hold" },
+    { cut: cutOf({ reduce: true }), label: "reduce" },
+    { cut: cutOf({ reduce: true, near_goal: true }), label: "reduce + near goal" },
+    { cut: cutOf({ sliding: true }), label: "sliding" },
+    { cut: cutOf({ fast_loss: true }), label: "fast_loss" },
+    { cut: cutOf({ fast_loss: true, hold: true }), label: "fast_loss + hold" },
+  ];
+  for (const cell of cells) {
+    reset();
+    plainEarnedLadderRow();
+    const p = nextPrescription("Barbell Row", undefined, { cut: cell.cut });
+    assert.equal(p.action, "overload", `${cell.label}: a clean 12×3 at RIR 2 earns its step`);
+    assert.equal(p.suggested.weight, 105, `${cell.label}: the step is from the logged 100`);
+    assert.doesNotMatch(p.why, /deficit counts as progress/i, cell.label);
+    assert.equal(violatesReadingGrammar(p.why), null, cell.label);
+  }
+});
+
+test("a grind at the ceiling stays a hold even when near goal", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", isoDaysAgo(3), { weight: 50, reps: 12, rir: 0, setNum: s });
+
+  const p = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ hold: true, reduce: true, near_goal: true }) });
+  assert.equal(p.action, "hold", "near goal does not manufacture a step the work did not earn");
   assert.equal(p.suggested.weight, 50);
+});
+
+test("an unfinished dose stays a hold even when near goal", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  const date = isoDaysAgo(3);
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", date, { weight: 50, reps: 12, rir: 2, setNum: s });
+  linkLatestDoseOutcome("Dumbbell Curl", date, {
+    status: "in_progress",
+    comparable: true,
+    prescribedSets: 3,
+    achievedSets: 3,
+    challengeVerdict: "met",
+  });
+
+  const p = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ hold: true, near_goal: true }) });
+  assert.equal(p.dose_eligibility.eligible, false);
+  assert.equal(p.action, "hold", "near goal does not skip the eligible arm");
+});
+
+test("a reground from a comparable exceeded dose at top-of-range reps promotes", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  const date = isoDaysAgo(3);
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", date, { weight: 50, reps: 12, rir: 2, setNum: s });
+  linkLatestDoseOutcome("Dumbbell Curl", date, {
+    status: "completed",
+    comparable: true,
+    prescribedSets: 3,
+    achievedSets: 3,
+    challengeVerdict: "exceeded",
+  });
+
+  const p = nextPrescription("Dumbbell Curl");
+  assert.equal(p.reground, true);
+  assert.equal(p.dose_eligibility.reason, "full_comparable");
+  assert.equal(p.action, "overload", "a comparable exceeded dose at the top of the range carries the step");
+  assert.equal(p.suggested.weight, 52.5);
+
+  const held = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ hold: true }) });
+  assert.equal(held.action, "overload", "a soft fuel hold does not turn that earned step into a catch-up hold");
+  assert.equal(held.suggested.weight, 52.5);
+  assert.doesNotMatch(held.why, /earn (a |one more )?clean (extra )?rep/i);
+
+  const fast = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ fast_loss: true }) });
+  assert.equal(fast.action, "overload", "fast_loss + strong + eligible exceeded dose promotes");
+  assert.equal(fast.suggested.weight, 52.5);
+  assert.equal(fast.top_set, undefined, "the challenge top set is parked");
+  assert.equal(fast.suggested.sets, 3, "fast_loss never halves volume");
+
+  // What sliding gates is the CATCH-UP step — the plan sitting behind the real
+  // working weight. The step the ladder itself earned off a clean, comparable,
+  // exceeded dose is not a cut question, so this one still moves; the lift that has
+  // nothing but a catch-up to promote holds (see the cut-pressure matrix above).
+  const sliding = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ sliding: true }) });
+  assert.equal(sliding.action, "overload", "the ladder's own earned step is not a cut decision");
+  assert.equal(sliding.suggested.weight, 52.5);
+});
+
+test("near-goal promotion still yields to the acute gate", () => {
+  earnedOverload("Back Squat", "quads");
+  const acute = new Map([
+    [
+      "quads",
+      {
+        group: "quads",
+        band: "saturated",
+        residual: 1,
+        saturated: true,
+        last_date: isoDaysAgo(1),
+        days_ago: 1,
+        source: "strength",
+        activity: null,
+        detail: "test",
+      },
+    ],
+  ]);
+  const p = nextPrescription("Back Squat", undefined, { cut: cutOf({ hold: true, reduce: true, near_goal: true }), acute });
+  assert.equal(p.action, "hold", "a smoked group still holds even when near the destination");
+  assert.equal(p.suggested.weight, 185);
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
+test("near-goal promotion still yields to a pain-protected lift", () => {
+  earnedOverload("Back Squat", "quads");
+  const squat = repo.findExercise("Back Squat");
+  statePain("left knee", 9, "Back Squat", squat.id, [
+    { at: 6, painFree: false },
+    { at: 2, painFree: false },
+  ]);
+  const p = nextPrescription("Back Squat", undefined, { cut: cutOf({ hold: true, reduce: true, near_goal: true }) });
+  assert.equal(p.action, "deload", "a red pain band still takes the load off");
+  assert.equal(p.pain_protected, true);
+  assert.ok(p.suggested.weight < 185);
+});
+
+test("an earned promotion under a soft fuel hold speaks the log-earned set", () => {
+  plateauedCeilingCurl();
+  const p = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ hold: true }) });
+  assert.equal(p.action, "overload");
+  assert.doesNotMatch(p.why, /deficit counts as progress|holding this weight while|earn (a |one more )?clean/i);
+  assert.match(p.why, /logged|lifted|earned|fuel/i);
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
+test("plan-behind + reduce keeps the catch-up sentence with the number", () => {
+  plateauedCeilingCurl();
+  const p = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ reduce: true }) });
+  assert.equal(p.action, "hold");
   assert.match(p.why, /50 lb/);
+  assert.match(p.why, /plan|catching|lifting more/i);
+  assert.doesNotMatch(p.why, /deficit counts as progress|holding this weight while|leaning out/i);
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
+test("a deload-week hold keeps its phase sentence under reduce", () => {
+  seedCappedBenchWeek(8);
+  blocks.createBlock({ goal: "Ease", focus: "strength", total_weeks: 6, week_index: 6 });
+  const p = nextPrescription("Barbell Bench Press", undefined, { cut: cutOf({ reduce: true }) });
+  assert.equal(p.action, "hold");
+  assert.equal(p.block_phase, "deload");
+  assert.match(p.why, /easy week|light one|Recovery week/i);
+  assert.doesNotMatch(p.why, /deficit counts as progress|holding this weight while|leaning out/i);
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
+test("an earned promotion under a soft fuel hold does not mention a single that never came off", () => {
+  plateauedCeilingCurl();
+  const p = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ hold: true }) });
+  assert.equal(p.action, "overload");
+  assert.doesNotMatch(p.why, /\bsingle\b|top set/i);
+  assert.match(p.why, /logged|lifted|earned|fuel/i);
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
+test("push + hold_aggression parks a peak single with the with-single voice", () => {
+  seedHoldAggressionFuel();
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  planWith(1, { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 5, target_weight: 190, focus: "Legs" });
+  logSet("Back Squat", isoDaysAgo(25), { weight: 185, reps: 1, rir: 0 });
+  logSet("Back Squat", isoDaysAgo(21), { weight: 185, reps: 5, rir: 2 });
+  logSet("Back Squat", isoDaysAgo(10), { weight: 190, reps: 5, rir: 2 });
+  blocks.createBlock({ goal: "Peak", focus: "peak", total_weeks: 3, week_index: 3 });
+  repo.setSettings({ training_drive: "push" });
+
+  const bare = nextPrescription("Back Squat");
+  assert.ok(bare.top_set, "peak week carries a top-set protocol before fuel protection");
+
+  const p = planDayProgression(1).find((row) => row.exercise === "Back Squat");
+  assert.equal(p.action, "overload", "push keeps the step under a soft fuel hold");
+  assert.equal(p.top_set, undefined, "the heavy single came off");
+  assert.match(p.why, /single|top set/i);
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
+function seedFastLossCut() {
+  repo.setProfile({
+    name: "Athlete",
+    sex: "male",
+    age: 36,
+    height_cm: 183,
+    weight_lb: 188,
+    start_weight_lb: 210,
+    start_date: isoDaysAgo(60),
+    goal_weight_lb: 180,
+    goal_mode: "lose",
+    activity_factor: 1.5,
+  });
+  for (let d = 21; d >= 1; d--) {
+    if (d % 2 === 1 || d === 21 || d === 1) {
+      seedWeight(isoDaysAgo(d), 200 - (2.6 / 7) * (21 - d));
+    }
+  }
+}
+
+test("planDayProgression: a seeded reduce still halves volume near the destination", () => {
+  earnedOverload("Back Squat", "quads");
+  repo.setProfile({
+    name: "Athlete",
+    sex: "male",
+    age: 36,
+    height_cm: 183,
+    weight_lb: 181.2,
+    start_weight_lb: 210,
+    start_date: isoDaysAgo(60),
+    goal_weight_lb: 180,
+    goal_mode: "lose",
+    activity_factor: 1.5,
+  });
+  seedPersistentStrain();
+  assert.equal(currentUnderfuelingRead(localDateISO()).action.training, "reduce", "the fixture reaches the reduce branch");
+  assert.equal(repo.nearGoal(), true, "1.2 lb remaining is near the destination");
+  const p = planDayProgression(1, { forNextSession: true }).find((row) => row.exercise === "Back Squat");
+  assert.equal(p.action, "overload", "near goal lifts the promotion veto");
+  assert.equal(p.suggested.weight, 190, "the load step stands");
+  assert.equal(p.suggested.sets, 2, "persistent-strain volume reduction stays");
+  assert.equal(p.fuel_protected, true);
+  assert.doesNotMatch(p.why, /\bsingle\b|top set/i, "no single came off");
+});
+
+test("planDayProgression: a seeded fast_loss cut promotes and does not half volume", () => {
+  earnedOverload("Back Squat", "quads");
+  const date = isoDaysAgo(10);
+  linkLatestDoseOutcome("Back Squat", date, {
+    status: "completed",
+    comparable: true,
+    prescribedSets: 3,
+    achievedSets: 3,
+    challengeVerdict: "exceeded",
+  });
+  seedFastLossCut();
+  const cut = cutQualityRead(localDateISO());
+  assert.equal(cut.active, true, "the cut is live");
+  assert.equal(cut.rate.vs_lean_safe, "above", "loss is faster than lean-safe");
+  assert.notEqual(cut.verdict, "sliding", "anchors are not dropping");
+  assert.equal(currentUnderfuelingRead(localDateISO()).action.training, "proceed");
+  const p = planDayProgression(1, { forNextSession: true }).find((row) => row.exercise === "Back Squat");
+  assert.equal(p.action, "overload", "fast_loss does not veto an earned load step");
+  assert.equal(p.suggested.weight, 190);
+  assert.equal(p.top_set, undefined, "the challenge top set is parked");
+  assert.equal(p.suggested.sets, 3, "fast_loss never halves — it was never a fuel reduce");
+  assert.equal(p.fuel_protected, undefined);
+});
+
+test("every progression-voice export stays in athlete language", () => {
+  const namedFour = new Set([
+    "DOSE_UNFINISHED_HOLD",
+    "DOSE_UNDER_HOLD",
+    "DOSE_NON_COMPARABLE_HOLD",
+    "TIMED_DOSE_UNFINISHED_HOLD",
+    "TIMED_DOSE_UNDER_HOLD",
+    "TIMED_DOSE_NON_COMPARABLE_HOLD",
+    "TIMED_DOSE_PARTIAL_HOLD",
+    "LOG_EARNED_FUEL_PARK",
+    "LOG_EARNED_FUEL_PARK_SINGLE",
+    "DOSE_PARTIAL_HOLD",
+  ]);
+  let sets = 0;
+  for (const [name, value] of Object.entries(progressionVoice)) {
+    if (!Array.isArray(value) || value.length === 0) continue;
+    sets += 1;
+    const phrases = typeof value[0] === "function" ? value.map((fn) => fn(12, 8, "Front Squat")) : [...value];
+    if (namedFour.has(name)) assert.ok(phrases.length >= 4, `${name} is a four-phrasing set`);
+    for (const phrase of phrases) {
+      assert.equal(violatesReadingGrammar(phrase), null, `${name}: ${phrase}`);
+      assert.doesNotMatch(phrase, /\b(linked|dose|comparable|evidence|exposure)\b/i, `${name}: ${phrase}`);
+    }
+  }
+  assert.ok(sets >= 40, "the file's exports are what the guard walks");
+  for (const phrase of progressionVoice.LOG_EARNED_FUEL_PARK) {
+    assert.doesNotMatch(phrase, /\bsingle\b|top set/i, phrase);
+  }
+  for (const phrase of progressionVoice.LOG_EARNED_FUEL_PARK_SINGLE) {
+    assert.match(phrase, /single|top set/i, phrase);
+  }
 });

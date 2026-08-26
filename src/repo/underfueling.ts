@@ -83,6 +83,19 @@ const MIN_AGREEING_CHANNELS = 2;
 const SETTLING_DAYS = 7;
 const PERSISTENCE_WINDOW_DAYS = 21;
 
+// Training consequence of a soft fueling hold: `action.training` may only be
+// `hold_aggression` when the strain is decision-grade — the diary confirms a
+// shortfall (`logDirection === "strain"`) OR the measured scale trend
+// (`weight_trend`, never waist/`body_trend` alone) is in the strain set.
+// Otherwise training proceeds while the nutrition half (kcal_delta, kind, line)
+// is unchanged.
+//
+// Readers: `readCutPressure` and `applyFuelProtection` honor `action.training`
+// as the training lever. Recomposition copies it onto `training_directive`.
+// The volume-restore pass does NOT key on `training === "proceed"` — a waist-only
+// raise still proceeds while calories are moving; restore waits until the fuel
+// read itself has settled (see underfueling-service).
+
 // Internal causal roles keep correlated observations from pretending to be
 // independent votes. Weight and waist are two views of one energy-balance
 // outcome; workload describes demand, but is not an athlete outcome by itself.
@@ -114,6 +127,16 @@ function causalFamilies(channels: UnderfuelingChannel[], direction: Underfueling
       .filter((channel) => channel.direction === direction)
       .map((channel) => CHANNEL_FAMILY[channel.key])
       .filter((family) => family !== "demand_context")
+  );
+}
+
+function decisionGradeTrainingHold(
+  logDirection: UnderfuelingChannelDirection,
+  channels: UnderfuelingChannel[]
+): boolean {
+  return (
+    logDirection === "strain" ||
+    channels.some((channel) => channel.key === "weight_trend" && channel.direction === "strain")
   );
 }
 
@@ -700,21 +723,23 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
           : ["execution_gap", "prescription_strain", "persistent_strain"].includes(state)
             ? "medium"
             : "low";
+  const holdAggression = decisionGradeTrainingHold(logDirection, channels);
   const action: UnderfuelingRead["action"] =
     state === "execution_gap"
       ? {
           kind: "reshape_meals",
           kcal_delta: 0,
-          training: strain.some((channel) => ["performance", "recovery"].includes(channel.key))
-            ? "hold_aggression"
-            : "proceed",
+          training:
+            holdAggression && strain.some((channel) => ["performance", "recovery"].includes(channel.key))
+              ? "hold_aggression"
+              : "proceed",
           line: "Keep the current target and make the meal pattern easier to complete, including practical carb-forward fuel around training.",
         }
       : state === "prescription_strain"
         ? {
             kind: "raise_target",
             kcal_delta: strainFamilies.size >= 4 ? 200 : 150,
-            training: "hold_aggression",
+            training: holdAggression ? "hold_aggression" : "proceed",
             line: "Protect the next training block with one bounded carb-forward fuel step; do not chase literal exercise calories.",
           }
         : state === "persistent_strain"
@@ -728,9 +753,10 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
             ? {
                 kind: "settle",
                 kcal_delta: 0,
-                training: strain.some((channel) => ["performance", "recovery"].includes(channel.key))
-                  ? "hold_aggression"
-                  : "proceed",
+                training:
+                  holdAggression && strain.some((channel) => ["performance", "recovery"].includes(channel.key))
+                    ? "hold_aggression"
+                    : "proceed",
                 line: "A recent fuel correction is still inside its seven-day settling window, so no second calorie move is made.",
               }
             : state === "insufficient_signal"
