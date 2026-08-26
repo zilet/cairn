@@ -2088,11 +2088,10 @@ const SOFTENABLE_REST_CODES: ReadonlySet<string> = new Set([
 //   • logged_light_work_today  — EXCLUDED. Not a brake at all: it acknowledges movement
 //     ALREADY logged today. Opening it would ask for a second session on the strength
 //     of evidence about other mornings.
-//   • unprogrammed_easy_day    — SOFTENABLE. The floor when nothing is programmed,
-//     and the easy that actually fires after a hard yesterday with no plan day due.
-//     Opening it does not invent a session that does not exist: with a due plan day
-//     the ladder hands that session; with none the read stays easy movement on the
-//     easy clock. History of training through these mornings is the evidence.
+//   • unprogrammed_easy_day    — EXCLUDED, as unreachable rather than as policy: it
+//     is the floor that fires only when NO rule resolved, and a due plan day makes
+//     planned_training resolve — so "unprogrammed with a session to open" cannot
+//     occur, and softenEasy already refuses to invent a session when none is due.
 //   • accumulated_load_rest    — SOFTENABLE on the EASY arm. At the hard-day ceiling
 //     with recovery still reading well, that code now produces easy rather than rest
 //     (see the ladder on PUSH_DRIVE_CONSEC_CEILING). The rest arm stays in
@@ -2110,7 +2109,6 @@ const SOFTENABLE_EASY_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.chronic_sleep_watch.code,
   DAY_READ_OUTCOMES.endurance_volume_spike.code,
   DAY_READ_OUTCOMES.accumulated_load_rest.code,
-  UNPROGRAMMED_EASY_DAY.code,
 ]);
 
 // The hard ceiling on consecutive LOADING days. A day counts as loading when it

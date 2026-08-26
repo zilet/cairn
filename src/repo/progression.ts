@@ -1836,9 +1836,28 @@ function repsPrescription(
   const allSetsAtTop = hasRange && workingSets.length > 0 && setsAtTop === workingSets.length;
   const topSetAtTop = hasRange && topReps != null && topReps >= (repCeiling as number);
   const roomInRange = hasRange && topReps != null && topReps < (repCeiling as number);
-  // "Strong" = the work earned progression: last top set at RIR ≥ 2, OR the program-state
-  // trend reads progressing. RIR ≤ 1 means it was a grind — hold.
-  const strong = ((lastRir != null && lastRir >= 2) || status === "progressing") && doseEligibility.eligible;
+  // "Strong" = the work earned progression.
+  //
+  // ABSENCE OF A FELT RATING IS NOT WEAKNESS. The finish flow never asks for RIR,
+  // so on real logs every exposure carries none — and reading that silence as "not
+  // strong" closed the loop on itself: nothing was earned, so the plan never moved,
+  // so the same weight was repeated at the TOP of the rep range, so the estimated
+  // trend stayed flat, so nothing was ever earned. Classic DOUBLE PROGRESSION needs
+  // no felt rating: capping the prescribed rep range IS the strength signal, and the
+  // completeness gates below (allSetsAtTop / topSetAtTop / roomInRange) are what
+  // actually require the cap. So with no RIR logged, the work speaks for itself.
+  //
+  // A LOGGED rating still speaks, in both directions: RIR ≤ 1 was a grind and holds
+  // (unless the trend independently reads progressing, which it always did), and
+  // RIR ≥ 2 still counts even below the ceiling for the rep stage.
+  const rirLogged = lastRir != null;
+  const strong =
+    doseEligibility.eligible && (status === "progressing" || (rirLogged ? (lastRir as number) >= 2 : true));
+  // The card must not tell an athlete who never logs RIR to come back at "RIR 2+".
+  // Where a phrasing names the rating, the same meaning also exists spoken in reps;
+  // the RIR wording is picked ONLY when an RIR was actually logged.
+  const sayEffort = <T>(withRir: readonly T[], inReps: readonly T[], code: string): T =>
+    say(rirLogged ? withRir : inReps, code);
   // The LOAD step is earned only when EVERY working set capped the range (double
   // progression). With no rep range, fall back to a strong top set (RIR 2+ / progressing).
   // An INTENSIFICATION phase buys the step with intensity instead of completeness: a
@@ -1850,7 +1869,12 @@ function repsPrescription(
   const drive = brakeCtx?.drive ?? "steady";
   const topSetEarnsLoad = !!policy?.top_set_earns_load || (drive === "push" && !policy?.holds_load);
   const pushEarnedTopSet = topSetEarnsLoad && !policy?.top_set_earns_load && hasRange && !allSetsAtTop;
-  const earnedByWork = hasRange ? (topSetEarnsLoad ? topSetAtTop : allSetsAtTop) && strong : strong;
+  // With NO rep range there is no cap to earn, so silence alone must not promote a
+  // lift on nothing: the exposure has to have MET its own prescribed dose, or an
+  // RIR ≥ 2 has to have been logged, or the trend has to read progressing.
+  const openEarned =
+    strong && (rirLogged || status === "progressing" || doseEligibility.reason === "full_comparable");
+  const earnedByWork = hasRange ? (topSetEarnsLoad ? topSetAtTop : allSetsAtTop) && strong : openEarned;
   // The REP stage: strong work with a rep still to win inside the (possibly widened) range.
   const repStageEligible = hasRange && strong && roomInRange && !allSetsAtTop;
   // A recovery or peak week adds nothing new — neither load nor another rep. The
@@ -1933,7 +1957,27 @@ function repsPrescription(
       nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
       why = say(voice.REGRESSING_DELOAD, "regressing_deload");
     }
-  } else if (status === "plateaued") {
+  } else if (
+    status === "plateaued" &&
+    !(
+      // A "plateau" is a claim about the ATHLETE, but when the log shows them
+      // OUT-DOING the card — heavier than the plan asked, or more working sets
+      // than it prescribed — the flat trend is the PLAN's doing (a held target can
+      // only ever reproduce itself), so the earned ladders below own the decision.
+      // An athlete logging an RIR while merely repeating the prescription for weeks
+      // keeps the plateau read: they had effort in hand and took no step, so the
+      // stall is real and rotation is the answer. With NO felt rating, capping the
+      // range is the only signal there is, and double progression's step is its
+      // answer — the step when the range is capped, one more rep when it is not
+      // (repStageEligible), and a capped top set over uncapped backoffs falls to the
+      // finish-the-range ask below. A cut that genuinely vetoes promotion (reduce off goal, sliding
+      // anchors) keeps the plateau read too — deferring would hand out a step the
+      // cut rules just refused.
+      (planBehind || workingSets.length > sets || !rirLogged) &&
+      (earnedByWork || repStageEligible || (hasRange && topSetAtTop && !allSetsAtTop && strong)) &&
+      !cutVetoesPromotion(brakeCtx?.cut?.() ?? NO_CUT_PRESSURE, { status })
+    )
+  ) {
     // Grinding (RIR ≤ 1) → deload; flat long enough → vary; else hold/technique.
     //
     // How long "long enough" is is not a constant any more. A genuine deficit widens
@@ -2024,7 +2068,9 @@ function repsPrescription(
     why =
       policy && policy.rep_saturation > 0
         ? say(voice.ACCUMULATION_REP_STAGE, "accumulation_rep_stage")(repCeiling as number)
-        : say(voice.REP_STAGE_OVERLOAD, "rep_stage_overload")(repHigh as number);
+        : sayEffort(voice.REP_STAGE_OVERLOAD, voice.REP_STAGE_OVERLOAD_REPS, "rep_stage_overload")(
+            repHigh as number
+          );
   } else if (earned) {
     // DOUBLE PROGRESSION — the LOAD stage. Every working set capped the range at RIR 2+
     // (or no range + a strong top set) → the small earned step up, then reset to the bottom.
@@ -2057,10 +2103,15 @@ function repsPrescription(
                 // that, so the sentence says so rather than claiming every set capped.
                 // The bar it cleared is the CEILING (the range's top plus whatever the
                 // phase saturates on), never the plain rep_high.
-                say(voice.PUSH_TOP_SET_OVERLOAD, "push_top_set_overload")(repCeiling as number)
+                sayEffort(voice.PUSH_TOP_SET_OVERLOAD, voice.PUSH_TOP_SET_OVERLOAD_REPS, "push_top_set_overload")(
+                  repCeiling as number
+                )
             : hasRange
-              ? say(voice.EARNED_RANGE_OVERLOAD, "earned_range_overload")(repHigh as number, repLow as number)
-              : say(voice.EARNED_OPEN_OVERLOAD, "earned_open_overload");
+              ? sayEffort(voice.EARNED_RANGE_OVERLOAD, voice.EARNED_RANGE_OVERLOAD_REPS, "earned_range_overload")(
+                  repHigh as number,
+                  repLow as number
+                )
+              : sayEffort(voice.EARNED_OPEN_OVERLOAD, voice.EARNED_OPEN_OVERLOAD_REPS, "earned_open_overload");
     }
   } else if (phaseHolds) {
     // The work earned something and the WEEK is the reason it waits.
@@ -2092,8 +2143,14 @@ function repsPrescription(
           ? say(voice.ACCUMULATION_TOP_SET_ONLY_HOLD, "accumulation_top_set_only_hold")(repCeiling as number)
           : say(voice.TOP_SET_ONLY_HOLD, "top_set_only_hold")(repCeiling as number);
       fallthroughHold = true;
+    } else if (rirLogged && (lastRir as number) <= 1) {
+      // The range was finished, but the athlete rated the last set a grind. The
+      // not-earned sentence would ask for work they already did; the honest reason
+      // for the hold is the effort they reported.
+      why = say(voice.GRIND_HOLD, "grind_hold");
+      fallthroughHold = true;
     } else {
-      why = say(voice.NOT_EARNED_HOLD, "not_earned_hold");
+      why = sayEffort(voice.NOT_EARNED_HOLD, voice.NOT_EARNED_HOLD_REPS, "not_earned_hold");
       fallthroughHold = true;
     }
   }
@@ -2258,8 +2315,11 @@ function repsPrescription(
       cutPressure.hold && !cutVetoesPromotion(cutPressure, liftCut)
         ? say(voice.LOG_EARNED_FUEL_PARK, "log_earned_fuel_park")
         : hasRange
-          ? say(voice.EARNED_RANGE_OVERLOAD, "earned_range_overload")(repHigh as number, repLow as number)
-          : say(voice.EARNED_OPEN_OVERLOAD, "earned_open_overload");
+          ? sayEffort(voice.EARNED_RANGE_OVERLOAD, voice.EARNED_RANGE_OVERLOAD_REPS, "earned_range_overload")(
+              repHigh as number,
+              repLow as number
+            )
+          : sayEffort(voice.EARNED_OPEN_OVERLOAD, voice.EARNED_OPEN_OVERLOAD_REPS, "earned_open_overload");
   }
 
   // AUTOREGULATION GATE — one step toward safety on high soreness / low performance /

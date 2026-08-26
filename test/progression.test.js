@@ -313,6 +313,25 @@ test("deload gated on estimate confidence: unverified holds with a test story, v
   assert.match(verified.delta_text, /^−/, "delta reads as a decrease");
 });
 
+test("a flat trend with NO logged RIR defers the plateau to the work itself", () => {
+  // The plan held this weight for weeks, so the estimated trend is flat by
+  // construction — and with no felt rating logged there was never an effort signal
+  // to refuse. Capping the range (or sitting one rep short of it) answers with the
+  // double-progression ladder, not a plateau sentence.
+  makeExercise("Machine Chest Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Machine Chest Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 115, focus: "Push" });
+  for (const d of [35, 28, 21, 14, 7]) {
+    logSet("Machine Chest Press", isoDaysAgo(d), { weight: 115, reps: 10, setNum: 1 });
+    logSet("Machine Chest Press", isoDaysAgo(d), { weight: 115, reps: 10, setNum: 2 });
+    logSet("Machine Chest Press", isoDaysAgo(d), { weight: 115, reps: d === 7 ? 9 : 10, setNum: 3 });
+  }
+  const p = nextPrescription("Machine Chest Press");
+  assert.notEqual(p.action, "vary", "no-RIR flatness is the plan's doing, not the athlete's");
+  assert.ok(["overload", "hold"].includes(p.action));
+  assert.doesNotMatch(p.why, /flat for a stretch|standstill|level for a while/i, "no plateau sentence on out-run work");
+  assert.doesNotMatch(p.why, /RIR/, "never asks for a rating the athlete does not log");
+});
+
 test("vary: a long flat plateau (not grinding) suggests rotating a variation", () => {
   makeExercise("Leg Press", { muscle_group: "quads" });
   planWith(1, { exercise: "Leg Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 400, focus: "Legs" });
@@ -2205,6 +2224,12 @@ test("every progression-voice export stays in athlete language", () => {
     "LOG_EARNED_FUEL_PARK",
     "LOG_EARNED_FUEL_PARK_SINGLE",
     "DOSE_PARTIAL_HOLD",
+    "REP_STAGE_OVERLOAD_REPS",
+    "EARNED_RANGE_OVERLOAD_REPS",
+    "EARNED_OPEN_OVERLOAD_REPS",
+    "NOT_EARNED_HOLD_REPS",
+    "PUSH_TOP_SET_OVERLOAD_REPS",
+    "GRIND_HOLD",
   ]);
   let sets = 0;
   for (const [name, value] of Object.entries(progressionVoice)) {
@@ -2223,5 +2248,120 @@ test("every progression-voice export stays in athlete language", () => {
   }
   for (const phrase of progressionVoice.LOG_EARNED_FUEL_PARK_SINGLE) {
     assert.match(phrase, /single|top set/i, phrase);
+  }
+});
+
+// ---- double progression with NO RIR logged ---------------------------------
+// The finish flow never asks for RIR, so on real data every exposure carries
+// none. Reading that silence as "not strong" was a closed loop: nothing earned →
+// the plan never moved → the same weight repeated at the TOP of the range → the
+// trend stayed flat → nothing earned. Capping the range IS the signal.
+
+// One plan day + one fully logged exposure at `reps`, with no felt rating unless
+// one is passed. The plan target matches the logged weight, so nothing here is a
+// plan-behind catch-up — the earned ladder is what is under test.
+function loggedExposure(name, { reps, rir = null, weight = 115, repLow = 8, repHigh = 10, sets = 3, topReps = null, link = true } = {}) {
+  makeExercise(name, { muscle_group: "chest" });
+  planWith(1, { exercise: name, sets, rep_low: repLow, rep_high: repHigh, target_weight: weight, focus: "Push" });
+  const date = isoDaysAgo(4);
+  for (let s = 1; s <= sets; s++) {
+    logSet(name, date, { weight, reps: s === 1 && topReps != null ? topReps : reps, rir, setNum: s });
+  }
+  if (link) {
+    linkLatestDoseOutcome(name, date, {
+      status: "completed",
+      comparable: true,
+      prescribedSets: sets,
+      achievedSets: sets,
+      challengeVerdict: "met",
+    });
+  }
+  return date;
+}
+
+test("no RIR: every set at the top of the range earns the load step", () => {
+  loggedExposure("Barbell Bench Press", { reps: 10 });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.dose_eligibility.reason, "full_comparable");
+  assert.equal(p.action, "overload", "capping the range IS the strength signal — absence of a rating is not weakness");
+  assert.equal(p.suggested.weight, 120, "the ordinary clamped compound step from the logged 115");
+  assert.equal(p.rep_step, undefined, "the range is capped, so this is the LOAD stage");
+  assert.doesNotMatch(p.why, /RIR/i, "an athlete who never rates a set is never told to come back at RIR 2+");
+});
+
+test("no RIR: a rep short of the ceiling is the rep stage, not a hold", () => {
+  loggedExposure("Barbell Bench Press", { reps: 9 });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "overload");
+  assert.equal(p.rep_step, true, "a rep is still to win inside the range — reps advance, load holds");
+  assert.equal(p.suggested.weight, 115, "the load does not move until every set caps");
+  assert.doesNotMatch(p.why, /RIR/i);
+});
+
+test("a logged RIR 1 at the ceiling still holds, and says the grind is why", () => {
+  loggedExposure("Barbell Bench Press", { reps: 10, rir: 1 });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "hold", "a rating the athlete DID give still demotes — that was a grind");
+  assert.equal(p.suggested.weight, 115);
+  assert.ok(
+    progressionVoice.GRIND_HOLD.includes(p.why),
+    `the hold names the grind rather than asking for the range they just finished: ${p.why}`
+  );
+});
+
+test("a logged RIR 3 below the ceiling is still the rep stage", () => {
+  loggedExposure("Barbell Bench Press", { reps: 9, rir: 3 });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "overload");
+  assert.equal(p.rep_step, true);
+  assert.equal(p.suggested.weight, 115);
+  assert.match(p.why, /RIR 2\+/, "a rating that WAS given is the honest thing to speak in");
+});
+
+test("no rep range and no RIR: a met dose earns the step, an unlinked one earns nothing", () => {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: null, rep_high: null, target_weight: 115, focus: "Push" });
+  const date = isoDaysAgo(4);
+  for (let s = 1; s <= 3; s++) logSet("Barbell Bench Press", date, { weight: 115, reps: 8, setNum: s });
+
+  const unproven = nextPrescription("Barbell Bench Press");
+  assert.equal(unproven.dose_eligibility.reason, "legacy_unlinked");
+  assert.equal(unproven.action, "hold", "with no range to cap and no rating, silence must not promote on nothing");
+  assert.doesNotMatch(unproven.why, /RIR/i);
+
+  linkLatestDoseOutcome("Barbell Bench Press", date, {
+    status: "completed",
+    comparable: true,
+    prescribedSets: 3,
+    achievedSets: 3,
+    challengeVerdict: "met",
+  });
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.dose_eligibility.reason, "full_comparable");
+  assert.equal(p.action, "overload", "the exposure MET its own prescribed dose — that is the evidence");
+  assert.equal(p.suggested.weight, 120);
+  assert.doesNotMatch(p.why, /RIR/i);
+});
+
+test("push drive: no RIR, the top set alone at the ceiling takes the step", () => {
+  loggedExposure("Barbell Bench Press", { reps: 8, topReps: 10 });
+  repo.setSettings({ training_drive: "push" });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "overload", "under push a top set at the ceiling buys the step without a rating");
+  assert.equal(p.suggested.weight, 120);
+  assert.doesNotMatch(p.why, /RIR/i);
+});
+
+test("the no-RIR ladder never asks for a rating the athlete does not give", () => {
+  for (const [name, reps] of [["Barbell Bench Press", 10], ["Pendlay Row", 9], ["Incline Bench Press", 6]]) {
+    reset();
+    loggedExposure(name, { reps });
+    const why = nextPrescription(name).why;
+    assert.doesNotMatch(why, /\bRIR\b/i, `${name}: ${why}`);
   }
 });

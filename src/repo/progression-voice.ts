@@ -117,6 +117,17 @@ export const REP_STAGE_OVERLOAD: VoiceSet1 = [
     `Strong sets at RIR 2+, but not every set is at ${high} — earn that rep everywhere before the weight moves.`,
 ];
 
+// The same rep stage, spoken WITHOUT a felt rating — the wording used whenever no
+// RIR was logged on the last exposure. Telling someone who never rates a set to
+// come back "at RIR 2+" is an instruction they cannot follow; the reps are the ask.
+export const REP_STAGE_OVERLOAD_REPS: VoiceSet1 = [
+  (high) =>
+    `Not every set has reached ${high} yet — chase a rep toward the top of the range across all your sets. Cap every set and the weight goes up.`,
+  (high) => `The reps are climbing. Get every set to ${high} first; the load follows once they all cap.`,
+  (high) => `Still a rep to win — bring every set up to ${high}, and then the weight moves.`,
+  (high) => `Add a rep across the board before any load: ${high} on every set is what buys the step.`,
+];
+
 export const BODYWEIGHT_OVERLOAD: VoiceSet = [
   "You've capped the range on a bodyweight movement — add a rep or a set; there's no load to add.",
   "The range is capped and there's no weight to add here — take an extra rep or another set.",
@@ -148,6 +159,24 @@ export const EARNED_OPEN_OVERLOAD: VoiceSet = [
   "You hit the top of the range at RIR 2+ — the small earned step up is yours.",
   "Top of the range at RIR 2+ — that earns the small step up.",
   "You capped the range with RIR 2+ to spare — take the small step up.",
+];
+
+// The earned LOAD step, spoken in reps. Capping the range on every set IS the
+// signal when nothing was rated — so the sentence credits the work that happened
+// rather than a rating that was never given.
+export const EARNED_RANGE_OVERLOAD_REPS: VoiceSet2 = [
+  (high, low) =>
+    `Every set hit ${high} — you capped the range, so take the earned step up and reset to ${low} reps.`,
+  (high, low) => `All your sets reached ${high}. The range is yours; step the weight up and build back from ${low}.`,
+  (high, low) => `${high} on every set — that's the range capped. Add the small step and climb again from ${low}.`,
+  (high, low) => `You owned ${high} across the board — the step up is earned; back to ${low} reps at the new weight.`,
+];
+
+export const EARNED_OPEN_OVERLOAD_REPS: VoiceSet = [
+  "You capped the range — the small earned step up is yours.",
+  "Top of the range on the work that counted — that earns the small step up.",
+  "The range is capped, so the weight moves: take the small step.",
+  "You finished the range clean — add the small step next time out.",
 ];
 
 export const DOSE_UNFINISHED_HOLD: VoiceSet = [
@@ -195,6 +224,25 @@ export const NOT_EARNED_HOLD: VoiceSet = [
   "Not quite earned yet — hold and finish the rep range cleanly at RIR 2+ before adding.",
   "Not there yet — hold the load and close out the rep range cleanly at RIR 2+ first.",
   "Not earned this time — hold here and finish the range clean at RIR 2+ before adding load.",
+];
+
+// The not-earned hold, spoken in reps. The ask has to be something the athlete can
+// actually go and do: cap the range on every set.
+export const NOT_EARNED_HOLD_REPS: VoiceSet = [
+  "Not quite there — hold the load and take every set to the top of the range; that's what moves it.",
+  "Hold here for now. Cap the rep range on every set and the weight goes up.",
+  "Not earned this time — keep the weight and finish the range out on all your sets first.",
+  "Stay at this load and own the top of the range across the board; the step comes right after.",
+];
+
+// The work capped the range but the last set was rated a grind. The RIR IS what the
+// athlete told us here, so naming it is honest — and it is the one thing that turns
+// a completed range into a hold.
+export const GRIND_HOLD: VoiceSet = [
+  "You finished the range, but that last set was a grind at RIR 0–1 — hold the weight and take one cleaner run at it.",
+  "The reps were there and the effort was maxed out at RIR 0–1. Keep this load until it comes back with a rep or two in reserve.",
+  "That went up as a grind — hold here, and the weight moves once the same work leaves you RIR 2+.",
+  "Range done, but nothing left in the tank at the end — stay at this load for one more clean session before stepping.",
 ];
 
 // ---- catching the plan up to reality ----------------------------------------
@@ -467,6 +515,17 @@ export const PUSH_TOP_SET_OVERLOAD: VoiceSet1 = [
     `You asked to push, and the top set hit ${high} at RIR 2+ — take the small step up; the other sets can catch up at the new weight.`,
 ];
 
+// The same push rule with no felt rating logged: the top set capping the ceiling is
+// the whole evidence, and the sentence says only that.
+export const PUSH_TOP_SET_OVERLOAD_REPS: VoiceSet1 = [
+  (high) =>
+    `Your top set owned ${high} and you've asked to be pushed — so that buys the step up rather than waiting for the others to match.`,
+  (high) =>
+    `${high} on the top set. You asked for the harder read, so the weight moves now instead of waiting on the rest of the sets.`,
+  (high) => `You asked to push, and the top set hit ${high} — take the small step up; the other sets catch up at the new weight.`,
+  (high) => `Top set at ${high}, and you want to be pushed: the load steps now, and the rest of the sets follow it up.`,
+];
+
 // Intensification: a strong top set at the ceiling buys the step on its own.
 export const INTENSIFICATION_OVERLOAD: VoiceSet = [
   "You're in the sharper stretch of the run — a strong set at the top of the range buys the weight, so take it.",
@@ -646,12 +705,17 @@ export function progressionVoicePhrases(): string[] {
     LEDGER_PATIENCE_HOLD,
     LEDGER_MISSED_DELOAD,
     ESCALATE_WAVE_SETTLE,
+    EARNED_OPEN_OVERLOAD_REPS,
+    NOT_EARNED_HOLD_REPS,
+    GRIND_HOLD,
   ];
   const one: Array<[VoiceSet1, string | number]> = [
     [PLATEAU_VARY_OPEN, 4],
     [REP_STAGE_OVERLOAD, 12],
     [TOP_SET_ONLY_HOLD, 12],
     [PUSH_TOP_SET_OVERLOAD, 12],
+    [REP_STAGE_OVERLOAD_REPS, 12],
+    [PUSH_TOP_SET_OVERLOAD_REPS, 12],
     [PLAN_BEHIND_OVERLOAD, "50 lb"],
     [PLAN_BEHIND_HOLD, "50 lb"],
     [PLAN_UNSET_OVERLOAD, "95 lb"],
@@ -665,6 +729,7 @@ export function progressionVoicePhrases(): string[] {
     [PLATEAU_VARY_TO, 4, "Front Squat"],
     [RELATED_START_IDEA, "Bench Press", "75 lb"],
     [EARNED_RANGE_OVERLOAD, 12, 8],
+    [EARNED_RANGE_OVERLOAD_REPS, 12, 8],
     [TIMED_OVERLOAD, 5, 45],
     [REALIZATION_TOP_SET, "205 lb", "single"],
     [ESCALATE_REP_WAVE, 3, 5],

@@ -633,6 +633,15 @@ test("late set corrections, deletions, skips, reopen, and finish refresh the ful
   assert.equal(getDailySessionOutcome(DATE).status, "completed");
 });
 
+// What the session actually PRESCRIBES for a lift, which is not always the number
+// the agent proposed: an exposure that capped the rep range earns a load step, so
+// the next composition asks for more. A fixture that re-logs the old weight would
+// be logging a genuine shortfall, not a repeat exposure.
+function prescribedWeight(prepared, exercise) {
+  const item = (prepared.daily_session?.items || []).find((entry) => entry.exercise === exercise);
+  return item?.target_weight ?? null;
+}
+
 test("movement response requires two comparable completed outcomes with the same stable intent", () => {
   seedPlan();
   const dates = ["2031-08-05", "2031-08-07"];
@@ -641,8 +650,9 @@ test("movement response requires two comparable completed outcomes with the same
       [{ exercise: "Back Squat", sets: 2, rep_low: 5, rep_high: 5, target_weight: 225 }],
       date
     );
-    repo.logSetByName({ date, exercise: "Back Squat", weight: 225, reps: 5, day_number: null });
-    repo.logSetByName({ date, exercise: "Back Squat", weight: 225, reps: 5, day_number: null });
+    const weight = prescribedWeight(prepared, "Back Squat");
+    repo.logSetByName({ date, exercise: "Back Squat", weight, reps: 5, day_number: null });
+    repo.logSetByName({ date, exercise: "Back Squat", weight, reps: 5, day_number: null });
     repo.finishSession(prepared.session_id, null);
     const response = recentMovementResponse("Back Squat", { intent_key: "strength:reps:5-5" });
     assert.equal(response.verdict, index === 0 ? "insufficient" : "earned_absorbed");
@@ -652,30 +662,21 @@ test("movement response requires two comparable completed outcomes with the same
 
 test("two newer clean outcomes supersede an older conflicting hold in the bounded response window", () => {
   seedPlan();
+  // The oldest exposure lands 25 lb under what was asked (the conflicting hold);
+  // the two newest meet whatever the day prescribes.
   const exposures = [
-    { date: "2031-07-28", weight: 200 },
-    { date: "2031-08-01", weight: 225 },
-    { date: "2031-08-05", weight: 225 },
+    { date: "2031-07-28", short: 25 },
+    { date: "2031-08-01", short: 0 },
+    { date: "2031-08-05", short: 0 },
   ];
   for (const exposure of exposures) {
     const prepared = acceptComposition(
       [{ exercise: "Back Squat", sets: 2, rep_low: 5, rep_high: 5, target_weight: 225 }],
       exposure.date
     );
-    repo.logSetByName({
-      date: exposure.date,
-      exercise: "Back Squat",
-      weight: exposure.weight,
-      reps: 5,
-      day_number: null,
-    });
-    repo.logSetByName({
-      date: exposure.date,
-      exercise: "Back Squat",
-      weight: exposure.weight,
-      reps: 5,
-      day_number: null,
-    });
+    const weight = prescribedWeight(prepared, "Back Squat") - exposure.short;
+    repo.logSetByName({ date: exposure.date, exercise: "Back Squat", weight, reps: 5, day_number: null });
+    repo.logSetByName({ date: exposure.date, exercise: "Back Squat", weight, reps: 5, day_number: null });
     repo.finishSession(prepared.session_id, null);
   }
 

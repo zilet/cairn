@@ -961,12 +961,15 @@ function compactSignalSupport(
     if (drive === "steady") return { recovery_capacity };
     return {
       recovery_capacity,
+      // The state BUILD failed — that is unknown, not benign. Fail closed: a
+      // stamped fresh_brake keeps the caps conservative and the reach shut until
+      // the signal state can actually be read again.
       signal_support: {
         training_drive: drive,
         backed: false,
         backed_by: [],
         training_directive: "proceed",
-        fresh_brake: false,
+        fresh_brake: true,
       },
     };
   }
@@ -1739,7 +1742,11 @@ export function buildDailySessionDecision(
     // day's own estimate (or the ordinary train-day default) — never from the
     // quiet read's 20-minute clock. Capped at 40 only when a brake is present.
     const lifted = requestMinutes ?? planDayDurationEstimate(snapshot) ?? TRAIN_DAY_DEFAULT_MINUTES;
-    duration = Math.round(capsMayOpen ? lifted : Math.min(lifted, 40));
+    // A REST read the athlete overrides keeps the 40-minute clock even on an
+    // otherwise-open morning: the read said none, so the override buys a bounded
+    // session, never an unbounded one. Only an EASY read opens to the plan day's
+    // own clock, and only when nothing brakes.
+    duration = Math.round(capsMayOpen && baseKind !== "rest" ? lifted : Math.min(lifted, 40));
   } else {
     duration = requestMinutes ?? snapshot.day_read.est_minutes ?? null;
     if (duration != null) {

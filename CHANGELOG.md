@@ -23,8 +23,31 @@ Versioning](https://semver.org/) for tagged releases.
   the countdown ends the bar counts up ("Rested 4:10") until your next set.
 - **An optional screen wake lock while you train** — turn it on in Settings → While you train to
   keep the screen awake for the length of a session.
+- **Chat can log how you feel** — tell it "I feel great" or "that session was rough" and it records
+  the same check-in the app does, energy/sleep/soreness/mood on the usual 1–5 scale.
 
 ### Changed
+
+- **Work at your real working weight counts, even on a day the plan called light** — a rest day you
+  chose to train through, or a travel day you still hit your numbers on, no longer gets quietly
+  written off as unusable evidence; only illness or a real pain flag still holds it back.
+- **A soft "ease off the calories a bit" no longer blocks a lift you've clearly earned** — losing
+  weight faster than planned no longer stops a load increase either, though the single heaviest set
+  of the day still gets parked until things settle. Only an actual stall or slide in your lifts still
+  holds the load where it is; near your goal weight, an earned step through a leaner week keeps the
+  weight and only trims the set count.
+- **A string of hard days is a note, not an automatic rest** — several loading days in a row now
+  shows up as a caveat on today's session rather than forcing a day off by itself; a rest still comes
+  when something about today itself — how you slept, how you're reading, a missed dose — actually
+  backs it. At the far end of a hard stretch with nothing else wrong, the day eases instead of
+  training through it or resting outright.
+- **A rating from a session where you hit everything you were asked no longer drags the week down**
+  — a low "how did that feel" score is set aside when the actual sets logged say otherwise, lift by
+  lift, and a later strong session can clear an earlier low one before its week is up.
+- **Rating your energy or sleep as "okay" (a 3) is tracked like any other check-in** — it no longer
+  reads the same as not checking in at all.
+- **Your measured resting-metabolism number now adjusts for weight change since the test** — a scan
+  taken at a different bodyweight no longer overstates or understates today's baseline.
 
 - **Progression asks for more when you have earned it** — under a "push me" drive, completing every
   set at the top of the range steps the load (and variety and new lifts are no longer held while
@@ -42,6 +65,12 @@ Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- **A training day you chose to train through was being mislabeled as recovery on every lift** — a
+  rest day taken by choice was quietly marking a month of real work as unusable evidence; the last
+  60 days of your training record have been repaired.
+- **A session card no longer says the same thing twice** — a lift already carrying a sentence about
+  why it's holding no longer also gets a "reduced" note stacked directly above it, and your own note
+  on a card is never cut off to make room for the server's line.
 - **A missing minus sign on an assisted lift no longer flips it to weighted work** — a positive
   weight typed onto a lift you do with assistance is stored as assist again, the plan target follows,
   and rows already flipped are repaired.

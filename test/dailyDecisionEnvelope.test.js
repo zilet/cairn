@@ -370,7 +370,7 @@ test("athlete override 'train anyway' wins the kind but stays conservative", () 
   assert.equal(env.request.train_anyway, true);
   assert.equal(env.caps.volume, "normal", "train-anyway from rest keeps working volume unless another brake is present");
   assert.equal(env.caps.intensity, "hold", "keep the working load, no challenge top set");
-  assert.equal(env.caps.duration_min, 60, "no brake: duration comes from the plan day, not the rest clock");
+  assert.equal(env.caps.duration_min, 40, "a rest read overridden keeps the bounded 40-minute clock even with no brake");
   assert.ok(env.precedence.includes("athlete_override"));
   assert.ok(
     TRAIN_ANYWAY_REST_RATIONALE.includes(env.rationale[0].text),
@@ -391,7 +391,7 @@ test("every recognized train-intent override on a rest read persists train_anywa
     assert.equal(env.request.train_anyway, true, override);
     assert.equal(env.caps.volume, "normal", override);
     assert.equal(env.caps.intensity, "hold", override);
-    assert.equal(env.caps.duration_min, 60, override);
+    assert.equal(env.caps.duration_min, 40, override);
   }
 });
 
@@ -956,10 +956,10 @@ test("high soreness with a fresh brake still softens the day even if capacity is
   assert.ok(env.precedence.includes("high_soreness"));
 });
 
-test("train-anyway from rest takes the plan day's duration when no brake is present", () => {
+test("train-anyway from an easy read takes the plan day's duration when no brake is present", () => {
   const env = buildDailySessionDecision(
     snapshot({
-      day_read: { ...snapshot().day_read, kind: "rest", est_minutes: 20 },
+      day_read: { ...snapshot().day_read, kind: "easy", est_minutes: 20 },
       request: { override: null, train_anyway: true, equipment: null, minutes: null, goal: null },
     }),
     { now: NOW }
@@ -967,7 +967,7 @@ test("train-anyway from rest takes the plan day's duration when no brake is pres
   assert.equal(env.kind, "train");
   assert.equal(env.caps.duration_min, 60, "the quiet read's 20-minute clock is not inherited");
   assert.equal(env.caps.volume, "normal");
-  assert.equal(env.caps.intensity, "hold");
+  assert.equal(env.caps.intensity, "normal", "an easy read overridden on an open morning is a full day");
 });
 
 test("train-anyway from rest caps duration at 40 when a fresh brake is present", () => {

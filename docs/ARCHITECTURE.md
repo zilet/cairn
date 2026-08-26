@@ -177,6 +177,78 @@ cutting weight cannot fix a food problem. A plateaued lift under cut pressure ea
 `PLATEAU_CUT_PATIENCE_WEEKS` (2) extra weeks before a variation is offered — holding ground on a real
 deficit is the win, not a stall to reshuffle away from.
 
+**Promotion is earned by performance: a soft fuel hold and fast weight loss no longer veto an earned
+step.** `CutPressure` (`progression.ts`) used to collapse into one `deep`/`any` boolean that any fuel
+signal could veto a promotion through. It now carries `hold` (the fuel read asks aggression held — a
+soft signal that never vetoes), `reduce` (an outright lighter dose — vetoes unless `near_goal`),
+`sliding` (`cutQualityRead`'s own verdict is `sliding`, or THIS lift is independently regressing or
+under-prescribed — always vetoes), and `fast_loss` (losing faster than lean-safe but not sliding —
+never vetoes an earned load step, it only parks the challenge top set / heavy single, since the peak
+protocol already goes cautious under any cut pressure). `deep` (`sliding || fast_loss`) and `any`
+survive as the existing "the athlete is training in a genuine deficit" aliases other readers still
+consult. `nearGoal(date)` (`recomposition.ts`, `NEAR_GOAL_REMAINING_LB` = 2.5 lb) reads true only on a
+live lose-mode cut within that remaining distance to `goal_weight_lb` — a gain/maintain athlete, a
+missing weight/goal, or a goal already at/past current never reads near. `applyFuelProtection`'s
+`reduce` branch, near goal, keeps the load the log just earned and only halves the set count (and
+parks a near-maximal single) instead of the ordinary volume-and-load reduction; the promotion-veto
+question and the volume-reduction question are answered separately, so a near-goal athlete still gets
+the calorie cut's volume consequence, just not its promotion veto. `underfueling.ts`'s
+`action.training:'hold_aggression'` itself now only fires when the strain is decision-grade — the
+diary confirms a shortfall, or the measured `weight_trend` channel (never waist alone) is in the
+strain set — so a lone soft signal no longer trims training on its own; `runUnderfuelingControlLoop`'s
+volume-restore pass keys on the fuel read having actually SETTLED (`kind` in `hold`/`settle`/
+`collect_signal`), not merely on `action.training === 'proceed'`, since a waist-only `prescription_strain`
+still raises calories with `training:'proceed'` while volume should stay down. Card copy for an earned
+step landing under a soft hold, or a near-goal promotion, speaks in its own voice
+(`voice.LOG_EARNED_FUEL_PARK`/`LOG_EARNED_FUEL_PARK_SINGLE`) rather than reusing the fallthrough
+not-earned sentence; `voice.CUT_HOLDING_WIN` is now reserved for the case it actually describes — a
+`reduce`/`sliding` HOLD, never a plan-behind catch-up or a phase hold, and never a `fast_loss` day
+(which has its own, separate reason for holding).
+
+**Work done is evidence — a prescription is a suggestion, the log is the truth.**
+`src/repo/outcome-comparability.ts` (schema 4 in `DailySessionOutcomeFacts.facts_json`, db-free so
+`migrate.ts` and `daily-reconciliation.ts` share one transform) adds `performed_at_full_load` to every
+`MovementDoseEvidence` row: whether that lift's sets/weight (or seconds, for timed) landed at or above
+a `FullLoadReference` built from the un-reduced plan sets plus `harderLoad(planTarget, recentWorking)`
+— `recentWorkingWeight`/`recentWorkingSeconds` (3-session lookback, date-scoped via a new
+`beforeExclusive` parameter on both, `exercises.ts`) is the PRIMARY reference, the plan's
+`target_weight`/`target_seconds` only a no-history fallback, because the plan target is a FORWARD
+prescription (progression writes the NEXT target there) and comparing against it would silently ask
+"hit your next target" rather than "matched your recent effort" — the same rule `reach` already
+follows. A dose performed at full load drops `recovery_dose` and `travel` from that dose's
+`non_comparable_reasons`; `illness` and `relevant_symptom` stay full safety floors regardless of load.
+`doseComparability()`'s reason table itself (`NEVER_BLOCKS_A_LIFT`, the `partial`/`loaded_endurance`
+scoping) is unchanged — the write path and `repairOutcomeComparability()` both call the same function
+now, so there is one truth rather than two.
+
+The session-level `recovery` flag is now STRUCTURED, never a regex over stored decision prose.
+`structuredRecovery(date, composition)` is true only for an active/recheck `recovery_cycles` row at
+that date, a stored `recovery_cycle` on the decision `constraints`/`provenance`/`decision` node (or its
+nested `daily_decision`), or `activeRecoveryWeekLedger(date)`. The old `contextMentions(/recovery|deload/)`
+regex over `composition.constraints`/`provenance` fired on `caps.intensity:"deload"` and rationale text
+containing the word "recovery" produced by an ordinary rest-day `train_anyway` envelope — so
+`recovery_dose` landed on every lift of a chosen training day, day-wide, and a month of work at or
+above the working load never counted as evidence. Migration v97 (`outcome-comparability-repair`, pure
+data repair, no schema bump) re-derives `daily_session_outcomes.facts_json` for the last 60 days
+through `repairOutcomeComparability(facts, {recovery})`, dropping a stored `recovery_dose` reason where
+no structured recovery window covered the date (`travel` is left alone — a stored row cannot prove the
+prescription itself was reduced); idempotent, and it never touches a row it cannot parse.
+`session-dose-log.ts`'s `sessionHasComparableDoseShortfall` only counts a repaired `comparable:true`
+dose at `schema_version >= 3` — schema-2 rows never carried per-dose comparability and must not be
+read as though the repair materialized it there.
+
+**RIR is optional, and its absence is not weakness.** The finish flow never asks for RIR, so most
+logged sets carry none — reading that silence as "not strong enough to earn a step" would close the
+loop on itself (nothing earned → the plan never moves → the same weight repeats at the top of the rep
+range → the trend stays flat → nothing is ever earned). With no RIR logged, capping the prescribed rep
+range on every working set IS the strength signal: classic double progression, where the completeness
+gates (`allSetsAtTop`/`topSetAtTop`/`roomInRange`) do the work a felt rating would otherwise do. A
+LOGGED RIR still speaks in both directions — RIR ≤1 was a grind and holds the step (unless the trend
+independently reads `progressing`); RIR ≥2 counts even below the ceiling for the rep stage. Card copy
+must never tell an athlete who has never logged RIR to come back at "RIR 2+" — `progression-voice.ts`
+picks the RIR-flavored phrasing only when an RIR was actually logged for that exposure; an athlete who
+never rates gets the identical meaning spoken in reps instead.
+
 **Three evidence seams the strength-progression decision reads, none of them gates.**
 `estimateConfidenceFor(exercise, date)` (`calibration.ts`) reruns the SAME anchored/aging/never
 freshness ladder the calibration card's athlete-facing word runs on, so a lift the card calls
@@ -800,17 +872,60 @@ read unless every gate holds: the stacked-days rest is the one in play and nothi
 earned-rest branch is also true (a dose overrun, a run-down check-in or a low readiness reading each
 keeps its rest); the run of loading days is under a hard ceiling of five, above which the rest stands
 whatever the athlete has asked for; nothing clinical is in play, by the same three-way
-`clinicallyDriven()` probe the softening uses; the evidence is positively green, either the `backed`
-support tier or a fresh readiness reading of 60+ over last night's own sleep with **no** fresh
-caution or constraint anywhere in the signal state (`hasFreshBrake` in `signal-state.ts`, the same
-predicate the `backed` tier asks of itself); and the acute gate leaves at least one group actually
-due, rendered through `plainGroupWords` with no raw-key fallback behind it. It never overrides a
-safety floor, never raises volume or intensity beyond the day that was already programmed, and never
-reaches the read on any morning the deterministic floor would not otherwise have rested. The posture
-is hashed into the day-read fingerprint so flipping the control regenerates the Brief — but the
+`clinicallyDriven()` probe the softening uses; the evidence is positively green — the `backed` support
+tier, a fresh readiness reading of 60+ over last night's own sleep with **no** fresh caution or
+constraint anywhere in the signal state (`hasFreshBrake` in `signal-state.ts`, the same predicate the
+`backed` tier asks of itself), OR `recovery_capacity` already `supportive` at `confidence:"high"` with
+fresh HRV/resting-HR/sleep on the board and last night itself present and long enough
+(`supportiveCapacityBacksDay()`, the same helper the `reach` resolver below uses, so a morning that
+corroborates the drive read also backs a reach and vice versa) — and the acute gate leaves at least one
+group actually due, rendered through `plainGroupWords` with no raw-key fallback behind it. It never
+overrides a safety floor, never raises volume or intensity beyond the day that was already programmed,
+and never reaches the read on any morning the deterministic floor would not otherwise have rested. The
+posture is hashed into the day-read fingerprint so flipping the control regenerates the Brief — but the
 default is omitted from the hash rather than nulled, so the key's first appearance cannot invalidate
 every warm read at once; and the drive read hashes a stable token in the `focus` slot, because its
 focus is the rendered due list, which moves as the session is logged.
+
+**A run of loading days is a caveat, never a brake of its own — `daily_decision_v7`.** A day counts as
+LOADING when it is `hard`, or moderate STRENGTH work, or genuinely hard cardio
+(`hardCardioDay(iso, cardioLoadMedian)`, asked directly rather than read off the day's grade, since a
+strength-led hybrid's hard ride can still grade `moderate` in `dayLoad` while clearing the cardio bar).
+For a strength-led athlete (an explicit muscle/strength training-intent hierarchy, or an active
+hypertrophy/strength block) an easy or moderate cardio-only day does not extend the streak — a
+30-minute jog between lifting days is not a fourth hard day, and the day's own grade is unchanged
+either way; endurance-led athletes still count hard OR moderate exactly as `dayLoad` always has.
+Below the hard ceiling, an uncorroborated stacked-days count no longer forces `accumulated_load_rest`
+— it rides only as `STACKED_DAYS_CAVEAT` on the train/easy read the rest of the state already reached
+(`planned_training` and the unprogrammed-easy fallback both append it), the same pattern a weekly-
+mileage spike already used. `accumulated_load_rest` still fires as REST, but now only when a CURRENT
+signal corroborates the count: low readiness, a low subjective check-in, a recovery-week dose
+overrun, `hasFreshBrake`, `recovery_capacity` `watch`/`constrained` backed by fresh evidence, anything
+clinical today, or a clinical hold starting tomorrow (`holdsTomorrow`). At the hard ceiling
+(`PUSH_DRIVE_CONSEC_CEILING`, 5) with nothing corroborating and recovery still supportive, the read is
+now EASY under the same `accumulated_load_rest` code, `STACKED_LOAD_CEILING_WHY` — not rest, and not
+another train day the drive preference above can keep reopening (the preference answers the caveat
+tier only; it cannot answer the ceiling). `accumulated_load_rest` was also added to
+`SOFTENABLE_EASY_CODES`, since the ceiling-easy read is itself now an easy-tier outcome the adherence
+ladder can move up when the athlete has repeatedly trained through it without cost.
+
+**Soreness routes rather than softens only on a genuinely open morning.** A high (`≥4`) soreness
+report used to unconditionally soften the whole day's volume. It now checks whether the morning is
+actually open (`capsMayOpen`: no fresh brake, training directive `proceed`/absent) AND
+`recovery_capacity.status === "supportive"` — only then does high soreness route to the muscle
+envelope's existing rotation-away-from-sore-groups behavior instead of softening the day; a fresh
+brake or a non-`proceed` directive keeps volume reduced even if capacity itself reads well.
+`effectiveRecoveryReadiness()` (`daily-decision.ts`) is the one place `snapshot.recovery.readiness`'s
+raw reading gets the `recovery_capacity` deferral applied — `constrained` always reads low,
+`supportive` never reads low — so `snapshot.recovery.readiness` itself stays RAW everywhere else in
+the snapshot for provenance. **A completed log outranks a felt low-performance rating** here too:
+`snapshot.feedback.log_contradicts_low_rating` (set via `sessionLogContradictsLowRating`,
+`session-dose-log.ts`) suppresses `lowPerformance` outright when the log itself disagrees.
+**Train-anyway from a rest morning holds the working load**: `intensity` stays `"hold"` rather than
+forcing `"deload"` unless a phase or `repeatedUnder` independently calls for one, and duration comes
+from `planDayDurationEstimate()` — the plan day's own estimate (or the ordinary 60-minute train-day
+default) — capped at 40 minutes only when a brake is present (`capsMayOpen === false`), never the
+quiet read's 20-minute clock.
 
 **The calendar can hold TODAY, not just tomorrow.** `todayHolds()` (`src/repo/signal-state.ts`) is
 the same-day mirror of `tomorrowHolds()`, and deliberately narrower — two shapes only: the athlete's
@@ -864,6 +979,72 @@ than invent a fifth `kind`; `est_minutes` stays untouched, since a backed day is
 the session, not a reason to make it longer. The safety clamp is unaffected either way:
 `enforceDayReadSafetyPosture` only ever clamps a read DOWN, so push logic has to live in this
 deterministic rule ahead of that clamp to have any effect at all.
+
+**A completed log outranks a felt rating, per lift.** `sessionLogContradictsLowRating()`
+(`src/repo/session-dose-log.ts`) reads dose comparability the way it is stored — per lift, not per
+session — via `doseContradictionTally()`: every dose is bucketed `met`/`exceeded`/`short`/
+`under_full_load`/`unprescribed` (a lift carrying no prescription is ignored; a skipped lift with no
+dose row still counts short). The rating is contradicted when the doses met-or-exceeded at least match
+the ones that fell short, AND, on an incomplete log, at least one dose was genuinely `exceeded` (more
+sets than prescribed, or a heavier top weight than the target — a clean log needs no such extra
+evidence). Any lift that landed under its own `full_load_reference` (the same `FullLoadReference` the
+reconciliation write persists, read structurally off `facts_json` so a pre-schema-4 row simply has no
+opinion here) kills the contradiction outright, whatever the counts say — this is a LOAD question only,
+never `sets`, so it cannot let one short lift veto the whole per-session majority the rule exists to
+remove. `autoregBrake` (`progression.ts`) and `feltFatigueHorizon()` (`signal-state.ts`) both consult
+it: a `perfLow` brake is dropped live when the originating session's log contradicts it, and an already-
+emitted `felt_fatigue` constraint closes EARLY (inside its normal 7-day window) the moment any later
+completed session between its origin date and today also contradicts a low rating
+(`laterCompletedSessionMetDoses`) — so a bad-feeling session that logged its work fine, followed by
+one confirming session, stops braking well before the window would have aged it out on its own.
+
+**Check-in `energy`/`sleep_feel` at 3 is genuinely NEUTRAL, and neutral still emits.** The 1–5 scale
+brakes at ≤2 (the acute constraint, `safety_override:true`) and supports at ≥4; a 3 used to silently
+fall through the same `neutral` bucket that absence does. It now still produces an observation
+(`"steady energy today"` / `"reasonably rested"`) so the field stays inside `coverage.active_fields` —
+otherwise an athlete who tapped exactly 3 with nothing else on the board would trip `thinSignalCoverage`
+and be told the read is "running on nothing tracked at all" on a morning they actually checked in.
+Neutral still ranks below every real direction: it reaches neither the support ladder
+(`SUPPORT_EARNED_FIELDS`) nor any brake. `SUPPORT_SUFFICIENT_FIELDS` (`session_quality` alone) is
+untouched, but `planningSignalState()` now also emits a `session_quality` support observation dated to
+YESTERDAY specifically when yesterday's own completed session (`completedSessionOnDate`) rated ≥4, even
+on a day the rolling autoregulation rollup withheld `strong_flag` because of a live soreness note — the
+same "strongly-rated sessions alone earn it" law the tier was built on, just no longer blind to a
+session the rollup happened to be looking past.
+
+**Chat can log the same check-in the app does.** `log_checkin` (`src/chatActions.ts`,
+`CHAT_ACTION_TYPES`) accepts `energy`/`sleep_feel`/`soreness`/`mood` (each clamped 1–5) and an optional
+free-text `note`, applied immediately through the same `addCheckin()` (`coach.ts`) the PWA calls.
+`chatCheckinDate()` accepts only a real calendar `YYYY-MM-DD` on or before local today — "yesterday" or
+an invented future date is dropped so the write falls through to today rather than landing on a date
+`getCheckinByDate` can never see. A chat-sourced note is routed into symptom capture
+(`captureCheckinNoteSymptomReport`, reusing `symptomTextMentionsBody` from `symptomCapture.ts`) only
+when the athlete's own words independently carry symptom intent — the same guard
+`report_training_symptom` uses — never automatically the way the PWA's own note field always does
+(`source_kind` distinguishes the two paths).
+
+**Measured RMR is scaled to current bodyweight before it anchors the BMR blend.** A test taken at a
+different bodyweight than today's otherwise silently misrepresented energy need at the *current*
+weight. `measuredRmrWeightAdjustment()` (`src/repo/expenditure.ts`, now exported) scales the measured
+figure by the existing expenditure weight-adjustment model between the test date's weight and today's;
+`computeGoalCheck()` (`profile.ts`) blends the ADJUSTED kcal into the formula BMR (not the raw measured
+figure) and reports both under `goal.measured_rmr.adjusted_kcal` and the fuller
+`goal.measured_rmr_adjusted_for_lb` (`original_kcal`/`adjusted_kcal`/`test_weight_lb`/
+`current_weight_lb`/`delta_lb`/`test_weight_date`), so the UI and prompts can show the adjustment's own
+provenance rather than a bare number.
+
+**Composition cards stop double-speaking, and the athlete's own note is never truncated.**
+`daily-composition.ts`'s `adaptationNote()` used to prepend a server sentence and then hard-truncate
+the combined 500-char note — cutting off whatever the athlete had written at the END, which is exactly
+where a safety cue ("sharp pain = stop") tends to live. The athlete's own text now never yields: if the
+server's lead sentence will not fit ahead of an existing note within the budget, the note stands alone
+untouched. `itemAlreadyHasProgressionHoldWhy()` skips the reduced/eased/hold note entirely when a
+`hold`/`deload` candidate already carries its own non-empty `progression_evidence.why` — a card no
+longer prints "Holding the current target today" directly above a progression sentence that already
+says why. The three note families (`REDUCED_AREA_NOTES`/`EASED_TODAY_NOTES`/`HOLD_TARGET_NOTES`) are
+now variant sets rotated by `pickDayVariant(date, ...:exercise)` rather than one literal each, keyed
+per exercise so two lifts in the same state on one screen do not print identical text while one lift
+stays stable through the day.
 
 **The morning look-back: what already happened, above what is suggested.** `morningReview(date)`
 (`src/repo/brain/morning-review.ts`) builds the short past-tense passage the Brief renders ABOVE

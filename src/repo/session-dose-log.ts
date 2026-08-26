@@ -18,6 +18,10 @@
 // shortfalls, and never writes `own_dose_shortfall` onto the row — so 2-of-5 done
 // at target would look complete. Missing evidence is absence: the rating stands.
 import { db } from "../db.js";
+// The signed load comparison and the full-load reference pick have ONE home.
+// outcome-comparability.ts imports nothing, so this costs no cycle — and a local
+// copy is how the two readings drift apart.
+import { harderLoad, loadAtOrAbove } from "./outcome-comparability.js";
 
 // The per-dose full-load reference reconciliation persists on schema-4 rows
 // (`FullLoadReference` in outcome-comparability.ts). Read structurally off
@@ -162,22 +166,6 @@ function fullLoadReference(dose: DoseRow): FullLoadReferenceRow | null {
   const ref = dose?.full_load_reference;
   if (!ref || typeof ref !== "object" || Array.isArray(ref)) return null;
   return ref as FullLoadReferenceRow;
-}
-
-// Mirrors loadAtOrAbove/harderLoad in outcome-comparability.ts, which this branch
-// does not carry yet. Weight is signed: the larger value is harder in both regimes
-// (loaded + and assist −), and a positive log against a negative reference is the
-// typing slip progression already ignores, not a comparison. Recent working load
-// wins over the plan target — the plan is a FORWARD prescription, so comparing to
-// it would ask "hit your next target", not "match your recent effort".
-function loadAtOrAbove(achieved: number, reference: number): boolean {
-  if (reference < 0 && achieved > 0) return false;
-  if (reference > 0 && achieved < 0) return false;
-  return achieved >= reference;
-}
-
-function harderLoad(plan: number | null, recent: number | null): number | null {
-  return recent ?? plan;
 }
 
 /**

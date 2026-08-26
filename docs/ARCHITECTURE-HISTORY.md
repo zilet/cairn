@@ -4,6 +4,70 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-26 — the Evidence Round: work done outranks the calendar and the feeling
+
+Schema 97 (`outcome-comparability-repair`, pure data repair — no `db.ts` counterpart); sw `CACHE`
+unchanged. Four packages, one throughline: a prescription is a suggestion, the log is the truth, and
+none of the brakes get to consult the calendar or a felt rating in place of what actually happened.
+
+**Work done is evidence.** `daily-reconciliation.ts`'s session-level `recovery` flag used to be a
+regex over stored decision prose (`caps.intensity:"deload"`, the word "recovery" in rationale text) —
+so a chosen rest-day training session labeled `recovery_dose` on every lift, day-wide, and a month of
+work at or above the working load never counted toward progression. It is now STRUCTURED
+(`structuredRecovery()`): only an active/recheck `recovery_cycles` row, a stored `recovery_cycle` on
+the decision context, or an applied recovery-week stamp counts. `src/repo/outcome-comparability.ts`
+(new, db-free so `migrate.ts` and the runtime write path share one transform) adds
+`performed_at_full_load` per dose — computed against the LOGGED working load
+(`recentWorkingWeight`/`recentWorkingSeconds`, now date-scoped via a `beforeExclusive` parameter; the
+plan's forward target is only a no-history fallback) — which drops `recovery_dose`/`travel` from that
+dose's reasons; illness and a relevant symptom stay full safety floors regardless. `facts_json` schema
+4 stores the per-dose reference and verdict directly. Migration v97 repaired the last 60 days of live
+`daily_session_outcomes` rows under the new law (idempotent, schema ≥3 rows only); the deploy found
+0 real `recovery_cycles` rows against most outcome rows carrying `recovery_dose` on every dose.
+
+**Promotion is earned by performance.** `CutPressure` (`progression.ts`) split its collapsed
+`deep`/`any` boolean into `hold` (soft fuel read, never vetoes a promotion), `reduce` (vetoes unless
+`near_goal`, within 2.5 lb of a live lose-mode goal — `NEAR_GOAL_REMAINING_LB`, `recomposition-stage.ts`),
+`sliding` (anchor lifts actually dropping, or this lift regressing/shortfall — always vetoes), and
+`fast_loss` (losing faster than lean-safe but not sliding — never vetoes an earned load step, only
+parks the challenge top set). `underfueling.ts`'s `hold_aggression` training consequence now only
+fires when the diary confirms a shortfall or the measured `weight_trend` channel is in the strain set
+— a lone soft signal no longer trims training on its own — and the volume-restore pass keys on the
+fuel read having actually settled, not merely on `training === "proceed"`. Cards speak in their own
+voice for an earned step landing under a soft hold or a near-goal promotion
+(`LOG_EARNED_FUEL_PARK`/`_SINGLE`); `CUT_HOLDING_WIN` is reserved for the `reduce`/`sliding` hold it
+actually describes, never a plan-behind catch-up, a phase hold, or a `fast_loss` day.
+
+**The Brief counts signals, not days.** Consecutive loading days are now a caveat
+(`STACKED_DAYS_CAVEAT`), never a brake on their own — `daily_decision_v7`. A day counts as loading
+when hard, moderate STRENGTH work, or genuinely hard cardio (`hardCardioDay`, asked directly); a
+strength-led athlete's easy/moderate cardio-only day no longer extends the streak. Below the 5-day
+ceiling, an uncorroborated run rides as a caveat on the train/easy read; `accumulated_load_rest` fires
+as REST only when a current signal corroborates it (low readiness, low subjective, a dose overrun, a
+fresh brake, `recovery_capacity` watch/constrained with fresh data, anything clinical, or a clinical
+hold starting tomorrow); at the ceiling with nothing corroborating and recovery still supportive the
+read is EASY under the same code, not another train day the drive preference can keep reopening.
+`supportiveCapacityBacksDay()` is the one helper both the push-drive rest-answer rule and the
+envelope's `reach` resolver now use for the wearable-corroboration path. Soreness ≥4 routes to the
+muscle envelope instead of softening the whole day only on a genuinely open morning with
+`recovery_capacity` already supportive. Train-anyway from a rest morning holds the WORKING load
+(`intensity:"hold"`, not `"deload"`) with duration from the plan day's own estimate, not the quiet
+read's 20-minute clock.
+
+**A completed log outranks a felt rating, per lift.** `sessionLogContradictsLowRating()`
+(`session-dose-log.ts`) became a per-lift majority test (met+exceeded ≥ short; an incomplete log needs
+≥1 exceeded; a lift under its own stored full-load reference kills the contradiction outright). A
+`felt_fatigue` brake now closes early — inside its 7-day window — the moment a later completed session
+also contradicts a low rating. Check-in `energy`/`sleep_feel` at 3 now emits a genuine NEUTRAL
+observation (keeps the field in `coverage.active_fields`) rather than reading as absence; a
+`session_quality` support observation is now also dated to YESTERDAY when that session rated ≥4, even
+under a live soreness note that withheld the rolling `strong_flag`. Chat gained `log_checkin` (1–5
+scales, date-validated, note routed through symptom capture only on explicit intent). Measured RMR is
+now scaled to current bodyweight (`measuredRmrWeightAdjustment`) before it anchors the BMR blend, with
+the adjustment's own provenance reported under `goal.measured_rmr_adjusted_for_lb`. Composition notes
+stop double-speaking (a hold/deload with its own progression `why` gets no second sentence) and never
+truncate the athlete's own note — the server's lead sentence yields, not their words.
+
 ## 2026-08-26 — the Elite Coach Round: signals, not schedules
 
 Schema 94 → 96 (v95 assisted-sign repair, v96 abandon a mismatched auto endurance-base block); sw

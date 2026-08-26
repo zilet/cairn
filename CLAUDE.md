@@ -208,8 +208,17 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Autoregulation feedback** (`sessions.soreness`/`performance`/`joint_pain`) and subjective
   `checkins` are optional signals that INFORM coach selection — they never override progressive
   overload, never auto-change the plan, and their absence never forces a rest read. **A completed
-  log outranks a felt rating**: a performance rating of 2 counts as a low day only when the session's
-  doses were not all met (`sessionLogContradictsLowRating`, `src/repo/session-dose-log.ts`).
+  log outranks a felt rating, PER LIFT**: `sessionLogContradictsLowRating` (`src/repo/session-dose-log.ts`)
+  is a majority test — lifts met/exceeded must at least match the ones that fell short (a skip counts
+  short), an incomplete log additionally needs ≥1 lift genuinely `exceeded`, and any lift that landed
+  under its own stored full-load reference kills the contradiction outright whatever the counts say.
+  A low `felt_fatigue` constraint this earns closes early (within its 7-day window) the moment a later
+  completed session contradicts it too (`autoregBrake`, `signal-state.ts`). Check-in `energy`/
+  `sleep_feel` still brake at ≤2 and support at ≥4, but a `3` is genuinely NEUTRAL (it still emits an
+  observation, so a tapped-in athlete never reads as untracked) — never round it to a brake or a
+  support vote. Chat can write the same check-in via the `log_checkin` action
+  (`src/chatActions.ts`), 1–5 scales only, and a free-text note there is routed through symptom
+  capture only when the athlete's own words carry symptom intent — never automatically.
 - **Deload-due is earned by loaded weeks and a log-confirmed shortfall, never the calendar.**
   `mesocycle()` (`src/repo/program-state.ts`) classifies a week as loaded only against the median of
   the loaded weeks before it (`classifyLoadedWeeks`); a light week breaks the streak. `deload-due`
@@ -226,6 +235,21 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   on the first eligible compound (`src/repo/daily-composition.ts`), computed from the LOGGED working
   weight, never a plan target; composition reports back so the persisted envelope never promises a
   reach that is not on a card. `item.reach` persists only for server-derived items.
+- **Consecutive loading days are a caveat, never a brake of their own** (`daily_decision_v7`,
+  `src/repo/day-read.ts`/`daily-decision.ts`). A day counts as loading when it is hard, or moderate
+  STRENGTH work, or genuinely hard cardio (asked directly via `hardCardioDay` — an easy/moderate run
+  never extends a strength-led athlete's streak, and the day's own grade is unchanged). Below the hard
+  ceiling (5), an uncorroborated run rides only as `STACKED_DAYS_CAVEAT` on the train/easy read — the
+  athlete still gets their day. `accumulated_load_rest` fires as REST only when a CURRENT signal
+  corroborates (low readiness, low subjective, a recovery-week dose overrun, a fresh brake,
+  `recovery_capacity` watch/constrained with fresh data, anything clinical today or a clinical hold
+  starting tomorrow). At the ceiling with nothing corroborating and recovery still supportive, the
+  read is EASY under the same code — not rest, and not another train day the drive preference can keep
+  reopening. `supportiveCapacityBacksDay()` (exported from `day-read.ts`) is the ONE helper both the
+  push-drive rest-answer rule and the envelope's `reach` resolver use for the wearable-corroboration
+  path, so the two answers cannot drift. `train_anyway` from a rest morning holds the WORKING load
+  (`intensity:'hold'`, never `'deload'` unless a phase/repeated-under independently says so) and its
+  duration comes from the plan day's own estimate, not the quiet read's 20-minute clock.
 - **Day-read prose is a variant set, never one literal.** A stable input fires a stable rule every
   morning, so a single sentence per rule printed verbatim for weeks. Rules carry their own athlete-
   facing `reasons` (`src/repo/brain/day-read-rules.ts`), and every athlete-facing string — outcome
@@ -289,9 +313,35 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   is telemetry only; the progression engine reads the per-dose flags, never that session-level rollup
   — restoring the session-level reading is the regression to watch for. `settings.training_drive='push'`
   has bounded mechanical authority in progression (keeps an earned overload/vary/introduce step under
-  a fuel hold, top set dropped) — but every promotion still needs `mayPromoteLoad` (RIR 2+ or a
-  progressing trend, an eligible finished dose, no cut pressure), and every safety floor ignores
-  drive entirely. Details in `docs/ARCHITECTURE.md`.
+  a fuel hold, top set dropped) — but every promotion still needs `mayPromoteLoad` (an eligible
+  finished dose, no VETOING cut pressure — `sliding`, or `reduce` off goal), and every safety floor
+  ignores drive entirely. Details in
+  `docs/ARCHITECTURE.md`.
+- **Work done is evidence — a prescription is a suggestion, the log is the truth.** `performed_at_full_load`
+  (`src/repo/outcome-comparability.ts`, `facts_json` schema 4) is computed per dose against the LOGGED
+  working load — `recentWorkingWeight`/`recentWorkingSeconds` primary, the plan's `target_weight`/
+  `target_seconds` only as a no-history fallback (never the forward prescription progression is about
+  to write) — and drops `recovery_dose`/`travel` from that dose's non-comparable reasons; illness and a
+  relevant symptom stay full safety floors regardless. The `recovery` flag itself is STRUCTURED, never a
+  regex over stored envelope prose (`caps.intensity:"deload"` and the word "recovery" in rationale text
+  are NOT a recovery window) — it comes only from an active/recheck `recovery_cycles` row, a stored
+  `recovery_cycle` on the decision context, or an applied recovery-week stamp. Migration v97 repaired
+  60 days of live rows a rest-day train-anyway envelope had mislabeled; schema-2 rows are read as-is,
+  schema-3 comparable is re-derived live, schema-4 rows store the per-dose answer directly.
+- **Cut pressure has three shapes, and only two veto an earned promotion.** `CutPressure` (`progression.ts`)
+  splits `hold` (a soft fuel read — never vetoes), `reduce` (an outright lighter fuel dose — vetoes
+  unless `near_goal`, within `NEAR_GOAL_REMAINING_LB` = 2.5 lb of a live lose-mode goal), `sliding`
+  (anchor lifts actually dropping, or this lift regressing/shortfall — ALWAYS vetoes), and `fast_loss`
+  (losing faster than lean-safe but not sliding — never vetoes an earned load step, only parks the
+  challenge top set/heavy single). `deep` is the `sliding || fast_loss` alias other readers still
+  consult as "the cut is running hot"; promotion itself reads `sliding`/`fast_loss` directly.
+- **RIR is optional, and its absence is not weakness.** The finish flow never asks for RIR, so most
+  logged sets carry none. With no RIR logged, capping the prescribed rep range on every working set
+  IS the strength signal (classic double progression) — the completeness gates require the cap, not a
+  felt rating. A logged RIR still speaks in both directions: RIR ≤1 was a grind and holds the step;
+  RIR ≥2 counts even below the ceiling. Card copy must not tell an athlete who never logs RIR to come
+  back at "RIR 2+" — the RIR-flavored phrasing in `progression-voice.ts` is picked only when an RIR was
+  actually logged; an athlete who never rates gets the same meaning spoken in reps.
 - **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
   as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.
   Details in `docs/ARCHITECTURE.md`.
