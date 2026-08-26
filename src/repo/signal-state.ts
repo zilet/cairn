@@ -22,6 +22,12 @@ import {
 import { enduranceHoldSubject, isEnduranceHoldDirective } from "./directives-read.js";
 import { addDaysISO, joinList } from "./shared.js";
 import { contextEventReadsAsIllness, contextEventReadsAsLabDraw } from "./context-effect.js";
+import {
+  completedSessionOnDate,
+  laterCompletedSessionMetDoses,
+  latestSessionIdOnDate,
+  sessionLogContradictsLowRating,
+} from "./session-dose-log.js";
 
 export type SignalDimension =
   | "recovery_capacity"
@@ -1483,19 +1489,23 @@ const SUPPORT_EARNED_FIELDS: ReadonlySet<string> = new Set(["session_quality", "
 // five-point scale, on a morning with nothing else on the board — earned `backed` at
 // confidence `low`, and the Brief then said "everything you've logged lately says
 // you're carrying this well". One tap is not everything, and 4-out-of-5 is not
-// carrying it well.
+// carrying it well. Energy / sleep_feel 3 is the middle of that scale and emits
+// nothing (neutral: no observation); support starts at 4.
 //
 // A rated session is different in kind: it is an OUTCOME the athlete produced and then
 // judged, `strong_flag` is derived from their recent ratings rather than from one box,
 // and it ages out on its own window. So it stays sufficient on its own — which is the
 // law the tier was built on ("strongly-rated sessions ALONE earn it, with no wearable
-// anywhere") and which nothing here weakens.
+// anywhere") and which nothing here weakens. Yesterday's completed session rated ≥ 4
+// lands as `session_quality` in the same earned set, so it is that same law, not a
+// new shortcut.
 //
 // The self-reports are corroboration instead: they earn the tier when there are TWO of
-// them, or when the day's confidence is better than `low` (i.e. the state has real
-// breadth behind it). Alone at low confidence they leave an ordinary train day, which
-// is the calm and common answer. This is also just the constitution applied where it
-// had not been: subjective check-ins "INFORM coach selection — they never override
+// them, or when one of them sits on a day whose confidence is better than `low`
+// (wearables can raise that confidence, they cannot punch a lone tap through at
+// `low`). Alone at low confidence they leave an ordinary train day, which is the calm
+// and common answer. This is also just the constitution applied where it had not
+// been: subjective check-ins "INFORM coach selection — they never override
 // progressive overload", and a lone tap MINTING a licence to push is that override
 // wearing the other sign.
 const SUPPORT_SUFFICIENT_FIELDS: ReadonlySet<string> = new Set(["session_quality"]);
@@ -1686,6 +1696,18 @@ export function buildUnifiedSignalState(
     provenance: [...new Set(resolved.map((item) => `${item.field}:${item.source}:${item.date ?? "undated"}`))],
     conflicts: DIMENSIONS.flatMap((dimension) => dimensions[dimension].conflicts),
   };
+}
+
+function feltFatigueHorizon(
+  date: string,
+  autoreg: { low_performance_flag?: boolean; low_performance_date?: string | null } | null | undefined
+): { emit: boolean; maxAgeDays: number } {
+  if (!autoreg?.low_performance_flag) return { emit: false, maxAgeDays: 1 };
+  const origin = String(autoreg.low_performance_date ?? date).slice(0, 10);
+  const originId = latestSessionIdOnDate(origin);
+  if (originId != null && sessionLogContradictsLowRating(originId)) return { emit: false, maxAgeDays: 1 };
+  if (laterCompletedSessionMetDoses(origin, date)) return { emit: false, maxAgeDays: 1 };
+  return { emit: true, maxAgeDays: 7 };
 }
 
 function observation(
@@ -2090,24 +2112,36 @@ export function planningSignalState(input: {
   }
 
   const checkin = input.checkin;
-  if (checkin?.energy != null)
+  const energy = checkin?.energy == null ? null : Number(checkin.energy);
+  // 1–5 scale: ≤2 is the run-down constraint, ≥4 is support, 3 is the middle and
+  // reads NEUTRAL — a 3 is not "feeling good" and is not a reason to rest.
+  //
+  // Neutral still EMITS. Dropping the observation entirely would take the field out
+  // of `coverage.active_fields`, and an athlete who tapped 3 with nothing else on the
+  // board would trip `thinSignalCoverage` — the read telling them it is "running on
+  // nothing tracked at all" on a morning they actually checked in. They tracked; the
+  // answer was simply the middle one. Neutral ranks below every real direction, so it
+  // reaches neither the support ladder nor any brake.
+  if (energy != null)
     observations.push(
       observation(
         "recovery_capacity",
         "felt_energy",
         date,
         "user_checkin",
-        Number(checkin.energy) <= 2 ? "constraint" : Number(checkin.energy) >= 4 ? "support" : "neutral",
+        energy <= 2 ? "constraint" : energy >= 4 ? "support" : "neutral",
         // Third-person evidence, like every sibling: this string is the POSTURE line in
         // the prompt and the `based_on` provenance, and it was handing the model a
         // verdict ("rest is the smart call") where the contract promises an observation.
         // The athlete-facing sentence is the `felt_energy_low` voice and is unchanged.
-        Number(checkin.energy) <= 2
+        energy <= 2
           ? "The athlete reports feeling run-down today."
-          : "The athlete reports workable energy today.",
+          : energy >= 4
+            ? "The athlete reports feeling good today."
+            : "The athlete reports steady energy today.",
         {
-          voice: { key: Number(checkin.energy) <= 2 ? "felt_energy_low" : "felt_energy_ok" },
-          safety_override: Number(checkin.energy) <= 2,
+          voice: { key: energy <= 2 ? "felt_energy_low" : "felt_energy_ok" },
+          safety_override: energy <= 2,
           max_age_days: 0,
         }
       )
@@ -2141,20 +2175,26 @@ export function planningSignalState(input: {
         { context_only: true, max_age_days: 0 }
       )
     );
-  if (checkin?.sleep_feel != null)
+  // Same ladder, and neutral emits here for the same reason: a 3 is a check-in the
+  // athlete filled in, so the field stays in coverage without reaching the support
+  // rung or any brake.
+  const sleepFeel = checkin?.sleep_feel == null ? null : Number(checkin.sleep_feel);
+  if (sleepFeel != null)
     observations.push(
       observation(
         "recovery_capacity",
         "sleep_feel",
         date,
         "user_checkin",
-        Number(checkin.sleep_feel) <= 2 ? "constraint" : Number(checkin.sleep_feel) >= 4 ? "support" : "neutral",
-        Number(checkin.sleep_feel) <= 2
+        sleepFeel <= 2 ? "constraint" : sleepFeel >= 4 ? "support" : "neutral",
+        sleepFeel <= 2
           ? "The athlete feels poorly recovered despite any wearable reading."
-          : "The athlete feels reasonably rested.",
+          : sleepFeel >= 4
+            ? "The athlete feels well rested today."
+            : "The athlete feels reasonably rested today.",
         {
-          voice: { key: Number(checkin.sleep_feel) <= 2 ? "sleep_feel_low" : "sleep_feel_ok" },
-          safety_override: Number(checkin.sleep_feel) <= 2,
+          voice: { key: sleepFeel <= 2 ? "sleep_feel_low" : "sleep_feel_ok" },
+          safety_override: sleepFeel <= 2,
           max_age_days: 0,
         }
       )
@@ -2256,19 +2296,20 @@ export function planningSignalState(input: {
         }
       )
     );
-  if (autoreg?.low_performance_flag)
+  const fatigueHorizon = feltFatigueHorizon(date, autoreg);
+  if (fatigueHorizon.emit)
     observations.push(
       observation(
         "training_load_tolerance",
         "felt_fatigue",
-        autoreg.low_performance_date ?? date,
+        autoreg?.low_performance_date ?? date,
         "manual_session",
         "constraint",
         "Recent sessions felt below usual performance, so loading should ease.",
-        { voice: { key: "low_performance" }, safety_override: true, max_age_days: 7 }
+        { voice: { key: "low_performance" }, safety_override: true, max_age_days: fatigueHorizon.maxAgeDays }
       )
     );
-  else if (autoreg?.soreness_flag)
+  if (autoreg?.soreness_flag)
     observations.push(
       observation(
         "training_load_tolerance",
@@ -2297,6 +2338,24 @@ export function planningSignalState(input: {
         { voice: { key: "session_strong" }, max_age_days: 7 }
       )
     );
+  else {
+    // Yesterday's completed session rated well is the same support, dated to that
+    // session, even when the rollup withheld strong_flag (a live soreness note).
+    const yesterday = addDaysISO(date, -1);
+    const ySession = yesterday ? completedSessionOnDate(yesterday) : null;
+    if (ySession?.performance != null && ySession.performance >= 4)
+      observations.push(
+        observation(
+          "training_load_tolerance",
+          "session_quality",
+          yesterday,
+          "manual_session",
+          "support",
+          "Yesterday's completed session came back strong, so the athlete is absorbing the current dose.",
+          { voice: { key: "session_strong" }, max_age_days: 1 }
+        )
+      );
+  }
 
   // Easy running executed at threshold. A caution rather than a constraint, and
   // deliberately NO `safety_override`: nothing about it is acute, so it can never be

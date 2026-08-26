@@ -734,17 +734,226 @@ function linkSessionOutcome(sessionId, date, facts) {
 
 function dose(
   exercise,
-  { comparable = true, verdict = "met", prescribedSets = 3, achievedSets = 3, non_comparable_reasons = [] } = {}
+  {
+    comparable = true,
+    verdict = "met",
+    prescribedSets = 3,
+    achievedSets = 3,
+    targetWeight = null,
+    topWeight = null,
+    fullLoadReference = null,
+    non_comparable_reasons = [],
+  } = {}
 ) {
   return {
     exercise,
     comparable,
+    mode: "reps",
     non_comparable_reasons,
-    prescribed: { sets: prescribedSets },
-    achieved: { sets: achievedSets },
+    prescribed: { sets: prescribedSets, target_weight: targetWeight },
+    achieved: { sets: achievedSets, top_weight: topWeight },
     challenge_verdict: verdict,
+    // Reconciliation persists a FullLoadReference OBJECT on schema-4 rows.
+    ...(fullLoadReference == null ? {} : { full_load_reference: fullLoadReference }),
   };
 }
+
+// Dose comparability is a per-lift question, so the contradiction is read per
+// lift: one lift that fell short does not disqualify a session the athlete
+// otherwise pushed past what was asked. An INCOMPLETE log has to carry a lift
+// that was genuinely exceeded before it outranks what the athlete felt.
+const exceededDose = (exercise) => dose(exercise, { verdict: "exceeded", prescribedSets: 3, achievedSets: 4 });
+const shortDose = (exercise) =>
+  dose(exercise, {
+    comparable: false,
+    verdict: "under_prescribed",
+    prescribedSets: 3,
+    achievedSets: 1,
+    non_comparable_reasons: ["partial"],
+  });
+
+test("sessionLogContradictsLowRating: five lifts exceeded and one short still outranks a 2-rating", () => {
+  const date = day(-6);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkSessionOutcome(session.id, date, {
+    skipped: [],
+    dose_context: { partial: true, comparable: false, non_comparable_reasons: ["partial"] },
+    dose_evidence: [
+      exceededDose("Back Squat"),
+      exceededDose("Bench Press"),
+      exceededDose("Romanian Deadlift"),
+      exceededDose("Walking Lunge"),
+      exceededDose("Calf Raise"),
+      shortDose("Face Pull"),
+    ],
+  });
+  assert.equal(
+    sessionLogContradictsLowRating(session.id),
+    true,
+    "the lifts that landed outnumber the one that did not, and five of them went past target"
+  );
+});
+
+test("sessionLogContradictsLowRating: an even split with nothing exceeded leaves the rating standing", () => {
+  const date = day(-7);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkSessionOutcome(session.id, date, {
+    skipped: [],
+    dose_context: { partial: true, comparable: false, non_comparable_reasons: ["partial"] },
+    dose_evidence: [
+      dose("Back Squat"),
+      dose("Bench Press"),
+      dose("Romanian Deadlift"),
+      shortDose("Walking Lunge"),
+      shortDose("Calf Raise"),
+      shortDose("Face Pull"),
+    ],
+  });
+  assert.equal(
+    sessionLogContradictsLowRating(session.id),
+    false,
+    "half the day short and nothing pushed past target is not evidence against the felt rating"
+  );
+});
+
+test("sessionLogContradictsLowRating: two exceeded against four short leaves the rating standing", () => {
+  const date = day(-8);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkSessionOutcome(session.id, date, {
+    skipped: [],
+    dose_context: { partial: true, comparable: false, non_comparable_reasons: ["partial"] },
+    dose_evidence: [
+      exceededDose("Back Squat"),
+      exceededDose("Bench Press"),
+      shortDose("Romanian Deadlift"),
+      shortDose("Walking Lunge"),
+      shortDose("Calf Raise"),
+      shortDose("Face Pull"),
+    ],
+  });
+  assert.equal(sessionLogContradictsLowRating(session.id), false, "more lifts fell short than landed");
+});
+
+test("sessionLogContradictsLowRating: a lift under its full working load leaves the rating standing", () => {
+  const date = day(-9);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkSessionOutcome(session.id, date, {
+    skipped: [],
+    dose_context: { partial: false, comparable: true, non_comparable_reasons: [] },
+    dose_evidence: [
+      exceededDose("Back Squat"),
+      exceededDose("Bench Press"),
+      exceededDose("Romanian Deadlift"),
+      exceededDose("Walking Lunge"),
+      exceededDose("Calf Raise"),
+      dose("Face Pull", {
+        verdict: "met",
+        topWeight: 40,
+        // Recent working load wins over the plan target, as harderLoad reads it.
+        fullLoadReference: { sets: 3, target_weight: 35, recent_working_weight: 55, rep_low: 8 },
+      }),
+    ],
+  });
+  assert.equal(
+    sessionLogContradictsLowRating(session.id),
+    false,
+    "a lift that regressed under its own working load is a real shortfall, whatever the counts say"
+  );
+});
+
+// The full-load arm reads the reference's LOAD, never its `sets`. Reconciliation's
+// own `performed_at_full_load` folds a set shortfall into the same boolean, and
+// borrowing that here would let one short lift veto the whole majority read —
+// the per-session strictness this rule exists to remove. Volume is counted once,
+// as a shortfall.
+test("sessionLogContradictsLowRating: a short lift that still hit its working load is counted once", () => {
+  const date = day(-12);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkSessionOutcome(session.id, date, {
+    skipped: [],
+    dose_context: { partial: true, comparable: false, non_comparable_reasons: ["partial"] },
+    dose_evidence: [
+      exceededDose("Back Squat"),
+      exceededDose("Bench Press"),
+      exceededDose("Romanian Deadlift"),
+      exceededDose("Walking Lunge"),
+      exceededDose("Calf Raise"),
+      dose("Face Pull", {
+        verdict: "under_prescribed",
+        prescribedSets: 4,
+        achievedSets: 2,
+        topWeight: 55,
+        fullLoadReference: { sets: 4, target_weight: 55, recent_working_weight: 55, rep_low: 8 },
+      }),
+    ],
+  });
+  assert.equal(
+    sessionLogContradictsLowRating(session.id),
+    true,
+    "two sets short at the usual load is one shortfall, not a shortfall plus a regression"
+  );
+});
+
+// The live record's shape: reconciliation writes `under_prescribed` on a lift
+// whose top weight sat under target even though the athlete logged MORE sets
+// than were asked for. Added volume is not a shortfall — the load question is
+// the full-load arm's, and it answers per lift.
+test("sessionLogContradictsLowRating: sets logged past the prescription count as exceeded", () => {
+  const date = day(-11);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkSessionOutcome(session.id, date, {
+    skipped: ["Face Pull"],
+    dose_context: { partial: true, comparable: false, non_comparable_reasons: ["partial"] },
+    dose_evidence: [
+      dose("Back Squat", { verdict: "under_prescribed", prescribedSets: 2, achievedSets: 3 }),
+      dose("Bench Press", { verdict: "exceeded", prescribedSets: 2, achievedSets: 3 }),
+      dose("Romanian Deadlift", { verdict: "under_prescribed", prescribedSets: 1, achievedSets: 4 }),
+      dose("Walking Lunge", { verdict: "exceeded", prescribedSets: 1, achievedSets: 3 }),
+      dose("Calf Raise", { verdict: "exceeded", prescribedSets: 1, achievedSets: 4 }),
+      dose("Face Pull", {
+        comparable: false,
+        verdict: "not_attempted",
+        prescribedSets: 2,
+        achievedSets: 0,
+        non_comparable_reasons: ["partial"],
+      }),
+    ],
+  });
+  assert.equal(
+    sessionLogContradictsLowRating(session.id),
+    true,
+    "five lifts carried more volume than asked; one that was not attempted does not outrank them"
+  );
+});
+
+test("sessionLogContradictsLowRating: a session where every lift was skipped never contradicts", () => {
+  const date = day(-10);
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  const session = repo.getOrCreateSession(date);
+  repo.setSessionFeedback(date, { performance: 2 });
+  linkSessionOutcome(session.id, date, {
+    skipped: ["Back Squat", "Bench Press", "Romanian Deadlift"],
+    dose_context: { partial: true, comparable: false, non_comparable_reasons: ["partial"] },
+    dose_evidence: [
+      dose("Back Squat", { verdict: "not_attempted", achievedSets: 0 }),
+      dose("Bench Press", { verdict: "not_attempted", achievedSets: 0 }),
+      dose("Romanian Deadlift", { verdict: "not_attempted", achievedSets: 0 }),
+    ],
+  });
+  assert.equal(sessionLogContradictsLowRating(session.id), false, "nothing landed, so nothing contradicts");
+});
 
 test("sessionLogContradictsLowRating: 2 of 5 lifts done at target leaves a 2-rating standing", () => {
   const date = day(-3);

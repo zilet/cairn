@@ -610,7 +610,7 @@ function garminTotalAnchor(since: string, today: string): PriorAnchor | null {
   };
 }
 
-function measuredRmrWeightAdjustment(
+export function measuredRmrWeightAdjustment(
   rmr: { kcal: number; date: string | null },
   through: string
 ): {

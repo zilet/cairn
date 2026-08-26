@@ -54,6 +54,7 @@ import {
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
 import type { MemoryKind } from "./repo/memory.js";
 import {
+  chatCheckinDate,
   normalizeChatActions,
   normalizeRunZoneKey,
   type ChatAction,
@@ -3412,6 +3413,20 @@ export function applyChatActions(
               error: "no open pain note matches that area",
               area_text: a.area_text,
             },
+          });
+          break;
+        case "log_checkin":
+          applied.push({
+            type: a.type,
+            result: repo.addCheckin(chatCheckinDate(a.date, localDateISO()) ?? "", {
+              energy: a.energy,
+              sleep_feel: a.sleep_feel,
+              soreness: a.soreness,
+              mood: a.mood,
+              note: a.note == null ? null : String(a.note),
+              source_kind: "chat",
+              capture_note_symptom: hasExplicitSymptomReportIntent(message),
+            }),
           });
           break;
         case "plan_update":

@@ -47,11 +47,20 @@ import {
   STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS,
 } from "../dist/chatTurns.js";
 import { pickDayVariant } from "../dist/repo/brain/day-read-rules.js";
-import { localDateISO } from "../dist/repo/shared.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { currentTrainingDataVersion } from "../dist/repo/training-cache.js";
 
 beforeEach(() => {
-  for (const t of ["chat_turns", "chat_messages", "memory", "plan_proposals", "food_notes", "body_measurements"]) {
+  for (const t of [
+    "chat_turns",
+    "chat_messages",
+    "memory",
+    "plan_proposals",
+    "food_notes",
+    "body_measurements",
+    "checkins",
+    "symptom_reports",
+  ]) {
     try {
       db.prepare(`DELETE FROM ${t}`).run();
     } catch {
@@ -2004,6 +2013,97 @@ test("applyChatActions drops an empty log_measurement before any repo write", ()
   assert.deepEqual(applied, [], "nothing measurable → dropped by normalize");
   assert.deepEqual(drafts, []);
   assert.equal(repo.latestBodyMeasurement(), null);
+});
+
+test("applyChatActions log_checkin writes a checkins row", () => {
+  const { applied, drafts } = applyChatActions(
+    { actions: [{ type: "log_checkin", energy: 3, sleep_feel: 3, note: "feeling great this morning" }] },
+    { agent: "stub", message: "I feel great today" }
+  );
+  assert.deepEqual(drafts, []);
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0].type, "log_checkin");
+  const rows = repo.listCheckins(5);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].energy, 3);
+  assert.equal(rows[0].sleep_feel, 3);
+  assert.equal(rows[0].note, "feeling great this morning");
+});
+
+test("log_checkin stores energy 4 and 5 on the 1-5 scale", () => {
+  applyChatActions({ actions: [{ type: "log_checkin", energy: 4 }] }, { agent: "stub", message: "I'm doing well" });
+  assert.equal(repo.getCheckinByDate(localDateISO()).energy, 4);
+
+  applyChatActions(
+    { actions: [{ type: "log_checkin", energy: 5 }] },
+    { agent: "stub", message: "amazing, 5/5" }
+  );
+  assert.equal(repo.getCheckinByDate(localDateISO()).energy, 5);
+});
+
+test("log_checkin drops a non-ISO or future date so the row lands on today", () => {
+  const today = localDateISO();
+  const yesterday = addDaysISO(today, -1);
+  for (const date of ["yesterday", "2026-13-99", "2027-01-01"]) {
+    applyChatActions(
+      { actions: [{ type: "log_checkin", energy: 4, date }] },
+      { agent: "stub", message: "I feel good" }
+    );
+    assert.equal(repo.getCheckinByDate(date), null, `${date} must not become a checkins.date`);
+  }
+  const todayRows = repo.listCheckins(10).filter((row) => row.date === today);
+  assert.equal(todayRows.length, 3, "the three bogus dates fall through to today");
+
+  applyChatActions(
+    { actions: [{ type: "log_checkin", energy: 4, date: yesterday }] },
+    { agent: "stub", message: "yesterday I felt good" }
+  );
+  const yRow = repo.getCheckinByDate(yesterday);
+  assert.ok(yRow, "a real calendar yesterday is kept");
+  assert.equal(yRow.energy, 4);
+  assert.equal(yRow.date, yesterday);
+});
+
+test("a chat check-in note does not invent a symptom report from a mention", () => {
+  const { applied } = applyChatActions(
+    { actions: [{ type: "log_checkin", energy: 2, note: "my left knee hurts on every squat" }] },
+    { agent: "stub", message: "I feel rough, my left knee hurts" }
+  );
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0].type, "log_checkin");
+  const reports = db.prepare(`SELECT * FROM symptom_reports ORDER BY id`).all();
+  assert.equal(reports.length, 0, "mentioning pain is not authority to write a symptom record");
+});
+
+test("a log_checkin note writes a symptom report only when the athlete asked to log it", () => {
+  const { applied } = applyChatActions(
+    { actions: [{ type: "log_checkin", energy: 2, note: "my left knee hurts on every squat" }] },
+    { agent: "stub", message: "please log that my left knee hurts on every squat" }
+  );
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0].type, "log_checkin");
+  const reports = db.prepare(`SELECT * FROM symptom_reports ORDER BY id`).all();
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].text, /left knee hurts/);
+  assert.equal(reports[0].source_kind, "chat");
+});
+
+test("applyChatActions drops an empty log_checkin before any repo write", () => {
+  const { applied, drafts } = applyChatActions(
+    { actions: [{ type: "log_checkin" }] },
+    { agent: "stub", message: "just chatting" }
+  );
+  assert.deepEqual(applied, []);
+  assert.deepEqual(drafts, []);
+  assert.equal(repo.listCheckins(5).length, 0);
+});
+
+test("addCheckin from the app also routes a body-complaint note into a symptom report", () => {
+  repo.addCheckin(localDateISO(), { energy: 2, note: "my left knee hurts on every squat" });
+  const reports = db.prepare(`SELECT * FROM symptom_reports ORDER BY id`).all();
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].text, /left knee hurts/);
+  assert.equal(reports[0].source_kind, "api");
 });
 
 test("photo food placeholder is created only for food-intent photo turns", () => {

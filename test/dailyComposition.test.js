@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { composeDailySession } from "../dist/coachOps.js";
-import { deterministicComposedSession, normalizeComposedSession } from "../dist/repo/daily-composition.js";
+import {
+  deterministicComposedSession,
+  EASED_TODAY_NOTES,
+  HOLD_TARGET_NOTES,
+  normalizeComposedSession,
+  REDUCED_AREA_NOTES,
+} from "../dist/repo/daily-composition.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import { REACH_NO_ROOM_WHY } from "../dist/repo/daily-decision.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { db, repo, resetTables } from "./_seed.js";
@@ -350,7 +357,10 @@ test("hold candidates clamp positive, assisted, bodyweight, and timed targets to
   assert.equal(byExercise.get("Push-Up").target_weight, null);
   assert.equal(byExercise.get("Front Plank").target_weight, null);
   assert.equal(byExercise.get("Front Plank").target_seconds, 60);
-  assert.ok(session.items.every((item) => /Holding the current target today/.test(item.note)));
+  assert.ok(
+    session.items.every((item) => HOLD_TARGET_NOTES.includes(item.note)),
+    "a hold with no existing why still gets one rotated hold sentence"
+  );
   assert.equal(validation.capped, true);
 });
 
@@ -890,7 +900,7 @@ test("a reduced area keeps its movement but comes down in sets and target", () =
   assert.equal(squat.target_weight, 180, "and the target is eased by the reduced factor");
   assert.equal(validation.capped, true, "the clamp is reported");
   assert.equal(validation.rejected.length, 0, "nothing is thrown away");
-  assert.match(squat.note, /carrying recent work/i, "and it is said in plain words");
+  assert.ok(REDUCED_AREA_NOTES.includes(squat.note), "and it is said in plain words from the reduced set");
 });
 
 test("an untouched area in the same session keeps the volume it was composed with", () => {
@@ -1520,4 +1530,192 @@ test("a non-reach day is unchanged by the reach injection path", () => {
   assert.equal(session.items.length, 1);
   assert.equal(session.items[0].target_weight, 225);
   assert.equal(session.items[0].reach, undefined);
+});
+
+test("composition notes are variant sets that hold the reading grammar", () => {
+  const phrases = [...REDUCED_AREA_NOTES, ...EASED_TODAY_NOTES, ...HOLD_TARGET_NOTES];
+  assert.ok(REDUCED_AREA_NOTES.length >= 4);
+  assert.ok(EASED_TODAY_NOTES.length >= 4);
+  assert.ok(HOLD_TARGET_NOTES.length >= 4);
+  for (const phrase of phrases) {
+    assert.equal(violatesReadingGrammar(phrase), null, `reading grammar: ${phrase}`);
+    assert.doesNotMatch(
+      phrase,
+      /\b(?:comparable|dose evidence|non_comparable|envelope|cap|reground|snapshot)\b/i,
+      phrase
+    );
+  }
+});
+
+test("eased-today variants remain a standalone sentence after the session prefix is stripped", () => {
+  const EASED_PREFIX = /^eased for today[\s.,:;·—–-]*/i;
+  assert.ok(EASED_TODAY_NOTES.length >= 4);
+  for (const phrase of EASED_TODAY_NOTES) {
+    const remainder = phrase.replace(EASED_PREFIX, "").trim();
+    if (!remainder) continue;
+    assert.match(remainder[0], /[A-Z]/, remainder);
+    assert.match(remainder, /\.$/, remainder);
+    assert.doesNotMatch(remainder, /every movement sits a notch lighter/i, remainder);
+  }
+});
+
+test("a hold-day item with a progression why keeps exactly one hold sentence", () => {
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.savePlanDay(1, "Hold anchors", "No progression today", [
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },
+  ]);
+  const why = "Flat lately — hold the load and earn one more clean rep first.";
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100, note: why }]),
+    envelope({
+      template: { day_number: 1, plan_day_id: repo.getPlanDay(1).id, focus: "Hold anchors", intent: "template" },
+      candidates: [
+        {
+          exercise: "Bench Press",
+          muscle_group: "chest",
+          action: "hold",
+          reason_code: "progression_hold",
+          substitution_for: null,
+          note: why,
+          progression_evidence: {
+            delta_text: null,
+            why,
+            reground: false,
+            autoregulated: false,
+            movement_response: null,
+            rep_step: false,
+            dose_eligibility: null,
+          },
+        },
+      ],
+    })
+  );
+  assert.ok(session);
+  const item = session.items.find((row) => row.exercise === "Bench Press");
+  assert.equal(item.note, why, "composition does not prepend a second hold sentence");
+  const holdSentences = String(item.note)
+    .split(/\.\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part && /hold/i.test(part));
+  assert.equal(holdSentences.length, 1, "exactly one hold sentence reaches the card");
+  assert.ok(!HOLD_TARGET_NOTES.some((line) => line !== why && String(item.note).includes(line)));
+});
+
+test("a reduced hold still says the area is carrying recent work", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  anchorPlan([{ exercise: "Back Squat", sets: 5, rep_low: 5, rep_high: 7, target_weight: 200 }]);
+  const why = "Holding while you rebuild range on this one.";
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 5, rep_low: 5, rep_high: 7, target_weight: 200, note: why }]),
+    reducedEnvelope(["quads"], {
+      template: {
+        day_number: 1,
+        plan_day_id: repo.getPlan().find((d) => d.day_number === 1).id,
+        focus: "Lower",
+        intent: "template",
+      },
+      candidates: [
+        {
+          exercise: "Back Squat",
+          muscle_group: "quads",
+          action: "hold",
+          reason_code: "progression_hold",
+          substitution_for: null,
+          note: why,
+          progression_evidence: {
+            delta_text: null,
+            why,
+            reground: false,
+            autoregulated: false,
+            movement_response: null,
+            rep_step: false,
+            dose_eligibility: null,
+          },
+        },
+      ],
+    })
+  );
+  const squat = session.items.find((row) => row.exercise === "Back Squat");
+  assert.ok(
+    REDUCED_AREA_NOTES.some((line) => String(squat.note).startsWith(line)),
+    "the area note is added because it is extra"
+  );
+  assert.match(squat.note, /rebuild range/);
+  assert.ok(!HOLD_TARGET_NOTES.some((line) => String(squat.note).startsWith(line)), "no second generic hold prepend");
+});
+
+test("a plan coach note does not suppress the hold explanation", () => {
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.savePlanDay(1, "Hold anchors", "No progression today", [
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },
+  ]);
+  const coachNote = "Keep the shoulder blades tucked.";
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100, note: coachNote }]),
+    envelope({
+      template: { day_number: 1, plan_day_id: repo.getPlanDay(1).id, focus: "Hold anchors", intent: "template" },
+      candidates: [
+        {
+          exercise: "Bench Press",
+          muscle_group: "chest",
+          action: "hold",
+          reason_code: "progression_hold",
+          substitution_for: null,
+          progression_evidence: {
+            delta_text: null,
+            why: null,
+            reground: false,
+            autoregulated: false,
+            movement_response: null,
+            rep_step: false,
+            dose_eligibility: null,
+          },
+        },
+      ],
+    })
+  );
+  assert.ok(session);
+  const item = session.items.find((row) => row.exercise === "Bench Press");
+  assert.ok(
+    HOLD_TARGET_NOTES.some((line) => String(item.note).startsWith(line)),
+    "a plan coach note is not a progression why, so the hold sentence still lands"
+  );
+  assert.match(item.note, /shoulder blades/);
+});
+
+// The athlete's own note carries their safety cues, and a "sharp pain = stop" sits
+// at the END of a long one. Composing the eased sentence in front of it used to
+// slice the combined string to 500 chars, cutting the tail — so the longer eased
+// variants silently deleted exactly the line that must survive. The server's
+// sentence is the part that yields now.
+const STOP_CUE = "If anything turns sharp, stop the set — sharp pain = stop.";
+const LONG_ATHLETE_NOTE = `${"Brace hard and keep the ribs stacked over the pelvis on every rep. ".repeat(6).trim()} ${STOP_CUE}`;
+
+test("an eased day never truncates the athlete's own note away from its stop cue", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  assert.ok(LONG_ATHLETE_NOTE.length > 400 && LONG_ATHLETE_NOTE.length < 500, "the live shape: long, but under the cap");
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225, note: LONG_ATHLETE_NOTE },
+    ]),
+    envelope({ caps: { volume: "normal", intensity: "easy", duration_min: 60 } })
+  );
+  assert.ok(session);
+  const item = session.items.find((row) => row.exercise === "Back Squat");
+  assert.ok(item.note.includes(STOP_CUE), "the stop cue survives verbatim");
+  assert.ok(item.note.endsWith(STOP_CUE), "and it is still the last thing the athlete reads");
+  assert.ok(item.note.includes(LONG_ATHLETE_NOTE), "the whole note the athlete wrote is intact, not trimmed");
+});
+
+test("an eased day still composes its sentence in front of a short athlete note", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225, note: "Belt on for the top set." },
+    ]),
+    envelope({ caps: { volume: "normal", intensity: "easy", duration_min: 60 } })
+  );
+  const item = session.items.find((row) => row.exercise === "Back Squat");
+  assert.match(item.note, /^Eased for today\./, "there is room, so the composition sentence still leads");
+  assert.ok(item.note.endsWith("Belt on for the top set."), "and the athlete's note is untouched behind it");
 });

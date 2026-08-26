@@ -110,6 +110,7 @@ import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
 import { trainingPlaybook, type TrainingPlaybookRead } from "./training-playbook.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import type { UnderfuelingRead } from "./underfueling.js";
+import { latestSessionIdOnDate, sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { recentMovementResponse, type RecentMovementResponseVerdict } from "./training-response.js";
 import {
   doseComparability,
@@ -270,6 +271,8 @@ export interface AutoregSignals {
   performance: number | null; // most recent 1-5
   joint_pain: string | null; // most recent free-text ("left knee")
   date: string | null;
+  performance_date?: string | null;
+  performance_session_id?: number | null;
   // The canonical groups the session that REPORTED each signal actually trained.
   // Soreness and performance are read independently (the freshest non-null of
   // each), so they can come from different days and carry different scopes.
@@ -313,6 +316,8 @@ export function recentAutoregulation(days = AUTOREG_WINDOW_DAYS, date = localDat
     performance: null,
     joint_pain: null,
     date: null,
+    performance_date: null,
+    performance_session_id: null,
     soreness_groups: [],
     performance_groups: [],
   };
@@ -321,8 +326,8 @@ export function recentAutoregulation(days = AUTOREG_WINDOW_DAYS, date = localDat
   try {
     const rows = db
       .prepare(
-        `SELECT date, soreness, performance, joint_pain FROM sessions
-        WHERE date >= ? AND date <= ? ORDER BY date DESC`
+        `SELECT id, date, soreness, performance, joint_pain FROM sessions
+        WHERE date >= ? AND date <= ? ORDER BY date DESC, id DESC`
       )
       .all(since, today) as any[];
     for (const r of rows) {
@@ -333,6 +338,9 @@ export function recentAutoregulation(days = AUTOREG_WINDOW_DAYS, date = localDat
       if (out.performance == null && r.performance != null) {
         out.performance = Number(r.performance);
         performanceDate = String(r.date);
+        out.performance_date = performanceDate;
+        const sid = Number(r.id);
+        out.performance_session_id = Number.isInteger(sid) && sid > 0 ? sid : null;
       }
       if (out.joint_pain == null && r.joint_pain != null && String(r.joint_pain).trim())
         out.joint_pain = String(r.joint_pain).trim();
@@ -385,8 +393,21 @@ function autoregBrake(
   const jointHit = group && autoreg?.joint_pain ? painAreaLoadsGroup(autoreg.joint_pain, group) : false;
   const soreHigh =
     autoreg?.soreness != null && autoreg.soreness >= 4 && feedbackReaches(autoreg.soreness_groups, group);
-  const perfLow =
+  let perfLow =
     autoreg?.performance != null && autoreg.performance <= 2 && feedbackReaches(autoreg.performance_groups, group);
+  // A completed log outranks a felt rating: if the session that carried the
+  // 1–2 actually met every prescribed dose, the rating does not hold the lift.
+  if (perfLow) {
+    try {
+      const sid =
+        Number(autoreg?.performance_session_id) > 0
+          ? Number(autoreg?.performance_session_id)
+          : latestSessionIdOnDate(autoreg?.performance_date ?? autoreg?.date);
+      if (sid != null && sessionLogContradictsLowRating(sid)) perfLow = false;
+    } catch {
+      /* a lookup miss must not invent a brake */
+    }
+  }
   const highStrain = soreHigh || perfLow || heavyAcute;
 
   // A named sore joint is the strongest brake — one step toward safety.

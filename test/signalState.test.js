@@ -6,6 +6,7 @@ import {
   buildMealSwapPrompt,
   buildNutritionCheckinPrompt,
 } from "../dist/prompt.js";
+import { thinSignalCoverage } from "../dist/repo/signal-state.js";
 import { db, localDaysAgo, repo, resetTables } from "./_seed.js";
 
 beforeEach(() => {
@@ -22,7 +23,9 @@ beforeEach(() => {
     "plan_items",
     "plan_days",
     "exercises",
-    "profile"
+    "profile",
+    "daily_session_compositions",
+    "daily_session_outcomes"
   );
 });
 
@@ -227,7 +230,7 @@ test("the machine-facing summaries are untouched and the athlete voice sits besi
   const date = localDaysAgo(0);
   const state = repo.planningSignalState({
     date,
-    checkin: { energy: 3, sleep_feel: 1, soreness: 5 },
+    checkin: { energy: 4, sleep_feel: 1, soreness: 5 },
     recovery: {
       recovery: { sleep_min: 280, training_readiness: 20 },
       delta: { hrv: -9, rhr: 6 },
@@ -250,7 +253,7 @@ test("the machine-facing summaries are untouched and the athlete voice sits besi
     summaryOf("recovery_capacity", "sleep_feel"),
     "The athlete feels poorly recovered despite any wearable reading."
   );
-  assert.equal(summaryOf("recovery_capacity", "felt_energy"), "The athlete reports workable energy today.");
+  assert.equal(summaryOf("recovery_capacity", "felt_energy"), "The athlete reports feeling good today.");
   assert.equal(summaryOf("training_load_tolerance", "felt_soreness"), "The athlete reports high soreness today.");
 
   // The two prose fields renderSignalState actually prints are still the summary.
@@ -1614,4 +1617,225 @@ test("absent HRV fires nothing at all, whatever the performance channel says", (
     (state.dimensions.recovery_capacity.evidence ?? []).find((item) => item.field === "hrv"),
     undefined
   );
+});
+
+function linkSessionDoses(sessionId, date, { verdict = "met", skipped = [] } = {}) {
+  const composition = db
+    .prepare(
+      `INSERT INTO daily_session_compositions
+        (version, session_id, date, source, status, title, items_json, request_fingerprint)
+       VALUES (1, ?, ?, 'adaptive_plan', 'active', 'Dose fixture', ?, ?)`
+    )
+    .run(sessionId, date, JSON.stringify([{ exercise: "Test Squat", sets: 3 }]), `dose-${sessionId}`);
+  db.prepare(
+    `INSERT INTO daily_session_outcomes (composition_id, session_id, date, status, facts_json)
+     VALUES (?, ?, ?, 'completed', ?)`
+  ).run(
+    composition.lastInsertRowid,
+    sessionId,
+    date,
+    JSON.stringify({
+      schema_version: 3,
+      skipped,
+      dose_context: { partial: skipped.length > 0, comparable: skipped.length === 0, non_comparable_reasons: [] },
+      dose_evidence: [
+        {
+          exercise: "Test Squat",
+          comparable: true,
+          prescribed: { sets: 3 },
+          achieved: { sets: skipped.length ? 0 : 3 },
+          challenge_verdict: verdict,
+        },
+      ],
+    })
+  );
+}
+
+function seedRatedSession(date, { performance = null, soreness = null, finish = true } = {}) {
+  repo.upsertExercise({ name: "Test Squat", muscle_group: "legs" });
+  repo.logSetByName({ date, exercise: "Test Squat", weight: 185, reps: 5, rir: 2 });
+  const session = repo.getOrCreateSession(date, null);
+  if (performance != null || soreness != null) {
+    repo.setSessionFeedback(date, {
+      ...(performance == null ? {} : { performance }),
+      ...(soreness == null ? {} : { soreness }),
+    });
+  }
+  if (finish) db.prepare(`UPDATE sessions SET finished_at = datetime('now') WHERE id = ?`).run(session.id);
+  return session;
+}
+
+test("a completed log that met every dose skips the felt_fatigue constraint", () => {
+  const ratedOn = localDaysAgo(2);
+  const session = seedRatedSession(ratedOn, { performance: 2 });
+  linkSessionDoses(session.id, ratedOn, { verdict: "met" });
+
+  const state = repo.planningSignalState({
+    date: localDaysAgo(0),
+    trainingSignals: {
+      autoregulation: { low_performance_flag: true, low_performance_date: ratedOn, soreness_flag: false },
+    },
+  });
+  const felt = state.dimensions.training_load_tolerance.evidence.find((item) => item.field === "felt_fatigue");
+  assert.equal(felt, undefined, "the log outranks the felt 2");
+});
+
+test("felt_fatigue closes when a later completed session meets its doses", () => {
+  const ratedOn = localDaysAgo(3);
+  seedRatedSession(ratedOn, { performance: 2 });
+  const later = seedRatedSession(localDaysAgo(1), { performance: 3 });
+  linkSessionDoses(later.id, localDaysAgo(1), { verdict: "met" });
+
+  const state = repo.planningSignalState({
+    date: localDaysAgo(0),
+    trainingSignals: {
+      autoregulation: { low_performance_flag: true, low_performance_date: ratedOn, soreness_flag: false },
+    },
+  });
+  const felt = state.dimensions.training_load_tolerance.evidence.find((item) => item.field === "felt_fatigue");
+  assert.equal(felt, undefined, "the next completed session that met its doses closes the constraint");
+});
+
+test("soreness is emitted alongside a low-performance flag, not instead of it", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    trainingSignals: {
+      autoregulation: {
+        low_performance_flag: true,
+        low_performance_date: localDaysAgo(1),
+        soreness_flag: true,
+        soreness_date: localDaysAgo(1),
+      },
+    },
+  });
+  const fields = state.dimensions.training_load_tolerance.evidence.map((item) => item.field);
+  assert.ok(fields.includes("felt_fatigue"));
+  assert.ok(fields.includes("felt_soreness"));
+  const felt = state.dimensions.training_load_tolerance.evidence.find((item) => item.field === "felt_fatigue");
+  assert.equal(felt.max_age_days, 7, "the felt-fatigue window still closes at seven days");
+  const sore = state.dimensions.training_load_tolerance.evidence.find((item) => item.field === "felt_soreness");
+  assert.equal(sore.direction, "caution");
+});
+
+// Neutral must still EMIT. Dropping the observation takes the field out of
+// coverage.active_fields, and an athlete who tapped 3 with nothing else on the
+// board trips thinSignalCoverage — the read telling them it is running on nothing
+// tracked at all on a morning they actually checked in.
+test("energy 3 today is neutral: it counts as tracked, but reaches neither support nor a brake", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({ date, checkin: { energy: 3 } });
+  const energy = state.dimensions.recovery_capacity.evidence.find((item) => item.field === "felt_energy");
+  assert.ok(energy, "a check-in the athlete filled in is evidence, whatever the answer was");
+  assert.equal(energy.direction, "neutral", "3 is the middle of 1–5: not support, not a constraint");
+  assert.ok(!energy.safety_override, "the middle of the scale never claims the morning");
+  assert.ok(
+    state.dimensions.recovery_capacity.coverage.active_fields.includes("felt_energy"),
+    "the field stays in coverage"
+  );
+  assert.equal(thinSignalCoverage(state.dimensions), false, "they tracked; the answer was just the middle one");
+  assert.equal(state.action.support, null, "a 3 earns no support tier");
+  assert.ok(
+    !Object.values(state.dimensions).some((dim) => dim.status === "constrained"),
+    "and it is no reason to rest"
+  );
+});
+
+test("sleep_feel 3 today is neutral on the same terms", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({ date, checkin: { sleep_feel: 3 } });
+  const sleep = state.dimensions.recovery_capacity.evidence.find((item) => item.field === "sleep_feel");
+  assert.ok(sleep);
+  assert.equal(sleep.direction, "neutral");
+  assert.equal(thinSignalCoverage(state.dimensions), false);
+  assert.equal(state.action.support, null);
+});
+
+test("energy 4 alone is support, not backed", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({ date, checkin: { energy: 4 } });
+  const energy = state.dimensions.recovery_capacity.evidence.find((item) => item.field === "felt_energy");
+  assert.equal(energy.direction, "support");
+  assert.equal(state.action.posture, "train");
+  assert.equal(state.action.confidence, "low");
+  assert.equal(state.action.support, null, "one earned self-report is not the backed tier");
+});
+
+test("energy 4 plus high-confidence wearables earns the backed tier", () => {
+  const date = localDaysAgo(0);
+  const withWearables = repo.buildUnifiedSignalState(date, [
+    {
+      dimension: "recovery_capacity",
+      field: "felt_energy",
+      date,
+      source: "user_checkin",
+      direction: "support",
+      summary: "The athlete reports feeling good today.",
+      max_age_days: 0,
+    },
+    {
+      dimension: "recovery_capacity",
+      field: "hrv",
+      date,
+      source: "garmin",
+      direction: "support",
+      summary: "HRV is steady against the athlete's norm.",
+      max_age_days: 3,
+    },
+    {
+      dimension: "recovery_capacity",
+      field: "sleep",
+      date,
+      source: "garmin",
+      direction: "support",
+      summary: "The most recent recorded night supports the planned day.",
+      max_age_days: 3,
+    },
+  ]);
+  assert.equal(withWearables.action.posture, "train");
+  assert.equal(withWearables.action.confidence, "high");
+  assert.equal(withWearables.action.support?.level, "backed");
+  assert.ok(withWearables.action.support.fields.includes("felt_energy"));
+});
+
+test("energy 4 plus a fresh caution does not earn the backed tier", () => {
+  const date = localDaysAgo(0);
+  const state = repo.buildUnifiedSignalState(date, [
+    {
+      dimension: "recovery_capacity",
+      field: "felt_energy",
+      date,
+      source: "user_checkin",
+      direction: "support",
+      summary: "The athlete reports feeling good today.",
+      max_age_days: 0,
+    },
+    {
+      dimension: "training_load_tolerance",
+      field: "acute_load",
+      date,
+      source: "cairn_program_state",
+      direction: "caution",
+      summary: "Acute training load is running above the established base.",
+      max_age_days: 1,
+    },
+  ]);
+  assert.equal(state.action.support, null, "a fresh caution withdraws the backed tier");
+});
+
+test("a performance rating of 4 on yesterday's completed session emits fresh support", () => {
+  const yesterday = localDaysAgo(1);
+  seedRatedSession(yesterday, { performance: 4 });
+  const state = repo.planningSignalState({ date: localDaysAgo(0) });
+  const quality = state.dimensions.training_load_tolerance.evidence.find((item) => item.field === "session_quality");
+  assert.ok(quality, "yesterday's strong finish is support on the load dimension");
+  assert.equal(quality.direction, "support");
+  assert.equal(quality.date, yesterday);
+  assert.equal(quality.max_age_days, 1);
+});
+
+test("energy 1 and sleep_feel 1 still own the rest rung", () => {
+  const date = localDaysAgo(0);
+  assert.equal(repo.planningSignalState({ date, checkin: { energy: 1 } }).action.posture, "rest");
+  assert.equal(repo.planningSignalState({ date, checkin: { sleep_feel: 2 } }).action.posture, "rest");
 });

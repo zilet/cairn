@@ -85,7 +85,9 @@ import { getAppState, setAppState } from "./app-state.js";
 import { readAdherenceModel } from "./brain/read-adherence.js";
 import { getProgress, getRecentSessions, typicalTrainingHour, vouchedRunCompliance } from "./sessions.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
+import { recordSymptomReport } from "./symptom-reports.js";
 import { symptomAreaKey } from "./symptom-area.js";
+import { symptomTextMentionsBody } from "../symptomCapture.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import { addDaysISO, localDateISO, localDayOfStamp, nowContext } from "./shared.js";
 import { bumpTrainingDataVersion, coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
@@ -1712,6 +1714,11 @@ export interface CheckinInput {
   sleep_feel?: number | null;
   soreness?: number | null;
   note?: string | null;
+  source_kind?: "chat" | "api";
+  // Chat-only: the athlete's own message must independently pass the same
+  // symptom-intent guard report_training_symptom uses. The PWA path (athlete-
+  // typed note) ignores this and always captures.
+  capture_note_symptom?: boolean;
 }
 
 function clampScale15(v: any): number | null {
@@ -1724,6 +1731,7 @@ function clampScale15(v: any): number | null {
 // One check-in per save (a date can have several; the latest wins for reads).
 export function addCheckin(date: string, fields: CheckinInput = {}) {
   const d = date || localDateISO();
+  const note = fields.note == null ? null : String(fields.note).trim().slice(0, 500) || null;
   const info = db
     .prepare(`INSERT INTO checkins (date, mood, energy, sleep_feel, soreness, note) VALUES (?, ?, ?, ?, ?, ?)`)
     .run(
@@ -1732,11 +1740,34 @@ export function addCheckin(date: string, fields: CheckinInput = {}) {
       clampScale15(fields.energy),
       clampScale15(fields.sleep_feel),
       clampScale15(fields.soreness),
-      fields.note == null ? null : String(fields.note).trim().slice(0, 500) || null
+      note
     );
+  const fromChat = fields.source_kind === "chat";
+  if (!fromChat || fields.capture_note_symptom === true) {
+    captureCheckinNoteSymptomReport(d, note, fromChat ? "chat" : "api");
+  }
   invalidateDayRead(d); // a fresh subjective signal can change today's read
   bumpTrainingDataVersion(); // keep the shared training version comprehensive for consumers
   return db.prepare(`SELECT * FROM checkins WHERE id = ?`).get(info.lastInsertRowid);
+}
+
+function captureCheckinNoteSymptomReport(
+  date: string,
+  note: string | null,
+  sourceKind: "chat" | "api"
+): boolean {
+  const text = note == null ? "" : String(note).trim();
+  if (!text || !symptomTextMentionsBody(text)) return false;
+  try {
+    recordSymptomReport({
+      text,
+      source_kind: sourceKind,
+      reported_on: date,
+    });
+  } catch {
+    /* capturing the words is additive — never fail the check-in write over it */
+  }
+  return true;
 }
 
 // Most recent check-in for a date (or null) — the day-read reads "today".

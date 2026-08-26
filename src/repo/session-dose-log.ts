@@ -3,21 +3,44 @@
 // question: did this session actually land short, or did the athlete hit what
 // was prescribed and then rate the session poorly?
 //
-// A low rating is contradicted only when the session has no skipped / partial
-// doses (dose_context.partial, the skipped list, per-dose `non_comparable_reasons`
-// carrying "partial") AND every attempted dose is `met`/`exceeded`. Filtering
-// to comparable doses first would hide the abandoned lifts — doseComparability
-// persists comparable:false + reasons:["partial"] on own-dose shortfalls, and
-// never writes `own_dose_shortfall` onto the row — so 2-of-5 done at target
-// would look complete. Missing evidence is absence: the rating stands.
+// Dose comparability is a PER-LIFT question, not a per-session one, so the
+// contradiction is read per lift too. A whole session is not disqualified by one
+// lift that fell short: the log contradicts the rating when the lifts that were
+// met or exceeded at least match the ones that fell short, at least one lift was
+// genuinely EXCEEDED, and no lift regressed under its stored full-load reference.
+// A clean log — every prescribed dose met, nothing skipped — still contradicts on
+// its own; the "one exceeded" arm is the extra evidence an INCOMPLETE log has to
+// carry before it can outrank what the athlete felt.
+//
+// Lifts carrying no prescription are ignored; skipped lifts count as shortfalls.
+// Filtering to comparable doses first would hide the abandoned lifts —
+// doseComparability persists comparable:false + reasons:["partial"] on own-dose
+// shortfalls, and never writes `own_dose_shortfall` onto the row — so 2-of-5 done
+// at target would look complete. Missing evidence is absence: the rating stands.
 import { db } from "../db.js";
+
+// The per-dose full-load reference reconciliation persists on schema-4 rows
+// (`FullLoadReference` in outcome-comparability.ts). Read structurally off
+// facts_json — rows written before schema 4 carry none and the arm stays quiet.
+type FullLoadReferenceRow = {
+  sets?: unknown;
+  target_weight?: unknown;
+  target_seconds?: unknown;
+  rep_low?: unknown;
+  recent_working_weight?: unknown;
+  recent_working_seconds?: unknown;
+};
 
 type DoseRow = {
   comparable?: unknown;
   challenge_verdict?: unknown;
   non_comparable_reasons?: unknown;
-  prescribed?: { sets?: unknown } | null;
-  achieved?: { sets?: unknown } | null;
+  exercise?: unknown;
+  movement_key?: unknown;
+  mode?: unknown;
+  full_load_reference?: FullLoadReferenceRow | null;
+  prescribed?: { sets?: unknown; target_weight?: unknown; target_seconds?: unknown } | null;
+  achieved?: { sets?: unknown; top_weight?: unknown; top_reps?: unknown; top_seconds?: unknown } | null;
 };
 
 type OutcomeFacts = {
@@ -77,13 +100,6 @@ function doseOwnShortfall(dose: DoseRow): boolean {
   return reasons.includes("partial") || ownSetShortfall(dose);
 }
 
-function hasSkippedOrPartialDose(facts: OutcomeFacts | null): boolean {
-  if (!facts) return false;
-  if (facts.dose_context?.partial === true) return true;
-  if (skippedExercises(facts).length > 0) return true;
-  return doseRows(facts).some(doseOwnShortfall);
-}
-
 function hasOwnDoseShortfall(facts: OutcomeFacts | null): boolean {
   if (!facts) return false;
   if (skippedExercises(facts).length > 0) return true;
@@ -101,18 +117,213 @@ function isPartialOrUnderPrescribed(dose: DoseRow): boolean {
   return verdict === "under_prescribed" || verdict === "partial";
 }
 
+function finiteOrNull(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** A lift the day actually asked for. One with nothing prescribed is ignored. */
+function dosePrescribed(dose: DoseRow): boolean {
+  const verdict = String(dose?.challenge_verdict ?? "");
+  const sets = finiteOrNull(dose?.prescribed?.sets);
+  if (sets != null && sets > 0) return true;
+  if (finiteOrNull(dose?.prescribed?.target_weight) != null) return true;
+  if (finiteOrNull(dose?.prescribed?.target_seconds) != null) return true;
+  if (verdict === "no_target" || verdict === "") return false;
+  return true;
+}
+
 /**
- * True when the log contradicts a low felt rating: no skipped/partial doses,
- * and every attempted dose is `met` or `exceeded`. Any skip, set-shortfall, or
- * `dose_context.partial` — or no dose evidence at all — and the rating stands.
+ * A dose the athlete pushed PAST what was asked — a verdict of `exceeded`, more
+ * sets than prescribed, or a heavier top weight than the target. (Weight is
+ * signed: on an assisted lift a larger number is less assist, so one comparison
+ * reads both.)
+ */
+function doseExceeded(dose: DoseRow): boolean {
+  if (String(dose?.challenge_verdict ?? "") === "exceeded") return true;
+  const prescribedSets = finiteOrNull(dose?.prescribed?.sets);
+  const achievedSets = finiteOrNull(dose?.achieved?.sets);
+  if (prescribedSets != null && prescribedSets > 0 && achievedSets != null && achievedSets > prescribedSets) {
+    return true;
+  }
+  const targetWeight = finiteOrNull(dose?.prescribed?.target_weight);
+  const topWeight = finiteOrNull(dose?.achieved?.top_weight);
+  return targetWeight != null && topWeight != null && topWeight > targetWeight;
+}
+
+function doseKeys(dose: DoseRow): string[] {
+  return [dose?.exercise, dose?.movement_key]
+    .map((value) => String(value ?? "").trim().toLowerCase())
+    .filter((value) => value.length > 0);
+}
+
+function fullLoadReference(dose: DoseRow): FullLoadReferenceRow | null {
+  const ref = dose?.full_load_reference;
+  if (!ref || typeof ref !== "object" || Array.isArray(ref)) return null;
+  return ref as FullLoadReferenceRow;
+}
+
+// Mirrors loadAtOrAbove/harderLoad in outcome-comparability.ts, which this branch
+// does not carry yet. Weight is signed: the larger value is harder in both regimes
+// (loaded + and assist −), and a positive log against a negative reference is the
+// typing slip progression already ignores, not a comparison. Recent working load
+// wins over the plan target — the plan is a FORWARD prescription, so comparing to
+// it would ask "hit your next target", not "match your recent effort".
+function loadAtOrAbove(achieved: number, reference: number): boolean {
+  if (reference < 0 && achieved > 0) return false;
+  if (reference > 0 && achieved < 0) return false;
+  return achieved >= reference;
+}
+
+function harderLoad(plan: number | null, recent: number | null): number | null {
+  return recent ?? plan;
+}
+
+/**
+ * A lift whose top set landed UNDER its own full working load — a real regression.
+ *
+ * This reads the reference's LOAD arms only, never its `sets`. Reconciliation's
+ * own `performed_at_full_load` folds a set shortfall into the same boolean, and
+ * borrowing that here would let one short lift veto the whole majority read —
+ * exactly the per-session strictness the majority rule exists to remove. Volume
+ * is already counted as a shortfall above; this arm answers load alone. An
+ * unknown reference or an unlogged top set is absence, not a regression.
+ */
+function doseUnderFullLoad(dose: DoseRow): boolean {
+  const reference = fullLoadReference(dose);
+  if (!reference) return false;
+  if (String(dose?.mode ?? "") === "timed") {
+    const refSeconds = harderLoad(
+      finiteOrNull(reference.target_seconds),
+      finiteOrNull(reference.recent_working_seconds)
+    );
+    const topSeconds = finiteOrNull(dose?.achieved?.top_seconds);
+    return refSeconds != null && topSeconds != null && topSeconds < refSeconds;
+  }
+  const refWeight = harderLoad(
+    finiteOrNull(reference.target_weight),
+    finiteOrNull(reference.recent_working_weight)
+  );
+  if (refWeight == null) {
+    // Bodyweight: the rep floor of the un-reduced prescription is the reference.
+    const repLow = finiteOrNull(reference.rep_low);
+    const topReps = finiteOrNull(dose?.achieved?.top_reps);
+    return repLow != null && topReps != null && topReps < repLow;
+  }
+  const topWeight = finiteOrNull(dose?.achieved?.top_weight);
+  return topWeight != null && !loadAtOrAbove(topWeight, refWeight);
+}
+
+export type DoseContradictionTally = {
+  met: number;
+  exceeded: number;
+  short: number;
+  under_full_load: number;
+  unprescribed: number;
+};
+
+/**
+ * Per-lift counts behind the contradiction read. Exported so a caller can say
+ * WHY a rating stood without re-deriving the classification.
+ */
+export function doseContradictionTally(sessionId: number): DoseContradictionTally | null {
+  const facts = outcomeFactsForSession(sessionId);
+  if (!facts) return null;
+  const doses = doseRows(facts);
+  const tally: DoseContradictionTally = { met: 0, exceeded: 0, short: 0, under_full_load: 0, unprescribed: 0 };
+  const counted = new Set<string>();
+  for (const dose of doses) {
+    for (const key of doseKeys(dose)) counted.add(key);
+    if (!dosePrescribed(dose)) {
+      tally.unprescribed++;
+      continue;
+    }
+    if (doseUnderFullLoad(dose)) tally.under_full_load++;
+    const verdict = String(dose?.challenge_verdict ?? "");
+    // An own-dose shortfall — fewer sets than asked, or a persisted "partial" —
+    // is a shortfall whatever the verdict says. Otherwise volume the athlete
+    // added past the prescription reads as exceeded even where the verdict is
+    // `under_prescribed` on load: that quality question is the full-load arm's,
+    // and it is answered per lift above.
+    if (doseOwnShortfall(dose)) tally.short++;
+    else if (doseExceeded(dose)) tally.exceeded++;
+    else if (isMetOrExceeded(dose) || verdict === "no_target") tally.met++;
+    else tally.short++;
+  }
+  // A lift on the skipped list with no dose row of its own is still a shortfall.
+  for (const name of skippedExercises(facts)) {
+    if (!counted.has(name.trim().toLowerCase())) tally.short++;
+  }
+  return tally;
+}
+
+/**
+ * True when the log contradicts a low felt rating. Per lift: the doses met or
+ * exceeded must at least match the ones that fell short (skips count short,
+ * unprescribed lifts are ignored), and an incomplete log must additionally show
+ * at least one dose EXCEEDED. A lift that regressed under its stored full working
+ * load leaves the rating standing whatever the counts say, and no dose evidence
+ * at all is absence, not contradiction.
  */
 export function sessionLogContradictsLowRating(sessionId: number): boolean {
-  const facts = outcomeFactsForSession(sessionId);
-  if (!facts) return false;
-  if (hasSkippedOrPartialDose(facts)) return false;
-  const doses = doseRows(facts);
-  if (!doses.length) return false;
-  return doses.every(isMetOrExceeded);
+  const tally = doseContradictionTally(sessionId);
+  if (!tally) return false;
+  const done = tally.met + tally.exceeded;
+  if (done === 0) return false;
+  if (tally.under_full_load > 0) return false;
+  if (tally.short === 0) return true;
+  return done >= tally.short && tally.exceeded > 0;
+}
+
+export function latestSessionIdOnDate(date: string | null | undefined): number | null {
+  const day = String(date ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const row = db
+    .prepare(`SELECT id FROM sessions WHERE date = ? ORDER BY id DESC LIMIT 1`)
+    .get(day) as { id?: number } | undefined;
+  const id = Number(row?.id);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+export function completedSessionOnDate(
+  date: string | null | undefined
+): { id: number; performance: number | null } | null {
+  const day = String(date ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const row = db
+    .prepare(
+      `SELECT id, performance, finished_at FROM sessions WHERE date = ? ORDER BY id DESC LIMIT 1`
+    )
+    .get(day) as { id?: number; performance?: number | null; finished_at?: string | null } | undefined;
+  const id = Number(row?.id);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  if (row?.finished_at == null && !sessionHasLoggedWork(id)) return null;
+  const performance = row?.performance == null ? null : Number(row.performance);
+  return { id, performance: Number.isFinite(performance as number) ? (performance as number) : null };
+}
+
+function sessionHasLoggedWork(sessionId: number): boolean {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM logged_sets WHERE session_id = ?`)
+    .get(sessionId) as { n?: number } | undefined;
+  return Number(row?.n) > 0;
+}
+
+/** A later completed session that met its prescribed doses closes an earlier low rating. */
+export function laterCompletedSessionMetDoses(afterDate: string, throughDate: string): boolean {
+  const after = String(afterDate ?? "").slice(0, 10);
+  const through = String(throughDate ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(after) || !/^\d{4}-\d{2}-\d{2}$/.test(through)) return false;
+  const rows = db
+    .prepare(
+      `SELECT id FROM sessions
+        WHERE date > ? AND date <= ?
+          AND (finished_at IS NOT NULL OR id IN (SELECT session_id FROM logged_sets))
+        ORDER BY date ASC, id ASC`
+    )
+    .all(after, through) as { id: number }[];
+  return rows.some((row) => sessionLogContradictsLowRating(Number(row.id)));
 }
 
 export function sessionHasComparableDoseShortfall(sessionId: number): boolean {

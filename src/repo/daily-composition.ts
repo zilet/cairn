@@ -4,7 +4,7 @@ import { normalizeSessionSuggestionResult } from "./adaptive-session.js";
 // forgets this import still typechecks and then throws at runtime.
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { cardioPlanIdentity } from "./cardio-plan-identity.js";
-import { canonicalGroup } from "./exercise-canon.js";
+import { canonicalGroup, normalizedExerciseKey } from "./exercise-canon.js";
 import { cardioPainRelevance, REACH_NO_ROOM_WHY, type DailyDecisionEnvelope } from "./daily-decision.js";
 import {
   equipmentCompatibility,
@@ -102,11 +102,65 @@ function scaledTarget(value: unknown, factor: number): number | null {
   return Math.round(n * factor * 100) / 100;
 }
 
+const ADAPTATION_NOTE_BUDGET = 500;
+
+// The athlete's own note is never truncated. It carries their safety cues — a
+// "sharp pain = stop" sits at the END of a long one — so trimming the tail to fit
+// a composition sentence would cut exactly the line that must survive. The
+// server's sentence is the part that yields: if the prefix will not fit in front
+// of the existing note, the note stands alone.
 function adaptationNote(note: unknown, text: string): string {
   const existing = String(note ?? "").trim();
-  if (!existing) return text;
-  if (existing.toLowerCase().includes(text.toLowerCase())) return existing.slice(0, 500);
-  return `${text}. ${existing}`.slice(0, 500);
+  if (!existing) return String(text).slice(0, ADAPTATION_NOTE_BUDGET);
+  if (existing.toLowerCase().includes(text.toLowerCase())) return existing;
+  const lead = `${String(text).replace(/[.]+$/, "")}. `;
+  if (lead.length + existing.length > ADAPTATION_NOTE_BUDGET) return existing;
+  return `${lead}${existing}`;
+}
+
+// Athlete-facing composition notes. Each branch is a SET rotated by day + exercise
+// so two lifts in the same state on one screen do not print the same sentence, and
+// one lift stays stable all day. Index 0 is the canonical phrasing.
+export const REDUCED_AREA_NOTES: readonly [string, ...string[]] = [
+  "Kept light — this area is still carrying recent work",
+  "This area is still working through what you did recently, so it stays light today",
+  "Keeping this one light; the area hasn't fully come back from the last few days",
+  "A lighter look here — this area is still carrying recent work",
+  "Still some recent work sitting in this area, so it stays on the lighter side",
+];
+
+export const EASED_TODAY_NOTES: readonly [string, ...string[]] = [
+  "Eased for today.",
+  "Eased for today. This one is set a little easier.",
+  "Eased for today. Leave a little more in the tank on this lift.",
+  "Eased for today. Keep the effort honest and stop a bit earlier.",
+];
+
+export const HOLD_TARGET_NOTES: readonly [string, ...string[]] = [
+  "Holding the current target today",
+  "Same target as last time — hold here",
+  "Keep this one where it is today",
+  "No change on the load today; hold what you've been using",
+];
+
+function compositionNoteFor(
+  variants: readonly [string, ...string[]],
+  date: string,
+  code: string,
+  exercise: unknown
+): string {
+  return pickDayVariant(variants, date, `daily-composition:${code}:${normalizedExerciseKey(String(exercise ?? ""))}`);
+}
+
+// A hold/deload already has a progression why on the card. Prepending a second
+// hold sentence is the double-speak this module used to print every morning.
+function itemAlreadyHasProgressionHoldWhy(
+  candidate: DailyDecisionEnvelope["candidates"][number] | undefined
+): boolean {
+  const action = candidate?.action;
+  if (action !== "hold" && action !== "deload") return false;
+  const why = String(candidate?.progression_evidence?.why ?? "").trim();
+  return why.length > 0;
 }
 
 function trustedCandidateMetadata(candidate: DailyDecisionEnvelope["candidates"][number] | undefined) {
@@ -720,12 +774,19 @@ export function normalizeComposedSession(
         if (weight !== next.target_weight) changed = true;
         next.target_weight = weight;
       }
+      // Reduced-area and day-level easing say something the progression why does
+      // not (this area is still carrying work; today's cap came down). Always add.
       next.note = adaptationNote(
         next.note,
-        isReduced ? "Kept light — this area is still carrying recent work" : "Eased for today"
+        isReduced
+          ? compositionNoteFor(REDUCED_AREA_NOTES, envelope.date, "reduced", next.exercise)
+          : compositionNoteFor(EASED_TODAY_NOTES, envelope.date, "eased", next.exercise)
       );
-    } else if (hold) {
-      next.note = adaptationNote(next.note, "Holding the current target today");
+    } else if (hold && !itemAlreadyHasProgressionHoldWhy(candidate)) {
+      next.note = adaptationNote(
+        next.note,
+        compositionNoteFor(HOLD_TARGET_NOTES, envelope.date, "hold", next.exercise)
+      );
     }
     capped.push(next);
   }

@@ -6,6 +6,7 @@ import {
 } from "./foodCapture.js";
 import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocumentKind } from "./healthDocumentKinds.js";
 import { CONTEXT_TAG_VOCAB, isContextTagKey } from "./contextTags.js";
+import { localDateISO } from "./repo/shared.js";
 
 type ChatActionRecord = Record<string, unknown>;
 
@@ -38,6 +39,7 @@ export const CHAT_ACTION_TYPES = [
   "log_measurement",
   "report_training_symptom",
   "resolve_training_symptom",
+  "log_checkin",
   "revert_decision",
 ] as const;
 
@@ -286,6 +288,16 @@ export interface ResolveTrainingSymptomAction extends ChatActionBase {
   on?: unknown;
 }
 
+export interface LogCheckinAction extends ChatActionBase {
+  type: "log_checkin";
+  energy?: number | null;
+  sleep_feel?: number | null;
+  soreness?: number | null;
+  mood?: number | null;
+  note?: unknown;
+  date?: unknown;
+}
+
 export interface RevertDecisionAction extends ChatActionBase {
   type: "revert_decision";
   id: number | string;
@@ -316,6 +328,7 @@ export type ChatAction =
   | LogMeasurementAction
   | ReportTrainingSymptomAction
   | ResolveTrainingSymptomAction
+  | LogCheckinAction
   | RevertDecisionAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
@@ -587,6 +600,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `Use resolve_training_symptom ONLY when the athlete tells you an open pain note is done — "my knee's fine now, close that", "the shoulder's healed". Name the AREA they named; the server closes the open record for that place and does nothing when none matches. Closing is their call: never infer it from a good session, a missing complaint, or your own read, and never diagnose. If they say it came back instead, that is not this action.`,
     ],
   },
+  log_checkin: {
+    type: "log_checkin",
+    applyMode: "immediate",
+    shape: `{ "type": "log_checkin", "energy": 1-5, "sleep_feel": 1-5, "soreness": 1-5, "mood": 1-5, "note": "<optional>", "date": "YYYY-MM-DD|omit" }`,
+    guidance: [
+      `Use log_checkin when the athlete tells you how they feel today or how a session felt — "I feel great", "I feel rough", "that session was hard". energy, sleep_feel, soreness, and mood are all 1 (low) to 5 (great) — the same scale the app writes. Omit any field they did not speak to; never guess a missing rating. A note is optional free text and is stored verbatim. date must be a real YYYY-MM-DD on or before today; omit it rather than inventing "yesterday" or a future day. This writes the same check-in the app does — absence of a check-in is silence.`,
+    ],
+  },
   revert_decision: {
     type: "revert_decision",
     applyMode: "immediate",
@@ -655,6 +676,30 @@ function isKnownType(type: unknown): type is ChatActionType {
 
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function clampChatScale(value: unknown, min: number, max: number): number | null {
+  if (value == null || (typeof value === "string" && value.trim() === "")) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+// A check-in date is a real calendar YYYY-MM-DD on or before local today.
+// "yesterday", "2026-13-99", and a future day are dropped so addCheckin
+// falls through to today — otherwise they land in checkins.date forever
+// invisible to getCheckinByDate.
+export function chatCheckinDate(value: unknown, today: string = localDateISO()): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return undefined;
+  const [year, month, day] = raw.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {
+    return undefined;
+  }
+  if (raw > today) return undefined;
+  return raw;
 }
 
 function finiteId(value: unknown): value is number | string {
@@ -788,6 +833,24 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       return nonBlank(value.area_text) && value.area_text.trim().length <= SYMPTOM_AREA_INPUT_MAX
         ? { ...value, type: "resolve_training_symptom", area_text: value.area_text.trim() }
         : null;
+    case "log_checkin": {
+      const energy = clampChatScale(value.energy, 1, 5);
+      const sleepFeel = clampChatScale(value.sleep_feel, 1, 5);
+      const soreness = clampChatScale(value.soreness, 1, 5);
+      const mood = clampChatScale(value.mood, 1, 5);
+      const note = nonBlank(value.note) ? value.note.trim() : null;
+      if (energy == null && sleepFeel == null && soreness == null && mood == null && !note) return null;
+      return {
+        ...value,
+        type: "log_checkin",
+        energy,
+        sleep_feel: sleepFeel,
+        soreness,
+        mood,
+        note,
+        date: chatCheckinDate(value.date),
+      };
+    }
     case "revert_decision":
       return finiteId(value.id) ? { ...value, type: "revert_decision", id: value.id } : null;
   }

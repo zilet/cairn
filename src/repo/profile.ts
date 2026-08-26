@@ -22,7 +22,7 @@ import {
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getExerciseGuideByExerciseId, getGuideSuggestionForExercise } from "./exercise-guide.js";
 import { findExercise } from "./exercises.js";
-import { estimateExpenditure, type ExpenditureEstimate } from "./expenditure.js";
+import { estimateExpenditure, measuredRmrWeightAdjustment, type ExpenditureEstimate } from "./expenditure.js";
 import { lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getLatestNutritionTarget, setNutritionTarget } from "./nutrition.js";
@@ -2466,9 +2466,19 @@ export function computeGoalCheck(
   const formulaBmr = 10 * kg + 6.25 * p.height_cm - 5 * p.age + sexAdj;
   const measuredRmrOpts = { syncHealthDocs: opts.syncMeasuredRmr !== false };
   const measuredRmr = latestMeasuredRmr(measuredRmrOpts);
-  const measuredRmrQuality = measuredRmr ? measuredRmrAssessment(localDateISO(), measuredRmrOpts) : null;
+  const rmrAdjustment = measuredRmr
+    ? measuredRmrWeightAdjustment({ kcal: measuredRmr.kcal, date: measuredRmr.date }, localDateISO())
+    : null;
+  const measuredRmrQualityRaw = measuredRmr ? measuredRmrAssessment(localDateISO(), measuredRmrOpts) : null;
+  const measuredRmrQuality = measuredRmrQualityRaw
+    ? { ...measuredRmrQualityRaw, adjusted_kcal: rmrAdjustment?.adjusted_kcal ?? null }
+    : null;
   const measuredWeight = measuredRmrQuality?.freshness_weight ?? 0;
-  const bmr = measuredRmrQuality ? formulaBmr + (measuredRmrQuality.kcal - formulaBmr) * measuredWeight : formulaBmr;
+  const measuredKcal = measuredRmrQuality?.adjusted_kcal ?? measuredRmrQuality?.kcal;
+  const bmr =
+    measuredRmrQuality && measuredKcal != null
+      ? formulaBmr + (measuredKcal - formulaBmr) * measuredWeight
+      : formulaBmr;
   // The manual activity factor is the cold-start seed. estimateExpenditure owns
   // the complete prior hierarchy + outcome fusion so the Goal and Energy
   // surfaces cannot disagree about which maintenance estimate is active.
@@ -2651,6 +2661,16 @@ export function computeGoalCheck(
     bmr_source: measuredRmrQuality?.freshness === "fresh" ? "measured" : measuredWeight > 0 ? "blended" : "formula",
     bmr_formula: Math.round(formulaBmr),
     measured_rmr: measuredRmrQuality,
+    measured_rmr_adjusted_for_lb: rmrAdjustment
+      ? {
+          original_kcal: measuredRmr?.kcal ?? rmrAdjustment.adjusted_kcal - rmrAdjustment.adjustment_kcal,
+          adjusted_kcal: rmrAdjustment.adjusted_kcal,
+          test_weight_lb: rmrAdjustment.test_weight_lb,
+          current_weight_lb: rmrAdjustment.current_weight_lb,
+          delta_lb: rmrAdjustment.delta_lb,
+          test_weight_date: rmrAdjustment.test_weight_date,
+        }
+      : null,
     tdee,
     tdee_source,
     tdee_basis,

@@ -1819,6 +1819,26 @@ test("a grind at the ceiling is a catch-up hold, not a promoted overload", () =>
   assert.match(p.why, /50 lb/, "the catch-up hold names the real working weight");
 });
 
+test("autoregBrake skips a low performance rating when the completed log met every dose", () => {
+  earnedOverload("Barbell Bench Press", "chest");
+  const date = isoDaysAgo(1);
+  db.prepare(`INSERT INTO sessions (date, performance, finished_at) VALUES (?, 2, datetime('now'))`).run(date);
+
+  const held = nextPrescription("Barbell Bench Press");
+  assert.equal(held.action, "hold", "without a contradicting log the felt 2 still holds");
+  assert.equal(held.autoregulated, true);
+
+  linkLatestDoseOutcome("Barbell Bench Press", date, {
+    prescribedSets: 3,
+    achievedSets: 3,
+    challengeVerdict: "met",
+  });
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "overload", "a completed log outranks a felt 2");
+  assert.equal(p.suggested.weight, 190);
+  assert.ok(!p.autoregulated, "the felt 2 did not shape this step");
+});
+
 test("an unfinished dose behind the plan stays a catch-up hold", () => {
   makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
   planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
