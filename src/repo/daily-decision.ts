@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import { truncateAtWord } from "../brain/contract-utils.js";
 import { db } from "../db.js";
-import { getCheckinByDate, getRecoverySummary } from "./coach.js";
+import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { cardioPlanIdentity } from "./cardio-plan-identity.js";
-import { dayRead } from "./day-read.js";
+import { dayPlanningSignalState, dayRead, supportiveCapacityBacksDay } from "./day-read.js";
 import {
   equipmentCompatibility,
   inferExerciseEquipment,
@@ -21,11 +21,11 @@ import { planDayProgression, recentAutoregulation } from "./progression.js";
 import { personalResponseModifierFor } from "./reaction-model.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { dayPlanningSignalState } from "./day-read.js";
 import { getSettings } from "./settings.js";
-import { sensorIsCurrent } from "./sensor-freshness.js";
+import { SENSOR_MAX_AGE_DAYS, sensorAgeDays, sensorIsCurrent } from "./sensor-freshness.js";
+import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { addDaysISO, localDateISO } from "./shared.js";
-import { hasFreshBrake } from "./signal-state.js";
+import { hasFreshBrake, type SignalConfidence, type SignalDimensionState } from "./signal-state.js";
 import {
   getTrainingIntent,
   type EnduranceRole,
@@ -58,8 +58,15 @@ import { listTrainingSymptoms } from "./training-symptoms.js";
 // under `training_drive = "push"` with no fresh brake and unsaturated main lifts
 // may reach inside the session; `hold_aggression` keeps the reach flag and trims
 // only the challenge item.
+//
+// Caps (v7): train-anyway duration comes from the plan day's own estimate (capped
+// at 40 only when a brake is present); soreness routes instead of softening only
+// on an actually-open day; `recovery.readiness` stays raw and the capacity
+// deferral happens at read time; reach can also be backed by the same supportive-
+// capacity path dayRead uses for the drive rule. Snapshot gained recovery_capacity
+// corroboration fields, so identity moves.
 
-export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v6";
+export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v7";
 
 export const DAILY_DECISION_REASONS = [
   "injury_exclusion",
@@ -129,6 +136,20 @@ export interface DailyDecisionSnapshot {
     rhr_drift: "down" | "flat" | "up" | null;
     sleep_drift: "down" | "flat" | "up" | null;
   };
+  // Compact view of the unified signal state's recovery_capacity. Omit-when-idle
+  // so a snapshot with nothing to say serializes as it did before the field
+  // existed. `snapshot.recovery.readiness` stays RAW; `effectiveRecoveryReadiness`
+  // is the one place the capacity deferral is applied (supportive never reads
+  // "low"; constrained reads "low"). Fresh-field flags back a reach the same way
+  // they back dayRead's drive rule.
+  recovery_capacity?: {
+    status: SignalDimensionState["status"];
+    confidence: SignalConfidence;
+    fresh_hrv?: boolean;
+    fresh_resting_hr?: boolean;
+    fresh_sleep?: boolean;
+    slept_enough?: boolean;
+  };
   recovery_cycle: {
     id: number;
     effective_status: "active" | "recheck";
@@ -150,6 +171,9 @@ export interface DailyDecisionSnapshot {
     performance: number | null;
     joint_pain: string | null;
     low_performance_count?: number;
+    // A completed log outranks a felt low rating. Omit-when-false so a snapshot
+    // that never asked the question serializes as it did before the key existed.
+    log_contradicts_low_rating?: boolean;
   } | null;
   constraints: {
     injuries: Array<{
@@ -486,6 +510,16 @@ function recoveryReadiness(recovery: any, asOf: string): "low" | "moderate" | "h
   return "low";
 }
 
+function effectiveRecoveryReadiness(
+  snapshot: DailyDecisionSnapshot
+): "low" | "moderate" | "high" | null {
+  const capacity = snapshot.recovery_capacity;
+  const raw = snapshot.recovery.readiness;
+  if (capacity?.status === "constrained") return "low";
+  if (capacity?.status === "supportive") return raw === "low" ? "moderate" : raw;
+  return raw;
+}
+
 const ILLNESS_RE = /\b(ill|sick|flu|cold|fever|covid|infection|unwell)\b/i;
 const TRAIN_INTENT_RE =
   /^(?:(?:i|we)\s+(?:still\s+)?(?:(?:want|choose|plan|intend)\s+to|(?:am|are)\s+going\s+to|will|can)\s+)?(?:train anyway|train|lift|push|do (?:the )?full (?:session|workout)|full (?:session|workout))(?:\s+(?:today|now|anyway))?[.!]?$/i;
@@ -504,7 +538,7 @@ function recentLowPerformanceCount(date: string): number {
   try {
     const rows = db
       .prepare(
-        `SELECT DISTINCT s.date
+        `SELECT s.id AS id, s.date AS date
            FROM sessions s
            LEFT JOIN daily_session_compositions d
              ON d.session_id = s.id AND d.status = 'active'
@@ -516,13 +550,36 @@ function recentLowPerformanceCount(date: string): number {
               OR json_extract(d.provenance_json, '$.daily_decision.caps.intensity') IS NULL
               OR json_extract(d.provenance_json, '$.daily_decision.caps.intensity') = 'normal'
             )
-          ORDER BY s.date DESC
-          LIMIT 2`
+          ORDER BY s.date DESC`
       )
       .all(since, date) as any[];
-    return rows.length;
+    const dates = new Set<string>();
+    for (const row of rows) {
+      if (sessionLogContradictsLowRating(Number(row.id))) continue;
+      dates.add(String(row.date));
+      if (dates.size >= 2) break;
+    }
+    return dates.size;
   } catch {
     return 0;
+  }
+}
+
+function latestPerformanceContradictedByLog(date: string): boolean {
+  const today = String(date).slice(0, 10);
+  const since = addDaysISO(today, -2) ?? today;
+  try {
+    const row = db
+      .prepare(
+        `SELECT id, performance FROM sessions
+          WHERE date >= ? AND date <= ? AND performance IS NOT NULL
+          ORDER BY date DESC, id DESC LIMIT 1`
+      )
+      .get(since, today) as any;
+    if (!row || Number(row.performance) > 2) return false;
+    return sessionLogContradictsLowRating(Number(row.id));
+  } catch {
+    return false;
   }
 }
 
@@ -576,6 +633,7 @@ export function gatherDailyDecisionSnapshot(
   const selection = (selected?.selection ?? {}) as Record<string, any>;
 
   const recoverySummary = safe(() => getRecoverySummary(14, undefined, d), null);
+  const supportSlice = compactSignalSupport(d, recoverySummary);
   const read = safe(() => dayRead(d, recoverySummary), null);
   const signals = (read?.signals ?? {}) as Record<string, any>;
 
@@ -748,6 +806,7 @@ export function gatherDailyDecisionSnapshot(
             performance: finite(autoreg.performance),
             joint_pain: prose(autoreg.joint_pain, 300),
             low_performance_count: recentLowPerformanceCount(d),
+            ...(latestPerformanceContradictedByLog(d) ? { log_contradicts_low_rating: true } : {}),
           }
         : null,
     constraints: {
@@ -850,21 +909,58 @@ export function gatherDailyDecisionSnapshot(
     // so writing the key with a null value would change every fingerprint on the
     // planet the day this shipped. Absent means absent.
     ...(planComplexityScale == null ? {} : { personal_response: { plan_complexity: planComplexityScale } }),
-    ...(compactSignalSupport(d, recoverySummary) ?? {}),
+    ...(supportSlice.signal_support ? { signal_support: supportSlice.signal_support } : {}),
+    ...(supportSlice.recovery_capacity ? { recovery_capacity: supportSlice.recovery_capacity } : {}),
+  };
+}
+
+function lastNightSleepsEnough(date: string): boolean {
+  const lastNight = safe(() => latestSleep(SENSOR_MAX_AGE_DAYS.sleep, date), null);
+  const lastNightAge = sensorAgeDays(lastNight?.date ?? null, date);
+  return (
+    lastNightAge != null &&
+    lastNightAge >= 0 &&
+    lastNightAge <= 1 &&
+    lastNight?.total_min != null &&
+    Number(lastNight.total_min) >= 360
+  );
+}
+
+function compactRecoveryCapacity(
+  state: ReturnType<typeof dayPlanningSignalState> | null,
+  date: string
+): DailyDecisionSnapshot["recovery_capacity"] | null {
+  const dim = state?.dimensions.recovery_capacity;
+  if (!dim) return null;
+  if (dim.status === "unknown" && dim.confidence === "none") return null;
+  const fresh = (field: string) =>
+    dim.evidence.some((item) => item.field === field && item.freshness !== "stale");
+  return {
+    status: dim.status,
+    confidence: dim.confidence,
+    fresh_hrv: fresh("hrv"),
+    fresh_resting_hr: fresh("resting_hr"),
+    fresh_sleep: fresh("sleep"),
+    slept_enough: lastNightSleepsEnough(date),
   };
 }
 
 function compactSignalSupport(
   date: string,
   recovery: unknown
-): { signal_support: DailyDecisionSignalSupport } | null {
+): {
+  signal_support?: DailyDecisionSignalSupport;
+  recovery_capacity?: DailyDecisionSnapshot["recovery_capacity"];
+} {
   const drive = safe(() => (getSettings().training_drive === "push" ? "push" : "steady"), "steady") as
     | "push"
     | "steady";
   const state = safe(() => dayPlanningSignalState(date, { recovery }), null);
+  const recovery_capacity = compactRecoveryCapacity(state, date) ?? undefined;
   if (!state) {
-    if (drive === "steady") return null;
+    if (drive === "steady") return { recovery_capacity };
     return {
+      recovery_capacity,
       signal_support: {
         training_drive: drive,
         backed: false,
@@ -887,8 +983,11 @@ function compactSignalSupport(
       ? rawDirective
       : "proceed";
   const fresh_brake = hasFreshBrake(state.dimensions);
-  if (drive === "steady" && !backed && training_directive === "proceed" && !fresh_brake) return null;
+  if (drive === "steady" && !backed && training_directive === "proceed" && !fresh_brake) {
+    return { recovery_capacity };
+  }
   return {
+    recovery_capacity,
     signal_support: {
       training_drive: drive,
       backed,
@@ -1047,6 +1146,16 @@ const PLAN_COMPLEXITY_EASE_DETAILS: readonly string[] = [
   "A simpler shape today; the longer days haven't been fitting lately",
 ];
 
+// Train-anyway on a rest morning: keep the working load, leave the extra top set
+// off, keep the clock shorter. Several phrasings because a stable input used to
+// print one sentence every time they chose to train.
+export const TRAIN_ANYWAY_REST_RATIONALE: readonly string[] = [
+  "Training by choice — keep the working load, leave the extra top set off, and keep the session shorter.",
+  "Training by choice — same working sets, no extra top set, and a shorter window.",
+  "Training by choice — hold the working load, skip the extra top set, and keep it compact.",
+  "Training by choice — keep what you usually lift, leave the extra top set off, and keep it shorter.",
+];
+
 // Athlete-facing reach lines. A backed push morning is a reason to go after a
 // little more inside the session, never a gate and never a score. Rotated so a
 // stable input does not print one sentence for weeks.
@@ -1076,6 +1185,18 @@ export const REACH_NO_ROOM_WHY: readonly [string, ...string[]] = [
 
 const EMPTY_REACH: DailyDecisionReach = { level: null, backed_by: [], why: "" };
 
+const TRAIN_DAY_DEFAULT_MINUTES = 60;
+
+function planDayDurationEstimate(snapshot: DailyDecisionSnapshot): number {
+  const cardioMins = snapshot.plan_items
+    .map((it) => (String(it.kind ?? "").toLowerCase() === "cardio" ? finite(it.target_duration_min) : null))
+    .filter((n): n is number => n != null && n > 0);
+  const hasStrength = snapshot.plan_items.some((it) => String(it.kind ?? "").toLowerCase() !== "cardio");
+  if (hasStrength) return TRAIN_DAY_DEFAULT_MINUTES;
+  if (cardioMins.length) return Math.round(cardioMins.reduce((a, b) => a + b, 0));
+  return TRAIN_DAY_DEFAULT_MINUTES;
+}
+
 // Early-out only: if the first plan item's group is already saturated, do not
 // license a reach. Composition re-checks the ACTUAL surviving host (the first
 // plan item may have been excluded) and refuses a host with no group.
@@ -1097,16 +1218,33 @@ function resolveReach(
   const support = snapshot.signal_support;
   if (!support || kind !== "train") return { reach: EMPTY_REACH, trimmed: false };
   if (support.training_drive !== "push") return { reach: EMPTY_REACH, trimmed: false };
-  if (!support.backed) return { reach: EMPTY_REACH, trimmed: false };
   if (support.fresh_brake) return { reach: EMPTY_REACH, trimmed: false };
+  const capacity = snapshot.recovery_capacity;
+  const capacityBacked = supportiveCapacityBacksDay({
+    status: capacity?.status,
+    confidence: capacity?.confidence,
+    freshHrv: capacity?.fresh_hrv === true,
+    freshRestingHr: capacity?.fresh_resting_hr === true,
+    freshSleep: capacity?.fresh_sleep === true,
+    sleptEnough: capacity?.slept_enough === true,
+    freshBrake: support.fresh_brake,
+    trainingDirective: support.training_directive,
+  });
+  if (!support.backed && !capacityBacked) return { reach: EMPTY_REACH, trimmed: false };
   const directive = support.training_directive;
-  if (directive !== "proceed" && directive !== "hold_aggression") return { reach: EMPTY_REACH, trimmed: false };
+  if (support.backed) {
+    if (directive !== "proceed" && directive !== "hold_aggression") return { reach: EMPTY_REACH, trimmed: false };
+  } else if (directive !== "proceed") {
+    return { reach: EMPTY_REACH, trimmed: false };
+  }
   const mainGroup = mainLiftGroup(snapshot);
   if (mainGroup && saturated.includes(mainGroup)) return { reach: EMPTY_REACH, trimmed: false };
-  const backed_by = Array.isArray(support.backed_by)
-    ? support.backed_by.filter((field) => typeof field === "string" && field.trim()).slice(0, 8)
-    : [];
-  const trimmed = directive === "hold_aggression";
+  const backed_by = support.backed
+    ? Array.isArray(support.backed_by)
+      ? support.backed_by.filter((field) => typeof field === "string" && field.trim()).slice(0, 8)
+      : []
+    : ["recovery_capacity"];
+  const trimmed = support.backed && directive === "hold_aggression";
   return {
     reach: {
       level: "push",
@@ -1215,9 +1353,29 @@ export function buildDailySessionDecision(
   const highSoreness =
     (snapshot.feedback?.soreness != null && snapshot.feedback.soreness >= 4) ||
     (snapshot.checkin?.soreness != null && snapshot.checkin.soreness >= 4);
-  const lowPerformance = snapshot.feedback?.performance != null && snapshot.feedback.performance <= 2;
+  const readiness = effectiveRecoveryReadiness(snapshot);
+  // Caps may open (soreness routes rather than softens; train-anyway volume
+  // stays normal) only on a day that is actually open: no fresh brake, training
+  // still `proceed`, and — for soreness — recovery_capacity already supportive.
+  // A missing signal_support is treated as open so pure unit fixtures that
+  // never stamped one keep their existing answers.
+  const capsMayOpen =
+    snapshot.signal_support?.fresh_brake !== true &&
+    (snapshot.signal_support?.training_directive == null ||
+      snapshot.signal_support.training_directive === "proceed");
+  // Soreness is a ROUTING signal: the muscle envelope already rotates away from
+  // the sore groups. It only skips the whole-day ease when the morning is
+  // actually open AND recovery_capacity is supportive. A fresh brake or a
+  // non-proceed directive keeps volume reduced even if capacity reads well.
+  const sorenessRoutes =
+    highSoreness && capsMayOpen && snapshot.recovery_capacity?.status === "supportive";
+  const sorenessSoftensDay = highSoreness && !sorenessRoutes;
+  const lowPerformance =
+    snapshot.feedback?.performance != null &&
+    snapshot.feedback.performance <= 2 &&
+    snapshot.feedback.log_contradicts_low_rating !== true;
   const repeatedUnder = lowPerformance && Number(snapshot.feedback?.low_performance_count ?? 1) >= 2;
-  if (snapshot.recovery.readiness === "low") {
+  if (readiness === "low") {
     fire(precedence, baseKind === "rest" ? "low_recovery_rest" : "low_recovery_easy");
     soft.push({
       code: baseKind === "rest" ? "low_recovery_rest" : "low_recovery_easy",
@@ -1262,7 +1420,7 @@ export function buildDailySessionDecision(
       code: "athlete_override",
       text:
         baseKind === "rest"
-          ? "Training by choice — the session stays shorter and more conservative today."
+          ? pickDayVariant(TRAIN_ANYWAY_REST_RATIONALE, snapshot.date, "daily_decision:train_anyway_rest")
           : "Training by choice — today's safety context still shapes the session.",
     });
   } else if (override) {
@@ -1554,12 +1712,14 @@ export function buildDailySessionDecision(
       detail: pickDayVariant(PLAN_COMPLEXITY_EASE_DETAILS, snapshot.date, "plan_complexity_ease"),
     });
   }
+  const trainAnywayFromRest = trainAnyway && baseKind === "rest";
+  const trainAnywayLiftsQuiet = trainAnyway && (baseKind === "rest" || baseKind === "easy");
+  const trainAnywayKeepsReduced = trainAnywayFromRest && !capsMayOpen;
   const softenVolume =
     kind === "easy" ||
-    (trainAnyway && baseKind === "rest") ||
-    snapshot.recovery.readiness === "low" ||
-    highSoreness ||
-    consecutive >= 3 ||
+    readiness === "low" ||
+    sorenessSoftensDay ||
+    trainAnywayKeepsReduced ||
     snapshot.day_read.recovery_week ||
     longevityEase ||
     planComplexityEase;
@@ -1568,18 +1728,26 @@ export function buildDailySessionDecision(
   const intensity: DailyDecisionEnvelope["caps"]["intensity"] =
     kind === "rest" || kind === "easy"
       ? "easy"
-      : deloadPhase || repeatedUnder || (trainAnyway && baseKind === "rest")
+      : deloadPhase || repeatedUnder
         ? "deload"
-        : snapshot.recovery.readiness === "low" || highSoreness || lowPerformance || longevityEase
+        : trainAnywayFromRest || readiness === "low" || sorenessSoftensDay || lowPerformance || longevityEase
           ? "hold"
           : "normal";
-  let duration = requestMinutes ?? snapshot.day_read.est_minutes ?? null;
-  if (duration != null) {
-    if (kind === "rest") duration = Math.min(duration, 20);
-    else if (kind === "easy") duration = Math.min(duration, 40);
-    duration = Math.round(duration);
+  let duration: number | null;
+  if (trainAnywayLiftsQuiet) {
+    // When train-anyway lifts a rest/easy read, duration comes from the plan
+    // day's own estimate (or the ordinary train-day default) — never from the
+    // quiet read's 20-minute clock. Capped at 40 only when a brake is present.
+    const lifted = requestMinutes ?? planDayDurationEstimate(snapshot) ?? TRAIN_DAY_DEFAULT_MINUTES;
+    duration = Math.round(capsMayOpen ? lifted : Math.min(lifted, 40));
+  } else {
+    duration = requestMinutes ?? snapshot.day_read.est_minutes ?? null;
+    if (duration != null) {
+      if (kind === "rest") duration = Math.min(duration, 20);
+      else if (kind === "easy") duration = Math.min(duration, 40);
+      duration = Math.round(duration);
+    }
   }
-  if (trainAnyway && baseKind === "rest") duration = Math.min(duration ?? 40, 40);
   if (durationOverrideOnly && duration != null) duration = Math.min(duration, 35);
 
   // ---- Candidates (template intent only; custom leaves composition to Stage 3) ----

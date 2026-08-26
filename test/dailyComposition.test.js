@@ -1211,6 +1211,42 @@ function logBodyweight(exercise, date = "2031-06-20") {
   repo.logSetByName({ date, exercise, reps: 8 });
 }
 
+test("a rotated chest/shoulder day with sore legs still seats a reach on the first fresh compound", () => {
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Overhead Press", muscle_group: "shoulders", mode: "reps" });
+  logWorking("Bench Press", 155);
+  logWorking("Overhead Press", 95);
+  const env = reachEnvelope({
+    caps: { volume: "normal", intensity: "normal", duration_min: 60 },
+    muscles: {
+      required: ["chest", "shoulders"],
+      allowed: ["chest", "shoulders"],
+      reduced: ["quads", "hamstrings"],
+      excluded: [],
+      saturated: ["quads", "hamstrings"],
+    },
+    candidates: [
+      reachCandidate("Bench Press", 155, { muscle_group: "chest" }),
+      reachCandidate("Overhead Press", 95, { muscle_group: "shoulders" }),
+    ],
+  });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 7, target_weight: 155 },
+      { exercise: "Overhead Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 95 },
+    ]),
+    env
+  );
+  assert.ok(session);
+  const benches = session.items.filter((i) => i.exercise === "Bench Press");
+  assert.equal(benches.length, 2, "the first fresh compound splits into reach + working");
+  assert.equal(benches[0].sets, 1);
+  assert.ok(benches[0].reach);
+  assert.equal(validation.reach_landed, true);
+  assert.equal(env.reach.level, "push");
+  assert.ok(!env.soft_preferences.some((e) => e.code === "reach_no_room"));
+});
+
 test("a reach day injects exactly one top set on the first compound", () => {
   repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
   repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });

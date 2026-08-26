@@ -330,7 +330,7 @@ test("an unstarted persisted v4 adaptive composition is refreshed under v6 inste
   const refreshed = prepare({ date: DATE, source: "adaptive_plan" });
   assert.equal(refreshed.reused, false);
   assert.notEqual(refreshed.daily_session.id, Number(legacy.lastInsertRowid));
-  assert.equal(refreshed.daily_session.decision.policy_version, "daily_decision_v6");
+  assert.equal(refreshed.daily_session.decision.policy_version, "daily_decision_v7");
   assert.notEqual(refreshed.daily_session.decision.input_fingerprint, legacyFingerprint);
   assert.equal(
     db.prepare(`SELECT status FROM daily_session_compositions WHERE id = ?`).get(legacy.lastInsertRowid).status,
@@ -355,7 +355,7 @@ test("latest decision lookup ignores historical policy rows until v6 exists", ()
   seedPlan();
   const current = repo.decideDailySession(DATE).envelope;
   repo.recordDailySessionDecision(current);
-  assert.equal(repo.getLatestDailySessionDecision(DATE).policy_version, "daily_decision_v6");
+  assert.equal(repo.getLatestDailySessionDecision(DATE).policy_version, "daily_decision_v7");
   assert.equal(repo.getLatestDailySessionDecision(DATE).input_fingerprint, current.input_fingerprint);
 });
 
@@ -800,9 +800,10 @@ test("asking for a session on a rest day keeps its movements once accepted", () 
   assert.equal(accepted.daily_session.decision.baseline_kind, "rest");
   assert.equal(accepted.daily_session.decision.train_anyway, true);
   assert.ok(accepted.daily_session.items.length > 0, "the movements survive acceptance");
-  // Still a rest day underneath: the caps stay conservative, it is not a free pass.
+  // Still a rest day underneath: the working load holds, the clock stays shorter.
+  // Volume stays reduced here because the check-in is itself a recovery brake.
   assert.equal(accepted.daily_session.decision.caps.volume, "reduced");
-  assert.equal(accepted.daily_session.decision.caps.intensity, "deload");
+  assert.equal(accepted.daily_session.decision.caps.intensity, "hold");
 });
 
 test("legacy train-intent agent input persists train_anyway and conservative rest-day caps", () => {
@@ -818,7 +819,7 @@ test("legacy train-intent agent input persists train_anyway and conservative res
   assert.equal(accepted.daily_session.decision.kind, "train");
   assert.equal(accepted.daily_session.decision.train_anyway, true);
   assert.equal(accepted.daily_session.decision.caps.volume, "reduced");
-  assert.equal(accepted.daily_session.decision.caps.intensity, "deload");
+  assert.equal(accepted.daily_session.decision.caps.intensity, "hold");
   assert.ok(accepted.daily_session.items.every((item) => item.sets == null || item.sets <= 3));
 });
 

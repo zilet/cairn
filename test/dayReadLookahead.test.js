@@ -180,7 +180,8 @@ test("the coach context and the rule answer the tomorrow question identically", 
 
   const read = repo.dayRead(REF);
   assert.equal(read.signals.tomorrow_holds, undefined, "the rule reads tomorrow as open");
-  assert.equal(read.decision.rule_code, "accumulated_load_rest");
+  assert.equal(read.kind, "train", "uncorroborated stacked days with a due plan stay open");
+  assert.equal(read.decision.rule_code, "planned_training");
   assert.equal(repo.getCoachContext().tomorrow_holds, null, "and so does the prompt");
 });
 
@@ -189,8 +190,9 @@ test("the coach context and the rule answer the tomorrow question identically", 
 test("stacked loading days plus a commitment tomorrow re-times the rest into an easy training day", () => {
   seedStackedMorning();
   const baseline = repo.dayRead(REF);
-  assert.equal(baseline.kind, "rest", "without the look-ahead this morning is the rhythm rest");
-  assert.equal(baseline.decision.rule_code, "accumulated_load_rest");
+  assert.equal(baseline.kind, "train", "without the look-ahead this morning is the due plan day");
+  assert.equal(baseline.decision.rule_code, "planned_training");
+  assert.equal(baseline.signals.consecutive_training_days, 3);
 
   bloodworkTomorrow();
   const read = repo.dayRead(REF);
@@ -234,7 +236,7 @@ test("a trip starting tomorrow re-times the rest; an injury row starting tomorro
   seedStackedMorning();
   repo.addContextEvent({ kind: "injury", title: "Scheduled procedure", start_date: TOMORROW });
   const injury = repo.dayRead(REF);
-  assert.equal(injury.kind, "rest", "a clinical shape is never a reason to reach for load today");
+  assert.equal(injury.kind, "rest", "a clinical shape starting tomorrow still produces a protective read");
   assert.equal(injury.decision.rule_code, "accumulated_load_rest");
   // Still SEEN, though — the prompt and the ledger carry it either way.
   assert.equal(injury.signals.tomorrow_holds[0].blocks_training, false);
@@ -250,7 +252,8 @@ test("a light session already logged today closes the day; the calendar does not
   bloodworkTomorrow();
 
   const read = repo.dayRead(REF);
-  assert.notEqual(read.decision.rule_code, "lookahead_retimed_training");
+  assert.equal(read.kind, "easy");
+  assert.equal(read.decision.rule_code, "logged_light_work_today");
   // Still SEEN — the look-ahead is context either way.
   assert.equal(read.signals.tomorrow_holds[0].blocks_training, true);
 });
@@ -266,8 +269,8 @@ test("an event the athlete says claims nothing stops blocking, whatever its kind
 
   const read = repo.dayRead(REF);
   assert.equal(read.signals.tomorrow_holds[0].blocks_training, false, "the athlete's own word outranks the kind");
-  assert.equal(read.kind, "rest");
-  assert.equal(read.decision.rule_code, "accumulated_load_rest");
+  assert.equal(read.kind, "train");
+  assert.equal(read.decision.rule_code, "planned_training");
 });
 
 test("an illness filed as a life event is a clinical shape, not a commitment", () => {
@@ -281,8 +284,8 @@ test("an illness filed as a life event is a clinical shape, not a commitment", (
 
   const read = repo.dayRead(REF);
   assert.equal(read.signals.tomorrow_holds[0].blocks_training, false);
-  assert.notEqual(read.decision.rule_code, "lookahead_retimed_training");
-  assert.equal(read.kind, "rest");
+  assert.equal(read.kind, "rest", "an illness starting tomorrow is a protective read, not a reason to load today");
+  assert.equal(read.decision.rule_code, "accumulated_load_rest");
 });
 
 test("the consecutive-day ceiling bounds the re-timing: four days flips, five does not", () => {
@@ -299,7 +302,8 @@ test("the consecutive-day ceiling bounds the re-timing: four days flips, five do
   bloodworkTomorrow();
   const five = repo.dayRead(REF);
   assert.notEqual(five.decision.rule_code, "lookahead_retimed_training", "five days in a row is the ceiling");
-  assert.equal(five.kind, "rest");
+  assert.equal(five.kind, "easy", "at the ceiling with supportive recovery the read is easy, not rest");
+  assert.equal(five.decision.rule_code, "accumulated_load_rest");
 });
 
 // ---------- (c) safety-grounded rest is NEVER re-timed ----------
@@ -346,8 +350,8 @@ test("with nothing on tomorrow the signal is absent and the read is byte-for-byt
 
   assert.equal(read.signals.tomorrow_holds, undefined);
   assert.equal(read.signals.lookahead_retimed, undefined);
-  assert.equal(read.kind, "rest");
-  assert.equal(read.decision.rule_code, "accumulated_load_rest");
+  assert.equal(read.kind, "train");
+  assert.equal(read.decision.rule_code, "planned_training");
   assert.equal(
     read.signals.signal_state.dimensions.life_capacity.evidence.some((item) => item.field === "tomorrow_holds"),
     false
@@ -360,7 +364,8 @@ test("an event starting the day AFTER tomorrow changes nothing", () => {
 
   const read = repo.dayRead(REF);
   assert.equal(read.signals.tomorrow_holds, undefined);
-  assert.equal(read.decision.rule_code, "accumulated_load_rest");
+  assert.equal(read.kind, "train");
+  assert.equal(read.decision.rule_code, "planned_training");
 });
 
 // ---------- (e) the words ----------

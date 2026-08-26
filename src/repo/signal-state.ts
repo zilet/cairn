@@ -914,6 +914,10 @@ export interface TomorrowHold {
   start_date: string;
   end_date: string | null;
   blocks_training: boolean;
+  // An injury row or anything that reads as illness. Carried so the day-read can
+  // keep tomorrow's clinical shape protective (it corroborates stacked rest)
+  // without treating it as a calendar claim that re-times the day toward load.
+  clinical: boolean;
 }
 
 /** Context events that START on the day after `date`. Never throws; absent input ⇒ []. */
@@ -940,6 +944,7 @@ export function tomorrowHolds(date: string, contextEvents: unknown): TomorrowHol
         start_date: tomorrow,
         end_date: event.end_date ? String(event.end_date).slice(0, 10) : null,
         blocks_training: clinical ? false : (claimsDayOverride(event) ?? KIND_CLAIMS_DAY.test(kind)),
+        clinical,
       };
     });
 }

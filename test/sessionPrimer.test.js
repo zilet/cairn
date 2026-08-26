@@ -141,7 +141,7 @@ test("an accepted train-anyway session exposes its authoritative label and plain
   assert.equal(primer.provenance_label, "Training by choice");
   assert.equal(primer.decision_kind_label, "Training session");
   assert.ok(primer.decision_bounds.includes("Lower volume"));
-  assert.ok(primer.decision_bounds.includes("Lighter loads"));
+  assert.ok(primer.decision_bounds.includes("Hold the load steady"));
   assert.ok(primer.decision_bounds.some((item) => /^Up to \d+ minutes$/.test(item)));
 });
 

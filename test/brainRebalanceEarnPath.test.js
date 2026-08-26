@@ -73,14 +73,32 @@ const seedMorningRead = (date, kind, signals = {}) =>
     override: null,
   });
 
-// An easy morning the athlete took well above easy, and rated fine. Deliberately
-// spaced two days apart everywhere it is used: three CONSECUTIVE loading days would
-// trip the accumulated-load rest and put a different rule on today's read entirely.
+// An easy morning the athlete took well above easy, and rated fine.
 const seedOverriddenEasy = (date, performance = 4) => {
   seedMorningRead(date, "easy");
   seedTrainingDay(date);
   if (performance != null) repo.setSessionFeedback(date, { performance });
 };
+
+// A world the ladder can actually MOVE. Two conditions have to hold at once, and
+// only one of them is about the pattern:
+//
+//   1. today's rule read is an EASY one in SOFTENABLE_EASY_CODES, and
+//   2. there is a real plan day due, because the ladder opens the session that was
+//      already programmed and never invents one — with nothing programmed the read
+//      stays easy movement on the easy clock, whatever the history says.
+//
+// Five consecutive loading days is the accumulated-load CEILING, which with nothing
+// corroborating reads easy under `accumulated_load_rest` — an easy read that, unlike
+// the chronic-sleep watch and the unprogrammed floor, survives a due plan day. So this
+// is the shape where the ladder has both an easy read to open and a session to open it
+// to, and it is the shape the ceiling comment names: at the ceiling the day may still
+// be opened, but only by `overridden_and_fine` evidence.
+const seedOpenableWorld = (performance = 4) => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  for (const back of [1, 2, 3, 4, 5]) seedOverriddenEasy(dayBefore(REF, back), performance);
+};
+const OPENABLE_MORNINGS = [5, 4, 3, 2, 1].map((back) => dayBefore(REF, back));
 
 // A recovery summary in the shape dayRead's `recovery` parameter takes. The chronic-
 // sleep watch needs a SAMPLE-FLOORED mean under six hours AND a current night that
@@ -192,8 +210,8 @@ test("the run-volume holds say what opens them again", () => {
 
 // ── 2. the outcome loop, one rung up: easy → train ──────────────────────────
 
-test("three easy mornings taken above easy without cost open today's easy read to a training day", () => {
-  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+test("easy mornings taken above easy without cost open today's easy read to a training day", () => {
+  seedOpenableWorld();
 
   const r = repo.dayRead(REF, thinSleep());
 
@@ -207,22 +225,33 @@ test("three easy mornings taken above easy without cost open today's easy read t
   // the day opened rather than being asked to trust it.
   assert.equal(r.signals.easy_outcome_feedback.active, true);
   assert.equal(r.signals.easy_outcome_feedback.applied, true);
-  assert.deepEqual(r.signals.easy_outcome_feedback.overridden_and_fine, [
-    dayBefore(REF, 6),
-    dayBefore(REF, 4),
-    dayBefore(REF, 2),
-  ]);
+  assert.deepEqual(r.signals.easy_outcome_feedback.overridden_and_fine, OPENABLE_MORNINGS);
   assert.equal(r.signals.easy_outcome_feedback.last_honored_easy, null);
 });
 
 test("the opened day takes the session that was actually due", () => {
-  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
-  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  seedOpenableWorld();
 
   const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.kind, "train");
+  assert.equal(r.decision.rule_code, "outcome_feedback_open");
   assert.equal(r.focus, "Lower body", "an opened day with nothing in it would be worse than the easy read");
   assert.equal(r.est_minutes, 60);
+});
+
+test("with nothing programmed there is no session to open — the pattern holds and the day stays easy", () => {
+  // Same pattern, same evidence, no plan. The ladder opens the session that was
+  // already due; it never invents one, so the read keeps its own easy clock and the
+  // pattern stays on the board unapplied.
+  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+
+  const r = repo.dayRead(REF, thinSleep());
+  assert.equal(r.kind, "easy");
+  assert.equal(r.decision.rule_code, "chronic_sleep_watch");
+  assert.equal(r.focus, null);
+  assert.equal(r.est_minutes, 25, "the easy clock, not an invented sixty-minute session");
+  assert.equal(r.signals.easy_outcome_feedback.active, true, "the pattern is still on the board…");
+  assert.equal(r.signals.easy_outcome_feedback.applied, false, "…and it had nothing to move this day to");
 });
 
 test("two is a coincidence — the easy read stands", () => {
@@ -258,7 +287,7 @@ test("sessions that went badly are not evidence that outrunning the read was fin
 });
 
 test("an unrated session still counts — silence is not evidence of harm", () => {
-  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back), null);
+  seedOpenableWorld(null);
 
   const r = repo.dayRead(REF, thinSleep());
   assert.equal(r.decision.rule_code, "outcome_feedback_open");
@@ -308,8 +337,12 @@ test("the two ladders never compose into rest → train", () => {
 test("the softening sustains itself: its own opened mornings keep the evidence alive", () => {
   // Two ordinary overruled easy mornings, then one this rule already opened and the
   // athlete trained through. Without that third kind counting, the window would empty
-  // and the read would relapse on a ten-day cycle.
-  for (const back of [6, 8]) seedOverriddenEasy(dayBefore(REF, back));
+  // and the read would relapse on a ten-day cycle. The two unread days either side are
+  // load only — they carry the streak to the ceiling so there is an easy read to open,
+  // and say nothing about the pattern.
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  for (const back of [4, 5]) seedTrainingDay(dayBefore(REF, back));
+  for (const back of [1, 3]) seedOverriddenEasy(dayBefore(REF, back));
   seedMorningRead(dayBefore(REF, 2), "train", { easy_outcome_feedback: { active: true, applied: true } });
   seedTrainingDay(dayBefore(REF, 2));
   repo.setSessionFeedback(dayBefore(REF, 2), { performance: 4 });
@@ -397,7 +430,7 @@ test("a run-down check-in is never opened into a session, by either mechanism", 
 });
 
 test("a symptom they reported TODAY holds it; the same watch left unspoken does not", () => {
-  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  seedOpenableWorld();
   repo.reportTrainingSymptom({ area_text: "left knee", onset_on: REF, report_text: "left knee is grumbling today" });
 
   const spoken = repo.dayRead(REF, thinSleep(), openState(REF));
@@ -418,7 +451,7 @@ test("a symptom they reported TODAY holds it; the same watch left unspoken does 
   // statement about this morning — so the pattern opens the day exactly as it would
   // with no watch at all.
   resetTables(...WORLD, "training_symptom_events", "symptom_reports", "movement_tolerance_observations");
-  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  seedOpenableWorld();
   repo.reportTrainingSymptom({ area_text: "left knee", onset_on: dayBefore(REF, 14) });
 
   const stale = repo.dayRead(REF, thinSleep(), openState(REF));
@@ -428,7 +461,7 @@ test("a symptom they reported TODAY holds it; the same watch left unspoken does 
 });
 
 test("no check-in changes nothing — absence of a statement is not a statement", () => {
-  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  seedOpenableWorld();
 
   const r = repo.dayRead(REF, thinSleep(), openState(REF));
   assert.equal(r.kind, "train", "the softening behaves exactly as it did before the veto existed");
@@ -438,7 +471,7 @@ test("no check-in changes nothing — absence of a statement is not a statement"
 });
 
 test("a fine morning is not a veto — a good check-in still opens the day", () => {
-  for (const back of [2, 4, 6]) seedOverriddenEasy(dayBefore(REF, back));
+  seedOpenableWorld();
   repo.addCheckin(REF, { energy: 4, sleep_feel: 4, mood: 4, soreness: 2 });
 
   const r = repo.dayRead(REF, thinSleep(), openState(REF));

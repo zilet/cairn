@@ -65,15 +65,14 @@ test("strength athlete: EASY cardio does NOT count toward consecutive training d
   assert.notEqual(r.kind, "rest");
 });
 
-test("endurance athlete: 3 consecutive cardio days earns REST (cardio counts as training)", () => {
+test("endurance athlete: 3 consecutive cardio days COUNT as loading (the count is not a rest of its own)", () => {
   repo.setProfile({ primary_discipline: "endurance", endurance_sport: "running" });
   for (let i = 1; i <= 3; i++) seedActivity(dayBefore(REF, i), { type: "run", duration_min: 45, distance_km: 8 });
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(r.signals.discipline, "endurance");
   assert.equal(r.signals.consecutive_training_days, 3);
-  assert.equal(r.kind, "rest");
-  // The wording rotates per calendar day (see dayRead.test.js) — the RULE is the pin.
-  assert.equal(r.decision.rule_code, "accumulated_load_rest");
+  assert.equal(r.kind, "easy", "uncorroborated stacked days stay open as easy movement");
+  assert.equal(r.decision.rule_code, "unprogrammed_easy_day");
 });
 
 test("endurance athlete: a single short walk doesn't read as a hard training day", () => {

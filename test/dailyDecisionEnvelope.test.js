@@ -7,6 +7,7 @@ import {
   REACH_NO_ROOM_WHY,
   REACH_PUSH_WHY,
   REACH_TRIMMED_WHY,
+  TRAIN_ANYWAY_REST_RATIONALE,
 } from "../dist/repo/daily-decision.js";
 import { REACH_AMRAP_NOTES, REACH_TOP_SET_NOTES } from "../dist/repo/daily-composition.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
@@ -78,7 +79,7 @@ test("same snapshot yields identical fingerprint and envelope content", () => {
   assert.equal(a.input_fingerprint, b.input_fingerprint);
   assert.equal(a.input_fingerprint, dailyDecisionFingerprint(snap));
   assert.deepEqual(a, b);
-  assert.equal(a.policy_version, "daily_decision_v6");
+  assert.equal(a.policy_version, "daily_decision_v7");
 });
 
 test("fingerprint is stable across object key insertion order", () => {
@@ -97,12 +98,12 @@ test("fingerprint changes when a load-bearing input changes", () => {
   assert.notEqual(a, b);
 });
 
-test("v6 policy identity cannot collide with the legacy snapshot-only v4 fingerprint", () => {
+test("v7 policy identity cannot collide with the legacy snapshot-only v4 fingerprint", () => {
   const snap = snapshot();
   const legacyV4 = createHash("sha256").update(stableJson(snap)).digest("hex");
   const current = dailyDecisionFingerprint(snap);
   assert.notEqual(current, legacyV4);
-  assert.equal(buildDailySessionDecision(snap, { now: NOW }).policy_version, "daily_decision_v6");
+  assert.equal(buildDailySessionDecision(snap, { now: NOW }).policy_version, "daily_decision_v7");
 });
 
 test("healthy training day carries the plan with progression reason codes", () => {
@@ -367,11 +368,14 @@ test("athlete override 'train anyway' wins the kind but stays conservative", () 
   assert.equal(env.kind, "train");
   assert.equal(env.baseline_kind, "rest");
   assert.equal(env.request.train_anyway, true);
-  assert.equal(env.caps.volume, "reduced");
-  assert.equal(env.caps.intensity, "deload");
-  assert.ok(env.caps.duration_min <= 40);
+  assert.equal(env.caps.volume, "normal", "train-anyway from rest keeps working volume unless another brake is present");
+  assert.equal(env.caps.intensity, "hold", "keep the working load, no challenge top set");
+  assert.equal(env.caps.duration_min, 60, "no brake: duration comes from the plan day, not the rest clock");
   assert.ok(env.precedence.includes("athlete_override"));
-  assert.match(env.rationale[0].text, /Training by choice/);
+  assert.ok(
+    TRAIN_ANYWAY_REST_RATIONALE.includes(env.rationale[0].text),
+    `unexpected train-anyway rationale ${JSON.stringify(env.rationale[0].text)}`
+  );
 });
 
 test("every recognized train-intent override on a rest read persists train_anyway and conservative caps", () => {
@@ -385,9 +389,9 @@ test("every recognized train-intent override on a rest read persists train_anywa
     );
     assert.equal(env.kind, "train", override);
     assert.equal(env.request.train_anyway, true, override);
-    assert.equal(env.caps.volume, "reduced", override);
-    assert.equal(env.caps.intensity, "deload", override);
-    assert.ok(env.caps.duration_min <= 40, override);
+    assert.equal(env.caps.volume, "normal", override);
+    assert.equal(env.caps.intensity, "hold", override);
+    assert.equal(env.caps.duration_min, 60, override);
   }
 });
 
@@ -701,7 +705,299 @@ test("reach why and notes hold the reading grammar", () => {
     ...REACH_NO_ROOM_WHY,
     ...REACH_TOP_SET_NOTES,
     ...REACH_AMRAP_NOTES,
+    ...TRAIN_ANYWAY_REST_RATIONALE,
   ]) {
     assert.equal(violatesReadingGrammar(line), null, line);
   }
+});
+
+test("train-anyway from rest does not deload — deload stays a phase or repeated-under signal", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      day_read: { ...snapshot().day_read, kind: "rest" },
+      request: { override: null, train_anyway: true, equipment: null, minutes: null, goal: null },
+      program: { ...snapshot().program, mesocycle_phase: "accumulation" },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.caps.intensity, "hold");
+  assert.notEqual(env.caps.intensity, "deload");
+});
+
+test("high soreness is a routing signal when recovery_capacity is supportive", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      recovery_capacity: { status: "supportive", confidence: "high" },
+      feedback: { soreness: 4, performance: 4, joint_pain: null, low_performance_count: 0 },
+      muscle_load: [
+        { group: "quads", days_ago: 1, saturated: true, source: "strength" },
+        { group: "hamstrings", days_ago: 1, saturated: true, source: "strength" },
+      ],
+      plan: {
+        day_number: 2,
+        focus: "Upper body",
+        plan_day_id: 11,
+        source: "adaptive",
+        reason: "Chest and shoulders are due",
+        due: ["chest", "shoulders"],
+        over: ["quads", "hamstrings"],
+      },
+      plan_items: [
+        { exercise: "Bench Press", muscle_group: "chest", equipment: "barbell", mode: "reps", kind: "strength" },
+        {
+          exercise: "Overhead Press",
+          muscle_group: "shoulders",
+          equipment: "barbell",
+          mode: "reps",
+          kind: "strength",
+        },
+      ],
+      progression: [
+        { exercise: "Bench Press", muscle_group: "chest", action: "overload", why: "Two clean sessions" },
+        { exercise: "Overhead Press", muscle_group: "shoulders", action: "hold", why: "Reps not consolidated" },
+      ],
+    }),
+    { now: NOW }
+  );
+  assert.ok(env.precedence.includes("high_soreness"), "soreness still speaks");
+  assert.ok(env.muscles.reduced.includes("quads"));
+  assert.ok(env.muscles.reduced.includes("hamstrings"));
+  assert.equal(env.caps.volume, "normal", "fresh groups are not volume-softened");
+  assert.equal(env.caps.intensity, "normal", "fresh groups keep full intensity");
+});
+
+test("high soreness still softens the day when recovery is not supportive", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      recovery_capacity: { status: "watch", confidence: "medium" },
+      feedback: { soreness: 4, performance: 4, joint_pain: null, low_performance_count: 0 },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.caps.volume, "reduced");
+  assert.equal(env.caps.intensity, "hold");
+  assert.ok(env.precedence.includes("high_soreness"));
+});
+
+test("supportive recovery_capacity never lets a raw low readiness clamp the day", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      recovery: { has_data: true, readiness: "low", hrv_drift: "flat", rhr_drift: "flat", sleep_drift: "flat" },
+      recovery_capacity: { status: "supportive", confidence: "high" },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.caps.volume, "normal");
+  assert.equal(env.caps.intensity, "normal");
+  assert.ok(!env.precedence.includes("low_recovery_easy"));
+  assert.ok(!env.precedence.includes("low_recovery_rest"));
+});
+
+test("constrained recovery_capacity reads as low readiness even if the wearable number is moderate", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      recovery: { has_data: true, readiness: "moderate", hrv_drift: "flat", rhr_drift: "flat", sleep_drift: "flat" },
+      recovery_capacity: { status: "constrained", confidence: "high" },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.caps.volume, "reduced");
+  assert.equal(env.caps.intensity, "hold");
+});
+
+test("consecutive training days do not soften volume by themselves", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      day_read: { ...snapshot().day_read, consecutive_training_days: 5 },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.caps.volume, "normal");
+  assert.equal(env.caps.intensity, "normal");
+  assert.ok(env.precedence.includes("consecutive_training_days"), "the count still speaks as a caveat");
+});
+
+test("train-anyway from rest on a backed push morning still licenses reach at hold intensity", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      day_read: { ...snapshot().day_read, kind: "rest" },
+      request: { override: null, train_anyway: true, equipment: null, minutes: null, goal: null },
+      recovery_capacity: { status: "supportive", confidence: "high" },
+      signal_support: pushSupport(),
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.kind, "train");
+  assert.equal(env.caps.intensity, "hold");
+  assert.equal(env.caps.volume, "normal");
+  assert.equal(env.reach.level, "push", "hold intensity is not a sixth posture — reach still sits beside it");
+});
+
+test("a live-shaped push morning with sore legs and supportive capacity keeps full intensity and reaches", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      day_read: {
+        kind: "train",
+        focus: "Upper body",
+        est_minutes: 60,
+        consecutive_training_days: 5,
+        recovery_week: false,
+        trained_today: false,
+      },
+      recovery: { has_data: true, readiness: "moderate", hrv_drift: "flat", rhr_drift: "flat", sleep_drift: "flat" },
+      recovery_capacity: { status: "supportive", confidence: "high" },
+      signal_support: pushSupport(),
+      feedback: { soreness: 4, performance: 4, joint_pain: null, low_performance_count: 0 },
+      muscle_load: [
+        { group: "quads", days_ago: 1, saturated: true, source: "strength" },
+        { group: "hamstrings", days_ago: 1, saturated: true, source: "strength" },
+      ],
+      plan: {
+        day_number: 2,
+        focus: "Chest and shoulders",
+        plan_day_id: 11,
+        source: "adaptive",
+        reason: "Chest and shoulders are due",
+        due: ["chest", "shoulders"],
+        over: ["quads", "hamstrings"],
+      },
+      plan_items: [
+        { exercise: "Bench Press", muscle_group: "chest", equipment: "barbell", mode: "reps", kind: "strength" },
+        {
+          exercise: "Overhead Press",
+          muscle_group: "shoulders",
+          equipment: "barbell",
+          mode: "reps",
+          kind: "strength",
+        },
+      ],
+      progression: [
+        {
+          exercise: "Bench Press",
+          muscle_group: "chest",
+          action: "overload",
+          why: "Two clean sessions",
+          current_target: {
+            mode: "reps",
+            sets: 3,
+            rep_low: 5,
+            rep_high: 7,
+            target_weight: 155,
+            target_seconds: null,
+          },
+          suggested_target: {
+            mode: "reps",
+            sets: 3,
+            rep_low: 5,
+            rep_high: 7,
+            target_weight: 160,
+            target_seconds: null,
+          },
+        },
+      ],
+    }),
+    { now: NOW }
+  );
+  assert.ok(env.kind === "train" || env.kind === "easy");
+  assert.equal(env.caps.volume, "normal");
+  assert.equal(env.caps.intensity, "normal");
+  assert.equal(env.reach.level, "push");
+  assert.ok(env.precedence.includes("backed_day_reach"));
+  assert.ok(env.muscles.reduced.includes("quads"));
+  assert.ok(!env.muscles.reduced.includes("chest"));
+  const bench = env.candidates.find((c) => c.exercise === "Bench Press");
+  assert.ok(bench);
+  assert.notEqual(bench.action, "deload");
+});
+
+test("supportive capacity with fresh fields backs a reach even when signal_support.backed is false", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      signal_support: pushSupport({ backed: false, backed_by: [] }),
+      recovery_capacity: {
+        status: "supportive",
+        confidence: "high",
+        fresh_hrv: true,
+        fresh_resting_hr: true,
+        fresh_sleep: true,
+        slept_enough: true,
+      },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.reach.level, "push");
+  assert.deepEqual(env.reach.backed_by, ["recovery_capacity"]);
+  assert.ok(env.precedence.includes("backed_day_reach"));
+});
+
+test("supportive capacity without fresh fields does not back a reach", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      signal_support: pushSupport({ backed: false, backed_by: [] }),
+      recovery_capacity: { status: "supportive", confidence: "high" },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.reach.level, null);
+});
+
+test("high soreness with a fresh brake still softens the day even if capacity is supportive", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      recovery_capacity: { status: "supportive", confidence: "high" },
+      signal_support: pushSupport({ fresh_brake: true, training_directive: "recover" }),
+      feedback: { soreness: 4, performance: 4, joint_pain: null, low_performance_count: 0 },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.caps.volume, "reduced");
+  assert.equal(env.caps.intensity, "hold");
+  assert.equal(env.reach.level, null);
+  assert.ok(env.precedence.includes("high_soreness"));
+});
+
+test("train-anyway from rest takes the plan day's duration when no brake is present", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      day_read: { ...snapshot().day_read, kind: "rest", est_minutes: 20 },
+      request: { override: null, train_anyway: true, equipment: null, minutes: null, goal: null },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.kind, "train");
+  assert.equal(env.caps.duration_min, 60, "the quiet read's 20-minute clock is not inherited");
+  assert.equal(env.caps.volume, "normal");
+  assert.equal(env.caps.intensity, "hold");
+});
+
+test("train-anyway from rest caps duration at 40 when a fresh brake is present", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      day_read: { ...snapshot().day_read, kind: "rest", est_minutes: 20 },
+      request: { override: null, train_anyway: true, equipment: null, minutes: null, goal: null },
+      signal_support: pushSupport({ fresh_brake: true, training_directive: "recover" }),
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.kind, "train");
+  assert.equal(env.caps.duration_min, 40);
+  assert.equal(env.caps.volume, "reduced");
+  assert.equal(env.caps.intensity, "hold");
+});
+
+test("a completed log that contradicts a low rating does not hold intensity", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      feedback: {
+        soreness: 2,
+        performance: 2,
+        joint_pain: null,
+        low_performance_count: 1,
+        log_contradicts_low_rating: true,
+      },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.caps.intensity, "normal");
+  assert.ok(!env.precedence.includes("recent_underperformance"));
 });

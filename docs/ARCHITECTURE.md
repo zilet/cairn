@@ -61,11 +61,14 @@ older policy cannot be silently reused after an upgrade.
 
 **Reach is the envelope's up direction.** `DailyDecisionEnvelope.reach` (`level: "push" | null`) sits
 beside the five-value safety ladder — it is not a sixth posture or intensity. It fires when
-`training_drive` is `push`, the unified signal state is `backed`, nothing fresh is braking, training
-is `proceed` or `hold_aggression`, the kind is `train`, and the day's main-lift group is not
-`saturated` per `acuteGate` (an early-out; composition re-checks the actual host). `hold_aggression`
-keeps `level: "push"` and trims only the challenge item (`reach_trimmed_by_fueling`: fueling keeps
-today's reach to the working sets). On an open reach day, composition injects one challenge top set
+`training_drive` is `push`, the unified signal state is `backed` **or** recovery_capacity corroborates
+the morning (the same `supportiveCapacityBacksDay` helper dayRead uses for the drive rule:
+supportive at high confidence, fresh HRV / resting HR / sleep, last night long enough, no fresh
+brake, directive `proceed`), nothing fresh is braking, training is `proceed` or `hold_aggression`
+(the backed path; the capacity path is proceed-only), the kind is `train`, and the day's main-lift
+group is not `saturated` per `acuteGate` (an early-out; composition re-checks the actual host).
+`hold_aggression` keeps `level: "push"` and trims only the challenge item (`reach_trimmed_by_fueling`:
+fueling keeps today's reach to the working sets). Policy `daily_decision_v7`. On an open reach day, composition injects one challenge top set
 on the first *eligible* compound — never a reduced, excluded, saturated, or ungrouped item — at
 1×3–5 from the logged working weight (`round5(recentWorkingWeight × 1.075)`, `REACH_TOP_SET_NOTES`),
 counting as one working set against the volume cap; assisted and bodyweight lifts (by logged

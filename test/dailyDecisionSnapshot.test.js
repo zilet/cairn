@@ -336,7 +336,11 @@ test("rest plus explicit Train anyway becomes one capped plan-backed train compo
   const acceptedWeighted = accepted.items.find((item) => item.target_weight != null);
   const selectedPlan = repo.getPlan().find((day) => Number(day.id) === Number(accepted.plan_day_id));
   const sourceWeighted = selectedPlan.items.find((item) => item.exercise === acceptedWeighted.exercise);
-  assert.ok(acceptedWeighted.target_weight < sourceWeighted.target_weight, "the intensity cap changes known loads");
+  assert.equal(
+    acceptedWeighted.target_weight,
+    sourceWeighted.target_weight,
+    "hold intensity keeps the working load — it does not deload it"
+  );
   assert.ok(accepted.est_minutes <= 40);
   assert.equal(accepted.provenance.label, "Training by choice");
   assert.equal(accepted.constraints.train_anyway, true);
@@ -367,7 +371,7 @@ test("an idle gather omits signal_support and the envelope reach stays null", ()
   const snap = gatherDailyDecisionSnapshot(DATE);
   assert.equal(snap.signal_support, undefined);
   const env = buildDailySessionDecision(snap, { now: "2031-06-10T09:00:00.000Z" });
-  assert.equal(env.policy_version, "daily_decision_v6");
+  assert.equal(env.policy_version, "daily_decision_v7");
   assert.equal(env.reach.level, null);
   assert.deepEqual(env.reach.backed_by, []);
 });

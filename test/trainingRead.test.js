@@ -37,6 +37,7 @@ beforeEach(() => {
     "plan_proposals",
     "checkins",
     "daily_metrics",
+    "context_events",
     "app_state"
   );
 });
@@ -148,9 +149,29 @@ test("three genuinely-hard days in a row still earns rest (the streak is intact)
   seedTrainingDay(dayBefore(REF, 3));
   seedTrainingDay(dayBefore(REF, 2));
   seedTrainingDay(dayBefore(REF, 1));
-  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
-  assert.equal(r.signals.consecutive_training_days, 3);
-  assert.equal(r.kind, "rest");
+  const uncorroborated = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(uncorroborated.signals.consecutive_training_days, 3);
+  assert.equal(uncorroborated.kind, "easy", "uncorroborated stacked days stay open as easy movement");
+  assert.ok(
+    DAY_READ_CAVEAT_VARIANTS["planned_training:stacked_days"].some((variant) =>
+      uncorroborated.why.includes(variant)
+    ),
+    `expected the stacked-days caveat, got ${JSON.stringify(uncorroborated.why)}`
+  );
+
+  // A current signal that corroborates the streak without the protect rule
+  // above earned-rest taking the day first (a low check-in / readiness reading
+  // would ship as acute_signal_protection on the production path).
+  repo.addContextEvent({
+    kind: "travel",
+    title: "Overnight trip, short sleep likely",
+    start_date: REF,
+    end_date: REF,
+  });
+  const corroborated = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(corroborated.signals.consecutive_training_days, 3);
+  assert.equal(corroborated.kind, "rest");
+  assert.equal(corroborated.decision.rule_code, "accumulated_load_rest");
 });
 
 test("an active recovery week keeps compliant reduced sessions easy and continues the plan", () => {
