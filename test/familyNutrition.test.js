@@ -34,7 +34,7 @@ test("profile allergies + dietary_restrictions round-trip; undefined leaves inta
 });
 
 test("addFamily / updateFamily carry allergies + dietary_restrictions (clamped at 500)", () => {
-  const f = repo.addFamily({ name: "Mara", relationship: "daughter", allergies: "eggs", dietary_restrictions: "mild spice only" });
+  const f = repo.addFamily({ name: "Sam", relationship: "daughter", allergies: "eggs", dietary_restrictions: "mild spice only" });
   assert.equal(f.allergies, "eggs");
   assert.equal(f.dietary_restrictions, "mild spice only");
 
@@ -63,9 +63,9 @@ test("meal-plan prompt hard-excludes the athlete's allergens, and is silent when
 
 test("a family member's allergy surfaces as an optional household mod in the meal prompt", () => {
   repo.setProfile({ allergies: "", dietary_restrictions: "" });
-  repo.addFamily({ name: "Mara", relationship: "daughter", birthdate: "2019-05-01", allergies: "eggs" });
+  repo.addFamily({ name: "Sam", relationship: "daughter", birthdate: "2019-05-01", allergies: "eggs" });
   const p = prompt.buildMealPlanPrompt();
   assert.match(p, /HOUSEHOLD/);
-  assert.match(p, /Mara/);
+  assert.match(p, /Sam/);
   assert.match(p, /eggs/);
 });

@@ -66,7 +66,7 @@ function elementMap(values) {
 
 function makeContextInput(overrides = {}) {
   const rootNode = elementMap({
-    "#name": { value: "Milos" },
+    "#name": { value: "Alex" },
     "#age": { value: "42" },
     "#empty": { value: "" },
     "#about": { value: "Long-term health" },
@@ -152,7 +152,7 @@ test("Me Health public dependency API delegates controller factories without API
   assert.equal(depsContext.state, input.state);
 
   const profile = api.profile(depsContext);
-  assert.equal(profile.inputValue("#name", input.root), "Milos");
+  assert.equal(profile.inputValue("#name", input.root), "Alex");
   assert.equal(profile.numberValue("#age", input.root), 42);
   assert.equal(profile.numberValue("#empty", input.root), null);
   assert.equal(profile.textAreaValue("#about", input.root), "Long-term health");

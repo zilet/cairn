@@ -110,11 +110,11 @@ test("text visit notes fall back to structured clinical facts when the agent mis
     disabled_agents: ["claude", "codex", "antigravity", "grok"],
   });
 
-  const note = `Progress Notes by Amanda Dimeo at 7/7/2026  1:40 PM
+  const note = `Progress Notes by Jordan Reyes, MD at 7/7/2026  1:40 PM
 Televisit Adult Patient Visit
 7/7/2026
 History of Present Illness:
-Milos is presenting for follow-up on labs.
+Alex is presenting for follow-up on labs.
 Reviewed family history and updated in EPIC; denies family history of heart disease, denies family history of sudden cardiac or unknown death
 
 Assessment/Plan:

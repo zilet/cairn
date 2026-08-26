@@ -330,7 +330,7 @@ function harness(initialPeople = []) {
 }
 
 test("family controller renders the family route and hydrates people by id", async () => {
-  const h = harness([{ id: 7, name: "Mara", relationship: "daughter", color: "#6e7f5c" }]);
+  const h = harness([{ id: 7, name: "Sam", relationship: "daughter", color: "#6e7f5c" }]);
 
   await h.context.CairnFamilyController.render(h.deps);
   await tick();
@@ -355,7 +355,7 @@ test("family controller validates and posts new family members", async () => {
   assert.equal(h.deps.view.querySelector("#fName").focusCount, 1);
   assert.equal(h.requests.filter((request) => request.opts?.method === "POST").length, 0);
 
-  h.deps.view.querySelector("#fName").value = "Mara";
+  h.deps.view.querySelector("#fName").value = "Sam";
   h.deps.view.querySelector("#fRel").value = "daughter";
   h.deps.view.querySelector("#fNotes").value = "soccer";
   h.deps.view.querySelectorAll(".famadd .fam-swatch")[1].click();
@@ -365,7 +365,7 @@ test("family controller validates and posts new family members", async () => {
   const post = h.requests.find((request) => request.path === "/family" && request.opts?.method === "POST");
   assert.ok(post);
   assert.deepEqual(JSON.parse(post.opts.body), {
-    name: "Mara",
+    name: "Sam",
     relationship: "daughter",
     birthdate: null,
     color: "#6e7f5c",
@@ -380,7 +380,7 @@ test("family controller validates and posts new family members", async () => {
 
 test("family optimistic pending rows do not expose committed edit controls", () => {
   const h = harness();
-  const html = h.context.CairnFamily.familyCardHtml({ id: -123, name: "Mara" });
+  const html = h.context.CairnFamily.familyCardHtml({ id: -123, name: "Sam" });
 
   assert.match(html, /fam-name-pending/);
   assert.doesNotMatch(html, /class="fam-name"/);
@@ -390,7 +390,7 @@ test("family optimistic pending rows do not expose committed edit controls", () 
 });
 
 test("family controller edits and deletes existing family members", async () => {
-  const h = harness([{ id: 7, name: "Mara", relationship: "daughter", color: "#b4552d" }]);
+  const h = harness([{ id: 7, name: "Sam", relationship: "daughter", color: "#b4552d" }]);
   await h.context.CairnFamilyController.render(h.deps);
   await tick();
 
@@ -399,7 +399,7 @@ test("family controller edits and deletes existing family members", async () => 
   const edit = card.querySelector(".fam-edit");
   assert.ok(edit);
   assert.equal(edit.querySelector(".fe-name").focusCount, 1);
-  edit.querySelector(".fe-name").value = "Mara Z";
+  edit.querySelector(".fe-name").value = "Sam R";
   edit.querySelector(".fe-rel").value = "daughter";
   edit.querySelector(".fe-notes").value = "weekend training";
   edit.querySelectorAll(".fam-swatch")[2].click();
@@ -410,7 +410,7 @@ test("family controller edits and deletes existing family members", async () => 
   const put = h.requests.find((request) => request.path === "/family/7" && request.opts?.method === "PUT");
   assert.ok(put);
   assert.deepEqual(JSON.parse(put.opts.body), {
-    name: "Mara Z",
+    name: "Sam R",
     relationship: "daughter",
     birthdate: null,
     color: "#c9a86a",
@@ -431,7 +431,7 @@ test("family controller edits and deletes existing family members", async () => 
 });
 
 test("family delete waits for a deferred edit commit so the member cannot be restored", async () => {
-  const h = harness([{ id: 7, name: "Mara", relationship: "daughter", color: "#b4552d" }]);
+  const h = harness([{ id: 7, name: "Sam", relationship: "daughter", color: "#b4552d" }]);
   await h.context.CairnFamilyController.render(h.deps);
   await tick();
 

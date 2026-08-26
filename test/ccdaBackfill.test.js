@@ -75,7 +75,7 @@ test("applyCcdaHealthBackfill preserves existing split lab panels and is BP-idem
     const source = repo.addHealthDocument({
       kind: "bloodwork",
       doc_date: "2026-03-10",
-      original_name: "health_summary_milos_mychart.zip",
+      original_name: "health_summary_mychart.zip",
       parsed_json: { markers: [{ name: "LDL-C", value: 102, unit: "mg/dL" }] },
       enrichment_status: "done",
     });
@@ -86,7 +86,7 @@ test("applyCcdaHealthBackfill preserves existing split lab panels and is BP-idem
         markers: [{ name: "HbA1c", value: 5.4, unit: "%" }],
         type: "bloodwork",
       },
-    ], "health_summary_milos_mychart.zip");
+    ], "health_summary_mychart.zip");
 
     const extracted = repo.extractCcdaHealthData(dir);
     const first = repo.applyCcdaHealthBackfill(source.id, extracted);

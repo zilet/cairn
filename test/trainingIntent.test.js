@@ -6,7 +6,7 @@ import { MIGRATIONS } from "../dist/migrate.js";
 
 const MAX_VERSION = MIGRATIONS.reduce((m, x) => Math.max(m, x.version), 0);
 
-const MILOS_INTENT = {
+const HYBRID_INTENT = {
   priorities: ["longevity", "muscle", "leanness", "endurance", "muscle", "unknown"],
   endurance_role: "supporting",
   endurance_capacity: {
@@ -20,7 +20,7 @@ test("training intent normalizes, persists, resolves explicitly, and clears back
   const saved = repo.setProfile({
     primary_discipline: "hybrid",
     goal_mode: "lose",
-    training_intent: MILOS_INTENT,
+    training_intent: HYBRID_INTENT,
   });
   assert.equal(typeof saved.training_intent_json, "string");
   assert.deepEqual(repo.getTrainingIntent(), {
@@ -60,7 +60,7 @@ test("invalid stored intent derives safely and explicit no-endurance never inven
 });
 
 test("an invalid incoming intent cannot erase a valid explicit hierarchy", () => {
-  repo.setProfile({ training_intent: MILOS_INTENT });
+  repo.setProfile({ training_intent: HYBRID_INTENT });
   repo.setProfile({
     training_intent: {
       priorities: [],
@@ -72,7 +72,7 @@ test("an invalid incoming intent cannot erase a valid explicit hierarchy", () =>
 });
 
 test("MTB capability recognizes ride tokens and a recent outing above the target as ready", () => {
-  repo.setProfile({ training_intent: MILOS_INTENT });
+  repo.setProfile({ training_intent: HYBRID_INTENT });
   db.prepare(
     `INSERT INTO activities (date, type, raw_text, duration_min, source)
      VALUES ('2026-07-20', 'mountain_biking', 'MTB trail ride', 151, 'manual')`
@@ -87,7 +87,7 @@ test("MTB capability recognizes ride tokens and a recent outing above the target
 });
 
 test("structured sport type wins over incidental cross-sport words in the activity note", () => {
-  repo.setProfile({ training_intent: MILOS_INTENT });
+  repo.setProfile({ training_intent: HYBRID_INTENT });
   db.prepare(
     `INSERT INTO activities (date, type, raw_text, duration_min, source)
      VALUES ('2026-07-20', 'ride', 'Easy MTB; legs fresh after yesterday run', 125, 'manual')`
@@ -98,7 +98,7 @@ test("structured sport type wins over incidental cross-sport words in the activi
 });
 
 test("capacity reads building, rebuilding, and no-data calmly without changing the plan", () => {
-  repo.setProfile({ training_intent: MILOS_INTENT });
+  repo.setProfile({ training_intent: HYBRID_INTENT });
   const noData = repo.getEnduranceCapacity(repo.getTrainingIntent(), { asOf: "2026-07-28" });
   assert.equal(noData.status, "no_data");
 
@@ -117,7 +117,7 @@ test("capacity reads building, rebuilding, and no-data calmly without changing t
 });
 
 test("coach context carries the resolved intent and capacity read", () => {
-  repo.setProfile({ training_intent: MILOS_INTENT });
+  repo.setProfile({ training_intent: HYBRID_INTENT });
   const ctx = repo.getCoachContext();
   assert.equal(ctx.training_intent.source, "explicit");
   assert.deepEqual(ctx.training_intent.priorities, ["longevity", "muscle", "leanness", "endurance"]);

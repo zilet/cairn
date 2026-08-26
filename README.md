@@ -167,7 +167,7 @@ Point Claude Code at it with one command:
 claude mcp add --transport http cairn http://localhost:8787/mcp
 ```
 
-**262 MCP tools** span the plan, sessions and exercises, the accountable coaching loop, profile and
+**268 MCP tools** span the plan, sessions and exercises, the accountable coaching loop, profile and
 goal, activities and bodyweight, memory, meal plans and recipes, health records and markers, the
 connected-brain directives and insights, recovery, chat, Garmin sync, and settings. A representative
 slice: `get_plan`, `log_set`, `get_day_read`, `suggest_session`, `draft_plan_update`,

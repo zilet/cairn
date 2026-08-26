@@ -129,7 +129,7 @@ type FamilyControllerApi = {
       <h1 class="lbl" style="margin:20px 0 8px">Add someone</h1>
       <div class="lifeadd famadd">
         <div class="field" style="margin-bottom:9px"><label for="fName">Name</label>
-          <input id="fName" name="fName" type="text" placeholder="e.g. Mara" class="form-input"></div>
+          <input id="fName" name="fName" type="text" placeholder="e.g. Sam" class="form-input"></div>
         <div class="field" style="margin-bottom:9px"><label for="fRel">Relationship (optional)</label>
           <input id="fRel" name="fRel" type="text" placeholder="e.g. daughter / partner" class="form-input"></div>
         <div class="field" style="margin-bottom:9px"><label for="fBirth">Birthday (optional)</label>

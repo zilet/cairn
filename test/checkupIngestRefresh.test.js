@@ -39,7 +39,7 @@ test("a fresh health-doc ingest recomputes the recheck cadence without the night
 
   // A text visit note reaches the health-completion tail via the deterministic
   // fallback under the stub agent (proven in enrichHealthStatus.test.js).
-  const note = `Progress Notes by Amanda Dimeo at 7/7/2026  1:40 PM
+  const note = `Progress Notes by Jordan Reyes, MD at 7/7/2026  1:40 PM
 Televisit Adult Patient Visit
 7/7/2026
 Assessment/Plan:

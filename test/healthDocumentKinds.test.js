@@ -45,7 +45,7 @@ test("health document kind inference uses content when the agent says other", ()
 
   assert.equal(inferHealthDocumentKind({
     type: "ccda_vitals",
-    original_name: "health_summary_milos_mychart.zip",
+    original_name: "health_summary_mychart.zip",
     summary: "MyChart vitals recorded 2026-03-11 09:39",
     markers: [{ name: "BMI", value: 30.1 }],
   }), "vitals");

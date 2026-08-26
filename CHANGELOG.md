@@ -5,6 +5,36 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+### Added
+
+- **Session logging paints before it waits on the network** — an added exercise, a logged set's
+  chip and progress, and a skip all show up instantly, then reconcile with the server; a set
+  logged offline stays visibly queued and replays once you're back.
+- **The rest timer survives a locked phone** — it's now a real deadline instead of a counter that
+  freezes when the screen sleeps, so returning to an overdue rest completes it correctly, and once
+  the countdown ends the bar counts up ("Rested 4:10") until your next set.
+- **An optional screen wake lock while you train** — turn it on in Settings → While you train to
+  keep the screen awake for the length of a session.
+
+### Changed
+
+- **A blood-draw morning is sequenced onto one place instead of two** — a same-day lab draw or
+  duplicate export upload now folds into a single record automatically, instead of showing up as
+  two separate entries with the same readings.
+- **Health imports keep working when a coaching assistant is unavailable** — Cairn now recognizes
+  when a connected AI provider is out of quota or needs sign-in and reads lab results straight from
+  the export instead of stalling, and Settings explains the wait ("Limit reached · resets …")
+  instead of just showing "Connected."
+
+### Fixed
+
+- **Switching your session no longer gets stuck** — picking a different day's workout after a
+  synced run that happened to match your plan could lock you out of changing your mind; a
+  synced cardio activity now stays on its own record and never locks the session it doesn't belong
+  to.
+- **A pain rating no longer shows up as a lab result** — office-visit vitals like a pain score are
+  recognized as vitals, not treated as an analyte.
+
 ## [1.7.5] — 2026-08-24
 
 A small patch finishing what 1.7.4's look-ahead started: the calendar can now hold *today*, not

@@ -26,8 +26,8 @@ test("family helper normalizes color, initials, and age", () => {
 
   assert.equal(family.familyColor("#abc"), "#abc");
   assert.equal(family.familyColor("not-a-color"), family.FAMILY_DEFAULT_COLOR);
-  assert.equal(family.familyInitials("Mara Zikic"), "MZ");
-  assert.equal(family.familyInitials("Mara"), "MA");
+  assert.equal(family.familyInitials("Sam Rivera"), "SR");
+  assert.equal(family.familyInitials("Sam"), "SA");
   assert.equal(family.familyInitials(""), "?");
   assert.match(family.ageFromBirthdate("2000-01-01"), /^\d+ yr$/);
   assert.equal(family.ageFromBirthdate("bad"), "");
@@ -39,7 +39,7 @@ test("family card renderer escapes user content and attributes", () => {
   const html = family.familyCardHtml(
     {
       id: '7" onclick="bad',
-      name: "Mara <kid>",
+      name: "Sam <kid>",
       relationship: "daughter <oldest>",
       birthdate: "2018-02-01",
       color: "javascript:red",
@@ -51,7 +51,7 @@ test("family card renderer escapes user content and attributes", () => {
   );
 
   assert.match(html, /data-fam="7&quot; onclick=&quot;bad"/);
-  assert.match(html, /Mara &lt;kid&gt;/);
+  assert.match(html, /Sam &lt;kid&gt;/);
   assert.match(html, /daughter &lt;oldest&gt;/);
   assert.match(html, /soccer &lt;Tuesdays&gt;/);
   assert.match(html, /avoids peanuts &lt;severe&gt; · vegetarian &lt;mostly&gt;/);

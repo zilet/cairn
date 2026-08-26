@@ -4,6 +4,66 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-25 — provider routing, one panel per draw date, session logging
+
+No schema change (stayed 94); sw `CACHE` v555 → v557. A day of provider resilience, health-doc
+grounding and a session-logging surface that no longer waits on the network.
+
+**Provider routing and deterministic CCDA reads.** A MyChart export uploaded while every coaching
+CLI was out of quota came back "analyzed" with no labs: three providers were exhausted (weekly
+limit / usage limit / balance), a fourth ran headless and could not `ls` the folder, and all four
+were recorded as `invalid_json`, re-probed on every op, and shown as Connected regardless.
+`src/agentAvailability.ts` classifies a CLI failure (quota, rate, auth, payment, permission) and
+parses the reset instant from the CLI's own banner, persisting per-agent holds in
+`agent_availability` (new table, no migration); rotation now skips a held provider unless it is the
+only option and records one `rotation_exhausted` diagnostic instead of burning a repair pass per
+try. Settings shows the honest state ("Limit reached · resets …", "Needs credit", "Sign in").
+Independently, CCDA Results sections (organizer BATTERY → LOINC observations) are now extracted
+deterministically into a typed `ccda_results` stream with canonical marker names and latest-wins
+dedupe, so a headless or fully-exhausted rotation still completes as `ingest.mode="deterministic"`
+("read from data", never "analyzed") instead of stalling on the agent. Reported diagnostics were
+cleared: boundary outcomes read as a taxonomy rather than errors, stale-snapshot set-asides are
+calm, and 12 open items closed (memoised coach context, `jobRunner` draining on `setImmediate`,
+client diagnostic coalescing, a pre-existing lint error in stdout normalization).
+
+**One panel per draw date.** An undated agent-authored panel from a CCDA import used to land as a
+"Set date" card; `dateUndatedPanels()` now files it on the deterministic results/vitals date whose
+readings it strictly-majority matches, and drops it if it cannot be placed. The deeper problem was
+the same draw arriving more than once — a PDF and a zip of one export, a re-export, the CCDA pass
+and the agent's own read of one import — each becoming its own dated record.
+`dedupeHealthDocuments()` (`src/repo/health-dedupe.ts`) folds same-date records whose shared
+readings AGREE into one survivor (source row > derived children > deterministic read > fullest),
+unioning markers and facts and iterating to a fixed point; evidence has to discriminate, so a
+shared weight, BMI or pulse alone never makes a match. Runs scoped after every ingest, and
+whole-record via `POST /api/health-docs/dedupe` / `dedupe_health_records` (dry run unless
+`apply:true`). A follow-up fix folded the two vitals sheets themselves — a pain score is office
+vitals, not an analyte — and taught a fold to shed a survivor's observation rows rather than carry
+them forward. Also: canon aliases for CCDA spellings (HDL, CO2, BMI, LDL Direct); free-text
+observation rows ("Lab Interpretation") are never markers.
+
+**A matched run never locks the day.** The daily composition refused replacement once a synced
+cardio activity matched the prescribed run, so picking Push after a Garmin run that happened to
+resemble its prescribed "Easy run" locked the athlete out of switching to Pull — skipping every
+lift to escape locked it harder, and sessions being one-per-date meant "start another" landed on
+the same row. A cardio activity is its own record and survives whatever the strength day becomes;
+skips and a finish stamp on a session with zero logged sets are now read as bookkeeping of a
+prescription being replaced, not evidence of training, so a replace clears them and opens the new
+day clean. Logged sets, notes, feedback, duration and a linked strength activity still lock.
+
+**Session logging that paints first.** The logging surface waited on a round-trip before showing
+anything, which over a tailnet read as a frozen UI. Every action now mutates the DOM first — an
+added exercise, a logged set's chip/progress/rest timer, a skip — before the network call
+completes, adopting the real id on success, rolling back on refusal, and staying visibly pending
+when queued offline (re-projected from the outbox by mutation id across any repaint, only for
+items that will actually replay). The rest timer moved from a decrementing counter that froze on a
+locked phone to a persisted deadline: `visibilitychange`/`pageshow`/`focus` re-derive the truth
+from the clock, an overdue rest completes on return, and once the countdown lands the bar counts UP
+("Rested 4:10") until the next set. Adds an opt-in, device-local Screen Wake Lock for an open
+session (Settings → While you train). Tests: `test/ccdaResults.test.js`, `test/healthIngest.test.js`,
+`test/healthDedupe.test.js`.
+
+---
+
 ## 2026-08-24 — the Quiet Coach Round
 
 Twenty packages across four waves, schema 92 → 94 (m93 `surface_dismissals`, m94 `belief_dispositions`),

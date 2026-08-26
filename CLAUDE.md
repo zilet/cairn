@@ -115,7 +115,7 @@ worker.
 
 ## Architecture: two protocol surfaces over one shared layer
 
-REST endpoints are **defined** in the ~20 routers under `src/routes/*.ts` (`src/api.ts` only *mounts*
+REST endpoints are **defined** in two dozen routers under `src/routes/*.ts` (`src/api.ts` only *mounts*
 them). MCP tools are **defined** in `src/surfaces/mcp/*.ts` (`src/mcp.ts` only *registers* them).
 Both call the same layer beneath: use-case services in `src/domain/*` and data/domain modules in
 `src/repo/*` (barrelled by `src/repo.ts`), with prompts in `src/prompt.ts` and client-facing DTOs in
@@ -308,3 +308,4 @@ one-off `docker compose exec` commands that must persist a CLI login need `-u ap
 | `docs/OPERATIONS.md` | Deploy, migrate, backup, restore, tooling notes. |
 | `docs/ELITE-BRAIN-IMPLEMENTATION.md` | The decision ledger, evaluators, autonomy tiers. |
 | `docs/ARCHITECTURE-HISTORY.md` | Append-only per-round schema/feature changelog. |
+| `docs/` (rest) | User-facing guides — quickstart, deployment, Garmin, Apple Health, households, sharing, sandbox, observability. |

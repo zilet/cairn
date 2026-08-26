@@ -222,7 +222,7 @@ test("request correlation returns generic 500 and records one bounded issue", ()
   apiDiagnosticMiddleware(request, response, () => {});
   const id = response.headers["x-request-id"];
   assert.ok(id);
-  const privateText = "Milos private Friday meal and family plan\nsecond private health line";
+  const privateText = "Alex private Friday meal and family plan\nsecond private health line";
   const logs = [];
   const originalError = console.error;
   console.error = (message) => logs.push(String(message));
@@ -469,7 +469,7 @@ test("matched templates discard named values and SSE/probes stay outside product
 
 test("client identifiers are server-derived and adversarial values never persist", () => {
   const parsed = parseClientDiagnosticBatch({ events: [{ kind: "api_failure", level: "error",
-    message: "ignored private text", fingerprint: "MilosPrivateApoBPlan",
+    message: "ignored private text", fingerprint: "AlexPrivateApoBPlan",
     request_id: "PrivateFamilyRequestIdentifier", tab: "FamilyVacationSecret",
     route: "/api/exercises/NamedPrivateExercise", method: "GET", status: 500 }] });
   assert.ok(parsed);
@@ -479,7 +479,7 @@ test("client identifiers are server-derived and adversarial values never persist
   assert.equal(stored.route, "/api/exercises");
   assert.equal(stored.request_id, null);
   assert.deepEqual(JSON.parse(stored.metadata_json), { tab: "unknown", online: null });
-  assert.doesNotMatch(JSON.stringify(stored), /Milos|ApoB|Vacation|NamedPrivate/);
+  assert.doesNotMatch(JSON.stringify(stored), /Alex|ApoB|Vacation|NamedPrivate/);
 });
 
 test("diagnostic coalescing never crosses or relabels releases", () => {

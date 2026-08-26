@@ -331,7 +331,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   const harness = profileHarness({ profile: { primary_discipline: "strength", endurance_goal_json: null } });
 
   await harness.context.CairnMeProfileController.renderProfile(harness.deps);
-  harness.rootEl.querySelector("#name").value = "Milos";
+  harness.rootEl.querySelector("#name").value = "Alex";
   harness.rootEl.querySelector("#age").value = "42";
   // Imperial is the default unit (no locale/localStorage in the vm): feet + inches.
   harness.rootEl.querySelector("#height_ft").value = "5";
@@ -369,7 +369,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   // Storage stays imperial: height_in is the source-of-truth (5'11" = 71 in), with
   // a derived height_cm kept in sync; the clinical CV flags are gone from Profile.
   assert.deepEqual(harness.saved, {
-    name: "Milos",
+    name: "Alex",
     age: 42,
     sex: "female",
     height_in: 71,

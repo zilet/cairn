@@ -37,7 +37,7 @@ test("cardio sync helper detects configured Garmin credentials", () => {
   assert.equal(sync.configured(null), false);
   assert.equal(sync.configured({ garmin_credentials_source: "none" }), false);
   assert.equal(sync.configured({ garmin_credentials_source: "env" }), true);
-  assert.equal(sync.configured({ garmin_username: "milos" }), true);
+  assert.equal(sync.configured({ garmin_username: "athlete" }), true);
   assert.equal(sync.configured({ garmin_password_configured: true }), true);
 });
 
@@ -49,7 +49,7 @@ test("cardio sync helper stays silent when Garmin is not configured", () => {
 
 test("cardio sync helper nudges stale expected runs calmly", () => {
   const sync = loadCardioSync();
-  const html = sync.lineHtml({ garmin_username: "milos" }, { expectingRun: true });
+  const html = sync.lineHtml({ garmin_username: "athlete" }, { expectingRun: true });
 
   assert.match(html, /this morning's run not synced yet\?/);
   assert.match(html, /cardio-sync-dot stale/);
@@ -59,7 +59,7 @@ test("cardio sync helper nudges stale expected runs calmly", () => {
 test("cardio sync helper renders recent sync freshness", () => {
   const sync = loadCardioSync();
   const html = sync.lineHtml({
-    garmin_username: "milos",
+    garmin_username: "athlete",
     garmin_last_sync_at: "2026-06-30T11:00:00.000Z",
     garmin_last_sync_status: "ok",
   });
@@ -71,7 +71,7 @@ test("cardio sync helper renders recent sync freshness", () => {
 test("cardio sync helper renders failed sync state", () => {
   const sync = loadCardioSync();
   const html = sync.lineHtml({
-    garmin_username: "milos",
+    garmin_username: "athlete",
     garmin_last_sync_at: "2026-06-30T11:00:00.000Z",
     garmin_last_sync_status: "failed: auth",
   });
