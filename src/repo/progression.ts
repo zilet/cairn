@@ -644,6 +644,29 @@ function clampedOverload(
   return rounded;
 }
 
+// Peel assist toward bodyweight. Never crosses sign in one step — landing at or
+// past 0 is bodyweight (null), matching the earned-assist branch.
+function assistStepNext(
+  baseWeight: number,
+  group: string | null,
+  modifier: CoachPersonalModifier | null | undefined,
+  phaseStepScale: number
+): number | null {
+  const ceil = phaseStepCeiling(group, baseWeight, phaseStepScale);
+  const standardStep = Math.min(Math.abs(baseWeight) * STEP_FRAC * phaseStepScale, ceil);
+  const step = modifier
+    ? applyPersonalResponseModifier({
+        base: standardStep,
+        modifier,
+        min: 0,
+        max: ceil,
+        safety_ceiling: ceil,
+      })
+    : standardStep;
+  const reduced = round5(baseWeight + step);
+  return reduced >= 0 ? null : reduced;
+}
+
 // Find the plan item (and its prescribed targets) for an exercise, if any.
 function planItemFor(name: string): {
   plan_item_id: number;
@@ -946,9 +969,24 @@ function latestWorkingSets(name: string): { weight: number | null; reps: number 
   }));
 }
 
+function metSnapshottedPrescription(dose: any): boolean {
+  if (!dose || typeof dose !== "object") return false;
+  if (dose.challenge_verdict === "met" || dose.challenge_verdict === "exceeded") return true;
+  const prescribedSets = Number(dose.prescribed?.sets);
+  const achievedSets = Number(dose.achieved?.sets);
+  if (!Number.isFinite(prescribedSets) || prescribedSets <= 0 || !Number.isFinite(achievedSets) || achievedSets < prescribedSets) {
+    return false;
+  }
+  const target = dose.prescribed?.target_weight;
+  const top = dose.achieved?.top_weight;
+  if (target == null || !Number.isFinite(Number(target))) return true;
+  return top != null && Number.isFinite(Number(top)) && Number(top) + 0.1 >= Number(target);
+}
+
 function linkedDoseEligibility(
   sessionId: number | null | undefined,
-  movement: string
+  movement: string,
+  opts?: { planBehind?: boolean }
 ): NonNullable<Prescription["dose_eligibility"]> {
   if (sessionId == null) return { linked_outcome: false, eligible: true, reason: "legacy_unlinked" };
   const row = db
@@ -1024,6 +1062,15 @@ function linkedDoseEligibility(
     return { linked_outcome: true, eligible: false, reason: "non_comparable" };
   }
   if (dose.challenge_verdict !== "met" && dose.challenge_verdict !== "exceeded") {
+    // A plan re-ground must not turn a dose that met its own composition snapshot
+    // into a blocker. When the plan is still behind logged reality and this dose
+    // completed that snapshot, a later target rewrite may make the stored verdict
+    // look under_prescribed — catch that up as a full comparable exposure. The
+    // carve-out does NOT run before comparability: an endurance overlap or a
+    // movement-relevant symptom still holds the lift out of the comparable set.
+    if (opts?.planBehind && metSnapshottedPrescription(dose)) {
+      return { linked_outcome: true, eligible: true, reason: "full_comparable" };
+    }
     return { linked_outcome: true, eligible: false, reason: "under_prescribed" };
   }
   return { linked_outcome: true, eligible: true, reason: "full_comparable" };
@@ -1483,12 +1530,14 @@ export interface PrescriptionOpts {
   drive?: TrainingDrive | null; // the athlete's standing posture (settings.training_drive); read from settings when absent
 }
 
-// The athlete's own standing declaration. It buys exactly two things below — a
-// top set can earn the load step outside an intensification phase, and an earned
-// step survives a soft fueling hold. It buys nothing from a SAFETY floor: the
-// acute gate, the autoregulation brake, the symptom gates, the unverified-
-// regression hold, a load-limiting constraint note and the clinician tier are all
-// deliberately blind to it.
+// The athlete's own standing declaration. It buys a handful of things below — a
+// top set can earn the load step outside an intensification phase, an earned
+// step (and a vary/introduce rotation) survives a soft fueling hold, a single
+// met/exceeded on a full comparable dose is enough to take the step, and a
+// re-ground that met its own snapshot stays comparable. It buys nothing from a
+// SAFETY floor: the acute gate, the autoregulation brake, the symptom gates, the
+// unverified-regression hold, a load-limiting constraint note and the clinician
+// tier are all deliberately blind to it.
 export type TrainingDrive = "steady" | "push";
 
 export function readTrainingDrive(): TrainingDrive {
@@ -1601,9 +1650,17 @@ function repsPrescription(
   // realer load, so Math.max picks the right "from" in both regimes.
   const planWeight = plan?.weight ?? null;
   const recentWorking = recentWorkingWeight(name);
+  // Sign is the encoding, not the name. A lift called "Assisted Pull-Up" with a
+  // purely positive history is weighted work; the name must not freeze it as assist.
+  const assistHistory = (planWeight != null && planWeight < 0) || (recentWorking != null && recentWorking < 0);
   let baseWeight: number | null;
-  if (planWeight != null && recentWorking != null) baseWeight = Math.max(planWeight, recentWorking);
-  else
+  if (planWeight != null && recentWorking != null) {
+    // A positive log on an assisted plan is untrusted for grounding — a typing
+    // slip of +40 on a −25 assist lift must not become the "harder" load.
+    if (planWeight < 0 && recentWorking > 0) baseWeight = planWeight;
+    else if (planWeight > 0 && recentWorking < 0) baseWeight = recentWorking;
+    else baseWeight = Math.max(planWeight, recentWorking);
+  } else
     baseWeight =
       planWeight != null
         ? planWeight
@@ -1622,9 +1679,15 @@ function repsPrescription(
   // no target, then loaded for real, stayed at NULL forever with the catch-up prose
   // dead code. The bodyweight encoding is safe here: recentWorkingWeight ignores
   // null/zero loads, so a genuinely bodyweight lift never reads as behind.
-  const planUnset = plan != null && planWeight == null && recentWorking != null;
+  // A positive recent on an assisted plan is NOT behind — that number is the slip
+  // the sign-integrity path exists to ignore, not a working weight to catch up to.
+  const planUnset = plan != null && planWeight == null && recentWorking != null && !(assistHistory && recentWorking > 0);
   const planBehind =
-    planUnset || (planWeight != null && recentWorking != null && recentWorking > planWeight + 0.1);
+    planUnset ||
+    (planWeight != null &&
+      recentWorking != null &&
+      !(planWeight < 0 && recentWorking > 0) &&
+      recentWorking > planWeight + 0.1);
 
   const repLow = plan?.rep_low ?? cur?.rep_low ?? undefined;
   const repHigh = plan?.rep_high ?? cur?.rep_high ?? undefined;
@@ -1676,7 +1739,7 @@ function repsPrescription(
   const hasRange = repLow != null && repHigh != null;
   const repCeiling = hasRange ? (repHigh as number) + (policy?.rep_saturation ?? 0) : null;
   const workingSets = latestWorkingSets(name);
-  const doseEligibility = linkedDoseEligibility(last?.session_id, name);
+  const doseEligibility = linkedDoseEligibility(last?.session_id, name, { planBehind });
   const topReps = last?.reps != null ? Number(last.reps) : null;
   const setsAtTop = hasRange
     ? workingSets.filter((s) => s.reps != null && (s.reps as number) >= (repCeiling as number)).length
@@ -1883,19 +1946,7 @@ function repsPrescription(
       why = say(voice.BODYWEIGHT_OVERLOAD, "bodyweight_overload");
     } else if (baseWeight < 0) {
       // Assisted — reduce the assist toward bodyweight (a smaller absolute value).
-      const ceil = phaseStepCeiling(group, baseWeight, phaseStepScale);
-      const standardStep = Math.min(Math.abs(baseWeight) * STEP_FRAC * phaseStepScale, ceil);
-      const step = brakeCtx?.personalModifier
-        ? applyPersonalResponseModifier({
-            base: standardStep,
-            modifier: brakeCtx.personalModifier,
-            min: 0,
-            max: ceil,
-            safety_ceiling: ceil,
-          })
-        : standardStep;
-      const reduced = round5(baseWeight + step); // toward 0
-      nextWeight = reduced >= 0 ? null : reduced; // crossed to bodyweight → null
+      nextWeight = assistStepNext(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
       why =
         nextWeight == null
           ? say(voice.ASSIST_TO_BODYWEIGHT, "assist_to_bodyweight")
@@ -1958,6 +2009,49 @@ function repsPrescription(
     else why = say(voice.NOT_EARNED_HOLD, "not_earned_hold");
   }
 
+  // REGROUND does not consume the step. A plan sitting under the real working
+  // weight used to rewrite the card as a catch-up HOLD ("earn a clean extra
+  // rep") even when every working set had already capped the range — applying
+  // then only moved the target to the logged number and the earned step was
+  // spent. When the log is at or past the ceiling, the prescription is the
+  // earned overload FROM the logged weight; the proposal writes that one
+  // number (catch-up + step). Mid-range stays a plain re-ground hold so the
+  // extra rep is still earned at the real load.
+  //
+  // Promotion still has to EARN the step. A grind, an unfinished/incomparable
+  // dose, or a genuine cut must stay a catch-up HOLD at the logged weight —
+  // the same floors the ladder already applied, with the plan-behind hold voice.
+  const cutPressure = brakeCtx?.cut?.() ?? NO_CUT_PRESSURE;
+  const mayPromoteLoad = strong && doseEligibility.eligible && !cutPressure.any;
+  if (
+    planBehind &&
+    baseWeight != null &&
+    !loadConstrained &&
+    !topSet &&
+    !policy?.holds_load &&
+    status !== "regressing" &&
+    action !== "deload" &&
+    action !== "vary" &&
+    action !== "introduce"
+  ) {
+    const atOrPastCeiling = hasRange
+      ? allSetsAtTop || (topReps != null && topReps > (repCeiling as number))
+      : false;
+    if (atOrPastCeiling && (action === "hold" || repStep) && mayPromoteLoad) {
+      action = "overload";
+      repStep = false;
+      if (baseWeight < 0) {
+        nextWeight = assistStepNext(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
+      } else {
+        nextWeight = clampedOverload(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
+      }
+    } else if (!atOrPastCeiling && action === "overload" && repStep) {
+      action = "hold";
+      nextWeight = baseWeight;
+      repStep = false;
+    }
+  }
+
   // Catch-up framing: when the plan target was BEHIND the real working weight, say so
   // plainly — the step is "from where you actually are", and even a hold re-grounds the
   // plan onto reality (the suggested weight = baseWeight, so applying lands it there).
@@ -1994,6 +2088,12 @@ function repsPrescription(
   const response = recentMovementResponse(name, {
     intent_key: `strength:reps:${repLow ?? "open"}-${repHigh ?? repLow ?? "open"}`,
   });
+  // `earned_hold` (two comparable under-prescriptions) is the only movement-
+  // response verdict that demotes an earned overload. `insufficient` never does:
+  // before this pass a single comparable met/exceeded already left the ladder's
+  // earned step standing, and it still does. Under push, that single met on a
+  // full comparable dose is enough for the step — we do not wait for a second
+  // comparable verdict to become earned_absorbed.
   if (response.verdict === "earned_hold") {
     if (action === "overload") {
       action = "hold";
@@ -2010,6 +2110,29 @@ function repsPrescription(
     }
     varyTo = undefined;
     varyOptions = undefined;
+  } else if (
+    drive === "push" &&
+    action === "hold" &&
+    !loadConstrained &&
+    !policy?.holds_load &&
+    status !== "regressing" &&
+    mayPromoteLoad &&
+    doseEligibility.eligible &&
+    doseEligibility.reason === "full_comparable" &&
+    (response.latest_verdict === "met" || response.latest_verdict === "exceeded") &&
+    hasRange &&
+    allSetsAtTop
+  ) {
+    // One full comparable met/exceeded is enough under push: take the step from
+    // the logged working weight rather than waiting for a second exposure.
+    action = "overload";
+    repStep = false;
+    if (baseWeight == null) nextWeight = null;
+    else if (baseWeight < 0) nextWeight = assistStepNext(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
+    else nextWeight = clampedOverload(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
+    why = hasRange
+      ? say(voice.EARNED_RANGE_OVERLOAD, "earned_range_overload")(repHigh as number, repLow as number)
+      : say(voice.EARNED_OPEN_OVERLOAD, "earned_open_overload");
   }
 
   // AUTOREGULATION GATE — one step toward safety on high soreness / low performance /
@@ -2116,6 +2239,12 @@ function repsPrescription(
       why = say(voice.ESCALATE_VARIATION, "escalate_variation")(varyTo ?? "a close variation");
     }
   }
+
+  // Assisted load (negative weight) never crosses sign in one step —
+  // bodyweight (null) is the furthest it may travel, matching assistStepNext.
+  // The name is not a sign: a purely positive history on an "Assisted …" lift
+  // is weighted work and may step up like any other loaded movement.
+  if (baseWeight != null && baseWeight < 0 && nextWeight != null && nextWeight > 0) nextWeight = null;
 
   // A peak week is TWO-TIER work and PrescriptionTarget only describes one tier, so
   // `suggested` carries the BULK of the session — the back-off block — and `top_set`
@@ -2423,7 +2552,9 @@ function applyFuelProtection(
     // A soft fueling signal no longer erases a step the work earned when the
     // athlete has asked to be pushed. The near-maximal top set still comes off:
     // that is the genuinely costly piece of an underfed day, and the athlete's
-    // declaration is about training hard, not about testing a single.
+    // declaration is about training hard, not about testing a single. The same
+    // carve-out keeps a vary/introduce rotation — those are the stimulus, not
+    // the costly single.
     if (drive === "push" && prescription.action === "overload") {
       return prescription.top_set
         ? {
@@ -2439,6 +2570,14 @@ function applyFuelProtection(
             why: `${prescription.why} ${say(voice.PUSH_FUEL_PEAK_TRIM, "push_fuel_peak_trim")}`,
           }
         : prescription;
+    }
+    if (drive === "push" && (prescription.action === "vary" || prescription.action === "introduce")) {
+      return {
+        ...prescription,
+        top_set: undefined,
+        autoregulated: true,
+        why: `${prescription.why} ${say(voice.PUSH_FUEL_VARIETY_KEEP, "push_fuel_variety_keep")}`,
+      };
     }
     const current = prescription.current ?? prescription.suggested;
     return {
@@ -2610,7 +2749,11 @@ export function buildProgressionProposal(
     if (p.mode === "timed") {
       if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;
     } else if (p.suggested.weight !== undefined) {
-      c.target_weight = p.suggested.weight;
+      // A re-ground on an assisted-history lift never writes a positive target
+      // in one step — bodyweight (null) is the furthest it may travel.
+      const suggestedWeight = p.suggested.weight;
+      c.target_weight =
+        suggestedWeight != null && suggestedWeight > 0 && planned != null && planned < 0 ? null : suggestedWeight;
     }
     // Only a change that moves a target (or is a swap) is a real change.
     if (c.target_weight !== undefined || c.target_seconds !== undefined) changes.push(c);

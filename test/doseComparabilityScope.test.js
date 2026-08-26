@@ -341,6 +341,35 @@ test("the same old row still holds a lift the run actually loaded", () => {
   assert.equal(p.action, "hold");
 });
 
+test("a plan-behind re-ground does not launder an endurance-overlap dose into comparable", () => {
+  makeExercise("Back Squat", "quads");
+  const prepared = finishDay(
+    [{ exercise: "Back Squat", sets: 3, rep_low: 8, rep_high: 12, target_weight: 50 }],
+    DATE
+  );
+  repo.addActivity({ date: DATE, type: "run", duration_min: 60, distance_km: 10 });
+  for (let s = 1; s <= 3; s++) {
+    repo.logSetByName({ date: DATE, exercise: "Back Squat", weight: 50, reps: 12, rir: 2, day_number: null });
+  }
+  repo.finishSession(prepared.session_id, null);
+
+  const outcome = repo.getDailySessionOutcome(DATE);
+  assert.equal(doseFor(outcome, "Back Squat").comparable, false, "the run loaded the same legs");
+  assert.ok(doseFor(outcome, "Back Squat").non_comparable_reasons.includes("loaded_endurance"));
+  assert.ok(
+    doseFor(outcome, "Back Squat").challenge_verdict === "met" ||
+      doseFor(outcome, "Back Squat").challenge_verdict === "exceeded",
+    "the dose met its own snapshot — the carve-out would have fired on that alone"
+  );
+
+  db.prepare(`UPDATE plan_items SET target_weight = 27 WHERE exercise_id = ?`).run(repo.findExercise("Back Squat").id);
+
+  const p = nextPrescription("Back Squat");
+  assert.equal(p.reground, true, "the rewritten plan sits under the logged 50");
+  assert.equal(p.dose_eligibility.eligible, false, "endurance overlap is not laundered into full comparable");
+  assert.equal(p.dose_eligibility.reason, "non_comparable");
+});
+
 test("an old row whose own dose came in short is still held", () => {
   makeExercise("Barbell Row", "back");
   repo.savePlanDay(1, "Pull", "Pull", [

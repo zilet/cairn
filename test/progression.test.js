@@ -14,7 +14,7 @@
 // directly (the barrel re-export is the LEAD's wire-up, landing at merge).
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { db, localDaysAgo, repo, seedWeight } from "./_seed.js";
 import {
   nextPrescription,
   planDayProgression,
@@ -37,9 +37,10 @@ import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 
 // ---- local seeding (kept in-file so we don't touch the shared _seed.js) ----
 function reset() {
-  for (const t of ["daily_session_outcomes", "daily_session_compositions", "logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "plan_proposals", "food_notes", "fueling_feedback", "nutrition_targets"]) {
+  for (const t of ["daily_session_outcomes", "daily_session_compositions", "logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "garmin_daily_metrics", "garmin_sources", "plan_proposals", "food_notes", "fueling_feedback", "nutrition_targets", "checkins"]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
+  try { repo.setSettings({ training_drive: "steady" }); } catch { /* settings row may be absent */ }
 }
 
 function linkLatestDoseOutcome(name, date, {
@@ -451,6 +452,18 @@ test("assisted lifts reduce the assist toward bodyweight (never a positive flip)
   assert.ok(p.suggested.weight < 0, "still assisted");
   assert.ok(p.suggested.weight > -50, "assist reduced toward bodyweight");
   assert.match(p.delta_text, /assist/);
+});
+
+test("an assist-named lift with purely positive history steps the load like any other", () => {
+  makeExercise("Assisted Pull-Up", { muscle_group: "back" });
+  planWith(1, { exercise: "Assisted Pull-Up", sets: 3, rep_low: 6, rep_high: 8, target_weight: 25, focus: "Pull" });
+  for (const d of [21, 14, 3]) {
+    for (let s = 1; s <= 3; s++) logSet("Assisted Pull-Up", isoDaysAgo(d), { weight: 25, reps: 8, rir: 2, setNum: s });
+  }
+
+  const p = nextPrescription("Assisted Pull-Up");
+  assert.equal(p.action, "overload", "the name is not a sign — positive history earns the step");
+  assert.equal(p.suggested.weight, 30, "25 steps to 30; the name must not null the load");
 });
 
 test("only a finished full comparable linked dose can earn the next overload", () => {
@@ -1625,4 +1638,221 @@ test("underfed AND a red pain band: the two brakes stack on volume instead of ca
   // reported it themselves — with the fuel clause appended rather than replacing it.
   assert.equal(violatesReadingGrammar(both.why), null);
   assert.doesNotMatch(both.why, /calorie|kcal|settling window/i, "training register, not the nutrition one");
+});
+
+// ===========================================================================
+// PUSH AUTHORITY — hold_aggression keeps vary/introduce; re-ground does not
+// consume the step; a single met on a full comparable dose is enough.
+// ===========================================================================
+
+function seedHoldAggressionFuel() {
+  const day = (delta) => localDaysAgo(-delta);
+  repo.setProfile({
+    name: "Athlete",
+    sex: "male",
+    age: 36,
+    height_cm: 183,
+    weight_lb: 200,
+    start_weight_lb: 210,
+    start_date: day(-60),
+    goal_weight_lb: 180,
+    goal_mode: "lose",
+    activity_factor: 1.5,
+  });
+  db.prepare(
+    `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, carbs_g, fat_g, source)
+     VALUES (?, 2200, 175, 240, 70, 'test')`
+  ).run(day(-30));
+  for (let delta = -10; delta <= -1; delta++) {
+    db.prepare(
+      `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status) VALUES (?, 'meal', '', ?, NULL)`
+    ).run(day(delta), JSON.stringify({ kcal: 2175, protein_g: 175 }));
+  }
+  for (const [delta, weight] of [[-10, 203], [-8, 202.4], [-6, 201.8], [-4, 201.2], [-1, 200.3]]) {
+    seedWeight(day(delta), weight);
+  }
+  const source = db
+    .prepare(`INSERT INTO garmin_sources (provider, mode, label) VALUES ('garmin', 'manual', 'drive-test')`)
+    .run();
+  db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date, body_fat_pct) VALUES (?, ?, 18)`).run(
+    source.lastInsertRowid,
+    day(-1)
+  );
+  repo.addCheckin(day(-1), { mood: 3, energy: 1, sleep_feel: 1 });
+  repo.addCheckin(day(-2), { mood: 3, energy: 1, sleep_feel: 1 });
+}
+
+test("push + hold_aggression keeps vary and introduce", () => {
+  seedHoldAggressionFuel();
+  assert.equal(currentUnderfuelingRead(localDateISO()).action.training, "hold_aggression");
+
+  makeExercise("Leg Press", { muscle_group: "quads" });
+  planWith(1, { exercise: "Leg Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 400, focus: "Legs" });
+  for (const d of [35, 28, 21, 14, 7, 2]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
+
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  planWith(2, { exercise: "Back Squat", sets: 3, rep_low: 8, rep_high: 8, target_weight: 203, focus: "Legs" });
+  for (const [d, w] of [[98, 200], [70, 200], [42, 200], [21, 200], [2, 203]]) {
+    logSet("Back Squat", isoDaysAgo(d), { weight: w, reps: 8, rir: 2 });
+  }
+
+  const steadyVary = planDayProgression(1).find((p) => p.exercise === "Leg Press");
+  const steadyIntro = planDayProgression(2).find((p) => p.exercise === "Back Squat");
+  assert.equal(steadyVary.action, "hold", "ordinarily fueling holds a variation");
+  assert.equal(steadyIntro.action, "hold", "ordinarily fueling holds an introduce");
+
+  repo.setSettings({ training_drive: "push" });
+  const pushVary = planDayProgression(1).find((p) => p.exercise === "Leg Press");
+  const pushIntro = planDayProgression(2).find((p) => p.exercise === "Back Squat");
+  assert.equal(pushVary.action, "vary", "push keeps the rotation under a soft fueling hold");
+  assert.equal(pushIntro.action, "introduce", "push keeps the fresh movement under a soft fueling hold");
+  assert.equal(pushVary.autoregulated, true);
+  assert.equal(pushIntro.autoregulated, true);
+  assert.match(pushVary.why, /fuel/i);
+  assert.match(pushIntro.why, /fuel/i);
+  assert.equal(violatesReadingGrammar(pushVary.why), null);
+  assert.equal(violatesReadingGrammar(pushIntro.why), null);
+});
+
+test("reground with all sets at top overloads from the logged weight", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", isoDaysAgo(3), { weight: 50, reps: 12, rir: 2, setNum: s });
+
+  const p = nextPrescription("Dumbbell Curl");
+  assert.equal(p.reground, true);
+  assert.equal(p.action, "overload", "capping the range at the real load earns the step, not a catch-up hold");
+  assert.equal(p.suggested.weight, 52.5, "the step is from the logged 50, never a hold at 50");
+  assert.equal(p.current?.weight, 50, "the displayed current is the logged working weight");
+
+  const prop = buildProgressionProposal(1);
+  assert.equal(prop.ok, true);
+  const change = prop.proposal.parsed.changes.find((c) => c.exercise === "Dumbbell Curl");
+  assert.equal(change.target_weight, 52.5, "one target change carries both the re-ground and the step");
+});
+
+test("reground mid-range holds at the logged weight", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", isoDaysAgo(3), { weight: 50, reps: 9, rir: 2, setNum: s });
+
+  const p = nextPrescription("Dumbbell Curl");
+  assert.equal(p.reground, true);
+  assert.equal(p.action, "hold", "mid-range is a plain re-ground, not a rep-step that never lands");
+  assert.equal(p.suggested.weight, 50);
+  assert.equal(p.rep_step, undefined);
+
+  const prop = buildProgressionProposal(1);
+  assert.equal(prop.ok, true, "the catch-up hold is a real plan change");
+  const change = prop.proposal.parsed.changes.find((c) => c.exercise === "Dumbbell Curl");
+  assert.equal(change.target_weight, 50, "the plan catches up; the extra rep is still to earn");
+});
+
+test("insufficient movement response never demotes an earned step", () => {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185, focus: "Push" });
+  for (let s = 1; s <= 3; s++) logSet("Barbell Bench Press", isoDaysAgo(3), { weight: 185, reps: 8, rir: 2, setNum: s });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "overload");
+  assert.equal(p.suggested.weight, 190);
+  assert.equal(p.movement_response, "insufficient", "one session is not two comparable verdicts");
+});
+
+test("a single met verdict on a full comparable dose earns the step under push", () => {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185, focus: "Push" });
+  const date = isoDaysAgo(4);
+  for (let s = 1; s <= 3; s++) logSet("Barbell Bench Press", date, { weight: 185, reps: 8, rir: 2, setNum: s });
+  linkLatestDoseOutcome("Barbell Bench Press", date, {
+    status: "completed",
+    comparable: true,
+    prescribedSets: 3,
+    achievedSets: 3,
+    challengeVerdict: "met",
+  });
+  repo.setSettings({ training_drive: "push" });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.dose_eligibility.reason, "full_comparable");
+  assert.equal(p.action, "overload", "one met on a full comparable dose is enough under push");
+  assert.equal(p.suggested.weight, 190);
+  assert.equal(p.movement_response, "insufficient", "earned_absorbed still needs two verdicts");
+});
+
+test("a re-ground does not make a snapshotted dose ineligible", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  const date = isoDaysAgo(3);
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", date, { weight: 50, reps: 12, rir: 2, setNum: s });
+  linkLatestDoseOutcome("Dumbbell Curl", date, {
+    status: "completed",
+    comparable: true,
+    prescribedSets: 3,
+    achievedSets: 3,
+    challengeVerdict: "under_prescribed",
+  });
+  repo.setSettings({ training_drive: "push" });
+
+  const p = nextPrescription("Dumbbell Curl");
+  assert.equal(p.reground, true);
+  assert.equal(
+    p.dose_eligibility.reason,
+    "full_comparable",
+    "the dose met its own snapshot, so a later target rewrite does not block the step"
+  );
+  assert.equal(p.action, "overload");
+  assert.equal(p.suggested.weight, 52.5);
+});
+
+test("a grind at the ceiling is a catch-up hold, not a promoted overload", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", isoDaysAgo(3), { weight: 50, reps: 12, rir: 0, setNum: s });
+
+  const p = nextPrescription("Dumbbell Curl");
+  assert.equal(p.reground, true);
+  assert.equal(p.action, "hold", "RIR 0 is a grind — capping the range does not buy the step");
+  assert.equal(p.suggested.weight, 50, "the plan catches up to the logged 50; it does not step to 52.5");
+  assert.match(p.why, /50 lb/, "the catch-up hold names the real working weight");
+});
+
+test("an unfinished dose behind the plan stays a catch-up hold", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  const date = isoDaysAgo(3);
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", date, { weight: 50, reps: 12, rir: 2, setNum: s });
+  linkLatestDoseOutcome("Dumbbell Curl", date, {
+    status: "in_progress",
+    comparable: true,
+    prescribedSets: 3,
+    achievedSets: 3,
+    challengeVerdict: "met",
+  });
+
+  const p = nextPrescription("Dumbbell Curl");
+  assert.equal(p.reground, true);
+  assert.equal(p.dose_eligibility.reason, "unfinished");
+  assert.equal(p.dose_eligibility.eligible, false);
+  assert.equal(p.action, "hold", "an unfinished dose is not promoted just because the plan is behind");
+  assert.equal(p.suggested.weight, 50);
+  assert.match(p.why, /50 lb/);
+});
+
+test("a cut plateau at the ceiling is a catch-up hold, not a promoted overload", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 27, focus: "Pull" });
+  for (const d of [18, 12, 7]) logSet("Dumbbell Curl", isoDaysAgo(d), { weight: 50, reps: 12, rir: 2 });
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", isoDaysAgo(3), { weight: 50, reps: 12, rir: 2, setNum: s });
+
+  const state = repo.getProgramState().lifts.find((l) => l.exercise === "Dumbbell Curl");
+  assert.equal(state?.status, "plateaued", "the fixture is a measured plateau, not a fresh lift");
+
+  const p = nextPrescription("Dumbbell Curl", undefined, {
+    cut: { hold: true, reduce: false, deep: false, any: true },
+  });
+  assert.equal(p.reground, true);
+  assert.equal(p.action, "hold", "the cut floor is not something a re-ground talks its way out of");
+  assert.equal(p.suggested.weight, 50);
+  assert.match(p.why, /50 lb/);
 });

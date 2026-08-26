@@ -383,14 +383,24 @@ export const PUSH_FUEL_PEAK_TRIM: VoiceSet = [
   "Keeping the step because you asked to push — leave the near-maximal top set for a day your fueling is further along.",
 ];
 
+// Same carve-out as PUSH_FUEL_PEAK_TRIM, for a rotation or a fresh movement rather
+// than a load step. The fueling read still takes the costly near-maximal single
+// off; it does not cancel the change of movement the athlete asked to keep.
+export const PUSH_FUEL_VARIETY_KEEP: VoiceSet = [
+  "You've asked to keep pushing, so this rotation still happens — skip the near-maximal single while your fueling catches up.",
+  "The fresh movement still goes in, since pushing is what you asked for; leave the heavy single for a day your fueling is further along.",
+  "Keeping the variation because you asked to push — the near-maximal top set can wait until your fueling is further along.",
+];
+
 // NOTE: there is deliberately no "…and fueling too" CLAUSE here any more. A clause
 // is something appended to an item's OWN sentence, and the only branch that ever
 // did that was a lift already holding for its own unrelated reason — which is
 // exactly the register leak that put somebody else's explanation on a lift card.
 // Every item the fuel read actually changes now carries a whole fuel sentence of
 // its own: FUEL_HOLD_STEP when the step is held, PUSH_FUEL_PEAK_TRIM when only the
-// near-maximal single comes off, FUEL_DELOAD_CLAUSE on a dose already going down,
-// FUEL_RECOVERY_DOSE when the read cuts the dose itself.
+// near-maximal single comes off, PUSH_FUEL_VARIETY_KEEP when a rotation/introduce
+// stands and only the single waits, FUEL_DELOAD_CLAUSE on a dose already going
+// down, FUEL_RECOVERY_DOSE when the read cuts the dose itself.
 
 export const FUEL_DELOAD_CLAUSE: VoiceSet = [
   "Your fueling is still catching up, so the easier dose stands.",
@@ -597,6 +607,7 @@ export function progressionVoicePhrases(): string[] {
     PAIN_RED_REDUCE,
     FUEL_HOLD_STEP,
     PUSH_FUEL_PEAK_TRIM,
+    PUSH_FUEL_VARIETY_KEEP,
     FUEL_DELOAD_CLAUSE,
     FUEL_RECOVERY_DOSE,
     ACCUMULATION_OVERLOAD,

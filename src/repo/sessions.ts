@@ -448,7 +448,59 @@ export interface LogSetInput {
   note?: string;
 }
 
-function insertSetByName(input: LogSetInput, emitEffects: boolean) {
+// Assisted lifts encode assist as a NEGATIVE weight. The client sends a plain
+// signed number, so a typing slip of "+40" on a lift that has been -25/-30/-40
+// assist used to store a loaded +40, after which re-ground and prefill treated
+// the movement as weighted. Rule: when the established sign is assist — the last
+// 3 working weights on distinct days are all < 0, OR the name matches
+// /\bassist(ed)?\b/i — a positive incoming whose magnitude is within 1.5× of the
+// max assist magnitude of those days is stored as -|weight| and marked
+// `normalized: "assist_sign"`. A positive LARGER than that band is honored as
+// typed (the athlete may really have gone weighted).
+const ASSIST_NAME_RE = /\bassist(ed)?\b/i;
+
+function assistSignContext(ex: { id: number; name: string }): { established: boolean; bandCeiling: number | null } {
+  const nameHit = ASSIST_NAME_RE.test(String(ex.name ?? ""));
+  const rows = db
+    .prepare(
+      `SELECT s.date AS date, ls.weight AS weight
+         FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.weight != 0
+          AND s.date >= date('now', '-90 days')
+        ORDER BY s.date DESC, ls.id DESC
+        LIMIT 60`
+    )
+    .all(ex.id) as Array<{ date: string; weight: number }>;
+  const hardestByDate = new Map<string, number>();
+  const dateOrder: string[] = [];
+  for (const row of rows) {
+    const d = String(row.date);
+    const w = Number(row.weight);
+    if (!Number.isFinite(w) || w === 0) continue;
+    if (!hardestByDate.has(d)) {
+      if (dateOrder.length >= 3) break;
+      dateOrder.push(d);
+      hardestByDate.set(d, w);
+    } else if (w > (hardestByDate.get(d) as number)) {
+      hardestByDate.set(d, w);
+    }
+  }
+  const last3 = dateOrder.map((d) => hardestByDate.get(d) as number);
+  const allNegative = last3.length === 3 && last3.every((w) => w < 0);
+  const negatives = last3.filter((w) => w < 0);
+  const maxMag = negatives.length ? Math.max(...negatives.map((w) => Math.abs(w))) : null;
+  // The name arm only applies while the stored history is still assist. Once the
+  // most recent logged day already carries an honored positive, the athlete has
+  // moved to weighted work and a later in-band positive (a 25 lb belt) must not
+  // be flipped forever.
+  const alreadyWeighted = last3[0] != null && last3[0] > 0;
+  return {
+    established: !alreadyWeighted && (allNegative || nameHit),
+    bandCeiling: maxMag != null ? maxMag * 1.5 : null,
+  };
+}
+
+function insertSetByName(input: LogSetInput, emitEffects: boolean, normalizeAssistSign = true) {
   const date = input.date || localDateISO();
   const ex = findOrCreateExercise(input.exercise, undefined, undefined, input.exercise_mode);
   // An explicitly-passed mode also updates an existing exercise (e.g. converting
@@ -470,6 +522,16 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean) {
       .get(session.id, ex.id) as any;
     setNumber = (row?.m ?? 0) + 1;
   }
+  let storedWeight: number | null = input.weight == null ? null : Number(input.weight);
+  if (storedWeight != null && !Number.isFinite(storedWeight)) storedWeight = null;
+  let normalized: "assist_sign" | undefined;
+  if (normalizeAssistSign && storedWeight != null && storedWeight > 0) {
+    const ctx = assistSignContext(ex);
+    if (ctx.established && ctx.bandCeiling != null && storedWeight <= ctx.bandCeiling) {
+      storedWeight = -Math.abs(storedWeight);
+      normalized = "assist_sign";
+    }
+  }
   const info = db
     .prepare(
       `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir, note, duration_sec)
@@ -479,7 +541,7 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean) {
       session.id,
       ex.id,
       setNumber,
-      input.weight ?? null,
+      storedWeight,
       input.reps ?? null,
       input.rir ?? null,
       input.note ?? null,
@@ -515,8 +577,8 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean) {
         .get(ex.id, info.lastInsertRowid) as any;
       pr = input.duration_sec! > (prev?.m ?? 0);
     }
-  } else if ((input.weight ?? 0) > 0 && (input.reps ?? 0) > 0) {
-    est_1rm = epley1RM(input.weight!, input.reps!);
+  } else if ((storedWeight ?? 0) > 0 && (input.reps ?? 0) > 0) {
+    est_1rm = epley1RM(storedWeight!, input.reps!);
     const prev = db
       .prepare(`SELECT weight, reps FROM logged_sets WHERE exercise_id = ? AND id != ? AND weight > 0 AND reps > 0`)
       .all(ex.id, info.lastInsertRowid) as any[];
@@ -536,12 +598,13 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean) {
     exercise: ex.name,
     mode: ex.mode ?? "reps",
     set_number: setNumber,
-    weight: input.weight ?? null,
+    weight: storedWeight,
     reps: input.reps ?? null,
     rir: input.rir ?? null,
     duration_sec: input.duration_sec ?? null,
     est_1rm,
     pr,
+    ...(normalized ? { normalized } : {}),
   };
 }
 
@@ -621,7 +684,7 @@ export function importGarminActivitySets(input: {
       result = { authority: storedAuthority, imported: 0, already_imported: false };
     } else {
       for (const set of sets) {
-        const logged = insertSetByName({ ...set, date }, false);
+        const logged = insertSetByName({ ...set, date }, false, false);
         if (Number(logged.session_id) !== sessionId) {
           throw new Error(`Garmin set landed in unexpected session ${logged.session_id}`);
         }

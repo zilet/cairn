@@ -2071,6 +2071,106 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 95,
+    name: "assisted-sign-repair",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // THE ROWS THIS EXISTS FOR. An assisted lift stores assist as a NEGATIVE
+    // weight. The client sends a plain signed number, so a typing slip of +40 on
+    // a lift that had been −25/−30/−40 assist stored a loaded +40. Re-ground
+    // then moved the plan target from −25 to +40, prefill made every later set
+    // weighted, and the e1RM trend read as regressing because Epley ran on the
+    // flipped rows.
+    //
+    // WHAT IT CHANGES. For exercises whose name matches /\bassist(ed)?\b/i:
+    // a logged_sets row with weight > 0 that has an earlier negative-weight set
+    // on the same exercise AND whose magnitude is within 1.5× of the max assist
+    // magnitude of the prior 60 days is flipped to −weight. Epley is computed
+    // at read time and never runs on weight ≤ 0, so there is no est_1rm column
+    // to clear. plan_items of those exercises whose target_weight > 0 sits in
+    // the same band are flipped the same way. Idempotent: a second pass finds
+    // no matching positive rows.
+    up: (db) => {
+      const assistName = /\bassist(ed)?\b/i;
+      const dayShift = (iso: string, days: number): string => {
+        const d = new Date(`${String(iso).slice(0, 10)}T00:00:00Z`);
+        if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+        d.setUTCDate(d.getUTCDate() + days);
+        return d.toISOString().slice(0, 10);
+      };
+      let flippedSets = 0;
+      let flippedPlans = 0;
+      try {
+        const exercises = db.prepare(`SELECT id, name FROM exercises`).all() as Array<{ id: number; name: string }>;
+        for (const ex of exercises) {
+          if (!assistName.test(String(ex.name ?? ""))) continue;
+          let sets: Array<{ id: number; weight: number; date: string }> = [];
+          try {
+            sets = db
+              .prepare(
+                `SELECT ls.id AS id, ls.weight AS weight, s.date AS date
+                   FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+                  WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL`
+              )
+              .all(ex.id) as Array<{ id: number; weight: number; date: string }>;
+          } catch {
+            continue;
+          }
+          for (const row of sets) {
+            const w = Number(row.weight);
+            if (!Number.isFinite(w) || w <= 0) continue;
+            const date = String(row.date ?? "").slice(0, 10);
+            const earlierNegative = sets.some((s) => Number(s.weight) < 0 && String(s.date).slice(0, 10) < date);
+            if (!earlierNegative) continue;
+            const windowStart = dayShift(date, -60);
+            const priorMags = sets
+              .filter((s) => {
+                const d = String(s.date).slice(0, 10);
+                return Number(s.weight) < 0 && d < date && d >= windowStart;
+              })
+              .map((s) => Math.abs(Number(s.weight)));
+            if (!priorMags.length) continue;
+            const maxMag = Math.max(...priorMags);
+            if (w > maxMag * 1.5) continue;
+            try {
+              db.prepare(`UPDATE logged_sets SET weight = -ABS(weight) WHERE id = ?`).run(row.id);
+              flippedSets++;
+            } catch {
+              /* row disappeared under us — skip */
+            }
+          }
+          const negMags = sets
+            .map((s) => Number(s.weight))
+            .filter((w) => Number.isFinite(w) && w < 0)
+            .map((w) => Math.abs(w));
+          if (!negMags.length) continue;
+          const band = Math.max(...negMags) * 1.5;
+          try {
+            const items = db
+              .prepare(
+                `SELECT id, target_weight FROM plan_items
+                  WHERE exercise_id = ? AND target_weight IS NOT NULL AND target_weight > 0`
+              )
+              .all(ex.id) as Array<{ id: number; target_weight: number }>;
+            for (const item of items) {
+              const tw = Number(item.target_weight);
+              if (!Number.isFinite(tw) || tw <= 0 || tw > band) continue;
+              db.prepare(`UPDATE plan_items SET target_weight = -ABS(target_weight) WHERE id = ?`).run(item.id);
+              flippedPlans++;
+            }
+          } catch {
+            /* plan_items absent on an ancient DB */
+          }
+        }
+      } catch {
+        /* exercises/logged_sets absent — nothing to repair */
+      }
+      if (flippedSets || flippedPlans) {
+        console.log(`[migrate] v95 assisted-sign-repair: ${flippedSets} logged_sets, ${flippedPlans} plan_items`);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

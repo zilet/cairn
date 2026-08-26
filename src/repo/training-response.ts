@@ -11,6 +11,10 @@ export interface RecentMovementResponse {
   intent_key: string | null;
   comparable_outcomes: number;
   considered_outcomes: number;
+  // Newest comparable challenge, when any. `insufficient` still needs two
+  // verdicts to become earned_absorbed / earned_hold; a single met/exceeded
+  // here is what lets a push-drive step stand on one full comparable dose.
+  latest_verdict: ChallengeVerdict | null;
 }
 
 function movementIdentity(exercise: string): string {
@@ -74,6 +78,7 @@ export function recentMovementResponse(
       intent_key: matchedIntent,
       comparable_outcomes: verdicts.length,
       considered_outcomes: considered,
+      latest_verdict: verdicts[0] ?? null,
     };
   }
   const absorbed = verdicts.filter((verdict) => verdict === "met" || verdict === "exceeded").length;
@@ -86,5 +91,6 @@ export function recentMovementResponse(
     intent_key: matchedIntent,
     comparable_outcomes: verdicts.length,
     considered_outcomes: considered,
+    latest_verdict: verdicts[0] ?? null,
   };
 }

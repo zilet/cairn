@@ -492,12 +492,17 @@ export function recentWorkingWeight(name: string, sessionsBack = 3): number | nu
       `SELECT ls.weight AS weight, ls.reps AS reps FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
         WHERE ls.exercise_id = ? AND s.date = ? AND ls.weight IS NOT NULL AND ls.weight != 0`
     ).all(ex.id, d) as any[];
-    // The session's top set by est-1RM (weight × (1 + reps/30)); keep its raw weight.
+    // The session's hardest working set. Loaded (w>0): heavier and more reps
+    // ranks higher — the Epley-shaped `w * (1 + reps/30)` read. Assisted (w<0):
+    // that same multiply ranked FEWER reps higher because the weight is negative,
+    // which is the opposite of "harder". Score those on `(w, reps)` so less assist
+    // (closer to 0) AND more reps both rank higher.
     let topW: number | null = null;
     let bestScore = -Infinity;
     for (const s of sets) {
       const w = Number(s.weight);
-      const score = w * (1 + (Number(s.reps) || 0) / 30);
+      const reps = Number(s.reps) || 0;
+      const score = w < 0 ? w + reps / 30 : w * (1 + reps / 30);
       if (score > bestScore) { bestScore = score; topW = w; }
     }
     // "Harder" is the larger signed value in both regimes (loaded + and assist −),
