@@ -698,7 +698,7 @@ const CLUSTER_BODIES: readonly string[] = [
   "The last stretch has a shape to it: things that normally move independently have all softened together. Rather than press on, your food is going back toward steady ground from the start of your next day, and we watch what recovers.",
 ];
 
-export function energyDeficiencyBody(read: EnergyDeficiencyRead, date: string): string {
+export function energyDeficiencyBody(_read: EnergyDeficiencyRead, date: string): string {
   return pickVariant(CLUSTER_BODIES, date, "energy_deficiency_body");
 }
 

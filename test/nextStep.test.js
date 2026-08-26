@@ -18,7 +18,7 @@ import {
   snoozeNextStep,
   nextStepDone,
 } from "../dist/repo/next-step.js";
-import { localDateISO } from "../dist/repo/shared.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { runWithTimeZone } from "../dist/tz.js";
 
 // Local frame, NOT UTC: the omitted-date food note gets localDateISO() from the
@@ -59,12 +59,16 @@ function seedProfile() {
   });
 }
 
-// A food note logged TODAY. date is omitted so legacy fallback still gets tested.
-function seedFoodToday(parsed) {
+// A food note logged TODAY. date is omitted so the legacy fallback still gets
+// tested. The stamp is framed the way the only remaining date-less writer frames
+// it (src/demoSeed.ts) — the LOCAL day plus a wall-clock time — so the row reads
+// on TODAY at any hour, in any zone. A UTC instant here would key onto UTC
+// tomorrow every evening and stop exercising the fallback at all.
+function seedFoodToday(parsed, wallClock = "12:00:00") {
   db.prepare(
     `INSERT INTO food_notes (meal, raw_output, parsed_json, enrichment_status, created_at)
      VALUES ('meal', '', ?, NULL, ?)`
-  ).run(JSON.stringify(parsed), new Date().toISOString().slice(0, 19).replace("T", " "));
+  ).run(JSON.stringify(parsed), `${TODAY} ${wallClock}`);
 }
 
 function seedFoodStampedFor(localDate, utcCreatedAt, parsed) {
@@ -173,6 +177,22 @@ test("fuel: a real protein gap on a logged day surfaces (and step_key is stable)
   // Stable key across calls.
   const again = nextBestStep(TODAY);
   assert.equal(again.step_key, "fuel:protein-gap");
+});
+
+// A late-evening legacy (date-less) log belongs to the evening it was eaten, not
+// to the next calendar day — and the hour the SUITE happens to run must not decide
+// which day the fuel step reads. Both assertions hold at 06:00 and at 23:59.
+test("fuel: a late-evening legacy log stays on its own day, whatever the hour", () => {
+  seedProfile();
+  seedFoodToday({ summary: "late plate", kcal: 600, protein_g: 30 }, "23:30:00");
+
+  const today = nextBestStep(TODAY);
+  assert.ok(today, "the evening plate counts toward the day it was eaten");
+  assert.equal(today.domain, "fuel");
+  assert.equal(today.step_key, "fuel:protein-gap");
+
+  const tomorrow = nextBestStep(addDaysISO(TODAY, 1));
+  assert.equal(tomorrow, null, "and it never leaks onto the next day");
 });
 
 test("fuel keys logged food by the stamped local date, not UTC created_at", () => {

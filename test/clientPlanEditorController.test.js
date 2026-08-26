@@ -304,7 +304,7 @@ test("plan editor's exercise field gets a datalist fed from the exercise catalog
     },
   ]);
   const exerciseFetches = [];
-  harness.context.cachedApi = (path, options = {}) => {
+  harness.context.cachedApi = (path) => {
     if (path === "/exercises") {
       exerciseFetches.push(path);
       return Promise.resolve([{ name: "Bench" }, { name: "Pull-up" }]);

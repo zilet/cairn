@@ -43,7 +43,7 @@ import { applyProposalWithAutonomy } from "./autonomy-service.js";
 // The conflict layer lives in its own module (typed predicates over context
 // VALUES, never over serialized key names). Re-exported here because this is
 // where every caller already reaches for it.
-export { type ConferenceConflictInputs } from "./conference-conflicts.js";
+export type { ConferenceConflictInputs } from "./conference-conflicts.js";
 export {
   citedConflictResolutions,
   clinicalAutonomyFromRevision,
