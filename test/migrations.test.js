@@ -929,3 +929,112 @@ test("the migrated schema has the columns later code depends on", () => {
   assert.ok(cols("food_notes").has("eaten_at"), "v79 food_notes.eaten_at");
   assert.ok(cols("insights").has("intent_key"), "v90 insights.intent_key");
 });
+
+function v96Fixture() {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE program_blocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal TEXT NOT NULL DEFAULT 'Training block',
+    focus TEXT NOT NULL DEFAULT 'strength',
+    phase TEXT NOT NULL DEFAULT 'accumulation',
+    week_index INTEGER NOT NULL DEFAULT 1,
+    total_weeks INTEGER NOT NULL DEFAULT 6,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT DEFAULT (datetime('now'))
+  );`);
+  d.exec(`CREATE TABLE profile (
+    id INTEGER PRIMARY KEY,
+    training_intent_json TEXT,
+    primary_discipline TEXT,
+    goal_mode TEXT
+  );`);
+  return d;
+}
+
+function insertBlock(d, { focus = "endurance-base", week_index = 1, status = "active", goal = "Build toward Spring Half" } = {}) {
+  return Number(
+    d
+      .prepare(
+        `INSERT INTO program_blocks (goal, focus, phase, week_index, total_weeks, started_at, status)
+         VALUES (?, ?, 'accumulation', ?, 6, datetime('now'), ?)`
+      )
+      .run(goal, focus, week_index, status).lastInsertRowid
+  );
+}
+
+test("v96 abandons a week-1 endurance-base block when intent is supporting and muscle-first", () => {
+  const d = v96Fixture();
+  const id = insertBlock(d, { week_index: 1 });
+  d.prepare(`INSERT INTO profile (id, training_intent_json, primary_discipline) VALUES (1, ?, 'hybrid')`).run(
+    JSON.stringify({
+      priorities: ["longevity", "muscle", "strength", "leanness", "endurance"],
+      endurance_role: "supporting",
+    })
+  );
+
+  const migration = MIGRATIONS.find((m) => m.version === 96);
+  assert.ok(migration, "migration 96 is registered");
+  migration.up(d);
+  assert.equal(d.prepare("SELECT status FROM program_blocks WHERE id = ?").get(id).status, "abandoned");
+  assert.equal(d.prepare("SELECT COUNT(*) AS n FROM program_blocks").get().n, 1, "the row is kept for provenance");
+
+  migration.up(d);
+  assert.equal(
+    d.prepare("SELECT status FROM program_blocks WHERE id = ?").get(id).status,
+    "abandoned",
+    "idempotent — a second pass does not delete or revive the row"
+  );
+  d.close();
+});
+
+test("v96 leaves a co_primary athlete's endurance-base block untouched", () => {
+  const d = v96Fixture();
+  const id = insertBlock(d, { week_index: 1 });
+  d.prepare(`INSERT INTO profile (id, training_intent_json, primary_discipline) VALUES (1, ?, 'hybrid')`).run(
+    JSON.stringify({
+      priorities: ["strength", "endurance", "muscle", "longevity"],
+      endurance_role: "co_primary",
+    })
+  );
+
+  const migration = MIGRATIONS.find((m) => m.version === 96);
+  migration.up(d);
+  assert.equal(d.prepare("SELECT status FROM program_blocks WHERE id = ?").get(id).status, "active");
+  d.close();
+});
+
+test("v96 leaves a hand-opened endurance-base block untouched", () => {
+  const d = v96Fixture();
+  const id = insertBlock(d, { week_index: 1, goal: "My own endurance block" });
+  d.prepare(`INSERT INTO profile (id, training_intent_json, primary_discipline) VALUES (1, ?, 'hybrid')`).run(
+    JSON.stringify({
+      priorities: ["longevity", "muscle", "strength", "leanness", "endurance"],
+      endurance_role: "supporting",
+    })
+  );
+
+  const migration = MIGRATIONS.find((m) => m.version === 96);
+  migration.up(d);
+  assert.equal(
+    d.prepare("SELECT status FROM program_blocks WHERE id = ?").get(id).status,
+    "active",
+    "a hand-opened block has no auto-derived 'Build toward ' label"
+  );
+  d.close();
+});
+
+test("v96 leaves an auto-labeled block with derived/NULL intent untouched", () => {
+  const d = v96Fixture();
+  const id = insertBlock(d, { week_index: 1 });
+  d.prepare(`INSERT INTO profile (id, training_intent_json, primary_discipline) VALUES (1, NULL, 'strength')`).run();
+
+  const migration = MIGRATIONS.find((m) => m.version === 96);
+  migration.up(d);
+  assert.equal(
+    d.prepare("SELECT status FROM program_blocks WHERE id = ?").get(id).status,
+    "active",
+    "derived intent (NULL JSON) is not a stated hierarchy"
+  );
+  d.close();
+});

@@ -24,6 +24,79 @@ function hasTable(db: DatabaseSync, name: string): boolean {
   return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
 }
 
+// v96: a db-free read of stored training intent. Mirrors the shape
+// normalizeTrainingIntent / getTrainingIntent understand, without importing
+// those modules (they pull in db.ts and would close a boot-order cycle).
+const MIGRATION_PRIORITIES = new Set(["longevity", "muscle", "leanness", "strength", "endurance"]);
+const MIGRATION_ENDURANCE_ROLES = new Set(["none", "supporting", "co_primary", "primary"]);
+
+function parseMigrationTrainingIntent(
+  raw: unknown
+): { priorities: string[]; endurance_role: string; source?: "explicit" | "derived" } | null {
+  let value = raw;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      value = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  if (!Array.isArray(obj.priorities)) return null;
+  const priorities: string[] = [];
+  for (const item of obj.priorities) {
+    const priority = String(item ?? "")
+      .trim()
+      .toLowerCase();
+    if (MIGRATION_PRIORITIES.has(priority) && !priorities.includes(priority)) priorities.push(priority);
+    if (priorities.length === 5) break;
+  }
+  const role = String(obj.endurance_role ?? "")
+    .trim()
+    .toLowerCase();
+  if (!priorities.length || !MIGRATION_ENDURANCE_ROLES.has(role)) return null;
+  const sourceRaw = String(obj.source ?? "")
+    .trim()
+    .toLowerCase();
+  const source = sourceRaw === "explicit" || sourceRaw === "derived" ? sourceRaw : undefined;
+  return { priorities, endurance_role: role, ...(source ? { source } : {}) };
+}
+
+function muscleOrStrengthAheadOfEndurance(priorities: string[]): boolean {
+  const endurance = priorities.indexOf("endurance");
+  const endRank = endurance < 0 ? Number.POSITIVE_INFINITY : endurance;
+  const muscle = priorities.indexOf("muscle");
+  const strength = priorities.indexOf("strength");
+  return (muscle >= 0 && muscle < endRank) || (strength >= 0 && strength < endRank);
+}
+
+/**
+ * Mirror getTrainingIntent: normalizeTrainingIntent succeeding is what marks
+ * `source: "explicit"`. The persisted JSON usually has no source marker, so
+ * "the JSON exists and has priorities" is explicit. A derived marker, if
+ * present, is not a stated hierarchy.
+ */
+function migrationStoredIntentIsExplicit(
+  profile: { training_intent_json?: string | null } | null | undefined
+): { priorities: string[]; endurance_role: string } | null {
+  if (!profile) return null;
+  const parsed = parseMigrationTrainingIntent(profile.training_intent_json);
+  if (!parsed || parsed.source === "derived") return null;
+  return parsed;
+}
+
+function migrationIntentIsStrengthLed(
+  profile: { training_intent_json?: string | null; primary_discipline?: string | null } | null | undefined
+): boolean {
+  const explicit = migrationStoredIntentIsExplicit(profile);
+  if (!explicit) return false;
+  if (explicit.endurance_role !== "none" && explicit.endurance_role !== "supporting") return false;
+  return muscleOrStrengthAheadOfEndurance(explicit.priorities);
+}
+
 // ---- v82 data repair: fossilized plan_items.note / daily_session_compositions.why
 // prose from three retired code generations (found live via direct DB inspection,
 // never inferred from code — see the round's audit notes). Every branch matches a
@@ -2168,6 +2241,54 @@ export const MIGRATIONS: Migration[] = [
       }
       if (flippedSets || flippedPlans) {
         console.log(`[migrate] v95 assisted-sign-repair: ${flippedSets} logged_sets, ${flippedPlans} plan_items`);
+      }
+    },
+  },
+  {
+    version: 96,
+    name: "abandon-mismatched-endurance-base-blocks",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // THE ROWS THIS EXISTS FOR. ensureActiveBlock used to pick endurance-base
+    // whenever a race sat inside the ~10-week build window, ignoring a stored
+    // training intent whose endurance_role was none/supporting and whose
+    // muscle/strength priorities sat ahead of endurance. Those blocks are the
+    // live defect: week 1–2, still active, focus endurance-base, goal prefixed
+    // "Build toward " (the auto-derived label), on an athlete whose STATED
+    // (explicit) intent is strength/muscle first. Mark them abandoned (keep
+    // the row — provenance) so the next ensureActiveBlock call re-derives
+    // through chooseBlockFocus. A hand-opened block (any other goal text), a
+    // derived/NULL intent, a co_primary/primary athlete's block, a block
+    // already into week 3+, and any non-endurance-base focus are left alone.
+    //
+    // Profile and intent are read through raw SQL. This file cannot import
+    // repo/training-intent.ts (that module imports profile → db → here).
+    // Idempotent: a second pass finds no matching ACTIVE row.
+    up: (db) => {
+      try {
+        if (!hasTable(db, "program_blocks")) return;
+        const profile = (() => {
+          try {
+            return db
+              .prepare(
+                `SELECT training_intent_json, primary_discipline FROM profile WHERE id = 1`
+              )
+              .get() as { training_intent_json?: string | null; primary_discipline?: string | null } | undefined;
+          } catch {
+            return undefined;
+          }
+        })();
+        if (!migrationIntentIsStrengthLed(profile)) return;
+        db.exec(`
+          UPDATE program_blocks
+             SET status = 'abandoned'
+           WHERE status = 'active'
+             AND focus = 'endurance-base'
+             AND week_index <= 2
+             AND goal LIKE 'Build toward %'
+        `);
+      } catch {
+        /* a DB predating program_blocks / profile has nothing to repair */
       }
     },
   },

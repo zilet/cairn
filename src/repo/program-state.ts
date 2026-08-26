@@ -212,7 +212,7 @@ export interface CombinedLoadState {
   /** The lane that yields this week under the documented policy. */
   yields: CombinedLoadYield;
   /** Why that lane and not the other — machine register, for the provenance trail. */
-  basis: "block-peak" | "race-build" | "no-deadline";
+  basis: "block-peak" | "race-build" | "strength-led" | "no-deadline";
   /** Plain words for the athlete-facing rationale channel. No numbers, ever. */
   why: string;
 }
@@ -268,6 +268,17 @@ export const COMBINED_LOAD_RUN_YIELDS_QUIET_VARIANTS = [
   "Your week grew on both fronts at once — with no race in the picture, the calm move is to leave the running where it is for a week.",
 ] as const;
 
+// Same "the running yields" answer when the athlete's stated intent is strength
+// or muscle first and endurance is only supporting — a race on the calendar is
+// not enough to flip the week. The reason is different from a peaking block or
+// a quiet week, so the words are too.
+export const COMBINED_LOAD_STRENGTH_LED_VARIANTS = [
+  "Both sides of your training stepped up this week. Strength is the main work right now, so let the running hold its usual step and give the lifts the room.",
+  "Lifting and running both climbed at once. The lifting is what you're building first, so keep the mileage ordinary this week and let the weights take their step.",
+  "Two step-ups in one week, with strength as the main work — keep the running where it is and let the lifts have the week.",
+  "Your week grew on both fronts. The running is supporting work, so leave it at its usual step and let the lifting carry the increase.",
+] as const;
+
 /**
  * The cross-modality read the two per-lane ACWR guards cannot produce.
  *
@@ -278,8 +289,12 @@ export const COMBINED_LOAD_RUN_YIELDS_QUIET_VARIANTS = [
  *   • the lifting block is in its intensification/realization weeks → the RUN lane
  *     yields. That block's peak is the week's fixed point; run-progression already
  *     suppresses the race-ramp pull under exactly this predicate, so the two agree.
- *   • otherwise, a dated race is in the picture → the STRENGTH lane yields. The race
- *     is the thing with a deadline; strength volume is the thing that can wait a week.
+ *   • otherwise, a dated race is in the picture AND endurance is co-primary or
+ *     primary → the STRENGTH lane yields. The race is the thing with a deadline;
+ *     strength volume is the thing that can wait a week.
+ *   • otherwise, a dated race is in the picture but endurance is none/supporting
+ *     → the RUN lane yields (strength-led). Strength is the main work; the race
+ *     does not take the week.
  *   • otherwise, nothing is deadline-bound → the RUN lane yields. Mileage is where a
  *     spike is paid for in bone and tendon rather than a missed rep.
  *
@@ -310,12 +325,27 @@ function combinedLoadState(
     }
   })();
   const raceBuild = !!(goal?.is_race && goal.phase && goal.phase !== "past");
+  const enduranceRole = (() => {
+    try {
+      return getTrainingIntent()?.endurance_role ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  const strengthLed = enduranceRole === "none" || enduranceRole === "supporting";
 
   if (strengthBlockPeaking(block)) {
     return {
       yields: "run",
       basis: "block-peak",
       why: pickDayVariant(COMBINED_LOAD_RUN_YIELDS_VARIANTS, date, "combined-load-run-yields"),
+    };
+  }
+  if (raceBuild && strengthLed) {
+    return {
+      yields: "run",
+      basis: "strength-led",
+      why: pickDayVariant(COMBINED_LOAD_STRENGTH_LED_VARIANTS, date, "combined-load-strength-led"),
     };
   }
   if (raceBuild) {

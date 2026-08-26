@@ -122,3 +122,53 @@ export function getTrainingIntent(profile?: any): ResolvedTrainingIntent {
     source: "derived",
   };
 }
+
+function priorityIndex(priorities: readonly string[] | undefined, key: string): number {
+  if (!priorities) return -1;
+  return priorities.indexOf(key);
+}
+
+/**
+ * Endurance sits behind both muscle and strength in the athlete's own order
+ * (or is absent while both of those are present). Used as a ranking fallback
+ * when the stored role is missing or unrecognized — never to override an
+ * explicit co_primary / primary role.
+ */
+export function enduranceRanksBelowMuscleAndStrength(
+  priorities: readonly string[] | undefined
+): boolean {
+  const muscle = priorityIndex(priorities, "muscle");
+  const strength = priorityIndex(priorities, "strength");
+  if (muscle < 0 || strength < 0) return false;
+  const endurance = priorityIndex(priorities, "endurance");
+  const endRank = endurance < 0 ? Number.POSITIVE_INFINITY : endurance;
+  return muscle < endRank && strength < endRank;
+}
+
+/**
+ * Strength/muscle is the block's main work only when the athlete actually
+ * stated their hierarchy (`source === "explicit"`) AND the role is
+ * none/supporting — or, when the role is missing, endurance ranked below both
+ * muscle and strength. Derived intent keeps the endurance-led tree, including
+ * the default `endurance_role: "none"` every never-set strength athlete gets.
+ * co_primary / primary also keep that tree.
+ */
+export function isStrengthLedIntent(intent: TrainingIntent | ResolvedTrainingIntent | null | undefined): boolean {
+  if (!intent || (intent as { source?: string }).source !== "explicit") return false;
+  const role = intent.endurance_role;
+  if (role === "none" || role === "supporting") return true;
+  if (role === "co_primary" || role === "primary") return false;
+  return enduranceRanksBelowMuscleAndStrength(intent.priorities);
+}
+
+/**
+ * Which of muscle vs strength sits higher in the priority order. Muscle before
+ * strength (or muscle present and strength absent) ⇒ hypertrophy; otherwise strength.
+ */
+export function muscleLeadsStrength(priorities: readonly string[] | undefined): boolean {
+  const muscle = priorityIndex(priorities, "muscle");
+  const strength = priorityIndex(priorities, "strength");
+  if (muscle < 0) return false;
+  if (strength < 0) return true;
+  return muscle < strength;
+}

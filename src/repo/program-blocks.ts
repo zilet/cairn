@@ -19,6 +19,13 @@ import { bumpTrainingDataVersion } from "./training-cache.js";
 import { recordDecision } from "./brain-decisions.js";
 import { buildAerobicTrendExpectation } from "./brain/change-expectations.js";
 import { localDateISO } from "./shared.js";
+import {
+  getTrainingIntent,
+  isStrengthLedIntent,
+  muscleLeadsStrength,
+  type ResolvedTrainingIntent,
+  type TrainingIntent,
+} from "./training-intent.js";
 
 // ---- allowed enum values ----
 const VALID_FOCUS = ["strength", "hypertrophy", "endurance-base", "peak"] as const;
@@ -260,15 +267,155 @@ export function getActiveBlock(): ProgramBlock | null {
 }
 
 /**
- * Ensure ONE active periodization block exists, auto-creating a sensible default
- * aligned to the athlete's endurance goal when none is running. IDEMPOTENT —
- * returns the existing active block untouched if there is one (it never resets a
- * block the athlete is mid-way through). Does NOT auto-advance weeks (that stays
- * manual / the scheduler's job).
+ * The dated endurance objective `chooseBlockFocus` reads — a subset of
+ * `getEnduranceGoal()` so the decision is fixture-testable without a profile.
+ */
+export interface BlockFocusGoal {
+  is_race?: boolean;
+  phase?: string | null;
+  weeks_to_race?: number | null;
+  event?: string | null;
+  target?: string | null;
+}
+
+export interface ChosenBlockFocus {
+  focus: BlockFocus;
+  total_weeks: number;
+  goal: string;
+}
+
+function raceEventLabel(goal: BlockFocusGoal | null | undefined): string {
+  const event = goal?.event ? String(goal.event).slice(0, 80) : "";
+  return event || "your race";
+}
+
+function peakSizing(wk: number | null | undefined): number {
+  return wk != null && wk > 0 ? Math.min(4, Math.max(2, wk)) : 3;
+}
+
+function strengthOrHypertrophyBlock(
+  intent: TrainingIntent | ResolvedTrainingIntent | null | undefined,
+  opts: { event?: string | null; standingEndurance?: boolean } = {}
+): ChosenBlockFocus {
+  const hypertrophy = muscleLeadsStrength(intent?.priorities);
+  const focus: Focus = hypertrophy ? "hypertrophy" : "strength";
+  const event = opts.event ? String(opts.event).slice(0, 80) : "";
+  let goal: string;
+  if (event) {
+    goal = hypertrophy
+      ? `Muscle first — keep ${event} as supporting work`
+      : `Strength first — keep ${event} as supporting work`;
+  } else if (opts.standingEndurance) {
+    goal = hypertrophy
+      ? "Muscle base — steady running on the side"
+      : "Strength base — steady running on the side";
+  } else {
+    goal = hypertrophy
+      ? "Muscle base — build size on the main lifts"
+      : "Strength base — build the main lifts";
+  }
+  return { focus, total_weeks: 6, goal };
+}
+
+/**
+ * The endurance-led tree (co_primary / primary). A race in the build window
+ * takes the block; lifting stays supportive of that build.
+ */
+function chooseEndurancePrimaryBlock(goal: BlockFocusGoal | null | undefined): ChosenBlockFocus {
+  if (goal?.is_race) {
+    const phase = goal.phase ?? null;
+    const wk = goal.weeks_to_race ?? null;
+    const event = raceEventLabel(goal);
+    if (phase === "taper" || phase === "sharpen" || (wk != null && wk <= 4)) {
+      return {
+        focus: "peak",
+        total_weeks: peakSizing(wk),
+        goal: `Sharpen for ${event} — arrive fresh`,
+      };
+    }
+    if (phase === "build" || (wk != null && wk <= 10)) {
+      return {
+        focus: "endurance-base",
+        total_weeks: wk != null && wk > 0 ? Math.min(8, Math.max(4, wk - 2)) : 6,
+        goal: `Build toward ${event} — aerobic base + supportive strength`,
+      };
+    }
+    if (String(goal.target ?? "").trim() && wk != null && wk <= 16) {
+      return {
+        focus: "endurance-base",
+        total_weeks: Math.min(8, Math.max(4, wk - 2)),
+        goal: `Build toward ${event} — aerobic base + supportive strength`,
+      };
+    }
+    return {
+      focus: "strength",
+      total_weeks: 6,
+      goal: `Off-season strength — base for ${event}`,
+    };
+  }
+  if (goal && !goal.is_race) {
+    return {
+      focus: "strength",
+      total_weeks: 6,
+      goal: "Strength base — steady running on the side",
+    };
+  }
+  return { focus: "strength", total_weeks: 6, goal: "Strength base — build the main lifts" };
+}
+
+/**
+ * Pick the default block's focus / length / label from the dated endurance
+ * objective AND the athlete's stated training intent. Pure — fixtures in,
+ * `{focus, total_weeks, goal}` out — so a supporting race cannot silently take
+ * the block over a muscle/strength-first hierarchy.
  *
- * The default is STRENGTH-FIRST today (the athlete's primary discipline), but it
- * biases the focus + length toward an approaching race so the program periodizes
- * sensibly without the athlete having to set up a block by hand:
+ * Strength-led only when intent is explicit (endurance_role none/supporting, or
+ * endurance ranked below both muscle and strength): focus follows the higher of
+ * muscle/strength (muscle before strength ⇒ hypertrophy, else strength), 6
+ * weeks. A race only claims a peak when it is ≤ 3 weeks out or already in
+ * taper/sharpen; otherwise it is named as supporting work on a
+ * strength/hypertrophy block.
+ *
+ * Derived intent (never-set priorities/role) and co_primary / primary keep the
+ * endurance-led tree (build → endurance-base, target within 16 wk →
+ * endurance-base, ≤4 wk / sharpen / taper → peak, else strength/6).
+ */
+export function chooseBlockFocus(
+  goal: BlockFocusGoal | null | undefined,
+  intent: TrainingIntent | ResolvedTrainingIntent | null | undefined
+): ChosenBlockFocus {
+  if (!isStrengthLedIntent(intent)) return chooseEndurancePrimaryBlock(goal);
+
+  if (goal?.is_race) {
+    const phase = goal.phase ?? null;
+    const wk = goal.weeks_to_race ?? null;
+    const event = raceEventLabel(goal);
+    if (phase === "taper" || phase === "sharpen" || (wk != null && wk <= 3)) {
+      return {
+        focus: "peak",
+        total_weeks: peakSizing(wk),
+        goal: `Sharpen for ${event} — arrive fresh`,
+      };
+    }
+    return strengthOrHypertrophyBlock(intent, { event });
+  }
+  if (goal && !goal.is_race) {
+    return strengthOrHypertrophyBlock(intent, { standingEndurance: true });
+  }
+  return strengthOrHypertrophyBlock(intent);
+}
+
+/**
+ * Ensure ONE active periodization block exists, auto-creating a sensible default
+ * aligned to the athlete's stated training intent (and only then to a dated
+ * race) when none is running. IDEMPOTENT — returns the existing active block
+ * untouched if there is one (it never resets a block the athlete is mid-way
+ * through). Does NOT auto-advance weeks (that stays manual / the scheduler's job).
+ *
+ * An explicit supporting/none endurance role never lets a race in the build
+ * window take the block — strength or hypertrophy leads, and the race is named
+ * as supporting work. Derived intent and co_primary / primary keep the
+ * endurance-led tree:
  *  - a race in the BUILD window (~5–10 wk out) → an "endurance-base" block sized
  *    to the time-to-race so lifting stays supportive of the running build;
  *  - a race in the SHARPEN/TAPER window (≤4 wk) → a short "peak" block;
@@ -281,51 +428,15 @@ export function ensureActiveBlock(): ProgramBlock {
   const existing = getActiveBlock();
   if (existing) return existing;
 
-  const goal = getEnduranceGoal();
-  let focus: Focus = "strength";
-  let total_weeks = 6;
-  let blockGoal = "Strength base — build the main lifts";
-
-  if (goal?.is_race) {
-    const phase = goal.phase ?? null;
-    const wk = goal.weeks_to_race ?? null;
-    const event = goal.event ? String(goal.event).slice(0, 80) : "your race";
-    if (phase === "taper" || phase === "sharpen" || (wk != null && wk <= 4)) {
-      // Close to the race — a short peaking block; keep lifting minimal/supportive.
-      focus = "peak";
-      total_weeks = wk != null && wk > 0 ? Math.min(4, Math.max(2, wk)) : 3;
-      blockGoal = `Sharpen for ${event} — arrive fresh`;
-    } else if (phase === "build" || (wk != null && wk <= 10)) {
-      // In the build — center the aerobic base; strength is supportive/durability.
-      focus = "endurance-base";
-      total_weeks = wk != null && wk > 0 ? Math.min(8, Math.max(4, wk - 2)) : 6;
-      blockGoal = `Build toward ${event} — aerobic base + supportive strength`;
-    } else if (String(goal.target ?? "").trim() && wk != null && wk <= 16) {
-      // A TIME on the race changes what "far out" means. Sixteen weeks is where a
-      // half or a marathon build actually starts, and defaulting an athlete with a
-      // time to chase into an off-season strength block spent the runway they needed
-      // on the wrong stimulus. Still supportive strength — the block's focus is where
-      // the aerobic work sits, not a claim that lifting stops.
-      focus = "endurance-base";
-      total_weeks = Math.min(8, Math.max(4, wk - 2));
-      blockGoal = `Build toward ${event} — aerobic base + supportive strength`;
-    } else {
-      // Race exists but far out (base phase) — strength-first, build durability.
-      focus = "strength";
-      total_weeks = 6;
-      blockGoal = `Off-season strength — base for ${event}`;
-    }
-  } else if (goal && !goal.is_race) {
-    // A standing endurance goal (no date) — strength-first, with running kept as a
-    // steady supportive base; no peak to chase.
-    focus = "strength";
-    total_weeks = 6;
-    blockGoal = "Strength base — steady running on the side";
-  }
-
+  const chosen = chooseBlockFocus(getEnduranceGoal(), getTrainingIntent());
   // createBlock supersedes any active block (there's none here) and derives the
   // phase from week 1. Always returns the row.
-  return createBlock({ goal: blockGoal, focus, total_weeks, week_index: 1 });
+  return createBlock({
+    goal: chosen.goal,
+    focus: chosen.focus,
+    total_weeks: chosen.total_weeks,
+    week_index: 1,
+  });
 }
 
 /**

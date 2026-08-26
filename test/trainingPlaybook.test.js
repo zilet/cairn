@@ -70,6 +70,44 @@ test("adherence read proposes fewer or shorter sessions when planned days keep m
   assert.match(read.headline, /adherence fit/i);
 });
 
+test("adherence denominator ignores cardio-only plan days so a 4-lift week is not a restructure", () => {
+  // Five lift days + two dedicated run days (kind:'cardio' plan_items — the
+  // extra rows setWeeklyRuns writes). Runs logged as activities never create
+  // a session, so counting those days as expected strength sessions made a
+  // normal 4-session week read "restructure".
+  repo.savePlanDay(1, "Upper", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 135 }]);
+  repo.savePlanDay(2, "Pull", "Pull", [{ exercise: "Cable Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 90 }]);
+  repo.savePlanDay(3, "Lower", "Legs", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 }]);
+  repo.savePlanDay(4, "Push 2", "Push", [{ exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 95 }]);
+  repo.savePlanDay(5, "Hinge", "Hinge", [{ exercise: "Romanian Deadlift", sets: 3, rep_low: 8, rep_high: 10, target_weight: 135 }]);
+  repo.savePlanDay(6, "Easy run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 8, target_zone: "Z2" }]);
+  repo.savePlanDay(7, "Long run", "Endurance", [{ kind: "cardio", exercise: "Long run", target_distance_km: 14, target_zone: "Z2" }]);
+
+  // Four lift days land each week (Mon–Thu). Friday and both run days are empty.
+  // REF is a Monday; Tues/Wed/Thu of the same week sit AFTER that Monday, so the
+  // in-window dates are the weekdays of the prior week (back(6) is the Tuesday
+  // before REF, etc.).
+  for (const monday of [21, 14, 7, 0]) {
+    repo.logSetByName({ exercise: "Bench Press", weight: 135, reps: 5, date: back(monday) });
+    repo.logSetByName({ exercise: "Cable Row", weight: 90, reps: 8, date: back(monday + 6) });
+    repo.logSetByName({ exercise: "Back Squat", weight: 185, reps: 5, date: back(monday + 5) });
+    repo.logSetByName({ exercise: "Overhead Press", weight: 95, reps: 5, date: back(monday + 4) });
+  }
+
+  const read = repo.trainingPlaybook(REF);
+  assert.notEqual(read.adherence?.status, "restructure", "cardio-only days are not missed strength sessions");
+});
+
+test("a cardio-only plan still produces an adherence read", () => {
+  repo.savePlanDay(1, "Easy run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 8, target_zone: "Z2" }]);
+  repo.savePlanDay(3, "Tempo", "Endurance", [{ kind: "cardio", exercise: "Tempo", target_distance_km: 6, target_zone: "Z3" }]);
+  repo.savePlanDay(5, "Long run", "Endurance", [{ kind: "cardio", exercise: "Long run", target_distance_km: 14, target_zone: "Z2" }]);
+  repo.savePlanDay(6, "Recovery spin", "Endurance", [{ kind: "cardio", exercise: "Easy spin", target_distance_km: 20, target_zone: "Z1" }]);
+
+  const read = repo.trainingPlaybook(REF);
+  assert.ok(read.adherence, "cardio-only planned days still produce an adherence read");
+});
+
 test("program evolution trigger includes playbook and adherence reasons without auto-applying", () => {
   const out = repo.programEvolutionTrigger(REF, {
     programState: { lifts: [] },

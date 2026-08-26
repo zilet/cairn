@@ -172,6 +172,18 @@ const server = app.listen(PORT, HOST, () => {
   // The callback only persists a bounded job and queues its async worker.
   startBrainReviewJobSubscriber();
   startScheduler();
+  // v96 may have abandoned a week-1/2 auto-derived endurance-base block.
+  // ensureActiveBlock is otherwise only the weekly scheduler + two routes, so
+  // re-open here rather than leave the live DB with no active block for up to
+  // a week. Idempotent; fail-soft so a ledger hiccup cannot block boot.
+  // Gated on a non-empty plan, as the scheduler's slot is — a fresh install
+  // with nothing planned does not get a block opened for it.
+  try {
+    const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
+    if (hasPlan) repo.ensureActiveBlock();
+  } catch (err) {
+    console.error("[boot] ensureActiveBlock failed:", err);
+  }
   maybeScheduleAgentCliAutoUpdate();
   // Re-process any free-text entries left 'pending' by a prior restart.
   recoverPendingEnrich();

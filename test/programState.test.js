@@ -728,3 +728,21 @@ test("every combined-load phrasing is a variant set that holds the reading gramm
   const all = sets.flatMap(([, set]) => set);
   assert.equal(new Set(all).size, all.length, "no phrasing is shared between the three answers");
 });
+
+test("with a supporting endurance role a race build yields the run, not strength", () => {
+  seedBothLanesRamped();
+  repo.setProfile({
+    endurance_goal: { mode: "race", event: "Spring Half", date: fwd(70), distance_km: 21.1, weekly_km: 35 },
+    training_intent: {
+      priorities: ["longevity", "muscle", "strength", "leanness", "endurance"],
+      endurance_role: "supporting",
+    },
+  });
+  const combined = repo.getProgramState(REF).hybrid?.combined_load;
+  assert.ok(combined, "the combined read fires");
+  assert.equal(combined.yields, "run", "strength is the main work; the mileage holds");
+  assert.equal(combined.basis, "strength-led");
+  assert.match(combined.why, /lift|strength|weight/i);
+  assert.doesNotMatch(combined.why, /\d/, "no ratio, no number, ever");
+  assert.equal(violatesReadingGrammar(combined.why), null);
+});

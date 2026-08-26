@@ -289,6 +289,28 @@ function plannedDays(): Array<{ id: number; day_number: number; name: string }> 
   }
 }
 
+/**
+ * Plan days that carry at least one strength item. Dedicated run days
+ * (`plan_items.kind = 'cardio'`, typically the extra rows `setWeeklyRuns`
+ * creates on top of a 5-day lift week) are real plan rows, but a run logged
+ * as an activity rather than a session would otherwise count as a missed
+ * strength day. Mixed lift+run days stay in — they have a strength item.
+ * Returns null when the items table cannot be read, so the caller keeps every
+ * planned day rather than silently emptying the denominator.
+ */
+function dayIdsWithStrengthItem(): Set<number> | null {
+  try {
+    const rows = db.prepare(
+      `SELECT DISTINCT plan_day_id AS id
+         FROM plan_items
+        WHERE kind IS NULL OR lower(kind) != 'cardio'`
+    ).all() as any[];
+    return new Set(rows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id)));
+  } catch {
+    return null;
+  }
+}
+
 function completedTrainingDates(start: string, end: string): Set<string> {
   try {
     const rows = db.prepare(
@@ -318,7 +340,11 @@ function skipRows(start: string, end: string): Array<{ date: string; exercise: s
 }
 
 function adherenceRead(date: string, windowDays: number): AdherenceRestructureRead | null {
-  const days = plannedDays();
+  const planned = plannedDays();
+  const strengthIds = dayIdsWithStrengthItem();
+  const strengthDays = strengthIds ? planned.filter((d) => strengthIds.has(d.id)) : planned;
+  // Dropping zero-item days is fine; a cardio-only plan has no strength days, so fall back to every planned day.
+  const days = strengthDays.length ? strengthDays : planned;
   if (!days.length) return null;
   const end = date;
   const start = addDaysISO(end, -(Math.max(14, windowDays) - 1)) ?? end;
