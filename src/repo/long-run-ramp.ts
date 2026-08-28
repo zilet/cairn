@@ -156,7 +156,14 @@ export function trailingLongestRunKm(date: string, lookbackDays = LONG_RUN_LOOKB
  */
 export function isQualityRunPrescription(item: { interval?: unknown; target_zone?: unknown }): boolean {
   const interval = item?.interval;
-  if (Array.isArray(interval) ? interval.length > 0 : interval != null && String(interval).trim() !== "") return true;
+  if (Array.isArray(interval)) {
+    if (interval.length > 0) return true;
+  } else if (typeof interval === "string") {
+    if (interval.trim() !== "") return true;
+  } else if (interval != null) {
+    // Any other non-null payload (a parsed object, whatever its prototype) is structure.
+    return true;
+  }
   const zone = String(item?.target_zone ?? "").match(/([1-9])/);
   return zone != null && Number(zone[1]) >= 4;
 }
