@@ -632,6 +632,58 @@ test("a 40 km ride is not the week's long run, and is never ramped", () => {
   assert.equal(run.target_distance_km, Math.round(9.8 * SUSTAINABLE_LONG_STEP_FACTOR * 2) / 2);
 });
 
+test("a quality session is never the long run, whatever its distance", () => {
+  // The reconciliation fixture that caught this live: a 7 km Z4 interval run with no
+  // run history behind it was ramped down to 6 km — but an interval session's
+  // distance is a property of its structure, and the ramp was never entitled to it.
+  repo.replacePlan([
+    {
+      day_number: 1,
+      name: "Quality",
+      focus: "Endurance",
+      items: [
+        {
+          kind: "cardio",
+          exercise: "Quality run",
+          target_distance_km: 7,
+          target_duration_min: 40,
+          target_zone: "Z4",
+          interval: [{ reps: 4, on: "1 km", off: "2 min", zone: "Z4" }],
+        },
+        { kind: "cardio", exercise: "Long run", target_distance_km: 6.5, target_zone: "Z2" },
+      ],
+    },
+  ]);
+  // Detection: the week's long run is the longest EASY run, not the biggest number.
+  assert.equal(templateLongRunKm(), 6.5, "the interval session does not own the week's long-run identity");
+
+  const envelope = cardioEnvelope(REF, 1, { volume: "normal", intensity: "normal", duration_min: 240 });
+  const { session } = normalizeComposedSession(
+    {
+      name: "Quality",
+      focus: "Endurance",
+      why: "today's endurance",
+      est_minutes: 90,
+      items: [
+        {
+          kind: "cardio",
+          exercise: "Quality run",
+          target_distance_km: 7,
+          target_duration_min: 40,
+          target_zone: "Z4",
+          interval: [{ reps: 4, on: "1 km", off: "2 min", zone: "Z4" }],
+          note: "Quality run",
+        },
+      ],
+    },
+    envelope
+  );
+  const quality = session.items.find((it) => /quality/i.test(String(it.note ?? it.exercise ?? "")));
+  assert.ok(quality, JSON.stringify(session.items));
+  assert.equal(quality.target_distance_km, 7, "the interval prescription is left exactly as written");
+  assert.equal(quality.target_duration_min, 40, "and so is its clock");
+});
+
 test("an athlete with no run history is never told a distance is past 'their longest'", () => {
   const ramp = longRunRamp({ templateKm: 12, trailingLongestKm: null, lastWeekKm: 0, chronicWeeklyKm: 0 });
   assert.equal(ramp.first_long_run, true);

@@ -17,7 +17,7 @@ import {
   recentWorkingSeconds,
   recentWorkingWeight,
 } from "./exercises.js";
-import { type LongRunRamp, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
+import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 
@@ -595,6 +595,9 @@ function applyLongRunRamp(
   // Distance history is RUN history. A 40 km ride is not a step on the same ladder,
   // and the identity read is the one place that question is already answered.
   if (cardioPlanIdentity(item).sport !== "run") return { applied: false, changed: false };
+  // A quality session — intervals, or a hard zone — is never the long run, whatever
+  // its distance: its structure IS the prescription. Same predicate detection uses.
+  if (isQualityRunPrescription(item)) return { applied: false, changed: false };
   const ramp = longRunPrescription(envelope.date, distance);
   if (!ramp || !ramp.building) return { applied: false, changed: false };
   item.target_distance_km = ramp.prescribed_km;

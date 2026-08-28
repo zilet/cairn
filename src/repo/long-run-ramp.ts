@@ -147,6 +147,20 @@ export function trailingLongestRunKm(date: string, lookbackDays = LONG_RUN_LOOKB
   }
 }
 
+/**
+ * A QUALITY run prescription — structured intervals, or a hard target zone — is
+ * never "the long run", whatever its distance. The long run is the week's longest
+ * EASY run; an interval session's distance is a property of its structure, and
+ * reshaping it to a rounded half-kilometre would break the very thing it prescribes.
+ * Asked by detection and application alike, so the two halves cannot drift.
+ */
+export function isQualityRunPrescription(item: { interval?: unknown; target_zone?: unknown }): boolean {
+  const interval = item?.interval;
+  if (Array.isArray(interval) ? interval.length > 0 : interval != null && String(interval).trim() !== "") return true;
+  const zone = String(item?.target_zone ?? "").match(/([1-9])/);
+  return zone != null && Number(zone[1]) >= 4;
+}
+
 /** A stored interval payload, read back the way the identity helper expects it. */
 function parseInterval(raw: unknown): unknown {
   if (typeof raw !== "string" || !raw.trim()) return null;
@@ -185,14 +199,16 @@ export function templateLongRunKm(): number | null {
     for (const row of rows) {
       const km = Number(row?.target_distance_km);
       if (!Number.isFinite(km) || km <= 0) continue;
+      const interval = parseInterval(row.interval_json);
       const identity = cardioPlanIdentity({
         exercise: row.exercise,
         note: row.note,
-        interval: parseInterval(row.interval_json),
+        interval,
         target_zone: row.target_zone,
         target_distance_km: km,
       });
       if (identity.sport !== "run") continue;
+      if (isQualityRunPrescription({ interval, target_zone: row.target_zone })) continue;
       if (best == null || km > best) best = km;
     }
     return best;
