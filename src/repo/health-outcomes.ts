@@ -1,7 +1,15 @@
 import { addInsight, isDuplicateInsight, listDirectives } from "./coach.js";
-import { insightIntentCorpus, isDuplicateInsightIntent, resolveInsightIntent } from "./insight-intent.js";
+import {
+  type InsightEvidenceEpoch,
+  insightFacetForSurface,
+  insightIntentCorpus,
+  isDuplicateInsightIntent,
+  resolveInsightIntent,
+} from "./insight-intent.js";
+import { brainDecisionFingerprint, recordDecision } from "./brain-decisions.js";
 import { getMarkerHistory } from "./health.js";
 import { canonicalMarker } from "./marker-canon.js";
+import { markerValidityHorizons } from "./marker-validity.js";
 import { addMemory } from "./memory.js";
 import { capStr } from "./nutrition.js";
 import { markerSide, matchOptimalZone, optimalDistance } from "./propagation-data.js";
@@ -45,6 +53,9 @@ export interface RecordedHealthOutcomeRead extends HealthOutcomeRead {
   persisted: {
     insights: number;
     memories: number;
+    // Brain-ledger observations written for the EVENT annotations (see
+    // healthOutcomeEvents) — the falsifiable trail behind "this came back worse".
+    observations: number;
   };
 }
 
@@ -287,6 +298,9 @@ export function recordHealthOutcomeAnnotations(limit = 12): RecordedHealthOutcom
   const read = healthOutcomeAnnotations(limit);
   let insights = 0;
   let memories = 0;
+  // The pull read also lays down the EVENT trail, so a user-triggered outcome read and
+  // the automatic post-ingest pass leave the same ledger. Fingerprint-idempotent.
+  const observations = recordHealthOutcomeEvents().observations;
   // The same territory guard the agentic pass uses (src/repo/insight-intent.ts), so
   // an outcome annotation can't re-say a connection either producer already made.
   // These summaries are deterministic and marker-anchored, so derivation is the
@@ -313,5 +327,147 @@ export function recordHealthOutcomeAnnotations(limit = 12): RecordedHealthOutcom
     const memory = addMemory(`${annotation.marker} outcome: ${annotation.summary}`, "learning", "health-outcome");
     if (memory) memories++;
   }
-  return { ...read, persisted: { insights, memories } };
+  return { ...read, persisted: { insights, memories, observations } };
+}
+
+// ---------------------------------------------------------------------------
+// "worse than last time" is an EVENT  (owner ruling R1)
+// ---------------------------------------------------------------------------
+//
+// An outcome annotation is a pull-only read: it describes what a follow-up draw did
+// to a marker a directive was anchored on. Most of those readings are unremarkable.
+// TWO are events — the panel came back WORSENING, or it came back UNCHANGED after the
+// marker's own recheck window had already elapsed, which is the lever having had its
+// chance and not taken it. An event is allowed to leave a visible artifact: a brain
+// observation in the ledger, and (via healthOutcomeEvidenceEpochs) permission for the
+// insight layer to speak about that territory again.
+//
+// Everything here stays INFORMATIONAL. Nothing changes a plan, a dose, or a target.
+
+export type HealthOutcomeEventReason = "worsening" | "unchanged_past_recheck";
+
+export interface HealthOutcomeEvent {
+  annotation: HealthOutcomeAnnotation;
+  reason: HealthOutcomeEventReason;
+}
+
+function daysApart(from: string, to: string): number | null {
+  const a = Date.parse(`${from}T00:00:00Z`);
+  const b = Date.parse(`${to}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Math.round((b - a) / 86_400_000);
+}
+
+// Which annotations are events, and why. The recheck window is the marker's OWN
+// per-class horizon (src/repo/marker-validity.ts) — never a hardcoded number of
+// months — so a lipid panel, an acute-phase reactant and a DEXA each get the cadence
+// their class actually has.
+export function healthOutcomeEventReason(
+  annotation: HealthOutcomeAnnotation
+): HealthOutcomeEventReason | null {
+  if (String(annotation.directive_status) === "dismissed") return null; // waved off by the athlete
+  if (annotation.outcome === "worsening") return "worsening";
+  if (annotation.outcome !== "unchanged") return null;
+  const span = daysApart(annotation.trigger.date, annotation.follow_up.date);
+  if (span == null) return null;
+  return span >= markerValidityHorizons(annotation.marker).note_days ? "unchanged_past_recheck" : null;
+}
+
+export function healthOutcomeEvents(limit = 60): HealthOutcomeEvent[] {
+  const out: HealthOutcomeEvent[] = [];
+  for (const annotation of healthOutcomeAnnotations(limit).annotations) {
+    const reason = healthOutcomeEventReason(annotation);
+    if (reason) out.push({ annotation, reason });
+  }
+  return out;
+}
+
+// The bridge into the insight layer's territorial dedupe: one dated epoch per FACET,
+// carrying the newest event draw date on it. `at` is the follow-up reading's own date,
+// never "now" — an insight said after that draw already knew about it and stays deduped.
+export function healthOutcomeEvidenceEpochs(limit = 60): InsightEvidenceEpoch[] {
+  const latest = new Map<string, string>();
+  for (const { annotation } of healthOutcomeEvents(limit)) {
+    const facet = insightFacetForSurface(annotation.marker)?.facet;
+    if (!facet) continue;
+    const at = String(annotation.follow_up.date).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(at)) continue;
+    const seen = latest.get(facet);
+    if (!seen || at > seen) latest.set(facet, at);
+  }
+  return [...latest.entries()].map(([facet, at]) => ({ facet, at }));
+}
+
+function eventSourceRef(annotation: HealthOutcomeAnnotation): string {
+  const marker = folded(annotation.marker).replace(/ /g, "-") || "marker";
+  return `outcome:${annotation.directive_id}:${marker}:${annotation.follow_up.date}`.slice(0, 120);
+}
+
+// Record the event trail. Uses the SAME clinical lane the directive ledger already
+// uses (kind 'health_directive', clinician tier, observed status, never reversible) —
+// the event is named in `context.event` / `action.outcome` rather than by widening the
+// shared decision-kind vocabulary. The fingerprint carries the marker, both readings
+// and the reason, so re-running after every document in one upload batch is idempotent
+// while a genuinely newer draw becomes a genuinely new row.
+export function recordHealthOutcomeEvents(limit = 60): {
+  events: HealthOutcomeEvent[];
+  observations: number;
+} {
+  const events = healthOutcomeEvents(limit);
+  let observations = 0;
+  for (const { annotation, reason } of events) {
+    try {
+      const domain =
+        annotation.domain === "training" ? "training" : annotation.domain === "nutrition" ? "nutrition" : "health";
+      recordDecision({
+        effective_date: annotation.follow_up.date,
+        kind: "health_directive",
+        domain,
+        summary: capStr(annotation.summary, 300) ?? `${annotation.marker} outcome`,
+        rationale: annotation.caveat,
+        source: "health_outcome",
+        source_ref_type: "directive",
+        source_ref_key: eventSourceRef(annotation),
+        status: "observed",
+        autonomy_tier: "clinician",
+        risk_class: "clinical",
+        reversible: false,
+        input_fingerprint: brainDecisionFingerprint({
+          event: "health_outcome",
+          directive_id: annotation.directive_id,
+          marker: folded(annotation.marker),
+          trigger: [annotation.trigger.date, annotation.trigger.value],
+          follow_up: [annotation.follow_up.date, annotation.follow_up.value],
+          outcome: annotation.outcome,
+          reason,
+        }),
+        context: {
+          event: "health_outcome",
+          reason,
+          outcome: annotation.outcome,
+          directive_id: annotation.directive_id,
+          directive_status: annotation.directive_status,
+          marker: annotation.marker,
+          trigger_value: annotation.trigger.value,
+          trigger_date: annotation.trigger.date,
+          follow_up_value: annotation.follow_up.value,
+          follow_up_date: annotation.follow_up.date,
+          delta: annotation.delta,
+          percent_change: annotation.percent_change,
+          in_optimal_now: annotation.in_optimal_now,
+        },
+        action: { outcome: annotation.outcome, reason, next_step: annotation.next_step },
+        specialist: null,
+        applied_at: null,
+        reverted_at: null,
+        superseded_by: null,
+        evaluator_version: null,
+      });
+      observations++;
+    } catch {
+      // The outcome read is authoritative; the audit trail is best effort — the same
+      // posture recordActiveDirectiveDecisions takes in src/repo/propagation.ts.
+    }
+  }
+  return { events, observations };
 }

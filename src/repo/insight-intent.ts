@@ -23,6 +23,12 @@ import { db } from "../db.js";
 // given its own hard suppression — see repeatedlyDismissedKeys' own doc comment
 // for the repetition gate itself.
 import { repeatedlyDismissedKeys } from "./surface-dismissals.js";
+// "Worse than last time" is an EVENT, and an event outranks a 90-day territorial
+// key (owner ruling R2). The epochs themselves are computed in health-outcomes.ts,
+// which imports this module for the key contract — a deliberate two-way edge inside
+// the repo layer's existing cycle, kept safe by both modules being function-only at
+// top level and by the call below being wrapped.
+import { healthOutcomeEvidenceEpochs } from "./health-outcomes.js";
 
 export type InsightDomain = "training" | "endurance" | "nutrition" | "sleep" | "recovery" | "labs" | "body" | "life";
 
@@ -533,6 +539,21 @@ export function deriveInsightIntentKey(text: string | null | undefined, rational
   return makeKey(found[0].facet, found[1].facet, "*");
 }
 
+// The SINGLE facet a short label names — a marker name ("LDL-C", "Total Cholesterol"),
+// not a sentence. deriveInsightIntentKey needs exactly two facets and is deliberately
+// null on anything else; this is the one-sided read the evidence-epoch path below
+// needs, so a marker whose reading just got worse can be mapped onto the territory an
+// insight would have claimed. Longest surface wins, same table, same word boundaries.
+export function insightFacetForSurface(label: string | null | undefined): InsightFacet | null {
+  const hay = String(label ?? "").toLowerCase();
+  if (!hay.trim()) return null;
+  for (const { re, facet } of SURFACES) {
+    re.lastIndex = 0;
+    if (re.test(hay)) return facet;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // the one resolution contract both producers call
 // ---------------------------------------------------------------------------
@@ -599,6 +620,38 @@ export interface InsightIntentCorpus {
   unkeyedTexts: string[];
 }
 
+// ---------------------------------------------------------------------------
+// evidence epochs — "worse than last time" reopens a territory
+// ---------------------------------------------------------------------------
+
+// A dated EVENT on one facet: the marker behind it re-measured and the reading did
+// not go the way the plan intended (worsening, or unchanged past its own recheck
+// window). Produced by health-outcomes.ts from the same annotations the doctor loop
+// reads; consumed here as the one reason a 90-day territorial key stops suppressing.
+export interface InsightEvidenceEpoch {
+  facet: string;
+  // YYYY-MM-DD — the FOLLOW-UP reading's own draw date, never "now". A key said
+  // after that draw already knew about it.
+  at: string;
+}
+
+// A key is superseded when one of ITS facets carries an epoch that postdates the day
+// the key was last said. Same facet-pair + polarity still collides on everything
+// else — this is the single documented exception (owner ruling R2), so a panel that
+// came back worse is allowed to be spoken about again instead of reading as
+// already-said for the rest of the 90-day window.
+export function intentKeySupersededByEvidence(
+  key: string | null | undefined,
+  saidAt: string | null | undefined,
+  epochs: InsightEvidenceEpoch[]
+): boolean {
+  const parsed = splitInsightIntentKey(key);
+  if (!parsed || !epochs.length) return false;
+  const said = String(saidAt ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(said)) return false;
+  return epochs.some((e) => parsed.facets.includes(e.facet) && String(e.at).slice(0, 10) > said);
+}
+
 // Legacy rows are NOT backfilled — their keys are derived here, at READ time, so
 // improving derivation improves them retroactively (the same on-the-fly shape as
 // lastDirectiveFeedback's intent classification, src/repo/propagation.ts).
@@ -606,11 +659,14 @@ export function insightIntentCorpus(): InsightIntentCorpus {
   const kinds = KEYED_INSIGHT_KINDS.map(() => "?").join(", ");
   const recent = db
     .prepare(
-      `SELECT text, rationale, intent_key FROM insights
+      `SELECT text, rationale, intent_key, created_at FROM insights
         WHERE kind IN (${kinds}) AND created_at >= datetime('now', ?)
         ORDER BY id DESC LIMIT ?`
     )
     .all(...KEYED_INSIGHT_KINDS, `-${INSIGHT_KEY_WINDOW_DAYS} days`, KEY_WINDOW_ROW_LIMIT) as any[];
+  // Deliberately WITHOUT created_at: a downvoted row is sticky, and the epoch check
+  // below only fires on rows that carry one. A row in both lists is skipped from
+  // `recent` when an epoch reopens it and re-added from here — sticky wins.
   const downvoted = db
     .prepare(
       `SELECT text, rationale, intent_key FROM insights
@@ -619,14 +675,31 @@ export function insightIntentCorpus(): InsightIntentCorpus {
     )
     .all(...KEYED_INSIGHT_KINDS, DOWNVOTED_KEY_LIMIT) as any[];
 
+  // The epochs that can reopen a territory. Best effort and never fatal: dedupe must
+  // keep working on a DB with no markers, and this module sits in the same repo cycle
+  // health-outcomes.ts does, so a partially-initialised graph degrades to "no epochs"
+  // (today's behaviour) rather than throwing inside the guard.
+  let epochs: InsightEvidenceEpoch[] = [];
+  try {
+    epochs = healthOutcomeEvidenceEpochs();
+  } catch {
+    epochs = [];
+  }
+
   const keys: string[] = [];
   const seenKeys = new Set<string>();
   const unkeyedTexts: string[] = [];
   const seenTexts = new Set<string>();
+  // A thumbs-down / repeated dismissal is the athlete waving the CONNECTION off, not a
+  // claim about the evidence — so only the time-window rows (`recent`) are eligible to
+  // be reopened by a new epoch. The sticky half keeps suppressing regardless.
   for (const row of [...recent, ...downvoted]) {
     const stored = splitInsightIntentKey(row?.intent_key) ? String(row.intent_key).trim() : null;
     const key = stored ?? deriveInsightIntentKey(row?.text, row?.rationale);
     if (key) {
+      const reopened =
+        row?.created_at != null && intentKeySupersededByEvidence(key, String(row.created_at), epochs);
+      if (reopened) continue;
       if (!seenKeys.has(key)) {
         seenKeys.add(key);
         keys.push(key);

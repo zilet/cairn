@@ -456,6 +456,67 @@ function markerMateriallyWorse(feedback: any, ctx: MarkerContext): boolean {
   return newOver > oldOver + threshold;
 }
 
+// A WORSENING READING RESURFACES ITS DIRECTIVE (owner ruling R1).
+//
+// The diff-based reconcile updates a changed directive IN PLACE, which is exactly right
+// for a reworded rationale or an aging clause — and exactly wrong for the one change
+// that is news. A panel that comes back further off-optimal writes its new number onto
+// the row that was already sitting there, keeps the row's id and created_at, and so
+// changes nothing anyone can see: `listDirectives` orders by id DESC, the card looks
+// identical, and the athlete is never told the thing they are working on got worse.
+//
+// So before the reconcile: any active row of this source whose desired replacement
+// carries a MATERIALLY worse trigger, from a genuinely NEWER draw, is soft-resolved and
+// its replacement stamped `resurfaced_from_id`. The reconcile then INSERTS it — a new
+// row, at the top of the list, with a new trigger value and date, and a new fingerprint
+// for recordActiveDirectiveDecisions to write into the ledger.
+//
+// Idempotent by construction: it requires a strictly newer trigger_date, so re-deriving
+// against the same panel (which the enrichment queue does once per ingested document)
+// resurfaces nothing the second time.
+export function resurfaceWorseningDirectives(source: string, desired: DirectiveInput[]): number {
+  let existing: any[] = [];
+  try {
+    existing = db
+      .prepare(`SELECT * FROM health_directives WHERE source = ? AND status = 'active'`)
+      .all(source) as any[];
+  } catch {
+    return 0;
+  }
+  if (!existing.length) return 0;
+  const byKey = new Map<string, any>();
+  for (const row of existing) if (row.directive_key) byKey.set(String(row.directive_key), row);
+
+  let resurfaced = 0;
+  for (const d of desired) {
+    const key = d.directive_key
+      ? normalizeDirectiveKey(d.directive_key)
+      : defaultDirectiveKey(d.marker ?? null, String(d.domain || "watch"), d.directive ?? null);
+    if (!key) continue;
+    const cur = byKey.get(key);
+    if (!cur || cur.status !== "active") continue;
+
+    const newDate = String(d.trigger_date ?? "").slice(0, 10);
+    const oldDate = String(cur.trigger_date ?? "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate) || !(newDate > oldDate)) continue; // same draw → no news
+
+    const zone = matchOptimalZone(String(d.marker ?? cur.marker ?? ""));
+    const value = Number(d.trigger_value);
+    if (!zone || !Number.isFinite(value)) continue;
+    const side = ["low", "high"].includes(String(d.trigger_side)) ? (String(d.trigger_side) as "low" | "high") : "unknown";
+    const ctx = { value, flag: null, zone, side, marker: null } as unknown as MarkerContext;
+    if (!markerMateriallyWorse({ trigger_side: cur.trigger_side, trigger_value: cur.trigger_value }, ctx)) continue;
+
+    // Machine resolve: status_at stays NULL, exactly as the reconcile's own soft-resolve
+    // does — this is never user feedback, and must not read as one.
+    db.prepare(`UPDATE health_directives SET status = 'resolved' WHERE id = ? AND status = 'active'`).run(cur.id);
+    byKey.delete(key);
+    d.resurfaced_from_id = Number(cur.id);
+    resurfaced++;
+  }
+  return resurfaced;
+}
+
 function shouldSuppressDirective(feedback: any, ctx: MarkerContext): boolean {
   if (!feedback) return false;
   if (feedback.status === "dismissed") return !markerMateriallyWorse(feedback, ctx);
@@ -731,6 +792,9 @@ export function deriveDirectives() {
   collectGenericLongTail(SOURCE, markers, seen, profile, consumedZones, desired);
   emitFiringClusters(SOURCE, firing, seen, desired);
 
+  // A worsening reading is news: soft-resolve the row it superseded so the reconcile
+  // INSERTS its replacement (new id, new created_at) instead of silently overwriting.
+  resurfaceWorseningDirectives(SOURCE, desired);
   const result = reconcileDirectives(SOURCE, desired);
   setAppState(DERIVE_SIG_KEY, sig);
   if (result.changed > 0) {

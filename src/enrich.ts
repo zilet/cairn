@@ -122,10 +122,26 @@ export function settleStaleImagingJob(
 // (cleared when the review job starts, so data landing mid-run queues the next).
 let reviewQueued = false;
 
-// Pure: whether to enqueue a review refresh given the current latch state. Keeps
-// the "at most one pending refresh" pile-up guard unit-testable.
-export function shouldEnqueueReviewRefresh(alreadyQueued: boolean): boolean {
-  return !alreadyQueued;
+// ONE REVIEW PER INGEST BATCH (owner ruling R4). The latch alone only collapses
+// refreshes that are pending SIMULTANEOUSLY — and a batch never is: an upload of a
+// dozen documents queues them all up front and drains them SERIALLY, so doc 1 finishes,
+// enqueues a review, the review runs and clears the latch, and doc 2 does it all again.
+// One zip became fourteen whole-picture reviews that way, each one naming the same
+// finding. The fix is to ask what is still coming: while ANOTHER health document is
+// still queued, this document's review would be superseded before anyone read it, so
+// the batch's LAST document is the one that enqueues. Nothing is lost — the deferred
+// refresh is not dropped, it is the one that ends up running, over the complete batch.
+export function shouldEnqueueReviewRefresh(alreadyQueued: boolean, healthWorkPending = false): boolean {
+  if (alreadyQueued) return false;
+  if (healthWorkPending) return false;
+  return true;
+}
+
+// Whether any further health document is still waiting in (or being processed by) the
+// queue. Exported for tests; the drain loop shifts the CURRENT job off before running
+// it, so this only ever sees documents that have not been read yet.
+export function healthWorkPending(): boolean {
+  return queue.some((job) => job.kind === "health");
 }
 
 // Pure: only REGENERATE the whole-picture synthesis after new labs when the user has
@@ -136,7 +152,7 @@ export function shouldRegenerateSynthesis(existingSynthesis: unknown): boolean {
 }
 
 export function enqueueReviewRefresh(): void {
-  if (!shouldEnqueueReviewRefresh(reviewQueued)) return;
+  if (!shouldEnqueueReviewRefresh(reviewQueued, healthWorkPending())) return;
   reviewQueued = true;
   queue.push({ kind: "review", id: 0 });
   if (!draining) void drain();
@@ -375,6 +391,17 @@ async function drain(): Promise<void> {
           /* ignore */
         }
         console.error(`[enrich] job ${job.kind}#${job.id} failed (${diagnosticErrorName(e)})`);
+        // The batch's review refresh is enqueued by the LAST health document to finish
+        // (shouldEnqueueReviewRefresh). If that document is the one that threw, the
+        // refresh would be lost for the whole batch — so a failing health job still
+        // asks, and the guard decides. A failure keeps the previous review either way.
+        if (job.kind === "health") {
+          try {
+            enqueueReviewRefresh();
+          } catch {
+            /* ignore */
+          }
+        }
       }
     }
   } finally {
@@ -874,6 +901,14 @@ async function processJob(job: Job): Promise<void> {
     // immediately instead of waiting for the nightly checkup_attention_date op. The
     // GET /health/next-checkup read is otherwise read-only. Fail-open like the rest.
     try { repo.refreshDoctorLoopAttention(); } catch (e: any) { console.warn(`[enrich] doctor-loop attention refresh failed: ${e?.message}`); }
+    // "Worse than last time" is an EVENT (owner ruling R1). The outcome annotations were
+    // pull-only — nobody ever computed them unless the user opened the read — so a panel
+    // that came back further off-optimal left no trace anywhere: the directive quietly
+    // absorbed the new number and the connected brain carried on as if nothing had
+    // happened. Recording them HERE, on the ingest that produced the new reading, is what
+    // makes a worsening marker a dated fact the ledger and the insight layer can both see.
+    // Fingerprint-idempotent, so every document in a batch may call it. Fail-open.
+    try { repo.recordHealthOutcomeEvents(); } catch (e: any) { console.warn(`[enrich] health outcome events failed: ${e?.message}`); }
     // deriveDirectives() busts today's cached Brief itself (a lab reshapes the read).
     enqueueReviewRefresh();
   }

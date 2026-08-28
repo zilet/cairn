@@ -40,8 +40,10 @@ test("a changed marker updates the directive in place (id + created_at preserved
   const before = activeMarkersWatch("ApoB")[0];
   const createdAt = db.prepare(`SELECT created_at FROM health_directives WHERE id = ?`).get(before.id).created_at;
 
-  // A newer reading with a different value → same directive_key, changed trigger snapshot.
-  seedHealthDoc("2026-03-01", [marker("ApoB", 150, { unit: "mg/dL", flag: "high" })]);
+  // A newer reading with a different value → same directive_key, changed trigger
+  // snapshot. Deliberately NOT materially worse: a materially worse draw is news and
+  // resurfaces as a new row instead (owner ruling R1, covered in directiveChurn).
+  seedHealthDoc("2026-03-01", [marker("ApoB", 123, { unit: "mg/dL", flag: "high" })]);
   repo.deriveDirectives();
   const after = activeMarkersWatch("ApoB")[0];
   assert.equal(after.id, before.id, "the row is updated in place, not replaced");
@@ -50,7 +52,7 @@ test("a changed marker updates the directive in place (id + created_at preserved
     createdAt,
     "created_at is preserved through an in-place update"
   );
-  assert.equal(after.trigger_value, 150, "the new trigger snapshot is written");
+  assert.equal(after.trigger_value, 123, "the new trigger snapshot is written");
 });
 
 // (b) --------------------------------------------------------------------------

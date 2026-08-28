@@ -69,14 +69,15 @@ test("a CHANGED marker updates the row in place rather than resolving and re-ins
   assert.ok(before.length > 0);
   const beforeIds = before.map((d) => d.id).sort();
 
-  // A worse draw: same directives, new trigger snapshot.
-  seedHealthDoc("2026-03-01", [marker("ApoB", 155, { unit: "mg/dL", flag: "high" })]);
+  // A fresh draw that moved, but not MATERIALLY worse: same directives, new trigger
+  // snapshot. (A materially worse draw is news and resurfaces instead — see below.)
+  seedHealthDoc("2026-03-01", [marker("ApoB", 123, { unit: "mg/dL", flag: "high" })]);
   repo.deriveDirectives();
 
   const after = repo.listActiveDirectives().filter((d) => (d.marker || "") === "ApoB");
   assert.deepEqual(after.map((d) => d.id).sort(), beforeIds, "the same rows carried the update");
   assert.ok(
-    after.every((d) => d.trigger_value === 155),
+    after.every((d) => d.trigger_value === 123),
     "the new trigger snapshot landed on the existing rows"
   );
   assert.equal(
@@ -84,6 +85,34 @@ test("a CHANGED marker updates the row in place rather than resolving and re-ins
     0,
     "updating content resolves nothing"
   );
+});
+
+// The one change that is NOT absorbed in place: a reading that came back materially
+// FURTHER off-optimal is news, and news gets a row of its own (owner ruling R1).
+// Silently overwriting it is what let a rising LDL read as nothing had happened.
+test("a MATERIALLY WORSE draw resurfaces its rows instead of being absorbed in place", () => {
+  seedHealthDoc("2025-12-01", [marker("ApoB", 120, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives();
+  const beforeIds = repo
+    .listActiveDirectives()
+    .filter((d) => (d.marker || "") === "ApoB")
+    .map((d) => d.id)
+    .sort();
+  assert.ok(beforeIds.length > 0);
+
+  seedHealthDoc("2026-03-01", [marker("ApoB", 155, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives();
+
+  const after = repo.listActiveDirectives().filter((d) => (d.marker || "") === "ApoB");
+  assert.ok(after.length > 0);
+  assert.ok(
+    after.every((d) => !beforeIds.includes(d.id)),
+    "every worsened directive is a new row, so it resurfaces"
+  );
+  assert.ok(after.every((d) => d.trigger_value === 155 && beforeIds.includes(d.resurfaced_from_id)));
+  const resolved = repo.listDirectives({ all: true }).filter((d) => d.status === "resolved");
+  assert.deepEqual(resolved.map((d) => d.id).sort(), beforeIds, "the superseded rows are soft-resolved");
+  assert.ok(resolved.every((d) => d.status_at == null), "a machine resolve is never user feedback");
 });
 
 test("a marker that comes back INTO range soft-resolves its rows without stamping user feedback", () => {

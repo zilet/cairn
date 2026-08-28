@@ -25,6 +25,8 @@ import { listSupplements } from "./supplements.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { followupLabel, markerSlugFromSignalKey } from "./attention-labels.js";
 import { dexaRescanWhenText, dexaRescanWindow, latestDexaDate } from "./dexa-window.js";
+import { matchOptimalZone, optimalDistance } from "./propagation-data.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
 
 export type CheckupItemKind = "lab" | "dexa" | "review" | "add";
 
@@ -93,6 +95,88 @@ const FRAME =
 // the quiet Stand tile. Beyond it, the read still exists — it just doesn't surface
 // itself (pull, never push; no urgency).
 const SOON_DAYS = 45;
+
+// WHICH MISSING WORKUP A FLAGGED MARKER ACTUALLY WARRANTS (owner ruling R3).
+//
+// recommendedPanel() already knows what has never been measured, but the tile only
+// raised itself for DATED rechecks and ordered labs — so an athlete whose lipids came
+// back worse on a minimal panel, with ApoB and Lp(a) simply not drawn, saw nothing at
+// all. The add-on is worth surfacing on its own when a marker it would explain is
+// currently off-optimal or lab-flagged; otherwise it stays exactly as quiet as today.
+//
+// Keys are recommendedPanel() item keys; values are the optimal-zone labels / marker
+// names whose flag makes that add-on worth asking for. Deliberately narrow — an add-on
+// with no clinical neighbour on file stays a calm, undated suggestion.
+const ADDON_WARRANTED_BY: Record<string, string[]> = {
+  apob: ["LDL-C", "Total Cholesterol", "Non-HDL-C", "Triglycerides", "HDL-C"],
+  lpa: ["LDL-C", "Total Cholesterol", "Non-HDL-C", "ApoB"],
+  "hs-crp": ["LDL-C", "Total Cholesterol", "Non-HDL-C", "Triglycerides", "Homocysteine"],
+  hba1c: ["Fasting Glucose", "Glucose", "Triglycerides"],
+  "fasting-insulin": ["Fasting Glucose", "Glucose", "HbA1c", "Triglycerides"],
+  ferritin: ["Hemoglobin", "Hematocrit", "MCV", "Iron"],
+  "vitamin-d": ["Calcium", "Alkaline Phosphatase"],
+  "urine-acr": ["Creatinine", "eGFR"],
+};
+
+// An add-on plus whether a currently-off marker warrants it. `warranted` is internal
+// ordering/gating state and is stripped before the item reaches the client contract.
+interface WarrantedCheckupItem extends CheckupItem {
+  warranted: boolean;
+}
+
+// Athlete-facing, informational, never medical advice — and a set, never one literal,
+// so the same missing workup does not print the same sentence every morning.
+const ADDON_WARRANTED_LINES = [
+  "Something it helps explain is off right now, and this has never been measured.",
+  "A related marker is flagged at the moment, and this one isn't on file.",
+  "This would add context to a marker that's currently out of your optimal range.",
+  "Worth asking about — a neighbouring marker is off and this has never been drawn.",
+];
+
+const ADDON_LEDE_LINES = [
+  "Nothing's due to recheck — but a couple of things worth adding to the next draw would fill in a marker that's off right now.",
+  "No rechecks are open. There are a few workups that have never been done and would explain a flagged marker.",
+  "Nothing's on the calendar to recheck. A short list of never-measured add-ons would round out the picture on a marker that's off.",
+];
+
+// Is this marker something a clinician would look at right now: lab-flagged, or sitting
+// outside its evidence-anchored optimal band. NO score is computed or surfaced — this is
+// a boolean about whether the marker is off, nothing more.
+function markerIsOff(m: MarkerLike | undefined): boolean {
+  if (!m) return false;
+  const flag = String(m.latest?.flag ?? "").toLowerCase();
+  if (flag === "high" || flag === "low") return true;
+  const zone = matchOptimalZone(String(m.name ?? m.key ?? ""));
+  const value = Number(m.latest?.value);
+  if (!zone || !Number.isFinite(value)) return false;
+  return optimalDistance(value, zone) > 0;
+}
+
+// The add-on keys a currently-off marker warrants. Pure over the marker index so the
+// rule is testable without a DB shape.
+export function warrantedAddOnKeys(markerByKey: Map<string, MarkerLike>): Set<string> {
+  const off = new Set<string>();
+  for (const m of markerByKey.values()) {
+    if (!markerIsOff(m)) continue;
+    for (const name of [m.name, m.key, matchOptimalZone(String(m.name ?? m.key ?? ""))?.label]) {
+      const n = String(name ?? "").toLowerCase();
+      if (n) off.add(n);
+      const canon = name ? canonicalMarker(String(name)) : null;
+      if (canon?.name) off.add(canon.name.toLowerCase());
+      if (canon?.key) off.add(canon.key.toLowerCase());
+    }
+  }
+  const out = new Set<string>();
+  if (!off.size) return out;
+  for (const [addOn, triggers] of Object.entries(ADDON_WARRANTED_BY)) {
+    const hit = triggers.some((label) => {
+      const canon = canonicalMarker(label);
+      return off.has(label.toLowerCase()) || off.has(canon.name.toLowerCase()) || off.has(canon.key.toLowerCase());
+    });
+    if (hit) out.add(addOn);
+  }
+  return out;
+}
 // How far out a dated recheck stays worth listing as "upcoming".
 const UPCOMING_HORIZON_DAYS = 180;
 
@@ -444,7 +528,9 @@ function composeLede(
   dueNow: CheckupItem[],
   upcomingDated: CheckupItem[],
   orderedLabs: OrderedLab[],
-  followThrough: FollowThroughItem[]
+  followThrough: FollowThroughItem[],
+  warrantedAddOns: CheckupItem[] = [],
+  asOf: string = todayISO()
 ): string {
   if (dueNow.length) {
     const extra = dueNow.length > 1 ? `, plus ${dueNow.length - 1} more` : "";
@@ -453,6 +539,7 @@ function composeLede(
   const soonest = upcomingDated[0];
   if (soonest && soonest.when_text) return `Your ${soonest.label} recheck ${soonest.when_text}.`;
   if (orderedLabs.length) return "Your last visit left labs to bring in — nothing's due to recheck on Cairn's side yet.";
+  if (warrantedAddOns.length) return pickDayVariant(ADDON_LEDE_LINES, asOf, "next-checkup:lede:addons");
   if (followThrough.length) return "No rechecks are due — a few things you're doing are still working; here's where they stand.";
   return "Nothing's due for a recheck right now. Your markers are quiet — Cairn will flag the next window when it opens.";
 }
@@ -530,28 +617,44 @@ export function nextCheckupRead(opts: { refresh?: boolean; asOf?: string } = {})
   }
   upcomingDated.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)));
 
-  // Missing high-value workups → calm "worth adding" suggestions (no date).
-  const addOns: CheckupItem[] = (recommendedPanel() as any[]).map((item) => ({
-    signal_key: `add:${String(item.key)}`,
-    label: String(item.label),
-    kind: "add" as const,
-    next_due: null,
-    when_text: null,
-    why: `${String(item.reason)} ${String(item.cadence_note)}`.trim(),
-  }));
+  // Missing high-value workups → calm "worth adding" suggestions (no date). A workup a
+  // currently-flagged marker actually warrants is listed FIRST and says why — and it is
+  // the one kind of add-on that can raise the tile on its own (owner ruling R3).
+  const warrantedKeys = warrantedAddOnKeys(markerByKey);
+  const addOns: WarrantedCheckupItem[] = (recommendedPanel() as any[])
+    .map((item) => {
+      const warranted = warrantedKeys.has(String(item.key));
+      const why = `${String(item.reason)} ${String(item.cadence_note)}`.trim();
+      return {
+        signal_key: `add:${String(item.key)}`,
+        label: String(item.label),
+        kind: "add" as const,
+        next_due: null,
+        when_text: null,
+        why: warranted
+          ? `${why} ${pickDayVariant(ADDON_WARRANTED_LINES, asOf, `next-checkup:addon:${String(item.key)}`)}`.trim()
+          : why,
+        warranted,
+      };
+    })
+    .sort((a, b) => Number(b.warranted) - Number(a.warranted));
+  const warrantedAddOns = addOns.filter((a) => a.warranted);
 
-  const upcoming = [...upcomingDated.slice(0, 8), ...addOns.slice(0, 6)];
+  const upcoming: CheckupItem[] = [
+    ...upcomingDated.slice(0, 8),
+    ...addOns.slice(0, 6).map(({ warranted: _warranted, ...item }) => item),
+  ];
 
   const followThrough = composeFollowThrough(markerByKey, attentionBySignal, asOf);
   const orderedLabs = scanOrderedLabs();
   const prep = composePrep(dueNow, addOns, followThrough, orderedLabs);
-  const lede = composeLede(dueNow, upcomingDated, orderedLabs, followThrough);
+  const lede = composeLede(dueNow, upcomingDated, orderedLabs, followThrough, warrantedAddOns, asOf);
 
   const upcomingSoon = upcomingDated.some((e) => {
     const d = daysBetween(asOf, e.next_due || "");
     return d != null && d <= SOON_DAYS;
   });
-  const has_content = dueNow.length > 0 || upcomingSoon || orderedLabs.length > 0;
+  const has_content = dueNow.length > 0 || upcomingSoon || orderedLabs.length > 0 || warrantedAddOns.length > 0;
 
   return { lede, due_now: dueNow, upcoming, follow_through: followThrough, prep, has_content, frame: FRAME };
 }
