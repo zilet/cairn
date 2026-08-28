@@ -7,6 +7,19 @@ Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- **The week can hold a real rest day** — a plan day can now be marked Rest: it takes its place in
+  the weekly rotation like any other day, the morning read honors it as a suggestion (never a
+  gate), and no drive setting or "yesterday went fine" streak can quietly turn it back into a
+  training day. Training anyway on a rest day offers the next real session in your week, not a
+  generic card.
+- **The long run builds toward its target** — a template distance is now a destination, not a
+  demand: each week's long run steps up from your actual longest recent run at a sustainable
+  rate, holds on a week already carrying a full build, and the card says so in plain words.
+- **Every anchor lift on one card** — the Progress strength card now shows all the lifts you're
+  rebuilding, one expanded and the rest a tap away.
+- **Navigation that answers the Back button** — the plan's Changes record joined the Plan bar,
+  and drilling into a marker domain on Stand is a real page: the browser Back button returns to
+  the overview instead of leaving.
 - **Harm now includes the body's response** — a day counts as "went fine" only when the log AND
   your physiology agree: a hard cardio day, your longest run in ninety days, or a next morning
   that answers badly (rest-grade readiness, low HRV status, clearly elevated resting HR) all stop

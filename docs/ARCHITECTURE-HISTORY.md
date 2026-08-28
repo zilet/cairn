@@ -4,6 +4,45 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-28 — the Hybrid Week Round: a rest day is a real row, and the long run is a destination
+
+Schema 99 (`plan-days-day-type` — additive, defaulted `'training'`); sw `CACHE` v559. Two packages
+in parallel worktrees, an adversarial review (ten findings fixed), same-day follow-on to the Elite
+Coach Round: the live template was five lift days plus two "Run" days with runs attached to three
+lift days and ZERO rest days, so the day selector surfaced training on every calendar date and the
+long run was a fixed number the athlete failed against.
+
+**A rest day is a first-class ring member** (`plan_days.day_type`, v99). A `'rest'` day carries
+zero items — the emptiness IS the prescription, enforced by `assertPlanDayTypeCoherent` on every
+writer including `addExerciseToPlanDay` — rides the rotation like any other day, is never scored
+against a training day in either direction, never becomes a session anchor, and is excluded from
+`week_planned`. The `template_rest_day` day-read rule sits BELOW every safety floor (a morning with
+its own reason to rest keeps its own words) and above planned training; push drive and the
+easy→train outcome ladder both carry explicit guards so neither can open the seam. `train_anyway`
+from a programmed rest day falls through to the next TRAINING day in the ring — the athlete who
+insists gets a real session, not a blank card. The week-ahead strip and the week-layout read both
+know the day (`kind:"rest"`, never a move-destination), and the autonomy snapshot/rollback carries
+`day_type` on both the v2 three-way path and legacy v1 payloads so an Undo cannot delete the seam.
+
+**The long run ramps to its template distance** (`src/repo/long-run-ramp.ts`). The template figure
+is a DESTINATION: the card prescribes `min(template, trailing-90d longest run ×
+SUSTAINABLE_LONG_STEP_FACTOR)` rounded to the half-km, held at the trailing longest on a week
+already carrying its full sustainable build (canonical `weeklyKm`). Detection and application ask
+the same sport question (`cardioPlanIdentity(...).sport === "run"` on both sides — a long ride
+cannot poison the run ladder), an authored plan note survives with the ramp sentence appended, the
+note is regenerated if the easy clamp rescales the distance, and a zero-history athlete gets a
+first-run variant set that never references "your longest". `applyLongRunRamp` runs between
+`holdLegDrivenCardio` and `clampCardioItem`; a held day still holds. Day-read's private trailing-7d
+running-volume query was retired for the canonical `weeklyKm`, window equivalence pinned by test.
+
+**The client learned the round's IA** in the same sweep (feat(ui)): the Plan bar gained the
+"Changes" segment for `/app/plan/coach`; the Stand marker-domain drill-in became a real route
+(`/app/stand/domain?id=<key>`) so browser Back steps back to the overview; the four hand-rolled
+"Where to focus" renderers collapsed into ONE `coachingFocusHtml(focus, {variant})` with a
+per-variant spec table; the Progress anchor card reads the plural `/api/strength-journeys` and
+shows every active anchor (one expanded, the rest as tappable rows); and bare ISO dates left the
+athlete-visible copy in five files.
+
 ## 2026-08-28 — the Elite Coach Round: the body's answer counts, and the athlete's word holds
 
 Schema 98 (`strength-objectives-one-active-per-lift`, index swap only — no data touched); sw `CACHE`
