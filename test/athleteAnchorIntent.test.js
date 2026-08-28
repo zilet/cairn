@@ -94,11 +94,10 @@ test("migration v98 is idempotent, additive, and preserves a v97-shaped active o
   assert.match(source, /DROP INDEX IF EXISTS idx_strength_objectives_one_active\b/);
   assert.match(source, /CREATE UNIQUE INDEX IF NOT EXISTS idx_strength_objectives_one_active_per_lift/);
   assert.doesNotMatch(
-    source.slice(0, source.indexOf("},\n];")),
+    source.slice(0, source.includes("version: 99") ? source.indexOf("version: 99") : source.indexOf("},\n];")),
     /\b(?:DELETE|DROP TABLE|UPDATE strength_objectives)\b/,
     "v98 is additive: it never rewrites or removes an objective row"
   );
-  assert.equal(migrate.includes("version: 99"), false, "98 is the highest migration in this change");
 
   // Rebuild a v97-shaped table (one-active-overall index) and run the migration body.
   db.exec(`DROP TABLE IF EXISTS v97_probe_objectives`);

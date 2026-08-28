@@ -300,7 +300,7 @@ test("the plan-day picker answers WHICH day and nothing else — it carries no k
   seedSplit();
   longRun();
   const selected = selectAdaptivePlanDay(REF);
-  assert.deepEqual(Object.keys(selected).sort(), ["day_number", "focus", "selection"]);
+  assert.deepEqual(Object.keys(selected).sort(), ["day_number", "day_type", "focus", "selection"]);
   assert.doesNotMatch(JSON.stringify(selected), /"kind"/, "the picker never speaks about rest / easy / train");
 });
 
