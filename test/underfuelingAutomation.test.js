@@ -8,6 +8,7 @@ import { recordDecision } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy, revertDecision } from "../dist/domain/brain/autonomy-service.js";
 import { runWithTimeZone } from "../dist/tz.js";
+import { todayAgenda } from "../dist/repo/today-agenda.js";
 
 const today = () => localDateISO();
 
@@ -674,4 +675,200 @@ test("waist-only prescription strain does not trigger the volume-restore pass", 
   );
   const item = repo.getPlanDay(1).items.find((entry) => entry.exercise === "Barbell Bench Press");
   assert.equal(item.sets, 4, "the protective cut is left where it was");
+});
+
+// ---- a standing ask is not re-asked every night ------------------------------
+// The read's `signature` hashes the intake window's `through` date, so it DRIFTS
+// EVERY DAY even when nothing about the athlete's picture moved. The nightly job
+// therefore minted a fresh identical draft each pass and the older one was set
+// aside as "stale", which reset the question before the athlete could ever answer
+// it. What makes a re-draft material is the ask itself: a different step, a
+// different direction, or a different basis class.
+function openUnderfuelDrafts() {
+  return repo
+    .listReviewHeldProposals(50)
+    .filter((p) => p.agent === "underfuel-brain" && p.instruction === "auto: protective fuel correction");
+}
+
+test("a nightly redraft with an identical delta leaves the standing ask standing", () => {
+  repo.setSettings({ lead_mode: "review_everything", proactive_enabled: true });
+  seedTarget();
+
+  const first = runUnderfuelingControlLoop(today(), { read: read("prescription_strain", "night-1") });
+  assert.equal(first.action, "none", "under review posture the correction is held for the athlete");
+  const drafts = openUnderfuelDrafts();
+  assert.equal(drafts.length, 1);
+  const standingProposalId = drafts[0].id;
+  const standingDecisionId = repo
+    .listBrainDecisions({ status: "review", kind: "nutrition_target", domain: "nutrition", limit: 100 })
+    .find((d) => Number(d.source_ref_key) === standingProposalId)?.id;
+  assert.ok(standingDecisionId, "the held draft has one review decision");
+
+  // Three more nightly passes, each with a FRESH signature (as the real read produces)
+  // but the same +150 toward the same basis.
+  for (const sig of ["night-2", "night-3", "night-4"])
+    assert.equal(runUnderfuelingControlLoop(today(), { read: read("prescription_strain", sig) }).action, "none");
+
+  assert.deepEqual(
+    openUnderfuelDrafts().map((p) => p.id),
+    [standingProposalId],
+    "no second draft is minted for an unchanged ask",
+  );
+  const live = repo
+    .listBrainDecisions({ status: "review", kind: "nutrition_target", domain: "nutrition", limit: 100 })
+    .filter((d) => Number(d.source_ref_key) === standingProposalId);
+  assert.equal(live.length, 1, "and the original decision is still the live one");
+  assert.equal(Number(live[0].id), Number(standingDecisionId), "same row, same age, same place in the list");
+  assert.equal(live[0].context.reaffirmed_on, today(), "only its evidence was refreshed");
+  assert.equal(
+    repo.listBrainDecisions({ kind: "nutrition_target", status: "superseded", limit: 100 }).length,
+    0,
+    "nothing was set aside behind the athlete's back",
+  );
+
+  // …and the athlete can still see it: under this posture Today's agenda reads the
+  // held-draft queue, and the standing ask is the draft sitting in it. No new UI —
+  // the point of the fix is that the existing surface finally has something stable
+  // to show instead of a row that was replaced before it could be read.
+  const agenda = todayAgenda(today());
+  assert.ok(
+    [...agenda.primary, ...agenda.more].some((c) => String(c?.id) === "draft-proposals"),
+    "the standing ask is reachable on the surface the athlete reads",
+  );
+});
+
+test("a materially different ask does supersede the standing one", () => {
+  repo.setSettings({ lead_mode: "review_everything", proactive_enabled: true });
+  seedTarget();
+  const base = read("prescription_strain", "material-1");
+  runUnderfuelingControlLoop(today(), { read: base });
+  const firstId = openUnderfuelDrafts()[0].id;
+
+  const bigger = { ...base, signature: "material-2", action: { ...base.action, kcal_delta: 250 } };
+  runUnderfuelingControlLoop(today(), { read: bigger });
+
+  const drafts = openUnderfuelDrafts();
+  assert.equal(drafts.length, 1, "still exactly one open ask");
+  assert.notEqual(drafts[0].id, firstId, "but it is the new one");
+  assert.equal(drafts[0].parsed.nutrition.delta_kcal, 250, "carrying the changed step");
+  assert.equal(repo.getProposal(firstId).status, "superseded", "and the outdated one is retired");
+});
+
+// ---- a declined recovery week stays declined ---------------------------------
+test("a recovery week the athlete declined is not re-announced on the same evidence", () => {
+  seedTarget();
+  seedPlan();
+  const first = runUnderfuelingControlLoop(today(), { read: read("persistent_strain", "decline-1") });
+  assert.equal(first.recovery.announced, true, "the week is announced once");
+
+  assert.equal(revertDecision(first.recovery.decision.id, "I feel underexercised").ok, true);
+  // Date the refusal to three days ago, so "since the refusal" is a real window.
+  db.prepare(`UPDATE brain_decisions SET context_json = json_set(context_json, '$.held_by_user_on', ?) WHERE id = ?`).run(
+    addDaysISO(today(), -3),
+    first.recovery.decision.id,
+  );
+
+  const again = runUnderfuelingControlLoop(today(), { read: read("persistent_strain", "decline-2") });
+  assert.equal(again.recovery, null, "the same fuel read does not reopen the question");
+  assert.match(again.reason, /already said no/i);
+  assert.equal(
+    repo
+      .listBrainDecisions({ status: "announced", kind: "training_structure", domain: "recovery", limit: 100 })
+      .length,
+    0,
+    "nothing new is announced",
+  );
+
+  // A NEW safety-grade signal is information the refusal could not have been about,
+  // so the week may be offered again.
+  db.prepare(`INSERT INTO checkins (date, energy, sleep_feel) VALUES (?, 1, 2)`).run(addDaysISO(today(), -1));
+  const reopened = runUnderfuelingControlLoop(today(), { read: read("persistent_strain", "decline-3") });
+  assert.ok(reopened.recovery, "a fresh brake reopens it");
+  assert.equal(reopened.recovery.announced, true);
+});
+
+// ---- an ask nobody can see is indistinguishable from no ask ------------------
+// Under a coach-led posture the standing protective-fuel draft is held at the `ask`
+// tier as an ordinary `requested_review`, and Today's attention filter drops that
+// code on purpose (most rows carrying it are bookkeeping that resolves itself).
+// This one does not resolve itself: it is a question addressed to the athlete that
+// changes nothing until they answer. It is admitted by shape — and nothing else
+// carrying `requested_review` comes with it.
+test("in lead mode the standing protective-fuel ask reaches the attention surface", () => {
+  repo.setSettings({ lead_mode: "lead", proactive_enabled: true });
+  seedTarget();
+  seedPlan();
+
+  // Force the ask tier the live box produces for this decision.
+  const held = runUnderfuelingControlLoop(today(), {
+    read: read("prescription_strain", "attention-1"),
+  });
+  let draft = openUnderfuelDrafts()[0];
+  if (!draft) {
+    // Under this posture the loop may own the change outright; re-shape the owned
+    // decision into the ask-tier review hold the live ledger carries.
+    const owned = repo
+      .listBrainDecisions({ kind: "nutrition_target", domain: "nutrition", limit: 10 })
+      .find((d) => String(d.source_ref_type) === "plan_proposal");
+    assert.ok(owned, "the loop produced a nutrition_target decision to re-shape");
+    db.prepare(
+      `UPDATE brain_decisions
+          SET status = 'review', autonomy_tier = 'ask',
+              context_json = json_set(json_set(COALESCE(context_json,'{}'), '$.review_required', json('true')),
+                                      '$.review_reason_code', 'requested_review')
+        WHERE id = ?`,
+    ).run(owned.id);
+    draft = repo.getProposal(Number(owned.source_ref_key));
+  }
+  assert.ok(draft, "there is a standing protective-fuel draft");
+  assert.equal(draft.agent, "underfuel-brain");
+  assert.equal(draft.instruction, "auto: protective fuel correction");
+
+  const attention = repo.listAttentionReviewHeldProposals(20);
+  assert.ok(
+    attention.some((p) => Number(p.id) === Number(draft.id)),
+    "the standing ask is on the coach-led attention surface",
+  );
+  const agenda = todayAgenda(today());
+  const cards = [...agenda.primary, ...agenda.more];
+  assert.ok(
+    cards.some((c) => String(c?.id) === "draft-proposals"),
+    "…and Today raises the plan-decision card for it",
+  );
+
+  // A DIFFERENT requested_review row is still excluded — the gate opened for one
+  // deliberate shape, not for the whole reason code.
+  const unrelated = repo.createProposal("coach", "auto: something else entirely", "", {
+    summary: "An unrelated bookkeeping draft.",
+    changes: [],
+  });
+  recordDecision({
+    effective_date: today(),
+    kind: "training_target",
+    domain: "training",
+    summary: "An unrelated requested review.",
+    rationale: "Bookkeeping.",
+    source: "coach",
+    source_ref_type: "plan_proposal",
+    source_ref_key: String(unrelated.id),
+    status: "review",
+    autonomy_tier: "ask",
+    risk_class: "low",
+    reversible: false,
+    input_fingerprint: null,
+    context: { review_required: true, review_reason_code: "requested_review" },
+    action: { proposal_id: unrelated.id },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+  const after = repo.listAttentionReviewHeldProposals(20);
+  assert.ok(
+    !after.some((p) => Number(p.id) === Number(unrelated.id)),
+    "a generic requested_review row is still not an interruption",
+  );
+  assert.ok(after.some((p) => Number(p.id) === Number(draft.id)), "and the fuel ask is still there");
+  assert.ok(held.ok);
 });

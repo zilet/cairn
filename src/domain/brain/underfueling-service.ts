@@ -4,6 +4,7 @@ import {
   getBrainDecision,
   getBrainRollback,
   listBrainDecisions,
+  patchBrainDecision,
   recordDecision,
   transitionBrainDecision,
 } from "../../repo/brain-decisions.js";
@@ -21,6 +22,8 @@ import {
 } from "../../repo/profile.js";
 import { buildVolumeRestoreProposal } from "../../repo/progression.js";
 import { activeRecoveryWeekLedger } from "../../repo/recovery-week-ledger.js";
+import { recoveryWeekMayBeAnnounced } from "../../repo/recovery-refusal.js";
+import { PROTECTIVE_FUEL_INSTRUCTION, UNDERFUEL_BRAIN_AGENT } from "../../repo/protective-fuel-draft.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "../../repo/shared.js";
 import { currentUnderfuelingRead } from "../../repo/underfueling-snapshot.js";
 import type { UnderfuelingRead } from "../../repo/underfueling.js";
@@ -32,11 +35,11 @@ export { currentUnderfuelingRead } from "../../repo/underfueling-snapshot.js";
 const EXECUTION_ACTION_KEY = "underfuel_execution_last_action";
 const PRESCRIPTION_ACTION_KEY = "underfuel_prescription_last_action";
 const ACTION_COOLDOWN_DAYS = 7;
-// The single-source identity of an auto protective-fuel correction draft. Both the
-// createProposal write and the stale-draft supersession matcher key off these, so a
-// rename can never silently break the dedup (they must stay in lock-step).
-const UNDERFUEL_BRAIN_AGENT = "underfuel-brain";
-const PROTECTIVE_FUEL_INSTRUCTION = "auto: protective fuel correction";
+// The single-source identity of an auto protective-fuel correction draft. The
+// createProposal write, the stale-draft supersession matcher, the standing-ask
+// lookup AND the two attention-surface filters all key off these, so they live in
+// one leaf module rather than being retyped here (a rename can never silently
+// break the dedup or hide the ask).
 
 export interface UnderfuelingControlResult {
   ok: true;
@@ -291,6 +294,11 @@ function nutritionProposal(
         ? "Independent outcome channels still show strain after the prior correction settled, so fuel moves one bounded step toward maintenance while training recovers."
         : "Completed-day intake is near target while robust outcome channels agree that the current prescription is too aggressive; add one bounded carb-forward step.",
     underfueling_signature: read.signature,
+    // The BASIS CLASS behind the ask. `underfueling_signature` drifts every single
+    // day (it hashes the window's `through` date), so it can never answer "is this
+    // the same ask as yesterday's?" — the state can, and together with the delta it
+    // is what makes a re-draft material or not. See openProtectiveFuelAsk.
+    basis_state: read.state,
     coordination_key: coordinationKey,
   };
   return createProposal(UNDERFUEL_BRAIN_AGENT, PROTECTIVE_FUEL_INSTRUCTION, "", {
@@ -439,6 +447,74 @@ function supersedeStaleProtectiveFuelRecoveryDrafts(signature: string, keepDecis
   for (const proposalId of orphaned) setProposalStatus(proposalId, "superseded");
 }
 
+// A STANDING ask — an open protective-fuel draft the athlete has not answered yet.
+// `review`, `pending` and `announced` all mean "this is live and the athlete either
+// has it or is about to"; anything terminal is not standing.
+function openProtectiveFuelAsk(): { decision: any; proposal: any; nutrition: any } | null {
+  for (const status of ["review", "pending", "announced"] as const) {
+    for (const decision of listBrainDecisions({ status, kind: "nutrition_target", domain: "nutrition", limit: 100 })) {
+      if (String(decision.source_ref_type) !== "plan_proposal") continue;
+      const proposalId = Number(decision.source_ref_key);
+      if (!(proposalId > 0)) continue;
+      const proposal = getProposal(proposalId) as any;
+      if (
+        !proposal ||
+        proposal.status !== "draft" ||
+        String(proposal.agent) !== UNDERFUEL_BRAIN_AGENT ||
+        String(proposal.instruction) !== PROTECTIVE_FUEL_INSTRUCTION
+      )
+        continue;
+      const nutrition = proposal.parsed?.nutrition;
+      if (!nutrition) continue;
+      return { decision, proposal, nutrition };
+    }
+  }
+  return null;
+}
+
+/**
+ * Is a fresh draft MATERIALLY different from the one already standing? Only three
+ * things make it so: a different step size, a different direction, or a different
+ * basis class. Anything else is the nightly job re-typing yesterday's question —
+ * and re-typing it is what set the standing ask aside every night before the
+ * athlete had a chance to read it.
+ */
+function fuelAskMateriallyDiffers(standing: any, delta: number, state: string): boolean {
+  const prior = Number(standing?.delta_kcal);
+  if (!Number.isFinite(prior) || prior === 0) return true;
+  if (Math.sign(prior) !== Math.sign(delta)) return true;
+  if (Math.round(prior) !== Math.round(delta)) return true;
+  // A draft written before `basis_state` existed carries no basis to compare, so it
+  // is treated as different exactly once; its replacement records one.
+  return String(standing?.basis_state ?? "") !== String(state);
+}
+
+// The standing ask keeps its identity, its age and its place in the athlete's list.
+// Only the EVIDENCE behind it is refreshed, so the card the athlete eventually opens
+// cites today's read rather than the one that first raised the question.
+function refreshStandingFuelAsk(decision: any, read: UnderfuelingRead, today: string): any {
+  try {
+    return (
+      patchBrainDecision(Number(decision.id), {
+        context: {
+          ...((decision.context as Record<string, unknown>) ?? {}),
+          underfueling_signature: read.signature,
+          reaffirmed_on: today,
+          evidence_observed_at: new Date().toISOString(),
+        },
+      }) ?? decision
+    );
+  } catch {
+    return decision;
+  }
+}
+
+// The step the shared proposal clamp will actually write, computed here so the
+// standing-ask comparison sees the SAME number `nutritionProposal` would store.
+function boundedFuelStep(delta: number, today: string, ceiling: number): number {
+  return Math.max(100, Math.min(250, Math.round(personalizedNutritionStep(delta, today, ceiling) / 25) * 25));
+}
+
 function scheduleNutrition(
   read: UnderfuelingRead,
   today: string,
@@ -446,8 +522,35 @@ function scheduleNutrition(
   delta: number,
   ceiling = 250
 ): any | null {
+  // AN OPEN ASK IS NOT RE-ASKED. A held nutrition_target draft must survive until the
+  // athlete answers it or its content genuinely changes; minting an identical one every
+  // night set the previous night's aside as "stale" and reset the question before it
+  // could ever be seen. Only a material change (different step, direction, or basis)
+  // earns a new draft — and therefore the supersede of the old one.
+  const standing = openProtectiveFuelAsk();
+  if (standing && !fuelAskMateriallyDiffers(standing.nutrition, boundedFuelStep(delta, today, ceiling), read.state)) {
+    const decision = refreshStandingFuelAsk(standing.decision, read, today);
+    return {
+      ok: true,
+      reused: true,
+      standing_ask: true,
+      review_required: String(decision.status) === "review",
+      decision,
+      proposal: standing.proposal,
+    };
+  }
   const proposal = nutritionProposal(read, today, coordinationKey, personalizedNutritionStep(delta, today, ceiling));
   if (!proposal) return null;
+  // The ask DID change materially, so the HELD one is genuinely out of date and is
+  // retired here by identity. The signature-keyed sweep below cannot do it: the
+  // signature drifts daily, so yesterday's draft never matches today's read. Scoped to
+  // `review`: an already-owned pending/announced decision has its own lifecycle (the
+  // boundary applier, cancelAnnouncementsForProposal) and is not this guard's to retire.
+  if (standing && String(standing.decision.status) === "review") {
+    for (const decision of listBrainDecisions({ status: "review", kind: "nutrition_target", domain: "nutrition", limit: 100 }))
+      if (Number(decision.source_ref_key) === Number(standing.proposal.id)) transitionBrainDecision(Number(decision.id), "superseded");
+    setProposalStatus(Number(standing.proposal.id), "superseded");
+  }
   return applyProposalWithAutonomy(Number(proposal.id), {
     requested_tier: "quiet_apply",
     safety_response: true,
@@ -616,16 +719,36 @@ export function runUnderfuelingControlLoop(
       const existingRecovery = recoveryWeekStatus(today);
       let recovery: any | null = null;
       const existingRecoveryDecision = recoveryDecisionForStatus(existingRecovery, today);
+      // A DECLINED RECOVERY WEEK IS DURABLE. Cancelling an announced one is the
+      // athlete's own word on their training, and it holds for the rest of this
+      // block. Only genuinely NEW information — a symptom, an illness or injury, a
+      // clinical finding, a fresh subjective brake — is something their refusal
+      // could not have been about, and only that reopens the announcement. The same
+      // fuel read saying the same thing tomorrow is not new information.
+      const announcement = recoveryWeekMayBeAnnounced(today);
       if (existingRecoveryDecision && existingRecovery && existingRecovery.state !== "drafted") {
         recovery = linkedExistingRecovery(existingRecoveryDecision, existingRecovery.state);
       } else if (existingRecovery?.state === "drafted") {
         // A bare draft is not scheduled. Route that exact proposal through autonomy
         // now, preserving its immutable history and avoiding a duplicate reshape.
-        const draft = getProposal(existingRecovery.proposal_id);
+        const draft = announcement.allowed ? getProposal(existingRecovery.proposal_id) : null;
         if (draft) recovery = routeRecoveryProposal(Number(draft.id), coordinationKey);
-      } else if (!existingRecovery) {
+      } else if (!existingRecovery && announcement.allowed) {
         const proposal = recoveryProposal(read, coordinationKey);
         if (proposal) recovery = routeRecoveryProposal(Number(proposal.id), coordinationKey);
+      }
+      if (!announcement.allowed && !recovery) {
+        // The fuel half still stands on its own: food is the corrective the athlete
+        // never refused. Only the week-reshaping half is held back.
+        return {
+          ok: true,
+          read,
+          action: resultOwnsDecision(nutrition) ? "nutrition_correction_scheduled" : "none",
+          coordination_key: coordinationKey,
+          nutrition,
+          recovery: null,
+          reason: `You already said no to a recovery week on ${announcement.refused_on}, and nothing new has come up since, so that stands.`,
+        };
       }
       // Same guard for the recovery half: a held recovery review keeps at most one live
       // same-signature review decision instead of minting a fresh one every daily pass.

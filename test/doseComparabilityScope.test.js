@@ -1379,7 +1379,14 @@ test("a schema-2 under-prescribed dose does not feed the comparable-shortfall ar
   );
 });
 
-test("the stronger fueling signal keeps its full effect however hard the athlete asked", () => {
+// PUSH LIFTS THE VOLUME CUT ON AN EARNED STEP. This used to assert the opposite —
+// that a `reduce` read outranked the declaration and took the session down anyway —
+// and that is the rule the athlete was living under when a capped, completed log
+// kept coming back as a lighter dose. A drive of `push` now keeps the set count and
+// the step the ladder earned; the near-maximal single is still what comes off, and
+// a STEADY athlete at the same distance from goal still takes the recovery dose
+// (the sibling assertion below).
+test("push keeps an earned step's full volume under a reduce; steady still takes the lighter dose", () => {
   seedReduceFuel();
   assert.equal(repo.currentUnderfuelingRead(localDateISO()).action.training, "reduce");
 
@@ -1389,8 +1396,18 @@ test("the stronger fueling signal keeps its full effect however hard the athlete
   ]);
   for (let s = 1; s <= 3; s++) logSet("Barbell Bench Press", localDaysAgo(4), { weight: 185, reps: 8, rir: 2, setNum: s });
 
+  repo.setSettings({ training_drive: "steady" });
+  const steady = planDayProgression(1).find((item) => item.exercise === "Barbell Bench Press");
+  assert.equal(steady.action, "deload", "away from goal, a steady athlete still takes the lighter dose");
+  assert.ok(steady.suggested.weight < 185);
+  assert.equal(steady.fuel_protected, true, "and the restore ledger is owed that volume");
+
   repo.setSettings({ training_drive: "push" });
   const push = planDayProgression(1).find((item) => item.exercise === "Barbell Bench Press");
-  assert.equal(push.action, "deload", "a reduce read is a lighter dose, not a step");
-  assert.ok(push.suggested.weight < 185);
+  assert.equal(push.action, "overload", "the athlete asked to be pushed and the log earned the step");
+  assert.equal(push.suggested.sets, 3, "the full set count stays on the card");
+  assert.ok(push.suggested.weight >= 185, "and nothing comes off the load");
+  assert.equal(push.top_set, undefined, "only the near-maximal single is parked");
+  assert.equal(push.fuel_protected, undefined, "no volume came off, so nothing is owed back");
+  assert.equal(violatesReadingGrammar(push.why), null);
 });

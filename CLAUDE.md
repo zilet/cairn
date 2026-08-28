@@ -313,9 +313,9 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   is telemetry only; the progression engine reads the per-dose flags, never that session-level rollup
   — restoring the session-level reading is the regression to watch for. `settings.training_drive='push'`
   has bounded mechanical authority in progression (keeps an earned overload/vary/introduce step under
-  a fuel hold, top set dropped) — but every promotion still needs `mayPromoteLoad` (an eligible
-  finished dose, no VETOING cut pressure — `sliding`, or `reduce` off goal), and every safety floor
-  ignores drive entirely. Details in
+  a fuel hold AND its full set count under a fuel `reduce`, top set dropped in both) — but every
+  promotion still needs `mayPromoteLoad` (an eligible finished dose, no VETOING cut pressure —
+  `sliding`, or `reduce` off goal), and every safety floor ignores drive entirely. Details in
   `docs/ARCHITECTURE.md`.
 - **Work done is evidence — a prescription is a suggestion, the log is the truth.** `performed_at_full_load`
   (`src/repo/outcome-comparability.ts`, `facts_json` schema 4) is computed per dose against the LOGGED
@@ -330,7 +330,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   schema-3 comparable is re-derived live, schema-4 rows store the per-dose answer directly.
 - **Cut pressure has three shapes, and only two veto an earned promotion.** `CutPressure` (`progression.ts`)
   splits `hold` (a soft fuel read — never vetoes), `reduce` (an outright lighter fuel dose — vetoes
-  unless `near_goal`, within `NEAR_GOAL_REMAINING_LB` = 2.5 lb of a live lose-mode goal), `sliding`
+  unless `near_goal`: `atOrNearGoal` (`src/repo/goal-proximity.ts`), within `NEAR_GOAL_REMAINING_LB`
+  = 2.5 lb of a live lose-mode goal INCLUDING a goal already reached — where it also stops shrinking
+  the plan at all, since the answer to underfueling at the destination is more food, not a smaller
+  session), `sliding`
   (anchor lifts actually dropping, or this lift regressing/shortfall — ALWAYS vetoes), and `fast_loss`
   (losing faster than lean-safe but not sliding — never vetoes an earned load step, only parks the
   challenge top set/heavy single). `deep` is the `sliding || fast_loss` alias other readers still

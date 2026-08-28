@@ -32,6 +32,7 @@ import { normalizedExerciseKey } from "../dist/repo/exercise-canon.js";
 import { trainingPlaybook } from "../dist/repo/training-playbook.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import { currentUnderfuelingRead } from "../dist/repo/underfueling-snapshot.js";
+import { atOrNearGoal } from "../dist/repo/goal-proximity.js";
 import { registerProgramTools } from "../dist/surfaces/mcp/program.js";
 import { localDateISO, addDaysISO } from "../dist/repo/shared.js";
 import { recordDecision } from "../dist/repo/brain-decisions.js";
@@ -530,7 +531,7 @@ test("only a finished full comparable linked dose can earn the next overload", (
     } else {
       assert.equal(prescription.action, "hold", fixture.name);
       assert.equal(prescription.suggested.weight, 100, fixture.name);
-      assert.match(prescription.why, /finish|log|sets|clean|fair look|it moves|weight can move|stays put|count the same/i, fixture.name);
+      assert.match(prescription.why, /finish|log|sets?|clean|fair look|it moves|weight can move|stays put|count the same/i, fixture.name);
     }
   }
 });
@@ -2163,8 +2164,13 @@ function seedFastLossCut() {
   }
 }
 
-test("planDayProgression: a seeded reduce still halves volume near the destination", () => {
-  earnedOverload("Back Squat", "quads");
+// AT THE DESTINATION THE FUEL ANSWER IS FOOD, NOT LESS TRAINING. The athlete is 1.2 lb
+// from a live lose-mode goal and several channels still read strain. Two rules now
+// answer that together: the underfueling read refuses to say `reduce` this close (the
+// corrective is the calorie step it already carries), and applyFuelProtection keeps the
+// prescribed sets and load if a `reduce` reaches it anyway. The old ruling — halve the
+// sets and call it a recovery dose — is what left a maintaining athlete underexercised.
+function atGoalProfile() {
   repo.setProfile({
     name: "Athlete",
     sex: "male",
@@ -2177,15 +2183,100 @@ test("planDayProgression: a seeded reduce still halves volume near the destinati
     goal_mode: "lose",
     activity_factor: 1.5,
   });
+}
+
+test("planDayProgression: at the destination a fuel read keeps the full session", () => {
+  earnedOverload("Back Squat", "quads");
+  atGoalProfile();
   seedPersistentStrain();
-  assert.equal(currentUnderfuelingRead(localDateISO()).action.training, "reduce", "the fixture reaches the reduce branch");
-  assert.equal(repo.nearGoal(), true, "1.2 lb remaining is near the destination");
+  const read = currentUnderfuelingRead(localDateISO());
+  assert.equal(read.state, "persistent_strain", "the fixture still reads persistent strain");
+  assert.notEqual(read.action.training, "reduce", "but at goal the training consequence is never `reduce`");
+  assert.ok(
+    ["proceed", "hold_aggression"].includes(read.action.training),
+    `hold_aggression at most, got ${read.action.training}`
+  );
+  assert.equal(atOrNearGoal(), true, "1.2 lb remaining is at/near the destination");
   const p = planDayProgression(1, { forNextSession: true }).find((row) => row.exercise === "Back Squat");
+  assert.equal(p.action, "overload", "the load step the log earned still stands");
+  assert.equal(p.suggested.weight, 190);
+  assert.equal(p.suggested.sets, 3, "the full prescribed sets stay on the card");
+  assert.equal(p.fuel_protected, undefined, "no volume came off, so the restore ledger is owed nothing");
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
+// The belt to that braces: even if a `reduce` reaches applyFuelProtection at goal
+// (a directive written before the read was fixed, a stored envelope), the plan keeps
+// its shape. Driven through the day pass with the fuel read seeded directly.
+test("planDayProgression: a `reduce` that reaches the day pass at goal never shrinks it", () => {
+  earnedOverload("Back Squat", "quads");
+  atGoalProfile();
+  seedPersistentStrain();
+  const p = planDayProgression(1, {
+    forNextSession: true,
+    fuelRead: { ...currentUnderfuelingRead(localDateISO()), action: { kind: "recovery_package", kcal_delta: 250, training: "reduce", line: "seeded" } },
+  }).find((row) => row.exercise === "Back Squat");
   assert.equal(p.action, "overload", "near goal lifts the promotion veto");
   assert.equal(p.suggested.weight, 190, "the load step stands");
-  assert.equal(p.suggested.sets, 2, "persistent-strain volume reduction stays");
-  assert.equal(p.fuel_protected, true);
-  assert.doesNotMatch(p.why, /\bsingle\b|top set/i, "no single came off");
+  assert.equal(p.suggested.sets, 3, "and so do the sets — no recovery dose at the destination");
+  assert.equal(p.fuel_protected, undefined);
+  assert.doesNotMatch(String(p.delta_text), /recovery dose/i);
+});
+
+// AWAY from the destination nothing changed: a steady-drive athlete 15 lb out still
+// takes the reduced dose, load and volume both.
+test("planDayProgression: far from goal a reduce still takes the recovery dose", () => {
+  earnedOverload("Back Squat", "quads");
+  repo.setProfile({
+    name: "Athlete",
+    sex: "male",
+    age: 36,
+    height_cm: 183,
+    weight_lb: 195,
+    start_weight_lb: 210,
+    start_date: isoDaysAgo(60),
+    goal_weight_lb: 180,
+    goal_mode: "lose",
+    activity_factor: 1.5,
+  });
+  repo.setSettings({ training_drive: "steady" });
+  seedPersistentStrain();
+  assert.equal(atOrNearGoal(), false, "15 lb out is not near the destination");
+  assert.equal(currentUnderfuelingRead(localDateISO()).action.training, "reduce", "the fixture reaches the branch");
+  const p = planDayProgression(1, { forNextSession: true }).find((row) => row.exercise === "Back Squat");
+  assert.equal(p.action, "deload", "away from goal the recovery dose stands");
+  assert.equal(p.suggested.sets, 2, "half the sets, rounded up");
+  assert.equal(p.fuel_protected, true, "and the restore ledger is owed the volume");
+  assert.equal(String(p.delta_text), "recovery dose");
+});
+
+// PUSH LIFTS THE VOLUME CUT ON AN EARNED STEP EVERYWHERE, not only at the destination.
+// The athlete asked to be pushed; the costly near-maximal single still comes off, but
+// the sets their log earned do not.
+test("planDayProgression: push keeps the full set count on an earned step under a reduce", () => {
+  earnedOverload("Back Squat", "quads");
+  repo.setProfile({
+    name: "Athlete",
+    sex: "male",
+    age: 36,
+    height_cm: 183,
+    weight_lb: 195,
+    start_weight_lb: 210,
+    start_date: isoDaysAgo(60),
+    goal_weight_lb: 180,
+    goal_mode: "lose",
+    activity_factor: 1.5,
+  });
+  repo.setSettings({ training_drive: "push" });
+  seedPersistentStrain();
+  assert.equal(atOrNearGoal(), false, "still 15 lb out — this is the drive, not the destination");
+  assert.equal(currentUnderfuelingRead(localDateISO()).action.training, "reduce");
+  const p = planDayProgression(1, { forNextSession: true }).find((row) => row.exercise === "Back Squat");
+  assert.equal(p.action, "overload", "the step the log earned survives");
+  assert.equal(p.suggested.sets, 3, "and so does the full set count");
+  assert.equal(p.top_set, undefined, "only the near-maximal single is parked");
+  assert.equal(p.fuel_protected, undefined);
+  assert.equal(violatesReadingGrammar(p.why), null);
 });
 
 test("planDayProgression: a seeded fast_loss cut promotes and does not half volume", () => {

@@ -367,6 +367,40 @@ export function hasRecentDecisionVeto(kind: string, days = 5): boolean {
   return !!row;
 }
 
+/**
+ * WHEN the athlete last said no to a kind of decision, with no time window at all —
+ * the caller decides how long that "no" stays durable (a recovery-week refusal
+ * lasts the block; `hasRecentDecisionVeto` keeps its own bounded five days for the
+ * re-propose etiquette). Only a DELIBERATE refusal counts: an announced change the
+ * athlete held (`canceled` + `held_by_user`). System cancels carry no marker and
+ * are correctly invisible here. Returns the day the hold was recorded
+ * (`context.held_by_user_on`, falling back to the decision's own creation date for
+ * rows written before that stamp existed), or null.
+ */
+export function latestUserVetoAt(kind: string, domain?: string): string | null {
+  const key = String(kind || "").trim();
+  if (!key) return null;
+  const scope = String(domain || "").trim();
+  try {
+    const row = db
+      .prepare(
+        `SELECT COALESCE(json_extract(context_json, '$.held_by_user_on'), date(created_at)) AS refused_on
+           FROM brain_decisions
+          WHERE kind = ?
+            AND (? = '' OR domain = ?)
+            AND status = 'canceled'
+            AND json_extract(context_json, '$.held_by_user') = 1
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1`
+      )
+      .get(key, scope, scope) as { refused_on?: string } | undefined;
+    const at = String(row?.refused_on ?? "").trim();
+    return at || null;
+  } catch {
+    return null;
+  }
+}
+
 export function insertBrainDecision(value: unknown): BrainDecision {
   const normalized = normalizeBrainDecision(value);
   if (!normalized) throw new Error("invalid brain decision");

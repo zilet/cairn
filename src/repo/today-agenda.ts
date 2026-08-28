@@ -63,6 +63,7 @@ import { standingMomentum } from "./standing.js";
 // The waiting-draft 'plan' candidate — now the ONE Today surface that points at a
 // review-needed draft (the duplicate side-loader card was retired).
 import { listAttentionReviewHeldProposals, listProposals, listReviewHeldProposals } from "./profile.js";
+import { isProtectiveFuelAsk } from "./protective-fuel-draft.js";
 // The two NEW Era-2 candidate producers, built by sibling agents. They land at
 // integration time; import them now (do not stub). Each returns a fully-formed
 // TodayAgendaCandidate or null.
@@ -542,6 +543,12 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
     // announce-first. Ordinary requested-review, stale-draft, or budget-hold
     // bookkeeping is handled in conversation/repair or waits for the budget week to
     // roll — never pushed back as a generic plan review.
+    //
+    // The ONE exception is the standing protective-fuel ask, which lands as a plain
+    // `requested_review` here yet is a real question that changes nothing until the
+    // athlete answers it. Same predicate the SQL reader uses, from the same module,
+    // so the two filters cannot disagree about what reaches this surface.
+    if (isProtectiveFuelAsk(p)) return true;
     return ["safety_floor", "user_lock", "domain_policy", "clinical"].includes(
       String(p.autonomy?.review_reason_code ?? "")
     );

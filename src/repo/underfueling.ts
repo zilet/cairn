@@ -5,6 +5,10 @@ import { completedIntakeWindow, type CompletedIntakeDay } from "./intake-window.
 import { vouchedRunCompliance } from "./sessions.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
+// "Is the cut essentially finished?" — a LEAF read (profile + resolved bodyweight
+// + the shared near-goal band), deliberately not the recomposition read, which
+// consumes this module.
+import { atOrNearGoal } from "./goal-proximity.js";
 
 export type UnderfuelingState =
   | "insufficient_signal"
@@ -74,6 +78,10 @@ export interface UnderfuelingOptions {
   goal?: any;
   programState?: any;
   wholePerson?: any;
+  // At/near the goal weight the fuel answer is FOOD, not less training (see the
+  // `persistent_strain` branch). Injectable so a fixture can state the athlete's
+  // proximity to the destination without staging a whole profile.
+  atOrNearGoal?: boolean;
 }
 
 const MATERIAL_GAP_FRAC = 0.11;
@@ -724,6 +732,10 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
             ? "medium"
             : "low";
   const holdAggression = decisionGradeTrainingHold(logDirection, channels);
+  // Fail-soft: an unreadable profile answers "not near", which keeps the stricter
+  // pre-existing behaviour rather than licensing the softer one.
+  const nearDestination =
+    typeof opts.atOrNearGoal === "boolean" ? opts.atOrNearGoal : (() => { try { return atOrNearGoal(today); } catch { return false; } })();
   const action: UnderfuelingRead["action"] =
     state === "execution_gap"
       ? {
@@ -746,8 +758,17 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
           ? {
               kind: "recovery_package",
               kcal_delta: 250,
-              training: "reduce",
-              line: "The correction has had time to settle and several independent channels still agree; coordinate a recovery week with another bounded move toward maintenance.",
+              // AT OR NEAR GOAL THE CORRECTIVE IS FOOD, NOT LESS TRAINING. Persistent
+              // strain a whisker from the destination says the deficit has run its
+              // course, and the honest move is the upward calorie step this action
+              // already carries. Shrinking the session on top would take the athlete's
+              // training away to pay for a cut that is already over, so the training
+              // consequence is capped at `hold_aggression` — and only where the strain
+              // is decision-grade at all; otherwise training simply proceeds.
+              training: nearDestination ? (holdAggression ? "hold_aggression" : "proceed") : "reduce",
+              line: nearDestination
+                ? "You are at the weight you were heading for and the strain signals still agree, so fuel steps toward maintenance while training keeps its shape."
+                : "The correction has had time to settle and several independent channels still agree; coordinate a recovery week with another bounded move toward maintenance.",
             }
           : state === "settling"
             ? {
@@ -782,7 +803,9 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
       : state === "prescription_strain"
         ? "The diary is near target while robust weight and performance/recovery channels agree that the prescription is too aggressive."
         : state === "persistent_strain"
-          ? "A fresh athlete-response signal and independent corroboration still show strain after the prior upward correction had seven days to settle."
+          ? nearDestination
+            ? "A fresh athlete-response signal and independent corroboration still show strain after the prior upward correction had seven days to settle, and goal weight is already reached or within reach — so the corrective is the bounded move toward maintenance, not a smaller training dose."
+            : "A fresh athlete-response signal and independent corroboration still show strain after the prior upward correction had seven days to settle."
           : state === "settling"
             ? "The latest upward correction remains inside the no-double-adjust window."
             : awaitingPostCorrectionResponse

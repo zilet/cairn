@@ -2644,7 +2644,15 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
             if (draft?.status === "draft") setProposalStatus(proposalId, "superseded");
           }
           const held = patchBrainDecision(id, {
-            context: { ...((canceled.context as Record<string, unknown>) ?? {}), held_by_user: true },
+            context: {
+              ...((canceled.context as Record<string, unknown>) ?? {}),
+              held_by_user: true,
+              // WHEN they said no. `brain_decisions` has no updated_at, and
+              // `created_at` is when the change was PROPOSED — a durable refusal
+              // (a declined recovery week holds for the rest of the block) has to
+              // be dated from the refusal, not from the offer.
+              held_by_user_on: localDateISO(),
+            },
           });
           return { ok: true, decision: held ?? canceled };
         }

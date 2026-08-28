@@ -51,6 +51,7 @@ import { bumpTrainingDataVersion } from "./training-cache.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "./proposal-intent.js";
 import { classifyRecompositionStage } from "./recomposition-stage.js";
+import { PROTECTIVE_FUEL_ASK_SQL } from "./protective-fuel-draft.js";
 import { type MarkerInterventionRecording, markerInterventionRecording } from "./marker-response.js";
 import {
   activeRecoveryWeekLedger,
@@ -161,6 +162,12 @@ export function listReviewHeldProposals(limit = 20) {
 // adoption re-offers it), so it never belongs on Today and is intentionally NOT in this list.
 // Filter the interrupting reason codes in SQL BEFORE the bounded limit so a stream of generic
 // requested-review bookkeeping cannot crowd an older safety/user-lock/policy hold out.
+//
+// ONE further shape is admitted, and it is not a reason code: the standing protective-fuel
+// ask (PROTECTIVE_FUEL_ASK_SQL). It lands as an ordinary `requested_review` under a coach-led
+// posture, but it is a QUESTION that changes nothing until the athlete answers it — and an ask
+// they never see is indistinguishable from no ask. The gate stays shut for every OTHER
+// requested_review row; see protective-fuel-draft.ts for why this one is different.
 export function listAttentionReviewHeldProposals(limit = 20) {
   const rows = db
     .prepare(
@@ -173,8 +180,11 @@ export function listAttentionReviewHeldProposals(limit = 20) {
              WHERE d.source_ref_type = 'plan_proposal'
                AND d.source_ref_key = CAST(p.id AS TEXT)
                AND d.status = 'review'
-               AND json_extract(d.context_json, '$.review_reason_code') IN
+               AND (
+                 json_extract(d.context_json, '$.review_reason_code') IN
                    ('safety_floor','user_lock','domain_policy','clinical')
+                 OR ${PROTECTIVE_FUEL_ASK_SQL}
+               )
           )
         ORDER BY (
           SELECT MAX(d.id)
@@ -182,8 +192,11 @@ export function listAttentionReviewHeldProposals(limit = 20) {
            WHERE d.source_ref_type = 'plan_proposal'
              AND d.source_ref_key = CAST(p.id AS TEXT)
              AND d.status = 'review'
-             AND json_extract(d.context_json, '$.review_reason_code') IN
+             AND (
+               json_extract(d.context_json, '$.review_reason_code') IN
                  ('safety_floor','user_lock','domain_policy','clinical')
+               OR ${PROTECTIVE_FUEL_ASK_SQL}
+             )
         ) DESC
         LIMIT ?`
     )

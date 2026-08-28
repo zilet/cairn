@@ -77,7 +77,7 @@ import { type UnverifiedRegressionHold, unverifiedRegressionHold } from "./calib
 import { movementRiskFor } from "./movement-risk.js";
 import { type PainBandRead, painBandForMovement } from "./pain-band.js";
 import { cutQualityRead } from "./cut-quality.js";
-import { nearGoal } from "./recomposition.js";
+import { atOrNearGoal } from "./goal-proximity.js";
 import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";
 import { applyPersonalResponseModifier, liftLedgerRead, whatWorksForYou } from "./reaction-model.js";
 // createProposal + the auto-progression dedup live in profile.js; imported here (as
@@ -1386,9 +1386,13 @@ export interface CutPressure {
   /** Any of the above — the athlete is training in a genuine deficit right now. */
   any: boolean;
   /**
-   * Within NEAR_GOAL_REMAINING_LB of goal weight on a live lose-mode cut. Lifts
-   * the reduce promotion veto so the log can still move the load; sliding
-   * still vetoes. Volume reduction from persistent strain is unchanged.
+   * At OR within NEAR_GOAL_REMAINING_LB of goal weight on a live lose-mode cut
+   * (`atOrNearGoal` — unlike `nearGoal`, a goal already reached counts). Lifts
+   * the reduce promotion veto so the log can still move the load; sliding still
+   * vetoes. It ALSO lifts the volume reduction: at/near goal `applyFuelProtection`
+   * keeps the prescribed sets and load and takes only the near-maximal single,
+   * because the honest answer to underfueling at the destination is more food,
+   * not a smaller session.
    */
   near_goal: boolean;
 }
@@ -1441,7 +1445,7 @@ function readCutPressure(date: string): CutPressure {
   }
   let near_goal = false;
   try {
-    near_goal = nearGoal(date);
+    near_goal = atOrNearGoal(date);
   } catch {
     /* no remaining read → not claimed near the destination */
   }
@@ -2646,7 +2650,13 @@ function ex_name(name: string): string {
 // runner loop owns those). Powers Today's session card + the apply path. Each
 // row carries its plan_item_id so a "apply these" build can route through
 // propose→apply by day_number.
-export function planDayProgression(dayNumber: number, opts: { forNextSession?: boolean } = {}): Prescription[] {
+export function planDayProgression(
+  dayNumber: number,
+  // `fuelRead` overrides ONLY the fuel/protection read for this pass — the seam that
+  // lets a fixture state "a `reduce` reached this day" without staging the whole
+  // channel agreement behind it. Omit it and the read is the live one, exactly as before.
+  opts: { forNextSession?: boolean; fuelRead?: UnderfuelingRead } = {}
+): Prescription[] {
   const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
   if (!day) return [];
   const items = db
@@ -2676,13 +2686,13 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
   const personalResponse = whatWorksForYou();
   const preferences = learnedPreferences();
   const today = localDateISO();
-  const fuelProtection = currentUnderfuelingRead(today);
+  const fuelProtection = opts.fuelRead ?? currentUnderfuelingRead(today);
   // The periodization phase and the fuel/cut read are properties of the DAY, not of
   // a lift — read once and threaded in, so a day's pass never walks the program state
   // once per movement.
   const block = activeBlockContext(today);
   const cut = cutPressureThunk(today);
-  const atNearGoal = nearGoal(today);
+  const atNearGoal = atOrNearGoal(today);
   // The calibration read is per-LIFT, not per-day, so the shared reader is a memo
   // rather than a single value — a movement appearing twice in a pass walks its
   // 400-day history once, and a movement no branch asks about never walks it.
@@ -2789,29 +2799,53 @@ function applyFuelProtection(
       why: say(voice.FUEL_HOLD_STEP, "fuel_hold_step"),
     };
   }
-  // training === "reduce" (persistent_strain) from here. Near goal lifts the
-  // PROMOTION veto only; the volume reduction stays. fast_loss never reaches
+  // training === "reduce" (persistent_strain) from here. fast_loss never reaches
   // this branch — it is not a fuel `reduce`.
-  // A near-goal promotion keeps the load the log just earned and only halves the
-  // sets — and it parks the near-maximal single, which is the costly part.
-  if (atNearGoal && ["overload", "vary", "introduce"].includes(prescription.action)) {
+  //
+  // AT OR NEAR THE DESTINATION, a fuel `reduce` STOPS SHRINKING THE PLAN. The cut
+  // is essentially finished, and the honest answer to "training is running ahead of
+  // the food" there is more food, not a smaller session (the underfueling read itself
+  // now refuses to say `reduce` at/near goal — see underfueling.ts — so this branch
+  // is the belt to that braces). Full prescribed sets AND the load stand, for an
+  // earned step and for a hold alike; the one thing this read may still take is the
+  // near-maximal top set / heavy single, the genuinely costly piece of an underfed day.
+  //
+  // Away from goal the reduction stands, EXCEPT that a `push` athlete keeps the full
+  // set count on a step their log earned — the same bounded mechanical authority the
+  // declaration already carries under `hold_aggression`. Neither carve-out touches a
+  // safety floor: a pain-braked prescription falls through to the reduction below, and
+  // illness/symptom floors never reach this function at all.
+  const earnedStep = ["overload", "vary", "introduce"].includes(prescription.action);
+  const keepsFullVolume = !prescription.pain_protected && (atNearGoal || (drive === "push" && earnedStep));
+  if (keepsFullVolume && (earnedStep || prescription.action === "hold")) {
     const parkedSingle = Boolean(prescription.top_set);
     return {
       ...prescription,
-      suggested: {
-        ...prescription.suggested,
-        sets: Math.max(1, Math.ceil(Number(prescription.suggested.sets || 1) / 2)),
-      },
+      // Deliberately NOT `fuel_protected`: that flag marks a dose the fuel read
+      // REDUCED, and the restore ledger turns it into volume owed back. Nothing came
+      // off the set count here, so there is no debt to record.
       top_set: undefined,
       autoregulated: true,
-      fuel_protected: true,
       why:
         prescription.action === "overload"
           ? say(
               parkedSingle ? voice.LOG_EARNED_FUEL_PARK_SINGLE : voice.LOG_EARNED_FUEL_PARK,
               parkedSingle ? "log_earned_fuel_park_single" : "log_earned_fuel_park"
             )
-          : prescription.why,
+          : prescription.action === "hold"
+            ? say(voice.AT_GOAL_FUEL_KEEP_VOLUME, "at_goal_fuel_keep_volume")
+            : `${prescription.why} ${say(voice.PUSH_FUEL_VARIETY_KEEP, "push_fuel_variety_keep")}`,
+    };
+  }
+  // Any other action at/near goal keeps its own prescription and only hears the fuel
+  // clause. The recovery-dose downgrade (−10% load AND half the sets) must not fire
+  // once the destination is this close.
+  if (atNearGoal && !prescription.pain_protected) {
+    return {
+      ...prescription,
+      top_set: undefined,
+      autoregulated: true,
+      why: `${prescription.why} ${say(voice.FUEL_DELOAD_CLAUSE, "fuel_deload_clause")}`,
     };
   }
   // A PROGRESSION deload is already a reduced dose — load and volume both — so fuel

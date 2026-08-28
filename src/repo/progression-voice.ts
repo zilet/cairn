@@ -451,8 +451,19 @@ export const PUSH_FUEL_VARIETY_KEEP: VoiceSet = [
 // its own: FUEL_HOLD_STEP when the step is held, LOG_EARNED_FUEL_PARK when the
 // log earned a step that stands (no single mentioned), LOG_EARNED_FUEL_PARK_SINGLE
 // when a top set actually came off, PUSH_FUEL_VARIETY_KEEP when a rotation/introduce
-// stands and only the single waits, FUEL_DELOAD_CLAUSE on work already going
-// down, FUEL_RECOVERY_DOSE when the read cuts the session itself.
+// stands and only the single waits, AT_GOAL_FUEL_KEEP_VOLUME when the athlete is at
+// their goal weight and the plan keeps its full shape, FUEL_DELOAD_CLAUSE on work
+// already going down, FUEL_RECOVERY_DOSE when the read cuts the session itself.
+
+// At (or a whisker from) goal weight, a protective fuel read no longer shrinks the
+// session — it keeps the sets and the load and only leaves the near-maximal single
+// alone. This is the sentence for a lift that is HOLDING there: the plan kept its
+// shape, so the card must not imply work was taken away.
+export const AT_GOAL_FUEL_KEEP_VOLUME: VoiceSet = [
+  "You're at the weight you were heading for, so the session keeps its full shape — hold this load and leave the heavy single for another day.",
+  "This close to where you were going, the work stays as written; hold the load, and let the near-maximal single wait while fueling catches up.",
+  "No sets come off this close to where you were heading. Hold the load, skip the heavy top set, and let food do the catching up.",
+];
 
 export const FUEL_DELOAD_CLAUSE: VoiceSet = [
   "Your fueling is still catching up, so the easier session stands.",
@@ -692,6 +703,7 @@ export function progressionVoicePhrases(): string[] {
     PUSH_FUEL_VARIETY_KEEP,
     FUEL_DELOAD_CLAUSE,
     FUEL_RECOVERY_DOSE,
+    AT_GOAL_FUEL_KEEP_VOLUME,
     ACCUMULATION_OVERLOAD,
     INTENSIFICATION_OVERLOAD,
     PHASE_DELOAD_HOLD,
