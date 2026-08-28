@@ -197,6 +197,24 @@ export function nextCandidateAfter(candidates: PlanDayCandidate[], dayNumber: nu
   return candidates[idx >= 0 ? (idx + 1) % candidates.length : 0];
 }
 
+/**
+ * The next TRAINING day on the SAME rotation ring, skipping any rest days in between.
+ * The one caller today is train-anyway from a programmed rest morning: the athlete
+ * overrode the seam, and the day they should be handed is the one their own week was
+ * about to give them — not a generic fallback, and not the empty rest day itself.
+ * Null when the plan has no training day at all (a week that is nothing but rest).
+ */
+export function nextTrainingCandidateAfter(candidates: PlanDayCandidate[], dayNumber: number): PlanDayCandidate | null {
+  if (!candidates.length) return null;
+  let cursor = dayNumber;
+  for (let step = 0; step < candidates.length; step++) {
+    const next = nextCandidateAfter(candidates, cursor);
+    if (!isRestPlanDay(next)) return next;
+    cursor = next.day_number;
+  }
+  return null;
+}
+
 function weekdayCandidate(candidates: PlanDayCandidate[], date: string): PlanDayCandidate {
   const idx = (new Date(date + "T00:00:00Z").getUTCDay() + 6) % 7; // Mon=0
   return candidates[idx % candidates.length];

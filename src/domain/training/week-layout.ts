@@ -346,6 +346,10 @@ export function weekLayoutRead(
   try {
     planDays = new Set(
       planDayStrengthGroups()
+        // The week's REST day is not a slot. It carries no items, so by groups alone it
+        // is indistinguishable from a thin training day — and "move your heavy squat
+        // day onto your rest day" is the one recommendation this read must never make.
+        .filter((d) => d.day_type !== "rest")
         .map((d) => d.day_number)
         .filter(onRing)
     );

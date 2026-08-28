@@ -21,7 +21,7 @@ import {
   normalizeComposedSession,
 } from "../dist/repo/daily-composition.js";
 import { decideDailySession } from "../dist/repo/daily-decision.js";
-import { DAY_READ_OUTCOMES, DAY_READ_WHY_VARIANTS, dayRead } from "../dist/repo/day-read.js";
+import { DAY_READ_OUTCOMES, DAY_READ_WHY_VARIANTS, dayRead, weekAheadPlan } from "../dist/repo/day-read.js";
 import {
   LONG_RUN_MIN_KM,
   longRunRamp,
@@ -553,4 +553,255 @@ test("the spike classification the read publishes is unchanged by the swap", () 
     assert.equal(read.signals.endurance_volume.last_week_km, expectedLastWeek);
     assert.equal(read.signals.endurance_volume.volume_spike, expectedSpike);
   }
+});
+
+// ---------------------------------------------------------------------------
+// 8. review fixes — detection and application ask the SAME question
+// ---------------------------------------------------------------------------
+
+// A cardio envelope for one plan day, with the caps handed in. The decision is real
+// (so nothing about the envelope is invented); only the fields these tests are
+// deliberately holding still are overridden.
+function cardioEnvelope(date, dayNumber, caps) {
+  return {
+    ...decideDailySession(date).envelope,
+    kind: "train",
+    caps,
+    request: { override: null, train_anyway: false, equipment: null, minutes: null, goal: null },
+    template: {
+      day_number: dayNumber,
+      plan_day_id: repo.getPlanDay(dayNumber).id,
+      focus: "Endurance",
+      intent: "template",
+    },
+    muscles: { required: [], allowed: [], reduced: [], excluded: [], saturated: [] },
+    candidates: [],
+    endurance_hold: undefined,
+  };
+}
+
+test("a 40 km ride is not the week's long run, and is never ramped", () => {
+  repo.replacePlan([
+    {
+      day_number: 1,
+      name: "Endurance",
+      focus: "Endurance",
+      items: [
+        { kind: "cardio", exercise: "Long ride", target_distance_km: 40, target_zone: "Z2" },
+        {
+          kind: "cardio",
+          exercise: "Long run",
+          target_distance_km: 12,
+          target_duration_min: 80,
+          target_zone: "long",
+        },
+      ],
+    },
+  ]);
+  // The bug: MAX(target_distance_km) over every cardio row made 40 the week's
+  // "long run", so the 12 km run never matched it and the ramp switched off entirely.
+  assert.equal(templateLongRunKm(), 12, "40 km on a bike is not the week's longest RUN");
+
+  seedRun(addDaysISO(REF, -10), 9.8);
+  seedRun(addDaysISO(REF, -24), 6);
+  const envelope = cardioEnvelope(REF, 1, { volume: "normal", intensity: "normal", duration_min: 240 });
+  const { session } = normalizeComposedSession(
+    {
+      name: "Endurance",
+      focus: "Endurance",
+      why: "today's endurance",
+      est_minutes: 200,
+      items: [
+        { kind: "cardio", exercise: "Long ride", target_distance_km: 40, target_zone: "Z2", note: "Long ride" },
+        {
+          kind: "cardio",
+          exercise: "Long run",
+          target_distance_km: 12,
+          target_duration_min: 80,
+          target_zone: "long",
+          note: "Long run",
+        },
+      ],
+    },
+    envelope
+  );
+  const ride = session.items.find((it) => /ride/i.test(String(it.note ?? it.exercise ?? "")));
+  const run = session.items.find((it) => /run/i.test(String(it.note ?? it.exercise ?? "")));
+  assert.ok(ride && run, `both prescriptions survive: ${JSON.stringify(session.items)}`);
+  assert.equal(ride.target_distance_km, 40, "the ride is left exactly as the template wrote it");
+  assert.equal(run.target_distance_km, Math.round(9.8 * SUSTAINABLE_LONG_STEP_FACTOR * 2) / 2);
+});
+
+test("an athlete with no run history is never told a distance is past 'their longest'", () => {
+  const ramp = longRunRamp({ templateKm: 12, trailingLongestKm: null, lastWeekKm: 0, chronicWeeklyKm: 0 });
+  assert.equal(ramp.first_long_run, true);
+  const seen = new Set();
+  for (let i = 0; i < 8; i++) {
+    const note = longRunRampNote(ramp, addDaysISO(REF, i));
+    assert.equal(/longest/i.test(note), false, `there is no longest run to be past: ${note}`);
+    assert.ok(note.includes(String(ramp.prescribed_km)), `the note still names today's distance: ${note}`);
+    seen.add(note);
+  }
+  assert.ok(seen.size > 1, "one literal per rule is the bug");
+
+  // And an athlete WITH history still gets the sentence that references it.
+  const built = longRunRamp({ templateKm: 12, trailingLongestKm: 9.85, lastWeekKm: 20, chronicWeeklyKm: 22 });
+  assert.equal(built.first_long_run, false);
+});
+
+test("the ramp explains the number without deleting the athlete's own instruction", () => {
+  repo.replacePlan([
+    {
+      day_number: 1,
+      name: "Long run",
+      focus: "Endurance",
+      items: [
+        {
+          kind: "cardio",
+          exercise: "Long run",
+          target_distance_km: 12,
+          target_duration_min: 80,
+          target_zone: "long",
+          note: "Negative split the back half",
+        },
+      ],
+    },
+  ]);
+  seedRun(addDaysISO(REF, -10), 9.85);
+  seedRun(addDaysISO(REF, -24), 6);
+  const envelope = cardioEnvelope(REF, 1, { volume: "normal", intensity: "normal", duration_min: 120 });
+  const { session } = normalizeComposedSession(
+    {
+      name: "Long run",
+      focus: "Endurance",
+      why: "today's run",
+      est_minutes: 80,
+      items: [
+        {
+          kind: "cardio",
+          exercise: "Long run",
+          target_distance_km: 12,
+          target_duration_min: 80,
+          target_zone: "long",
+          note: "Negative split the back half",
+        },
+      ],
+    },
+    envelope
+  );
+  const item = session.items[0];
+  assert.equal(item.target_distance_km, 11.5);
+  assert.ok(
+    String(item.note).startsWith("Negative split the back half"),
+    `the athlete's own coaching survives: ${item.note}`
+  );
+  assert.ok(item.note.includes("11.5"), `and the ramp still explains the number: ${item.note}`);
+});
+
+test("a clamped long run's note names the distance actually on the card", () => {
+  repo.replacePlan([
+    {
+      day_number: 1,
+      name: "Long run",
+      focus: "Endurance",
+      items: [
+        {
+          kind: "cardio",
+          exercise: "Long run",
+          target_distance_km: 12,
+          target_duration_min: 80,
+          target_zone: "long",
+          note: "Long run",
+        },
+      ],
+    },
+  ]);
+  seedRun(addDaysISO(REF, -10), 9.85);
+  seedRun(addDaysISO(REF, -24), 6);
+  // A 40-minute ceiling on a run the ramp just prescribed at 11.5 km: the clamp
+  // rescales the distance, and the note has to be re-said about the new number
+  // rather than left promising 11.5 above a 5-and-a-bit km card.
+  const envelope = cardioEnvelope(REF, 1, { volume: "normal", intensity: "normal", duration_min: 40 });
+  const { session } = normalizeComposedSession(
+    {
+      name: "Long run",
+      focus: "Endurance",
+      why: "today's run",
+      est_minutes: 80,
+      items: [
+        {
+          kind: "cardio",
+          exercise: "Long run",
+          target_distance_km: 12,
+          target_duration_min: 80,
+          target_zone: "long",
+          note: "Long run",
+        },
+      ],
+    },
+    envelope
+  );
+  const item = session.items[0];
+  assert.equal(item.target_duration_min, 40);
+  assert.ok(item.target_distance_km < 11.5, `the clamp rescaled the distance: ${item.target_distance_km}`);
+  assert.ok(
+    item.note.includes(String(item.target_distance_km)),
+    `the note must name the card's own distance (${item.target_distance_km}): ${item.note}`
+  );
+  assert.equal(item.note.includes("11.5"), false, `and must not still promise the pre-clamp figure: ${item.note}`);
+});
+
+test("the week ahead calls the template's rest day a rest day", () => {
+  seedRingWithRest();
+  const { days } = weekAheadPlan(REF);
+  assert.equal(days.length, 3);
+  const rest = days[1];
+  assert.equal(rest.kind, "rest", "an itemless day is not a lift day");
+  assert.equal(rest.note ?? null, null, "and a rest day carries no block-purpose line");
+  assert.equal(days[0].kind, "lift");
+  assert.equal(days[2].kind, "lift");
+});
+
+test("training anyway on the rest day offers the next TRAINING day, not easy movement", () => {
+  seedRingWithRest();
+  anchorOnDayOne();
+  // Baseline: the untouched rest morning is unchanged by any of this.
+  const quiet = decideDailySession(REF).envelope;
+  assert.equal(quiet.kind, "rest");
+  assert.equal(quiet.template.day_number, null);
+  assert.equal(quiet.template.day_type, "rest");
+  assert.equal(deterministicComposedSession(quiet).items.length, 0);
+
+  const { envelope } = decideDailySession(REF, { train_anyway: true });
+  assert.equal(envelope.kind, "train");
+  assert.equal(envelope.template.day_number, 3, "the ring's next TRAINING day, skipping the seam");
+  assert.equal(envelope.template.day_type, undefined, "the emitted template describes the day being composed");
+  assert.equal(envelope.caps.intensity, "hold", "the train-anyway load rules still apply");
+
+  const session = deterministicComposedSession(envelope);
+  assert.ok(session.items.length, "a real day composes real work");
+  assert.equal(
+    session.items.some((it) => /easy movement/i.test(String(it.exercise ?? ""))),
+    false,
+    "the generic fallback is what this replaces"
+  );
+  assert.ok(
+    session.items.some((it) => /Seated Cable Row/i.test(String(it.exercise ?? ""))),
+    `day 3's own work: ${JSON.stringify(session.items)}`
+  );
+});
+
+test("a week that is nothing but rest keeps the old train-anyway fallback", () => {
+  repo.replacePlan([{ day_number: 1, name: "Rest", focus: null, day_type: "rest", items: [] }]);
+  const { envelope } = decideDailySession(REF, { train_anyway: true });
+  assert.equal(envelope.kind, "train");
+  const session = deterministicComposedSession(envelope);
+  assert.ok(session.items.length, "the athlete still gets something");
+});
+
+test("an exercise can never be appended to the week's rest day", () => {
+  seedRingWithRest();
+  assert.throws(() => repo.addExerciseToPlanDay(2, "Goblet Squat", "rotate-in"), /rest day/i);
+  assert.equal(repo.getPlanDay(2).items.length, 0, "and nothing landed");
+  assert.ok(repo.addExerciseToPlanDay(3, "Goblet Squat", "rotate-in"), "a training day still accepts it");
 });

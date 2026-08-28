@@ -273,6 +273,33 @@ function trainingPlanSnapshot(): any[] {
   }));
 }
 
+// A LEGACY (v1, array-shaped) training-plan rollback payload was captured before
+// `day_type` existed, so every day in it is silent about the field — and replacePlan
+// reads an omitted day_type as 'training'. Undoing an old decision would therefore
+// flatten a rest day the athlete has added since, which is a deletion nobody asked
+// for hiding inside an Undo. Carry the LIVE type forward wherever the payload does
+// not declare one. A day absent from the payload is still deleted, exactly as this
+// path has always behaved. The one exception is coherence: a payload day carrying
+// work cannot be restored as a rest day, so items win and it comes back as training.
+// (The v2 three-way path already reverts day_type explicitly and is untouched.)
+function withCurrentDayTypes(payload: any[]): any[] {
+  let current: Map<number, string>;
+  try {
+    current = new Map(trainingPlanSnapshot().map((day: any) => [Number(day.day_number), String(day.day_type)]));
+  } catch {
+    return payload;
+  }
+  return payload.map((day: any) => {
+    if (day == null || typeof day !== "object") return day;
+    const declared = String(day.day_type ?? "").toLowerCase();
+    if (declared === "rest" || declared === "training") return day;
+    const live = current.get(Number(day.day_number));
+    if (live !== "rest") return day;
+    const itemCount = Array.isArray(day.items) ? day.items.length : 0;
+    return itemCount > 0 ? day : { ...day, day_type: "rest" };
+  });
+}
+
 function sameValue(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -2676,7 +2703,7 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
     return withSqliteSavepoint(`revert_decision_${id}`, () => {
       if (rollback?.kind === "training_plan" && Array.isArray(rollback.payload)) {
         // Legacy snapshots remain reversible. New writes use a three-way snapshot below.
-        replacePlan(rollback.payload);
+        replacePlan(withCurrentDayTypes(rollback.payload));
       } else if (
         rollback?.kind === "training_plan" &&
         rollback.payload?.version === 2 &&

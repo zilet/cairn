@@ -17,7 +17,7 @@ import {
   recentWorkingSeconds,
   recentWorkingWeight,
 } from "./exercises.js";
-import { longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
+import { type LongRunRamp, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 
@@ -578,7 +578,18 @@ function holdLegDrivenCardio(item: any, envelope: DailyDecisionEnvelope): { held
 // The note it writes is preserved through the clamp for the same reason the hold's
 // note is: the generic easy-clamp sentence is the weaker of the two, and it was
 // built to fill a silence rather than to overwrite an explanation.
-function applyLongRunRamp(item: any, envelope: DailyDecisionEnvelope): { applied: boolean; changed: boolean } {
+function rampedNote(ramp: LongRunRamp, authored: string, date: string): string {
+  const sentence = longRunRampNote(ramp, date);
+  // The athlete's own coaching detail ("negative split the back half") is the part of
+  // this card nobody else could have written. The ramp explains the NUMBER; it was
+  // never entitled to delete the instruction sitting beside it.
+  return (authored ? `${authored} — ${sentence}` : sentence).slice(0, 500);
+}
+
+function applyLongRunRamp(
+  item: any,
+  envelope: DailyDecisionEnvelope
+): { applied: boolean; changed: boolean; ramp?: LongRunRamp; authored?: string } {
   const distance = finite(item?.target_distance_km);
   if (distance == null || distance <= 0) return { applied: false, changed: false };
   // Distance history is RUN history. A 40 km ride is not a step on the same ladder,
@@ -594,8 +605,29 @@ function applyLongRunRamp(item: any, envelope: DailyDecisionEnvelope): { applied
   if (duration != null && duration > 0) {
     item.target_duration_min = Math.round(duration * (ramp.prescribed_km / ramp.template_km));
   }
-  item.note = longRunRampNote(ramp, envelope.date).slice(0, 500);
-  return { applied: true, changed: true };
+  const authored = String(item.note ?? "").trim();
+  item.note = rampedNote(ramp, authored, envelope.date);
+  return { applied: true, changed: true, ramp, authored };
+}
+
+/**
+ * The clamp downstream may rescale the distance against the day's duration cap, and
+ * `preserveNote` protects the ramp's WORDS without protecting its number — so a 9 km
+ * card clamped to 40 minutes could end up reading "9 km today" above a 5.2 km
+ * prescription. Re-say the same sentence (same variant, same date pick) about the
+ * distance that actually landed. Only when the two genuinely disagree: half-kilometre
+ * rounding is not a contradiction worth rewriting a note over.
+ */
+const RAMP_NOTE_DRIFT_KM = 0.25;
+
+function resyncRampNote(item: any, ramp: LongRunRamp, authored: string, envelope: DailyDecisionEnvelope): boolean {
+  const finalKm = finite(item?.target_distance_km);
+  if (finalKm == null || finalKm <= 0) return false;
+  if (Math.abs(finalKm - ramp.prescribed_km) <= RAMP_NOTE_DRIFT_KM) return false;
+  const note = rampedNote({ ...ramp, prescribed_km: finalKm }, authored, envelope.date);
+  if (item.note === note) return false;
+  item.note = note;
+  return true;
 }
 
 function clampCardioItem(
@@ -852,9 +884,14 @@ export function normalizeComposedSession(
       if (hold.changed) changed = true;
       // A held day still holds, and a forced-easy day still has no distance target:
       // the ramp only ever shapes a run that is actually being offered.
-      const ramp = hold.held || forceEasyCardio ? { applied: false } : applyLongRunRamp(next, envelope);
+      const ramp =
+        hold.held || forceEasyCardio
+          ? ({ applied: false } as ReturnType<typeof applyLongRunRamp>)
+          : applyLongRunRamp(next, envelope);
       if (ramp.applied) changed = true;
       if (clampCardioItem(next, envelope, forceEasyCardio, hold.held || ramp.applied)) changed = true;
+      // The clamp may have rescaled the distance the note just named.
+      if (ramp.applied && ramp.ramp && resyncRampNote(next, ramp.ramp, ramp.authored ?? "", envelope)) changed = true;
       Object.assign(next, trustedCandidateMetadata(candidate));
       if (forceEasyCardio) hasEasyCardio = true;
       capped.push(next);

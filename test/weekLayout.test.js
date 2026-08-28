@@ -210,6 +210,25 @@ test("a week with nowhere clean to move says so instead of inventing a slot", ()
   assert.equal(violatesReadingGrammar(read.suggestion), null, read.suggestion);
 });
 
+test("the week's rest day is never offered as the slot for a heavy lower day", () => {
+  // Day 4 is the seam the athlete wrote into their own week (v99). It carries no
+  // items, so by muscle groups alone it is indistinguishable from a thin training
+  // day — and it is also the NEAREST free slot to day 5, which is exactly how the
+  // clearing search used to land on it.
+  upperDay(1);
+  upperDay(2, "Pull");
+  upperDay(3, "Push 2");
+  repo.savePlanDay(4, "Rest", null, [], { day_type: "rest" });
+  heavyLowerDay(5);
+  runDay(6, "Long run", 18);
+
+  const read = weekLayoutRead(REF);
+  assert.equal(read.clean, false, "the heavy lower day still sits beside the long run");
+  assert.notEqual(read.suggested_move?.to, 4, "a rest day is not a slot");
+  assert.equal(/thursday/i.test(String(read.suggestion ?? "")), false, `day 4 named anyway: ${read.suggestion}`);
+  assert.equal(repo.getPlanDay(4).day_type, "rest", "and the read changed nothing");
+});
+
 test("every athlete-facing sentence holds the reading grammar", () => {
   heavyLowerDay(5);
   runDay(6, "Long run", 18);

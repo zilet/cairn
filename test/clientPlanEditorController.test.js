@@ -355,6 +355,39 @@ test("plan editor controller serializes cardio and filters blank rows", () => {
   ]);
 });
 
+test("a rest day holding an empty placeholder row still saves as a rest day", () => {
+  const harness = loadPlanEditorController([]);
+  // Marking a day as rest does not remove the blank row the editor renders, so the
+  // model still carries one all-empty item. Deciding rest-vs-training off the
+  // UNFILTERED list read that placeholder as work and silently promoted the seam
+  // back to a training day on save.
+  const days = harness.context.CairnPlanEditorController.serializeDays([
+    {
+      day_number: 3,
+      name: "Rest",
+      focus: "",
+      day_type: "rest",
+      items: [{ kind: "strength", exercise: "   ", sets: 3, rep_low: 8, rep_high: 10 }],
+    },
+  ]);
+  assert.equal(days[0].day_type, "rest", "a blank row is not work");
+  assert.deepEqual(days[0].items, []);
+
+  // And a rest day that genuinely carries work is still saved as the training day
+  // it plainly is, rather than sent to the server to be refused.
+  const withWork = harness.context.CairnPlanEditorController.serializeDays([
+    {
+      day_number: 3,
+      name: "Rest",
+      focus: "",
+      day_type: "rest",
+      items: [{ kind: "strength", exercise: " Squat ", sets: 3, rep_low: 5, rep_high: 5 }],
+    },
+  ]);
+  assert.equal(withWork[0].day_type, "training");
+  assert.equal(withWork[0].items.length, 1);
+});
+
 test("the Plan recovery banner announces a reshaped week — drafted asks, applied informs, null stays silent", () => {
   const harness = loadPlanEditorController([]);
   const banner = harness.context.CairnPlanEditorController.planRecoveryBannerHtml;

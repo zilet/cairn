@@ -91,25 +91,33 @@ function syncPlanModel(model: PlanEditorFormModelDay[], root: ParentNode): void 
   });
 }
 
+function planItemHasContent(item: PlanEditorFormItem): boolean {
+  if (isCardioItem(item)) {
+    const note = String(item.note || "").trim();
+    const zone = String(item.target_zone || "").trim();
+    return !!note || item.target_distance_km != null || item.target_duration_min != null || !!zone;
+  }
+  return !!String(item.exercise || "").trim();
+}
+
 function serializePlanDays(model: PlanEditorFormModelDay[]): PlanEditorFormSaveDay[] {
-  return model.map((day, index) => ({
-    day_number: index + 1,
-    name: String(day.name || `Day ${index + 1}`),
-    focus: day.focus || null,
-    // A rest day that somehow carries work is saved as the training day it plainly
-    // is, rather than sent to be refused: the server's invariant is real, and the
-    // editor's job is to keep the athlete from ever meeting it.
-    day_type: String(day.day_type ?? "training") === "rest" && !day.items.length ? "rest" : "training",
-    items: day.items
-      .filter((item) => {
-        if (isCardioItem(item)) {
-          const note = String(item.note || "").trim();
-          const zone = String(item.target_zone || "").trim();
-          return !!note || item.target_distance_km != null || item.target_duration_min != null || !!zone;
-        }
-        return !!String(item.exercise || "").trim();
-      })
-      .map((item) => {
+  return model.map((day, index) => {
+    // The blank-row filter runs FIRST. Marking a day as rest leaves its empty
+    // placeholder row in the DOM, and deciding rest-vs-training off the unfiltered
+    // list read that placeholder as work — so a rest day the athlete had just marked
+    // serialized as a training day and the seam quietly vanished on save.
+    const items = day.items.filter(planItemHasContent);
+    return {
+      day_number: index + 1,
+      name: String(day.name || `Day ${index + 1}`),
+      focus: day.focus || null,
+      // A rest day that somehow carries work is saved as the training day it plainly
+      // is, rather than sent to be refused: the server's invariant is real, and the
+      // editor's job is to keep the athlete from ever meeting it.
+      day_type: (String(day.day_type ?? "training") === "rest" && !items.length ? "rest" : "training") as
+        | "rest"
+        | "training",
+      items: items.map((item) => {
         if (isCardioItem(item)) {
           const intervalNote = String(item.interval_note || "").trim();
           const note = String(item.note || "").trim();
@@ -136,7 +144,8 @@ function serializePlanDays(model: PlanEditorFormModelDay[]): PlanEditorFormSaveD
           target_seconds: item.target_seconds ?? null,
         };
       }),
-  }));
+    };
+  });
 }
 
 const CAIRN_PLAN_EDITOR_FORM = {

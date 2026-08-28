@@ -4187,7 +4187,9 @@ export function weekAheadDayNote(kind: WeekAheadDay["kind"], date: string, meso:
 
 export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; summary: string } {
   const d = String(date).slice(0, 10);
-  const planDays = db.prepare(`SELECT id, day_number, name, focus FROM plan_days ORDER BY day_number`).all() as any[];
+  const planDays = db
+    .prepare(`SELECT id, day_number, name, focus, day_type FROM plan_days ORDER BY day_number`)
+    .all() as any[];
   if (!planDays.length) return { days: [], summary: "" };
   // Per-day modality from plan_items so the floor REFLECTS a runner's prescribed
   // cardio instead of hardcoding every day to a lift — without this a runner sees
@@ -4220,7 +4222,17 @@ export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; su
   }
   const days: WeekAheadDay[] = planDays.map((pd) => {
     const c = counts.get(Number(pd.id)) || { cardio: 0, strength: 0 };
-    const kind: WeekAheadDay["kind"] = c.cardio > 0 ? (c.strength > 0 ? "mixed" : "run") : "lift";
+    // The week's REST day is a day_type, never an item count. Reading it from the
+    // counts alone made a 0/0 day read "lift" — a rest day handed a block-purpose
+    // note, in the floor AND in the agentic week-ahead this same list seeds.
+    const kind: WeekAheadDay["kind"] =
+      String(pd.day_type ?? "training").toLowerCase() === "rest"
+        ? "rest"
+        : c.cardio > 0
+          ? c.strength > 0
+            ? "mixed"
+            : "run"
+          : "lift";
     return {
       day: null,
       kind,

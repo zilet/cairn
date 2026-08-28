@@ -778,6 +778,10 @@ export interface PlanDayGroups {
   focus: string | null;
   groups: string[]; // canonical strength muscle groups (cardio items ignored)
   heavy_lower: boolean;
+  // The week's programmed REST day (v99). An itemless day is indistinguishable from a
+  // rest day by groups alone, so anything choosing a destination for work has to read
+  // this rather than infer it from an empty list.
+  day_type: "training" | "rest";
 }
 
 // Each plan day's strength muscle groups, classified against the canon (cardio items are
@@ -789,7 +793,7 @@ export function planDayStrengthGroups(): PlanDayGroups[] {
   try {
     rows = db
       .prepare(
-        `SELECT pd.day_number AS day_number, pd.focus AS focus,
+        `SELECT pd.day_number AS day_number, pd.focus AS focus, pd.day_type AS day_type,
                 pi.kind AS kind, e.name AS exercise, e.muscle_group AS muscle_group
            FROM plan_days pd
            LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id
@@ -804,8 +808,14 @@ export function planDayStrengthGroups(): PlanDayGroups[] {
   for (const r of rows) {
     const dn = Number(r.day_number);
     if (!Number.isFinite(dn)) continue;
-    const cur =
-      map.get(dn) ?? { day_number: dn, focus: r.focus == null ? null : String(r.focus), groups: [], heavy_lower: false };
+    const restDay = String(r.day_type ?? "training").toLowerCase() === "rest";
+    const cur = map.get(dn) ?? {
+      day_number: dn,
+      focus: r.focus == null ? null : String(r.focus),
+      groups: [],
+      heavy_lower: false,
+      day_type: (restDay ? "rest" : "training") as "training" | "rest",
+    };
     const exercise = r.exercise == null ? "" : String(r.exercise).trim();
     if (exercise && r.kind !== "cardio") {
       const group = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(exercise);

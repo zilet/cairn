@@ -1654,8 +1654,13 @@ export function addExerciseToPlanDay(
   name: string,
   lead?: string | null
 ): { day: number; exercise: string } | null {
-  const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(Number(dayNumber)) as any;
+  const day = db.prepare(`SELECT id, day_type FROM plan_days WHERE day_number = ?`).get(Number(dayNumber)) as any;
   if (!day) return null;
+  // This path writes through insertPlanItem rather than savePlanDay, so it bypasses
+  // the resolve/assert pair every other writer goes through. A rest day carries zero
+  // items; an append that lands one on it would leave the plan in exactly the state
+  // the invariant exists to forbid. Same refusal, same words.
+  assertPlanDayTypeCoherent(Number(dayNumber), normalizePlanDayType(day.day_type) ?? "training", 1);
   const dayItems = db
     .prepare(
       `SELECT e.name AS ex_name

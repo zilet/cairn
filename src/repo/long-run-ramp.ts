@@ -32,6 +32,7 @@
 // ============================================================================
 import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { cardioPlanIdentity } from "./cardio-plan-identity.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { weeklyKm } from "./program-state.js";
 import { SUSTAINABLE_LONG_STEP_FACTOR, SUSTAINABLE_WEEKLY_BUILD_FACTOR } from "./run-ramp.js";
@@ -73,6 +74,13 @@ export interface LongRunRamp {
   building: boolean;
   /** True when the weekly volume is already at the build ceiling, so no step this week. */
   weekly_build_hold: boolean;
+  /**
+   * True when there is NO run history behind this prescription, so the anchor is the
+   * beginner's floor rather than anything the athlete has actually run. The note has
+   * to know: "one honest step past your longest" is a sentence about a run that
+   * happened, and printing it to someone with an empty log outruns the evidence.
+   */
+  first_long_run: boolean;
 }
 
 /** Half a kilometre is the finest distance worth putting in front of a runner. */
@@ -116,6 +124,7 @@ export function longRunRamp(input: LongRunRampInput): LongRunRamp | null {
     anchor_km: Math.round(anchor * 100) / 100,
     building: prescribed < template,
     weekly_build_hold: weeklyBuildHold,
+    first_long_run: !(trailing != null && trailing > 0),
   };
 }
 
@@ -138,23 +147,55 @@ export function trailingLongestRunKm(date: string, lookbackDays = LONG_RUN_LOOKB
   }
 }
 
+/** A stored interval payload, read back the way the identity helper expects it. */
+function parseInterval(raw: unknown): unknown {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
 /**
- * The longest distance the WEEK TEMPLATE prescribes, across every plan day. This is
- * what makes "the long run" a property of the week rather than of one card: a 6 km
+ * The longest RUN distance the WEEK TEMPLATE prescribes, across every plan day. This
+ * is what makes "the long run" a property of the week rather than of one card: a 6 km
  * midweek aerobic run and a 12 km Sunday run are both cardio rows, and only the
- * second is the one this module shapes. Null when the template prescribes no
+ * second is the one this module shapes. Null when the template prescribes no run
  * distance at all (a time-only or interval-only endurance week).
+ *
+ * The sport filter is not an optimization — it is the same question `applyLongRunRamp`
+ * asks before it touches an item, and asking it in only one of the two places is what
+ * let a 40 km "Long ride" row become the week's longest prescription and silently
+ * disable the ramp for the run that actually needed it. Distance history is RUN
+ * history; a ride is not a step on the same ladder in either direction.
  */
 export function templateLongRunKm(): number | null {
   try {
-    const row = db
+    const rows = db
       .prepare(
-        `SELECT MAX(target_distance_km) AS km FROM plan_items
-          WHERE kind = 'cardio' AND target_distance_km IS NOT NULL AND target_distance_km > 0`
+        `SELECT e.name AS exercise, pi.note AS note, pi.interval_json AS interval_json,
+                pi.target_zone AS target_zone, pi.target_distance_km AS target_distance_km
+           FROM plan_items pi
+           LEFT JOIN exercises e ON e.id = pi.exercise_id
+          WHERE pi.kind = 'cardio' AND pi.target_distance_km IS NOT NULL AND pi.target_distance_km > 0`
       )
-      .get() as any;
-    const km = Number(row?.km);
-    return Number.isFinite(km) && km > 0 ? km : null;
+      .all() as any[];
+    let best: number | null = null;
+    for (const row of rows) {
+      const km = Number(row?.target_distance_km);
+      if (!Number.isFinite(km) || km <= 0) continue;
+      const identity = cardioPlanIdentity({
+        exercise: row.exercise,
+        note: row.note,
+        interval: parseInterval(row.interval_json),
+        target_zone: row.target_zone,
+        target_distance_km: km,
+      });
+      if (identity.sport !== "run") continue;
+      if (best == null || km > best) best = km;
+    }
+    return best;
   } catch {
     return null;
   }
@@ -214,11 +255,21 @@ const LONG_RUN_HELD_NOTE: ReadonlyArray<(km: string, target: string) => string> 
   (km, target) => `${km} km rather than a step toward ${target} — the week is carrying enough of a build already.`,
 ];
 
+// An athlete with nothing logged has no "longest", so every sentence above that
+// leans on one is a claim about a run that never happened. The starting distance is
+// the beginner's floor stepped once, and it says exactly that instead.
+const LONG_RUN_FIRST_NOTE: ReadonlyArray<(km: string, target: string) => string> = [
+  (km, target) => `Starting at ${km} km and working toward ${target}. A first honest distance to build from.`,
+  (km, target) => `${km} km to begin with — ${target} is the destination, and this is where the build starts.`,
+  (km, target) => `Beginning at ${km} km rather than ${target}. The distance grows as the weeks do.`,
+  (km, target) => `${km} km today. That's the opening distance; ${target} is what it grows into.`,
+];
+
 /** How a ramped long run explains itself. Rotated by date like every athlete-facing line. */
 export function longRunRampNote(ramp: LongRunRamp, date: string): string {
   const km = String(ramp.prescribed_km);
   const target = String(ramp.template_km);
-  return ramp.weekly_build_hold
-    ? pickDayVariant(LONG_RUN_HELD_NOTE, date, "long_run_ramp:held")(km, target)
-    : pickDayVariant(LONG_RUN_BUILDING_NOTE, date, "long_run_ramp:building")(km, target);
+  if (ramp.weekly_build_hold) return pickDayVariant(LONG_RUN_HELD_NOTE, date, "long_run_ramp:held")(km, target);
+  if (ramp.first_long_run) return pickDayVariant(LONG_RUN_FIRST_NOTE, date, "long_run_ramp:first")(km, target);
+  return pickDayVariant(LONG_RUN_BUILDING_NOTE, date, "long_run_ramp:building")(km, target);
 }

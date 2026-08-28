@@ -527,3 +527,63 @@ test("the canonical recovery-week draft is stamped domain 'recovery' at write ti
   const split = all.find((d) => d.id !== announced[0].id);
   assert.equal(split.domain, "training", "prose containing 'lighter' never earns the recovery stamp");
 });
+
+// ---------------------------------------------------------------------------
+// (5) undoing a LEGACY rollback snapshot never eats the week's rest day
+// ---------------------------------------------------------------------------
+
+// A v1 (array-shaped) training-plan rollback payload predates `day_type` entirely, so
+// every day in it is silent about the field — and replacePlan reads an omitted
+// day_type as 'training'. Undoing an old decision would therefore have flattened a
+// rest day the athlete added afterwards: a deletion nobody asked for, hiding inside
+// an Undo. The v2 three-way path reverts day_type explicitly and is untouched.
+test("a legacy plan rollback restores the old week without deleting the rest day", () => {
+  repo.replacePlan([
+    {
+      day_number: 1,
+      name: "Push",
+      items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 }],
+    },
+    { day_number: 2, name: "Rest", focus: null, day_type: "rest", items: [] },
+    {
+      day_number: 3,
+      name: "Pull",
+      items: [{ exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 80 }],
+    },
+  ]);
+
+  // The snapshot as it would have been written before v99: no day_type anywhere.
+  const legacy = [
+    {
+      day_number: 1,
+      name: "Push",
+      focus: null,
+      items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 175 }],
+    },
+    { day_number: 2, name: "Rest", focus: null, items: [] },
+    {
+      day_number: 3,
+      name: "Pull",
+      focus: null,
+      items: [{ exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 80 }],
+    },
+  ];
+
+  const id = Number(
+    db
+      .prepare(
+        `INSERT INTO brain_decisions (kind, domain, summary, status, autonomy_tier, risk_class, reversible, applied_at)
+         VALUES ('training_target', 'training', 'legacy bench nudge', 'applied', 'quiet_apply', 'low', 1, ?)
+         RETURNING id`
+      )
+      .get(new Date().toISOString()).id
+  );
+  repo.saveBrainRollback(id, "training_plan", legacy);
+
+  const out = revertDecision(id, "put it back");
+  assert.equal(out.ok, true, out.error);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 175, "the old prescription came back");
+  assert.equal(repo.getPlanDay(2).day_type, "rest", "and the seam the athlete added since survived it");
+  assert.equal(repo.getPlanDay(2).items.length, 0);
+  assert.equal(repo.getPlanDay(3).day_type, "training");
+});

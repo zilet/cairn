@@ -14,7 +14,13 @@ import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { getInjuryImpacts, listContextEvents } from "./health.js";
 import { type AcuteGateReading, RUN_PRIME_GROUPS, acuteGates, recentEnduranceImpacts } from "./hybrid-load.js";
 import { getPlanDay } from "./plan.js";
-import { selectAdaptivePlanDay, selectedPlanDayForDate } from "./plan-selection.js";
+import {
+  nextTrainingCandidateAfter,
+  planDayCandidates,
+  planDayFocus,
+  selectAdaptivePlanDay,
+  selectedPlanDayForDate,
+} from "./plan-selection.js";
 import { getProgramState } from "./program-state.js";
 import { muscleGroupsForPainArea, painAreaLoadsExercise } from "./pain-relevance.js";
 import { planDayProgression, recentAutoregulation } from "./progression.js";
@@ -647,7 +653,39 @@ export function gatherDailyDecisionSnapshot(
       };
     }
   }
-  const basePlanDay = selected?.day_number != null ? safe(() => getPlanDay(selected.day_number), null) : null;
+  const selectedDayNumber = selected?.day_number ?? null;
+  let basePlanDay = selectedDayNumber != null ? safe(() => getPlanDay(selectedDayNumber), null) : null;
+
+  // ---- train-anyway from the week's programmed REST day ----
+  // The rest day is the one plan day with nothing on it, so composing FROM it produced
+  // a generic 25-minute "Easy movement" card — which is not the athlete's plan, and not
+  // what "train anyway" asked for. The envelope falls through to the next TRAINING day
+  // on the same rotation ring plan-selection walks (so today hands them the session
+  // their own week was about to), skipping any further rest days. The train-anyway load
+  // rules are unchanged and still apply on top: `baseKind` is read from the day-read,
+  // which sees the rest day independently, so the session still lands at held intensity
+  // on a bounded clock. A week that is nothing but rest keeps the old fallback.
+  const overrideText = prose(opts.override, 200);
+  const trainAnywayRequested = opts.train_anyway === true || isTrainIntentOverride(overrideText);
+  let planDayType: "training" | "rest" =
+    selected?.day_type === "rest" || String(basePlanDay?.day_type ?? "") === "rest" ? "rest" : "training";
+  if (planDayType === "rest" && trainAnywayRequested && selected) {
+    const restDayNumber = selected.day_number;
+    const fallthrough = safe(() => nextTrainingCandidateAfter(planDayCandidates(), restDayNumber), null);
+    const fallthroughDay = fallthrough ? safe(() => getPlanDay(fallthrough.day_number), null) : null;
+    if (fallthrough && fallthroughDay && selected) {
+      selected = {
+        ...selected,
+        plan_day_id: Number(fallthroughDay.id),
+        day_number: fallthrough.day_number,
+        focus: planDayFocus(fallthrough),
+        day_type: "training",
+      };
+      basePlanDay = fallthroughDay;
+      planDayType = "training";
+    }
+  }
+
   const recoveryCycle = safe(() => recoveryCycleAt(d), null);
   const activeCycle =
     recoveryCycle &&
@@ -705,7 +743,6 @@ export function gatherDailyDecisionSnapshot(
     source: "derived" as const,
   });
 
-  const override = prose(opts.override, 200);
   const contextInjuries = (Array.isArray(injuryImpacts?.injuries) ? injuryImpacts.injuries : []).map((inj: any) => ({
     title: text(inj?.title ?? inj?.text, 120) ?? "injury",
     constraint_level: inj?.constraint_level === "soft_recheck" ? ("soft_recheck" as const) : ("protective" as const),
@@ -764,11 +801,11 @@ export function gatherDailyDecisionSnapshot(
   return {
     date: d,
     request: {
-      override,
+      override: overrideText,
       // `train_anyway` is a first-class request bit. Recognizing the legacy
       // phrase keeps cached/offline requests from older clients replayable
       // without letting arbitrary "train" prose silently become an override.
-      train_anyway: opts.train_anyway === true || isTrainIntentOverride(override),
+      train_anyway: trainAnywayRequested,
       equipment: text(opts.equipment, 200),
       minutes: opts.minutes != null ? finite(opts.minutes) : null,
       goal: text(opts.goal, 120),
@@ -779,8 +816,9 @@ export function gatherDailyDecisionSnapshot(
       plan_day_id: selected?.plan_day_id ?? planDay?.id ?? null,
       // The selector's answer first, the raw plan row as the fallback — the two agree,
       // but a snapshot taken from a cached selection still has to read the live day.
-      day_type:
-        selected?.day_type === "rest" || String(basePlanDay?.day_type ?? "") === "rest" ? "rest" : "training",
+      // Resolved above, because train-anyway may have already walked the rotation on
+      // past this seam; this field describes the day the snapshot actually carries.
+      day_type: planDayType,
       source: text(selected?.source ?? null, 40),
       reason: prose(selection?.reason ?? null, 300),
       due: dedupe(Array.isArray(selection?.due) ? selection.due : []),
