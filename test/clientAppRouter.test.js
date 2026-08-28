@@ -20,7 +20,7 @@ const deps = {
   routeApi: { planSections: ["edit", "food", "meals", "coach"] },
   planSections: [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]],
   progressSections: [["sessions", "History"], ["program", "Program"], ["intake", "Intake"], ["energy", "Energy"]],
-  standSections: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age"],
+  standSections: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age", "domain"],
   meSections: [["standing", "Standing"], ["profile", "Profile"], ["health", "Health"]],
   healthSections: [["read", "Read"], ["records", "Records"], ["markers", "Markers"]],
   settingsSections: [["agents", "Agents"], ["system", "System"], ["data", "Data"]],
@@ -272,4 +272,26 @@ test("app router syncs canonical URLs through push and replace history", () => {
     }),
     null,
   );
+});
+
+test("the Stand domain drill-in is a real route that carries its domain key", () => {
+  const router = loadRouter();
+  const state = { tab: "today", day: null, dayPicked: false, plan: [], today: {}, logDate: "2026-06-29" };
+
+  assert.equal(router.applyRouteState({ tab: "stand", section: "domain", id: "lipids" }, { state, ...deps }), "stand");
+  assert.equal(state.standSeg, "domain");
+  assert.equal(state.standDomain, "lipids");
+  assert.deepEqual(plain(router.currentRouteState({ state: { ...state, tab: "stand" }, ...deps, defaultProgressSection: null })), {
+    tab: "stand",
+    section: "domain",
+    id: "lipids",
+  });
+
+  // A domain URL with no key parses; the Stand screen falls back to the overview.
+  assert.equal(router.applyRouteState({ tab: "stand", section: "domain" }, { state, ...deps }), "stand");
+  assert.equal(state.standDomain, null);
+  assert.deepEqual(plain(router.currentRouteState({ state: { ...state, tab: "stand" }, ...deps, defaultProgressSection: null })), {
+    tab: "stand",
+    section: "domain",
+  });
 });

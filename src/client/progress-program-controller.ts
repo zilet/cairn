@@ -47,6 +47,16 @@ const PROTECTING_FALLBACKS: readonly string[] = [
   "The anchor waits while a current pain, injury, or load constraint leads.",
 ];
 
+// Recency, the house way: relative by default, exact one hover away. Never a
+// bare YYYY-MM-DD in athlete-facing copy.
+function sjourneyWhenHtml(iso: string): string {
+  const date = String(iso || "").trim();
+  if (!date) return "";
+  const rel = typeof relAge === "function" ? relAge(date) : date;
+  const abs = typeof absDate === "function" ? absDate(date) : date;
+  return `<span title="${escAttr(abs)}">${escHtml(rel)}</span>`;
+}
+
 function strengthJourneyCardHtml(value: unknown): string {
   const journey = value && typeof value === "object" ? (value as Partial<ProgressStrengthJourney>) : null;
   const objective = journey?.objective;
@@ -55,9 +65,11 @@ function strengthJourneyCardHtml(value: unknown): string {
   }
   const current = journey.current?.est_1rm;
   const currentDate = journey.current?.date ? String(journey.current.date) : null;
+  // Recency reads relative, precise on hover — never a bare YYYY-MM-DD (DESIGN.md).
   const currentText = Number.isFinite(Number(current))
-    ? `${Number(current).toFixed(1)} lb estimated 1RM${currentDate ? ` · ${currentDate}` : ""}`
+    ? `${Number(current).toFixed(1)} lb estimated 1RM`
     : "Estimated 1RM not established yet";
+  const currentWhen = currentDate ? ` · ${sjourneyWhenHtml(currentDate)}` : "";
   const targetText = `${Number(objective.target_est_1rm).toFixed(1)} lb estimated 1RM target`;
   const gap = journey.gap_lb;
   const completed = objective.status === "completed";
@@ -78,7 +90,7 @@ function strengthJourneyCardHtml(value: unknown): string {
     ? `<div class="sjourney-range"><span class="lbl">Planning range</span><strong>${Number(journey.projection.earliest_weeks)}–${Number(journey.projection.latest_weeks)} weeks</strong><span>${escHtml(journey.projection.caveat)}</span></div>`
     : "";
   const checkpoint = completed
-    ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Target rebuilt${objective.achieved_date ? ` · ${escHtml(objective.achieved_date)}` : ""}</strong><span>Keep it steady and consolidate this milestone before choosing another goal.</span></div>`
+    ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Target rebuilt${objective.achieved_date ? ` · ${sjourneyWhenHtml(String(objective.achieved_date))}` : ""}</strong><span>Keep it steady and consolidate this milestone before choosing another goal.</span></div>`
     : journey.phase === "protecting"
       ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Hold or ease the anchor</strong><span>${escHtml(journey.projection_withheld_reason || pickDayVariant(PROTECTING_FALLBACKS, localISO(), "sjourney-protecting"))}</span></div>`
       : journey.next_prescription
@@ -91,23 +103,142 @@ function strengthJourneyCardHtml(value: unknown): string {
   return `<section class="sjourney-card reveal" aria-label="Strength comeback journey">
     <div class="sjourney-head"><span class="lbl">Anchor lift · ${escHtml(phase)}</span><span>${escHtml(gapText)}</span></div>
     <h2>${escHtml(objective.exercise)}</h2>
-    <div class="sjourney-route"><span>${escHtml(currentText)}</span><i aria-hidden="true">→</i><span>${escHtml(targetText)}</span></div>
+    <div class="sjourney-route"><span>${escHtml(currentText)}${currentWhen}</span><i aria-hidden="true">→</i><span>${escHtml(targetText)}</span></div>
     <div class="sjourney-trend">${escHtml(trendText)}</div>
     ${checkpoint}${supportHtml}${projection}
   </section>`;
 }
 
+// ---- multi-anchor: an athlete may be rebuilding several lifts at once --------
+// One active objective per lift, so a six-anchor rebuild must not read as a
+// single-lift goal. The card expands ONE anchor in full (the primary, or
+// whichever row the athlete last opened) and lists the rest as compact rows.
+
+// Where this anchor is, in words. Est-1RM POUNDS are a real measurement and
+// print freely; a 0-100 grade, a filled bar, or a "% done" never do — the
+// constitution bans them, and strengthJourney.test.js holds this file to it.
+function sjourneyRowState(journey: ProgressStrengthJourney): string {
+  if (journey.objective?.status === "completed") return "milestone complete";
+  if (journey.phase === "protecting") return "protected for now";
+  const gap = Number(journey.gap_lb);
+  if (Number.isFinite(gap) && gap > 0) return `${gap.toFixed(1)} lb to go`;
+  // No exposure yet means there is no estimate to compare — an anchor chosen
+  // this morning must not read as one already standing at its target.
+  if (!Number.isFinite(Number(journey.current?.est_1rm))) return "no exposure logged yet";
+  return "at the target";
+}
+
+// The direction, spoken. `trend.direction` is the server's word; anything else
+// (no exposures yet) says so plainly rather than implying a flat trend.
+function sjourneyRowTrend(journey: ProgressStrengthJourney): string {
+  switch (journey.trend?.direction) {
+    case "rising":
+      return "climbing";
+    case "falling":
+      return "easing back";
+    case "stable":
+      return "holding";
+    default:
+      return "still establishing";
+  }
+}
+
+function sjourneyAnchorRowHtml(journey: ProgressStrengthJourney): string {
+  const objective = journey.objective;
+  if (!objective?.exercise) return "";
+  const current = Number(journey.current?.est_1rm);
+  const target = Number(objective.target_est_1rm);
+  const route =
+    Number.isFinite(current) && Number.isFinite(target)
+      ? `${current.toFixed(1)} → ${target.toFixed(1)} lb`
+      : Number.isFinite(target)
+        ? `${target.toFixed(1)} lb target`
+        : "";
+  return `<button class="sjourney-other" type="button" data-sjanchor="${escAttr(objective.exercise)}">
+    <span class="sjourney-other-main">
+      <span class="sjourney-other-name">${escHtml(objective.exercise)}</span>
+      <span class="sjourney-other-state">${escHtml(sjourneyRowState(journey))} · ${escHtml(sjourneyRowTrend(journey))}</span>
+    </span>
+    ${route ? `<span class="sjourney-other-route">${escHtml(route)}</span>` : ""}
+    <span class="sjourney-other-arw" aria-hidden="true">›</span>
+  </button>`;
+}
+
+function strengthAnchorsHtml(journeys: ProgressStrengthJourney[], openExercise: string | null): string {
+  const live = journeys.filter((j) => j?.available && j.objective?.exercise);
+  if (!live.length) return "";
+  const openKey = String(openExercise || "").toLowerCase();
+  const primaryIndex = Math.max(
+    0,
+    live.findIndex((j) => String(j.objective?.exercise || "").toLowerCase() === openKey)
+  );
+  const primary = live[primaryIndex];
+  const rest = live.filter((_, index) => index !== primaryIndex);
+  const rows = rest.map((j) => sjourneyAnchorRowHtml(j)).join("");
+  // A single anchor renders exactly as it always has — no empty "others" shelf.
+  return (
+    strengthJourneyCardHtml(primary) +
+    (rows
+      ? `<section class="sjourney-others reveal" aria-label="Your other anchor lifts">
+      <div class="lbl sjourney-others-head">Also rebuilding</div>
+      ${rows}
+    </section>`
+      : "")
+  );
+}
+
+// The anchor currently expanded on the card. Held here (not in the URL) because
+// it is a reading preference inside one screen, not a place you can be.
+let strengthAnchorOpen: string | null = null;
+let strengthAnchorJourneys: ProgressStrengthJourney[] = [];
+
 async function loadStrengthJourney(deps: ClientProgressProgramControllerDeps): Promise<void> {
-  let result: unknown = null;
+  // The PLURAL read is the truth — an athlete may hold one active objective per
+  // lift. It carries no `suggestion`, so a slate with no anchor at all still
+  // asks the singular endpoint for the quiet invitation.
+  let journeys: ProgressStrengthJourney[] = [];
   try {
-    result = await deps.api("/strength-journey");
+    const res = (await deps.api("/strength-journeys")) as { journeys?: ProgressStrengthJourney[] } | null;
+    journeys = Array.isArray(res?.journeys) ? res.journeys.filter((j): j is ProgressStrengthJourney => !!j) : [];
   } catch {
-    result = null;
+    journeys = [];
+  }
+  const live = journeys.filter((j) => j?.available && j.objective?.exercise);
+  let html = "";
+  if (live.length) {
+    strengthAnchorJourneys = live;
+    html = strengthAnchorsHtml(live, strengthAnchorOpen);
+  } else {
+    strengthAnchorJourneys = [];
+    strengthAnchorOpen = null;
+    let single: unknown = null;
+    try {
+      single = await deps.api("/strength-journey");
+    } catch {
+      single = null;
+    }
+    html = strengthJourneyCardHtml(single);
   }
   const slot = deps.view.querySelector("#progStrengthJourneySlot");
   if (!slot) return;
-  slot.innerHTML = strengthJourneyCardHtml(result);
+  slot.innerHTML = html;
+  wireStrengthAnchors(slot, deps);
   wireStrengthSuggestion(slot, deps);
+}
+
+// Tapping another anchor expands it in place — no refetch, no route change; the
+// list is already in hand.
+function wireStrengthAnchors(slot: Element, deps: ClientProgressProgramControllerDeps): void {
+  slot.querySelectorAll<HTMLElement>("[data-sjanchor]").forEach((row) =>
+    row.addEventListener("click", () => {
+      const exercise = row.dataset.sjanchor || "";
+      if (!exercise || !strengthAnchorJourneys.length) return;
+      strengthAnchorOpen = exercise;
+      slot.innerHTML = strengthAnchorsHtml(strengthAnchorJourneys, strengthAnchorOpen);
+      wireStrengthAnchors(slot, deps);
+      wireStrengthSuggestion(slot, deps);
+    })
+  );
 }
 
 // One tap starts the suggested anchor (the existing create path); "Not now"
@@ -617,6 +748,8 @@ const CAIRN_PROGRESS_PROGRAM_CONTROLLER = {
   triggerProgramEvolve,
   tidyExerciseNames,
   strengthJourneyCardHtml,
+  strengthAnchorsHtml,
+  loadStrengthJourney,
 };
 
 Object.assign(globalThis, { CairnProgressProgramController: CAIRN_PROGRESS_PROGRAM_CONTROLLER });

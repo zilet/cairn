@@ -26,10 +26,16 @@ const routes = [
   { path: "/app/plan/meals", tab: "plan", expectedState: { planSeg: "meals" } },
   { path: "/app/plan/coach", tab: "plan", expectedState: { planSeg: "coach" } },
   { path: "/app/progress/energy", tab: "progress", expectedState: { progressSeg: "energy" } },
+  // Program hosts the multi-anchor strength card (GET /api/strength-journeys).
+  { path: "/app/progress/program", tab: "progress", expectedState: { progressSeg: "program" } },
   { path: "/app/stand", tab: "stand", expectedState: { standSeg: null } },
   { path: "/app/stand/age", tab: "stand", expectedState: { standSeg: "age" } },
   { path: "/app/stand/records", tab: "stand", expectedState: { standSeg: "records" } },
   { path: "/app/stand/markers", tab: "stand", expectedState: { standSeg: "markers" } },
+  // The marker-domain drill-in is a real route carrying its domain key in ?id=.
+  { path: "/app/stand/domain?id=heart", tab: "stand", expectedState: { standSeg: "domain" } },
+  // A domain URL with no key is not an error — Stand falls back to the overview.
+  { path: "/app/stand/domain", tab: "stand", expectedHref: "/app/stand", expectedState: { standSeg: null } },
   { path: "/app/me/standing", tab: "stand", expectedHref: "/app/stand/age", expectedState: { standSeg: "age" } },
   { path: "/app/me/health/read", tab: "stand", expectedHref: "/app/stand", expectedState: { standSeg: null } },
   { path: "/app/me/health/records", tab: "stand", expectedHref: "/app/stand/records", expectedState: { standSeg: "records" } },
@@ -1252,6 +1258,40 @@ async function smokePlanSegmentNavigation(cdp, base) {
         hasEnergyCard: Boolean(document.querySelector("#energyCard"))
       };
     })()`);
+    // Changes (/app/plan/coach) is a first-class Plan segment: reachable from the
+    // bar, and it paints its own active pill instead of being a dead-end drill-in.
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.segbtn[data-seg="coach"]');
+      if (!btn) throw new Error("missing Plan Changes segment");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Plan bar reaches the Changes record and lights its pill", `(() => {
+      const active = document.querySelector('.segbtn.active[data-seg="coach"]');
+      return {
+        ok: Boolean(
+          active &&
+          active.textContent.trim() === "Changes" &&
+          window.state?.planSeg === "coach" &&
+          location.pathname === "/app/plan/coach" &&
+          document.querySelector("#proplist")
+        ),
+        href: location.pathname,
+        planSeg: window.state && window.state.planSeg,
+        active: active ? active.textContent.trim() : ""
+      };
+    })()`);
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.segbtn[data-seg="edit"]');
+      if (!btn) throw new Error("missing Plan Training segment");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "the Changes segment routes back to Training through the bar", `(() => ({
+      ok: Boolean(window.state?.planSeg === "edit" && location.pathname === "/app/plan/edit" && document.querySelector("#planedit")),
+      href: location.pathname,
+      planSeg: window.state && window.state.planSeg
+    }))()`);
     ok(failures.length === 0, "/app/plan segment workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
@@ -1295,6 +1335,32 @@ async function smokeHealthInnerNavigation(cdp, base) {
         hasUploadButton: Boolean(document.querySelector("#hUpload"))
       };
     })()`);
+    // The domain drill-in must advance history, so browser/OS Back steps back UP
+    // to the Stand overview instead of leaving Stand entirely.
+    await navigateAndHydrate(cdp, base, "/app/stand", "stand");
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector("[data-domain]");
+      if (!btn) throw new Error("missing Stand domain tile");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Stand domain tile advances to its own route", `(() => ({
+      ok: Boolean(
+        window.state?.standSeg === "domain" &&
+        location.pathname === "/app/stand/domain" &&
+        new URLSearchParams(location.search).get("id") &&
+        document.querySelector("#standResults")
+      ),
+      href: location.pathname + location.search,
+      standSeg: window.state && window.state.standSeg
+    }))()`);
+    await evaluate(cdp, `(() => { history.back(); return true; })()`);
+    await waitForCondition(cdp, "browser Back from a domain returns to the Stand overview", `(() => ({
+      ok: Boolean(window.state?.tab === "stand" && window.state?.standSeg == null && location.pathname === "/app/stand"),
+      href: location.pathname + location.search,
+      tab: window.state && window.state.tab,
+      standSeg: window.state && window.state.standSeg
+    }))()`);
     ok(failures.length === 0, "/app/stand health-tool navigation workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
@@ -1615,12 +1681,16 @@ async function smokeHealthRecordActions(cdp, base) {
       return true;
     })()`);
 
+    // The control's LABEL reads human (DESIGN.md: no bare YYYY-MM-DD in copy); the
+    // date input behind it still carries the exact ISO the picker needs.
     await waitForCondition(cdp, "Health Records saves the edited result date", `(() => {
       const id = ${firstIdJson};
       const row = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === id);
       const val = row ? row.querySelector(".hdoc-date-val") : null;
+      const input = row ? row.querySelector("[data-hdate]") : null;
       const text = val ? val.textContent.trim() : null;
-      return { ok: text === ${newDateJson}, text };
+      const human = window.absDate ? window.absDate(${newDateJson}) : null;
+      return { ok: Boolean(text && text === human && input && input.value === ${newDateJson}), text, human };
     })()`);
 
     const savedDoc = await apiJson(base, `/health-docs/${first.id}`);

@@ -70,6 +70,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/last-set",
   "/progress/:exercise",
   "/strength-journey",
+  "/strength-journeys",
   "/strength-journey/suggestion/dismiss",
   "/activities",
   "/activities/:id",

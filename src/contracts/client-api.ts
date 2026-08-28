@@ -1755,6 +1755,10 @@ export interface ClientSessionPrimer {
   provenance_label: "Adapted for today" | "Training by choice" | null;
 }
 
+export interface ClientStrengthJourneysResponse {
+  journeys: ClientStrengthJourney[];
+}
+
 export interface ClientStrengthJourneySetResponse {
   objective: ClientStrengthObjective;
   journey: ClientStrengthJourney;
@@ -3044,6 +3048,10 @@ export interface ClientApiResponses {
   "/api/sets": ClientLoggedSet;
   "/api/last-set": ClientLoggedSet | null;
   "/api/strength-journey": ClientStrengthJourney | ClientStrengthJourneySetResponse;
+  // Every anchor the athlete is rebuilding, one journey each (one active
+  // objective per lift). The Progress card reads this; the singular path above
+  // still answers with the primary anchor plus the no-anchor suggestion.
+  "/api/strength-journeys": ClientStrengthJourneysResponse;
   "/api/strength-journey/suggestion/dismiss": { dismissed_at: string };
   "/api/activities": ClientActivity[];
   "/api/agent/run": ClientProposalResult | ClientAgentJobEnvelope;

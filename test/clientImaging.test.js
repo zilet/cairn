@@ -19,6 +19,9 @@ function imaging() {
     Error,
     FormData: class {},
     withToken: (path) => `TOKEN:${path}`,
+    // date-utils in the browser: recency reads relative, precise on hover.
+    relAge: (iso) => `about the time of ${iso}`,
+    absDate: (iso) => `absolute:${iso}`,
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);

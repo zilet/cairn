@@ -508,7 +508,16 @@ async function renderToday(opts: any = {}) {
   const [agenda, conductor] = await Promise.all([agendaPromise, conductorPromise]);
   if (todayState.tab !== "today" || todayState.logDate !== renderedDate || pollToken !== railToken) return;
 
-  const conductorHtml = conductor ? coachingFocusThreadHtml(conductor) : "";
+  // One story, ONE voice on Today. The server already picked which surface holds
+  // the position of prominence (read.attention.primary); when that is the fuel
+  // card, a conductor thread whose lever is the same nutrition story would state
+  // it twice in one column, a few hundred pixels apart. The promoted card keeps
+  // it — the same arbitration the health lever already gets below, in reverse.
+  // (`body` routes to meals too — see cfocusDomainRoute — so it counts as fuel.)
+  const conductorDomain = String(conductor?.lead?.domain || "");
+  const conductorEchoesLead =
+    read?.attention?.primary === "fuel" && (conductorDomain === "nutrition" || conductorDomain === "body");
+  const conductorHtml = conductor && !conductorEchoesLead ? coachingFocusThreadHtml(conductor) : "";
   const conductorLeads = !!conductorHtml;
   const cfocusSlot = todayView.querySelector("#cfocusSlot");
   if (cfocusSlot) {

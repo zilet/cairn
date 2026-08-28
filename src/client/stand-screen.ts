@@ -266,28 +266,14 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
   }
   function focusHeroHtml(): string {
     const f = DATA?.focus as Record<string, unknown> | null;
+    if (!f || typeof coachingFocusHtml !== "function") return "";
+    const focus = f as unknown as ClientCoachingFocus;
     // COMPACT conductor on the Stand overview: the full card (parallel/later/
     // connections/retest) would make rival whole-picture claims against the
     // health synthesis rendered right below it — one voice, one lead, and the
-    // full plan is one tap away on Progress → Program.
-    if (f && typeof coachingFocusCompactHtml === "function") {
-      const compact = coachingFocusCompactHtml(f as unknown as ClientCoachingFocus);
-      if (compact) return compact;
-    }
-    const headline = f && typeof f.headline === "string" ? f.headline.trim() : "";
-    const lead = f && f.lead && typeof f.lead === "object" ? (f.lead as Record<string, unknown>) : null;
-    const line =
-      lead && typeof lead.line === "string"
-        ? lead.line.trim()
-        : lead && typeof lead.why === "string"
-          ? lead.why.trim()
-          : "";
-    if (!headline && !line) return "";
-    return `<div class="stand-focus reveal">
-      <span class="stand-focus-k">Where to focus</span>
-      ${headline ? `<h2 class="stand-focus-h">${escHtml(headline)}</h2>` : ""}
-      ${line ? `<p class="stand-focus-p">${escHtml(line)}</p>` : ""}
-    </div>`;
+    // full plan is one tap away on Progress → Program. When the server says the
+    // focus isn't available, the HERO variant still speaks the calm one-liner.
+    return coachingFocusHtml(focus, { variant: "compact" }) || coachingFocusHtml(focus, { variant: "hero" });
   }
 
   function bodyComp(): Record<string, unknown> | null {
@@ -895,13 +881,22 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     );
   }
 
+  // A domain drill-in is a real route (/app/stand/domain?id=<key>), not a silent
+  // in-place swap: setting standSeg=null left the URL sitting on the overview, so
+  // browser/OS Back walked straight out of Stand instead of stepping back up to it.
+  // An unknown/absent key is not an error — it falls back to the overview.
   function showDomain(key: string): void {
+    const all = key === "__all__";
+    if (!all && !DOMAINS.some((x) => x.key === key)) {
+      showOverview();
+      return;
+    }
     curDomain = key;
     standQuery = "";
     standOff = false;
-    const all = key === "__all__";
     curView = all ? "markers" : "domain";
-    setStandSeg(all ? "markers" : null);
+    state.standDomain = all ? null : key;
+    setStandSeg(all ? "markers" : "domain");
     const d = all ? null : DOMAINS.find((x) => x.key === key);
     const markers = all ? DATA?.markers || [] : d ? markersOfDomain(d) : [];
     const outCount = markers.filter(markerOutOfRange).length;
@@ -981,6 +976,8 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
   }
   function showOverview(): void {
     curView = "overview";
+    curDomain = null;
+    state.standDomain = null;
     setStandSeg(null);
     // Stepped back from a self-contained tool before the overview data landed →
     // hold the calm loading state until the in-flight fetch resolves.
@@ -1309,6 +1306,12 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
   function paintStandSeg(seg: ClientStandSection | null): void {
     if (seg === "markers") {
       showAllMarkers();
+      return;
+    }
+    if (seg === "domain") {
+      // Direct entry with no (or an unknown) domain key lands calmly on the
+      // overview — showDomain owns that fallback.
+      showDomain(String(state.standDomain || ""));
       return;
     }
     if (seg === "body") {

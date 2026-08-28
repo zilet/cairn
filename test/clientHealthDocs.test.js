@@ -13,6 +13,9 @@ function loadHealthDocs() {
     String,
     JSON,
     localISO: () => "2026-06-30",
+    // date-utils in the browser: recency reads relative, precise on hover.
+    relAge: (iso) => `about the time of ${iso}`,
+    absDate: (iso) => `absolute:${iso}`,
     stagger: (idx) => `--i:${idx}`,
     withToken: (url) => `TOKEN:${url}`,
     enrichmentActive: (status) => status === "pending" || status === "enriching",
@@ -42,7 +45,7 @@ test("health document helpers render analyzed records safely", () => {
   };
 
   const inner = docs.healthDocInner(row);
-  assert.match(inner, /Bloodwork · 2026-06-01/);
+  assert.match(inner, /Bloodwork · <span title="absolute:2026-06-01">about the time of 2026-06-01<\/span>/);
   assert.match(inner, /✦ analyzed/);
   assert.match(inner, /2 markers · 1 flagged/);
   assert.match(inner, /LDL-C &lt;direct&gt;/);

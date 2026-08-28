@@ -125,6 +125,10 @@ function loadProgramController() {
     coachingFocusCardHtml(focus) {
       return focus?.show ? `<section class="focus-card">FOCUS CARD</section>` : "";
     },
+    // Recency helpers (date-utils in the browser). Stubbed deterministically so the
+    // card's "relative by default, exact on hover" contract is asserted, not a clock.
+    relAge: (iso) => `about ${iso === "2026-07-07" ? "3 weeks" : "2 weeks"} ago`,
+    absDate: (iso) => `absolute:${iso}`,
     wireGuides() {
       /* tap-through wiring — no-op in the controller unit test */
     },
@@ -232,7 +236,8 @@ test("strength journey Progress states are explicit, calm, and plan-backed", () 
     projection_withheld_reason: "Need four exact-lift exposures.",
   };
   const establishing = card(base);
-  assert.match(establishing, /160\.0 lb estimated 1RM · 2026-07-07/);
+  assert.match(establishing, /160\.0 lb estimated 1RM · <span title="absolute:2026-07-07">about 3 weeks ago<\/span>/);
+  assert.doesNotMatch(establishing, /2026-07-07<\/span>|· 2026-07-07/, "recency never prints a bare ISO date");
   assert.match(establishing, /Checkpoint/);
   assert.match(establishing, /Need four exact-lift exposures/);
   assert.doesNotMatch(establishing, /Invented|optional/);
@@ -257,9 +262,129 @@ test("strength journey Progress states are explicit, calm, and plan-backed", () 
     ],
   });
   assert.match(completed, /milestone complete/);
-  assert.match(completed, /Target rebuilt · 2026-07-10/);
+  assert.match(completed, /Target rebuilt · <span title="absolute:2026-07-10">about 2 weeks ago<\/span>/);
   assert.match(completed, /Strength around it · planned/);
   assert.match(completed, /Cable &lt;Row&gt; · Stable press shelf/);
+});
+
+function anchorJourney(exercise, overrides = {}) {
+  return {
+    available: true,
+    objective: { exercise, target_est_1rm: 225, status: "active", achieved_date: null },
+    current: { est_1rm: 185, date: "2026-07-07" },
+    gap_lb: 40,
+    trend: { direction: "rising", est_1rm_lb_per_week: 1.5, exposures: 4, span_days: 21 },
+    phase: "building",
+    next_prescription: null,
+    planned_support: [],
+    support_suggestions: [],
+    projection: null,
+    projection_withheld_reason: null,
+    ...overrides,
+  };
+}
+
+test("every active anchor reaches the Progress card, in words and pounds", () => {
+  const context = loadProgramController();
+  const anchors = context.CairnProgressProgramController.strengthAnchorsHtml;
+
+  // One anchor renders exactly as it always did — no empty "also rebuilding" shelf.
+  const single = anchors([anchorJourney("Bench <Press>")], null);
+  assert.match(single, /sjourney-card/);
+  assert.doesNotMatch(single, /sjourney-others/);
+
+  const many = anchors(
+    [
+      anchorJourney("Bench <Press>"),
+      anchorJourney("Deadlift", { gap_lb: 0, trend: { direction: "stable", exposures: 6, span_days: 40 } }),
+      anchorJourney("Overhead Press", { phase: "protecting", gap_lb: 25 }),
+      anchorJourney("Squat", {
+        objective: { exercise: "Squat", target_est_1rm: 315, status: "completed", achieved_date: "2026-07-10" },
+      }),
+    ],
+    null
+  );
+  // The first anchor expands in full; the rest are compact rows.
+  assert.match(many, /<h2>Bench &lt;Press&gt;<\/h2>/);
+  assert.match(many, /Also rebuilding/);
+  assert.match(many, /data-sjanchor="Deadlift"/);
+  assert.match(many, /data-sjanchor="Overhead Press"/);
+  assert.match(many, /data-sjanchor="Squat"/);
+  assert.doesNotMatch(many, /data-sjanchor="Bench &lt;Press&gt;"/, "the expanded anchor is not also a row");
+  // Words for state and direction; est-1RM POUNDS are a real measurement and print.
+  assert.match(many, /at the target · holding/);
+  // A brand-new anchor with no exposure must not read as already at its target.
+  const fresh = anchors(
+    [anchorJourney("Bench <Press>"), anchorJourney("Deadlift", { current: null, gap_lb: null, trend: {} })],
+    null
+  );
+  assert.match(fresh, /no exposure logged yet · still establishing/);
+  assert.match(fresh, /225\.0 lb target/, "with no estimate the row shows the target alone");
+  assert.match(many, /protected for now/);
+  assert.match(many, /milestone complete/);
+  assert.match(many, /185\.0 → 225\.0 lb/);
+  // Never a 0-100 grade, a percentage, or a completion meter (the constitution).
+  assert.doesNotMatch(many, /\d+\s*%|progress-bar|score/i);
+
+  // Opening another anchor expands THAT one and files the previous one back.
+  const opened = anchors([anchorJourney("Bench <Press>"), anchorJourney("Deadlift")], "Deadlift");
+  assert.match(opened, /<h2>Deadlift<\/h2>/);
+  assert.match(opened, /data-sjanchor="Bench &lt;Press&gt;"/);
+});
+
+test("the Progress anchor card reads the plural endpoint and falls back for a blank slate", async () => {
+  const context = loadProgramController();
+  const slot = {
+    innerHTML: "",
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const view = {
+    innerHTML: "",
+    querySelector: (selector) => (selector === "#progStrengthJourneySlot" ? slot : null),
+    querySelectorAll: () => [],
+  };
+
+  const asked = [];
+  const deps = depsFor(context, {
+    view,
+    api: async (path) => {
+      asked.push(path);
+      if (path === "/strength-journeys")
+        return { journeys: [anchorJourney("Bench <Press>"), anchorJourney("Deadlift")] };
+      return null;
+    },
+  });
+  await context.CairnProgressProgramController.loadStrengthJourney(deps);
+  assert.deepEqual(asked, ["/strength-journeys"], "the plural read is the one the card asks for");
+  assert.match(slot.innerHTML, /Also rebuilding/);
+
+  // No anchor at all → the singular endpoint still supplies the quiet invitation.
+  const asked2 = [];
+  const slot2 = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  const deps2 = depsFor(context, {
+    view: { innerHTML: "", querySelector: () => slot2, querySelectorAll: () => [] },
+    api: async (path) => {
+      asked2.push(path);
+      if (path === "/strength-journeys") return { journeys: [{ available: false }] };
+      return {
+        available: false,
+        suggestion: {
+          exercise: "Bench Press",
+          target_kind: "personal_best",
+          target_est_1rm: 225,
+          current_est_1rm: 200,
+          gap_lb: 25,
+          title: "Rebuild your bench",
+          detail: "You were here a year ago.",
+          basis: "From your logged history.",
+        },
+      };
+    },
+  });
+  await context.CairnProgressProgramController.loadStrengthJourney(deps2);
+  assert.deepEqual(asked2, ["/strength-journeys", "/strength-journey"]);
+  assert.match(slot2.innerHTML, /Make this my anchor/);
 });
 
 test("progress program controller renders the empty state through the route shell", () => {

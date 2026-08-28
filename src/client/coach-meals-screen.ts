@@ -54,7 +54,7 @@ function coachWaitingDecisionsHtml(rows: unknown): string {
 async function renderCoach(): Promise<void> {
   headerTitle.textContent = "Changes";
   state.planSeg = "coach";
-  view.innerHTML = skelLines(2) + skelLines(3);
+  view.innerHTML = segSkeleton("coach", planSeg(), 3);
   const agents = coachMealRows<CoachAgent>(await api("/agents"));
   const proposals = await api("/proposals?limit=10");
   let waiting: unknown = null;
@@ -73,8 +73,11 @@ async function renderCoach(): Promise<void> {
       .join("");
 
   await skelSwap(() => {
-    view.innerHTML = `
-    <button class="linkbtn linkbtn-plain" id="changesBackToPlan" type="button">‹ Plan</button>
+    view.innerHTML =
+      // Changes is a first-class Plan segment now, so the bar IS the way back —
+      // a "‹ Plan" link beside its own active pill was the same move said twice.
+      segBar("coach", planSeg()) +
+      `
     <p class="changes-lede sess-line" style="color:var(--muted);margin:2px 2px 16px;line-height:1.5">Your expert team adapts training and meals in the background, then leaves a clear record here. Most changes need nothing from you: they arrive at the right boundary with a heads-up and Undo. Talk to the team anytime in the <button class="linkbtn linkbtn-plain" id="changesToChat" type="button">Coach</button> tab.</p>
     ${coachWaitingDecisionsHtml(waiting)}
     <h1 class="lbl" style="margin:24px 0 8px">Program change history</h1>
@@ -107,10 +110,7 @@ async function renderCoach(): Promise<void> {
     </details>`;
   });
 
-  $("#changesBackToPlan")?.addEventListener("click", () => {
-    state.planJump = "edit";
-    activateTab("plan");
-  });
+  wireSeg(PLAN_HANDLERS);
   $("#changesToChat")?.addEventListener("click", () => activateTab("chat"));
   $<HTMLSelectElement>("#presetsel")?.addEventListener("change", (e) => {
     const wrap = htmlElement($("#customwrap"));

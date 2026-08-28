@@ -5275,6 +5275,30 @@ button.hmk-row:active{background:var(--card-2)}
 .ex-journey,.sess-launch-journey,.done-journey{margin-top:8px;color:var(--sage);font-size:.78rem;line-height:1.4}
 @media(max-width:420px){.sjourney-head{align-items:flex-start;flex-direction:column;gap:3px}}
 
+/* Every OTHER anchor the athlete is rebuilding — the compact per-lift shelf under
+   the expanded one. Tap a row to expand it in its place. Words + real pound
+   figures only; no meter, no percentage, no score. */
+.sjourney-others{margin:0 0 16px}
+.sjourney-others-head{display:block;margin:0 2px 7px;color:var(--muted)}
+.sjourney-other{
+  display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:11px 13px;margin-bottom:7px;font-family:var(--font-ui);color:var(--ink);
+  transition:box-shadow var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);
+}
+.sjourney-other:last-child{margin-bottom:0}
+.sjourney-other:active{transform:var(--press-lg)}
+.sjourney-other-main{display:grid;gap:2px;flex:1 1 auto;min-width:0}
+.sjourney-other-name{font-family:var(--font-display);font-size:1rem;font-weight:560;color:var(--ink)}
+.sjourney-other-state{font-size:.76rem;color:var(--muted)}
+.sjourney-other-route{flex:0 0 auto;font-family:var(--font-display);font-size:.9rem;color:var(--ink-2);white-space:nowrap}
+.sjourney-other-arw{flex:0 0 auto;color:var(--faint)}
+@media(hover:hover){.sjourney-other:hover{box-shadow:var(--shadow-sm)}}
+@media(max-width:420px){
+  .sjourney-other{flex-wrap:wrap}
+  .sjourney-other-route{width:100%;white-space:normal}
+}
+
 /* The quiet anchor-lift invitation (shown only when no objective is chosen). */
 .sjourney-suggest{border-style:dashed}
 .sjourney-suggest-detail{margin:2px 0 8px;color:var(--ink-2);font-size:.86rem;line-height:1.5}

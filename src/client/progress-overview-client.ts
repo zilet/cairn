@@ -20,7 +20,6 @@ type TovLoadGroup = {
   detail?: unknown;
 };
 type TovAdjustment = { kind?: unknown; title?: unknown; why?: unknown };
-type TovFocusItem = { domain?: unknown; title?: unknown; why?: unknown; move?: unknown };
 type TovData = {
   stats: Record<string, unknown> | null;
   balance: Record<string, unknown> | null;
@@ -465,26 +464,16 @@ function wireTovStart(): void {
   });
 }
 
+// The Progress-overview lever is the "overview" display variant of the ONE
+// coaching-focus renderer (src/client/coaching-focus-client.ts) — same payload,
+// same gating, this surface's density and chrome. It used to be a fourth
+// hand-rolled copy of the read.
 function tovFocusHtml(data: TovData): string {
-  const focus = data.focus || {};
-  const lead = (focus.lead || null) as TovFocusItem | null;
-  if (!focus.available || !lead || !lead.title) return "";
-  const move = lead.move ? `<div class="tov-focus-move">${escHtml(lead.move)}</div>` : "";
-  const retest = (focus.retest || null) as Record<string, unknown> | null;
-  const retestNames = (retest && Array.isArray(retest.focus) ? retest.focus : [])
-    .map((name) => String(name || "").trim())
-    .filter((name) => name && name.toLowerCase() !== "unknown");
-  const retestWeeks = CairnProgressData.number(retest?.in_weeks);
-  const retestLine = retestNames.length && retestWeeks >= 1
-    ? `<div class="tov-focus-retest">Re-test ${escHtml(retestNames.join(", "))} in ~${retestWeeks} wk</div>`
-    : "";
-  return `<div class="well-accent tov-focus reveal" style="${stagger(3)}">
-    <div class="lbl">Where to focus</div>
-    <div class="tov-focus-title">${escHtml(lead.title)}</div>
-    ${lead.why ? `<div class="tov-focus-why">${escHtml(lead.why)}</div>` : ""}
-    ${move}${retestLine}
-    <button class="linkbtn linkbtn-sm" type="button" data-tovgo="program">Full program read ›</button>
-  </div>`;
+  if (typeof coachingFocusHtml !== "function") return "";
+  return coachingFocusHtml((data.focus || null) as unknown as ClientCoachingFocus | null, {
+    variant: "overview",
+    style: stagger(3),
+  });
 }
 
 function tovMovesHtml(data: TovData): string {

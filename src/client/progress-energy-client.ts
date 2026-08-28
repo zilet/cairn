@@ -351,7 +351,7 @@ function nutritionCheckinProposalHtml(result: NutritionCheckinResult | null | un
         <button class="draftbtn" id="ckGoMeals" type="button">Open meals</button>
         <button class="ghostbtn" id="ckDismiss" type="button">Got it</button>
       </div>
-      <div class="eb-advisory lbl">${scheduled ? `lands ${escHtml(String(autonomy.effective_date || "at the next food-day boundary"))} · meals refresh in the background · Undo available` : "review posture — your call before anything changes"}</div>
+      <div class="eb-advisory lbl">${scheduled ? `lands ${escHtml(autonomy.effective_date ? humanDate(String(autonomy.effective_date)) : "at the next food-day boundary")} · meals refresh in the background · Undo available` : "review posture — your call before anything changes"}</div>
     </section>`;
 }
 

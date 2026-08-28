@@ -41,9 +41,9 @@ type RouteSyncMode = "push" | "replace";
   function routeSyncCurrent(): Partial<RouteSyncRoute> {
     return window.CairnAppRouter.currentRouteState({
       state,
-      // The visible Plan bar intentionally omits the internal Changes route.
-      // Canonical URL state still needs the complete route definition so a
-      // genuine review-required change can remain at /app/plan/coach instead
+      // Canonical URL state reads the complete route definition rather than the
+      // VISIBLE bar: planSeg() hides Endurance for a strength athlete, and a
+      // section the bar happens not to show must still keep its own URL instead
       // of being rewritten to Training during the next state sync.
       planSections: routeSyncApi()?.planSections || planSeg(),
       progressSections: PROGRESS_SEG,

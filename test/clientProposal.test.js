@@ -16,6 +16,10 @@ function loadProposal() {
     String,
     fmtWeight: (weight) => `${weight} lb`,
     stagger: (index) => `--i:${index}`,
+    // date-utils in the browser. Stubbed deterministically so the "dates read
+    // human, never raw" contract is asserted rather than a clock.
+    humanDate: (iso) => (iso === "2026-07-13" ? "Jul 13, 2026" : iso === "2026-07-14" ? "Jul 14, 2026" : `on ${iso}`),
+    relTime: (iso) => `${iso} ago`,
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
@@ -148,6 +152,7 @@ test("proposal helper renders Coach proposal list with actions, folds, and escap
   assert.match(html, /Applied to your plan/);
   assert.match(html, /Squat &lt;heavy&gt;/);
   assert.match(html, /Show earlier proposals \(1\)/);
+  assert.match(html, /#draft&lt;1&gt; · now ago/, "the stamp is a relative time, never a raw timestamp");
   assert.doesNotMatch(html, /coach<script>|Push <carefully>|<bad json>/);
 });
 
@@ -170,7 +175,8 @@ test("proposal helper treats an autonomy-scheduled draft as upcoming, not Apply 
     },
     0
   );
-  assert.match(html, /Scheduled for 2026-07-13/);
+  assert.match(html, /Scheduled for Jul 13, 2026/);
+  assert.doesNotMatch(html, /2026-07-13/, "no bare YYYY-MM-DD in athlete-visible copy");
   assert.doesNotMatch(html, /data-apply/);
 });
 
@@ -187,7 +193,8 @@ test("an autonomy-owned draft chip reads the scheduled truth, not a dead DRAFT",
     0
   );
   // Sage-toned scheduled chip (the accepted/applied family), never the draft chip, and no Apply.
-  assert.match(announced, /mp-badge ok">LANDS 2026-07-14/);
+  assert.match(announced, /mp-badge ok">LANDS Jul 14, 2026/);
+  assert.doesNotMatch(announced, /2026-07-14/, "no bare YYYY-MM-DD in athlete-visible copy");
   assert.doesNotMatch(announced, /mp-badge draft/);
   assert.doesNotMatch(announced, /data-apply/);
 

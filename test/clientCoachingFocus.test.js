@@ -132,6 +132,62 @@ test("coaching focus renderer escapes text and preserves conductor structure", (
   assert.doesNotMatch(recoveryThread, /data-cfocus-go="stand"/);
 });
 
+test("one renderer, four variants: each surface keeps its own chrome and density", () => {
+  const { focus } = loadCoachingFocus();
+  assert.equal(typeof focus.coachingFocusHtml, "function", "the shared generator is exported");
+
+  // full — the whole conductor (Program).
+  const full = focus.coachingFocusHtml(richFocus, { variant: "full" });
+  assert.equal(full, focus.coachingFocusCardHtml(richFocus), "the card alias is the full variant");
+  assert.match(full, /class="cfocus settle-in"/);
+  assert.match(full, /Alongside/);
+  assert.match(full, /cfocus-later/);
+  assert.match(full, /cfocus-conn/);
+  assert.match(full, /cfocus-retest/);
+
+  // compact — one voice for the Stand overview: lead only, plus the read-through.
+  const compact = focus.coachingFocusHtml(richFocus, { variant: "compact" });
+  assert.equal(compact, focus.coachingFocusCompactHtml(richFocus), "the compact alias is the compact variant");
+  assert.match(compact, /class="cfocus cfocus-compact settle-in"/);
+  assert.match(compact, /The full focus plan/);
+  assert.doesNotMatch(compact, /Alongside|cfocus-later|cfocus-conn|cfocus-retest/);
+
+  // overview — the Progress well: flat lead, one-line retest, its own link family.
+  const overview = focus.coachingFocusHtml(richFocus, { variant: "overview", style: "--i:3" });
+  assert.match(overview, /class="well-accent tov-focus reveal" style="--i:3"/);
+  assert.match(overview, /tov-focus-title">Break &lt;plateau&gt;/);
+  assert.match(overview, /tov-focus-move">Rotate incline &lt;press&gt;/);
+  assert.match(overview, /Re-test Bench &lt;top set&gt;, 5k in ~2 wk/);
+  assert.match(overview, /data-tovgo="program"/);
+  assert.doesNotMatch(overview, /data-cfocus-go|cfocus-go-arrow/, "the well is not itself a link");
+  // A placeholder lift name or a sub-week horizon is not a sentence — stay quiet.
+  const noRetest = focus.coachingFocusHtml(
+    { ...richFocus, retest: { in_weeks: 0, focus: ["unknown"], why: "" } },
+    { variant: "overview" }
+  );
+  assert.doesNotMatch(noRetest, /Re-test/);
+  // The overview needs a real lead title.
+  assert.equal(focus.coachingFocusHtml({ ...richFocus, lead: { domain: "training", title: "" } }, { variant: "overview" }), "");
+
+  // hero — the DEGRADED read: the one variant that survives available:false.
+  const unavailable = { ...richFocus, available: false };
+  assert.equal(focus.coachingFocusHtml(unavailable, { variant: "compact" }), "");
+  const hero = focus.coachingFocusHtml(unavailable, { variant: "hero" });
+  assert.match(hero, /class="stand-focus reveal"/);
+  assert.match(hero, /stand-focus-k">Where to focus/);
+  assert.match(hero, /<h2 class="stand-focus-h">Build &lt;patiently&gt;<\/h2>/);
+  assert.match(hero, /stand-focus-p">Bench needs a new stimulus/);
+  // An older payload shape put the sentence on lead.line — still preferred.
+  const heroLine = focus.coachingFocusHtml(
+    { ...unavailable, lead: { ...richFocus.lead, line: "Legacy <line>" } },
+    { variant: "hero" }
+  );
+  assert.match(heroLine, /Legacy &lt;line&gt;/);
+  // Nothing to say → nothing drawn.
+  assert.equal(focus.coachingFocusHtml({ available: false, headline: "", lead: null }, { variant: "hero" }), "");
+  assert.equal(focus.coachingFocusHtml(null, { variant: "hero" }), "");
+});
+
 test("coaching focus route bridge preserves deep-link destinations", () => {
   const { focus, state, activated } = loadCoachingFocus();
 

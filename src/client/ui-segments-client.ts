@@ -266,6 +266,13 @@ function createUiSegments(deps: UiSegmentsDeps): UiSegmentsController {
     energy: () => deps.renderEnergy(),
   };
 
+  // "Changes" is the /app/plan/coach route — the background-coaching change record.
+  // It rides the bar as its own segment (last, after the things you edit) so the
+  // screen is reachable from the bar and paints its own active pill instead of
+  // being a dead-end drill-in you could only reach from a deep link. The KEY stays
+  // "coach" so every existing route, jump and deep link is unchanged; the LABEL is
+  // "Changes" because the Coach *tab* is chat, and two "Coach" affordances on one
+  // screen would be the same word for two different places.
   function planSeg(): readonly UiSegmentsSegment[] {
     const routedToEndurance = deps.state.planSeg === "endurance" || deps.state.planJump === "endurance";
     return uiSegmentsShowEnduranceTab() || routedToEndurance
@@ -274,11 +281,13 @@ function createUiSegments(deps: UiSegmentsDeps): UiSegmentsController {
           ["endurance", "Endurance"],
           ["food", "Food"],
           ["meals", "Meals"],
+          ["coach", "Changes"],
         ]
       : [
           ["edit", "Training"],
           ["food", "Food"],
           ["meals", "Meals"],
+          ["coach", "Changes"],
         ];
   }
 

@@ -41,6 +41,10 @@ export type ClientAppState = {
   setSeg?: ClientSettingsSection;
   pendingChatSession?: string | null;
   pendingHealthDocId?: string | null;
+  // The marker domain open behind /app/stand/domain?id=<key>. Set alongside
+  // standSeg="domain" so a reload/deep link reopens the same drill-in, and
+  // cleared whenever Stand steps back to the overview.
+  standDomain?: string | null;
   pendingHealthScroll?: "hbDirectives" | string | null;
   chatPrefill?: string | null;
   capturePrefill?: string | null;

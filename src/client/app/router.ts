@@ -118,6 +118,9 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     } else if (tab === "stand") {
       state.standSeg = routeKey(route.section, options.standSections, null) as ClientStandSection | null;
       if (state.standSeg === "records") state.pendingHealthDocId = route.id || null;
+      // The domain drill-in carries WHICH domain in ?id=. A domain URL with no key
+      // is not an error — Stand falls back to the overview rather than crashing.
+      if (state.standSeg === "domain") state.standDomain = route.id || null;
     } else if (tab === "me") {
       // Match the RAW section for the legacy redirects — "standing"/"health" are
       // no longer Me seg-bar entries, so routeKey would fall back to profile.
@@ -159,6 +162,7 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     } else if (tab === "stand") {
       route.section = routeKey(state.standSeg, options.standSections, null) as AppRoute["section"];
       if (route.section === "records" && state.pendingHealthDocId) route.id = state.pendingHealthDocId;
+      if (route.section === "domain" && state.standDomain) route.id = state.standDomain;
     } else if (tab === "me") {
       route.section = routeKey(state.meSeg, options.meSections, "profile") as AppRoute["section"];
     } else if (tab === "settings") {

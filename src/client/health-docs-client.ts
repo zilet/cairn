@@ -155,7 +155,7 @@ function healthDocInner(doc: HealthDocRow): string {
         : "Analyzed";
 
   const head = `<div class="sess-head${collapsible ? " hdoc-head" : ""}"${collapsible ? ` data-hdoc-toggle role="button" tabindex="0" aria-label="Toggle record detail"` : ""}>
-      <span class="sess-date">${escHtml(healthKindLabel(doc.kind))}${doc.doc_date ? ` · ${escHtml(doc.doc_date)}` : ""}${derived ? `<span class="hdoc-tag">from import</span>` : ""}</span>
+      <span class="sess-date">${escHtml(healthKindLabel(doc.kind))}${doc.doc_date ? ` · <span title="${escAttr(absDate(String(doc.doc_date)))}">${escHtml(relAge(String(doc.doc_date)))}</span>` : ""}${derived ? `<span class="hdoc-tag">from import</span>` : ""}</span>
       <span class="hdoc-headright">
         <span class="hdoc-badge">${analysisBadge}</span>
         ${collapsible ? `<span class="hdoc-chev" aria-hidden="true">▾</span>` : ""}
@@ -176,7 +176,7 @@ function healthDocInner(doc: HealthDocRow): string {
       <div class="hdoc-date-wrap">
         <button class="hdoc-datebtn" data-hdate-edit="${docIdAttr}" title="Change the result date">
           <span class="hdoc-date-ico" aria-hidden="true">✎</span>
-          <span class="hdoc-date-val">${doc.doc_date ? escHtml(doc.doc_date) : "Set date"}</span>
+          <span class="hdoc-date-val">${doc.doc_date ? escHtml(absDate(String(doc.doc_date))) : "Set date"}</span>
         </button>
         <span class="hdoc-date-edit" data-hdate-editor="${docIdAttr}" hidden>
           <input id="hdate-${docIdAttr}" name="health_doc_date_${docIdAttr}" class="hdoc-date" data-hdate="${docIdAttr}" type="date" value="${escAttr(doc.doc_date || "")}" max="${localISO()}" aria-label="Result date">

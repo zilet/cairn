@@ -51,41 +51,182 @@ function cfocusSwapButtonsHtml(item: ClientCoachingFocusItem): string {
   return html;
 }
 
-// options.blockLine=false omits the calendar line — for the Program view, which
-// already owns block truth via its own "Current block · week N of M" card.
-// options.actions=true renders the [data-cfocus-act] buttons — only where they
-// are wired (Program). Every navigate-only surface (the Standing slot) keeps the
-// default, so an action button never renders dead.
-function coachingFocusCardHtml(
-  focus: ClientCoachingFocus | null | undefined,
-  options: { blockLine?: boolean; actions?: boolean } = {}
+// ---------------------------------------------------------------------------
+// ONE "Where to focus" renderer, four display variants.
+//
+// The same /api/coaching-focus payload used to be rendered by four hand-rolled
+// copies (the Program card, the Stand compact conductor, the Stand degraded
+// hero, and the Progress-overview well). They drifted: a payload field added for
+// one surface silently missed the other three. Everything now flows through
+// `coachingFocusHtml(focus, {variant})`; a variant SPEC below says which parts
+// that surface shows and in whose class family, so each surface keeps its own
+// density and Atelier chrome without owning its own copy of the read.
+//
+//   full     — Progress → Program. The whole conductor: lead + actions,
+//              Alongside, Next, connections, the retest card.
+//   compact  — the Stand overview slot. One voice (masthead, headline, calendar
+//              line, THE lead) with the full plan one tap away, so the conductor
+//              and the health synthesis below it never make rival whole-picture
+//              claims on one screen.
+//   overview — Progress → Overview. A `.well-accent` lever: title, why, move,
+//              a one-line retest, and the read-through link.
+//   hero     — Stand's DEGRADED read. The one variant that renders when the
+//              server says the focus is not available: masthead + headline +
+//              one line, so a thin payload still says something calm.
+// ---------------------------------------------------------------------------
+
+type ClientCoachingFocusVariant = "full" | "compact" | "hero" | "overview";
+
+type CoachingFocusRenderOptions = {
+  variant?: ClientCoachingFocusVariant;
+  // `full` only: false omits the block calendar line — the Program view already
+  // owns block truth via its own "Current block · week N of M" card.
+  blockLine?: boolean;
+  // `full` only: render the [data-cfocus-act] buttons. Only Program wires them;
+  // every navigate-only surface keeps the default so a button never renders dead.
+  actions?: boolean;
+  // Inline style for the wrapper (the Progress overview's reveal stagger).
+  style?: string;
+};
+
+type CfocusVariantSpec = {
+  wrap: string;
+  mastClass: string;
+  // The masthead's own element. Block-level where the surface's label is a row
+  // of its own (the Progress-overview well), inline where the class supplies it.
+  mastTag: "span" | "div";
+  headlineClass: string;
+  headlineTag: "p" | "h2";
+  // "option" honours options.blockLine; "domain" gates on the training family
+  // (a lifting calendar under a lab lever would imply the lab work is
+  // block-scoped volume work); "never" omits it.
+  blockLine: "option" | "domain" | "never";
+  // "route" = the navigable lead block with domain tag + arrow;
+  // "flat" = title/why/move with no route chrome (the surface links out itself);
+  // "line" = headline + one line only, no lead block at all.
+  lead: "route" | "flat" | "line";
+  leadWrap: string;
+  leadTitleClass: string;
+  leadWhyClass: string;
+  // "" omits the Move line.
+  moveClass: string;
+  // The lead's title is required for this variant to render at all.
+  requireTitle: boolean;
+  // Renders even when the server says the focus is not available (hero only).
+  allowUnavailable: boolean;
+  parallel: boolean;
+  later: boolean;
+  connections: boolean;
+  retest: "card" | "line" | "never";
+  footer: string;
+};
+
+const CFOCUS_VARIANTS: Record<ClientCoachingFocusVariant, CfocusVariantSpec> = {
+  full: {
+    wrap: "cfocus settle-in",
+    mastClass: "cfocus-mast lbl",
+    mastTag: "span",
+    headlineClass: "cfocus-headline",
+    headlineTag: "p",
+    blockLine: "option",
+    lead: "route",
+    leadWrap: "cfocus-lead",
+    leadTitleClass: "cfocus-lead-title",
+    leadWhyClass: "cfocus-lead-why",
+    moveClass: "cfocus-lead-move",
+    requireTitle: false,
+    allowUnavailable: false,
+    parallel: true,
+    later: true,
+    connections: true,
+    retest: "card",
+    footer: "",
+  },
+  compact: {
+    wrap: "cfocus cfocus-compact settle-in",
+    mastClass: "cfocus-mast lbl",
+    mastTag: "span",
+    headlineClass: "cfocus-headline",
+    headlineTag: "p",
+    blockLine: "domain",
+    lead: "route",
+    leadWrap: "cfocus-lead",
+    leadTitleClass: "cfocus-lead-title",
+    leadWhyClass: "cfocus-lead-why",
+    moveClass: "",
+    requireTitle: false,
+    allowUnavailable: false,
+    parallel: false,
+    later: false,
+    connections: false,
+    retest: "never",
+    footer: `<button class="cfocus-full-link" type="button" data-cfocus-go="program">The full focus plan →</button>`,
+  },
+  overview: {
+    wrap: "well-accent tov-focus reveal",
+    mastClass: "lbl",
+    mastTag: "div",
+    headlineClass: "",
+    headlineTag: "p",
+    blockLine: "never",
+    lead: "flat",
+    leadWrap: "",
+    leadTitleClass: "tov-focus-title",
+    leadWhyClass: "tov-focus-why",
+    moveClass: "tov-focus-move",
+    requireTitle: true,
+    allowUnavailable: false,
+    parallel: false,
+    later: false,
+    connections: false,
+    retest: "line",
+    // The Progress overview wires [data-tovgo] itself (a view-transitioned seg
+    // handler), so this link stays in that family rather than [data-cfocus-go].
+    footer: `<button class="linkbtn linkbtn-sm" type="button" data-tovgo="program">Full program read ›</button>`,
+  },
+  hero: {
+    wrap: "stand-focus reveal",
+    mastClass: "stand-focus-k",
+    mastTag: "span",
+    headlineClass: "stand-focus-h",
+    headlineTag: "h2",
+    blockLine: "never",
+    lead: "line",
+    leadWrap: "",
+    leadTitleClass: "",
+    leadWhyClass: "stand-focus-p",
+    moveClass: "",
+    requireTitle: false,
+    allowUnavailable: true,
+    parallel: false,
+    later: false,
+    connections: false,
+    retest: "never",
+    footer: "",
+  },
+};
+
+function cfocusText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+// The navigable lead block (full/compact). A RUNNING recovery week is a
+// confirmation, not a destination — it renders non-interactive (no route, no
+// arrow); every other lead keeps its route.
+function cfocusRouteLeadHtml(
+  lead: ClientCoachingFocusItem,
+  spec: CfocusVariantSpec,
+  options: CoachingFocusRenderOptions,
+  acts: boolean
 ): string {
-  if (!focus || !focus.available || !focus.lead) return "";
-  const lead = focus.lead;
-  // Lead mode owns the actions server-side (focus.acts === false): the coach applies
-  // bounded changes itself, so the card offers no one-tap swap/draft ask, only state
-  // and a review LINK. Absent → true (the legacy navigate-and-act surfaces).
-  const acts = focus.acts !== false;
-  const parallel = focusItems(focus.parallel);
-  const later = Array.isArray(focus.later) ? focus.later.filter((item) => item && item.title) : [];
-  const connections = Array.isArray(focus.connections) ? focus.connections.filter(Boolean) : [];
-  const retest = focus.retest;
-
-  let html = `<div class="cfocus settle-in">`;
-  html += `<span class="cfocus-mast lbl">Where to focus</span>`;
-  if (focus.headline) html += `<p class="cfocus-headline">${escHtml(focus.headline)}</p>`;
-  if (focus.block_line && options.blockLine !== false)
-    html += `<p class="cfocus-blockline">${escHtml(focus.block_line)}</p>`;
-
-  // A RUNNING recovery week is a confirmation, not a destination — the lead renders
-  // non-interactive (no navigation, no arrow); every other lead keeps its route.
-  const leadConfirm = lead.domain === "recovery" && lead.recovery_active === true;
-  html += leadConfirm
-    ? `<div class="cfocus-lead cfocus-confirm">`
-    : `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
-  html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3>${leadConfirm ? "" : `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`}</div>`;
-  if (lead.why) html += `<p class="cfocus-lead-why">${escHtml(lead.why)}</p>`;
-  if (lead.move) html += `<p class="cfocus-lead-move"><span class="lbl">Move</span>${escHtml(lead.move)}</p>`;
+  const confirm = lead.domain === "recovery" && lead.recovery_active === true;
+  let html = confirm
+    ? `<div class="${spec.leadWrap} cfocus-confirm">`
+    : `<div class="${spec.leadWrap} cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
+  html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="${spec.leadTitleClass}">${escHtml(lead.title || "")}</h3>${confirm ? "" : `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`}</div>`;
+  if (lead.why) html += `<p class="${spec.leadWhyClass}">${escHtml(lead.why)}</p>`;
+  if (spec.moveClass && lead.move)
+    html += `<p class="${spec.moveClass}"><span class="lbl">Move</span>${escHtml(lead.move)}</p>`;
   // Action buttons render ONLY when options.actions — they are wired where the
   // card lives (Program); a navigate-only surface would render them dead. The
   // surrounding lead row still navigates (focusRouteTarget ignores [data-cfocus-act]).
@@ -111,69 +252,134 @@ function coachingFocusCardHtml(
     // coach rotates at the boundary itself, so the server also emits no swap payload.
     if (acts) html += cfocusSwapButtonsHtml(lead);
   }
-  html += `</div>`;
+  return `${html}</div>`;
+}
 
-  if (parallel.length) {
-    html += `<div class="cfocus-along"><span class="cfocus-sec-lbl lbl">Alongside</span>`;
-    for (const item of parallel) {
-      html += `<div class="cfocus-along-row cfocus-go" data-cfocus-go="${escAttr(item.domain || "")}" role="link" tabindex="0">${cfocusDomainTag(item.domain)}`;
-      html += `<span class="cfocus-along-title">${escHtml(item.title || "")}</span>`;
-      html += `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`;
-      if (item.why) html += `<span class="cfocus-along-why">${escHtml(item.why)}</span>`;
-      if (item.move) html += `<span class="cfocus-along-move">${escHtml(item.move)}</span>`;
-      if (options.actions && acts) html += cfocusSwapButtonsHtml(item);
-      html += `</div>`;
-    }
-    html += `</div>`;
-  }
-
-  if (later.length) {
-    html += `<p class="cfocus-later"><span class="cfocus-later-lbl">Next:</span> ${later.map((item) => escHtml(item.title)).join(" · ")}</p>`;
-  }
-
-  for (const connection of connections) {
-    html += `<p class="cfocus-conn">${escHtml(connection)}</p>`;
-  }
-
-  if (retest && Array.isArray(retest.focus) && retest.focus.length) {
-    const when =
-      typeof retest.in_weeks === "number" && retest.in_weeks > 0
-        ? `~${retest.in_weeks} week${retest.in_weeks === 1 ? "" : "s"}`
-        : "due now";
-    html += `<div class="cfocus-retest cfocus-go" data-cfocus-go="program" role="link" tabindex="0"><span class="cfocus-retest-lbl lbl">Next check-in</span>`;
-    html += `<span class="cfocus-retest-body">${escHtml(retest.focus.join(" · "))} <span class="cfocus-retest-when">${escHtml(when)}</span></span>`;
-    if (retest.why) html += `<span class="cfocus-retest-why">${escHtml(retest.why)}</span>`;
-    html += `</div>`;
-  }
-
-  html += `</div>`;
+// The flat lead (the Progress-overview well): the same words with no route
+// chrome, because the well itself is not a link — its footer is.
+function cfocusFlatLeadHtml(lead: ClientCoachingFocusItem, spec: CfocusVariantSpec): string {
+  let html = `<div class="${spec.leadTitleClass}">${escHtml(lead.title || "")}</div>`;
+  if (lead.why) html += `<div class="${spec.leadWhyClass}">${escHtml(lead.why)}</div>`;
+  if (spec.moveClass && lead.move) html += `<div class="${spec.moveClass}">${escHtml(lead.move)}</div>`;
   return html;
 }
 
-// The COMPACT conductor — for surfaces that already carry their own depth (the
-// Stand overview renders the health synthesis right below). One voice: masthead,
-// headline, calendar line, THE lead lever — no parallel/later/connections/retest
-// (those live in the full card on Progress → Program, one tap away), so the
-// conductor and the synthesis never make rival whole-picture claims on one screen.
+function cfocusRetestHtml(focus: ClientCoachingFocus, spec: CfocusVariantSpec): string {
+  const retest = focus.retest;
+  if (spec.retest === "never" || !retest || !Array.isArray(retest.focus) || !retest.focus.length) return "";
+  if (spec.retest === "line") {
+    // The compact one-liner drops a placeholder lift name and only speaks when
+    // the timing is real — "Re-test unknown in ~0 wk" is not a sentence.
+    const names = retest.focus
+      .map((name) => cfocusText(name))
+      .filter((name) => name && name.toLowerCase() !== "unknown");
+    const weeks = Number(retest.in_weeks);
+    if (!names.length || !Number.isFinite(weeks) || weeks < 1) return "";
+    return `<div class="tov-focus-retest">Re-test ${escHtml(names.join(", "))} in ~${Math.round(weeks)} wk</div>`;
+  }
+  const when =
+    typeof retest.in_weeks === "number" && retest.in_weeks > 0
+      ? `~${retest.in_weeks} week${retest.in_weeks === 1 ? "" : "s"}`
+      : "due now";
+  let html = `<div class="cfocus-retest cfocus-go" data-cfocus-go="program" role="link" tabindex="0"><span class="cfocus-retest-lbl lbl">Next check-in</span>`;
+  html += `<span class="cfocus-retest-body">${escHtml(retest.focus.join(" · "))} <span class="cfocus-retest-when">${escHtml(when)}</span></span>`;
+  if (retest.why) html += `<span class="cfocus-retest-why">${escHtml(retest.why)}</span>`;
+  return `${html}</div>`;
+}
+
+function coachingFocusHtml(
+  focus: ClientCoachingFocus | null | undefined,
+  options: CoachingFocusRenderOptions = {}
+): string {
+  const spec = CFOCUS_VARIANTS[options.variant || "full"] || CFOCUS_VARIANTS.full;
+  if (!focus) return "";
+  const lead = focus.lead || null;
+  if (!spec.allowUnavailable && (!focus.available || !lead)) return "";
+  if (spec.requireTitle && !cfocusText(lead?.title)) return "";
+
+  const headline = cfocusText(focus.headline);
+  // The degraded hero speaks the lead's own line (or its why) as the one
+  // sentence; it renders only when it actually has something to say.
+  // `line` is not in the typed contract — it is a tolerated older payload shape the
+  // Stand fallback has always preferred over `why`; read it defensively, not as a field.
+  const heroLine =
+    spec.lead === "line"
+      ? cfocusText((lead as unknown as { line?: unknown } | null)?.line) || cfocusText(lead?.why)
+      : "";
+  if (spec.lead === "line" && !headline && !heroLine) return "";
+
+  // Lead mode owns the actions server-side (focus.acts === false): the coach applies
+  // bounded changes itself, so the card offers no one-tap swap/draft ask, only state
+  // and a review LINK. Absent → true (the legacy navigate-and-act surfaces).
+  const acts = focus.acts !== false;
+  const style = options.style ? ` style="${escAttr(options.style)}"` : "";
+
+  let html = `<div class="${spec.wrap}"${style}>`;
+  html += `<${spec.mastTag} class="${spec.mastClass}">Where to focus</${spec.mastTag}>`;
+  if (headline)
+    html +=
+      spec.headlineTag === "h2"
+        ? `<h2 class="${spec.headlineClass}">${escHtml(headline)}</h2>`
+        : `<p class="${spec.headlineClass}">${escHtml(headline)}</p>`;
+
+  const showBlockLine =
+    spec.blockLine === "option"
+      ? options.blockLine !== false
+      : spec.blockLine === "domain"
+        ? cfocusBlockDomains(lead?.domain)
+        : false;
+  if (focus.block_line && showBlockLine) html += `<p class="cfocus-blockline">${escHtml(focus.block_line)}</p>`;
+
+  if (lead) {
+    if (spec.lead === "route") html += cfocusRouteLeadHtml(lead, spec, options, acts);
+    else if (spec.lead === "flat") html += cfocusFlatLeadHtml(lead, spec);
+  }
+  if (spec.lead === "line" && heroLine) html += `<p class="${spec.leadWhyClass}">${escHtml(heroLine)}</p>`;
+
+  if (spec.parallel) {
+    const parallel = focusItems(focus.parallel);
+    if (parallel.length) {
+      html += `<div class="cfocus-along"><span class="cfocus-sec-lbl lbl">Alongside</span>`;
+      for (const item of parallel) {
+        html += `<div class="cfocus-along-row cfocus-go" data-cfocus-go="${escAttr(item.domain || "")}" role="link" tabindex="0">${cfocusDomainTag(item.domain)}`;
+        html += `<span class="cfocus-along-title">${escHtml(item.title || "")}</span>`;
+        html += `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`;
+        if (item.why) html += `<span class="cfocus-along-why">${escHtml(item.why)}</span>`;
+        if (item.move) html += `<span class="cfocus-along-move">${escHtml(item.move)}</span>`;
+        if (options.actions && acts) html += cfocusSwapButtonsHtml(item);
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+  }
+
+  if (spec.later) {
+    const later = Array.isArray(focus.later) ? focus.later.filter((item) => item && item.title) : [];
+    if (later.length)
+      html += `<p class="cfocus-later"><span class="cfocus-later-lbl">Next:</span> ${later.map((item) => escHtml(item.title)).join(" · ")}</p>`;
+  }
+
+  if (spec.connections) {
+    const connections = Array.isArray(focus.connections) ? focus.connections.filter(Boolean) : [];
+    for (const connection of connections) html += `<p class="cfocus-conn">${escHtml(connection)}</p>`;
+  }
+
+  html += cfocusRetestHtml(focus, spec);
+  html += spec.footer;
+  return `${html}</div>`;
+}
+
+// The named variants stay as thin aliases: every existing call site keeps its
+// shape, and there is still exactly one place the read is built.
+function coachingFocusCardHtml(
+  focus: ClientCoachingFocus | null | undefined,
+  options: { blockLine?: boolean; actions?: boolean } = {}
+): string {
+  return coachingFocusHtml(focus, { ...options, variant: "full" });
+}
+
 function coachingFocusCompactHtml(focus: ClientCoachingFocus | null | undefined): string {
-  if (!focus || !focus.available || !focus.lead) return "";
-  const lead = focus.lead;
-  let html = `<div class="cfocus cfocus-compact settle-in">`;
-  html += `<span class="cfocus-mast lbl">Where to focus</span>`;
-  if (focus.headline) html += `<p class="cfocus-headline">${escHtml(focus.headline)}</p>`;
-  if (focus.block_line && cfocusBlockDomains(lead.domain))
-    html += `<p class="cfocus-blockline">${escHtml(focus.block_line)}</p>`;
-  // A RUNNING recovery week leads as a confirmation, not a route (see the full card).
-  const leadConfirm = lead.domain === "recovery" && lead.recovery_active === true;
-  html += leadConfirm
-    ? `<div class="cfocus-lead cfocus-confirm">`
-    : `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
-  html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3>${leadConfirm ? "" : `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`}</div>`;
-  if (lead.why) html += `<p class="cfocus-lead-why">${escHtml(lead.why)}</p>`;
-  html += `</div>`;
-  html += `<button class="cfocus-full-link" type="button" data-cfocus-go="program">The full focus plan →</button>`;
-  html += `</div>`;
-  return html;
+  return coachingFocusHtml(focus, { variant: "compact" });
 }
 
 async function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void> {
@@ -332,6 +538,7 @@ document.addEventListener("keydown", (event) => {
 const CAIRN_COACHING_FOCUS = {
   CFOCUS_DOMAIN_LABEL,
   cfocusDomainTag,
+  coachingFocusHtml,
   coachingFocusCardHtml,
   coachingFocusCompactHtml,
   loadCoachingFocus,
@@ -343,6 +550,7 @@ Object.assign(globalThis, {
   CairnCoachingFocus: CAIRN_COACHING_FOCUS,
   CFOCUS_DOMAIN_LABEL,
   cfocusDomainTag,
+  coachingFocusHtml,
   coachingFocusCardHtml,
   coachingFocusCompactHtml,
   loadCoachingFocus,
