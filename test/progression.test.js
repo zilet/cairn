@@ -2223,6 +2223,43 @@ test("planDayProgression: a `reduce` that reaches the day pass at goal never shr
   assert.doesNotMatch(String(p.delta_text), /recovery dose/i);
 });
 
+// ATTRIBUTION MUST MATCH THE REASON. A kept vary/introduce at goal used to borrow the
+// PUSH sentence ("pushing is what you asked for") even for a steady athlete who never
+// made that declaration — a card explaining itself by a preference the athlete never
+// expressed. At goal the rotation is kept by the DESTINATION, and says so.
+test("planDayProgression: a steady athlete at goal never hears the rotation blamed on pushing", () => {
+  makeExercise("Leg Press", { muscle_group: "quads" });
+  planWith(1, { exercise: "Leg Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 400, focus: "Legs" });
+  for (const d of [35, 28, 21, 14, 7, 2]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
+  atGoalProfile();
+  repo.setSettings({ training_drive: "steady" });
+  seedPersistentStrain();
+
+  const seededReduce = {
+    ...currentUnderfuelingRead(localDateISO()),
+    action: { kind: "recovery_package", kcal_delta: 250, training: "reduce", line: "seeded" },
+  };
+  const steady = planDayProgression(1, { forNextSession: true, fuelRead: seededReduce }).find(
+    (row) => row.exercise === "Leg Press"
+  );
+  assert.equal(steady.action, "vary", "at the destination the rotation still stands");
+  assert.equal(steady.suggested.sets, 3, "and keeps its full set count");
+  assert.equal(steady.top_set, undefined, "only the near-maximal single waits");
+  assert.doesNotMatch(steady.why, /asked to (keep pushing|push)|pushing is what you asked/i,
+    "a steady athlete is never told the card reflects a push they never declared");
+  assert.match(steady.why, /where you were (heading|going)/i, "the destination is the reason, and says so");
+  assert.equal(violatesReadingGrammar(steady.why), null);
+
+  // …and the push athlete still hears their own declaration named.
+  repo.setSettings({ training_drive: "push" });
+  const pushed = planDayProgression(1, { forNextSession: true, fuelRead: seededReduce }).find(
+    (row) => row.exercise === "Leg Press"
+  );
+  assert.equal(pushed.action, "vary");
+  assert.match(pushed.why, /push/i, "the athlete who did declare it hears it");
+  assert.equal(violatesReadingGrammar(pushed.why), null);
+});
+
 // AWAY from the destination nothing changed: a steady-drive athlete 15 lb out still
 // takes the reduced dose, load and volume both.
 test("planDayProgression: far from goal a reduce still takes the recovery dose", () => {

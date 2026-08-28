@@ -371,6 +371,28 @@ export function mergeExercises(
     // anchor-lift journey follows the survivor instead of losing its exact-lift anchor.
     const intoKey = normalizedExerciseKey(into.name);
     const fromKey = normalizedExerciseKey(from.name);
+    // Schema v98 holds ONE active objective per exercise_key. Merging two lifts that
+    // BOTH carry a live anchor would land two active rows on the survivor's key and
+    // throw UNIQUE mid-merge, 500-ing a merge that is otherwise perfectly legal. So
+    // supersede first, mirroring setStrengthObjective's per-lift semantics: the NEWEST
+    // active anchor across the two lifts survives, the rest become 'superseded'
+    // history (never deleted, never rewritten).
+    const contendingActive = db
+      .prepare(
+        `SELECT id FROM strength_objectives
+          WHERE status = 'active' AND (exercise_key = ? OR exercise_key = ? OR exercise = ? COLLATE NOCASE)
+          ORDER BY id DESC`
+      )
+      .all(fromKey, intoKey, from.name) as Array<{ id: number }>;
+    if (contendingActive.length > 1) {
+      for (const row of contendingActive.slice(1)) {
+        db.prepare(
+          `UPDATE strength_objectives
+              SET status = 'superseded', superseded_at = datetime('now'), updated_at = datetime('now')
+            WHERE id = ?`
+        ).run(Number(row.id));
+      }
+    }
     const objectives = Number(
       db
         .prepare("UPDATE strength_objectives SET exercise = ?, exercise_key = ? WHERE exercise_key = ? OR exercise = ? COLLATE NOCASE")

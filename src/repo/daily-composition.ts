@@ -499,17 +499,49 @@ function safeEasySessionText(value: string | null, fallback: string): string {
 const LEG_DRIVEN_CARDIO =
   /\b(?:run|running|jog|jogging|ride|riding|bike|biking|cycle|cycling|spin|row|rowing|erg|hike|hiking|stair|stairs|elliptical|treadmill)\b/i;
 
-const RUN_HELD_NOTE: readonly string[] = [
+// The hold fires for two DIFFERENT reasons and the words have to match which one
+// applied. `longest_run_yesterday` / `hard_endurance_yesterday` are endurance
+// evidence — yesterday's RUN is the thing in the legs, and saying so is true. But
+// `legs_saturated` alone is the muscle model talking: it can be saturated purely by
+// a heavy squat day with no running anywhere in the week, and telling that athlete
+// "yesterday's running is still in your legs" is a sentence outrunning its evidence.
+// So the note is chosen from the envelope's OWN `endurance_hold.reasons` — never
+// re-derived here — and the lifting-only set names leg work without claiming a run.
+const RUN_HELD_NOTE_ENDURANCE: readonly string[] = [
   "Yesterday's running is still in your legs — keep today's movement off them",
-  "Your legs are still carrying yesterday's effort, so this stays a walk today",
-  "Today's easy movement stays off the legs while yesterday settles",
-  "Walking rather than running today — yesterday's work is still there",
+  "Your legs are still carrying yesterday's run, so this stays a walk today",
+  "Today's easy movement stays off the legs while yesterday's running settles",
+  "Walking rather than running today — yesterday's endurance work is still there",
 ];
 
-function holdLegDrivenCardio(item: any, envelope: DailyDecisionEnvelope): boolean {
-  if (envelope.endurance_hold?.no_run !== true) return false;
+const RUN_HELD_NOTE_LEGS: readonly string[] = [
+  "Your legs are still carrying yesterday's work — walking today instead of running",
+  "Recent leg work is still settling, so today's movement stays a walk",
+  "Keeping today off the legs while the last leg session clears",
+  "Walking rather than running — your legs have had enough load lately",
+];
+
+// Which reasons make the running language TRUE. Anything else (today: legs_saturated)
+// falls through to the leg-work wording.
+const ENDURANCE_HOLD_RUN_REASONS: ReadonlySet<string> = new Set([
+  "longest_run_yesterday",
+  "hard_endurance_yesterday",
+]);
+
+function runHeldNote(envelope: DailyDecisionEnvelope): string {
+  const reasons = envelope.endurance_hold?.reasons ?? [];
+  const enduranceCaused = reasons.some((r) => ENDURANCE_HOLD_RUN_REASONS.has(String(r)));
+  return enduranceCaused
+    ? pickDayVariant(RUN_HELD_NOTE_ENDURANCE, envelope.date, "daily_composition:run_held:endurance")
+    : pickDayVariant(RUN_HELD_NOTE_LEGS, envelope.date, "daily_composition:run_held:legs");
+}
+
+// Returns whether the hold APPLIED (so the easy clamp downstream knows not to
+// overwrite the note it just wrote) alongside whether anything changed.
+function holdLegDrivenCardio(item: any, envelope: DailyDecisionEnvelope): { held: boolean; changed: boolean } {
+  if (envelope.endurance_hold?.no_run !== true) return { held: false, changed: false };
   const label = String(item?.exercise ?? "");
-  if (!LEG_DRIVEN_CARDIO.test(label)) return false;
+  if (!LEG_DRIVEN_CARDIO.test(label)) return { held: false, changed: false };
   let changed = false;
   if (item.exercise !== "Easy walk") {
     item.exercise = "Easy walk";
@@ -528,15 +560,23 @@ function holdLegDrivenCardio(item: any, envelope: DailyDecisionEnvelope): boolea
     item.target_distance_km = null;
     changed = true;
   }
-  const note = pickDayVariant(RUN_HELD_NOTE, envelope.date, "daily_composition:run_held");
+  const note = runHeldNote(envelope);
   if (item.note !== note) {
     item.note = note;
     changed = true;
   }
-  return changed;
+  return { held: true, changed };
 }
 
-function clampCardioItem(item: any, envelope: DailyDecisionEnvelope, forceEasy: boolean): boolean {
+function clampCardioItem(
+  item: any,
+  envelope: DailyDecisionEnvelope,
+  forceEasy: boolean,
+  // The endurance hold already wrote the note that explains WHY this is a walk.
+  // The generic easy-clamp note below is the weaker sentence of the two, and it was
+  // silently replacing it on every quiet day (which is every day the hold can fire).
+  preserveNote = false
+): boolean {
   let changed = false;
   const durationCap = envelope.caps.duration_min;
   const requestedDuration = finite(item.target_duration_min);
@@ -578,7 +618,7 @@ function clampCardioItem(item: any, envelope: DailyDecisionEnvelope, forceEasy: 
       changed = true;
     }
     const note = "Easy conversational effort; no intervals today";
-    if (item.note !== note) {
+    if (!preserveNote && item.note !== note) {
       item.note = note;
       changed = true;
     }
@@ -778,8 +818,9 @@ export function normalizeComposedSession(
       if (applyRecoveryCycleTarget(next, envelope)) changed = true;
       // Before the easy clamp, not after: the clamp renames by MODALITY
       // (easyCardioName), so a run reaching it first is only ever an "Easy run".
-      if (holdLegDrivenCardio(next, envelope)) changed = true;
-      if (clampCardioItem(next, envelope, forceEasyCardio)) changed = true;
+      const hold = holdLegDrivenCardio(next, envelope);
+      if (hold.changed) changed = true;
+      if (clampCardioItem(next, envelope, forceEasyCardio, hold.held)) changed = true;
       Object.assign(next, trustedCandidateMetadata(candidate));
       if (forceEasyCardio) hasEasyCardio = true;
       capped.push(next);

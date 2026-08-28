@@ -599,6 +599,24 @@ export function recentCardioLoadMedian(asOf: string, days = 42): number | null {
 }
 
 export function hardCardioDay(date: string, loadMedian?: number | null): boolean {
+  return hardCardioDayCore(date, loadMedian, false);
+}
+
+// The same question asked with bar (d) — the duration bar — removed: did the day's
+// cardio grade hard on INTENSITY EVIDENCE (a-c) alone? A routine 45-minute easy Z2
+// jog clears (d) on duration and nothing else, which is correct for the callers that
+// ask "was yesterday a loading day" (streaks, corroboration — an easy run still costs
+// something), and wrong for the one caller that asks "did this day HARM them":
+// grading every ordinary run as harm would mean the override-softening ladders never
+// activate for a regular runner. `hardCardioDay` itself is deliberately unchanged —
+// only `harmEvidenceOnDay` (src/repo/brain/read-adherence.ts) takes this stricter
+// reading, and the next-morning physiology arm there still catches an easy-LOOKING
+// run the body disagreed with.
+export function hardCardioDayIntense(date: string, loadMedian?: number | null): boolean {
+  return hardCardioDayCore(date, loadMedian, true);
+}
+
+function hardCardioDayCore(date: string, loadMedian: number | null | undefined, intensityOnly: boolean): boolean {
   let rows: any[] = [];
   try {
     rows = db
@@ -631,6 +649,7 @@ export function hardCardioDay(date: string, loadMedian?: number | null): boolean
     if (z4 >= HARD_CARDIO_Z4_SEC) return true;
     const load = r.load != null ? Number(r.load) : null;
     if (load != null && median != null && median > 0 && load >= median * HARD_CARDIO_LOAD_MULT) return true;
+    if (intensityOnly) continue;
     // (d) SPORT-AWARE duration bar: a run/ride/swim/row loads at ≥ 40 min; a walk/hike
     // or unknown "other" type needs a much longer effort (~90 min) so an easy hike of
     // ~40 min never grades as a loading day. Distance is deliberately not a trigger.

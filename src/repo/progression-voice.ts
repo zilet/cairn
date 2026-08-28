@@ -450,8 +450,10 @@ export const PUSH_FUEL_VARIETY_KEEP: VoiceSet = [
 // Every item the fuel read actually changes now carries a whole fuel sentence of
 // its own: FUEL_HOLD_STEP when the step is held, LOG_EARNED_FUEL_PARK when the
 // log earned a step that stands (no single mentioned), LOG_EARNED_FUEL_PARK_SINGLE
-// when a top set actually came off, PUSH_FUEL_VARIETY_KEEP when a rotation/introduce
-// stands and only the single waits, AT_GOAL_FUEL_KEEP_VOLUME when the athlete is at
+// when a top set actually came off, PUSH_FUEL_VARIETY_KEEP when a PUSH athlete's
+// rotation/introduce stands and only the single waits, AT_GOAL_FUEL_VARIETY_KEEP for
+// that same kept rotation when the athlete never asked to push and is simply at their
+// goal, AT_GOAL_FUEL_KEEP_VOLUME when the athlete is at
 // their goal weight and the plan keeps its full shape, FUEL_DELOAD_CLAUSE on work
 // already going down, FUEL_RECOVERY_DOSE when the read cuts the session itself.
 
@@ -463,6 +465,18 @@ export const AT_GOAL_FUEL_KEEP_VOLUME: VoiceSet = [
   "You're at the weight you were heading for, so the session keeps its full shape — hold this load and leave the heavy single for another day.",
   "This close to where you were going, the work stays as written; hold the load, and let the near-maximal single wait while fueling catches up.",
   "No sets come off this close to where you were heading. Hold the load, skip the heavy top set, and let food do the catching up.",
+];
+
+// The same kept rotation as PUSH_FUEL_VARIETY_KEEP, but for an athlete who never
+// asked to be pushed — they are simply AT the weight they were heading for, and at
+// the destination a protective fuel read holds the near-maximal single rather than
+// the session. Attributing that to a push preference (the old fallback) put words in
+// the athlete's mouth: it named a declaration they never made as the reason their
+// card looks the way it does.
+export const AT_GOAL_FUEL_VARIETY_KEEP: VoiceSet = [
+  "You're at the weight you were heading for, so this rotation still happens — leave the near-maximal single for a day your fueling is further along.",
+  "This close to where you were going, the fresh movement stays in; only the heavy single waits while fueling catches up.",
+  "No work comes off this close to where you were heading — keep the variation, and let the near-maximal top set wait.",
 ];
 
 export const FUEL_DELOAD_CLAUSE: VoiceSet = [
@@ -704,6 +718,7 @@ export function progressionVoicePhrases(): string[] {
     FUEL_DELOAD_CLAUSE,
     FUEL_RECOVERY_DOSE,
     AT_GOAL_FUEL_KEEP_VOLUME,
+    AT_GOAL_FUEL_VARIETY_KEEP,
     ACCUMULATION_OVERLOAD,
     INTENSIFICATION_OVERLOAD,
     PHASE_DELOAD_HOLD,

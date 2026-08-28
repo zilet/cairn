@@ -9,7 +9,6 @@ import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import type { UnderfuelingRead } from "./underfueling.js";
 import {
   classifyRecompositionStage,
-  isNearGoal,
   type RecompositionStageKind,
 } from "./recomposition-stage.js";
 
@@ -91,25 +90,11 @@ function remainingToGoalLb(current: number | null, goal: number | null): number 
   return goal < current ? round1(current - goal) : 0;
 }
 
-// Close enough to the destination that a soft/reduce fuel hold no longer vetoes
-// a promotion the log already earned. Sliding cut pressure still does; fast_loss
-// does not. Pure remaining math lives in `isNearGoal`; this is the date-aware
-// reader. Only a live lose-mode cut can be "near" — a gain/maintain athlete, a
-// missing weight/goal, or a goal already at/past current must never read as
-// near (0 remaining is at-destination display math, not a near-goal lever).
-export function nearGoal(date = localDateISO()): boolean {
-  try {
-    const profile = getProfile() as any;
-    if (effectiveGoalMode(profile) !== "lose") return false;
-    const currentResolved = resolvedCurrentBodyweight(profile, date);
-    const current = finite(currentResolved?.weight_lb ?? profile?.weight_lb);
-    const goal = finite(profile?.goal_weight_lb);
-    if (current == null || goal == null || goal >= current) return false;
-    return isNearGoal(remainingToGoalLb(current, goal));
-  } catch {
-    return false;
-  }
-}
+// NOTE: the date-aware "is the athlete at the destination?" reader is
+// `atOrNearGoal()` in goal-proximity.ts — the ONE answer to that question. A second
+// reader (`nearGoal`) used to live here answering false once the goal was reached;
+// having two answers to one question is how a caller silently picked the wrong one.
+// Pure remaining math is still `isNearGoal`, re-exported above.
 
 function activePhaseFallback(): PhaseLike {
   try {

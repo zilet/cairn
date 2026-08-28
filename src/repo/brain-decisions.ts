@@ -376,6 +376,11 @@ export function hasRecentDecisionVeto(kind: string, days = 5): boolean {
  * are correctly invisible here. Returns the day the hold was recorded
  * (`context.held_by_user_on`, falling back to the decision's own creation date for
  * rows written before that stamp existed), or null.
+ *
+ * Ordered by the REFUSAL date, not by `created_at`: a decision is created when the
+ * change is proposed and held whenever the athlete gets to it, so an older proposal
+ * refused today outranks a newer one refused last week. Ordering by the proposal
+ * date returned the stale refusal and aged the athlete's most recent "no" out early.
  */
 export function latestUserVetoAt(kind: string, domain?: string): string | null {
   const key = String(kind || "").trim();
@@ -390,7 +395,8 @@ export function latestUserVetoAt(kind: string, domain?: string): string | null {
             AND (? = '' OR domain = ?)
             AND status = 'canceled'
             AND json_extract(context_json, '$.held_by_user') = 1
-          ORDER BY created_at DESC, id DESC
+          ORDER BY COALESCE(json_extract(context_json, '$.held_by_user_on'), date(created_at)) DESC,
+                   created_at DESC, id DESC
           LIMIT 1`
       )
       .get(key, scope, scope) as { refused_on?: string } | undefined;

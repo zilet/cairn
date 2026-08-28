@@ -1,3 +1,4 @@
+import { db } from "../db.js";
 import { addInsight, isDuplicateInsight, listDirectives } from "./coach.js";
 import {
   type InsightEvidenceEpoch,
@@ -382,16 +383,49 @@ export function healthOutcomeEvents(limit = 60): HealthOutcomeEvent[] {
   return out;
 }
 
+// When the app LEARNED about one outcome event: the created_at of the ledger row
+// recordHealthOutcomeEvents wrote for it (same source_ref_key, so it is that event's
+// own row). Best effort — no row yet (the first pass, or a pure/test path) reads null.
+function outcomeLearnedAt(annotation: HealthOutcomeAnnotation): string | null {
+  try {
+    const row = db
+      .prepare(
+        `SELECT created_at FROM brain_decisions
+          WHERE source = 'health_outcome' AND source_ref_key = ? ORDER BY id LIMIT 1`
+      )
+      .get(eventSourceRef(annotation)) as { created_at?: string } | undefined;
+    const at = String(row?.created_at ?? "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(at) ? at : null;
+  } catch {
+    return null;
+  }
+}
+
 // The bridge into the insight layer's territorial dedupe: one dated epoch per FACET,
-// carrying the newest event draw date on it. `at` is the follow-up reading's own date,
-// never "now" — an insight said after that draw already knew about it and stays deduped.
-export function healthOutcomeEvidenceEpochs(limit = 60): InsightEvidenceEpoch[] {
+// carrying the newest event on it.
+//
+// `at` is NOT simply the draw date. A panel is dated when the blood was drawn but the
+// app knows nothing about it until the PDF is ingested, routinely days later — so an
+// insight written in that gap (drawn 08-24, said 08-26, uploaded 08-28) would read as
+// "said after the evidence" and stay suppressed, which is exactly the silence this
+// feature exists to break. Each epoch is therefore dated by the LATER of the draw and
+// the moment the observation was recorded. With no ledger row to read (the first pass,
+// or a caller outside the DB path) it falls back to `learnedAt` if the caller threaded
+// one, and otherwise to the draw date — never to "now".
+export function healthOutcomeEvidenceEpochs(
+  limit = 60,
+  opts: { learnedAt?: string | null } = {}
+): InsightEvidenceEpoch[] {
+  const suppliedLearnedAt = String(opts.learnedAt ?? "").slice(0, 10);
+  const fallbackLearnedAt = /^\d{4}-\d{2}-\d{2}$/.test(suppliedLearnedAt) ? suppliedLearnedAt : null;
   const latest = new Map<string, string>();
   for (const { annotation } of healthOutcomeEvents(limit)) {
     const facet = insightFacetForSurface(annotation.marker)?.facet;
     if (!facet) continue;
-    const at = String(annotation.follow_up.date).slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(at)) continue;
+    const drawn = String(annotation.follow_up.date).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(drawn)) continue;
+    const learned = outcomeLearnedAt(annotation) ?? fallbackLearnedAt;
+    const at = learned && learned > drawn ? learned : drawn;
     const seen = latest.get(facet);
     if (!seen || at > seen) latest.set(facet, at);
   }

@@ -4,6 +4,80 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-28 — the Elite Coach Round: the body's answer counts, and the athlete's word holds
+
+Schema 98 (`strength-objectives-one-active-per-lift`, index swap only — no data touched); sw `CACHE`
+unchanged (no `public/` diff). Four packages built in parallel worktrees off the 2026-08-28 live
+diagnosis: the morning after the athlete's longest-ever run (9.85 km, 51/59 min in Z4, readiness
+1/100 the next morning) the Brief suggested another run, the fuel loop was halving the plan 1.2 lb
+from goal, a declined recovery week re-announced itself, chat's "I'll flag it to your coach lane"
+wrote nothing, and a worse lipid panel landed silently.
+
+**Harm includes the body's response** (`harmEvidenceOnDay`, `src/repo/brain/read-adherence.ts`).
+`trainedWithoutHarm` — the predicate both override-softening ladders stand on — used to read only
+`sessions.performance`, so a run-only day (no session row) was unrated and unrated read as fine.
+It now also fails on the day's cardio grading hard (`hardCardioDay`), the longest run in ninety
+days (`longestRunNovelty`, `training-read.ts`, one exported source of truth: ≥ trailing-90d max,
+0.25 km tolerance, ≥3 prior runs), or the NEXT morning answering badly — fresh rest-grade
+readiness, Garmin's own low/poor HRV status, or resting HR ≥ its 7-day average + 5. Every arm
+gates through `sensorIsCurrent`; silence about a lifted session is still not harm.
+
+**A rest-grade reading is rest** (`src/repo/readiness-bands.ts`: `LOW_READINESS` 35 — the existing
+band, now named — and `REST_GRADE_READINESS` 20, inclusive). A fresh ≤20 reading gets its own
+`rest_grade_readiness` REST rule directly above the protect rule (which had been folding readiness
+1 into an *easy* day), in `SOFTENABLE_REST_CODES` so the outcome ladder may ease it — to easy
+movement only; `outcome_feedback_soften` is excluded from `SOFTENABLE_EASY_CODES`, so it can never
+chain to train.
+
+**Runs don't stack by default.** The easy→train softening refuses to open a cardio-only plan day
+(`planDayIsCardioOnly`) when yesterday was hard cardio or a new-longest run; the decision snapshot
+gains omit-when-idle `longest_run_yesterday`, the envelope an `endurance_hold` (fires on quiet
+days when yesterday was a first/hard endurance day or a run-prime group is saturated per the
+existing acute residual); composition's `holdLegDrivenCardio` runs BEFORE `clampCardioItem` and
+turns leg-driven cardio into an easy walk while strength items stand. `daily_decision_v7`'s caveat
+law is intact — a new-longest run now merely CORROBORATES the stacked-days rest as a fact about
+the last 24 hours; hard cardio alone deliberately does not (it already counts toward the streak).
+
+**At the goal the answer is food** (`src/repo/goal-proximity.ts` `atOrNearGoal` = `nearGoal` plus
+the goal-already-reached case that helper excludes; leaf, fail-soft false). Under fuel `reduce`
+at/near goal `applyFuelProtection` keeps full sets AND load for earned steps and holds (top set
+parks; the −10%/half-sets recovery-dose branch cannot fire); `drive=push` keeps an earned step's
+full volume under `reduce` everywhere; `persistent_strain` at/near goal maps to `hold_aggression`
+at most, never `reduce` (`underfueling.ts`). The nightly ask churn's root cause: the read's
+`signature` hashes the intake window's `through` date and drifts daily, so the supersede matcher
+never recognized yesterday's draft as the same ask — `underfueling-service.ts` now reuses a
+standing protective-fuel draft unless step size, direction, or basis class changed, refreshing
+evidence in place. `src/repo/protective-fuel-draft.ts` names the one ask shape (SQL + TS twin
+predicates) so `listAttentionReviewHeldProposals` and `planDraftCandidate` both admit it in lead
+mode without opening the `requested_review` gate. A user-held recovery week stamps
+`held_by_user_on`; `recovery-refusal.ts` blocks re-announcement for the block unless a genuinely
+NEW safety-grade signal (symptom re-report, new directive, energy/sleep ≤2 check-in, soreness ≥4
+or joint pain, injury/illness context event) post-dates the refusal.
+
+**Six anchors in parallel** (migration v98). The `strength_objectives` partial unique index was on
+`(status)` — literally one active objective in the whole DB. It becomes one active PER
+`exercise_key`; supersede and the ledger's `currentTrackedObjective` are per-lift (the old query
+would have stopped closing five of six objectives); journeys carry `active_objectives`; mirrored
+GET/POST `/api/strength-objectives`, `/api/strength-journeys`, `get_strength_journeys` /
+`list_strength_objectives` MCP tools. Chat gains `flag_training_structure`: an ask-tier
+`training_structure` decision carrying the athlete's verbatim sentence as rationale, applied
+never; `reconcileTrainingStructureReply` replaces a hand-off claim that didn't land.
+
+**A worse panel is an event** (`health-outcomes.ts`). Worsening — or unchanged past the marker's
+own validity-class horizon — records a clinical-lane brain observation on every completed health
+ingest (draw-dated, fingerprint-idempotent). Correction to the round's own diagnosis: the diff
+reconcile DID absorb a worse number, but invisibly (same row id, same card) — so
+`resurfaceWorseningDirectives` (`propagation.ts`) soft-resolves the old row (machine resolve,
+`status_at` NULL) and inserts a fresh one carrying `resurfaced_from_id`, requiring a STRICTLY
+newer draw date for idempotence. `insight-intent.ts` evidence epochs reopen a 90-day-deduped key
+when an outcome post-dates it (thumbs-down stays sticky). `next-checkup.ts` warranted add-ons
+(ApoB/Lp(a)/hs-CRP off a lipid flag, plus hba1c/insulin/ferritin/vit-D/UACR mappings) sort first
+and raise the tile. `enrich.ts`: the review latch only collapsed refreshes pending simultaneously
+while the upload queue drains SERIALLY — one zip became fourteen agent reviews; now the batch's
+last document enqueues the one whole-picture review, and a failing job still asks.
+
+---
+
 ## 2026-08-26 — the Evidence Round: work done outranks the calendar and the feeling
 
 Schema 97 (`outcome-comparability-repair`, pure data repair — no `db.ts` counterpart); sw `CACHE`

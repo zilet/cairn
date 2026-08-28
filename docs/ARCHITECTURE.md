@@ -186,11 +186,13 @@ under-prescribed — always vetoes), and `fast_loss` (losing faster than lean-sa
 never vetoes an earned load step, it only parks the challenge top set / heavy single, since the peak
 protocol already goes cautious under any cut pressure). `deep` (`sliding || fast_loss`) and `any`
 survive as the existing "the athlete is training in a genuine deficit" aliases other readers still
-consult. `nearGoal(date)` (`recomposition.ts`, `NEAR_GOAL_REMAINING_LB` = 2.5 lb) reads true only on a
-live lose-mode cut within that remaining distance to `goal_weight_lb` — a gain/maintain athlete, a
-missing weight/goal, or a goal already at/past current never reads near. `applyFuelProtection`'s
-`reduce` branch, near goal, keeps the load the log just earned and only halves the set count (and
-parks a near-maximal single) instead of the ordinary volume-and-load reduction; the promotion-veto
+consult. `atOrNearGoal(date)` (`goal-proximity.ts`, `NEAR_GOAL_REMAINING_LB` = 2.5 lb,
+`STALE_GOAL_OVERSHOOT_LB` = 5 lb) reads true only on a live lose-mode goal within that remaining
+distance to `goal_weight_lb` INCLUDING a goal already reached, bounded below — more than 5 lb past
+an unrevised goal is a stale goal, not a reached one; a gain/maintain athlete or a missing
+weight/goal never reads near. `applyFuelProtection`'s `reduce` branch, at/near goal, keeps the full
+prescribed sets AND load for earned steps and holds and only parks the near-maximal single —
+underfueling at the destination is answered with food, never a smaller session; the promotion-veto
 question and the volume-reduction question are answered separately, so a near-goal athlete still gets
 the calorie cut's volume consequence, just not its promotion veto. `underfueling.ts`'s
 `action.training:'hold_aggression'` itself now only fires when the strain is decision-grade — the

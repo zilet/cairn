@@ -560,9 +560,11 @@ function exactLiftState(exercise: string, programState: ProgramState): LiftState
 }
 
 export function getStrengthJourney(
-  opts: { programState?: ProgramState; exercise?: string | null } = {}
+  opts: { programState?: ProgramState; exercise?: string | null; activeObjectives?: StrengthObjective[] } = {}
 ): StrengthJourney {
-  const activeObjectives = listActiveStrengthObjectives();
+  // The active set is identical for every journey in one read, so getStrengthJourneys()
+  // threads its single query through here exactly as it threads the program state.
+  const activeObjectives = opts.activeObjectives ?? listActiveStrengthObjectives();
   const objective = currentJourneyObjective(opts.exercise ?? null);
   if (!objective) {
     return {
@@ -750,13 +752,16 @@ export function getStrengthJourney(
  * One journey per ACTIVE anchor, newest anchor first — the parallel read for an athlete
  * rebuilding several lifts at once. Falls back to the single (possibly completed)
  * journey when nothing is active, so a surface can render this list unconditionally.
- * The shared program state is computed once and threaded into every journey.
+ * The shared program state AND the active-objective read are computed once and threaded
+ * into every journey.
  */
 export function getStrengthJourneys(opts: { programState?: ProgramState } = {}): StrengthJourney[] {
   const active = listActiveStrengthObjectives();
-  if (!active.length) return [getStrengthJourney(opts)];
+  if (!active.length) return [getStrengthJourney({ ...opts, activeObjectives: active })];
   const programState = opts.programState ?? getProgramState();
-  return active.map((objective) => getStrengthJourney({ programState, exercise: objective.exercise }));
+  return active.map((objective) =>
+    getStrengthJourney({ programState, exercise: objective.exercise, activeObjectives: active })
+  );
 }
 
 // ---- anchor-lift activation -------------------------------------------------

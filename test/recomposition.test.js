@@ -1,6 +1,7 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, localDaysAgo, repo, resetTables, seedIntake, seedWeight } from "./_seed.js";
+import { STALE_GOAL_OVERSHOOT_LB, atOrNearGoal } from "../dist/repo/goal-proximity.js";
 
 beforeEach(() => {
   resetTables(
@@ -129,8 +130,8 @@ test("a first low target is not mistaken for a recent increase and does not bloc
   assert.notEqual(read.action.kind, "settling");
 });
 
-test("isNearGoal and nearGoal mark the last 2.5 lb, not the whole leaning-out stretch", () => {
-  const { isNearGoal, NEAR_GOAL_REMAINING_LB, nearGoal } = repo;
+test("isNearGoal and atOrNearGoal mark the last 2.5 lb, not the whole leaning-out stretch", () => {
+  const { isNearGoal, NEAR_GOAL_REMAINING_LB } = repo;
   assert.equal(NEAR_GOAL_REMAINING_LB, 2.5);
   assert.equal(isNearGoal(0), true);
   assert.equal(isNearGoal(1.2), true);
@@ -151,7 +152,7 @@ test("isNearGoal and nearGoal mark the last 2.5 lb, not the whole leaning-out st
     goal_mode: "lose",
     goal_weight_lb: 180,
   });
-  assert.equal(nearGoal(localDaysAgo(0)), true, "1.2 lb remaining is near the destination");
+  assert.equal(atOrNearGoal(localDaysAgo(0)), true, "1.2 lb remaining is near the destination");
 
   repo.setProfile({
     age: 40,
@@ -164,7 +165,7 @@ test("isNearGoal and nearGoal mark the last 2.5 lb, not the whole leaning-out st
     goal_mode: "lose",
     goal_weight_lb: 180,
   });
-  assert.equal(nearGoal(localDaysAgo(0)), false, "8 lb remaining is leaning out, not near goal");
+  assert.equal(atOrNearGoal(localDaysAgo(0)), false, "8 lb remaining is leaning out, not near goal");
 
   repo.setProfile({
     age: 40,
@@ -177,7 +178,7 @@ test("isNearGoal and nearGoal mark the last 2.5 lb, not the whole leaning-out st
     goal_mode: "gain",
     goal_weight_lb: 200,
   });
-  assert.equal(nearGoal(localDaysAgo(0)), false, "a gain goal +20 lb is never near-goal");
+  assert.equal(atOrNearGoal(localDaysAgo(0)), false, "a gain goal +20 lb is never near-goal");
 
   repo.setProfile({
     age: 40,
@@ -190,7 +191,7 @@ test("isNearGoal and nearGoal mark the last 2.5 lb, not the whole leaning-out st
     goal_mode: "maintain",
     goal_weight_lb: 180,
   });
-  assert.equal(nearGoal(localDaysAgo(0)), false, "maintain is never near-goal");
+  assert.equal(atOrNearGoal(localDaysAgo(0)), false, "maintain is never near-goal");
 
   repo.setProfile({
     age: 40,
@@ -203,7 +204,7 @@ test("isNearGoal and nearGoal mark the last 2.5 lb, not the whole leaning-out st
     goal_mode: "lose",
     goal_weight_lb: 180,
   });
-  assert.equal(nearGoal(localDaysAgo(0)), true, "lose with remaining 1.2 is near the destination");
+  assert.equal(atOrNearGoal(localDaysAgo(0)), true, "lose with remaining 1.2 is near the destination");
 
   repo.setProfile({
     age: 40,
@@ -216,7 +217,7 @@ test("isNearGoal and nearGoal mark the last 2.5 lb, not the whole leaning-out st
     goal_mode: "lose",
     goal_weight_lb: 180,
   });
-  assert.equal(nearGoal(localDaysAgo(0)), false, "lose with remaining 3 is not near goal");
+  assert.equal(atOrNearGoal(localDaysAgo(0)), false, "lose with remaining 3 is not near goal");
 
   repo.setProfile({
     age: 40,
@@ -229,7 +230,41 @@ test("isNearGoal and nearGoal mark the last 2.5 lb, not the whole leaning-out st
     goal_mode: "lose",
     goal_weight_lb: null,
   });
-  assert.equal(nearGoal(localDaysAgo(0)), false, "a missing goal is never 0-as-near");
+  // setProfile MERGES, so a null goal in the payload leaves the stored one standing —
+  // clear it at the table to test the genuinely goal-less profile.
+  db.prepare(`UPDATE profile SET goal_weight_lb = NULL`).run();
+  assert.equal(atOrNearGoal(localDaysAgo(0)), false, "a missing goal is never 0-as-near");
+
+  // The goal REACHED is the case atOrNearGoal exists for — the removed `nearGoal`
+  // answered false here, which is why there is now one reader instead of two.
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    sex: "male",
+    activity_factor: 1.55,
+    weight_lb: 179,
+    start_weight_lb: 205,
+    start_date: localDaysAgo(42),
+    goal_mode: "lose",
+    goal_weight_lb: 180,
+  });
+  assert.equal(atOrNearGoal(localDaysAgo(0)), true, "a pound past the goal is at the destination");
+
+  // …but only within the overshoot band. A goal nobody has revised in 10 lb is stale,
+  // and must not disable the strict fuel path forever.
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    sex: "male",
+    activity_factor: 1.55,
+    weight_lb: 170,
+    start_weight_lb: 205,
+    start_date: localDaysAgo(42),
+    goal_mode: "lose",
+    goal_weight_lb: 180,
+  });
+  assert.equal(atOrNearGoal(localDaysAgo(0)), false, "10 lb past a stale goal is not at the destination");
+  assert.equal(STALE_GOAL_OVERSHOOT_LB, 5);
 });
 
 test("a missing goal stays unknown instead of manufacturing a zero-pound destination or timeline", () => {

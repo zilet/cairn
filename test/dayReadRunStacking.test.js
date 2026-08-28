@@ -53,6 +53,22 @@ function seedRun(date, km, minutes = Math.round(km * 6)) {
   db.prepare(sql).run(date, minutes, km);
 }
 
+// The same run, but with the wearable evidence that makes it HARD on intensity
+// rather than on duration alone (the live scenario: 51 of 59 minutes at threshold).
+// `harmEvidenceOnDay` reads intensity only, so this is what a "hard run" has to be
+// for the softening ladders to hold.
+function seedHardRun(date, km, minutes = Math.round(km * 6)) {
+  seedRun(date, km, minutes);
+  const act = db.prepare(`SELECT id FROM activities WHERE date = ? ORDER BY id DESC LIMIT 1`).get(date);
+  const src = db
+    .prepare(`INSERT INTO garmin_sources (provider, mode, label) VALUES ('garmin','unofficial',?)`)
+    .run(`hard-run-${date}`);
+  db.prepare(
+    `INSERT INTO garmin_activities (source_id, external_id, activity_id, date, type, aerobic_te, te_label)
+     VALUES (?, ?, ?, ?, 'running', 4.2, 'threshold')`
+  ).run(src.lastInsertRowid, `hard-run-${date}`, act.id, date);
+}
+
 // A history of ordinary runs, ending the day before `date`, so there is a real
 // "longest" for a new one to beat.
 function seedRunHistory(date, kms = [5, 5.5, 6, 6.2]) {
@@ -100,10 +116,35 @@ test("an unrated lifting day is still not harm", () => {
 });
 
 test("a hard run is harm even though nothing rated it", () => {
-  seedRun(YESTERDAY, 9.85, 59);
+  seedHardRun(YESTERDAY, 9.85, 59);
   const harm = harmEvidenceOnDay(YESTERDAY);
-  assert.ok(harm, "a threshold-length run cost them something");
+  assert.ok(harm, "a threshold run cost them something");
   assert.ok(["hard_cardio", "longest_run"].includes(harm.kind), `unexpected kind ${harm?.kind}`);
+  assert.equal(trainedWithoutHarm(YESTERDAY), false);
+});
+
+// ---- a duration-only "hard" grade is NOT harm (ruling, 2026-08-28) ----
+// hardCardioDay grades ANY run of 40+ minutes as hard on duration alone, which is
+// right for the streak and corroboration readers and wrong here: it would make an
+// ordinary 45-minute Z2 jog "harm" and the override-softening ladders would never
+// activate for anyone who simply runs. Harm reads intensity evidence only; the
+// next-morning physiology arm still catches an easy-LOOKING run the body disliked.
+test("an ordinary 45-minute easy run is not harm on duration alone", () => {
+  seedRun(YESTERDAY, 7, 45);
+  assert.equal(harmEvidenceOnDay(YESTERDAY), null);
+  assert.equal(trainedWithoutHarm(YESTERDAY), true);
+});
+
+test("...but the same easy-looking run is harm when the next morning disagrees", () => {
+  seedRun(YESTERDAY, 7, 45);
+  repo.upsertGarminDailyMetric({ date: REF, training_readiness: 1 });
+  assert.equal(harmEvidenceOnDay(YESTERDAY)?.kind, "readiness_rest_grade");
+  assert.equal(trainedWithoutHarm(YESTERDAY), false);
+});
+
+test("...and a 45-minute run with a hard training effect IS harm", () => {
+  seedHardRun(YESTERDAY, 7, 45);
+  assert.equal(harmEvidenceOnDay(YESTERDAY)?.kind, "hard_cardio");
   assert.equal(trainedWithoutHarm(YESTERDAY), false);
 });
 
@@ -145,7 +186,7 @@ function quietMorning(date, extra = {}) {
 
 test("three overridden rest mornings that were hard runs do not soften anything", () => {
   const days = [3, 2, 1].map((n) => addDaysISO(REF, -n));
-  for (const date of days) seedRun(date, 8, 55);
+  for (const date of days) seedHardRun(date, 8, 55);
   const model = { recent: days.map((date) => quietMorning(date)) };
   assert.equal(restOverrideSoftening(model, REF).active, false);
   assert.deepEqual(restOverrideSoftening(model, REF).overridden_and_fine, []);
@@ -166,11 +207,20 @@ test("three overridden rest mornings of genuinely fine lifting still soften", ()
 
 test("the easy ladder holds too when the divergences were runs", () => {
   const days = [3, 2, 1].map((n) => addDaysISO(REF, -n));
-  for (const date of days) seedRun(date, 8, 55);
+  for (const date of days) seedHardRun(date, 8, 55);
   const model = {
     recent: days.map((date) => ({ date, read: "easy", softened: false, trained: true, load: "hard" })),
   };
   assert.equal(easyOverrideSoftening(model, REF).active, false);
+});
+
+test("three ordinary easy runs, nothing else, DO soften — the ladder still works for a runner", () => {
+  const days = [3, 2, 1].map((n) => addDaysISO(REF, -n));
+  for (const date of days) seedRun(date, 7, 45);
+  const model = { recent: days.map((date) => quietMorning(date)) };
+  const soft = restOverrideSoftening(model, REF);
+  assert.equal(soft.active, true, "a routine 45-minute jog is not harm");
+  assert.equal(soft.overridden_and_fine.length, 3);
 });
 
 // ---------- R2: a rest-grade reading IS rest ----------
@@ -278,6 +328,46 @@ test("the hold leaves the strength half of a day alone", () => {
   );
   const names = session.items.map((i) => i.exercise);
   assert.deepEqual(names, ["Easy walk", "Bench Press"]);
+});
+
+// ---- the words have to match which evidence fired the hold ----
+// The hold correctly fires on `legs_saturated` alone, which the muscle model can
+// reach off a pure squat day with zero running. The note must not then tell a
+// lifter that "yesterday's running" is in their legs.
+const CLAIMS_YESTERDAYS_RUN = /yesterday's (?:running|run\b|endurance)/i;
+
+test("a lifting-saturation hold names leg work and never claims a run", () => {
+  const { session } = normalizeComposedSession(runSession, {
+    ...cardioEnvelope(),
+    endurance_hold: { no_run: true, reasons: ["legs_saturated"] },
+  });
+  const note = String(session.items[0].note ?? "");
+  assert.ok(note.length, "the held item still explains itself");
+  assert.equal(
+    CLAIMS_YESTERDAYS_RUN.test(note),
+    false,
+    `lifting-only hold must not claim yesterday's running: ${note}`
+  );
+  assert.match(note, /legs|leg |walk/i);
+});
+
+test("an endurance-caused hold keeps the running language", () => {
+  for (const reason of ["hard_endurance_yesterday", "longest_run_yesterday"]) {
+    const { session } = normalizeComposedSession(runSession, {
+      ...cardioEnvelope(),
+      endurance_hold: { no_run: true, reasons: [reason] },
+    });
+    const note = String(session.items[0].note ?? "");
+    assert.ok(CLAIMS_YESTERDAYS_RUN.test(note), `${reason} should speak about the run: ${note}`);
+  }
+});
+
+test("legs_saturated alongside endurance evidence still speaks about the run", () => {
+  const { session } = normalizeComposedSession(runSession, {
+    ...cardioEnvelope(),
+    endurance_hold: { no_run: true, reasons: ["hard_endurance_yesterday", "legs_saturated"] },
+  });
+  assert.ok(CLAIMS_YESTERDAYS_RUN.test(String(session.items[0].note ?? "")));
 });
 
 test("the band edge itself reads as rest", () => {

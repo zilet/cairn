@@ -222,6 +222,83 @@ test("an epoch that predates the insight does not reopen it, and a thumbs-down s
   assert.equal(repo.isDuplicateInsightIntent(key, repo.insightIntentCorpus().keys), true);
 });
 
+// A panel is DATED when the blood was drawn but only becomes knowable when the PDF is
+// ingested, routinely days later. Dating the epoch by the draw alone re-suppressed
+// exactly the insights this feature exists to reopen.
+function seedWorseningLipidPanel(triggerDaysAgo, followUpDaysAgo) {
+  seedHealthDoc(isoDaysAgo(triggerDaysAgo), [marker("LDL-C", 173, { unit: "mg/dL", flag: "high" })]);
+  repo.addDirective({
+    source: "markers",
+    domain: "nutrition",
+    marker: "LDL-C",
+    directive: "Hold the fibre lever and recheck after a response window.",
+    trigger_value: 173,
+    trigger_side: "high",
+    trigger_date: isoDaysAgo(triggerDaysAgo),
+    status: "active",
+  });
+  seedHealthDoc(isoDaysAgo(followUpDaysAgo), [marker("LDL-C", 186, { unit: "mg/dL", flag: "high" })]);
+}
+
+test("an epoch is dated by when the panel was INGESTED, not by the draw it happened on", () => {
+  const key = "labs.lipids~nutrition.fibre:same";
+  // Said three days ago — AFTER the draw six days ago, but before the upload today.
+  sayConnection(key, 3);
+  seedWorseningLipidPanel(120, 6);
+
+  // Before anything is recorded there is no ledger row, so the epoch falls back to the
+  // draw — the pure path is unchanged.
+  assert.equal(
+    repo.healthOutcomeEvidenceEpochs().find((e) => e.facet === "labs.lipids").at,
+    isoDaysAgo(6),
+    "with nothing recorded the epoch still reads as the draw date",
+  );
+
+  // Ingest happens now: recordHealthOutcomeEvents writes the observation the app learned.
+  assert.ok(repo.recordHealthOutcomeEvents().observations >= 1);
+  const epoch = repo.healthOutcomeEvidenceEpochs().find((e) => e.facet === "labs.lipids");
+  assert.ok(epoch.at > isoDaysAgo(6), "the epoch moves forward to the day the app learned it");
+  assert.equal(
+    repo.isDuplicateInsightIntent(key, repo.insightIntentCorpus().keys),
+    false,
+    "a connection said between the draw and the upload could not have known — it reopens",
+  );
+});
+
+test("an insight said AFTER the panel was ingested stays deduped", () => {
+  const key = "labs.lipids~nutrition.fibre:same";
+  seedWorseningLipidPanel(120, 6);
+  assert.ok(repo.recordHealthOutcomeEvents().observations >= 1);
+  // Said now, with the ingested panel already on file.
+  repo.addInsight({
+    kind: "connection",
+    text: "Your cholesterol picture tracks with how much dietary fibre you get in.",
+    rationale: "A dated association across the last two panels.",
+    intent_key: key,
+  });
+  assert.equal(
+    repo.isDuplicateInsightIntent(key, repo.insightIntentCorpus().keys),
+    true,
+    "the connection already knew about the worse panel",
+  );
+});
+
+// A caller outside the DB path can thread the learned-at date it holds.
+test("healthOutcomeEvidenceEpochs accepts a caller-supplied learnedAt when no ledger row exists", () => {
+  seedWorseningLipidPanel(120, 6);
+  const supplied = repo.healthOutcomeEvidenceEpochs(60, { learnedAt: isoDaysAgo(1) });
+  assert.equal(supplied.find((e) => e.facet === "labs.lipids").at, isoDaysAgo(1));
+  // Never earlier than the draw, and never a malformed value.
+  assert.equal(
+    repo.healthOutcomeEvidenceEpochs(60, { learnedAt: isoDaysAgo(30) }).find((e) => e.facet === "labs.lipids").at,
+    isoDaysAgo(6),
+  );
+  assert.equal(
+    repo.healthOutcomeEvidenceEpochs(60, { learnedAt: "not-a-date" }).find((e) => e.facet === "labs.lipids").at,
+    isoDaysAgo(6),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // (c) a missing workup a flagged marker warrants raises the tile
 // ---------------------------------------------------------------------------

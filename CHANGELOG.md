@@ -7,6 +7,36 @@ Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- **Harm now includes the body's response** — a day counts as "went fine" only when the log AND
+  your physiology agree: a hard cardio day, your longest run in ninety days, or a next morning
+  that answers badly (rest-grade readiness, low HRV status, clearly elevated resting HR) all stop
+  the app from softening the next day's read upward.
+- **A rest-grade readiness reading is rest** — a fresh reading at or below the deep band gets its
+  own rest read in its own words; adaptation may ease it to easy movement, never into a session.
+- **The app stops stacking runs** — after a hard run or a new-longest run, the next day's easy
+  read never opens as another run: leg-driven cardio is held (an easy walk stands in) while the
+  strength half of the day is untouched, and a cardio-only plan day won't be opened by the
+  adaptation ladder the morning after hard endurance work.
+- **At the goal, the answer is food — not less training** — within reach of a lose-mode goal (or
+  at it), an underfueling read no longer shrinks the plan: earned steps and holds keep their full
+  sets and load (only the near-maximal single parks), and the fuel read's corrective is the bounded
+  step toward maintenance. The standing "move fuel toward maintenance" question no longer re-drafts
+  itself nightly, and it now surfaces on Today even in lead mode.
+- **"No" means no for a recovery week** — a declined recovery week stays declined for the rest of
+  the block; only a genuinely new safety-grade signal (a symptom, an illness, a poor check-in, a
+  clinical directive) can reopen the suggestion, and the read says so in plain words.
+- **Six anchor lifts in parallel** — strength objectives are now per-lift (migration v98), so a
+  squat, deadlift, bench, row, curl and press comeback can all be tracked at once, over REST, MCP,
+  or chat; logging one lift closes its own objective and leaves the others open.
+- **A chat promise leaves a trace** — "I'll flag that to your coach" now records a real proposal
+  for you to confirm (never auto-applied), and the reply only claims the hand-off when it landed.
+- **A worse lab panel is an event** — when a re-measured marker comes back further off-optimal (or
+  unchanged past its own recheck horizon), Cairn records the outcome on ingest, resurfaces the
+  directive as a fresh card instead of silently editing the old one, lets a genuinely new result
+  reopen an insight the 90-day dedupe had closed, and raises the checkup tile with the follow-up
+  workups that finding warrants (ApoB, Lp(a), hs-CRP off a lipid flag). One whole-picture health
+  review per upload batch instead of one per document.
+
 - **The day adapts up, not only down** — on a morning your recovery backs and nothing is holding,
   the session carries one "Reach": a heavier single set on the main lift (or an all-out clean last
   set on an assisted or bodyweight lift), prefilled on the card. It only appears when it is actually

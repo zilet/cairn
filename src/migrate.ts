@@ -2419,13 +2419,15 @@ export const MIGRATIONS: Migration[] = [
     // cleanly, and the db.ts CREATE TABLE block already carries the new index
     // for fresh databases.
     up: (db) => {
-      try {
-        db.exec(`DROP INDEX IF EXISTS idx_strength_objectives_one_active`);
-        db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_strength_objectives_one_active_per_lift
-                   ON strength_objectives(exercise_key) WHERE status = 'active'`);
-      } catch {
-        /* a DB predating strength_objectives has no index to move */
-      }
+      // The only legitimate no-op is a DB predating the table — checked EXPLICITLY via
+      // sqlite_master rather than by swallowing every error. A try/catch around both
+      // statements could commit a DROP whose CREATE failed, leaving the table with NO
+      // uniqueness at all and the version stamped, so no retry would ever run it again.
+      // Any real SQL error now propagates and runMigrations' transaction rolls back.
+      if (!hasTable(db, "strength_objectives")) return;
+      db.exec(`DROP INDEX IF EXISTS idx_strength_objectives_one_active`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_strength_objectives_one_active_per_lift
+                 ON strength_objectives(exercise_key) WHERE status = 'active'`);
     },
   },
 ];

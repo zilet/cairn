@@ -1622,6 +1622,10 @@ export function buildDailySessionDecision(
     if (hardEnduranceYesterday) enduranceHoldReasons.push("hard_endurance_yesterday");
     if (legsSaturated) enduranceHoldReasons.push("legs_saturated");
   }
+  // `reasons` is not telemetry — composition reads it to pick WHICH note the held
+  // cardio item carries (running language only when endurance evidence is what fired
+  // the hold; `legs_saturated` alone can come from a pure squat day). Keep the codes
+  // stable; `daily-composition.ts` matches on them.
   const enduranceHold: DailyDecisionEnvelope["endurance_hold"] = enduranceHoldReasons.length
     ? { no_run: true, reasons: enduranceHoldReasons }
     : undefined;

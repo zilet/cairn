@@ -634,7 +634,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     guidance: [
       `Use flag_training_structure when the athlete asks for a change to the SHAPE of their training that you cannot make from chat — which lifts the program is built around ("track all six of my anchors in parallel"), how the week is split, what the current block is for, adding or dropping a training day. You have no action that restructures a plan, so saying you will "flag it" or "pass it to your coach lane" without emitting this action leaves nothing behind at all — never promise the hand-off without it.`,
       `"request" MUST be the athlete's own sentence, copied verbatim — it is stored as the rationale the coach lane reads, so do not paraphrase, summarize or clean it up. "summary" is your own short third-person line naming the change ("Rebuild six anchor lifts in parallel"). Emit it only for an explicit ask from the athlete; a question about what they should do, or your own idea, is not one.`,
-      `This records a proposal for the athlete to CONFIRM — it changes no plan by itself and is never applied automatically. Say so honestly: it is flagged and will come back as something to confirm, not "done" or "updated". When the same ask is already standing, re-flagging is harmless; it does not stack up duplicates.`,
+      `This records a proposal for the athlete to CONFIRM — it changes no plan by itself and is never applied automatically. Say so honestly: it is flagged and will come back as something to confirm, not "done" or "updated". When the same ask is already standing, re-flagging is harmless: the server points back at that one standing flag instead of stacking a second thing to confirm. A materially different ask is flagged on its own.`,
     ],
   },
   revert_decision: {

@@ -476,6 +476,36 @@ test("hardCardioDay: a 42-min run (endurance sport) IS hard on duration alone", 
   assert.equal(repo.hardCardioDay(REF), true);
 });
 
+// ---- the intensity-only reading (harm's stricter bar) ----
+// `hardCardioDayIntense` drops bar (d), the duration bar, and keeps a-c. It exists
+// for `harmEvidenceOnDay`: an ordinary 45-minute Z2 jog is a loading day but not an
+// injury, and grading it as harm would stop the override-softening ladders from
+// ever activating for someone who simply runs.
+test("hardCardioDayIntense: a 59-min run with no intensity evidence is NOT hard", () => {
+  seedHcActivity(REF, { type: "run", duration_min: 59, distance_km: 10 });
+  assert.equal(repo.hardCardioDay(REF), true, "the duration bar still reads it as a loading day");
+  assert.equal(repo.hardCardioDayIntense(REF), false);
+});
+
+test("hardCardioDayIntense: a hard training-effect qualifies", () => {
+  const a = seedHcActivity(REF, { type: "run", duration_min: 45, distance_km: 8 });
+  seedHcGarmin(a.lastInsertRowid, REF, { aerobic_te: 4.2 });
+  assert.equal(repo.hardCardioDayIntense(REF), true);
+});
+
+test("hardCardioDayIntense: real time at Z4+ qualifies", () => {
+  const a = seedHcActivity(REF, { type: "run", duration_min: 30, distance_km: 6 });
+  seedHcGarmin(a.lastInsertRowid, REF, { hr_zones_json: JSON.stringify([{ zone: 4, secs: 900 }]) });
+  assert.equal(repo.hardCardioDayIntense(REF), true);
+});
+
+test("hardCardioDayIntense: a training load well above the median qualifies", () => {
+  const a = seedHcActivity(REF, { type: "run", duration_min: 30, distance_km: 6 });
+  seedHcGarmin(a.lastInsertRowid, REF, { training_load: 300 });
+  assert.equal(repo.hardCardioDayIntense(REF, 100), true);
+  assert.equal(repo.hardCardioDayIntense(REF, 400), false, "at or below the median it is not intense");
+});
+
 test("hardCardioDay: a 25-min run stays easy (below the endurance duration bar)", () => {
   seedHcActivity(REF, { type: "run", duration_min: 25, distance_km: 5 });
   assert.equal(repo.hardCardioDay(REF), false);

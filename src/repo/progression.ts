@@ -1387,7 +1387,8 @@ export interface CutPressure {
   any: boolean;
   /**
    * At OR within NEAR_GOAL_REMAINING_LB of goal weight on a live lose-mode cut
-   * (`atOrNearGoal` — unlike `nearGoal`, a goal already reached counts). Lifts
+   * (`atOrNearGoal` — a goal already reached, or passed by up to the stale-goal
+   * overshoot band, counts). Lifts
    * the reduce promotion veto so the log can still move the load; sliding still
    * vetoes. It ALSO lifts the volume reduction: at/near goal `applyFuelProtection`
    * keeps the prescribed sets and load and takes only the near-maximal single,
@@ -2834,7 +2835,15 @@ function applyFuelProtection(
             )
           : prescription.action === "hold"
             ? say(voice.AT_GOAL_FUEL_KEEP_VOLUME, "at_goal_fuel_keep_volume")
-            : `${prescription.why} ${say(voice.PUSH_FUEL_VARIETY_KEEP, "push_fuel_variety_keep")}`,
+            : // vary / introduce. WHY the rotation stands has to match why it was
+              // actually kept: a push athlete asked for it, an at-goal athlete did
+              // not. `keepsFullVolume` admits both, so naming the push declaration
+              // unconditionally told a steady athlete the card reflects a preference
+              // they never expressed. (The overload sentences above are already
+              // attribution-free — they name the LOG, which is true either way.)
+              drive === "push"
+              ? `${prescription.why} ${say(voice.PUSH_FUEL_VARIETY_KEEP, "push_fuel_variety_keep")}`
+              : `${prescription.why} ${say(voice.AT_GOAL_FUEL_VARIETY_KEEP, "at_goal_fuel_variety_keep")}`,
     };
   }
   // Any other action at/near goal keeps its own prescription and only hears the fuel

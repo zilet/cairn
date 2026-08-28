@@ -56,7 +56,8 @@ export function recoveryWeekRefusedOn(today = localDateISO()): string | null {
  * athlete's refusal could not have been about:
  *   • a symptom reported or re-reported after the refusal,
  *   • an illness or injury that started after it and is still open,
- *   • a health directive derived after it (the clinical lane),
+ *   • a firm TRAINING health directive derived after it (the clinical lane — see the
+ *     exclusions on that query; a resurfaced or lab-lever row is not new news),
  *   • a fresh subjective brake — a low check-in, or a session logged with high
  *     soreness or a named sore joint.
  * Ordinary fatigue, a flat week, or the same fuel read saying the same thing are
@@ -72,10 +73,28 @@ export function newSafetyGradeSignalSince(since: string, today = localDateISO())
     )
   )
     return true;
+  // The CLINICAL lane — deliberately NOT "any new active directive". Three exclusions,
+  // each one a row that is not news the athlete's refusal failed to answer:
+  //   • a RESURFACED row (`resurfaced_from_id` set) is old news restated. A worsening
+  //     panel re-inserts a previously handled directive with a fresh `created_at`; that
+  //     new timestamp must not reopen a training refusal on its own.
+  //   • a row outside `domain='training'` is a nutrition or watch lever (a lipid
+  //     eat-more-fiber nudge, a recheck reminder). It says nothing about whether this
+  //     week's training should change, whatever lab it came from.
+  //   • an `uncertain` row is by contract a softer nudge ("keep regular aerobic work
+  //     in the week"), not a constraint on training — never safety-grade.
+  // What survives is the shape that genuinely overrides a refusal: a firm training
+  // directive, from either source, telling the athlete their training must change
+  // (e.g. the anemia pattern's "hold endurance volume until iron recovers").
   if (
     one(
       `SELECT 1 FROM health_directives
-        WHERE status = 'active' AND date(created_at) > ? LIMIT 1`,
+        WHERE status = 'active'
+          AND date(created_at) > ?
+          AND resurfaced_from_id IS NULL
+          AND domain = 'training'
+          AND COALESCE(uncertain, 0) = 0
+        LIMIT 1`,
       since
     )
   )

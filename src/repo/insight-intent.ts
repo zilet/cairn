@@ -630,8 +630,10 @@ export interface InsightIntentCorpus {
 // reads; consumed here as the one reason a 90-day territorial key stops suppressing.
 export interface InsightEvidenceEpoch {
   facet: string;
-  // YYYY-MM-DD — the FOLLOW-UP reading's own draw date, never "now". A key said
-  // after that draw already knew about it.
+  // YYYY-MM-DD — the day the evidence became KNOWABLE: the later of the follow-up
+  // reading's draw date and the day the app recorded the observation (labs are ingested
+  // days after the draw, and nothing could know about a panel before it was uploaded).
+  // Never "now". A key said on or after that day already knew about it.
   at: string;
 }
 

@@ -213,7 +213,12 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   short), an incomplete log additionally needs ≥1 lift genuinely `exceeded`, and any lift that landed
   under its own stored full-load reference kills the contradiction outright whatever the counts say.
   A low `felt_fatigue` constraint this earns closes early (within its 7-day window) the moment a later
-  completed session contradicts it too (`autoregBrake`, `signal-state.ts`). Check-in `energy`/
+  completed session contradicts it too (`autoregBrake`, `signal-state.ts`). Readiness bands live in
+  `src/repo/readiness-bands.ts` (`LOW_READINESS` 35 = subdued/easy; `REST_GRADE_READINESS` 20
+  inclusive = its own REST rule, softenable only to easy movement) — never hardcode a readiness
+  threshold. And `trainedWithoutHarm` is `harmEvidenceOnDay(date) == null`: a hard-cardio day, a
+  new-longest run (`longestRunNovelty`), or a bad next morning (rest-grade readiness, low HRV
+  status, elevated RHR) is harm — a run-only day is never "unrated therefore fine". Check-in `energy`/
   `sleep_feel` still brake at ≤2 and support at ≥4, but a `3` is genuinely NEUTRAL (it still emits an
   observation, so a tapped-in athlete never reads as untracked) — never round it to a brake or a
   support vote. Chat can write the same check-in via the `log_checkin` action
@@ -285,7 +290,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   Details in `docs/ARCHITECTURE.md`.
 - **Directives never change anything by themselves.** A flagged marker propagates into
   `health_directives` via `deriveDirectives()`; sources `'markers'` (deterministic) and
-  `'health_review'` (agent-emitted) coexist and each clears/rewrites only its own rows. Directives
+  `'health_review'` (agent-emitted) coexist and each clears/rewrites only its own rows. One
+  exception to the churn-free diff reconcile: a materially-WORSE trigger from a strictly newer
+  draw resurfaces its directive as a fresh row (`resurfaceWorseningDirectives`,
+  `resurfaced_from_id`) — news gets a row, never an invisible in-place edit. Directives
   are informational, not medical advice; `uncertain`/uncited ones are a softer nudge. The user flips
   `active|resolved|dismissed`.
 

@@ -888,6 +888,47 @@ export function flagTrainingStructureAuthorized(message: string | null | undefin
   return !isLeadingQuestion(text);
 }
 
+// The athlete's sentence, compared the way a person compares two asks: case- and
+// whitespace-insensitive. An EXACT re-ask already collapses onto the standing row
+// (recordDecision fingerprints {kind, refs, effective_date, action}, and the
+// brain_decisions fingerprint index is UNIQUE with INSERT OR IGNORE) — so the only
+// thing that used to stack was a NEAR-duplicate: the same request retyped with
+// different capitalisation or spacing.
+function normalizedStructureRequest(text: string): string {
+  return String(text ?? "")
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * The training-structure flag already standing for this same ask, if there is one.
+ * Scoped exactly to what the athlete would recognise as "the thing I already asked
+ * for": a chat-sourced, ask-tier `training_structure` decision still sitting in the
+ * review queue whose stored rationale (their own words) matches. A materially
+ * different request matches nothing and is flagged fresh.
+ */
+export function standingTrainingStructureFlag(request: string): any | null {
+  const wanted = normalizedStructureRequest(request);
+  if (!wanted) return null;
+  try {
+    return (
+      repo
+        .listBrainDecisions({ status: "review", kind: "training_structure", limit: 100 })
+        .find(
+          (row: any) =>
+            row?.source === "chat" &&
+            row?.autonomy_tier === "ask" &&
+            normalizedStructureRequest(String(row?.rationale ?? "")) === wanted
+        ) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
 function decisionReferences(text: string): number[] {
   return [...text.matchAll(/\bdecision\s*(?:#\s*|id\s*)?(\d+)\b/gi)]
     .map((match) => Number(match[1]))
@@ -3498,7 +3539,15 @@ export function applyChatActions(
           const request = a.request;
           const requestSummary = typeof a.summary === "string" && a.summary.trim() ? a.summary.trim() : request;
           const explanation = `You asked for a change to how your training is built: “${request}”. Nothing has changed yet — confirm it and the coach can build it into the plan.`;
-          const recorded = repo.recordDecision({
+          // Re-asking must not stack a second thing to confirm, which is what the prompt
+          // guidance already promises. An identical sentence collapses on the decision
+          // fingerprint; a near-duplicate (retyped, recapitalised) is caught here and
+          // points back at the SAME standing flag. History stays immutable — nothing is
+          // rewritten, the athlete simply still has exactly one ask waiting.
+          const standing = standingTrainingStructureFlag(request);
+          const recorded = standing
+            ? { decision: standing }
+            : repo.recordDecision({
             effective_date: null,
             kind: "training_structure",
             domain: "training",
@@ -3535,12 +3584,15 @@ export function applyChatActions(
           const stored = repo.getBrainDecision(Number(recorded.decision.id));
           // Server-owned readback: the receipt may only claim a flag that is genuinely
           // sitting in the review queue at the ask tier with the athlete's own words.
+          // Compared through the same normalization the reuse lookup uses, so a
+          // re-flagged near-duplicate verifies against the standing row it points at —
+          // the stored rationale stays the athlete's ORIGINAL sentence, verbatim.
           const verified =
             !!stored &&
             stored.status === "review" &&
             stored.autonomy_tier === "ask" &&
             stored.kind === "training_structure" &&
-            String(stored.rationale ?? "") === request;
+            normalizedStructureRequest(String(stored.rationale ?? "")) === normalizedStructureRequest(request);
           applied.push({
             type: a.type,
             result: { ok: verified, verified, decision_id: stored?.id ?? null, decision: stored ?? null },

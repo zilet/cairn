@@ -304,6 +304,37 @@ test("re-flagging the same request does not stack up duplicate asks", () => {
   assert.equal(repo.listBrainDecisions({ status: "review", kind: "training_structure", limit: 100 }).length, 1);
 });
 
+test("a NEAR-duplicate re-ask reuses the standing flag; a materially different ask is flagged fresh", () => {
+  // An exact repeat already collapses on the decision fingerprint. What used to stack
+  // was the same sentence retyped — different spacing, different capitalisation.
+  const flag = (request, message = request) =>
+    applyChatActions(
+      { actions: [{ type: "flag_training_structure", request }] },
+      { agent: "stub", message }
+    ).applied.find((row) => row.type === "flag_training_structure");
+
+  const first = flag(REQUEST);
+  assert.equal(first.result.verified, true);
+  const nearDuplicate = flag("  i want to REBUILD strength   across all six of my anchor lifts in parallel. ");
+  assert.equal(
+    nearDuplicate.result.decision_id,
+    first.result.decision_id,
+    "a retyped version of the same ask points back at the one standing flag",
+  );
+  assert.equal(
+    repo.listBrainDecisions({ status: "review", kind: "training_structure", limit: 100 }).length,
+    1,
+    "nothing stacked up",
+  );
+  // The athlete's ORIGINAL words are what stands — the near-duplicate never rewrites them.
+  assert.equal(repo.getBrainDecision(first.result.decision_id).rationale, REQUEST);
+
+  const different = flag("Drop my training week to three days and build it around the deadlift.");
+  assert.notEqual(different.result.decision_id, first.result.decision_id, "a different ask is its own flag");
+  assert.equal(different.result.verified, true);
+  assert.equal(repo.listBrainDecisions({ status: "review", kind: "training_structure", limit: 100 }).length, 2);
+});
+
 // ---- (d) reply truthfulness (R4) ----------------------------------------------
 
 test("the reply may only claim the hand-off when a decision actually landed", () => {

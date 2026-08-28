@@ -41,6 +41,7 @@ import { getTrainingIntent } from "../training-intent.js";
 import {
   dayLoad,
   hardCardioDay,
+  hardCardioDayIntense,
   longestRunNovelty,
   recentCardioLoadMedian,
   type TrainingLoad,
@@ -886,9 +887,13 @@ const NO_SOFTENING: RestOverrideSoftening = Object.freeze({
 // So harm now has four faces, and the physiological ones do not need a rating:
 //   • RATED POORLY   — the old test, unchanged. The WORST session of the day decides,
 //                      so one good lift cannot paper over a second that went badly.
-//   • HARD CARDIO    — the day's cardio graded hard (`hardCardioDay`, the one source
-//                      of truth for that question). A threshold effort is a cost
-//                      whether or not anything asked them to rate it.
+//   • HARD CARDIO    — the day's cardio graded hard ON INTENSITY EVIDENCE
+//                      (`hardCardioDayIntense`: a hard training-effect/label, real
+//                      time at Z4+, or a training load well above their own median).
+//                      A threshold effort is a cost whether or not anything asked
+//                      them to rate it. The plain `hardCardioDay` duration bar is
+//                      deliberately NOT harm here — an ordinary 45-minute easy run
+//                      is a loading day, not an injury.
 //   • A FIRST        — the longest run in months (`longestRunNovelty`). Novel stimulus.
 //   • THE NEXT MORNING — a FRESH rest-grade readiness reading, or fresh physiology
 //                      reading as a brake (Garmin's own low/poor HRV status, or a
@@ -1009,7 +1014,13 @@ export function harmEvidenceOnDay(date: string): HarmEvidence | null {
         detail: `${novelty.distance_km} km vs ${novelty.previous_longest_km} km best`,
       };
     }
-    if (hardCardioDay(date)) return { date, kind: "hard_cardio", detail: "cardio graded hard" };
+    // Intensity-evidenced hard ONLY (bars a-c). `hardCardioDay`'s duration bar (d)
+    // grades any run ≥ 40 min as hard, so a routine 45-minute easy Z2 jog would count
+    // as harm and this ladder would never activate for someone who simply runs. A
+    // duration-only hard grade is not harm by itself; if the body disagreed, the
+    // next-morning physiology arm below says so.
+    if (hardCardioDayIntense(date))
+      return { date, kind: "hard_cardio", detail: "cardio graded hard on intensity" };
   } catch {
     /* same contract: a failed read finds no harm, it does not invent one */
   }

@@ -79,6 +79,39 @@ test("mergeExercises carries the anchor-lift objective, session skips, and re-te
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM attention_schedule WHERE signal_key='training:strength:back-squat'").get().n, 1);
 });
 
+test("merging two lifts that BOTH hold an active anchor supersedes the older one instead of throwing", () => {
+  // Schema v98 allows one ACTIVE objective per exercise_key. Repointing a second active
+  // row onto the survivor's key would hit that unique index mid-merge and 500 the merge.
+  repo.findOrCreateExercise("Squat", "quads");
+  repo.findOrCreateExercise("Back Squat", "quads");
+  logReps("Squat", 135, 5, isoDaysAgo(3));
+  logReps("Back Squat", 185, 5, TODAY);
+
+  const insert = db.prepare(
+    "INSERT INTO strength_objectives (exercise, exercise_key, target_kind, target_est_1rm, status) VALUES (?, ?, 'explicit_est_1rm', ?, 'active')"
+  );
+  const older = insert.run("Squat", repo.normalizedExerciseKey("Squat"), 250).lastInsertRowid;
+  const newer = insert.run("Back Squat", repo.normalizedExerciseKey("Back Squat"), 300).lastInsertRowid;
+
+  const res = repo.mergeExercises("Squat", "Back Squat");
+  assert.equal(res.ok, true, "the merge succeeds rather than hitting the unique index");
+  assert.equal(res.error, undefined);
+
+  const active = db.prepare("SELECT * FROM strength_objectives WHERE status='active'").all();
+  assert.equal(active.length, 1, "exactly one active anchor survives on the merged key");
+  assert.equal(Number(active[0].id), Number(newer), "the NEWEST anchor is the one left standing");
+  assert.equal(active[0].exercise, "Back Squat");
+  assert.equal(active[0].exercise_key, repo.normalizedExerciseKey("Back Squat"));
+
+  // The older one is superseded history, not deleted or rewritten — and it followed the
+  // survivor so its lift identity stays coherent.
+  const retired = db.prepare("SELECT * FROM strength_objectives WHERE id=?").get(older);
+  assert.equal(retired.status, "superseded");
+  assert.ok(retired.superseded_at, "the supersede is stamped");
+  assert.equal(retired.target_est_1rm, 250, "history is immutable");
+  assert.equal(retired.exercise_key, repo.normalizedExerciseKey("Back Squat"), "and it repoints to the survivor");
+});
+
 test("mergeExercises refuses a timed↔reps merge (incompatible logging shapes)", () => {
   const timed = repo.findOrCreateExercise("Plank"); // detects timed
   const reps = repo.findOrCreateExercise("Crunch"); // reps
