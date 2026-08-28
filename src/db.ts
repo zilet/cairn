@@ -313,10 +313,14 @@ CREATE INDEX IF NOT EXISTS idx_sets_session ON logged_sets(session_id);
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON logged_sets(exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
 
--- One athlete-selected anchor lift for the current strength comeback. The target
+-- Athlete-selected anchor lifts for the current strength comeback. The target
 -- is snapped when the objective is created (a then-current personal best or an
 -- explicit est-1RM), so later history never moves the finish line. Old objectives
 -- stay as history when a new one supersedes them.
+--
+-- Several anchors may be active AT ONCE (an athlete rebuilding squat, deadlift,
+-- row, bench, curl and press in parallel is one goal, not six competing ones) —
+-- the invariant is ONE ACTIVE ROW PER exercise_key, never one active row overall.
 CREATE TABLE IF NOT EXISTS strength_objectives (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   exercise TEXT NOT NULL,
@@ -335,8 +339,8 @@ CREATE TABLE IF NOT EXISTS strength_objectives (
   achieved_date TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_strength_objectives_status ON strength_objectives(status, id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_strength_objectives_one_active
-  ON strength_objectives(status) WHERE status = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_strength_objectives_one_active_per_lift
+  ON strength_objectives(exercise_key) WHERE status = 'active';
 
 -- Planned exercises consciously skipped ("not today") for one session. A skip
 -- only holds while the exercise has no logged sets that session — logging wins.

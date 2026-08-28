@@ -1,20 +1,21 @@
-// One explicit anchor-lift objective and its deterministic comeback read.
+// Explicit anchor-lift objectives and their deterministic comeback reads.
 //
-// This is deliberately narrower than program-state: the athlete selects ONE exact
+// This is deliberately narrower than program-state: the athlete selects an exact
 // exercise, its target is snapped at selection time, and every trend/projection uses
 // normalizedExerciseKey (never movementKey). Barbell and dumbbell histories therefore
 // remain separate even when they train the same movement pattern.
+//
+// SEVERAL ANCHORS MAY BE ACTIVE AT ONCE. Rebuilding six lifts in parallel is one
+// goal, not six competing ones, so the invariant is one active row PER exercise_key
+// (schema v98) — never one active row overall. `getStrengthJourney()` still reads the
+// primary (most recent) anchor for the single-journey surfaces; `getStrengthJourneys()`
+// is the whole set, and every journey also carries `active_objectives`.
 import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { classifyConstraint, normalizedExerciseKey } from "./exercise-canon.js";
 import { classifyPattern, type Equipment, type MovementPattern } from "./exercise-variations.js";
 import { injuryAffectsExercise, listContextEvents } from "./health.js";
-import {
-  availableEquipment,
-  nextPrescription,
-  recentAutoregulation,
-  type Prescription,
-} from "./progression.js";
+import { availableEquipment, nextPrescription, recentAutoregulation, type Prescription } from "./progression.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { getProgramState, type LiftState, type ProgramState } from "./program-state.js";
 import { localDateISO } from "./shared.js";
@@ -90,6 +91,10 @@ export interface StrengthJourney {
     stalled_or_regressing: boolean;
   };
   capacity_basis: string | null;
+  // Every anchor the athlete currently holds, newest first — the journey above reads
+  // ONE of them (the primary), and this is the parallel set the coach context and the
+  // prompt sites need so a six-anchor rebuild never reads as a single-lift goal.
+  active_objectives: StrengthObjective[];
   // Populated by the surfaces (route/MCP) only when NO objective exists yet — a
   // quiet invitation into the anchor-lift journey. Left unset elsewhere.
   suggestion?: AnchorObjectiveSuggestion | null;
@@ -143,9 +148,31 @@ export function getStrengthObjective(id: number): StrengthObjective | null {
   return asObjective(db.prepare(`SELECT * FROM strength_objectives WHERE id = ?`).get(Number(id)));
 }
 
+/** Every active anchor, newest first. One row per lift by construction (schema v98). */
+export function listActiveStrengthObjectives(): StrengthObjective[] {
+  return (db.prepare(`SELECT * FROM strength_objectives WHERE status = 'active' ORDER BY id DESC`).all() as any[])
+    .map(asObjective)
+    .filter((row): row is StrengthObjective => !!row);
+}
+
+/**
+ * The PRIMARY active anchor — the most recently chosen one. Kept for the single-journey
+ * surfaces; anything that must honour every anchor reads listActiveStrengthObjectives().
+ */
 export function getActiveStrengthObjective(): StrengthObjective | null {
+  return listActiveStrengthObjectives()[0] ?? null;
+}
+
+/** The active objective for one exact lift, if the athlete holds one. */
+export function getActiveStrengthObjectiveForExercise(exercise: string): StrengthObjective | null {
+  const key = normalizedExerciseKey(String(exercise ?? ""));
+  if (!key) return null;
   return asObjective(
-    db.prepare(`SELECT * FROM strength_objectives WHERE status = 'active' ORDER BY id DESC LIMIT 1`).get()
+    db
+      .prepare(
+        `SELECT * FROM strength_objectives WHERE status = 'active' AND exercise_key = ? ORDER BY id DESC LIMIT 1`
+      )
+      .get(key)
   );
 }
 
@@ -235,11 +262,13 @@ export function setStrengthObjective(input: {
   const alreadyReached = !!reached && reached.est_1rm >= target;
   db.exec("BEGIN IMMEDIATE");
   try {
+    // Per-lift supersede: naming a new squat target retires the old SQUAT objective
+    // and leaves every other anchor the athlete is rebuilding exactly where it is.
     db.prepare(
       `UPDATE strength_objectives
           SET status = 'superseded', superseded_at = datetime('now'), updated_at = datetime('now')
-        WHERE status = 'active'`
-    ).run();
+        WHERE status = 'active' AND exercise_key = ?`
+    ).run(key);
     const info = db
       .prepare(
         `INSERT INTO strength_objectives
@@ -278,10 +307,12 @@ export function setStrengthObjectiveStatus(
   db.exec("BEGIN IMMEDIATE");
   try {
     if (status === "active") {
+      // Only the other active objective ON THE SAME LIFT is in the way — reactivating a
+      // superseded bench objective must not retire the athlete's live squat anchor.
       db.prepare(
         `UPDATE strength_objectives SET status='superseded', superseded_at=datetime('now'), updated_at=datetime('now')
-          WHERE status='active' AND id != ?`
-      ).run(id);
+          WHERE status='active' AND exercise_key = ? AND id != ?`
+      ).run(current.exercise_key, id);
     }
     db.prepare(
       `UPDATE strength_objectives SET status=?, updated_at=datetime('now'),
@@ -502,7 +533,21 @@ function envelopeSeries(history: StrengthExposure[]): StrengthExposure[] {
   });
 }
 
-function currentJourneyObjective(): StrengthObjective | null {
+function currentJourneyObjective(exercise?: string | null): StrengthObjective | null {
+  const key = exercise == null ? null : normalizedExerciseKey(String(exercise));
+  if (exercise != null && !key) return null;
+  if (key) {
+    return (
+      getActiveStrengthObjectiveForExercise(String(exercise)) ??
+      asObjective(
+        db
+          .prepare(
+            `SELECT * FROM strength_objectives WHERE status='completed' AND exercise_key=? ORDER BY id DESC LIMIT 1`
+          )
+          .get(key)
+      )
+    );
+  }
   return (
     getActiveStrengthObjective() ??
     asObjective(db.prepare(`SELECT * FROM strength_objectives WHERE status='completed' ORDER BY id DESC LIMIT 1`).get())
@@ -514,8 +559,11 @@ function exactLiftState(exercise: string, programState: ProgramState): LiftState
   return (programState.lifts || []).find((lift) => normalizedExerciseKey(lift.exercise) === key) ?? null;
 }
 
-export function getStrengthJourney(opts: { programState?: ProgramState } = {}): StrengthJourney {
-  const objective = currentJourneyObjective();
+export function getStrengthJourney(
+  opts: { programState?: ProgramState; exercise?: string | null } = {}
+): StrengthJourney {
+  const activeObjectives = listActiveStrengthObjectives();
+  const objective = currentJourneyObjective(opts.exercise ?? null);
   if (!objective) {
     return {
       available: false,
@@ -540,6 +588,7 @@ export function getStrengthJourney(opts: { programState?: ProgramState } = {}): 
         stalled_or_regressing: false,
       },
       capacity_basis: null,
+      active_objectives: activeObjectives,
     };
   }
 
@@ -693,7 +742,21 @@ export function getStrengthJourney(opts: { programState?: ProgramState } = {}): 
     capacity_basis: currentPoint
       ? "Best exact-lift estimated 1RM across the latest three exposures, refreshed within 28 days."
       : null,
+    active_objectives: activeObjectives,
   };
+}
+
+/**
+ * One journey per ACTIVE anchor, newest anchor first — the parallel read for an athlete
+ * rebuilding several lifts at once. Falls back to the single (possibly completed)
+ * journey when nothing is active, so a surface can render this list unconditionally.
+ * The shared program state is computed once and threaded into every journey.
+ */
+export function getStrengthJourneys(opts: { programState?: ProgramState } = {}): StrengthJourney[] {
+  const active = listActiveStrengthObjectives();
+  if (!active.length) return [getStrengthJourney(opts)];
+  const programState = opts.programState ?? getProgramState();
+  return active.map((objective) => getStrengthJourney({ programState, exercise: objective.exercise }));
 }
 
 // ---- anchor-lift activation -------------------------------------------------

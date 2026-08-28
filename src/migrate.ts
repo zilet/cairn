@@ -1933,7 +1933,11 @@ export const MIGRATIONS: Migration[] = [
     // so. Each ALTER guards itself, so a fresh DB (where db.ts already created both
     // columns) and a second pass are both clean no-ops.
     up: (db) => {
-      addColumn(db, "training_symptom_events", "scope TEXT NOT NULL DEFAULT 'area' CHECK (scope IN ('area','systemic'))");
+      addColumn(
+        db,
+        "training_symptom_events",
+        "scope TEXT NOT NULL DEFAULT 'area' CHECK (scope IN ('area','systemic'))"
+      );
       addColumn(
         db,
         "movement_tolerance_observations",
@@ -2270,11 +2274,9 @@ export const MIGRATIONS: Migration[] = [
         if (!hasTable(db, "program_blocks")) return;
         const profile = (() => {
           try {
-            return db
-              .prepare(
-                `SELECT training_intent_json, primary_discipline FROM profile WHERE id = 1`
-              )
-              .get() as { training_intent_json?: string | null; primary_discipline?: string | null } | undefined;
+            return db.prepare(`SELECT training_intent_json, primary_discipline FROM profile WHERE id = 1`).get() as
+              | { training_intent_json?: string | null; primary_discipline?: string | null }
+              | undefined;
           } catch {
             return undefined;
           }
@@ -2342,9 +2344,9 @@ export const MIGRATIONS: Migration[] = [
       // imports. A missing table or a date-only legacy stamp still counts.
       const appliedWeekCovers = (date: string): boolean => {
         try {
-          const row = db
-            .prepare(`SELECT value FROM app_state WHERE key = 'recovery_week_applied'`)
-            .get() as { value?: string } | undefined;
+          const row = db.prepare(`SELECT value FROM app_state WHERE key = 'recovery_week_applied'`).get() as
+            | { value?: string }
+            | undefined;
           if (!row?.value) return false;
           let appliedOn = String(row.value).slice(0, 10);
           if (!/^\d{4}-\d{2}-\d{2}$/.test(appliedOn)) {
@@ -2398,6 +2400,31 @@ export const MIGRATIONS: Migration[] = [
       }
       if (repaired) {
         console.log(`[migrate] v97 outcome-comparability-repair: ${repaired} daily_session_outcomes`);
+      }
+    },
+  },
+  {
+    version: 98,
+    name: "strength-objectives-one-active-per-lift",
+    // MULTI-ANCHOR OBJECTIVES. The anchor-lift journey shipped with a partial
+    // unique index on `status` — literally one active objective in the whole
+    // database. An athlete rebuilding squat, deadlift, row, bench, curl and
+    // press in parallel could therefore hold exactly one of those six, and
+    // naming the second silently superseded the first.
+    //
+    // The invariant becomes ONE ACTIVE ROW PER exercise_key. Additive and
+    // non-destructive: no row is read, rewritten or deleted, so an existing
+    // active objective survives untouched and simply stops blocking the others.
+    // Idempotent — DROP ... IF EXISTS / CREATE ... IF NOT EXISTS both re-run
+    // cleanly, and the db.ts CREATE TABLE block already carries the new index
+    // for fresh databases.
+    up: (db) => {
+      try {
+        db.exec(`DROP INDEX IF EXISTS idx_strength_objectives_one_active`);
+        db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_strength_objectives_one_active_per_lift
+                   ON strength_objectives(exercise_key) WHERE status = 'active'`);
+      } catch {
+        /* a DB predating strength_objectives has no index to move */
       }
     },
   },

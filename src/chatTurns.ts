@@ -329,7 +329,8 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts);
     const runReply = reconcileChatRunReply(planReply, turn.message, applied);
     const objectiveReply = reconcileStrengthObjectiveReply(runReply, turn.message, applied);
-    const reply = reconcileChatRevertReply(objectiveReply, applied, refusedReverts, proposedReply);
+    const structureReply = reconcileTrainingStructureReply(objectiveReply, applied);
+    const reply = reconcileChatRevertReply(structureReply, applied, refusedReverts, proposedReply);
     const failedAttempts = attempts.filter((a) => !a.ok);
     const meta: {
       applied: typeof applied;
@@ -871,6 +872,20 @@ export function hasExplicitSymptomResolveIntent(message: string | null | undefin
   const negated = /\b(?:do not|don't|dont|never|not|stop)\b[\s\S]{0,24}\b(?:close|resolve|clear|mark)\b/i;
   if (negated.test(text)) return false;
   return subject.test(text) && (closeCommand.test(text) || healed.test(text));
+}
+
+// A training-STRUCTURE request is the athlete asking for a different shape of
+// training. Chat cannot restructure a plan, so the action only records an ask-tier
+// decision for them to confirm — nothing mutates — and the gate is deliberately
+// permissive: the model reads the sentence, and the one thing the server refuses is
+// the reading every other training gate here already refuses, a leading question
+// ("Should I train all six lifts?"), which is a conversation and not an ask.
+export function flagTrainingStructureAuthorized(message: string | null | undefined): boolean {
+  const text = String(message ?? "")
+    .replace(/[‘’]/g, "'")
+    .trim();
+  if (!text) return false;
+  return !isLeadingQuestion(text);
 }
 
 function decisionReferences(text: string): number[] {
@@ -1766,6 +1781,20 @@ export const STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS = [
   "Nothing landed on your strength goals — no strength objective was saved.",
 ] as const;
 
+export const TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS = [
+  "Nothing was actually flagged to the coach lane there, so your plan and its structure are unchanged.",
+  "To be straight with you: no request reached the coach lane, and your training structure is unchanged.",
+  "I didn't get that hand-off recorded, so nothing is waiting on the coach lane and your plan is unchanged.",
+  "No structure request was saved from this — your plan and split stay exactly as they are.",
+] as const;
+
+export const TRAINING_STRUCTURE_UNVERIFIED_VARIANTS: ReadonlyArray<(reason: string) => string> = [
+  (reason) => `I couldn't verify that hand-off, so I won't claim it's waiting: ${reason}.`,
+  (reason) => `That request didn't read back cleanly, so I won't claim the coach lane has it: ${reason}.`,
+  (reason) => `I can't confirm that reached the coach lane, so I won't say it did: ${reason}.`,
+  (reason) => `That hand-off isn't confirmed on my side, so I won't claim it's queued: ${reason}.`,
+] as const;
+
 export const DECISION_REVERT_NOT_AUTHORIZED_VARIANTS: ReadonlyArray<(how: string) => string> = [
   (how) =>
     `I read that as a question rather than a go-ahead, so nothing was reverted. Say “${how}” and I'll roll it back.`,
@@ -2044,6 +2073,44 @@ export function reconcileStrengthObjectiveReply(
     ? `Strength objective saved and verified: ${exercise} to ${target} lb estimated 1RM.`
     : `Strength objective saved and verified: ${exercise}.`;
   return appendReceipt(reply, receipt);
+}
+
+// Prose claiming the structure request was handed off. Subject-anchored the same way
+// replyClaimsRunSuccess is: an honest sentence ("I can't change your split from here")
+// shares vocabulary with the false claim, so only the hand-off ASSERTION counts.
+function replyClaimsStructureFlagged(reply: string): boolean {
+  return /\b(?:i(?:['’]ve| have| will|['’]ll)?\s+(?:now\s+)?(?:flagged|flag|pass(?:ed)?|sen[dt]|rout(?:ed|e)|hand(?:ed)?\s+(?:it|that|this)\s+(?:off|over))\b[\s\S]{0,60}\b(?:coach|coaching)\s+lane\b|\b(?:coach|coaching)\s+lane\b[\s\S]{0,40}\b(?:has|got|will get|picks? (?:it|that) up)\b)/i.test(
+    reply
+  );
+}
+
+// The counterpart to reconcileStrengthObjectiveReply for the structure hand-off. Chat
+// promising to "flag it to your coach lane" and writing nothing is exactly the failure
+// flag_training_structure exists to close, so the reply may only make that claim when
+// an ask-tier decision genuinely landed — and when one did, the receipt says plainly
+// that it is waiting to be confirmed, not that anything changed.
+export function reconcileTrainingStructureReply(
+  reply: string,
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
+): string {
+  const today = localDateISO();
+  const entries = applied.filter((entry) => entry.type === "flag_training_structure");
+  if (!entries.length) {
+    if (replyClaimsStructureFlagged(reply)) {
+      return pickDayVariant(TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS, today, "chat-structure-not-flagged");
+    }
+    return reply;
+  }
+  const results = entries.map((entry) => recordOrNull(entry.result) ?? {});
+  const verified = results.length > 0 && results.every((result) => result.ok === true && result.verified === true);
+  if (!verified) {
+    const reason = String(entries.find((entry) => entry.error)?.error ?? "the request did not read back");
+    return pickDayVariant(TRAINING_STRUCTURE_UNVERIFIED_VARIANTS, today, "chat-structure-unverified")(reason);
+  }
+  return appendReceipt(
+    reply,
+    "Flagged to your coach lane — it's waiting for you to confirm, and nothing in your plan has changed yet."
+  );
 }
 
 // Prose claiming the Undo already happened. Subject-anchored on purpose, exactly as
@@ -2565,10 +2632,7 @@ export function chatReadPromptSuffix(state: ChatReadState, exhausted: boolean): 
 // (that would leak the JSON into the bubble). It mirrors the job loop's handling
 // (`runChosen.ts` snapshotOnly): drop the read contract and re-ask the same agent for
 // a plain reply, rather than persisting the protocol JSON as prose.
-export type ChatReadTurnClass =
-  | { kind: "query"; query: CoachReadQueryTurn }
-  | { kind: "malformed" }
-  | { kind: "none" };
+export type ChatReadTurnClass = { kind: "query"; query: CoachReadQueryTurn } | { kind: "malformed" } | { kind: "none" };
 
 export function classifyChatReadTurn(raw: string): ChatReadTurnClass {
   const text = String(raw ?? "");
@@ -2814,7 +2878,13 @@ export async function runChatCompletion(
             // contract and re-stream the SAME agent once for a plain reply. Bounded:
             // readExhausted stops the next pass from detecting a read at all.
             const attempt = decorate(
-              { agent: first, ok: true, status: "read_malformed", exit_code: res.code, model: res.usage?.model ?? null },
+              {
+                agent: first,
+                ok: true,
+                status: "read_malformed",
+                exit_code: res.code,
+                model: res.usage?.model ?? null,
+              },
               firstProfile,
               true,
               ttft
@@ -3273,7 +3343,10 @@ export function applyChatActions(
           break;
         }
         case "log_weight":
-          applied.push({ type: a.type, result: repo.logWeight(a.weight_lb, stringOrUndefined(a.date), stringOrUndefined(a.note)) });
+          applied.push({
+            type: a.type,
+            result: repo.logWeight(a.weight_lb, stringOrUndefined(a.date), stringOrUndefined(a.note)),
+          });
           break;
         case "log_health": {
           // Defense in depth: normalizeChatActions already rejects the imaging kind
@@ -3415,6 +3488,65 @@ export function applyChatActions(
             },
           });
           break;
+        case "flag_training_structure": {
+          // THE PROMISE HAS TO LEAVE A TRACE. A reply that says "I'll flag it to your
+          // coach lane" and writes nothing is the bug this closes. The durable artifact
+          // is an ask-tier `training_structure` decision holding the athlete's own
+          // sentence as its rationale — it is never applied from here, and the athlete
+          // confirms it on the decision surfaces exactly as any other ask.
+          if (!flagTrainingStructureAuthorized(message)) break;
+          const request = a.request;
+          const requestSummary = typeof a.summary === "string" && a.summary.trim() ? a.summary.trim() : request;
+          const explanation = `You asked for a change to how your training is built: “${request}”. Nothing has changed yet — confirm it and the coach can build it into the plan.`;
+          const recorded = repo.recordDecision({
+            effective_date: null,
+            kind: "training_structure",
+            domain: "training",
+            summary: requestSummary.slice(0, 300),
+            // The athlete's words, verbatim — never the model's paraphrase.
+            rationale: request,
+            source: "chat",
+            source_ref_type: null,
+            source_ref_key: null,
+            status: "review",
+            autonomy_tier: "ask",
+            risk_class: "moderate",
+            // There is no plan mutation to take back; confirming it is what starts one.
+            reversible: false,
+            input_fingerprint: null,
+            context: {
+              review_required: true,
+              requested_in_chat: true,
+              athlete_request: request,
+              chat_turn_id: ctx.turnId ?? null,
+              evidence_observed_at: new Date().toISOString(),
+            },
+            action: {
+              kind: "training_structure_request",
+              request,
+              user_explanation: explanation,
+            },
+            specialist: null,
+            applied_at: null,
+            reverted_at: null,
+            superseded_by: null,
+            evaluator_version: null,
+          });
+          const stored = repo.getBrainDecision(Number(recorded.decision.id));
+          // Server-owned readback: the receipt may only claim a flag that is genuinely
+          // sitting in the review queue at the ask tier with the athlete's own words.
+          const verified =
+            !!stored &&
+            stored.status === "review" &&
+            stored.autonomy_tier === "ask" &&
+            stored.kind === "training_structure" &&
+            String(stored.rationale ?? "") === request;
+          applied.push({
+            type: a.type,
+            result: { ok: verified, verified, decision_id: stored?.id ?? null, decision: stored ?? null },
+          });
+          break;
+        }
         case "log_checkin":
           applied.push({
             type: a.type,

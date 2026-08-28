@@ -28,6 +28,9 @@ import {
   sessionHighlights,
   setSessionFeedback,
   setStrengthObjective,
+  getStrengthJourneys,
+  listActiveStrengthObjectives,
+  listStrengthObjectives,
   skipExercise,
   unskipExercise,
   updateSessionNotes,
@@ -46,7 +49,10 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       reps: z.number().int().optional(),
       rir: z.number().optional().describe("reps in reserve"),
       duration_sec: z.number().optional().describe("seconds held/hung, for timed exercises"),
-      exercise_mode: z.enum(["reps", "timed"]).optional().describe("sets the exercise's mode (applied on create; updates an existing exercise when passed)"),
+      exercise_mode: z
+        .enum(["reps", "timed"])
+        .optional()
+        .describe("sets the exercise's mode (applied on create; updates an existing exercise when passed)"),
       set_number: z.number().int().optional(),
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       day_number: z.number().int().optional(),
@@ -82,7 +88,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_strength_objective",
-    "Set one athlete-explicit anchor-lift objective. Supersedes the prior active objective and snapshots either the exact exercise's current personal best or an explicit estimated-1RM target.",
+    "Set one athlete-explicit anchor-lift objective. Supersedes the prior active objective ON THAT LIFT ONLY — call it once per lift to hold several anchors in parallel — and snapshots either the exact exercise's current personal best or an explicit estimated-1RM target.",
     {
       exercise: z.string().min(1),
       target_kind: z.enum(["return_to_personal_best", "explicit_est_1rm"]),
@@ -90,8 +96,23 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     },
     async (input) => {
       const objective = setStrengthObjective(input);
-      return asText({ objective, journey: getStrengthJourney() });
+      return asText({ objective, journey: getStrengthJourney({ exercise: objective.exercise }) });
     }
+  );
+
+  server.tool(
+    "get_strength_journeys",
+    "Read EVERY anchor-lift comeback journey the athlete currently holds, one per active objective. An athlete rebuilding several lifts in parallel has several active anchors (one per lift); get_strength_journey answers only for the most recently chosen one. Read-only.",
+    {},
+    async () => asText({ journeys: getStrengthJourneys() })
+  );
+
+  server.tool(
+    "list_strength_objectives",
+    "List the athlete's anchor-lift objective rows: every currently active one (at most one per lift) plus recent history (superseded/completed/archived). Read-only; never selects a goal.",
+    { limit: z.number().int().positive().max(200).optional() },
+    async ({ limit }) =>
+      asText({ active: listActiveStrengthObjectives(), objectives: listStrengthObjectives(limit ?? 50) })
   );
 
   server.tool(
@@ -285,7 +306,13 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       movement: z.string().trim().min(1).max(120),
       session_id: z.number().int().positive().optional(),
       symptom_event_id: z.number().int().positive().optional(),
-      area_text: z.string().trim().min(1).max(120).optional().describe("Short area label, e.g. 'left knee'. A place, not a sentence."),
+      area_text: z
+        .string()
+        .trim()
+        .min(1)
+        .max(120)
+        .optional()
+        .describe("Short area label, e.g. 'left knee'. A place, not a sentence."),
       outcome: z.enum(["pain_present", "pain_free"]),
     },
     async (input) => asText(recordExerciseSymptomObservation(input))
@@ -332,7 +359,13 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     {
       id: z.number().int().positive(),
       on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
-      area_text: z.string().trim().min(1).max(120).optional().describe("Short area label, e.g. 'left knee'. A place, not a sentence."),
+      area_text: z
+        .string()
+        .trim()
+        .min(1)
+        .max(120)
+        .optional()
+        .describe("Short area label, e.g. 'left knee'. A place, not a sentence."),
       movement: z.string().trim().min(1).max(120).optional(),
       exercise_id: z.number().int().positive().nullable().optional(),
     },

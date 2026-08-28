@@ -15,6 +15,11 @@ type ChatActionRecord = Record<string, unknown>;
 // it has to match across surfaces or chat becomes the loose one.
 const SYMPTOM_AREA_INPUT_MAX = 120;
 
+// A structure request is one athlete sentence, not a transcript. The decision
+// contract truncates a rationale at 1,500 characters anyway; bounding it here keeps
+// the stored ask readable and the shape check honest about what it accepted.
+export const TRAINING_STRUCTURE_REQUEST_MAX = 1_000;
+
 export const CHAT_ACTION_TYPES = [
   "log_activity",
   "log_set",
@@ -40,6 +45,7 @@ export const CHAT_ACTION_TYPES = [
   "report_training_symptom",
   "resolve_training_symptom",
   "log_checkin",
+  "flag_training_structure",
   "revert_decision",
 ] as const;
 
@@ -298,6 +304,18 @@ export interface LogCheckinAction extends ChatActionBase {
   date?: unknown;
 }
 
+// The athlete asking for a change to the SHAPE of their training — which lifts the
+// program is built around, how the week is split, what the block is for. Chat cannot
+// restructure a plan, and a promise to "flag it to your coach lane" that wrote nothing
+// was the whole bug this exists to close: the action records an ask-tier
+// `training_structure` brain decision carrying the athlete's own sentence, and the
+// athlete confirms it on the existing decision surfaces. It never applies anything.
+export interface FlagTrainingStructureAction extends ChatActionBase {
+  type: "flag_training_structure";
+  request: string;
+  summary?: unknown;
+}
+
 export interface RevertDecisionAction extends ChatActionBase {
   type: "revert_decision";
   id: number | string;
@@ -329,6 +347,7 @@ export type ChatAction =
   | ReportTrainingSymptomAction
   | ResolveTrainingSymptomAction
   | LogCheckinAction
+  | FlagTrainingStructureAction
   | RevertDecisionAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
@@ -608,6 +627,16 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `Use log_checkin when the athlete tells you how they feel today or how a session felt — "I feel great", "I feel rough", "that session was hard". energy, sleep_feel, soreness, and mood are all 1 (low) to 5 (great) — the same scale the app writes. Omit any field they did not speak to; never guess a missing rating. A note is optional free text and is stored verbatim. date must be a real YYYY-MM-DD on or before today; omit it rather than inventing "yesterday" or a future day. This writes the same check-in the app does — absence of a check-in is silence.`,
     ],
   },
+  flag_training_structure: {
+    type: "flag_training_structure",
+    applyMode: "immediate",
+    shape: `{ "type": "flag_training_structure", "request": "<the athlete's own words, verbatim>", "summary": "<one short line naming the change they asked for>" }`,
+    guidance: [
+      `Use flag_training_structure when the athlete asks for a change to the SHAPE of their training that you cannot make from chat — which lifts the program is built around ("track all six of my anchors in parallel"), how the week is split, what the current block is for, adding or dropping a training day. You have no action that restructures a plan, so saying you will "flag it" or "pass it to your coach lane" without emitting this action leaves nothing behind at all — never promise the hand-off without it.`,
+      `"request" MUST be the athlete's own sentence, copied verbatim — it is stored as the rationale the coach lane reads, so do not paraphrase, summarize or clean it up. "summary" is your own short third-person line naming the change ("Rebuild six anchor lifts in parallel"). Emit it only for an explicit ask from the athlete; a question about what they should do, or your own idea, is not one.`,
+      `This records a proposal for the athlete to CONFIRM — it changes no plan by itself and is never applied automatically. Say so honestly: it is flagged and will come back as something to confirm, not "done" or "updated". When the same ask is already standing, re-flagging is harmless; it does not stack up duplicates.`,
+    ],
+  },
   revert_decision: {
     type: "revert_decision",
     applyMode: "immediate",
@@ -655,7 +684,9 @@ export function renderChatActionPromptProse(types: readonly ChatActionType[] = C
   const immediateTypes = types.filter(
     (type) => (CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec).applyMode === "immediate"
   );
-  const draftTypes = types.filter((type) => (CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec).applyMode === "draft");
+  const draftTypes = types.filter(
+    (type) => (CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec).applyMode === "draft"
+  );
   const draftSection = draftTypes.length
     ? `\n- ${draftTypes.join(" and ")} are saved as DRAFTS for the user to review and apply — never assume they're live.\n${renderActionGuidance(draftTypes)}`
     : "";
@@ -850,6 +881,14 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
         note,
         date: chatCheckinDate(value.date),
       };
+    }
+    case "flag_training_structure": {
+      // The athlete's words are the payload: an empty or whitespace request has
+      // nothing to route, and a whole transcript pasted into it is not a request.
+      const request = nonBlank(value.request) ? value.request.trim().slice(0, TRAINING_STRUCTURE_REQUEST_MAX) : null;
+      if (!request) return null;
+      const summary = nonBlank(value.summary) ? value.summary.trim().slice(0, 200) : null;
+      return { ...value, type: "flag_training_structure", request, summary };
     }
     case "revert_decision":
       return finiteId(value.id) ? { ...value, type: "revert_decision", id: value.id } : null;

@@ -69,24 +69,29 @@ type TrackedObjective = {
   achieved_date: string | null;
 };
 
-function currentTrackedObjective(): TrackedObjective | null {
+// The tracked objective FOR ONE LIFT. Several anchors may be active at once (one
+// active row per exercise_key, schema v98), so a logged squat must reconcile the
+// squat objective — asking for "the" active objective would hand back whichever
+// anchor was chosen last and quietly stop closing every other one.
+function currentTrackedObjective(exerciseKey: string): TrackedObjective | null {
+  if (!exerciseKey) return null;
   return (
     (db
       .prepare(
         `SELECT id, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
                 status, achieved_est_1rm, achieved_date
        FROM strength_objectives
-      WHERE status='active'
+      WHERE status='active' AND exercise_key=?
       UNION ALL
      SELECT id, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
             status, achieved_est_1rm, achieved_date
        FROM strength_objectives
-      WHERE status='completed' AND NOT EXISTS (
-        SELECT 1 FROM strength_objectives WHERE status='active'
+      WHERE status='completed' AND exercise_key=? AND NOT EXISTS (
+        SELECT 1 FROM strength_objectives WHERE status='active' AND exercise_key=?
       )
       ORDER BY id DESC LIMIT 1`
       )
-      .get() as TrackedObjective | undefined) ?? null
+      .get(exerciseKey, exerciseKey, exerciseKey) as TrackedObjective | undefined) ?? null
   );
 }
 
@@ -96,8 +101,8 @@ export function reconcileStrengthObjectiveFromLoggedSets(input: { exercise: stri
   reopened: boolean;
 } {
   const key = normalizedExerciseKey(input.exercise);
-  const objective = currentTrackedObjective();
-  if (!objective || objective.exercise_key !== key) return { completed: false, reopened: false };
+  const objective = currentTrackedObjective(key);
+  if (!objective) return { completed: false, reopened: false };
 
   const history = exactHistory(key);
   const eligible = !objective.baseline_date
@@ -105,8 +110,7 @@ export function reconcileStrengthObjectiveFromLoggedSets(input: { exercise: stri
     : history.filter(
         (point) =>
           point.date > objective.baseline_date! ||
-          (point.date === objective.baseline_date &&
-            point.est_1rm > Number(objective.baseline_est_1rm ?? 0)) ||
+          (point.date === objective.baseline_date && point.est_1rm > Number(objective.baseline_est_1rm ?? 0)) ||
           (objective.status === "completed" && point.date === objective.achieved_date)
       );
   const supporting = eligible.filter((point) => point.est_1rm >= Number(objective.target_est_1rm));
@@ -123,8 +127,8 @@ export function reconcileStrengthObjectiveFromLoggedSets(input: { exercise: stri
   }
 
   if (!supporting.length) {
-    // There is no active row when currentTrackedObjective returns a completed
-    // objective, so reopening cannot violate the one-active-objective invariant.
+    // There is no active row FOR THIS LIFT when currentTrackedObjective returns a
+    // completed objective, so reopening cannot violate the one-active-per-lift invariant.
     db.prepare(
       `UPDATE strength_objectives
           SET status='active', completed_at=NULL, achieved_est_1rm=NULL,
@@ -173,37 +177,42 @@ export interface StrengthJourneySessionMovement {
 export function strengthJourneySessionMovement(sessionId: number): StrengthJourneySessionMovement | null {
   const session = db.prepare(`SELECT date FROM sessions WHERE id=?`).get(sessionId) as { date: string } | undefined;
   if (!session) return null;
-  const objective = db
+  // Every anchor the athlete holds, newest first. With several active at once the
+  // session's own sets decide which one this read is about — taking the newest row
+  // unconditionally would report silence on a session that moved a different anchor.
+  const objectives = db
     .prepare(
       `SELECT exercise, exercise_key, target_est_1rm FROM strength_objectives
-      WHERE status IN ('active','completed') ORDER BY id DESC LIMIT 1`
+      WHERE status IN ('active','completed') ORDER BY id DESC`
     )
-    .get() as { exercise: string; exercise_key: string; target_est_1rm: number } | undefined;
-  if (!objective) return null;
-  const ids = exactExerciseIds(objective.exercise_key);
-  if (!ids.length) return null;
-  const hit = db
-    .prepare(
-      `SELECT 1 FROM logged_sets WHERE session_id=? AND exercise_id IN (${ids.map(() => "?").join(",")}) LIMIT 1`
-    )
-    .get(sessionId, ...ids);
-  if (!hit) return null;
-  const history = exactHistory(objective.exercise_key);
-  const current = capacityEnvelope(history, session.date);
-  const before = capacityEnvelope(
-    history.filter((point) => point.date !== session.date),
-    session.date
-  );
-  if (!current || !before) return null;
-  const delta = round1(current.est_1rm - before.est_1rm);
-  if (!(delta > 0)) return null;
-  const priorGap = Math.max(0, Number(objective.target_est_1rm) - before.est_1rm);
-  const currentGap = Math.max(0, Number(objective.target_est_1rm) - current.est_1rm);
-  return {
-    exercise: objective.exercise,
-    current_est_1rm: current.est_1rm,
-    current_date: current.date,
-    capacity_delta_lb: delta,
-    gap_closed_lb: round1(Math.max(0, priorGap - currentGap)),
-  };
+    .all() as Array<{ exercise: string; exercise_key: string; target_est_1rm: number }>;
+  for (const objective of objectives) {
+    const ids = exactExerciseIds(objective.exercise_key);
+    if (!ids.length) continue;
+    const hit = db
+      .prepare(
+        `SELECT 1 FROM logged_sets WHERE session_id=? AND exercise_id IN (${ids.map(() => "?").join(",")}) LIMIT 1`
+      )
+      .get(sessionId, ...ids);
+    if (!hit) continue;
+    const history = exactHistory(objective.exercise_key);
+    const current = capacityEnvelope(history, session.date);
+    const before = capacityEnvelope(
+      history.filter((point) => point.date !== session.date),
+      session.date
+    );
+    if (!current || !before) continue;
+    const delta = round1(current.est_1rm - before.est_1rm);
+    if (!(delta > 0)) continue;
+    const priorGap = Math.max(0, Number(objective.target_est_1rm) - before.est_1rm);
+    const currentGap = Math.max(0, Number(objective.target_est_1rm) - current.est_1rm);
+    return {
+      exercise: objective.exercise,
+      current_est_1rm: current.est_1rm,
+      current_date: current.date,
+      capacity_delta_lb: delta,
+      gap_closed_lb: round1(Math.max(0, priorGap - currentGap)),
+    };
+  }
+  return null;
 }

@@ -411,7 +411,10 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/body-metrics\.ts/);
   // W3.3: +2 (list_context_tags, toggle_context_tag) in src/surfaces/mcp/person-context.ts.
   // W1 staging: +3 (list_beliefs, dispute_belief, undispute_belief) in src/surfaces/mcp/connected-brain.ts.
-  assert.equal(tools.length, 257, "tool count changes only for reviewed MCP additions");
+  // Multi-anchor objectives: +2 (get_strength_journeys, list_strength_objectives) in
+  // src/surfaces/mcp/training-log.ts — the parallel-anchor read the athlete's six
+  // rebuild lifts need, mirroring GET /api/strength-journeys and /api/strength-objectives.
+  assert.equal(tools.length, 259, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);

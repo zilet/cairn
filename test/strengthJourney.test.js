@@ -36,26 +36,40 @@ test("return-to-best snaps the exact target and does not move it after a new bes
   assert.equal(repo.getStrengthJourney().current.est_1rm, 239.2);
 });
 
-test("setting a new objective leaves exactly one active and preserves the old row", () => {
-  const first = repo.setStrengthObjective({
+test("a new objective on a DIFFERENT lift runs in parallel; the same lift supersedes", () => {
+  const squat = repo.setStrengthObjective({
     exercise: "Back Squat",
     target_kind: "explicit_est_1rm",
     target_est_1rm: 300,
   });
-  const second = repo.setStrengthObjective({
+  const bench = repo.setStrengthObjective({
     exercise: "Barbell Bench Press",
     target_kind: "explicit_est_1rm",
     target_est_1rm: 225,
   });
-  assert.equal(repo.getActiveStrengthObjective().id, second.id);
+  // Rebuilding two lifts is one goal, not two competing ones: both stay active.
+  assert.equal(repo.getActiveStrengthObjective().id, bench.id, "the primary is the most recent anchor");
+  assert.deepEqual(
+    repo.listActiveStrengthObjectives().map((row) => row.id),
+    [bench.id, squat.id]
+  );
+  assert.equal(repo.getStrengthObjective(squat.id).status, "active");
+
+  // Naming a NEW squat target retires only the old squat row.
+  const squatAgain = repo.setStrengthObjective({
+    exercise: "Back Squat",
+    target_kind: "explicit_est_1rm",
+    target_est_1rm: 315,
+  });
   const rows = repo.listStrengthObjectives();
-  assert.equal(rows.filter((row) => row.status === "active").length, 1);
-  assert.equal(rows.find((row) => row.id === first.id).status, "superseded");
-  assert.equal(rows.find((row) => row.id === first.id).target_est_1rm, 300);
+  assert.equal(rows.filter((row) => row.status === "active").length, 2);
+  assert.equal(rows.find((row) => row.id === squat.id).status, "superseded");
+  assert.equal(rows.find((row) => row.id === squat.id).target_est_1rm, 300, "the superseded snapshot is immutable");
+  assert.equal(rows.find((row) => row.id === bench.id).status, "active", "the bench anchor is untouched");
   assert.deepEqual(
     repo.exportAll().strength_objectives.map((row) => row.id),
-    [second.id, first.id],
-    "JSON backup keeps the active and superseded immutable snapshots"
+    [squatAgain.id, bench.id, squat.id],
+    "JSON backup keeps every immutable snapshot"
   );
 });
 
@@ -304,6 +318,13 @@ test("set correction preserves alternate evidence and never rewrites superseded 
     exercise: "Barbell Bench Press",
     target_kind: "explicit_est_1rm",
     target_est_1rm: 200,
+  });
+  // Same lift, so this one retires the row above; the archived deadlift anchor is a
+  // third lift entirely and neither of them may be rewritten by a squat correction.
+  repo.setStrengthObjective({
+    exercise: "Barbell Bench Press",
+    target_kind: "explicit_est_1rm",
+    target_est_1rm: 210,
   });
   const current = repo.setStrengthObjective({
     exercise: "Deadlift",

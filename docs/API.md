@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**325 routes** across 111 groups.
+**328 routes** across 113 groups.
 
 ## `/activities`
 
@@ -738,6 +738,19 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/strength-journey` | One explicit athlete-selected anchor lift. GET is strictly read-only; PUT snaps the target now and supersedes the prior active objective atomically. When no objective exists, the GET folds in a reachable anchor suggestion (computed from the standards capacities only in that case, so an existing journey pays nothing). |
 | PUT | `/api/strength-journey` |  |
 | POST | `/api/strength-journey/suggestion/dismiss` | Quiet the anchor-lift invitation for a long while (a suggestion, never a nag). |
+
+## `/strength-journeys`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/strength-journeys` | Every anchor the athlete is rebuilding, one journey each (an athlete may hold several at once — one active objective per lift). Read-only; the single /strength-journey above still answers with the primary anchor. |
+
+## `/strength-objectives`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/strength-objectives` | The raw objective rows (active + history). Read-only. |
+| POST | `/api/strength-objectives` | Create one anchor objective. Mirrors PUT /strength-journey exactly — the plural path is what an athlete (or the coach agent) calls once per lift to hold several anchors in parallel; each call supersedes only the prior objective ON THAT LIFT. |
 
 ## `/suggestions`
 

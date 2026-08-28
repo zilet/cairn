@@ -36,6 +36,9 @@ import {
   sessionHighlights,
   setSessionFeedback,
   setStrengthObjective,
+  getStrengthJourneys,
+  listActiveStrengthObjectives,
+  listStrengthObjectives,
   skipExercise,
   trainingLoadBand,
   unskipExercise,
@@ -72,9 +75,7 @@ trainingLogRouter.get("/training-symptoms", (req, res) => {
   try {
     const requested = req.query.movements;
     const movements =
-      requested == null
-        ? undefined
-        : (Array.isArray(requested) ? requested : [requested]).map(String).slice(0, 64);
+      requested == null ? undefined : (Array.isArray(requested) ? requested : [requested]).map(String).slice(0, 64);
     res.json(
       listTrainingSymptoms({
         on: req.query.on ? String(req.query.on) : undefined,
@@ -100,8 +101,7 @@ trainingLogRouter.post("/training-symptoms/observation", (req, res) => {
         date: String(body.date ?? ""),
         movement: boundedText(body.movement, "movement", 120, true)!,
         session_id: body.session_id == null ? null : positiveId(body.session_id, "session_id"),
-        symptom_event_id:
-          body.symptom_event_id == null ? null : positiveId(body.symptom_event_id, "symptom_event_id"),
+        symptom_event_id: body.symptom_event_id == null ? null : positiveId(body.symptom_event_id, "symptom_event_id"),
         area_text: boundedText(body.area_text, "area_text", 300),
         outcome: body.outcome,
       })
@@ -255,11 +255,13 @@ trainingLogRouter.put("/sessions/:id/notes", (req, res) => {
 trainingLogRouter.post("/sessions/:date/feedback", (req, res) => {
   const b = req.body ?? {};
   try {
-    res.json(setSessionFeedback(String(req.params.date), {
-      soreness: b.soreness,
-      performance: b.performance,
-      joint_pain: b.joint_pain,
-    }));
+    res.json(
+      setSessionFeedback(String(req.params.date), {
+        soreness: b.soreness,
+        performance: b.performance,
+        joint_pain: b.joint_pain,
+      })
+    );
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -335,6 +337,38 @@ trainingLogRouter.get("/strength-journey", (_req, res) => {
 // Quiet the anchor-lift invitation for a long while (a suggestion, never a nag).
 trainingLogRouter.post("/strength-journey/suggestion/dismiss", (_req, res) => {
   res.json(dismissAnchorObjectiveSuggestion());
+});
+
+// Every anchor the athlete is rebuilding, one journey each (an athlete may hold
+// several at once — one active objective per lift). Read-only; the single
+// /strength-journey above still answers with the primary anchor.
+trainingLogRouter.get("/strength-journeys", (_req, res) => {
+  res.json({ journeys: getStrengthJourneys() });
+});
+
+// The raw objective rows (active + history). Read-only.
+trainingLogRouter.get("/strength-objectives", (req, res) => {
+  res.json({
+    active: listActiveStrengthObjectives(),
+    objectives: listStrengthObjectives(req.query.limit != null ? Number(req.query.limit) : 50),
+  });
+});
+
+// Create one anchor objective. Mirrors PUT /strength-journey exactly — the plural
+// path is what an athlete (or the coach agent) calls once per lift to hold several
+// anchors in parallel; each call supersedes only the prior objective ON THAT LIFT.
+trainingLogRouter.post("/strength-objectives", (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const objective = setStrengthObjective({
+      exercise: body.exercise,
+      target_kind: body.target_kind,
+      target_est_1rm: body.target_est_1rm,
+    });
+    res.json({ objective, journey: getStrengthJourney({ exercise: objective.exercise }) });
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message ?? String(error) });
+  }
 });
 
 trainingLogRouter.put("/strength-journey", (req, res) => {
