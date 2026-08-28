@@ -1085,7 +1085,10 @@ function computeWeeklyStats(date?: string) {
       `SELECT COUNT(DISTINCT s.date) AS c FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date < ?`
     )
     .get(monday, nextMonday) as any;
-  const weekPlanned = db.prepare(`SELECT COUNT(*) AS c FROM plan_days`).get() as any;
+  // "Planned" means SESSIONS planned. The week's rest day is a real row in the
+  // template (v99) and deliberately not one of them — counting it would tell the
+  // athlete they are 2 of 6 through a week that only ever asked for five.
+  const weekPlanned = db.prepare(`SELECT COUNT(*) AS c FROM plan_days WHERE day_type != 'rest'`).get() as any;
   // Cardio this week (activities table) — so the "This Week" summary speaks to
   // BOTH modalities, not just lifting adherence. Count + total distance.
   const weekCardio = db

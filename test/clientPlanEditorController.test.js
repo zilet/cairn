@@ -283,6 +283,9 @@ test("plan editor controller wires edit add reorder and save payload", async () 
         day_number: 1,
         name: "Upper edited",
         focus: "Strength",
+        // Every saved day declares its type: the editor saves the WHOLE week, and a
+        // payload that omitted it would erase the week's rest day on any other edit.
+        day_type: "training",
         items: [
           { kind: "strength", exercise: "Bench", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185, note: null, warmup_sets: null, target_seconds: null },
           { kind: "strength", exercise: "Pull-up", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, note: null, warmup_sets: null, target_seconds: null },
@@ -343,6 +346,7 @@ test("plan editor controller serializes cardio and filters blank rows", () => {
       day_number: 1,
       name: "Day 1",
       focus: null,
+      day_type: "training",
       items: [
         { kind: "strength", exercise: "Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, note: "controlled", warmup_sets: null, target_seconds: null },
         { kind: "cardio", note: "Tempo", target_distance_km: 6, target_duration_min: 35, target_zone: "Z3", interval: { note: "4 x 3 min" } },

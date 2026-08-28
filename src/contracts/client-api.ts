@@ -595,6 +595,10 @@ export interface ClientPlanDay {
   day_number: number;
   name: string;
   focus?: string | null;
+  // 'training' (default) | 'rest'. A rest day is a real day in the week carrying
+  // ZERO items — the emptiness is the prescription, not a day the athlete forgot
+  // to fill in.
+  day_type?: "training" | "rest";
   // A single grounded "why this session" line (repo/day-read.ts planDayPurpose)
   // tying the day to the active strength block/endurance goal. Absent — never
   // a fabricated fallback — whenever the program state can't ground one.

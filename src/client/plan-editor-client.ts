@@ -25,8 +25,14 @@ type PlanEditorDay = {
   day_number?: unknown;
   name?: unknown;
   focus?: unknown;
+  // 'rest' is a real day in the week that carries no items (v99).
+  day_type?: unknown;
   items?: PlanEditorItem[];
 };
+
+function isRestDay(day: PlanEditorDay | PlanEditorApiDay): boolean {
+  return String((day as { day_type?: unknown }).day_type ?? "training") === "rest";
+}
 
 (() => {
 function blankStrength(): PlanEditorItem {
@@ -37,11 +43,16 @@ function blankCardio(): PlanEditorItem {
   return { kind: "cardio", exercise: "", sets: 1, rep_low: null, rep_high: null, target_weight: null, note: "", warmup_sets: null, target_distance_km: null, target_duration_min: null, target_zone: null, interval_note: "" };
 }
 
-function dayModelFromPlan(day: PlanEditorDay | PlanEditorApiDay): Required<Pick<PlanEditorDay, "day_number" | "name" | "focus" | "items">> {
+function dayModelFromPlan(
+  day: PlanEditorDay | PlanEditorApiDay
+): Required<Pick<PlanEditorDay, "day_number" | "name" | "focus" | "day_type" | "items">> {
   return {
     day_number: day.day_number,
     name: day.name,
     focus: day.focus || "",
+    // Carried through the model because the editor saves the WHOLE week: a model
+    // that dropped it would erase the rest day on the next save of any other day.
+    day_type: isRestDay(day) ? "rest" : "training",
     items: (Array.isArray(day.items) ? day.items : []).map((item) => ({
       kind: isCardioItem(item) ? "cardio" : "strength",
       exercise: item.exercise,
@@ -73,6 +84,7 @@ function calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): stri
 
 function progDayHtml(day: PlanEditorDay, dayIndex: number): string {
   const items = Array.isArray(day.items) ? day.items : [];
+  const rest = isRestDay(day);
   const strip = items.map((item) => {
     if (isCardioItem(item)) {
       const tile = artImg("activity", cardioArtPhrase(item), "artile-md strip-tile", art("activity", cardioArtPhrase(item)));
@@ -121,7 +133,7 @@ function progDayHtml(day: PlanEditorDay, dayIndex: number): string {
   return `<div class="prog-day reveal" style="${stagger(dayIndex)}" data-pd="${dayIndex}">
         <div class="prog-head">
           <div class="prog-head-main">
-            <div class="lbl">Day ${escHtml(day.day_number)}</div>
+            <div class="lbl">Day ${escHtml(day.day_number)}${rest ? " · Rest" : ""}</div>
             <div class="prog-name">${escHtml(day.name || `Day ${day.day_number}`)}</div>
             ${day.focus ? `<div class="prog-focus">${escHtml(day.focus)}</div>` : ""}
           </div>
@@ -131,7 +143,7 @@ function progDayHtml(day: PlanEditorDay, dayIndex: number): string {
           </div>
         </div>
         ${strip ? `<div class="prog-strip">${strip}</div>` : ""}
-        <div class="prog-list">${rows || `<div class="empty">No exercises yet — tap Edit day.</div>`}</div>
+        <div class="prog-list">${rows || `<div class="empty">${rest ? "A rest day — nothing planned, and nothing missing." : "No exercises yet — tap Edit day."}</div>`}</div>
       </div>`;
 }
 
@@ -181,6 +193,9 @@ function pitemHtml(item: PlanEditorItem, dayIndex: number, itemIndex: number, la
 
 function pdayHtml(day: PlanEditorDay, dayIndex: number): string {
   const items = Array.isArray(day.items) ? day.items : [];
+  const rest = isRestDay(day);
+  // A rest day shows no item rows and no add buttons: it carries none, and the
+  // server refuses one that does. The toggle is the whole affordance.
   return `<div class="pday" data-d="${dayIndex}">
         <div class="pday-head">
           <input class="pday-name" value="${escAttr(day.name)}" placeholder="Day name">
@@ -188,11 +203,15 @@ function pdayHtml(day: PlanEditorDay, dayIndex: number): string {
           <button class="delbtn" data-delday="${dayIndex}">✕</button>
         </div>
         <input class="pday-focus" value="${escAttr(day.focus)}" placeholder="Focus (optional)">
-        ${items.map((item, itemIndex) => pitemHtml(item, dayIndex, itemIndex, items.length - 1)).join("")}
         <div class="pday-add">
+          <button type="button" class="ghostbtn" data-restday="${dayIndex}" aria-pressed="${rest ? "true" : "false"}">${rest ? "This is a rest day" : "Make this a rest day"}</button>
+          ${rest ? `<span class="lbl" style="align-self:center">no exercises — that's the point</span>` : ""}
+        </div>
+        ${rest ? "" : items.map((item, itemIndex) => pitemHtml(item, dayIndex, itemIndex, items.length - 1)).join("")}
+        ${rest ? "" : `<div class="pday-add">
           <button class="ghostbtn" data-additem="${dayIndex}">+ exercise</button>
           <button class="ghostbtn" data-addcardio="${dayIndex}">+ cardio</button>
-        </div>
+        </div>`}
       </div>`;
 }
 

@@ -63,7 +63,14 @@ CREATE TABLE IF NOT EXISTS plan_days (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day_number INTEGER NOT NULL UNIQUE,
   name TEXT NOT NULL,
-  focus TEXT
+  focus TEXT,
+  -- A first-class REST day in the week template (v99). 'training' (default) is
+  -- every day that carries work; 'rest' is the deliberate seam a hybrid week is
+  -- built around. A rest day carries ZERO plan_items — the emptiness is the
+  -- prescription, not a missing one — and plan quality stops reading it as a
+  -- broken training day. It still rides in the rotation ring so the seam lands
+  -- where the athlete programmed it.
+  day_type TEXT NOT NULL DEFAULT 'training'
 );
 CREATE TABLE IF NOT EXISTS plan_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

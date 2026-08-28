@@ -127,3 +127,35 @@ test("plan editor editable rows preserve selectors, ordering controls, and escap
   assert.match(dayHtml, /value="last 10m steady"/);
   assert.doesNotMatch(dayHtml, /<base>|<pull>|Deadlift "heavy"/);
 });
+
+// ---- the week's rest day, in the editor (v99) ----
+// The editor saves the WHOLE week through one PUT, so the day's type has to survive
+// the model round-trip or a rest day would be erased by editing any other day.
+test("the editor carries a rest day through the model, the read view, and the edit view", () => {
+  const editor = loadPlanEditor();
+  const rest = editor.dayModelFromPlan({ day_number: 3, name: "Rest", focus: null, day_type: "rest", items: [] });
+  assert.equal(rest.day_type, "rest");
+  assert.deepEqual(rest.items, []);
+  assert.equal(
+    editor.dayModelFromPlan({ day_number: 1, name: "Push", focus: "push", items: [] }).day_type,
+    "training",
+    "a day that says nothing is an ordinary day"
+  );
+
+  const read = editor.progDayHtml(rest, 0);
+  assert.match(read, /Day 3 · Rest/, "the read view names the seam");
+  assert.match(read, /rest day/i);
+  assert.doesNotMatch(read, /No exercises yet/, "emptiness is the prescription, not a gap to fill");
+
+  const edit = editor.pdayHtml(rest, 0);
+  assert.match(edit, /data-restday="0"/, "there is a way to unmark it");
+  assert.match(edit, /This is a rest day/);
+  assert.doesNotMatch(edit, /data-additem/, "a rest day offers no way to add work to it");
+
+  const training = editor.pdayHtml(
+    editor.dayModelFromPlan({ day_number: 1, name: "Push", focus: "push", items: [] }),
+    0
+  );
+  assert.match(training, /Make this a rest day/);
+  assert.match(training, /data-additem/);
+});

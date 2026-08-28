@@ -175,9 +175,14 @@ export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
           day_number: { type: "integer", minimum: 1 },
           name: { type: "string", minLength: 1 },
           focus: { type: ["string", "null"] },
+          // A first-class rest day (v99). "rest" days carry NO items — the emptiness
+          // is the prescription — which is why `items` no longer requires one: a week
+          // that names its rest day is a better week than one that leaves a hole where
+          // the seam should be, and the server refuses a rest day that carries work.
+          day_type: { type: ["string", "null"], enum: ["training", "rest", null] },
           items: {
             type: "array",
-            minItems: 1,
+            minItems: 0,
             items: {
               type: "object",
               additionalProperties: true,

@@ -345,18 +345,22 @@ const WEEK_COMPOSE_SCHEMA = `{
   "as_of_date": "<YYYY-MM-DD date this week was composed>",
   "summary": "one or two sentences on the shape of this week and why it starts here",
   "days": [
-    { "day_number": <1-7>, "name": "<day name, e.g. Lower>", "focus": "<focus, e.g. lower>", "items": [
+    { "day_number": <1-7>, "name": "<day name, e.g. Lower>", "focus": "<focus, e.g. lower>", "day_type": "training", "items": [
       { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <number|null>, "superset_group": <int|null — same value pairs two items as a superset>, "note": "<optional cue, e.g. 'NEW — start light, log actual'>" },
       { "exercise": "<name>", "sets": <n>, "target_seconds": <n>, "note": "<ONLY for a held/timed movement — omit reps and load>" },
       { "kind": "cardio", "exercise": "<e.g. Long run>", "target_distance_km": <n|null>,
         "target_duration_min": <n|null>, "target_zone": "<Z2|easy|tempo|threshold|intervals|long|null>", "note": "<optional timeless pacing/structure>" }
-    ] }
+    ] },
+    { "day_number": <1-7>, "name": "<e.g. Rest>", "focus": null, "day_type": "rest", "items": [] }
   ],
   "notes": "<optional coaching notes, may be empty>"
 }
-// "days"   → the WHOLE week, and the only output. One entry per training day; leave a
-//            rest day OUT rather than emitting an empty day. Each item is strength by
-//            default, or an endurance prescription with "kind":"cardio".
+// "days"     → the WHOLE week, and the only output. One entry per DAY of the week the
+//              template covers, including the rest days. Each item is strength by
+//              default, or an endurance prescription with "kind":"cardio".
+// "day_type" → "training" (the default if you omit it) or "rest". A "rest" day carries
+//              an EMPTY "items" array — the emptiness is the prescription. Never put
+//              work on a rest day; it will be refused.
 // A first week has nothing to progress FROM, so it carries no "changes" and no
 // "cardio" array — both of those edit an existing plan. Emit "days" only.`;
 
@@ -405,12 +409,18 @@ HOW TO COMPOSE IT:
   best to both. Never stack three hard days in a row, including across the Sunday→Monday seam.
 - THE LONG RUN GOES LATE in the week, where the days around it can be easy; QUALITY sits MID-WEEK,
   well clear of it. Put the genuinely easy days and the rest days between them.
+- NAME THE REST DAY. A rest day is a day in the week with "day_type":"rest" and an empty "items"
+  array — not a gap in the numbering. It is the week's SEAM: the ring's recovery point, the thing
+  that stops the hard days from stacking across Sunday into Monday, and the day the athlete's
+  Brief can honestly say is theirs. A week whose day_numbers simply skip a day has no seam
+  anywhere in it, which is how a seven-day template ends up asking for training every single day.
 - BUILD FOR THE DAYS THEY ACTUALLY TRAIN. Cairn stores training frequency as something they SAID,
   not as a field — read DATA.memory and the profile's about_me for it ("trains about 4 days a
   week"). When nothing says, build a sustainable 3-4 training days and note in the summary that
   the week can grow once they've run it. An honest week they finish beats an ideal one they drop.
-- LEAVE REAL REST. A week with no rest day is not a week they will run twice. Omit the rest days
-  from "days" entirely rather than emitting an empty day.
+- LEAVE REAL REST. A week with no rest day is not a week they will run twice. Give it a day of its
+  own with "day_type":"rest" and no items, placed where the hard days need the break — and read
+  the no-two-hard-days rule around it, since a rest day IS the seam that separates them.
 - START LIGHT AND HONEST. With no logged history, prescribe conservative starting loads with a
   short "NEW — start light, log actual" note, or leave target_weight null and let the first
   session set the number — never invent a load they have never lifted. Where DATA does carry

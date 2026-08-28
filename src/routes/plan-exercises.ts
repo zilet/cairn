@@ -107,7 +107,7 @@ planExercisesRouter.put("/plan", (req, res) => {
 planExercisesRouter.put("/plan/:day", (req, res) => {
   try {
     const b = req.body ?? {};
-    const result = savePlanDayChecked(Number(req.params.day), b.name, b.focus ?? null, b.items ?? [], { quality_override: b.quality_override === true });
+    const result = savePlanDayChecked(Number(req.params.day), b.name, b.focus ?? null, b.items ?? [], { quality_override: b.quality_override === true, day_type: b.day_type ?? null });
     res.json(result.day);
   } catch (e: any) {
     res.status(400).json({ error: e.message, ...(e?.report ? { quality: e.report, quality_override_available: true } : {}) });

@@ -21,6 +21,7 @@ type PlanEditorFormModelDay = {
   day_number?: unknown;
   name?: unknown;
   focus?: unknown;
+  day_type?: unknown;
   items: PlanEditorFormItem[];
 };
 
@@ -28,6 +29,7 @@ type PlanEditorFormSaveDay = {
   day_number: number;
   name: string;
   focus: unknown;
+  day_type: "training" | "rest";
   items: Array<Record<string, unknown>>;
 };
 
@@ -94,6 +96,10 @@ function serializePlanDays(model: PlanEditorFormModelDay[]): PlanEditorFormSaveD
     day_number: index + 1,
     name: String(day.name || `Day ${index + 1}`),
     focus: day.focus || null,
+    // A rest day that somehow carries work is saved as the training day it plainly
+    // is, rather than sent to be refused: the server's invariant is real, and the
+    // editor's job is to keep the athlete from ever meeting it.
+    day_type: String(day.day_type ?? "training") === "rest" && !day.items.length ? "rest" : "training",
     items: day.items
       .filter((item) => {
         if (isCardioItem(item)) {

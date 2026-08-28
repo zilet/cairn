@@ -138,12 +138,14 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       day_number: z.number().int(),
       name: z.string(),
       focus: z.string().nullable().optional(),
+      day_type: z.enum(["training", "rest"]).optional().describe("'rest' marks the week's rest day; a rest day carries an EMPTY items array. Omitted leaves the day as it already is."),
       items: z.array(planItemShape),
       quality_override: z.boolean().optional().describe("Explicitly allow a structurally invalid manual edit after reviewing the returned quality report"),
     },
     async (day) => {
       const result = savePlanDayChecked(day.day_number, day.name, day.focus ?? null, day.items, {
         quality_override: day.quality_override,
+        day_type: day.day_type ?? null,
       });
       return asText(result.day);
     }
@@ -158,7 +160,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_plan",
-    "Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days) or to add cardio days. Days not included are removed. Each item may be a strength exercise or a kind:'cardio' endurance prescription.",
+    "Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days), to add cardio days, or to name the week's rest day (day_type:'rest' with no items). Days not included are removed. Each item may be a strength exercise or a kind:'cardio' endurance prescription.",
     {
       quality_override: z.boolean().optional().describe("Explicitly allow a structurally invalid manual plan after reviewing the returned quality report"),
       days: z.array(
@@ -166,6 +168,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
           day_number: z.number().int().optional(),
           name: z.string(),
           focus: z.string().nullable().optional(),
+          day_type: z.enum(["training", "rest"]).optional().describe("'rest' marks a rest day; it carries an EMPTY items array. Defaults to 'training'."),
           items: z.array(planItemShape),
         })
       ),

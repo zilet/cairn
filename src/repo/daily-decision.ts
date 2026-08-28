@@ -120,6 +120,11 @@ export interface DailyDecisionSnapshot {
     day_number: number | null;
     focus: string | null;
     plan_day_id: number | null;
+    // 'rest' when the week template itself puts a rest day here (v99). Carried on the
+    // snapshot so the envelope can say WHY today is quiet — "your week has a rest day
+    // here" is a different sentence from "your readiness is low", and the composition
+    // has to be able to tell them apart.
+    day_type: "training" | "rest";
     source: string | null;
     reason: string | null;
     due: string[];
@@ -361,6 +366,10 @@ export interface DailyDecisionEnvelope {
     plan_day_id: number | null;
     focus: string | null;
     intent: "template" | "custom";
+    // Present only when the week template programmed a REST day here. Optional and
+    // omit-when-training so an ordinary envelope_json row serializes byte-identically
+    // to the ones already stored, and every historical row reads as a training day.
+    day_type?: "rest";
   };
   muscles: {
     required: string[];
@@ -632,6 +641,7 @@ export function gatherDailyDecisionSnapshot(
         plan_day_id: Number(adaptiveDay.id),
         day_number: adaptive.day_number,
         focus: adaptive.focus,
+        day_type: adaptive.day_type,
         selection: adaptive.selection,
         source: "adaptive" as const,
       };
@@ -767,6 +777,10 @@ export function gatherDailyDecisionSnapshot(
       day_number: selected?.day_number ?? null,
       focus: text(selected?.focus ?? planDay?.focus ?? null, 160),
       plan_day_id: selected?.plan_day_id ?? planDay?.id ?? null,
+      // The selector's answer first, the raw plan row as the fallback — the two agree,
+      // but a snapshot taken from a cached selection still has to read the live day.
+      day_type:
+        selected?.day_type === "rest" || String(basePlanDay?.day_type ?? "") === "rest" ? "rest" : "training",
       source: text(selected?.source ?? null, 40),
       reason: prose(selection?.reason ?? null, 300),
       due: dedupe(Array.isArray(selection?.due) ? selection.due : []),
@@ -1988,6 +2002,10 @@ export function buildDailySessionDecision(
       plan_day_id: kind === "rest" ? null : snapshot.plan.plan_day_id,
       focus: kind === "rest" ? "Recovery" : snapshot.plan.focus,
       intent,
+      // Survives the rest-day nulling above on purpose: the day_number is cleared
+      // because there is no session to compose FROM, and this field is the reason
+      // there isn't one.
+      ...(snapshot.plan.day_type === "rest" ? { day_type: "rest" as const } : {}),
     },
     muscles: { required, allowed, reduced, excluded, saturated },
     caps: { volume, intensity, duration_min: duration },

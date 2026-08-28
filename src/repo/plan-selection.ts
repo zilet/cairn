@@ -17,8 +17,17 @@ export interface PlanDayCandidate {
   day_number: number;
   name: string;
   focus: string | null;
+  // 'rest' is a first-class template value (v99), not an empty training day. It
+  // rides in the ROTATION RING like any other day — that is the whole point, the
+  // seam has to land where the athlete programmed it — but it never competes on
+  // score in either direction, and it never becomes a session anchor.
+  day_type: "training" | "rest";
   names: string[];
   groups: MuscleGroup[];
+}
+
+export function isRestPlanDay(day: Pick<PlanDayCandidate, "day_type"> | null | undefined): boolean {
+  return day?.day_type === "rest";
 }
 
 export interface ResolvedSessionPlanDay {
@@ -31,6 +40,7 @@ export interface SelectedPlanDay {
   plan_day_id: number;
   day_number: number;
   focus: string | null;
+  day_type: "training" | "rest";
   selection: Record<string, any>;
   source: "existing-session" | "cached-day-read" | "adaptive";
 }
@@ -65,6 +75,7 @@ export function planDayCandidates(): PlanDayCandidate[] {
   const rows = db
     .prepare(
       `SELECT pd.id AS id, pd.day_number AS day_number, pd.name AS day_name, pd.focus AS focus,
+            pd.day_type AS day_type,
             pi.kind AS kind, e.name AS exercise, e.muscle_group AS muscle_group
        FROM plan_days pd
        LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id
@@ -81,6 +92,7 @@ export function planDayCandidates(): PlanDayCandidate[] {
       day_number: Number(r.day_number),
       name: String(r.day_name || `Day ${r.day_number}`),
       focus: r.focus == null ? null : String(r.focus),
+      day_type: String(r.day_type ?? "training").toLowerCase() === "rest" ? ("rest" as const) : ("training" as const),
       names: [],
       groups: [],
     };
@@ -118,7 +130,12 @@ export function resolveSessionPlanDay(
 ): ResolvedSessionPlanDay | null {
   if (planDayId != null) {
     const linked = candidates.find((d) => d.id === Number(planDayId));
-    if (linked) return { day_number: linked.day_number, method: "linked" };
+    // A REST day is never an anchor. Training anyway on the programmed rest day
+    // creates a session linked to it, and letting that link anchor the rotation
+    // would advance the ring off the seam — the athlete's one extra session would
+    // shift every following day by one for the rest of the block. Fall through to
+    // the content-based resolvers instead, which read what was actually lifted.
+    if (linked && !isRestPlanDay(linked)) return { day_number: linked.day_number, method: "linked" };
   }
 
   const loggedNames = new Set(
@@ -408,9 +425,12 @@ function selectionReason(selected: PlanSelectionScore, rotation: PlanSelectionSc
   return avoid ? `${lead}, while ${avoid}` : lead;
 }
 
-export function selectAdaptivePlanDay(
-  date: string
-): { day_number: number; focus: string | null; selection: Record<string, any> } | null {
+export function selectAdaptivePlanDay(date: string): {
+  day_number: number;
+  focus: string | null;
+  day_type: "training" | "rest";
+  selection: Record<string, any>;
+} | null {
   const candidates = planDayCandidates();
   if (!candidates.length) return null;
   const anchors = recentSessionAnchors(date, candidates);
@@ -418,6 +438,41 @@ export function selectAdaptivePlanDay(
   const rotation = anchor?.resolved
     ? nextCandidateAfter(candidates, anchor.resolved.day_number)
     : weekdayCandidate(candidates, date);
+
+  // ---- the rotation landed on the programmed REST day ----
+  // Returned as-is, with no scoring pass at all. The scorer's whole job is "which of
+  // the training days fits today best", and there is no version of that question whose
+  // answer should be "so train on the rest day instead". Ending here is also what makes
+  // the seam stable: run the comparison and a due-heavy week would reopen the rest day
+  // every single time it came round, which is how a template ends up with no rest in it.
+  // The read this produces is still a SUGGESTION — the athlete can train anyway, and
+  // train_anyway carries them through exactly as it does from any other rest morning.
+  if (isRestPlanDay(rotation)) {
+    return {
+      day_number: rotation.day_number,
+      focus: planDayFocus(rotation),
+      day_type: "rest",
+      selection: {
+        selected: { day_number: rotation.day_number, focus: planDayFocus(rotation), day_type: "rest" },
+        rotation: { day_number: rotation.day_number, focus: planDayFocus(rotation), day_type: "rest" },
+        adapted: false,
+        reason: null,
+        rest_day: true,
+        anchor: anchor
+          ? {
+              date: anchor.date,
+              days_ago: anchor.days_ago,
+              groups: anchor.groups,
+              resolved_day_number: anchor.resolved?.day_number ?? null,
+              method: anchor.resolved?.method ?? null,
+            }
+          : null,
+        last_session: anchors[0]
+          ? { date: anchors[0].date, days_ago: anchors[0].days_ago, groups: anchors[0].groups }
+          : null,
+      },
+    };
+  }
 
   let balance: any = null;
   try {
@@ -435,7 +490,13 @@ export function selectAdaptivePlanDay(
   const due = new Set<string>(Array.isArray(balance?.due) ? balance.due : []);
   const over = new Set<string>(Array.isArray(balance?.over) ? balance.over : []);
   const rotationIndex = candidates.findIndex((d) => d.day_number === rotation.day_number);
-  const scored = candidates.map((day) =>
+  // Only TRAINING days are scored. A rest day carries no groups, so the scorer would
+  // read it as a thin, nothing-due day and rank it near the bottom — but "near the
+  // bottom" is not the same as "not a candidate", and the day the rotation is pointing
+  // at is a training day here. The rest day is not an alternative to it; it is a
+  // different question, already answered above.
+  const scorable = candidates.filter((day) => !isRestPlanDay(day));
+  const scored = scorable.map((day) =>
     scorePlanDay({
       day,
       rotation,
@@ -460,6 +521,7 @@ export function selectAdaptivePlanDay(
   return {
     day_number: selected.day_number,
     focus: planDayFocus(selected),
+    day_type: selected.day_type,
     selection: {
       selected: { day_number: selected.day_number, focus: planDayFocus(selected) },
       rotation: { day_number: rotation.day_number, focus: planDayFocus(rotation) },
@@ -512,7 +574,14 @@ export function selectedPlanDayForDate(date: string): SelectedPlanDay | null {
       plan_day_id: sessionDay.id,
       day_number: sessionDay.day_number,
       focus: planDayFocus(sessionDay),
-      selection: { selected: { day_number: sessionDay.day_number, focus: planDayFocus(sessionDay) } },
+      day_type: sessionDay.day_type,
+      selection: {
+        selected: {
+          day_number: sessionDay.day_number,
+          focus: planDayFocus(sessionDay),
+          day_type: sessionDay.day_type,
+        },
+      },
       source: "existing-session",
     };
   }
@@ -528,6 +597,10 @@ export function selectedPlanDayForDate(date: string): SelectedPlanDay | null {
         plan_day_id: day.id,
         day_number: day.day_number,
         focus: planDayFocus(day),
+        // Read from the LIVE plan row, never from the cached selection blob: the
+        // template may have been edited since the Brief was written, and the day's
+        // type is the one thing in here that changes what today IS.
+        day_type: day.day_type,
         selection,
         source: "cached-day-read",
       };
@@ -543,6 +616,7 @@ export function selectedPlanDayForDate(date: string): SelectedPlanDay | null {
     plan_day_id: day.id,
     day_number: day.day_number,
     focus: planDayFocus(day),
+    day_type: day.day_type,
     selection: selected.selection,
     source: "adaptive",
   };

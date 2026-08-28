@@ -1054,12 +1054,16 @@ export function savePlanDayChecked(
   name: string,
   focus: string | null,
   items: PlanItemInput[],
-  opts: { quality_override?: boolean } = {}
+  opts: { quality_override?: boolean; day_type?: string | null } = {}
 ) {
   const before = validateTrainingPlan(getPlan());
   const normalizedItems = withAuthoritativeExerciseModes(items);
+  // Resolved BEFORE validation so the report describes the day that would actually
+  // be written — a rest day arriving with items has to fail as a structured quality
+  // error the editor can render, not as a bare throw from the writer underneath.
+  const dayType = resolvePlanDayType(day_number, opts.day_type, normalizedItems.length);
   const candidate = getPlan().filter((day: any) => Number(day.day_number) !== Number(day_number));
-  candidate.push({ day_number, name, focus, items: normalizedItems });
+  candidate.push({ day_number, name, focus, day_type: dayType, items: normalizedItems });
   candidate.sort((a: any, b: any) => Number(a.day_number) - Number(b.day_number));
   const quality = validateTrainingPlan(candidate);
   const beforeKeys = new Set(before.errors.map(qualityIssueKey));
@@ -1069,21 +1073,35 @@ export function savePlanDayChecked(
   if (blocking.length && !opts.quality_override) {
     throw new PlanQualityError({ ok: false, errors: blocking, warnings: quality.warnings });
   }
-  const day = savePlanDay(day_number, name, focus, normalizedItems);
+  // The zero-items invariant is structural, never overridable: quality_override is
+  // for a week a human judged unusual, not for a day that cannot exist.
+  assertPlanDayTypeCoherent(day_number, dayType, normalizedItems.length);
+  const day = savePlanDay(day_number, name, focus, normalizedItems, { day_type: dayType });
   return { ok: true, day, quality, quality_override: blocking.length > 0 };
 }
 
 export function replacePlanChecked(
-  days: { day_number?: number; name?: string; focus?: string | null; items?: PlanItemInput[] }[],
+  days: {
+    day_number?: number;
+    name?: string;
+    focus?: string | null;
+    day_type?: string | null;
+    items?: PlanItemInput[];
+  }[],
   opts: { quality_override?: boolean } = {}
 ) {
   const normalized = days.map((day, index) => ({
     ...day,
     day_number: day.day_number ?? index + 1,
+    // A full restructure DECLARES the whole week, so an omitted day_type here means
+    // 'training' rather than "leave it as it was" — the alternative would let a week
+    // that never mentions rest inherit yesterday's seam in a day now full of work.
+    day_type: planDayTypeForRestructure(day.day_type),
     items: withAuthoritativeExerciseModes(day.items ?? []),
   }));
   const quality = validateTrainingPlan(normalized);
   if (!quality.ok && !opts.quality_override) throw new PlanQualityError(quality);
+  for (const day of normalized) assertPlanDayTypeCoherent(day.day_number, day.day_type, day.items.length);
   const plan = replacePlan(normalized);
   return { ok: true, plan, quality, quality_override: !quality.ok };
 }
@@ -1683,6 +1701,71 @@ export function addExerciseToPlanDay(
 }
 
 // ---------- plan editing (manual + restructure) ----------
+// ---------- the week's REST day, as a first-class template value (v99) ----------
+// A rest day used to exist only by NOT being in the template, which meant a
+// seven-day week had nowhere to put one: every plan_days row was a day with work
+// in it, and the day selector surfaced a training day on every calendar date. A
+// `day_type` of 'rest' names the seam instead, and the emptiness IS the
+// prescription — a rest day carries zero items, and anything trying to write one
+// with items is rejected rather than quietly stored as a half-day.
+export type PlanDayType = "training" | "rest";
+
+/** 'training' | 'rest' from any caller-supplied value; null when it is neither. */
+export function normalizePlanDayType(value: unknown): PlanDayType | null {
+  const v = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (v === "rest") return "rest";
+  if (v === "training") return "training";
+  return null;
+}
+
+// What a write MEANS when it does not declare a day_type, resolved in ONE place so
+// the checked wrapper validates exactly the day the writer will persist:
+//   • declared                      → that value (an unknown value is an error).
+//   • new day                       → 'training'. A day being created with no word
+//                                     about it is the ordinary day.
+//   • existing day, items incoming  → 'training'. Items and rest are incompatible,
+//                                     and a caller sending work plainly means work;
+//                                     failing them on a field they never heard of
+//                                     would be the wrong answer.
+//   • existing day, no items        → UNCHANGED. Clearing a training day's items
+//                                     leaves it a training day; re-saving a rest
+//                                     day's name leaves it a rest day.
+export function resolvePlanDayType(day_number: number, declared: unknown, itemCount: number): PlanDayType {
+  if (declared != null && String(declared).trim() !== "") {
+    const normalized = normalizePlanDayType(declared);
+    if (!normalized) throw new Error(`Unknown plan day type "${String(declared)}" — a plan day is 'training' or 'rest'.`);
+    return normalized;
+  }
+  if (itemCount > 0) return "training";
+  const existing = db.prepare(`SELECT day_type FROM plan_days WHERE day_number = ?`).get(day_number) as any;
+  if (!existing) return "training";
+  return normalizePlanDayType(existing.day_type) ?? "training";
+}
+
+// A restructure DECLARES the whole week, so an omitted day_type is 'training' rather
+// than "leave it as it was": the alternative would let a week that never mentions rest
+// inherit yesterday's seam into a day now full of work. Every snapshot this repo takes
+// of a plan therefore has to carry day_type through (trainingPlanSnapshot does), or an
+// Undo would quietly erase the rest day it is meant to restore.
+function planDayTypeForRestructure(declared: unknown): PlanDayType {
+  const normalized = normalizePlanDayType(declared);
+  if (normalized) return normalized;
+  if (declared != null && String(declared).trim() !== "")
+    throw new Error(`Unknown plan day type "${String(declared)}" — a plan day is 'training' or 'rest'.`);
+  return "training";
+}
+
+/** The one place the zero-items invariant is stated. Throws with the athlete's own words. */
+export function assertPlanDayTypeCoherent(day_number: number, day_type: PlanDayType, itemCount: number): void {
+  if (day_type === "rest" && itemCount > 0) {
+    throw new Error(
+      `Day ${day_number} is a rest day, so it carries no exercises. Clear its items, or mark the day as training first.`
+    );
+  }
+}
+
 export interface PlanItemInput {
   exercise?: string; // optional for a cardio item (its label can live in `note`)
   sets?: number;
@@ -1738,22 +1821,37 @@ export function savePlanDay(
   name: string,
   focus: string | null,
   items: PlanItemInput[],
-  opts: { deferTrainingVersionBump?: boolean; deferDayReadInvalidation?: boolean } = {}
+  opts: {
+    deferTrainingVersionBump?: boolean;
+    deferDayReadInvalidation?: boolean;
+    // 'training' | 'rest'. Omitted means "whatever this day already is" (see
+    // resolvePlanDayType) so a caller that has never heard of the field cannot
+    // silently flip a rest day back into a training one.
+    day_type?: string | null;
+  } = {}
 ) {
+  const list = items || [];
+  const dayType = resolvePlanDayType(day_number, opts.day_type, list.length);
+  assertPlanDayTypeCoherent(day_number, dayType, list.length);
   const existing = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(day_number) as any;
   let dayId: number;
   if (existing) {
-    db.prepare(`UPDATE plan_days SET name = ?, focus = ? WHERE id = ?`).run(name, focus ?? null, existing.id);
+    db.prepare(`UPDATE plan_days SET name = ?, focus = ?, day_type = ? WHERE id = ?`).run(
+      name,
+      focus ?? null,
+      dayType,
+      existing.id
+    );
     dayId = existing.id;
     db.prepare(`DELETE FROM plan_items WHERE plan_day_id = ?`).run(dayId);
   } else {
     dayId = Number(
       db
-        .prepare(`INSERT INTO plan_days (day_number, name, focus) VALUES (?, ?, ?)`)
-        .run(day_number, name, focus ?? null).lastInsertRowid
+        .prepare(`INSERT INTO plan_days (day_number, name, focus, day_type) VALUES (?, ?, ?, ?)`)
+        .run(day_number, name, focus ?? null, dayType).lastInsertRowid
     );
   }
-  (items || []).forEach((it, i) => {
+  list.forEach((it, i) => {
     const isCardio = String(it.kind ?? "").toLowerCase() === "cardio";
     if (isCardio) {
       // A cardio item needs no exercise; its label rides in `note` (or `exercise`,
@@ -1903,7 +2001,13 @@ export function deletePlanDay(
 
 // Full restructure: make the plan exactly the given days (add/remove/rewrite).
 export function replacePlan(
-  days: { day_number?: number; name?: string; focus?: string | null; items?: PlanItemInput[] }[]
+  days: {
+    day_number?: number;
+    name?: string;
+    focus?: string | null;
+    day_type?: string | null;
+    items?: PlanItemInput[];
+  }[]
 ) {
   if (!Array.isArray(days) || !days.length) throw new Error("replacePlan needs a non-empty days array");
   const result = withSqliteSavepoint("replace_plan", () => {
@@ -1919,6 +2023,7 @@ export function replacePlan(
       savePlanDay(d.day_number, d.name || `Day ${i + 1}`, d.focus ?? null, d.items || [], {
         deferTrainingVersionBump: true,
         deferDayReadInvalidation: true,
+        day_type: planDayTypeForRestructure(d.day_type),
       })
     );
     return getPlan();

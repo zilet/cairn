@@ -25,6 +25,7 @@ type PlanEditorControllerDay = {
   day_number?: unknown;
   name?: unknown;
   focus?: unknown;
+  day_type?: unknown;
   items?: PlanEditorControllerItem[];
 };
 
@@ -32,6 +33,7 @@ type PlanEditorControllerModelDay = {
   day_number: unknown;
   name: unknown;
   focus: unknown;
+  day_type: unknown;
   items: PlanEditorControllerItem[];
 };
 
@@ -482,6 +484,19 @@ async function renderPlanEditor(): Promise<void> {
       markDirty();
       draw();
     }));
+    // Mark / unmark the week's rest day. Toggling ON clears the day's items, because a
+    // rest day carries none and the server refuses one that does — so the athlete sees
+    // the day empty at the moment they say it, rather than a save error afterwards.
+    view.querySelectorAll<HTMLElement>("[data-restday]").forEach((button) => button.addEventListener("click", () => {
+      sync();
+      const day = model[form.datasetNumber(button, "restday")];
+      if (!day) return;
+      const nowRest = String(day.day_type ?? "training") !== "rest";
+      day.day_type = nowRest ? "rest" : "training";
+      if (nowRest) day.items = [];
+      markDirty();
+      draw();
+    }));
     view.querySelectorAll<HTMLElement>("[data-pikind]").forEach((button) => button.addEventListener("click", () => {
       sync();
       const [dayRaw, itemRaw, kindRaw] = String(button.dataset.pikind || "").split(":");
@@ -523,7 +538,7 @@ async function renderPlanEditor(): Promise<void> {
   $("#addDay")?.addEventListener("click", () => {
     sync();
     const next = model.reduce((max, day) => Math.max(max, form.dayNumber(day)), 0) + 1;
-    model.push({ day_number: next, name: `Day ${next}`, focus: "", items: [] });
+    model.push({ day_number: next, name: `Day ${next}`, focus: "", day_type: "training", items: [] });
     editing.add(model.length - 1);
     markDirty();
     draw();

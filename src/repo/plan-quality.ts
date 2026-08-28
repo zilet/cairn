@@ -27,6 +27,11 @@ export interface PlanQualityReport {
 
 export interface PlanQualityDay {
   day_number?: unknown;
+  // 'training' (default) | 'rest'. A rest day is a legitimate, deliberate part of a
+  // week — the ONLY thing this compiler asks of it is that it stays empty. Nothing
+  // below counts it as a strength day, a pattern gap, or a thin day, because it is
+  // none of those: emptiness is what a rest day is FOR.
+  day_type?: unknown;
   items?: unknown;
 }
 
@@ -89,6 +94,17 @@ export function validateTrainingPlan(days: PlanQualityDay[]): PlanQualityReport 
     const dayExtra = dayNumber == null ? {} : { day_number: dayNumber };
 
     const items = Array.isArray(rawDay?.items) ? (rawDay.items as any[]) : [];
+    const restDay = String(rawDay?.day_type ?? "training").toLowerCase() === "rest";
+    if (restDay && items.length) {
+      errors.push(
+        issue(
+          "error",
+          "rest_day_has_items",
+          `Day ${dayLabel} is marked as a rest day, so it cannot also prescribe ${items.length} item(s).`,
+          dayExtra
+        )
+      );
+    }
     const strength = items.filter(
       (item) => item && typeof item === "object" && String(item.kind ?? "strength").toLowerCase() !== "cardio"
     );

@@ -33,7 +33,7 @@ import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } fr
 import { RECOVERY_SAMPLE_FLOOR, recoveryTrendBars } from "./recovery-trend.js";
 import { activeContextEffect } from "./context-effect.js";
 import { listActiveDirectives } from "./directives-read.js";
-import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
+import { RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { planningContextEvents } from "./health.js";
@@ -53,7 +53,7 @@ import {
   selectAdaptivePlanDay,
 } from "./plan-selection.js";
 import { activeRecoveryWeek, getEnduranceGoal, getPrimaryDiscipline } from "./profile.js";
-import { getProgramState, type MesoPhase, type MesocycleState } from "./program-state.js";
+import { getProgramState, weeklyKm, type MesoPhase, type MesocycleState } from "./program-state.js";
 import { runIntensityDiscipline } from "./run-progression.js";
 import { programBalance } from "./progression.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
@@ -196,6 +196,19 @@ export const DAY_READ_OUTCOMES = {
       "You've already got real training in today.",
       "Today's work is already done and logged.",
       "The session's in — today is covered.",
+    ],
+  },
+  // The week's own seam. Not a brake and not an argument — the athlete built a rest
+  // day into their template and today is it, so the read simply says so. Every safety
+  // floor above still wins on a morning that has its own reason to rest, and keeps its
+  // own words; this one only speaks when nothing else needed to.
+  template_rest_day: {
+    code: "template_rest_day",
+    reasons: [
+      "Your week has a rest day here, and today is it.",
+      "Today is the rest day your week is built around.",
+      "The plan leaves today open — this is the rest day in your week.",
+      "Your template puts a rest day here, so today is yours.",
     ],
   },
   acute_sleep_corroborated: {
@@ -1177,7 +1190,20 @@ const SIGNAL_VOICE_CONCEPTS: Record<string, RegExp> = Object.fromEntries(
   Object.entries(SIGNAL_VOICE_REGISTRY).map(([key, entry]) => [`acute_signal_protection:${key}`, entry.concept])
 );
 
+// The programmed rest day speaks in the athlete's own terms: the day is theirs, and
+// what is offered is movement rather than nothing at all. Several phrasings because
+// this rule fires on the SAME weekday every week — one literal would print the same
+// sentence every Sunday morning for as long as the template stands.
+const TEMPLATE_REST_DAY_WHY: readonly string[] = [
+  "Your week has a rest day here, so today is yours — a walk or some easy mobility if you feel like moving.",
+  "Today is the rest day in your template. Nothing is owed; a gentle walk or some mobility is plenty.",
+  "The plan keeps today clear for recovery, so this is a rest day — move easily if you want to, or not at all.",
+  "This is the rest day your week is built around. Some easy mobility or a walk fits it well.",
+  "Your template puts rest here, so today is open — an easy walk is the whole ask, and even that is optional.",
+];
+
 export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> = {
+  template_rest_day: TEMPLATE_REST_DAY_WHY,
   logged_loading_work_today: DONE_WHY.map((render) => render("session")),
   acute_sleep_corroborated: ACUTE_SLEEP_WHY,
   recovery_dose_overrun: DOSE_OVERRUN_WHY,
@@ -1227,6 +1253,11 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
 // variant cannot drift away from the meaning the rule exists to convey. Applies to
 // BOTH registers: the athlete-facing `why` and the ledger `reason`.
 export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
+  // The one fact this read exists to carry: the REST is the athlete's own week
+  // talking, not a brake. A phrasing that stops naming the plan/week/template would
+  // read as an unexplained quiet day, which is exactly the sentence a first-class
+  // rest day was built to stop producing.
+  template_rest_day: /\b(?:plan|week|template)\b/i,
   logged_loading_work_today: /\b(?:in today|done|books|covered|logged)\b/i,
   acute_sleep_corroborated: /\b(?:sleep|night|nights)\b/i,
   acute_signal_protection: /\b(?:protect|protecting|protection|recovery|guarding)\b/i,
@@ -2426,25 +2457,17 @@ export function dayRead(
   let volumeSpike = false;
   let lastWeekKm: number | null = null;
   if (countsCardio) {
-    const runSport = activitySportWhere("activities", RUN_SPORT_PATTERNS);
-    const weekKm = (endIso: string): number => {
-      const end = new Date(endIso + "T00:00:00Z").getTime();
-      const start = new Date(end - 6 * 864e5).toISOString().slice(0, 10);
-      const row = db
-        .prepare(
-          `SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities
-            WHERE date >= ? AND date <= ? AND (${runSport.sql})`
-        )
-        .get(start, endIso, ...runSport.params) as any;
-      return Math.round(Number(row?.km ?? 0) * 10) / 10;
-    };
-    const yesterdayIso = new Date(new Date(d + "T00:00:00Z").getTime() - 864e5).toISOString().slice(0, 10);
-    lastWeekKm = weekKm(yesterdayIso);
+    // ONE definition of a running week, shared with the reaction model and the next-
+    // step engines: `weeklyKm(anchor, weekBack, patterns)` sums the seven days ending
+    // `weekBack * 7` days before the anchor. This file used to carry a byte-identical
+    // private copy of that query, which is how two windows drift apart in the first
+    // place. The anchor is YESTERDAY for the acute week (today is still being lived,
+    // and a run logged this morning is not a week's worth of evidence) and TODAY for
+    // the three prior weeks, exactly as the inline version computed them.
+    const acuteWeekEnd = addDaysISO(d, -1);
+    lastWeekKm = acuteWeekEnd ? weeklyKm(acuteWeekEnd, 0, RUN_SPORT_PATTERNS) : 0;
     // The three prior weeks' average (the chronic base), ending a week back.
-    const priorEnds = [7, 14, 21].map((n) =>
-      new Date(new Date(d + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10)
-    );
-    const priorKm = priorEnds.map(weekKm);
+    const priorKm = [1, 2, 3].map((weekBack) => weeklyKm(d, weekBack, RUN_SPORT_PATTERNS));
     const chronic = priorKm.reduce((a, b) => a + b, 0) / priorKm.length;
     // A meaningful spike: this week clearly above the chronic base (and a real
     // amount of running, so a near-zero base doesn't trip on a single short run).
@@ -2698,9 +2721,39 @@ export function dayRead(
   // Pick a suggested plan day for the "train" case. This now starts with the
   // historical rotation but lets logged content, volume balance, and acute load
   // adapt the pick when another programmed day is clearly smarter.
-  function suggestedPlanDay(): { day_number: number; focus: string | null; selection?: Record<string, any> } | null {
-    const selected = selectAdaptivePlanDay(d);
-    if (selected?.selection) (signals as any).plan_selection = selected.selection;
+  // Memoized, and DELIBERATELY SIDE-EFFECT-FREE: several rules ask, the selector
+  // re-reads the plan, the recent anchors and the acute gate on every call — and,
+  // critically, publishing `plan_selection` from here would put the selector's
+  // churning provenance (last_session, scores) into the signals of reads that never
+  // used to carry it, which is a fingerprint that moves on every logged set.
+  let adaptivePick: ReturnType<typeof selectAdaptivePlanDay> | undefined;
+  function adaptivePlanDay() {
+    if (adaptivePick === undefined) adaptivePick = selectAdaptivePlanDay(d);
+    return adaptivePick;
+  }
+
+  // Is the day the rotation points at the week's programmed REST day? A pure QUESTION
+  // — asked by rules that only need to step aside, so it publishes nothing.
+  function templateRestDay(): boolean {
+    return adaptivePlanDay()?.day_type === "rest";
+  }
+
+  // The plan day there is a SESSION on. A rest day is deliberately not one: every
+  // caller here treats null as "nothing is due today", which is precisely what a
+  // programmed rest day means, and routing it through this one accessor is what
+  // stops the read from opening the seam by accident — the look-ahead offers easy
+  // movement instead of an invented session, and the easy→train outcome ladder,
+  // which requires a real plan day to open, cannot open a rest day at all.
+  function suggestedPlanDay(): {
+    day_number: number;
+    focus: string | null;
+    selection?: Record<string, any>;
+  } | null {
+    const selected = adaptivePlanDay();
+    if (!selected || selected.day_type === "rest") return null;
+    // Published HERE and only here: the provenance belongs on the reads that are
+    // actually pointing at a session.
+    if (selected.selection) (signals as any).plan_selection = selected.selection;
     return selected;
   }
 
@@ -3049,6 +3102,14 @@ export function dayRead(
       resolve: () => {
         if (trainingDrive !== "push") return null;
         if (!stackedLoadingRest) return null;
+        // …and it may never answer the week's OWN rest day (2026-08-28). The stacked-
+        // days rest and the programmed rest day are different objects: the first is a
+        // read arguing from a pattern, which a standing preference plus green evidence
+        // may fairly answer, and the second is structure the athlete built on purpose.
+        // A preference that can delete the template's one seam is how a seven-day week
+        // ends up with no rest in it again. They can still train anyway; nothing here
+        // blocks a thing.
+        if (templateRestDay()) return null;
         if (yesterdayRecoveryOverdose || lowSubjective || lowReadiness) return null;
         if (consec >= PUSH_DRIVE_CONSEC_CEILING) return null;
         if (clinicallyDriven(signalState, healthWorkaround)) return null;
@@ -3232,6 +3293,10 @@ export function dayRead(
         const blocking = holdsTomorrow.filter((hold) => hold.blocks_training);
         if (!blocking.length) return null;
         if (trainedToday || bigActivity) return null;
+        // There is nothing to RE-TIME on the week's programmed rest day: the session
+        // this rule reaches forward for is not due today in the first place. Stepping
+        // aside leaves the rest read to say what today actually is.
+        if (templateRestDay()) return null;
         if (!stackedLoadingRest) return null;
         if (yesterdayRecoveryOverdose || lowSubjective || lowReadiness) return null;
         if (consec >= PUSH_DRIVE_CONSEC_CEILING) return null;
@@ -3368,6 +3433,39 @@ export function dayRead(
             focus: null,
             why: pickDayVariant(LIGHT_WORK_WHY, d, "logged_light_work_today"),
             est_minutes: 20,
+            signals,
+          },
+        };
+      },
+    },
+    {
+      // ---- the week's own rest day ----
+      // Placed HERE, and the position is the whole ruling. Above it sit every floor
+      // that has a reason of its own to rest — a fact already logged today, a short
+      // night, a protective posture, a dose overrun, a low reading, a run-down check-in
+      // — and each keeps its own words, because "you slept four hours" is a truer
+      // sentence than "it's your rest day" even when both are true and the answer is
+      // the same. Below it sits the planned-training rule, which is exactly what this
+      // one exists to stand in front of.
+      //
+      // Nothing here gates anything. It is the calmest read in the file: the athlete
+      // wrote a rest day into their own week, and today is that day.
+      resolve: () => {
+        if (!templateRestDay()) return null;
+        const pick = adaptivePlanDay();
+        (signals as any).template_rest_day = {
+          day_number: pick?.day_number ?? null,
+          focus: pick?.focus ?? null,
+        };
+        return {
+          outcome: DAY_READ_OUTCOMES.template_rest_day,
+          read: {
+            kind: "rest" as const,
+            // No focus: there is no session to name, and putting the rest day's own
+            // label ("Rest") in the focus slot would render as a thing to go and do.
+            focus: null,
+            why: pickDayVariant(TEMPLATE_REST_DAY_WHY, d, "template_rest_day"),
+            est_minutes: null,
             signals,
           },
         };
@@ -3759,6 +3857,11 @@ export function dayRead(
   // and preempt it, so without this an athlete who has been outrunning the quiet reads
   // for a fortnight would be handed a training day with nothing in it. No plan day due
   // → easy movement with the easy clock, never an invented session.
+  //
+  // And the week's programmed REST day is "no plan day due" (suggestedPlanDay returns
+  // null for it): a fortnight of overrun mornings is evidence about how the athlete
+  // absorbs the QUIET READS, never a mandate to delete the rest day out of their own
+  // template. `softenEasy` requires openedPlanDay, so the ladder simply stops here.
   const openedPlanDay = softenEasyEarned && !heldByStatement ? suggestedPlanDay() : null;
   // ---- and it may never open a SECOND run (owner ruling, 2026-08-28) ----
   // The ladder opens the day that is due. When the day that is due is nothing but

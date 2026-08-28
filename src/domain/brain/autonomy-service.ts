@@ -259,6 +259,10 @@ function trainingPlanSnapshot(): any[] {
     day_number: Number(day.day_number),
     name: String(day.name ?? ""),
     focus: day.focus == null ? null : String(day.focus),
+    // Carried through because replacePlan reads an omitted day_type as 'training':
+    // a snapshot that dropped it would turn every Undo into a quiet deletion of the
+    // week's rest day.
+    day_type: String(day.day_type ?? "training") === "rest" ? "rest" : "training",
     items: (Array.isArray(day.items) ? day.items : []).map((item: any) => {
       const clean: Record<string, any> = {};
       for (const field of PLAN_ITEM_FIELDS) {
@@ -388,6 +392,9 @@ function mergeTrainingRollback(before: any[], after: any[], current: any[], swap
       day_number: dayNumber,
       name: rollbackScalar(b.name, a.name, c.name),
       focus: rollbackScalar(b.focus, a.focus, c.focus),
+      // Same three-way rule as the other day-level scalars: the decision's own change
+      // to the day's type reverts, an edit the athlete made since it does not.
+      day_type: rollbackScalar(b.day_type ?? "training", a.day_type ?? "training", c.day_type ?? "training"),
       items,
     });
   }

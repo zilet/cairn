@@ -2430,6 +2430,21 @@ export const MIGRATIONS: Migration[] = [
                  ON strength_objectives(exercise_key) WHERE status = 'active'`);
     },
   },
+  {
+    version: 99,
+    name: "plan-days-day-type",
+    // THE REST DAY BECOMES FIRST-CLASS. Until now a week template could only say
+    // "train" — a rest day existed by being absent, so a seven-day template of
+    // five lifting days and two runs had no seam anywhere in it, and the day
+    // selector surfaced a training day on every calendar day of the year.
+    //
+    // `day_type` is additive and defaulted, so every existing row reads exactly as
+    // it did before: an untouched plan is a plan of training days. Nothing is
+    // rewritten and nothing is deleted. The one invariant the writers enforce on
+    // top of the column is that a 'rest' day carries no plan_items — which no
+    // existing row can violate, because no existing row is a rest day.
+    up: (db) => addColumn(db, "plan_days", "day_type TEXT NOT NULL DEFAULT 'training'"),
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

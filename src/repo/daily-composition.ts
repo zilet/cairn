@@ -17,6 +17,7 @@ import {
   recentWorkingSeconds,
   recentWorkingWeight,
 } from "./exercises.js";
+import { longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 
@@ -568,6 +569,35 @@ function holdLegDrivenCardio(item: any, envelope: DailyDecisionEnvelope): { held
   return { held: true, changed };
 }
 
+// ---------- the week's long run, shaped to what the legs have earned ----------
+// Runs BEFORE the easy clamp and only when the day is genuinely offering a run:
+// an endurance hold has already turned this item into a walk with no distance on
+// it, and a forced-easy day drops the distance target entirely, so a ramp applied
+// there would be arithmetic over a number about to be deleted.
+//
+// The note it writes is preserved through the clamp for the same reason the hold's
+// note is: the generic easy-clamp sentence is the weaker of the two, and it was
+// built to fill a silence rather than to overwrite an explanation.
+function applyLongRunRamp(item: any, envelope: DailyDecisionEnvelope): { applied: boolean; changed: boolean } {
+  const distance = finite(item?.target_distance_km);
+  if (distance == null || distance <= 0) return { applied: false, changed: false };
+  // Distance history is RUN history. A 40 km ride is not a step on the same ladder,
+  // and the identity read is the one place that question is already answered.
+  if (cardioPlanIdentity(item).sport !== "run") return { applied: false, changed: false };
+  const ramp = longRunPrescription(envelope.date, distance);
+  if (!ramp || !ramp.building) return { applied: false, changed: false };
+  item.target_distance_km = ramp.prescribed_km;
+  // A duration written for the template distance would now prescribe the same clock
+  // for a shorter run, which is a pace instruction nobody gave. Scaled with the
+  // distance so the effort stays the effort the plan asked for.
+  const duration = finite(item.target_duration_min);
+  if (duration != null && duration > 0) {
+    item.target_duration_min = Math.round(duration * (ramp.prescribed_km / ramp.template_km));
+  }
+  item.note = longRunRampNote(ramp, envelope.date).slice(0, 500);
+  return { applied: true, changed: true };
+}
+
 function clampCardioItem(
   item: any,
   envelope: DailyDecisionEnvelope,
@@ -820,7 +850,11 @@ export function normalizeComposedSession(
       // (easyCardioName), so a run reaching it first is only ever an "Easy run".
       const hold = holdLegDrivenCardio(next, envelope);
       if (hold.changed) changed = true;
-      if (clampCardioItem(next, envelope, forceEasyCardio, hold.held)) changed = true;
+      // A held day still holds, and a forced-easy day still has no distance target:
+      // the ramp only ever shapes a run that is actually being offered.
+      const ramp = hold.held || forceEasyCardio ? { applied: false } : applyLongRunRamp(next, envelope);
+      if (ramp.applied) changed = true;
+      if (clampCardioItem(next, envelope, forceEasyCardio, hold.held || ramp.applied)) changed = true;
       Object.assign(next, trustedCandidateMetadata(candidate));
       if (forceEasyCardio) hasEasyCardio = true;
       capped.push(next);
@@ -1124,7 +1158,14 @@ export function deterministicComposedSession(envelope: DailyDecisionEnvelope): C
     return {
       name: "Rest day",
       focus: "Recovery",
-      why: envelope.rationale[0]?.text ?? "Today is for recovery.",
+      // A rest day the WEEK programmed explains itself differently from one a signal
+      // earned: the first is structure the athlete built, and the card should sound
+      // like their own plan rather than like a brake. The rationale still leads on
+      // every other rest morning.
+      why:
+        envelope.template.day_type === "rest"
+          ? pickDayVariant(TEMPLATE_REST_DAY_NOTE, envelope.date, "daily_composition:template_rest")
+          : (envelope.rationale[0]?.text ?? "Today is for recovery."),
       est_minutes: null,
       items: [],
     };
@@ -1143,6 +1184,18 @@ export function deterministicComposedSession(envelope: DailyDecisionEnvelope): C
     }
   );
 }
+
+// The programmed rest day's own card. Never a brake and never a gate — the athlete
+// wrote this day into their week, so it offers what a rest day is actually for. Its
+// own set, several phrasings, because it lands on the same weekday every week and one
+// literal would print verbatim for as long as the template stands.
+export const TEMPLATE_REST_DAY_NOTE: readonly string[] = [
+  "Your week has a rest day here. An easy walk or a few minutes of mobility is plenty, and doing nothing counts too.",
+  "This is the rest day in your plan. Move gently if you feel like it — a walk, some stretching — or leave it alone.",
+  "The week keeps today clear. Easy mobility or a walk fits it well; nothing at all fits it just as well.",
+  "Today is yours. Your plan puts a rest day here, so a gentle walk is the whole ask, and even that is optional.",
+  "Rest is what the week programmed for today. Some easy movement is welcome; a real day off is too.",
+];
 
 // Keep the wire marker a literal here: adaptive-session imports this module to
 // build envelope-backed plan snapshots, so eagerly reading its exported constant
