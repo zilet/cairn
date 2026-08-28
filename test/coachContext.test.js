@@ -270,8 +270,11 @@ test("coach context keeps poor recovery above injury while preserving the conduc
   ]);
   db.prepare("INSERT INTO garmin_sources (id, provider, mode) VALUES (1, 'garmin', 'unofficial')").run();
   db.prepare(
+    // 25, not 20: at or below REST_GRADE_READINESS (src/repo/readiness-bands.ts) the
+    // deep band now owns the morning as its own rest read. This case is about the
+    // injury caveat surviving a SUBDUED reading, so it keeps a subdued one.
     `INSERT INTO garmin_daily_metrics (source_id, date, training_readiness)
-     VALUES (1, ?, 20)`
+     VALUES (1, ?, 25)`
   ).run(today);
   repo.addContextEvent({
     kind: "injury",
@@ -324,8 +327,11 @@ test("thin coach context preserves the injury caveat without a plan or training 
   const today = localDaysAgo(0);
   db.prepare("INSERT INTO garmin_sources (id, provider, mode) VALUES (1, 'garmin', 'unofficial')").run();
   db.prepare(
+    // 25, not 20: at or below REST_GRADE_READINESS (src/repo/readiness-bands.ts) the
+    // deep band now owns the morning as its own rest read. This case is about the
+    // injury caveat surviving a SUBDUED reading, so it keeps a subdued one.
     `INSERT INTO garmin_daily_metrics (source_id, date, training_readiness)
-     VALUES (1, ?, 20)`
+     VALUES (1, ?, 25)`
   ).run(today);
   repo.addContextEvent({
     kind: "injury",

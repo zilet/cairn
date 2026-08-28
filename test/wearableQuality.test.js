@@ -264,7 +264,12 @@ test("DayRead uses only fresh current readiness for a current decision", () => {
 
   const fresh = repo.dayRead(today, {
     has_data: true,
-    recovery: { training_readiness: 20, avg_training_readiness: 56 },
+    // 25, not 20: at or below REST_GRADE_READINESS (src/repo/readiness-bands.ts) the
+    // deep band owns the morning as rest under its own rule. This case is about the
+    // SUBDUED band earning an easier day rather than a rest verdict, so it uses one.
+    // (The stale branch above deliberately keeps its 20 — a stale deep reading must
+    // still behave as absent.)
+    recovery: { training_readiness: 25, avg_training_readiness: 56 },
     quality: { training_readiness: { latest_date: today, freshness: "fresh", sample_count: 5, window_days: 14 } },
   });
   // A lone wearable recovery constraint is deliberately conservative: it owns an

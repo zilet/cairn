@@ -34,9 +34,17 @@ import {
   transitionBrainDecision,
 } from "../brain-decisions.js";
 import { activeRecoveryWeek } from "../profile.js";
+import { readsRestGradeReadiness } from "../readiness-bands.js";
+import { SENSOR_MAX_AGE_DAYS, sensorIsCurrent } from "../sensor-freshness.js";
 import { addDaysISO, localDateISO } from "../shared.js";
 import { getTrainingIntent } from "../training-intent.js";
-import { dayLoad, hardCardioDay, recentCardioLoadMedian, type TrainingLoad } from "../training-read.js";
+import {
+  dayLoad,
+  hardCardioDay,
+  longestRunNovelty,
+  recentCardioLoadMedian,
+  type TrainingLoad,
+} from "../training-read.js";
 
 export const DAY_READ_ADHERENCE_METRIC = "day_read_adherence";
 export const DAY_READ_ADHERENCE_EVALUATOR_VERSION = "day-read-adherence-v1";
@@ -834,8 +842,9 @@ const NO_HARM_PERFORMANCE = 3;
 export interface RestOverrideSoftening {
   active: boolean;
   window_days: number;
-  // The mornings inside the window the athlete trained through with nothing in the
-  // session feedback suggesting it cost them, newest last. Both kinds count — see
+  // The mornings inside the window the athlete trained through with nothing saying it
+  // cost them — not their session rating, not the day's own cardio grade, not the next
+  // morning's physiology (see harmEvidenceOnDay). Newest last. Both kinds count — see
   // restOverrideSoftening.
   overridden_and_fine: string[];
   // The most recent morning they actually TOOK the quiet day it offered: a rest read
@@ -863,13 +872,117 @@ const NO_SOFTENING: RestOverrideSoftening = Object.freeze({
   last_honored_rest: null,
 });
 
-// Did the work logged on `date` show any sign of having cost them? Only the
-// athlete's own session feedback answers this — `performance` is their 1-5 read of
-// how the session went against expectation. The WORST session of the day decides,
-// so one good lift cannot paper over a second effort that went badly. Exported for
-// morningReview (src/repo/brain/morning-review.ts), which asks the same question
-// about a single divergence rather than a rolling window of them.
-export function trainedWithoutHarm(date: string): boolean {
+// ---------- HARM INCLUDES THE BODY'S RESPONSE (owner ruling, 2026-08-28) ----------
+//
+// This question used to have exactly one answer: `sessions.performance`, the
+// athlete's own 1-5 read of how a lifted session went. That made a whole shape of
+// day invisible. A RUN has no session row, so a run-only divergence arrived
+// unrated — and unrated reads as fine, on purpose, because silence about a lifted
+// session is not evidence of harm. The live consequence: the athlete's longest run
+// ever, 51 of 59 minutes at threshold, followed by a readiness reading of 1/100,
+// counted as three-for-three "overrode it and was fine" and softened the next
+// morning's read into another run.
+//
+// So harm now has four faces, and the physiological ones do not need a rating:
+//   • RATED POORLY   — the old test, unchanged. The WORST session of the day decides,
+//                      so one good lift cannot paper over a second that went badly.
+//   • HARD CARDIO    — the day's cardio graded hard (`hardCardioDay`, the one source
+//                      of truth for that question). A threshold effort is a cost
+//                      whether or not anything asked them to rate it.
+//   • A FIRST        — the longest run in months (`longestRunNovelty`). Novel stimulus.
+//   • THE NEXT MORNING — a FRESH rest-grade readiness reading, or fresh physiology
+//                      reading as a brake (Garmin's own low/poor HRV status, or a
+//                      resting HR clearly above its own seven-day average). This is
+//                      the body answering; it outranks the absence of a rating.
+//
+// What has NOT changed is the direction of absence. No rating, no wearable, no run
+// — no harm. Every arm here needs POSITIVE evidence, freshness included, and every
+// failure path returns "no harm found" rather than manufacturing one.
+
+// How far a resting HR must sit above its own recent average to read as a brake.
+// Garmin publishes the seven-day average on the same row, so this is a personal
+// comparison, never a population number. Five beats is the conventional "something
+// is going on" step and is well clear of night-to-night noise.
+const RESTING_HR_BRAKE_DELTA_BPM = 5;
+// The HRV verdicts the watch itself calls bad. Read as a WORD, not re-derived from
+// a baseline we would then have to keep in sync with baseline-bands.
+const HRV_BRAKE_STATUSES: ReadonlySet<string> = new Set(["low", "poor"]);
+
+export type HarmEvidenceKind =
+  | "rated_poorly"
+  | "hard_cardio"
+  | "longest_run"
+  | "readiness_rest_grade"
+  | "physiology_brake";
+
+export interface HarmEvidence {
+  // The day the work happened on.
+  date: string;
+  kind: HarmEvidenceKind;
+  // Machine register — provenance for the ledger and the coach context, never
+  // rendered to the athlete as-is.
+  detail: string;
+}
+
+// The morning after `date`, read for the body's answer. Returns the first brake it
+// finds, or null. Freshness is asked through sensor-freshness (a reading that is too
+// old to speak for that morning behaves as absent, never as reassurance and never as
+// a brake), and a morning that has not happened yet simply has no row.
+function nextMorningPhysiologyBrake(date: string): HarmEvidence | null {
+  const morning = addDaysISO(date, 1);
+  if (!morning) return null;
+  // Reach back only as far as the loosest bound any field here uses; per-field
+  // freshness is still checked individually below.
+  const floor = addDaysISO(morning, -Math.max(SENSOR_MAX_AGE_DAYS.hrv, SENSOR_MAX_AGE_DAYS.resting_hr));
+  if (!floor) return null;
+  let row: any;
+  try {
+    row = db
+      .prepare(
+        `SELECT date, training_readiness, hrv_status, resting_hr, hr_7d_avg
+           FROM garmin_daily_metrics
+          WHERE date >= ? AND date <= ?
+            AND (training_readiness IS NOT NULL OR hrv_status IS NOT NULL OR resting_hr IS NOT NULL)
+          ORDER BY date DESC, id DESC LIMIT 1`
+      )
+      .get(floor, morning) as any;
+  } catch {
+    return null;
+  }
+  if (!row) return null;
+  const readingDate = row.date == null ? null : String(row.date);
+  if (sensorIsCurrent("training_readiness", readingDate, morning) && readsRestGradeReadiness(row.training_readiness)) {
+    return {
+      date,
+      kind: "readiness_rest_grade",
+      detail: `readiness ${Number(row.training_readiness)} on ${morning}`,
+    };
+  }
+  if (sensorIsCurrent("hrv", readingDate, morning)) {
+    const status = String(row.hrv_status ?? "").toLowerCase();
+    if (status && HRV_BRAKE_STATUSES.has(status)) {
+      return { date, kind: "physiology_brake", detail: `hrv status ${status} on ${morning}` };
+    }
+  }
+  if (sensorIsCurrent("resting_hr", readingDate, morning)) {
+    const rhr = Number(row.resting_hr);
+    const avg = Number(row.hr_7d_avg);
+    if (Number.isFinite(rhr) && Number.isFinite(avg) && avg > 0 && rhr >= avg + RESTING_HR_BRAKE_DELTA_BPM) {
+      return {
+        date,
+        kind: "physiology_brake",
+        detail: `resting hr ${Math.round(rhr)} vs 7-day ${Math.round(avg)} on ${morning}`,
+      };
+    }
+  }
+  return null;
+}
+
+// Did the work logged on `date` show any sign of having cost them, and if so which
+// evidence says so? Null means "nothing says it cost them" — which includes an
+// unrated lifting day, deliberately. Exported so the reads that consult it can carry
+// the provenance instead of a bare boolean.
+export function harmEvidenceOnDay(date: string): HarmEvidence | null {
   try {
     const row = db
       .prepare(`SELECT MIN(performance) AS worst FROM sessions WHERE date = ? AND performance IS NOT NULL`)
@@ -878,12 +991,40 @@ export function trainedWithoutHarm(date: string): boolean {
     // — and `Number(null)` is 0, not NaN, which read every unrated session as the
     // worst possible one and made the common case (they log the work, they don't
     // rate it) permanently unreachable. Test the absence before coercing.
-    if (row?.worst == null) return true;
-    const worst = Number(row.worst);
-    return Number.isFinite(worst) ? worst >= NO_HARM_PERFORMANCE : true;
+    if (row?.worst != null) {
+      const worst = Number(row.worst);
+      if (Number.isFinite(worst) && worst < NO_HARM_PERFORMANCE) {
+        return { date, kind: "rated_poorly", detail: `performance ${worst}` };
+      }
+    }
   } catch {
-    return true;
+    /* an unreadable sessions table is not evidence of harm */
   }
+  try {
+    const novelty = longestRunNovelty(date);
+    if (novelty) {
+      return {
+        date,
+        kind: "longest_run",
+        detail: `${novelty.distance_km} km vs ${novelty.previous_longest_km} km best`,
+      };
+    }
+    if (hardCardioDay(date)) return { date, kind: "hard_cardio", detail: "cardio graded hard" };
+  } catch {
+    /* same contract: a failed read finds no harm, it does not invent one */
+  }
+  try {
+    return nextMorningPhysiologyBrake(date);
+  } catch {
+    return null;
+  }
+}
+
+// The boolean form, kept as the name every existing caller uses (restOverrideSoftening,
+// easyOverrideSoftening, and morningReview — which asks the same question about a
+// single divergence rather than a rolling window of them).
+export function trainedWithoutHarm(date: string): boolean {
+  return harmEvidenceOnDay(date) == null;
 }
 
 // Which mornings this signal is allowed to reason about at all. Two kinds, and the
@@ -956,8 +1097,9 @@ export function restOverrideSoftening(model: ReadAdherenceModel | null, asOf: st
 export interface EasyOverrideSoftening {
   active: boolean;
   window_days: number;
-  // The easy mornings inside the window the athlete took ABOVE easy with nothing in the
-  // session feedback suggesting it cost them, newest last.
+  // The easy mornings inside the window the athlete took ABOVE easy with nothing saying
+  // it cost them — the same four-faced test the rest ladder uses
+  // (harmEvidenceOnDay). Newest last.
   overridden_and_fine: string[];
   // The most recent morning they actually kept at or under easy when a quiet-ish read
   // asked them to. Everything on or before it is discarded — agreeing with the read

@@ -85,13 +85,17 @@ import {
 } from "./wear-pattern-voice.js";
 import { afterSqliteCommit } from "./sqlite-savepoint.js";
 import {
+  type LongestRunNovelty,
   type TrainingLoad,
   dayLoad,
   hardCardioDay,
   hybridDayContext,
+  longestRunNovelty,
+  planDayIsCardioOnly,
   recentCardioLoadMedian,
   recoverySessionDose,
 } from "./training-read.js";
+import { readsLowReadiness, readsRestGradeReadiness } from "./readiness-bands.js";
 import { withFlexibleRunLookahead } from "./hybrid-run-lookahead.js";
 import { dayFuelState } from "./fuel-state.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
@@ -289,6 +293,19 @@ export const DAY_READ_OUTCOMES = {
       "Your watch read this morning as low readiness.",
     ],
   },
+  // The band BELOW the one above, and a genuinely different read (owner ruling,
+  // 2026-08-28). A subdued reading earns an easy day; a reading this deep is the
+  // watch saying the night restored nothing, and the day it earns is rest. The
+  // outcome ladder may still ease it — but only as far as easy movement.
+  rest_grade_readiness: {
+    code: "rest_grade_readiness",
+    reasons: [
+      "This morning's readiness reading is about as low as it goes.",
+      "Your readiness reading this morning is barely off the floor.",
+      "The reading this morning is at the very bottom of its range.",
+      "Whatever last night was, the morning reading says it didn't restore much.",
+    ],
+  },
   felt_run_down_rest: {
     code: "felt_run_down_rest",
     reasons: [
@@ -432,6 +449,16 @@ const LOW_READINESS_WHY: readonly string[] = [
   "A lighter day is the safer call today — your readiness reading came in low this morning.",
   "This morning's reading came in low, so keeping today light is the safer bet.",
   "Readiness is down today — worth respecting rather than pushing through.",
+];
+// The deep band. Every phrasing names the READING (that is the whole basis of the
+// day) and offers rest without a verdict about the athlete — and none of them
+// mentions running, because the one thing this morning must not do is put another
+// run in front of them.
+const REST_GRADE_READINESS_WHY: readonly string[] = [
+  "Your readiness reading this morning is about as low as that number goes — today is a rest day.",
+  "This morning's reading is at the very bottom of its range, so today is best spent resting.",
+  "The reading came back this morning saying almost nothing was restored — rest is the day.",
+  "Readiness is scraping the floor this morning; a genuine rest day is what fits.",
 ];
 // The same words the unified signal state speaks for the same check-in, borrowed
 // rather than re-declared: a low-energy check-in reaches the athlete through BOTH
@@ -1160,6 +1187,7 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   day_claimed_rest: DAY_CLAIMED_WHY,
   lab_draw_morning: LAB_DRAW_WHY,
   low_readiness_rest: LOW_READINESS_WHY,
+  rest_grade_readiness: REST_GRADE_READINESS_WHY,
   felt_run_down_rest: RUN_DOWN_WHY,
   logged_light_work_today: LIGHT_WORK_WHY,
   endurance_volume_spike: VOLUME_SPIKE_WHY,
@@ -1221,6 +1249,9 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // naming it is an unexplained easy day, and the sequencing advice goes with it.
   lab_draw_morning: /\b(?:draw|labs?|blood)\b/i,
   low_readiness_rest: /\b(?:readiness|reading)\b/i,
+  // Same one word as its shallower sibling, for the same reason: the reading IS the
+  // argument, and a phrasing that stops naming it is an unexplained rest day.
+  rest_grade_readiness: /\b(?:readiness|reading)\b/i,
   felt_run_down_rest: /\b(?:run-down|low)\b/i,
   logged_light_work_today: /\b(?:moved|movement|board)\b/i,
   endurance_volume_spike: /\b(?:running|run|mileage)\b/i,
@@ -2064,6 +2095,12 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
 const SOFTENABLE_REST_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.accumulated_load_rest.code,
   DAY_READ_OUTCOMES.low_readiness_rest.code,
+  // The deep readiness band. Softenable — but read the ladder before assuming that
+  // makes it weak: rest may only ever be eased to EASY, the softened read carries no
+  // focus and a 20-minute clock, `outcome_feedback_soften` is excluded from the easy
+  // ladder so it can never chain on to train, and composition refuses to make that
+  // easy day a run (see daily-composition's endurance hold).
+  DAY_READ_OUTCOMES.rest_grade_readiness.code,
   DAY_READ_OUTCOMES.felt_run_down_rest.code,
   DAY_READ_OUTCOMES.acute_signal_protection.code,
 ]);
@@ -2488,7 +2525,13 @@ export function dayRead(
   const readinessCurrent = rec?.recovery?.training_readiness ?? null;
   const readinessDate = readinessQuality?.latest_date ?? null;
   const readinessFresh = sensorIsCurrent("training_readiness", readinessDate, d);
-  const lowReadiness = readinessFresh && readinessCurrent != null && Number(readinessCurrent) < 35;
+  const lowReadiness = readinessFresh && readsLowReadiness(readinessCurrent);
+  // The deeper band (owner ruling, 2026-08-28). Same reading, same freshness gate,
+  // a different answer: `lowReadiness` earns the protective EASY read the signal
+  // state already produces, this one earns REST. Both bands live in
+  // readiness-bands.ts so read-adherence can ask the mirror question about
+  // yesterday's divergence against the same numbers.
+  const restGradeReadiness = readinessFresh && readsRestGradeReadiness(readinessCurrent);
   const readinessAverage = rec?.recovery?.avg_training_readiness ?? null;
   // Mounting fatigue: at least 2 straight training days AND recovery drifting the
   // wrong way (or readiness low) — i.e. heading toward a reset but not there yet.
@@ -2810,6 +2853,35 @@ export function dayRead(
     null
   );
   if (easyFeedback) (signals as any).easy_outcome_feedback = { ...easyFeedback, applied: false };
+  // ---- what YESTERDAY's endurance says about today (owner ruling, 2026-08-28) ----
+  // Two facts, both about the day before, both deliberately narrow:
+  //   • hard cardio yesterday — asked through `hardCardioDay`, the one source of truth
+  //     for that grade, with the cardio-load median this read already computed.
+  //   • a FIRST — the longest run in ninety days (`longestRunNovelty`). Neither
+  //     `hardCardioDay` (which ignores distance on purpose) nor the weekly-mileage
+  //     spike (a week-shaped argument) can see one very long single effort.
+  // They never brake a day by themselves. They corroborate a run of loading days, they
+  // ride in `signals` so the agent prompt sees them, and they keep the outcome ladder
+  // from opening ANOTHER run tomorrow (see the softening guard below).
+  const yesterdayIso = addDaysISO(d, -1);
+  const hardCardioYesterday = !!yesterdayIso && signalInput(() => hardCardioDay(yesterdayIso, cardioLoadMedian), false);
+  const runNoveltyYesterday: LongestRunNovelty | null = yesterdayIso
+    ? signalInput(() => longestRunNovelty(yesterdayIso), null)
+    : null;
+  if (hardCardioYesterday || runNoveltyYesterday) {
+    (signals as any).endurance_yesterday = {
+      hard_cardio: hardCardioYesterday,
+      ...(runNoveltyYesterday
+        ? {
+            longest_run: {
+              distance_km: runNoveltyYesterday.distance_km,
+              previous_longest_km: runNoveltyYesterday.previous_longest_km,
+              lookback_days: runNoveltyYesterday.lookback_days,
+            },
+          }
+        : {}),
+    };
+  }
   // The rhythm-driven rest: genuinely-loading days stacking up outside a reduced week.
   // Hoisted out of the earned-rest rule because the training-drive rule directly above
   // it answers THIS trigger and no other, and two copies of the condition is how the
@@ -2826,6 +2898,12 @@ export function dayRead(
   const tomorrowClinical = holdsTomorrow.some((hold) => hold.clinical === true);
   const stackedLoadCorroborated =
     lowReadiness ||
+    // A first — the longest run in months, done yesterday — is a CURRENT fact about
+    // the last twenty-four hours, which is exactly what the caveat law asks for
+    // before a run of days may read as rest. Hard cardio alone is not enough: that
+    // already counts toward the run of days, and counting it twice would turn the
+    // calendar back into a brake of its own.
+    !!runNoveltyYesterday ||
     lowSubjective ||
     yesterdayRecoveryOverdose ||
     hasFreshBrake(signalState.dimensions) ||
@@ -2879,6 +2957,33 @@ export function dayRead(
             kind: "rest",
             focus: null,
             why: pickDayVariant(ACUTE_SLEEP_WHY, d, "acute_sleep_corroborated"),
+            est_minutes: null,
+            signals,
+          },
+        };
+      },
+    },
+    {
+      // ---- a rest-grade reading IS rest (owner ruling, 2026-08-28) ----
+      // Above the protect rule ON PURPOSE, and this ordering is the whole rule. Below
+      // it, a reading in the deep band reaches the athlete as the protect rule's EASY
+      // day: the signal state rates anything under LOW_READINESS as a recovery
+      // constraint and the posture resolves to easy, so a reading of 1/100 and a
+      // reading of 34/100 produced the identical morning. They are not the identical
+      // morning. Above the protect rule the deep band gets its own read, its own code
+      // and its own words — and the shallow band keeps the easy day it always had.
+      //
+      // Freshness is the same gate as everywhere else: a reading too old to speak for
+      // today behaves as absent (sensor-freshness), so a watch left in a drawer never
+      // manufactures a rest day.
+      resolve: () => {
+        if (!restGradeReadiness) return null;
+        return {
+          outcome: DAY_READ_OUTCOMES.rest_grade_readiness,
+          read: {
+            kind: "rest",
+            focus: null,
+            why: pickDayVariant(REST_GRADE_READINESS_WHY, d, "rest_grade_readiness"),
             est_minutes: null,
             signals,
           },
@@ -3655,7 +3760,26 @@ export function dayRead(
   // for a fortnight would be handed a training day with nothing in it. No plan day due
   // → easy movement with the easy clock, never an invented session.
   const openedPlanDay = softenEasyEarned && !heldByStatement ? suggestedPlanDay() : null;
-  const softenEasy = softenEasyEarned && !heldByStatement && openedPlanDay != null;
+  // ---- and it may never open a SECOND run (owner ruling, 2026-08-28) ----
+  // The ladder opens the day that is due. When the day that is due is nothing but
+  // cardio — the week template here is five lift days and two consecutive "Run" days
+  // — opening it the morning after a hard run is how the read comes to stack runs by
+  // default, which is a thing no coach would ever program and the ladder was never
+  // meant to decide. A day with any strength work in it is untouched: its strength
+  // half is already gated by the muscle model, and the athlete gets their session.
+  //
+  // The hold is on the MODALITY, not on the ladder. The pattern stays live, the
+  // evidence stays published, and the read simply keeps whatever the rules gave it.
+  const runStackingHold =
+    (hardCardioYesterday || !!runNoveltyYesterday) && planDayIsCardioOnly(openedPlanDay?.day_number ?? null);
+  const softenEasy = softenEasyEarned && !heldByStatement && openedPlanDay != null && !runStackingHold;
+  if (runStackingHold) {
+    (signals as any).run_stacking_hold = {
+      plan_day: openedPlanDay?.day_number ?? null,
+      hard_cardio_yesterday: hardCardioYesterday,
+      longest_run_yesterday: !!runNoveltyYesterday,
+    };
+  }
   if (easyFeedback) {
     (signals as any).easy_outcome_feedback = {
       ...easyFeedback,

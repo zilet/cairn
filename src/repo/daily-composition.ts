@@ -488,6 +488,54 @@ function safeEasySessionText(value: string | null, fallback: string): string {
   return value && !HARD_CARDIO_LANGUAGE.test(value) ? value : fallback;
 }
 
+// ---- the modality hold: a quiet day after a hard run is not another run ----
+// The envelope decides WHETHER (daily-decision's `endurance_hold`, off yesterday's
+// endurance and the same acute leg residual that gates strength items); this decides
+// WHAT INSTEAD. Leg-driven endurance — run, ride, row, hike, stairs — becomes an easy
+// walk, which is movement the residual does not care about. Swimming and anything
+// already a walk are left alone, and the strength half of the day is untouched: it is
+// gated by the muscle model, so what survives is exactly the upper-body-only session
+// the ruling asks for.
+const LEG_DRIVEN_CARDIO =
+  /\b(?:run|running|jog|jogging|ride|riding|bike|biking|cycle|cycling|spin|row|rowing|erg|hike|hiking|stair|stairs|elliptical|treadmill)\b/i;
+
+const RUN_HELD_NOTE: readonly string[] = [
+  "Yesterday's running is still in your legs — keep today's movement off them",
+  "Your legs are still carrying yesterday's effort, so this stays a walk today",
+  "Today's easy movement stays off the legs while yesterday settles",
+  "Walking rather than running today — yesterday's work is still there",
+];
+
+function holdLegDrivenCardio(item: any, envelope: DailyDecisionEnvelope): boolean {
+  if (envelope.endurance_hold?.no_run !== true) return false;
+  const label = String(item?.exercise ?? "");
+  if (!LEG_DRIVEN_CARDIO.test(label)) return false;
+  let changed = false;
+  if (item.exercise !== "Easy walk") {
+    item.exercise = "Easy walk";
+    changed = true;
+  }
+  if (item.target_zone !== "easy") {
+    item.target_zone = "easy";
+    changed = true;
+  }
+  if (item.interval != null) {
+    item.interval = null;
+    changed = true;
+  }
+  // A distance target written for a run is meaningless once the movement changed.
+  if (item.target_distance_km != null) {
+    item.target_distance_km = null;
+    changed = true;
+  }
+  const note = pickDayVariant(RUN_HELD_NOTE, envelope.date, "daily_composition:run_held");
+  if (item.note !== note) {
+    item.note = note;
+    changed = true;
+  }
+  return changed;
+}
+
 function clampCardioItem(item: any, envelope: DailyDecisionEnvelope, forceEasy: boolean): boolean {
   let changed = false;
   const durationCap = envelope.caps.duration_min;
@@ -728,6 +776,9 @@ export function normalizeComposedSession(
     const candidate = candidates.get(String(next.exercise ?? "").toLowerCase());
     if (next.kind === "cardio") {
       if (applyRecoveryCycleTarget(next, envelope)) changed = true;
+      // Before the easy clamp, not after: the clamp renames by MODALITY
+      // (easyCardioName), so a run reaching it first is only ever an "Easy run".
+      if (holdLegDrivenCardio(next, envelope)) changed = true;
       if (clampCardioItem(next, envelope, forceEasyCardio)) changed = true;
       Object.assign(next, trustedCandidateMetadata(candidate));
       if (forceEasyCardio) hasEasyCardio = true;

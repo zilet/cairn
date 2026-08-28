@@ -12,7 +12,7 @@
 // used by both sessions/activities and intelligence (which import each other) without
 // a cycle.
 import { db } from "../db.js";
-import { canonicalEnduranceSport } from "./endurance-sports.js";
+import { activitySportWhere, canonicalEnduranceSport, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import {
   canonicalGroup,
   classifyMuscleGroup,
@@ -641,6 +641,104 @@ export function hardCardioDay(date: string, loadMedian?: number | null): boolean
     if (dur >= (isEnduranceSession ? HARD_CARDIO_MIN : CARDIO_GRADE.walkHikeModerateMin)) return true;
   }
   return false;
+}
+
+// ---------- the longest run they have ever done (lately) ----------
+//
+// `hardCardioDay` deliberately ignores distance, and the weekly-mileage spike is a
+// WEEK-shaped argument. Between them sits the thing neither can see: ONE run that
+// is further than anything this athlete has done in months. That is a novel
+// stimulus by definition — the body has no recent adaptation to it — and the day
+// after it is not an ordinary day.
+//
+// The signal is deliberately narrow. It says one thing about one run, it is a
+// CAVEAT-grade fact (it biases the next day toward easy/rest and keeps another run
+// off it), and it never brakes anything on its own.
+export const LONGEST_RUN_LOOKBACK_DAYS = 90;
+// A run does not have to BEAT the previous longest to be novel — matching it is the
+// same stimulus, and a GPS track is not precise enough to make 9.83 km meaningfully
+// different from 9.85. The tolerance is small enough that an ordinary weekly long
+// run never trips it.
+export const LONGEST_RUN_TOLERANCE_KM = 0.25;
+// Below this many prior runs in the window there is no "longest" to be — the first
+// three runs after a layoff are all personal bests and none of them are news.
+export const LONGEST_RUN_MIN_PRIOR_RUNS = 3;
+
+export interface LongestRunNovelty {
+  date: string;
+  distance_km: number;
+  // The longest run in the window BEFORE this one — what makes today's a first.
+  previous_longest_km: number;
+  prior_runs: number;
+  lookback_days: number;
+}
+
+// Was the longest run on `date` at least as long as anything in the trailing
+// window before it? Null when there is no run that day, no distance recorded, or
+// too thin a history to call anything a first. Null-safe; never throws.
+export function longestRunNovelty(date: string, lookbackDays = LONGEST_RUN_LOOKBACK_DAYS): LongestRunNovelty | null {
+  try {
+    const runSport = activitySportWhere("activities", RUN_SPORT_PATTERNS);
+    const today = db
+      .prepare(
+        `SELECT MAX(distance_km) AS km FROM activities
+          WHERE date = ? AND distance_km IS NOT NULL AND distance_km > 0 AND (${runSport.sql})`
+      )
+      .get(date, ...runSport.params) as any;
+    const km = Number(today?.km);
+    if (!Number.isFinite(km) || km <= 0) return null;
+    const from = addDaysISO(date, -Math.max(1, lookbackDays));
+    const to = addDaysISO(date, -1);
+    if (!from || !to) return null;
+    const prior = db
+      .prepare(
+        `SELECT COUNT(*) AS n, MAX(distance_km) AS km FROM activities
+          WHERE date >= ? AND date <= ? AND distance_km IS NOT NULL AND distance_km > 0 AND (${runSport.sql})`
+      )
+      .get(from, to, ...runSport.params) as any;
+    const priorRuns = Number(prior?.n ?? 0);
+    const priorLongest = Number(prior?.km);
+    if (!Number.isFinite(priorRuns) || priorRuns < LONGEST_RUN_MIN_PRIOR_RUNS) return null;
+    if (!Number.isFinite(priorLongest) || priorLongest <= 0) return null;
+    if (km < priorLongest - LONGEST_RUN_TOLERANCE_KM) return null;
+    return {
+      date,
+      distance_km: Math.round(km * 100) / 100,
+      previous_longest_km: Math.round(priorLongest * 100) / 100,
+      prior_runs: priorRuns,
+      lookback_days: lookbackDays,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Is this template day nothing but cardio? A "Run" day in the week template has no
+// strength items at all, which is exactly the day that must not be opened on the
+// morning after a hard run — opening it is how a softening ladder stacks runs. A day
+// carrying any strength item is not this shape: its strength half is already gated
+// by the muscle model. Null-safe → false when there is no such plan day.
+export function planDayIsCardioOnly(dayNumber: number | null | undefined): boolean {
+  if (dayNumber == null || !Number.isFinite(Number(dayNumber))) return false;
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT pi.kind AS kind FROM plan_days pd
+           JOIN plan_items pi ON pi.plan_day_id = pd.id
+          WHERE pd.day_number = ?`
+      )
+      .all(Number(dayNumber)) as any[];
+  } catch {
+    return false;
+  }
+  if (!rows.length) return false;
+  let cardio = 0;
+  for (const r of rows) {
+    if (String(r?.kind ?? "").toLowerCase() === "cardio") cardio++;
+    else return false;
+  }
+  return cardio > 0;
 }
 
 // ---------- hybrid interference/synergy: runner + lifter sequencing ----------

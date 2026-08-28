@@ -281,7 +281,9 @@ test("on the production path the subjective rests are shadowed by the protect po
 
   seedPlan();
   db.prepare("INSERT INTO garmin_sources (id, provider, mode) VALUES (1, 'garmin', 'unofficial')").run();
-  db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date, training_readiness) VALUES (1, ?, 20)`).run(REF);
+  // 25 rather than 20: at or below REST_GRADE_READINESS the deep band owns the day
+  // under its own code, and this case is about the SUBDUED band being shadowed.
+  db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date, training_readiness) VALUES (1, ?, 25)`).run(REF);
   const readiness = repo.dayRead(REF);
   assert.equal(readiness.decision.rule_code, "acute_signal_protection");
 });
@@ -300,7 +302,7 @@ test("...and are still reachable through a scoped state, which is why they stay 
   seedPlan();
   const scopedRecovery = {
     has_data: true,
-    recovery: { training_readiness: 20 },
+    recovery: { training_readiness: 25 },
     quality: { training_readiness: { latest_date: REF } },
   };
   const readiness = repo.dayRead(REF, scopedRecovery, repo.buildUnifiedSignalState(REF, []));

@@ -637,7 +637,10 @@ test("poor recovery owns an injury-overlap day while the movement work-around su
 
   const r = repo.dayRead(REF, {
     has_data: true,
-    recovery: { training_readiness: 20, avg_training_readiness: 50 },
+    // 25, not 20: a reading at or under REST_GRADE_READINESS now reads as a genuine
+    // rest day of its own (see readiness-bands.ts). This case is about the injury
+    // work-around surviving a SUBDUED reading, so it keeps a subdued one.
+    recovery: { training_readiness: 25, avg_training_readiness: 50 },
     quality: {
       training_readiness: { latest_date: REF, source: "garmin", freshness: "fresh", sample_count: 1 },
     },

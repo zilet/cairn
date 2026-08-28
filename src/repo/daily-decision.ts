@@ -12,7 +12,7 @@ import {
 import { findExercise } from "./exercises.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { getInjuryImpacts, listContextEvents } from "./health.js";
-import { type AcuteGateReading, acuteGates, recentEnduranceImpacts } from "./hybrid-load.js";
+import { type AcuteGateReading, RUN_PRIME_GROUPS, acuteGates, recentEnduranceImpacts } from "./hybrid-load.js";
 import { getPlanDay } from "./plan.js";
 import { selectAdaptivePlanDay, selectedPlanDayForDate } from "./plan-selection.js";
 import { getProgramState } from "./program-state.js";
@@ -32,6 +32,7 @@ import {
   type TrainingPriority,
 } from "./training-intent.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
+import { longestRunNovelty } from "./training-read.js";
 
 // The deterministic daily-decision envelope (Stage 2 of the adaptive daily
 // training plan). This is the
@@ -97,6 +98,9 @@ export const DAILY_DECISION_REASONS = [
   "backed_day_reach",
   "reach_trimmed_by_fueling",
   "reach_no_room",
+  // Yesterday's endurance still owns today's legs, so the quiet day this envelope
+  // describes may not be another run (owner ruling, 2026-08-28).
+  "run_held_by_endurance_residual",
 ] as const;
 
 export type DailyDecisionReason = (typeof DAILY_DECISION_REASONS)[number];
@@ -249,6 +253,12 @@ export interface DailyDecisionSnapshot {
   // nothing learned serializes byte-for-byte as it did before this field existed
   // and every historical envelope stays readable.
   personal_response?: { plan_complexity: number };
+  // Did yesterday's run go further than anything in the trailing ninety days?
+  // Stamped omit-when-idle by gather (a snapshot with no first serializes exactly as
+  // it did before the field existed), because the decision must stay a pure function
+  // of its snapshot and `longestRunNovelty` is a database read. Every other input this
+  // rule needs — hard endurance yesterday, saturated leg groups — is already here.
+  longest_run_yesterday?: true;
   // Compact reach inputs. The envelope is a pure function of the snapshot and had
   // neither `settings.training_drive` nor the signal state's `support` / brake /
   // training directive, so gather stamps this slice (omit-when-idle, same as
@@ -387,6 +397,13 @@ export interface DailyDecisionEnvelope {
   // SignalPosture / caps.intensity ladders stay safety ladders. `level: "push"`
   // licenses a within-session reach; `null` is the ordinary train day.
   reach: DailyDecisionReach;
+  // The one modality this quiet day may not be. The leg residual has always gated
+  // STRENGTH items and never cardio, which is how an easy day the morning after a
+  // threshold run kept arriving as "Easy run" with every leg group flagged saturated
+  // on the very same envelope. Composition reads this and offers easy movement (or an
+  // upper-body-only session) instead. Optional so historical envelope_json rows remain
+  // readable, and omit-when-idle so an ordinary day serializes unchanged.
+  endurance_hold?: { no_run: true; reasons: string[] };
 }
 
 export interface DailyDecisionReach {
@@ -659,6 +676,12 @@ export function gatherDailyDecisionSnapshot(
   // the first case from the envelope entirely.
   const muscleLoad = safe(() => acuteGates(d), new Map()) as Map<string, AcuteGateReading>;
   const endurance = safe(() => recentEnduranceImpacts(3, d), []) as any[];
+  // A FIRST yesterday — the longest run in the trailing ninety days. Read here rather
+  // than inside the decision so `buildDailySessionDecision` stays a pure function of
+  // its snapshot; every other input the endurance hold needs (hard endurance yesterday,
+  // saturated leg groups) is already on the snapshot.
+  const yesterdayIso = addDaysISO(d, -1);
+  const longestRunYesterday = yesterdayIso ? safe(() => longestRunNovelty(yesterdayIso) != null, false) : false;
 
   const programState = safe(() => getProgramState(d, recoverySummary), null) as any;
   const progression =
@@ -909,6 +932,9 @@ export function gatherDailyDecisionSnapshot(
     // so writing the key with a null value would change every fingerprint on the
     // planet the day this shipped. Absent means absent.
     ...(planComplexityScale == null ? {} : { personal_response: { plan_complexity: planComplexityScale } }),
+    // Same spread-not-null discipline: absent means absent, and an ordinary morning
+    // fingerprints exactly as it did before this field existed.
+    ...(longestRunYesterday ? { longest_run_yesterday: true as const } : {}),
     ...(supportSlice.signal_support ? { signal_support: supportSlice.signal_support } : {}),
     ...(supportSlice.recovery_capacity ? { recovery_capacity: supportSlice.recovery_capacity } : {}),
   };
@@ -1571,6 +1597,41 @@ export function buildDailySessionDecision(
     fire(precedence, "muscle_saturated");
     soft.push({ code: "muscle_saturated", detail: `Recently saturated: ${saturated.join(", ")}` });
   }
+  // ---- the leg residual finally gates CARDIO too (owner ruling, 2026-08-28) ----
+  // Every one of these inputs was already on the snapshot and none of them reached a
+  // cardio item: the muscle model gated strength items and cardio walked straight
+  // past it, which is how a quiet day the morning after a threshold run arrived as
+  // "Easy run" on an envelope whose every leg group was flagged saturated.
+  //
+  // Narrow on purpose. It applies only to a day that is ALREADY quiet (easy, or a
+  // rest day the athlete is training through anyway) — a training day is a different
+  // question and keeps whatever the plan says. It changes the MODALITY, never the
+  // kind, never the caps, and it is a suggestion like everything else here: the
+  // athlete can still go for a run, the app just stops proposing one.
+  const hardEnduranceYesterday = snapshot.endurance.some(
+    (e) => e.days_ago === 1 && (e.intensity === "hard" || e.load === "hard")
+  );
+  const legsSaturated = RUN_PRIME_GROUPS.some((group) => saturated.includes(group));
+  const enduranceHoldReasons: string[] = [];
+  // "Quiet" is the READ, not just the resulting kind: a rest morning the athlete is
+  // training through anyway resolves to `kind: "train"`, and that is precisely the
+  // live case this rule exists for. An ordinary training day — quiet by neither
+  // measure — is untouched.
+  if (kind !== "train" || baseKind !== "train") {
+    if (snapshot.longest_run_yesterday === true) enduranceHoldReasons.push("longest_run_yesterday");
+    if (hardEnduranceYesterday) enduranceHoldReasons.push("hard_endurance_yesterday");
+    if (legsSaturated) enduranceHoldReasons.push("legs_saturated");
+  }
+  const enduranceHold: DailyDecisionEnvelope["endurance_hold"] = enduranceHoldReasons.length
+    ? { no_run: true, reasons: enduranceHoldReasons }
+    : undefined;
+  if (enduranceHold) {
+    fire(precedence, "run_held_by_endurance_residual");
+    soft.push({
+      code: "run_held_by_endurance_residual",
+      detail: `Quiet day keeps off the legs: ${enduranceHoldReasons.join(", ")}`,
+    });
+  }
   const due = dedupe([...snapshot.plan.due, ...snapshot.program.volume_low_groups]);
   if (due.length) {
     fire(precedence, "muscle_due");
@@ -1936,6 +1997,7 @@ export function buildDailySessionDecision(
     protective_exclusions: protectiveExclusions,
     reported_joint_pain: snapshot.feedback?.joint_pain ?? null,
     reach,
+    ...(enduranceHold ? { endurance_hold: enduranceHold } : {}),
   };
 }
 
