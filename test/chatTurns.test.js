@@ -41,6 +41,11 @@ import {
   RUN_HELD_FOR_REVIEW_VARIANTS,
   RUN_NOT_LIVE_VARIANTS,
   RUN_NOT_SAVED_VARIANTS,
+  GOAL_NONE_SAVED_VARIANTS,
+  GOAL_NOT_SAVED_VARIANTS,
+  hasExplicitGoalIntent,
+  hasExplicitGoalIntentInContext,
+  reconcileGoalIdentityReply,
   shouldCreatePhotoFoodPlaceholder,
   STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS,
   STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
@@ -1892,6 +1897,88 @@ test("goal identity changes require an explicit athlete statement", () => {
       context: "technical trails in the Fells",
     },
   });
+});
+
+test("a stated bodyweight destination is an explicit goal; a bare load number is not", () => {
+  assert.equal(hasExplicitGoalIntent("Let's get down to 154 lbs by October 20."), true);
+  assert.equal(hasExplicitGoalIntent("I'd like to drop to 154 lb before the trip"), true);
+  assert.equal(hasExplicitGoalIntent("Locking in 154 lb by October 20th"), true);
+  assert.equal(hasExplicitGoalIntent("My goal is 154 lb"), true);
+  // No unit → could be a barbell load, a rep count, anything. Never a bodyweight goal.
+  assert.equal(hasExplicitGoalIntent("drop down to 135 on the bench today"), false);
+  // Exploratory questions still never write identity.
+  assert.equal(hasExplicitGoalIntent("Should I get down to 154 lbs?"), false);
+});
+
+test("a goal negotiation carries the athlete's own explicit statement into a short confirmation", () => {
+  const negotiated = ["I want to get down to 154 lbs by end of September.", "Fair — what timeline is safe?"];
+  // The final refinement message alone fails the per-message gate…
+  assert.equal(hasExplicitGoalIntent("154 by October 20th, then"), false);
+  // …but carries through the athlete's own earlier statement.
+  assert.equal(hasExplicitGoalIntentInContext("154 by October 20th, then", negotiated), true);
+  assert.equal(hasExplicitGoalIntentInContext("okay, let's lock that in", negotiated), true);
+  // A bare agreement with NO explicit athlete statement anywhere stays inexplicit —
+  // a coach-suggested goal cannot ride in on an "ok".
+  assert.equal(hasExplicitGoalIntentInContext("ok sounds good", ["how was the run?"]), false);
+  // A question never confirms, even with an explicit statement behind it.
+  assert.equal(hasExplicitGoalIntentInContext("should I really change my goal?", negotiated), false);
+});
+
+test("applyChatActions persists a negotiated goal and reports what applied; a silent drop is no longer silent", () => {
+  repo.setProfile({ goal_weight_lb: 164 });
+  const confirmed = applyChatActions(
+    { actions: [{ type: "set_profile", goal_weight_lb: 154, goal_date: "2026-10-20", goal_mode: "lose" }] },
+    {
+      agent: "stub",
+      message: "154 by October 20th, then",
+      recentAthleteMessages: ["I want to get down to 154 lbs by end of September."],
+    }
+  );
+  assert.equal(confirmed.applied.length, 1);
+  assert.equal(repo.getProfile().goal_weight_lb, 154);
+  assert.equal(repo.getProfile().goal_date, "2026-10-20");
+  assert.deepEqual(confirmed.droppedGoalFields, []);
+  assert.deepEqual(confirmed.appliedGoalPatch, {
+    goal_weight_lb: 154,
+    goal_date: "2026-10-20",
+    goal_mode: "lose",
+  });
+
+  const dropped = applyChatActions(
+    { actions: [{ type: "set_profile", goal_weight_lb: 140 }] },
+    { agent: "stub", message: "ok", recentAthleteMessages: ["how was the run?"] }
+  );
+  assert.deepEqual(dropped.applied, []);
+  assert.equal(repo.getProfile().goal_weight_lb, 154, "a coach-suggested goal cannot ride in on a bare ok");
+  assert.deepEqual(dropped.droppedGoalFields, ["goal_weight_lb"]);
+  assert.equal(dropped.appliedGoalPatch, null);
+});
+
+test("reconcileGoalIdentityReply: a lock claim over a dropped write is replaced; an applied goal gets a receipt", () => {
+  const today = localDateISO();
+  // Prose claimed the lock, nothing was written → the whole reply is replaced with the correction.
+  const corrected = reconcileGoalIdentityReply(
+    "Locking in 154 lb by October 20th as the goal.",
+    ["goal_weight_lb", "goal_date"],
+    null
+  );
+  assert.equal(corrected, pickDayVariant(GOAL_NOT_SAVED_VARIANTS, today, "chat-goal-not-saved"));
+
+  // A neutral reply over a dropped write gets the quiet for-the-record line appended.
+  const noted = reconcileGoalIdentityReply("Sounds like a strong plan.", ["goal_weight_lb"], null);
+  assert.match(noted, /^Sounds like a strong plan\./);
+  assert.equal(noted.includes(pickDayVariant(GOAL_NONE_SAVED_VARIANTS, today, "chat-goal-none-saved")), true);
+
+  // An applied goal gets an exact receipt under the model's prose.
+  const receipt = reconcileGoalIdentityReply("Great — that's the plan.", [], {
+    goal_weight_lb: 154,
+    goal_date: "2026-10-20",
+    goal_mode: "lose",
+  });
+  assert.match(receipt, /Goal saved: 154 lb by 2026-10-20 \(lose\)\./);
+
+  // Nothing goal-shaped happened → the reply passes through untouched.
+  assert.equal(reconcileGoalIdentityReply("Logged your lunch.", [], null), "Logged your lunch.");
 });
 
 test("applyChatActions ignores unknown action types without throwing", () => {

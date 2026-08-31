@@ -4,6 +4,28 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-31 — goal-negotiation round: a negotiated goal locks, and a dropped one says so
+
+NO schema change; server-only (no sw bump). Root cause found live: the athlete negotiated a new
+goal weight over several chat turns, the model emitted the goal fields, and the reply said "locking
+it in" — but `applyChatActions`' per-message `hasExplicitGoalIntent` gate read the final short
+confirmation ("154 by October 20th, then") as inexplicit and SILENTLY deleted the goal fields from
+the `set_profile` patch. The profile kept the old goal, so the underfueling brain later read "at
+goal" and proposed a fuel raise off a premise the athlete had renegotiated days earlier. Three
+fixes in `src/chatTurns.ts`: (1) the base detector now recognizes a stated bodyweight DESTINATION
+("get down to 154 lb", "locking in 154 lb by October 20") — unit required, so a barbell "drop down
+to 135" never reads as a goal — and its exploratory-question guard grew the matching "should I get
+down to…?" arm; (2) `hasExplicitGoalIntentInContext` lets a confirmation-shaped message (agreement
+word, or a bare number/date refinement, never a question) carry forward an explicit statement from
+the athlete's OWN recent unarchived messages (last 8, coach text never searched) — a
+coach-suggested goal still cannot ride in on a bare "ok"; (3) the drop is never silent:
+`applyChatActions` returns `droppedGoalFields`/`appliedGoalPatch`, and a new
+`reconcileGoalIdentityReply` in the reply chain replaces a lock-claiming reply with an honest
+correction (variant set), appends a quiet for-the-record line otherwise, and appends an exact
+"Goal saved: 154 lb by 2026-10-20 (lose)." receipt when the write really landed.
+`set_training_intent`/`set_endurance_goal` drops are recorded the same way, and the `set_profile`
+action shape shown to the model now names the goal fields with explicit-statement guidance.
+
 ## 2026-08-31 — capture-surface round: streamed prose stays in its card, frequents become drafts
 
 NO schema change; sw `CACHE` v561→v562. Two UI corrections. **Contained job streaming**: the shared

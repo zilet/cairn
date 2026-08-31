@@ -389,7 +389,10 @@ export const CHAT_ACTION_PROMPT_SPECS = {
   set_profile: {
     type: "set_profile",
     applyMode: "immediate",
-    shape: `{ "type": "set_profile", "weight_lb": 176 }`,
+    shape: `{ "type": "set_profile", "weight_lb": 176, "goal_weight_lb": 165, "goal_date": "YYYY-MM-DD", "goal_mode": "lose|maintain|gain" }`,
+    guidance: [
+      `Goal fields (goal_weight_lb, goal_date, goal_mode) persist ONLY when the athlete's own message states the goal explicitly, or plainly confirms a goal THEY stated earlier in this conversation. Never write them from a coach suggestion the athlete has not affirmed, and never claim a goal is locked without emitting this action.`,
+    ],
   },
   set_training_intent: {
     type: "set_training_intent",

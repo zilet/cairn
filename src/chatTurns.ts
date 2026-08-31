@@ -314,7 +314,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     // and skip the normal log_food application so the photo never double-logs.
     const photoFood = turn.image_path ? logPhotoFood(actions, turn) : null;
 
-    const { applied, drafts, labConfirms, refusedReverts } = applyChatActions(
+    const { applied, drafts, labConfirms, refusedReverts, droppedGoalFields, appliedGoalPatch } = applyChatActions(
       { actions },
       {
         agent,
@@ -329,7 +329,8 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts);
     const runReply = reconcileChatRunReply(planReply, turn.message, applied);
     const objectiveReply = reconcileStrengthObjectiveReply(runReply, turn.message, applied);
-    const structureReply = reconcileTrainingStructureReply(objectiveReply, applied);
+    const goalReply = reconcileGoalIdentityReply(objectiveReply, droppedGoalFields, appliedGoalPatch);
+    const structureReply = reconcileTrainingStructureReply(goalReply, applied);
     const reply = reconcileChatRevertReply(structureReply, applied, refusedReverts, proposedReply);
     const failedAttempts = attempts.filter((a) => !a.ok);
     const meta: {
@@ -738,23 +739,85 @@ const GOAL_IDENTITY_FIELDS = new Set([
 
 // Identity-level goals must come from an explicit athlete statement, never from
 // a coach inference or an answer to a "what should my goal be?" question.
+function isExploratoryGoalQuestion(text: string): boolean {
+  return /\b(?:what|which)\b.{0,30}\b(?:goals?|targets?|priorities)\b|\b(?:should|could|would)\s+i\b.{0,30}\b(?:goals?|targets?|weigh|train|run|race)\b|\b(?:should|could|would)\s+i\b.{0,40}\b(?:get|drop|come|cut|slim|lean|lose|gain)\b/i.test(
+    text
+  );
+}
+
 export function hasExplicitGoalIntent(message: string | null | undefined): boolean {
   const text = String(message ?? "").trim();
   if (!text) return false;
-  if (
-    /\b(?:what|which)\b.{0,30}\b(?:goals?|targets?|priorities)\b|\b(?:should|could|would)\s+i\b.{0,30}\b(?:goals?|targets?|weigh|train|run|race)\b/i.test(
-      text
-    )
-  )
-    return false;
+  if (isExploratoryGoalQuestion(text)) return false;
   return (
     /\bmy\s+(?:new\s+)?(?:goal|goals|priorities)\s+(?:is|are|will be)\b/i.test(text) ||
     /\b(?:set|change|update)\s+(?:my\s+)?(?:goals?|targets?|priorities|discipline)\b/i.test(text) ||
     /\bi\s+(?:want|plan|aim|intend|am going)\s+to\b.{0,80}\b(?:weigh|lose|gain|maintain|run|race|train|lift|cycle|ride|swim|complete|finish)\b/i.test(
       text
     ) ||
-    /\b(?:train(?:ing)?\s+for|signed?\s+up\s+for|keep\s+me\b.{0,40}\bready)\b/i.test(text)
+    /\b(?:train(?:ing)?\s+for|signed?\s+up\s+for|keep\s+me\b.{0,40}\bready)\b/i.test(text) ||
+    // A stated bodyweight DESTINATION is a goal even without the word "goal":
+    // "get down to 154 lb", "drop to 154 lbs by October". The unit is required so
+    // "drop down to 135" about a barbell load never reads as a bodyweight goal.
+    /\b(?:get|drop|come|cut|slim|lean|bring\s+(?:it|me|this))\s+(?:back\s+)?(?:down\s+)?to\s+\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b/i.test(
+      text
+    ) ||
+    /\block(?:ing|ed)?\s+(?:it\s+|that\s+)?in\b.{0,60}\b\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b|\b\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b.{0,40}\block(?:ing|ed)?\s+(?:it\s+|that\s+)?in\b/i.test(
+      text
+    ) ||
+    /\b(?:my|the)\s+goal\b.{0,30}\b\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b/i.test(text)
   );
+}
+
+// A short message that AGREES or refines a number/date rather than restating the
+// whole goal — the shape a confirmation takes at the end of a negotiation ("154 by
+// October 20th, then", "okay, let's lock that in"). Never a question.
+function carriesGoalAffirmation(text: string): boolean {
+  if (!text || isExploratoryGoalQuestion(text)) return false;
+  return (
+    /\b(?:ok(?:ay)?|yes|yep|yeah|sure|sounds\s+good|deal|agreed?|do\s+that|go\s+with|let'?s|lock(?:ing)?\s+(?:it\s+|that\s+)?in|make\s+it|confirm(?:ed)?|that\s+works)\b/i.test(
+      text
+    ) ||
+    /\b\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b/i.test(text) ||
+    /\bby\s+(?:early\s+|mid[-\s]?|late\s+|end\s+of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i.test(
+      text
+    ) ||
+    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?\b/i.test(text)
+  );
+}
+
+// Goal negotiation is a CONVERSATION, not one sentence: the athlete states the goal,
+// the coach pushes back on the timeline, the athlete confirms a refined number/date.
+// A per-message gate reads that final confirmation as inexplicit and silently drops
+// the write the athlete believes just happened. So a confirmation-shaped message may
+// carry forward an explicit statement from the athlete's OWN recent messages — never
+// from the coach's suggestion text, which is not searched at all. A "fresh start"
+// archives the thread and closes the window.
+export function hasExplicitGoalIntentInContext(
+  message: string | null | undefined,
+  recentAthleteMessages: readonly string[]
+): boolean {
+  if (hasExplicitGoalIntent(message)) return true;
+  const text = String(message ?? "").trim();
+  if (!text || !carriesGoalAffirmation(text)) return false;
+  return recentAthleteMessages.some((m) => hasExplicitGoalIntent(m));
+}
+
+// The athlete's own recent, still-live messages — the negotiation window above.
+// Current message excluded (it is the one being judged).
+const GOAL_CONTEXT_LOOKBACK_MESSAGES = 8;
+function recentAthleteStatements(excludeMessageId?: number | null): string[] {
+  try {
+    const rows = repo.listChatMessages(GOAL_CONTEXT_LOOKBACK_MESSAGES * 3) as any[];
+    return rows
+      .filter(
+        (r) => r?.role === "user" && (excludeMessageId == null || Number(r.id) !== Number(excludeMessageId))
+      )
+      .slice(-GOAL_CONTEXT_LOOKBACK_MESSAGES)
+      .map((r) => String(r.content ?? ""));
+  } catch {
+    return [];
+  }
 }
 
 // Strength objectives are narrower than general profile/race goals: one named lift
@@ -1822,6 +1885,20 @@ export const STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS = [
   "Nothing landed on your strength goals — no strength objective was saved.",
 ] as const;
 
+export const GOAL_NOT_SAVED_VARIANTS = [
+  'I didn\'t actually change your stored goal there — nothing is locked. Say it directly ("set my goal to 165 lb by June 1") or set it in Me → Profile, and it will stick.',
+  'That didn\'t reach your stored goal — it\'s unchanged. A direct sentence ("set my goal to 165 lb by June 1") or Me → Profile will lock it for real.',
+  'To be straight with you: the goal on file is unchanged. Tell me plainly — "set my goal to X lb by DATE" — or use Me → Profile, and it will save.',
+  "Nothing was written to your goal just now, so the one on file still stands. Say it as a direct instruction or set it in Me → Profile to lock it.",
+] as const;
+
+export const GOAL_NONE_SAVED_VARIANTS = [
+  "For the record: your stored goal didn't change from this.",
+  "To be clear, no goal change was saved here — the one on file stands.",
+  "Nothing landed on your stored goal from this exchange.",
+  "Your goal on file is unchanged by this.",
+] as const;
+
 export const TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS = [
   "Nothing was actually flagged to the coach lane there, so your plan and its structure are unchanged.",
   "To be straight with you: no request reached the coach lane, and your training structure is unchanged.",
@@ -2123,6 +2200,45 @@ function replyClaimsStructureFlagged(reply: string): boolean {
   return /\b(?:i(?:['’]ve| have| will|['’]ll)?\s+(?:now\s+)?(?:flagged|flag|pass(?:ed)?|sen[dt]|rout(?:ed|e)|hand(?:ed)?\s+(?:it|that|this)\s+(?:off|over))\b[\s\S]{0,60}\b(?:coach|coaching)\s+lane\b|\b(?:coach|coaching)\s+lane\b[\s\S]{0,40}\b(?:has|got|will get|picks? (?:it|that) up)\b)/i.test(
     reply
   );
+}
+
+// Prose asserting a goal is locked/saved. Subject-anchored like replyClaimsRunSuccess:
+// the honest corrections above share vocabulary ("goal", "unchanged", "will save"), so
+// only the positive ASSERTION counts — "locking in", "your goal is now set".
+function replyClaimsGoalSaved(reply: string): boolean {
+  return /\block(?:ing|ed)?\s+(?:it\s+|that\s+)?in\b|\bgoal\b.{0,30}\b(?:is\s+)?(?:now\s+)?(?:set|saved|updated|locked|active|live)\b|\b(?:i(?:['’]ve| have)?\s+)?(?:set|saved|updated|locked)\b.{0,25}\bgoal\b/i.test(
+    reply
+  );
+}
+
+// The goal-identity counterpart to reconcileStrengthObjectiveReply. The failure this
+// closes is real and quiet: the athlete negotiates a goal over several messages, the
+// per-message gate strips the fields, and the model's prose says "locking it in" over
+// a write that never happened — the athlete walks away believing a goal the brain
+// cannot see. When goal fields APPLIED, a receipt states exactly what was saved; when
+// they were DROPPED, a lock-claiming reply is replaced with the honest correction and
+// any other reply gets a quiet for-the-record line.
+export function reconcileGoalIdentityReply(
+  reply: string,
+  droppedGoalFields: readonly string[],
+  appliedGoalPatch: Record<string, unknown> | null
+): string {
+  const today = localDateISO();
+  if (appliedGoalPatch && Object.keys(appliedGoalPatch).length) {
+    const weight = Number(appliedGoalPatch.goal_weight_lb);
+    const date = String(appliedGoalPatch.goal_date ?? "").trim();
+    const mode = String(appliedGoalPatch.goal_mode ?? "").trim();
+    const parts = [
+      Number.isFinite(weight) ? `${weight} lb` : null,
+      date ? `by ${date}` : null,
+      mode ? `(${mode})` : null,
+    ].filter(Boolean);
+    const receipt = parts.length ? `Goal saved: ${parts.join(" ")}.` : "Goal saved.";
+    return appendReceipt(reply, receipt);
+  }
+  if (!droppedGoalFields.length) return reply;
+  if (replyClaimsGoalSaved(reply)) return pickDayVariant(GOAL_NOT_SAVED_VARIANTS, today, "chat-goal-not-saved");
+  return appendReceipt(reply, pickDayVariant(GOAL_NONE_SAVED_VARIANTS, today, "chat-goal-none-saved"));
 }
 
 // The counterpart to reconcileStrengthObjectiveReply for the structure hand-off. Chat
@@ -3212,12 +3328,18 @@ export function applyChatActions(
     skipLogFood?: boolean;
     turnId?: number | null;
     userMessageId?: number | null;
+    // Test seam: the athlete's own recent messages for the goal-negotiation
+    // carry-forward. Omitted in the real flow, where they are read from the live
+    // (unarchived) chat log excluding the current message.
+    recentAthleteMessages?: readonly string[];
   }
 ): {
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>;
   drafts: unknown[];
   labConfirms: LabConfirmDraft[];
   refusedReverts: number[];
+  droppedGoalFields: string[];
+  appliedGoalPatch: Record<string, unknown> | null;
 } {
   const applied: Array<{ type: ChatActionType; result?: unknown; error?: string }> = [];
   const drafts: unknown[] = [];
@@ -3228,7 +3350,16 @@ export function applyChatActions(
   const refusedReverts: number[] = [];
   const message = ctx.message ?? "";
   const foodOnly = isFoodOnlyTurn(message, ctx.imagePath);
-  const explicitGoalIntent = !foodOnly && hasExplicitGoalIntent(message);
+  const explicitGoalIntent =
+    !foodOnly &&
+    hasExplicitGoalIntentInContext(
+      message,
+      ctx.recentAthleteMessages ?? recentAthleteStatements(ctx.userMessageId)
+    );
+  // Goal-identity writes the gate DROPPED (so the reply can say so instead of the
+  // prose claiming a lock over nothing) and the goal fields that APPLIED (receipt).
+  const droppedGoalFields: string[] = [];
+  let appliedGoalPatch: Record<string, unknown> | null = null;
   const explicitStrengthObjectiveIntent = !foodOnly && hasExplicitStrengthObjectiveIntent(message);
   const inheritedClinical = inheritedClinicalLineage({
     turnId: ctx.turnId,
@@ -3248,14 +3379,21 @@ export function applyChatActions(
           break;
         case "set_profile": {
           const { type, ...patch } = a;
+          const goalFieldsRequested = [...GOAL_IDENTITY_FIELDS].filter((field) => field in patch);
           if (!explicitGoalIntent) {
             for (const field of GOAL_IDENTITY_FIELDS) delete patch[field];
+            droppedGoalFields.push(...goalFieldsRequested);
+          } else if (goalFieldsRequested.length) {
+            appliedGoalPatch = Object.fromEntries(goalFieldsRequested.map((field) => [field, patch[field]]));
           }
           if (Object.keys(patch).length) applied.push({ type: a.type, result: repo.setProfile(patch) });
           break;
         }
         case "set_training_intent": {
-          if (!explicitGoalIntent) break;
+          if (!explicitGoalIntent) {
+            droppedGoalFields.push("training_intent");
+            break;
+          }
           const { type, ...trainingIntent } = a;
           const normalizedIntent = repo.normalizeTrainingIntent(trainingIntent);
           if (!normalizedIntent) break;
@@ -3263,7 +3401,10 @@ export function applyChatActions(
           break;
         }
         case "set_endurance_goal": {
-          if (!explicitGoalIntent) break;
+          if (!explicitGoalIntent) {
+            droppedGoalFields.push("endurance_goal");
+            break;
+          }
           // The endurance OBJECTIVE — applied through setProfile's endurance_goal
           // path (normalized/validated there). The action's own fields ARE the goal.
           const { type, ...goal } = a;
@@ -3689,5 +3830,5 @@ export function applyChatActions(
       applied.push({ type: a.type, error: e instanceof Error ? e.message : String(e) });
     }
   }
-  return { applied, drafts, labConfirms, refusedReverts };
+  return { applied, drafts, labConfirms, refusedReverts, droppedGoalFields, appliedGoalPatch };
 }
