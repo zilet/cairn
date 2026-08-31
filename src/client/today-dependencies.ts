@@ -170,7 +170,6 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         loadTrainingProvenance: input.loadTrainingProvenance,
         loadTableHint: input.loadTableHint,
         setupWeightChip: input.setupWeightChip,
-        loadFrequentFoods: input.loadFrequentFoods,
         loadContextBanner: input.loadContextBanner,
         loadHealthFocusBanner: input.loadHealthFocusBanner,
         loadWearable: input.loadWearable,

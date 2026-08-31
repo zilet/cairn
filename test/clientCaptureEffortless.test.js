@@ -75,33 +75,10 @@ function elementStub(overrides = {}) {
   };
 }
 
-test("loadFrequentFoods stays quiet when there are no frequents for this time of day", async () => {
-  const wrap = elementStub();
-  const capture = loadCapture({
-    view: { querySelector: (sel) => (sel === "#freqFoods" ? wrap : null) },
-    api: async () => [],
-  });
-
-  await capture.loadFrequentFoods();
-
-  assert.equal(wrap.innerHTML, "");
-});
-
-test("loadFrequentFoods renders one-tap chips for foods logged near this time of day", async () => {
-  const wrap = elementStub();
-  const clicked = [];
-  wrap.querySelectorAll = (sel) =>
-    sel === "[data-freq]" ? [{ dataset: { freq: "oats and berries" }, addEventListener: (_t, h) => clicked.push(h) }] : [];
-  const capture = loadCapture({
-    view: { querySelector: (sel) => (sel === "#freqFoods" ? wrap : null) },
-    api: async () => [{ summary: "oats and berries", kcal: 410 }],
-  });
-
-  await capture.loadFrequentFoods();
-
-  assert.match(wrap.innerHTML, /Usual around now/);
-  assert.match(wrap.innerHTML, /data-freq="oats and berries"/);
-  assert.match(wrap.innerHTML, /410/);
+test("capture.ts no longer exports the Today frequents surface (moved to the Chat composer)", () => {
+  const capture = loadCapture();
+  assert.equal(capture.loadFrequentFoods, undefined);
+  assert.equal(capture.relogFrequent, undefined);
 });
 
 test("check-in slot offers a one-tap ask when nothing is logged for today", async () => {
@@ -198,7 +175,7 @@ test("setupVoiceCapture no-ops quietly on a surface that doesn't render #chatMic
   assert.equal(setupCalls.length, 0);
 });
 
-test("Today post-render wiring surfaces frequents and check-in again (no longer dead wiring)", () => {
+test("Today post-render wiring surfaces the check-in and tag chips (frequents live in Chat now)", () => {
   const context = { Object, String, Number };
   context.window = context;
   context.globalThis = context;
@@ -230,7 +207,6 @@ test("Today post-render wiring surfaces frequents and check-in again (no longer 
     loadTrainingProvenance() {},
     loadTableHint() {},
     setupWeightChip() {},
-    loadFrequentFoods: () => calls.push("loadFrequentFoods"),
     loadContextBanner() {},
     loadHealthFocusBanner() {},
     loadWearable() {},
@@ -248,5 +224,5 @@ test("Today post-render wiring surfaces frequents and check-in again (no longer 
 
   context.CairnTodayPostRenderWiring.wirePostRender(deps);
 
-  assert.deepEqual(calls, ["loadFrequentFoods", "loadCheckin", "loadTagChips"]);
+  assert.deepEqual(calls, ["loadCheckin", "loadTagChips"]);
 });

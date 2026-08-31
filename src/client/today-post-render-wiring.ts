@@ -40,7 +40,6 @@ type TodayPostRenderWiringDeps = {
   loadTrainingProvenance(isToday: boolean): unknown;
   loadTableHint(): unknown;
   setupWeightChip(): unknown;
-  loadFrequentFoods(): unknown;
   loadContextBanner(): unknown;
   loadHealthFocusBanner(): unknown;
   loadWearable(isToday: boolean): unknown;
@@ -105,13 +104,12 @@ type TodayPostRenderWiringApi = {
 
     deps.loadTableHint();
     deps.setupWeightChip();
-    // Frequents ("Usual around now") + the ambient "how are you feeling?" check-in
-    // + the quiet context-tag chip row ride the capture row, quiet by default (they
-    // render nothing until their loader finds something worth a tap). The check-in
-    // also feeds dayRead, so it stays load-bearing even though it's easy to miss at
-    // a glance; the tag chips never feed dayRead — they're evidence for the insight
-    // generator only.
-    deps.loadFrequentFoods();
+    // The ambient "how are you feeling?" check-in + the quiet context-tag chip row
+    // ride the capture row, quiet by default (they render nothing until their loader
+    // finds something worth a tap). The check-in also feeds dayRead, so it stays
+    // load-bearing even though it's easy to miss at a glance; the tag chips never
+    // feed dayRead — they're evidence for the insight generator only. Food frequents
+    // live in the Chat composer now (prefill chips), not on Today.
     deps.loadCheckin();
     deps.loadTagChips();
     deps.loadContextBanner();

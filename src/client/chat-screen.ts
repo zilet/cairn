@@ -97,6 +97,44 @@ function chatHeaderDeps(): ChatHeaderControllerDeps {
   };
 }
 
+// "Usual around now" prefill chips above the composer. Shown only while the
+// composer is EMPTY and focused; a tap drafts "Log <summary>" for the athlete to
+// edit and send through the normal chat food lane (chatRouting's explicit_food_log
+// needs the capture verb, hence the "Log " prefix). Never auto-sends — meals vary,
+// so the frequent is a starting sentence, and the estimate is re-derived from the
+// text the athlete actually sends. Fetched once per Chat mount, quiet on failure.
+function wireChatFrequents(input: HTMLTextAreaElement): void {
+  const slot = $<HTMLElement>("#chatFreqSlot");
+  if (!slot) return;
+  let requested = false;
+  const hide = () => { slot.hidden = true; };
+  const showIfReady = () => { if (slot.firstElementChild) slot.hidden = false; };
+  const maybeShow = async (): Promise<void> => {
+    if (input.value.trim()) { hide(); return; }
+    if (!requested) {
+      requested = true;
+      let foods: unknown = [];
+      try { foods = await api("/frequent-foods?hour=" + new Date().getHours()); } catch { foods = []; }
+      if (!slot.isConnected) return;
+      slot.innerHTML = CairnChatClient.frequentChipsHtml(foods);
+      slot.querySelectorAll<HTMLElement>("[data-freq]").forEach((chip) =>
+        chip.addEventListener("click", () => {
+          input.value = "Log " + (chip.dataset.freq || "");
+          autosizeChatInput(input);
+          hide();
+          input.focus();
+        }));
+      if (input.value.trim() || document.activeElement !== input) return;
+    }
+    showIfReady();
+  };
+  input.addEventListener("focus", () => { void maybeShow(); });
+  input.addEventListener("input", () => {
+    if (input.value.trim()) hide();
+    else showIfReady();
+  });
+}
+
 async function renderChat(): Promise<void> {
   headerTitle.textContent = "Coach";
   document.body.classList.add("chat-mode"); // the chat column owns the viewport; drop body's tab-bar padding
@@ -145,6 +183,7 @@ async function renderChat(): Promise<void> {
   // capture-in-Chat product law. Silently absent where Web Speech isn't
   // supported (setupVoiceCapture hides #chatMic itself in that case).
   setupVoiceCapture();
+  wireChatFrequents(input);
 
   const cachedMessages = peekCached<ChatScreenMessage[]>(CHAT_LIVE_CACHE_KEY);
   if (cachedMessages) {

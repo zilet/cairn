@@ -141,78 +141,9 @@ function setupVoiceCapture(): void {
   captureVoice().setup({ mic, input: inp });
 }
 
-// hour → meal slot, used both to label the re-logged food and to query frequents
-function mealForHour(h: number): string {
-  if (h < 11) return "breakfast";
-  if (h < 15) return "lunch";
-  if (h < 18) return "snack";
-  return "dinner";
-}
-
-// One-tap re-log of the foods most often eaten near this time of day. The chip
-// POSTs the summary to /food-notes; enrichment polling then upgrades it in place.
-// Quiet by default: nothing renders if there are no frequents.
-async function loadFrequentFoods(): Promise<void> {
-  const wrap = view.querySelector<HTMLElement>("#freqFoods");
-  if (!wrap) return;
-  const hour = new Date().getHours();
-  let foods: CaptureFrequentFood[] = [];
-  try { foods = await api("/frequent-foods?hour=" + hour) as CaptureFrequentFood[]; } catch { foods = []; }
-  if (state.tab !== "today" || !wrap.isConnected) return;
-  if (!Array.isArray(foods) || !foods.length) { wrap.innerHTML = ""; return; }
-  const chips = foods.slice(0, 6).map((f) => {
-    const summary = String(f.summary || "").trim();
-    if (!summary) return "";
-    const kcal = f.kcal != null ? `<span class="freq-chip-kcal">${Math.round(Number(f.kcal))}</span>` : "";
-    return `<button class="freq-chip" data-freq="${escAttr(summary)}">
-        <span class="freq-chip-art">${art("food", summary)}</span>
-        <span class="freq-chip-name">${escHtml(summary)}</span>${kcal}
-      </button>`;
-  }).join("");
-  if (!chips) { wrap.innerHTML = ""; return; }
-  wrap.innerHTML = `<div class="freq-head lbl">Usual around now</div>
-    <div class="freq-chips">${chips}</div>`;
-  wrap.querySelectorAll<HTMLElement>("[data-freq]").forEach((b) =>
-    b.addEventListener("click", () => relogFrequent(b.dataset.freq, b)));
-}
-
-let _relogInFlight = false;
-async function relogFrequent(summary: string | undefined, chip?: HTMLElement): Promise<void> {
-  if (_relogInFlight || !summary) return;
-  _relogInFlight = true;
-  if (chip) chip.classList.add("freq-chip-busy");
-  const meal = mealForHour(new Date().getHours());
-  let f: CaptureFoodNote | null = null;
-  try {
-    f = await api("/food-notes", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ meal, text: summary }),
-    }) as CaptureFoodNote;
-  } catch (error) {
-    _relogInFlight = false;
-    if (chip) chip.classList.remove("freq-chip-busy");
-    if (!captureFailureIsTransient(error)) {
-      toast("Couldn't log that — try again.");
-      return;
-    }
-    // Offline — queue the re-log and replay it on reconnect rather than dropping it.
-    const saved = await outboxEnqueue("food", "/food-notes", { meal, text: summary });
-    if (!saved) {
-      toast("Couldn’t save that on this device — free storage and try again.");
-      return;
-    }
-    toast("Saved · " + meal + " — will sync when you're back");
-    return;
-  }
-  _relogInFlight = false;
-  if (chip) chip.classList.remove("freq-chip-busy");
-  if (!f || f.error) { toast("Couldn't log that — try again."); return; }
-  toast("Logged · " + meal);
-  // poll the enrichment upgrade quietly (no visible row on Today; the meal lives in Plan → Food)
-  if (f.id && enrichmentActive(f.enrichment_status)) {
-    pollEnrichment("/food-notes", f.id, { tab: state.tab, token: pollToken });
-  }
-}
+// Food frequents ("Usual around now") moved into the Chat composer as prefill
+// chips (chat-frequents wiring in chat-screen.ts) — capture stays scoped to Chat,
+// and a frequent is a starting draft to edit, never a verbatim one-tap re-log.
 
 // ---------- optional how-you-feel (offered, never required) ----------
 // A subtle, dismissible 1–5 mood/energy tap. If a check-in already exists for
@@ -373,8 +304,6 @@ Object.assign(globalThis, {
   quickLog,
   setupWeightChip,
   setupVoiceCapture,
-  loadFrequentFoods,
-  relogFrequent,
   loadCheckin,
   loadTagChips,
   loadTodayReads,

@@ -35,7 +35,7 @@ test("Today lead keeps bodyweight capture reachable and omits standalone typed, 
   assert.doesNotMatch(html, /id="goalSlot"|id="goalLine"/);
 });
 
-test("Today lead carries the quiet frequents strip and check-in slot on today's own date", () => {
+test("Today lead carries the quiet check-in slot on today's own date, without the retired frequents strip", () => {
   const shell = loadMainShell();
   const html = shell.leadHtml(
     {
@@ -47,7 +47,7 @@ test("Today lead carries the quiet frequents strip and check-in slot on today's 
     { escapeHtml: String }
   );
 
-  assert.match(html, /id="freqFoods" class="freq-foods"/);
+  assert.doesNotMatch(html, /id="freqFoods"/);
   assert.match(html, /id="checkinSlot" class="checkin-slot"/);
 });
 
@@ -63,7 +63,7 @@ test("Today lead omits the check-in slot when browsing a day other than today", 
     { escapeHtml: String }
   );
 
-  assert.match(html, /id="freqFoods" class="freq-foods"/);
+  assert.doesNotMatch(html, /id="freqFoods"/);
   assert.doesNotMatch(html, /id="checkinSlot"/);
 });
 

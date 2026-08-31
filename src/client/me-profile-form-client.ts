@@ -444,7 +444,7 @@ type MeProfileFormContext = {
 
     <div class="prof-capture-note sess">
       <div class="sess-line" style="color:var(--muted)">
-        Log your bodyweight, activities, and meals on <button class="linkbtn" id="profToToday">Today</button> — the quick-log, the bodyweight chip, voice, and your frequents all live there. They show up in <b>Lately</b> and your <button class="linkbtn" id="profToProgress">History</button>.
+        Log your bodyweight on <button class="linkbtn" id="profToToday">Today</button>; log meals and activities in Chat — voice, photos, and your usual-around-now frequents live in the composer there. They show up in <b>Lately</b> and your <button class="linkbtn" id="profToProgress">History</button>.
       </div>
     </div>`;
   }

@@ -26,18 +26,17 @@ type TodayMainShellApi = {
   }
 
   function captureRowHtml(currentWeight: unknown, isToday: boolean): string {
-    // freqFoods, checkinSlot and tagsSlot render only when their loader has
-    // something to show (frequents for this time of day / no check-in noted
-    // yet / the quiet tag chip row) — all three are empty <div>s here that
-    // stay quiet (`:empty{display:none}`) until their loader fills them in
-    // during post-render wiring.
+    // checkinSlot and tagsSlot render only when their loader has something to
+    // show (no check-in noted yet / the quiet tag chip row) — both are empty
+    // <div>s here that stay quiet (`:empty{display:none}`) until their loader
+    // fills them in during post-render wiring. Food frequents moved into the
+    // Chat composer (prefill, not one-tap re-log) — capture stays in Chat.
     return `<div class="capture-row reveal" style="--i:1">
       <div class="wt-inline" id="wtInline" hidden>
         <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)">
         <button id="wtInlineGo" class="logbtn">+</button>
       </div>
       <button id="wtChipMini" class="wt-mini" type="button" title="Log bodyweight">${weightChipLabel(currentWeight)}<span class="stat-plus">+</span></button>
-      <div id="freqFoods" class="freq-foods"></div>
       ${isToday ? `<div id="checkinSlot" class="checkin-slot"></div>` : ""}
       ${isToday ? `<div id="tagsSlot" class="tags-slot"></div>` : ""}
     </div>`;

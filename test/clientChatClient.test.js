@@ -142,6 +142,7 @@ test("chat shell, header, starter, and divider helpers preserve selectors safely
   assert.match(shell, /id="chatFile"/);
   assert.match(shell, /id="chatInput"/);
   assert.match(shell, /id="chatSend"/);
+  assert.match(shell, /id="chatFreqSlot"[^>]*hidden/);
   assert.match(shell, /Logs save instantly/);
 
   const header = chat.headerActionsHtml();
@@ -186,4 +187,26 @@ test("chat composer's mic glyph comes from the reused capture-voice-client modul
   const html = context.CairnChatClient.shellHtml();
 
   assert.match(html, /<svg data-test-glyph><\/svg>/);
+});
+
+test("frequent chips are prefill drafts: escaped summaries, rounded kcal, at most three, empty when nothing qualifies", () => {
+  const chat = loadChatClient();
+
+  assert.equal(chat.frequentChipsHtml([]), "");
+  assert.equal(chat.frequentChipsHtml(null), "");
+  assert.equal(chat.frequentChipsHtml([{ summary: "   " }]), "");
+
+  const html = chat.frequentChipsHtml([
+    { summary: `skyr "protein" oats <bowl>`, kcal: 544.6 },
+    { summary: "omelette", kcal: null },
+    { summary: "hotel breakfast", kcal: 540 },
+    { summary: "a fourth thing that must not render", kcal: 100 },
+  ]);
+  assert.match(html, /usual around now/);
+  assert.match(html, /data-freq="skyr &quot;protein&quot; oats &lt;bowl&gt;"/);
+  assert.match(html, /545/);
+  assert.doesNotMatch(html, /<bowl>/);
+  assert.doesNotMatch(html, /fourth thing/);
+  const omelette = html.match(/data-freq="omelette"[\s\S]*?<\/button>/)?.[0] ?? "";
+  assert.doesNotMatch(omelette, /freq-chip-kcal/, "a frequent with no kcal renders no kcal badge");
 });

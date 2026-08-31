@@ -2720,8 +2720,8 @@ tier that is a recorded fact; (2) `approxTimeForMealLabel`'s representative hour
 with no stated time — good enough to place "breakfast" before "dinner", never good enough to store
 or display as something the athlete said; (3) the last placeable entry's carried-forward position,
 so a run of unplaceable rows (a bare `"meal"`/`"snack"`/custom label) stays where it was logged
-instead of being swept to one end. Row id is the final tiebreak. `frequentFoods()` (used for
-one-tap re-logging near a time of day) bands on the same `eaten_at` hour when present, falling back
+instead of being swept to one end. Row id is the final tiebreak. `frequentFoods()` (feeding the
+chat composer's "usual around now" prefill chips) bands on the same `eaten_at` hour when present, falling back
 to the write hour — otherwise a late dinner logged the next morning would poison the breakfast-time
 frequents.
 
@@ -2792,9 +2792,10 @@ ellipse-pack / tape-driven-croquis fallbacks.
 **Today** opens to the day-read **Brief** (`/api/today-read` → a calm `kind`/`headline`/`why`/`focus`
 read with override chips like "rough night" that re-fetch with `?override=`, and a "build me a
 session" launchpad → `/api/session-suggest` — a suggestion, never a gate), plus effortless capture
-(one-tap **frequents** from `/api/frequent-foods`, **voice** input via the Web Speech API
-`SpeechRecognition`/`webkitSpeechRecognition` when supported, an optional morning **check-in** card →
-`/api/checkins`), a dedicated **weekly read card** (`#weeklySlot`, `loadTodayReads`/
+(the bodyweight chip, an optional morning **check-in** card → `/api/checkins`; food **frequents**
+from `/api/frequent-foods` live in the CHAT composer as prefill drafts — "usual around now" chips
+that draft "Log <summary>" for the athlete to edit, never a one-tap re-log — and **voice** input
+via the Web Speech API rides the chat composer too, per the capture-in-Chat law), a dedicated **weekly read card** (`#weeklySlot`, `loadTodayReads`/
 `renderWeeklyCard`) — "how the week went + the one change" as its own sage-mastheaded editorial card
 (the keystone `next_step` rendered as a terracotta "One change" well), surfaced from the latest
 `kind:'weekly_read'` insight so a newer connection never buries it (weekend-gated client fallback to

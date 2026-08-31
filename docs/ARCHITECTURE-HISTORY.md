@@ -4,7 +4,23 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
-## 2026-08-28 — the Hybrid Week Round: a rest day is a real row, and the long run is a destination
+## 2026-08-31 — capture-surface round: streamed prose stays in its card, frequents become drafts
+
+NO schema change; sw `CACHE` v561→v562. Two UI corrections. **Contained job streaming**: the shared
+delta painter (`paintJobStream`, `src/client/agent-job-client.ts`) used to replace the whole anchor's
+innerHTML with a bare `.job-stream` div, so a stream-capable agent's session-suggest "why" prose
+painted as raw uncontained text below Today while the calm loading card vanished. The painter now
+mounts into a `[data-stream-slot]` inside the loading card when one is offered (the caption yields
+via `.is-streaming`, the spinner stays, the prose clamps to ~7.5em and auto-scrolls); anchors without
+a slot keep the old takeover, so the other prose ops are unchanged until they opt in. **Frequents are
+prefill drafts in Chat**: the Today "Usual around now" strip (six one-tap re-log chips whose
+conservative exact-summary grouping surfaced near-duplicates and whose verbatim re-log never matched
+a varying meal) is retired; `/api/frequent-foods` now feeds `#chatFreqSlot` above the Chat composer —
+shown only while the composer is empty and focused, at most three chips, and a tap drafts
+`Log <summary>` into the input for the athlete to EDIT and send through the normal chat food lane
+(the "Log " prefix is what satisfies `chatRouting`'s capture-verb requirement), so the estimate is
+re-derived from what was actually eaten. Capture stays scoped to Chat; Today's capture row keeps only
+the bodyweight chip, check-in, and tag chips.
 
 Schema 99 (`plan-days-day-type` — additive, defaulted `'training'`); sw `CACHE` v559. Two packages
 in parallel worktrees, an adversarial review (ten findings fixed), same-day follow-on to the Elite

@@ -616,7 +616,6 @@ declare global {
     upgradeBriefInPlace(date: string, isToday: boolean): unknown;
     loadTableHint(): unknown;
     setupWeightChip(): unknown;
-    loadFrequentFoods(): unknown;
     loadContextBanner(): unknown;
     loadHealthFocusBanner(): unknown;
     loadWearable(isToday: boolean): unknown;
@@ -2067,6 +2066,7 @@ declare global {
       freshPillHtml(distilled: unknown): string;
       emptyHtml(): string;
       starterChipsHtml(starters?: readonly unknown[]): string;
+      frequentChipsHtml(foods: unknown): string;
       dividerHtml(iso: unknown, label: unknown): string;
       earlierBarHtml(): string;
       dayISO(timestamp: unknown, localISO: (date?: Date) => string): string;
@@ -4157,7 +4157,6 @@ declare global {
         loadTrainingProvenance(isToday: boolean): unknown;
         loadTableHint(): unknown;
         setupWeightChip(): unknown;
-        loadFrequentFoods(): unknown;
         loadContextBanner(): unknown;
         loadHealthFocusBanner(): unknown;
         loadWearable(isToday: boolean): unknown;

@@ -72,6 +72,7 @@ function chatShellHtml(): string {
           <span class="chat-preview-hint">Photo attached — I'll estimate &amp; log it</span>
           <button id="chatPreviewX" class="xbtn chip-x" aria-label="Remove photo">✕</button>
         </div>
+        <div id="chatFreqSlot" class="chat-freq-slot" hidden></div>
         <div class="chatbar">
           <button id="chatAttach" class="attachbtn" aria-label="Attach a photo — camera, library, or files">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -109,6 +110,27 @@ function chatFreshPillHtml(distilled: unknown): string {
 
 function chatEmptyHtml(): string {
   return `<div class="empty">Say hi, log a ride, or ask the coach to change your plan.</div>`;
+}
+
+// "Usual around now" — the foods most often logged near this hour, offered as
+// PREFILL drafts above the composer (never a one-tap re-log: meals vary, so the
+// frequent is a starting sentence the athlete edits, and the estimate is
+// re-derived from what they actually send). Empty string when nothing qualifies.
+function chatFrequentChipsHtml(foods: unknown): string {
+  const rows = Array.isArray(foods) ? foods : [];
+  const chips = rows.slice(0, 3).map((f) => {
+    const row = f && typeof f === "object" ? (f as Record<string, unknown>) : {};
+    const summary = String(row.summary || "").trim();
+    if (!summary) return "";
+    const kcal = row.kcal != null && Number.isFinite(Number(row.kcal))
+      ? `<span class="freq-chip-kcal">${Math.round(Number(row.kcal))}</span>`
+      : "";
+    return `<button class="freq-chip" type="button" data-freq="${escAttr(summary)}">
+        <span class="freq-chip-name">${escHtml(summary)}</span>${kcal}
+      </button>`;
+  }).join("");
+  if (!chips) return "";
+  return `<div class="chat-freq"><span class="freq-head lbl">usual around now</span><div class="freq-chips">${chips}</div></div>`;
 }
 
 function chatStarterChipsHtml(starters: readonly unknown[] = CHAT_STARTERS): string {
@@ -437,6 +459,7 @@ const CAIRN_CHAT_CLIENT = {
   freshPillHtml: chatFreshPillHtml,
   emptyHtml: chatEmptyHtml,
   starterChipsHtml: chatStarterChipsHtml,
+  frequentChipsHtml: chatFrequentChipsHtml,
   dividerHtml: chatDividerHtml,
   earlierBarHtml: chatEarlierBarHtml,
   dayISO: chatDayISO,

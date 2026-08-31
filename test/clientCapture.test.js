@@ -100,7 +100,7 @@ test("activity capture surfaces device-storage failure instead of claiming an of
   assert.deepEqual(toasts, ["Couldn’t save that on this device — free storage and try again."]);
 });
 
-test("weight and frequent-food capture only enqueue transient failures", async () => {
+test("weight capture only enqueues transient failures", async () => {
   const capture = loadCapture();
   const permanent = new Error("forbidden");
   const queued = [];
@@ -129,12 +129,9 @@ test("weight and frequent-food capture only enqueue transient failures", async (
   capture.setupWeightChip();
   await saveWeight();
 
-  const foodChip = { classList: { add() {}, remove() {} } };
-  await capture.relogFrequent("oats and berries", foodChip);
-
   assert.equal(input.value, "181.5", "the rejected weight remains editable");
   assert.equal(queued.length, 0);
-  assert.deepEqual(toasts, ["Couldn't log that — try again.", "Couldn't log that — try again."]);
+  assert.deepEqual(toasts, ["Couldn't log that — try again."]);
 });
 
 test("bodyweight quick-add updates both the always-reachable chip and folded tile", async () => {

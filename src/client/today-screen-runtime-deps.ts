@@ -92,7 +92,6 @@ function createTodayScreenRuntimeDependencies(input: TodayScreenRuntimeDepsInput
     upgradeBriefInPlace: input.upgradeBriefInPlace,
     loadTableHint: () => bridge().loadTableHint(),
     setupWeightChip,
-    loadFrequentFoods,
     loadContextBanner: () => bridge().loadContextBanner(),
     loadHealthFocusBanner: () => bridge().loadHealthFocusBanner(),
     loadWearable: (isToday) => bridge().loadWearable(isToday),
