@@ -5,6 +5,13 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.7.6] — 2026-08-31
+
+The theme of this patch is a coach that believes the log. What you actually lifted, ran, and ate
+outranks the calendar, a felt rating, and the plan's own bookkeeping. A week can hold a real rest
+day. A worse lab panel is news. A goal you locked in chat stays locked — and when a write cannot
+land, the reply says so.
+
 ### Added
 
 - **The week can hold a real rest day** — a plan day can now be marked Rest: it takes its place in
@@ -15,49 +22,32 @@ Versioning](https://semver.org/) for tagged releases.
 - **The long run builds toward its target** — a template distance is now a destination, not a
   demand: each week's long run steps up from your actual longest recent run at a sustainable
   rate, holds on a week already carrying a full build, and the card says so in plain words.
-- **Every anchor lift on one card** — the Progress strength card now shows all the lifts you're
+- **The day adapts up, not only down** — on a morning your recovery backs and nothing is holding,
+  the session carries one "Reach": a heavier single set on the main lift (or an all-out clean last
+  set on an assisted or bodyweight lift), prefilled on the card. It only appears when it is actually
+  on a card, and never on a lift that is being kept light.
+- **Six anchor lifts in parallel** — strength objectives are now per-lift, so a squat, deadlift,
+  bench, row, curl and press comeback can all be tracked at once; logging one lift closes its own
+  objective and leaves the others open. The Progress strength card shows every lift you're
   rebuilding, one expanded and the rest a tap away.
-- **Navigation that answers the Back button** — the plan's Changes record joined the Plan bar,
-  and drilling into a marker domain on Stand is a real page: the browser Back button returns to
-  the overview instead of leaving.
-- **Harm now includes the body's response** — a day counts as "went fine" only when the log AND
-  your physiology agree: a hard cardio day, your longest run in ninety days, or a next morning
-  that answers badly (rest-grade readiness, low HRV status, clearly elevated resting HR) all stop
-  the app from softening the next day's read upward.
-- **A rest-grade readiness reading is rest** — a fresh reading at or below the deep band gets its
-  own rest read in its own words; adaptation may ease it to easy movement, never into a session.
-- **The app stops stacking runs** — after a hard run or a new-longest run, the next day's easy
-  read never opens as another run: leg-driven cardio is held (an easy walk stands in) while the
-  strength half of the day is untouched, and a cardio-only plan day won't be opened by the
-  adaptation ladder the morning after hard endurance work.
-- **At the goal, the answer is food — not less training** — within reach of a lose-mode goal (or
-  at it), an underfueling read no longer shrinks the plan: earned steps and holds keep their full
-  sets and load (only the near-maximal single parks), and the fuel read's corrective is the bounded
-  step toward maintenance. The standing "move fuel toward maintenance" question no longer re-drafts
-  itself nightly, and it now surfaces on Today even in lead mode.
-- **"No" means no for a recovery week** — a declined recovery week stays declined for the rest of
-  the block; only a genuinely new safety-grade signal (a symptom, an illness, a poor check-in, a
-  clinical directive) can reopen the suggestion, and the read says so in plain words.
-- **Six anchor lifts in parallel** — strength objectives are now per-lift (migration v98), so a
-  squat, deadlift, bench, row, curl and press comeback can all be tracked at once, over REST, MCP,
-  or chat; logging one lift closes its own objective and leaves the others open.
-- **A chat promise leaves a trace** — "I'll flag that to your coach" now records a real proposal
-  for you to confirm (never auto-applied), and the reply only claims the hand-off when it landed.
 - **A worse lab panel is an event** — when a re-measured marker comes back further off-optimal (or
   unchanged past its own recheck horizon), Cairn records the outcome on ingest, resurfaces the
   directive as a fresh card instead of silently editing the old one, lets a genuinely new result
   reopen an insight the 90-day dedupe had closed, and raises the checkup tile with the follow-up
   workups that finding warrants (ApoB, Lp(a), hs-CRP off a lipid flag). One whole-picture health
   review per upload batch instead of one per document.
-
-- **The day adapts up, not only down** — on a morning your recovery backs and nothing is holding,
-  the session carries one "Reach": a heavier single set on the main lift (or an all-out clean last
-  set on an assisted or bodyweight lift), prefilled on the card. It only appears when it is actually
-  on a card, and never on a lift that is being kept light.
-- **A recovery week is earned by the log, not the calendar** — Cairn no longer suggests a reset
-  because N weeks have passed or because two sessions felt flat; it looks for a real shortfall in
-  what you lifted plus a drift in your physiology after a run of genuinely loaded weeks. Travel-light
-  weeks no longer count as loaded weeks.
+- **The Brief looks back once, quietly** — one past-tense sentence about yesterday when there is
+  something safe to say, silent otherwise.
+- **You can inspect the coach's beliefs** — tap to set one aside. Causes you volunteered (travel,
+  rough sleep, a work crunch) are remembered and tested quietly against outcomes, never as a
+  diagnosis.
+- **Usual meals draft in Chat** — focusing the composer offers up to three usual meals as drafts
+  to edit and send, so the estimate is of what you actually ate. The Today one-tap re-log strip
+  is gone; capture lives in Chat, where voice and check-in already live.
+- **A chat promise leaves a trace** — "I'll flag that to your coach" now records a real proposal
+  for you to confirm (never auto-applied), and the reply only claims the hand-off when it landed.
+- **Chat can log how you feel** — tell it "I feel great" or "that session was rough" and it records
+  the same check-in the app does, energy/sleep/soreness/mood on the usual 1–5 scale.
 - **Session logging paints before it waits on the network** — an added exercise, a logged set's
   chip and progress, and a skip all show up instantly, then reconcile with the server; a set
   logged offline stays visibly queued and replays once you're back.
@@ -66,38 +56,62 @@ Versioning](https://semver.org/) for tagged releases.
   the countdown ends the bar counts up ("Rested 4:10") until your next set.
 - **An optional screen wake lock while you train** — turn it on in Settings → While you train to
   keep the screen awake for the length of a session.
-- **Chat can log how you feel** — tell it "I feel great" or "that session was rough" and it records
-  the same check-in the app does, energy/sleep/soreness/mood on the usual 1–5 scale.
+- **Navigation that answers the Back button** — the plan's Changes record joined the Plan bar,
+  and drilling into a marker domain on Stand is a real page: the browser Back button returns to
+  the overview instead of leaving. Settings puts you first and folds the operator console under
+  the hood.
 
 ### Changed
 
 - **Work at your real working weight counts, even on a day the plan called light** — a rest day you
   chose to train through, or a travel day you still hit your numbers on, no longer gets quietly
   written off as unusable evidence; only illness or a real pain flag still holds it back.
-- **A soft "ease off the calories a bit" no longer blocks a lift you've clearly earned** — losing
-  weight faster than planned no longer stops a load increase either, though the single heaviest set
-  of the day still gets parked until things settle. Only an actual stall or slide in your lifts still
-  holds the load where it is; near your goal weight, an earned step through a leaner week keeps the
-  weight and only trims the set count.
-- **A string of hard days is a note, not an automatic rest** — several loading days in a row now
-  shows up as a caveat on today's session rather than forcing a day off by itself; a rest still comes
-  when something about today itself — how you slept, how you're reading, a missed dose — actually
-  backs it. At the far end of a hard stretch with nothing else wrong, the day eases instead of
-  training through it or resting outright.
-- **A rating from a session where you hit everything you were asked no longer drags the week down**
-  — a low "how did that feel" score is set aside when the actual sets logged say otherwise, lift by
-  lift, and a later strong session can clear an earlier low one before its week is up.
-- **Rating your energy or sleep as "okay" (a 3) is tracked like any other check-in** — it no longer
-  reads the same as not checking in at all.
-- **Your measured resting-metabolism number now adjusts for weight change since the test** — a scan
-  taken at a different bodyweight no longer overstates or understates today's baseline.
-
+- **Capped work is the strength signal** — you do not need to log a felt rating for a set at the
+  top of the range to count; a plan that has not moved is not automatically a plateau.
 - **Progression asks for more when you have earned it** — under a "push me" drive, completing every
   set at the top of the range steps the load (and variety and new lifts are no longer held while
   fueling settles); a plan that sat under your real working weight is re-grounded with the step,
   not a catch-up hold. Safety floors (pain, soreness, a fresh brake, a cut) are unchanged.
+- **A soft "ease off the calories a bit" no longer blocks a lift you've clearly earned** — losing
+  weight faster than planned no longer stops a load increase either, though the single heaviest set
+  of the day still gets parked until things settle. Only an actual stall or slide in your lifts still
+  holds the load where it is.
+- **At the goal, the answer is food — not less training** — within reach of a lose-mode goal (or
+  at it), an underfueling read no longer shrinks the plan: earned steps and holds keep their full
+  sets and load (only the near-maximal single parks), and the fuel read's corrective is the bounded
+  step toward maintenance. The standing "move fuel toward maintenance" question no longer re-drafts
+  itself nightly, and it now surfaces on Today even in lead mode.
+- **A recovery week is earned by the log, not the calendar** — Cairn no longer suggests a reset
+  because N weeks have passed or because two sessions felt flat; it looks for a real shortfall in
+  what you lifted plus a drift in your physiology after a run of genuinely loaded weeks. Travel-light
+  weeks no longer count as loaded weeks. **"No" means no** — a declined recovery week stays declined
+  for the rest of the block unless a genuinely new safety-grade signal reopens it.
+- **Harm now includes the body's response** — a day counts as "went fine" only when the log AND
+  your physiology agree: a hard cardio day, your longest run in ninety days, or a next morning
+  that answers badly (rest-grade readiness, low HRV status, clearly elevated resting HR) all stop
+  the app from softening the next day's read upward.
+- **A rest-grade readiness reading is rest** — a fresh reading at or below the deep band gets its
+  own rest read in its own words; adaptation may ease it to easy movement, never into a session.
+- **The app stops stacking runs** — after a hard run or a new-longest run, the next day's easy
+  read never opens as another run: leg-driven cardio is held (an easy walk stands in) while the
+  strength half of the day is untouched.
+- **A string of hard days is a note, not an automatic rest** — several loading days in a row now
+  shows up as a caveat on today's session rather than forcing a day off by itself; a rest still comes
+  when something about today itself actually backs it. At the far end of a hard stretch with nothing
+  else wrong, the day eases instead of training through it or resting outright.
+- **A completed log outranks a felt rating, lift by lift** — a low "how did that feel" score is
+  set aside when the actual sets logged say otherwise, and a later strong session can clear an
+  earlier low one before its week is up. Rating energy or sleep as "okay" (a 3) is tracked like any
+  other check-in — it no longer reads the same as not checking in at all.
+- **Pain decides one movement, not the day** — three bands, one question: did it settle by the next
+  time that movement loaded.
 - **The training block follows your stated priorities** — a race you marked as supporting work no
   longer turns the block into an aerobic base; strength or muscle leads until the race is close.
+- **Fewer questions you already answered** — chat checks your usual training hour and the log
+  before asking; a stale draft is refreshed against current evidence instead of becoming a
+  question nobody could answer. A Garmin strength merge and a routine meal-plan refresh land
+  quietly with one-tap Undo. A dismissal informs the next read only after it repeats on distinct
+  days, never from one tap.
 - **A blood-draw morning is sequenced onto one place instead of two** — a same-day lab draw or
   duplicate export upload now folds into a single record automatically, instead of showing up as
   two separate entries with the same readings.
@@ -105,9 +119,18 @@ Versioning](https://semver.org/) for tagged releases.
   when a connected AI provider is out of quota or needs sign-in and reads lab results straight from
   the export instead of stalling, and Settings explains the wait ("Limit reached · resets …")
   instead of just showing "Connected."
+- **Your measured resting-metabolism number now adjusts for weight change since the test** — a scan
+  taken at a different bodyweight no longer overstates or understates today's baseline.
 
 ### Fixed
 
+- **A goal you locked in chat stays locked** — a short confirmation after you named the number no
+  longer silently drops the write; if it cannot save, the reply says so instead of claiming it
+  locked.
+- **A quality session is never the long run** — interval work does not steal the long-run slot,
+  whatever the GPS distance.
+- **Session-suggest copy stays in its card** — streaming "why" prose no longer spills as raw text
+  under Today while the loading card vanishes.
 - **A training day you chose to train through was being mislabeled as recovery on every lift** — a
   rest day taken by choice was quietly marking a month of real work as unusable evidence; the last
   60 days of your training record have been repaired.
@@ -126,6 +149,14 @@ Versioning](https://semver.org/) for tagged releases.
   to.
 - **A pain rating no longer shows up as a lab result** — office-visit vitals like a pain score are
   recognized as vitals, not treated as an analyte.
+
+### Notes
+
+- Schema migrations **93** through **99** run automatically on boot (dismissals and beliefs as
+  inspectable evidence, assisted-sign repair, a mismatched auto endurance-base block is abandoned,
+  60 days of mislabeled recovery outcomes are repaired, one active strength objective per lift, and
+  rest as a first-class plan day). Back up before deploying, as always.
+- Service worker cache v550 → v562; installed PWAs self-update on next open.
 
 ## [1.7.5] — 2026-08-24
 
