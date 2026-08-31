@@ -192,12 +192,22 @@ function paintJobStream(host: Element | null, accumulated: string): void {
   if (!(host instanceof HTMLElement)) return;
   let box = host.querySelector(".job-stream");
   if (!box) {
-    host.innerHTML = `<div class="job-stream"><div class="job-stream-text"></div></div>`;
-    box = host.querySelector(".job-stream");
+    // A loading card may carry a [data-stream-slot] — then the prose streams INSIDE
+    // the card chrome (the caption yields via .is-streaming) instead of replacing
+    // the whole anchor with bare text. Anchors without a slot keep the old takeover.
+    const slot = host.querySelector<HTMLElement>("[data-stream-slot]");
+    const mount = slot ?? host;
+    mount.innerHTML = `<div class="job-stream"><div class="job-stream-text"></div></div>`;
+    if (slot) {
+      slot.hidden = false;
+      host.classList.add("is-streaming");
+    }
+    box = mount.querySelector(".job-stream");
   }
   const body = box?.querySelector(".job-stream-text");
   if (body instanceof HTMLElement) {
     body.innerHTML = `${escHtml(accumulated)}<span class="stream-caret" aria-hidden="true"></span>`;
+    if (box instanceof HTMLElement) box.scrollTop = box.scrollHeight;
   }
 }
 

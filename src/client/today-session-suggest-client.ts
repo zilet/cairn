@@ -71,6 +71,7 @@ type SuggestedSessionLike = Partial<ClientSessionSuggestion> | null | undefined;
     return `<div class="sug-card well-accent well-accent-sage sug-loading settle-in">
       <span class="aspin" aria-hidden="true"></span>
       ${CairnUi.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" })}
+      <div class="sug-stream" data-stream-slot hidden></div>
     </div>`;
   }
 

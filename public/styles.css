@@ -3144,6 +3144,12 @@ body.sheet-open{overflow:hidden}
 /* loading: the house cairn loader + a rotating status line (see §04b) */
 .sug-loading{border-left-color:var(--gold);display:flex;align-items:center;gap:12px}
 .sug-loading-line{font-size:.88rem;color:var(--ink-2)}
+/* live "why" prose streams INSIDE the loading card (never bare text in the slot);
+   the rotating caption yields to it, the spinner stays until the card lands */
+.is-streaming .sug-loading .job-cap{display:none}
+.sug-stream{flex:1;min-width:0}
+.sug-stream .job-stream{max-height:7.5em;overflow-y:auto}
+.sug-stream .job-stream-text{font-size:.86rem;color:var(--ink-2);line-height:1.5}
 
 /* -------------------------------------------------------------------
    atelier loading — one calm vocabulary for "an agent is thinking",
