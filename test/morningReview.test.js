@@ -111,7 +111,9 @@ test("a kept rest day is spoken positively, with no guilt", () => {
 
   const review = morningReview(today);
   assert.equal(review.passages.length, 1);
-  assert.match(review.passages[0], /rest/i);
+  // The concept, not one literal: the kept-rest phrasing rotates by date and one
+  // variant says "quiet day" instead of "rest".
+  assert.match(review.passages[0], /rest|quiet day/i);
   assert.doesNotMatch(review.passages[0], /you didn't train|failed|missed/i);
   assert.equal(violatesReadingGrammar(review.passages[0]), null);
 });

@@ -974,7 +974,9 @@ test("attachDayReadContext threads a look_back block when yesterday's morning re
   assert.ok(read.look_back, "a kept rest yesterday is speakable");
   assert.equal(Array.isArray(read.look_back.passages), true);
   assert.equal(read.look_back.passages.length, 1);
-  assert.match(read.look_back.passages[0], /rest/i);
+  // The concept, not one literal: the kept-rest phrasing rotates by date and one
+  // variant says "quiet day" instead of "rest".
+  assert.match(read.look_back.passages[0], /rest|quiet day/i);
 });
 
 test("attachDayReadContext carries no look_back key when yesterday was genuinely unremarkable", () => {
