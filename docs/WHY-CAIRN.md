@@ -70,12 +70,38 @@ Where Cairn is different:
   write the run you *should do next*. Cairn periodizes a conservative ramp and taper toward your
   race (or holds a standing readiness goal), prescribes the week's runs, and — when the watch syncs
   them back — adapts next week to the miles you actually ran (fell short → hold, never cram missed
-  volume). Measurement on one side, a coached plan on the other, joined.
+  volume). Measurement on one side, a coached plan on the other, joined. Strength closes the same
+  loop in the other direction: a finished Cairn session writes back onto the watch as that day's
+  exercise sets, in Garmin's own vocabulary, so the recording matches what you actually lifted —
+  proof that this isn't a one-way read.
 - **Pull, never push.** No nudges, no streaks, no "you haven't closed your rings." Cairn earns
   being opened by being useful when opened. Insights wait for you in-app; nothing pings you.
 
 **When the wearable wins:** you want precise passive measurement and a refined ring/watch
 experience. Keep it — and let Cairn read from it. They're complements, not competitors.
+
+---
+
+## Cairn vs. Hevy / Strong
+
+**These are good lifting loggers.** Fast set entry, clean history, plate math, a well-worn plate
+of templates — if all you want is a frictionless place to record sets, either does that job well.
+
+Where Cairn is different:
+
+- **It reads more than the gym.** A logger sees your sets. It doesn't see your recovery, your
+  labs, your sleep, or what you ate — so it can't tell you a hard upper day is a bad idea because
+  your HRV is down, or that your iron came back low the week your long runs stalled.
+- **The next session adapts.** A logger records history; it doesn't decide what changes next.
+  Cairn earns overloads, calls deloads where you stalled, and holds a lift when the dose evidence
+  says the last one wasn't comparable — before you show up to train.
+- **It writes back to the watch, not just the app.** A finished Cairn session pushes that day's
+  sets onto your Garmin recording too, so the watch's own history matches what you actually
+  lifted — a logger's ledger stays local to the logger.
+
+**When the logger wins:** you just want fast, reliable set entry and don't need training decisions
+or cross-domain context. Cairn does all three — reads the wider picture, adapts the next session,
+and pushes sets onto the watch — which is a different, heavier tool for a different job.
 
 ---
 

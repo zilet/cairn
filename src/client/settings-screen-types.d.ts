@@ -15,6 +15,8 @@ type SettingsScreenData = {
   settings: Record<string, unknown>;
   agents: SettingsScreenAgent[];
   research_auto_eligible?: boolean | { eligible?: boolean; reason?: string };
+  /** UTC ISO of the last strength write-back that landed; null/absent = nothing sent yet. */
+  garmin_last_export_at?: string | null;
 };
 
 type SettingsScreenWorkingModel = {

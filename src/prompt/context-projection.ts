@@ -642,9 +642,27 @@ function summarizeSession(session: unknown): unknown {
   return out;
 }
 
+// The session's `garmin` blob is physiology the model reads (heart rate, zones, the
+// watch's own summary) PLUS write-back bookkeeping it must never see: `export`
+// (Garmin activity ids, the payload fingerprint, the shells we still owe a delete)
+// and `reconciled_at`. Those are the plumbing's own record of what it sent, not
+// evidence about the athlete's body — handing them over spends tokens on ids and
+// invites a model to narrate our sync state as if it were training news.
+const NON_EVIDENCE_GARMIN_KEYS = ["export", "reconciled_at"] as const;
+
+function compactGarminSessionBlob(garmin: unknown): unknown {
+  if (!garmin || typeof garmin !== "object" || Array.isArray(garmin)) return garmin;
+  const row = garmin as Record<string, unknown>;
+  if (!NON_EVIDENCE_GARMIN_KEYS.some((key) => Object.hasOwn(row, key))) return garmin;
+  const out: Record<string, unknown> = { ...row };
+  for (const key of NON_EVIDENCE_GARMIN_KEYS) delete out[key];
+  return out;
+}
+
 // Cap the window and right-size each session for the site. At "full" detail the
 // session-level fields (date, title, soreness/performance/joint_pain, notes, skips,
-// garmin) are all read by prompts and stay untouched, and only each SET is projected.
+// garmin) are all read by prompts and stay untouched, and only each SET — and the
+// Garmin blob's write-back bookkeeping — is projected.
 function compactSessions(sessions: unknown, limit: number, detail: "full" | "summary" = "full"): unknown {
   if (!Array.isArray(sessions)) return sessions;
   const window = sessions.slice(0, limit);
@@ -652,8 +670,10 @@ function compactSessions(sessions: unknown, limit: number, detail: "full" | "sum
   return window.map((session) => {
     if (!session || typeof session !== "object" || Array.isArray(session)) return session;
     const row = session as Record<string, unknown>;
-    if (!Array.isArray(row.sets)) return row;
-    return { ...row, sets: row.sets.map(projectSet) };
+    const garmin = compactGarminSessionBlob(row.garmin);
+    const trimmed = garmin === row.garmin ? row : { ...row, garmin };
+    if (!Array.isArray(row.sets)) return trimmed;
+    return { ...trimmed, sets: row.sets.map(projectSet) };
   });
 }
 

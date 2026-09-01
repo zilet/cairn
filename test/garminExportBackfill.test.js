@@ -392,3 +392,34 @@ test("the toggle and a missing Garmin account both short-circuit the whole run",
   const unconfigured = await garminExportBackfill({ apply: true });
   assert.deepEqual(unconfigured, { ok: true, skipped: "garmin_not_configured" });
 });
+
+// Sending a month of history to an external account is a real, user-triggered change,
+// and the decision ledger is where Cairn's material changes are accountable. Its own
+// kind, not `garmin_reconcile` — that one names inbound activity ids the Today agenda
+// offers an Undo for, and would surface this batch as an announcement it cannot undo.
+test("an applied backfill records exactly one ledger row; a dry run records none", async () => {
+  install();
+  const older = seedFinishedSession("2026-05-01", 2);
+  const newer = seedFinishedSession("2026-05-08", 2);
+  await drainQueue();
+  for (const id of [older, newer]) db.prepare(`UPDATE sessions SET garmin_json = NULL WHERE id = ?`).run(id);
+
+  await garminExportBackfill({ since: "2026-04-01", until: "2026-06-01" });
+  assert.deepEqual(repo.listBrainDecisions({ kind: "garmin_backfill" }), [], "a dry run decides nothing");
+
+  const applied = await garminExportBackfill({ since: "2026-04-01", until: "2026-06-01", apply: true });
+  assert.equal(applied.enqueued, 2);
+
+  const rows = repo.listBrainDecisions({ kind: "garmin_backfill" });
+  assert.equal(rows.length, 1, "one row for the batch, not one per session");
+  const [row] = rows;
+  assert.equal(row.status, "applied");
+  assert.equal(row.domain, "training");
+  assert.equal(row.reversible, false, "sets already on Garmin are not undone by an undo of this batch");
+  assert.equal(row.risk_class, "low");
+  assert.deepEqual(row.action.session_ids, [older, newer], "and it names what was sent, oldest first");
+  assert.match(row.summary, /2 finished strength sessions/);
+  assert.match(row.rationale, /2026-04-01 to 2026-06-01/);
+
+  await drainQueue();
+});

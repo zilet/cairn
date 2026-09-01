@@ -200,6 +200,49 @@ test("logged sets keep what a coach reads and shed internal bookkeeping", () => 
   assert.equal(bodyweightSet.reps, 8);
 });
 
+// The write-back put its own bookkeeping inside `sessions.garmin_json` — Garmin
+// activity ids, the payload fingerprint, the shells still owed a delete, when the
+// merge last ran. That is the plumbing's record of what IT did, not evidence about
+// the athlete's body, so it must not ride into a prompt at full detail.
+test("a session's Garmin blob keeps physiology and drops write-back bookkeeping", () => {
+  const ctx = {
+    recent_sessions: [
+      {
+        date: "2026-01-01",
+        title: "Push",
+        sets: [{ exercise: "Bench Press", mode: "reps", weight: 135, reps: 8, id: 3, created_at: "x" }],
+        garmin: {
+          avg_hr: 126,
+          max_hr: 158,
+          calories: 284,
+          summary: "steady session",
+          reconciled_at: "2026-01-01T18:00:00Z",
+          export: {
+            activity_id: "9911",
+            source: "manual",
+            fingerprint: "abc123",
+            exported_at: "2026-01-01T18:02:00Z",
+            created_ids: ["9911"],
+          },
+        },
+      },
+    ],
+  };
+  const [session] = projectCoachContext(ctx, "coach").recent_sessions;
+  assert.ok(!Object.hasOwn(session.garmin, "export"), "the export ledger never reaches a prompt");
+  assert.ok(!Object.hasOwn(session.garmin, "reconciled_at"), "nor does the reconcile stamp");
+  assert.equal(session.garmin.avg_hr, 126, "the physiology the model actually reads survives");
+  assert.equal(session.garmin.summary, "steady session", "as does the watch's own summary");
+  assert.equal(session.sets.length, 1, "and the sets are still projected as before");
+  assert.ok(Object.hasOwn(ctx.recent_sessions[0].garmin, "export"), "the snapshot itself is untouched");
+
+  // A session with no sets array takes the other branch of the same projection.
+  const noSets = { recent_sessions: [{ date: "2026-01-02", garmin: { avg_hr: 100, export: { activity_id: "1" } } }] };
+  const [bare] = projectCoachContext(noSets, "coach").recent_sessions;
+  assert.ok(!Object.hasOwn(bare.garmin, "export"), "a session without sets is projected too");
+  assert.equal(bare.garmin.avg_hr, 100);
+});
+
 test("the recovery view ships one quality map instead of four copies of it", () => {
   seedDemo();
   const ctx = repo.getCoachContext();

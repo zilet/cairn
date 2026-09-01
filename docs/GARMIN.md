@@ -152,9 +152,11 @@ recording with no exercises in it. So a **finished** Cairn strength session is p
 back as that day's exercise sets (`src/garminExport.ts`), in one of three shapes:
 
 1. **Cairn-only** (no watch activity that day) — Cairn creates a manual strength
-   activity (`POST /activity-service/activity/manual`) and writes the sets onto it. The
-   activity is mirrored into `garmin_activities` and reconciled, so the day shows ONE
-   strength activity and a later real sync of the same id updates that row.
+   activity (`POST /activity-service/activity` — the `/manual` suffix 405s; the body is
+   the web app's own DTO shape, with `startTimeLocal` as the athlete's wall-clock time)
+   and writes the sets onto it. The activity is mirrored into `garmin_activities` and
+   reconciled, so the day shows ONE strength activity and a later real sync of the same
+   id updates that row.
 2. **Parallel** (Cairn sets AND a same-day Garmin strength activity) — the sets are
    written onto the EXISTING watch activity, in place. Never a second upload: the
    watch's heart rate, duration and calories are the physiology worth keeping, and a
@@ -168,8 +170,17 @@ is deleted, and `export` retargets to the watch id. The day ends up with one act
 Heart rate and calories rank *which* watch recording is the richer home; they do not
 gate the move — a watch activity with no HR still owns the day.
 
+**Retraction.** If the work a session described disappears — every set deleted, or every
+mapping lost — whatever Cairn already pushed is now wrong, so it is withdrawn, but only
+on a carrier Cairn made: a manual shell is deleted outright and the export record
+cleared, while sets that landed on a watch recording stay there (its own slot labels
+cannot be restored) and the export record is kept with a `_watch_kept` skip reason.
+
 **The endpoint is UNOFFICIAL** — `PUT /activity-service/activity/{id}/exerciseSets`, on
-the same undocumented connectapi surface the read path already uses. Every failure is
+the same undocumented connectapi surface the read path already uses. The PUT body
+mirrors the GET envelope exactly, `{activityId, exerciseSets}` — omitting the top-level
+`activityId` 400s ("Activity ID should not be Null in the Exercises Object"), a shape
+only a live canary run against a real account could confirm. Every failure is
 therefore a quiet no-op: the Cairn log is the record of truth and a write that didn't
 land costs nothing but a retry on the next sync. A create that lands and a PUT that
 then fails is remembered locally so the retry writes onto the same activity rather

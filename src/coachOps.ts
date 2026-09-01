@@ -1026,6 +1026,22 @@ export function normalizeExerciseExplanation(input: any): ExerciseExplanation | 
   return { setup, move, feel, ...(avoid ? { avoid } : {}) };
 }
 
+/**
+ * The movement itself, in one or two sentences, for the art prompt's pose clause
+ * (src/art.ts). Setup then move, first sentence of each — enough to place the
+ * body without handing the image model the whole guide.
+ */
+export function exercisePoseFromExplanation(explanation: ExerciseExplanation | null | undefined): string | null {
+  const firstSentence = (v: any): string => {
+    const s = String(v ?? "").replace(/\s+/g, " ").trim();
+    if (!s) return "";
+    const m = s.match(/^[^.!?]+[.!?]?/);
+    return (m ? m[0] : s).replace(/[.!?]+$/, "").trim();
+  };
+  const parts = [firstSentence(explanation?.setup), firstSentence(explanation?.move)].filter(Boolean);
+  return parts.length ? parts.join(". ") : null;
+}
+
 export function exerciseExplanationCacheKey(detail: any): string {
   return repo.fingerprint({
     name: String(detail?.name ?? "")

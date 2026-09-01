@@ -2390,7 +2390,11 @@ summary + memory.
   (`{activity_id, source, fingerprint, exported_at, mode}`) so an unchanged session skips before any
   network call. `reconcileGarminStrength` carries that record forward when it rebuilds the blob.
   Full behavior — the three write cases, FILL vs REPLACE, the retarget repair — is in
-  `docs/GARMIN.md`.
+  `docs/GARMIN.md`. Sessions older than the 7-day sync window are never picked up
+  automatically, so `POST /api/garmin/export-backfill` (`src/garminExportBackfill.ts`) previews
+  or enqueues that backlog batched and oldest-first, calling the exporter's own
+  `planGarminExportTarget` for its prediction rather than restating the decision tree — one
+  seam, so a preview cannot drift from what the job does.
 
 ### Health ingestion is completeness-first
 

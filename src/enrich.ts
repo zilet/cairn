@@ -23,7 +23,7 @@ import {
 } from "./symptomCapture.js";
 import { symptomAreaKey } from "./repo/symptom-area.js";
 import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
-import { explainExercise, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
+import { explainExercise, exercisePoseFromExplanation, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 import { GEMINI_TEXT_MODEL, warmExerciseArt } from "./art.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
 import { diagnosticErrorName, recordAsyncFailure, recordDegradedOperation } from "./diagnostics.js";
@@ -96,6 +96,8 @@ type Kind =
 interface Job {
   kind: Kind;
   id: number;
+  /** Ahead of the ordinary backlog — see enqueueEnrich. */
+  front?: boolean;
 }
 interface HealthSource {
   fp: string;
@@ -355,17 +357,39 @@ function agentGarminSetInputs(parsed: any): repo.GarminSetImportInput[] {
   return usable;
 }
 
-// Push a job and start the drain loop if it isn't already running.
-export function enqueueEnrich(kind: Kind, id: number): void {
+/**
+ * Push a job and start the drain loop if it isn't already running.
+ *
+ * The queue is one serial FIFO, so a burst of slow background work (a Garmin outage
+ * catching up: export jobs at 90s each, strength jobs at 120s) used to park the one
+ * job an athlete is actually sitting in chat waiting for — a photographed meal, a
+ * sentence about a sore knee — behind ten minutes of housekeeping. `front` lifts
+ * those two kinds over the backlog. It does NOT interrupt the job already running,
+ * and front jobs keep FIFO order among themselves; everything else is unchanged.
+ */
+export function enqueueEnrich(kind: Kind, id: number, opts: { front?: boolean } = {}): void {
   if (queue.some((job) => job.kind === kind && job.id === id)) return;
-  queue.push({ kind, id });
+  if (!opts.front) {
+    queue.push({ kind, id });
+  } else {
+    let at = 0;
+    while (at < queue.length && queue[at].front) at++;
+    queue.splice(at, 0, { kind, id, front: true });
+  }
   if (!draining) void drain();
+}
+
+/** The jobs still WAITING, in the order they will run. Queue shape, for tests only. */
+export function pendingEnrichJobsForTests(): Array<{ kind: Kind; id: number }> {
+  return queue.map((job) => ({ kind: job.kind, id: job.id }));
 }
 
 // The repo stores the athlete's words and must not import this engine (the barrel
 // would close a cycle), so the engine registers itself. Until it does — a migration
 // CLI, a storage-only test — a verbatim report is still written; it simply waits.
-repo.registerSymptomExtractionHook((reportId) => enqueueEnrich("symptom", reportId));
+// Ahead of the background backlog: a body report is written the moment the athlete
+// says it, and the structure derived from it is what the next screen reads.
+repo.registerSymptomExtractionHook((reportId) => enqueueEnrich("symptom", reportId, { front: true }));
 
 /**
  * Whether this free text is worth an agent call at all. Re-exported from the one
@@ -1028,6 +1052,28 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     /* the retarget is a repair, never a requirement */
   }
 
+  // ECHO: this activity is Cairn's own write-back coming back in. Asking an agent to
+  // read "the body's reaction" to a shell we authored from the athlete's own log is
+  // both a wasted invocation on every sync, forever, and evidence laundering — the
+  // narrative would be a model reading our own numbers back to us as if the watch had
+  // observed them, and set extrapolation could invent sets on top of them. Everything
+  // deterministic above still ran (the physiology merge, the retarget check); only the
+  // agentic layer stops here. Provenance is the test, never physiology: the name
+  // marker Cairn writes, or the export ledger naming this very activity.
+  let cairnAuthored = false;
+  try {
+    const { isCairnAuthoredName, sessionOwnsGarminActivity } = await import("./garminExport.js");
+    cairnAuthored = isCairnAuthoredName(ga.name) || sessionOwnsGarminActivity(ga.session_id, ga.external_id);
+  } catch {
+    /* provenance unavailable → fall through to the ordinary agentic path */
+  }
+  if (cairnAuthored) {
+    console.log(
+      `[enrich] garmin_strength#${garminActivityId}: Cairn authored this activity — reconciled, no narrative (own echo).`
+    );
+    return;
+  }
+
   const settings = repo.getSettings();
   if (!settings.enrich_enabled) {
     // The physiology and any atomic deterministic set import stand; skip narrative.
@@ -1133,6 +1179,7 @@ export async function processExerciseJob(id: number): Promise<void> {
   let finalName = String(ex.name);
   let group: string | null = ex.muscle_group ?? null;
   let equipment: string | null = ex.equipment ?? null;
+  let pose: string | null = null;
 
   if (order.length) {
     // Mark in-progress BEFORE the first await so a crash leaves a recoverable
@@ -1174,14 +1221,19 @@ export async function processExerciseJob(id: number): Promise<void> {
         try { repo.ensureGarminMapping(applied.id); } catch { /* mapping is best-effort */ }
       }
     }
-    // Warm the how-to guide into ai_cache so the first ⓘ tap serves instantly.
-    try { await explainExercise("auto", finalName); } catch { /* best-effort */ }
+    // Warm the how-to guide into ai_cache so the first ⓘ tap serves instantly. Its
+    // setup/move sentences also describe the POSE for the art prompt below — the
+    // name alone under-specifies the movement, and the figurine came back wrong.
+    try {
+      const guide: any = await explainExercise("auto", finalName);
+      pose = exercisePoseFromExplanation(guide?.explanation);
+    } catch { /* best-effort — art still warms without a pose */ }
   }
 
-  // Muscle/equipment-aware art under the bare-name key (self-degrades: no key /
+  // Muscle/equipment/pose-aware art under the bare-name key (self-degrades: no key /
   // art disabled / already cached / known-failed → no-op). Runs EVEN with no CLI
   // agent — the art call is a direct Gemini request keyed off the deterministic group.
-  try { await warmExerciseArt(finalName, { muscle_group: group, equipment }); } catch { /* best-effort */ }
+  try { await warmExerciseArt(finalName, { muscle_group: group, equipment, pose }); } catch { /* best-effort */ }
 
   // 'done' whenever an agent was available (the deterministic row already stands, so
   // even a soft agent miss leaves a usable exercise — the guide hydrates lazily and

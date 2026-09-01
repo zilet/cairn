@@ -2393,7 +2393,9 @@ function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: str
   try {
     if (repo.getSettings().enrich_enabled) {
       repo.setFoodNoteEnrichStatus(note.id, "pending");
-      import("./enrich.js").then((m) => m.enqueueEnrich("food_photo", note.id)).catch(() => {});
+      // The athlete is in chat waiting on this read; it goes ahead of background
+      // housekeeping (Garmin catch-up, exercise canonicalization) in the serial queue.
+      import("./enrich.js").then((m) => m.enqueueEnrich("food_photo", note.id, { front: true })).catch(() => {});
     }
   } catch {
     /* settings unreadable → leave the note as-is */

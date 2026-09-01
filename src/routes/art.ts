@@ -1,8 +1,10 @@
 import { Router } from "express";
 import fs from "node:fs";
-import { isArtKind, cachedArtPath, requestArt, warmArt, artManifest } from "../art.js";
+import { isArtKind, cachedArtPath, requestArt, warmArt, artManifest, regenerateArt, type ArtContext } from "../art.js";
 import { getArtStats } from "../domain/operator/index.js";
 import { exerciseArtPending } from "../domain/training/index.js";
+import { getExerciseDetail } from "../repo.js";
+import { getCachedExerciseExplanation, exercisePoseFromExplanation } from "../coachOps.js";
 
 export const artRouter = Router();
 
@@ -53,6 +55,42 @@ artRouter.get("/art", (req, res) => {
 artRouter.post("/art/warm", (_req, res) => {
   const { queued, skipped } = warmArt();
   res.json({ ok: true, queued, skipped });
+});
+
+// Repair path for an image that came back wrong (the classic: a cable lateral
+// raise rendered as a plank, because the name alone under-specified the pose and
+// the style references filled the gap). Drops the cached file and generates again
+// under the SAME key, with the richest prompt we can build — for an exercise that
+// means its muscle group, implement, and the pose from its cached how-to guide.
+// Designed-failure convention: {ok:false, error} at HTTP 200.
+artRouter.post("/art/regenerate", async (req, res) => {
+  const kind = String(req.body?.kind ?? "");
+  const q = String(req.body?.q ?? "").trim();
+  if (!isArtKind(kind)) return res.json({ ok: false, error: "kind must be food|exercise|activity" });
+  if (!q || q.length > 200) return res.json({ ok: false, error: "q required, max 200 chars" });
+
+  let context: ArtContext | null = null;
+  if (kind === "exercise") {
+    const detail: any = getExerciseDetail(q);
+    if (detail?.found) {
+      const guide: any = getCachedExerciseExplanation(q);
+      context = {
+        muscle_group: detail.muscle_group ?? null,
+        equipment: detail.equipment ?? null,
+        pose: exercisePoseFromExplanation(guide?.explanation),
+      };
+    }
+  }
+
+  try {
+    const regenerated = await regenerateArt(kind, q, context);
+    // false means generation was unavailable — no key, art disabled, or the
+    // breaker is open on this kind's model — not that anything broke here.
+    if (!regenerated) return res.json({ ok: false, error: "art generation unavailable", regenerated: false });
+    return res.json({ ok: true, regenerated: true });
+  } catch (e: any) {
+    return res.json({ ok: false, error: String(e?.message ?? e) });
+  }
 });
 
 // Which PWA art queries already have a cached image, as "kind|q" tokens. Not

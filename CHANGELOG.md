@@ -5,6 +5,8 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-09-01
+
 ### Added
 
 - **Your strength sessions now show up on Garmin** — finish a session in Cairn and its exercises and
@@ -195,7 +197,9 @@ land, the reply says so.
   inspectable evidence, assisted-sign repair, a mismatched auto endurance-base block is abandoned,
   60 days of mislabeled recovery outcomes are repaired, one active strength objective per lift, and
   rest as a first-class plan day). Back up before deploying, as always.
-- Service worker cache v550 → v562; installed PWAs self-update on next open.
+- Upgraders: finished strength sessions now sync back to Garmin by default once your Garmin
+  credentials are configured. Settings → Sources & automation turns it off.
+- Service worker cache v550 → v564; installed PWAs self-update on next open.
 
 ## [1.7.5] — 2026-08-24
 

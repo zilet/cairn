@@ -40,6 +40,10 @@
       workingModel: wm,
       settings: deps.settings,
       garminStatusHtml: deps.garminStatusLine(deps.settings, false),
+      lastExportAt: deps.data.garmin_last_export_at ?? null,
+      // Resolved at call time: the date helpers are plain globals from another client
+      // script, so a top-level reference would not survive load order.
+      dates: { relTime, absDate },
     });
 
     settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#garminUsername").addEventListener(

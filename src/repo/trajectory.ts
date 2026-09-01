@@ -49,7 +49,7 @@ import { localDateISO } from "./shared.js";
 // ---------------------------------------------------------------------------
 
 export interface TrajectoryMilestone {
-  /** Plain-language label, e.g. "Deload week" / "Race day — Boston" / "Goal weight". */
+  /** Plain-language label, e.g. "Deload week" / "Race day — Half Marathon" / "Goal weight". */
   label: string;
   /** ISO date (YYYY-MM-DD) the milestone is anchored to, or null when it has no date. */
   when: string | null;

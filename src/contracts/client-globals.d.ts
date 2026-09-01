@@ -3303,6 +3303,8 @@ declare global {
         workingModel: Pick<SettingsScreenWorkingModel, "garmin_username" | "garmin_export_strength">;
         settings: Record<string, unknown>;
         garminStatusHtml: string;
+        lastExportAt?: string | null;
+        dates?: { relTime?: (value: string) => string; absDate?: (value: string) => string };
         appleHealth?: {
           loading?: boolean;
           error?: string | null;

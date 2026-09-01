@@ -53,6 +53,9 @@ const GEMINI_400 = JSON.stringify({
 
 before(async () => {
   globalThis.fetch = async (url, init) => {
+    // Only Gemini is stubbed: the route tests below drive the real art router
+    // over loopback, and that fetch has to reach the listener.
+    if (!String(url).includes("generativelanguage.googleapis.com")) return realFetch(url, init);
     calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
     return responder();
   };
@@ -63,6 +66,7 @@ before(async () => {
 
 after(() => {
   globalThis.fetch = realFetch;
+  server?.close();
 });
 
 beforeEach(() => {
@@ -81,6 +85,32 @@ beforeEach(() => {
   const artDir = path.join(process.env.DATA_DIR, "art");
   if (fs.existsSync(artDir)) fs.rmSync(artDir, { recursive: true, force: true });
 });
+
+// The real art router over loopback, so the express wiring, body parsing and
+// status codes of POST /api/art/regenerate are under test too.
+let server = null;
+async function regeneratePost() {
+  if (!server) {
+    const express = (await import("express")).default;
+    const { artRouter } = await import("../dist/routes/art.js");
+    const app = express();
+    app.use(express.json());
+    app.use("/api", artRouter);
+    server = await new Promise((resolve, reject) => {
+      const s = app.listen(0, "127.0.0.1", () => resolve(s));
+      s.on("error", reject);
+    });
+  }
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  return async (body) => {
+    const res = await realFetch(`${base}/art/regenerate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json() };
+  };
+}
 
 /** Let the fire-and-forget drain() loop run to completion. */
 async function settle() {
@@ -272,4 +302,108 @@ test("pregenerate() respects an open circuit instead of hammering a dead upstrea
   calls = [];
   await assert.rejects(() => art.pregenerate("food", "seeded oatmeal"), /paused/);
   assert.equal(calls.length, 0, "a builder loop spends nothing while the circuit is open");
+});
+
+// ---- the repair path: regenerate an image that came back wrong ----------------
+// A figurine can land wrong (a cable lateral raise rendered as a plank). The
+// cache is keyed by name, so without a force path the bad image is permanent.
+
+test("regenerateArt replaces the cached file under the SAME key", async () => {
+  assert.equal(await art.warmExerciseArt("cable lateral raise"), true);
+  const file = art.cachedArtPath("exercise", "cable lateral raise");
+  assert.ok(file, "the first generation cached a file");
+  fs.writeFileSync(file, Buffer.from("the wrong picture"));
+
+  calls = [];
+  assert.equal(await art.regenerateArt("exercise", "cable lateral raise"), true);
+  assert.equal(calls.length, 1, "a regeneration is a real, paid generation");
+  assert.equal(
+    art.cachedArtPath("exercise", "cable lateral raise"),
+    file,
+    "the key — and so the PWA's plain ?q= request — is unchanged"
+  );
+  assert.equal(fs.readFileSync(file).subarray(0, 4).toString("hex"), "89504e47", "fresh bytes replaced the bad ones");
+});
+
+test("regenerateArt carries the pose into the prompt without touching the key", async () => {
+  await art.warmExerciseArt("cable lateral raise");
+  const bareKeyFile = art.cachedArtPath("exercise", "cable lateral raise");
+
+  calls = [];
+  await art.regenerateArt("exercise", "cable lateral raise", {
+    muscle_group: "shoulders",
+    equipment: "a cable machine",
+    pose: "Stand side-on to a low pulley. Raise the straight arm out to shoulder height.",
+  });
+  const prompt = calls[0].body.contents[0].parts[0].text;
+  assert.match(prompt, /the pose: Stand side-on to a low pulley/);
+  assert.equal(art.cachedArtPath("exercise", "cable lateral raise"), bareKeyFile, "same file, richer prompt");
+});
+
+test("regenerateArt spends nothing while the circuit is open, and keeps the old image", async () => {
+  assert.equal(await art.warmExerciseArt("goblet squat"), true);
+  const file = art.cachedArtPath("exercise", "goblet squat");
+  for (let i = 0; i < circuit.OPEN_AFTER_CONSECUTIVE_FAILURES; i++) {
+    circuit.noteArtFailure(EXERCISE_MODEL, "400:INVALID_ARGUMENT");
+  }
+
+  calls = [];
+  assert.equal(await art.regenerateArt("exercise", "goblet squat"), false);
+  assert.equal(calls.length, 0, "an open circuit spends nothing");
+  assert.ok(fs.existsSync(file), "and a picture we cannot replace is not thrown away");
+});
+
+test("regenerateArt retries a key the failure map had parked", async () => {
+  responder = () => errorResponse(400, GEMINI_400);
+  assert.equal(await art.warmExerciseArt("seated row"), false);
+  circuit.resetArtCircuit();
+
+  responder = () => okImage();
+  calls = [];
+  assert.equal(await art.warmExerciseArt("seated row"), false, "the warm path still refuses a known-failed key");
+  assert.equal(calls.length, 0);
+  assert.equal(await art.regenerateArt("exercise", "seated row"), true, "an explicit repair clears it");
+  assert.equal(calls.length, 1);
+});
+
+// ---- POST /api/art/regenerate ------------------------------------------------
+
+test("the regenerate route validates kind and q, and reports failure at HTTP 200", async () => {
+  const post = await regeneratePost();
+
+  const badKind = await post({ kind: "sticker", q: "cable lateral raise" });
+  assert.equal(badKind.status, 200, "designed failures ride at 200");
+  assert.equal(badKind.body.ok, false);
+  assert.match(badKind.body.error, /kind must be/);
+
+  const noQ = await post({ kind: "exercise", q: "  " });
+  assert.equal(noQ.status, 200);
+  assert.equal(noQ.body.ok, false);
+  assert.match(noQ.body.error, /q required/);
+
+  const tooLong = await post({ kind: "exercise", q: "x".repeat(201) });
+  assert.equal(tooLong.body.ok, false);
+});
+
+test("the regenerate route generates under the query's own key", async () => {
+  const post = await regeneratePost();
+  calls = [];
+  const res = await post({ kind: "exercise", q: "cable lateral raise" });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { ok: true, regenerated: true });
+  assert.equal(calls.length, 1);
+  assert.ok(art.cachedArtPath("exercise", "cable lateral raise"), "the image is cached where the PWA looks for it");
+});
+
+test("the regenerate route says so when generation is unavailable", async () => {
+  const post = await regeneratePost();
+  for (let i = 0; i < circuit.OPEN_AFTER_CONSECUTIVE_FAILURES; i++) {
+    circuit.noteArtFailure(EXERCISE_MODEL, "400:INVALID_ARGUMENT");
+  }
+  calls = [];
+  const res = await post({ kind: "exercise", q: "cable lateral raise" });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ok, false);
+  assert.equal(res.body.regenerated, false);
+  assert.equal(calls.length, 0);
 });

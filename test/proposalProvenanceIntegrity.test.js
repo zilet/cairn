@@ -4,9 +4,11 @@ import * as repo from "../dist/repo.js";
 import { db } from "../dist/db.js";
 import { MIGRATIONS } from "../dist/migrate.js";
 import {
+  captureProposalEvidence,
   clampProposalProvenanceDates,
   normalizeStoredProposalPayload,
   prepareProposalPayload,
+  verifyProposalEvidenceSnapshot,
 } from "../dist/repo/proposal-truth.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 
@@ -275,4 +277,42 @@ test("the clamp helper reaches every reason site a payload can carry", () => {
   assert.equal(payload.cardio[0].reason_provenance.evidence_date, asOf);
   assert.equal(payload.days[0].items[0].reason_provenance.evidence_date, asOf);
   assert.equal(clampProposalProvenanceDates(payload), 0, "idempotent");
+});
+
+// The Garmin write-back writes its OWN bookkeeping into `sessions.garmin_json` —
+// which activity it wrote to, the payload fingerprint, when it went. That blob is
+// hashed into `training_fingerprint`, so before the bookkeeping keys were excluded
+// every export and every reconcile made a pending proposal read premise-stale with
+// nothing about the athlete's training changed.
+test("recording a Garmin export does not make a pending proposal premise-stale", () => {
+  const date = localDateISO();
+  const session = repo.getOrCreateSession(date);
+  const before = captureProposalEvidence(date);
+
+  repo.recordSessionGarminExport(session.id, {
+    activity_id: "998877",
+    source: "manual",
+    fingerprint: "payload-abc",
+    exported_at: new Date().toISOString(),
+    mode: "create",
+    created_ids: ["998877"],
+  });
+  db.prepare(
+    `UPDATE sessions
+        SET garmin_json = json_set(garmin_json, '$.reconciled_at', ?)
+      WHERE id = ?`
+  ).run(new Date().toISOString(), session.id);
+
+  const after = verifyProposalEvidenceSnapshot(before, date);
+  assert.equal(after.status, "current", "the export is bookkeeping, not evidence");
+  assert.deepEqual(after.changed_components, [], "and nothing reads as changed");
+
+  // Control: real physiology on the SAME blob still moves the fingerprint, so the
+  // exclusion is scoped to the write-back's own keys and has not gone blind.
+  db.prepare(
+    `UPDATE sessions SET garmin_json = json_set(garmin_json, '$.avg_hr', 141) WHERE id = ?`
+  ).run(session.id);
+  const moved = verifyProposalEvidenceSnapshot(before, date);
+  assert.equal(moved.status, "changed");
+  assert.ok(moved.changed_components.includes("training"), "watch physiology is still evidence");
 });

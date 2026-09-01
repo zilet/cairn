@@ -87,6 +87,14 @@ const NON_AUTHORITATIVE_KEYS = new Set([
   "narrative",
   "explanation",
   "display",
+  // Garmin write-back bookkeeping, carried inside a session's garmin_json. An export
+  // records WHAT WE SENT — activity ids, a payload fingerprint, a timestamp — and a
+  // reconcile records when the merge last ran. Neither is evidence about the athlete,
+  // so folding them into the fingerprint made every sync flip `training_fingerprint`
+  // and mark a pending proposal premise-stale with nothing about the training changed.
+  "export",
+  "exported_at",
+  "reconciled_at",
 ]);
 
 function boundedAuthoritativeJson(value: unknown, depth = 0): unknown {
@@ -114,6 +122,21 @@ function boundedAuthoritativeJson(value: unknown, depth = 0): unknown {
     out[key] = boundedAuthoritativeJson(entry, depth + 1);
   }
   return out;
+}
+
+/**
+ * A session's Garmin blob as EVIDENCE. Everything the write-back records about
+ * itself is filtered out above, which leaves a session that has only ever been
+ * exported holding `{}` where it used to hold nothing at all — and a fingerprint
+ * that moves on null → {} churns exactly the way excluding the keys was meant to
+ * stop. Nothing evidential left reads as nothing.
+ */
+function authoritativeGarminBlob(value: unknown): unknown {
+  const projected = boundedAuthoritativeJson(value);
+  if (projected && typeof projected === "object" && !Array.isArray(projected)) {
+    if (!Object.keys(projected).length) return null;
+  }
+  return projected;
 }
 
 function humanDate(date: string): string {
@@ -375,7 +398,7 @@ function trainingFacts(
         finished_at: session.finished_at,
         kind: session.kind,
         notes: String(session.notes ?? "").slice(0, 1_500) || null,
-        garmin_json: boundedAuthoritativeJson(session.garmin_json),
+        garmin_json: authoritativeGarminBlob(session.garmin_json),
       })),
       sets,
       activities,

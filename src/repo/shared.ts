@@ -266,7 +266,7 @@ export function parseDbTime(s: unknown): Date | null {
 // `created_at` is written by datetime('now'), which is UTC with no zone marker —
 // so slicing its first ten characters, or letting SQLite's own date() do it,
 // answers the question in UTC. Every evening east of Greenwich that is the WRONG
-// DAY: a proposal applied at 8 PM in Boston is stamped tomorrow, and a comparison
+// DAY: a proposal applied at 8 PM local time is stamped tomorrow, and a comparison
 // against a local day then counts it into the wrong week, or misses it entirely.
 //
 // Anything that compares a stamp to a local calendar day (a plan week, a "since

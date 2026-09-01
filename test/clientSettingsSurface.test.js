@@ -225,3 +225,36 @@ test("Settings opens onto You by default, with Agents & System pushed to the end
   assert.match(router, /state\.setSeg = routeKey\(route\.section, options\.settingsSections, state\.setSeg \|\| "you"\)/, "a remembered/deep-linked segment is still honored — only the fallback default changed");
   assert.match(router, /route\.section = routeKey\(state\.setSeg, options\.settingsSections, "you"\)/);
 });
+
+// One quiet line of write-back state under the toggle. "Is this actually doing
+// anything?" needs an answer; what is on the athlete's Garmin account is Garmin's to
+// show, so the line names no activities, no counts and no ids.
+test("the strength write-back toggle carries one quiet line of last-sent state", () => {
+  const surface = loadSettingsSurface();
+  const wm = { garmin_username: "athlete@example.com", garmin_export_strength: true };
+  const base = { workingModel: wm, settings: {}, garminStatusHtml: "" };
+
+  const never = surface.sourcesSliceHtml(base);
+  assert.match(never, /Nothing sent yet/);
+
+  const sent = surface.sourcesSliceHtml({
+    ...base,
+    lastExportAt: "2026-08-30T18:02:00Z",
+    dates: { relTime: () => "2 days ago", absDate: (day) => `August 30, 2026 (${day})` },
+  });
+  assert.match(sent, /Last sent 2 days ago/);
+  assert.doesNotMatch(sent, /Nothing sent yet/);
+  assert.match(sent, /title="August 30, 2026 \(2026-08-30\)"/);
+  // No counts, no Garmin ids — a settings line is not a tally of someone's account.
+  assert.doesNotMatch(sent, /\d+ activit/);
+});
+
+test("settingsData carries the last write-back stamp through to the controllers", () => {
+  const surface = loadSettingsSurface();
+  assert.equal(surface.settingsData({ settings: {}, agents: [] }).garmin_last_export_at, null);
+  assert.equal(
+    surface.settingsData({ settings: {}, agents: [], garmin_last_export_at: "2026-08-30T18:02:00Z" })
+      .garmin_last_export_at,
+    "2026-08-30T18:02:00Z"
+  );
+});

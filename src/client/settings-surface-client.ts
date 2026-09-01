@@ -21,6 +21,8 @@ type SettingsSourcesSliceOptions = {
   workingModel: Pick<SettingsScreenWorkingModel, "garmin_username" | "garmin_export_strength">;
   settings: Record<string, unknown>;
   garminStatusHtml: string;
+  lastExportAt?: string | null;
+  dates?: SettingsSurfaceDateFns;
   appleHealth?: AppleHealthUiState;
 };
 
@@ -112,6 +114,7 @@ function settingsData(value: unknown): SettingsScreenData {
       typeof eligible === "boolean" || (eligible && typeof eligible === "object")
         ? (eligible as SettingsScreenData["research_auto_eligible"])
         : undefined,
+    garmin_last_export_at: typeof row.garmin_last_export_at === "string" ? row.garmin_last_export_at : null,
   };
 }
 
@@ -216,6 +219,19 @@ function settingsArtHealthLineHtml(health: unknown): string {
   return `<div class="sess-line" style="color:var(--muted)">${parts.join(" · ")}.</div>`;
 }
 
+/**
+ * One quiet line of write-back state under the toggle: enough to answer "is this
+ * doing anything?" and nothing more. No activity counts, no Garmin ids — what is on
+ * the athlete's Garmin account is Garmin's to show, not ours to tally.
+ */
+function settingsGarminExportStateHtml(options: SettingsSourcesSliceOptions): string {
+  const at = String(options.lastExportAt ?? "").trim();
+  const rel = at ? (options.dates?.relTime ? options.dates.relTime(at) : at) : "";
+  const title = at && options.dates?.absDate ? ` title="${escAttr(options.dates.absDate(at.slice(0, 10)))}"` : "";
+  const text = rel ? `Last sent ${escHtml(rel)}` : "Nothing sent yet";
+  return `<div class="sess-line" style="color:var(--muted);margin-top:6px"><span${title}>${text}</span></div>`;
+}
+
 function settingsSourcesSliceHtml(options: SettingsSourcesSliceOptions): string {
   const s = settingsSurfaceRecord(options.settings);
   const wm = options.workingModel;
@@ -243,6 +259,7 @@ function settingsSourcesSliceHtml(options: SettingsSourcesSliceOptions): string 
         <label class="toggle" style="margin-top:14px"><input type="checkbox" id="garminExportStrength" ${wm.garmin_export_strength ? "checked" : ""}>
           <span>Send finished strength sessions back to Garmin</span></label>
         <div class="sess-line" style="color:var(--muted);margin-top:6px">When you finish a session here, its exercises and sets are added to that day on Garmin — onto the watch's own recording when there is one, so heart rate and calories stay as they are. A day Garmin already logged itself is left alone.</div>
+        ${settingsGarminExportStateHtml(options)}
 
         <div id="appleHealthCard">${appleHealthCardHtml(options.appleHealth ?? { loading: true })}</div>
       </section>`;

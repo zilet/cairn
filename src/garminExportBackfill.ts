@@ -24,6 +24,7 @@
 // recording syncs, a set is edited), in which case the exporter's answer wins.
 import { garminExportFingerprint, planGarminExportTarget, type GarminExportPayloadSet } from "./garminExport.js";
 import * as repo from "./repo.js";
+import { localDateISO } from "./repo/shared.js";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
@@ -213,6 +214,42 @@ function previewOne(
 }
 
 /**
+ * One ledger row per APPLIED backfill — the athlete asked for history to be sent, and
+ * a batch of outbound writes to an external account should be as visible in the
+ * decision trail as anything Cairn does on its own. A dry run decides nothing and
+ * records nothing. Not reversible: once the sets are on Garmin, withdrawing them is
+ * the exporter's own retract path, not an undo of this batch. Best-effort — the
+ * enqueue already happened, and audit must never fail the operation.
+ */
+function recordBackfillDecision(sessionIds: number[], opts: GarminBackfillOptions): void {
+  if (!sessionIds.length) return;
+  try {
+    const since = String(opts.since ?? "").trim();
+    const until = String(opts.until ?? "").trim();
+    const window = since || until ? `${since || "the beginning"} to ${until || "today"}` : "all eligible history";
+    repo.recordDecision({
+      effective_date: localDateISO(),
+      kind: "garmin_backfill",
+      domain: "training",
+      summary: `Sent ${sessionIds.length} finished strength session${sessionIds.length === 1 ? "" : "s"} back to Garmin`,
+      rationale: `History backfill over ${window}, queued oldest first.`,
+      source: "garmin_export_backfill",
+      source_ref_type: null,
+      source_ref_key: null,
+      status: "applied",
+      autonomy_tier: "ask",
+      risk_class: "low",
+      reversible: false,
+      applied_at: new Date().toISOString(),
+      context: { window, limit: clampLimit(opts.limit) },
+      action: { session_ids: sessionIds },
+    });
+  } catch {
+    /* the writes are queued; the audit row is bookkeeping */
+  }
+}
+
+/**
  * Preview (or run) a batched backfill of finished Cairn strength sessions to Garmin.
  * Returns a plain result — an unconfigured connector and a disabled toggle are
  * ordinary outcomes, not errors, and they use the exporter's own vocabulary.
@@ -239,11 +276,14 @@ export async function garminExportBackfill(opts: GarminBackfillOptions = {}): Pr
   let enqueued = 0;
   if (apply) {
     const { enqueueEnrich } = await import("./enrich.js");
+    const sessionIds: number[] = [];
     for (const preview of batch) {
       if (preview.planned === "unchanged" || preview.planned === "skip_no_mapped_sets") continue;
       enqueueEnrich("garmin_export", preview.session_id);
+      sessionIds.push(preview.session_id);
       enqueued++;
     }
+    recordBackfillDecision(sessionIds, opts);
   }
 
   // The long tail is the agentic layer's job, not ours: the `exercise` enrichment

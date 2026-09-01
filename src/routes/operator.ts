@@ -17,6 +17,7 @@ import {
 } from "../domain/operator/index.js";
 import { researchAutoEligible } from "../research.js";
 import { getDiagnostics, ingestClientDiagnosticEvents, parseClientDiagnosticBatch } from "../repo/diagnostics.js";
+import { lastGarminStrengthExportAt } from "../repo/garmin-strength-export.js";
 import { getBuildStamp } from "../build-info.js";
 
 export const operatorRouter = Router();
@@ -49,6 +50,9 @@ operatorRouter.get("/settings", (_req, res) =>
     agents: getAgentConfig(),
     route_tasks: listRoutableTasks(),
     research_auto_eligible: researchAutoEligible(),
+    // Quiet state for the strength write-back toggle. Derived, not a settings column,
+    // so it rides alongside `settings` rather than inside it.
+    garmin_last_export_at: lastGarminStrengthExportAt(),
   })
 );
 operatorRouter.put("/settings", (req, res) =>
@@ -56,6 +60,7 @@ operatorRouter.put("/settings", (req, res) =>
     settings: setSettings(req.body ?? {}),
     agents: getAgentConfig(),
     route_tasks: listRoutableTasks(),
+    garmin_last_export_at: lastGarminStrengthExportAt(),
   })
 );
 

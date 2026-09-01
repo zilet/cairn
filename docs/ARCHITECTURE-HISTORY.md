@@ -59,6 +59,26 @@ after the snapshot). New non-agentic enrich kind `garmin_export`
 (enqueued by `finishSession` and `syncGarmin`, the latter capped at 7 days), independent of `enrich_enabled`. New settings toggle
 `garmin_export_strength`, default ON, in Settings → Sources.
 
+**Backfill (`src/garminExportBackfill.ts`, new).** The 7-day sync lookback deliberately leaves
+existing history untouched, so an athlete who wants their whole Cairn strength log on Garmin gets it
+through `POST /api/garmin/export-backfill` / `garmin_export_backfill` instead: dry-run by default,
+walking eligible finished sessions oldest-first (`since`/`until`/`limit`, default 25, clamped 1–100)
+and reporting each one's `planned` outcome — `unchanged` / `fill_or_replace` / `create` / `retarget` /
+`drop_surplus` / `skip_no_mapped_sets` — by calling the exporter's own `planGarminExportTarget` rather
+than restating its decision tree, so the preview cannot drift from what `{apply:true}` actually
+enqueues onto the serial `garmin_export` queue. `refine_unmapped` additionally queues the `exercise`
+agent for two cohorts: lifts the FIT catalog could not place, and lifts that predate the background
+enrichment cleanup entirely (`enrichment_status IS NULL`) and so were never canonicalized.
+
+**Fixed same day (fc29ad53) — the wire shapes only a live account could confirm.** The first live
+canary run against a real Garmin account surfaced two wire-shape bugs no client source documents: the
+manual-activity create is `POST /activity-service/activity` (the `/manual` suffix 405s), with the
+Connect web app's own DTO body (`startTimeLocal` as the athlete's wall-clock time, zone in
+`timeZoneUnitDTO`); and the `exerciseSets` PUT body must mirror the GET envelope exactly —
+`{activityId, exerciseSets}` — omitting the top-level `activityId` 400s ("Activity ID should not be
+Null in the Exercises Object"). Both fixes live in the wire adapter only; the decision tree
+(`planGarminExportTarget`, FILL vs REPLACE) and its tests were untouched.
+
 ## 2026-08-31 — chat pasted-link round: Cairn fetches the page so headless agy never curls
 
 NO schema change; server-only (no sw bump). Live on the Pi: the athlete pasted a ScienceDaily URL,

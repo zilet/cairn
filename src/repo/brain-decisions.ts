@@ -36,7 +36,7 @@ function isoTimestamp(value: unknown): string | undefined {
  * `created_at`/`applied_at` are INSTANTS — SQLite writes them with `datetime('now')`,
  * which is UTC — while every window below is a local calendar day. Slicing ten
  * characters off the instant answered the question in UTC, and west of Greenwich that
- * is tomorrow for the whole evening: a change applied at 8 PM in Boston was dated a
+ * is tomorrow for the whole evening: a change applied at 8 PM local time was dated a
  * day into the future, so it sorted above changes that landed after it and fell out of
  * the window it belongs to the moment the window's far edge was today.
  *

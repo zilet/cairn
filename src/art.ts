@@ -98,6 +98,30 @@ export function isArtKind(kind: string): kind is ArtKind {
 export interface ArtContext {
   muscle_group?: string | null;
   equipment?: string | null;
+  // A one-or-two-sentence description of the MOVEMENT itself, taken from the
+  // exercise's how-to guide (setup + move). The name alone under-specifies a
+  // pose — "Cable Lateral Raise" rendered as a plank, because the style
+  // references were the only pose signal the model had. Like the rest of this
+  // context it never touches `key`.
+  pose?: string | null;
+}
+
+// How much of the movement description rides along. Long enough for a setup and
+// a move sentence, short enough that it can't drown the styling text.
+const POSE_MAX_CHARS = 220;
+
+// A compact " — the pose: <movement description>" clause for the exercise prompt.
+// Sanitized to a single plain sentence run: no newlines, no runaway length.
+export function exercisePoseClause(context?: ArtContext | null): string {
+  const raw = String(context?.pose ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  let pose = raw;
+  if (pose.length > POSE_MAX_CHARS) {
+    const cut = pose.slice(0, POSE_MAX_CHARS).replace(/\s+\S*$/, "");
+    pose = (cut || pose.slice(0, POSE_MAX_CHARS)).trim();
+  }
+  pose = pose.replace(/[\s.,;:—-]+$/, "");
+  return pose ? ` — the pose: ${pose}` : "";
 }
 
 // A compact " — a <group> exercise using <equipment>" clause for the exercise
@@ -121,7 +145,7 @@ export function stylePrompt(kind: ArtKind, text: string, context?: ArtContext | 
     case "food":
       return `Professional studio food photography of ${text}. Plated on simple cream ceramic, centered, soft diffused natural light, photographed against a seamless warm cream studio background (#F4EFE6), gentle soft shadow beneath the dish, slightly elevated three-quarter angle, appetizing, hyper-detailed, no text, no hands, no props other than the dish. Square 1:1.`;
     case "exercise":
-      return `Hand-sculpted matte clay figurine of a person performing ${text}${exerciseContextClause(context)}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
+      return `Hand-sculpted matte clay figurine of a person performing ${text}${exerciseContextClause(context)}${exercisePoseClause(context)}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
     case "activity":
       return `Hand-sculpted matte clay figurine of a person doing ${text}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
   }
@@ -200,29 +224,57 @@ export function requestArt(kind: ArtKind, text: string): boolean {
 // recovery re-run, or the serve path beat it) or is in flight. Records the spend
 // ledger like the serve path. Returns true only when it generated a new image.
 export async function warmExerciseArt(name: string, context?: ArtContext | null): Promise<boolean> {
+  return warmArtUnderName("exercise", name, context);
+}
+
+/**
+ * Force a fresh image for an existing (kind, q) under its own cache key: drop the
+ * cached file, forget the key's failure, generate again. The repair path for a
+ * figurine that came back wrong (a lateral raise rendered as a plank). Respects
+ * the circuit breaker and records the spend exactly like the warm path — a
+ * regeneration is a paid generation. Returns true only when a new image landed.
+ */
+export async function regenerateArt(kind: ArtKind, q: string, context?: ArtContext | null): Promise<boolean> {
+  return warmArtUnderName(kind, q, context, true);
+}
+
+// The shared body behind warmExerciseArt and regenerateArt: generate under the
+// BARE query's own key. `force` drops the cached file and the known-failed mark
+// first; without it an existing image or a known failure is a no-op.
+async function warmArtUnderName(
+  kind: ArtKind,
+  name: string,
+  context?: ArtContext | null,
+  force = false,
+): Promise<boolean> {
   const text = String(name ?? "").trim();
   if (!text) return false;
   if (!getGeminiApiKey()) return false;
   if (!getSettings().art_enabled) return false;
-  const model = imageModelFor("exercise");
+  const model = imageModelFor(kind);
   if (artCircuitOpen(model)) return false;
-  const key = cacheKey("exercise", text);
-  if (failed.has(key)) return false;
-  if (fs.existsSync(fileForKey(key))) return false; // already generated (enriched or name-only)
+  const key = cacheKey(kind, text);
   if (inFlight.has(key)) return false;              // the serve queue is already on it
+  if (force) {
+    failed.delete(key);
+    try { fs.rmSync(fileForKey(key), { force: true }); } catch { /* a file we can't drop we can still overwrite */ }
+  } else {
+    if (failed.has(key)) return false;
+    if (fs.existsSync(fileForKey(key))) return false; // already generated (enriched or name-only)
+  }
   inFlight.add(key);
   try {
-    await generate({ key, kind: "exercise", text, context });
+    await generate({ key, kind, text, context });
   } catch (e: any) {
     failed.set(key, model);
     noteArtFailure(model, artErrorCode(e));
-    recordArtUsage({ kind: "exercise", query: normalize(text), action: "fail", model });
-    console.warn(`[art] exercise art failed for "${text}": ${e?.message ?? e}`);
+    recordArtUsage({ kind, query: normalize(text), action: "fail", model });
+    console.warn(`[art] ${kind} art failed for "${text}": ${e?.message ?? e}`);
     return false;
   } finally {
     inFlight.delete(key);
   }
-  recordGeneration("exercise", key, normalize(text), normalize(text), model);
+  recordGeneration(kind, key, normalize(text), normalize(text), model);
   return true;
 }
 
@@ -700,7 +752,8 @@ function styleReferenceParts(kind: ArtKind, excludeKey: string): any[] {
       text:
         "The following images are existing figurines from this same series. Match their sculptural style, " +
         "material, palette, lighting and framing exactly, so the new figurine reads as part of the same set. " +
-        "Do not copy their pose or subject.",
+        "Do not copy their pose or subject. The figurine's pose must depict the movement described in the " +
+        "prompt text above; these references govern material and style only, never the body position.",
     },
     ...parts,
   ];

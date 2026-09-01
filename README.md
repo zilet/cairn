@@ -35,6 +35,10 @@ on your own hardware, keeps your data in a SQLite file you own, and never scores
   a thin logging week lowers confidence instead of scolding. `change: false` is the common answer.
 - **Lifting and running plans that evolve.** Earned overloads, deloads where you stalled, a
   conservative ramp and taper toward a race — adapting to the work you actually did.
+- **Your lifts show up on your watch.** Garmin sync is two-way: sleep, HRV and activities come in,
+  and a finished strength session goes back out as that day's exercise sets — written onto the
+  watch's own recording when there is one, in Garmin's own exercise vocabulary. Your whole history
+  can follow, one reviewed batch at a time.
 - **Agent-native.** A full MCP server ships alongside the PWA, so any MCP client can read and write
   everything Cairn knows.
 
@@ -91,7 +95,7 @@ docker run -d --name cairn -p 127.0.0.1:8787:8787 \
 Open **http://localhost:8787** — you land on the Brief immediately. Three named volumes keep your
 data (`cairn-data`), your CLI logins (`cairn-home`), and any tools you install (`cairn-tools`)
 across updates, so rebuilds touch none of them. To update: `docker pull ghcr.io/zilet/cairn:latest`
-and re-run. Add `-e TZ=Europe/London` for your timezone.
+and re-run. Add `-e TZ=America/New_York` for your timezone — set your own.
 
 Prefer a compose file, with the env vars and loopback-safe defaults already wired up? Or want the
 source, to build locally and develop?
@@ -167,7 +171,7 @@ Point Claude Code at it with one command:
 claude mcp add --transport http cairn http://localhost:8787/mcp
 ```
 
-**268 MCP tools** span the plan, sessions and exercises, the accountable coaching loop, profile and
+**260+ MCP tools** span the plan, sessions and exercises, the accountable coaching loop, profile and
 goal, activities and bodyweight, memory, meal plans and recipes, health records and markers, the
 connected-brain directives and insights, recovery, chat, Garmin sync, and settings. A representative
 slice: `get_plan`, `log_set`, `get_day_read`, `suggest_session`, `draft_plan_update`,
@@ -178,7 +182,7 @@ This is where vision and loose natural language belong — snap a plate and say 
 estimate it"*, or *"log my ride: 2h in the fells, felt strong"*. Packaged Claude Code and Codex
 skills at `.claude/skills/cairn/` and `.agents/skills/cairn/` map everyday phrases to these tools.
 
-The same surface is reachable over REST — **307 routes across 107 groups** under `/api`. Both
+The same surface is reachable over REST — **300+ routes** under `/api`. Both
 indexes are generated from source and never hand-edited: [`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md)
 and [`docs/API.md`](docs/API.md).
 
@@ -193,7 +197,8 @@ maintained for you and you don't want to host anything.
 **Oura / Garmin / Whoop?** Wearables are the best in the world at measurement, and Cairn reads
 *from* them rather than replacing them. What it adds is synthesis instead of a metric wall, and the
 loop your watch leaves open: Garmin records the run you did, Cairn writes the run you should do
-next. *The wearable wins* on precise passive measurement — keep it, and let Cairn read from it.
+next — and a finished strength session goes back out onto the watch as that day's exercise sets.
+*The wearable wins* on precise passive measurement — keep it, and let Cairn talk to it.
 
 **ChatGPT and a spreadsheet?** The closest comparison, and genuinely capable. Cairn is what happens
 when you make that loop durable: every coaching call is already grounded in your profile, plan,
@@ -219,6 +224,16 @@ The longer, fully honest version is [`docs/WHY-CAIRN.md`](docs/WHY-CAIRN.md).
   sell and no one to retain. If it ever feels like it's trying to keep you in the app, that's a bug.
 - **Not zero-setup.** It's self-hosted. That's the price of owning your data and your model.
 
+## Your data: what stays, what leaves
+
+Everything Cairn knows about you lives in one SQLite file on your own machine — there's no
+Cairn-run server for it to sync to. When an agentic feature runs (chat, adaptive coaching, a
+generated meal plan, a health review), your coach context goes to whichever model provider you
+connected — Anthropic, OpenAI, Google, or xAI — for that one call, and nowhere else. With no agent
+configured, the deterministic core (the Brief, logging, plans, charts, the connected brain) runs
+with zero outbound calls. Garmin and Apple Health sync talk only to those services, using your own
+credentials.
+
 ## Docs
 
 | Doc | What it covers |
@@ -226,7 +241,7 @@ The longer, fully honest version is [`docs/WHY-CAIRN.md`](docs/WHY-CAIRN.md).
 | [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | 30-second start, Raspberry Pi, VM, Docker, Node, agent setup |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Tailscale, HTTPS PWA, updates, migrations, backup/restore |
 | [`docs/HOUSEHOLDS.md`](docs/HOUSEHOLDS.md) · [`docs/SANDBOX.md`](docs/SANDBOX.md) | Private profiles per person; Daytona / Codespaces |
-| [`docs/APPLE_HEALTH.md`](docs/APPLE_HEALTH.md) · [`docs/GARMIN.md`](docs/GARMIN.md) | Bringing sleep, HRV and activities in |
+| [`docs/APPLE_HEALTH.md`](docs/APPLE_HEALTH.md) · [`docs/GARMIN.md`](docs/GARMIN.md) | Bringing sleep, HRV and activities in; Garmin sync is two-way, with finished strength sessions going back out |
 | [`docs/API.md`](docs/API.md) · [`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) | Generated REST + MCP reference (`npm run docs:index`) |
 | [`docs/VISION.md`](docs/VISION.md) · [`docs/WHY-CAIRN.md`](docs/WHY-CAIRN.md) | The product constitution; how Cairn compares, at length |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`CHANGELOG.md`](CHANGELOG.md) | Subsystem depth for contributors; release history |

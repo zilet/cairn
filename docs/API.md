@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**329 routes** across 113 groups.
+**330 routes** across 113 groups.
 
 ## `/activities`
 
@@ -73,6 +73,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/art` | Cache hit -> the cached image, immutable-cached. Miss -> 204 immediately and a background generation is queued when generation is available; the client simply retries later. No key / disabled / known-failed also returns 204. |
 | GET | `/api/art/manifest` | Which PWA art queries already have a cached image, as "kind\|q" tokens. Not cached because readiness changes as the background queue produces images. |
+| POST | `/api/art/regenerate` | Repair path for an image that came back wrong (the classic: a cable lateral raise rendered as a plank, because the name alone under-specified the pose and the style references filled the gap). Drops the cached file and generates again under the SAME key, with the richest prompt we can build — for an exercise that means its muscle group, implement, and the pose from its cached how-to guide. Designed-failure convention: {ok:false, error} at HTTP 200. |
 | GET | `/api/art/stats` | Artwork spend telemetry: estimated Gemini cost since art was last enabled, all-time totals, generations avoided via semantic reuse, and cache size. Also returns `health`: when art last rendered, failures in the last 7 days, the last upstream error code, and whether the circuit breaker has paused generation. |
 | POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for. Safe no-op when generation is unavailable. |
 

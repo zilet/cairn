@@ -2047,7 +2047,12 @@ function scheduleFoodNoteEffects(row: any, enrichKind: "food" | "food_photo" | n
     // "already logged" reads).
     invalidateDayReadForDate(d);
     // Lazy import to avoid a circular dependency (enrich.ts imports repo.ts).
-    if (enrichKind) import("../enrich.js").then((m) => m.enqueueEnrich(enrichKind, row.id)).catch(() => {});
+    // A photographed meal is a read the athlete is waiting on in chat, so it goes
+    // ahead of background housekeeping in the serial queue; a text note is not.
+    if (enrichKind)
+      import("../enrich.js")
+        .then((m) => m.enqueueEnrich(enrichKind, row.id, { front: enrichKind === "food_photo" }))
+        .catch(() => {});
   });
 }
 

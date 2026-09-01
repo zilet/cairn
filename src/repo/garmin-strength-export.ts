@@ -202,6 +202,23 @@ export function recordSessionGarminExport(sessionId: number, record: GarminSessi
 }
 
 /**
+ * When the write-back last landed, across every session — one quiet line of state for
+ * the Settings toggle, so "is this actually doing anything?" has an answer without
+ * naming activities, ids or counts. Null when nothing has ever been sent.
+ */
+export function lastGarminStrengthExportAt(): string | null {
+  const row = db
+    .prepare(
+      `SELECT MAX(json_extract(garmin_json, '$.export.exported_at')) AS at
+         FROM sessions
+        WHERE garmin_json IS NOT NULL`
+    )
+    .get() as any;
+  const at = String(row?.at ?? "").trim();
+  return at || null;
+}
+
+/**
  * Finished sessions in the sync window that Cairn owns sets for — the candidates a
  * sync enqueues for write-back. Deliberately generous: it does NOT try to decide
  * whether an export is stale (that needs the FIT mapping and the fingerprint), so

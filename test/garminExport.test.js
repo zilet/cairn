@@ -835,3 +835,134 @@ test("Undo of a Garmin merge keeps an export that landed after the snapshot", ()
   assert.equal(blob.export.activity_id, "9001");
   assert.equal(blob.export.fingerprint, "abc");
 });
+
+// ---- the write-back's own echo coming back in -------------------------------------
+//
+// Every strength activity a sync sees is queued for the narrative agent. Once Cairn
+// writes sessions OUT, the shells it authored sync back IN — so a workout the athlete
+// logged by hand paid for an agent call, on every sync, forever, to have a model read
+// Cairn's own numbers back to it as "the body's reaction". The deterministic reconcile
+// must still run (that is what links the row); only the agentic layer stops.
+function enableStubNarrative() {
+  repo.setSettings({
+    enrich_enabled: true,
+    // Only the offline stub is eligible, so "did this reach an agent?" is observable
+    // without a network call: the stub always answers, so a narrative appearing means
+    // the agent ran and its absence means it was never asked.
+    disabled_agents: ["claude", "codex", "antigravity", "grok"],
+  });
+}
+
+test("a watch's own strength recording still gets the narrative agent", async () => {
+  install();
+  enableStubNarrative();
+  const activity = seedWatchActivity("777001", {
+    exercise_sets: [{ category: "BENCH_PRESS", name: "BARBELL_BENCH_PRESS", reps: 5, weight_kg: 60 }],
+  });
+  repo.reconcileGarminStrength(activity.id);
+
+  await processGarminStrengthJob(activity.id);
+
+  const linked = repo.getGarminActivity(activity.id);
+  const session = repo.getSessionDetail(linked.session_id);
+  assert.equal(session.garmin.agent, "stub", "an activity the watch recorded is read by the agent");
+});
+
+test("an activity Cairn authored is reconciled but never reaches the agent", async () => {
+  install();
+  enableStubNarrative();
+  // The marker Cairn writes into the name is the provenance that survives our own
+  // bookkeeping being lost, so it alone is enough to recognise the echo.
+  const activity = seedWatchActivity("777002", { name: cairnShellActivityName("Push") });
+
+  await processGarminStrengthJob(activity.id);
+
+  const linked = repo.getGarminActivity(activity.id);
+  assert.ok(linked.session_id, "the deterministic reconcile still ran and linked the day");
+  const session = repo.getSessionDetail(linked.session_id);
+  assert.equal(session.garmin?.agent ?? null, null, "no narrative was requested for our own shell");
+});
+
+test("an activity named in the session's export ledger never reaches the agent", async () => {
+  install();
+  enableStubNarrative();
+  // Name unmarked on purpose: an athlete may rename the activity on Garmin, so the
+  // ledger has to answer provenance on its own.
+  const activity = seedWatchActivity("777003", { name: "Renamed By Athlete" });
+  repo.reconcileGarminStrength(activity.id);
+  const linked = repo.getGarminActivity(activity.id);
+  repo.recordSessionGarminExport(linked.session_id, {
+    activity_id: "777003",
+    source: "manual",
+    fingerprint: "abc",
+    exported_at: new Date().toISOString(),
+    mode: "create",
+    created_ids: ["777003"],
+  });
+
+  await processGarminStrengthJob(activity.id);
+
+  const session = repo.getSessionDetail(linked.session_id);
+  assert.equal(session.garmin?.agent ?? null, null, "the ledger recognises the echo without the name marker");
+});
+
+// `garmin_activities` is UNIQUE on (source_id, external_id). The exporter used to
+// resolve its own source, always "default", while the sync resolves
+// process.env.GARMIN_SOURCE_LABEL — so on an install that sets the label, the shell
+// Cairn created and the same activity coming back from the next sync landed as TWO
+// rows, and the day then read as two merged activities.
+test("the exporter writes under the same Garmin source the sync uses", async () => {
+  const previous = process.env.GARMIN_SOURCE_LABEL;
+  process.env.GARMIN_SOURCE_LABEL = "watch-primary";
+  try {
+    install();
+    const sessionId = seedFinishedSession(3);
+    const result = await exportSessionToGarmin(sessionId);
+    assert.equal(result.ok, true);
+    assert.equal(result.activity_id, "9001");
+
+    // Exactly what a following sync does with Garmin's own copy of that activity.
+    const source = repo.upsertGarminSource({ label: repo.garminSourceLabel() });
+    repo.upsertGarminActivity(
+      {
+        external_id: "9001",
+        date: TODAY,
+        start_time: `${TODAY}T07:30:00`,
+        type: "strength_training",
+        name: cairnShellActivityName("Push"),
+        duration_min: 32,
+      },
+      source.id
+    );
+
+    const rows = db.prepare(`SELECT source_id FROM garmin_activities WHERE external_id = '9001'`).all();
+    assert.equal(rows.length, 1, "one activity, one row — the sync updates the shell instead of duplicating it");
+    assert.equal(rows[0].source_id, source.id, "and it lives under the labelled source, not 'default'");
+  } finally {
+    if (previous === undefined) delete process.env.GARMIN_SOURCE_LABEL;
+    else process.env.GARMIN_SOURCE_LABEL = previous;
+  }
+});
+
+// The Settings line's data source. Derived from the sessions themselves rather than a
+// settings column, so it cannot drift from what actually went out.
+test("the last write-back stamp reads the most recent export across sessions", async () => {
+  install();
+  assert.equal(repo.lastGarminStrengthExportAt(), null, "nothing sent yet reads as nothing, not as a date");
+
+  const sessionId = seedFinishedSession(3);
+  await exportSessionToGarmin(sessionId);
+  const first = repo.lastGarminStrengthExportAt();
+  assert.ok(first, "an export that landed is visible");
+
+  // An older session exporting afterwards must not move the answer backwards.
+  const older = repo.getOrCreateSession(isoDaysAgo(9));
+  repo.recordSessionGarminExport(older.id, {
+    activity_id: "8800",
+    source: "manual",
+    fingerprint: "old",
+    exported_at: "2020-01-01T00:00:00.000Z",
+    mode: "create",
+  });
+  assert.equal(repo.lastGarminStrengthExportAt(), first, "the MOST RECENT export is the answer");
+});

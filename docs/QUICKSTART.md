@@ -416,6 +416,28 @@ npm run seed:demo
 
 ---
 
+## Connect Garmin (optional)
+
+Bring sleep, HRV, resting heart rate, and activities in — and, once you finish a Cairn strength
+session, send those sets back out onto the watch. Enter your Garmin email/password in **Settings →
+Sources**, or set `GARMIN_USERNAME` / `GARMIN_PASSWORD` in `.env`. The connector uses Garmin's
+unofficial, password-based API rather than an official partner integration, so a sync failure
+degrades quietly instead of erroring loudly — see [`GARMIN.md`](GARMIN.md) for the official-API
+path and full sync detail.
+
+---
+
+## Your data, and staying safe across updates
+
+- **Your data is one SQLite file.** Grab it any time from **Settings → Export**, or
+  `curl http://localhost:8787/api/export/db -o cairn-snapshot.db` — a clean, restorable snapshot,
+  no need to stop the container first.
+- **Migrations run automatically on boot, and there's no undo.** Every update applies pending
+  schema changes the moment Cairn starts, and down-migrations don't exist — back up the DB first if
+  you might want to roll back. See [`OPERATIONS.md`](OPERATIONS.md) for the how.
+
+---
+
 ## Connect MCP (optional)
 
 From a machine that can reach Cairn:

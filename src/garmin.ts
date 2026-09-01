@@ -906,7 +906,7 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
   const days = Math.max(1, Math.min(180, options.days ?? Number(process.env.GARMIN_SYNC_DAYS ?? 30)));
   const limit = Math.max(1, Math.min(200, options.limit ?? Number(process.env.GARMIN_SYNC_LIMIT ?? 100)));
   const source = repo.upsertGarminSource({
-    label: process.env.GARMIN_SOURCE_LABEL || "default",
+    label: repo.garminSourceLabel(),
     mode: "unofficial",
     auth_status: "not_configured",
   }) as any;

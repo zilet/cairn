@@ -28,6 +28,10 @@ export const BRAIN_DECISION_KINDS = [
   "goal_change",
   "case_conference",
   "garmin_reconcile",
+  // A user-triggered batch write-back of finished Cairn sessions to Garmin. Its own
+  // kind, not `garmin_reconcile`: that one names inbound activity ids the Today
+  // agenda offers an Undo for, and a batch of outbound writes is neither.
+  "garmin_backfill",
 ] as const;
 export type BrainDecisionKind = (typeof BRAIN_DECISION_KINDS)[number];
 

@@ -487,8 +487,24 @@ function priorWriteMode(prior: GarminSessionExportRecord | null): "fill" | "repl
   return kept === "fill" || kept === "create" || kept === "retarget" ? kept : "replace";
 }
 
-function isCairnAuthoredName(name: string | null | undefined): boolean {
+export function isCairnAuthoredName(name: string | null | undefined): boolean {
   return String(name ?? "").trimEnd().endsWith(CAIRN_ACTIVITY_MARKER);
+}
+
+/**
+ * Did THIS session's write-back author this Garmin activity? The two answers the
+ * export ledger can give — the activity we last wrote to, and every shell we created
+ * — asked as one question, so an inbound job can tell Cairn's own echo from a
+ * workout the watch actually recorded. Provenance only: it says nothing about
+ * whether the export is current.
+ */
+export function sessionOwnsGarminActivity(sessionId: number, externalId: string | null | undefined): boolean {
+  const id = String(externalId ?? "").trim();
+  if (!id) return false;
+  const prior = repo.getSessionGarminExport(sessionId);
+  if (!prior) return false;
+  if (prior.source === "manual" && prior.activity_id === id) return true;
+  return cairnAuthoredIds(prior).includes(id);
 }
 
 function cairnAuthoredIds(prior: GarminSessionExportRecord | null): string[] {
@@ -697,15 +713,23 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
           // 500s used to leave no local record, so the next retry created another empty
           // activity. An empty fingerprint keeps this attempt from looking "unchanged".
           try {
-            const saved = repo.upsertGarminActivity({
-              external_id: targetId,
-              date: String(session.date),
-              start_time: garminGmtStamp(startMs),
-              type: "strength_training",
-              // The SAME marked name locally, so the mark is readable without a sync.
-              name: cairnShellActivityName(session.title),
-              duration_min: durationMin,
-            }) as any;
+            // Under the SAME source the sync writes under (repo.garminSourceLabel()).
+            // `garmin_activities` is UNIQUE on (source_id, external_id): landing the
+            // shell under "default" while a labelled install syncs under its own label
+            // gives the same activity two rows, and the day then reads "2 activities".
+            const garminSource = repo.upsertGarminSource({ label: repo.garminSourceLabel() }) as any;
+            const saved = repo.upsertGarminActivity(
+              {
+                external_id: targetId,
+                date: String(session.date),
+                start_time: garminGmtStamp(startMs),
+                type: "strength_training",
+                // The SAME marked name locally, so the mark is readable without a sync.
+                name: cairnShellActivityName(session.title),
+                duration_min: durationMin,
+              },
+              garminSource?.id ?? null
+            ) as any;
             if (saved?.id) repo.reconcileGarminStrength(Number(saved.id));
           } catch (e: any) {
             console.warn(`[garmin-export] session ${sessionId}: could not link the manual activity: ${e?.message ?? e}`);

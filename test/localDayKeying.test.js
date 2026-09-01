@@ -68,7 +68,7 @@ test("createChatTurn captures the active device timezone (so the worker can re-f
 // Three reads compared a UTC `created_at` against a LOCAL calendar day: by slicing
 // the stamp's first ten characters, or by letting SQLite's own date() do it. Both
 // answer in UTC. Every evening west of Greenwich that is the wrong day — a
-// proposal applied at 8:30 PM in Boston reports as tomorrow — so a "since this
+// proposal applied at 8:30 PM Eastern reports as tomorrow — so a "since this
 // date" window silently included or excluded the whole evening.
 
 const ET = "America/New_York";

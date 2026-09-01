@@ -701,6 +701,17 @@ function paceFrom(durationMin?: number | null, distanceKm?: number | null, type?
   return `${m}:${s}/km`;
 }
 
+/**
+ * The Garmin source this install writes under. `garmin_activities` is UNIQUE on
+ * (source_id, external_id), so a writer that resolves its own label lands the same
+ * activity twice the moment GARMIN_SOURCE_LABEL is set — the sync under the labelled
+ * source, the exporter under "default" — and the day then reads "2 activities merged".
+ * Every writer asks here so there is exactly one answer.
+ */
+export function garminSourceLabel(): string {
+  return process.env.GARMIN_SOURCE_LABEL || "default";
+}
+
 export function upsertGarminSource(input: GarminSourceInput = {}) {
   const label = (input.label ?? "default").toString().trim() || "default";
   const mode = cleanGarminMode(input.mode);
@@ -752,7 +763,7 @@ export function getGarminSource(id?: number | null) {
 
 export function upsertGarminActivity(input: GarminActivityInput, sourceId?: number | null) {
   if (!input.external_id || !String(input.external_id).trim()) throw new Error("external_id required");
-  const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: "default" });
+  const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: garminSourceLabel() });
   if (!source) throw new Error("Garmin source not found");
   // Resolve a sparse re-sync against the normalized row BEFORE mirroring it. A
   // provider retry can contain only an external id; treating that as "today / other"
@@ -1034,7 +1045,7 @@ export function upsertGarminDailyMetric(
   options: { emitEvent?: boolean } = {}
 ) {
   if (!isRealIsoDate(input.date)) throw new Error("date must be a real YYYY-MM-DD");
-  const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: "default" });
+  const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: garminSourceLabel() });
   if (!source) throw new Error("Garmin source not found");
   const cols = ["source_id", "date", ...GARMIN_DAILY_COLS, "raw_json"];
   const placeholders = cols.map(() => "?").join(", ");
