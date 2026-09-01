@@ -54,6 +54,12 @@
         wm.garmin_password = settingsSourcesAutomationInput(event).value;
       }
     );
+    settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#garminExportStrength").addEventListener(
+      "change",
+      (event) => {
+        wm.garmin_export_strength = settingsSourcesAutomationInput(event).checked;
+      }
+    );
 
     // Manual Garmin sync: pulse while the connector runs, then re-pull /settings so the
     // status line shows exactly what the server recorded.

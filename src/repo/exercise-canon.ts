@@ -182,7 +182,7 @@ export function normalizeExerciseName(raw: string): string {
 // "pulldowns" → "pulldown", "raises" → "raise", "curls" → "curl", "triceps" →
 // "tricep", while "press"/"abs" (ss / too short) stay intact. Conservative: it only
 // ever removes ONE trailing "s", so it can't collapse two genuinely different words.
-function foldPluralToken(t: string): string {
+export function foldPluralToken(t: string): string {
   return t.length > 3 && t.endsWith("s") && !t.endsWith("ss") ? t.slice(0, -1) : t;
 }
 
@@ -667,7 +667,7 @@ export function planExerciseMerges(
 // same lift (incline vs flat bench, sumo vs conventional, seated vs standing calf
 // raise, single-arm vs two-arm). "assisted" is checked separately — it also inverts
 // the load direction, so it's an even harder stop.
-const VARIATION_TOKENS = new Set([
+export const VARIATION_TOKENS = new Set([
   "incline", "decline", "pause", "paused", "deficit", "sumo", "seated", "standing",
   "single", "close", "wide", "narrow", "reverse", "kneeling", "staggered", "tempo",
   "pin", "snatch",

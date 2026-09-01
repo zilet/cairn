@@ -40,6 +40,7 @@ class FakeElement {
       "garminPassword",
       "garminSyncBtn",
       "garminStatus",
+      "garminExportStrength",
       "appleHealthCard",
       "ahConnect",
       "ahRefresh",
@@ -170,6 +171,7 @@ test("settings sources controller owns Garmin and Apple Health wiring", async ()
   const wm = {
     garmin_username: "",
     garmin_password: "",
+    garmin_export_strength: true,
     enrich_enabled: false,
     art_enabled: true,
     research_enabled: false,
@@ -191,6 +193,11 @@ test("settings sources controller owns Garmin and Apple Health wiring", async ()
   rootEl.querySelector("#garminPassword").input("secret");
   assert.equal(wm.garmin_username, "athlete@example.com");
   assert.equal(wm.garmin_password, "secret");
+
+  // Strength write-back is on by default and reflects the model both ways.
+  assert.equal(rootEl.querySelector("#garminExportStrength").checked, true);
+  rootEl.querySelector("#garminExportStrength").change(false);
+  assert.equal(wm.garmin_export_strength, false);
 
   await appleCard.querySelector("#ahConnect").click();
   assert.equal(harness.openedUrls.length, 1);
@@ -219,6 +226,7 @@ test("Apple Health connect polls boundedly and restores retry controls after tim
   const wm = {
     garmin_username: "",
     garmin_password: "",
+    garmin_export_strength: true,
     enrich_enabled: false,
     art_enabled: false,
     research_enabled: false,
@@ -254,6 +262,7 @@ test("Apple Health connect waits for the first metrics ingest before reporting s
   const wm = {
     garmin_username: "",
     garmin_password: "",
+    garmin_export_strength: true,
     enrich_enabled: false,
     art_enabled: false,
     research_enabled: false,
@@ -316,6 +325,7 @@ test("settings automation controller owns enrichment and research toggles", () =
   const wm = {
     garmin_username: "",
     garmin_password: "",
+    garmin_export_strength: true,
     enrich_enabled: true,
     art_enabled: false,
     research_enabled: false,

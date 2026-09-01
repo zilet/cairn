@@ -9,6 +9,7 @@ import {
 } from "../chatActions.js";
 import * as repo from "../repo.js";
 import type { ChatLane } from "../chatRouting.js";
+import { renderChatLinkedPagesBlock, type ChatLinkedPage } from "../chatLinks.js";
 import { promptData } from "./context-projection.js";
 import {
   CONTEXT_GUARDRAILS,
@@ -128,6 +129,8 @@ export function parseChatReply(text: string): { reply: string; actions: ChatActi
 
 export interface BuildChatPromptOptions {
   lane?: ChatLane;
+  /** Pages Cairn already fetched from URLs in this turn — the agent must not browse. */
+  linkedPages?: ChatLinkedPage[];
 }
 
 const CAPTURE_ACTION_TYPES = ["log_activity", "log_food", "update_food_note", "log_weight", "log_supplement"] as const;
@@ -233,6 +236,7 @@ Open and LOOK at that image file directly before answering.
 - If it is not food (gym equipment, a form-check frame, a menu, a label): just use what you see to
   answer their message; only log when they clearly want something logged.
 ` : "";
+  const linkedBlock = lane === "capture" ? "" : renderChatLinkedPagesBlock(options.linkedPages);
   if (lane === "capture") {
     return `${CAIRN_PERSONA}
 
@@ -338,7 +342,7 @@ ${CHAT_ACTION_SENTINEL}
 
 ACTION SHAPES (each item inside the "actions" array):
 ${renderChatActionSchema()}
-${photoBlock}
+${photoBlock}${linkedBlock}
 CONVERSATION SO FAR:
 ${convo || "(new conversation)"}
 

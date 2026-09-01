@@ -816,6 +816,7 @@ declare global {
       SettingsScreenWorkingModel,
       | "garmin_username"
       | "garmin_password"
+      | "garmin_export_strength"
       | "enrich_enabled"
       | "art_enabled"
       | "research_enabled"
@@ -3299,7 +3300,7 @@ declare global {
       };
       artSpendCardHtml(stats: unknown): string;
       sourcesSliceHtml(options: {
-        workingModel: Pick<SettingsScreenWorkingModel, "garmin_username">;
+        workingModel: Pick<SettingsScreenWorkingModel, "garmin_username" | "garmin_export_strength">;
         settings: Record<string, unknown>;
         garminStatusHtml: string;
         appleHealth?: {

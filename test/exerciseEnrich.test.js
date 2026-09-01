@@ -8,8 +8,12 @@
 // art. The agent never runs in the harness (offline, deterministic), so we cover:
 //   - upsertExercise({enrich}) persistence + the create-only enqueue gate.
 //   - applyExerciseEnrichment: fill-only group/equipment/mode, the safe rename of
-//     an unreferenced fresh row, the "never rename a logged movement" guard, and
-//     the merge-into-existing-duplicate path (logged sets repointed, never lost).
+//     an unreferenced fresh row, the identity-guarded rename of a LOGGED row (the
+//     same lift may be relabelled; a different lift may not), the validated Garmin
+//     FIT mapping, and the merge-into-existing-duplicate path (logged sets
+//     repointed, never lost).
+//   - the deterministic Garmin mapping applied at insert, from both entry points,
+//     with no agent in the picture.
 //   - processExerciseJob graceful degradation (no agent / enrichment off → skipped,
 //     row intact) and recoverPendingEnrich picking up an interrupted exercise.
 import { test, beforeEach } from "node:test";
@@ -83,7 +87,10 @@ test("applyExerciseEnrichment renames an unreferenced fresh row to a cleaner can
   assert.notEqual(before, "Incline Dumbbell Press", "the name actually changed");
 });
 
-test("applyExerciseEnrichment never renames a movement that already has logged sets", () => {
+test("applyExerciseEnrichment renames a logged movement when the canonical is the same lift", () => {
+  // A label is display text, not identity: "db incline press" and "Incline Dumbbell
+  // Press" are the same lift, so the athlete gets the clean name and their history
+  // stays exactly where it was (same row id, same sets).
   const row = repo.findOrCreateExercise("db incline press");
   const name = repo.getExercise(row.id).name;
   db.prepare("UPDATE exercises SET muscle_group = NULL WHERE id = ?").run(row.id);
@@ -91,10 +98,123 @@ test("applyExerciseEnrichment never renames a movement that already has logged s
   const setsBefore = db.prepare("SELECT COUNT(*) AS c FROM logged_sets").get().c;
 
   const r = repo.applyExerciseEnrichment(row.id, { canonical: "Incline Dumbbell Press", muscle_group: "chest" });
-  assert.equal(r.name, name, "a logged movement keeps the name the athlete has been using");
+  assert.equal(r.id, row.id, "the same row — logged numbers never move");
+  assert.equal(r.name, "Incline Dumbbell Press", "the same lift, spelled cleanly");
   assert.equal(db.prepare("SELECT COUNT(*) AS c FROM logged_sets").get().c, setsBefore, "logged sets are untouched");
-  // Pure tags (group) still fill even when the rename is skipped.
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS c FROM logged_sets WHERE exercise_id = ?").get(row.id).c,
+    setsBefore,
+    "and they still belong to this exercise"
+  );
   assert.equal(repo.getExercise(row.id).muscle_group, "chest", "a null group still fills");
+});
+
+test("renaming a logged movement remaps Garmin onto the clean name", () => {
+  const row = repo.findOrCreateExercise("db incline press");
+  db.prepare(`UPDATE exercises SET garmin_category = 'SQUAT', garmin_exercise = NULL, garmin_map_status = 'mapped' WHERE id = ?`).run(
+    row.id
+  );
+  repo.logSetByName({ exercise: repo.getExercise(row.id).name, weight: 40, reps: 10, date: "2026-07-01" });
+
+  repo.applyExerciseEnrichment(row.id, { canonical: "Incline Dumbbell Press" });
+
+  const after = repo.getExercise(row.id);
+  assert.equal(after.name, "Incline Dumbbell Press");
+  assert.notEqual(after.garmin_category, "SQUAT", "the messy name's miss must not stick");
+  assert.equal(after.garmin_map_status, "mapped");
+});
+
+test("applyExerciseEnrichment never renames a logged movement into a DIFFERENT lift", () => {
+  const row = repo.findOrCreateExercise("Bench Press");
+  const name = repo.getExercise(row.id).name;
+  repo.logSetByName({ exercise: name, weight: 135, reps: 8, date: "2026-07-01" });
+
+  const r = repo.applyExerciseEnrichment(row.id, { canonical: "Goblet Squat" });
+  assert.equal(r.name, name, "a real movement difference keeps the name the athlete has been using");
+  assert.equal(repo.getExercise(row.id).name, name);
+});
+
+test("applyExerciseEnrichment stores a valid Garmin mapping and refuses an invented enum", () => {
+  const row = repo.findOrCreateExercise("ZTest Knee Wibble"); // nothing deterministic to find
+  assert.equal(repo.getExercise(row.id).garmin_category, null);
+
+  // An enum Garmin does not know would 400 the whole write — dropped outright.
+  repo.applyExerciseEnrichment(row.id, { garmin_category: "KNEE_WIBBLE", garmin_exercise: "WIBBLE" });
+  assert.equal(repo.getExercise(row.id).garmin_category, null, "an invented category never lands");
+
+  repo.applyExerciseEnrichment(row.id, { garmin_category: "SQUAT", garmin_exercise: "GOBLET_SQUAT" });
+  const mapped = repo.getExercise(row.id);
+  assert.equal(mapped.garmin_category, "SQUAT");
+  assert.equal(mapped.garmin_exercise, "GOBLET_SQUAT");
+  assert.equal(mapped.garmin_map_status, "mapped");
+
+  // Fill-only: an already-mapped pair is not replaced by a later suggestion.
+  repo.applyExerciseEnrichment(row.id, { garmin_category: "BENCH_PRESS", garmin_exercise: null });
+  assert.equal(repo.getExercise(row.id).garmin_category, "SQUAT", "a mapped pair is never clobbered");
+});
+
+test("ensureGarminMapping does not re-score a remembered miss", () => {
+  const row = repo.findOrCreateExercise("ZTest Knee Wibble");
+  assert.equal(repo.getExercise(row.id).garmin_map_status, "unmapped");
+  db.prepare(`UPDATE exercises SET name = 'Back Squat' WHERE id = ?`).run(row.id);
+  repo.ensureGarminMapping(row.id);
+  assert.equal(
+    repo.getExercise(row.id).garmin_map_status,
+    "unmapped",
+    "a remembered miss is not re-scored; a rename clears the status first"
+  );
+});
+
+test("a new movement gets its deterministic Garmin mapping with no agent involved", () => {
+  // Both entry points — the exercises screen and simply logging a set — resolve the
+  // FIT mapping at insert, so write-back works on a fresh install with no CLI at all.
+  const upserted = repo.upsertExercise({ name: "Goblet Squat" }, { enrich: true });
+  const fromUpsert = repo.getExercise(upserted.id);
+  assert.equal(fromUpsert.garmin_category, "SQUAT");
+  assert.equal(fromUpsert.garmin_exercise, "GOBLET_SQUAT");
+  assert.equal(fromUpsert.garmin_map_status, "mapped");
+
+  repo.logSetByName({ exercise: "Romanian Deadlift", weight: 185, reps: 8, date: "2026-07-03" });
+  const logged = repo.findExercise("Romanian Deadlift");
+  assert.equal(logged.garmin_category, "DEADLIFT");
+  assert.equal(logged.garmin_exercise, "ROMANIAN_DEADLIFT");
+
+  // A name the catalog cannot place is remembered as unmapped rather than guessed at.
+  repo.logSetByName({ exercise: "ZTest Knee Wibble", weight: 20, reps: 10, date: "2026-07-03" });
+  const unknown = repo.findExercise("ZTest Knee Wibble");
+  assert.equal(unknown.garmin_category, null);
+  assert.equal(unknown.garmin_map_status, "unmapped");
+});
+
+test("a set logged through a surface queues its enrichment; an internal write and a Garmin import do not", () => {
+  // The surfaces a person logs through (POST /api/sets, the log_set tool) opt in — the
+  // name they typed is the one that may still need cleaning up.
+  repo.logSetByName({ exercise: "Meadows Row", weight: 60, reps: 12, date: "2026-07-04" }, { enrich: true });
+  assert.equal(
+    repo.findExercise("Meadows Row").enrichment_status,
+    "pending",
+    "an off-plan movement usually arrives by being logged, not by being added"
+  );
+
+  // Without that opt-in the movement is still created and still mapped — it just does
+  // not buy an agent call (seed, plan import and every internal write take this path).
+  repo.logSetByName({ exercise: "Jefferson Curl", weight: 45, reps: 8, date: "2026-07-04" });
+  const quiet = repo.findExercise("Jefferson Curl");
+  assert.equal(quiet.enrichment_status ?? null, null, "an internal write never queues an agent call");
+
+  // A Garmin set import creates rows too; those must stay off the queue, exactly like
+  // seed and plan import.
+  assert.equal(repo.findExercise("Seated Cable Row"), undefined);
+  repo.importGarminActivitySets({
+    session_id: repo.getOrCreateSession("2026-07-05").id,
+    date: "2026-07-05",
+    activity_key: "garmin-activity:test",
+    sets: [{ exercise: "Seated Cable Row", weight: 45, reps: 10, exercise_mode: "reps" }],
+  });
+  const imported = repo.findExercise("Seated Cable Row");
+  assert.ok(imported, "the movement exists");
+  assert.equal(imported.enrichment_status ?? null, null, "a Garmin import never queues an agent call");
+  assert.equal(imported.garmin_map_status, "mapped", "but it still gets the deterministic mapping");
 });
 
 test("applyExerciseEnrichment merges into an existing canonical duplicate, repointing logged sets", () => {

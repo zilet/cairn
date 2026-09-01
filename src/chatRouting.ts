@@ -249,7 +249,11 @@ export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision 
   if (MEDICATION.test(message)) deep("medication_interaction");
   if (GOAL_IDENTITY.test(message)) deep("goal_identity");
   if (PLAN_RESTRUCTURE.test(message)) deep("plan_restructure");
-  if (CURRENT_RESEARCH.test(message)) deep("current_research");
+  // A pasted http(s) URL on a coaching turn is a request to look at that page.
+  // Capture-only logs stay capture even if a menu URL rode along.
+  if (CURRENT_RESEARCH.test(message) || (captures.length === 0 && /https?:\/\/[^\s]+/i.test(message))) {
+    deep("current_research");
+  }
   if (constrainedInMultipleWays(message)) deep("multi_constraint");
   if (EXPLICIT_DEEP.test(message)) deep("explicit_deep_request");
 

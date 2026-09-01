@@ -41,6 +41,7 @@ export interface Settings {
   garmin_credentials_source: "settings" | "env" | "mixed" | "none";
   garmin_last_sync_at: string | null; // UTC ISO of the last completed sync (ok or failed)
   garmin_last_sync_status: string; // short result line: "ok: 12 activities · 14 daily" | "failed: …"
+  garmin_export_strength: boolean; // send finished Cairn strength sessions back to Garmin (default ON; Garmin stays the input for runs/recovery)
   gemini_api_key_configured: boolean;
   gemini_api_key_source: "settings" | "env" | "none";
   research_enabled: boolean; // host-side evidence research (default OFF; off ⇒ deterministic, no network)
@@ -305,6 +306,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["update_check_enabled", "INTEGER DEFAULT 1"],
   ["lead_mode", "TEXT DEFAULT 'lead'"],
   ["training_drive", "TEXT DEFAULT 'steady'"],
+  ["garmin_export_strength", "INTEGER DEFAULT 1"],
 ];
 let settingsSchemaChecked = false;
 
@@ -455,6 +457,7 @@ function defaultSettings(): Settings {
     garmin_credentials_source: process.env.GARMIN_USERNAME || process.env.GARMIN_PASSWORD ? "env" : "none",
     garmin_last_sync_at: null,
     garmin_last_sync_status: "",
+    garmin_export_strength: true, // a finished Cairn strength session goes back to the watch by default
     gemini_api_key_configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY),
     gemini_api_key_source: process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY ? "env" : "none",
     research_enabled: false, // host-side research off by default — opt-in, deterministic when off
@@ -537,6 +540,8 @@ function rowToSettings(row: any): Settings {
     garmin_credentials_source: garminSource,
     garmin_last_sync_at: String(row.garmin_last_sync_at ?? "").trim() || null,
     garmin_last_sync_status: row.garmin_last_sync_status == null ? "" : String(row.garmin_last_sync_status),
+    // NULL on old rows (column added by the settings column repair) defaults to ON.
+    garmin_export_strength: row.garmin_export_strength == null ? true : !!row.garmin_export_strength,
     gemini_api_key_configured: !!(rowGemini || envGemini),
     gemini_api_key_source: rowGemini ? "settings" : envGemini ? "env" : "none",
     // NULL on old rows (column added by migration v28) defaults to OFF.
@@ -644,6 +649,8 @@ export function setSettings(patch: any): Settings {
     // part of the UPDATE below, so a settings save never clobbers it.
     garmin_last_sync_at: cur.garmin_last_sync_at,
     garmin_last_sync_status: cur.garmin_last_sync_status,
+    garmin_export_strength:
+      patch.garmin_export_strength !== undefined ? !!patch.garmin_export_strength : cur.garmin_export_strength,
     gemini_api_key_configured: !!geminiApiKeyForStatus || cur.gemini_api_key_configured,
     gemini_api_key_source: cur.gemini_api_key_source,
     research_enabled: patch.research_enabled !== undefined ? !!patch.research_enabled : cur.research_enabled,
@@ -693,7 +700,7 @@ export function setSettings(patch: any): Settings {
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -721,7 +728,8 @@ export function setSettings(patch: any): Settings {
     JSON.stringify(merged.agent_profile_bindings),
     merged.update_check_enabled ? 1 : 0,
     merged.lead_mode,
-    merged.training_drive
+    merged.training_drive,
+    merged.garmin_export_strength ? 1 : 0
   );
   return getSettings();
 }

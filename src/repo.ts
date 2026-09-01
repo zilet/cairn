@@ -16,6 +16,8 @@ export * from "./repo/location-context.js";
 export * from "./repo/training-intent.js";
 export * from "./repo/endurance-capacity.js";
 export * from "./repo/activities.js";
+export * from "./repo/garmin-exercise-map.js"; // Cairn exercise name → Garmin FIT category/sub-exercise (pure)
+export * from "./repo/garmin-strength-export.js"; // sessions.garmin_json.export bookkeeping for strength write-back
 export * from "./repo/memory.js";
 export * from "./repo/brain-decisions.js";
 export * from "./repo/brain-evaluations.js";

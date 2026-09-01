@@ -6,6 +6,7 @@ import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import { UPLOADS_DIR } from "./uploadPaths.js";
 import { buildChatPrompt, parseChatEscalationRequest, parseChatReply, CHAT_REPLY_SENTINEL } from "./prompt.js";
+import { extractChatHttpUrls, fetchChatLinkedPages, type ChatLinkedPage } from "./chatLinks.js";
 import {
   coachReadToolList,
   COACH_READ_MAX_ROUNDS,
@@ -2847,6 +2848,8 @@ export interface ChatCompletionDeps {
     request: CoachReadToolRequest,
     context: CoachReadToolExecutionContext
   ) => CoachReadToolResult | Promise<CoachReadToolResult>;
+  /** Offline tests inject this so a fixture URL never hits the network. */
+  fetchLinkedPages?: typeof fetchChatLinkedPages;
 }
 
 export async function runChatCompletion(
@@ -2860,6 +2863,7 @@ export async function runChatCompletion(
   const runStreamingDep = deps.runAgentStreaming ?? runAgentStreaming;
   const supportsStream = deps.supportsStream ?? agentSupportsStream;
   const executeCoachRead = deps.executeCoachRead ?? executeCoachReadTool;
+  const fetchLinkedPages = deps.fetchLinkedPages ?? fetchChatLinkedPages;
   const readRunId = crypto.randomUUID();
   const readState = newChatReadState();
   let readExhausted = false;
@@ -2894,6 +2898,16 @@ export async function runChatCompletion(
   let lastErr: any = null;
   let lanePasses = 0;
   const unsupportedSeen = new Set<string>();
+
+  // Same pattern as listing a health-export folder: fetch pasted URLs HERE so a
+  // headless CLI never reaches for curl (agy auto-denies `command` and exits
+  // empty). Capture stays receipt-fast and skips the network.
+  let linkedPages: ChatLinkedPage[] = [];
+  const urls = (decision?.lane ?? "coach") === "capture" ? [] : extractChatHttpUrls(String(turn.message ?? ""));
+  if (urls.length) {
+    emit(id, { type: "progress", text: "Reading the link you sent…" });
+    linkedPages = await fetchLinkedPages(urls, { signal });
+  }
 
   const profileFor = (name: string): RuntimeChatProfile => {
     if (!decision) return resolveRuntimeChatProfile(definitions[name], null);
@@ -2963,7 +2977,10 @@ export async function runChatCompletion(
       history,
       turn.message || "(no text — see the attached photo)",
       turn.image_path || undefined,
-      lane ? { lane } : {}
+      {
+        ...(lane ? { lane } : {}),
+        ...(linkedPages.length ? { linkedPages } : {}),
+      }
     );
 
     // Streaming first, exactly once for an equivalent provider/profile tuple. The
@@ -3375,7 +3392,10 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.addActivity({ text: a.text, date: a.date, notes: a.notes }) });
           break;
         case "log_set":
-          applied.push({ type: a.type, result: repo.logSetByName(repo.resolveImplicitPlanDay(a)) });
+          applied.push({
+            type: a.type,
+            result: repo.logSetByName(repo.resolveImplicitPlanDay(a), { enrich: true }),
+          });
           break;
         case "set_profile": {
           const { type, ...patch } = a;

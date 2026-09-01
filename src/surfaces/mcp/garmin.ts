@@ -38,6 +38,20 @@ export function registerGarminTools(server: McpToolRegistrar) {
       return asText(await syncGarmin(opts));
     });
 
+  server.tool("garmin_export_backfill",
+    "Send finished Cairn strength sessions older than the 7-day sync window back to Garmin, in batches, oldest first. Dry run by default: reports per session what would happen (unchanged / fill_or_replace / create / retarget / drop_surplus / skip_no_mapped_sets), naming the target activity and any Cairn-made shells it would withdraw, and which lifts the FIT catalog could not place, writing and queueing nothing. Pass apply:true to enqueue the exports on the serial queue.",
+    {
+      since: z.string().optional().describe("Earliest session date (YYYY-MM-DD); omit for all history"),
+      until: z.string().optional().describe("Latest session date (YYYY-MM-DD)"),
+      limit: z.number().int().optional().describe("Batch size, default 25, clamped 1..100"),
+      apply: z.boolean().optional().describe("Actually enqueue the exports; default false (dry run)"),
+      refine_unmapped: z.boolean().optional().describe("Also queue the agentic exercise enrichment for movements in the batch the catalog could not place (reason 'unmapped') or that have never been enriched at all (reason 'never_enriched'). Needs apply:true and enrich_enabled; a dry run only lists them as refine_candidates."),
+    },
+    async (opts) => {
+      const { garminExportBackfill } = await import("../../garminExportBackfill.js");
+      return asText(await garminExportBackfill(opts));
+    });
+
   server.tool("upsert_garmin_activity",
     "Ingest one normalized Garmin activity. It is deduped by external_id and mirrored into Cairn activities for calendar/load context.",
     {

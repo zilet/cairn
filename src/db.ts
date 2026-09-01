@@ -25,7 +25,10 @@ CREATE TABLE IF NOT EXISTS exercises (
   cues TEXT,
   mode TEXT DEFAULT 'reps',               -- reps | timed (e.g. plank, dead hang)
   equipment TEXT,                         -- classified implement (e.g. 'a cable machine') — art/guide context
-  enrichment_status TEXT                  -- pending|in_progress|done|failed|skipped|null (background 'exercise' enrichment)
+  enrichment_status TEXT,                 -- pending|in_progress|done|failed|skipped|null (background 'exercise' enrichment)
+  garmin_category TEXT,                   -- FIT exercise category for strength write-back (repo/garmin-exercise-map.ts)
+  garmin_exercise TEXT,                   -- FIT sub-exercise; null means category-only (always legal on a Garmin PUT)
+  garmin_map_status TEXT                  -- mapped|unmapped|skipped|null
 );
 -- Imported instructional guides for a movement: step-by-step text, muscles worked,
 -- equipment and two demonstration photos, from the public-domain free-exercise-db
@@ -929,7 +932,8 @@ CREATE TABLE IF NOT EXISTS settings (
   agent_profile_bindings TEXT DEFAULT '',     -- JSON provider -> task -> optional {model,reasoning}; overrides TASK_EXECUTION_PROFILES (repo/settings.ts)
   update_check_enabled INTEGER DEFAULT 1,     -- 1 = quiet daily check for a newer Cairn release (GitHub Releases API); pull-never-push, surfaced in Settings → Data
   lead_mode TEXT DEFAULT 'lead',               -- lead | announce_first | review_everything — one calm autonomy control
-  training_drive TEXT DEFAULT 'steady'         -- steady | push — the athlete's standing posture toward accumulated-load rest
+  training_drive TEXT DEFAULT 'steady',        -- steady | push — the athlete's standing posture toward accumulated-load rest
+  garmin_export_strength INTEGER DEFAULT 1     -- 1 = send finished Cairn strength sessions back to Garmin (see src/garminExport.ts)
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each

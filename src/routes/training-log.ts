@@ -295,7 +295,8 @@ trainingLogRouter.post("/sets", (req, res) => {
   try {
     const b = req.body ?? {};
     if (!b.exercise) return res.status(400).json({ error: "exercise is required" });
-    res.json(logSetByName(resolveImplicitPlanDay(b)));
+    // A name the athlete typed here is the one worth cleaning up in the background.
+    res.json(logSetByName(resolveImplicitPlanDay(b), { enrich: true }));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

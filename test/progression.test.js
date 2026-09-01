@@ -2247,7 +2247,9 @@ test("planDayProgression: a steady athlete at goal never hears the rotation blam
   assert.equal(steady.top_set, undefined, "only the near-maximal single waits");
   assert.doesNotMatch(steady.why, /asked to (keep pushing|push)|pushing is what you asked/i,
     "a steady athlete is never told the card reflects a push they never declared");
-  assert.match(steady.why, /where you were (heading|going)/i, "the destination is the reason, and says so");
+  // The variant set rotates by date: "where you were heading/going" or "the
+  // weight you were heading for" — either names the destination as the reason.
+  assert.match(steady.why, /(where|weight) you were (heading|going)/i, "the destination is the reason, and says so");
   assert.equal(violatesReadingGrammar(steady.why), null);
 
   // …and the push athlete still hears their own declaration named.

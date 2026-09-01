@@ -58,7 +58,8 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       day_number: z.number().int().optional(),
       note: z.string().optional(),
     },
-    async (args) => asText(logSetByName(resolveImplicitPlanDay(args)))
+    // Same opt-in as POST /api/sets: a name arriving from a person gets background cleanup.
+    async (args) => asText(logSetByName(resolveImplicitPlanDay(args), { enrich: true }))
   );
 
   server.tool(

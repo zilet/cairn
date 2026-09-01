@@ -2445,6 +2445,28 @@ export const MIGRATIONS: Migration[] = [
     // existing row can violate, because no existing row is a rest day.
     up: (db) => addColumn(db, "plan_days", "day_type TEXT NOT NULL DEFAULT 'training'"),
   },
+  {
+    version: 100,
+    name: "exercise-garmin-mapping",
+    // STRENGTH WRITE-BACK NEEDS A RESOLVED FIT ENUM PER LIFT. Garmin only accepts
+    // a set whose exercise is a member of its own two-level FIT enum (a category,
+    // plus an optional sub-exercise under it), so every lift Cairn wants to push
+    // has to carry the pair it resolved to. It is stored on the row rather than
+    // re-derived per export so a hand-corrected or agent-refined mapping survives,
+    // and so an unmappable movement is remembered as unmappable instead of being
+    // re-scored on every sync.
+    //
+    // Purely additive: three nullable columns. An existing row reads exactly as it
+    // did (no mapping ⇒ nothing is exported for that lift), and findOrCreateExercise
+    // fills the deterministic pair on the next insert. Nothing is rewritten, nothing
+    // is deleted, and the write-back toggle itself lives in `settings` (whose own
+    // column repair adds garmin_export_strength).
+    up: (db) => {
+      addColumn(db, "exercises", "garmin_category TEXT");
+      addColumn(db, "exercises", "garmin_exercise TEXT");
+      addColumn(db, "exercises", "garmin_map_status TEXT");
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

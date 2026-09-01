@@ -322,3 +322,38 @@ test("chat: a cancel mid-read-round aborts the turn without a broken bubble", as
     /canceled/
   );
 });
+
+test("chat: pasted URLs are fetched once and injected so the CLI never curls", async () => {
+  const prompts = [];
+  const runAgentStreaming = async (_name, prompt, opts) => {
+    prompts.push(prompt);
+    const raw = "===CAIRN_REPLY===\nZinc trial in 2015 — interesting, not a reason to change today's session.\n";
+    for (const piece of raw.match(/[\s\S]{1,7}/g) ?? [raw]) opts.onDelta?.(piece);
+    return { code: 0, raw, stderr: "", usage: {} };
+  };
+  let fetched = 0;
+  const { events, off } = collectEvents(4242);
+  const out = await runChatCompletion(
+    4242,
+    turnFixture({
+      message: "Curious about this study? https://www.sciencedaily.com/releases/2015/07/x.htm",
+      routing: { policy_version: "chat-routing-v1", lane: "deep", reason_codes: ["current_research"] },
+    }),
+    [],
+    new AbortController().signal,
+    {
+      runAgentStreaming,
+      supportsStream: () => true,
+      fetchLinkedPages: async (urls) => {
+        fetched++;
+        assert.deepEqual(urls, ["https://www.sciencedaily.com/releases/2015/07/x.htm"]);
+        return [{ url: urls[0], title: "Zinc study", text: "Placebo-controlled zinc trial.", error: null }];
+      },
+    }
+  );
+  off();
+  assert.equal(fetched, 1);
+  assert.ok(prompts.some((p) => /LINKED PAGE/.test(p) && /Placebo-controlled zinc trial/.test(p)));
+  assert.ok(events.some((e) => e.type === "progress" && /link you sent/i.test(e.text)));
+  assert.match(out.raw, /Zinc trial/);
+});

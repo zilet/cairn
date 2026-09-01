@@ -79,7 +79,20 @@ const execFileP = promisify(execFile);
 // applies it exclusively via the existing lifecycle repo functions. id is the
 // symptom_reports row id; it carries its own extraction_status machine. A failure
 // costs nothing: the words stay stored and rendered.
-type Kind = "activity" | "food" | "food_photo" | "health" | "review" | "garmin_strength" | "exercise" | "symptom";
+// 'garmin_export' pushes a finished Cairn strength session BACK to Garmin as that
+// day's exercise sets (src/garminExport.ts). id is the sessions row id; like
+// garmin_strength it has no status column of its own, and every outcome — connector
+// off, Garmin owning the day, an unchanged session — is an ordinary skip.
+type Kind =
+  | "activity"
+  | "food"
+  | "food_photo"
+  | "health"
+  | "review"
+  | "garmin_strength"
+  | "garmin_export"
+  | "exercise"
+  | "symptom";
 interface Job {
   kind: Kind;
   id: number;
@@ -344,6 +357,7 @@ function agentGarminSetInputs(parsed: any): repo.GarminSetImportInput[] {
 
 // Push a job and start the drain loop if it isn't already running.
 export function enqueueEnrich(kind: Kind, id: number): void {
+  if (queue.some((job) => job.kind === kind && job.id === id)) return;
   queue.push({ kind, id });
   if (!draining) void drain();
 }
@@ -410,7 +424,7 @@ async function drain(): Promise<void> {
 }
 
 function markStatus(job: Job, status: string): void {
-  if (job.kind === "review" || job.kind === "garmin_strength") return; // no row status of their own
+  if (job.kind === "review" || job.kind === "garmin_strength" || job.kind === "garmin_export") return; // no row status of their own
   // symptom_reports.extraction_status is a narrower machine than the enrichment
   // rows' (no 'in_progress' — a report is never half-extracted, it either yielded a
   // structure or it did not), so it is set only through its own dedicated path.
@@ -558,6 +572,7 @@ function clearDeterministicIngest(id: number): void {
 async function processJob(job: Job): Promise<void> {
   if (job.kind === "review") return processReviewJob();
   if (job.kind === "garmin_strength") return processGarminStrengthJob(job.id);
+  if (job.kind === "garmin_export") return processGarminExportJob(job.id);
   if (job.kind === "food_photo") return processFoodPhotoJob(job.id);
   if (job.kind === "exercise") return processExerciseJob(job.id);
   if (job.kind === "symptom") return processSymptomJob(job.id);
@@ -996,6 +1011,23 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
   });
   let logged = initialImport.imported;
 
+  // RETARGET: this session's work already went to Garmin as a manual activity we
+  // invented, and the watch's own recording of the same workout has now linked.
+  // The sets belong on the watch's activity, so ask for a re-export;
+  // exportSessionToGarmin moves them and deletes the shell. Physiology ranks
+  // *which* watch recording wins; it does not gate the enqueue — a recording with
+  // no HR still owns the day. Checked here (not only in syncGarmin) because a
+  // re-enqueued or manually triggered strength job reconciles outside a sync, and
+  // before the enrichment gate because the write-back is deterministic.
+  try {
+    const priorExport = repo.getSessionGarminExport(ga.session_id);
+    if (priorExport?.source === "manual" && String(ga.external_id ?? "") !== priorExport.activity_id) {
+      enqueueEnrich("garmin_export", ga.session_id);
+    }
+  } catch {
+    /* the retarget is a repair, never a requirement */
+  }
+
   const settings = repo.getSettings();
   if (!settings.enrich_enabled) {
     // The physiology and any atomic deterministic set import stand; skip narrative.
@@ -1058,6 +1090,25 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
   if (logged) console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) into session ${ga.session_id} (kg→lb in code).`);
 }
 
+// ---- finished Cairn strength session → Garmin ------------------------------------
+// The one direction Garmin never gave us. Everything about WHETHER to write lives in
+// exportSessionToGarmin (connector off, Garmin owning the day, nothing mapped, nothing
+// changed are all ordinary skips), so this handler is just the queue seam: it is not
+// agentic, needs no CLI, and must never throw — the athlete's Cairn log is the record
+// of truth and a Garmin write that missed costs nothing but the next sync's retry.
+// Exported so the offline test can drive it without the drain loop.
+export async function processGarminExportJob(sessionId: number): Promise<void> {
+  try {
+    const { exportSessionToGarmin } = await import("./garminExport.js");
+    const result = await exportSessionToGarmin(sessionId);
+    if (result.skipped) console.log(`[enrich] garmin_export#${sessionId}: skipped (${result.skipped}).`);
+    else if (result.ok) console.log(`[enrich] garmin_export#${sessionId}: ${result.mode} → activity ${result.activity_id}.`);
+    else console.warn(`[enrich] garmin_export#${sessionId}: ${result.error}`);
+  } catch (e: any) {
+    console.warn(`[enrich] garmin_export#${sessionId} failed: ${e?.message ?? e}`);
+  }
+}
+
 // ---- new off-plan exercise → canonical + classify + guide + art ----------------
 // The athlete added a movement that wasn't in the plan (e.g. "Single-Arm Lat
 // Pulldown"). The deterministic canon already cleaned the name + guessed a
@@ -1106,11 +1157,22 @@ export async function processExerciseJob(id: number): Promise<void> {
         muscle_group: asStr(parsed.muscle_group ?? parsed.group),
         mode: asStr(parsed.mode),
         equipment: asStr(parsed.equipment),
+        // The FIT pair the agent chose from the candidate shortlist. applyExerciseEnrichment
+        // validates it against the catalog and fills only what is still unmapped, so an
+        // invented or ill-fitting enum cannot displace a deterministic hit.
+        garmin_category: asStr(parsed.garmin_category),
+        garmin_exercise: asStr(parsed.garmin_exercise),
       });
       finalName = applied.name || finalName;
       const updated = repo.getExercise(applied.id) as any;
       group = updated?.muscle_group ?? group;
       equipment = updated?.equipment ?? equipment;
+      // A rename can change what the deterministic mapper would say ("db incline press"
+      // → "Incline Dumbbell Press" is a catalog hit where the raw label was not), so
+      // re-run the mapper on the final name for anything the agent left unmapped.
+      if (!updated?.garmin_category) {
+        try { repo.ensureGarminMapping(applied.id); } catch { /* mapping is best-effort */ }
+      }
     }
     // Warm the how-to guide into ai_cache so the first ⓘ tap serves instantly.
     try { await explainExercise("auto", finalName); } catch { /* best-effort */ }

@@ -24,6 +24,27 @@ garminRouter.post("/garmin/sync", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// Send FINISHED Cairn strength sessions from before the 7-day sync window back to
+// Garmin. Dry run unless {apply:true}: the preview says what each session would do
+// and which lifts the FIT catalog cannot place, and nothing is written or queued.
+// Applying enqueues ordinary garmin_export jobs, oldest first, on the serial queue.
+garminRouter.post("/garmin/export-backfill", async (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const { garminExportBackfill } = await import("../garminExportBackfill.js");
+    res.json(
+      await garminExportBackfill({
+        since: body.since ? String(body.since) : undefined,
+        until: body.until ? String(body.until) : undefined,
+        limit: body.limit != null ? Number(body.limit) : undefined,
+        apply: body.apply === true,
+        refine_unmapped: body.refine_unmapped === true,
+      })
+    );
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
 garminRouter.post("/garmin/sources", (req, res) => {
   try {
     res.json(upsertGarminSource(req.body ?? {}));

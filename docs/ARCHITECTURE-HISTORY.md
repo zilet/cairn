@@ -4,6 +4,73 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-01 — Garmin strength write-back round: the work Cairn owns goes back to the watch
+
+Schema **100** (`exercise-garmin-mapping`), sw **v563**. Garmin stays the input for runs, sleep and
+recovery; strength is the one thing that now also travels outbound. An athlete who lifts with Cairn
+on their phone had a blank strength history on Garmin, and one who *did* start the watch got a
+recording with no exercises in it.
+
+**The mapper is a catalog, not a guess.** Garmin's strength model is a two-level FIT enum (category +
+optional sub-exercise) and one unknown member 400s the entire payload, so `src/garmin-exercise-catalog.json`
+(1527 rows / 47 categories, checked in, imported so `tsc` emits it into `dist/`) is the only
+vocabulary. `src/repo/garmin-exercise-map.ts` is pure — exact display match → expanded-token key →
+unique fuzzy (≥0.7) → a category-only ref (always legal on a PUT) → `none` with a ranked shortlist —
+and `isValidGarminRef` is the gate everything agent-authored passes through. Three scoring rules
+earned their keep against real gym names: a shared MOVEMENT word is required (without it
+"Single-Arm DB Row" mapped onto a kettlebell swing), qualifiers that change the lift are penalized
+asymmetrically (without it plain "Bulgarian Split Squat" lost to the *Overhead* row purely by being
+shorter), and the category vote is scored implement-BLIND with equipment-named categories gated
+(without it "Overhead Press" split its vote between SHOULDER_PRESS and SANDBAG and came back
+unmapped, and "Cable Row" lost ROW to SLED/SUSPENSION). Migration 100 adds
+`exercises.garmin_category` / `garmin_exercise` / `garmin_map_status`, filled at INSERT by
+`ensureGarminMapping` — so seed, plan import and a hand-logged set all resolve identically with no
+agent, and write-back works on a fresh offline install.
+
+**Names normalize after entry, and a logged lift may now be relabelled.** Logging a set through a
+surface a PERSON types into (`POST /api/sets`, the `log_set` tool → `logSetByName(input, {enrich:true})`)
+queues the `exercise` enrichment job on a genuine create — an off-plan movement usually arrives by
+being LOGGED, not by being added — through a shared `queueExerciseEnrichment` gate so the
+"only-when-enabled, else record skipped" rule cannot drift from `upsertExercise`. The opt-in lives on
+the surface, not in the repo write, for the same reason `POST /api/exercises` carries it: seed, plan
+import, a Garmin set import and every internal write create movements too, and none of them may buy
+an agent call (that would also make the offline test suite spawn CLIs). An unqueued movement is still
+mapped — the deterministic FIT resolution happens on the INSERT. `applyExerciseEnrichment` gained the real policy
+change: a movement WITH logged sets may be renamed when `sameExerciseIdentity(current, proposed)` is
+true ("db incline press" → "Incline Dumbbell Press") — the label is display text, the id and the
+numbers never move — while a real implement/angle difference still refuses. The prompt now also asks
+for `garmin_category`/`garmin_exercise`, strictly as a pick from `garminCandidatesForPrompt`.
+
+**Write-back (`src/garminExport.ts`, new).** Cairn-only → create a manual activity then PUT sets onto
+it, mirrored into `garmin_activities` + reconciled so the day shows ONE activity; parallel → PUT onto
+the EXISTING watch activity in place (never a second upload — the watch's HR/duration/calories are
+the physiology worth keeping); Garmin-only (`cairn_sets_authoritative === false`) → never touched. If
+a manual shell was created and the watch's own recording of the same workout syncs afterwards, the
+sets move across, the shell is deleted and `export` retargets (physiology ranks which watch
+activity is the richer home; it does not gate the move). FILL preserves the watch's own ACTIVE
+slots when the count *matches* Cairn's logged sets, leaving REST alone; a mismatch is REPLACE so
+the first N slots are never relabeled. A create is recorded locally *before* the PUT so a later
+500 retries onto the same activity. Grams on the wire, with
+Cairn's assist-is-negative and bodyweight-is-null encodings both sending no load; a 400 retries once
+with sub-names dropped. `sessions.garmin_json.export` holds a fingerprint of the ordered sets so a
+re-sync skips before any network call, and `reconcileGarminStrength` now carries that record forward
+rather than forgetting it on every blob rebuild (Undo of a merge also keeps an export that landed
+after the snapshot). New non-agentic enrich kind `garmin_export`
+(enqueued by `finishSession` and `syncGarmin`, the latter capped at 7 days), independent of `enrich_enabled`. New settings toggle
+`garmin_export_strength`, default ON, in Settings → Sources.
+
+## 2026-08-31 — chat pasted-link round: Cairn fetches the page so headless agy never curls
+
+NO schema change; server-only (no sw bump). Live on the Pi: the athlete pasted a ScienceDaily URL,
+agy was the only un-held provider, and the turn died as `permission_denied`. Headless `agy -p`
+cannot prompt; `command` / `read_url` default to Ask and are soft-denied, so the run exits 0 with
+empty stdout. Two complementary fixes, same shape as the health-ingest FILE INVENTORY: (1)
+`src/chatLinks.ts` fetches at most three plausible http(s) pages (SSRF-safe, size-capped) and
+`buildChatPrompt` injects a LINKED PAGE block that forbids curl; (2)
+`ensureAntigravityHeadlessPermissions` merges Google's scoped `read_url(*)` grant into
+`~/.gemini/antigravity-cli/settings.json` on spawn — never `--dangerously-skip-permissions`. A
+coaching turn that contains an http(s) URL also raises `current_research`.
+
 ## 2026-08-31 — goal-negotiation round: a negotiated goal locks, and a dropped one says so
 
 NO schema change; server-only (no sw bump). Root cause found live: the athlete negotiated a new

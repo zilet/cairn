@@ -262,6 +262,7 @@ export interface ClientSettings {
   update_check_enabled?: boolean;
   garmin_last_sync_at?: string | null;
   garmin_last_sync_status?: string | null;
+  garmin_export_strength?: boolean;
   agent_strategy?: string;
   agent_order?: string[];
   disabled_agents?: string[];

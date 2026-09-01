@@ -205,6 +205,11 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   deterministic merge (physiology onto `sessions.garmin_json`, link, delete stale row) *always*, even
   with no agent; the narrative + missing-exercise logging is the agentic layer on the enrichment
   queue, guarded so hand-logged sets are never overwritten and re-syncs stay idempotent.
+  **Strength also travels OUT**: a finished Cairn session is written back as that day's Garmin
+  exercise sets (`src/garminExport.ts`, non-agentic `garmin_export` enrich kind, FIT enums from
+  `src/repo/garmin-exercise-map.ts` — never invented), onto the watch's own activity when there is
+  one; a Garmin-owned day (`cairn_sets_authoritative === false`) stays inbound-only. See
+  `docs/GARMIN.md`.
 - **Autoregulation feedback** (`sessions.soreness`/`performance`/`joint_pain`) and subjective
   `checkins` are optional signals that INFORM coach selection — they never override progressive
   overload, never auto-change the plan, and their absence never forces a rest read. **A completed

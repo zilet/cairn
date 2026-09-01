@@ -415,7 +415,7 @@ type RawGetOptions = {
 // Hit any Garmin Connect endpoint via the package's generic client; never throw.
 // The connector's internal endpoints are undocumented and device-dependent, so
 // every caller treats a null as "not available on this account" and degrades.
-async function rawGet(client: any, url: string, options: RawGetOptions = {}): Promise<any> {
+export async function rawGet(client: any, url: string, options: RawGetOptions = {}): Promise<any> {
   if (options.optionalKey && options.unavailable?.has(options.optionalKey)) return null;
   // The package's get() reaches axios with NO baseURL, so a RELATIVE service path
   // throws "Invalid URL" — the connectapi host must be prepended. This was the real
@@ -423,8 +423,7 @@ async function rawGet(client: any, url: string, options: RawGetOptions = {}): Pr
   // on the first live sync: every rawGet failed "Invalid URL"). Every internal service
   // endpoint lives under GC_API (https://connectapi.garmin.com), exactly how the
   // library's own methods build their absolute URLs (UrlClass.GC_API + "/<service>…").
-  const base = client?.url?.GC_API || "https://connectapi.garmin.com";
-  const full = /^https?:\/\//i.test(url) ? url : `${base}${url.startsWith("/") ? "" : "/"}${url}`;
+  const full = absoluteGarminUrl(client, url);
   try {
     return await client.get(full);
   } catch (e: any) {
@@ -442,6 +441,38 @@ async function rawGet(client: any, url: string, options: RawGetOptions = {}): Pr
     return null;
   }
 }
+
+// Write-side twins of rawGet. Same URL discipline (the package's client reaches
+// axios with NO baseURL, so the connectapi host has to be prepended by hand), and
+// the same undocumented-endpoint reality — but these THROW rather than degrading to
+// null. A read that comes back empty is a field the app can live without; a write
+// that silently did nothing would leave Cairn believing Garmin holds sets it does
+// not, so the caller has to see the failure.
+function absoluteGarminUrl(client: any, url: string): string {
+  const base = client?.url?.GC_API || "https://connectapi.garmin.com";
+  return /^https?:\/\//i.test(url) ? url : `${base}${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
+export async function rawPost(client: any, url: string, body: unknown): Promise<any> {
+  return client.post(absoluteGarminUrl(client, url), body);
+}
+
+export async function rawPut(client: any, url: string, body: unknown): Promise<any> {
+  return client.put(absoluteGarminUrl(client, url), body);
+}
+
+export async function rawDelete(client: any, url: string): Promise<any> {
+  const full = absoluteGarminUrl(client, url);
+  // GarminConnect exposes get/post/put directly but not delete; its underlying
+  // HttpClient does, and that is the same authenticated transport.
+  if (typeof client?.client?.delete === "function") return client.client.delete(full);
+  if (typeof client?.delete === "function") return client.delete(full);
+  throw new Error("Garmin client exposes no DELETE transport");
+}
+
+// The authenticated client, shared with the write-back path (src/garminExport.ts) so
+// there is exactly one place that resolves credentials and token files.
+export { makeClient as makeGarminClient };
 
 // The displayName the /usersummary + several /metrics endpoints key on is the
 // account's GUID-style profile id. When the package's getUserProfile() returned
@@ -936,10 +967,19 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
         console.warn(`[garmin] reconcile #${id} failed: ${e?.message ?? e}`);
       }
     }
-    if (strengthIds.length) {
+    // Finished Cairn sessions whose work Garmin may not have yet. Cap the lookback
+    // at 7 days so enabling the (default-on) toggle does not silently backfill a
+    // month of history into the athlete's Garmin calendar. finishSession still
+    // exports the session just finished, regardless of age.
+    const exportSince = isoDaysAgo(Math.min(7, days));
+    const exportIds = repo.getSettings().garmin_export_strength ? repo.sessionsEligibleForGarminExport(exportSince) : [];
+    if (strengthIds.length || exportIds.length) {
       import("./enrich.js")
         .then((m) => {
           for (const id of strengthIds) m.enqueueEnrich("garmin_strength", id);
+          // After the strength reconcile above, so a session that just linked a watch
+          // activity is exported against its new target rather than the old one.
+          for (const id of exportIds) m.enqueueEnrich("garmin_export", id);
         })
         .catch(() => {});
     }

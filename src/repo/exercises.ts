@@ -13,6 +13,7 @@ import {
   setExerciseAlias,
 } from "./exercise-canon.js";
 import { repointGuidesOnMerge } from "./exercise-guide.js";
+import { isValidGarminRef, mapExerciseToGarmin, sameExerciseIdentity } from "./garmin-exercise-map.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
@@ -29,6 +30,9 @@ export interface ExerciseRow {
   cues?: string | null;
   equipment?: string | null;
   enrichment_status?: string | null;
+  garmin_category?: string | null;
+  garmin_exercise?: string | null;
+  garmin_map_status?: string | null;
 }
 
 function validMode(mode: any): string | undefined {
@@ -93,7 +97,58 @@ export function findOrCreateExercise(name: string, muscle_group?: string, constr
   const info = db
     .prepare(`INSERT INTO exercises (name, muscle_group, constraint_note, mode) VALUES (?, ?, ?, ?)`)
     .run(cleanName, resolvedGroup ?? null, constraint_note ?? null, resolvedMode);
+  // Every genuinely-new movement gets its deterministic Garmin FIT mapping right
+  // here, on the INSERT — so seed, plan import and a hand-logged set all resolve one
+  // the same way, with no agent involved. The agentic layer only ever refines the
+  // long tail this floor could not place (see applyExerciseEnrichment).
+  ensureGarminMapping(Number(info.lastInsertRowid));
   return db.prepare(`SELECT * FROM exercises WHERE id = ?`).get(info.lastInsertRowid);
+}
+
+// Resolve and store the FIT category/sub-exercise pair for one movement, from its
+// name plus whatever tags it already carries. Fill-only: a row already 'mapped' (an
+// agent-refined or hand-corrected pair) is left alone, and an unmappable name is
+// remembered as 'unmapped' rather than re-scored on every read. Never throws — a
+// missing mapping only means that lift isn't included in a write-back.
+export function ensureGarminMapping(id: number): { category: string | null; exercise: string | null; status: string } {
+  const ex = getExercise(id);
+  if (!ex) return { category: null, exercise: null, status: "unmapped" };
+  const status = String(ex.garmin_map_status ?? "");
+  const already = String(ex.garmin_category ?? "").trim();
+  if (status === "mapped" && already) return { category: already, exercise: ex.garmin_exercise ?? null, status };
+  if (status === "skipped" || status === "unmapped") return { category: null, exercise: null, status };
+  try {
+    const hit = mapExerciseToGarmin(String(ex.name), {
+      muscle_group: ex.muscle_group ?? null,
+      equipment: ex.equipment ?? null,
+    });
+    const mapped = hit.confidence !== "none" && isValidGarminRef(hit);
+    db.prepare(`UPDATE exercises SET garmin_category = ?, garmin_exercise = ?, garmin_map_status = ? WHERE id = ?`).run(
+      mapped ? hit.category : null,
+      mapped ? hit.exercise : null,
+      mapped ? "mapped" : "unmapped",
+      id
+    );
+    return mapped
+      ? { category: hit.category, exercise: hit.exercise, status: "mapped" }
+      : { category: null, exercise: null, status: "unmapped" };
+  } catch {
+    return { category: null, exercise: null, status: "unmapped" };
+  }
+}
+
+// The ONE gate that decides whether a freshly-created movement gets a background
+// enrichment job. Both the user-facing upsert and the log-a-set path call it, so
+// the "only queue when enrichment is enabled, otherwise record 'skipped' directly"
+// rule cannot drift between them (a disabled install must not accrue pending churn).
+export function queueExerciseEnrichment(id: number): "pending" | "skipped" {
+  const status = getSettings().enrich_enabled ? "pending" : "skipped";
+  setExerciseEnrichStatus(id, status);
+  if (status === "pending") {
+    // enrich.ts imports repo.ts, so import lazily to avoid a module-eval cycle.
+    import("../enrich.js").then((m) => m.enqueueEnrich("exercise", id)).catch(() => {});
+  }
+  return status;
 }
 
 // Create-or-update by name: new exercises get the given fields; existing ones
@@ -128,20 +183,17 @@ export function upsertExercise(
   const row = findOrCreateExercise(name, input.muscle_group ?? undefined, undefined, input.mode ?? undefined);
   const created = !!row && Number(row.id) > beforeMax;
   if (created && opts.enrich) {
-    // Only queue when enrichment is enabled — otherwise record 'skipped' directly
-    // (no pending churn), mirroring addActivity/addFoodNote.
-    const status = getSettings().enrich_enabled ? "pending" : "skipped";
-    setExerciseEnrichStatus(Number(row.id), status);
-    if (status === "pending") {
-      // enrich.ts imports repo.ts, so import lazily to avoid a module-eval cycle.
-      import("../enrich.js").then((m) => m.enqueueEnrich("exercise", Number(row.id))).catch(() => {});
-    }
+    queueExerciseEnrichment(Number(row.id));
     return getExercise(Number(row.id)); // re-read so enrichment_status rides along
   }
   return row;
 }
 
-function maxExerciseId(): number {
+// AUTOINCREMENT ids are monotonic, so an id above the pre-call max is the reliable
+// "a new row was inserted" signal — findOrCreateExercise may instead resolve to an
+// existing row via alias/key/clean-dupe. Exported for the log-a-set path, which asks
+// the same question.
+export function maxExerciseId(): number {
   return Number((db.prepare(`SELECT COALESCE(MAX(id), 0) AS m FROM exercises`).get() as any)?.m ?? 0);
 }
 
@@ -180,15 +232,31 @@ function exerciseReferenceCount(id: number): { logs: number; plan: number } {
 // Conservative, in order:
 //   - canonical: if it names an EXISTING different movement → merge THIS into it
 //     (repoints FKs by id, deletes the dup, records the alias). If it's a cleaner
-//     name with no collision AND this row is still unreferenced (a freshly-added
-//     off-plan movement) → rename by id + record the alias. Otherwise leave the
-//     name and just record the alias so a future re-add resolves cleanly.
+//     name with no collision AND either this row is still unreferenced (a freshly-
+//     added off-plan movement) OR the canonical is demonstrably the SAME lift
+//     (sameExerciseIdentity — "DB Incline Press" → "Incline Dumbbell Press") →
+//     rename by id + record the alias. Otherwise leave the name and just record the
+//     alias so a future re-add resolves cleanly.
 //   - muscle_group: only fills a null/"other" group with a recognized value.
 //   - equipment: only fills an empty equipment tag.
 //   - mode: only when there are no logged sets yet (mode drives logging shape).
+//   - garmin_category/garmin_exercise: validated against the FIT catalog, fill-only.
+//
+// The rename rule is deliberately about IDENTITY, not references: a logged movement
+// may be relabelled to a cleaner name for the same lift (the label is display text;
+// the logged numbers never move, and the id is stable), but it is never renamed
+// across a real implement/angle difference — that would silently turn one lift's
+// history into another's. sameExerciseIdentity is the guard, and it fails closed.
 export function applyExerciseEnrichment(
   id: number,
-  fields: { canonical?: string | null; muscle_group?: string | null; mode?: string | null; equipment?: string | null },
+  fields: {
+    canonical?: string | null;
+    muscle_group?: string | null;
+    mode?: string | null;
+    equipment?: string | null;
+    garmin_category?: string | null;
+    garmin_exercise?: string | null;
+  },
 ): { id: number; name: string } {
   const cur = getExercise(id);
   if (!cur) return { id, name: "" };
@@ -206,14 +274,20 @@ export function applyExerciseEnrichment(
         name = String(other.name);
       }
     } else if (!other) {
-      // No collision — safe to rename by id, but ONLY while the row is still
-      // unreferenced (a freshly-added off-plan movement). Once it has logged sets
-      // or sits in the plan, keep the name the athlete has been using.
+      // No collision — safe to rename by id when the row is still unreferenced (a
+      // freshly-added off-plan movement) OR when the canonical is the SAME lift
+      // spelled cleanly. Anything else keeps the name the athlete has been using.
       const refs = exerciseReferenceCount(id);
-      if (refs.logs === 0 && refs.plan === 0) {
+      if ((refs.logs === 0 && refs.plan === 0) || sameExerciseIdentity(name, proposed)) {
         db.prepare(`UPDATE exercises SET name = ? WHERE id = ?`).run(proposed, id);
         setExerciseAlias(normalizeExerciseName(name), proposed);
         name = proposed;
+        // The old messy name may have mapped to the wrong FIT enum; the clean one
+        // deserves a fresh look. The floor runs after the agent's pick below so a
+        // valid shortlist choice wins, and a group fill can inform the retry.
+        db.prepare(
+          `UPDATE exercises SET garmin_category = NULL, garmin_exercise = NULL, garmin_map_status = NULL WHERE id = ?`
+        ).run(id);
       }
     }
   }
@@ -239,6 +313,29 @@ export function applyExerciseEnrichment(
   if (mode && mode !== ex.mode && exerciseReferenceCount(workingId).logs === 0) {
     db.prepare(`UPDATE exercises SET mode = ? WHERE id = ?`).run(mode, workingId);
   }
+
+  // The agent's FIT mapping, held to the catalog's own enum. An invented category
+  // or sub-exercise is dropped outright (Garmin would 400 the whole PUT), and an
+  // already-mapped pair is never replaced by an empty or invalid one — the
+  // deterministic floor stands until something strictly better validates.
+  const proposedCategory = String(fields.garmin_category ?? "").trim().toUpperCase();
+  const proposedExercise = String(fields.garmin_exercise ?? "").trim().toUpperCase() || null;
+  if (proposedCategory) {
+    const ref = { category: proposedCategory, exercise: proposedExercise };
+    const alreadyMapped = String(ex.garmin_map_status ?? "") === "mapped" && !!String(ex.garmin_category ?? "").trim();
+    if (!alreadyMapped && isValidGarminRef(ref)) {
+      db.prepare(
+        `UPDATE exercises SET garmin_category = ?, garmin_exercise = ?, garmin_map_status = 'mapped' WHERE id = ?`
+      ).run(ref.category, ref.exercise, workingId);
+    }
+  }
+
+  // ensureGarminMapping early-returns once a row is already 'mapped' OR 'unmapped'
+  // (that memoized 'unmapped' is deliberate — never re-score a row we already
+  // scored and rejected). So this call only actually re-scores after the RENAME
+  // path above has cleared garmin_map_status to null; a group/equipment fill
+  // never touches the status and this is a no-op for it, same as a mapped row.
+  ensureGarminMapping(workingId);
 
   return { id: workingId, name };
 }

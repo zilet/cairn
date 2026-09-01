@@ -96,6 +96,20 @@ test("local dinner and nearby restaurant discovery always require current resear
   }
 });
 
+test("a pasted http(s) URL on a coaching question is current research; a capture log is not", () => {
+  const study = decideChatRouting({
+    message:
+      "And I am curious about this study? https://www.sciencedaily.com/releases/2015/07/150716180913.htm?hl=en-US",
+  });
+  assert.equal(study.lane, "deep");
+  assert.ok(study.reason_codes.includes("current_research"));
+
+  const food = decideChatRouting({ message: "Log lunch: chicken and rice https://menu.example.org/today" });
+  assert.equal(food.lane, "capture");
+  assert.ok(food.reason_codes.includes("explicit_food_log"));
+  assert.ok(!food.reason_codes.includes("current_research"));
+});
+
 test("unsupported historical activity, weight, and supplement corrections stay out of capture", () => {
   for (const message of [
     "Correction: yesterday's weight was 179.0, not 178.0",

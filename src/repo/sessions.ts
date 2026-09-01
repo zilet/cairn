@@ -14,7 +14,13 @@ import {
 import { activitySportWhere, canonicalEnduranceSport } from "./endurance-sports.js";
 import { MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
-import { findExercise, findOrCreateExercise, listExercises } from "./exercises.js";
+import {
+  findExercise,
+  findOrCreateExercise,
+  listExercises,
+  maxExerciseId,
+  queueExerciseEnrichment,
+} from "./exercises.js";
 import { listContextEvents, listHealthReviews } from "./health.js";
 import { invalidateDayRead, invalidateDayReadIfDecisionChanged } from "./intelligence.js";
 import { listMemory, listSuggestions } from "./memory.js";
@@ -201,6 +207,18 @@ export function finishSession(sessionId: number, notes?: string | null) {
   // Stage 4: reconcile the accepted daily-session composition against what was
   // actually trained (idempotent, additive; a no-op for plain plan sessions).
   reconcileDailySessionSafe(sessionId);
+  // The work Cairn owns goes back to the watch (src/garminExport.ts) — enqueued on
+  // the serial enrichment queue, never inline: an unconfigured connector, a Garmin
+  // outage or a lift with no FIT mapping must all be silent no-ops, and none of them
+  // may fail a finish. The export itself re-checks the toggle, credentials, set
+  // authority and its own fingerprint before touching the network.
+  try {
+    import("../enrich.js")
+      .then((m) => m.enqueueEnrich("garmin_export", sessionId))
+      .catch(() => {});
+  } catch {
+    /* write-back is additive — it must never fail a finish */
+  }
   return { ...getSessionDetail(sessionId), summary: sessionSummary(sessionId) };
 }
 
@@ -500,9 +518,23 @@ function assistSignContext(ex: { id: number; name: string }): { established: boo
   };
 }
 
-function insertSetByName(input: LogSetInput, emitEffects: boolean, normalizeAssistSign = true) {
+function insertSetByName(
+  input: LogSetInput,
+  emitEffects: boolean,
+  normalizeAssistSign = true,
+  opts: LogSetOptions = {}
+) {
   const date = input.date || localDateISO();
+  const beforeMaxExercise = maxExerciseId();
   const ex = findOrCreateExercise(input.exercise, undefined, undefined, input.exercise_mode);
+  // An off-plan movement most often arrives by being LOGGED, not by being added on
+  // the exercises screen — so the log path queues the same background enrichment the
+  // user-facing upsert does (canonical name, group/equipment, guide, art, and the
+  // agentic Garmin mapping for a name the deterministic catalog could not place).
+  // Only on a genuine INSERT, and only for a hand/chat/API log: a Garmin set import
+  // (emitEffects false) keeps the deterministic mapping and stays off the queue,
+  // exactly like seed and plan import.
+  const createdExercise = !!ex && Number(ex.id) > beforeMaxExercise;
   // An explicitly-passed mode also updates an existing exercise (e.g. converting
   // "Plank" to timed on the first timed log).
   if (input.exercise_mode && ["reps", "timed"].includes(input.exercise_mode) && ex.mode !== input.exercise_mode) {
@@ -590,6 +622,12 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean, normalizeAssi
   }
 
   if (emitEffects) reconcileDailySessionSafe(session.id);
+  // A name typed by a PERSON is the one that may still need cleaning up, so the
+  // background 'exercise' job is queued only for a surface-driven log (`opts.enrich`,
+  // exactly like POST /api/exercises' own opt-in) — never for a repo-internal or
+  // connector write. The deterministic FIT mapping already happened on the INSERT
+  // inside findOrCreateExercise, so an unqueued movement is still mapped.
+  if (createdExercise && emitEffects && opts.enrich) queueExerciseEnrichment(Number(ex.id));
 
   return {
     id: info.lastInsertRowid,
@@ -608,8 +646,16 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean, normalizeAssi
   };
 }
 
-export function logSetByName(input: LogSetInput) {
-  return insertSetByName(input, true);
+// `enrich` is set by the surfaces a human logs through (POST /api/sets, the log_set
+// MCP tool) — mirroring upsertExercise's own opt-in — so a brand-new name they typed
+// gets its canonical cleanup + the agentic Garmin mapping refinement, while seed,
+// import and internal callers stay quiet.
+export interface LogSetOptions {
+  enrich?: boolean;
+}
+
+export function logSetByName(input: LogSetInput, opts: LogSetOptions = {}) {
+  return insertSetByName(input, true, true, opts);
 }
 
 export interface GarminSetImportInput {

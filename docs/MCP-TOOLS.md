@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**270 tools.**
+**271 tools.**
 
 | Tool | Description |
 |---|---|
@@ -58,6 +58,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `evolve_program` | Read the deterministic program-state (per-lift trend + plateau/stall) and draft a plan EVOLUTION — progress what's working, deload/rotate what's stalled, introduce novelty, periodize — then route it through the autonomy layer. Under lead_mode='lead' a bounded, reversible evolution quiet-applies at its natural boundary and a structural restructure announces first (with one-tap Undo); under 'review_everything' it stays a DRAFT to review then apply_proposal. Returns the proposal + the program-state snapshot + the autonomy outcome. |
 | `exercise_guide_status` | Whether the optional exercise guide library is imported, and how much of it matched: total guides stored, how many are linked to the athlete's own exercises, how many low-confidence suggestions await confirmation, and how many demonstration photos are cached locally. |
 | `finish_session` | Mark a session finished (optionally attaching notes) and return its summary (sets, tonnage, PRs). |
+| `garmin_export_backfill` | Send finished Cairn strength sessions older than the 7-day sync window back to Garmin, in batches, oldest first. Dry run by default: reports per session what would happen (unchanged / fill_or_replace / create / retarget / drop_surplus / skip_no_mapped_sets), naming the target activity and any Cairn-made shells it would withdraw, and which lifts the FIT catalog could not place, writing and queueing nothing. Pass apply:true to enqueue the exports on the serial queue. |
 | `generate_insight` | Queue one durable whole-picture pass for a genuine connection or weekly read. Returns a job immediately; poll get_agent_job. A valid insight is deduped and waits in-app without a notification. Informational, not medical advice. |
 | `get_active_block` | The active periodization block (goal / focus / phase / week N of M), or null. The mesocycle the coach periodizes toward. |
 | `get_agent_cli_install_status` | Get the current one-at-a-time coaching-CLI install/update status. Installer output is bounded and secret-redacted. |

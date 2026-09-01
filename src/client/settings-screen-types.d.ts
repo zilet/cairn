@@ -30,6 +30,7 @@ type SettingsScreenWorkingModel = {
   gemini_api_key: string;
   garmin_username: string;
   garmin_password: string;
+  garmin_export_strength: boolean;
   coach_day: number;
   coach_hour: number;
   time_zone: string;
@@ -46,6 +47,7 @@ type SettingsScreenPersistBody = {
   art_enabled: boolean;
   research_enabled: boolean;
   garmin_username: string;
+  garmin_export_strength: boolean;
   coach_day: number;
   coach_hour: number;
   agent_routes: Record<string, string>;

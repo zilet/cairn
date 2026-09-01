@@ -1310,6 +1310,10 @@ export function reconcileGarminStrength(garminActivityId: number) {
     // Absent means pending: processGarminStrengthJob resolves it from the current
     // set state immediately before any watch-derived sets can be written.
     ...(setAuthority === undefined ? {} : { cairn_sets_authoritative: setAuthority }),
+    // What we already wrote BACK to Garmin (src/garminExport.ts). The blob is rebuilt
+    // from scratch on every reconcile, so without this a routine re-sync would forget
+    // the export and the next pass would re-write the same sets onto the watch.
+    ...(existing?.export ? { export: existing.export } : {}),
     // Carry the agentic narrative forward whenever the day already had one.
     summary: existing ? (existing.summary ?? null) : null,
     intensity: existing ? (existing.intensity ?? null) : null,
@@ -1392,7 +1396,24 @@ export function revertGarminReconcile(payload: GarminReconcileRollbackPayload): 
     const stillOwned =
       entry.activity_ids.length === linked.length && entry.activity_ids.every((id) => linked.includes(id));
     if (!stillOwned) continue;
-    db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(entry.prior_garmin_json, entry.session_id);
+    const current = db.prepare(`SELECT garmin_json FROM sessions WHERE id = ?`).get(entry.session_id) as any;
+    let restored = entry.prior_garmin_json;
+    // An export that landed AFTER the snapshot was taken must survive Undo: dropping
+    // it would make the next write-back invent a second manual activity for a day
+    // that already has one.
+    try {
+      const currentBlob = current?.garmin_json ? JSON.parse(current.garmin_json) : null;
+      const exportRecord = currentBlob?.export;
+      if (exportRecord) {
+        const priorBlob = restored ? JSON.parse(restored) : {};
+        const merged = priorBlob && typeof priorBlob === "object" && !Array.isArray(priorBlob) ? priorBlob : {};
+        merged.export = exportRecord;
+        restored = JSON.stringify(merged);
+      }
+    } catch {
+      /* a bad blob keeps the snapshot as-is */
+    }
+    db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(restored, entry.session_id);
     for (const id of entry.activity_ids) {
       db.prepare(`UPDATE garmin_activities SET session_id = NULL WHERE id = ?`).run(id);
     }

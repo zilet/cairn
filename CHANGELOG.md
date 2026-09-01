@@ -5,6 +5,45 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+### Added
+
+- **Your strength sessions now show up on Garmin** — finish a session in Cairn and its exercises and
+  sets are added to that day on Garmin Connect. When the watch recorded the workout too, the sets go
+  onto that recording in place, so heart rate, duration and calories stay exactly as they are and the
+  day never shows two activities; when you lifted with your phone alone, Cairn creates the strength
+  activity for you. A day Garmin logged by itself is left alone, and if the watch's own recording
+  turns up after Cairn already created one, the work moves onto the watch's and the placeholder goes
+  away. A Garmin sync only looks back a week for sessions to send, so flipping the switch on does
+  not dump a month of old workouts into Garmin. Runs, sleep and recovery still come in from Garmin
+  exactly as before. On by default, with a switch in Settings → Sources → Garmin Connect.
+- **You can send your whole training history to Garmin, once you've seen what it would do** — a
+  sync only ever looks back a week, so older sessions stay put unless you ask. Asking shows you the
+  list first: every finished session, oldest first, what would happen to it, and which lifts Garmin
+  wouldn't recognise — with nothing sent. Say go and the sessions are sent in small batches, oldest
+  first, so Garmin's calendar fills in the order you actually trained. You can also ask a coaching
+  pass to tidy up the movements in that history first — both the ones Garmin's catalog couldn't
+  place and the ones that were logged before Cairn started cleaning names up, which on a long-lived
+  log is most of the messy ones.
+- **Cairn speaks the watch's exercise vocabulary** — a lift is matched against Garmin's own exercise
+  catalog (1527 movements) before anything is sent, so a bench press reads as a bench press on the
+  watch rather than an unnamed set. The match is offline and needs no agent; the harder names are
+  offered to a coaching agent as a shortlist to choose from, and a movement neither can place is
+  quietly left out instead of guessed at. Logging a new movement from a session or from chat can
+  spend a coaching pass to tidy the name so the catalog stays consistent.
+- **A movement can be renamed to the name you'd actually write** — "db incline press" becomes
+  "Incline Dumbbell Press" even after you've logged sets against it. Your numbers and history stay
+  exactly where they are, and a rename across a real difference (barbell vs dumbbell, incline vs
+  flat) is still refused.
+
+### Fixed
+
+- **Chat can read a pasted link without a headless CLI** — Antigravity's print mode auto-denies
+  browse/shell tools it cannot prompt for, and exits with no answer. Cairn now fetches the page
+  itself (the same pattern as listing a health-export folder so the agent never needs `ls`), drops
+  the readable text into the prompt, and grants agy the scoped `read_url(*)` rule Google documents
+  for headless fetching. A pasted study URL is also routed as current research, so a web-capable
+  agent is preferred when one is actually available.
+
 ## [1.7.6] — 2026-08-31
 
 The theme of this patch is a coach that believes the log. What you actually lifted, ran, and ate

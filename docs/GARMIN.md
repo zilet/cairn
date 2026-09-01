@@ -143,6 +143,136 @@ The coach receives a compact summary (it never sees the raw rows):
   training-load-balance phrase (latest non-null) where available
 - source status and last sync
 
+## Strength Write-Back (Cairn → Garmin)
+
+Garmin is the INPUT for runs, sleep and recovery, and that stays true. Strength is the
+one thing that also travels the other way: an athlete who lifts with Cairn on their
+phone had a blank strength history on Garmin, and one who started the watch got a
+recording with no exercises in it. So a **finished** Cairn strength session is pushed
+back as that day's exercise sets (`src/garminExport.ts`), in one of three shapes:
+
+1. **Cairn-only** (no watch activity that day) — Cairn creates a manual strength
+   activity (`POST /activity-service/activity/manual`) and writes the sets onto it. The
+   activity is mirrored into `garmin_activities` and reconciled, so the day shows ONE
+   strength activity and a later real sync of the same id updates that row.
+2. **Parallel** (Cairn sets AND a same-day Garmin strength activity) — the sets are
+   written onto the EXISTING watch activity, in place. Never a second upload: the
+   watch's heart rate, duration and calories are the physiology worth keeping, and a
+   duplicate activity would double-count the day everywhere Garmin aggregates.
+3. **Garmin-only** (`sessions.garmin_json.cairn_sets_authoritative === false`) —
+   Garmin's own detected sets are the truth for that day and are never overwritten.
+
+And one repair: if a manual activity was created and the watch's own recording of the
+same workout syncs afterwards, the sets move onto the watch activity, the manual shell
+is deleted, and `export` retargets to the watch id. The day ends up with one activity.
+Heart rate and calories rank *which* watch recording is the richer home; they do not
+gate the move — a watch activity with no HR still owns the day.
+
+**The endpoint is UNOFFICIAL** — `PUT /activity-service/activity/{id}/exerciseSets`, on
+the same undocumented connectapi surface the read path already uses. Every failure is
+therefore a quiet no-op: the Cairn log is the record of truth and a write that didn't
+land costs nothing but a retry on the next sync. A create that lands and a PUT that
+then fails is remembered locally so the retry writes onto the same activity rather
+than inventing a second one.
+
+**FILL vs REPLACE.** When writing onto a watch activity Cairn first GETs the existing
+`exerciseSets`. If the watch recorded *exactly* as many plausible ACTIVE slots
+(duration ≤ 600 s) as Cairn logged sets, the exercise/reps/load are written INTO those
+slots — the watch knows *when* each set happened, which is evidence Cairn does not have
+— and REST periods are left exactly as they were. A timed hold overlays its logged
+duration onto the slot. A mismatch (three logged sets onto an eight-set watch session)
+is REPLACE: one ACTIVE slot per Cairn set, spread across the session span. A positional
+fill of the first N would relabel the wrong lifts.
+
+**Lookback.** `finishSession` exports the session just finished. A Garmin *sync* only
+enqueues finished sessions from the last 7 days, so turning the (default-on) toggle on
+does not silently backfill a month of history into the athlete's Garmin calendar.
+
+### Backfilling history
+
+The 7-day lookback is a guard, not a limit: an athlete who *wants* their whole Cairn
+strength history on Garmin gets it explicitly, through `POST /api/garmin/export-backfill`
+(MCP: `garmin_export_backfill`, `src/garminExportBackfill.ts`). It is batched and
+**dry-run first**.
+
+A dry run (the default) touches no network and enqueues nothing. It walks the eligible
+finished sessions **oldest first** — `since` / `until` scope the window, `limit` caps the
+batch (default 25, clamped 1–100) — and reports for each one its date, set count, how
+many sets actually map onto the FIT catalog, the lifts that don't, the linked watch
+activity if there is one, the activity the sets would land on (`target_activity_id`), the
+shells it would withdraw (`surplus_activity_ids`), the prior export record, and `planned`:
+`unchanged` / `fill_or_replace` / `create` / `retarget` (the sets move onto the watch's own
+recording and Cairn's shells are withdrawn) / `drop_surplus` (nothing is rewritten; only a
+surplus shell is removed) / `skip_no_mapped_sets`. `total_eligible` and `remaining` say how
+much history is left to walk.
+
+`planned` and `predicted_fingerprint` are a PREDICTION. `planned` **calls the exporter's own
+target decision** (`planGarminExportTarget`) rather than restating it — a second copy of
+those rules is how a preview starts lying about retargets and orphaned shells — but a watch
+recording can sync or a set can be edited between the preview and the job, in which case
+`exportSessionToGarmin`'s answer wins. It stays the single authority; nothing here writes to
+Garmin itself.
+
+`{apply: true}` enqueues every session that is not `unchanged` or `skip_no_mapped_sets` as
+ordinary `garmin_export` jobs,
+oldest first, so the serial enrichment queue paces the writes and Garmin's calendar fills
+forward in time.
+
+`{refine_unmapped: true}` additionally hands the movements in the batch to the agentic
+`exercise` enrichment pass (the prompt carries the FIT candidate shortlist;
+`applyExerciseEnrichment` validates the pick). **Two cohorts qualify**, reported with a
+`reason` in `refine_candidates` / `refine_queued`:
+
+- `unmapped` — the catalog could not place the lift, so it is silently missing from every
+  export.
+- `never_enriched` — `exercises.enrichment_status IS NULL`: the row was created before the
+  background cleanup was wired up, so its name was never canonicalized and its group and
+  equipment were never classified. An install of that vintage carries a tail of raw names
+  ("Seated leg press - machine", "Single arm DB pulls"), and tidying one is often exactly
+  what lets the catalog place it on the next pass — so a mapped-but-unenriched lift is a
+  candidate too. The job is idempotent and the rename is identity-guarded, so re-queuing
+  costs nothing.
+
+Queueing goes through `queueExerciseEnrichment`, which stamps `enrichment_status` to
+`pending` and enqueues, and it is gated on both `enrich_enabled` and `apply` — spending an
+agent is a real action a dry run must not take. A dry run still lists both cohorts in
+`refine_candidates` and stamps nothing.
+
+The toggle and the credentials gate the whole run: with either missing the result is
+`{ok:true, skipped:"export_disabled"|"garmin_not_configured"}` — the exporter's own
+vocabulary.
+
+**Mapping.** Garmin's strength model is a two-level FIT enum (a category such as
+`BENCH_PRESS` plus an optional sub-exercise such as `BARBELL_BENCH_PRESS`), and an
+unknown member 400s the whole payload. `src/repo/garmin-exercise-map.ts` resolves a
+Cairn name against a checked-in catalog (`src/garmin-exercise-catalog.json`, 1527 rows
+across 47 categories) — exact, token-key, fuzzy, or category-only — and never invents an
+enum. The pair is stored on `exercises.garmin_category` / `garmin_exercise` /
+`garmin_map_status` at insert, with no agent involved, so write-back works on a fresh
+offline install. The long tail the catalog cannot place is offered to the `exercise`
+enrichment agent as a shortlist it must choose from (or return null for), validated
+again by `isValidGarminRef` before it is stored. A lift that still has no mapping is
+simply left out of the payload; if NOTHING maps, the export is skipped whole. On a 400
+the PUT is retried once with the sub-names dropped, since a bare category is always
+legal.
+
+Weight on the wire is **grams**. Cairn's encodings survive: a negative weight (assist)
+and a null (bodyweight) both send no load at all, and a timed exercise sends a duration
+with no reps.
+
+**Idempotency.** A successful write is recorded on `sessions.garmin_json.export` as
+`{ activity_id, source: "watch"|"manual", fingerprint, exported_at, mode }`. The
+fingerprint is a stable hash of the ordered logged sets and their mapping, so a
+re-finish, a re-sync or a scheduler pass over an unchanged session skips before touching
+the network — while editing one rep re-exports.
+
+**Toggle.** Settings → Sources → Garmin Connect → "Send finished strength sessions back
+to Garmin" (`settings.garmin_export_strength`, default ON; also settable via MCP
+`set_settings`). Off, nothing is ever written. The work runs on the serial enrichment
+queue as the `garmin_export` kind — enqueued by `finishSession` and by `syncGarmin` for
+finished sessions in the sync window — and is deliberately independent of
+`enrich_enabled`, since it is deterministic and involves no agent.
+
 ## Official Garmin API Request
 
 Garmin's Connect Developer Program is the right official path for any shared,

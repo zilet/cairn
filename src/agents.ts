@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { agentCliPath, agentDataDir, buildAgentSpawnOptions, promptReferencesDataDir } from "./agentExecution.js";
 import type { JsonSchema } from "./json-schema.js";
 import { telemetryModelName } from "./telemetry-privacy.js";
+import { ensureAntigravityHeadlessPermissions } from "./antigravityPermissions.js";
 import {
   availabilityHolds,
   availabilityReason,
@@ -1656,6 +1657,9 @@ function runAgentImpl(
   return new Promise((resolve, reject) => {
     // Already-aborted before launch (Stop landed while queued): don't spawn.
     if (signal?.aborted) { removeSchemaDir(); reject(new Error(`agent "${name}" canceled`)); return; }
+    if (name === "antigravity") {
+      try { ensureAntigravityHeadlessPermissions(); } catch { /* never block a spawn */ }
+    }
     const child = spawn(def.command, args, buildAgentSpawnOptions({
       kind: "agent",
       prompt,
@@ -1841,6 +1845,9 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
 
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new Error(`agent "${name}" canceled`)); return; }
+    if (name === "antigravity") {
+      try { ensureAntigravityHeadlessPermissions(); } catch { /* never block a spawn */ }
+    }
     const child = spawn(def.command, args, buildAgentSpawnOptions({
       kind: "chat",
       prompt,

@@ -1499,6 +1499,19 @@ REST surface: `GET /api/chat/turns/:id/stream` (SSE: a `snapshot` then `phase`/`
 /api/chat/turns` (active = queued+running, oldest-first), `GET /api/chat/turns/:id` (poll fallback),
 `POST /api/chat/turns/:id/cancel`, `POST /api/chat/reset` (distill-to-memory, then archive).
 
+**Pasted URLs are fetched by Cairn, not the CLI.** Headless `agy -p` auto-denies Ask-default tools
+(`command`, `read_url`) because it cannot prompt, then exits 0 with empty stdout — which is how a
+"what about this study?" turn with a ScienceDaily link used to die as `permission_denied` while
+Claude/Grok/Codex were on quota. `extractChatHttpUrls` / `fetchChatLinkedPages` (`src/chatLinks.ts`)
+pull at most three plausible http(s) pages (SSRF-safe via `isPlausibleSourceUrl`, including the
+post-redirect URL; 8s / 1.5 MB / 12k chars), convert HTML to readable text, and `buildChatPrompt`
+injects a LINKED PAGE block that tells the agent not to curl. Capture stays receipt-fast and skips
+the network. Independently, `ensureAntigravityHeadlessPermissions` merges `read_url(*)` into
+`~/.gemini/antigravity-cli/settings.json` on every agy spawn — the scoped grant Google documents,
+never `--dangerously-skip-permissions` (that would auto-approve writes and shell against a pasted
+page's prompt injection). A coaching turn that contains an http(s) URL also picks up
+`current_research`, so `preferWeb` can start with Claude when it is actually available.
+
 ---
 
 ## Provider availability (`src/agentAvailability.ts` + `src/repo/agent-availability.ts`)
@@ -2346,8 +2359,8 @@ to (a) refine the entry's structured fields and (b) distill genuinely-notable du
 file path** (`buildHealthEnrichPrompt`) — the CLIs can open local files — to extract markers + a
 summary + memory.
 
-- **Kinds**: `'activity' | 'food' | 'health'` (plus `'garmin_strength'`, `'exercise'`, `'food_photo'`
-  and `'symptom'` — see "Symptom capture" below). **Status machine** on
+- **Kinds**: `'activity' | 'food' | 'health'` (plus `'garmin_strength'`, `'garmin_export'`,
+  `'exercise'`, `'food_photo'` and `'symptom'` — see "Symptom capture" below). **Status machine** on
   `activities`/`food_notes`/`health_documents` `.enrichment_status`: `pending` → `in_progress` (set
   *before* the agent `await`, so a crash leaves a recoverable marker) → `done`/`failed`/`skipped` (or
   `null` = not applicable). `recoverPendingEnrich()` (called from `server.ts` at boot) re-enqueues
@@ -2366,6 +2379,18 @@ summary + memory.
 - Degrades gracefully end-to-end: disabled / no agent → `skipped` (written directly at insert, no
   queue churn); a failure or wrong-shape (e.g. coach-proposal) response → `failed`/no-op with the
   regex parse (or the as-uploaded doc) left intact.
+- `'garmin_export'` is the one kind that is **not agentic**: it pushes a finished Cairn strength
+  session back to Garmin (`exportSessionToGarmin`, `src/garminExport.ts`) as that day's exercise
+  sets. Like `'garmin_strength'` it has no status column of its own (the status setters and
+  `markFailed` ignore it), and it deliberately runs regardless of `enrich_enabled` — there is no CLI
+  in the path. The FIT mapping it writes with lives on `exercises.garmin_category` /
+  `garmin_exercise` / `garmin_map_status` (resolved deterministically at insert by
+  `src/repo/garmin-exercise-map.ts`, refined for the long tail by the `'exercise'` job's validated
+  candidate choice), and what Garmin already holds is recorded on `sessions.garmin_json.export`
+  (`{activity_id, source, fingerprint, exported_at, mode}`) so an unchanged session skips before any
+  network call. `reconcileGarminStrength` carries that record forward when it rebuilds the blob.
+  Full behavior — the three write cases, FILL vs REPLACE, the retarget repair — is in
+  `docs/GARMIN.md`.
 
 ### Health ingestion is completeness-first
 

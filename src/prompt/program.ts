@@ -1,5 +1,8 @@
 // Program-facing prompts: the exercise how-to explanation, the exercise-name
 // reconciliation, and the free-text onboarding extraction.
+// Imported from the module, not the repo barrel: the mapper is pure (a static FIT
+// catalog + token math, no db), so the prompt layer can ask it directly.
+import { garminCandidatesForPrompt, mapExerciseToGarmin } from "../repo/garmin-exercise-map.js";
 import { CAIRN_PERSONA, renderJsonContract } from "./shared.js";
 
 const EXERCISE_EXPLANATION_SCHEMA = `{
@@ -88,7 +91,9 @@ const EXERCISE_ENRICH_SCHEMA = `{
   "canonical": "<the clean, canonical Title-Case name of THIS SAME movement (fix casing/typos/junk, keep the implement + angle); return it unchanged if already clean>",
   "muscle_group": "<primary muscle group, ONE of: chest, back, shoulders, biceps, triceps, quads, hamstrings, glutes, calves, core, forearms, rear delts, mobility — or null if genuinely unclear>",
   "mode": "reps|timed",
-  "equipment": "<short phrase for the main implement, e.g. 'a cable machine', 'a barbell', 'dumbbells', 'a resistance band', 'bodyweight' — or null if unclear>"
+  "equipment": "<short phrase for the main implement, e.g. 'a cable machine', 'a barbell', 'dumbbells', 'a resistance band', 'bodyweight' — or null if unclear>",
+  "garmin_category": "<the CATEGORY of the ONE candidate below that is this same movement, copied EXACTLY — or null if none of them is>",
+  "garmin_exercise": "<that candidate's EXERCISE, copied EXACTLY, or null when the candidate has none / only the category fits>"
 }`;
 
 export function buildExerciseEnrichPrompt(detail: any): string {
@@ -96,8 +101,27 @@ export function buildExerciseEnrichPrompt(detail: any): string {
     name: detail?.name ?? "",
     muscle_group: detail?.muscle_group ?? null,
     mode: detail?.mode ?? "reps",
+    equipment: detail?.equipment ?? null,
     constraint_note: detail?.constraint_note ?? null,
   };
+  // The FIT taxonomy the watch speaks. The deterministic mapper already answered as
+  // far as its token overlap can (src/repo/garmin-exercise-map.ts); the model is
+  // asked only for the long tail it could not place, and STRICTLY as a choice from
+  // the shortlist — an invented enum is rejected by Garmin, so it must not be
+  // possible for the model to produce one.
+  const suggestion = mapExerciseToGarmin(String(ex.name), {
+    muscle_group: ex.muscle_group,
+    equipment: ex.equipment,
+  });
+  const candidates = garminCandidatesForPrompt(String(ex.name), 12, {
+    muscle_group: ex.muscle_group,
+    equipment: ex.equipment,
+    resolved: suggestion,
+  }).map((c) => ({
+    display: c.display,
+    category: c.category,
+    exercise: c.exercise,
+  }));
   return `You are a strength-training data librarian tidying ONE exercise a user just added to their log.
 Classify this single movement so the app can file it cleanly. Do NOT invent or substitute a different exercise.
 
@@ -106,12 +130,20 @@ RULES:
 - "muscle_group": the primary muscle group it trains, from the allowed list, or null if genuinely unclear.
 - "mode": "timed" for a held position measured in seconds (plank, dead hang, wall sit, a stretch); "reps" for anything counted in reps.
 - "equipment": a short phrase naming the main implement, or null if unclear.
+- "garmin_category" / "garmin_exercise": the movement's slot in the watch's own exercise taxonomy, so a session logged here reads correctly on the watch.
+  • You MUST copy a category/exercise pair VERBATIM from GARMIN_CANDIDATES below. NEVER invent, translate, abbreviate or reword an enum — an unknown value is rejected outright.
+  • Pick the candidate that is the SAME movement. A different implement or angle is a different movement: prefer the candidate whose implement matches, and if only the general family matches, return that candidate's category with "garmin_exercise": null.
+  • If NONE of the candidates is this movement, return null for BOTH. That is a perfectly good answer — a wrong match is worse than no match.
+${suggestion.confidence === "none" ? "  • The offline mapper could not place this one, so your read matters here." : `  • The offline mapper already suggests {"category":${JSON.stringify(suggestion.category)},"exercise":${JSON.stringify(suggestion.exercise)}} (${suggestion.confidence} match). Confirm it, or choose a better candidate.`}
 - Plain words, no scores. Informational only; never diagnose or make clinical claims.
 
 ${renderJsonContract(EXERCISE_ENRICH_SCHEMA)}
 
 EXERCISE:
-${JSON.stringify(ex)}`;
+${JSON.stringify(ex)}
+
+GARMIN_CANDIDATES:
+${JSON.stringify(candidates)}`;
 }
 
 // Agentic exercise reconciliation — the clean-naming layer over the deterministic

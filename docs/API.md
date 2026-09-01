@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**328 routes** across 113 groups.
+**329 routes** across 113 groups.
 
 ## `/activities`
 
@@ -330,6 +330,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | POST | `/api/garmin/activities` |  |
 | GET | `/api/garmin/daily` |  |
 | POST | `/api/garmin/daily` |  |
+| POST | `/api/garmin/export-backfill` | Send FINISHED Cairn strength sessions from before the 7-day sync window back to Garmin. Dry run unless {apply:true}: the preview says what each session would do and which lifts the FIT catalog cannot place, and nothing is written or queued. Applying enqueues ordinary garmin_export jobs, oldest first, on the serial queue. |
 | POST | `/api/garmin/reconcile` | Reconcile synced Garmin strength activities into the day's Cairn session: the deterministic physiology merge runs now; the agentic narrative/extrapolation is queued on the serial enrichment queue. {date} for one day, else {days} window. |
 | GET | `/api/garmin/sources` |  |
 | POST | `/api/garmin/sources` |  |

@@ -18,7 +18,7 @@ type SettingsSurfaceStatusHelpers = {
 };
 
 type SettingsSourcesSliceOptions = {
-  workingModel: Pick<SettingsScreenWorkingModel, "garmin_username">;
+  workingModel: Pick<SettingsScreenWorkingModel, "garmin_username" | "garmin_export_strength">;
   settings: Record<string, unknown>;
   garminStatusHtml: string;
   appleHealth?: AppleHealthUiState;
@@ -133,6 +133,8 @@ function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingMo
     gemini_api_key: "",
     garmin_username: settingsSurfaceString(s.garmin_username),
     garmin_password: "",
+    // Defaults ON: a finished Cairn session belongs on the athlete's Garmin history.
+    garmin_export_strength: settingsSurfaceBool(s.garmin_export_strength, true),
     coach_day: settingsSurfaceNumber(s.coach_day),
     coach_hour: settingsSurfaceNumber(s.coach_hour),
     time_zone: settingsSurfaceString(s.time_zone),
@@ -231,12 +233,16 @@ function settingsSourcesSliceHtml(options: SettingsSourcesSliceOptions): string 
         <div class="field"><label>Garmin password</label>
           <input id="garminPassword" type="password" autocomplete="current-password" placeholder="${garminPlaceholder}">
         </div>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Settings credentials override GARMIN_USERNAME / GARMIN_PASSWORD. Garmin remains an input source for coaching context.</div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Settings credentials override GARMIN_USERNAME / GARMIN_PASSWORD. Runs, sleep and recovery come in from Garmin; finished strength sessions can go back out.</div>
         <div class="syncrow">
           <div class="syncstatus" id="garminStatus">${options.garminStatusHtml}</div>
           <button id="garminSyncBtn" class="ghostbtn syncbtn">Sync now</button>
         </div>
         <div class="sess-line" style="color:var(--muted);margin-top:6px">Once configured, Cairn syncs automatically every ~6 hours.</div>
+
+        <label class="toggle" style="margin-top:14px"><input type="checkbox" id="garminExportStrength" ${wm.garmin_export_strength ? "checked" : ""}>
+          <span>Send finished strength sessions back to Garmin</span></label>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">When you finish a session here, its exercises and sets are added to that day on Garmin — onto the watch's own recording when there is one, so heart rate and calories stay as they are. A day Garmin already logged itself is left alone.</div>
 
         <div id="appleHealthCard">${appleHealthCardHtml(options.appleHealth ?? { loading: true })}</div>
       </section>`;
