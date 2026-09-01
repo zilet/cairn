@@ -117,9 +117,9 @@ release; there are no back-ported patches for older tags.
 
 ## Reporting a vulnerability
 
-Please report security issues **privately** by email:
-
-**milos@spicefactory.co**
+Please report security issues **privately** through GitHub's private vulnerability
+reporting: [github.com/zilet/cairn/security/advisories/new](https://github.com/zilet/cairn/security/advisories/new)
+(the repo's **Security** tab → *Report a vulnerability*).
 
 - Do **not** open a public GitHub issue or pull request for a security report.
 - Include enough detail to reproduce (affected version/tag, steps, impact).

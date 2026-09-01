@@ -44,8 +44,9 @@ is officially representing the community in public spaces.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the
-project maintainer at **milos@spicefactory.co**. All complaints will be reviewed and
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported privately to the
+project maintainer through GitHub (a direct message to the repository owner, or a minimal
+issue asking for a private channel). All complaints will be reviewed and
 investigated promptly and fairly.
 
 ## Attribution
