@@ -117,19 +117,33 @@ export function createLiveGarminStrengthApi(makeClient: () => Promise<any> = mak
       );
     },
     async putExerciseSets(activityId, payload) {
+      // The PUT body mirrors the GET envelope exactly: {activityId, exerciseSets}.
+      // Omitting the top-level activityId 400s ("Activity ID should not be Null in
+      // the Exercises Object") — verified against a live activity's GET shape.
+      const body = { activityId: Number(activityId), ...payload };
       await guard(() =>
         withDeadline("write", (async () =>
-          rawPut(await client(), `/activity-service/activity/${activityId}/exerciseSets`, payload))())
+          rawPut(await client(), `/activity-service/activity/${activityId}/exerciseSets`, body))())
       );
     },
     async createManualActivity(input) {
+      // POST /activity-service/activity — the /manual suffix 405s. The body is the
+      // DTO shape the Connect web app sends; startTimeLocal is LOCAL wall-clock
+      // time, and the process TZ is the athlete's (container TZ env), so a plain
+      // local format of the UTC instant is correct.
+      const startMs = Date.parse(`${input.startTimeGmt.replace(" ", "T")}Z`);
       const created = await guard(() =>
         withDeadline("create", (async () =>
-          rawPost(await client(), "/activity-service/activity/manual", {
+          rawPost(await client(), "/activity-service/activity", {
             activityName: input.name,
-            activityTypeKey: "strength_training",
-            startTimeInGMT: input.startTimeGmt,
-            elapsedDurationInSecs: input.durationSec,
+            activityTypeDTO: { typeKey: "strength_training" },
+            eventTypeDTO: { typeKey: "uncategorized" },
+            timeZoneUnitDTO: { unitKey: localTimeZoneKey() },
+            summaryDTO: {
+              startTimeLocal: localWallClockIso(Number.isFinite(startMs) ? startMs : Date.now()),
+              duration: input.durationSec,
+              distance: 0,
+            },
           }))())
       );
       const activityId = Number(created?.activityId ?? created?.activityIds?.[0] ?? created?.id);
@@ -211,9 +225,27 @@ function garminSlotTime(ms: number): string {
   return `${new Date(ms).toISOString().slice(0, 19)}.0`;
 }
 
-/** "YYYY-MM-DD HH:MM:SS" in UTC — the shape the manual-activity endpoint takes. */
+/** "YYYY-MM-DD HH:MM:SS" in UTC — the internal instant carried to the adapter. */
 export function garminGmtStamp(ms: number): string {
   return new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+}
+
+/** The IANA zone this process runs in — the athlete's own (container TZ env). */
+function localTimeZoneKey(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+/** "YYYY-MM-DDTHH:MM:SS.00" LOCAL wall-clock — summaryDTO.startTimeLocal's shape. */
+function localWallClockIso(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
+    d.getMinutes()
+  )}:${pad(d.getSeconds())}.00`;
 }
 
 function exerciseEntry(set: GarminExportPayloadSet): any[] {
