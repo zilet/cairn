@@ -60,6 +60,11 @@ background scheduler; storage is SQLite via Node's built-in `node:sqlite`. The n
 <td valign="top"><img src="media/screens/16-exercise-detail.png" alt="Exercise detail"><br><sub><b>Every exercise, illustrated.</b> Tap any lift for its est-1RM trend, form cues and history — with a generated studio illustration.</sub></td>
 </tr>
 <tr>
+<td valign="top"><img src="media/screens/18-cairn-session-card.png" alt="A logged session in Cairn"><br><sub><b>Logged in Cairn…</b> A session as you logged it on your phone — sets, loads, a timed hold — no watch involved.</sub></td>
+<td valign="top"><img src="media/screens/19-garmin-activity.png" alt="The same session on Garmin"><br><sub><b>…lands on Garmin.</b> The same workout appears in Garmin Connect as that day's strength activity, muscle map and all.</sub></td>
+<td valign="top"><img src="media/screens/20-garmin-sets.png" alt="Exercise sets in Garmin's own vocabulary"><br><sub><b>In the watch's own words.</b> Every set written in Garmin's exercise vocabulary — reps, loads, order — so your history reads natively there too.</sub></td>
+</tr>
+<tr>
 <td valign="top"><img src="media/screens/07-progress-1rm.png" alt="Strength progress"><br><sub><b>Strength.</b> Est-1RM trend per lift, plus history, volume-by-muscle and a calendar heatmap.</sub></td>
 <td valign="top"><img src="media/screens/08-energy-balance.png" alt="Adaptive nutrition"><br><sub><b>Adaptive nutrition.</b> Expenditure derived from your weight trend — lean-safe, adherence-neutral, never blamey.</sub></td>
 <td valign="top"><img src="media/screens/10-meals.png" alt="Goal-aware meal plan"><br><sub><b>Goal-aware meals.</b> Protein-anchored weekly plans, shaped by the same flagged labs (oily fish &amp; soluble fiber for ApoB, iron on long-run days).</sub></td>

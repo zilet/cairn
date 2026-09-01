@@ -145,6 +145,12 @@ The coach receives a compact summary (it never sees the raw rows):
 
 ## Strength Write-Back (Cairn → Garmin)
 
+<p align="center">
+  <img src="../media/screens/21-garmin-feed.png" alt="Cairn sessions in the Garmin Connect app's activity feed" width="280">
+  <br>
+  <sub>Sessions logged in Cairn, in the Garmin Connect app's own feed — each named after its Cairn day.</sub>
+</p>
+
 Garmin is the INPUT for runs, sleep and recovery, and that stays true. Strength is the
 one thing that also travels the other way: an athlete who lifts with Cairn on their
 phone had a blank strength history on Garmin, and one who started the watch got a
