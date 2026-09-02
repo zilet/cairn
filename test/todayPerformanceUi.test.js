@@ -29,7 +29,11 @@ test("Today starts non-dependent summary reads before later render work", () => 
 });
 
 test("Today starts plan and session requests together on the cold path", () => {
-  assert.match(todayDataLoader, /deps\.cachedApi\("\/today\?date="/, "cold path tries the aggregate first");
+  assert.match(todayDataLoader, /const aggregatePath = "\/today\?date=" \+/, "one aggregate path for both paths");
+  assert.ok(
+    (todayDataLoader.match(/deps\.cachedApi\(aggregatePath,/g) || []).length === 2,
+    "the aggregate is the cold read AND the warm revalidation — never five separate reads",
+  );
   const planPromise = todayDataLoader.indexOf("const planPromise");
   const sessionPromise = todayDataLoader.indexOf("const sessionPromise");
   const awaitBoth = todayDataLoader.indexOf("const [plan, session, stats, profile, exercises] = await Promise.all");
@@ -38,12 +42,12 @@ test("Today starts plan and session requests together on the cold path", () => {
   assert.ok(sessionPromise > planPromise, "session promise starts immediately after plan promise");
   assert.ok(awaitBoth > sessionPromise, "plan and session are awaited together");
   assert.ok(assignPlan > awaitBoth, "plan state is assigned after both independent reads are in flight");
-  assert.match(todayDataLoader, /if\s*\(!aggregate\)\s*\{[\s\S]*revalidate\("\/plan", "plan"\);[\s\S]*revalidate\("\/sessions\?date="/, "independent SWR revalidation stays as aggregate fallback");
+  assert.match(todayDataLoader, /if\s*\(!warm && !aggregate\)\s*\{[\s\S]*revalidate\("\/plan", "plan"\);[\s\S]*revalidate\("\/sessions\?date="/, "independent SWR revalidation stays as aggregate fallback");
 });
 
 test("Today SWR-caches progression and invalidates it when set truth changes", () => {
   assert.match(todayPlanSessionData, /deps\.cachedApi\("\/program\/progression\?day="/);
-  assert.match(todayPlanSessionData, /key:\s*`program:progression:\$\{day\}`/);
+  assert.match(todayPlanSessionData, /const key = `program:progression:\$\{day\}`/);
   assert.match(todayPlanSessionPreparation, /todayPlanSessionData\.loadPrescriptions/);
   assert.match(today, /todayPlanSessionPreparation\.preparePlanSession/);
   assert.match(today, /invalidateTodayProgression/);

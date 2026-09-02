@@ -20,6 +20,17 @@ type TodayDataAggregate = {
   stats: unknown;
   profile: unknown;
   exercises: unknown[];
+  // Added by the fan-in: the same payloads /last-set, /program/progression,
+  // /strength-journey, /today-agenda and /coaching-focus return, so one open no
+  // longer pays a round trip each for them. Optional — an older server (or a
+  // response shaped by a future change) simply leaves the client on its
+  // individual fetches.
+  last_sets?: Record<string, unknown> | null;
+  progression_day?: number | null;
+  progression?: unknown;
+  strength_journey?: unknown;
+  agenda?: unknown;
+  coaching_focus?: unknown;
 };
 type TodayDataLoadDeps = {
   root: HTMLElement;
@@ -47,6 +58,19 @@ type TodayDataLoadResult = {
   stats: unknown;
   profile: unknown;
   exercises: unknown;
+  // True only when the aggregate answered from the NETWORK in this render. The
+  // agenda and the conductor focus are per-render reads by design, so a cached
+  // aggregate must never stand in for them: without this flag the screen keeps
+  // its own fetches.
+  aggregateFresh: boolean;
+  agenda: unknown;
+  coachingFocus: unknown;
+  // Exercise names whose `last-set:<name>` key this render primed from a fresh
+  // aggregate, and the plan day whose `program:progression:<day>` it primed.
+  primedLastSets: string[];
+  primedProgressionDay: number | null;
+  // undefined = not covered this render; the prep wave keeps its own fetch.
+  strengthJourney?: unknown;
   revalidations: Array<Promise<unknown>>;
   changed(): boolean;
 };
@@ -56,6 +80,19 @@ type TodayDataLoaderApi = {
 };
 
 (() => {
+  // Same "did this payload actually change?" test the SWR layer uses: these are
+  // small API bodies we already serialize. A value that will not serialize is
+  // treated as its own, never-equal identity.
+  let unstable = 0;
+  function stableJson(value: unknown): string {
+    if (value === undefined) return "~absent";
+    try {
+      return JSON.stringify(value) ?? "~undefined";
+    } catch {
+      return "~unstable:" + ++unstable;
+    }
+  }
+
   function isTodayAggregate(value: unknown): value is TodayDataAggregate {
     if (!value || typeof value !== "object") return false;
     const row = value as Partial<TodayDataAggregate>;
@@ -92,6 +129,41 @@ type TodayDataLoaderApi = {
         }).catch(() => {}),
       );
     };
+    const aggregatePath = "/today?date=" + encodeURIComponent(deps.state.logDate);
+    const sliceOf = (value: TodayDataAggregate) => [
+      { key: "plan", data: value.plan },
+      { key: sessKey, data: value.session },
+      { key: "stats", data: value.stats },
+      { key: "profile", data: value.profile },
+      { key: "exercises", data: value.exercises },
+    ];
+    const primedLastSets: string[] = [];
+    let primedProgressionDay: number | null = null;
+    // The aggregate carries the prep-wave payloads too. Prime their EXISTING keys
+    // (`last-set:<name>`, `program:progression:<day>`) so every other reader —
+    // the session surface, a later soft repaint — keeps working unchanged, and
+    // report which names this render covered so the prep wave can skip them.
+    const primePrepSlices = (value: TodayDataAggregate, fillOnly: boolean) => {
+      const lastSets = value.last_sets;
+      if (lastSets && typeof lastSets === "object") {
+        for (const name of Object.keys(lastSets)) {
+          const key = "last-set:" + name;
+          // On the background path only FILL a hole: a set logged while the
+          // request was in flight already wrote the newer truth into this key.
+          if (fillOnly && deps.peekCached(key)) continue;
+          deps.storeCached(key, (lastSets as Record<string, unknown>)[name]);
+          if (!fillOnly) primedLastSets.push(name);
+        }
+      }
+      const day = value.progression_day;
+      if (typeof day === "number" && Number.isFinite(day) && Array.isArray(value.progression)) {
+        const key = "program:progression:" + day;
+        if (!fillOnly || !deps.peekCached(key)) {
+          deps.storeCached(key, value.progression);
+          if (!fillOnly) primedProgressionDay = day;
+        }
+      }
+    };
 
     // Intentional: a cold skeleton wipe happens before captureExDrafts in renderToday.
     if (!warm && !deps.root.querySelector(".today-wrap")) deps.root.innerHTML = deps.todaySkeleton();
@@ -102,7 +174,7 @@ type TodayDataLoaderApi = {
     let aggregateFresh = false;
     if (!warm) {
       try {
-        const value = await deps.cachedApi("/today?date=" + encodeURIComponent(deps.state.logDate), {
+        const value = await deps.cachedApi(aggregatePath, {
           key: aggregateKey,
           onUpgrade: () => {
             aggregateFresh = true;
@@ -112,15 +184,44 @@ type TodayDataLoaderApi = {
           aggregate = value;
           // Re-check each slice now: a preparation mutation may have primed a
           // newer session while the aggregate GET was in flight.
-          if (aggregateFresh || !deps.peekCached("plan")) deps.storeCached("plan", value.plan);
-          if (aggregateFresh || !deps.peekCached(sessKey)) deps.storeCached(sessKey, value.session);
-          if (aggregateFresh || !deps.peekCached("stats")) deps.storeCached("stats", value.stats);
-          if (aggregateFresh || !deps.peekCached("profile")) deps.storeCached("profile", value.profile);
-          if (aggregateFresh || !deps.peekCached("exercises")) deps.storeCached("exercises", value.exercises);
+          for (const slice of sliceOf(value)) {
+            if (aggregateFresh || !deps.peekCached(slice.key)) deps.storeCached(slice.key, slice.data);
+          }
+          primePrepSlices(value, !aggregateFresh);
         }
       } catch {
         aggregate = null;
       }
+    } else {
+      // WARM: the five slices all peeked, so nothing blocks the paint — but the
+      // background refresh is still ONE aggregate, not five separate GETs. It
+      // resolves after this render, so its agenda/prep payloads only fill holes;
+      // a slice is written (and a soft repaint earned) only when this key has not
+      // moved under us while the request was in flight.
+      const before = new Map<string, string>();
+      for (const [name, peek] of Object.entries(peeks)) {
+        const key = name === "session" ? sessKey : name;
+        before.set(key, stableJson(peek ? (peek as TodayDataSwrPeek<unknown>).data : undefined));
+      }
+      revalidations.push(
+        deps.cachedApi(aggregatePath, {
+          key: aggregateKey,
+          onUpgrade: (data) => {
+            if (!isTodayAggregate(data)) return;
+            for (const slice of sliceOf(data)) {
+              const current = deps.peekCached(slice.key);
+              const currentJson = stableJson(current ? current.data : undefined);
+              // Someone newer (a logged set, a mutation write) owns this key now.
+              if (currentJson !== before.get(slice.key)) continue;
+              const nextJson = stableJson(slice.data);
+              if (nextJson === currentJson) continue;
+              deps.storeCached(slice.key, slice.data);
+              anyChanged = true;
+            }
+            primePrepSlices(data, true);
+          },
+        }).catch(() => {}),
+      );
     }
     const useFreshAggregate = !!aggregate && aggregateFresh;
     const latestSessionPeek = deps.peekCached(sessKey);
@@ -173,7 +274,9 @@ type TodayDataLoaderApi = {
       exercisesPromise,
     ]);
     if (useFreshAggregate || !deps.state.plan.length) deps.state.plan = plan as unknown[];
-    if (!aggregate) {
+    // Only when the aggregate was tried and could not answer. A warm open already
+    // revalidates through the one aggregate above.
+    if (!warm && !aggregate) {
       revalidate("/plan", "plan");
       revalidate("/sessions?date=" + deps.state.logDate, sessKey);
       revalidate("/stats", "stats");
@@ -189,6 +292,12 @@ type TodayDataLoaderApi = {
       stats,
       profile,
       exercises,
+      aggregateFresh: useFreshAggregate,
+      agenda: useFreshAggregate ? aggregate!.agenda ?? null : null,
+      coachingFocus: useFreshAggregate ? aggregate!.coaching_focus ?? null : null,
+      primedLastSets,
+      primedProgressionDay,
+      strengthJourney: useFreshAggregate ? aggregate!.strength_journey : undefined,
       revalidations,
       changed: () => anyChanged,
     };

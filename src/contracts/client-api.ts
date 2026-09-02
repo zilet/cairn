@@ -3076,6 +3076,9 @@ export interface ClientApiResponses {
   "/api/sessions/skip": ClientOkResponse;
   "/api/sets": ClientLoggedSet;
   "/api/last-set": ClientLoggedSet | null;
+  // Batch form of /last-set for the PWA session card: one entry per requested
+  // name, each exactly what /last-set answers for it.
+  "/api/last-sets": Record<string, ClientLoggedSet | null>;
   "/api/strength-journey": ClientStrengthJourney | ClientStrengthJourneySetResponse;
   // Every anchor the athlete is rebuilding, one journey each (one active
   // objective per lift). The Progress card reads this; the singular path above

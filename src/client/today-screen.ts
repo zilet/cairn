@@ -236,7 +236,7 @@ async function renderToday(opts: any = {}) {
     todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
   const previewTrainAnyway = /\btrain anyway\b/i.test(String(briefOverride || ""));
   const [prep, read, sessionPreview] = await Promise.all([
-    todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday)),
+    todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday, todayData)),
     loadBrief(todayState.logDate, briefOverride, { fast: true }),
     loadAdaptiveSessionPreview(todayState.logDate, String(briefOverride || ""), previewTrainAnyway).catch(() => null),
   ]);
@@ -352,8 +352,25 @@ async function renderToday(opts: any = {}) {
   // before — the standalone goal/health lines simply return.
   const renderedDate = todayState.logDate;
   const railToken = pollToken;
-  const agendaPromise = CairnTodayRailController.fetchTodayAgenda(todayState.logDate, todayRailDeps());
-  const conductorPromise = todayApi("/coaching-focus").catch(() => null);
+  // Both now ride along on the /today aggregate — but ONLY when it answered from
+  // the network in THIS render (todayData.aggregateFresh). The agenda reflects
+  // today's state at the moment it is asked, so a cached aggregate must never
+  // stand in for it: then, and on any older server that omits them, we fall back
+  // to the two standalone reads exactly as before.
+  const primedAgenda: any =
+    todayData.aggregateFresh &&
+    todayData.agenda &&
+    typeof todayData.agenda === "object" &&
+    Array.isArray((todayData.agenda as any).primary) &&
+    Array.isArray((todayData.agenda as any).more)
+      ? todayData.agenda
+      : null;
+  const agendaPromise = primedAgenda
+    ? Promise.resolve(primedAgenda)
+    : CairnTodayRailController.fetchTodayAgenda(todayState.logDate, todayRailDeps());
+  const conductorPromise = primedAgenda
+    ? Promise.resolve(todayData.coachingFocus as any)
+    : todayApi("/coaching-focus").catch(() => null);
 
   let html = todayMainShell.leadHtml(
     {
@@ -1261,7 +1278,9 @@ async function renderSession(opts: any = {}): Promise<void> {
   const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
   const { isToday } = todayData;
   const session: any = todayData.session;
-  const prep: any = await todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday));
+  const prep: any = await todayPlanSessionPreparation.preparePlanSession(
+    todayDeps().planSession(session, isToday, todayData)
+  );
 
   const profile: any = todayData.profile;
   const exercises: any[] = (todayData.exercises as any[]) || [];

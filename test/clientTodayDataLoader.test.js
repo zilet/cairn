@@ -25,6 +25,9 @@ function loadDataLoader() {
     Promise,
     Array,
     String,
+    Number,
+    JSON,
+    Set,
     encodeURIComponent,
     document: { activeElement: null },
     window: null,
@@ -181,4 +184,145 @@ test("Today data loader falls back to independent reads when the aggregate is un
   );
   assert.equal(result.revalidations.length, 5);
   assert.deepEqual(deps.state.plan, [{ day_number: 1, name: "Fallback", items: [] }]);
+});
+
+// ---- the fan-in: one aggregate on the warm path too, and its prep slices ----
+
+function aggregatePayload(extra = {}) {
+  return {
+    date: "2026-01-02",
+    plan: [{ day_number: 1, name: "Aggregate", items: [] }],
+    session: { id: 7, date: "2026-01-02", sets: [] },
+    stats: { week_sets: 3 },
+    profile: { name: "Aggregate" },
+    exercises: [{ id: 1, name: "Back Squat" }],
+    ...extra,
+  };
+}
+
+function warmPeeks(overrides = {}) {
+  return {
+    plan: { data: [{ day_number: 1, name: "Warm", items: [] }], fresh: true },
+    "today:session:2026-01-02": { data: { id: 7, date: "2026-01-02", sets: [] }, fresh: true },
+    stats: { data: { week_sets: 3 }, fresh: true },
+    profile: { data: { name: "Warm" }, fresh: true },
+    exercises: { data: [{ id: 1, name: "Back Squat" }], fresh: true },
+    ...overrides,
+  };
+}
+
+test("a warm Today open revalidates through ONE aggregate, not five separate reads", async () => {
+  const loader = loadDataLoader();
+  const cache = warmPeeks();
+  const { deps, calls } = makeDeps({
+    peekCached: (key) => cache[key] || null,
+    cachedApi: async (path, options = {}) => {
+      const payload = aggregatePayload();
+      if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
+      return payload;
+    },
+  });
+
+  const result = await loader.load({}, deps);
+  await Promise.all(result.revalidations);
+
+  const requested = calls.filter((call) => call[0] === "cached" || call[0] === "api");
+  assert.deepEqual(requested, [["cached", "/today?date=2026-01-02", "today:aggregate:2026-01-02"]]);
+  assert.equal(result.revalidations.length, 1);
+  // The warm paint still comes from the cache, and the background aggregate is a
+  // per-render read, so its agenda must never be offered to the screen.
+  assert.equal(result.aggregateFresh, false);
+  assert.equal(result.agenda, null);
+  assert.deepEqual([...result.primedLastSets], []);
+});
+
+test("a cold Today open still costs exactly one request", async () => {
+  const loader = loadDataLoader();
+  const { deps, calls } = makeDeps();
+
+  const result = await loader.load({}, deps);
+  await Promise.all(result.revalidations);
+
+  assert.deepEqual(
+    calls.filter((call) => call[0] === "cached" || call[0] === "api"),
+    [["cached", "/today?date=2026-01-02", "today:aggregate:2026-01-02"]],
+  );
+  assert.equal(result.revalidations.length, 0);
+});
+
+test("a warm aggregate writes a slice only when it changed and nothing newer owns the key", async () => {
+  const loader = loadDataLoader();
+  const cache = warmPeeks();
+  const { deps, writes } = makeDeps({
+    peekCached: (key) => cache[key] || null,
+    cachedApi: async (path, options = {}) => {
+      // A set logged while the request was in flight: the session key moved.
+      cache["today:session:2026-01-02"] = { data: { id: 7, date: "2026-01-02", sets: [{ id: 1 }] }, fresh: true };
+      const payload = aggregatePayload();
+      if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
+      return payload;
+    },
+  });
+
+  const result = await loader.load({}, deps);
+  await Promise.all(result.revalidations);
+
+  // profile changed ("Warm" -> "Aggregate"); stats/exercises did not; the session
+  // key is owned by the newer write and must not be clobbered by the older read.
+  assert.deepEqual(writes.map((row) => row.key), ["plan", "profile"]);
+  assert.equal(result.changed(), true);
+});
+
+test("a fresh aggregate primes the prep keys and reports what it covered", async () => {
+  const loader = loadDataLoader();
+  const { deps, writes } = makeDeps({
+    cachedApi: async (path, options = {}) => {
+      const payload = aggregatePayload({
+        last_sets: { "Back Squat": { weight: 225, reps: 5 }, "Barbell Row": null },
+        progression_day: 1,
+        progression: [{ exercise: "Back Squat", action: "push" }],
+        strength_journey: { available: false },
+        agenda: { primary: [], more: [] },
+        coaching_focus: { lead: { domain: "training" } },
+      });
+      if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
+      return payload;
+    },
+  });
+
+  const result = await loader.load({}, deps);
+
+  const written = Object.fromEntries(writes.map((row) => [row.key, row.data]));
+  assert.deepEqual(written["last-set:Back Squat"], { weight: 225, reps: 5 });
+  assert.equal(written["last-set:Barbell Row"], null);
+  assert.deepEqual(written["program:progression:1"], [{ exercise: "Back Squat", action: "push" }]);
+  assert.deepEqual([...result.primedLastSets], ["Back Squat", "Barbell Row"]);
+  assert.equal(result.primedProgressionDay, 1);
+  assert.equal(result.aggregateFresh, true);
+  assert.deepEqual(result.agenda, { primary: [], more: [] });
+  assert.deepEqual(result.coachingFocus, { lead: { domain: "training" } });
+  assert.deepEqual(result.strengthJourney, { available: false });
+});
+
+test("a background aggregate only FILLS an empty last-set key, never overwrites one", async () => {
+  const loader = loadDataLoader();
+  const cache = warmPeeks({ "last-set:Back Squat": { data: { weight: 245, reps: 3 }, fresh: true } });
+  const { deps, writes } = makeDeps({
+    peekCached: (key) => cache[key] || null,
+    cachedApi: async (path, options = {}) => {
+      const payload = aggregatePayload({
+        last_sets: { "Back Squat": { weight: 225, reps: 5 }, "Bench Press": { weight: 165, reps: 5 } },
+      });
+      if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
+      return payload;
+    },
+  });
+
+  const result = await loader.load({}, deps);
+  await Promise.all(result.revalidations);
+
+  const keys = writes.map((row) => row.key);
+  assert.equal(keys.includes("last-set:Back Squat"), false);
+  assert.equal(keys.includes("last-set:Bench Press"), true);
+  assert.deepEqual([...result.primedLastSets], []);
 });

@@ -463,6 +463,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/last-set` |  |
 
+## `/last-sets`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/last-sets` | Batch form of /last-set for the PWA's session card, which prefills several exercises at once: ?exercises=Back%20Squat,Bench%20Press returns { "<name>": <last set\|null> } with exactly the value /last-set gives per name. PWA convenience only — deliberately NOT mirrored as an MCP tool, since an agent asks per exercise and a batch adds no capability (see docs/MCP-TOOLS.md). |
+
 ## `/learned-timeline`
 
 | Method | Path | Notes |
@@ -805,7 +811,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/today` | Cold-start aggregate for the Today screen. This is deliberately only the independent low-risk reads the client previously fetched separately; route semantics for /plan, /sessions?date=, /stats, /profile, and /exercises stay unchanged and the client still primes their individual SWR keys. |
+| GET | `/api/today` | One server read for the whole Today open: the independent low-risk reads the client used to fetch separately (/plan, /sessions?date=, /stats, /profile, /exercises) PLUS the per-plan-day last sets, that day's progression, the strength journey, the salience agenda and the conductor's focus. Every one of those routes still exists and answers identically — this only collapses the request count; the client still primes their individual SWR keys. |
 
 ## `/today-agenda`
 

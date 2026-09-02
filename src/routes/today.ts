@@ -4,48 +4,28 @@ import {
   confirmGoalCheckin,
   dismissGoalCheckin,
   learnedTimeline,
-  markTodaySeen,
-  shouldMarkTodayAgendaSeen,
   sinceLastLookedCandidate,
   teamWeekRead,
   todayAgenda,
 } from "../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../domain/health/index.js";
-import { getProfile } from "../domain/person/index.js";
-import { getSessionByDate, getWeeklyStats, listExercises, selectedPlanDayForDate } from "../domain/training/index.js";
-import { getPlanWithPurpose } from "../repo.js";
-import { localDateISO } from "../repo/shared.js";
+import { selectedPlanDayForDate } from "../domain/training/index.js";
+import { markTodayAgendaSeen, todayAggregate, todayDateParam } from "../domain/today/index.js";
 import { recordDismissal } from "../repo/surface-dismissals.js";
 
 export const todayRouter = Router();
 
-function todayDateParam(value: unknown): string {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
-    ? value
-    : localDateISO();
-}
-
-export function todayAggregate(dateQuery?: unknown) {
-  const date = todayDateParam(dateQuery);
-  return {
-    date,
-    // One quiet purpose line per plan day (Amendment 2: "why this session" tied
-    // to the strength block/endurance goal) — same source GET /plan reads, so
-    // the sentence never appears here then vanishes on the client's background
-    // /plan revalidation. See repo/day-read.ts getPlanWithPurpose.
-    plan: getPlanWithPurpose(date),
-    session: getSessionByDate(date),
-    stats: getWeeklyStats(),
-    profile: getProfile(),
-    exercises: listExercises(),
-  };
-}
+// Re-exported so existing importers (tests, tooling) keep one name for the
+// aggregate; the composition itself lives in src/domain/today.
+export { todayAggregate };
 
 // ---- Era 2 (the calm daily driver, docs/VISION.md §12) ----
-// Cold-start aggregate for the Today screen. This is deliberately only the
-// independent low-risk reads the client previously fetched separately; route
-// semantics for /plan, /sessions?date=, /stats, /profile, and /exercises stay
-// unchanged and the client still primes their individual SWR keys.
+// One server read for the whole Today open: the independent low-risk reads the
+// client used to fetch separately (/plan, /sessions?date=, /stats, /profile,
+// /exercises) PLUS the per-plan-day last sets, that day's progression, the
+// strength journey, the salience agenda and the conductor's focus. Every one of
+// those routes still exists and answers identically — this only collapses the
+// request count; the client still primes their individual SWR keys.
 todayRouter.get("/today", (req, res) => {
   res.json(todayAggregate(req.query.date));
 });
@@ -81,11 +61,10 @@ todayRouter.get("/today-agenda", (req, res) => {
     ? req.query.date
     : undefined;
   const agenda = todayAgenda(date);
-  try {
-    if (shouldMarkTodayAgendaSeen(date, localDateISO())) markTodaySeen();
-  } catch {
-    /* best-effort */
-  }
+  // Shared with the Today aggregate, which computes the same agenda. The stamp is
+  // debounced (~1h) inside markTodaySeen, so one open advances it exactly once
+  // however many of the two surfaces the client actually asked.
+  markTodayAgendaSeen(date);
   res.json(agenda);
 });
 

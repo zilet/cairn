@@ -63,6 +63,7 @@ type TodayPlanSessionPrepDeps = {
   api(path: string): Promise<unknown>;
   cachedApi(path: string, opts?: TodayPlanSessionPrepCachedApiOptions<unknown>): Promise<unknown>;
   peekCached<T = unknown>(key: string, freshFor?: number): TodayPlanSessionPrepSwrPeek<T> | null;
+  storeCached?(key: string, data: unknown): void;
   suggestedPlanDayNumber(session: TodayPlanSessionPrepSession | null | undefined, isToday: boolean): Promise<number>;
   isCardioItem(item: TodayPlanSessionPrepPlanItem): boolean;
   cardioLabel(item: TodayPlanSessionPrepPlanItem): string;
@@ -70,6 +71,12 @@ type TodayPlanSessionPrepDeps = {
     item: TodayPlanSessionPrepPlanItem,
     effort: TodayPlanSessionPrepCardioEffort | null | undefined
   ): boolean;
+  // What the /today aggregate already answered for THIS render (see
+  // today-data-loader): primed SWR keys plus the strength journey payload, so the
+  // paint-blocking prep wave asks the network only for what is genuinely missing.
+  primedLastSets?: string[];
+  primedProgressionDay?: number | null;
+  primedStrengthJourney?: unknown;
 };
 type TodayPlanSessionPrepResult = {
   revealBlank: boolean;
@@ -165,7 +172,7 @@ type TodayPlanSessionPrepDataApi = {
   loadPrescriptions(
     day: number | null,
     planEx: string[],
-    deps: Pick<TodayPlanSessionPrepDeps, "cachedApi">
+    deps: Pick<TodayPlanSessionPrepDeps, "cachedApi" | "peekCached" | "primedProgressionDay">
   ): Promise<Record<string, TodayPlanSessionPrepPrescription | null | undefined>>;
   loadCardioContext(
     dayItems: TodayPlanSessionPrepPlanItem[],
@@ -273,10 +280,16 @@ type TodayPlanSessionPrepDataApi = {
           deps
         ),
         todayPlanSessionData.loadPrescriptions(dailySession && !planSource ? null : deps.state.day, early.planEx, deps),
-        deps
-          .api("/strength-journey")
-          .then((value) => (value && typeof value === "object" ? (value as TodayPlanSessionPrepStrengthJourney) : null))
-          .catch(() => null),
+        deps.primedStrengthJourney !== undefined
+          ? Promise.resolve(
+              deps.primedStrengthJourney && typeof deps.primedStrengthJourney === "object"
+                ? (deps.primedStrengthJourney as TodayPlanSessionPrepStrengthJourney)
+                : null
+            )
+          : deps
+              .api("/strength-journey")
+              .then((value) => (value && typeof value === "object" ? (value as TodayPlanSessionPrepStrengthJourney) : null))
+              .catch(() => null),
       ]);
 
     const matchedCardio = todayPlanSessionModel.matchCardioEfforts(allCardio, cardioEfforts, deps.cardioEffortMatches);

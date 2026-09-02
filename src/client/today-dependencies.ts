@@ -132,7 +132,14 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
       };
     },
 
-    planSession(session: unknown, isToday: boolean) {
+    // `primed` carries what the /today aggregate already answered in this render
+    // (today-data-loader's load result). Omit it and the preparation wave fetches
+    // everything itself, exactly as before.
+    planSession(
+      session: unknown,
+      isToday: boolean,
+      primed?: { primedLastSets?: string[]; primedProgressionDay?: number | null; strengthJourney?: unknown }
+    ) {
       return {
         state: input.state,
         session,
@@ -140,10 +147,14 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         api: input.api,
         cachedApi: input.cachedApi,
         peekCached: input.peekCached,
+        storeCached: input.storeCached,
         suggestedPlanDayNumber: input.suggestedPlanDayNumber,
         isCardioItem: input.isCardioItem,
         cardioLabel: input.cardioLabel,
         cardioEffortMatches: input.cardioEffortMatches,
+        primedLastSets: primed?.primedLastSets,
+        primedProgressionDay: primed?.primedProgressionDay ?? null,
+        primedStrengthJourney: primed ? primed.strengthJourney : undefined,
       };
     },
 

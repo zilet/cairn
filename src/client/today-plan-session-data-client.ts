@@ -23,7 +23,15 @@ type TodayPlanSessionDataDeps = {
   api(path: string): Promise<unknown>;
   cachedApi(path: string, opts?: TodayPlanSessionDataCachedApiOptions<unknown>): Promise<unknown>;
   peekCached<T = unknown>(key: string, freshFor?: number): TodayPlanSessionDataSwrPeek<T> | null;
+  // Present on the Today/Session deps; when absent the batch path is skipped and
+  // each name falls back to its own cachedApi read.
+  storeCached?(key: string, data: unknown): void;
   isCardioItem(item: TodayPlanSessionDataPlanItem): boolean;
+  // Primed by the /today aggregate earlier in THIS render (today-data-loader):
+  // these SWR keys already hold this render's server truth, so asking for them
+  // again would be one round trip per exercise for an answer we have.
+  primedLastSets?: string[];
+  primedProgressionDay?: number | null;
 };
 type TodayPlanSessionCardioContext = {
   allCardio: TodayPlanSessionDataPlanItem[];
@@ -39,7 +47,7 @@ type TodayPlanSessionDataApi = {
   loadPrescriptions(
     day: number | null,
     planEx: string[],
-    deps: Pick<TodayPlanSessionDataDeps, "cachedApi">,
+    deps: Pick<TodayPlanSessionDataDeps, "cachedApi" | "peekCached" | "primedProgressionDay">,
   ): Promise<Record<string, TodayPlanSessionDataPrescription | null | undefined>>;
   loadCardioContext(
     dayItems: TodayPlanSessionDataPlanItem[],
@@ -60,35 +68,87 @@ type TodayPlanSessionDataApi = {
   ): Promise<Record<string, Record<string, unknown> | null>> {
     const needLast = [...new Set(names)].filter((name) => !(loggedByEx[name] && loggedByEx[name].length));
     const lastSets: Record<string, Record<string, unknown> | null> = {};
-    await Promise.all(needLast.map(async (name) => {
+    const primed = new Set(deps.primedLastSets || []);
+    // ONE request for however many names are still open, instead of one per
+    // exercise in the wave that blocks first paint. A single name keeps the
+    // plain /last-set path (same SWR key, same cheap answer).
+    const fetchMany = async (batch: string[]): Promise<Record<string, Record<string, unknown> | null>> => {
+      const out: Record<string, Record<string, unknown> | null> = {};
+      if (!batch.length) return out;
+      if (batch.length === 1 || !deps.storeCached) {
+        await Promise.all(batch.map(async (name) => {
+          const key = "last-set:" + name;
+          try {
+            out[name] = await deps.cachedApi("/last-set?exercise=" + encodeURIComponent(name), { key }) as
+              | Record<string, unknown>
+              | null;
+          } catch {
+            out[name] = null;
+          }
+        }));
+        return out;
+      }
+      const rows = await deps.api("/last-sets?exercises=" + batch.map(encodeURIComponent).join(",")) as
+        | Record<string, Record<string, unknown> | null>
+        | null;
+      for (const name of batch) {
+        const value = rows && typeof rows === "object" && name in rows ? rows[name] : null;
+        out[name] = value ?? null;
+        // Write through to the per-exercise key every other reader still uses.
+        deps.storeCached("last-set:" + name, out[name]);
+      }
+      return out;
+    };
+
+    const warmNames: string[] = [];
+    const coldNames: string[] = [];
+    for (const name of needLast) {
       const key = "last-set:" + name;
+      // Covered by this render's aggregate: read the key it just primed and ask
+      // nothing. An off-plan name the aggregate did not carry still falls through.
+      if (primed.has(name)) {
+        const primedPeek = deps.peekCached<Record<string, unknown> | null>(key);
+        lastSets[name] = primedPeek ? primedPeek.data : null;
+        continue;
+      }
       const peek = deps.peekCached<Record<string, unknown> | null>(key);
       if (peek) {
         lastSets[name] = peek.data;
-        deps.cachedApi("/last-set?exercise=" + encodeURIComponent(name), { key }).catch(() => {});
-        return;
+        warmNames.push(name);
+      } else {
+        coldNames.push(name);
       }
+    }
+    // A warm name already painted from cache; its refresh rides in the background
+    // exactly as before, just as one request rather than one per name.
+    if (warmNames.length) fetchMany(warmNames).catch(() => {});
+    if (coldNames.length) {
       try {
-        lastSets[name] = await deps.cachedApi("/last-set?exercise=" + encodeURIComponent(name), { key }) as Record<string, unknown> | null;
+        Object.assign(lastSets, await fetchMany(coldNames));
       } catch {
-        lastSets[name] = null;
+        for (const name of coldNames) if (!(name in lastSets)) lastSets[name] = null;
       }
-    }));
+    }
     return lastSets;
   }
 
   async function loadPrescriptions(
     day: number | null,
     planEx: string[],
-    deps: Pick<TodayPlanSessionDataDeps, "cachedApi">,
+    deps: Pick<TodayPlanSessionDataDeps, "cachedApi" | "peekCached" | "primedProgressionDay">,
   ): Promise<Record<string, TodayPlanSessionDataPrescription | null | undefined>> {
     const rxByEx: Record<string, TodayPlanSessionDataPrescription | null | undefined> = {};
     if (day == null || !planEx.length) return rxByEx;
+    const key = `program:progression:${day}`;
     try {
-      const list = await deps.cachedApi("/program/progression?day=" + encodeURIComponent(day), {
-        key: `program:progression:${day}`,
-        freshFor: 15000,
-      }) as unknown[];
+      // Same day the aggregate primed this render: its rows ARE the answer.
+      const primedPeek = deps.primedProgressionDay === day && deps.peekCached ? deps.peekCached(key) : null;
+      const list = (primedPeek
+        ? primedPeek.data
+        : await deps.cachedApi("/program/progression?day=" + encodeURIComponent(day), {
+          key,
+          freshFor: 15000,
+        })) as unknown[];
       if (Array.isArray(list)) {
         for (const raw of list) {
           const rx = recordValue(raw) as unknown as TodayPlanSessionDataPrescription;

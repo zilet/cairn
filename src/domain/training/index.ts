@@ -28,6 +28,7 @@ export * from "../../repo/program-state.js";
 export * from "../../repo/progression.js";
 export * from "../../repo/support-work.js";
 export * from "../../repo/strength-objectives.js";
+export * from "./strength-journey-read.js";
 export * from "../../repo/run-progression.js";
 export * from "../../repo/sessions.js";
 export * from "./run-compliance-read.js";

@@ -68,6 +68,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/sets",
   "/sets/:id",
   "/last-set",
+  "/last-sets",
   "/progress/:exercise",
   "/strength-journey",
   "/strength-journeys",

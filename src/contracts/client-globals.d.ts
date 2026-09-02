@@ -645,7 +645,11 @@ declare global {
     rail(): ClientTodayRailControllerDeps;
     dataLoad(): Parameters<Window["CairnTodayDataLoader"]["load"]>[1];
     dataRefresh(): Parameters<Window["CairnTodayDataLoader"]["scheduleSoftRepaint"]>[1];
-    planSession(session: unknown, isToday: boolean): any;
+    planSession(
+      session: unknown,
+      isToday: boolean,
+      primed?: { primedLastSets?: string[]; primedProgressionDay?: number | null; strengthJourney?: unknown }
+    ): any;
     postRender(
       input: ClientTodayDependenciesPostRenderInput
     ): Parameters<Window["CairnTodayPostRenderWiring"]["wirePostRender"]>[0];
@@ -3981,6 +3985,12 @@ declare global {
         stats: unknown;
         profile: unknown;
         exercises: unknown;
+        aggregateFresh: boolean;
+        agenda: unknown;
+        coachingFocus: unknown;
+        primedLastSets: string[];
+        primedProgressionDay: number | null;
+        strengthJourney?: unknown;
         revalidations: Array<Promise<unknown>>;
         changed(): boolean;
       }>;

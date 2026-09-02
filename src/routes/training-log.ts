@@ -3,10 +3,8 @@ import { localToday } from "../dayread.js";
 import { streamEnrichRow } from "./enrich-stream.js";
 import {
   addActivity,
-  currentLiftCapacities,
   deleteSet,
   dismissAnchorObjectiveSuggestion,
-  suggestAnchorObjective,
   finishSessionWithHeadline,
   getActivity,
   getCardioForDate,
@@ -15,6 +13,7 @@ import {
   getLastSet,
   getProgress,
   getStrengthJourney,
+  strengthJourneyRead,
   getRecentSessions,
   getSessionByDate,
   getSessionDetail,
@@ -204,6 +203,26 @@ trainingLogRouter.get("/last-set", (req, res) => {
   res.json(getLastSet(exercise));
 });
 
+const MAX_BATCH_LAST_SETS = 32;
+
+// Batch form of /last-set for the PWA's session card, which prefills several
+// exercises at once: ?exercises=Back%20Squat,Bench%20Press returns
+// { "<name>": <last set|null> } with exactly the value /last-set gives per name.
+// PWA convenience only — deliberately NOT mirrored as an MCP tool, since an agent
+// asks per exercise and a batch adds no capability (see docs/MCP-TOOLS.md).
+trainingLogRouter.get("/last-sets", (req, res) => {
+  const raw = req.query.exercises ? String(req.query.exercises) : "";
+  const names: string[] = [];
+  for (const part of raw.split(",")) {
+    const name = part.trim();
+    if (name && !names.includes(name)) names.push(name);
+  }
+  if (!names.length) return res.status(400).json({ error: "exercises required" });
+  const out: Record<string, unknown> = {};
+  for (const name of names.slice(0, MAX_BATCH_LAST_SETS)) out[name] = getLastSet(name);
+  res.json(out);
+});
+
 trainingLogRouter.get("/sessions/:id", (req, res) => {
   const s = getSessionDetail(Number(req.params.id));
   if (!s) return res.status(404).json({ error: "not found" });
@@ -330,9 +349,7 @@ trainingLogRouter.get("/progress/:exercise", (req, res) =>
 // objective exists, the GET folds in a reachable anchor suggestion (computed from
 // the standards capacities only in that case, so an existing journey pays nothing).
 trainingLogRouter.get("/strength-journey", (_req, res) => {
-  const journey = getStrengthJourney();
-  if (!journey.available) journey.suggestion = suggestAnchorObjective({ capacities: currentLiftCapacities() });
-  res.json(journey);
+  res.json(strengthJourneyRead());
 });
 
 // Quiet the anchor-lift invitation for a long while (a suggestion, never a nag).
