@@ -231,6 +231,28 @@ test("the scroll pin is coalesced to one layout write per frame", () => {
   assert.equal(pendingFrames(), 1, "a later delta queues the next frame, not a backlog");
 });
 
+test("two job streams painting in the same frame both get their scroll pin", () => {
+  const { paint, newHost, runFrame, pendingFrames } = loadPainter();
+  const hostA = newHost();
+  const hostB = newHost();
+
+  stream(paint, hostA, ["a1 ", "a2 "]);
+  stream(paint, hostB, ["b1 ", "b2 "]);
+
+  const boxA = hostA.querySelector(".job-stream");
+  const boxB = hostB.querySelector(".job-stream");
+  assert.equal(boxA.scrollTop, 0, "nothing pinned before the frame runs");
+  assert.equal(boxB.scrollTop, 0, "nothing pinned before the frame runs");
+  // Both hosts queued deltas before the frame fired, so one animation frame
+  // must flush both pending scroll boxes, not just whichever painted last.
+  assert.equal(pendingFrames(), 1, "both streams share a single coalesced frame");
+
+  runFrame();
+
+  assert.equal(boxA.scrollTop, boxA.scrollHeight, "host A's box is pinned");
+  assert.equal(boxB.scrollTop, boxB.scrollHeight, "host B's box is pinned too");
+});
+
 test("a body rebuilt under the painter is re-seeded rather than losing its text", () => {
   const { paint, newHost } = loadPainter();
   const host = newHost();

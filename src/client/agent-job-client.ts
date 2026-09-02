@@ -196,13 +196,16 @@ function teardownJobs(pred?: ((jobId: string) => boolean) | unknown): void {
 // scrollHeight immediately after, forcing a synchronous layout per delta on the
 // main thread while the card was on screen.
 const jobStreamTextNodes = new WeakMap<HTMLElement, Text>();
-let jobStreamScrollBox: HTMLElement | null = null;
+// A Set, not a single slot: two job streams can paint deltas in the same frame
+// (e.g. two agentic reads running concurrently), and a single module-level box
+// would drop the scroll pin for whichever one wrote second.
+const jobStreamScrollBoxes = new Set<HTMLElement>();
 let jobStreamScrollQueued = false;
 
 // Deltas arrive far faster than the screen refreshes, so the scroll pin happens
 // once per FRAME, not once per delta — one layout read instead of hundreds.
 function queueJobStreamScroll(box: HTMLElement): void {
-  jobStreamScrollBox = box;
+  jobStreamScrollBoxes.add(box);
   if (jobStreamScrollQueued) return;
   jobStreamScrollQueued = true;
   const frame = typeof requestAnimationFrame === "function"
@@ -210,9 +213,9 @@ function queueJobStreamScroll(box: HTMLElement): void {
     : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16);
   frame(() => {
     jobStreamScrollQueued = false;
-    const target = jobStreamScrollBox;
-    jobStreamScrollBox = null;
-    if (target) target.scrollTop = target.scrollHeight;
+    const targets = [...jobStreamScrollBoxes];
+    jobStreamScrollBoxes.clear();
+    for (const target of targets) target.scrollTop = target.scrollHeight;
   });
 }
 

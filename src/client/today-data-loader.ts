@@ -198,10 +198,15 @@ type TodayDataLoaderApi = {
       // resolves after this render, so its agenda/prep payloads only fill holes;
       // a slice is written (and a soft repaint earned) only when this key has not
       // moved under us while the request was in flight.
+      // Read the SAME source the compare below reads (peekCached), not `peeks` —
+      // `peeks.plan` may be a synthetic peek built off deps.state.plan, which can
+      // be stale relative to the cache. Baselining off state here would make the
+      // compare below see a mismatch that was never a genuine in-flight write and
+      // silently drop a fresh aggregate slice.
       const before = new Map<string, string>();
-      for (const [name, peek] of Object.entries(peeks)) {
-        const key = name === "session" ? sessKey : name;
-        before.set(key, stableJson(peek ? (peek as TodayDataSwrPeek<unknown>).data : undefined));
+      for (const key of ["plan", sessKey, "stats", "profile", "exercises"]) {
+        const peek = deps.peekCached(key);
+        before.set(key, stableJson(peek ? peek.data : undefined));
       }
       revalidations.push(
         deps.cachedApi(aggregatePath, {

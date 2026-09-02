@@ -304,6 +304,30 @@ test("a fresh aggregate primes the prep keys and reports what it covered", async
   assert.deepEqual(result.strengthJourney, { available: false });
 });
 
+test("a warm open still catches a fresh aggregate plan when state.plan is stale relative to the cache", async () => {
+  const loader = loadDataLoader();
+  // The cache already holds a newer plan than deps.state.plan (e.g. a background
+  // write landed after state.plan was last assigned but before this render). The
+  // warm-path guard must baseline off the cache, not the stale state snapshot, or
+  // it wrongly concludes something newer owns the key and drops the aggregate.
+  const cache = warmPeeks({ plan: { data: [{ day_number: 1, name: "Cached", items: [] }], fresh: true } });
+  const { deps, writes } = makeDeps({
+    peekCached: (key) => cache[key] || null,
+    cachedApi: async (_path, options = {}) => {
+      const payload = aggregatePayload({ plan: [{ day_number: 1, name: "Fresh Aggregate", items: [] }] });
+      if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
+      return payload;
+    },
+  });
+  deps.state.plan = [{ day_number: 1, name: "State Stale", items: [] }];
+
+  const result = await loader.load({}, deps);
+  await Promise.all(result.revalidations);
+
+  assert.ok(writes.some((row) => row.key === "plan" && row.data[0].name === "Fresh Aggregate"));
+  assert.equal(result.changed(), true);
+});
+
 test("a background aggregate only FILLS an empty last-set key, never overwrites one", async () => {
   const loader = loadDataLoader();
   const cache = warmPeeks({ "last-set:Back Squat": { data: { weight: 245, reps: 3 }, fresh: true } });

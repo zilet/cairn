@@ -3309,6 +3309,9 @@ body.swr-busy::after{
 .feel-row{display:flex;align-items:center;gap:9px}
 .feel-lbl{color:var(--muted)}
 .feel-dots{display:inline-flex;gap:3px}
+/* the word an answered scale says back, next to its dots */
+.feel-said{color:var(--muted);font-size:.78rem;margin-left:2px}
+.feel-said:empty{display:none}
 .feel-dot{
   width:24px;height:24px;border-radius:50%;border:1px solid var(--line-2);
   background:var(--card);color:var(--muted);font-size:.7rem;line-height:1;cursor:pointer;
