@@ -20,7 +20,12 @@ import {
   violatesReadingGrammar,
 } from "../dist/repo/day-read.js";
 import { REST_TRADE_TITLE, tradeRestDay } from "../dist/domain/brain/rest-trade.js";
-import { todayHolds, planningSignalState } from "../dist/repo/signal-state.js";
+import {
+  todayHolds,
+  planningSignalState,
+  lifeCapacityIsCommitment,
+  hasFreshBrake,
+} from "../dist/repo/signal-state.js";
 import { contextEventReadsAsLabDraw } from "../dist/repo/context-effect.js";
 import { pickDayVariant } from "../dist/repo/brain/day-read-rules.js";
 import { buildDayReadPrompt } from "../dist/prompt/day.js";
@@ -449,4 +454,79 @@ test("a floor is never a trade: a rest-grade reading, a symptom and a clinical h
   const clinical = tradeRestDay({ date: REF });
   assert.equal(clinical.ok, false);
   assert.ok(clinical.reason === "clinical_hold" || clinical.reason === "not_a_quiet_day", clinical.reason);
+});
+
+// ---------- (i) the trade's own row is bookkeeping, never a commitment ----------
+//
+// The trade has to write a real calendar row for the day to read as the rest the
+// athlete chose — and that row is a `life_event`, which is exactly the shape the
+// signal state reads as SCHEDULE PRESSURE. So the system's own bookkeeping came back
+// at the athlete the next morning as "Rest day — traded adds schedule pressure
+// today": a fresh caution on life_capacity, a fresh brake under every rule that gates
+// on one, and — if they trained anyway, which this very read invites them to — a
+// session compressed 60 → 40 minutes blaming a commitment that does not exist. It
+// reached the coach prompt as evidence prose too.
+//
+// The trade row is now excluded from that filter the way the clinical shapes are
+// excluded from `todayHolds`: it is only ever read as the claimed rest day it is.
+
+test("the traded day raises no schedule pressure, no fresh brake and no commitment", () => {
+  seedStackedMorning();
+  tradedToday();
+  const events = repo.listContextEvents({ activeOnly: true });
+  const state = planningSignalState({ date: REF, contextEvents: events });
+
+  const pressure = state.dimensions.life_capacity.evidence.filter((row) => row.field === "schedule_pressure");
+  assert.deepEqual(pressure, [], "the trade's own row is not a commitment on the athlete");
+  assert.notEqual(state.dimensions.life_capacity.status, "watch");
+  assert.equal(lifeCapacityIsCommitment(state), false, "and the 60 → 40 clamp's discriminator stays off");
+  assert.equal(hasFreshBrake(state.dimensions), false);
+
+  // An ordinary same-day commitment is untouched — this is a carve-out for one row,
+  // not the end of schedule pressure.
+  resetTables(...WORLD);
+  seedStackedMorning();
+  claimedToday();
+  const ordinary = planningSignalState({ date: REF, contextEvents: repo.listContextEvents({ activeOnly: true }) });
+  assert.equal(lifeCapacityIsCommitment(ordinary), true);
+});
+
+test("todayHolds marks the trade as a trade, and the ordinary claim as a claim", () => {
+  const holds = todayHolds(REF, [
+    {
+      id: 1,
+      kind: "life_event",
+      title: REST_TRADE_TITLE,
+      start_date: REF,
+      end_date: REF,
+      meta: { claims_day: true, [REST_TRADE_META_KEY]: true },
+    },
+    { id: 2, kind: "life_event", title: "All-day offsite", start_date: REF, end_date: REF, meta: { claims_day: true } },
+  ]);
+  assert.deepEqual(
+    holds.map((hold) => [hold.id, hold.claims_day, hold.rest_trade]),
+    [
+      [1, true, true],
+      [2, true, false],
+    ]
+  );
+});
+
+test("the traded day never compresses the clock, and the coach prompt never names a commitment", () => {
+  seedStackedMorning();
+  tradedToday();
+
+  const read = repo.dayRead(REF);
+  assert.equal(read.decision.rule_code, "day_traded_rest");
+  assert.equal(read.signals.schedule, undefined, "no clock to compress and nothing to blame it on");
+
+  const prompt = buildDayReadPrompt(undefined, { date: REF });
+  assert.match(prompt, /THIS IS THE REST THEY TRADED FORWARD/);
+  assert.doesNotMatch(prompt, /THE DAY IS SPOKEN FOR/, "there is no appointment");
+  assert.doesNotMatch(prompt, /Rest day — traded adds schedule pressure/);
+  assert.doesNotMatch(
+    prompt,
+    /commitment or stressful stretch is likely to compress/,
+    "the schedule-pressure evidence prose must not reach the model either"
+  );
 });

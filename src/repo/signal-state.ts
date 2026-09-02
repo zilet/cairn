@@ -9,7 +9,6 @@ import {
   LAST_NIGHT_MAX_AGE_DAYS,
   SENSOR_MAX_AGE_DAYS,
   type SensorSignal,
-  isLastNight,
   sensorIsCurrent,
 } from "./sensor-freshness.js";
 import { recoveryTrendBars } from "./recovery-trend.js";
@@ -27,7 +26,7 @@ import {
 } from "./wear-pattern-voice.js";
 import { enduranceHoldSubject, isEnduranceHoldDirective } from "./directives-read.js";
 import { addDaysISO, joinList } from "./shared.js";
-import { contextEventReadsAsIllness, contextEventReadsAsLabDraw } from "./context-effect.js";
+import { contextEventIsRestTrade, contextEventReadsAsIllness, contextEventReadsAsLabDraw } from "./context-effect.js";
 import {
   completedSessionOnDate,
   laterCompletedSessionMetDoses,
@@ -985,6 +984,10 @@ export interface TodayHold {
   end_date: string | null;
   claims_day: boolean; // the athlete's own word: this event takes the day
   lab_draw: boolean; // measurement-sensitive — any movement belongs after it
+  // The claim is the rest THEY traded forward, not an outside commitment. Carried so
+  // every surface downstream (the read's own words, the coach prompt) can say whose
+  // idea the quiet day was instead of blaming an appointment that does not exist.
+  rest_trade: boolean;
 }
 
 /** Context events that HOLD the day being read. Never throws; absent input ⇒ []. */
@@ -1012,6 +1015,7 @@ export function todayHolds(date: string, contextEvents: unknown): TodayHold[] {
       end_date: end || null,
       claims_day,
       lab_draw,
+      rest_trade: contextEventIsRestTrade(event),
     });
   }
   return out;
@@ -1809,10 +1813,21 @@ export function planningSignalState(input: {
   // 5h owns the day, under 6h is a caution) while the words claim only that night.
   // And "that night" means the night that ENDED on `date`: sleep is dated by its wake
   // day, so the window's two-day tolerance would let a night dated d-1 be voiced as
-  // last night on a morning the watch was not worn. Gated rather than merely aged:
-  // past the bound there is no one-night observation at all, which is the same
-  // neutral absence an unworn watch already produces (see LAST_NIGHT_MAX_AGE_DAYS).
-  if (current.sleep_min != null && isLastNight(quality.sleep_min?.latest_date ?? null, date))
+  // last night on a morning the watch was not worn (see LAST_NIGHT_MAX_AGE_DAYS).
+  //
+  // AGED, NOT GATED. This used to skip the observation entirely past the bound, on the
+  // reasoning that the result was "the same neutral absence an unworn watch already
+  // produces" — and it was, exactly: a night dated d-1 and a watch that has never been
+  // worn produced byte-identical coverage, latest_date and reason. That is a false
+  // equivalence in the one direction that matters, because "they wore it yesterday and
+  // not last night" and "there is no watch" call for different sentences and different
+  // amounts of confidence. The bound is enforced by the max_age_days below instead:
+  // past it the observation resolves `stale`, which `active` excludes, so it still
+  // cannot move status, confidence, conflicts, the posture or the voice — the words
+  // claiming last night are as unreachable as before. What it now leaves is a TRACE:
+  // `sleep` in coverage.stale_fields, a dated provenance row, and a `reason` that says
+  // only stale evidence is available rather than none at all.
+  if (current.sleep_min != null)
     addRecovery(
       "sleep",
       "sleep_min",
@@ -2674,12 +2689,22 @@ export function planningSignalState(input: {
         { voice: { key: "schedule_pressure" }, max_age_days: 0 }
       )
     );
+  // Schedule pressure is a claim about the athlete's calendar — something THEY told
+  // us takes their time today. The rest trade's own bookkeeping row is filed as a
+  // `life_event` (it has to be a real calendar row for the day to read as the rest
+  // they chose), so it matched here and came back at them as "Rest day — traded adds
+  // schedule pressure today": a fresh caution on life_capacity, a fresh brake, and a
+  // session compressed to 40 minutes if they trained anyway — all of it blaming a
+  // commitment that is the system's own bookkeeping. Excluded outright, the same way
+  // the clinical shapes are excluded from `todayHolds`; the trade is still read, as
+  // the claimed rest day it is, by the same-day hold rule in day-read.ts.
   const activePressure = (Array.isArray(input.contextEvents) ? input.contextEvents : []).filter(
     (event) =>
       event &&
       event.start_date <= date &&
       (!event.end_date || event.end_date >= date) &&
-      /trip|life_event|family_event/.test(String(event.kind || ""))
+      /trip|life_event|family_event/.test(String(event.kind || "")) &&
+      !contextEventIsRestTrade(event)
   );
   if (activePressure.length && !context?.expect_worse_sleep)
     observations.push(

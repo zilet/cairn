@@ -121,7 +121,16 @@ test("a night dated the day BEFORE the read is not last night", () => {
   const sleepObs = (r.signals.signal_state?.dimensions?.recovery_capacity?.evidence ?? []).filter(
     (e) => e.field === "sleep"
   );
-  assert.equal(sleepObs.length, 0, "and no one-night sleep observation");
+  // The observation exists, and it is STALE — the bound is enforced by aging it, not by
+  // dropping it, so a watch synced yesterday stays distinguishable from a watch that was
+  // never worn (the two used to be byte-identical). Stale evidence is excluded from
+  // `active`, so it still decides nothing: the dimension keeps its status and the words
+  // claiming last night remain unreachable, which every assertion around this one pins.
+  assert.equal(sleepObs.length, 1, "the night is on the record");
+  assert.equal(sleepObs[0].freshness, "stale", "but only as a trace, never as last night");
+  const recovery = r.signals.signal_state.dimensions.recovery_capacity;
+  assert.equal(recovery.coverage.active_fields.includes("sleep"), false, "it bears on nothing");
+  assert.ok(recovery.coverage.stale_fields.includes("sleep"));
 
   const p = prompt.buildDayReadPrompt();
   assert.match(p, /no recent sleep or HRV data has synced/, "the prompt speaks the absent branch");

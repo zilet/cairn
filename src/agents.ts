@@ -373,7 +373,16 @@ export function invalidateAgentConfigured(name?: string): void {
 // run, and entirely best-effort: a failed probe just leaves that cache cold for
 // the lazy path to fill exactly as it did before.
 export function warmAgentProbes(): void {
-  const names = Object.keys(loadAgents());
+  // The one read OUTSIDE the per-agent try, and the boot path runs it inside
+  // app.listen — so an agents.json that parses to null (or fails to parse at all)
+  // took the whole server down over a warm-up that is best-effort by design. No
+  // agents to warm is a cold cache, exactly what the lazy path already handles.
+  let names: string[] = [];
+  try {
+    names = Object.keys(loadAgents() ?? {});
+  } catch {
+    return;
+  }
   const step = (index: number): void => {
     if (index >= names.length) return;
     try {

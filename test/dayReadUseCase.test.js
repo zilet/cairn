@@ -1005,3 +1005,42 @@ test("attachDayReadContext carries no look_back key when yesterday was genuinely
   const read = attachDayReadContext(date, { kind: "train" });
   assert.equal(read.look_back, undefined, "no invented passage — the key is simply absent");
 });
+
+// ---------- the two facts behind one stamp ----------
+// `computed_at` is when the sentence was written; `evidence_as_of` is when the data
+// it leaned on last landed. The client has long rendered both ("As of 7:39 sync" over
+// "Read at 4:00 AM") and the server emitted only the second, so the midnight-rollover
+// recompute's own clock read as the age of the athlete's data.
+
+test("evidence_as_of names when the freshest evidence landed, as a UTC instant", () => {
+  resetTables("day_reads", "suggestions", "sessions", "logged_sets", "garmin_daily_metrics", "garmin_sources");
+  const date = localDaysAgo(0);
+  repo.upsertGarminDailyMetric({ date, training_readiness: 62, sleep_min: 430 });
+  db.prepare(`UPDATE garmin_daily_metrics SET updated_at = ? WHERE date = ?`).run(`${date} 11:39:00`, date);
+
+  const read = attachDayReadContext(date, repo.dayRead(date));
+  assert.equal(read.evidence_as_of, `${date}T11:39:00Z`);
+  // It is a separate fact from the sentence's own clock, which is what the client's
+  // two-line stamp exists to say.
+  assert.notEqual(read.evidence_as_of, read.computed_at);
+});
+
+test("with no sync row behind the evidence the key is simply absent", () => {
+  resetTables("day_reads", "suggestions", "sessions", "logged_sets", "garmin_daily_metrics", "garmin_sources");
+  const date = localDaysAgo(0);
+  const read = attachDayReadContext(date, repo.dayRead(date));
+  assert.equal(read.evidence_as_of, undefined, "no invented stamp — the client falls back to computed_at");
+});
+
+test("stale evidence never dates the Brief", () => {
+  resetTables("day_reads", "suggestions", "sessions", "logged_sets", "garmin_daily_metrics", "garmin_sources");
+  const date = localDaysAgo(0);
+  // A sync that landed a week ago is absent everywhere else in the read; it must not
+  // be allowed to say when the athlete's data is "as of" either.
+  const old = localDaysAgo(9);
+  repo.upsertGarminDailyMetric({ date: old, training_readiness: 62, sleep_min: 430 });
+  db.prepare(`UPDATE garmin_daily_metrics SET updated_at = ? WHERE date = ?`).run(`${old} 06:00:00`, old);
+
+  const read = attachDayReadContext(date, repo.dayRead(date));
+  assert.equal(read.evidence_as_of, undefined);
+});

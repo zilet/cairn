@@ -110,6 +110,38 @@ export function contextEventReadsAsLabDraw(ev: any): boolean {
   return !!text && LAB_DRAW_RE.test(text);
 }
 
+// ---------- THE REST TRADE'S OWN BOOKKEEPING ROW ----------
+//
+// When the athlete trades a quiet day forward (src/domain/brain/rest-trade.ts) the
+// trade is recorded as a context_event on the day it moves the rest TO, carrying
+// `claims_day` so the day reads as the rest they chose. It is the system's own
+// bookkeeping, not a commitment they told us about — so every reader that treats a
+// calendar row as PRESSURE on the athlete must skip it, exactly the way the clinical
+// shapes above are skipped. Left in, the trade's own row came back the next morning
+// as "Rest day — traded adds schedule pressure today": a fresh caution on
+// life_capacity, a hasFreshBrake, and — if the athlete trained anyway, which the
+// read invites them to — a session compressed to 40 minutes blaming a commitment
+// that does not exist.
+//
+// The key lives here, beside the other two shape probes, so the writer, the day read
+// and the signal state cannot drift into two spellings of one flag. `day-read.ts`
+// re-exports it under the name its existing callers already import.
+export const REST_TRADE_META_KEY = "rest_trade";
+
+/** Is this context event the rest trade's own claimed-day row? */
+export function contextEventIsRestTrade(ev: any): boolean {
+  if (!ev || typeof ev !== "object") return false;
+  let meta: any = (ev as any).meta;
+  if (meta == null && (ev as any).meta_json) {
+    try {
+      meta = JSON.parse(String((ev as any).meta_json));
+    } catch {
+      meta = null;
+    }
+  }
+  return !!meta && typeof meta === "object" && (meta as any)[REST_TRADE_META_KEY] === true;
+}
+
 // Add N days to a YYYY-MM-DD string → a YYYY-MM-DD string (UTC, DST-safe for a
 // plain day count). Returns null on an unparseable date.
 function addDaysISO(iso: string, days: number): string | null {

@@ -48,6 +48,9 @@ export interface DayReadResult {
   // ClientDayRead has always said so.
   decision?: DayReadDecision;
   input_fingerprint?: string;
+  // When the evidence behind the read last landed (see evidenceAsOf below). Absent
+  // when no fresh evidence has a sync row to point at.
+  evidence_as_of?: string;
   computed_at?: string;
   // A hand-authored read (the demo seed's Brief) pinned against recompute.
   curated?: boolean;
@@ -95,6 +98,53 @@ export interface ReadTodayOptions {
 // implementation alongside dayread.ts's and the recovery-week clamp's. The one
 // rotated implementation now lives beside the rest of the Brief's vocabulary in
 // repo/day-read.ts, and takes the date it is speaking for.)
+
+// ---------- WHEN THE EVIDENCE LANDED, NOT WHEN THE SENTENCE WAS WRITTEN ----------
+//
+// The Brief's stamp said one thing — "Updated 4:00 AM" — for two different facts,
+// and the client has long been ready to say both ("As of 7:39 sync" over "Read at
+// 4:00 AM"). Nothing on the server ever emitted the first half, so the midnight
+// rollover recompute's own clock read as the age of the athlete's data.
+//
+// Two rules keep this honest. It reads only evidence the signal state itself
+// resolved `fresh` — a stale reading is absent everywhere else and must not date
+// the Brief either. And it returns an INSTANT or nothing: observations carry a
+// wake-day DATE, and rendering a bare date through the client's clock formatter
+// would print a midnight no sync ever happened at. The instant comes from the row
+// the sync actually wrote, so the label ("As of … sync") is literally true; with no
+// such row the key is omitted and the client falls back to computed_at, which is
+// exactly the pre-existing single line.
+function evidenceAsOf(read: Record<string, unknown>): string | null {
+  try {
+    const state = (read?.signals as { signal_state?: any } | undefined)?.signal_state;
+    const dimensions = state?.dimensions;
+    if (!dimensions || typeof dimensions !== "object") return null;
+    const dates = new Set<string>();
+    for (const dimension of Object.values(dimensions as Record<string, any>)) {
+      for (const item of Array.isArray(dimension?.evidence) ? dimension.evidence : []) {
+        if (item?.freshness !== "fresh") continue;
+        const date = String(item?.date ?? "");
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date)) dates.add(date);
+      }
+    }
+    if (!dates.size) return null;
+    const list = [...dates];
+    const landed = db
+      .prepare(
+        `SELECT MAX(COALESCE(updated_at, created_at)) AS at FROM garmin_daily_metrics
+          WHERE date IN (${list.map(() => "?").join(",")})`
+      )
+      .get(...list) as { at?: string | null } | undefined;
+    const at = landed?.at ? String(landed.at).trim() : "";
+    if (!at) return null;
+    // SQLite's datetime('now') is UTC with no zone marker, and the client parses this
+    // with `new Date(...)` — which reads a bare stamp as LOCAL time and would shift
+    // the label by the whole offset. Say UTC explicitly.
+    return /[Zz]$|[+-]\d{2}:?\d{2}$/.test(at) ? at : `${at.replace(" ", "T")}Z`;
+  } catch {
+    return null;
+  }
+}
 
 export function attachDayReadContext(readDate: string, read: Record<string, unknown>): DayReadResult {
   let arc: string | null = null;
@@ -173,10 +223,13 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     lookBack = null;
   }
 
+  const asOf = evidenceAsOf(read);
+
   return {
     ...read,
     forward,
     arc,
+    ...(asOf ? { evidence_as_of: asOf } : {}),
     periodization_context: periodizationContext,
     ...(attention ? { attention } : {}),
     ...(recovery ? { recovery } : {}),
@@ -346,9 +399,20 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
             signals: live.signals,
             input_fingerprint: live.input_fingerprint,
             prose_identity: dayReadProseIdentity(readDate, live),
+            // Prose stays pinned, provenance stays current — the same split
+            // pinnedDayReadProse makes, for the same reason: a decision re-stamped
+            // with a fresh computed_at over the morning's evidence list describes two
+            // different moments in one row. The cached list is the fallback so a
+            // decision never loses provenance it already had.
             decision:
               cached.decision && typeof cached.decision === "object"
-                ? { ...cached.decision, computed_at: stampedAt }
+                ? {
+                    ...cached.decision,
+                    computed_at: stampedAt,
+                    evidence: Array.isArray(live?.decision?.evidence)
+                      ? live.decision.evidence
+                      : cached.decision.evidence,
+                  }
                 : live.decision,
             computed_at: stampedAt,
           };

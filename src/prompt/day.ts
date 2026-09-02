@@ -466,7 +466,13 @@ export function buildDayReadPrompt(
       : [];
     const claimed = holds.find((hold) => hold?.claims_day);
     const lab = holds.find((hold) => hold?.lab_draw);
-    if (claimed) {
+    if (claimed?.rest_trade) {
+      // The claim is the system's own bookkeeping row for a rest the athlete moved
+      // here themselves, so it must never be described as a commitment: there is no
+      // appointment and nothing is taking their time. Told there was, the model
+      // invented an obligation and handed it back to them as the reason for the day.
+      todayHoldBlock += `\nTHIS IS THE REST THEY TRADED FORWARD (DATA is in signals.today_holds): they trained through a quiet read earlier and moved that rest onto today — their own choice, not an appointment and nothing on their calendar. Speak it as the trade it was: today is the quiet half of a deal they made, and still theirs to spend however they like. Never name a commitment, never say anything is taking their time, and never argue the day back open.\n`;
+    } else if (claimed) {
       todayHoldBlock += `\nTHE DAY IS SPOKEN FOR (their own word — DATA is in signals.today_holds): they marked "${String(claimed.title ?? "").trim() || "a commitment"}" as taking today. Honor it: lean rest or the gentlest movement, name the commitment as the reason in a friend's voice, and never argue the day back open.\n`;
     }
     if (lab) {

@@ -31,7 +31,7 @@ import {
 } from "./brain/read-adherence.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
 import { RECOVERY_SAMPLE_FLOOR, recoveryTrendBars } from "./recovery-trend.js";
-import { activeContextEffect } from "./context-effect.js";
+import { activeContextEffect, contextEventIsRestTrade, REST_TRADE_META_KEY } from "./context-effect.js";
 import { listActiveDirectives } from "./directives-read.js";
 import { RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { estimateExpenditure } from "./expenditure.js";
@@ -528,23 +528,18 @@ const DAY_CLAIMED_WHY: readonly string[] = [
 // ---------- THE REST TRADE ----------
 // One key, written by the trade use case (src/domain/brain/rest-trade.ts) onto the
 // `claims_day` context event it inserts for tomorrow, and read back here on the day
-// it names. Exported so the two sides cannot drift into two spellings of the same
-// flag. The CALENDAR carries a trade — nothing about the plan's rotation moves.
-export const REST_TRADE_META_KEY = "rest_trade";
+// it names. It LIVES in `context-effect.ts` beside the illness and lab-draw probes,
+// because the signal state needs the same answer to keep the trade's own row out of
+// its schedule-pressure filter — one key, one predicate, three readers. Re-exported
+// here so the callers that already import it from this module keep working.
+// The CALENDAR carries a trade — nothing about the plan's rotation moves.
+export { REST_TRADE_META_KEY };
 
 /** Was the event behind this hold the athlete's own traded rest day? */
 function eventIsRestTrade(contextEvents: unknown, holdId: number | null): boolean {
   if (holdId == null || !Array.isArray(contextEvents)) return false;
   const event = (contextEvents as any[]).find((row) => row && Number(row.id) === Number(holdId));
-  let meta: any = event?.meta;
-  if (meta == null && event?.meta_json) {
-    try {
-      meta = JSON.parse(String(event.meta_json));
-    } catch {
-      meta = null;
-    }
-  }
-  return !!meta && typeof meta === "object" && (meta as any)[REST_TRADE_META_KEY] === true;
+  return contextEventIsRestTrade(event);
 }
 
 // The trade's own sentence: it names whose idea this was and what it bought, and it

@@ -537,9 +537,24 @@ export function pinnedDayReadProse(date: string, baseline: any, identity: string
     ...cached,
     signals: baseline.signals,
     input_fingerprint: baseline.input_fingerprint,
+    // PROSE stays pinned; PROVENANCE does not. `decision.evidence` is the dated
+    // "here is what I was looking at" list the athlete can open under the read, and
+    // re-stamping the row while keeping the morning's evidence produced a decision
+    // claiming a fresh computed_at over readings that had since been superseded — a
+    // row whose stamp and whose evidence described different moments. The wording is
+    // what the pin exists to hold steady, and it is unaffected: `rule_code` is part of
+    // the identity this pin already matched on, so the live evidence is the same list
+    // of facts, freshly dated. Falls back to the cached list when the baseline carries
+    // none, so a decision never loses provenance it already had.
     decision:
       cached.decision && typeof cached.decision === "object"
-        ? { ...cached.decision, computed_at: computedAt }
+        ? {
+            ...cached.decision,
+            computed_at: computedAt,
+            evidence: Array.isArray(baseline?.decision?.evidence)
+              ? baseline.decision.evidence
+              : cached.decision.evidence,
+          }
         : baseline.decision,
     computed_at: computedAt,
   };

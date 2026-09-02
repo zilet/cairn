@@ -37,6 +37,7 @@ import { activeRecoveryWeek } from "../profile.js";
 import { readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
 import { SENSOR_MAX_AGE_DAYS, sensorIsCurrent } from "../sensor-freshness.js";
 import { addDaysISO, localDateISO } from "../shared.js";
+import { currentTrainingDataVersion, registerTrainingCacheClear } from "../training-cache.js";
 import { getTrainingIntent } from "../training-intent.js";
 import {
   dayLoad,
@@ -752,29 +753,54 @@ export interface MorningDecision extends MorningRead {
   context: Record<string, unknown> | null;
 }
 
-// The instant the athlete first trained on each date in the range. `sessions.created_at`
-// is the primary source; a session row that somehow carries none falls back to the
-// earliest `logged_sets.created_at` beneath it, which is the same event a moment later.
+// The instant the athlete first TRAINED on each date in the range.
+//
+// A LOGGED SET is the primary source, and the session row is only a fallback —
+// which is the opposite of how this read first shipped, and the reason it is
+// worth the comment. `sessions.created_at` is when the ROW was created, and a
+// session row exists long before any work does: accepting a composed session from
+// the Brief creates one (repo/adaptive-session.ts), so does rating soreness or
+// performance, so does skipping an exercise (repo/sessions.ts). The live shape
+// this misreads is the ordinary one — open the Brief at 06:30, tap "ask for a
+// session", lift at 11:54. Taking the row's stamp put the cutoff at 06:30, threw
+// away the 08:16 recompute the athlete actually opened to, and handed the ladder
+// back the superseded 04:01 rest read: exactly the bug the cutoff exists to fix.
+//
+// The fallback is narrow on purpose: a date whose session carries NO sets at all
+// (they rated it, or skipped their way through it) has no set instant to use, and
+// the row's own stamp is then the closest thing to a training instant that exists.
+//
+// A run-only day gets no cutoff, and deliberately keeps the pre-existing behavior
+// (the last predictive read of the date wins). Neither cardio table carries an
+// instant this comparison can trust: `activities.created_at` is when the sync
+// IMPORTED the run — the scheduler backfills yesterday's runs at the rollover, so
+// it is routinely hours or days off the effort — and `garmin_activities.start_time`
+// is the watch's `startTimeLocal` when it has one and `startTimeGMT` when it does
+// not (src/garmin.ts), so its zone is unknowable while every stamp compared here is
+// UTC. An unknowable instant is worse than no cutoff: it would silently shift the
+// boundary by the UTC offset and exclude real morning reads. Sets stay the signal.
 function firstTrainingInstantByDate(from: string, to: string): Map<string, string> {
   const out = new Map<string, string>();
-  try {
-    const rows = db
-      .prepare(
-        `SELECT date, MIN(created_at) AS first_at FROM sessions
-          WHERE date >= ? AND date <= ? AND created_at IS NOT NULL
-          GROUP BY date`
-      )
-      .all(from, to) as Array<{ date: string; first_at: string | null }>;
-    for (const row of rows) if (row.first_at) out.set(String(row.date), String(row.first_at));
-  } catch {
-    /* an unreadable sessions table means no cutoff, not a wrong one */
-  }
   try {
     const rows = db
       .prepare(
         `SELECT s.date AS date, MIN(ls.created_at) AS first_at
            FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
           WHERE s.date >= ? AND s.date <= ? AND ls.created_at IS NOT NULL
+          GROUP BY s.date`
+      )
+      .all(from, to) as Array<{ date: string; first_at: string | null }>;
+    for (const row of rows) if (row.first_at) out.set(String(row.date), String(row.first_at));
+  } catch {
+    /* an unreadable logged_sets table means no cutoff, not a wrong one */
+  }
+  try {
+    const rows = db
+      .prepare(
+        `SELECT s.date AS date, MIN(s.created_at) AS first_at
+           FROM sessions s
+          WHERE s.date >= ? AND s.date <= ? AND s.created_at IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM logged_sets ls WHERE ls.session_id = s.id)
           GROUP BY s.date`
       )
       .all(from, to) as Array<{ date: string; first_at: string | null }>;
@@ -1143,9 +1169,61 @@ function trainedOnDate(date: string): boolean {
   );
 }
 
+// ---------- ONE ANSWER PER MORNING, NOT TEN ----------
+//
+// `trainedWithoutHarm` is asked per day across a ten-day window by BOTH softening
+// ladders and again by morning-review's streak walk, and each ask used to rebuild the
+// same three lookups from scratch: `nextMorningAbsorbedIt` read the morning's
+// readiness, then called `nextMorningPhysiologyBrake`, which read it again, and
+// `harmEvidenceOnDay` then called that brake a third time — with every readiness read
+// running the ledger decision query, the three trained-on-date probes and the wearable
+// row underneath it. Same date, same database, same answer, ~10x the statements.
+//
+// So the three pure per-date reads memoize. They are keyed on the training-data
+// version every production write bumps (the sibling memos in lift-comparability and
+// program-state fold in the same counter), and the registered clear is the backstop
+// for the test isolate, which wipes tables out of band and resets the counter to zero
+// so a version match alone cannot be trusted there.
+//
+// A morning that is not yet CLOSED is never cached. The one input this counter does
+// not see is a fresh `brain_decisions` row, and the only morning whose ledger read
+// realistically moves inside one process is today's — the scheduler recomputing the
+// current day. Bounding the memo to past mornings makes that unreachable, and past
+// mornings are the entire hot path (both ladders and the streak walk look backwards).
+let readinessMemo = new Map<string, number | null>();
+let metricsRowMemo = new Map<string, any>();
+let brakeMemo = new Map<string, HarmEvidence | null>();
+let memoVersion = currentTrainingDataVersion();
+registerTrainingCacheClear(() => {
+  readinessMemo = new Map();
+  metricsRowMemo = new Map();
+  brakeMemo = new Map();
+  memoVersion = currentTrainingDataVersion();
+});
+
+function memoFor<T>(store: Map<string, T>, morning: string, compute: () => T): T {
+  const version = currentTrainingDataVersion();
+  if (version !== memoVersion) {
+    readinessMemo = new Map();
+    metricsRowMemo = new Map();
+    brakeMemo = new Map();
+    memoVersion = version;
+  }
+  // Only closed mornings are cacheable — see above.
+  if (morning >= localDateISO()) return compute();
+  if (store.has(morning)) return store.get(morning) as T;
+  const value = compute();
+  store.set(morning, value);
+  return value;
+}
+
 // The newest wearable row that may speak for `morning`. Per-field freshness is still
 // asked individually by each caller.
 function morningMetricsRow(morning: string): any {
+  return memoFor(metricsRowMemo, morning, () => morningMetricsRowUncached(morning));
+}
+
+function morningMetricsRowUncached(morning: string): any {
   // Reach back only as far as the loosest bound any field here uses.
   const floor = addDaysISO(morning, -Math.max(SENSOR_MAX_AGE_DAYS.hrv, SENSOR_MAX_AGE_DAYS.resting_hr));
   if (!floor) return null;
@@ -1170,6 +1248,10 @@ function morningMetricsRow(morning: string): any {
 // The ONE lookup both the physiology brake and the hard-cardio absorption test use,
 // so the two cannot disagree about what the body said.
 function morningReadiness(morning: string): number | null {
+  return memoFor(readinessMemo, morning, () => morningReadinessUncached(morning));
+}
+
+function morningReadinessUncached(morning: string): number | null {
   const fromLedger = ledgerMorningReadiness(morning);
   if (fromLedger != null) return fromLedger;
   if (trainedOnDate(morning)) return null;
@@ -1189,6 +1271,13 @@ function morningReadiness(morning: string): number | null {
 function nextMorningPhysiologyBrake(date: string): HarmEvidence | null {
   const morning = addDaysISO(date, 1);
   if (!morning) return null;
+  // Keyed by the MORNING, which is what the answer is about — `date` only names the
+  // day the brake is being attributed to, and the returned evidence carries it.
+  const found = memoFor(brakeMemo, morning, () => nextMorningPhysiologyBrakeUncached(date, morning));
+  return found ? { ...found, date } : null;
+}
+
+function nextMorningPhysiologyBrakeUncached(date: string, morning: string): HarmEvidence | null {
   const readiness = morningReadiness(morning);
   if (readiness != null && readsRestGradeReadiness(readiness)) {
     return {

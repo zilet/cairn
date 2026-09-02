@@ -228,6 +228,17 @@ test("only the night that ended on the read day bears on the posture", () => {
 
   assert.equal(dim(nightBefore).status, "unknown", "the night BEFORE last decides nothing");
   assert.equal(dim(nightBefore).coverage.active_fields.includes("sleep"), false);
+  // …but it still leaves a TRACE. The bound is enforced by aging the observation, not
+  // by dropping it, so a watch synced yesterday stays distinguishable from a watch
+  // that was never worn — which the two used to be byte-identical on.
+  assert.ok(dim(nightBefore).coverage.stale_fields.includes("sleep"));
+  assert.ok(dim(nightBefore).coverage.observed_fields.includes("sleep"));
+  assert.equal(dim(nightBefore).latest_date, localDaysAgo(repo.LAST_NIGHT_MAX_AGE_DAYS + 1));
+
+  const noWatch = repo.planningSignalState({ date: localDaysAgo(0) });
+  assert.deepEqual(dim(noWatch).coverage.observed_fields, [], "and nothing worn observes nothing");
+  assert.equal(dim(noWatch).latest_date, null);
+  assert.notEqual(dim(nightBefore).reason, dim(noWatch).reason, "the two silences do not read alike");
 });
 
 test("a stale short night never becomes a caution — absence stays neutral", () => {

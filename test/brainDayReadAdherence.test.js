@@ -1359,3 +1359,100 @@ test("a locked verdict on a superseded read still reaches the Learned timeline",
   assert.equal(pattern.missed_n, 5);
   assert.match(pattern.statement, /you usually train anyway/);
 });
+
+// ============================================ THE CUTOFF IS THE FIRST SET, NOT THE
+// SESSION ROW
+//
+// `sessions.created_at` is when the ROW was created, and the row exists long before
+// any work does: accepting a composed session from the Brief creates one, so does
+// rating soreness or performance, so does skipping an exercise. The live shape this
+// misread is the ordinary one — open the Brief at 06:30, tap "ask for a session",
+// lift at 11:54. Taking the row's stamp put the cutoff at 06:30, threw away the 08:16
+// recompute the athlete actually opened to, and handed the ladder back the superseded
+// 04:01 rest read: exactly the bug the cutoff exists to fix.
+
+// A session row created early (the Brief tap) with the real work logged hours later.
+function sessionRowAt(date, rowTime, setTime) {
+  seedTrainingDay(date);
+  db.prepare(`UPDATE sessions SET created_at=? WHERE date=?`).run(`${date} ${rowTime}`, date);
+  db.prepare(
+    `UPDATE logged_sets SET created_at=? WHERE session_id IN (SELECT id FROM sessions WHERE date=?)`
+  ).run(`${date} ${setTime}`, date);
+}
+
+test("a session row created when they asked for the session is not when they trained", () => {
+  reset();
+  const date = localDaysAgo(1);
+  readAtTime(date, "rest", "04:01:00");
+  readAtTime(date, "easy", "08:16:00");
+  // 06:30: they opened the Brief and tapped "ask for a session". 11:54: they lifted.
+  sessionRowAt(date, "06:30:00", "11:54:00");
+
+  assert.equal(morningReadForDate(date).kind, "easy", "the 08:16 read is what the Brief showed");
+  const model = readAdherenceModel(localDaysAgo(0), 42);
+  assert.equal(model.recent.at(-1).read, "easy");
+  assert.equal(model.by_read.find((row) => row.read === "rest"), undefined, "no rest override is invented");
+});
+
+test("a day whose session carries no sets falls back to the row's own stamp", () => {
+  reset();
+  const date = localDaysAgo(1);
+  readAtTime(date, "rest", "04:00:00");
+  // They rated the day rather than logging work: a session row, no sets under it.
+  repo.setSessionFeedback(date, { performance: 3 });
+  db.prepare(`UPDATE sessions SET created_at=? WHERE date=?`).run(`${date} 07:00:00`, date);
+  readAtTime(date, "easy", "09:30:00");
+
+  assert.equal(
+    morningReadForDate(date).kind,
+    "rest",
+    "with no set instant the row's stamp is the closest thing to a training instant there is"
+  );
+});
+
+// ============================================ ONE ANSWER PER MORNING
+//
+// `trainedWithoutHarm` is asked per day across a ten-day window by both softening
+// ladders and again by morning-review's streak walk, and each ask used to rebuild the
+// same lookups: `nextMorningAbsorbedIt` read the morning's readiness, then called
+// `nextMorningPhysiologyBrake`, which read it again, and `harmEvidenceOnDay` called
+// that brake a third time — each readiness read running the ledger query, three
+// trained-on-date probes and the wearable row underneath it.
+
+function countingStatements(fn) {
+  const original = db.prepare;
+  let count = 0;
+  db.prepare = function (...args) {
+    count++;
+    return original.apply(this, args);
+  };
+  try {
+    fn();
+  } finally {
+    db.prepare = original;
+  }
+  return count;
+}
+
+test("harmEvidenceOnDay issues a bounded number of statements, and repeats are cheaper", () => {
+  reset();
+  const day = localDaysAgo(3);
+  const morning = localDaysAgo(2);
+  liftedOn(day);
+  // A hard-cardio day, which is the arm that reaches the absorption test — and so the
+  // one that used to ask the same morning the same question three times over.
+  hardRunOn(day);
+  repo.upsertGarminDailyMetric({ date: morning, training_readiness: 78, resting_hr: 53, hr_7d_avg: 55 });
+
+  const first = countingStatements(() => harmEvidenceOnDay(day));
+  const second = countingStatements(() => harmEvidenceOnDay(day));
+
+  // Before the memo this shape issued 28 statements on the first call and 28 again on
+  // the second; it now issues 18 and 5. The bounds sit just above each, so a return of
+  // the duplicate work fails here rather than quietly costing a ladder ten times over.
+  assert.ok(first <= 20, `one call should stay bounded, issued ${first}`);
+  assert.ok(second <= 8, `a repeat should reuse the memoized morning, issued ${second}`);
+  assert.ok(second < first, `a repeat must be cheaper than the first, ${second} vs ${first}`);
+  // And the answer is unchanged by the memo.
+  assert.deepEqual(harmEvidenceOnDay(day), harmEvidenceOnDay(day));
+});

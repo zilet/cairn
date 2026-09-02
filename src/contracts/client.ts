@@ -86,6 +86,13 @@ export interface ClientDayRead {
   };
   input_fingerprint?: string;
   computed_at?: string;
+  // When the evidence behind the read last LANDED, as opposed to when the sentence was
+  // written (`computed_at`). A UTC ISO instant, taken from the sync row that wrote the
+  // freshest evidence the read leaned on; absent whenever no fresh evidence has a sync
+  // row to point at, in which case the Brief's stamp falls back to `computed_at` alone
+  // and reads exactly as it did before. Derived fresh per response, same precedent as
+  // forward/arc/week/recovery.
+  evidence_as_of?: string;
   // A hand-authored read (the demo seed's Brief) pinned against recompute.
   curated?: boolean;
   // Which Today surface leads today. Optional: absent on any non-live date and

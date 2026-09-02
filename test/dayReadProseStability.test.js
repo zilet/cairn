@@ -215,3 +215,68 @@ test("the precompute warms the deterministic floor when last night has not synce
   db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 430)`).run(date);
   assert.equal(sleepRowExistsFor(date), true);
 });
+
+// ---------- prose stays pinned, PROVENANCE stays current ----------
+// The pin holds the sentence steady; it must not hold the read's evidence list steady
+// too. `decision.evidence` is the dated "here's what I was looking at" list under the
+// read, so re-stamping a fresh computed_at over the morning's evidence produced one row
+// whose stamp and whose evidence described two different moments.
+
+// A cached agent row whose decision carries a deliberately STALE evidence list, so the
+// refresh is visible: whatever comes back must not be this.
+function seedStaleEvidence(date, extra = {}) {
+  const baseline = repo.dayRead(date);
+  repo.saveDayRead(date, {
+    ...baseline,
+    ...extra,
+    headline: "Today's the day.",
+    why: MORNING,
+    source: "agent",
+    agent: "claude",
+    prose_identity: repo.dayReadProseIdentity(date, baseline),
+    decision: {
+      ...baseline.decision,
+      evidence: [{ label: "Yesterday's reading", value: "a stamp from before the sync" }],
+      computed_at: "2000-01-01T00:00:00.000Z",
+    },
+  });
+  return baseline;
+}
+
+test("the pin re-stamps the decision's evidence, not just its clock", async () => {
+  resetTables(...TABLES);
+  offlineAgents();
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  seedPlan();
+  const baseline = seedStaleEvidence(date);
+
+  const again = await computeDayRead({ date });
+
+  assert.equal(again.why, MORNING, "the sentence is still the one the athlete read");
+  assert.deepEqual(again.decision.evidence, baseline.decision.evidence, "the provenance is today's");
+  assert.notEqual(again.decision.computed_at, "2000-01-01T00:00:00.000Z");
+});
+
+test("readToday's re-stamp refreshes the provenance the same way", async () => {
+  resetTables(...TABLES);
+  offlineAgents();
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  seedPlan();
+  // The inputs drifted but the CALL did not — the branch that re-stamps rather than
+  // rewriting. Stamping the cached row with a fingerprint the live baseline no longer
+  // matches is that state exactly, and it does not depend on which particular input
+  // the day-read fingerprint happens to cover.
+  seedStaleEvidence(date, { input_fingerprint: "a-fingerprint-from-before-the-sync" });
+
+  const opened = await readToday({ date });
+
+  assert.equal(opened.why, MORNING);
+  assert.notDeepEqual(
+    opened.decision.evidence,
+    [{ label: "Yesterday's reading", value: "a stamp from before the sync" }],
+    "a fresh stamp must not sit over the morning's evidence"
+  );
+  assert.deepEqual(opened.decision.evidence, repo.dayRead(date).decision.evidence);
+});

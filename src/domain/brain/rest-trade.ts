@@ -65,6 +65,23 @@ export interface RestTradeResult {
 /** The rule codes whose quiet day is about RHYTHM rather than about the athlete. */
 const TRADEABLE_REST_RULES = new Set(["accumulated_load_rest", "template_rest_day"]);
 
+// ---------- WHY THESE SENTENCES ARE LITERALS, NOT VARIANT SETS ----------
+//
+// Every athlete-facing string the BRIEF speaks rotates through pickDayVariant, because
+// a stable input fires a stable rule every morning and one sentence printed verbatim
+// for weeks stops reading as coaching. That reasoning does not reach here.
+//
+// A refusal is the answer to a TAP. The athlete asked one question, once, and gets one
+// answer back in the same second. It is not a daily reading they wake up to, they will
+// see any given one a handful of times at most, and each refusal already names its own
+// concrete reason, so there is nothing to grow tired of. Rotating them would actively
+// hurt: two taps a minute apart, refused for the SAME reason in two different
+// sentences, reads as the system changing its mind rather than repeating itself. A
+// stable answer to a stable question is the honest shape.
+//
+// So tap-triggered refusals are EXEMPT from the variant law, deliberately. They are
+// still held to everything else — a friend's voice, no score, no gate — and
+// `violatesReadingGrammar` is asserted against them in dayReadTodayHold.test.js.
 function refuse(reason: RestTradeRefusal, error: string): RestTradeResult {
   return { ok: false, reason, error };
 }
