@@ -464,13 +464,18 @@ export function recordDayReadDecision(
   if (existing && existing.status !== "observed") return null;
 
   const expectation = dayReadAdherenceExpectation(date, read);
+  // Held in consts because the same two values are compared against the stored row
+  // below, when a same-claim recompute reuses it (see "the ledger must say what the
+  // athlete read").
+  const ledgerSummary = String(read.headline || `${kind} day`).slice(0, 300);
+  const ledgerRationale: string | null = typeof read.why === "string" ? read.why : null;
   const recorded = recordDecision(
     {
       effective_date: date,
       kind: "day_read",
       domain: "cross_domain",
-      summary: String(read.headline || `${kind} day`).slice(0, 300),
-      rationale: read.why ?? null,
+      summary: ledgerSummary,
+      rationale: ledgerRationale,
       source: read.source ?? "deterministic",
       source_ref_type: "day_read",
       source_ref_key: date,
@@ -511,6 +516,28 @@ export function recordDayReadDecision(
   // a `done` acknowledgement leaves the morning's prediction standing, so the day it
   // predicted can still be judged against it.
   const currentId = Number(recorded.decision.id);
+
+  // THE LEDGER MUST SAY WHAT THE ATHLETE READ.
+  //
+  // A same-claim recompute is an INSERT OR IGNORE above (deliberately — the day's
+  // prediction must keep asking its question rather than being retired by a recompute
+  // that reached the same conclusion). But the row then kept the FIRST wording of the
+  // day while the day_reads cache kept the last, so provenance showed a sentence the
+  // athlete never saw. The claim, the expectation and the morning `context` are all
+  // untouched here: only the prose is brought up to what is on screen. No new row, no
+  // supersede.
+  if (recorded.decision.summary !== ledgerSummary || (recorded.decision.rationale ?? null) !== ledgerRationale) {
+    try {
+      db.prepare(`UPDATE brain_decisions SET summary = ?, rationale = ? WHERE id = ? AND status = 'observed'`).run(
+        ledgerSummary,
+        ledgerRationale,
+        currentId
+      );
+    } catch {
+      // Provenance polish is best-effort; the claim itself is already recorded.
+    }
+  }
+
   const priors = dayReadSupersedesPriorReads(kind)
     ? (db
         .prepare(

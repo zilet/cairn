@@ -1029,6 +1029,25 @@ test("stale sleep is NOT treated as last night (no fabricated sleep read)", () =
   assert.ok(fresh.signals.last_night && fresh.signals.last_night.total_min === 440);
 });
 
+// FINDING 7 — LAST NIGHT MUST BE DATED TO THE READ.
+// The small-hours precompute writes the day's first sentence before the watch has
+// synced, so whatever sleep row exists is the night BEFORE last night. Presence is not
+// recency: the prompt's LAST NIGHT block and the floor's `why` must both fall silent
+// unless the night ends on the day being read.
+// TODO: green once LAST_NIGHT_MAX_AGE_DAYS = 0 lands (a separate in-flight package);
+// on this base SENSOR_MAX_AGE_DAYS.sleep is still 2, so a date-1 night is surfaced.
+test("a night dated the day before is not LAST NIGHT for this read", { todo: true }, async () => {
+  resetTables("daily_metrics", "garmin_daily_metrics");
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 440)`).run(dayBefore(REF, 1));
+  const read = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(read.signals.last_night, null, "yesterday's night is not the night this read is about");
+  const { buildDayReadPrompt } = await import("../dist/prompt.js");
+  const prompt = buildDayReadPrompt(undefined, { date: REF, baseline: read });
+  assert.doesNotMatch(prompt, /\nLAST NIGHT:/);
+  assert.match(prompt, /no recent sleep or HRV data has synced/);
+  assert.doesNotMatch(read.why, /\bslept\b|\bsleep\b|\brested\b/i, "the floor claims nothing about a night it lacks");
+});
+
 test("EASY (not DONE) when today's logged work was only light", () => {
   // A short mobility/recovery session graded 'easy' is NOT a completed training
   // day — keep it 'easy' (they may still want their real work), never 'done'.

@@ -285,6 +285,15 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   facing `reasons` (`src/repo/brain/day-read-rules.ts`), and every athlete-facing string — outcome
   reason, the read's `why`, the server-policy clamp reason — rotates through `pickDayVariant(date)`.
   Add a phrasing to the set; do not add a literal. Details in `docs/ARCHITECTURE.md`.
+- **ONE WORDING PER MORNING PER IDENTITY.** The read's identity is
+  `dayReadProseIdentity(date, baseline)` — `(date, kind, decision.rule_code, focus)`, always from the
+  DETERMINISTIC baseline, persisted as `prose_identity`. A recompute landing on the same identity keeps
+  the cached `headline`/`why` and refreshes only `signals` / `input_fingerprint` / `computed_at`
+  (`pinnedDayReadProse`, above the agent call in `computeDayRead`); the agent is asked only on an
+  identity change, the athlete's explicit new read, or floor prose (the self-heal path). A bare
+  `input_fingerprint` move is NOT material truth in `readToday` — every sync moves it — and the 04:00
+  precompute warms the floor only (`precomputeDayReadFloor`) until a sleep row is dated that day, so no
+  sentence is written about a night that has not synced. Details in `docs/ARCHITECTURE.md`.
 - **Any surface a PERSON reads goes through `spokenSignalVoice`; `summary`/`reason` are the machine
   register.** `SignalObservation.summary` and every dimension `reason` (`src/repo/signal-state.ts`)
   are third-person evidence prose for `renderSignalState`, the coach context and the provenance

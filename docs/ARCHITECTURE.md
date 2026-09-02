@@ -623,6 +623,43 @@ would be a competing arbitration rule, not a null-safety floor. Only a real comm
 time-window caveat and the `est_minutes` clamp; the recovery-squeeze cause holds intensity for the
 full session length instead of shortening it.
 
+**One wording per morning, per identity.** A single set of facts once produced three
+different Brief paragraphs before breakfast: the small-hours precompute wrote one before the
+watch had synced the night, the sync's debounced refresh wrote a second, and the first open
+re-derived "material truth changed" from a bare `input_fingerprint` move, overwrote the agent's
+sentence with deterministic floor prose and armed a third agent run. `brain_decisions` kept the
+first wording (its fingerprint hashes the CLAIM, so a same-kind recompute is INSERT OR IGNORE)
+while `day_reads` kept the last, so provenance showed a sentence the athlete never saw. Every
+input that could move a recommendation moves the fingerprint — a watch sync, a memoized state
+going live — so the fingerprint was never the right question. The right question is whether the
+deterministic CALL changed. `dayReadProseIdentity(date, baseline)` (`src/repo/day-read.ts`) is
+that call: `(date, kind, decision.rule_code, focus)`, always computed from the deterministic
+baseline (never from an agent row's own decision, whose `rule_code` is always `agent_day_read`),
+persisted in the row's `_day_read_meta` and read back as `prose_identity`. Three consequences.
+(1) `pinnedDayReadProse` (`src/dayread.ts`) runs ABOVE the agent call in `computeDayRead`: a
+cached agent row written for the same identity keeps its `headline`/`why`, and only `signals`,
+`input_fingerprint` and `computed_at` are refreshed — no spawn. The pin releases on an identity
+change, on the athlete's explicit "new read" (which deletes the row first), on a steered read,
+and on floor prose (`source:"deterministic"`), so the self-heal path stays open. The server-policy
+clamps still run over a pinned row; they are identity-preserving by construction, and a safety
+floor must never be skipped because the wording is old. (2) `readToday`
+(`src/domain/brain/day-read-use-case.ts`) no longer treats a bare fingerprint move as material
+truth — `identityChanged` replaced it, with a row written before the pin existed falling back to
+its stored `baseline_kind` rather than churning every cached read on deploy. A drift with the call
+unchanged re-stamps the row inline (same prose, live evidence) instead of writing floor prose and
+arming another agent run; completion / work / load / trained / fuel / prose-contradiction remain
+fact changes. (3) `precomputeDayReadFloor` + `sleepRowExistsFor` (`src/dayread.ts`): when the
+small-hours precompute finds no sleep row dated that day it warms the deterministic floor only.
+The morning open is still instant, nothing is written about a night that has not synced, and the
+first agent run happens after the first sync or the first open, whichever lands first. When the
+call genuinely does change, `buildDayReadPrompt`'s `CURRENT WORDING` block shows the agent the
+sentence already on screen and asks it to change only the part the changed fact touches.
+`recordDayReadDecision` (`src/repo/brain/read-adherence.ts`) closes the ledger seam: a same-claim
+recompute now UPDATEs `summary`/`rationale` on its own observed row — no new row, no supersede,
+claim and expectation untouched — so provenance reads back what the athlete read.
+`test/dayReadProseStability.test.js` pins all of it with every agent disabled, which is itself the
+spawn counter: a row that comes back `source:"agent"` cannot have been written by an agent here.
+
 **The reading grammar binds the agent too.** `violatesReadingGrammar(text)`
 (`src/repo/day-read.ts`) holds a sentence to the same four rules the deterministic vocabulary has
 always been written to: no leaked engineering vocabulary (`deterministic`/`posture`/`baseline`/

@@ -4317,6 +4317,24 @@ export function getPlanWithPurpose(date = localDateISO()): Array<Record<string, 
   }));
 }
 
+// ---------- one wording per morning ----------
+// The read's PROSE IDENTITY: the deterministic call the sentence was written for.
+// Two recomputes landing on the same (date, kind, rule_code, focus) are the same call
+// about the same day, so they must read the same — see the pin in computeDayRead
+// (src/dayread.ts). Always computed from the DETERMINISTIC BASELINE, never from an
+// agent row's own decision (whose rule_code is always `agent_day_read`), and persisted
+// beside the row so a later recompute can compare against the call the cached prose
+// actually answered.
+export function dayReadProseIdentity(
+  date: string,
+  read: { kind?: unknown; focus?: unknown; decision?: { rule_code?: unknown } | null } | null | undefined
+): string {
+  const kind = String(read?.kind ?? "").trim();
+  const rule = String(read?.decision?.rule_code ?? "").trim();
+  const focus = typeof read?.focus === "string" ? read.focus.trim().toLowerCase() : "";
+  return `${date}|${kind}|${rule}|${focus}`;
+}
+
 // ---------- Day-read cache (the Brief) ----------
 // One canonical (no-override) read per calendar day, persisted so the morning
 // open is instant. The nightly scheduler pass (and any cache miss) fills it; the
@@ -4349,6 +4367,10 @@ export function getCachedDayRead(date: string): any | null {
     override: row.override ?? null,
     decision,
     input_fingerprint: meta.input_fingerprint ?? undefined,
+    // The deterministic call this row's prose was written for (see dayReadProseIdentity).
+    // Absent on rows written before the pin existed — an unknown identity never matches,
+    // so such a row simply recomputes once and then carries one.
+    prose_identity: typeof meta.prose_identity === "string" ? meta.prose_identity : undefined,
     curated: meta.curated === true,
     computed_at: decision?.computed_at ?? (normalizedComputedAt || undefined),
   };
@@ -4413,6 +4435,9 @@ function writeDayRead(date: string, read: any, expectedStaleOverride?: CachedOve
     _day_read_meta: {
       decision,
       input_fingerprint: inputFingerprint,
+      ...(typeof read.prose_identity === "string" && read.prose_identity
+        ? { prose_identity: read.prose_identity }
+        : {}),
       ...(curated ? { curated: true } : {}),
     },
   };

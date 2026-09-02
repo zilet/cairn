@@ -9,7 +9,7 @@ import {
   synthesizeHealth,
   weekAheadServe,
 } from "./coachOps.js";
-import { precomputeDayRead, localToday, warmToday } from "./dayread.js";
+import { precomputeDayRead, precomputeDayReadFloor, sleepRowExistsFor, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
 import {
   evaluateMatureExpectations,
@@ -1000,8 +1000,19 @@ export function startScheduler() {
     lastPrecomputeDate = stamp;
     precomputeBusy = true;
     try {
-      await precomputeDayRead(stamp);
-      console.log(`[brief] precomputed today's day-read for ${stamp}.`);
+      // The watch has its own sync clock, so at 04:00 last night is routinely still
+      // on the device. Asking the agent for the day's sentence then writes it BLIND —
+      // and with one wording per identity that blind sentence is the one the morning
+      // keeps. So warm only the deterministic floor until the night exists; the first
+      // agent run happens after the first morning sync or the first open, whichever
+      // lands first (a floor row self-heals via ensureDayReadRefresh on open).
+      if (sleepRowExistsFor(stamp)) {
+        await precomputeDayRead(stamp);
+        console.log(`[brief] precomputed today's day-read for ${stamp}.`);
+      } else {
+        precomputeDayReadFloor(stamp);
+        console.log(`[brief] warmed the deterministic floor for ${stamp} (last night has not synced yet).`);
+      }
     } catch (e: any) {
       recordSchedulerFailure("day_read_precompute", e);
       console.error(`[brief] nightly precompute failed: ${e?.message ?? e}`);

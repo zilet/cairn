@@ -372,7 +372,16 @@ function debriefFacts(date: string): string {
 
 export function buildDayReadPrompt(
   ctx?: CoachContext,
-  opts: { override?: string; date?: string; baseline?: repo.DayRead } = {}
+  opts: {
+    override?: string;
+    date?: string;
+    baseline?: repo.DayRead;
+    // The wording already on the athlete's screen for this date, when there is one.
+    // Only ever passed when the day's CALL has changed — an unchanged call keeps its
+    // sentence without asking anyone (see the prose pin in src/dayread.ts) — so this
+    // block asks for CONTINUITY, not for a repeat.
+    currentWording?: { headline?: string | null; why?: string | null } | null;
+  } = {}
 ): string {
   const context = dateScopedPromptContext(ctx ?? repo.getCoachContext(), opts.date);
   // The baseline the CALLER will clamp, persist and fingerprint — passed in so the
@@ -552,6 +561,19 @@ export function buildDayReadPrompt(
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
 - Output "kind":"done", "focus":null, "est_minutes":null. DONE is a factual temporal state, not another easy-day recommendation.${debriefFacts(opts.date || context.now?.date || localDateISO())}`
       : "";
+  // The athlete has already read a sentence for this date today. The call has since
+  // changed (that is the only reason this block is here), so a new sentence is
+  // warranted — but a screen that rewords itself every few hours reads as churn, not
+  // as coaching. Ask for the smallest honest edit.
+  const currentWordingBlock = (() => {
+    const why = typeof opts.currentWording?.why === "string" ? opts.currentWording.why.trim() : "";
+    if (!why) return "";
+    const headline = typeof opts.currentWording?.headline === "string" ? opts.currentWording.headline.trim() : "";
+    return `\nCURRENT WORDING (what they have already read on this screen today):
+${headline ? `- headline: ${headline}\n` : ""}- why: ${why}
+KEEP this wording unless a fact above actually changed, and then change only the part that fact
+touches. Continuity is worth more than novelty here — never reword just to sound different.\n`;
+  })();
   return `${CAIRN_PERSONA}
 
 This is the Brief — today's day-read. Read their WHOLE picture and
@@ -581,7 +603,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}${fuelDemandLine}
 ${CONTEXT_GUARDRAILS}
-${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${overrideBlock}
+${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${currentWordingBlock}${overrideBlock}
 ${renderJsonContract(DAY_READ_SCHEMA)}
 
 DATA:

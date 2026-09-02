@@ -11,6 +11,7 @@ import {
   dayRead,
   dayReadHeadline,
   dayReadPeriodizationContext,
+  dayReadProseIdentity,
   forwardLook,
   getCachedDayRead,
   invalidateDayRead,
@@ -271,6 +272,18 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
         const proseContradiction = dayReadProseConsistencyIssue(cached, live?.signals);
         const fingerprintChanged =
           typeof cached.input_fingerprint !== "string" || cached.input_fingerprint !== live.input_fingerprint;
+        // A fingerprint move is NOT by itself a change of what the day is. Every input
+        // that could move a recommendation moves it — a watch sync, a memoized state
+        // going live — and treating that as material is what overwrote the athlete's
+        // morning sentence with floor prose and armed a third agent run for one set of
+        // facts. What matters is whether the deterministic CALL changed: the read's
+        // prose identity (date, kind, rule_code, focus). A row written before the pin
+        // existed carries no identity, so fall back to the coarse call it does carry —
+        // its baseline kind — rather than churning every cached read on deploy.
+        const identityChanged =
+          typeof cached.prose_identity === "string"
+            ? cached.prose_identity !== dayReadProseIdentity(readDate, live)
+            : String(cached.decision?.baseline_kind ?? cached.kind ?? "") !== String(live.kind ?? "");
         // Fuel bucket flip (e.g. a lunch that moved protein from behind → on_pace
         // after the morning read cached "protein's light so far"). Only a real flip
         // between two PRESENT buckets counts — a cached row from before this signal
@@ -286,13 +299,14 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
           trainedFactChanged ||
           fuelBucketChanged ||
           proseContradiction != null ||
-          fingerprintChanged;
+          identityChanged;
         if (materialTruthChanged) {
           const factual = {
             ...live,
             headline: dayReadHeadline(live, readDate),
             source: "deterministic",
             override: null,
+            prose_identity: dayReadProseIdentity(readDate, live),
           };
           // No await separates the getCachedDayRead above from this write, dayRead()
           // is synchronous, and node:sqlite is synchronous in a single process — so
@@ -319,6 +333,36 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
           scheduleDayReadRefresh(readDate);
           if (recordOutcome) recordDayReadSuggestion(readDate, factual, null);
           return attachDayReadContext(readDate, { ...factual, agent_status: agentStatusFor(factual) });
+        }
+        // The inputs drifted but the CALL did not. Keep the sentence the athlete is
+        // already reading and re-stamp the row against the fresher evidence — exactly
+        // what computeDayRead's prose pin does, done inline because it needs no agent
+        // and no timer. That is the whole change: this path used to write floor prose
+        // over the morning's wording and arm yet another agent run.
+        if (fingerprintChanged && !cached.override) {
+          const stampedAt = new Date().toISOString();
+          const restamped = {
+            ...cached,
+            signals: live.signals,
+            input_fingerprint: live.input_fingerprint,
+            prose_identity: dayReadProseIdentity(readDate, live),
+            decision:
+              cached.decision && typeof cached.decision === "object"
+                ? { ...cached.decision, computed_at: stampedAt }
+                : live.decision,
+            computed_at: stampedAt,
+          };
+          try {
+            saveDayRead(readDate, restamped);
+          } catch {
+            /* the response is still truthful */
+          }
+          if (recordOutcome) recordDayReadSuggestion(readDate, restamped, null);
+          return attachDayReadContext(readDate, {
+            ...restamped,
+            cached: true,
+            agent_status: agentStatusFor(restamped),
+          });
         }
         if (recordOutcome) recordDayReadSuggestion(readDate, cached, null);
         return attachDayReadContext(readDate, { ...cached, cached: true, agent_status: agentStatusFor(cached) });

@@ -59,7 +59,11 @@ test("a legacy cached row self-heals once against the complete decision fingerpr
   assert.equal(stable.input_fingerprint, healed.input_fingerprint);
 });
 
-test("hybrid lookahead changes reconcile stale agent prose on the next read", async () => {
+// ONE WORDING PER MORNING. A fingerprint move with the day's call unchanged is not a
+// change of what the day IS: it re-stamps the row's evidence and keeps the sentence the
+// athlete has already read, instead of overwriting it with floor prose (which is what
+// wrote a third Brief paragraph from one set of facts on 2026-09-02).
+test("a bare fingerprint drift re-stamps the row and keeps the wording already on screen", async () => {
   resetTables(
     "day_reads",
     "suggestions",
@@ -92,14 +96,19 @@ test("hybrid lookahead changes reconcile stale agent prose on the next read", as
   const stale = repo.getCachedDayRead(date);
   assert.equal(stale.signals.hybrid.protect_run_next, true);
 
-  const healed = await readToday({ date });
+  const served = await readToday({ date });
   const stable = await readToday({ date });
-  assert.equal(healed.source, "deterministic");
-  assert.notEqual(healed.input_fingerprint, stale.input_fingerprint);
-  assert.equal(healed.signals.hybrid?.protect_run_next ?? false, false);
-  assert.doesNotMatch(healed.why, /tomorrow's key run is still open/i);
+  // The prose survives — same call, same sentence.
+  assert.equal(served.source, "agent");
+  assert.equal(served.why, "Keep the legs light because tomorrow's key run is still open.");
+  // …but the evidence under it is the live evidence, and the row is re-stamped so the
+  // next open is a plain cache hit rather than another reconciliation.
+  assert.notEqual(served.input_fingerprint, stale.input_fingerprint);
+  assert.equal(served.signals.hybrid?.protect_run_next ?? false, false);
   assert.equal(stable.cached, true);
-  assert.equal(stable.input_fingerprint, healed.input_fingerprint);
+  assert.equal(stable.why, served.why);
+  assert.equal(stable.input_fingerprint, served.input_fingerprint);
+  assert.equal(repo.getCachedDayRead(date).source, "agent", "no floor prose was written over the morning");
 });
 
 test("material truth replaces a stale persisted athlete steer once, then remains stable", async () => {

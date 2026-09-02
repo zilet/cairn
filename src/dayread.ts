@@ -504,6 +504,47 @@ function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {
   return /outside the requested contract|no valid JSON/i.test(message) ? "invalid_response" : "unreachable";
 }
 
+// ---------- ONE WORDING PER MORNING PER IDENTITY ----------
+// A morning produced three different Brief paragraphs from one set of facts: the
+// 04:00 precompute wrote one before the night had synced, the sync's debounced
+// refresh wrote a second, and the open's material-truth recheck overwrote that with
+// floor prose and armed a third. Nothing anywhere kept the sentence the athlete had
+// already read when the CALL had not changed.
+//
+// The pin: if the cached row is agent prose written for the SAME deterministic call
+// (repo.dayReadProseIdentity — date, kind, rule_code, focus), keep its headline/why
+// and refresh only `signals`, `input_fingerprint` and `computed_at`. No agent spawn.
+// The agent is asked again only when the identity changes, on the athlete's explicit
+// "new read" (which deletes the row first), or when the cached row is floor prose —
+// that last case is the existing self-heal path and must stay open.
+//
+// Returns null when the cached row cannot carry the day's wording, in which case the
+// caller runs the ordinary agentic compute.
+export function pinnedDayReadProse(date: string, baseline: any, identity: string, cachedRow?: any): any | null {
+  const cached = cachedRow === undefined ? repo.getCachedDayRead(date) : cachedRow;
+  if (!cached || cached.curated) return null;
+  // Floor prose is a transient outage artifact, not the day's wording: leave the
+  // self-heal path (ensureDayReadRefresh) free to replace it with an agent sentence.
+  if (cached.source !== "agent") return null;
+  if (typeof cached.why !== "string" || !cached.why.trim()) return null;
+  if (cached.override) return null; // a steered read is transient and never canonical
+  if (cached.prose_identity !== identity) return null;
+  // Same call, but the sentence must still not contradict the fresher signals it is
+  // about to be re-stamped against (a completed hard session described as easy).
+  if (dayReadProseConsistencyIssue(cached, baseline?.signals)) return null;
+  const computedAt = decisionAt();
+  return {
+    ...cached,
+    signals: baseline.signals,
+    input_fingerprint: baseline.input_fingerprint,
+    decision:
+      cached.decision && typeof cached.decision === "object"
+        ? { ...cached.decision, computed_at: computedAt }
+        : baseline.decision,
+    computed_at: computedAt,
+  };
+}
+
 // Compute the agentic day-read with the deterministic floor as fallback. The
 // canonical (no-override) read is persisted to the day_reads cache; escape-hatch
 // overrides ("rough night" / "train anyway") are transient and never cached so
@@ -512,14 +553,29 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
   const { date, override, agent } = opts;
   const baseline = repo.dayRead(date);
   const resolvedDate = date || localToday();
+  const identity = repo.dayReadProseIdentity(resolvedDate, baseline);
   let out: any;
+  // The pin, above the agent call: a same-identity recompute re-stamps the wording
+  // the athlete already read instead of paying for — and printing — a new sentence.
+  const cached = override?.trim() ? null : repo.getCachedDayRead(resolvedDate);
+  const pinned = override?.trim() ? null : pinnedDayReadProse(resolvedDate, baseline, identity, cached);
+  // The clamps still run over the pinned row (they are identity-preserving by
+  // construction, and a safety floor must never be skipped because the wording is old).
+  if (pinned) return finishDayRead(pinned, baseline, { override, date: resolvedDate, identity });
   try {
     // Thread the SAME baseline the clamps, the persisted `signals` and the
     // `input_fingerprint` below are taken from, so the agent is never shown one
     // state while the server acts on another. (Inside a request the shared
     // signal-state memo already lines them up; the scheduler's warm runs outside
     // any request scope, where only explicit threading can.)
-    const prompt = buildDayReadPrompt(undefined, { override, date, baseline });
+    // The call has changed (otherwise the pin above would have answered), so the day
+    // gets a new sentence — but it is shown the one already on screen and asked to
+    // change only what the change touches. A curated or steered row is not offered.
+    const currentWording =
+      cached && !cached.curated && !cached.override && typeof cached.why === "string" && cached.why.trim()
+        ? { headline: cached.headline ?? null, why: cached.why }
+        : null;
+    const prompt = buildDayReadPrompt(undefined, { override, date, baseline, currentWording });
     // Interactive (the Brief is on the morning-open path) → the short leash, which
     // the bounded-read loop treats as the TOTAL deadline across all query rounds, so
     // the timeout envelope is unchanged. An agent that just answers makes exactly one
@@ -598,7 +654,15 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
       agent_issue: agentIssueFor(e),
     };
   }
-  out = enforceDayReadSafetyPosture(out, baseline, !!override?.trim(), resolvedDate);
+  return finishDayRead(out, baseline, { override, date: resolvedDate, identity });
+}
+
+// The shared tail of every computeDayRead branch — the agentic one, the deterministic
+// fallbacks, and the pinned-prose short-circuit: server-policy clamps, the athlete's
+// steer, the prose identity this wording answers, then the canonical persist.
+function finishDayRead(read: any, baseline: any, opts: { override?: string; date: string; identity: string }): any {
+  const { override, date: resolvedDate, identity } = opts;
+  let out = enforceDayReadSafetyPosture(read, baseline, !!override?.trim(), resolvedDate);
   out = enforceRecoveryWeekCadence(out, baseline, !!override?.trim(), resolvedDate);
   out = enforceCompletionContract(out, baseline, resolvedDate);
   // The day-ahead `forward` line is NOT persisted here — it's attached fresh on every
@@ -607,6 +671,9 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
   // guard in saveDayRead protects a stored steer from a later canonical recompute).
   // Persisting the steer is what makes it survive a reload and reach the coach context.
   out.override = override && override.trim() ? override.trim() : null;
+  // The deterministic call this wording answers. Stamped AFTER the clamps because
+  // each of them returns a fresh object spread from the baseline, which would drop it.
+  out.prose_identity = identity;
   try {
     repo.saveDayRead(resolvedDate, out);
   } catch {}
@@ -657,5 +724,34 @@ export function resetDayReadComputeCoalescing(): void {
 export async function precomputeDayRead(date?: string): Promise<void> {
   try {
     await computeCanonicalDayRead({ date: date || localToday() });
+  } catch {}
+}
+
+// Has LAST NIGHT actually landed for this date? The watch syncs on its own clock
+// (six-hourly), so at the small-hours precompute the night is routinely still on the
+// device. Nothing downstream can tell "no sleep yet" from "slept badly" once the read
+// has been written, which is how the first sentence of the day came to be written
+// before the night it describes existed.
+export function sleepRowExistsFor(date: string): boolean {
+  try {
+    return repo.latestSleep(repo.SENSOR_MAX_AGE_DAYS.sleep, date)?.date === date;
+  } catch {
+    return false;
+  }
+}
+
+// Warm the DETERMINISTIC floor only — no agent, no prose written blind. Used by the
+// small-hours precompute when the night has not synced yet: the row still makes the
+// morning open instant, and because it is floor prose the open's self-heal path
+// (ensureDayReadRefresh) asks the agent once the real evidence is in. Never throws.
+export function precomputeDayReadFloor(date?: string): void {
+  const resolvedDate = date || localToday();
+  try {
+    const baseline = repo.dayRead(resolvedDate);
+    finishDayRead(
+      { ...baseline, headline: dayReadHeadline(baseline, resolvedDate), source: "deterministic" },
+      baseline,
+      { date: resolvedDate, identity: repo.dayReadProseIdentity(resolvedDate, baseline) }
+    );
   } catch {}
 }
