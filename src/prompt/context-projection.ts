@@ -415,6 +415,26 @@ export const PROMPT_CONTEXT_SITES = {
     sessions: SESSIONS_RECENT,
   },
 
+  // The meal-plan SAFETY CHECKER (a bounded second pass over a drafted week). Its
+  // arithmetic — the lean-safe kcal floor, the protein target, fiber — is computed
+  // by the server before the prompt exists (src/repo/verify-floors.ts), so the ONLY
+  // thing left to it is the judgement no number can make: does a meal violate an
+  // allergy, a dietary restriction, a hard diet or a stated preference, and does the
+  // meal-slot timing contradict the schedule the athlete described. That judgement is
+  // unmakeable without the declarations, so this site carries every source one can
+  // come from: `profile` (allergies + dietary_restrictions), `family` (a shared meal's
+  // hard exclusions), `memory` and `learnings` (food likes/dislikes in their own
+  // words), `context_events` / `context_today` (travel, illness, a fast), and the
+  // condensed health reads whose directives can touch food. DROPPED: the whole
+  // training/endurance/fuel set and `recent_sessions` — it re-judges no programming
+  // and re-derives no target; the week's numbers already arrived as findings.
+  // `sessions: 0` because `recent_sessions` is not in the key set at all — this
+  // site reads no logged training, so it carries no session window either.
+  meal_plan_verify: {
+    keys: [...PERSON, ...HEALTH_CORE],
+    sessions: 0,
+  },
+
   // The quiet cross-domain insight. Its text names its own ground truth: "recovery,
   // markers/directives, training, nutrition, life/family context". Keeps the long-arc
   // reads (whole_person_trajectory) and prior insights for dedup. DROPPED: garmin,

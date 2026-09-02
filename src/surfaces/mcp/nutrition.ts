@@ -46,7 +46,7 @@ export function registerNutritionTools(server: McpToolRegistrar) {
   // ---- adaptive nutrition (T3) ----
   server.tool(
     "get_expenditure",
-    "Best-effort daily energy expenditure (TDEE), adherence-neutral and provenance-rich. Preserves the outcome anchor (avg logged intake minus recency-weighted bodyweight trend), then deterministically chooses/blends it with the strongest eligible prior: measured RMR + source-resolved active calories, Garmin total calories, or a profile seed. Returns additive basis/anchors/coverage/provenance fields; confidence remains the outcome-data confidence, so a prior-backed tdee may honestly carry 'none'. Missing days stay absent, future rows are excluded, and window is clamped to 7–90 days. projection_text remains a plain-language goal-pace forecast, never a score.",
+    "Best-effort daily energy expenditure (TDEE), adherence-neutral and provenance-rich. Preserves the outcome anchor (avg logged intake minus recency-weighted bodyweight trend), then deterministically chooses/blends it with the strongest eligible prior: measured RMR + source-resolved active calories, Garmin total calories, or a profile seed. Returns additive basis/anchors/coverage/provenance fields; confidence remains the outcome-data confidence, so a prior-backed tdee may honestly carry 'none'. Missing days stay absent, future rows are excluded, and window is clamped to 7–90 days. projection_text remains a plain-language goal-pace forecast.",
     { window: z.number().int().optional().describe("days to derive over (default 21)") },
     async ({ window }) => {
       const expenditure = estimateExpenditure(window ?? 21);
@@ -98,14 +98,14 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_goal_pace",
-    "The goal-pace series behind the motivational weight-progress chart: { points:[{date,weight_lb}] (canonical weigh-ins, manual beats Garmin), trend:{lb_wk, line:[{date,weight_lb},{date,weight_lb}]|null} (unweighted least-squares slope over the most recent ≤21 days, projected ~28 days out; null under 2 points or a <3-day span), needed:{lb_wk, line:[…]|null} (the straight line from today's weight to goal_weight_lb by goal_date; null with no goal, a past date, or no current weight), goal:{weight_lb,date}, window_days }. Read-only, null-safe, no scores. ?days clamps to 14–365 (default 90).",
+    "The goal-pace series behind the motivational weight-progress chart: { points:[{date,weight_lb}] (canonical weigh-ins, manual beats Garmin), trend:{lb_wk, line:[{date,weight_lb},{date,weight_lb}]|null} (unweighted least-squares slope over the most recent ≤21 days, projected ~28 days out; null under 2 points or a <3-day span), needed:{lb_wk, line:[…]|null} (the straight line from today's weight to goal_weight_lb by goal_date; null with no goal, a past date, or no current weight), goal:{weight_lb,date}, window_days }. Read-only, null-safe. ?days clamps to 14–365 (default 90).",
     { days: z.number().int().optional().describe("trailing window of weigh-ins to read (default 90, clamped 14–365)") },
     async ({ days }) => asText(goalPace(days ?? 90))
   );
 
   server.tool(
     "get_day_intake",
-    "A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, known:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining, fuel_demand }. fuel_demand ({date, demand: light|standard|big, drivers, evidence}) is how much work the day carries, from the training plan and the week's run intentions — a reason to bias carbohydrate toward a big day, NEVER a change to the target and never a judgement about a day already lived. For patch compatibility totals and remaining stay numeric and missing entry nutrients contribute zero; newer clients MUST consult known flags before presenting a total or target comparison. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one — else null. 'remaining', never 'consumed'; no score. ?date defaults to the user's local today.",
+    "A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, known:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining, fuel_demand }. fuel_demand ({date, demand: light|standard|big, drivers, evidence}) is how much work the day carries, from the training plan and the week's run intentions — a reason to bias carbohydrate toward a big day, NEVER a change to the target and never a judgement about a day already lived. Totals and remaining stay numeric for compatibility and entries with unknown nutrients contribute zero, so read the known flags before presenting a total or comparing against a target. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one — else null. 'remaining', never 'consumed'. ?date defaults to the user's local today.",
     { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
     // The same shape the REST route returns — MCP ⊆ REST, so the demand read rides
     // alongside the log here too rather than being folded into getDayIntake (which
@@ -115,7 +115,7 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_nutrition_progress",
-    "A calm multi-week read of recorded intake. Returns a complete chronological local-day series with unlogged days and unknown nutrients as null, explicit record observation density (never proof of full-day capture), confidence capped at observed because no independent completeness signal exists, and target comparisons/advice qualified with 'if these records reflect most of your day'. Nutrient averages/trends use only known values; historical accepted targets stay attached per day; food/fat-quality estimates are sampled, never extrapolated. Informational, not medical advice; no score, streak, or blame.",
+    "A calm multi-week read of recorded intake. Returns a complete chronological local-day series with unlogged days and unknown nutrients as null, explicit record observation density (never proof of full-day capture), confidence capped at observed because no independent completeness signal exists, and target comparisons/advice qualified with 'if these records reflect most of your day'. Nutrient averages/trends use only known values; historical accepted targets stay attached per day; food/fat-quality estimates are sampled, never extrapolated. No streak or blame.",
     { days: z.number().int().optional().describe("trailing days (default 35, safely clamped 14–90)") },
     async ({ days }) => asText(nutritionProgress(days ?? 35))
   );
@@ -196,10 +196,14 @@ export function registerNutritionTools(server: McpToolRegistrar) {
     "log_food_note",
     "Record a meal estimate (e.g. after looking at a plate photo): meal type, description, optional macros. Optionally backdate it with `date` and say when it was eaten with `eaten_at`.",
     {
-      meal: z.string(),
-      raw: z.string().optional(),
-      parsed: z.any().optional(),
-      image_path: z.string().optional(),
+      meal: z
+        .string()
+        .describe(
+          "meal label (e.g. 'breakfast', 'second lunch', 'protein shake'). A generic/blank value ('', 'meal', 'food') is not treated as a real label: the stored label then falls back to a slot inferred from `eaten_at` (breakfast/lunch/dinner/snack) when a time is given, else 'meal'"
+        ),
+      raw: z.string().optional().describe("the athlete's own description of what was eaten, verbatim; empty/omitted is stored as an empty string. Non-empty text queues background enrichment (unless enrichment is disabled in settings)"),
+      parsed: z.any().optional().describe("pre-parsed macro estimate to store instead of (or ahead of) enrichment, following the foodCapture.ts contract (ingredient rows with quantity, nutrition_pattern bands, confidence/basis); omit to let a raw-text or photo note enrich normally"),
+      image_path: z.string().optional().describe("server-relative path to an already-uploaded plate photo to attach to this note; omit for a text-only entry"),
       date: z
         .string()
         .optional()
@@ -240,18 +244,18 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "update_food_note",
-    "Correct a logged food note (fix a macro, rename it, change the meal slot, move it to the day it was actually eaten, 'I changed my mind'). Pass the id + any subset of { meal, summary, kcal, protein_g, carbs_g, fat_g, fiber_g, notes, items, date, eaten_at }. Coerced/clamped; marks the note's enrichment terminal so a background enricher can't later overwrite the correction. Returns the updated row, or an error when the id is unknown.",
+    "Correct a logged food note (fix a macro, rename it, change the meal slot, move it to the day it was actually eaten, 'I changed my mind'). Pass the id + any subset of { meal, summary, kcal, protein_g, carbs_g, fat_g, fiber_g, notes, items, date, eaten_at }. Coerced/clamped; omitting a field leaves it alone, while passing a macro or the note as null clears the stored value. Marks the note's enrichment terminal so a background enricher can't later overwrite the correction. Returns the updated row, or an error when the id is unknown.",
     {
-      id: z.number().int(),
-      meal: z.string().optional(),
-      summary: z.string().optional(),
-      kcal: z.number().optional(),
-      protein_g: z.number().optional(),
-      carbs_g: z.number().optional(),
-      fat_g: z.number().optional(),
-      fiber_g: z.number().optional(),
-      notes: z.string().optional(),
-      items: z.array(z.string()).optional(),
+      id: z.number().int().describe("id of the food_notes row to correct, from log_food_note or list_food_notes"),
+      meal: z.string().optional().describe("new meal label. Omit to leave it alone; a blank/whitespace-only value is ignored (the stored label is never cleared this way)"),
+      summary: z.string().optional().describe("short description of what was eaten, trimmed and capped at 200 characters. Omit to leave it alone; an empty string overwrites the stored summary with an empty string (it is never stored as null)"),
+      kcal: z.number().nullable().optional().describe("calories (kcal), clamped to 0-5000 and rounded. Omit to leave it alone; pass null to clear the stored value"),
+      protein_g: z.number().nullable().optional().describe("protein in grams, clamped to 0-500 and rounded. Omit to leave it alone; pass null to clear the stored value"),
+      carbs_g: z.number().nullable().optional().describe("carbohydrates in grams, clamped to 0-1000 and rounded. Omit to leave it alone; pass null to clear the stored value"),
+      fat_g: z.number().nullable().optional().describe("fat in grams, clamped to 0-500 and rounded. Omit to leave it alone; pass null to clear the stored value"),
+      fiber_g: z.number().nullable().optional().describe("fiber in grams, clamped to 0-200 and rounded. Omit to leave it alone; pass null to clear the stored value"),
+      notes: z.string().nullable().optional().describe("free-text note, trimmed and capped at 500 characters. Omit to leave it alone; pass null to clear the stored note, or an empty string to overwrite it with an empty string"),
+      items: z.array(z.string()).optional().describe("replacement list of ingredient/item strings, capped to the first 30 entries at 80 characters each. Omit to leave the stored items alone; this replaces the whole list, it does not merge"),
       date: z
         .string()
         .optional()
@@ -260,9 +264,10 @@ export function registerNutritionTools(server: McpToolRegistrar) {
         ),
       eaten_at: z
         .string()
+        .nullable()
         .optional()
         .describe(
-          "Correct the local 24-hour time it was eaten, 'HH:MM'. Omit to leave it alone; send an empty string to unstate a time that was wrong. Correcting the time never renames the meal."
+          "Correct the local 24-hour time it was eaten, 'HH:MM'. Omit to leave it alone; send null or an empty string to unstate a time that was wrong. Correcting the time never renames the meal."
         ),
     },
     // Lenient for the same reason as log_food_note: a bad guess must not cost the
@@ -277,7 +282,7 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "log_fueling_feedback",
-    "Record the athlete's one-tap fueling read for a day — the follow-through after a nutrition-target change: energy on a calm 1-3 running-low/steady/plenty scale, an optional hunger read (1-3), and an optional note. Adherence-neutral, no scores. Upserts one row per day and, when an applied target change is still in its 7-day follow-through window, links the answer to it so the next check-in weighs the subjective signal. Returns the saved row.",
+    "Record the athlete's one-tap fueling read for a day — the follow-through after a nutrition-target change: energy on a calm 1-3 running-low/steady/plenty scale, an optional hunger read (1-3), and an optional note. Adherence-neutral. Upserts one row per day and, when an applied target change is still in its 7-day follow-through window, links the answer to it so the next check-in weighs the subjective signal. Returns the saved row.",
     {
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       energy: z.number().int().min(1).max(3).describe("1 running low · 2 steady · 3 plenty"),

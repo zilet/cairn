@@ -57,7 +57,14 @@ garminRouter.get("/garmin/activities", (req, res) =>
 );
 garminRouter.post("/garmin/activities", (req, res) => {
   try {
-    res.json(upsertGarminActivity(req.body ?? {}, req.body?.source_id ? Number(req.body.source_id) : undefined));
+    // nullsClear: a hand correction through the API states null to CLEAR a field;
+    // omitting it still preserves. The sync path never opts in (its sparse payloads
+    // carry explicit nulls that must stay "preserve").
+    res.json(
+      upsertGarminActivity(req.body ?? {}, req.body?.source_id ? Number(req.body.source_id) : undefined, {
+        nullsClear: true,
+      })
+    );
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -67,7 +74,11 @@ garminRouter.get("/garmin/daily", (req, res) =>
 );
 garminRouter.post("/garmin/daily", (req, res) => {
   try {
-    res.json(upsertGarminDailyMetric(req.body ?? {}, req.body?.source_id ? Number(req.body.source_id) : undefined));
+    res.json(
+      upsertGarminDailyMetric(req.body ?? {}, req.body?.source_id ? Number(req.body.source_id) : undefined, {
+        nullsClear: true,
+      })
+    );
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

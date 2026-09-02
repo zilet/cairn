@@ -64,6 +64,40 @@ test("proposal helper renders clamp and verified transparency", () => {
   assert.equal(proposal.verifiedBadgeHtml({ checked: false }), "");
 });
 
+// A floor the SERVER still reads as breached must never wear the sage checkmark.
+// The session path has no downstream write gate, so this badge is the whole
+// safety net: an athlete handed a 90-minute session on a 45-minute budget has to
+// be told, not reassured.
+test("an unresolved floor breach never renders as a clean check", () => {
+  const proposal = loadProposal();
+  const over = "The session estimates 90 minutes against a <45>-minute budget.";
+
+  const stillOver = proposal.verifiedBadgeHtml({ checked: true, adjustments: [], unresolved: [over] });
+  assert.doesNotMatch(stillOver, /Checked against your floors/);
+  assert.match(stillOver, /verified-badge is-open/);
+  assert.match(stillOver, /Checked — one thing is still over your floors/);
+  assert.match(stillOver, /&lt;45&gt;-minute budget/, "the message is escaped and visible, not hidden");
+
+  // The agent turn never finished: honest about that, and still not a checkmark.
+  const unfinished = proposal.verifiedBadgeHtml({
+    checked: false,
+    adjustments: [],
+    unresolved: [over, "and one more"],
+  });
+  assert.match(unfinished, /Couldn't finish checking — 2 things are over your floors/);
+  assert.doesNotMatch(unfinished, /✓/);
+
+  // A repair that DID adjust something and still left a breach shows both.
+  const partial = proposal.verifiedBadgeHtml({
+    checked: true,
+    adjustments: ["raised Tuesday to the floor"],
+    unresolved: [over],
+  });
+  assert.match(partial, /still over your floors/);
+  assert.match(partial, /what was adjusted/);
+  assert.match(partial, /raised Tuesday to the floor/);
+});
+
 test("proposal helper renders strength and run prescriptions without Dundefined", () => {
   const proposal = loadProposal();
   const strength = proposal.strengthChangeHtml({

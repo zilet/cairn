@@ -30,10 +30,10 @@ export function registerMemoryLearningTools(server: McpToolRegistrar) {
     "update_memory",
     "Edit an existing memory note's content/kind/confidence by id. Use when a remembered fact CHANGED and should be corrected in place.",
     {
-      id: z.number().int(),
-      content: z.string().optional(),
-      kind: z.string().optional(),
-      confidence: z.number().optional(),
+      id: z.number().int().describe("the memory row's id, from list_memory"),
+      content: z.string().optional().describe("replacement text; omit to leave unchanged"),
+      kind: z.string().optional().describe("replacement kind label (e.g. preference, constraint, fact); omit to leave unchanged"),
+      confidence: z.number().optional().describe("0-5; clamped into that range. Omit to leave unchanged"),
     },
     async ({ id, content, kind, confidence }) =>
       asText(updateMemory(id, { content, kind, confidence }) ?? { error: "not found", id })
@@ -43,11 +43,16 @@ export function registerMemoryLearningTools(server: McpToolRegistrar) {
     "supersede_memory",
     "Mark a memory note superseded (it CONTRADICTS/REPLACES an older one). Never hard-deletes — the old fact stays in history. Optionally supply a replacement content (a new row is created) or replacement_id.",
     {
-      id: z.number().int(),
-      replacement: z.string().optional(),
-      kind: z.string().optional(),
-      replacement_id: z.number().int().optional(),
-      reason: z.string().optional(),
+      id: z.number().int().describe("the memory row's id to mark superseded, from list_memory"),
+      replacement: z
+        .string()
+        .optional()
+        .describe(
+          "text for a new replacement row; goes through the same add_memory dedup (an exact/near-duplicate live row is reused rather than a fresh insert). Omit if passing replacement_id, or to supersede with no replacement"
+        ),
+      kind: z.string().optional().describe("kind for the new replacement row when `replacement` is given; defaults to the superseded row's kind"),
+      replacement_id: z.number().int().optional().describe("id of an EXISTING memory row to point at instead of creating one via `replacement`"),
+      reason: z.string().optional().describe("free-text reason for the supersession; accepted but currently not persisted anywhere"),
     },
     async ({ id, replacement, kind, replacement_id, reason }) =>
       asText(

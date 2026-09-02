@@ -1,15 +1,15 @@
 // Background-enrichment prompts: free-text activity/food enrichment, the
-// health-document analyzer, the food-photo vision estimate, and the Garmin
-// strength reconciliation narrative.
+// food-photo vision estimate, and the Garmin strength reconciliation narrative.
+// Health documents are NOT enriched here — src/enrich.ts routes every uploaded
+// document through buildHealthIngestPrompt (src/prompt/health.ts) instead.
 import {
   FOOD_INGREDIENT_SCHEMA,
   FOOD_NUTRITION_PATTERN_SCHEMA,
   FOOD_PROVENANCE_SCHEMA,
   foodCaptureGuardrailLines,
 } from "../foodCapture.js";
-import { HEALTH_DOCUMENT_KIND_SCHEMA } from "../healthDocumentKinds.js";
 import * as repo from "../repo.js";
-import { HEALTH_TRANSCRIPTION_RULES, renderJsonContract } from "./shared.js";
+import { renderJsonContract } from "./shared.js";
 
 const ENRICH_ACTIVITY_SCHEMA = `{
   "structured": {
@@ -151,67 +151,6 @@ EXISTING MEMORY (do not repeat): ${JSON.stringify(recentMemory)}
 
 RAW FOOD NOTE TO ENRICH:
 ${raw}`;
-}
-
-const ENRICH_HEALTH_SCHEMA = `{
-  "kind": "${HEALTH_DOCUMENT_KIND_SCHEMA}",
-  "doc_date": "YYYY-MM-DD|null",
-  "structured": {
-    "markers": [
-      { "name": "<marker name, e.g. 'Ferritin'>", "value": <number|string>, "unit": "<unit, e.g. 'ng/mL'>", "flag": "low|normal|high|null" }
-    ],
-    "type": "${HEALTH_DOCUMENT_KIND_SCHEMA}"
-  },
-  "summary": "<plain-language summary, 1-3 sentences>",
-  "memory": [
-    { "content": "<durable notable fact, e.g. 'ferritin low-normal — recheck in 3mo'>", "kind": "observation|injury|milestone" }
-  ]
-}`;
-
-// Health-document analysis. The agent (Claude Code / Codex CLI) can open local
-// files, so we hand it the ABSOLUTE path and instruct it to read the file there.
-export function buildHealthEnrichPrompt(absPath: string, kind: string): string {
-  const profile = repo.getProfile();
-  const recentMemory = (repo.listMemory(40) as any[]).map((m) => m.content);
-
-  return `You analyze a single uploaded health document (a lab report, DEXA/body-composition
-scan, ECG, vitals record, RMR/metabolic test, progress/visit note, after-visit summary, imaging
-report, vision prescription, medication list, immunization record, or similar) for a training & nutrition tracker. The document is a local
-file — an image or a PDF — saved on this machine.
-
-READ THE FILE AT THIS ABSOLUTE PATH:
-${absPath}
-
-Open and read that file directly (it is a local ${kind} document). Extract the test markers /
-measurements and the date the results apply to, then output a clean structured result plus a
-short plain-language summary and any durable facts worth remembering.
-
-GUARDRAILS:
-- This is informational structuring, NOT medical diagnosis or advice. Do not diagnose, prescribe,
-  or recommend treatment. Just transcribe and summarize what the document shows.
-- Never invent values. Only include markers you can actually read from the file. Use null for any
-  flag you cannot determine (e.g. when no reference range is shown).
-${HEALTH_TRANSCRIPTION_RULES}
-- Infer top-level "kind" from the document itself (${HEALTH_DOCUMENT_KIND_SCHEMA}). Do not rely on
-  the upload label.
-- Infer top-level "doc_date" from the collection date, test date, exam date, scan date, or report
-  date printed in the document. Prefer the specimen/scan date over a final-report date. If no
-  date is visible, return null.
-- Prefer the reference ranges printed on the document to set "flag" (low/normal/high). If none is
-  shown, set flag to null rather than guessing.
-- "memory" is [] UNLESS there is a genuinely notable, durable fact (a clearly out-of-range marker
-  worth tracking, a meaningful body-composition change, an injury-relevant finding). Keep items
-  short and factual. Do NOT repeat anything already in EXISTING MEMORY below.
-
-${renderJsonContract(ENRICH_HEALTH_SCHEMA)}
-
-CONTEXT:
-profile: ${JSON.stringify(profile)}
-${
-  kind === "food"
-    ? `PREPARATION CONTEXT (canonical allowlisted tokens only; the user's meal note is authoritative): ${JSON.stringify(recentMemory)}`
-    : `EXISTING MEMORY (do not repeat): ${JSON.stringify(recentMemory)}`
-}`;
 }
 
 // ---- food photo → macros (vision) ----------------------------------------------

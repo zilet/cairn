@@ -53,21 +53,33 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
     "update_context_event",
     "Update a life-timeline event by id (any subset of fields). Set archived=true to retire it.",
     {
-      id: z.number().int(),
-      kind: z.enum(["trip", "injury", "life_event", "family_event"]).optional(),
-      title: z.string().optional(),
-      detail: z.string().nullable().optional(),
-      start_date: z.string().nullable().optional(),
-      end_date: z.string().nullable().optional(),
-      meta: z.any().optional(),
-      archived: z.boolean().optional(),
+      id: z.number().int().describe("context_events row id, from add_context_event or list_context_events"),
+      kind: z
+        .enum(["trip", "injury", "life_event", "family_event"])
+        .optional()
+        .describe("changes the event's category; omit to leave unchanged"),
+      title: z.string().optional().describe("short display title; omit to leave unchanged"),
+      detail: z.string().nullable().optional().describe("free-text detail; null clears, omit leaves unchanged"),
+      start_date: z.string().nullable().optional().describe("YYYY-MM-DD; null clears, omit leaves unchanged"),
+      end_date: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("YYYY-MM-DD; null makes the event ongoing/open-ended again, omit leaves unchanged"),
+      meta: z
+        .any()
+        .optional()
+        .describe(
+          "kind-specific payload (trip {location}, injury {area,severity}, life_event {impact}, family_event {member,recurrence}); replaces the whole object when provided, null clears it, omit leaves unchanged"
+        ),
+      archived: z.boolean().optional().describe("true retires the event from active planning; omit to leave unchanged"),
     },
     async ({ id, ...patch }) => asText(updateContextEvent(id, patch) ?? { error: "not found", id })
   );
 
   server.tool(
     "resolve_context_event",
-    "Close a life-timeline event as healed/over (e.g. an injury the user confirms is no longer bothering them) WITHOUT deleting it — it stays on the timeline and in exports but stops gating the day-read/coach as a hard constraint. Use this instead of delete when a niggle/injury has passed. `date` defaults to today.",
+    "Close a life-timeline event as healed/over (an injury the user confirms is no longer bothering them). Closing keeps the event on the timeline and in exports while it stops gating the day-read and coach as a hard constraint. `date` defaults to today.",
     {
       id: z.number().int(),
       date: z.string().nullable().optional().describe("YYYY-MM-DD healed-on date; defaults to today"),
@@ -77,7 +89,7 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
 
   server.tool(
     "delete_context_event",
-    "Delete a life-timeline event by id. To close a healed injury while KEEPING the record, prefer resolve_context_event.",
+    "Delete a life-timeline event by id. Deletion removes the event from the timeline and from exports; it is not recoverable.",
     { id: z.number().int() },
     async ({ id }) => asText(deleteContextEvent(id))
   );
@@ -135,14 +147,30 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
     "update_family",
     "Update a family member by id (any subset of fields). allergies are a HARD exclusion in shared meals; dietary_restrictions surface as optional household mods.",
     {
-      id: z.number().int(),
-      name: z.string().nullable().optional(),
-      color: z.string().nullable().optional(),
-      relationship: z.string().nullable().optional(),
-      birthdate: z.string().nullable().optional(),
-      notes: z.string().nullable().optional(),
-      allergies: z.string().nullable().optional(),
-      dietary_restrictions: z.string().nullable().optional(),
+      id: z.number().int().describe("family_members row id, from add_family or list_family"),
+      name: z.string().nullable().optional().describe("up to 120 chars; null clears, omit leaves unchanged"),
+      color: z.string().nullable().optional().describe("optional UI swatch; null clears, omit leaves unchanged"),
+      relationship: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("e.g. son/daughter/partner/parent, up to 60 chars; null clears, omit leaves unchanged"),
+      birthdate: z.string().nullable().optional().describe("YYYY-MM-DD; null clears, omit leaves unchanged"),
+      notes: z.string().nullable().optional().describe("free-text, up to 1000 chars; null clears, omit leaves unchanged"),
+      allergies: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(
+          "HARD exclusion for any shared/household meal, up to 500 chars; null clears, omit leaves unchanged"
+        ),
+      dietary_restrictions: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(
+          "surfaces as optional kid-friendly/shared-meal mods, up to 500 chars; null clears, omit leaves unchanged"
+        ),
     },
     async ({ id, ...patch }) => asText(updateFamily(id, patch) ?? { error: "not found", id })
   );
@@ -170,11 +198,14 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
     "update_supplement",
     "Edit one understood supplement (dose, frequency, note), or set active=false to mark it stopped (kept for history).",
     {
-      id: z.number().int(),
-      dose: z.string().optional(),
-      frequency: z.string().optional(),
-      note: z.string().optional(),
-      active: z.boolean().optional(),
+      id: z.number().int().describe("supplements row id, from understand_supplements or list_supplements"),
+      dose: z.string().optional().describe("free-text approximate dose (e.g. '5g'), up to 60 chars; omit to leave unchanged, '' clears"),
+      frequency: z
+        .string()
+        .optional()
+        .describe("free-text cadence (e.g. 'daily', 'occasionally'), up to 40 chars; omit to leave unchanged, '' resets to 'daily'"),
+      note: z.string().optional().describe("free-text note, up to 300 chars; omit to leave unchanged, '' clears"),
+      active: z.boolean().optional().describe("false marks it stopped (kept for history, excluded from list_supplements unless all=true); omit to leave unchanged"),
     },
     async (args) => asText(updateSupplement(args.id, args) ?? { error: "not found", id: args.id })
   );

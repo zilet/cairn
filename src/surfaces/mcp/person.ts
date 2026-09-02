@@ -31,7 +31,10 @@ export function registerPersonTools(server: McpToolRegistrar) {
     "set_profile",
     "Update profile fields (any subset). name is the user's name (optional; stamped on the doctor-ready clinical report — pass '' to clear). home_location is the durable home base used as planning context; pass '' to clear. A dated trip's context-event meta.location overrides the effective location only while that trip is active and never overwrites home. Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') remains a broad compatibility label; training_intent is the athlete-owned ordered priorities, explicit endurance role, and optional durable capability. endurance_sport is optional free text, '' clears it.",
     {
-      name: z.string().optional(),
+      name: z
+        .string()
+        .optional()
+        .describe("athlete's name; optional, stamped on the doctor-ready clinical report. Pass '' to clear, omit to leave unchanged"),
       home_location: z
         .string()
         .max(160)
@@ -39,19 +42,72 @@ export function registerPersonTools(server: McpToolRegistrar) {
         .describe(
           "durable home base; '' clears. Temporary travel belongs in a dated trip context event with meta.location"
         ),
-      sex: z.string().optional(),
-      age: z.number().optional(),
-      height_cm: z.number().optional(),
-      weight_lb: z.number().optional(),
-      goal_weight_lb: z.number().optional(),
-      goal_date: z.string().optional(),
-      activity_factor: z.number().optional(),
-      notes: z.string().optional(),
-      about_me: z.string().optional(),
-      allergies: z.string().optional(),
-      dietary_restrictions: z.string().optional(),
-      primary_discipline: z.enum(["strength", "endurance", "hybrid"]).optional(),
-      endurance_sport: z.string().optional(),
+      sex: z
+        .string()
+        .optional()
+        .describe(
+          "free-text (not an enum); selects health reference ranges and the female-only Navy body-fat formula. Left unset rather than guessed when unknown — never default it to a value"
+        ),
+      age: z.number().optional().describe("years; informs dose/recovery framing and reference ranges"),
+      height_cm: z
+        .number()
+        .optional()
+        .describe(
+          "height in centimetres; required before BMI or body-fat estimates compute. Providing height_in on log_body_measurement also back-fills this field"
+        ),
+      weight_lb: z
+        .number()
+        .optional()
+        .describe(
+          "current bodyweight in pounds; updates only the profile's stored value, not a weigh-in log — use log_weight to record a dated entry that feeds the goal-pace series and TDEE bodyweight trend"
+        ),
+      goal_weight_lb: z
+        .number()
+        .optional()
+        .describe(
+          "target bodyweight in pounds; paired with goal_date drives the lean-safe deficit/surplus calc. Changing it is a goal-identity change and always requires the athlete's explicit approval"
+        ),
+      goal_date: z
+        .string()
+        .optional()
+        .describe(
+          "YYYY-MM-DD target date for goal_weight_lb; changing it is a goal-identity change and always requires the athlete's explicit approval"
+        ),
+      activity_factor: z
+        .number()
+        .optional()
+        .describe(
+          "TDEE activity multiplier applied to formula BMR when no measured/adaptive expenditure is available; default 1.5 (roughly 'moderately active')"
+        ),
+      notes: z.string().optional().describe("free-text profile notes; overwritten wholesale by any provided value"),
+      about_me: z
+        .string()
+        .optional()
+        .describe(
+          "free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you), up to 8000 chars; '' clears, omit to leave unchanged"
+        ),
+      allergies: z
+        .string()
+        .optional()
+        .describe(
+          "HARD safety exclusion for meal planning (never suggested, not just avoided); free text, up to 1000 chars; '' clears, omit to leave unchanged"
+        ),
+      dietary_restrictions: z
+        .string()
+        .optional()
+        .describe(
+          "soft preference respected strongly but not a hard exclusion (vegetarian, no pork, …); free text, up to 1000 chars; '' clears, omit to leave unchanged"
+        ),
+      primary_discipline: z
+        .enum(["strength", "endurance", "hybrid"])
+        .optional()
+        .describe(
+          "broad compatibility label driving coach framing, day-read, and weekly stats; default 'strength'. training_intent is the richer, athlete-owned priority ordering — set both when possible"
+        ),
+      endurance_sport: z
+        .string()
+        .optional()
+        .describe("optional free text naming the athlete's endurance sport, up to 60 chars; '' clears, omit to leave unchanged"),
       training_intent: z
         .object({
           priorities: z
@@ -77,7 +133,7 @@ export function registerPersonTools(server: McpToolRegistrar) {
         .enum(["lose", "maintain", "gain"])
         .optional()
         .describe(
-          "the journey's shape: 'lose' (lean-safe deficit), 'maintain' (anchor to real expenditure — no deficit), 'gain' (conservative lean surplus). Omit to leave it deriving from the goal weight."
+          "the journey's shape: 'lose' (lean-safe deficit), 'maintain' (anchor to real expenditure — no deficit), 'gain' (conservative lean surplus). Omit to leave a stored mode unchanged; only with none stored does it derive from the goal weight. This schema cannot send the null/'' that resets an explicit mode back to derived."
         ),
     },
     async (p) => asText(setProfile(p))
@@ -156,13 +212,16 @@ export function registerPersonTools(server: McpToolRegistrar) {
     "log_blood_pressure",
     "Record a point-in-time blood pressure reading. Use measured_at for the actual cuff/clinic time (YYYY-MM-DD or YYYY-MM-DDTHH:mm). The reading also appears in marker history as Systolic BP, Diastolic BP, and Pulse when present.",
     {
-      systolic: z.number(),
-      diastolic: z.number(),
-      pulse: z.number().optional(),
-      measured_at: z.string().optional(),
-      source: z.string().optional(),
-      position: z.string().optional(),
-      note: z.string().optional(),
+      systolic: z.number().describe("mmHg, clamped to 60-260; must be greater than diastolic"),
+      diastolic: z.number().describe("mmHg, clamped to 35-160; must be less than systolic"),
+      pulse: z.number().optional().describe("bpm, clamped to 25-240; omit if not measured"),
+      measured_at: z
+        .string()
+        .optional()
+        .describe("YYYY-MM-DD or YYYY-MM-DDTHH:mm; a bare date is stored at noon. Omit to use now"),
+      source: z.string().optional().describe("who/what took the reading, e.g. 'manual', 'apple'; default 'manual'"),
+      position: z.string().optional().describe("body position during the reading, e.g. 'sitting', 'standing'; free text"),
+      note: z.string().optional().describe("free-text note stored with this reading, up to 240 chars"),
     },
     async (a) => {
       const row = addBloodPressureReading({
@@ -202,7 +261,7 @@ export function registerPersonTools(server: McpToolRegistrar) {
 
   server.tool(
     "dismiss_goal_checkin",
-    "Wave off the gentle goal check-in (Era 2): starts a long cooldown so it stays quiet. Dismissible to silence; pull-never-push.",
+    "Wave off the gentle goal check-in (Era 2): starts a long cooldown so it stays quiet. Dismissible to silence.",
     {},
     async () => {
       dismissGoalCheckin();
@@ -242,21 +301,27 @@ export function registerPersonTools(server: McpToolRegistrar) {
     "record_daily_metrics",
     "Upsert one source's daily wearable metrics for a real, non-future YYYY-MM-DD (idempotent on source+date) — the Apple Health via Shortcuts path. `source` defaults to 'apple' and is capped at 64 characters. Partial re-posts preserve previously recorded fields. Supports steps, sleep/recovery, calories, distance, exercise/stand time, SpO2 and VO2max; `raw` keeps the source payload verbatim.",
     {
-      date: z.string().describe("YYYY-MM-DD"),
+      date: z.string().describe("YYYY-MM-DD; real, non-future date only"),
       source: z.string().max(64).optional().describe("default 'apple'"),
-      steps: z.number().nullable().optional(),
-      sleep_min: z.number().nullable().optional(),
-      sleep_score: z.number().nullable().optional(),
-      resting_hr: z.number().nullable().optional(),
-      hrv_ms: z.number().nullable().optional(),
-      active_calories: z.number().nullable().optional(),
-      total_calories: z.number().nullable().optional(),
-      distance_km: z.number().nullable().optional(),
-      exercise_min: z.number().nullable().optional(),
-      stand_hours: z.number().nullable().optional(),
-      spo2_avg: z.number().nullable().optional(),
-      vo2max: z.number().nullable().optional(),
-      raw: z.any().optional(),
+      steps: z.number().nullable().optional().describe("step count for the day, clamped 0-200000; null/omit leaves any existing value on this source+date untouched"),
+      sleep_min: z.number().nullable().optional().describe("total sleep in minutes, clamped 0-1440; null/omit leaves any existing value untouched"),
+      sleep_score: z.number().nullable().optional().describe("0-100 device sleep score; null/omit leaves any existing value untouched"),
+      resting_hr: z.number().nullable().optional().describe("resting heart rate in bpm, clamped 0-250; null/omit leaves any existing value untouched"),
+      hrv_ms: z.number().nullable().optional().describe("heart-rate variability in milliseconds, clamped 0-500; null/omit leaves any existing value untouched"),
+      active_calories: z.number().nullable().optional().describe("active-energy kcal for the day, clamped 0-20000; null/omit leaves any existing value untouched"),
+      total_calories: z.number().nullable().optional().describe("total-energy kcal for the day, clamped 0-30000; null/omit leaves any existing value untouched"),
+      distance_km: z.number().nullable().optional().describe("distance covered in kilometres, clamped 0-1000; null/omit leaves any existing value untouched"),
+      exercise_min: z.number().nullable().optional().describe("exercise minutes for the day, clamped 0-1440; null/omit leaves any existing value untouched"),
+      stand_hours: z.number().nullable().optional().describe("Apple Watch stand hours, clamped 0-24; null/omit leaves any existing value untouched"),
+      spo2_avg: z
+        .number()
+        .nullable()
+        .optional()
+        .describe(
+          "average blood oxygen; accepts either a HealthKit 0-1 fraction or a 0-100 percent, both normalized to percent. A value outside the plausible 50-100% range is rejected (stored as missing), never clamped, so a bad reading never masquerades as a real one"
+        ),
+      vo2max: z.number().nullable().optional().describe("VO2max in mL/kg/min, clamped 5-100; null/omit leaves any existing value untouched"),
+      raw: z.any().optional().describe("source payload kept verbatim alongside the parsed fields, for debugging/traceability"),
     },
     async ({ date, source, ...metrics }) => asText(recordDailyMetrics(source ?? "apple", date, metrics))
   );

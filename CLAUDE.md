@@ -100,6 +100,12 @@ an HTTP error. And single-row `?date=` / `last-set` lookups return **`200 + null
 404, because the PWA's `api()` helper resolves to the body regardless of status, so a 404 error
 object would read as a truthy hit.
 
+**Structured output is enforced where a `coachOps.ts` call site passes `RunOpts.schema`; every other
+op is prose-only.** Every field a consumer READS must be named in the schema (an unnamed field is
+silently dropped by constrained decoding, not preserved by `additionalProperties: true`), and a
+schema is inert while streaming or for `stub` — the prose `OUTPUT CONTRACT` stays the floor
+everywhere. Details: `docs/ARCHITECTURE.md`'s "Enforced structured output" section.
+
 **Tests wipe the DB before every single test.** `test/run.mjs` shards files across workers (each with
 its own throwaway temp `DATA_DIR`/`DB_PATH`) and injects `test/_isolate.mjs` via `--import` — a root
 `beforeEach` that wipes the whole DB. So correctness is independent of file order and shard count,
@@ -218,7 +224,7 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   short), an incomplete log additionally needs ≥1 lift genuinely `exceeded`, and any lift that landed
   under its own stored full-load reference kills the contradiction outright whatever the counts say.
   A low `felt_fatigue` constraint this earns closes early (within its 7-day window) the moment a later
-  completed session contradicts it too (`autoregBrake`, `signal-state.ts`). Readiness bands live in
+  completed session contradicts it too (`autoregBrake`, `src/repo/progression.ts`). Readiness bands live in
   `src/repo/readiness-bands.ts` (`LOW_READINESS` 35 = subdued/easy; `REST_GRADE_READINESS` 20
   inclusive = its own REST rule, softenable only to easy movement) — never hardcode a readiness
   threshold. And `trainedWithoutHarm` is `harmEvidenceOnDay(date) == null`: a hard-cardio day, a
@@ -230,12 +236,12 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   (`src/chatActions.ts`), 1–5 scales only, and a free-text note there is routed through symptom
   capture only when the athlete's own words carry symptom intent — never automatically.
 - **Deload-due is earned by loaded weeks and a log-confirmed shortfall, never the calendar.**
-  `mesocycle()` (`src/repo/program-state.ts`) classifies a week as loaded only against the median of
-  the loaded weeks before it (`classifyLoadedWeeks`); a light week breaks the streak. `deload-due`
-  comes only from a six-week loaded streak, or four weeks plus a shortfall the log confirms plus
-  physiology. Ratings and notes are supporting copy; an applied recovery week only resets the count;
-  a block in weeks 1–2 or its own deload/realization phase never reads deload-due. Do not add a
-  "weeks since" trigger back.
+  `classifyLoadedWeeks` (`src/repo/program-state.ts`, feeding the `mesocycle` state) classifies a
+  week as loaded only against the median of the loaded weeks before it; a light week breaks the
+  streak. `deload-due` comes only from a six-week loaded streak, or four weeks plus a shortfall the
+  log confirms plus physiology — never from a weeks-since count. Ratings and notes are supporting
+  copy; an applied recovery week only resets the count; a block in weeks 1–2 or its own
+  deload/realization phase never reads deload-due.
 - **Assist is a sign, and the sign is guarded at log time.** A positive weight typed onto a
   negative-history lift within 1.5× the recent assist band is stored negative (`assistSignContext`,
   `src/repo/sessions.ts`; Garmin imports opt out). An exercise's NAME is never a sign — only its
@@ -284,7 +290,7 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   `apply:true`). Evidence must be discriminating — a shared weight/BMI/pulse never makes a match;
   records that merely share a date, or whose readings disagree, stay apart. Free-text observation rows
   ("Lab Interpretation") are never markers (`isNonAnalyteMarkerName`).
-- **Marker grouping**: `MARKER_GROUPS` (in `propagation.ts`) matches longest-first, and its **array
+- **Marker grouping**: `MARKER_GROUPS` (in `src/repo/propagation-data.ts`) matches longest-first, and its **array
   order is the display order** — conventional clinical lab-review order, mirrored by the doctor
   export and the in-app catalog. Full ordering rules and the non-clinical-marker filter live in
   `docs/ARCHITECTURE.md`.
@@ -314,8 +320,7 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Food capture has ONE contract and ONE direction of time inference.** `src/foodCapture.ts` owns
   the meal-estimate shape (ingredient rows with the quantity as a *field*, `nutrition_pattern` bands,
   `confidence`/`basis` provenance) for chat, note enrichment and the photo read alike — extend it
-  there, never re-declare the JSON in a fourth prompt; three drifting copies are what left the chat
-  path emitting no `nutrition_pattern` at all. A stated time may infer an unstated meal label
+  there, never re-declare the JSON in another prompt. A stated time may infer an unstated meal label
   (21:00 → dinner); the reverse must never happen. `eaten_at` is rendered to the athlete, so a time
   synthesized from a label would be indistinguishable from one they actually said — the label's hour
   orders a day at read time only, and is never stored.
@@ -323,24 +328,21 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Dose comparability is a per-lift question, not a per-session one.** Each `dose_evidence` entry
   carries its own `comparable` flag and reasons in `facts_json` — a shortfall blocks only the lift
   that fell short, an endurance day blocks only the muscles it actually loaded. `dose_context.comparable`
-  is telemetry only; the progression engine reads the per-dose flags, never that session-level rollup
-  — restoring the session-level reading is the regression to watch for. `settings.training_drive='push'`
-  has bounded mechanical authority in progression (keeps an earned overload/vary/introduce step under
+  is telemetry only; the progression engine reads the per-dose flags, never that session-level rollup.
+  `settings.training_drive='push'` has bounded mechanical authority in progression (keeps an earned overload/vary/introduce step under
   a fuel hold AND its full set count under a fuel `reduce`, top set dropped in both) — but every
   promotion still needs `mayPromoteLoad` (an eligible finished dose, no VETOING cut pressure —
   `sliding`, or `reduce` off goal), and every safety floor ignores drive entirely. Details in
   `docs/ARCHITECTURE.md`.
 - **Work done is evidence — a prescription is a suggestion, the log is the truth.** `performed_at_full_load`
-  (`src/repo/outcome-comparability.ts`, `facts_json` schema 4) is computed per dose against the LOGGED
-  working load — `recentWorkingWeight`/`recentWorkingSeconds` primary, the plan's `target_weight`/
-  `target_seconds` only as a no-history fallback (never the forward prescription progression is about
-  to write) — and drops `recovery_dose`/`travel` from that dose's non-comparable reasons; illness and a
-  relevant symptom stay full safety floors regardless. The `recovery` flag itself is STRUCTURED, never a
-  regex over stored envelope prose (`caps.intensity:"deload"` and the word "recovery" in rationale text
-  are NOT a recovery window) — it comes only from an active/recheck `recovery_cycles` row, a stored
-  `recovery_cycle` on the decision context, or an applied recovery-week stamp. Migration v97 repaired
-  60 days of live rows a rest-day train-anyway envelope had mislabeled; schema-2 rows are read as-is,
-  schema-3 comparable is re-derived live, schema-4 rows store the per-dose answer directly.
+  (`src/repo/outcome-comparability.ts`) is computed per dose against the LOGGED working load —
+  `recentWorkingWeight`/`recentWorkingSeconds` primary, the plan target only as a no-history fallback,
+  never the forward prescription progression is about to write — and it drops `recovery_dose`/`travel`
+  from that dose's non-comparable reasons; illness and a relevant symptom stay full safety floors. The
+  `recovery` flag is STRUCTURED — an active/recheck `recovery_cycles` row, a stored `recovery_cycle`
+  on the decision context, or an applied recovery-week stamp — never a regex over stored envelope
+  prose. Mechanism, the `facts_json` schema versions (owned by `src/repo/daily-reconciliation.ts`), and
+  the read path per version: `docs/ARCHITECTURE.md`.
 - **Cut pressure has three shapes, and only two veto an earned promotion.** `CutPressure` (`progression.ts`)
   splits `hold` (a soft fuel read — never vetoes), `reduce` (an outright lighter fuel dose — vetoes
   unless `near_goal`: `atOrNearGoal` (`src/repo/goal-proximity.ts`), within `NEAR_GOAL_REMAINING_LB`
@@ -361,6 +363,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
   as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.
   Details in `docs/ARCHITECTURE.md`.
+- **The session/meal-plan verify pass's numeric floors are computed server-side, not asked of a
+  model.** `src/repo/verify-floors.ts` precheck WINS over an agent `ok:true` — a breach it still
+  finds is `unresolved` on the outcome, never shipped as clean — and the agent turn is skipped
+  entirely when nothing needs judgement. Details in `docs/ARCHITECTURE.md`.
 
 ## Product constraints (enforced in prompts AND UI)
 

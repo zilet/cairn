@@ -192,6 +192,10 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   reaction_narrative: { model_class: "fast", reasoning: "medium" },
   exercise_explanation: { model_class: "fast", reasoning: "low" },
   chat_distill: { model_class: "fast", reasoning: "low" },
+  // Nightly memory passes — non-interactive, small structured payloads. Named here so
+  // they stop inheriting the CLI's home effort and stop landing in telemetry as "auto".
+  memory_consolidation: { model_class: "fast", reasoning: "low" },
+  about_me_growth: { model_class: "fast", reasoning: "medium" },
   // Background structuring — high volume, tight contracts, nothing to reason about.
   enrich: { model_class: "fast", reasoning: "low" },
   research: { model_class: "fast", reasoning: "medium" },
@@ -203,14 +207,20 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   recipe: { model_class: "deep", reasoning: "medium" },
   onboard: { model_class: "deep", reasoning: "medium" },
   exercise_reconcile: { model_class: "deep", reasoning: "medium" },
-  // Self-critique passes. runVerify checks a draft against the athlete's HARD
-  // constraints (injury, time budget, equipment, encoding; lean-safety for a meal
-  // plan), and it fails OPEN — a verify that dies just ships the unchecked draft.
-  // So a cheap or truncated verify degrades silently into no safety check at all,
-  // which is why these are pinned rather than left to inherit the CLI's defaults.
-  // Effort matches the composition op each one guards rather than exceeding it:
-  // both run inline inside a user-facing request, and a verify with a longer leash
-  // than the draft it checks would make the slow path the checking, not the work.
+  // Self-critique passes. The NUMERIC half of each verify is no longer a model
+  // call at all: `src/repo/verify-floors.ts` computes the kcal / protein / fiber
+  // floors and the session time budget deterministically before the prompt exists,
+  // and the pre-check outranks the model's verdict. So a cheap or truncated verify
+  // can no longer degrade into no arithmetic check — that part now survives the
+  // agent being down entirely.
+  // What is left IS the reason for the pin: reading a free-text injury or dietary
+  // constraint against a concrete plan, and repairing a draft without corrupting
+  // its mechanics encoding. That is judgement, it fails OPEN (a dead verify ships
+  // the draft with those checks unmade), and a weak model does it badly while
+  // still returning well-formed JSON. Effort matches the composition op each one
+  // guards rather than exceeding it: both run inline inside a user-facing request,
+  // and a verify with a longer leash than the draft it checks would make the slow
+  // path the checking, not the work.
   session_verify: { model_class: "deep", reasoning: "medium" },
   meal_plan_verify: { model_class: "deep", reasoning: "medium" },
   // Clinical-adjacent reading — a curated or plausible-but-wrong result is costly.

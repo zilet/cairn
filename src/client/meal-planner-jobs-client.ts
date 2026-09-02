@@ -48,9 +48,15 @@ function mealPlannerDraftFailLine(err: unknown): string {
   return "Couldn't reach the coach — check your connection.";
 }
 
+// `checked` alone is the WRONG gate: a verify whose agent turn died still carries
+// the floors the server itself computed, as `{checked:false, unresolved:[…]}`. Gating
+// on `checked` dropped exactly that outcome on the floor, so the meals surface showed
+// nothing where the badge would have named a breach. Keep any verification the server
+// bothered to return; `verifiedBadgeHtml` owns which of its three states renders, and
+// still returns "" for a checked:false with nothing to say.
 function mealPlannerRememberVerified(r: unknown): void {
   const row = mealPlannerJobRecord(r) as MealPlannerJobProposalResult;
-  if (row.ok && row.plan && row.plan.id != null && row.verified && row.verified.checked) {
+  if (row.ok && row.plan && row.plan.id != null && row.verified) {
     mealPlannerJobVerifiedByPlan.set(row.plan.id, row.verified);
   }
 }

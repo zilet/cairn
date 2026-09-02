@@ -14,25 +14,52 @@ export function registerBodyMetricsTools(server: McpToolRegistrar) {
     {
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       unit: z.enum(["in", "cm"]).optional().describe("unit the site values (and height_in) are given in; storage stays inches"),
-      waist_in: z.number().optional(),
-      hip_in: z.number().optional(),
-      chest_in: z.number().optional(),
-      shoulder_in: z.number().optional(),
-      neck_in: z.number().optional(),
-      thigh_in: z.number().optional(),
-      upper_arm_in: z.number().optional(),
-      calf_in: z.number().optional(),
-      forearm_in: z.number().optional(),
+      waist_in: z
+        .number()
+        .optional()
+        .describe(
+          "at the navel, relaxed, end of a normal exhale (follows `unit`, inches by default); drives waist-to-height and the Navy body-fat estimate"
+        ),
+      hip_in: z
+        .number()
+        .optional()
+        .describe(
+          "around the widest point of the glutes, feet together, tape level (follows `unit`); with waist_in drives waist-to-hip, and required (with neck_in) for the female Navy body-fat estimate"
+        ),
+      chest_in: z.number().optional().describe("at nipple line, tape level, end of a normal exhale (follows `unit`)"),
+      shoulder_in: z
+        .number()
+        .optional()
+        .describe("around the widest point of both shoulders over the delts, arms relaxed at sides (follows `unit`)"),
+      neck_in: z
+        .number()
+        .optional()
+        .describe(
+          "just below the Adam's apple, tape sloping slightly down toward the front, relaxed (follows `unit`); required for the Navy body-fat estimate"
+        ),
+      thigh_in: z
+        .number()
+        .optional()
+        .describe("widest point of the upper thigh, standing tall, weight even on both feet (follows `unit`)"),
+      upper_arm_in: z
+        .number()
+        .optional()
+        .describe("arm relaxed at side, halfway between shoulder and elbow, not flexed (follows `unit`)"),
+      calf_in: z.number().optional().describe("widest point of the calf, standing, weight even on both feet (follows `unit`)"),
+      forearm_in: z
+        .number()
+        .optional()
+        .describe("widest point of the forearm, arm relaxed, palm facing up (follows `unit`)"),
       height_in: z.number().optional().describe("user height (follows `unit`, inches by default) — sets the profile so BMI/body-fat light up"),
-      note: z.string().optional(),
-      source: z.string().optional(),
+      note: z.string().optional().describe("free-text note stored with this measurement row"),
+      source: z.string().optional().describe("who/what recorded this reading, e.g. 'manual'; free text, capped at 40 characters. Omitting it stores 'chat'; an empty string stores 'manual'"),
     },
     async (a) => asText(applyMeasurementAction(a))
   );
 
   server.tool(
     "get_body_measurements",
-    "Read logged body measurements + the latest reading + derived indicators (BMI, waist-to-height, waist-to-hip, Navy body-fat % estimate) over the window. Indicators are plain-language with optimal framing — no scores. Body-fat is a tape ESTIMATE, not a DEXA. Degrades to a 'set your height' hint when height is unset.",
+    "Read logged body measurements + the latest reading + derived indicators (BMI, waist-to-height, waist-to-hip, Navy body-fat % estimate) over the window. Indicators are plain-language with optimal framing. Body-fat is a tape ESTIMATE, not a DEXA. Degrades to a 'set your height' hint when height is unset.",
     {
       days: z.number().int().optional(),
       id: z.number().int().optional().describe("read one measurement row by id"),

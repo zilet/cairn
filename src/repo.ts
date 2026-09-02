@@ -124,6 +124,7 @@ export * from "./repo/trajectory.js"; // one periodized arc to the goals, today 
 export * from "./repo/whole-person-trajectory.js"; // standing "everything better" objective, per-domain words not a score
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation
 export * from "./repo/cut-target.js"; // the cut's calorie target, derived from logged intake + the measured weight trend
+export * from "./repo/verify-floors.js"; // the deterministic half of the verify pass — every numeric floor a draft breaches
 export * from "./repo/energy-deficiency.js"; // the male low-energy-availability symptom-cluster watch (protective, one-directional)
 export * from "./repo/energy-deficiency-snapshot.js"; // its memoized read + the small projection a prompt sees
 export * from "./repo/recomposition.js"; // phase-aware fat-loss + muscle/fuel protection synthesis

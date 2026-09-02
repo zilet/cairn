@@ -25,6 +25,7 @@ import {
   buildHealthSynthesisPrompt,
   buildInsightPrompt,
   buildMealPlanPrompt,
+  buildPlanVerifyPrompt,
   buildProgramEvolutionPrompt,
   buildSessionPrompt,
   buildSessionVerifyPrompt,
@@ -50,7 +51,16 @@ const SITES = [
   {
     site: "coach",
     build: () => buildCoachPrompt(),
-    kept: ["training_intent", "endurance_capacity", "plan", "recent_sessions", "program_state", "recovery", "directives", "garmin"],
+    kept: [
+      "training_intent",
+      "endurance_capacity",
+      "plan",
+      "recent_sessions",
+      "program_state",
+      "recovery",
+      "directives",
+      "garmin",
+    ],
     dropped: ["day_read", "recent_decisions", "insights", "whole_person_trajectory"],
   },
   {
@@ -62,7 +72,17 @@ const SITES = [
   {
     site: "day_read",
     build: () => buildDayReadPrompt(),
-    kept: ["training_intent", "endurance_capacity", "recovery", "signal_state", "coaching_focus", "recent_sessions", "day_intake", "health_focus", "read_adherence"],
+    kept: [
+      "training_intent",
+      "endurance_capacity",
+      "recovery",
+      "signal_state",
+      "coaching_focus",
+      "recent_sessions",
+      "day_intake",
+      "health_focus",
+      "read_adherence",
+    ],
     // day_read recomputes a FRESH deterministic baseline and renders the last few
     // days' reads itself — handing it the STORED read invites parroting.
     dropped: ["day_read", "garmin", "recent_decisions", "insights"],
@@ -95,7 +115,15 @@ const SITES = [
   {
     site: "insight",
     build: () => buildInsightPrompt(undefined, []),
-    kept: ["recovery", "directives", "health", "recent_sessions", "day_intake", "whole_person_trajectory", "recent_context_tags"],
+    kept: [
+      "recovery",
+      "directives",
+      "health",
+      "recent_sessions",
+      "day_intake",
+      "whole_person_trajectory",
+      "recent_context_tags",
+    ],
     dropped: ["garmin", "signal_state", "coaching_focus", "day_read", "recent_decisions"],
   },
   {
@@ -108,7 +136,16 @@ const SITES = [
     // Chat is the free-form surface — any question can land, so nothing is dropped.
     site: "chat",
     build: () => buildChatPrompt([], "how did my week go?"),
-    kept: ["memory", "supplements", "goal", "day_read", "garmin", "recent_decisions", "imaging", "typical_training_hour"],
+    kept: [
+      "memory",
+      "supplements",
+      "goal",
+      "day_read",
+      "garmin",
+      "recent_decisions",
+      "imaging",
+      "typical_training_hour",
+    ],
     dropped: [],
   },
   {
@@ -134,7 +171,19 @@ const SITES = [
     // directives and the training split all have to survive.
     site: "meal_plan",
     build: () => buildMealPlanPrompt(),
-    kept: ["training_intent", "endurance_capacity", "profile", "family", "memory", "directives", "health_focus", "plan", "goal", "meal_plan", "recovery"],
+    kept: [
+      "training_intent",
+      "endurance_capacity",
+      "profile",
+      "family",
+      "memory",
+      "directives",
+      "health_focus",
+      "plan",
+      "goal",
+      "meal_plan",
+      "recovery",
+    ],
     dropped: ["garmin", "day_read", "recent_decisions", "insights", "program_balance", "groups_trajectory"],
   },
   {
@@ -143,6 +192,15 @@ const SITES = [
     build: () => buildSessionVerifyPrompt({ name: "Lower body", items: [] }, { minutes: 45 }),
     kept: ["context_events", "memory", "directives", "health", "imaging", "plan", "recent_sessions"],
     dropped: ["recovery", "garmin", "day_intake", "meal_plan", "coaching_focus", "day_read"],
+  },
+  {
+    // The meal safety checker. Its arithmetic is the server's, so the ONLY thing it
+    // can still do is read a declaration against real food — which means every
+    // declaration source has to reach it, and nothing plan-shaping needs to.
+    site: "meal_plan_verify",
+    build: () => buildPlanVerifyPrompt({ daily_kcal: 2200, daily_protein_g: 170, days: [] }),
+    kept: ["profile", "family", "memory", "learnings", "context_events", "directives"],
+    dropped: ["plan", "recent_sessions", "meal_plan", "day_intake", "fueling", "coaching_focus", "garmin"],
   },
 ];
 
@@ -329,7 +387,16 @@ test("getCoachContext stays complete for every non-prompt consumer", () => {
   const ctx = repo.getCoachContext();
   // The projection happens at the prompt boundary — MCP tools, routes and agentJobs
   // must still see the keys individual prompts drop.
-  for (const key of ["training_intent", "endurance_capacity", "garmin", "day_read", "recent_decisions", "insights", "signal_state", "whole_person_trajectory"]) {
+  for (const key of [
+    "training_intent",
+    "endurance_capacity",
+    "garmin",
+    "day_read",
+    "recent_decisions",
+    "insights",
+    "signal_state",
+    "whole_person_trajectory",
+  ]) {
     assert.ok(Object.hasOwn(ctx, key), `the shared snapshot keeps ${key}`);
   }
   assert.ok(
@@ -644,13 +711,13 @@ test("the low-energy-availability watch reaches every site that already sees fue
     assert.deepEqual(
       projected.energy_deficiency,
       standing.energy_deficiency,
-      `${site} can explain why the target moved`,
+      `${site} can explain why the target moved`
     );
   }
   // …and the machine-register evidence dump never travels with it: the projection
   // carries which channels agree, not the numbers behind them.
   assert.ok(
     !JSON.stringify(projectCoachContext(standing, "chat").energy_deficiency).includes("ms)"),
-    "no measurement prose rides into a prompt",
+    "no measurement prose rides into a prompt"
   );
 });

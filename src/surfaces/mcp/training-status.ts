@@ -19,14 +19,14 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_endurance_prs",
-    "Endurance PRs from logged cardio, GROUPED BY SPORT (a best is only meaningful within its modality): each sport's longest distance + duration, plus fastest pace (min/km at 1/5/10k/half/full) for foot sports (run/walk) or best speed (km/h) for cycling/swim/row. `sports[]` leads with the user's primary endurance sport (profile endurance_sport, default running); flat top-level fields mirror that lead sport for back-compat. Optional `type` filter. Plain numbers, never a score — the endurance analogue of the strength est-1RM.",
+    "Endurance PRs from logged cardio, GROUPED BY SPORT (a best is only meaningful within its modality): each sport's longest distance + duration, plus fastest pace (min/km at 1/5/10k/half/full) for foot sports (run/walk) or best speed (km/h) for cycling/swim/row. `sports[]` leads with the user's primary endurance sport (profile endurance_sport, default running); flat top-level fields mirror that lead sport for back-compat. Optional `type` filter. Plain numbers — the endurance analogue of the strength est-1RM.",
     { type: z.string().optional().describe("filter to one activity type, e.g. 'run' | 'ride'") },
     async ({ type }) => asText(getEndurancePRs(type))
   );
 
   server.tool(
     "get_run_compliance",
-    "Run compliance for this week (Monday-anchored): the prescribed plan cardio (sessions / km / min) vs the actual logged cardio efforts, plus a plain-language summary ('32 of 40 km this week'). A ratio, never a 0-100 score — the endurance analogue of plan-day adherence for lifting. `basis` says where the prescription came from: 'applied' (the plan rows) or 'live_plan' (this week's live run mix, used when the applied rows prescribe no runs or predate this week).",
+    "Run compliance for this week (Monday-anchored): the prescribed plan cardio (sessions / km / min) vs the actual logged cardio efforts, plus a plain-language summary ('32 of 40 km this week'). A ratio — the endurance analogue of plan-day adherence for lifting. `basis` says where the prescription came from: 'applied' (the plan rows) or 'live_plan' (this week's live run mix, used when the applied rows prescribe no runs or predate this week).",
     { date: z.string().optional().describe("YYYY-MM-DD inside the week to read; defaults to this week") },
     async ({ date }) => asText(runComplianceRead(date || undefined))
   );
@@ -49,7 +49,7 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
     "set_endurance_goal",
     "Set or clear a temporary endurance objective. mode 'race' → a dated event the coach periodizes a ramp + taper toward (needs a real YYYY-MM-DD; optional event, distance_km, target like 'sub-1:45'). mode 'standing' → an ongoing readiness target with NO date. Keep durable priority and capability identity in set_training_intent.",
     {
-      mode: z.enum(["race", "standing"]).nullable().optional().describe("'race' | 'standing'; omit/null with no other fields to clear"),
+      mode: z.enum(["race", "standing"]).nullable().optional().describe("'race' | 'standing'; omitting it or passing null clears the whole goal, whatever other fields are sent"),
       event: z.string().optional(),
       date: z.string().optional().describe("YYYY-MM-DD (race mode)"),
       label: z.string().optional().describe("readiness label (standing mode), e.g. '10k-ready'"),

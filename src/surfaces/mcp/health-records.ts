@@ -65,7 +65,11 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
     }
   );
 
-  server.tool("delete_health_record", "Delete a health document by id.", { id: z.number().int() }, async ({ id }) => {
+  server.tool(
+    "delete_health_record",
+    "Delete one health document by id, along with its stored markers. An imaging document is removed as a full imaging study, including its attachment files. Deleting a panel withdraws what it propagated: connected-brain directives are re-derived afterwards, so directives grounded only in the removed markers are soft-resolved. This is not reversible and it is not a deduplication tool; use dedupe_health_records to fold repeated filings of one draw.",
+    { id: z.number().int() },
+    async ({ id }) => {
     if (getHealthDocument(id)?.kind === "imaging") return asText(deleteImagingStudy(id));
     const result = deleteHealthDocument(id);
     // Removing a panel WITHDRAWS what it propagated: re-derive so directives grounded in

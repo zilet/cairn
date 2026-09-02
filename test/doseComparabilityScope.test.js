@@ -24,6 +24,7 @@ import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { MIGRATIONS, runMigrations } from "../dist/migrate.js";
 import * as blocks from "../dist/repo/program-blocks.js";
+import { PUSH_TOP_SET_OVERLOAD, PUSH_TOP_SET_OVERLOAD_REPS } from "../dist/repo/progression-voice.js";
 
 const DATE = "2031-09-12";
 
@@ -879,9 +880,18 @@ test("a top set at the ceiling buys the step when the athlete has asked to be pu
   const push = nextPrescription("Barbell Bench Press");
   assert.equal(push.action, "overload");
   assert.equal(push.suggested.weight, 190);
-  // Every phrasing in the set names the athlete's own ask ("asked to push" / "asked
-  // for the harder read"); the word "push" itself is not in all of them.
-  assert.match(push.why, /you asked/i, "the sentence owns why the step came early");
+  // The sentence rotates through a variant set by date (pickDayVariant), so a regex
+  // that covers only one phrasing passes or fails by what day it is. Assert the whole
+  // set instead: every phrasing must name the athlete's own standing ask ("you've
+  // asked to be pushed" / "you asked for the harder read" / "you want to be pushed"),
+  // and none of them may claim every set capped.
+  const OWNS_THE_ASK = /you(?:'ve|’ve)? asked|you (?:want|wants) to be pushed|asked to (?:be pushed|push)/i;
+  for (const variant of [...PUSH_TOP_SET_OVERLOAD, ...PUSH_TOP_SET_OVERLOAD_REPS]) {
+    const text = variant(8);
+    assert.match(text, OWNS_THE_ASK, text);
+    assert.doesNotMatch(text, /every set/i, text);
+  }
+  assert.match(push.why, OWNS_THE_ASK, "the sentence owns why the step came early");
   assert.doesNotMatch(push.why, /every set/i, "…and never claims every set capped, because they did not");
   assert.equal(violatesReadingGrammar(push.why), null);
 });

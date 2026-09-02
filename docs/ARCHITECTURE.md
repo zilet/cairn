@@ -1614,7 +1614,9 @@ of that ladder — do not pass it directly.
 **Chat is deliberately absent from the table.** The adaptive chat router (`src/chatRouting.ts`)
 already assigns a per-message lane profile and stays authoritative for model/effort; only the timeout
 follows it, via the resolved profile rather than the task table. An op with no entry in the table
-inherits nothing and behaves exactly as it did before the table existed.
+inherits nothing and behaves exactly as it did before the table existed — which is what had left the
+nightly `memory_consolidation` and `about_me_growth` passes inheriting the CLI's home effort and
+landing in telemetry as `"auto"`, until both got their own `fast`/low and `fast`/medium entries.
 
 ---
 
@@ -1702,19 +1704,132 @@ schema's constrained decoding silently DROPS any field the schema doesn't mentio
 payloads carry far more fields than acceptance checks (`reason`, `note`, `superset_group`, cardio
 fields, …) — a closed schema would quietly amputate them.
 
-**Where it applies, and where it deliberately doesn't.** `coachOps.ts` passes a `schema` to
-`runChosen`/`runAgentWithFallback` for the five operations with one strict, non-union shape:
-proposal, `evolve_program`, `week_ahead`, `meal_plan` (structure only — nutritional adequacy stays
-the server-side `validateMealPlanDraftForPersistence` gate; a schema must never look like it
-authorized a plan the safety gate would reject), and `meal_swap`. Three call sites deliberately
-never receive one: chat (`src/chatTurns.ts`) is prose-first around the `===CAIRN_REPLY===` marker
-and a schema would destroy it; the streaming path (`runAgentStreaming`) declares no `{schema_args}`
-slot in any `stream.args`, since grok's `--json-schema` would override its own `--output-format
-streaming-json`; and `runChosenWithCoachReads` (`src/runChosen.ts`) deliberately does NOT forward
-the op's schema, because a turn there may legitimately be either the op's final contract or a
-`coach_read` query request, and the enforcing CLIs cannot express that union (claude rejects a
-top-level `anyOf` — the API requires a single top-level object `type`) — pinning the final contract
-would make a read request structurally impossible and silently kill depth-on-demand.
+**Where it applies, and where it deliberately doesn't.** An early pass attached a schema to five
+operations with one strict, non-union shape (proposal, `evolve_program`, `week_ahead`, `meal_plan`
+structure, `meal_swap`); a later audit found the rest of the agentic ops still asked for their shape
+in prose only, and closed the gap — `src/agent-contracts.ts` now exports a `*_SCHEMA` constant for
+every non-streaming `coachOps.ts` call site that produces a payload a consumer actually READS
+(session suggest/compose, nutrition check-in, recipe, exercise how-to, health review and synthesis,
+the multidisciplinary case-conference specialist opinions and its decision, chat distill, memory
+consolidation, about-me growth, onboarding, marker/exercise reconcile, activity/food/health-doc/
+Garmin-strength enrichment, and the generic verify pass — see below); `grep -c "^export const .*_SCHEMA"
+src/agent-contracts.ts` is the live count, since the running file is the source of truth and a
+number written here would rot on the next added op. `meal_plan`'s schema still covers structure
+only; nutritional adequacy stays the
+server-side `validateMealPlanDraftForPersistence` gate, so a schema must never look like it
+authorized a plan the safety gate would reject. Two call sites still deliberately never receive
+one: chat (`src/chatTurns.ts`) is prose-first around the `===CAIRN_REPLY===` marker and a schema
+would destroy it, and the streaming path (`runAgentStreaming`) declares no `{schema_args}` slot in
+any `stream.args` — `RunOpts.schema` is inert while streaming, since grok's `--json-schema` would
+override its own `--output-format streaming-json`. Those two keep the prose `OUTPUT CONTRACT` as
+their only floor, which is also why it stays in every prompt regardless: it's the fallback for a
+streamed turn, for `antigravity` (declares no `structured_output`), and for the offline `stub`
+agent.
+
+`runChosenWithCoachReads` (`src/runChosen.ts`) DOES forward the caller's schema (`schema:
+opts.schema` at its `invoke`), because claude rejects a top-level `anyOf` and a turn there may
+legitimately be either the op's final contract or an intermediate `coach_read` query request: the
+schema for a read-loop op therefore names BOTH — it spreads `COACH_READ_PROTOCOL_PROPERTIES`
+(`requests`, plus every arg the read-tool normalizer reads) alongside its own final-payload fields,
+with none of the final payload's fields marked `required` (a protocol turn carries none of them).
+Pinning a final-only schema there would make `requests` structurally impossible under constrained
+decoding and silently kill depth-on-demand. `DAY_READ_SCHEMA`, `INSIGHT_SCHEMA`,
+`SESSION_SUGGESTION_SCHEMA`, `NUTRITION_CHECKIN_SCHEMA`, `HEALTH_REVIEW_SCHEMA`,
+`HEALTH_SYNTHESIS_SCHEMA` and `SPECIALIST_OPINION_SCHEMA` (the case-conference specialist turn) are
+the read-loop schemas today — `grep -n "COACH_READ_PROTOCOL_PROPERTIES" src/agent-contracts.ts`
+finds the current set.
+
+**A repair retry is skipped when the failure can't be a prose problem.** `runAgentWithFallback`
+(`src/agents.ts`) gives an unparseable reply one JSON-repair retry — but under enforced structured
+output the first run was already constrained, so an unparseable reply means truncation or a CLI
+error, not a model that narrated instead of emitting JSON; re-asking for "only the JSON" cannot fix
+that and costs a full extra spawn (`worthRepair = parsedBeforeRepair || !structured`). The CONTRACT
+repair still applies on top of enforcement: a schema-VALID payload can still fail `acceptParsed`
+semantically (wrong values, a missing cross-field agreement), and that retry keeps the same schema
+— an agent that can enforce the contract is exactly the one that should not be asked to re-derive it
+from prose on a second try.
+
+**Two more laws beyond the four in `agent-contracts.ts`'s header comment**, both load-bearing for
+correctness rather than schema hygiene:
+
+- **Every field a consumer actually reads must be named — not sampled, read.**
+  `test/agentContractSchemas.test.js`'s `CONSUMER_READS` table is hand-derived by reading each
+  consumer function, not by fuzzing a payload through `matchesJsonSchema`: an open
+  `additionalProperties: true` node passes for *any* unnamed field, so a schema that quietly omits
+  a field a normalizer dereferences would pass every schema-shape test and still silently drop that
+  field under constrained decoding. The table is a set-inclusion floor (a schema may name more than
+  its consumer reads — the prose solicits fields nothing consumes yet — never less).
+- **A shared schema fragment used as an acceptance gate stays permissive; the same fragment
+  re-declared for a strict consumer gets tightened after the spread.** `RUN_INTERVAL_SCHEMA` /
+  `RUN_PRESCRIPTION_PROPERTIES` back both `PLAN_PROPOSAL_SCHEMA` (read by `isPlanProposalResult` via
+  `matchesJsonSchema` as a HARD acceptance gate — a bound tightened there doesn't steer the decoder,
+  it *rejects* a proposal the applier would have handled fine, e.g. `interval: []` or a `0` the
+  applier just clamps) and `SESSION_ITEM_SCHEMA` (read by `normalizePrescriptionItem` with
+  `strictShape: true`, which THROWS on a present-but-empty value in the wrong family — a `0` or
+  `[]` there is not absence, `present()` treats it as data). `SESSION_ITEM_SCHEMA` spreads the
+  permissive fragment and then re-declares `target_distance_km` / `target_duration_min` /
+  `interval` with `exclusiveMinimum` / `minItems: 1` immediately after, rather than tightening the
+  shared constant and silently starving the plan-proposal gate.
+
+---
+
+## Self-critique verify: deterministic floors, then judgement (`src/repo/verify-floors.ts`)
+
+The session and meal-plan verify passes (`src/coachOps.ts`'s shared `runVerify()`) used to ask a
+MODEL to do arithmetic the server already holds — "is any day below the lean-safe kcal floor",
+"is protein at target", "is fiber 30g+", "does `est_minutes` fit the time budget" — arithmetic
+whose every input Cairn had already computed, making it an LLM call whose own inputs decided its
+output. `verify-floors.ts` computes those floors deterministically instead
+(`mealPlanFloorPrecheck`/`sessionFloorPrecheck`, pure `…Violations` functions unit-testable with no
+DB plus a `…Precheck` wrapper that resolves the numbers from the repo's single sources of truth —
+`mealPlanFloorReference`, `nutritionFloorsFor`, `mealPlanDayTotals` — never re-derived), and the
+model is handed the FINDINGS, not the arithmetic.
+
+**The pre-check wins.** `runVerify()` runs the deterministic pass first; if it finds nothing AND no
+judgement check applies (no injuries, constraint notes, dietary declarations, allergies or active
+health context/directives on file), the agent turn is skipped entirely — `{checked: true, by:
+"server"}`, no prompt, no spend. Otherwise a bounded agent turn repairs the findings and makes the
+checks only a model can make (injury-area contraindication against a free-text note, dietary/timing
+fit against the athlete's own words, encoding integrity in its own repair) — contract unchanged,
+`{ok, violations: [], fixed_draft?}`, now schema-enforced via `verifyResultSchema(draftSchema)`
+(built per draft shape, since `fixed_draft` names none of the draft's fields unless it inlines that
+op's own schema there). An `ok:true` verdict over a breach the pre-check still finds is NOT
+accepted: `runVerify()` re-runs the deterministic pass after every agent attempt and asks for at
+most one re-repair; a breach still standing after that is `unresolved` on the outcome rather than
+silently reported clean. **Fail-open is preserved but no longer throws away the server's own
+arithmetic**: a dead or unparseable agent turn still ships the original draft unchanged, but when
+the pre-check had already found violations the outcome carries `{checked: false, by: "server",
+unresolved: [...]}` instead of `null` — the athlete is told which floor is over even when nothing
+could check the judgement half.
+
+The client renders `VerifyOutcome.verified` as three visible states (`src/client/proposal-client.ts`
+`verifiedBadgeHtml`): a sage checkmark only when `checked` and nothing is `unresolved`; a gold
+open-circle note when something is still `unresolved` (its wording distinguishes "checked and still
+over" from "couldn't finish checking, and here's what we already knew" — `checked` is never
+conflated with "clean"); and no badge at all when `verified` is `null` (nothing to say). An
+`unresolved` breach never paints the checkmark.
+
+`meal_plan_verify` gets its own `PROMPT_CONTEXT_SITES` entry (`src/prompt/context-projection.ts`):
+since the arithmetic is gone from the prompt, the site carries only what the judgement half needs —
+`PERSON` + `HEALTH_CORE` for allergies/dietary declarations/context events/directives — and drops
+the whole training/endurance/fuel key set and `recent_sessions`, since the pass re-judges no
+programming and re-derives no target.
+
+---
+
+## MCP server registration (`src/mcp.ts`, `scripts/gen-docs.mjs`)
+
+`buildMcpServer()` passes a server-level `instructions` string to the `McpServer` constructor,
+stated once — the product constitution (suggestion not a verdict, no numeric scores, insights wait
+in-app, agentic tools queue a job rather than block, an agent never applies its own change) — so
+each tool's own `description` in `src/surfaces/mcp/*.ts` can be a contract about what that specific
+tool does, instead of every tool restating the constitution. Descriptions are read as contracts by
+callers, not decoration.
+
+`docs/MCP-TOOLS.md`'s generator (`scripts/gen-docs.mjs`) reads `src/surfaces/mcp/`'s directory
+listing (`readdirSync`, filtered to `*.ts` minus `shared.ts`, sorted) rather than a hand-kept file
+list — a hand-kept list had silently dropped a module for a month while `CLAUDE.md` called this doc
+authoritative. Adding a new `src/surfaces/mcp/*.ts` module needs no update to the generator.
 
 ---
 
@@ -2356,7 +2471,7 @@ Free-text activity logs and food notes save **instantly** via the offline regex 
 **background, in-process serial queue** runs `buildEnrichPrompt()` through `runAgentWithFallback()`
 to (a) refine the entry's structured fields and (b) distill genuinely-notable durable facts into the
 `memory` table. Uploaded health documents are the third kind: the job hands the agent the **absolute
-file path** (`buildHealthEnrichPrompt`) — the CLIs can open local files — to extract markers + a
+file path** (`buildHealthIngestPrompt`) — the CLIs can open local files — to extract markers + a
 summary + memory.
 
 - **Kinds**: `'activity' | 'food' | 'health'` (plus `'garmin_strength'`, `'garmin_export'`,

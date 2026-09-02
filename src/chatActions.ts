@@ -508,7 +508,6 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       { "day_number": 1, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" } ] }`,
     guidance: [
       `plan_update is a SMALL, safety-checked adjustment to the existing plan. Use it when the user explicitly asks to fix today's/next session, or when this turn supplies a material training, recovery, pain, or life-context signal that changes the next session. A change can update load AND sets/rep_low/rep_high, add an absent movement, remove one with remove:true, or atomically swap {from,to} in place. NEVER use sets:0 to mean remove. Include every requested change in ONE plan_update so the server can apply the bounded edit as a unit. NEVER emit it for a food-only log, meal photo, or a general nutrition question.`,
-      `The server applies actions after your prose. Describe the intended edit, but NEVER say it was saved, updated, pushed, applied, or is live. Cairn will add a verified receipt only after reading the stored plan back.`,
     ],
   },
   plan_restructure: {
@@ -538,7 +537,6 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `set_run sets or adjusts exactly ONE run on ONE plan day of the current week ("make tomorrow's run 8k easy", "drop Thursday's tempo to 6k", "make the long run 75 minutes"). Use the day_number from DATA.plan — never invent one. It preserves that day's lifting and every other run on it. NEVER use plan_update or plan_restructure for a run: their changes[] can only reach loaded movements, so a run sent that way lands as a fake lifting exercise.`,
       `Distance and duration are two ways to say the same ask, so naming ONE clears the other. Send both only when the athlete asked for both. Zone is a zone KEY ("z2") — never write bpm numbers yourself; Cairn fills in the athlete's own band.`,
       `Changing the WHOLE week's run mix is not this action — there is no chat action for it. Say what you would change and point at the run plan, which proposes a full week for the athlete to accept.`,
-      `The server applies actions after your prose. Describe the intended run, but NEVER say it was saved, updated, or is live. Cairn adds a verified receipt only after reading the stored run back.`,
     ],
   },
   log_health: {
@@ -580,9 +578,8 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     applyMode: "immediate",
     shape: `{ "type": "log_context_tag", "tags": ["${CONTEXT_TAG_VOCAB.map((t) => t.key).join('", "')}"], "date": "YYYY-MM-DD|omit" }`,
     guidance: [
-      `log_context_tag tags TODAY (or a named day) with cheap, controlled-vocabulary life context — ${CONTEXT_TAG_VOCAB.map((t) => `${t.key} (${t.label})`).join(", ")}. It exists ONLY so the insight generator can later test outcomes against this context ("the mornings after travel ran a flatter HRV") and so a rough recovery reading with an overlapping tag reads as explained rather than concerning — it is NOT advice and NEVER produces a comment, warning, or lecture in your reply.`,
-      `Use it when the athlete mentions something in this vocabulary in passing ("flying to Denver today", "drinks tonight", "brutal week at work", "slept on a friend's couch", "feeling a bit off") — tag it quietly and move on; do not ask follow-up questions just to fill a tag. tags MUST be keys from the vocabulary above verbatim — never invent a new key, and never use this for an injury, a trip needing dates, or anything add_context_event already covers (those stay on the timeline; a tag is same-day and disposable).`,
-      `Omit "date" for today. Never say the tag was "logged" or "noted" in a way that reads as tracking/surveillance — a brief acknowledgment in the flow of the reply, if any, is enough.`,
+      `log_context_tag tags TODAY (or a named day) with cheap, controlled-vocabulary life context — ${CONTEXT_TAG_VOCAB.map((t) => `${t.key} (${t.label})`).join(", ")}. It exists ONLY so the insight generator can later test outcomes against this context ("the mornings after travel ran a flatter HRV") and so a rough recovery reading with an overlapping tag reads as explained rather than concerning.`,
+      `Use it when the athlete mentions something in this vocabulary in passing ("flying to Denver today", "drinks tonight", "brutal week at work", "slept on a friend's couch", "feeling a bit off"). Tag it silently and move on: the tag exists only for that later outcome test, so it never earns a comment, warning, or acknowledgment in your reply, and you do not ask follow-up questions just to fill one. tags MUST be keys from the vocabulary above verbatim — never invent a new key, and never use this for an injury, a trip needing dates, or anything add_context_event already covers (those stay on the timeline; a tag is same-day and disposable). Omit "date" for today.`,
     ],
   },
   log_supplement: {

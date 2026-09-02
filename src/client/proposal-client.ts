@@ -10,14 +10,19 @@ type ApplyResultMessage = {
 
 (() => {
   function proposalRecord(value: unknown): ProposalRecord {
-    return value && typeof value === "object" ? value as ProposalRecord : {};
+    return value && typeof value === "object" ? (value as ProposalRecord) : {};
   }
 
   function statusBadge(status: unknown): string {
     const s = String(status || "draft");
-    const cls = s === "accepted" || s === "applied" || s === "kept" ? "ok"
-      : s === "discarded" ? "off"
-      : s === "superseded" ? "muted" : "draft";
+    const cls =
+      s === "accepted" || s === "applied" || s === "kept"
+        ? "ok"
+        : s === "discarded"
+          ? "off"
+          : s === "superseded"
+            ? "muted"
+            : "draft";
     return `<span class="mp-badge ${cls}">${escHtml(s)}</span>`;
   }
 
@@ -33,10 +38,13 @@ type ApplyResultMessage = {
 
   function applyResultMessage(result: unknown): ApplyResultMessage {
     const r = proposalRecord(result);
-    if (!result || r.ok === false || r.error) return { failed: true, message: String(r.error || "Couldn't apply — try again") };
-    if (Array.isArray(r.clamped) && r.clamped.length) return { failed: false, message: "Applied · adjusted to a safe step" };
+    if (!result || r.ok === false || r.error)
+      return { failed: true, message: String(r.error || "Couldn't apply — try again") };
+    if (Array.isArray(r.clamped) && r.clamped.length)
+      return { failed: false, message: "Applied · adjusted to a safe step" };
     const addedN = Array.isArray(r.added) ? r.added.length : 0;
-    if (addedN) return { failed: false, message: addedN > 1 ? `Added ${addedN} movements to your plan` : "Added to your plan" };
+    if (addedN)
+      return { failed: false, message: addedN > 1 ? `Added ${addedN} movements to your plan` : "Added to your plan" };
     if (r.restructured) return { failed: false, message: "Plan restructured" };
     return { failed: false, message: "Applied" };
   }
@@ -44,27 +52,63 @@ type ApplyResultMessage = {
   function clampNoteHtml(clamped: unknown): string {
     const rows = (Array.isArray(clamped) ? clamped : []).filter(Boolean).map(proposalRecord);
     if (!rows.length) return "";
-    const lines = rows.slice(0, 6).map((c) => {
-      const what = String(c.exercise || c.field || "a value").trim();
-      const reason = String(c.reason || "kept to a safe step").trim();
-      const from = c.requested != null && c.requested !== "" ? `${escHtml(String(c.requested))} → ` : "";
-      const to = c.applied != null && c.applied !== "" ? `<b>${escHtml(String(c.applied))}</b>` : "";
-      const move = from || to ? `<span class="clampnote-move">${from}${to}</span>` : "";
-      return `<div class="clampnote-row"><span class="clampnote-what">${escHtml(what)}</span>${move}<span class="clampnote-why">${escHtml(reason)}</span></div>`;
-    }).join("");
+    const lines = rows
+      .slice(0, 6)
+      .map((c) => {
+        const what = String(c.exercise || c.field || "a value").trim();
+        const reason = String(c.reason || "kept to a safe step").trim();
+        const from = c.requested != null && c.requested !== "" ? `${escHtml(String(c.requested))} → ` : "";
+        const to = c.applied != null && c.applied !== "" ? `<b>${escHtml(String(c.applied))}</b>` : "";
+        const move = from || to ? `<span class="clampnote-move">${from}${to}</span>` : "";
+        return `<div class="clampnote-row"><span class="clampnote-what">${escHtml(what)}</span>${move}<span class="clampnote-why">${escHtml(reason)}</span></div>`;
+      })
+      .join("");
     return `<div class="clampnote settle-in" role="note">
         <div class="clampnote-lbl lbl"><span class="clampnote-glyph" aria-hidden="true">⚖</span> adjusted to a safe step</div>
         ${lines}
       </div>`;
   }
 
+  // The trust badge. THREE states, because "checked" and "clean" are not the same
+  // thing: the server computes the numeric floors itself, so it can know a draft is
+  // still over one even when the agent pass cleared it, or died before trying.
+  // An `unresolved` breach therefore NEVER paints the sage checkmark — it gets its
+  // own gold, open-circle note that says plainly what is still over. Still a
+  // suggestion, never a verdict: the athlete drives, and the draft is theirs to use.
   function verifiedBadgeHtml(verified: unknown): string {
     const v = proposalRecord(verified);
+    const list = (rows: unknown[]) =>
+      `<ul class="verified-list">${rows
+        .slice(0, 8)
+        .map((a) => `<li>${escHtml(String(a))}</li>`)
+        .join("")}</ul>`;
+    const clean = (rows: unknown) => (Array.isArray(rows) ? rows : []).filter((a) => a != null && String(a).trim());
+
+    const open = clean(v.unresolved);
+    const adj = clean(v.adjustments);
+    if (open.length) {
+      // The one state the athlete must not miss. `checked` distinguishes "we did
+      // look and this is still over" from "the check never finished, and here is
+      // what we already knew" — both honest, neither a green tick.
+      const lead = v.checked
+        ? open.length === 1
+          ? "Checked — one thing is still over your floors"
+          : `Checked — ${open.length} things are still over your floors`
+        : open.length === 1
+          ? "Couldn't finish checking — one thing is over your floors"
+          : `Couldn't finish checking — ${open.length} things are over your floors`;
+      return `<div class="verified-badge is-open settle-in" role="note">
+        <span class="verified-mark is-open" aria-hidden="true">○</span>
+        <span class="verified-text">${escHtml(lead)}</span>
+        ${list(open)}
+        ${adj.length ? `<details class="verified-detail"><summary>what was adjusted</summary>${list(adj)}</details>` : ""}
+      </div>`;
+    }
+
     if (!v.checked) return "";
-    const adj = (Array.isArray(v.adjustments) ? v.adjustments : []).filter((a) => a != null && String(a).trim());
     const detail = adj.length
       ? `<details class="verified-detail"><summary>what was adjusted</summary>
-           <ul class="verified-list">${adj.slice(0, 8).map((a) => `<li>${escHtml(String(a))}</li>`).join("")}</ul>
+           ${list(adj)}
          </details>`
       : "";
     return `<div class="verified-badge settle-in" role="note">
@@ -77,15 +121,20 @@ type ApplyResultMessage = {
   function strengthChangeHtml(change: unknown): string {
     const c = proposalRecord(change);
     if (!change) return "";
-    const dayTag = c.day_number != null
-      ? `<span class="lbl" style="margin-right:7px;opacity:.7">Day ${escHtml(c.day_number)}</span>`
-      : "";
-    const tgt = c.target_seconds != null
-      ? `${escHtml(c.target_seconds)}s`
-      : (c.target_weight != null ? escHtml(fmtWeight(c.target_weight)) : "—");
-    const reps = (c.rep_low != null)
-      ? ` <span style="color:var(--muted)">× ${escHtml(c.rep_low)}${c.rep_high != null && c.rep_high !== c.rep_low ? "–" + escHtml(c.rep_high) : ""}</span>`
-      : "";
+    const dayTag =
+      c.day_number != null
+        ? `<span class="lbl" style="margin-right:7px;opacity:.7">Day ${escHtml(c.day_number)}</span>`
+        : "";
+    const tgt =
+      c.target_seconds != null
+        ? `${escHtml(c.target_seconds)}s`
+        : c.target_weight != null
+          ? escHtml(fmtWeight(c.target_weight))
+          : "—";
+    const reps =
+      c.rep_low != null
+        ? ` <span style="color:var(--muted)">× ${escHtml(c.rep_low)}${c.rep_high != null && c.rep_high !== c.rep_low ? "–" + escHtml(c.rep_high) : ""}</span>`
+        : "";
     const reason = c.reason || c.note;
     const why = reason
       ? `<div class="sess-why" style="color:var(--muted);font-size:.82rem;margin:0 0 5px">${escHtml(reason)}</div>`
@@ -107,10 +156,12 @@ type ApplyResultMessage = {
     const parsed = proposalRecord(p.parsed);
     const autonomy = proposalRecord(p.autonomy);
     const scheduled = autonomy.status === "announced" || autonomy.status === "pending";
-    return p.status === "draft" && !scheduled && (
-      (Array.isArray(parsed.changes) && parsed.changes.length > 0) ||
-      (Array.isArray(parsed.cardio) && parsed.cardio.length > 0) ||
-      (Array.isArray(parsed.days) && parsed.days.length > 0)
+    return (
+      p.status === "draft" &&
+      !scheduled &&
+      ((Array.isArray(parsed.changes) && parsed.changes.length > 0) ||
+        (Array.isArray(parsed.cardio) && parsed.cardio.length > 0) ||
+        (Array.isArray(parsed.days) && parsed.days.length > 0))
     );
   }
 
@@ -125,10 +176,12 @@ type ApplyResultMessage = {
     const parsed = proposalRecord(p.parsed);
     const changes = Array.isArray(parsed.changes) ? parsed.changes : [];
     const cardio = Array.isArray(parsed.cardio) ? parsed.cardio : [];
-    const cardioHtml = cardio.map((run) => {
-      const c = proposalRecord(run);
-      return `<div class="sess-line run-line"><span class="run-pin" aria-hidden="true">▸</span><b>D${escHtml(c.day_number)} ${escHtml(c.label || c.exercise || "Run")}</b> <span class="numeral">${escHtml(runTargetText(c))}</span> <span style="color:var(--muted)">(${escHtml(c.reason || c.note || "")})</span></div>`;
-    }).join("");
+    const cardioHtml = cardio
+      .map((run) => {
+        const c = proposalRecord(run);
+        return `<div class="sess-line run-line"><span class="run-pin" aria-hidden="true">▸</span><b>D${escHtml(c.day_number)} ${escHtml(c.label || c.exercise || "Run")}</b> <span class="numeral">${escHtml(runTargetText(c))}</span> <span style="color:var(--muted)">(${escHtml(c.reason || c.note || "")})</span></div>`;
+      })
+      .join("");
     const body = p.parsed
       ? `<div class="sess-line">${escHtml(parsed.summary || "")}</div>` +
         changes.map(strengthChangeHtml).join("") +
@@ -145,10 +198,11 @@ type ApplyResultMessage = {
     const scheduled = autonomyOwned
       ? `<div class="sess-line" style="color:var(--muted);margin-top:10px">Scheduled for ${escHtml(autonomy.effective_date ? humanDate(String(autonomy.effective_date)) : "the next natural boundary")} · automatic and reversible</div>`
       : "";
-    const applied = p.status === "applied"
-      ? `<div class="apply-done settle-in"><span class="apply-done-mark" aria-hidden="true">✓</span> Applied to your plan</div>`
-        + clampNoteHtml(appliedClampFor(p, lastApplyClamp))
-      : "";
+    const applied =
+      p.status === "applied"
+        ? `<div class="apply-done settle-in"><span class="apply-done-mark" aria-hidden="true">✓</span> Applied to your plan</div>` +
+          clampNoteHtml(appliedClampFor(p, lastApplyClamp))
+        : "";
     return `<div class="mp-card reveal${p.status === "superseded" ? " mp-card-faded" : ""}" style="${stagger(index)}">
       <div class="mp-hero">
         <span class="lbl">${escHtml(p.agent)} · #${escHtml(p.id)}${p.created_at ? ` · ${escHtml(relTime(String(p.created_at)))}` : ""}</span>
@@ -159,17 +213,20 @@ type ApplyResultMessage = {
 
   function coachProposalListHtml(proposals: unknown, lastApplyClamp?: unknown): string {
     const rows = Array.isArray(proposals) ? proposals : [];
-    if (!rows.length) return `<div class="empty">No program decisions yet. The team will adapt bounded details in the background when the signals justify it; you can also ask for a review above.</div>`;
+    if (!rows.length)
+      return `<div class="empty">No program decisions yet. The team will adapt bounded details in the background when the signals justify it; you can also ask for a review above.</div>`;
 
     const open = rows.filter(isOpenProposal);
     const settled = rows.filter((p) => !isOpenProposal(p));
     const shown = [...open, ...settled.slice(0, 1)];
     const earlier = settled.slice(1);
-    return shown.map((p, i) => coachProposalCardHtml(p, i, lastApplyClamp)).join("") +
+    return (
+      shown.map((p, i) => coachProposalCardHtml(p, i, lastApplyClamp)).join("") +
       (earlier.length
         ? `<details class="hist-fold"><summary>Show earlier proposals (${earlier.length})</summary>
            <div class="hist-fold-body">${earlier.map((p, i) => coachProposalCardHtml(p, i, lastApplyClamp)).join("")}</div></details>`
-        : "");
+        : "")
+    );
   }
 
   const CAIRN_PROPOSAL = {

@@ -50,6 +50,14 @@ export interface ClientAgentAttempt {
 export interface ClientAgentVerification {
   checked: boolean;
   adjustments: string[];
+  // `by` says whether the deterministic floor pass is the only thing that spoke
+  // ("server" — a skipped or a failed agent turn) or a turn completed ("agent").
+  by?: "server" | "agent";
+  // Server-computed floor breaches still standing: a repair that did not clear
+  // them, or an agent turn that died before it could try. NEVER render a check
+  // carrying these as a clean pass — the athlete has to be told what is still
+  // over, especially on the session path, which has no downstream write gate.
+  unresolved?: string[];
 }
 
 export interface ClientAgentJobEnvelope {

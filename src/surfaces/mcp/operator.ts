@@ -81,7 +81,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
         .record(z.string(), z.string())
         .optional()
         .describe(
-          `optional per-task agent routing: a map { task -> agent } pinning one of these tasks to a specific agent: ${ROUTABLE_TASK_LIST}. Unknown tasks or unknown/disabled agents are dropped; {} or omitted = no routing (Auto rotates as before).`
+          `optional per-task agent routing: a map { task -> agent } pinning one of these tasks to a specific agent: ${ROUTABLE_TASK_LIST}. Unknown tasks or unknown/disabled agents are dropped; {} clears all routing (Auto rotates as before), while omitting the field leaves the stored routing unchanged.`
         ),
       coach_enabled: z.boolean().optional().describe("legacy weekly-draft compatibility flag; normal background coaching does not require it"),
       coach_day: z.number().int().optional(),
@@ -176,7 +176,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_agent_job",
-    "Read one durable coaching job, including its terminal result or calm error when complete.",
+    "Read one durable coaching job, including its terminal result or error when complete.",
     { id: z.number().int().positive() },
     async ({ id }) => asText(getAgentJob(id) ?? { error: "not found", id })
   );

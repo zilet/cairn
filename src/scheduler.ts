@@ -42,7 +42,7 @@ import {
   mealRefreshRetryDue,
   runOwnedMealRefreshAttempt,
 } from "./repo/meal-refresh-retry.js";
-import { isPlanProposalResult } from "./agent-contracts.js";
+import { PLAN_PROPOSAL_SCHEMA, isPlanProposalResult } from "./agent-contracts.js";
 import { autoImportExerciseGuidesIfEmpty } from "./domain/training/exercise-guide-use-case.js";
 import { createHash } from "node:crypto";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
@@ -504,6 +504,9 @@ export function startScheduler() {
           // a structural plan change is the most consequential thing Cairn drafts.
           profile: repo.executionProfileForOp("coach_draft"),
           acceptParsed: acceptsWeeklyCoachProposal,
+          // The same artifact acceptsWeeklyCoachProposal checks: this legacy tick
+          // bypasses runChosen, so it has to attach the schema itself.
+          schema: PLAN_PROPOSAL_SCHEMA,
         });
         const proposal = repo.createProposal(agent, "auto: weekly review", result.raw, result.parsed);
         const autonomy = applyProposalWithAutonomy(Number(proposal.id), { requested_tier: "quiet_apply" });

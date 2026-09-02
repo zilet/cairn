@@ -466,7 +466,7 @@ when it was last surfaced to the coach.
 CURRENT MEMORY (most recent first):
 ${rows || "(empty)"}
 
-${renderJsonContract(CONSOLIDATION_SCHEMA)}`;
+${renderJsonContract(CONSOLIDATION_SCHEMA, { note: "Include all three keys; use [] for any that is empty." })}`;
 }
 
 const ABOUT_ME_SCHEMA = `{

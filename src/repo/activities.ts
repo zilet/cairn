@@ -714,7 +714,12 @@ export function garminSourceLabel(): string {
 
 export function upsertGarminSource(input: GarminSourceInput = {}) {
   const label = (input.label ?? "default").toString().trim() || "default";
-  const mode = cleanGarminMode(input.mode);
+  // `mode` preserves on omit like every sibling field on this upsert. It used to run
+  // through cleanGarminMode unconditionally, so an omitted mode arrived as
+  // "unofficial" and OVERWROTE a stored "official"/"manual" — a status-only update
+  // silently reconfigured the connector. Only a stated mode is written; on insert the
+  // absence still means "unofficial".
+  const mode = input.mode == null ? null : cleanGarminMode(input.mode);
   const cur = db.prepare(`SELECT * FROM garmin_sources WHERE provider = 'garmin' AND label = ?`).get(label) as any;
   if (!cur) {
     const info = db
@@ -723,7 +728,7 @@ export function upsertGarminSource(input: GarminSourceInput = {}) {
        VALUES ('garmin', ?, ?, ?, ?, ?, ?)`
       )
       .run(
-        mode,
+        mode ?? "unofficial",
         label,
         input.auth_status ?? "not_configured",
         jsonOrNull(input.token_json),
@@ -733,7 +738,7 @@ export function upsertGarminSource(input: GarminSourceInput = {}) {
     return db.prepare(`SELECT * FROM garmin_sources WHERE id = ?`).get(info.lastInsertRowid);
   }
   db.prepare(
-    `UPDATE garmin_sources SET mode = ?, auth_status = COALESCE(?, auth_status),
+    `UPDATE garmin_sources SET mode = COALESCE(?, mode), auth_status = COALESCE(?, auth_status),
        token_json = COALESCE(?, token_json), sync_cursor = COALESCE(?, sync_cursor),
        last_sync_at = COALESCE(?, last_sync_at), updated_at = datetime('now')
      WHERE id = ?`
@@ -761,7 +766,71 @@ export function getGarminSource(id?: number | null) {
   return db.prepare(`SELECT * FROM garmin_sources WHERE provider = 'garmin' ORDER BY id LIMIT 1`).get() ?? null;
 }
 
-export function upsertGarminActivity(input: GarminActivityInput, sourceId?: number | null) {
+// The nullable richness columns of `garmin_activities`, paired with the input key
+// they read. Every one COALESCE-merges on conflict so a sparse provider re-sync (the
+// Garmin sync builds a FULL object whose absent fields are explicit nulls) can never
+// null out a field an earlier, richer sync filled.
+//
+// The cost of that blanket COALESCE was that a stored value could never be corrected
+// back to empty through any surface. `{ nullsClear: true }` — passed by the REST/MCP
+// ingest boundary, never by the sync — makes an EXPLICITLY null key overwrite while an
+// OMITTED key still preserves, so a hand correction can clear one field without the
+// sync losing anything.
+const GARMIN_ACTIVITY_MERGE_COLS: Array<[string, keyof GarminActivityInput]> = [
+  ["duration_min", "duration_min"],
+  ["distance_km", "distance_km"],
+  ["calories", "calories"],
+  ["avg_hr", "avg_hr"],
+  ["max_hr", "max_hr"],
+  ["ascent_m", "ascent_m"],
+  ["training_load", "training_load"],
+  ["training_effect", "training_effect"],
+  ["moving_min", "moving_min"],
+  ["elevation_loss_m", "elevation_loss_m"],
+  ["aerobic_te", "aerobic_te"],
+  ["anaerobic_te", "anaerobic_te"],
+  ["te_label", "te_label"],
+  ["avg_cadence", "avg_cadence"],
+  ["max_cadence", "max_cadence"],
+  ["avg_power", "avg_power"],
+  ["max_power", "max_power"],
+  ["norm_power", "norm_power"],
+  ["avg_speed", "avg_speed"],
+  ["max_speed", "max_speed"],
+  ["avg_temp", "avg_temp"],
+  ["vo2max", "vo2max"],
+  ["hr_zones_json", "hr_zones"],
+  ["exercise_sets_json", "exercise_sets"],
+  ["steps", "steps"],
+  ["avg_stride_len", "avg_stride_len"],
+  ["min_elevation_m", "min_elevation_m"],
+  ["max_elevation_m", "max_elevation_m"],
+  ["lap_count", "lap_count"],
+  ["avg_ground_contact_ms", "avg_ground_contact_ms"],
+  ["avg_vertical_osc_cm", "avg_vertical_osc_cm"],
+  ["avg_vertical_ratio", "avg_vertical_ratio"],
+  ["raw_json", "raw"],
+];
+
+const GARMIN_ACTIVITY_JSON_KEYS = new Set(["hr_zones", "exercise_sets", "raw"]);
+
+// Did the caller STATE null for this key (clear it), or just not mention it (leave it)?
+// An explicitly-`undefined` key reads as "not mentioned" — that is what a spread of an
+// optional field produces, and it must not clear anything.
+function statedNull(input: any, key: string): boolean {
+  return !!input && typeof input === "object" && Object.hasOwn(input, key) && (input as any)[key] === null;
+}
+
+export interface GarminUpsertOptions {
+  /** Let an explicitly-null field clear the stored value (omitted still preserves). */
+  nullsClear?: boolean;
+}
+
+export function upsertGarminActivity(
+  input: GarminActivityInput,
+  sourceId?: number | null,
+  options: GarminUpsertOptions = {}
+) {
   if (!input.external_id || !String(input.external_id).trim()) throw new Error("external_id required");
   const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: garminSourceLabel() });
   if (!source) throw new Error("Garmin source not found");
@@ -810,53 +879,26 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
             .filter(Boolean)
             .join(" · ") || null,
       }) as any);
-  db.prepare(
-    `INSERT INTO garmin_activities
-       (source_id, external_id, activity_id, date, start_time, type, name, duration_min, distance_km,
-        calories, avg_hr, max_hr, ascent_m, training_load, training_effect,
-        moving_min, elevation_loss_m, aerobic_te, anaerobic_te, te_label, avg_cadence, max_cadence,
-        avg_power, max_power, norm_power, avg_speed, max_speed, avg_temp, vo2max, hr_zones_json,
-        exercise_sets_json, steps, avg_stride_len, min_elevation_m, max_elevation_m, lap_count,
-        avg_ground_contact_ms, avg_vertical_osc_cm, avg_vertical_ratio, raw_json, synced_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-     ON CONFLICT(source_id, external_id) DO UPDATE SET
-       activity_id = COALESCE(excluded.activity_id, garmin_activities.activity_id),
-       date = excluded.date, start_time = COALESCE(excluded.start_time, garmin_activities.start_time),
-       type = excluded.type, name = COALESCE(excluded.name, garmin_activities.name),
-       duration_min = COALESCE(excluded.duration_min, garmin_activities.duration_min),
-       distance_km = COALESCE(excluded.distance_km, garmin_activities.distance_km),
-       calories = COALESCE(excluded.calories, garmin_activities.calories),
-       avg_hr = COALESCE(excluded.avg_hr, garmin_activities.avg_hr),
-       max_hr = COALESCE(excluded.max_hr, garmin_activities.max_hr),
-       ascent_m = COALESCE(excluded.ascent_m, garmin_activities.ascent_m),
-       training_load = COALESCE(excluded.training_load, garmin_activities.training_load),
-       training_effect = COALESCE(excluded.training_effect, garmin_activities.training_effect),
-       moving_min = COALESCE(excluded.moving_min, garmin_activities.moving_min),
-       elevation_loss_m = COALESCE(excluded.elevation_loss_m, garmin_activities.elevation_loss_m),
-       aerobic_te = COALESCE(excluded.aerobic_te, garmin_activities.aerobic_te),
-       anaerobic_te = COALESCE(excluded.anaerobic_te, garmin_activities.anaerobic_te),
-       te_label = COALESCE(excluded.te_label, garmin_activities.te_label),
-       avg_cadence = COALESCE(excluded.avg_cadence, garmin_activities.avg_cadence),
-       max_cadence = COALESCE(excluded.max_cadence, garmin_activities.max_cadence),
-       avg_power = COALESCE(excluded.avg_power, garmin_activities.avg_power),
-       max_power = COALESCE(excluded.max_power, garmin_activities.max_power),
-       norm_power = COALESCE(excluded.norm_power, garmin_activities.norm_power),
-       avg_speed = COALESCE(excluded.avg_speed, garmin_activities.avg_speed),
-       max_speed = COALESCE(excluded.max_speed, garmin_activities.max_speed),
-       avg_temp = COALESCE(excluded.avg_temp, garmin_activities.avg_temp),
-       vo2max = COALESCE(excluded.vo2max, garmin_activities.vo2max),
-       hr_zones_json = COALESCE(excluded.hr_zones_json, garmin_activities.hr_zones_json),
-       exercise_sets_json = COALESCE(excluded.exercise_sets_json, garmin_activities.exercise_sets_json),
-       steps = COALESCE(excluded.steps, garmin_activities.steps),
-       avg_stride_len = COALESCE(excluded.avg_stride_len, garmin_activities.avg_stride_len),
-       min_elevation_m = COALESCE(excluded.min_elevation_m, garmin_activities.min_elevation_m),
-       max_elevation_m = COALESCE(excluded.max_elevation_m, garmin_activities.max_elevation_m),
-       lap_count = COALESCE(excluded.lap_count, garmin_activities.lap_count),
-       avg_ground_contact_ms = COALESCE(excluded.avg_ground_contact_ms, garmin_activities.avg_ground_contact_ms),
-       avg_vertical_osc_cm = COALESCE(excluded.avg_vertical_osc_cm, garmin_activities.avg_vertical_osc_cm),
-       avg_vertical_ratio = COALESCE(excluded.avg_vertical_ratio, garmin_activities.avg_vertical_ratio),
-       raw_json = COALESCE(excluded.raw_json, garmin_activities.raw_json), synced_at = datetime('now')`
-  ).run(
+  // Built from GARMIN_ACTIVITY_MERGE_COLS so the column list, the bind order and the
+  // conflict clause cannot drift apart. `date`/`type` always take the incoming value
+  // (both were resolved from `prev` above, so a sparse retry still writes the stored
+  // one); the rest merge, or overwrite when the caller stated null under nullsClear.
+  const headCols = ["source_id", "external_id", "activity_id", "date", "start_time", "type", "name"];
+  const cols = [...headCols, ...GARMIN_ACTIVITY_MERGE_COLS.map(([c]) => c)];
+  const mergeSets = GARMIN_ACTIVITY_MERGE_COLS.map(([col, key]) =>
+    options.nullsClear && statedNull(input, key as string)
+      ? `${col} = excluded.${col}`
+      : `${col} = COALESCE(excluded.${col}, garmin_activities.${col})`
+  );
+  const updates = [
+    "activity_id = COALESCE(excluded.activity_id, garmin_activities.activity_id)",
+    "date = excluded.date",
+    "start_time = COALESCE(excluded.start_time, garmin_activities.start_time)",
+    "type = excluded.type",
+    "name = COALESCE(excluded.name, garmin_activities.name)",
+    ...mergeSets,
+  ].join(", ");
+  const values: any[] = [
     source.id,
     String(input.external_id),
     activity?.id ?? null,
@@ -864,40 +906,16 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
     start,
     type,
     name,
-    input.duration_min ?? null,
-    input.distance_km ?? null,
-    input.calories ?? null,
-    input.avg_hr ?? null,
-    input.max_hr ?? null,
-    input.ascent_m ?? null,
-    input.training_load ?? null,
-    input.training_effect ?? null,
-    input.moving_min ?? null,
-    input.elevation_loss_m ?? null,
-    input.aerobic_te ?? null,
-    input.anaerobic_te ?? null,
-    input.te_label ?? null,
-    input.avg_cadence ?? null,
-    input.max_cadence ?? null,
-    input.avg_power ?? null,
-    input.max_power ?? null,
-    input.norm_power ?? null,
-    input.avg_speed ?? null,
-    input.max_speed ?? null,
-    input.avg_temp ?? null,
-    input.vo2max ?? null,
-    jsonOrNull(input.hr_zones),
-    jsonOrNull(input.exercise_sets),
-    input.steps ?? null,
-    input.avg_stride_len ?? null,
-    input.min_elevation_m ?? null,
-    input.max_elevation_m ?? null,
-    input.lap_count ?? null,
-    input.avg_ground_contact_ms ?? null,
-    input.avg_vertical_osc_cm ?? null,
-    input.avg_vertical_ratio ?? null,
-    jsonOrNull(input.raw)
-  );
+    ...GARMIN_ACTIVITY_MERGE_COLS.map(([, key]) => {
+      const v = (input as any)[key];
+      return GARMIN_ACTIVITY_JSON_KEYS.has(key as string) ? jsonOrNull(v) : (v ?? null);
+    }),
+  ];
+  db.prepare(
+    `INSERT INTO garmin_activities (${cols.join(", ")}, synced_at)
+     VALUES (${cols.map(() => "?").join(", ")}, datetime('now'))
+     ON CONFLICT(source_id, external_id) DO UPDATE SET ${updates}, synced_at = datetime('now')`
+  ).run(...values);
   bumpTrainingDataVersion(); // a synced effort feeds weekly-stats + endurance reads
   const row = hydrateJson(
     db
@@ -907,8 +925,17 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
   // Keep the general activities mirror authoritative on every normalized update.
   // Date/type are safe because the sparse path above resolved them from `prev`;
   // nullable richness COALESCEs so a shell retry cannot erase duration/distance or
-  // the human-readable note already used by calendar/endurance consumers.
+  // the human-readable note already used by calendar/endurance consumers. Under
+  // nullsClear a field the caller deliberately cleared must not survive in the
+  // calendar copy either — but ONLY that field. This gate is per column for a reason:
+  // making the whole mirror unconditional wiped `notes` (written by the enricher or a
+  // REST edit) whenever any unrelated Garmin field was cleared, because `mirrorNotes`
+  // is derived and reads empty unless HR/load/effect happen to be stored. So each
+  // mirrored column clears only when a column it is DERIVED FROM was stated null.
   if (!strength && row?.activity_id) {
+    const cleared = (...keys: Array<keyof GarminActivityInput>) =>
+      !!options.nullsClear && keys.some((k) => statedNull(input, k as string));
+    const mirror = (col: string, isCleared: boolean) => (isCleared ? `${col} = ?` : `${col} = COALESCE(?, ${col})`);
     const mirrorNotes =
       [
         row.avg_hr != null ? `avg HR ${Math.round(Number(row.avg_hr))}` : null,
@@ -918,10 +945,14 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
         .filter(Boolean)
         .join(" · ") || null;
     db.prepare(
+      // raw_text mirrors `name`, which was already resolved from `prev` above and so
+      // is never null here — it stays on COALESCE. pace is derived from duration and
+      // distance; notes from HR, training load and training effect.
       `UPDATE activities SET
-         date = ?, type = ?, raw_text = COALESCE(?, raw_text),
-         duration_min = COALESCE(?, duration_min), distance_km = COALESCE(?, distance_km),
-         pace = COALESCE(?, pace), notes = COALESCE(?, notes)
+         date = ?, type = ?, ${mirror("raw_text", false)},
+         ${mirror("duration_min", cleared("duration_min"))}, ${mirror("distance_km", cleared("distance_km"))},
+         ${mirror("pace", cleared("duration_min", "distance_km"))},
+         ${mirror("notes", cleared("avg_hr", "training_load", "training_effect"))}
        WHERE id = ?`
     ).run(
       row.date,
@@ -1042,7 +1073,7 @@ function isRealIsoDate(value: unknown): value is string {
 export function upsertGarminDailyMetric(
   input: GarminDailyMetricInput,
   sourceId?: number | null,
-  options: { emitEvent?: boolean } = {}
+  options: GarminUpsertOptions & { emitEvent?: boolean } = {}
 ) {
   if (!isRealIsoDate(input.date)) throw new Error("date must be a real YYYY-MM-DD");
   const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: garminSourceLabel() });
@@ -1050,8 +1081,16 @@ export function upsertGarminDailyMetric(
   const cols = ["source_id", "date", ...GARMIN_DAILY_COLS, "raw_json"];
   const placeholders = cols.map(() => "?").join(", ");
   // COALESCE(excluded, existing) so a sparse re-sync preserves richer prior values.
+  // Under nullsClear (the REST/MCP ingest boundary only) a key the caller EXPLICITLY
+  // set to null overwrites instead — an omitted key still preserves — so a wrong
+  // stored reading can be corrected back to empty without the sync ever losing data.
   const updates = [...GARMIN_DAILY_COLS, "raw_json"]
-    .map((c) => `${c} = COALESCE(excluded.${c}, garmin_daily_metrics.${c})`)
+    .map((c) => {
+      const key = c === "raw_json" ? "raw" : c;
+      return options.nullsClear && statedNull(input, key)
+        ? `${c} = excluded.${c}`
+        : `${c} = COALESCE(excluded.${c}, garmin_daily_metrics.${c})`;
+    })
     .join(", ");
   const values: any[] = [source.id, input.date];
   for (const c of GARMIN_DAILY_COLS) values.push((input as any)[c] ?? null);

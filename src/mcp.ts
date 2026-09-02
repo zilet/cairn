@@ -56,7 +56,23 @@ export function mcpMetricOperation(body: unknown): string {
 }
 
 export function buildMcpServer(): McpServer {
-  const server = instrumentTelemetry(new McpServer({ name: "cairn", version: getBuildInfo().version }));
+  const server = instrumentTelemetry(
+    new McpServer(
+      { name: "cairn", version: getBuildInfo().version },
+      {
+        // Stated ONCE here so individual tool descriptions can be contracts about
+        // functionality instead of each restating the product constitution.
+        instructions:
+          "Cairn is a single-athlete training, nutrition, and longevity system. Every read is a suggestion " +
+          "the athlete drives, never a gate or a verdict, and nothing here is medical advice. Cairn surfaces " +
+          "no numeric scores or grades; report values, directions, and plain words instead. Insights and " +
+          "reviews wait in the app and are never pushed. Agentic tools return a queued job immediately " +
+          "rather than blocking; poll get_agent_job for the result. Tools that would change a plan, a " +
+          "target, or a goal produce a draft or route through the server's autonomy policy; an agent never " +
+          "applies its own change.",
+      }
+    )
+  );
   registerSystemTools(server);
   registerChatTools(server);
   registerConnectedBrainTools(server);

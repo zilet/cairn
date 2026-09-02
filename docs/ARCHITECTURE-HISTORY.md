@@ -4,6 +4,58 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-02 — Prompt audit: enforced structured output closes the gap, verify pass loses its arithmetic
+
+No schema migration, sw **v565**. An earlier pass had built enforced structured output end to end and
+attached it at five call sites; this round's audit found ~20 more agentic ops still asking for their
+shape in prose only, and closed that gap, plus split the self-critique verify pass into a
+deterministic half and a judgement half.
+
+**Enforced structured output, everywhere a consumer reads the payload.** `src/agent-contracts.ts`
+now exports a `*_SCHEMA` constant (up from 5) for every non-streaming `coachOps.ts` op that produces
+JSON a consumer dereferences and passes its `RunOpts.schema` — session suggest/compose, nutrition
+check-in, recipe, exercise how-to, health review/synthesis, the multidisciplinary case-conference's
+per-specialist opinion turn and its decision, chat distill, memory consolidation, about-me growth,
+onboarding, marker/exercise reconcile, the enrichment ops, and the generic verify pass. `DAY_READ_SCHEMA`,
+`INSIGHT_SCHEMA`, `SESSION_SUGGESTION_SCHEMA`, `NUTRITION_CHECKIN_SCHEMA`, `HEALTH_REVIEW_SCHEMA`,
+`HEALTH_SYNTHESIS_SCHEMA` and `SPECIALIST_OPINION_SCHEMA` are the read-loop schemas, each spreading
+`COACH_READ_PROTOCOL_PROPERTIES` so the same schema names both the final payload and an intermediate
+`coach_read` query turn. `RunOpts.schema` stays inert while streaming (chat, `runAgentStreaming`) and
+for `stub`, so the prose `OUTPUT CONTRACT` remains the floor everywhere. `runAgentWithFallback`'s
+one JSON-repair retry now skips itself under enforced output when the failure is unparseable — a
+constrained first run that still came back broken is a truncation/CLI-error, not a prose problem a
+re-prompt can fix — while the CONTRACT-repair retry (a schema-valid but semantically wrong payload)
+still applies. `test/agentContractSchemas.test.js`'s `CONSUMER_READS` table guards the invariant a
+sampled-payload test can't: every field a consumer function actually reads must be NAMED in its
+schema, because `additionalProperties: true` admits an unnamed field without making the model emit
+one. The pass also caught a live defect in the existing `PLAN_PROPOSAL_SCHEMA`: `day_type` carried a
+nullable `enum: ["training", "rest", null]`, and a nullable enum is the construct an enforcing
+backend is most likely to reject — dropped in favor of a `description`-only string, with
+`planDayTypeForRestructure` (`src/repo/plan.ts`), which already throws on anything off-vocabulary,
+staying the real gate. Details, plus the read-loop law and the permissive-shared-vs-tightened-strict
+schema pattern: `docs/ARCHITECTURE.md`'s "Enforced structured output" section.
+
+**Verify floors: the numeric half is no longer a model call.** `src/repo/verify-floors.ts` computes
+the session/meal-plan verify pass's numeric floors (lean-safe kcal, protein, fiber, time budget)
+deterministically from the server's own figures — arithmetic whose inputs already decided its
+output, previously asked of a model anyway. `runVerify()` (`src/coachOps.ts`) now runs that
+pre-check first and skips the agent turn entirely when nothing needs judgement; the pre-check wins
+over an `ok:true` verdict (an unrepaired breach is `unresolved` on the outcome, never shipped as
+clean); and fail-open no longer discards the server's own findings — a dead agent turn still ships
+the draft, but carries `{checked: false, unresolved: [...]}` when the pre-check had already found a
+breach. The client (`src/client/proposal-client.ts`) renders three visible badge states instead of a
+binary checked/unchecked. `meal_plan_verify` gets its own `PROMPT_CONTEXT_SITES` entry, carrying only
+what the judgement half needs. Details: `docs/ARCHITECTURE.md`.
+
+**Smaller fixes swept in the same round:** the MCP server now states the product constitution once
+via `McpServer`'s `instructions`, so individual tool descriptions read as contracts rather than
+restating it; `docs/MCP-TOOLS.md`'s generator reads `src/surfaces/mcp/`'s directory listing instead
+of a hand-kept module list (the hand-kept list had silently dropped a module for a month); and
+`TASK_EXECUTION_PROFILES` gained `memory_consolidation`/`about_me_growth` entries so those nightly
+passes stop inheriting the CLI's home effort.
+
+---
+
 ## 2026-09-01 — Garmin strength write-back round: the work Cairn owns goes back to the watch
 
 Schema **100** (`exercise-garmin-mapping`), sw **v563**. Garmin stays the input for runs, sleep and

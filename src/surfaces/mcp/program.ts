@@ -42,7 +42,7 @@ import { flexibleTrainingAgenda } from "../../repo.js";
 export function registerProgramTools(server: McpToolRegistrar) {
   server.tool(
     "get_program_state",
-    "Adaptive program state — the deterministic read of how the training program is evolving: per-lift est-1RM trend + plateau/stall detection, volume landmarks per muscle, mesocycle position (weeks since deload, ACWR), and endurance trends. Informational (plain words, no score); the basis for proposing plan evolutions.",
+    "Adaptive program state — the deterministic read of how the training program is evolving: per-lift est-1RM trend + plateau/stall detection, volume landmarks per muscle, mesocycle position (weeks since deload, ACWR), and endurance trends. The basis for proposing plan evolutions.",
     { date: z.string().optional() },
     async ({ date }) => asText(getProgramState(date))
   );
@@ -169,13 +169,34 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "update_block",
     "Update a periodization block's fields (goal/focus/phase/week_index/total_weeks/status).",
     {
-      id: z.number().int(),
-      goal: z.string().optional(),
-      focus: z.string().optional(),
-      phase: z.string().optional(),
-      week_index: z.number().int().optional(),
-      total_weeks: z.number().int().optional(),
-      status: z.string().optional(),
+      id: z.number().int().describe("the block's id, from get_active_block or list_blocks"),
+      goal: z.string().optional().describe("free-text goal label; clamped to 200 chars"),
+      focus: z
+        .string()
+        .optional()
+        .describe(
+          "one of strength | hypertrophy | endurance-base | peak; an unrecognized value is silently ignored and the existing focus is kept"
+        ),
+      phase: z
+        .string()
+        .optional()
+        .describe(
+          "one of accumulation | intensification | deload | realization; an unrecognized value is silently ignored and the existing phase is kept"
+        ),
+      week_index: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          "1-based week within the block; use advance_block_week for normal progression, which also transitions the phase"
+        ),
+      total_weeks: z.number().int().optional().describe("block length in weeks; clamped to a 2-12 range"),
+      status: z
+        .string()
+        .optional()
+        .describe(
+          "one of active | completed | abandoned; an unrecognized value is silently ignored and the existing status is kept"
+        ),
     },
     async ({ id, ...fields }) => asText(updateBlock(id, fields) ?? { error: "not found", id })
   );
@@ -203,7 +224,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_program_balance",
-    "Working-set volume per canonical muscle group over the last 2 weeks, banded against productive-range landmarks (low/productive/high) with a plain-language adherence-skew summary. Tells which groups are due and which are over — no numeric scores, no grades.",
+    "Working-set volume per canonical muscle group over the last 2 weeks, banded against productive-range landmarks (low/productive/high) with a plain-language adherence-skew summary. Tells which groups are due and which are over.",
     {},
     async () => asText(programBalance())
   );
@@ -240,14 +261,14 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_program_adjustments",
-    "The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing core/grip/mobility gaps — as a plain-language digest. Most-actionable first. Pull-never-push: the user reviews these; nothing auto-applies.",
+    "The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing core/grip/mobility gaps — as a plain-language digest. Most-actionable first. The user reviews these; nothing auto-applies.",
     {},
     async () => asText(programAdjustments())
   );
 
   server.tool(
     "get_support_work",
-    "Support-work intelligence — for each lagging COMPOUND lift (plateaued/regressing) whose CONTRIBUTING muscles are running under their productive volume, a targeted supporting-exercise suggestion: build the weak synergist (e.g. direct triceps work for a stalled bench, grip work for a stuck deadlift) instead of only rotating the movement. If the lift's OWN prime mover is under-trained it says the lift may simply be under-practiced. Plain words, suggestion-not-a-gate, no scores; [] when nothing lags. Pull-never-push.",
+    "Support-work intelligence — for each lagging COMPOUND lift (plateaued/regressing) whose CONTRIBUTING muscles are running under their productive volume, a targeted supporting-exercise suggestion: build the weak synergist (e.g. direct triceps work for a stalled bench, grip work for a stuck deadlift) instead of only rotating the movement. If the lift's OWN prime mover is under-trained it says the lift may simply be under-practiced. [] when nothing lags.",
     { date: z.string().optional() },
     async ({ date }) => asText(supportWorkRead(date))
   );
@@ -298,7 +319,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_run_zones",
-    "The user's HR-zone bpm bands (Z1–Z5), grounded in real physiology — max-HR (explicit → age-estimated → Garmin-observed → Garmin's own zone boundaries) and resting HR (Karvonen %HRR when known). Plain words + concrete bpm, never a score. {available:false} with no age and no Garmin HR.",
+    "The user's HR-zone bpm bands (Z1–Z5), grounded in real physiology — max-HR (explicit → age-estimated → Garmin-observed → Garmin's own zone boundaries) and resting HR (Karvonen %HRR when known). Plain words + concrete bpm. {available:false} with no age and no Garmin HR.",
     {},
     async () => asText(runZones())
   );
@@ -312,14 +333,14 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_muscle_load",
-    "Acute per-muscle freshness over the last ~2 days — recent strength sets AND endurance sessions folded onto the regions they fatigue (a long ride loads the legs). heavy:true means a real dose (the muscle wants a day). Plain words, no scores.",
+    "Acute per-muscle freshness over the last ~2 days — recent strength sets AND endurance sessions folded onto the regions they fatigue (a long ride loads the legs). heavy:true means a real dose (the muscle wants a day).",
     { days: z.number().int().min(1).max(7).optional().describe("window in days (default 2)") },
     async ({ days }) => asText(muscleLoadPayload(days ?? 2))
   );
 
   server.tool(
     "get_muscle_trajectory",
-    "Per-canonical-muscle-group ADVANCING vs STALLING read (the user's own mental model) — folds each group's member-lift statuses + its volume band/trend into one plain verdict (advancing/stalling/building/maintaining), and for a stalling group names the lead stalled lift + a MENU of same-pattern variations to rotate in. Plain words, no scores. {available:false} when nothing's logged.",
+    "Per-canonical-muscle-group ADVANCING vs STALLING read (the user's own mental model) — folds each group's member-lift statuses + its volume band/trend into one plain verdict (advancing/stalling/building/maintaining), and for a stalling group names the lead stalled lift + a MENU of same-pattern variations to rotate in. {available:false} when nothing's logged.",
     { date: z.string().optional() },
     async ({ date }) => asText(muscleGroupTrajectory(date))
   );
@@ -333,7 +354,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_training_playbook",
-    "The deterministic TRAINING PLAYBOOK — the plateau-type plays (strength plateau, endurance plateau, mono-stimulus, hybrid interference) and an adherence-fit restructure read the evolve-program loop can focus a proposal on. Each play carries a plain-language why + a short menu of adaptations, grounded in the program-state. Suggestion only: never mutates the plan, never a score; quiet ('no signal strong enough to change the plan') at steady state.",
+    "The deterministic TRAINING PLAYBOOK — the plateau-type plays (strength plateau, endurance plateau, mono-stimulus, hybrid interference) and an adherence-fit restructure read the evolve-program loop can focus a proposal on. Each play carries a plain-language why + a short menu of adaptations, grounded in the program-state. Never mutates the plan; quiet ('no signal strong enough to change the plan') at steady state.",
     {
       date: z.string().optional(),
       window: z.number().int().positive().optional().describe("adherence lookback window in days (default 28, min 14)"),
@@ -343,7 +364,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_dexa_targeting",
-    "DEXA-driven targeting — maps the body scan's regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral/central fat) to concrete TRAINING + one NUTRITION target, each with a plain 'path to your next scan'. T/Z-scores + ALMI are recognized reference reads (never a score); BMD/visceral stay informational (clinician-framed). {available:false} with no DEXA.",
+    "DEXA-driven targeting — maps the body scan's regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral/central fat) to concrete TRAINING + one NUTRITION target, each with a plain 'path to your next scan'. T/Z-scores + ALMI are recognized reference reads; BMD/visceral stay informational (clinician-framed). {available:false} with no DEXA.",
     {},
     async () => asText(dexaTargeting())
   );
@@ -357,7 +378,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "apply_proposal",
-    "Apply a draft proposal's target changes to the plan.",
+    "Apply a draft proposal directly to the plan, bypassing the server autonomy policy. Use only when the athlete has already reviewed the draft and asked for it; apply_proposal_with_autonomy is the path that honors lead mode, announces structural changes, and records an undoable decision. A changes[] payload updates each named target, a days payload replaces the whole week, and a nutrition_target payload is advisory acknowledgement with no plan to mutate. Re-applying an already-applied proposal is refused. Returns the applied result, or {error} describing the refusal.",
     { id: z.number().int() },
     async ({ id }) => {
       try {
@@ -372,11 +393,19 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "apply_proposal_with_autonomy",
     "Route a proposal through Cairn's server autonomy policy. It may quiet-apply, announce for a natural boundary, or hold for review; clinical and user-locked changes never auto-apply.",
     {
-      id: z.number().int(),
-      requested_tier: z.enum(["observe", "quiet_apply", "announce", "ask", "clinician"]).optional(),
-      safety_response: z.boolean().optional(),
-      user_locked: z.boolean().optional(),
-      clamp_refused: z.boolean().optional(),
+      id: z.number().int().describe("the draft proposal's id, from list_proposals or a draft_plan_update/evolve_program result"),
+      requested_tier: z
+        .enum(["observe", "quiet_apply", "announce", "ask", "clinician"])
+        .optional()
+        .describe(
+          "the caller's preferred autonomy tier; server policy can only clamp it MORE restrictive (e.g. clinical or user-locked changes still ask), never loosen it"
+        ),
+      safety_response: z
+        .boolean()
+        .optional()
+        .describe("true when this proposal is a direct response to a safety signal; exempts it from the weekly surprise-budget wait, but never loosens a clinical/ask/clinician tier"),
+      user_locked: z.boolean().optional().describe("true when the athlete has locked this decision; forces at least an ask tier"),
+      clamp_refused: z.boolean().optional().describe("true when a safety floor already refused the automatic action; forces at least an ask tier"),
     },
     async ({ id, requested_tier, safety_response, user_locked, clamp_refused }) =>
       asText(applyProposalWithAutonomy(id, { requested_tier, safety_response, user_locked, clamp_refused }))

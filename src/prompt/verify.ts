@@ -1,81 +1,133 @@
 // Self-critique verify prompts: the bounded second-pass safety checkers for a
 // drafted meal plan and a suggested session.
 import * as repo from "../repo.js";
+import type { FloorViolation } from "../repo/verify-floors.js";
+import { renderFloorViolations } from "../repo/verify-floors.js";
 import { promptData } from "./context-projection.js";
 import { CAIRN_PERSONA, dateScopedPromptContext, MECHANICS_ENCODING } from "./shared.js";
 
 // ---------- self-critique verify pass (Trust build V1) ----------
-// A bounded SECOND agent turn that checks a just-drafted high-stakes generative
-// output against the HARD floors/constraints — the model reviewing its own work
-// before it reaches the user. It is a SAFETY backstop, not a redesign: it only
-// fixes genuine floor/constraint violations, leaving a clean draft untouched. It
-// fails OPEN — if it can't run or returns garbage, the original draft ships exactly
-// as today (the verify pass is never load-bearing). Honors the constitution: still
-// a SUGGESTION, no scores, informational-not-medical.
+// A bounded SECOND agent turn over a just-drafted high-stakes generative output.
+// It is a SAFETY backstop, not a redesign: it repairs genuine violations and
+// leaves a clean draft untouched. It fails OPEN — if it can't run or returns
+// garbage, the original draft ships exactly as today (never load-bearing).
+// Honors the constitution: still a SUGGESTION, no scores, informational-not-medical.
+//
+// THE ARITHMETIC IS NOT THE MODEL'S JOB. Every numeric floor — the lean-safe kcal
+// floor, the protein target, the fiber floor, the session time budget — is
+// computed by the server (`src/repo/verify-floors.ts`) BEFORE this prompt is
+// built, and the findings are handed over below. Asking the model to re-derive a
+// number Cairn already holds is an LLM call whose inputs fully determine its
+// output, and it can disagree with the server. So the prompt states the floors'
+// verdict and asks for a repair. What remains genuinely the model's: reading a
+// free-text injury/dietary constraint against a concrete plan, and not corrupting
+// the mechanics encoding while it repairs.
 const VERIFY_RESULT_NOTE = `Return ONE bare JSON object only — no prose, no markdown fences:
 {
-  "ok": true | false,                 // true = the draft already honors every hard rule (no fix needed)
-  "violations": [ "<plain one-line description of each hard-rule violation you found>" ],
+  "ok": true | false,                 // true = nothing to repair (no listed breach, no violation you found)
+  "violations": [ "<plain one-line description of each violation being repaired>" ],
   "fixed_draft": <the FULL corrected draft in the SAME schema as the input, OR null when ok:true>
 }
-Rules: ONLY flag genuine HARD-rule violations (not taste/style). When ok:true, violations is [] and
-fixed_draft is null. When you DO fix, change as LITTLE as possible to bring it into compliance and keep
-the draft otherwise intact. Never invent new constraints; never turn a suggestion into a mandate.`;
+Rules: repair every breach listed above, plus any judgement violation you genuinely find. Do NOT
+recompute the listed numbers — they are the server's own arithmetic and they are correct. Change as
+LITTLE as possible; keep the draft otherwise intact. Never invent new constraints; never turn a
+suggestion into a mandate. When ok:true, violations is [] and fixed_draft is null.`;
 
-// Verify a drafted 7-day meal plan against the lean-safe / longevity HARD floors.
-export function buildPlanVerifyPrompt(draft: any): string {
-  const goal = repo.computeGoalCheck();
-  const recIntake = (goal as any)?.ok ? (goal as any).recommended?.target_intake_kcal ?? null : null;
-  const recProtein = (goal as any)?.ok ? (goal as any).recommended?.protein_g ?? null : null;
+function breachSection(violations: FloorViolation[]): string {
+  if (!violations.length) {
+    return `SERVER FLOOR CHECK: PASSED. Cairn already checked every numeric floor (calories, protein,
+fiber, time budget) against its own figures and found NO breach. Do not re-check the arithmetic and do
+not flag a number as too low or too high — that question is already answered.`;
+  }
+  return `SERVER FLOOR CHECK: ${violations.length} BREACH${violations.length === 1 ? "" : "ES"}. Cairn computed these
+against its own figures; they are correct and they are the ones to repair:
+${renderFloorViolations(violations)}
+
+Repair each one with the smallest change that clears it, and leave every other number alone.`;
+}
+
+// The declarations the drafted week has to survive, rendered from the SAME reader
+// the skip gate counts (`athleteDietaryDeclarations`) so the prompt shows exactly
+// what made this turn worth running. Allergies ride in the DATA block's `profile`
+// alongside the household's, which is where the meal-drafting prompt reads them
+// from too. Quiet when nothing is declared — never a heading over an empty list.
+function declaredConstraintsSection(draft: any, dietaryInstruction?: unknown): string {
+  const lines: string[] = [];
+  const clean = (value: unknown) => String(value ?? "").trim();
+  try {
+    const declared = repo.athleteDietaryDeclarations(dietaryInstruction, draft);
+    if (clean(declared.restrictions)) lines.push(`- DIETARY RESTRICTIONS (profile): ${clean(declared.restrictions)}`);
+    if (Array.isArray(declared.hardDietKeys) && declared.hardDietKeys.length)
+      lines.push(`- HARD DIET (every meal, item and substitution): ${declared.hardDietKeys.join(", ")}`);
+    if (clean(declared.mealPrefs)) lines.push(`- USER SCHEDULE & MEAL PREFERENCES: ${clean(declared.mealPrefs)}`);
+    if (clean(declared.instruction)) lines.push(`- THIS REQUEST ASKED FOR: ${clean(declared.instruction)}`);
+  } catch {
+    // A declaration read that fails leaves the DATA block as the only source. The
+    // check still runs; it is never quietly downgraded to "nothing declared".
+  }
+  return lines.length ? `\nDECLARED CONSTRAINTS (the athlete's own words):\n${lines.join("\n")}\n` : "";
+}
+
+// Verify a drafted 7-day meal plan. Numeric floors arrive already computed, so the
+// prompt's whole remaining job is the declaration/timing judgement — which is
+// unmakeable without the declarations, hence the DATA block.
+export function buildPlanVerifyPrompt(
+  draft: any,
+  violations: FloorViolation[] = [],
+  opts: { dietary_instruction?: unknown } = {}
+): string {
   return `${CAIRN_PERSONA}
 
-Right now you are acting as Cairn's nutrition SAFETY CHECKER. A meal plan was just drafted for the user. Before
-they see it, verify it against the HARD floors below and FIX only genuine violations. This is a
-backstop, not a rewrite — a compliant plan passes through untouched.
+Right now you are acting as Cairn's nutrition SAFETY CHECKER. A meal plan was just drafted for the user.
+Before they see it, repair the breaches Cairn found and check the one thing Cairn cannot check for
+itself. This is a backstop, not a rewrite — a compliant plan passes through untouched.
 
-HARD FLOORS (the only things you enforce):
-- Daily calories never below the lean-safe floor: ${recIntake != null ? `~${recIntake} kcal` : "the lean-safe recommended intake"}, and NEVER below ~1500 kcal regardless of math.
-- Daily protein at or above the recommended target${recProtein != null ? ` (~${recProtein} g/day)` : ""} — protein is protected under a deficit; never dropped to chase calories.
-- Aim for 30g+ fiber/day from whole foods.
-- A lean-safe deficit only — never a crash deficit.
-- Respect any injury/allergy/preference constraints carried in the DATA's memory/health/context.
-- Keep meal-slot timing consistent with the user's stated schedule (e.g. no pre-workout meal if they train fasted).
+${breachSection(violations)}
 
-If everything already holds, ok:true (do NOT nitpick taste or variety). If a floor is violated, return
-a fixed_draft in the EXACT meal-plan schema with the SMALLEST change that fixes it (e.g. add protein/fiber
-to a thin meal, raise calories to the floor) — preserve the days/meals structure and every other field.
-
-GOAL CHECK (lean-safe reference): ${JSON.stringify(goal)}
-
+YOUR OWN CHECK (judgement, not arithmetic — this is why you are here):
+- Does any meal, item or substitution violate an ALLERGY (DATA's profile.allergies and each family
+  member's — a hard safety exclusion, the one place a hard rule is allowed), a dietary restriction, a
+  hard diet, or a food the athlete has said they avoid (DATA's memory/learnings)?
+- Does the meal-slot timing contradict the schedule they stated (e.g. a pre-workout meal when they
+  train fasted)?
+- Does anything in DATA's context_events / directives make a meal a bad idea today?
+Do NOT nitpick taste, variety or ingredient choice — those are not violations.
+${declaredConstraintsSection(draft, opts.dietary_instruction)}
 THE DRAFTED PLAN TO CHECK:
 ${JSON.stringify(draft)}
+
+DATA (allergies, restrictions, household, food memory, life and health context):
+${promptData(repo.getCoachContext(), "meal_plan_verify")}
 
 ${VERIFY_RESULT_NOTE}`;
 }
 
-// Verify a just-suggested single session against the user's HARD constraints.
-export function buildSessionVerifyPrompt(draft: any, opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}): string {
+// Verify a just-suggested single session. The time budget arrives already checked.
+export function buildSessionVerifyPrompt(
+  draft: any,
+  opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {},
+  violations: FloorViolation[] = []
+): string {
   const ctx = dateScopedPromptContext(repo.getCoachContext(), opts.date);
   const limits: string[] = [];
-  if (opts.minutes) limits.push(`- TIME BUDGET: the whole session must fit in about ${Math.round(opts.minutes)} minutes (est_minutes must be ≤ this; drop accessories before compounds).`);
   if (opts.equipment) limits.push(`- EQUIPMENT: only movements possible with: ${opts.equipment.trim()}.`);
   if (opts.constraints) limits.push(`- CONSTRAINTS: ${opts.constraints.trim()}.`);
   return `${CAIRN_PERSONA}
 
-Right now you are acting as Cairn's training SAFETY CHECKER. A single session was just suggested for the user.
-Before they see it, verify it against the HARD constraints below and FIX only genuine violations. This
-is a backstop, not a rewrite — a compliant session passes through untouched. It remains a SUGGESTION.
+Right now you are acting as Cairn's training SAFETY CHECKER. A single session was just suggested for the
+user. Before they see it, repair the breaches Cairn found and check the ones Cairn cannot check for
+itself. This is a backstop, not a rewrite — a compliant session passes through untouched. It remains a
+SUGGESTION.
 
-HARD CONSTRAINTS (the only things you enforce):
-- Conservative loading only. Respect every exercise constraint_note and any active injury in the DATA's
-  context_events / health directives — NEVER program loaded movement through an injured area.
-- Encoding integrity — don't corrupt these:
+${breachSection(violations)}
+
+YOUR OWN CHECKS (judgement, not arithmetic — this is why you are here):
+- Contraindication: never program loaded movement through an injured area. Read every exercise
+  constraint_note and any active injury in the DATA's context_events / health directives against the
+  movements actually prescribed. Conservative loading only.
+${limits.length ? `${limits.join("\n")}\n` : ""}- Encoding integrity — if you return a fixed_draft, do not corrupt these:
 ${MECHANICS_ENCODING}
-${limits.length ? limits.join("\n") : "- (no extra time/equipment limits were requested)"}
-
-If everything already holds, ok:true (do NOT nitpick exercise choice or order). If a constraint is
-violated, return a fixed_draft in the EXACT session schema with the SMALLEST change that fixes it (swap a
-contraindicated movement, trim to the time budget, correct an encoding) — preserve the rest.
+Do NOT nitpick exercise choice or ordering — those are not violations.
 
 THE SUGGESTED SESSION TO CHECK:
 ${JSON.stringify(draft)}

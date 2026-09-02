@@ -8,7 +8,10 @@ import {
 // Deterministic nutrition safety checks shared by every meal/target write path.
 // Prompt instructions are useful guidance, but are not an authorization boundary.
 
-const ABSOLUTE_KCAL_FLOOR = 1500;
+// The universal floor: never advise a daily target below this, whatever the math
+// says. Exported so the verify pre-check states the SAME number the clamp enforces
+// instead of a prose approximation of it.
+export const ABSOLUTE_KCAL_FLOOR = 1500;
 
 // A weekly plan is an actionable prescription, so its headline target must be
 // true in the meals themselves. Ten percent accommodates ordinary recipe and
@@ -37,7 +40,10 @@ export type MealPlanAdequacy =
 export const MEAL_PLAN_FIBER_FLOOR_G = 30;
 export const MEAL_PLAN_FIBER_MIN_DAY_FRACTION = 0.8;
 
-function plannedDayTotals(parsed: any): MealPlanAdequacyDay[] {
+// Per-day kcal/protein/fiber totals rolled up from the meals themselves. THE one
+// reader of a drafted week's day arithmetic — the adequacy assessment and the
+// verify pre-check both call it, so they cannot disagree about what a day totals.
+export function mealPlanDayTotals(parsed: any): MealPlanAdequacyDay[] {
   return (Array.isArray(parsed?.days) ? parsed.days : []).map((day: any, index: number) => {
     const meals = Array.isArray(day?.meals) ? day.meals : [];
     const fiberTracked =
@@ -69,7 +75,7 @@ function plannedDayTotals(parsed: any): MealPlanAdequacyDay[] {
  * agent-produced weekly plan is checked before it can persist or enter autonomy.
  */
 export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
-  const days = plannedDayTotals(parsed);
+  const days = mealPlanDayTotals(parsed);
   const fiberTracked = days.length > 0 && days.every((day) => day.fiber_g != null);
   const fiberWasVerified = parsed?.quality_validation?.fiber?.status === "verified";
   if (days.length < 5 || days.length > 7) return { ok: true, checked: false, fiber_checked: false, days };
@@ -155,17 +161,26 @@ export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
   return { ok: true, checked: true, fiber_checked: true, days };
 }
 
+// The lean-safe kcal/protein floors a goal read implies. Extracted so the verify
+// pre-check can NAME the same two numbers the clamp below silently enforces — the
+// floors have one derivation, and a prompt must never restate it in prose.
+// `proteinFloor` is null when the goal carries no usable protein recommendation.
+export function nutritionFloorsFor(goal?: any): { kcalFloor: number; proteinFloor: number | null } {
+  const recommendedKcal = Number(goal?.ok ? goal.recommended?.target_intake_kcal : Number.NaN);
+  const recommendedProtein = Number(goal?.ok ? goal.recommended?.protein_g : Number.NaN);
+  return {
+    kcalFloor: Math.max(ABSOLUTE_KCAL_FLOOR, Number.isFinite(recommendedKcal) ? Math.round(recommendedKcal) : 0),
+    proteinFloor: Number.isFinite(recommendedProtein) && recommendedProtein > 0 ? Math.round(recommendedProtein) : null,
+  };
+}
+
 export function clampNutritionFloors<T extends Record<string, any>>(
   value: T,
   keys: { kcal: string; protein: string },
   goal?: any
 ): T {
   const out: Record<string, any> = { ...value };
-  const recommendedKcal = Number(goal?.ok ? goal.recommended?.target_intake_kcal : Number.NaN);
-  const recommendedProtein = Number(goal?.ok ? goal.recommended?.protein_g : Number.NaN);
-  const kcalFloor = Math.max(ABSOLUTE_KCAL_FLOOR, Number.isFinite(recommendedKcal) ? Math.round(recommendedKcal) : 0);
-  const proteinFloor =
-    Number.isFinite(recommendedProtein) && recommendedProtein > 0 ? Math.round(recommendedProtein) : null;
+  const { kcalFloor, proteinFloor } = nutritionFloorsFor(goal);
 
   const rawKcal = out[keys.kcal];
   const kcal = Number(rawKcal);

@@ -3,7 +3,7 @@ import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerSystemTools(server: McpToolRegistrar) {
   server.tool("get_update_status",
-    "Get the running Cairn version and whether a newer release is available (current, latest, update_available, html_url, notes, checked_at, enabled). Served from the cached daily check — no network on this call. Pull-never-push: nothing notifies; the result just waits in Settings → Data.",
+    "Get the running Cairn version and whether a newer release is available (current, latest, update_available, html_url, notes, checked_at, enabled). Served from the cached daily check — no network on this call. The result just waits in Settings → Data.",
     {},
     async () => asText(getUpdateStatus()));
 

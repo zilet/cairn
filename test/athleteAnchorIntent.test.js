@@ -12,7 +12,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { db, repo } from "./_seed.js";
-import { applyChatActions, reconcileTrainingStructureReply } from "../dist/chatTurns.js";
+import {
+  applyChatActions,
+  reconcileTrainingStructureReply,
+  TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS,
+  TRAINING_STRUCTURE_UNVERIFIED_VARIANTS,
+} from "../dist/chatTurns.js";
 import { normalizeChatAction, normalizeChatActions, CHAT_ACTION_TYPES } from "../dist/chatActions.js";
 import { trainingLogRouter } from "../dist/routes/training-log.js";
 import { localDateISO } from "../dist/repo/shared.js";
@@ -341,7 +346,18 @@ test("the reply may only claim the hand-off when a decision actually landed", ()
   // Nothing applied: the false promise is replaced, not decorated.
   const corrected = reconcileTrainingStructureReply(promise, []);
   assert.doesNotMatch(corrected, /I'll flag it/);
-  assert.match(corrected, /unchanged|Nothing was actually flagged|no request reached/i);
+  // The correction rotates through a variant set by date (pickDayVariant), so assert
+  // against the WHOLE set — a regex covering only some phrasings passes or fails by
+  // what day it is. Every variant must also carry the honest "nothing was flagged"
+  // meaning, which is what the rotation is allowed to vary the wording of.
+  assert.ok(
+    TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS.includes(corrected),
+    `the correction must be one of the variant set, got: ${corrected}`,
+  );
+  for (const variant of TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS) {
+    assert.match(variant, /unchanged|nothing (?:is|was)|no (?:structure )?request/i, variant);
+    assert.doesNotMatch(variant, /I'll flag it/);
+  }
 
   // Applied but unverified: the claim is withdrawn with a reason.
   const unverified = reconcileTrainingStructureReply(promise, [
@@ -349,6 +365,17 @@ test("the reply may only claim the hand-off when a decision actually landed", ()
   ]);
   assert.match(unverified, /the decision did not store/);
   assert.doesNotMatch(unverified, /I'll flag it/);
+  // Same rotation on the unverified arm: every variant must name the reason and
+  // refuse the claim, whichever one today picks.
+  assert.ok(
+    TRAINING_STRUCTURE_UNVERIFIED_VARIANTS.some((v) => v("the decision did not store") === unverified),
+    `the withdrawal must be one of the variant set, got: ${unverified}`,
+  );
+  for (const variant of TRAINING_STRUCTURE_UNVERIFIED_VARIANTS) {
+    const text = variant("the decision did not store");
+    assert.match(text, /the decision did not store/);
+    assert.match(text, /won't (?:claim|say)/i, text);
+  }
 
   // Verified: the prose survives and the receipt says it is WAITING, not done.
   const verified = reconcileTrainingStructureReply(promise, [

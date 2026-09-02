@@ -371,43 +371,27 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(mcp, /registerTrainingLogTools\(server\)/);
   assert.match(mcp, /registerTrainingStatusTools\(server\)/);
   assert.match(mcp, /registerBodyMetricsTools\(server\)/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/chat\.ts/);
+  // gen-docs reads the MCP module directory instead of a hand-kept list, so a new
+  // module can no longer be silently missing from the "authoritative" tool index.
+  assert.match(genDocs, /readdirSync\("src\/surfaces\/mcp"\)/);
   assert.match(parity, /src\/surfaces\/mcp\/chat\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/connected-brain\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/connected-brain\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/daily-driver\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/daily-driver\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/day-coach\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/day-coach\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/garmin\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/garmin\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/health-metrics\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/health-metrics\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/health-records\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/health-records\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/journey\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/journey\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/memory-learning\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/memory-learning\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/nutrition\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/nutrition\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/operator\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/operator\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/person\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/person\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/person-context\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/person-context\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/plan-exercises\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/plan-exercises\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/program\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/program\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/system\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/system\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/training-log\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/training-log\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/training-status\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/training-status\.ts/);
-  assert.match(genDocs, /src\/surfaces\/mcp\/body-metrics\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/body-metrics\.ts/);
   // W3.3: +2 (list_context_tags, toggle_context_tag) in src/surfaces/mcp/person-context.ts.
   // W1 staging: +3 (list_beliefs, dispute_belief, undispute_belief) in src/surfaces/mcp/connected-brain.ts.

@@ -6,7 +6,7 @@
 // src/api.ts / src/routes/* route registrations and MCP server.tool()
 // definitions. If a route/tool stops showing up, the registration shape changed
 // — re-check here.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -136,28 +136,14 @@ api += `---\n\n*The MCP surface mirrors most of these operations — see [MCP-TO
 emit("docs/API.md", api);
 
 // ---- MCP-TOOLS.md ----
+// Read the directory rather than listing modules by hand: a hand-kept list silently
+// dropped calibration.ts for a month while CLAUDE.md called this doc authoritative.
 const mcpSources = [
   "src/mcp.ts",
-  "src/surfaces/mcp/chat.ts",
-  "src/surfaces/mcp/connected-brain.ts",
-  "src/surfaces/mcp/daily-driver.ts",
-  "src/surfaces/mcp/day-coach.ts",
-  "src/surfaces/mcp/garmin.ts",
-  "src/surfaces/mcp/health-metrics.ts",
-  "src/surfaces/mcp/health-records.ts",
-  "src/surfaces/mcp/imaging.ts",
-  "src/surfaces/mcp/journey.ts",
-  "src/surfaces/mcp/memory-learning.ts",
-  "src/surfaces/mcp/nutrition.ts",
-  "src/surfaces/mcp/operator.ts",
-  "src/surfaces/mcp/person.ts",
-  "src/surfaces/mcp/person-context.ts",
-  "src/surfaces/mcp/plan-exercises.ts",
-  "src/surfaces/mcp/program.ts",
-  "src/surfaces/mcp/system.ts",
-  "src/surfaces/mcp/training-log.ts",
-  "src/surfaces/mcp/training-status.ts",
-  "src/surfaces/mcp/body-metrics.ts",
+  ...readdirSync("src/surfaces/mcp")
+    .filter((f) => f.endsWith(".ts") && f !== "shared.ts")
+    .sort()
+    .map((f) => `src/surfaces/mcp/${f}`),
 ];
 const tools = mcpSources.flatMap((file) => parseMcpTools(read(file))).sort((a, b) => a.name.localeCompare(b.name));
 let mcp = `# Cairn MCP tool index

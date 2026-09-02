@@ -28,6 +28,8 @@
 //     nothing else; the words stay stored and displayed. Extraction is an
 //     enhancement, never a gatekeeper.
 
+import type { JsonSchema } from "./json-schema.js";
+import { renderJsonContract } from "./prompt/shared.js";
 import { SYMPTOM_AREA_MAX } from "./repo/symptom-area.js";
 
 export const SYMPTOM_CHANGE_VALUES = ["new", "worse", "same", "better", "resolved"] as const;
@@ -122,6 +124,47 @@ export const SYMPTOM_CAPTURE_SCHEMA = `{
   ]
 }`;
 
+// The ENFORCED twin of the prose contract above, built off the SAME vocabulary
+// constants so the two cannot say different things. coerceSymptomCapture stays the
+// authority on meaning (a quote must be the athlete's own words, an area report must
+// name a place, a systemic report carries no movements — none of which JSON Schema
+// can state); this only makes the SHAPE impossible to get wrong on a CLI that can
+// enforce it. The three closed vocabularies are real enums here because the coercer
+// rejects anything outside them outright, so constraining the decoder to them turns a
+// whole class of rejected payload into an impossible one.
+export const SYMPTOM_CAPTURE_JSON_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["found"],
+  properties: {
+    found: { type: "boolean" },
+    reports: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: true,
+        properties: {
+          quote: { type: "string", minLength: 1 },
+          area_label: { type: ["string", "null"], maxLength: SYMPTOM_AREA_MAX },
+          scope: { type: "string", enum: [...SYMPTOM_CAPTURE_SCOPES] },
+          change: { type: "string", enum: [...SYMPTOM_CHANGE_VALUES] },
+          movements: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: true,
+              properties: {
+                name: { type: "string" },
+                outcome: { type: "string", enum: [...SYMPTOM_MOVEMENT_OUTCOMES] },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
 export const SYMPTOM_CAPTURE_GUARDRAILS = [
   `"quote" must be COPIED from the athlete's text, word for word. Do not paraphrase, tidy, translate or summarize it, and never write a sentence of your own there.`,
   `"area_label" is a short PLACE — two or three words naming where it is. It is not a sentence, not a diagnosis, and never carries a number, a rating or advice. Use null when the report names no place.`,
@@ -174,8 +217,7 @@ export function buildSymptomCapturePrompt(ctx: SymptomCaptureContext): string {
       ? `MOVEMENTS YOU MAY NAME (use these spellings, nothing else):\n${movements.map((name) => `- ${name}`).join("\n")}`
       : `MOVEMENTS YOU MAY NAME: none — leave every "movements" array empty.`,
     ``,
-    `Return ONLY this JSON, no prose around it:`,
-    SYMPTOM_CAPTURE_SCHEMA,
+    renderJsonContract(SYMPTOM_CAPTURE_SCHEMA),
     ``,
     `Rules:`,
     SYMPTOM_CAPTURE_GUARDRAILS.map((line) => `- ${line}`).join("\n"),

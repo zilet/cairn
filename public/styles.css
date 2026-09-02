@@ -1232,6 +1232,13 @@ body.resting{padding-bottom:calc(152px + max(env(safe-area-inset-bottom),6px) + 
 .verified-detail summary:hover{color:var(--ink-2)}
 .verified-list{margin:7px 0 0;padding-left:18px;color:var(--ink-2);font-weight:400;font-size:.78rem;line-height:1.5}
 .verified-list li{margin:2px 0}
+/* The OPEN state — the server's own arithmetic still reads a floor as over, either
+   because the repair pass could not clear it or because the pass never finished.
+   Gold, not warn red: this is "worth your eye", not an alarm, and the draft is
+   still the athlete's to use. The list is visible, never tucked behind a summary. */
+.verified-badge.is-open{color:var(--gold-deep)}
+.verified-mark.is-open{background:rgba(201,168,106,.16);color:var(--gold-deep)}
+.verified-badge.is-open .verified-list{flex:1 1 100%;margin-top:5px}
 
 .mp-day{border-top:1px solid var(--line);margin-top:11px;padding-top:10px}
 .mp-dayname{

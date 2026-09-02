@@ -124,15 +124,17 @@ test("checked day and restructure surfaces compile against the authoritative sto
   assert.equal(restPlan.status, 400);
   assert.ok(restPlan.payload.quality.errors.some((entry) => entry.code === "timed_load_incoherence"));
 
+  // MCP mirrors the REST route: a refused save hands back the structured quality
+  // report at 200 ({ok:false, quality}) so the caller can enumerate the blocking
+  // errors instead of retrying quality_override blind.
   const handlers = planMcpHandlers();
-  await assert.rejects(
-    () => handlers.get("save_plan_day")({ day_number: 12, name: "Timer", focus: "core", items: badItems }),
-    qualityFailure
-  );
-  await assert.rejects(
-    () => handlers.get("set_plan")({ days: [{ day_number: 12, name: "Timer", items: badItems }] }),
-    qualityFailure
-  );
+  const refusedReport = (response) => {
+    const body = JSON.parse(response.content[0].text);
+    assert.equal(body.ok, false);
+    assert.ok(body.quality.errors.some((entry) => entry.code === "timed_load_incoherence"));
+  };
+  refusedReport(await handlers.get("save_plan_day")({ day_number: 12, name: "Timer", focus: "core", items: badItems }));
+  refusedReport(await handlers.get("set_plan")({ days: [{ day_number: 12, name: "Timer", items: badItems }] }));
   assert.equal(repo.getPlanDay(12), null, "every rejected surface leaves SQLite unchanged");
 });
 

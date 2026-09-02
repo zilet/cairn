@@ -1,4 +1,5 @@
 import { db } from "../../db.js";
+import { CASE_CONFERENCE_DECISION_SCHEMA, SPECIALIST_OPINION_SCHEMA } from "../../agent-contracts.js";
 import { decideAutonomyTier } from "../../brain/autonomy.js";
 import {
   normalizeStrictCaseConferenceDecision,
@@ -521,6 +522,9 @@ export async function runCaseConference(
         maxCalls,
         runId: `${snap.id}:${domain}`,
         acceptParsed: (parsed) => isSpecialistOpinion(parsed) && parsed.domain === domain,
+        // Forwarded for the protocol turn as well as the final opinion (one schema
+        // for the whole loop), which is why it carries the coach_read protocol.
+        schema: SPECIALIST_OPINION_SCHEMA,
         signal: deps.signal,
       });
       return out.result.parsed;
@@ -564,6 +568,7 @@ export async function runCaseConference(
           await (deps.chosen ?? runChosen)(chosen, prompt, {
             op: "case_conference",
             acceptParsed: (parsed) => normalizeStrictCaseConferenceDecision(parsed) !== null,
+            schema: CASE_CONFERENCE_DECISION_SCHEMA,
             signal: deps.signal,
           })
         ).result.parsed;

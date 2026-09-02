@@ -27,6 +27,7 @@ import {
   updateTarget,
   upsertExercise,
 } from "../../domain/training/index.js";
+import { PlanQualityError } from "../../repo/plan-quality.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
 
@@ -65,15 +66,15 @@ const planItemShape = z.object({
 export function registerPlanExerciseTools(server: McpToolRegistrar) {
   server.tool(
     "get_plan",
-    "Get the full weekly training plan: every day with its exercises, sets, rep ranges, target weights, and injury notes.",
+    "Get the full weekly training plan: every day with its exercises, sets, rep ranges, target weights, injury notes, and day_type. A day with day_type 'rest' is a deliberate rest day and carries an empty items array; the emptiness is the prescription, not missing data.",
     {},
     async () => asText(getPlan())
   );
 
   server.tool(
     "get_plan_day",
-    "Get one training day by its number (1-5) with prescribed exercises and targets.",
-    { day_number: z.number().int().describe("1 through 5") },
+    "Read one day of the weekly training plan by its day number, with its prescribed exercises, set and rep targets, and any injury notes. Day numbers are whatever the current plan defines, commonly 1 through 7; call get_plan first when the numbering is unknown. A day with day_type 'rest' is a deliberate rest day and returns an empty items array. Returns null when no day carries that number.",
+    { day_number: z.number().int().describe("the day's number in the current plan; see get_plan") },
     async ({ day_number }) => asText(getPlanDay(day_number))
   );
 
@@ -138,16 +139,23 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       day_number: z.number().int(),
       name: z.string(),
       focus: z.string().nullable().optional(),
-      day_type: z.enum(["training", "rest"]).optional().describe("'rest' marks the week's rest day; a rest day carries an EMPTY items array. Omitted leaves the day as it already is."),
+      day_type: z.enum(["training", "rest"]).optional().describe("'rest' marks the week's rest day; a rest day carries an EMPTY items array. Omitted resolves from the items instead: any item makes the day 'training', an empty list keeps an existing day's stored type (and is 'training' for a new day)."),
       items: z.array(planItemShape),
-      quality_override: z.boolean().optional().describe("Explicitly allow a structurally invalid manual edit after reviewing the returned quality report"),
+      quality_override: z.boolean().optional().describe("Set only after reading the quality report returned by a refused save ({ok:false, quality}); it allows a structurally invalid day the athlete deliberately wants. The zero-items invariant on a training day is never overridable."),
     },
     async (day) => {
-      const result = savePlanDayChecked(day.day_number, day.name, day.focus ?? null, day.items, {
-        quality_override: day.quality_override,
-        day_type: day.day_type ?? null,
-      });
-      return asText(result.day);
+      try {
+        const result = savePlanDayChecked(day.day_number, day.name, day.focus ?? null, day.items, {
+          quality_override: day.quality_override,
+          day_type: day.day_type ?? null,
+        });
+        return asText(result.day);
+      } catch (error) {
+        // The refusal IS the contract: hand back the structured report so the caller can
+        // enumerate the blocking errors instead of retrying quality_override blind.
+        if (error instanceof PlanQualityError) return asText({ ok: false, quality: error.report });
+        throw error;
+      }
     }
   );
 
@@ -162,7 +170,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "set_plan",
     "Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days), to add cardio days, or to name the week's rest day (day_type:'rest' with no items). Days not included are removed. Each item may be a strength exercise or a kind:'cardio' endurance prescription.",
     {
-      quality_override: z.boolean().optional().describe("Explicitly allow a structurally invalid manual plan after reviewing the returned quality report"),
+      quality_override: z.boolean().optional().describe("Set only after reading the quality report returned by a refused save ({ok:false, quality}); it allows a structurally invalid week the athlete deliberately wants. The zero-items invariant on a training day is never overridable."),
       days: z.array(
         z.object({
           day_number: z.number().int().optional(),
@@ -174,8 +182,13 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       ),
     },
     async ({ days, quality_override }) => {
-      const result = replacePlanChecked(days, { quality_override });
-      return asText(result.plan);
+      try {
+        const result = replacePlanChecked(days, { quality_override });
+        return asText(result.plan);
+      } catch (error) {
+        if (error instanceof PlanQualityError) return asText({ ok: false, quality: error.report });
+        throw error;
+      }
     }
   );
 
@@ -190,9 +203,17 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "upsert_exercise",
     "Create an exercise by name (with optional muscle_group and mode reps|timed), or update those fields on an existing one.",
     {
-      name: z.string(),
-      muscle_group: z.string().nullable().optional(),
-      mode: z.enum(["reps", "timed"]).optional(),
+      name: z
+        .string()
+        .describe(
+          "exercise name; matched against the catalog (exact/alias/key). A match updates that exercise's fields, anything else creates a new one and queues background enrichment (canonicalize + classify + how-to guide + art)"
+        ),
+      muscle_group: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("canonical or legacy muscle-group label, canonicalized on write; null clears it. Omit to leave unchanged on an existing exercise"),
+      mode: z.enum(["reps", "timed"]).optional().describe("'timed' logs duration_sec instead of weight/reps. Omit to leave unchanged on an existing exercise"),
     },
     // A user-facing create (via the coach/MCP client) opts into the same quiet
     // background enrichment the REST route does — canonicalize + classify + guide
@@ -228,10 +249,22 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "suggest_variations",
     "Variation candidates for an exercise (same movement pattern, different bar path/implement) to break a plateau or keep training fresh; mode:'alternatives' returns equipment/injury-aware swaps.",
     {
-      exercise: z.string(),
-      mode: z.enum(["variations", "alternatives"]).optional(),
-      bodyweight_only: z.boolean().optional(),
-      avoid_equipment: z.array(z.string()).optional(),
+      exercise: z
+        .string()
+        .describe(
+          "exercise name; classified into a movement pattern by keyword matching on the name itself (not the exercise catalog), so free text works as long as it names the movement. Returns [] when no pattern is recognized"
+        ),
+      mode: z
+        .enum(["variations", "alternatives"])
+        .optional()
+        .describe(
+          "'variations' (default) = same-pattern movements with no equipment/injury filtering; 'alternatives' = same-pattern swaps filtered by bodyweight_only/avoid_equipment/injury_areas"
+        ),
+      bodyweight_only: z.boolean().optional().describe("mode:'alternatives' only — restrict candidates to bodyweight movements"),
+      avoid_equipment: z
+        .array(z.string())
+        .optional()
+        .describe("mode:'alternatives' only — equipment types to exclude from candidates (e.g. ['barbell'])"),
       injury_areas: z
         .array(z.string())
         .optional()

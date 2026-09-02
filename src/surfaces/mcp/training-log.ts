@@ -42,7 +42,7 @@ import { asText, type McpToolRegistrar } from "./shared.js";
 export function registerTrainingLogTools(server: McpToolRegistrar) {
   server.tool(
     "log_set",
-    "Log one working set. Uses today's session automatically (creates it if needed). Weight in lb; use negative weight for assisted movements (e.g. -30 = 30lb assist). For timed exercises (plank, dead hang) pass duration_sec instead of weight/reps, with exercise_mode 'timed'.",
+    "Log one working set into today's session, creating the session if none exists. Weight is in pounds and the sign is meaningful: negative is an assisted movement (-30 means 30 lb of assistance), and an omitted weight means bodyweight. A positive weight on a lift whose recent history is assisted is stored as assistance when it falls inside that lift's recent assist band, so pass a value above the band when the athlete truly went weighted. Timed exercises (plank, dead hang) take duration_sec with exercise_mode 'timed' instead of weight and reps. The exercise name is resolved against the catalog and may be canonicalized in the background. Does not update the weekly plan.",
     {
       exercise: z.string(),
       weight: z.number().optional(),
@@ -91,9 +91,13 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     "set_strength_objective",
     "Set one athlete-explicit anchor-lift objective. Supersedes the prior active objective ON THAT LIFT ONLY — call it once per lift to hold several anchors in parallel — and snapshots either the exact exercise's current personal best or an explicit estimated-1RM target.",
     {
-      exercise: z.string().min(1),
-      target_kind: z.enum(["return_to_personal_best", "explicit_est_1rm"]),
-      target_est_1rm: z.number().positive().max(5000).optional(),
+      exercise: z.string().min(1).describe("exact reps-based exercise name; timed exercises are refused"),
+      target_kind: z
+        .enum(["return_to_personal_best", "explicit_est_1rm"])
+        .describe(
+          "'return_to_personal_best' targets this exercise's own logged all-time-best est-1RM (requires history for it); 'explicit_est_1rm' targets target_est_1rm"
+        ),
+      target_est_1rm: z.number().positive().max(5000).optional().describe("estimated 1RM in pounds; required only when target_kind is explicit_est_1rm"),
     },
     async (input) => {
       const objective = setStrengthObjective(input);
@@ -153,14 +157,18 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
 
   server.tool(
     "update_set",
-    "Edit one logged set by id (history correction): any subset of weight (lb), reps, rir, note, duration_sec (timed work). Only provided fields change.",
+    "Edit one logged set by id (history correction): any subset of weight (lb), reps, rir, note, duration_sec (timed work). Only provided fields change. Corrections are stored exactly as given; unlike log_set, no assist-sign normalization is applied, so pass a negative weight explicitly for assisted work.",
     {
-      id: z.number().int(),
-      weight: z.number().nullable().optional(),
-      reps: z.number().int().nullable().optional(),
-      rir: z.number().nullable().optional(),
-      note: z.string().nullable().optional(),
-      duration_sec: z.number().nullable().optional(),
+      id: z.number().int().describe("the logged set's id, from get_session, recent_sessions, or get_session_detail"),
+      weight: z.number().nullable().optional().describe("pounds; negative for assisted work, null for bodyweight; stored verbatim"),
+      reps: z.number().int().nullable().optional().describe("reps completed; omit to leave unchanged, pass null to clear"),
+      rir: z.number().nullable().optional().describe("reps in reserve; omit to leave unchanged, pass null to clear"),
+      note: z.string().nullable().optional().describe("per-set note; omit to leave unchanged, pass null to clear"),
+      duration_sec: z
+        .number()
+        .nullable()
+        .optional()
+        .describe("seconds held/hung, for timed exercises; omit to leave unchanged, pass null to clear"),
     },
     async ({ id, ...fields }) => {
       const row = updateSet(id, fields);
@@ -186,14 +194,14 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     "log_activity",
     "Log a cardio/other session. Pass free text (e.g. 'ran 50 min @5:30/km') and/or structured fields.",
     {
-      text: z.string().optional(),
-      type: z.string().optional(),
-      duration_min: z.number().optional(),
-      distance_km: z.number().optional(),
-      pace: z.string().optional(),
-      rpe: z.number().optional(),
-      date: z.string().optional(),
-      notes: z.string().optional(),
+      text: z.string().optional().describe("free-text description; structured fields below override what it states"),
+      type: z.string().optional().describe("activity type, e.g. run, ride, swim, row, walk"),
+      duration_min: z.number().optional().describe("moving time in minutes; omit when text already states it"),
+      distance_km: z.number().optional().describe("distance in kilometres"),
+      pace: z.string().optional().describe("pace as text, e.g. '5:30/km'"),
+      rpe: z.number().optional().describe("perceived effort 1 to 10; optional, and its absence is not a low rating"),
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      notes: z.string().optional().describe("free-form notes kept with the activity"),
     },
     async (activity) => asText(addActivity(activity))
   );
@@ -228,14 +236,14 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_session_highlights",
-    "Evidence of forward motion for one logged session: any PRs set (a new best est-1RM, or a longer timed hold), how each exercise compares to its previous session (delta + direction), and a small trailing-7-day rollup (new bests, days trained). Read-only and factual — never a score. An unknown session id returns null.",
+    "Evidence of forward motion for one logged session: any PRs set (a new best est-1RM, or a longer timed hold), how each exercise compares to its previous session (delta + direction), and a small trailing-7-day rollup (new bests, days trained). Read-only and factual. An unknown session id returns null.",
     { id: z.number().int() },
     async ({ id }) => asText(sessionHighlights(id))
   );
 
   server.tool(
     "get_week_wins",
-    "The week's motivational rollup ending on a date (default today): new bests set, days trained, hard sets, muscle groups whose volume reached its productive range, and weight-trend pace toward the goal in plain words. Read-only and factual — never a score.",
+    "The week's motivational rollup ending on a date (default today): new bests set, days trained, hard sets, muscle groups whose volume reached its productive range, and weight-trend pace toward the goal in plain words. Read-only and factual.",
     { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
     async ({ date }) => asText(weekWins(date))
   );

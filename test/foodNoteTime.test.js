@@ -9,6 +9,7 @@
 // — no time is the ordinary case and must degrade nothing.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { z } from "zod";
 import { db, repo, resetTables, localDaysAgo } from "./_seed.js";
 import {
   mealLabelForTime,
@@ -678,4 +679,30 @@ test("editing an old entry never trips the backdate bound", () => {
   const fixed = repo.updateFoodNote(row.id, { kcal: 500 });
   assert.equal(fixed.date, localDaysAgo(365));
   assert.equal(fixed.parsed.kcal, 500);
+});
+
+// updateFoodNote()'s clear-field path keys on an explicit null (or ""), but the MCP
+// tool's fields were `.optional()` and not `.nullable()`, so the model could never
+// SEND that null — only REST could reach the clear. The schema is the fix, so the
+// test asserts the schema accepts it and the handler carries it through.
+test("the MCP update_food_note tool can clear a macro, the note and the time", async () => {
+  const shape = mcpTool("update_food_note").schema;
+  const parsed = z
+    .object(shape)
+    .parse({ id: 1, kcal: null, protein_g: null, carbs_g: null, fat_g: null, fiber_g: null, notes: null, eaten_at: null });
+  assert.equal(parsed.kcal, null, "the schema accepts an explicit null (it used to reject one)");
+  assert.equal(parsed.notes, null);
+  assert.equal(parsed.eaten_at, null);
+
+  const row = repo.addFoodNote("dinner", "", { summary: "Steak", kcal: 700, protein_g: 50, notes: "too salty" }, undefined, {
+    date: localDaysAgo(1),
+    eaten_at: "19:30",
+  });
+
+  const cleared = await callUpdateFoodNote({ id: row.id, kcal: null, notes: null, eaten_at: null });
+  assert.equal(cleared.parsed.kcal, null, "the macro is cleared, not left at 700");
+  assert.equal(cleared.parsed.notes, null);
+  assert.equal(cleared.eaten_at, null, "and the stated time is unstated");
+  assert.equal(cleared.parsed.protein_g, 50, "while an omitted field is left exactly alone");
+  assert.equal(cleared.date, localDaysAgo(1), "and a null never moves the day");
 });

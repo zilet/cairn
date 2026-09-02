@@ -21,6 +21,8 @@
 // how it actually obtained the numbers, so a stated 205 g and a guess off a picture
 // never read the same downstream.
 
+import type { JsonSchema } from "./json-schema.js";
+
 export const FOOD_CONFIDENCE_BANDS = ["low", "medium", "high"] as const;
 export type FoodConfidence = (typeof FOOD_CONFIDENCE_BANDS)[number];
 
@@ -72,6 +74,77 @@ export const FOOD_NUTRITION_PATTERN_SCHEMA = `{
       "food_quality": "mostly_whole|mixed|mostly_ultra_processed|unknown",
       "confidence": "${FOOD_CONFIDENCE_SCHEMA}", "basis": "${FOOD_BASIS_SCHEMA}"
     }`;
+
+// ---- the ENFORCED twins of the three fragments above -------------------------
+// The same shape, expressed as JSON Schema so a CLI that supports structured output
+// CONSTRAINS the payload instead of merely being asked for it. Declared here, beside
+// the prose fragments and off the same vocabulary constants, because the whole point
+// of this module is that the food shape exists once — a schema authored over in
+// agent-contracts.ts would be the fourth copy this file was written to prevent.
+// Every field coerceFoodIngredients / coerceNutritionPattern / normalizeFoodCaptureParsed
+// READS is named: constrained decoding drops what a schema does not mention.
+export const FOOD_INGREDIENT_JSON_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    item: { type: "string" },
+    // coerceFoodIngredients reads `item ?? name ?? food` and
+    // `amount ?? qty ?? quantity ?? portion`. The canonical spelling leads and is what
+    // the prose asks for; the aliases are named so a model that reaches for one lands
+    // in a slot the decoder keeps rather than losing the row's quantity.
+    name: { type: ["string", "null"] },
+    food: { type: ["string", "null"] },
+    amount: { type: ["string", "null"] },
+    qty: { type: ["string", "null"] },
+    quantity: { type: ["string", "null"] },
+    portion: { type: ["string", "null"] },
+    kcal: { type: ["number", "null"] },
+    protein_g: { type: ["number", "null"] },
+    carbs_g: { type: ["number", "null"] },
+    fat_g: { type: ["number", "null"] },
+    fiber_g: { type: ["number", "null"] },
+    basis: { type: ["string", "null"] },
+  },
+};
+
+export const FOOD_NUTRITION_PATTERN_JSON_SCHEMA: JsonSchema = {
+  type: ["object", "null"],
+  additionalProperties: true,
+  properties: {
+    sodium: { type: ["string", "null"] },
+    potassium: { type: ["string", "null"] },
+    calcium: { type: ["string", "null"] },
+    iron: { type: ["string", "null"] },
+    saturated_fat: { type: ["string", "null"] },
+    added_sugar: { type: ["string", "null"] },
+    saturated_fat_g: { type: ["number", "null"] },
+    unsaturated_fat_g: { type: ["number", "null"] },
+    omega_3_source: { type: ["boolean", "null"] },
+    alcohol_servings: { type: ["number", "null"] },
+    caffeine_mg: { type: ["number", "null"] },
+    caffeine_time: { type: ["string", "null"] },
+    food_quality: { type: ["string", "null"] },
+    confidence: { type: ["string", "null"] },
+    basis: { type: ["string", "null"] },
+  },
+};
+
+// The meal estimate itself, shared by the text enricher's `structured` node, the
+// photo read's flat top level, and anything else that stores a food capture.
+export const FOOD_ESTIMATE_PROPERTIES: Record<string, JsonSchema> = {
+  summary: { type: ["string", "null"] },
+  items: { type: "array", items: { type: "string" } },
+  ingredients: { type: "array", items: FOOD_INGREDIENT_JSON_SCHEMA },
+  kcal: { type: ["number", "null"] },
+  protein_g: { type: ["number", "null"] },
+  carbs_g: { type: ["number", "null"] },
+  fat_g: { type: ["number", "null"] },
+  fiber_g: { type: ["number", "null"] },
+  nutrition_pattern: FOOD_NUTRITION_PATTERN_JSON_SCHEMA,
+  notes: { type: ["string", "null"] },
+  confidence: { type: ["string", "null"] },
+  basis: { type: ["string", "null"] },
+};
 
 // Entry-level provenance. Every capture path emits it.
 export const FOOD_PROVENANCE_SCHEMA = `"confidence": "${FOOD_CONFIDENCE_SCHEMA}", "basis": "${FOOD_BASIS_SCHEMA}"`;

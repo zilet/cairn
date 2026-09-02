@@ -1,3 +1,4 @@
+import { renderJsonContract } from "./shared.js";
 export const IMAGING_STUDY_SCHEMA = `{
   "imaging_study": {
     "schema_version": 1,
@@ -73,6 +74,5 @@ CLINICAL AUTHORITY AND SAFETY:
 EXISTING STUDY (path-free and UID-redacted; use only as context, never as authority over the files):
 ${JSON.stringify(safeExisting)}
 
-Return ONE JSON object, no prose and no fences:
-${IMAGING_STUDY_SCHEMA}`;
+${renderJsonContract(IMAGING_STUDY_SCHEMA)}`;
 }

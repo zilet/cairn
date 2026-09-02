@@ -818,7 +818,7 @@ function normalizeMealPlanFiber(parsed: any): any {
   };
 }
 
-function athleteDietaryDeclarations(instruction?: unknown, parsed?: any) {
+export function athleteDietaryDeclarations(instruction?: unknown, parsed?: any) {
   let restrictions: string | null = null;
   try {
     const row = db.prepare(`SELECT dietary_restrictions FROM profile WHERE id = 1`).get() as any;
@@ -982,10 +982,12 @@ function refreshMealPlanConstraintState(plan: any): any {
 // target is the coordinated reviewed number, not something a later volatile
 // formula may silently raise. Thin profiles still receive the absolute 1500-kcal
 // floor and the plan's own positive protein target remains authoritative.
-export function validateMealPlanForPersistence(
-  parsed: any,
-  opts: { dietary_instruction?: unknown } = {}
-): MealPlanPersistenceCheck {
+// The goal read a weekly plan is judged against: the formula recommendation with
+// an ACCEPTED adaptive target folded over it (accepted kcal wins; protein takes
+// the higher of the two, because a floor never falls). Exported so the verify
+// pre-check and this write gate resolve the same reference — a second derivation
+// here is how a prompt and the server come to disagree about the floor.
+export function mealPlanFloorReference(): { goal: any; floorGoal: any; coordinatedTarget: number } {
   let goal: any = null;
   try {
     goal = computeGoalCheck();
@@ -1001,7 +1003,14 @@ export function validateMealPlanForPersistence(
   if (effective?.protein_g != null) {
     recommended.protein_g = Math.max(Number(recommended.protein_g) || 0, Number(effective.protein_g) || 0);
   }
-  const floorGoal = goal?.ok ? { ...goal, recommended } : goal;
+  return { goal, floorGoal: goal?.ok ? { ...goal, recommended } : goal, coordinatedTarget };
+}
+
+export function validateMealPlanForPersistence(
+  parsed: any,
+  opts: { dietary_instruction?: unknown } = {}
+): MealPlanPersistenceCheck {
+  const { floorGoal, coordinatedTarget } = mealPlanFloorReference();
   const floored = normalizeMealPlanFiber(
     parsed && typeof parsed === "object"
       ? clampNutritionFloors(parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, floorGoal)
@@ -1714,7 +1723,7 @@ export function coerceMeal(m: any) {
   return meal;
 }
 
-function athleteAllergies(): string | null {
+export function athleteAllergies(): string | null {
   try {
     const row = db.prepare(`SELECT allergies FROM profile WHERE id = 1`).get() as any;
     return row?.allergies == null ? null : String(row.allergies);

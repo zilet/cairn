@@ -111,19 +111,17 @@ export function renderGoalTargetFallback(path = "goal", opts: { label?: boolean 
   return opts.label === false ? `F${rule}` : `TARGETS: f${rule}`;
 }
 
-// The marker-transcription rules the health-document INGEST and the single-document
-// ENRICH prompt both have to state. They read the same kind of source and write the
-// same marker rows, and both copies had already been edited into byte-identical text
-// — which is the point at which a third edit lands in only one of them. Same
-// one-home pattern as src/foodCapture.ts. Neither rule is trimmed here; they moved.
+// The marker-transcription rules the health-document prompts state. Both copies had
+// already been edited into byte-identical text — which is the point at which a third
+// edit lands in only one of them — so they live here once. Same one-home pattern as
+// src/foodCapture.ts. Both are stated individually by buildHealthIngestPrompt
+// (src/prompt/health.ts); the pair used to have a second reader in the single-document
+// enrich prompt, which is gone.
 export const MARKER_UNITS_RULE = `- Preserve the source units exactly as printed (US or SI/EU units are both fine). Do NOT convert
   units yourself; Cairn normalizes recognized marker units deterministically after import.`;
 export const MYCHART_VITALS_RULE = `- Do not skip MyChart vitals/basic measurements: blood pressure, pulse/heart rate, weight, BMI,
   height, SpO2, temperature. If BP is printed as 124/78, emit two markers: Systolic BP 124 mmHg
   and Diastolic BP 78 mmHg.`;
-// The adjacent pair, for the enrich prompt that states them together.
-export const HEALTH_TRANSCRIPTION_RULES = `${MARKER_UNITS_RULE}
-${MYCHART_VITALS_RULE}`;
 
 // The ONE unified identity every coaching prompt opens with. Cairn is a single
 // intelligence — at once a longevity-minded coach, a preventive-medicine-literate

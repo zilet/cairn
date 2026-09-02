@@ -14,6 +14,7 @@
 // medical advice — clinical questions defer to a clinician.
 
 import * as repo from "./repo.js";
+import { RESEARCH_SCHEMA } from "./agent-contracts.js";
 import { runChosen } from "./runChosen.js";
 import { buildResearchPrompt } from "./prompt.js";
 import { loadAgents } from "./agents.js";
@@ -179,7 +180,7 @@ export async function researchEvidence(
   let tried: { agent: string; error: string }[] = [];
   let parsed: any = null;
   try {
-    const r = await runChosen(opts.agent, prompt, { op: "research", timeoutMs });
+    const r = await runChosen(opts.agent, prompt, { op: "research", timeoutMs, schema: RESEARCH_SCHEMA });
     chosen = r.agent;
     tried = r.tried;
     parsed = r.result.parsed;

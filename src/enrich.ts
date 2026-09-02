@@ -15,6 +15,7 @@ import {
   foodMacroTotalsFrom,
 } from "./foodCapture.js";
 import {
+  SYMPTOM_CAPTURE_JSON_SCHEMA,
   buildSymptomCapturePrompt,
   coerceSymptomCapture,
   symptomTextMentionsBody,
@@ -22,6 +23,18 @@ import {
   type SymptomCaptureReport,
 } from "./symptomCapture.js";
 import { symptomAreaKey } from "./repo/symptom-area.js";
+import type { JsonSchema } from "./json-schema.js";
+import {
+  ACTIVITY_ENRICH_SCHEMA,
+  EXERCISE_ENRICH_SCHEMA,
+  FOOD_ENRICH_SCHEMA,
+  FOOD_PHOTO_SCHEMA,
+  GARMIN_STRENGTH_SCHEMA,
+  HEALTH_INGEST_SCHEMA,
+  HEALTH_REVIEW_SCHEMA,
+  IMAGING_STUDY_JSON_SCHEMA,
+  isHealthReviewResult,
+} from "./agent-contracts.js";
 import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
 import { explainExercise, exercisePoseFromExplanation, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 import { GEMINI_TEXT_MODEL, warmExerciseArt } from "./art.js";
@@ -648,6 +661,9 @@ async function processJob(job: Job): Promise<void> {
   // or an unpacked archive folder) and ask it to split multi-date history into
   // panels; activity/food jobs hand it the raw free-text entry.
   let prompt: string;
+  // Chosen in the same branch as the prompt, so the enforced schema and the prose
+  // contract can never describe different documents.
+  let schema: JsonSchema;
   let timeoutMs = ENRICH_TIMEOUT_MS;
   // Track an unpacked archive dir so we can always remove it after the agent runs
   // — an Apple Health export is hundreds of MB and would otherwise fill a Pi's disk.
@@ -684,6 +700,7 @@ async function processJob(job: Job): Promise<void> {
       let existing: any = null;
       try { existing = row.parsed_json ? JSON.parse(row.parsed_json)?.imaging_study : null; } catch {}
       prompt = buildImagingStudyPrompt(promptFiles, existing);
+      schema = IMAGING_STUDY_JSON_SCHEMA;
       timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
     } else {
       const fp = (row?.file_path ?? "").toString().trim();
@@ -721,6 +738,7 @@ async function processJob(job: Job): Promise<void> {
       prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other", {
         inventory: isDir ? buildHealthSourceInventory(target) : undefined,
       });
+      schema = HEALTH_INGEST_SCHEMA;
       timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
     }
   } else {
@@ -731,6 +749,7 @@ async function processJob(job: Job): Promise<void> {
       return;
     }
     prompt = buildEnrichPrompt(job.kind, raw);
+    schema = job.kind === "food" ? FOOD_ENRICH_SCHEMA : ACTIVITY_ENRICH_SCHEMA;
     // Mark in-progress BEFORE the first await: if the process is killed mid-flight
     // the row carries a recoverable marker (recoverPendingEnrich picks 'in_progress'
     // up too) instead of being stuck 'pending' forever.
@@ -746,7 +765,11 @@ async function processJob(job: Job): Promise<void> {
     // Effort/model are server policy (repo.TASK_EXECUTION_PROFILES), not whatever the
     // CLI's home settings happen to say: ingestion is a deep/high transcription read,
     // ordinary enrichment is cheap structuring.
-    const fb = await runAgentWithFallback(order, prompt, { timeoutMs, profile: repo.executionProfileForTask(task) });
+    const fb = await runAgentWithFallback(order, prompt, {
+      timeoutMs,
+      profile: repo.executionProfileForTask(task),
+      schema,
+    });
     parsed = fb.result?.parsed ?? null;
     if (!parsed) agentFailure = new AgentFallbackError(order, [{ agent: fb.agent ?? "agent", error: "no usable output" }]);
   } catch (e: unknown) {
@@ -829,7 +852,7 @@ async function processJob(job: Job): Promise<void> {
         const fb2 = await runAgentWithFallback(
           repo.pickAgentOrderForTask("health"),
           buildHealthIngestPrompt(healthSource.fp, false, healthSource.kind, { emphasizeCompleteness: true, missed: { got, expected } }),
-          { timeoutMs: HEALTH_INGEST_TIMEOUT_MS, profile: repo.executionProfileForTask("health") },
+          { timeoutMs: HEALTH_INGEST_TIMEOUT_MS, profile: repo.executionProfileForTask("health"), schema: HEALTH_INGEST_SCHEMA },
         );
         const parsed2 = fb2.result?.parsed ?? null;
         const got2 = parsed2 && typeof parsed2 === "object" ? countIngestMarkers(parsed2) : 0;
@@ -975,6 +998,14 @@ async function processReviewJob(): Promise<void> {
     const fb = await runAgentWithFallback(order, prompt, {
       timeoutMs: ENRICH_TIMEOUT_MS,
       profile: repo.executionProfileForTask("health_review"),
+      // The SAME schema the interactive op enforces, which means it also names the
+      // coach_read protocol — this one-shot prompt carries no read-tool instructions,
+      // but the schema still offers `requests` as a legal shape. So this site pairs it
+      // with the acceptance predicate the interactive op uses: a payload that is only a
+      // read request has no headline, focus or watchlist, is rejected here, and can
+      // never reach addHealthReview to be persisted as an empty review.
+      acceptParsed: isHealthReviewResult,
+      schema: HEALTH_REVIEW_SCHEMA,
     });
     agent = fb.agent ?? null;
     raw = fb.result?.raw;
@@ -1096,6 +1127,7 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     const fb = await runAgentWithFallback(order, buildGarminStrengthPrompt(ga), {
       timeoutMs: ENRICH_TIMEOUT_MS,
       profile: repo.executionProfileForTask("enrich"),
+      schema: GARMIN_STRENGTH_SCHEMA,
     });
     agent = fb.agent ?? null;
     parsed = fb.result?.parsed ?? null;
@@ -1191,6 +1223,7 @@ export async function processExerciseJob(id: number): Promise<void> {
       const fb = await runAgentWithFallback(order, buildExerciseEnrichPrompt(repo.getExerciseDetail(ex.name)), {
         timeoutMs: ENRICH_TIMEOUT_MS,
         profile: repo.executionProfileForTask("enrich"),
+        schema: EXERCISE_ENRICH_SCHEMA,
       });
       parsed = fb.result?.parsed ?? null;
     } catch {
@@ -1426,6 +1459,8 @@ export async function processSymptomJob(id: number): Promise<void> {
     const fb = await runAgentWithFallback(order, buildSymptomCapturePrompt(ctx), {
       timeoutMs: ENRICH_TIMEOUT_MS,
       profile: repo.executionProfileForTask("enrich"),
+      // Derived from the same vocabulary constants coerceSymptomCapture enforces.
+      schema: SYMPTOM_CAPTURE_JSON_SCHEMA,
     });
     parsed = fb.result?.parsed ?? null;
   } catch {
@@ -1524,6 +1559,7 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
       const fb = await runAgentWithFallback(order, buildFoodPhotoPrompt(fp, hint || undefined), {
         timeoutMs: ENRICH_TIMEOUT_MS,
         profile: repo.executionProfileForTask("health"),
+        schema: FOOD_PHOTO_SCHEMA,
       });
       parsed = fb.result?.parsed ?? null;
       wrote = !!parsed && applyFoodPhoto(id, parsed);

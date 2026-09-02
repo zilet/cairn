@@ -1400,7 +1400,13 @@ export async function runAgentWithFallback(
       // waste. Only a chatty-but-willing model earns the one-shot repair.
       const failure = acceptedBeforeRepair ? null : classifyAgentFailure(name, result, new Date());
       const wasteful = !!failure && (availabilityHolds(failure.state) || failure.state === "permission_denied");
-      if (!acceptedBeforeRepair && !wasteful && !signal?.aborted) {
+      // Under ENFORCED structured output the first run was already constrained, so an
+      // unparseable reply means truncation or a CLI error — re-asking for "only the
+      // JSON" cannot fix it and costs a full extra spawn. The CONTRACT repair still
+      // applies: a schema-valid payload can fail acceptParsed semantically.
+      const structured = !!o.schema && agentSupportsStructuredOutput(name);
+      const worthRepair = parsedBeforeRepair || !structured;
+      if (!acceptedBeforeRepair && !wasteful && worthRepair && !signal?.aborted) {
         triedJson = true;
         try {
           result = await runAgent(name, prompt + (parsedBeforeRepair ? CONTRACT_REPAIR_SUFFIX : JSON_REPAIR_SUFFIX), {

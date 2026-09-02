@@ -19,7 +19,7 @@ import { queueMcpAgentJob } from "./background.js";
 export function registerDayCoachTools(server: McpToolRegistrar) {
   server.tool(
     "get_day_read",
-    "Queue a durable read of what KIND of day today should be — train, easy, or rest — as a calm suggestion. Returns a job immediately; poll get_agent_job for the final read. override reshapes it ('rough night' / 'short on time' / 'I want to train anyway').",
+    "Queue a durable read of what KIND of day today should be — train, easy, or rest. Returns a job immediately; poll get_agent_job for the final read. override reshapes it ('rough night' / 'short on time' / 'I want to train anyway').",
     {
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       override: z.string().optional().describe("free-text steer, e.g. 'rough night', 'short on time', 'train anyway'"),
@@ -85,7 +85,7 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
 
   server.tool(
     "preview_daily_session",
-    "Preview the exact read-only adaptive session candidate Cairn would persist for this date and intent. Returns calm athlete-facing constraints and rationale plus an input fingerprint for compare-and-set prepare, or null when the date has no weekly template day to build one from. Never records a decision or creates a workout session.",
+    "Preview the exact read-only adaptive session candidate Cairn would persist for this date and intent. Returns athlete-facing constraints and rationale plus an input fingerprint for compare-and-set prepare, or null when the date has no weekly template day to build one from. Never records a decision or creates a workout session.",
     {
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       override: z.string().optional().describe("exact day steer used for this preview"),
@@ -188,7 +188,7 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_daily_session_outcome",
-    "Read the daily-session outcome reconciliation for a date or session — what was suggested vs actually trained, progression evidence, feedback, and adherence-neutral context. A calm athlete-facing learning is added only after completion. Deterministic, agent-free; null when no reconciled daily session exists.",
+    "Read the daily-session outcome reconciliation for a date or session — what was suggested vs actually trained, progression evidence, feedback, and adherence-neutral context. An athlete-facing learning is added only after completion. Deterministic, agent-free; null when no reconciled daily session exists.",
     {
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       session_id: z.number().int().positive().optional().describe("exact completed session; takes precedence over date"),
@@ -198,7 +198,7 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_session_primer",
-    "Read the calm, deterministic pre-session primer for a day — why today's session is what it is (from the Brief), what changed since last time, what to watch, and what's deliberately fresh. Returns immediately (no agent). null when there's nothing worth saying beyond the Brief.",
+    "Read the deterministic pre-session primer for a day — why today's session is what it is (from the Brief), what changed since last time, what to watch, and what's deliberately fresh. Returns immediately (no agent). null when there's nothing worth saying beyond the Brief.",
     {
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       day: z.number().int().optional().describe("explicit plan-day number to prime; omit to use the adaptive pick"),
@@ -209,7 +209,7 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_week_ahead",
-    "Queue a calm sketch of the next several days — lift / run / mixed / rest — honoring injuries, recovery, and health directives. Returns a job immediately; poll get_agent_job. It remains a suggestion, never a fixed schedule.",
+    "Queue a calm sketch of the next several days — lift / run / mixed / rest — honoring injuries, recovery, and health directives. Returns a job immediately; poll get_agent_job.",
     { agent: z.string().optional().describe("omit or 'auto' to use the configured rotation") },
     async ({ agent }) => asText(queueMcpAgentJob("week_ahead", {}, agent))
   );

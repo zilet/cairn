@@ -137,7 +137,7 @@ TRANSCRIBE EVERY MARKER — THIS IS THE MOST IMPORTANT RULE:
 ${MYCHART_VITALS_RULE}
 - Set "marker_count" to how many results that date's source actually lists, and make markers[]
   contain exactly that many entries. If markers[] is shorter than marker_count, you dropped some
-  — go back and add the rest before answering. Completeness is judged on this.
+  — go back and add the rest before answering.
 - Group/section headers (Autoimmunity, Blood, Heart, Kidney, Liver, Nutrients…) are NOT markers —
   they organize the panel; transcribe the markers UNDER them, not the headers themselves.
 - A marker's "name" MUST be the named analyte, never a generic FIELD LABEL from the document. Do NOT

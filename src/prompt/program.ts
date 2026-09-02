@@ -229,7 +229,7 @@ the user's logged numbers (weights, reps, dates). Plain words, no scores.
 ${renderJsonContract(
     `{"groups": [{"members": ["<verbatim name>", ...], "canonical": "<clean Title-Case name>", "group": "<one group above or null>", "mode": "reps|timed"}],
  "merges": [{"from": "<verbatim name>", "into": "<verbatim name>", "why": "<short reason>", "confidence": "high|medium|low"}]}`,
-    { note: "ALWAYS include BOTH keys (use [] when empty)." }
+    { note: "Include both keys; use [] when empty." }
   )}
 
 EXERCISE NAMES (${items.length}):
