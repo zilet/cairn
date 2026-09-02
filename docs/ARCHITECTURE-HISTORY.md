@@ -4,6 +4,34 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-02 — Tool policy: the CLIs stop treating coaching prompts as tasks; zero-cost login probes
+
+No schema migration, sw **v567**. Diagnosed live on the Pi: the rotation's "Couldn't reach a coaching
+agent" banner named Antigravity `Blocked by a headless permission rule` and Grok `Agent timed out`
+while claude/codex sat on genuine quota holds. Both were the SAME reflex — grok 1.0.13 spent one chat
+turn on 28 tool executions (read_file / grep / run_terminal_command over its workspace cwd) across 23
+inference rounds until the 150 s timeout; agy 1.1.24 reached for a shell command, headless mode
+auto-denied it, and the run came back `status:CANCELED`, exit 0, empty response. The short-prompt ops
+(day read, exercise explanation) were unaffected; chat, insight and week-ahead failed on both.
+Verified that no CLI flag fixes it (grok `--max-turns 1` / `--permission-mode plan` cancel the turn,
+`--tools read_file` hangs, `--disallowed-tools` still reads, `--rules` ignored; agy `--mode plan` still
+denies) and that one sentence at the top of the prompt makes BOTH answer in a single round. So
+`applyToolPolicy` (`src/agents.ts`) now leads every spawn's prompt with `NO_TOOLS_PREAMBLE` at the
+`runAgent`/`runAgentStreaming` chokepoint, except when the prompt hands the CLI uploaded files (the
+existing `promptReferencesDataDir` test) or the call site passes the new `RunOpts.tools:"provider"`
+(`src/research.ts`, and a `current_research` chat turn). Idempotent across the JSON-repair retry.
+`test/agentToolPolicy.test.js` pins it; `test/agentExecution.test.js` now expects the preamble ahead
+of a plain prompt.
+
+Login probes re-grounded against the installed CLIs: antigravity's `status_check` is now
+`-p /quota --output-format json` — answered locally by agy with no agent turn or quota spend, and its
+`command.data.groups[].buckets[]` (`window`, `remaining_fraction`, `reset_time`) are parsed by
+`parseAgyQuota`, cached beside the login verdict, and surfaced as `quota[]` on `/api/settings` agents
+so the Connected card reads "Gemini · week 96% left · 5h 93% left" (`agentQuotaNote`,
+`settings-client.ts`). grok gains a `models` status_check with a positive-only parse (`Available
+models:` / `You are using XAI_API_KEY.`), falling through to its `auth_state` marker as before.
+claude `auth status` and codex `login status` were re-verified unchanged on 2.1.258 / 0.152.1.
+
 ## 2026-09-02 — Prompt audit: enforced structured output closes the gap, verify pass loses its arithmetic
 
 No schema migration, sw **v565**. An earlier pass had built enforced structured output end to end and

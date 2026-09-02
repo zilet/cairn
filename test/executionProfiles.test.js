@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  NO_TOOLS_PREAMBLE,
   normalizedAgentCapabilities,
   resolveAgentExecutionProfile,
   resolveAgentProfileForClass,
@@ -385,7 +386,8 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
   withTempDir((dataDir) => {
     const configPath = path.join(dataDir, "agents.json");
     fs.writeFileSync(configPath, JSON.stringify(providerConfig()));
-    const prompt = "Read my day.";
+    // A plain (file-less) prompt reaches every CLI behind the no-tools preamble.
+    const prompt = `${NO_TOOLS_PREAMBLE}\n\nRead my day.`;
     const runner = [
       `import { runChosen } from ${JSON.stringify(distRunChosenUrl)};`,
       `const prompt = ${JSON.stringify(prompt)};`,

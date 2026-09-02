@@ -12,6 +12,7 @@ import {
   buildAgentSpawnOptions,
   promptReferencesDataDir,
 } from "../dist/agentExecution.js";
+import { NO_TOOLS_PREAMBLE } from "../dist/agents.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -217,7 +218,8 @@ test("per-run MCP args expand only at the explicit capability slot", () => withT
     encoding: "utf8",
   });
   assert.equal(res.status, 0, res.stderr);
-  assert.deepEqual(JSON.parse(res.stdout).argv, ["--model", "terra-test", ...mcpArgs, "probe"]);
+  // A plain prompt (no uploaded files) travels behind the no-tools preamble.
+  assert.deepEqual(JSON.parse(res.stdout).argv, ["--model", "terra-test", ...mcpArgs, `${NO_TOOLS_PREAMBLE}\n\nprobe`]);
 }));
 
 test("streaming chat agent subprocess receives sanitized env and safe cwd", () => withTempDir((dataDir) => {

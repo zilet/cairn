@@ -180,7 +180,8 @@ export async function researchEvidence(
   let tried: { agent: string; error: string }[] = [];
   let parsed: any = null;
   try {
-    const r = await runChosen(opts.agent, prompt, { op: "research", timeoutMs, schema: RESEARCH_SCHEMA });
+    // The ONE op that wants the CLI's own tools: cited claims need live web search.
+    const r = await runChosen(opts.agent, prompt, { op: "research", timeoutMs, schema: RESEARCH_SCHEMA, tools: "provider" });
     chosen = r.agent;
     tried = r.tried;
     parsed = r.result.parsed;

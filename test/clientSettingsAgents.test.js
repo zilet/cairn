@@ -37,6 +37,10 @@ function loadSettingsAgents() {
         const availability = agent.availability || null;
         return availability ? `${availability.detail}. Cairn routes around it until then.` : "";
       },
+      agentQuotaNote(agent) {
+        const quota = Array.isArray(agent.quota) ? agent.quota : [];
+        return quota.length ? `Gemini · week ${Math.round(quota[0].remaining_fraction * 100)}% left` : "";
+      },
     },
   };
   context.window = context;
@@ -127,7 +131,14 @@ test("settings agent list renders escaped cards with state, controls, details, a
     order: ["Claude <main>", "Gemini"],
     disabled: new Set(["Gemini"]),
     meta: {
-      "Claude <main>": { name: "Claude <main>", description: "fast <coach>", configured: true, can_login: true, models_list: true },
+      "Claude <main>": {
+        name: "Claude <main>",
+        description: "fast <coach>",
+        configured: true,
+        can_login: true,
+        models_list: true,
+        quota: [{ group: "Gemini <Models>", window: "weekly", remaining_fraction: 0.956, reset_time: null }],
+      },
       Gemini: { name: "Gemini", description: "fallback", configured: false, can_login: true, models_list: true },
     },
     agentInfo: {
@@ -153,6 +164,9 @@ test("settings agent list renders escaped cards with state, controls, details, a
   assert.match(html, /No models reported/);
   assert.match(html, /data-up="Claude &lt;main&gt;" disabled/);
   assert.match(html, /data-down="Gemini" disabled/);
+  // The provider-reported usage line rides under a CONNECTED card only.
+  assert.match(html, /<div class="agent-card-note">Gemini · week 96% left<\/div>/);
+  assert.equal((html.match(/week 96% left/g) || []).length, 1, "a not-connected card shows no usage line");
 });
 
 test("the Agents slice keeps login/toggle affordances outside the collapsed operator fold", () => {

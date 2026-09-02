@@ -151,6 +151,13 @@ own change.** `applyProposal()` walks `parsed.changes[]` via `updateTarget()` an
 an already-applied proposal; a `parsed.days` payload instead routes to `replacePlan()`, and a
 `kind:'nutrition_target'` payload is advisory (acknowledgement only, no plan to mutate).
 
+**The CLIs are autonomous agents; Cairn's prompts are not tasks.** Every spawn goes through
+`applyToolPolicy` (`src/agents.ts`), which leads the prompt with `NO_TOOLS_PREAMBLE` unless the prompt
+hands the CLI uploaded files or the call site passed `tools:"provider"` (research, a current-research
+chat turn). Without it grok explores its cwd with tools until the timeout and agy trips a headless
+permission auto-deny — no CLI flag fixes that reliably (verified live; see `docs/ARCHITECTURE.md`
+"Tool policy"). Opt an op into provider tools at its call site, never by softening the preamble.
+
 **Autonomy is server policy, not model discretion** (Amendment 1 in `docs/VISION.md`).
 `decideAutonomyTier()` (`src/brain/autonomy.ts`, driven by `settings.lead_mode`) picks among observe
 / quiet_apply / announce / ask / clinician; bounded reversible changes land at natural boundaries,

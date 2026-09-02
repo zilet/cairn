@@ -161,6 +161,8 @@ export function listAgents() {
     // tri-state login/connected probe (true logged-in / false logged-out / null
     // undetectable). Only `false` excludes from the rotation — see agentConfigured.
     configured: agentConfigured(name),
+    // provider usage buckets read by the status probe (agy's /quota today); [] elsewhere
+    quota: agentQuota(name),
     // whether this agent declares an interactive login flow / a model catalog —
     // pure config reads, surfaced so the UI can render the right affordances.
     can_login: def.login != null,
@@ -282,9 +284,74 @@ function parseStatusOutput(name: string, stdout: string): boolean | null {
     if (/logged in|account|email/i.test(s)) return true;
     return null;
   }
+  if (name === "antigravity") {
+    // `agy -p /quota --output-format json` (verified on 1.1.24): a print-mode slash
+    // command answered locally by the CLI — no agent turn, no quota spent — whose
+    // envelope carries the usage buckets. Buckets present ⇒ the account is signed in.
+    if (parseAgyQuota(s).length) return true;
+    if (/not (logged|signed) in|sign in|log in|unauthenticated|authentication/i.test(s)) return false;
+    return null;
+  }
+  if (name === "grok") {
+    // `grok models` (1.0.13) has no signed-out wording we have verified, so only the
+    // POSITIVE banner counts; everything else falls through to auth_state.
+    if (/available models|you are using xai_api_key/i.test(s)) return true;
+    return null;
+  }
   // Generic fallback for any future status_check: an explicit "not logged in".
   if (/not logged in|logged out|please (log|sign) in/i.test(s)) return false;
   return null;
+}
+
+/** One provider usage bucket as agy reports it — group + window + how much is left. */
+export interface AgentQuotaBucket {
+  group: string;
+  window: "weekly" | "5h" | string;
+  remaining_fraction: number;
+  reset_time: string | null;
+}
+
+/**
+ * Read agy's `/quota` print-mode envelope into flat buckets. Tolerant by design: the
+ * shape was verified live on 1.1.24 ({command:{name:"usage",data:{groups:[{name,
+ * buckets:[{window,remaining_fraction,reset_time}]}]}}}); anything else yields [].
+ */
+export function parseAgyQuota(stdout: string): AgentQuotaBucket[] {
+  const text = (stdout || "").trim();
+  const start = text.indexOf("{");
+  if (start === -1) return [];
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text.slice(start));
+  } catch {
+    return [];
+  }
+  const groups = parsed?.command?.data?.groups;
+  if (!Array.isArray(groups)) return [];
+  const out: AgentQuotaBucket[] = [];
+  for (const g of groups) {
+    const buckets = Array.isArray(g?.buckets) ? g.buckets : [];
+    for (const b of buckets) {
+      const fraction = Number(b?.remaining_fraction);
+      if (!Number.isFinite(fraction)) continue;
+      out.push({
+        group: String(g?.name ?? ""),
+        window: String(b?.window ?? ""),
+        remaining_fraction: Math.max(0, Math.min(1, fraction)),
+        reset_time: typeof b?.reset_time === "string" ? b.reset_time : null,
+      });
+    }
+  }
+  return out;
+}
+
+// The last quota read a status probe produced, per agent — surfaced on the Settings
+// card so "Connected" can also say how much of the week is left. Refreshed with the
+// login verdict (same cache lifetime, same invalidation).
+const quotaCache = new Map<string, AgentQuotaBucket[]>();
+
+export function agentQuota(name: string): AgentQuotaBucket[] {
+  return quotaCache.get(name) ?? [];
 }
 
 function probeConfigured(name: string, def: AgentDef): boolean | null {
@@ -306,6 +373,9 @@ function probeConfigured(name: string, def: AgentDef): boolean | null {
       // to the combined stream only for the plain-text heuristics.
       let verdict = parseStatusOutput(name, r.stdout || "");
       if (verdict === null) verdict = parseStatusOutput(name, (r.stdout || "") + "\n" + (r.stderr || ""));
+      const quota = parseAgyQuota(r.stdout || "");
+      if (quota.length) quotaCache.set(name, quota);
+      else quotaCache.delete(name);
       if (verdict !== null) return verdict;
       // status_check ran but we couldn't read it — fall through to auth_state.
     } catch { /* fall through to the fallback signals */ }
@@ -346,6 +416,7 @@ export function invalidateAgentConfigured(name?: string): void {
   for (const agent of name ? [name] : Object.keys(loadAgents())) availabilityClear(agent);
   if (name) {
     configuredCache.delete(name);
+    quotaCache.delete(name);
     modelsRawCache.delete(name);
     modelsCache.delete(name);
     const cmd = loadAgents()[name]?.command;
@@ -356,6 +427,7 @@ export function invalidateAgentConfigured(name?: string): void {
   } else {
     presenceCache.clear();
     configuredCache.clear();
+    quotaCache.clear();
     modelsRawCache.clear();
     modelsCache.clear();
     versionCache.clear();
@@ -812,6 +884,12 @@ export function extractAgentUsage(text: string): AgentUsage {
 export interface RunOpts {
   timeoutMs?: number;
   signal?: AbortSignal;   // abort to kill the live subprocess mid-run (chat-turn Stop)
+  // What the CLI's OWN tools are for on this run. "none" (the default) prepends
+  // NO_TOOLS_PREAMBLE so an autonomous CLI answers from the prompt instead of
+  // exploring its cwd; "provider" leaves the prompt alone for the one op that needs
+  // live tools (cited web research). A prompt that hands the CLI uploaded files is
+  // always left alone — see applyToolPolicy.
+  tools?: "none" | "provider";
   // Custom JSON extractor applied to the CLI's stdout instead of the default
   // extractJson. Needed by the prose-first (reply-marked) op contracts: their prose
   // may legitimately contain a stray `{`, which anchors extractJson's first-brace
@@ -1435,6 +1513,7 @@ export async function runAgentWithFallback(
         model: o.model,
         reasoning: o.reasoning,
         profile: o.profile,
+        tools: o.tools,
         // Kept on for the repair retry too: an agent that can enforce the contract is
         // exactly the one that should not be asked to re-derive it from prose. Agents
         // later in the rotation that can't enforce it simply ignore it.
@@ -1465,6 +1544,7 @@ export async function runAgentWithFallback(
             model: o.model,
             reasoning: o.reasoning,
             profile: o.profile,
+            tools: o.tools,
             schema: o.schema,
           });
         } catch {
@@ -1613,7 +1693,41 @@ export async function runAgentWithFallback(
   throw new AgentFallbackError(order, tried);
 }
 
-export function runAgent(name: string, prompt: string, opts: RunOpts | number = {}): Promise<AgentResult> {
+// ---------- tool policy: the CLIs are agents, Cairn's prompts are not tasks ----------
+// Every coaching CLI here is an AUTONOMOUS coding agent: handed a long prompt with a
+// JSON contract, grok and agy read whatever sits in their cwd, grep it, and run shell
+// commands to "check" — and each of those steps is an inference round. Live on a Pi
+// (2026-09-02) a chat turn was 28 tool executions across 23 rounds before the 150 s
+// timeout, and agy's version of the same reflex was `run_terminal_command` → headless
+// auto-deny → "no output produced" (exit 0, empty response). Every DATA: block already
+// contains the whole picture, and the coach-read loop is a prompt protocol, not a tool.
+//
+// Verified on the Pi against grok 1.0.13 and agy 1.1.24: no CLI flag reliably turns the
+// reflex off (`--max-turns 1` and `--permission-mode plan` cancel the turn when a tool
+// is wanted, `--tools <one>` hung, `--disallowed-tools` still lists and reads,
+// `--rules` was ignored) — but a plain sentence at the top of the prompt makes both
+// answer in ONE round. So the rule travels with the prompt, provider-neutrally.
+export const NO_TOOLS_PREAMBLE =
+  "Everything you need is in this prompt. Do NOT use your own tools of any kind: do not read or " +
+  "list files, run commands, or search the web. Answer directly from the prompt text, in exactly " +
+  "the reply shape this prompt asks for; if something you need is not in the prompt, say so in " +
+  "your answer.";
+
+/**
+ * The prompt the CLI actually receives. Untouched when the run hands the CLI files it
+ * must open (an uploaded panel or photo — the same test that grants file access) or
+ * when the op asked for provider tools; otherwise NO_TOOLS_PREAMBLE leads. Idempotent,
+ * so the JSON-repair retry that re-runs a prompt never stacks a second copy.
+ */
+export function applyToolPolicy(prompt: string, tools: RunOpts["tools"] = "none"): string {
+  if (tools === "provider") return prompt;
+  if (promptReferencesDataDir(prompt)) return prompt;
+  if (prompt.startsWith(NO_TOOLS_PREAMBLE)) return prompt;
+  return `${NO_TOOLS_PREAMBLE}\n\n${prompt}`;
+}
+
+export function runAgent(name: string, rawPrompt: string, opts: RunOpts | number = {}): Promise<AgentResult> {
+  const prompt = applyToolPolicy(rawPrompt, typeof opts === "number" ? "none" : opts.tools);
   // Back-compat: older call sites pass a bare timeout number.
   const timeoutMs = typeof opts === "number" ? opts : (opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const signal = typeof opts === "number" ? undefined : opts.signal;
@@ -1874,10 +1988,11 @@ export interface StreamRunOpts extends RunOpts {
 // `raw` accumulates the full assistant text (prose + the trailing actions block),
 // parsed downstream by parseChatReply. Honors the same timeout + AbortSignal (Stop)
 // as the one-shot path. Falls back to runAgent when the agent has no stream config.
-export function runAgentStreaming(name: string, prompt: string, opts: StreamRunOpts = {}): Promise<AgentResult> {
+export function runAgentStreaming(name: string, rawPrompt: string, opts: StreamRunOpts = {}): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
-  if (!def.stream?.args?.length) return runAgent(name, prompt, opts); // no stream mode → one-shot
+  if (!def.stream?.args?.length) return runAgent(name, rawPrompt, opts); // no stream mode → one-shot
+  const prompt = applyToolPolicy(rawPrompt, opts.tools);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const signal = opts.signal;
   const onDelta = opts.onDelta;

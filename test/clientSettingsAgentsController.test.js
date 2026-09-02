@@ -147,6 +147,9 @@ function loadSettingsAgentsController() {
         const availability = agent.availability || null;
         return availability ? `${availability.detail}. Cairn routes around it until then.` : "";
       },
+      agentQuotaNote() {
+        return "";
+      },
     },
   };
   context.window = context;

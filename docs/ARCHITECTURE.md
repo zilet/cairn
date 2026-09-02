@@ -1671,6 +1671,43 @@ page's prompt injection). A coaching turn that contains an http(s) URL also pick
 
 ---
 
+## Tool policy: the CLIs are agents, Cairn's prompts are not tasks (`src/agents.ts`)
+
+Every coaching CLI is an *autonomous coding agent*. Handed a long prompt with a JSON contract, grok
+and agy treat it as a task: they read whatever sits in their cwd, grep it, and run shell commands to
+"check" — and every one of those steps is another inference round. Measured live (2026-09-02, grok
+1.0.13 / agy 1.1.24 on a Pi): one chat turn was 28 tool executions across 23 rounds before the 150 s
+interactive timeout, and agy's version of the same reflex was `run_terminal_command` → headless
+auto-deny → `"no output produced"` (exit 0, empty response, classified `permission_denied`). The
+short ops (day read, exercise explanation) were fine; the long-prompt ops (chat, insight, week
+ahead) failed on both providers while claude and codex — which answer from the prompt — were the
+only ones that worked, until their quotas ran out and the rotation had nothing left.
+
+Nothing in the argv reliably turns the reflex off. Verified on the Pi: grok's `--max-turns 1` and
+`--permission-mode plan` *cancel* the turn the moment a tool is wanted, `--tools read_file` hung for
+the full timeout, `--disallowed-tools …` still lists and reads (and dropping every tool fails
+session init — `search_replace` requires a read tool), `--rules` was ignored; agy's `--mode plan`
+still auto-denies and the only opt-outs it offers are a `permissions.allow` rule in its own
+`settings.json` or `--dangerously-skip-permissions`, neither of which Cairn should reach into. What
+DID work, on both, was one plain sentence at the top of the prompt: each answered in a single round.
+
+So the rule travels with the prompt, provider-neutrally. **`applyToolPolicy(prompt, tools)`** runs
+at the ONE chokepoint every spawn passes through (`runAgent` and `runAgentStreaming`) and prepends
+**`NO_TOOLS_PREAMBLE`** unless: the prompt hands the CLI files it must open — the same
+`promptReferencesDataDir` test that grants `file_access_args` (uploaded panels, photos,
+`CAIRN_AGENT_DATA_FILES:` inventories) — or the caller passed `RunOpts.tools: "provider"`. It is
+idempotent, so the JSON-repair retry that re-runs a prompt never stacks a second copy. Exactly two
+call sites opt into provider tools: `src/research.ts` (cited claims need live web search) and a
+chat turn routed with the `current_research` reason code (`chatTools` in `chatTurns.ts`).
+Everything else — every `DATA:` block, the coach-read protocol (a prompt protocol, never a tool) —
+answers from the prompt. Add a new op that genuinely needs the CLI's own tools by passing
+`tools: "provider"` at its call site; never by weakening the preamble.
+
+Two operational corollaries. `DATA_DIR/.agent-workspaces/<kind>` is the cwd for ordinary runs and is
+what an exploring CLI reads first — keep it empty (a stray CLI core dump or `*_output.json` there is
+fuel). And the `permission_denied` class is deliberately NOT a holding state: the CLI is healthy, that
+op was blocked, and the next prompt (now behind the preamble) is expected to succeed.
+
 ## Provider availability (`src/agentAvailability.ts` + `src/repo/agent-availability.ts`)
 
 Every provider failure used to look identical (`invalid_json`), so a CLI that was out of weekly quota
@@ -1727,6 +1764,18 @@ then."). Amber, never red: a provider limit is a schedule, not a fault, and the 
 asked to do anything about it. A hold never changes `usable`.
 
 ---
+
+**Login probes are per-CLI and re-verified against the installed versions** (`status_check` in
+`agents.json`, parsed by `parseStatusOutput` in `src/agents.ts` — STDOUT only, never the exit code):
+claude `auth status` (JSON `loggedIn`), codex `login status` (needs a POSITIVE "Logged in" banner),
+**agy `-p /quota --output-format json`** (1.1.24: a print-mode slash command the CLI answers
+locally — no agent turn, no quota spent, no conversation left behind — whose `command.data.groups[]`
+carry every usage bucket: `window` `weekly`/`5h`, `remaining_fraction`, `reset_time`; buckets
+present ⇒ signed in, and `parseAgyQuota` keeps them so `/api/settings` agents carry `quota[]` and the
+Connected card can say "Gemini · week 96% left · 5h 93% left"), and **grok `models`** (1.0.13 has
+`login`/`logout` but no status subcommand; `Available models:` / `You are using XAI_API_KEY.` is the
+positive signal, anything else falls through to the `~/.grok/auth.json` marker the in-app device-auth
+login writes). The quota cache shares the login verdict's lifetime and invalidation.
 
 ## Agent execution profiles (`src/repo/settings.ts` + `src/agents.ts`)
 

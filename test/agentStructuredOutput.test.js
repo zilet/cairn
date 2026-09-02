@@ -143,7 +143,9 @@ fs.writeFileSync(
 );
 process.env.AGENTS_CONFIG = fixturePath;
 
-const { agentSupportsStructuredOutput, runAgent, runAgentWithFallback } = await import("../dist/agents.js");
+const { agentSupportsStructuredOutput, runAgent, runAgentWithFallback, NO_TOOLS_PREAMBLE } = await import("../dist/agents.js");
+// Every plain prompt reaches the CLI behind the no-tools preamble (applyToolPolicy).
+const HELLO = `${NO_TOOLS_PREAMBLE}\n\nhello`;
 const { matchesJsonSchema } = await import("../dist/json-schema.js");
 const {
   MEAL_PLAN_STRUCTURE_SCHEMA,
@@ -173,17 +175,17 @@ test("an inline schema reaches the CLI as its declared flag", async () => {
   const argv = res.parsed.argv;
   assert.equal(argv[0], "--json-schema");
   assert.deepEqual(JSON.parse(argv[1]), SCHEMA);
-  assert.equal(argv[2], "hello");
+  assert.equal(argv[2], HELLO);
 });
 
 test("no schema requested leaves argv byte-for-byte unchanged", async () => {
   const res = await runAgent("inline", "hello");
-  assert.deepEqual(res.parsed.argv, ["hello"]);
+  assert.deepEqual(res.parsed.argv, [HELLO]);
 });
 
 test("an agent with no declaration silently ignores a schema", async () => {
   const res = await runAgent("plain", "hello", { schema: SCHEMA });
-  assert.deepEqual(res.parsed.argv, ["hello"]);
+  assert.deepEqual(res.parsed.argv, [HELLO]);
 });
 
 test("a file-mode schema is written to disk, read by the CLI, and cleaned up", async () => {

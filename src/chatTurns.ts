@@ -2877,8 +2877,13 @@ export async function runChatCompletion(
   const definitions = loadAgents();
   const attempts: ChatAgentAttempt[] = [];
   let decision: ChatRoutingDecision | null = turn.routing ?? null;
+  const wantsWeb = decision?.reason_codes.includes("current_research") === true;
+  // The CLI's own tools stay off for a coaching turn (the DATA block is the whole
+  // picture, and an autonomous CLI otherwise explores its cwd until the timeout);
+  // only a current-research turn is allowed to reach for live web search.
+  const chatTools: "none" | "provider" = wantsWeb ? "provider" : "none";
   const baseOrder = buildChatProviderOrder(chosen, repo.pickAgentOrder(), {
-    preferWeb: decision?.reason_codes.includes("current_research") === true,
+    preferWeb: wantsWeb,
     // A named provider is an explicit athlete choice. A Settings route pin is
     // still eligible as fallback, but current research starts with an enabled
     // web-capable provider whenever the turn itself was auto-routed.
@@ -3009,6 +3014,7 @@ export async function runChatCompletion(
           const res = await runStreamingDep(first, streamPrompt, {
             signal,
             timeoutMs: chatTurnTimeoutMs(firstProfile),
+            tools: chatTools,
             ...(firstProfile.execution ?? {}),
             onProgress: stream.progress,
             onDelta: stream.push,
@@ -3121,6 +3127,7 @@ export async function runChatCompletion(
           let res = await runAgentDep(name, runPrompt, {
             signal,
             timeoutMs: chatTurnTimeoutMs(profile),
+            tools: chatTools,
             ...(profile.execution ?? {}),
           });
           let raw = String(res.raw ?? "");
@@ -3130,6 +3137,7 @@ export async function runChatCompletion(
             res = await runAgentDep(name, runPrompt + EMPTY_CHAT_RETRY_SUFFIX, {
               signal,
               timeoutMs: chatTurnTimeoutMs(profile),
+              tools: chatTools,
               ...(profile.execution ?? {}),
             });
             raw = String(res.raw ?? "");

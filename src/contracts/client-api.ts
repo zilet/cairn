@@ -252,6 +252,8 @@ export interface ClientAgentInfo {
   present?: boolean;
   configured?: boolean | null;
   availability?: ClientAgentAvailability | null;
+  /** Provider-reported usage buckets from the status probe (agy's /quota); [] when unreported. */
+  quota?: { group: string; window: string; remaining_fraction: number; reset_time: string | null }[];
   auth_state?: string | null;
   default_model?: string | null;
   models?: string[];

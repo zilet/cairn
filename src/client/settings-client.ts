@@ -698,6 +698,30 @@ function agentAvailabilityNote(agent: Record<string, unknown>, now: Date = new D
   return `${detail ? `${detail}. ` : ""}Cairn routes around it until then.`;
 }
 
+// The quiet usage line under a connected provider that reports its own limits (agy's
+// /quota probe today): "Gemini · week 96% left · 5h 93% left". No bars, no scores —
+// a fraction the provider itself states, rounded, so the athlete knows before a run
+// fails whether the week is nearly spent. Empty when the provider reports nothing.
+function agentQuotaNote(agent: Record<string, unknown>): string {
+  const quota = Array.isArray(agent.quota) ? (agent.quota as Record<string, unknown>[]) : [];
+  const byGroup = new Map<string, string[]>();
+  for (const bucket of quota) {
+    const fraction = Number(bucket.remaining_fraction);
+    if (!Number.isFinite(fraction)) continue;
+    const window = String(bucket.window || "");
+    const label = window === "weekly" ? "week" : window === "5h" ? "5h" : window;
+    if (!label) continue;
+    const group = String(bucket.group || "").replace(/\s+models?$/i, "").trim() || "Usage";
+    const rows = byGroup.get(group) ?? [];
+    rows.push(`${label} ${Math.round(fraction * 100)}% left`);
+    byGroup.set(group, rows);
+  }
+  if (!byGroup.size) return "";
+  return Array.from(byGroup.entries())
+    .map(([group, rows]) => `${group} · ${rows.join(" · ")}`)
+    .join(" — ");
+}
+
 function updateCardHtml(status: unknown, options: SettingsUpdateOptions): string {
   const statusRow = status && typeof status === "object" ? (status as Record<string, unknown>) : null;
   const current = escHtml(String((statusRow && statusRow.current) || "—"));
@@ -738,6 +762,7 @@ Object.assign(globalThis, {
     diagnosticsCard,
     agentChipState,
     agentAvailabilityNote,
+    agentQuotaNote,
     updateCardHtml,
   },
 });

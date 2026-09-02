@@ -32,7 +32,12 @@ test("resolveLoginArgv returns the server-chosen login argv per agent", () => {
   assert.deepEqual(resolveLoginArgv("grok"), ["grok", "login", "--device-auth"]);
   // antigravity logs in via the bare interactive CLI (login: []).
   assert.deepEqual(resolveLoginArgv("antigravity"), ["agy"]);
-  assert.deepEqual(loadAgents().antigravity.status_check, ["models"], "models reports an explicit signed-out message");
+  // agy 1.1.24: `-p /quota --output-format json` is answered locally by the CLI (no
+  // agent turn, no quota spent) and carries the usage buckets — signed-in AND limit
+  // state in one probe. `models` used to be the probe; it fetched the catalog instead.
+  assert.deepEqual(loadAgents().antigravity.status_check, ["-p", "/quota", "--output-format", "json"]);
+  // grok 1.0.13 has no status subcommand; `models` is its cheapest authenticated call.
+  assert.deepEqual(loadAgents().grok.status_check, ["models"]);
 });
 
 test("resolveLoginArgv REJECTS an unknown agent (allowlist gate)", () => {
@@ -199,9 +204,9 @@ test("parseDefaultModel pulls the free 'Default model' line (grok/agy) or null",
 });
 
 test("grok's in-app device-auth login is detectable via auth_state", () => {
-  // grok has no status_check and the headless XAI_API_KEY may be unset, so the only
-  // signal that a Connect (`grok login --device-auth`) login happened is the file it
-  // writes. agents.json MUST declare that as grok's auth_state, or the card is stuck
+  // grok's `models` probe only ever says YES (its signed-out wording is unverified)
+  // and the headless XAI_API_KEY may be unset, so the fallback signal that a Connect
+  // (`grok login --device-auth`) login happened is the file it writes. agents.json MUST declare that as grok's auth_state, or the card is stuck
   // on "Installed" forever after a successful in-app login. (The fix for that bug.)
   const grok = loadAgents().grok;
   assert.ok(Array.isArray(grok.auth_state) && grok.auth_state.includes(".grok/auth.json"));

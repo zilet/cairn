@@ -3268,6 +3268,7 @@ declare global {
       ): string;
       agentChipState(agent: Record<string, unknown>, now?: Date): { cls: string; label: string };
       agentAvailabilityNote(agent: Record<string, unknown>, now?: Date): string;
+      agentQuotaNote(agent: Record<string, unknown>): string;
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;
     };
 
