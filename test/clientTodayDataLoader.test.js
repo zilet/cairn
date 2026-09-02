@@ -216,7 +216,7 @@ test("a warm Today open revalidates through ONE aggregate, not five separate rea
   const cache = warmPeeks();
   const { deps, calls } = makeDeps({
     peekCached: (key) => cache[key] || null,
-    cachedApi: async (path, options = {}) => {
+    cachedApi: async (_path, options = {}) => {
       const payload = aggregatePayload();
       if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
       return payload;
@@ -255,7 +255,7 @@ test("a warm aggregate writes a slice only when it changed and nothing newer own
   const cache = warmPeeks();
   const { deps, writes } = makeDeps({
     peekCached: (key) => cache[key] || null,
-    cachedApi: async (path, options = {}) => {
+    cachedApi: async (_path, options = {}) => {
       // A set logged while the request was in flight: the session key moved.
       cache["today:session:2026-01-02"] = { data: { id: 7, date: "2026-01-02", sets: [{ id: 1 }] }, fresh: true };
       const payload = aggregatePayload();
@@ -276,7 +276,7 @@ test("a warm aggregate writes a slice only when it changed and nothing newer own
 test("a fresh aggregate primes the prep keys and reports what it covered", async () => {
   const loader = loadDataLoader();
   const { deps, writes } = makeDeps({
-    cachedApi: async (path, options = {}) => {
+    cachedApi: async (_path, options = {}) => {
       const payload = aggregatePayload({
         last_sets: { "Back Squat": { weight: 225, reps: 5 }, "Barbell Row": null },
         progression_day: 1,
@@ -309,7 +309,7 @@ test("a background aggregate only FILLS an empty last-set key, never overwrites 
   const cache = warmPeeks({ "last-set:Back Squat": { data: { weight: 245, reps: 3 }, fresh: true } });
   const { deps, writes } = makeDeps({
     peekCached: (key) => cache[key] || null,
-    cachedApi: async (path, options = {}) => {
+    cachedApi: async (_path, options = {}) => {
       const payload = aggregatePayload({
         last_sets: { "Back Squat": { weight: 225, reps: 5 }, "Bench Press": { weight: 165, reps: 5 } },
       });

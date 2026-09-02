@@ -41,7 +41,7 @@ function seedPlan(weight = 135) {
 function counted(fn) {
   let n = 0;
   const orig = db.prepare.bind(db);
-  db.prepare = function (sql) {
+  db.prepare = (sql) => {
     const st = orig(sql);
     for (const m of ["get", "all", "run", "iterate"]) {
       const inner = st[m].bind(st);
