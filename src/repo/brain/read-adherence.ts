@@ -34,7 +34,7 @@ import {
   transitionBrainDecision,
 } from "../brain-decisions.js";
 import { activeRecoveryWeek } from "../profile.js";
-import { readsRestGradeReadiness } from "../readiness-bands.js";
+import { readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
 import { SENSOR_MAX_AGE_DAYS, sensorIsCurrent } from "../sensor-freshness.js";
 import { addDaysISO, localDateISO } from "../shared.js";
 import { getTrainingIntent } from "../training-intent.js";
@@ -677,33 +677,111 @@ export interface MorningRead {
   easySoftened: boolean;
 }
 
-// Which read the athlete was actually GIVEN that morning, taken from the earliest
-// ledger entry for the date. Deliberately not `day_reads` (one mutable row that
-// holds end-of-day state — a rest morning that ended in a session reads back as
-// `done`) and not `suggestions` (pre-dedupe duplicate rows).
+// ---------- WHICH READ THE ATHLETE ACTUALLY OPENED TO ----------
 //
-// `context_json` comes back for the same reason: that column is MORNING state (the
-// first write of the day wins and later recomputes never overwrite it — see
-// recordDayReadDecision), so `signals.outcome_feedback.applied` on it is a faithful
-// record of whether the read the athlete opened to had been softened. Reading the
-// softening off the read itself, rather than recomputing it, is what keeps this
-// free of a recursion back into restOverrideSoftening.
-function morningReadsByDate(from: string, to: string): Map<string, MorningRead> {
+// THE LAST PREDICTIVE READ BEFORE THEY TRAINED — not the first read of the date.
+//
+// This used to take MIN(id): first write wins, on the reasoning that the earliest
+// entry is the morning one. It is not. The scheduler recomputes the day at the
+// midnight rollover, which lands at 04:00 UTC for an eastern athlete — hours before
+// the morning's wearable sync, before last night's sleep is on the board, before any
+// check-in. That first row is routinely superseded by the 08:xx recompute, and it is
+// the LATTER the athlete opened the Brief to.
+//
+// Live case, 2026-08-31: decision 26229 written 04:01 UTC read `rest` and was
+// superseded; decision 26231 written 08:16 UTC read `easy`; the session was created
+// at 11:54 UTC. First-write-wins scored the day as a REST override, so it accrued to
+// the rest ladder's evidence instead of the easy ladder's — and the easy ladder,
+// the only thing allowed to open a stacked-days ceiling morning, stayed empty while
+// the athlete overrode easy three mornings running.
+//
+// So the rule is: the last PREDICTIVE read written before the athlete's first
+// training of that date, and if they never trained, the last predictive read of the
+// date. The cutoff is training rather than a clock hour because that is the moment
+// the read stopped being advice and became history — every recompute after it is
+// commentary on work already done, and `done` (which most of them are) is not
+// predictive anyway. Both timestamps are UTC 'YYYY-MM-DD HH:MM:SS' strings, so
+// string order IS instant order.
+//
+// `context_json` still comes back off the CHOSEN row, and still for the reason it
+// always did: that column is the state as of the write that created the row (an
+// unchanged read is INSERT OR IGNORE — see recordDayReadDecision), so
+// `signals.outcome_feedback.applied` on it is a faithful record of whether the read
+// the athlete opened to had been softened. Reading the softening off the read
+// itself, rather than recomputing it, is what keeps this free of a recursion back
+// into restOverrideSoftening.
+
+interface MorningDecisionRow {
+  id: number;
+  date: string;
+  created_at: string;
+  kind: PredictiveDayReadKind;
+}
+
+export interface MorningDecision extends MorningRead {
+  id: number;
+  // The read's own context blob, already parsed. `null` when the column was empty or
+  // unparseable — never a partial object.
+  context: Record<string, unknown> | null;
+}
+
+// The instant the athlete first trained on each date in the range. `sessions.created_at`
+// is the primary source; a session row that somehow carries none falls back to the
+// earliest `logged_sets.created_at` beneath it, which is the same event a moment later.
+function firstTrainingInstantByDate(from: string, to: string): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    const rows = db
+      .prepare(
+        `SELECT date, MIN(created_at) AS first_at FROM sessions
+          WHERE date >= ? AND date <= ? AND created_at IS NOT NULL
+          GROUP BY date`
+      )
+      .all(from, to) as Array<{ date: string; first_at: string | null }>;
+    for (const row of rows) if (row.first_at) out.set(String(row.date), String(row.first_at));
+  } catch {
+    /* an unreadable sessions table means no cutoff, not a wrong one */
+  }
+  try {
+    const rows = db
+      .prepare(
+        `SELECT s.date AS date, MIN(ls.created_at) AS first_at
+           FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+          WHERE s.date >= ? AND s.date <= ? AND ls.created_at IS NOT NULL
+          GROUP BY s.date`
+      )
+      .all(from, to) as Array<{ date: string; first_at: string | null }>;
+    for (const row of rows) {
+      if (!row.first_at) continue;
+      const date = String(row.date);
+      if (!out.has(date)) out.set(date, String(row.first_at));
+    }
+  } catch {
+    /* same contract */
+  }
+  return out;
+}
+
+// The chosen decision per date, context parsed. Deliberately two queries: the first
+// scans only the small `action_json`/`created_at` columns to pick a row per date, and
+// only the winners' `context_json` (a large signals blob, and there can be a dozen
+// rows per date on a churny day) is ever read or parsed.
+function morningDecisionsByDate(from: string, to: string): Map<string, MorningDecision> {
   const rows = db
     .prepare(
-      `SELECT current.source_ref_key AS date, current.action_json AS action_json,
-              current.context_json AS context_json
-         FROM brain_decisions current
-         JOIN (
-           SELECT MIN(id) AS id FROM brain_decisions
-            WHERE kind = 'day_read' AND source_ref_type = 'day_read'
-              AND source_ref_key >= ? AND source_ref_key <= ?
-            GROUP BY source_ref_key
-         ) first ON first.id = current.id
-        ORDER BY current.source_ref_key LIMIT 400`
+      `SELECT id, source_ref_key AS date, created_at, action_json
+         FROM brain_decisions
+        WHERE kind = 'day_read' AND source_ref_type = 'day_read'
+          AND source_ref_key >= ? AND source_ref_key <= ?
+        ORDER BY source_ref_key, created_at, id`
     )
-    .all(from, to) as Array<{ date: string; action_json: string | null; context_json: string | null }>;
-  const out = new Map<string, MorningRead>();
+    .all(from, to) as Array<{
+    id: number;
+    date: string;
+    created_at: string | null;
+    action_json: string | null;
+  }>;
+  const byDate = new Map<string, MorningDecisionRow[]>();
   for (const row of rows) {
     let kind: unknown = null;
     try {
@@ -712,27 +790,73 @@ function morningReadsByDate(from: string, to: string): Map<string, MorningRead> 
       kind = null;
     }
     if (!isPredictiveDayReadKind(kind)) continue;
-    let softened = false;
-    let easySoftened = false;
+    const date = String(row.date);
+    const list = byDate.get(date) ?? [];
+    list.push({ id: Number(row.id), date, created_at: String(row.created_at ?? ""), kind });
+    byDate.set(date, list);
+  }
+
+  const trained = firstTrainingInstantByDate(from, to);
+  const chosen = new Map<string, MorningDecisionRow>();
+  for (const [date, list] of byDate) {
+    const cutoff = trained.get(date) ?? null;
+    // `<=`, not `<`: these stamps are second-granular, so a read and a set written in
+    // the same second cannot be ordered, and the morning read is overwhelmingly the
+    // earlier writer of the two.
+    const before = cutoff ? list.filter((row) => row.created_at <= cutoff) : list;
+    // Nothing before the first set means every predictive read of the day is
+    // commentary on finished work. The earliest of them is then the closest thing to
+    // a morning read that exists, which is also what the old first-write rule picked.
+    chosen.set(date, before.at(-1) ?? list[0]!);
+  }
+
+  const out = new Map<string, MorningDecision>();
+  if (chosen.size === 0) return out;
+  const ids = [...chosen.values()].map((row) => row.id);
+  const contexts = new Map<number, Record<string, unknown> | null>();
+  const contextRows = db
+    .prepare(
+      `SELECT id, context_json FROM brain_decisions WHERE id IN (${ids.map(() => "?").join(",")})`
+    )
+    .all(...ids) as Array<{ id: number; context_json: string | null }>;
+  for (const row of contextRows) {
+    let context: Record<string, unknown> | null = null;
     try {
-      const context = JSON.parse(String(row.context_json ?? "null"));
-      softened = context?.signals?.outcome_feedback?.applied === true;
-      easySoftened = context?.signals?.easy_outcome_feedback?.applied === true;
+      const parsed = JSON.parse(String(row.context_json ?? "null"));
+      context = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
     } catch {
-      softened = false;
-      easySoftened = false;
+      context = null;
     }
-    out.set(String(row.date), { kind, softened, easySoftened });
+    contexts.set(Number(row.id), context);
+  }
+  for (const [date, row] of chosen) {
+    const context = contexts.get(row.id) ?? null;
+    const signals = (context as any)?.signals;
+    out.set(date, {
+      id: row.id,
+      kind: row.kind,
+      softened: signals?.outcome_feedback?.applied === true,
+      easySoftened: signals?.easy_outcome_feedback?.applied === true,
+      context,
+    });
   }
   return out;
 }
 
-// The single morning read for one date, off the same first-ledger-entry source
-// morningReadsByDate reads for the rolling model. Exported for callers that only
-// need one day (morningReview, src/repo/brain/morning-review.ts) so they consume
-// this module's own read of "what was the athlete actually told" rather than
-// re-deriving it against `day_reads` or `suggestions` (see morningReadsByDate's
-// own comment for why both of those answer a different question).
+function morningReadsByDate(from: string, to: string): Map<string, MorningRead> {
+  const out = new Map<string, MorningRead>();
+  for (const [date, decision] of morningDecisionsByDate(from, to)) {
+    out.set(date, { kind: decision.kind, softened: decision.softened, easySoftened: decision.easySoftened });
+  }
+  return out;
+}
+
+// The single morning read for one date, off the same source the rolling model reads.
+// Exported for callers that only need one day (morningReview,
+// src/repo/brain/morning-review.ts) so they consume this module's own read of "what
+// was the athlete actually told" rather than re-deriving it against `day_reads` or
+// `suggestions` (see the comment above for why both of those answer a different
+// question).
 export function morningReadForDate(date: string): MorningRead | null {
   if (!date) return null;
   try {
@@ -889,11 +1013,13 @@ const NO_SOFTENING: RestOverrideSoftening = Object.freeze({
 //                      so one good lift cannot paper over a second that went badly.
 //   • HARD CARDIO    — the day's cardio graded hard ON INTENSITY EVIDENCE
 //                      (`hardCardioDayIntense`: a hard training-effect/label, real
-//                      time at Z4+, or a training load well above their own median).
-//                      A threshold effort is a cost whether or not anything asked
-//                      them to rate it. The plain `hardCardioDay` duration bar is
-//                      deliberately NOT harm here — an ordinary 45-minute easy run
-//                      is a loading day, not an injury.
+//                      time at Z4+, or a training load well above their own median),
+//                      UNLESS the next morning positively vouches that the body
+//                      absorbed it (see nextMorningAbsorbedIt). A threshold effort is
+//                      a cost whether or not anything asked them to rate it, but not
+//                      when the morning after says otherwise out loud. The plain
+//                      `hardCardioDay` duration bar is deliberately NOT harm here —
+//                      an ordinary 45-minute easy run is a loading day, not an injury.
 //   • A FIRST        — the longest run in months (`longestRunNovelty`). Novel stimulus.
 //   • THE NEXT MORNING — a FRESH rest-grade readiness reading, or fresh physiology
 //                      reading as a brake (Garmin's own low/poor HRV status, or a
@@ -929,40 +1055,124 @@ export interface HarmEvidence {
   detail: string;
 }
 
-// The morning after `date`, read for the body's answer. Returns the first brake it
-// finds, or null. Freshness is asked through sensor-freshness (a reading that is too
-// old to speak for that morning behaves as absent, never as reassurance and never as
-// a brake), and a morning that has not happened yet simply has no row.
-function nextMorningPhysiologyBrake(date: string): HarmEvidence | null {
-  const morning = addDaysISO(date, 1);
-  if (!morning) return null;
-  // Reach back only as far as the loosest bound any field here uses; per-field
-  // freshness is still checked individually below.
+// ---------- WHAT "READINESS ON A MORNING" MEANS ----------
+//
+// `garmin_daily_metrics.training_readiness` is the LAST value synced for that date,
+// not a morning one. The watch recomputes readiness through the day, so on any date
+// the athlete trains, the stored number is a POST-WORKOUT reading: it says what the
+// session cost, not what the morning offered.
+//
+// Live case: the 2026-08-30 row holds training_readiness 11, synced after that day's
+// 10.4 km run — and read as "the morning after 08-29" it marked a Full Body session
+// the athlete rated 5/5 as harmful.
+//
+// So the morning value is taken from the LEDGER first: the day's own morning read
+// (chosen exactly as morningDecisionsByDate chooses it) recorded the readiness the
+// brain actually saw when it made the call, in `signals.fatigue.readiness`. That
+// snapshot is used only when it is about the right date and the read itself called
+// it fresh. Failing that, the Garmin row is honest ONLY on a date carrying no
+// training at all; on a training date the morning value is simply unknowable, and
+// unknowable is absent, never a brake and never reassurance.
+// `Number(null)` is 0, not NaN — the trap that has already read an unrated session as
+// the worst possible one elsewhere in this file. A readiness column is null far more
+// often than it is zero, and 0 is inside the rest-grade band, so absence must be
+// tested before the coercion, never after it.
+function readingNumber(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function ledgerMorningReadiness(morning: string): number | null {
+  let decision: MorningDecision | undefined;
+  try {
+    decision = morningDecisionsByDate(morning, morning).get(morning);
+  } catch {
+    return null;
+  }
+  const readiness = (decision?.context as any)?.signals?.fatigue?.readiness;
+  if (!readiness || typeof readiness !== "object") return null;
+  if (String(readiness.current_date ?? "") !== morning) return null;
+  if (String(readiness.freshness ?? "") !== "fresh") return null;
+  return readingNumber(readiness.current);
+}
+
+// Did the athlete train on this date at all — lifted, or logged any activity? The
+// question is only ever "may the stored Garmin readiness be read as a morning value",
+// so any training of any shape disqualifies it.
+function trainedOnDate(date: string): boolean {
+  const exists = (sql: string): boolean => {
+    try {
+      return !!db.prepare(sql).get(date);
+    } catch {
+      // An unreadable table cannot vouch that the day was quiet.
+      return true;
+    }
+  };
+  return (
+    exists(`SELECT 1 FROM sessions WHERE date = ? LIMIT 1`) ||
+    exists(`SELECT 1 FROM activities WHERE date = ? LIMIT 1`) ||
+    exists(`SELECT 1 FROM garmin_activities WHERE date = ? LIMIT 1`)
+  );
+}
+
+// The newest wearable row that may speak for `morning`. Per-field freshness is still
+// asked individually by each caller.
+function morningMetricsRow(morning: string): any {
+  // Reach back only as far as the loosest bound any field here uses.
   const floor = addDaysISO(morning, -Math.max(SENSOR_MAX_AGE_DAYS.hrv, SENSOR_MAX_AGE_DAYS.resting_hr));
   if (!floor) return null;
-  let row: any;
   try {
-    row = db
-      .prepare(
-        `SELECT date, training_readiness, hrv_status, resting_hr, hr_7d_avg
+    return (
+      db
+        .prepare(
+          `SELECT date, training_readiness, hrv_status, resting_hr, hr_7d_avg
            FROM garmin_daily_metrics
           WHERE date >= ? AND date <= ?
             AND (training_readiness IS NOT NULL OR hrv_status IS NOT NULL OR resting_hr IS NOT NULL)
           ORDER BY date DESC, id DESC LIMIT 1`
-      )
-      .get(floor, morning) as any;
+        )
+        .get(floor, morning) ?? null
+    );
   } catch {
     return null;
   }
+}
+
+// The readiness `morning` actually opened with, or null when that is unknowable.
+// The ONE lookup both the physiology brake and the hard-cardio absorption test use,
+// so the two cannot disagree about what the body said.
+function morningReadiness(morning: string): number | null {
+  const fromLedger = ledgerMorningReadiness(morning);
+  if (fromLedger != null) return fromLedger;
+  if (trainedOnDate(morning)) return null;
+  const row = morningMetricsRow(morning);
   if (!row) return null;
   const readingDate = row.date == null ? null : String(row.date);
-  if (sensorIsCurrent("training_readiness", readingDate, morning) && readsRestGradeReadiness(row.training_readiness)) {
+  if (!sensorIsCurrent("training_readiness", readingDate, morning)) return null;
+  return readingNumber(row.training_readiness);
+}
+
+// The morning after `date`, read for the body's answer. Returns the first brake it
+// finds, or null. Freshness is asked through sensor-freshness (a reading that is too
+// old to speak for that morning behaves as absent, never as reassurance and never as
+// a brake), and a morning that has not happened yet simply has no row. The HRV and
+// resting-HR arms read the wearable row directly and always have: both are OVERNIGHT
+// measurements, so unlike readiness they do not drift with the next day's training.
+function nextMorningPhysiologyBrake(date: string): HarmEvidence | null {
+  const morning = addDaysISO(date, 1);
+  if (!morning) return null;
+  const readiness = morningReadiness(morning);
+  if (readiness != null && readsRestGradeReadiness(readiness)) {
     return {
       date,
       kind: "readiness_rest_grade",
-      detail: `readiness ${Number(row.training_readiness)} on ${morning}`,
+      detail: `readiness ${readiness} on ${morning}`,
     };
   }
+  const row = morningMetricsRow(morning);
+  if (!row) return null;
+  const readingDate = row.date == null ? null : String(row.date);
   if (sensorIsCurrent("hrv", readingDate, morning)) {
     const status = String(row.hrv_status ?? "").toLowerCase();
     if (status && HRV_BRAKE_STATUSES.has(status)) {
@@ -981,6 +1191,38 @@ function nextMorningPhysiologyBrake(date: string): HarmEvidence | null {
     }
   }
   return null;
+}
+
+// ---------- A HARD EFFORT THE BODY ABSORBED IS NOT A COST ----------
+//
+// The hard-cardio arm reads INTENSITY BARS ONLY — a hard training-effect label, real
+// time at Z4+, a load above the athlete's own median. Those describe the stimulus,
+// and a stimulus is not by itself an injury: the whole point of a fit athlete is that
+// some hard days cost them nothing.
+//
+// Live case: 2026-09-01 was a Push session (13 sets, soreness 2) plus a 4.5 km run
+// carrying 13.6 minutes in Z4. The next morning readiness read 75-78, HRV sat 49 ms
+// above the athlete's own norm and resting HR came in at 53 against a seven-day 55 —
+// every available signal saying the body took it. Counted as harm anyway, it was one
+// of the three days keeping the easy ladder shut.
+//
+// So the day is retired ONLY on POSITIVE next-morning evidence, both halves required:
+// a morning readiness that is knowable, fresh and at or above SUPPORTIVE_READINESS,
+// AND no physiology brake firing for that morning at all. Absent or stale data is not
+// a vouch — silence never speaks for the body, in either direction, so an unknowable
+// morning leaves the day as harm exactly as before. That is what keeps the two
+// counter-cases counting: 08-27's 9.85 km at 164 bpm avg into a readiness of 26 the
+// next morning, and 08-30's 10.4 km into a 38.
+//
+// The other arms are untouched and keep their precedence. A poorly rated session and
+// a novel longest run are both facts about the day itself, and no next morning can
+// argue either of them away.
+function nextMorningAbsorbedIt(date: string): boolean {
+  const morning = addDaysISO(date, 1);
+  if (!morning) return false;
+  const readiness = morningReadiness(morning);
+  if (readiness == null || readiness < SUPPORTIVE_READINESS) return false;
+  return nextMorningPhysiologyBrake(date) == null;
 }
 
 // Did the work logged on `date` show any sign of having cost them, and if so which
@@ -1019,7 +1261,10 @@ export function harmEvidenceOnDay(date: string): HarmEvidence | null {
     // as harm and this ladder would never activate for someone who simply runs. A
     // duration-only hard grade is not harm by itself; if the body disagreed, the
     // next-morning physiology arm below says so.
-    if (hardCardioDayIntense(date))
+    //
+    // And a hard effort the body ABSORBED is not a cost either (see below): a
+    // vouching next morning retires this arm, and only this arm.
+    if (hardCardioDayIntense(date) && !nextMorningAbsorbedIt(date))
       return { date, kind: "hard_cardio", detail: "cardio graded hard on intensity" };
   } catch {
     /* same contract: a failed read finds no harm, it does not invent one */

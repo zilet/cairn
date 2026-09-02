@@ -95,7 +95,7 @@ import {
   recentCardioLoadMedian,
   recoverySessionDose,
 } from "./training-read.js";
-import { readsLowReadiness, readsRestGradeReadiness } from "./readiness-bands.js";
+import { readsLowReadiness, readsRestGradeReadiness, SUPPORTIVE_READINESS } from "./readiness-bands.js";
 import { withFlexibleRunLookahead } from "./hybrid-run-lookahead.js";
 import { dayFuelState } from "./fuel-state.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
@@ -2205,7 +2205,10 @@ const PUSH_DRIVE_CONSEC_CEILING = 5;
 // object. `lowReadiness` (the rest trigger) sits at <35; this is a long way clear of
 // it, because the wearable path is the one that can earn the read without a single
 // rated session behind it and so has to clear a higher bar than "not alarming".
-const PUSH_DRIVE_READINESS_FLOOR = 60;
+// The number lives in readiness-bands.ts because read-adherence now asks the same
+// vouching question about the morning AFTER a hard day, and the two modules may not
+// import each other — a second literal is exactly how a band drifts.
+const PUSH_DRIVE_READINESS_FLOOR = SUPPORTIVE_READINESS;
 
 // Shared corroboration path: recovery_capacity already supportive at high
 // confidence, with fresh HRV / resting HR / sleep on the board, last night

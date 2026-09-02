@@ -229,7 +229,13 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   inclusive = its own REST rule, softenable only to easy movement) — never hardcode a readiness
   threshold. And `trainedWithoutHarm` is `harmEvidenceOnDay(date) == null`: a hard-cardio day, a
   new-longest run (`longestRunNovelty`), or a bad next morning (rest-grade readiness, low HRV
-  status, elevated RHR) is harm — a run-only day is never "unrated therefore fine". Check-in `energy`/
+  status, elevated RHR) is harm — a run-only day is never "unrated therefore fine", but a hard-cardio
+  day is CLEARED when the next morning positively vouches (fresh readiness ≥ `SUPPORTIVE_READINESS`
+  and no brake firing; absent data never vouches). "Morning readiness" comes from the ledger's own
+  snapshot for that morning, since the stored Garmin value is the day's LAST sync and so is
+  post-workout on any day the athlete trained; the morning read itself is the last predictive
+  `brain_decisions` row before the first logged training of the date, never the midnight recompute.
+  Check-in `energy`/
   `sleep_feel` still brake at ≤2 and support at ≥4, but a `3` is genuinely NEUTRAL (it still emits an
   observation, so a tapped-in athlete never reads as untracked) — never round it to a brake or a
   support vote. Chat can write the same check-in via the `log_checkin` action

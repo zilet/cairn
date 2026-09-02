@@ -813,9 +813,19 @@ read as healthy there — this block answers "is the loop alive at all" directly
 matured-but-unevaluated / evaluated / verdict mix / the oldest overdue row and how many days overdue
 it is / whether a conclusive verdict has EVER been produced). `read_adherence` is
 `readAdherenceModel(asOf?, windowDays=42)` (`src/repo/brain/read-adherence.ts`): a rolling window's
-per-kind follow/diverge/unclear counts plus the last 14 days, reading the morning read from the
-EARLIEST `brain_decisions` row per date — never `day_reads` (mutable end-of-day state) or
-`suggestions` (pre-dedupe duplicate rows; see `dayReadSuggestionsByDate()` in `src/repo/memory.ts`).
+per-kind follow/diverge/unclear counts plus the last 14 days, reading the morning read from
+`brain_decisions` — never `day_reads` (mutable end-of-day state) or `suggestions` (pre-dedupe
+duplicate rows; see `dayReadSuggestionsByDate()` in `src/repo/memory.ts`).
+
+**The morning read is the LAST predictive decision written before the athlete trained**, not the
+first decision of the date. The scheduler recomputes at the midnight rollover (04:00 UTC for an
+eastern athlete), hours before the morning's wearable sync, and that row is routinely superseded by
+the 08:xx one the athlete actually opens the Brief to; first-write-wins therefore scored 2026-08-31
+as a REST override when the athlete had been given an EASY read, sending the evidence to the wrong
+ladder. First training is the earliest `sessions.created_at` for the date (falling back to the
+earliest `logged_sets.created_at` beneath it); with no training at all, the last predictive decision
+of the date stands. `context_json` still comes off the chosen row, so `outcome_feedback.applied`
+remains a faithful record of whether the read the athlete actually saw had been softened.
 The same model rides in `getCoachContext()` as the optional `CoachContextEnvelope.read_adherence`,
 memoized per build (`buildBrainSlice`, `src/repo/coach.ts`). It is absent from every `promptData`
 site except one: `day_read` (`context-projection.ts`) carries a compacted copy
@@ -829,6 +839,30 @@ has the athlete been training through rest mornings, and did those days go fine?
 more of the last `OUTCOME_SOFTENING_WINDOW_DAYS` (10) closed days offered a rest — or an
 already-softened easy — morning the athlete trained through with nothing in session feedback
 suggesting it cost them (worst-of-day `performance` ≥3, or unrated; silence is not evidence of harm).
+
+**Harm asks the body, and the body may also clear a hard day.** `harmEvidenceOnDay(date)` (the
+evidence form behind `trainedWithoutHarm`) still returns the first of its arms that fires — a poorly
+rated session, a novel longest run, an intensity-graded hard cardio day, or a braking next morning —
+but the hard-cardio arm is now retired when the next morning positively VOUCHES: a knowable, fresh
+morning readiness at or above `SUPPORTIVE_READINESS` (60, `src/repo/readiness-bands.ts`, shared with
+day-read's `PUSH_DRIVE_READINESS_FLOOR`) AND no physiology brake firing for that morning at all.
+Intensity bars describe the stimulus, not the cost; 2026-09-01's Z4 run came back the next morning at
+readiness 75-78 with HRV above norm and resting HR below its seven-day average, and counting it as
+harm was one of three days holding the easy ladder shut. Absent or stale data is never a vouch, so
+08-27's 9.85 km into a readiness of 26 still counts. The rated-session and longest-run arms are facts
+about the day itself and no morning can argue them away.
+
+**"Morning readiness" is not the stored Garmin value on a training day.**
+`garmin_daily_metrics.training_readiness` holds the LAST value synced for the date and the watch
+recomputes it through the day, so on any date the athlete trained it is a post-workout number — the
+2026-08-30 row read 11, synced after that day's 10.4 km run, and marked the previous day's 5/5-rated
+session as harmful. One helper answers the question for both the brake and the absorption test: the
+ledger's own morning snapshot first (`signals.fatigue.readiness` on that morning's chosen decision,
+used only when `current_date` matches and the read called it `fresh`), and the Garmin row only on a
+morning carrying no training at all. Otherwise the readiness arm is skipped as unknowable. The HRV
+and resting-HR arms read the wearable row directly as they always have: both are overnight
+measurements and do not drift with the next day's work.
+
 `dayRead()` applies it as one rule-outcome step down, rest → easy, and only for the four
 accumulation-style rest codes in `SOFTENABLE_REST_CODES` (`accumulated_load_rest` /
 `low_readiness_rest` / `felt_run_down_rest` / `acute_signal_protection`) — never

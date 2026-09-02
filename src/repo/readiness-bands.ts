@@ -1,5 +1,5 @@
-// READINESS BANDS — the two thresholds the morning read holds a wearable
-// readiness number to, in ONE place.
+// READINESS BANDS — the thresholds the morning read holds a wearable readiness
+// number to, in ONE place.
 //
 // They live here rather than in day-read.ts because two modules now have to
 // agree about them and neither may import the other: day-read decides today's
@@ -32,6 +32,17 @@ export const LOW_READINESS = 35;
 // and the band has to be far enough below the subdued one that an ordinary poor
 // night cannot reach it.
 export const REST_GRADE_READINESS = 20;
+
+// The band that positively VOUCHES for a day, as opposed to merely failing to
+// object. It sits a long way clear of LOW_READINESS because those are not mirror
+// questions: "nothing is alarming" is the absence of evidence, and the paths that
+// consult this one need the presence of it. Two ask it. day-read's push-drive
+// corroboration opens a training day off the wearable alone, with no rated session
+// behind it; read-adherence asks the morning after a hard cardio effort whether the
+// body actually absorbed it, and only a vouching morning may retire that day's harm.
+// Silence must never reach either bar, so both pair this with a freshness gate and
+// treat an absent reading as "no".
+export const SUPPORTIVE_READINESS = 60;
 
 function numeric(value: unknown): number | null {
   if (value == null) return null;

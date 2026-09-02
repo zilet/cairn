@@ -18,13 +18,18 @@ import { MIGRATIONS } from "../dist/migrate.js";
 import {
   dayReadAdherenceExpectation,
   dayTrainingTruth,
+  harmEvidenceOnDay,
+  morningReadForDate,
   OUTCOME_SOFTENING_MIN_DIVERGENCES,
   OUTCOME_SOFTENING_WINDOW_DAYS,
   readAdherenceModel,
   readAdherenceOutcome,
   reopenDayReadAdherence,
   restOverrideSoftening,
+  trainedWithoutHarm,
 } from "../dist/repo/brain/read-adherence.js";
+import { SUPPORTIVE_READINESS } from "../dist/repo/readiness-bands.js";
+import { addDaysISO } from "../dist/repo/shared.js";
 
 const LEDGER_TABLES = [
   "brain_evaluations",
@@ -35,6 +40,9 @@ const LEDGER_TABLES = [
   "sessions",
   "logged_sets",
   "activities",
+  "garmin_activities",
+  "garmin_daily_metrics",
+  "garmin_sources",
   "plan_days",
   "plan_items",
   "context_events",
@@ -635,8 +643,9 @@ test("the model reads the read the athlete was GIVEN, not the row's end-of-day s
   const date = localDaysAgo(3);
   repo.saveDayRead(date, read("rest"));
   // The day ended in a session, and the cached row was rewritten to 'done' — the
-  // trap that makes day_reads answer the wrong question. The ledger's EARLIEST
-  // entry still holds the rest read the athlete actually saw.
+  // trap that makes day_reads answer the wrong question. The ledger still holds the
+  // rest read the athlete actually saw: `done` is not predictive, so the last
+  // predictive read before they trained is still the rest one.
   seedTrainingDay(date);
   repo.saveDayRead(date, read("done", { focus: null, est_minutes: null }));
 
@@ -695,6 +704,220 @@ test("diagnostics carry the read-adherence model for the operator", () => {
   const model = getBrainDiagnostics(5).metrics.read_adherence;
   assert.equal(model.days_observed, 1);
   assert.equal(model.by_read[0].read, "rest");
+});
+
+// ==================================== WHICH READ THE ATHLETE ACTUALLY OPENED TO
+//
+// The scheduler recomputes the day at the midnight rollover — 04:00 UTC for an
+// eastern athlete, hours before the morning's wearable sync — and that first row is
+// routinely superseded by the 08:xx recompute the athlete actually opens the Brief
+// to. Picking the FIRST ledger entry therefore scored 2026-08-31 as a rest override
+// (decision 26229, 04:01 UTC, superseded) when the athlete had been given an easy
+// read (decision 26231, 08:16 UTC) and trained at 11:54. The evidence landed on the
+// rest ladder instead of the easy one, and the easy ladder — the only thing allowed
+// to open a stacked-days ceiling morning — stayed empty.
+
+// A read written at a specific instant. Both `brain_decisions.created_at` and
+// `sessions.created_at` are UTC 'YYYY-MM-DD HH:MM:SS', so these are real instants,
+// not decoration: the selection rule compares them directly.
+function readAtTime(date, kind, time, extra = {}) {
+  repo.saveDayRead(date, read(kind, extra));
+  const row = db
+    .prepare(
+      `SELECT id FROM brain_decisions WHERE kind='day_read' AND source_ref_type='day_read'
+        AND source_ref_key=? ORDER BY id DESC LIMIT 1`
+    )
+    .get(date);
+  db.prepare(`UPDATE brain_decisions SET created_at=? WHERE id=?`).run(`${date} ${time}`, row.id);
+  return row.id;
+}
+
+function trainedAtTime(date, time) {
+  seedTrainingDay(date);
+  const at = `${date} ${time}`;
+  db.prepare(`UPDATE sessions SET created_at=? WHERE date=?`).run(at, date);
+  db.prepare(
+    `UPDATE logged_sets SET created_at=? WHERE session_id IN (SELECT id FROM sessions WHERE date=?)`
+  ).run(at, date);
+}
+
+test("a midnight read superseded before the athlete trained is not the read they were given", () => {
+  reset();
+  const date = localDaysAgo(1);
+  readAtTime(date, "rest", "04:01:00");
+  readAtTime(date, "easy", "08:16:00");
+  trainedAtTime(date, "11:54:00");
+
+  assert.equal(morningReadForDate(date).kind, "easy", "the 08:16 read is what the Brief showed");
+  const model = readAdherenceModel(localDaysAgo(0), 42);
+  assert.equal(model.recent.at(-1).read, "easy");
+  assert.equal(model.by_read.find((row) => row.read === "rest"), undefined, "and no rest day is invented");
+});
+
+test("reads written after the first set are commentary, not the morning", () => {
+  reset();
+  const date = localDaysAgo(1);
+  readAtTime(date, "rest", "04:00:00");
+  readAtTime(date, "easy", "08:00:00");
+  trainedAtTime(date, "11:00:00");
+  // A late recompute that reached a predictive kind anyway. The day had already
+  // answered by then, so it cannot be what the athlete was told that morning.
+  readAtTime(date, "train", "20:30:00", { focus: "Lower" });
+
+  assert.equal(morningReadForDate(date).kind, "easy");
+});
+
+test("a date the athlete never trained keeps its LAST predictive read", () => {
+  reset();
+  const date = localDaysAgo(1);
+  readAtTime(date, "rest", "04:00:00");
+  readAtTime(date, "easy", "09:10:00");
+
+  assert.equal(morningReadForDate(date).kind, "easy", "with no training there is no cutoff to apply");
+});
+
+// ============================================ THE NEXT MORNING'S READINESS IS A
+// MORNING VALUE, NOT THE DAY'S LAST SYNC
+//
+// `garmin_daily_metrics.training_readiness` holds the newest value synced for the
+// date, and the watch recomputes readiness through the day — so on a date the
+// athlete trains, that number is a POST-WORKOUT reading. Live: the 2026-08-30 row
+// held 11, synced after that day's 10.4 km run, and marked 08-29's Full Body session
+// (rated 5/5) as harmful.
+
+// The readiness the brain saw when it made that morning's call, exactly where
+// dayRead publishes it.
+function ledgerMorningReadiness(date, current, { freshness = "fresh", currentDate = date } = {}) {
+  readAtTime(date, "train", "07:30:00", {
+    focus: "Upper",
+    signals: { fatigue: { readiness: { current, current_date: currentDate, freshness } } },
+  });
+}
+
+function liftedOn(date) {
+  repo.upsertExercise({ name: "Test Row", muscle_group: "back" });
+  repo.logSetByName({ date, exercise: "Test Row", weight: 100, reps: 8 });
+}
+
+test("the ledger's morning snapshot outranks a readiness value synced after training", () => {
+  reset();
+  const day = localDaysAgo(2);
+  const morning = localDaysAgo(1);
+  liftedOn(day);
+  // What the watch stores for the morning — contaminated by that morning's own run.
+  repo.upsertGarminDailyMetric({ date: morning, training_readiness: 11 });
+  // What the athlete actually woke up to, on the record.
+  ledgerMorningReadiness(morning, 76);
+
+  assert.equal(harmEvidenceOnDay(day), null);
+  assert.equal(trainedWithoutHarm(day), true);
+});
+
+test("with no snapshot, a next morning that carried training makes readiness unknowable", () => {
+  reset();
+  const day = localDaysAgo(2);
+  const morning = localDaysAgo(1);
+  liftedOn(day);
+  repo.upsertGarminDailyMetric({ date: morning, training_readiness: 11 });
+  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'running', 55, 10.4)`).run(
+    morning
+  );
+
+  // Unknowable is ABSENT — the readiness arm simply does not fire. The overnight
+  // arms (HRV, resting HR) are untouched and would still speak if they had data.
+  assert.equal(harmEvidenceOnDay(day), null);
+});
+
+test("with no snapshot and a quiet next morning, the stored row is honest again", () => {
+  reset();
+  const day = localDaysAgo(2);
+  const morning = localDaysAgo(1);
+  liftedOn(day);
+  repo.upsertGarminDailyMetric({ date: morning, training_readiness: 11 });
+
+  assert.equal(harmEvidenceOnDay(day)?.kind, "readiness_rest_grade");
+});
+
+test("a snapshot about the wrong date, or a stale one, does not speak", () => {
+  reset();
+  const day = localDaysAgo(2);
+  const morning = localDaysAgo(1);
+  liftedOn(day);
+  repo.upsertGarminDailyMetric({ date: morning, training_readiness: 11 });
+  // Fresh-looking, but it describes the day BEFORE — so it is not this morning's.
+  ledgerMorningReadiness(morning, 76, { currentDate: addDaysISO(morning, -1) });
+
+  assert.equal(harmEvidenceOnDay(day)?.kind, "readiness_rest_grade", "a snapshot for another date is absent");
+});
+
+// ============================== A HARD EFFORT THE BODY ABSORBED IS NOT A COST
+//
+// The hard-cardio arm reads intensity bars only, which describe the STIMULUS. Live:
+// 2026-09-01 was a Push session plus a 4.5 km run with 13.6 min in Z4, and the next
+// morning came back at readiness 75-78, HRV 49 ms above norm, resting HR 53 against
+// a seven-day 55. Counted as harm anyway, it was one of three days holding the easy
+// ladder shut. The counter-cases still count: 08-27's 9.85 km at 164 bpm into a
+// readiness of 26, and 08-30's 10.4 km into a 38.
+
+function hardRunOn(date, km = 4.5, minutes = 30) {
+  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'running', ?, ?)`).run(
+    date,
+    minutes,
+    km
+  );
+  const act = db.prepare(`SELECT id FROM activities WHERE date = ? ORDER BY id DESC LIMIT 1`).get(date);
+  const src = db
+    .prepare(`INSERT INTO garmin_sources (provider, mode, label) VALUES ('garmin','unofficial',?)`)
+    .run(`hard-run-${date}`);
+  db.prepare(
+    `INSERT INTO garmin_activities (source_id, external_id, activity_id, date, type, aerobic_te, te_label)
+     VALUES (?, ?, ?, ?, 'running', 4.2, 'threshold')`
+  ).run(src.lastInsertRowid, `hard-run-${date}`, act.id, date);
+}
+
+test("a hard run the next morning vouches for is not harm", () => {
+  reset();
+  const day = localDaysAgo(2);
+  const morning = localDaysAgo(1);
+  hardRunOn(day);
+  ledgerMorningReadiness(morning, SUPPORTIVE_READINESS + 15);
+
+  assert.equal(harmEvidenceOnDay(day), null);
+  assert.equal(trainedWithoutHarm(day), true);
+});
+
+test("a hard run the next morning answers badly is still harm", () => {
+  reset();
+  const day = localDaysAgo(2);
+  const morning = localDaysAgo(1);
+  hardRunOn(day);
+  ledgerMorningReadiness(morning, 26);
+
+  // 26 is above the rest-grade band, so nothing BRAKES — it simply fails to vouch,
+  // and a hard day that nothing vouches for keeps its own evidence.
+  assert.equal(harmEvidenceOnDay(day)?.kind, "hard_cardio");
+  assert.equal(trainedWithoutHarm(day), false);
+});
+
+test("a hard run with no next-morning data at all is still harm — silence never vouches", () => {
+  reset();
+  const day = localDaysAgo(2);
+  hardRunOn(day);
+
+  assert.equal(harmEvidenceOnDay(day)?.kind, "hard_cardio");
+});
+
+test("a supportive readiness cannot vouch over a physiology brake that fires anyway", () => {
+  reset();
+  const day = localDaysAgo(2);
+  const morning = localDaysAgo(1);
+  hardRunOn(day);
+  ledgerMorningReadiness(morning, SUPPORTIVE_READINESS + 15);
+  repo.upsertGarminDailyMetric({ date: morning, resting_hr: 62, hr_7d_avg: 54 });
+
+  // Both halves are required. A resting HR clearly above its own seven-day average is
+  // the body disagreeing with the readiness number.
+  assert.equal(harmEvidenceOnDay(day)?.kind, "hard_cardio");
 });
 
 // ------------------------------------------------- reading the outcomes back
