@@ -290,6 +290,20 @@ export const DAY_READ_OUTCOMES = {
       "You marked today as spoken for, so the quiet day lands here.",
     ],
   },
+  // THE TRADE (owner ruling, 2026-09-02). The same claim machinery as the rule above
+  // — a `claims_day` event the athlete wrote — but they wrote it about themselves:
+  // they kept training on a morning that read quiet and moved the break here. So the
+  // words name the trade rather than a commitment, because "you said today is taken"
+  // would read as an appointment they do not have. Still only a suggestion; training
+  // through it is exactly as available as it is on any other morning.
+  day_traded_rest: {
+    code: "day_traded_rest",
+    reasons: [
+      "This is the rest you traded for when you trained through the quiet day.",
+      "You moved this rest here yourself, so today is the quiet one.",
+      "Today is the rest you swapped forward — it's yours to take.",
+    ],
+  },
   lab_draw_morning: {
     code: "lab_draw_morning",
     reasons: [
@@ -509,6 +523,37 @@ const DAY_CLAIMED_WHY: readonly string[] = [
   "You said today is spoken for, so let it be — training picks back up when the calendar hands the day back.",
   "Today is already claimed, by your own word. A quiet day here costs nothing.",
   "You marked today as taken, so rest is the honest read — tomorrow is soon enough.",
+];
+// ---------- THE REST TRADE ----------
+// One key, written by the trade use case (src/domain/brain/rest-trade.ts) onto the
+// `claims_day` context event it inserts for tomorrow, and read back here on the day
+// it names. Exported so the two sides cannot drift into two spellings of the same
+// flag. The CALENDAR carries a trade — nothing about the plan's rotation moves.
+export const REST_TRADE_META_KEY = "rest_trade";
+
+/** Was the event behind this hold the athlete's own traded rest day? */
+function eventIsRestTrade(contextEvents: unknown, holdId: number | null): boolean {
+  if (holdId == null || !Array.isArray(contextEvents)) return false;
+  const event = (contextEvents as any[]).find((row) => row && Number(row.id) === Number(holdId));
+  let meta: any = event?.meta;
+  if (meta == null && event?.meta_json) {
+    try {
+      meta = JSON.parse(String(event.meta_json));
+    } catch {
+      meta = null;
+    }
+  }
+  return !!meta && typeof meta === "object" && (meta as any)[REST_TRADE_META_KEY] === true;
+}
+
+// The trade's own sentence: it names whose idea this was and what it bought, and it
+// never bargains the day back (the athlete may still train; the read does not argue
+// either way). `rest_trade` on the claiming event is what selects it — see
+// REST_TRADE_META_KEY.
+const DAY_TRADED_WHY: readonly string[] = [
+  "This is the rest you traded for — you took the training day, so the quiet one lands here. It's still yours to spend however you like.",
+  "You swapped this rest forward yourself when you trained through the quiet read, so today is where it comes due.",
+  "The rest you moved here is due today — you kept the session, and this is the other half of that trade.",
 ];
 const LAB_DRAW_WHY: readonly string[] = [
   "Your blood draw comes first today — keep the morning quiet, and an easy spin of the legs after it is plenty if you feel like moving.",
@@ -1211,6 +1256,7 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   push_drive_targeted_training: PUSH_DRIVE_WHY.map((render) => render("quads and back")),
   lookahead_retimed_training: LOOKAHEAD_RETIME_WHY,
   day_claimed_rest: DAY_CLAIMED_WHY,
+  day_traded_rest: DAY_TRADED_WHY,
   lab_draw_morning: LAB_DRAW_WHY,
   low_readiness_rest: LOW_READINESS_WHY,
   rest_grade_readiness: REST_GRADE_READINESS_WHY,
@@ -1276,6 +1322,9 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // day is theirs and already given: a sentence that drops "claimed / taken / spoken
   // for" is an unexplained rest.
   day_claimed_rest: /\b(?:claimed|taken|spoken for)\b/i,
+  // The trade is the whole basis of this read, so every phrasing has to say the rest
+  // was MOVED here by the athlete — a sentence that drops it is an unexplained rest.
+  day_traded_rest: /\b(?:traded|trade|moved|swapped)\b/i,
   // The one fact this read exists to carry is the draw itself — a phrasing that stops
   // naming it is an unexplained easy day, and the sequencing advice goes with it.
   lab_draw_morning: /\b(?:draw|labs?|blood)\b/i,
@@ -3224,13 +3273,20 @@ export function dayRead(
         if (trainedToday || bigActivity) return null;
         const claimed = holdsToday.find((hold) => hold.claims_day);
         if (claimed) {
-          (signals as any).same_day_hold = { hold: claimed, shape: "claimed" };
+          // A claim the athlete wrote about THEMSELVES — the rest they traded forward
+          // when they trained through a quiet morning — is the same hold with a
+          // different author, and it gets its own words rather than being told an
+          // appointment owns their day.
+          const traded = eventIsRestTrade(contextEvents, claimed.id);
+          (signals as any).same_day_hold = { hold: claimed, shape: traded ? "traded" : "claimed" };
           return {
-            outcome: DAY_READ_OUTCOMES.day_claimed_rest,
+            outcome: traded ? DAY_READ_OUTCOMES.day_traded_rest : DAY_READ_OUTCOMES.day_claimed_rest,
             read: {
               kind: "rest" as const,
               focus: null,
-              why: pickDayVariant(DAY_CLAIMED_WHY, d, "day_claimed_rest"),
+              why: traded
+                ? pickDayVariant(DAY_TRADED_WHY, d, "day_traded_rest")
+                : pickDayVariant(DAY_CLAIMED_WHY, d, "day_claimed_rest"),
               est_minutes: null,
               signals,
             },

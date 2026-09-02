@@ -1165,6 +1165,56 @@ the only consumers allowed to reason about one), and `day_read_adherence` is exc
 allowlist because the divergence half already speaks that same evidence in its own voice. Every
 sentence is a rotating variant set through `pickDayVariant`, the same rule as `day-read-rules.ts`.
 
+**The look-back NAMES the cause it was already reasoning from.** The plain "you went past it —
+noted" sets used to be selected by `trainedWithoutHarm(yesterday) === false`, a bare boolean — so the
+one thing the brain knew about the day (an "easy" run that graded hard) picked the curt sentence and
+never appeared in it. The passage now asks `harmEvidenceOnDay(yesterday)` for the EVIDENCE, and on an
+intensity-shaped cost (`hard_cardio`, `longest_run`) it says which half of the day carried it plus the
+unlock: the athlete's own easy ceiling in bpm, the same subject the train-read arm's
+`EARN_PATH_INTENSITY` speaks, read off `runIntensityDiscipline` and gated on the same `compressed`
+status that puts the number in front of them elsewhere. No ceiling to name means the sentence is
+spoken without a number, never vaguely. It is also STREAK-aware: consecutive quiet mornings trained
+through — counted back over contiguous days off the rolling `ReadAdherenceModel`, and broken by any
+harm that is NOT intensity-shaped, because a body that answered is not a rhythm to argue with — reach
+`TRADE_HANDOFF_STREAK` (3) and the passage acknowledges the pattern once and hands off to the rest
+trade below. The streak length rides in every `pickDayVariant` key, and the plain "noted" set is the
+FIRST-TIME set: it can never be the third morning's whole sentence.
+
+**The rest trade: "train today, rest tomorrow", written onto the calendar.** `tradeRestDay`
+(`src/domain/brain/rest-trade.ts`, behind `POST /api/today-read/trade-rest` and the `trade_rest_day`
+MCP tool) inserts ONE context event for `date + 1` — `kind:"life_event"`,
+`meta:{claims_day:true, rest_trade:true}` — and returns today's re-derived read with
+`train_anyway:true`. It adds no rule: `claims_day` is already the claim `tomorrowHolds` / `todayHolds`
+honor, so the look-ahead may re-time today and the claimed-rest rule speaks on the day itself. What
+the flag buys is the VOICE: `REST_TRADE_META_KEY` (`src/repo/day-read.ts`) selects the
+`day_traded_rest` outcome and `DAY_TRADED_WHY` over `day_claimed_rest`, with
+`same_day_hold.shape:"traded"`, so the athlete is told about their own trade rather than an
+appointment they do not have. Offered only on a quiet day that is about RHYTHM (an easy read,
+`accumulated_load_rest`, or the week's own `template_rest_day`); a rest-grade readiness reading, an
+active symptom or anything clinical refuses at HTTP 200 with `{ok:false, error, reason}` — floors are
+not trades, and they are checked BEFORE eligibility so the refusal names the real reason. Idempotent
+per date, at most one open trade, and **the plan's ring is never touched** — the calendar carries it.
+At the consecutive-day ceiling the look-ahead deliberately stands aside, so today's read may stay
+quiet after a trade; the session the athlete gets comes from `train_anyway` and the envelope's own
+clock below, never from the trade rewriting the suggestion.
+
+**A completed log answers a soft brake, and only the clock opens.** `capsMayOpen`
+(`src/repo/daily-decision.ts`) treated every `training_directive` alike, so the run-intensity caution
+capped a LIFTING session at 40 minutes on an athlete who had trained through four quiet mornings and
+set five new bests. `quietDayOpensOnEvidence` is the repo's "a completed log outranks a felt rating"
+law reaching the envelope: from an EASY baseline the athlete chose to train through, with the brake
+soft (`signal_support.soft_brake_only` — no `safety_override`, nothing on `health_constraints`, and
+the directive not `modify`/`recover`) and their own log behind it
+(`quiet_override_evidence.overridden_mornings >= 2` or `prs_7d >= 1`, both stamped omit-when-idle by
+gather), duration opens to the plan day's estimate and volume stays `normal`. Intensity stays `hold`
+and the reach stays parked — an opened window is not a licence to reach inside it. Every floor is
+checked first and none is exempted: a rest baseline, a `low` readiness bucket (raw AND effective, so
+the supportive-capacity deferral cannot smuggle a rest-grade reading through), illness, travel, an
+injury or symptom, joint pain, high soreness, an underpowered session, a recovery cycle or a reduced
+week all keep the cap they had. The reason code is `log_backs_open_day` and it carries an
+athlete-facing `rationale` entry (`LOG_BACKS_OPEN_DAY_RATIONALE`) so the plan surface can render one
+line explaining the day it got.
+
 **Recovery science lives in one module so three consumers cannot each grow an opinion of it.**
 `src/repo/recovery-science.ts` holds the evidence-graded physiology reads the signal state, the Brief
 and the prompt constraints all needed: the HRV decision band is now the smallest worthwhile change —

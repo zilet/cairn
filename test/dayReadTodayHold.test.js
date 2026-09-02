@@ -12,8 +12,14 @@
 // day that already has some, or take a rest grounded in a signal about the athlete.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables, seedTrainingDay, seedRecoveryDay, localDaysAgo } from "./_seed.js";
-import { DAY_READ_OUTCOMES, DAY_READ_WHY_VARIANTS, violatesReadingGrammar } from "../dist/repo/day-read.js";
+import { db, repo, resetTables, seedTrainingDay, seedRecoveryDay, localDaysAgo } from "./_seed.js";
+import {
+  DAY_READ_OUTCOMES,
+  DAY_READ_WHY_VARIANTS,
+  REST_TRADE_META_KEY,
+  violatesReadingGrammar,
+} from "../dist/repo/day-read.js";
+import { REST_TRADE_TITLE, tradeRestDay } from "../dist/domain/brain/rest-trade.js";
 import { todayHolds, planningSignalState } from "../dist/repo/signal-state.js";
 import { contextEventReadsAsLabDraw } from "../dist/repo/context-effect.js";
 import { pickDayVariant } from "../dist/repo/brain/day-read-rules.js";
@@ -314,4 +320,133 @@ test("with nothing on today the prompt says nothing and the read is what it was"
   const prompt = buildDayReadPrompt(undefined, { date: REF });
   assert.doesNotMatch(prompt, /LAB DRAW TODAY/);
   assert.doesNotMatch(prompt, /THE DAY IS SPOKEN FOR/);
+});
+
+// ---------- (h) the trade: the athlete's own claim, in their own words ----------
+// The rest trade writes the SAME claims_day event a commitment writes, plus one flag
+// saying whose idea it was — so tomorrow's read is the existing claimed-rest rule with
+// words that name the trade instead of an appointment the athlete does not have. The
+// calendar carries it; the plan's ring is untouched.
+
+const tradedToday = () =>
+  repo.addContextEvent({
+    kind: "life_event",
+    title: REST_TRADE_TITLE,
+    start_date: REF,
+    end_date: REF,
+    meta: { claims_day: true, [REST_TRADE_META_KEY]: true, traded_from: YESTERDAY },
+  });
+
+test("the rest they traded reads as rest, and says it was their own trade", () => {
+  seedStackedMorning();
+  tradedToday();
+
+  const read = repo.dayRead(REF);
+  assert.equal(read.kind, "rest");
+  assert.equal(read.decision.rule_code, "day_traded_rest");
+  assert.equal(read.est_minutes, null);
+  assert.ok(DAY_READ_WHY_VARIANTS.day_traded_rest.includes(read.why), `unexpected wording ${JSON.stringify(read.why)}`);
+  assert.match(read.why, /\b(?:traded|trade|moved|swapped)\b/i, "the trade is the whole basis of this read");
+  assert.equal(read.signals.same_day_hold.shape, "traded");
+  // It is still a suggestion — nothing here bargains the day back or forbids training.
+  assert.equal(violatesReadingGrammar(read.why), null);
+});
+
+test("an ordinary claimed day is untouched by the trade wording", () => {
+  seedStackedMorning();
+  claimedToday();
+  const read = repo.dayRead(REF);
+  assert.equal(read.decision.rule_code, "day_claimed_rest");
+  assert.equal(read.signals.same_day_hold.shape, "claimed");
+});
+
+test("the traded set speaks in several calm phrasings that hold the reading grammar", () => {
+  const why = DAY_READ_WHY_VARIANTS.day_traded_rest;
+  const reasons = DAY_READ_OUTCOMES.day_traded_rest.reasons;
+  assert.ok(why.length >= 3);
+  assert.ok(reasons.length >= 3);
+  assert.equal(new Set(why).size, why.length);
+  assert.equal(new Set(reasons).size, reasons.length);
+  for (const text of [...why, ...reasons]) {
+    assert.equal(violatesReadingGrammar(text), null, `breaks the reading grammar: ${JSON.stringify(text)}`);
+    assert.match(text, /[.!?]$/);
+    assert.match(text, /\b(?:traded|trade|moved|swapped)\b/i);
+    assert.doesNotMatch(text, /\b(?:you must|have to|owe)\b/i, "a trade they made is not a debt they are held to");
+  }
+  const days = ["2026-03-15", "2026-03-16", "2026-03-17"];
+  const landed = days.map((day) => pickDayVariant(why, day, "day_traded_rest"));
+  for (let i = 1; i < landed.length; i++) assert.notEqual(landed[i], landed[i - 1]);
+});
+
+// ---------- (i) the trade itself: what it may claim, and what it may not ----------
+
+test("a ceiling-easy morning can trade the quiet day forward, once", () => {
+  seedStackedMorning({ days: 5 });
+  const read = repo.dayRead(REF);
+  assert.equal(read.kind, "easy");
+  assert.equal(read.decision.rule_code, "accumulated_load_rest");
+
+  const first = tradeRestDay({ date: REF });
+  assert.equal(first.ok, true);
+  assert.equal(first.date, REF);
+  assert.equal(first.rest_date, TOMORROW);
+  assert.equal(first.already_traded, false);
+  assert.equal(first.train_anyway, true);
+  assert.ok(first.event_id);
+
+  // Idempotent per date: asking twice returns the same claim, never a second rest day.
+  const second = tradeRestDay({ date: REF });
+  assert.equal(second.ok, true);
+  assert.equal(second.already_traded, true);
+  assert.equal(second.event_id, first.event_id);
+  const claims = repo.listContextEvents({}).filter((event) => event?.meta?.[REST_TRADE_META_KEY] === true);
+  assert.equal(claims.length, 1, "one trade, one rest day on the calendar");
+});
+
+test("an ordinary training day has no quiet day to trade", () => {
+  resetTables(...WORLD);
+  repo.upsertExercise({ name: "Barbell Row", muscle_group: "back" });
+  repo.savePlanDay(1, "Pull", "Pull", [{ exercise: "Barbell Row", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const plain = tradeRestDay({ date: REF });
+  assert.equal(plain.ok, false);
+  assert.equal(plain.reason, "not_a_quiet_day");
+  assert.equal(violatesReadingGrammar(plain.error), null);
+});
+
+test("only one trade may be open at a time", () => {
+  seedStackedMorning({ days: 5 });
+  assert.equal(tradeRestDay({ date: REF }).ok, true);
+  // A second trade, a day later, would move the rest again without ever taking it.
+  const again = tradeRestDay({ date: TOMORROW });
+  assert.equal(again.ok, false);
+  assert.equal(again.reason, "trade_already_open");
+});
+
+test("a floor is never a trade: a rest-grade reading, a symptom and a clinical hold each refuse", () => {
+  seedStackedMorning({ days: 5 });
+  const sourceId = Number(
+    db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin', 'trade-floor')`).run().lastInsertRowid
+  );
+  db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date, training_readiness) VALUES (?, ?, 12)`).run(
+    sourceId,
+    REF
+  );
+  const readiness = tradeRestDay({ date: REF });
+  assert.equal(readiness.ok, false);
+  assert.equal(readiness.reason, "rest_grade_readiness");
+  assert.equal(violatesReadingGrammar(readiness.error), null);
+
+  // A symptom the athlete reported holds the day on its own terms.
+  seedStackedMorning({ days: 5 });
+  repo.reportTrainingSymptom({ area_text: "left knee", onset_on: REF, report_text: "My left knee is sore." });
+  const symptom = tradeRestDay({ date: REF });
+  assert.equal(symptom.ok, false);
+  assert.equal(symptom.reason, "active_symptom");
+
+  // And anything clinical shaping the day keeps the quiet day where it is.
+  seedStackedMorning({ days: 5 });
+  repo.addContextEvent({ kind: "injury", title: "Shoulder strain", start_date: REF });
+  const clinical = tradeRestDay({ date: REF });
+  assert.equal(clinical.ok, false);
+  assert.ok(clinical.reason === "clinical_hold" || clinical.reason === "not_a_quiet_day", clinical.reason);
 });

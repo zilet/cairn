@@ -280,6 +280,18 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   path, so the two answers cannot drift. `train_anyway` from a rest morning holds the WORKING load
   (`intensity:'hold'`, never `'deload'` unless a phase/repeated-under independently says so) and its
   duration comes from the plan day's own estimate, not the quiet read's 20-minute clock.
+- **The rest trade is carried by the CALENDAR; the ring is never touched.** "Train today, rest
+  tomorrow" (`tradeRestDay`, `src/domain/brain/rest-trade.ts`, behind `POST /api/today-read/trade-rest`
+  and the `trade_rest_day` MCP tool) writes ONE context event for `date+1` with
+  `meta:{claims_day:true, rest_trade:true}` — the claim the existing hold rules already honor — and
+  returns the read with `train_anyway:true`. Plan rotation, anchors and the week's shape do not move,
+  and nothing in `plan-selection.ts` learns about trades. `REST_TRADE_META_KEY` is what makes tomorrow
+  speak as `day_traded_rest` rather than `day_claimed_rest`. It is offered only on a rhythm-shaped
+  quiet day, and a rest-grade reading / active symptom / clinical hold refuses at 200 with
+  `{ok:false, error}` — floors are not trades. Its sibling law in the envelope: an EASY baseline the
+  athlete trains through, with a SOFT brake and their own log behind it, opens the DURATION and volume
+  only (`quietDayOpensOnEvidence`, `daily-decision.ts`) — intensity stays `hold`, the reach stays
+  parked, and every safety floor still caps.
 - **Day-read prose is a variant set, never one literal.** A stable input fires a stable rule every
   morning, so a single sentence per rule printed verbatim for weeks. Rules carry their own athlete-
   facing `reasons` (`src/repo/brain/day-read-rules.ts`), and every athlete-facing string — outcome

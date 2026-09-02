@@ -30,6 +30,7 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getSettings } from "./settings.js";
 import { LAST_NIGHT_MAX_AGE_DAYS, isLastNight, sensorIsCurrent } from "./sensor-freshness.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
+import { weekWins } from "./sessions.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { hasFreshBrake, type SignalConfidence, type SignalDimensionState } from "./signal-state.js";
 import {
@@ -107,6 +108,9 @@ export const DAILY_DECISION_REASONS = [
   // Yesterday's endurance still owns today's legs, so the quiet day this envelope
   // describes may not be another run (owner ruling, 2026-08-28).
   "run_held_by_endurance_residual",
+  // A completed log outranks a soft brake when the athlete chooses to train through
+  // a quiet morning: the session gets its own clock back (owner ruling, 2026-09-02).
+  "log_backs_open_day",
 ] as const;
 
 export type DailyDecisionReason = (typeof DAILY_DECISION_REASONS)[number];
@@ -275,6 +279,17 @@ export interface DailyDecisionSnapshot {
   // training directive, so gather stamps this slice (omit-when-idle, same as
   // personal_response) rather than reading those stores inside the decision.
   signal_support?: DailyDecisionSignalSupport;
+  // What the LOG says about the quiet mornings behind this one. Stamped omit-when-idle
+  // (and only on an `easy` day read) for the same reason `personal_response` is: the
+  // decision must stay a pure function of its snapshot, and both of these are database
+  // reads. See `quietOverrideOpensCaps` in buildDailySessionDecision.
+  quiet_override_evidence?: {
+    // Easy mornings inside easyOverrideSoftening's window the athlete took above easy
+    // with nothing saying it cost them (`easy_outcome_feedback.overridden_and_fine`).
+    overridden_mornings: number;
+    // New bests on a lift in the trailing seven days.
+    prs_7d: number;
+  };
 }
 
 export interface DailyDecisionSignalSupport {
@@ -283,6 +298,14 @@ export interface DailyDecisionSignalSupport {
   backed_by: string[];
   training_directive: "proceed" | "hold_aggression" | "modify" | "recover";
   fresh_brake: boolean;
+  // Is every fresh brake on the board a SOFT one — nothing clinical, nothing carrying
+  // a safety override? Stamped omit-when-idle (only on a day that has a fresh brake at
+  // all, and only when the answer is yes), so a snapshot with no brake and a snapshot
+  // whose brake is clinical both serialize exactly as they did before the field
+  // existed. It is the ONE thing that lets the caps distinguish "your easy runs have
+  // been hard" from "a health finding is holding today", which is the difference
+  // between a brake the athlete's own log may answer and a floor it may not.
+  soft_brake_only?: true;
 }
 
 export interface DailyDecisionTarget {
@@ -731,6 +754,23 @@ export function gatherDailyDecisionSnapshot(
   const yesterdayIso = addDaysISO(d, -1);
   const longestRunYesterday = yesterdayIso ? safe(() => longestRunNovelty(yesterdayIso) != null, false) : false;
 
+  // What the LOG says about the quiet mornings behind this one — read only on an
+  // `easy` day read, which is the one baseline whose caps this evidence may open (see
+  // `quietOverrideOpensCaps`). Two independent shapes of the same claim: the athlete
+  // has been outrunning the quiet read without it costing them, or their lifts have
+  // been setting new bests. Both are already-computed facts (the easy softening signal
+  // dayRead publishes, and the week's new bests) rather than a new judgement here.
+  const quietOverrideEvidence: DailyDecisionSnapshot["quiet_override_evidence"] = (() => {
+    if (read?.kind !== "easy") return undefined;
+    const easyFeedback = (signals?.easy_outcome_feedback ?? null) as { overridden_and_fine?: unknown } | null;
+    const overriddenMornings = Array.isArray(easyFeedback?.overridden_and_fine)
+      ? easyFeedback.overridden_and_fine.length
+      : 0;
+    const prs7d = safe(() => (weekWins(d).prs ?? []).length, 0);
+    if (!overriddenMornings && !prs7d) return undefined;
+    return { overridden_mornings: overriddenMornings, prs_7d: prs7d };
+  })();
+
   const programState = safe(() => getProgramState(d, recoverySummary), null) as any;
   const progression =
     selected?.day_number != null ? (safe(() => planDayProgression(selected.day_number), []) as any[]) : [];
@@ -989,6 +1029,7 @@ export function gatherDailyDecisionSnapshot(
     ...(longestRunYesterday ? { longest_run_yesterday: true as const } : {}),
     ...(supportSlice.signal_support ? { signal_support: supportSlice.signal_support } : {}),
     ...(supportSlice.recovery_capacity ? { recovery_capacity: supportSlice.recovery_capacity } : {}),
+    ...(quietOverrideEvidence ? { quiet_override_evidence: quietOverrideEvidence } : {}),
   };
 }
 
@@ -1074,8 +1115,34 @@ function compactSignalSupport(
       backed_by,
       training_directive,
       fresh_brake,
+      ...(fresh_brake && freshBrakesAreSoft(state) ? { soft_brake_only: true as const } : {}),
     },
   };
+}
+
+// Is every fresh brake on the board one the athlete's own log may answer?
+//
+// Deliberately conservative in both directions. A brake carrying `safety_override`
+// is a floor by construction, and ANY fresh caution or constraint on
+// `health_constraints` — a symptom they reported, an injury window, a clinical hold
+// — is the dimension whose whole job is to say "not this, not today". Neither is a
+// rhythm the log can outvote, so one of either answers no for the whole board. What
+// is left is the soft shape this exists for: the run-intensity caution, a
+// consecutive-load caution, a schedule squeeze.
+function freshBrakesAreSoft(state: ReturnType<typeof dayPlanningSignalState>): boolean {
+  try {
+    for (const dimension of Object.values(state.dimensions)) {
+      for (const item of dimension.evidence) {
+        if (item.freshness === "stale") continue;
+        if (item.direction !== "caution" && item.direction !== "constraint") continue;
+        if (item.safety_override === true) return false;
+        if (item.dimension === "health_constraints") return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function hasUnstartedAdaptiveComposition(date: string): boolean {
@@ -1234,6 +1301,18 @@ export const TRAIN_ANYWAY_REST_RATIONALE: readonly string[] = [
   "Training by choice — same working sets, no extra top set, and a shorter window.",
   "Training by choice — hold the working load, skip the extra top set, and keep it compact.",
   "Training by choice — keep what you usually lift, leave the extra top set off, and keep it shorter.",
+];
+
+// The sentence for a quiet morning the athlete's own log opened back up. It names
+// what the day keeps (the plan's clock, the usual sets) AND what it still holds
+// (the load, the extra top set), because a cap the athlete cannot see a reason for
+// is the defect this arm exists to fix. Never a score, never a verdict on the run —
+// the running caution keeps its own voice on the Brief.
+export const LOG_BACKS_OPEN_DAY_RATIONALE: readonly string[] = [
+  "Your recent sessions have backed this up, so today gets the plan's own length — same working load, no extra top set.",
+  "The log says you've been handling this, so the clock stays the plan's rather than a short one; the load itself holds where it is.",
+  "You've earned the full window here — today runs the plan's length at the usual working load, with the extra top set left off.",
+  "Nothing in your recent sessions asks for a shorter day, so today keeps the plan's length; the weights stay where they were.",
 ];
 
 // Athlete-facing reach lines. A backed push morning is a reason to go after a
@@ -1487,11 +1566,57 @@ export function buildDailySessionDecision(
     soft.push({ code: "consecutive_training_days", detail: `${consecutive} training days in a row` });
   }
 
+  // ---- THE LOG ANSWERS A SOFT BRAKE (owner ruling, 2026-09-02) ----
+  //
+  // `capsMayOpen` treats every training directive alike, so the run-intensity
+  // caution — a finding about RUNS — capped a lifting session at forty minutes with
+  // reduced volume on an athlete who had trained through four straight quiet
+  // mornings and set five new bests doing it. The repo's own law is that a completed
+  // log outranks a felt rating (sessionLogContradictsLowRating); this is that law
+  // reaching the envelope's clock.
+  //
+  // It opens exactly one thing — the DURATION and the volume — and only from an EASY
+  // baseline, only when the brake is soft (nothing clinical, nothing carrying a
+  // safety override, no symptom or injury on the board), and only when the athlete's
+  // own log backs it: two mornings already trained through without cost, or a new
+  // best inside the week. Intensity stays held, the reach stays parked, and every
+  // safety floor in this file is checked FIRST rather than exempted — a rest
+  // baseline, a rest-grade readiness reading, illness, travel, a symptom or injury, a
+  // recovery cycle or reduced week, high soreness, an underpowered session all keep
+  // the cap exactly as they had it.
+  const brakeIsSoft =
+    snapshot.signal_support?.soft_brake_only === true &&
+    snapshot.signal_support?.training_directive !== "modify" &&
+    snapshot.signal_support?.training_directive !== "recover";
+  const logBacksTheDay =
+    Number(snapshot.quiet_override_evidence?.overridden_mornings ?? 0) >= 2 ||
+    Number(snapshot.quiet_override_evidence?.prs_7d ?? 0) >= 1;
+  const quietDayOpensOnEvidence =
+    baseKind === "easy" &&
+    !capsMayOpen &&
+    brakeIsSoft &&
+    logBacksTheDay &&
+    // BOTH readings, not just the effective one: `effectiveRecoveryReadiness` lets a
+    // supportive capacity read a low number as moderate, and a rest-grade reading is
+    // a floor no amount of corroboration downgrades.
+    readiness !== "low" &&
+    snapshot.recovery.readiness !== "low" &&
+    !highSoreness &&
+    !lowPerformance &&
+    !snapshot.constraints.illness &&
+    !snapshot.constraints.travel &&
+    snapshot.constraints.injuries.length === 0 &&
+    !snapshot.feedback?.joint_pain &&
+    snapshot.recovery_cycle == null &&
+    snapshot.day_read.recovery_week !== true;
+
   // ---- Athlete override (docs §7: wins unless a hard safety bound) ----
   let kind = baseKind;
   const override = (snapshot.request.override ?? "").toLowerCase();
   const trainAnyway = snapshot.request.train_anyway === true || isTrainIntentOverride(override);
   let durationOverrideOnly = false;
+  // The evidence arm above only ever applies to an athlete who actually chose to train.
+  const quietDayOpened = trainAnyway && quietDayOpensOnEvidence;
   if (trainAnyway) {
     kind = "train";
     fire(precedence, "athlete_override");
@@ -1503,6 +1628,14 @@ export function buildDailySessionDecision(
           ? pickDayVariant(TRAIN_ANYWAY_REST_RATIONALE, snapshot.date, "daily_decision:train_anyway_rest")
           : "Training by choice — today's safety context still shapes the session.",
     });
+    if (quietDayOpened) {
+      fire(precedence, "log_backs_open_day");
+      soft.push({ code: "log_backs_open_day", detail: "Your recent sessions back the full clock" });
+      rationale.push({
+        code: "log_backs_open_day",
+        text: pickDayVariant(LOG_BACKS_OPEN_DAY_RATIONALE, snapshot.date, "daily_decision:log_backs_open_day"),
+      });
+    }
   } else if (override) {
     if (isTrainIntentOverride(override)) {
       kind = "train";
@@ -1842,14 +1975,25 @@ export function buildDailySessionDecision(
     snapshot.day_read.recovery_week ||
     longevityEase ||
     planComplexityEase;
+  // The evidence arm keeps the sets: every input that would have softened them here
+  // is already excluded by `quietDayOpensOnEvidence` except the two soft preferences
+  // (longevity, learned plan complexity), and those are preferences the athlete's own
+  // log has just outvoted for this one day.
   const volume: DailyDecisionEnvelope["caps"]["volume"] =
-    kind === "rest" ? "minimal" : softenVolume ? "reduced" : "normal";
+    kind === "rest" ? "minimal" : quietDayOpened ? "normal" : softenVolume ? "reduced" : "normal";
   const intensity: DailyDecisionEnvelope["caps"]["intensity"] =
     kind === "rest" || kind === "easy"
       ? "easy"
       : deloadPhase || repeatedUnder
         ? "deload"
-        : trainAnywayFromRest || readiness === "low" || sorenessSoftensDay || lowPerformance || longevityEase
+        : trainAnywayFromRest ||
+            readiness === "low" ||
+            sorenessSoftensDay ||
+            lowPerformance ||
+            longevityEase ||
+            // The clock opens; the LOAD does not. A brake the log answered still holds
+            // aggression for the day it was answered on.
+            quietDayOpened
           ? "hold"
           : "normal";
   let duration: number | null;
@@ -1861,8 +2005,10 @@ export function buildDailySessionDecision(
     // A REST read the athlete overrides keeps the 40-minute clock even on an
     // otherwise-open morning: the read said none, so the override buys a bounded
     // session, never an unbounded one. Only an EASY read opens to the plan day's
-    // own clock, and only when nothing brakes.
-    duration = Math.round(capsMayOpen && baseKind !== "rest" ? lifted : Math.min(lifted, 40));
+    // own clock — either because nothing brakes, or because the brake is soft and
+    // the athlete's own log has answered it (`quietDayOpened`).
+    const opensToPlanClock = baseKind !== "rest" && (capsMayOpen || quietDayOpened);
+    duration = Math.round(opensToPlanClock ? lifted : Math.min(lifted, 40));
   } else {
     duration = requestMinutes ?? snapshot.day_read.est_minutes ?? null;
     if (duration != null) {
@@ -1993,7 +2139,14 @@ export function buildDailySessionDecision(
   // ---- Reach (up direction, beside the safety ladder) ----
   // Reason codes fire here; the athlete-facing line trails the kind/template
   // headline so primary_rationale stays the day's read, same as intent bias.
-  const { reach, trimmed: reachTrimmed } = resolveReach(snapshot, kind, saturated);
+  // A day whose clock was opened by the log keeps its reach PARKED: the brake it
+  // answered is still on the board, and opening the window is not the same as
+  // licensing more inside it. (`resolveReach` already refuses on `fresh_brake`; this
+  // covers the directive-only shape, where nothing fresh brakes but aggression is
+  // being held.)
+  const { reach, trimmed: reachTrimmed } = quietDayOpened
+    ? { reach: EMPTY_REACH, trimmed: false }
+    : resolveReach(snapshot, kind, saturated);
   if (reach.level === "push") {
     const reachCode: DailyDecisionReason = reachTrimmed ? "reach_trimmed_by_fueling" : "backed_day_reach";
     fire(precedence, reachCode);

@@ -131,6 +131,27 @@ export interface ClientDayRead {
   };
 }
 
+// POST /api/today-read/trade-rest — "train today, rest tomorrow". Always HTTP 200:
+// a refusal (a rest-grade reading, a reported symptom, anything clinical, a trade
+// already open, or a day with no quiet read to trade) arrives as ok:false with the
+// athlete-facing `error` and a machine `reason`, the same designed failure signal the
+// other agentic endpoints here use.
+export interface ClientRestTradeResponse {
+  ok: boolean;
+  reason?: string;
+  error?: string;
+  // The day kept for training.
+  date?: string;
+  // The day the rest moved to (date + 1).
+  rest_date?: string;
+  event_id?: number | null;
+  // True when this exact trade was already on the calendar (the idempotent answer).
+  already_traded?: boolean;
+  train_anyway?: boolean;
+  // Today's read, re-derived after the claim landed.
+  read?: ClientDayRead;
+}
+
 export interface ClientTodayAgendaAction {
   label: string;
   kind: string;

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**272 tools.**
+**273 tools.**
 
 | Tool | Description |
 |---|---|
@@ -259,6 +259,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `sync_garmin` | Run a manual Garmin Connect sync using local GARMIN_USERNAME/GARMIN_PASSWORD or stored token files. Experimental unofficial connector. The scheduler also auto-syncs ~every 6h when configured; the result is recorded as garmin_last_sync_at/garmin_last_sync_status (visible via get_settings). |
 | `synthesize_health` | Queue and cache the elite-coach whole-picture synthesis across labs, body composition, training, recovery, nutrition, supplements, and life. Returns a job immediately; poll get_agent_job. |
 | `toggle_context_tag` | Tag or untag one day with a controlled-vocabulary context tag (travel/alcohol/poor_sleep_env/work_crunch/illness_feel). Tapping an already-tagged day untags it (archives the row). Never invent a key outside the vocabulary. |
+| `trade_rest_day` | Trade today's quiet day forward: keep today as a training day and claim TOMORROW as the rest instead. Writes one calendar event for tomorrow (the plan's rotation is untouched) and returns today's re-derived read with train_anyway. Allowed only when today reads easy, is the accumulated-load quiet day, or is the week's own rest day; a rest grounded in the athlete — a rest-grade readiness reading, a reported symptom, anything clinical — comes back ok:false with the reason. Idempotent per date, and at most one trade open at a time. |
 | `understand_supplements` | Capture supplements from plain words ('creatine daily, omega-3, some D, whey occasionally') — the system approximates each into name + typical dose + cadence + related markers and stores it (dedup by name). NOT a daily log; say it once. Returns the understood items. |
 | `undispute_belief` | Restore a disputed belief (from list_beliefs' set_aside) back to active. |
 | `unskip_exercise` | Restore a previously skipped exercise to a date's session plan. |

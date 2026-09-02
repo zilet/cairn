@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**331 routes** across 114 groups.
+**333 routes** across 115 groups.
 
 ## `/activities`
 
@@ -833,6 +833,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/today-read` | The day intelligence read — the soul of the product. Judges what KIND of day today should be (train / easy / rest) as a calm SUGGESTION, never a gate. ALWAYS 200: the agentic read writes the human sentence, and if no agent is reachable (or it returns garbage) it falls back to the deterministic floor so the Brief always has something true to say. ?override= lets the launchpad chips reshape the read ("rough night" / "short on time" / "train anyway").  Fast path: the canonical (no-override) read is cached per day — written nightly by the scheduler and on any miss — so the morning open is instant and never waits on an agent subprocess. Overrides always recompute (they're transient). |
 | POST | `/api/today-read/reshape` | Background the Brief OVERRIDE reshape ("rough night" / "short on time" / "train anyway") as a durable job, so a steer survives a tab switch / reload / restart like the other 7 ops. The canonical GET /api/today-read (and ?reset=1) stays synchronous (cached + deterministic floor); this POST is ONLY for the agentic override reshape. The job's `done` result is byte-for-byte what GET /api/today-read?override= returns, so the PWA reuses its Brief render. This always queues: a user-facing request never waits on a coaching CLI. |
+| POST | `/api/today-read/trade-rest` | The rest trade — "train today, rest tomorrow", written onto the calendar. Deterministic, synchronous, agent-free: it claims TOMORROW with one context event and hands back today's re-derived read plus train_anyway, so the Brief can reveal the plan on the same tap. Only offered on a quiet day that is about rhythm (the ceiling-easy read, any easy read, the week's own rest day); a rest grounded in the athlete — a rest-grade reading, a symptom, anything clinical — refuses as `{ok:false, error}` at HTTP 200, the designed failure signal the agentic endpoints here already use. Idempotent per date, never more than one open trade, and the plan's ring is untouched — the calendar carries the trade. |
 
 ## `/today-side`
 

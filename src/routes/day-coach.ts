@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { enqueueAgentJob, ensureWeekAheadJob } from "../agentJobs.js";
 import { composeDailySession, suggestSession, weekAheadServe } from "../coachOps.js";
-import { readToday } from "../domain/brain/index.js";
+import { readToday, tradeRestDay } from "../domain/brain/index.js";
 import { createAgentJob } from "../domain/person/index.js";
 import {
   dailySessionErrorBody,
@@ -62,6 +62,24 @@ dayCoachRouter.post("/today-read/reshape", async (req, res) => {
   });
   enqueueAgentJob((job as any).id);
   return res.json({ ok: true, job });
+});
+
+// The rest trade — "train today, rest tomorrow", written onto the calendar.
+// Deterministic, synchronous, agent-free: it claims TOMORROW with one context event
+// and hands back today's re-derived read plus train_anyway, so the Brief can reveal
+// the plan on the same tap. Only offered on a quiet day that is about rhythm (the
+// ceiling-easy read, any easy read, the week's own rest day); a rest grounded in the
+// athlete — a rest-grade reading, a symptom, anything clinical — refuses as
+// `{ok:false, error}` at HTTP 200, the designed failure signal the agentic endpoints
+// here already use. Idempotent per date, never more than one open trade, and the
+// plan's ring is untouched — the calendar carries the trade.
+dayCoachRouter.post("/today-read/trade-rest", (req, res) => {
+  const b = req.body ?? {};
+  try {
+    res.json(tradeRestDay({ date: b.date != null ? String(b.date) : undefined }));
+  } catch (error: any) {
+    res.json({ ok: false, error: error?.message ?? String(error) });
+  }
 });
 
 // Build ONE session for today on demand ("ask it for a session right now"). A

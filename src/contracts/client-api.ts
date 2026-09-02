@@ -10,6 +10,7 @@ import type {
   ClientNextStep,
   ClientNutritionProgress,
   ClientPrescription,
+  ClientRestTradeResponse,
   ClientSessionSuggestion,
   ClientSessionSuggestionItem,
   ClientTodayAgenda,
@@ -3107,6 +3108,7 @@ export interface ClientApiResponses {
   "/api/today-plan-day": ClientTodayPlanDaySelection | null;
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
+  "/api/today-read/trade-rest": ClientRestTradeResponse;
   "/api/session-suggest": ClientSessionSuggestResponse;
   "/api/daily-session": ClientDailySessionComposition | null;
   "/api/daily-session/preview": ClientDailySessionPreview | null;

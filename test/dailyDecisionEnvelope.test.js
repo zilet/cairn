@@ -1001,3 +1001,165 @@ test("a completed log that contradicts a low rating does not hold intensity", ()
   assert.equal(env.caps.intensity, "normal");
   assert.ok(!env.precedence.includes("recent_underperformance"));
 });
+
+// ---------- the log answers a soft brake (owner ruling, 2026-09-02) ----------
+// The live shape: four straight quiet mornings trained through, five new bests, and
+// every "train anyway" still capped at forty minutes — because the run-intensity
+// caution is a `training_directive`, and capsMayOpen treats every directive alike.
+// A finding about RUNS was shortening a lifting session, with no sentence anywhere.
+
+const SOFT_BRAKE_SUPPORT = {
+  training_drive: "steady",
+  backed: false,
+  backed_by: [],
+  training_directive: "hold_aggression",
+  fresh_brake: true,
+  soft_brake_only: true,
+};
+
+// An easy morning, a soft brake holding it, the athlete choosing to train, and their
+// own log behind them.
+function quietMorningSnapshot(overrides = {}) {
+  const { signal_support, quiet_override_evidence, ...rest } = overrides;
+  return snapshot({
+    day_read: {
+      kind: "easy",
+      focus: null,
+      est_minutes: 25,
+      consecutive_training_days: 4,
+      recovery_week: false,
+      trained_today: false,
+    },
+    request: { override: null, train_anyway: true, equipment: null, minutes: null, goal: null },
+    signal_support: { ...SOFT_BRAKE_SUPPORT, ...(signal_support ?? {}) },
+    quiet_override_evidence:
+      quiet_override_evidence === null ? undefined : (quiet_override_evidence ?? { overridden_mornings: 3, prs_7d: 5 }),
+    ...rest,
+  });
+}
+
+const capsOf = (snap) => buildDailySessionDecision(snap, { now: NOW }).caps;
+
+test("a soft brake the log has answered gives the quiet day back its own clock", () => {
+  const envelope = buildDailySessionDecision(quietMorningSnapshot(), { now: NOW });
+  assert.equal(envelope.caps.duration_min, 60, "the plan day's own estimate, not the 40-minute brake clock");
+  assert.equal(envelope.caps.volume, "normal");
+  // The clock opens; the LOAD does not.
+  assert.equal(envelope.caps.intensity, "hold");
+  assert.equal(envelope.reach.level, null, "an opened window is not a licence to reach inside it");
+  assert.ok(envelope.precedence.includes("log_backs_open_day"));
+  // And it says so, in one athlete-facing line the plan surface can render.
+  const line = envelope.rationale.find((entry) => entry.code === "log_backs_open_day");
+  assert.ok(line, "a cap the athlete cannot see a reason for is the defect this fixes");
+  assert.equal(violatesReadingGrammar(line.text), null);
+});
+
+test("a new best on its own is enough; so are two mornings already trained through", () => {
+  const withEvidence = (quiet_override_evidence) => capsOf(quietMorningSnapshot({ quiet_override_evidence }));
+  assert.equal(withEvidence({ overridden_mornings: 0, prs_7d: 1 }).duration_min, 60);
+  assert.equal(withEvidence({ overridden_mornings: 2, prs_7d: 0 }).duration_min, 60);
+  // One morning and no bests is not evidence yet — the cap stands.
+  assert.equal(withEvidence({ overridden_mornings: 1, prs_7d: 0 }).duration_min, 40);
+  // And with nothing logged at all, nothing changes from what it was.
+  assert.equal(capsOf(quietMorningSnapshot({ quiet_override_evidence: null })).duration_min, 40);
+});
+
+test("every safety floor still caps the day, whatever the log says", () => {
+  // A rest-grade reading arrives as a `low` readiness bucket, and it is a floor.
+  assert.equal(
+    capsOf(
+      quietMorningSnapshot({
+        recovery: { has_data: true, readiness: "low", hrv_drift: "down", rhr_drift: "up", sleep_drift: "down" },
+      })
+    ).duration_min,
+    40
+  );
+  // An active symptom or injury reaches the envelope as a constraint.
+  assert.equal(
+    capsOf(
+      quietMorningSnapshot({
+        constraints: {
+          injuries: [{ title: "Left knee", constraint_level: "protective", areas: ["knee"], exercises: [] }],
+          illness: false,
+          travel: false,
+        },
+      })
+    ).duration_min,
+    40
+  );
+  // A clinical hold: the brake is no longer soft, so the arm never opens.
+  assert.equal(
+    capsOf(quietMorningSnapshot({ signal_support: { soft_brake_only: undefined } })).duration_min,
+    40
+  );
+  // A directive that asks for less, rather than for restraint, is not soft either.
+  assert.equal(capsOf(quietMorningSnapshot({ signal_support: { training_directive: "recover" } })).duration_min, 40);
+  // Illness, high soreness and a reduced week each keep their cap.
+  assert.equal(
+    capsOf(quietMorningSnapshot({ constraints: { injuries: [], illness: true, travel: false } })).duration_min,
+    40
+  );
+  assert.equal(
+    capsOf(quietMorningSnapshot({ checkin: { soreness: 5, energy: 4, sleep_feel: 4 } })).duration_min,
+    40
+  );
+  assert.equal(
+    capsOf(
+      quietMorningSnapshot({
+        day_read: {
+          kind: "easy",
+          focus: null,
+          est_minutes: 25,
+          consecutive_training_days: 4,
+          recovery_week: true,
+          trained_today: false,
+        },
+      })
+    ).duration_min,
+    40
+  );
+});
+
+test("a REST baseline is unchanged — the override still buys a bounded session", () => {
+  const envelope = buildDailySessionDecision(
+    quietMorningSnapshot({
+      day_read: {
+        kind: "rest",
+        focus: null,
+        est_minutes: null,
+        consecutive_training_days: 4,
+        recovery_week: false,
+        trained_today: false,
+      },
+    }),
+    { now: NOW }
+  );
+  assert.equal(envelope.caps.duration_min, 40);
+  assert.equal(envelope.caps.volume, "reduced");
+  assert.equal(envelope.caps.intensity, "hold");
+  assert.equal(envelope.precedence.includes("log_backs_open_day"), false);
+});
+
+test("without the athlete choosing to train, the quiet day stays quiet", () => {
+  const envelope = buildDailySessionDecision(
+    quietMorningSnapshot({
+      request: { override: null, train_anyway: false, equipment: null, minutes: null, goal: null },
+    }),
+    { now: NOW }
+  );
+  assert.equal(envelope.kind, "easy");
+  assert.equal(envelope.precedence.includes("log_backs_open_day"), false);
+});
+
+test("the opened-day line rotates and never reads as a grade", () => {
+  const seen = new Set();
+  for (const date of ["2031-05-01", "2031-05-02", "2031-05-03", "2031-05-04"]) {
+    const envelope = buildDailySessionDecision(quietMorningSnapshot({ date }), { now: NOW });
+    const line = envelope.rationale.find((entry) => entry.code === "log_backs_open_day");
+    assert.ok(line);
+    assert.equal(violatesReadingGrammar(line.text), null);
+    assert.doesNotMatch(line.text, /\d+\s*(?:\/\s*100|%|points?|scores?)/i);
+    seen.add(line.text);
+  }
+  assert.ok(seen.size > 1, "a stable input across calendar days must not print one literal");
+});

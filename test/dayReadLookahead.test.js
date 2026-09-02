@@ -12,10 +12,16 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { repo, resetTables, seedTrainingDay, seedRecoveryDay, localDaysAgo } from "./_seed.js";
-import { DAY_READ_OUTCOMES, DAY_READ_WHY_VARIANTS, violatesReadingGrammar } from "../dist/repo/day-read.js";
+import {
+  DAY_READ_OUTCOMES,
+  DAY_READ_WHY_VARIANTS,
+  REST_TRADE_META_KEY,
+  violatesReadingGrammar,
+} from "../dist/repo/day-read.js";
 import { tomorrowHolds, planningSignalState } from "../dist/repo/signal-state.js";
 import { pickDayVariant } from "../dist/repo/brain/day-read-rules.js";
 import { promptData } from "../dist/prompt/context-projection.js";
+import { tradeRestDay, REST_TRADE_TITLE } from "../dist/domain/brain/rest-trade.js";
 
 const REF = localDaysAgo(0);
 const TOMORROW = localDaysAgo(-1);
@@ -412,4 +418,52 @@ test("the day-read prompt site carries the resolved look-ahead", () => {
   // The allowlist is a per-site decision, not a global one: the plan-shaping sites
   // reason over a whole week, where one day's commitment is noise.
   assert.doesNotMatch(promptData(ctx, "coach"), /tomorrow_holds/);
+});
+
+// ---------- (g) the rest trade is a claim on tomorrow like any other ----------
+// The athlete's own traded rest is written as a `claims_day` life event, which is
+// exactly the shape this look-ahead already honors — so the day they promised
+// themselves re-times today onto the plan day, with no new rule and no change to the
+// plan's rotation. The trade endpoint itself is only offered on a quiet morning (see
+// dayReadTodayHold.test.js); this pins the READ side of the same event.
+
+const tradedRestTomorrow = () =>
+  repo.addContextEvent({
+    kind: "life_event",
+    title: REST_TRADE_TITLE,
+    start_date: TOMORROW,
+    end_date: TOMORROW,
+    meta: { claims_day: true, [REST_TRADE_META_KEY]: true, traded_from: REF },
+  });
+
+test("a traded rest day tomorrow re-times today onto the plan day", () => {
+  seedStackedMorning();
+  tradedRestTomorrow();
+
+  const read = repo.dayRead(REF);
+  assert.equal(read.kind, "train");
+  assert.equal(read.decision.rule_code, "lookahead_retimed_training");
+  assert.equal(read.focus, "Pull", "the day their own week was about to hand them");
+  assert.equal(read.est_minutes, 40);
+  assert.equal(read.signals.lookahead_retimed.holds[0].title, REST_TRADE_TITLE);
+  assert.equal(read.signals.tomorrow_holds[0].blocks_training, true);
+});
+
+test("the trade endpoint writes exactly that claim, and hands back today re-derived", () => {
+  // The ceiling-easy morning the trade is actually offered on: five loading days, the
+  // read gone quiet, nothing corroborating a rest.
+  seedStackedMorning({ days: 5 });
+  const traded = tradeRestDay({ date: REF });
+  assert.equal(traded.ok, true);
+  assert.equal(traded.rest_date, TOMORROW);
+  assert.equal(traded.train_anyway, true, "the athlete has chosen today; the client reveals the plan on this");
+
+  const holds = repo.dayRead(REF).signals.tomorrow_holds;
+  assert.equal(holds.length, 1);
+  assert.equal(holds[0].title, REST_TRADE_TITLE);
+  assert.equal(holds[0].blocks_training, true, "the same claim the look-ahead honors above");
+  // At the consecutive-day CEILING the look-ahead deliberately stands aside, so the
+  // read itself stays quiet — the trade buys the athlete their session through
+  // `train_anyway` (and the envelope\'s own clock), never by rewriting the suggestion.
+  assert.equal(traded.read.kind, "easy");
 });

@@ -5,6 +5,7 @@ import {
   prepareDailySessionUseCase,
   previewAdaptiveDailySessionUseCase,
 } from "../../domain/training/index.js";
+import { tradeRestDay } from "../../domain/brain/index.js";
 import {
   dailyOutcomeRead,
   decideDailySession,
@@ -26,6 +27,13 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
       agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
     },
     async ({ date, override, agent }) => asText(queueMcpAgentJob("day_read_override", { date, override }, agent))
+  );
+
+  server.tool(
+    "trade_rest_day",
+    "Trade today's quiet day forward: keep today as a training day and claim TOMORROW as the rest instead. Writes one calendar event for tomorrow (the plan's rotation is untouched) and returns today's re-derived read with train_anyway. Allowed only when today reads easy, is the accumulated-load quiet day, or is the week's own rest day; a rest grounded in the athlete — a rest-grade readiness reading, a reported symptom, anything clinical — comes back ok:false with the reason. Idempotent per date, and at most one trade open at a time.",
+    { date: z.string().optional().describe("YYYY-MM-DD; the day being KEPT for training. Defaults to today") },
+    async ({ date }) => asText(tradeRestDay({ date }))
   );
 
   server.tool(
