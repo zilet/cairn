@@ -677,7 +677,7 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
   const shellsToDrop = plan.shells_to_drop;
   let targetId = plan.target_id;
   let source = plan.source;
-  let mode: "fill" | "replace" | "create" | "retarget" | null = plan.mode;
+  const mode: "fill" | "replace" | "create" | "retarget" | null = plan.mode;
 
   // Nothing changed and nothing moved — the common case on a re-sync.
   if (plan.unchanged && prior) return { ok: true, skipped: "unchanged", activity_id: prior.activity_id };

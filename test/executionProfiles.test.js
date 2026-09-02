@@ -246,7 +246,7 @@ test("every routable task except chat declares an execution profile", () => {
   }
   // Model pins must stay ALIASES so a new generation ships without a code change.
   const claude = bundledAgents().claude;
-  assert.deepEqual(claude.model_classes, { fast: "sonnet", deep: "opus" });
+  assert.deepEqual(claude.model_classes, { fast: "sonnet", deep: "fable" });
   for (const model of Object.values(claude.model_classes)) assert.doesNotMatch(model, /\d/, "no dated model id");
 });
 
@@ -279,10 +279,10 @@ test("every self-critique verify op declares an execution profile", () => {
 
 test("profiles are provider-aware: only agents that map a model class get --model", () => {
   assert.deepEqual(resolve("day_read", "claude"), { model: "sonnet", reasoning: "low" });
-  assert.deepEqual(resolve("proposal", "claude"), { model: "opus", reasoning: "xhigh" });
-  assert.deepEqual(resolve("health", "claude"), { model: "opus", reasoning: "high" });
+  assert.deepEqual(resolve("proposal", "claude"), { model: "fable", reasoning: "xhigh" });
+  assert.deepEqual(resolve("health", "claude"), { model: "fable", reasoning: "high" });
   assert.deepEqual(resolve("enrich", "claude"), { model: "sonnet", reasoning: "low" });
-  assert.deepEqual(resolve("session_suggest", "claude"), { model: "opus", reasoning: "medium" });
+  assert.deepEqual(resolve("session_suggest", "claude"), { model: "fable", reasoning: "medium" });
 
   // Non-Anthropic CLIs declare no model_classes: they keep their own model and take
   // only the effort. An Anthropic alias must never reach them.
@@ -348,10 +348,10 @@ test("executionProfileForOp folds ops onto their task class", () => {
   const profileFor = (op, agent) => repo.executionProfileForOp(op)(agent);
   // case_conference / conference_* -> brain_review, evolve_program -> proposal,
   // marker_reconcile -> health (the same taskForOp table the agent routing uses).
-  assert.deepEqual(profileFor("case_conference", "claude"), { model: "opus", reasoning: "xhigh" });
-  assert.deepEqual(profileFor("conference_nutrition", "claude"), { model: "opus", reasoning: "xhigh" });
-  assert.deepEqual(profileFor("evolve_program", "claude"), { model: "opus", reasoning: "xhigh" });
-  assert.deepEqual(profileFor("marker_reconcile", "claude"), { model: "opus", reasoning: "high" });
+  assert.deepEqual(profileFor("case_conference", "claude"), { model: "fable", reasoning: "xhigh" });
+  assert.deepEqual(profileFor("conference_nutrition", "claude"), { model: "fable", reasoning: "xhigh" });
+  assert.deepEqual(profileFor("evolve_program", "claude"), { model: "fable", reasoning: "xhigh" });
+  assert.deepEqual(profileFor("marker_reconcile", "claude"), { model: "fable", reasoning: "high" });
   assert.deepEqual(profileFor("day_read", "claude"), { model: "sonnet", reasoning: "low" });
   assert.deepEqual(profileFor("auto", "claude"), {});
 });
@@ -416,7 +416,7 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
     // fast/low vs deep/xhigh, expressed in each CLI's own flags. Only Claude maps a
     // model class, and grok/antigravity degrade xhigh to their declared ceiling.
     assert.deepEqual(argv.claude.day_read, ["--model", "sonnet", "--effort", "low", "-p", prompt]);
-    assert.deepEqual(argv.claude.proposal, ["--model", "opus", "--effort", "xhigh", "-p", prompt]);
+    assert.deepEqual(argv.claude.proposal, ["--model", "fable", "--effort", "xhigh", "-p", prompt]);
     assert.deepEqual(argv.codex.day_read, [
       "exec",
       "-c",
