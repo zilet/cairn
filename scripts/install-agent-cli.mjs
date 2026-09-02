@@ -112,19 +112,29 @@ function vendorCandidates(command, env, root) {
 
 function persistVendorBinary(command, env, root) {
   const target = path.join(root, "bin", command);
+  // Pick the NEWEST build among the known locations, then persist it at root/bin.
+  // The old rule scanned root/bin first and returned it as "already persisted", so a
+  // first-party `update` that wrote into the vendor's own directory (grok: ~/.grok/bin)
+  // never reached the copy on PATH — grok sat at 0.2.93 in .cairn-tools/bin while
+  // ~/.grok/bin held 1.0.13. Newest-mtime wins in both directions: a vendor that
+  // updates in place at root/bin (agy) keeps its copy, and a stale leftover in
+  // ~/.local/bin never overwrites a fresher one.
+  let newest = null;
   for (const candidate of vendorCandidates(command, env, root)) {
     try {
-      if (!fs.statSync(candidate).isFile()) continue;
-      if (path.resolve(candidate) === path.resolve(target)) return target;
-      const source = fs.realpathSync(candidate);
-      fs.copyFileSync(source, target);
-      fs.chmodSync(target, 0o755);
-      return target;
+      const stat = fs.statSync(candidate);
+      if (!stat.isFile()) continue;
+      if (!newest || stat.mtimeMs > newest.mtimeMs) newest = { candidate, mtimeMs: stat.mtimeMs };
     } catch {
-      // Try the next known vendor location.
+      // Not present at this location.
     }
   }
-  throw new Error(`${command} installer completed but no executable was found`);
+  if (!newest) throw new Error(`${command} installer completed but no executable was found`);
+  if (path.resolve(newest.candidate) === path.resolve(target)) return target;
+  const source = fs.realpathSync(newest.candidate);
+  fs.copyFileSync(source, target);
+  fs.chmodSync(target, 0o755);
+  return target;
 }
 
 function downloadVerifiedInstaller(spec, env) {

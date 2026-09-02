@@ -12,19 +12,20 @@
     "auth_state": [".claude.json", ".claude"],
     "models_list": null,
     "model_flag": ["--model", "{model}"],
-    "model_classes": { "fast": "sonnet", "deep": "opus" },
+    "model_classes": { "fast": "sonnet", "deep": "fable" },
+    "model_note": "Aliases, never dated IDs: the installed CLI resolves each alias to the newest model of that family. Verified live 2026-09-02: on claude 2.1.258 `fable` -> claude-fable-5-1 (Anthropic's most capable generally available model; ~2x the per-token cost of `opus`, so it is reserved for the `deep` class — composition, meal plans, onboarding, reconciliation) and `sonnet` -> Sonnet 5 for the high-frequency `fast` class. On the older 2.1.233 `fable` resolved to claude-fable-5, so the CLI pin below is part of the model choice.",
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh", "max"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
     "structured_output": {
       "flag": ["--json-schema", "{schema}"],
       "arg": "inline",
-      "note": "claude 2.1.220 --help: '--json-schema <schema>  JSON Schema for structured output validation.' Verified live: stdout is the bare payload with no envelope, so extractJson is unchanged. A top-level anyOf is REJECTED (API 400: input_schema.type required) — schemas must be a single top-level object."
+      "note": "claude 2.1.220 --help: '--json-schema <schema>  JSON Schema for structured output validation.' Verified live (re-verified on 2.1.258, 2026-09-02): stdout is the bare payload with no envelope, so extractJson is unchanged. A top-level anyOf is REJECTED (API 400: input_schema.type required) — schemas must be a single top-level object."
     },
     "install": {
       "method": "npm",
       "package": "@anthropic-ai/claude-code",
-      "version": "2.1.233"
+      "version": "2.1.258"
     },
     "stream": {
       "format": "claude",
@@ -55,7 +56,7 @@
     "install": {
       "method": "npm",
       "package": "@openai/codex",
-      "version": "0.147.0",
+      "version": "0.152.1",
       "args": ["--include=optional"]
     }
   },
@@ -107,12 +108,12 @@
       "flag": ["--json-schema", "{schema}"],
       "arg": "inline",
       "envelope": { "structured_key": "structuredOutput", "text_key": "text" },
-      "note": "grok 0.2.114 --help: '--json-schema <SCHEMA>  JSON Schema for structured output. When set, the model is constrained to produce JSON matching this schema. Implies --output-format json.' That implied switch is why `envelope` exists: verified live, stdout becomes {text, thought, usage, …, structuredOutput} — the first `{` is the ENVELOPE, so without unwrapping, extractJson would hand the op a telemetry object (and `thought` would drag raw reasoning into it). Deliberately absent from `stream.args`: --json-schema would override --output-format streaming-json."
+      "note": "grok 0.2.114 --help: '--json-schema <SCHEMA>  JSON Schema for structured output. When set, the model is constrained to produce JSON matching this schema. Implies --output-format json.' That implied switch is why `envelope` exists: verified live, stdout becomes {text, thought, usage, …, structuredOutput} — the first `{` is the ENVELOPE, so without unwrapping, extractJson would hand the op a telemetry object (and `thought` would drag raw reasoning into it). Deliberately absent from `stream.args`: --json-schema would override --output-format streaming-json. Re-verified live on grok 1.0.13 (2026-09-02, a major bump): `-p` is now `-p, --single <PROMPT>`, `--cwd`, `--json-schema`, `--reasoning-effort` (alias --effort) and `-m/--model` all still exist; the json envelope keys {text, thought, structuredOutput} are unchanged; `--output-format` offers plain|json|streaming-json|streaming-messages-json and streaming-json still emits {type:\"text\"|\"thought\", data} lines, so the stream adapter in src/agents.ts is unchanged. Vendor `update` writes to ~/.grok/bin; scripts/install-agent-cli.mjs persists the newest build to .cairn-tools/bin."
     },
     "install": {
       "method": "script",
       "url": "https://x.ai/cli/install.sh",
-      "sha256": "43d0943123edade1383a476a4f778674877acee7c1f98a00f094c4a0f7349321",
+      "sha256": "7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791",
       "update_args": ["update"]
     },
     "stream": {
