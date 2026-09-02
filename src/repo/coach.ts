@@ -90,7 +90,11 @@ import { symptomAreaKey } from "./symptom-area.js";
 import { symptomTextMentionsBody } from "../symptomCapture.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import { addDaysISO, localDateISO, localDayOfStamp, nowContext } from "./shared.js";
-import { bumpTrainingDataVersion, coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
+import {
+  bumpTrainingDataVersion,
+  coachContextBackstopSignature,
+  registerTrainingCacheClear,
+} from "./training-cache.js";
 import { currentMarkerDataVersion } from "./marker-cache.js";
 import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-context.js";
 // The "knows-me" layer — additive context keys (function-level cycle, same shape as
@@ -1158,13 +1162,22 @@ function buildBrainSlice(
 // free. The local DATE and HOUR cover the time-of-day framing (`now`, the fuel bucket,
 // the hour-based copy) that no write touches, along with the device zone that frames
 // them. The TTL is the last backstop, so even an input none of those catch can only be
-// stale for a minute.
+// stale for that long.
 //
 // A build's OWN incidental writes are folded in by re-reading the key after it returns:
 // the assembly is synchronous, so nothing else can have interleaved, and the value is
 // by construction consistent with the state it produced.
+//
+// WHY 15 MINUTES AND NOT ONE. The TTL was doing work it was never meant to do: every
+// Today open more than a minute after the last one paid a full rebuild (~800 ms and
+// ~4.5k statements on a Mac, seconds on the Pi) even when nothing whatsoever had
+// changed. The key — not the clock — is what keeps this honest: the odometer, the
+// per-table counts, the profile and settings rows by value, and the local date + hour
+// catch every input the context actually reads. The clock only covers the residue
+// (state living outside those tables, e.g. an app_state stamp), and the hour component
+// still bounds every time-of-day framing to the hour boundary regardless of the TTL.
 let coachContextMemo: { key: string; at: number; value: CoachContext } | null = null;
-const COACH_CONTEXT_MEMO_TTL_MS = 60_000;
+const COACH_CONTEXT_MEMO_TTL_MS = 15 * 60_000;
 registerTrainingCacheClear(() => {
   coachContextMemo = null;
 });
@@ -1176,7 +1189,11 @@ function coachContextMemoKey(): string {
 
 export function getCoachContext(): CoachContext {
   const key = coachContextMemoKey();
-  if (coachContextMemo && coachContextMemo.key === key && Date.now() - coachContextMemo.at < COACH_CONTEXT_MEMO_TTL_MS) {
+  if (
+    coachContextMemo &&
+    coachContextMemo.key === key &&
+    Date.now() - coachContextMemo.at < COACH_CONTEXT_MEMO_TTL_MS
+  ) {
     return coachContextMemo.value;
   }
   const value = runWithBrainSnapshot(() => getCoachContextFromSnapshot());

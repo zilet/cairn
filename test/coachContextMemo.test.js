@@ -125,9 +125,11 @@ test("the TTL rebuilds it even when nothing observable changed", () => {
   mock.timers.enable({ apis: ["Date"], now: MID_HOUR_INSTANT });
   try {
     const first = getCoachContext();
-    mock.timers.tick(30_000);
-    assert.equal(getCoachContext(), first, "still shared inside the window");
-    mock.timers.tick(31_000); // past the 60s backstop
+    // Well past the minute the TTL used to be: an idle open must not pay for a rebuild
+    // the key says nothing has earned.
+    mock.timers.tick(5 * 60_000);
+    assert.equal(getCoachContext(), first, "still shared minutes later — the key invalidates, not the clock");
+    mock.timers.tick(11 * 60_000); // past the 15-minute backstop
     assert.notEqual(getCoachContext(), first, "rebuilt once the backstop expires");
   } finally {
     mock.timers.reset();
@@ -141,4 +143,23 @@ test("the shared build stays a well-formed coach context", () => {
   assert.equal(shared, fresh);
   assert.ok(shared.now && typeof shared.now.date === "string");
   assert.deepEqual(Object.keys(shared).sort(), Object.keys(fresh).sort());
+});
+
+// The rotation cursor is bookkeeping, not coach input: pickAgentOrder() persists it on
+// `settings` every time a round-robin order is handed out, and the whole settings row is
+// in the memo key by value. Reading agent STATUS on a GET (the Brief asks on every open)
+// used to go through that same rotation, so the Brief expired the very build it was
+// about to read. The cursor is excluded from the key, and the status read no longer
+// rotates — see agentStatusFor (src/coachOps.ts), which asks getAgentConfig directly.
+test("the agent rotation cursor is not part of the key, but the rest of settings is", () => {
+  repo.setSettings({ rr_cursor: "claude" }); // materialize the row before it is keyed on
+  resetCoachContextMemo();
+  const first = getCoachContext();
+  repo.setSettings({ rr_cursor: "codex" });
+  assert.equal(getCoachContext(), first, "a cursor write must not expire the shared build");
+  repo.setSettings({ rr_cursor: "grok" });
+  assert.equal(getCoachContext(), first, "…however many times the rotation moves it");
+
+  repo.setSettings({ coach_hour: (repo.getSettings().coach_hour + 1) % 24 });
+  assert.notEqual(getCoachContext(), first, "a real settings change still rebuilds");
 });

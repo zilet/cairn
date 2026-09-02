@@ -56,7 +56,8 @@ import { activeRecoveryWeek, getEnduranceGoal, getPrimaryDiscipline } from "./pr
 import { getProgramState, weeklyKm, type MesoPhase, type MesocycleState } from "./program-state.js";
 import { runIntensityDiscipline } from "./run-progression.js";
 import { programBalance } from "./progression.js";
-import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO, nowContext } from "./shared.js";
+import { coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
 import { getTrainingIntent, isStrengthLedIntent } from "./training-intent.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import {
@@ -2367,7 +2368,51 @@ function freshStatementHold(date: string, checkin: any): FreshStatementField | n
 // dayPlanningSignalState). Anything else would be exactly the failure mode this
 // function was just fixed for: an optional argument silently changing what the
 // athlete-facing read is allowed to know.
+//
+// MEMOIZED at this export boundary only, and only for the BARE form. One Today open
+// asks for the same day's read three or four times — the cached fast path's fingerprint
+// comparison, the daily-decision snapshot, the next-step candidates, the coach context —
+// at ~800 statements each. The key is the date, the local hour and the coach-context
+// backstop signature (counts, high-water marks and the update odometer over every table
+// this read touches, plus profile and settings by value), so a write lands a new key:
+// the writer at invalidateDayReadIfDecisionChanged, which reads before it writes and
+// must see its own post-write read, is safe here where a plain TTL would not be.
+//
+// Every call that OVERRIDES an input — recovery, unifiedState, underfuelingSnapshot —
+// bypasses the memo entirely and recomputes. Those callers hold views assembled
+// elsewhere, and the parameter contract above is that each overrides exactly its own
+// input; nothing about a caller-supplied view belongs in a shared cache.
+//
+// The cached read is handed out AS IS, not cloned — the same convention getCoachContext
+// follows for the same reason: it is a read MODEL, every consumer spreads it
+// (`{...read, headline}`) or reads fields off it, and the request-scoped signal state
+// inside it is meant to be the one object the Brief and the coach both hold (see
+// test/dayReadUseCase "one signal state per date per request"). Treat what comes back as
+// read-only; a consumer that needs to change a field copies it first.
+let dayReadCache: { key: string; value: DayRead } | null = null;
+registerTrainingCacheClear(() => {
+  dayReadCache = null;
+});
+
 export function dayRead(
+  date?: string,
+  recovery?: any,
+  unifiedState?: UnifiedSignalState,
+  underfuelingSnapshot?: UnderfuelingRead
+): DayRead {
+  if (recovery !== undefined || unifiedState !== undefined || underfuelingSnapshot !== undefined) {
+    return computeDayRead(date, recovery, unifiedState, underfuelingSnapshot);
+  }
+  const d = date || localDateISO();
+  const now = nowContext();
+  const key = `${d}|${now.hour}|${now.tz ?? ""}|${coachContextBackstopSignature()}`;
+  if (dayReadCache && dayReadCache.key === key) return dayReadCache.value;
+  const value = computeDayRead(d);
+  dayReadCache = { key, value };
+  return value;
+}
+
+function computeDayRead(
   date?: string,
   recovery?: any,
   unifiedState?: UnifiedSignalState,

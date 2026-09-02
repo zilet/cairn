@@ -6,14 +6,15 @@ import { findExercise, findOrCreateExercise, recentWorkingSeconds, recentWorking
 import { relatedLiftStart } from "./related-lift.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO, localDayOfStamp } from "./shared.js";
-import { bumpTrainingDataVersion } from "./training-cache.js";
+import {
+  bumpTrainingDataVersion,
+  currentTrainingDataVersion,
+  registerTrainingCacheClear,
+  trainingBackstopSignature,
+} from "./training-cache.js";
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
-import {
-  type ReasonProvenance,
-  normalizeHistoricalReason,
-  validReasonProvenance,
-} from "./proposal-truth.js";
+import { type ReasonProvenance, normalizeHistoricalReason, validReasonProvenance } from "./proposal-truth.js";
 
 export { PlanQualityError, pressSlotKey, validateTrainingPlan } from "./plan-quality.js";
 
@@ -50,7 +51,88 @@ type AccountablePlanChange = {
   before: Omit<PlanPrescription, "day_number" | "exercise"> | null;
 };
 
+// The accountability decoration's OWN backstop: the brain ledger and the proposals it
+// joins are the only two tables it reads, and NEITHER is covered by
+// trainingBackstopSignature() (which watches the training log and the plan itself).
+//
+// COUNT catches a delete and MAX(id) an insert. UPDATES are the case they are blind to,
+// and this decoration is FULL of them: patchBrainDecision (repo/brain-decisions.ts)
+// rewrites a decision's whole row — action_json included — after an apply has walked the
+// changes, and that JSON is exactly where this map's summaries and per-change reasons
+// come from. So SQLite counts the updates for us, the same way
+// coachContextBackstopSignature does: one TEMP counter row plus an AFTER UPDATE trigger
+// on each of the two tables. TEMP objects live on this connection only — no schema
+// change, no migration, nothing persisted. If any of that fails to install, the
+// signature is a never-matching key and the memos below recompute on every call rather
+// than risk serving a stale "why".
+//
+// ONE statement on the read side, because this runs on every getPlan() / getPlanDay()
+// call, hits included.
+const ACCOUNTABLE_UPDATE_TABLE = "_cairn_plan_accountable_updates";
+let accountableBackstop: ReturnType<typeof db.prepare> | null = null;
+let accountableBackstopFailed = false;
+
+function accountableBackstopStatement(): ReturnType<typeof db.prepare> | null {
+  if (accountableBackstop || accountableBackstopFailed) return accountableBackstop;
+  try {
+    db.exec(`CREATE TEMP TABLE IF NOT EXISTS ${ACCOUNTABLE_UPDATE_TABLE} (n INTEGER NOT NULL)`);
+    const seeded = db.prepare(`SELECT COUNT(*) AS c FROM ${ACCOUNTABLE_UPDATE_TABLE}`).get() as any;
+    if (!seeded?.c) db.exec(`INSERT INTO ${ACCOUNTABLE_UPDATE_TABLE} (n) VALUES (0)`);
+    for (const t of ["brain_decisions", "plan_proposals"]) {
+      db.exec(
+        `CREATE TEMP TRIGGER IF NOT EXISTS _cairn_plan_accountable_u_${t} AFTER UPDATE ON ${t}
+         BEGIN UPDATE ${ACCOUNTABLE_UPDATE_TABLE} SET n = n + 1; END`
+      );
+    }
+    accountableBackstop = db.prepare(
+      `SELECT (SELECT n FROM ${ACCOUNTABLE_UPDATE_TABLE}) AS u,
+              (SELECT COUNT(*) FROM brain_decisions) AS dc,
+              (SELECT COALESCE(MAX(id),0) FROM brain_decisions) AS dm,
+              (SELECT COUNT(*) FROM plan_proposals) AS pc,
+              (SELECT COALESCE(MAX(id),0) FROM plan_proposals) AS pm`
+    );
+  } catch {
+    accountableBackstopFailed = true;
+    accountableBackstop = null;
+  }
+  return accountableBackstop;
+}
+
+function accountableBackstopSignature(): string {
+  try {
+    const stmt = accountableBackstopStatement();
+    if (!stmt) return `noaccountable:${Math.random()}`;
+    const r = stmt.get() as any;
+    if (r?.u == null) return `noaccountable:${Math.random()}`;
+    return [r.u, r.dc, r.dm, r.pc, r.pm].join("|");
+  } catch {
+    return `noaccountable:${Math.random()}`;
+  }
+}
+
+// MEMOIZED (repo/training-cache.ts): this map is rebuilt on EVERY getPlan()/getPlanDay()
+// — ~124 times per Today open — and each rebuild parses up to 100 decisions' action and
+// context JSON and normalizes their prose. Pure over the two tables the signature above
+// watches. A structuredClone on the way out leaves the cached map untouchable: `before`
+// rides onto a plan item as `brain_change_before`, and getPlanDay hands those items
+// straight to a caller.
+let accountableChangesCache: { key: string; value: Map<string, AccountablePlanChange> } | null = null;
+registerTrainingCacheClear(() => {
+  accountableChangesCache = null;
+  planCache = null;
+});
+
 function accountablePlanChanges(): Map<string, AccountablePlanChange> {
+  const key = accountableBackstopSignature();
+  if (accountableChangesCache && accountableChangesCache.key === key) {
+    return structuredClone(accountableChangesCache.value);
+  }
+  const value = computeAccountablePlanChanges();
+  accountableChangesCache = { key, value };
+  return structuredClone(value);
+}
+
+function computeAccountablePlanChanges(): Map<string, AccountablePlanChange> {
   const map = new Map<string, AccountablePlanChange>();
   try {
     const rows = db
@@ -59,7 +141,7 @@ function accountablePlanChanges(): Map<string, AccountablePlanChange> {
                 d.action_json, d.context_json, p.created_at AS proposal_created_at
          FROM brain_decisions d
          LEFT JOIN plan_proposals p
-           ON d.source_ref_type = 'plan_proposal' AND d.source_ref_key = CAST(p.id AS TEXT)
+           ON d.source_ref_type = 'plan_proposal' AND p.id = CAST(d.source_ref_key AS INTEGER)
         WHERE d.status = 'applied' AND d.domain = 'training' AND d.autonomy_tier IN ('quiet_apply','announce')
         ORDER BY d.id DESC LIMIT 100`
       )
@@ -370,7 +452,30 @@ function decorateAccountablePlan(days: any[]): any[] {
   }));
 }
 
+// MEMOIZED (repo/training-cache.ts), the same shape as getProgramState: the whole plan
+// is read ~124 times per Today open — once per lift inside planItemFor, once per
+// run-compliance call inside appliedRunPrescription, once per plan day inside
+// planDayProgression — and each read is one query per plan day plus the accountability
+// decoration. Keyed on the training backstop (which watches plan_days / plan_items /
+// exercises and folds in the training write counter every plan writer bumps) plus the
+// ledger signature above, so any write that can change a prescription or its "why"
+// lands a new key. structuredClone on the way out because callers mutate what they get:
+// the daily composition writes onto items, and several readers sort them in place.
+let planCache: { key: string; value: any[] } | null = null;
+
+function planCacheKey(): string {
+  return `${currentTrainingDataVersion()}|${trainingBackstopSignature()}|${accountableBackstopSignature()}`;
+}
+
 export function getPlan() {
+  const key = planCacheKey();
+  if (planCache && planCache.key === key) return structuredClone(planCache.value);
+  const value = computePlan();
+  planCache = { key, value };
+  return structuredClone(value);
+}
+
+function computePlan() {
   const days = db.prepare(`SELECT * FROM plan_days ORDER BY day_number`).all() as any[];
   const stmt = db.prepare(
     `SELECT ${PLAN_ITEM_COLS}

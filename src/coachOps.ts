@@ -296,7 +296,12 @@ export function agentStatusFor(
 ): "ok" | "unconfigured" | "all_failed" {
   let configured = true;
   try {
-    configured = repo.pickAgentOrder().length > 0;
+    // The USABLE set, read without rotating: this is a status question asked on every
+    // GET /today-read, and pickAgentOrder() persists a new `rr_cursor` under the
+    // round-robin strategy — a read path writing settings, which used to expire the
+    // whole coach-context memo on every Brief open. Same predicate, no side effect
+    // (the same read src/dayread-refresh.ts already uses for its side-effect-free gate).
+    configured = repo.getAgentConfig().some((a) => a.usable);
   } catch {
     configured = true;
   }

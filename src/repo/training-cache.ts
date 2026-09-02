@@ -184,6 +184,26 @@ function coachContextBackstopStatements(): CoachContextBackstopStatements {
   return coachContextBackstop;
 }
 
+// Columns on the single settings row that are BOOKKEEPING, not coach input, and so are
+// left OUT of the key. `rr_cursor` records which agent the rotation handed out last —
+// nothing the context reads consults it, and a plain GET used to write it
+// (`pickAgentOrder()` advances it under the round-robin strategy), so the Brief expired
+// the very build it was about to read. `updated_at` is stamped by the same UPDATE that
+// writes the cursor, so excluding the cursor without it would exclude nothing at all;
+// it carries no coach input of its own, because every column it summarizes is already
+// compared by VALUE here. Anything a reader can act on must NOT be listed here.
+const SETTINGS_KEY_EXCLUDED_COLUMNS = new Set(["rr_cursor", "updated_at"]);
+
+function withoutBookkeepingColumns(row: unknown): Record<string, unknown> {
+  if (!row || typeof row !== "object") return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
+    if (SETTINGS_KEY_EXCLUDED_COLUMNS.has(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 export function coachContextBackstopSignature(): string {
   try {
     const prepared = coachContextBackstopStatements();
@@ -197,7 +217,7 @@ export function coachContextBackstopSignature(): string {
       updates,
       Object.values(prepared.counts.get() as Record<string, number>).join(","),
       JSON.stringify(prepared.profile.get() ?? {}),
-      JSON.stringify(prepared.settings.get() ?? {}),
+      JSON.stringify(withoutBookkeepingColumns(prepared.settings.get())),
     ].join("|");
   } catch {
     return `nocoach:${Math.random()}`; // never-matching: rebuild rather than risk staleness

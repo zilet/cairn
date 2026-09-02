@@ -98,6 +98,7 @@ import {
   volumeRestorePayload,
 } from "./volume-guard.js";
 import { type LiftState, getProgramState } from "./program-state.js";
+import { coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
 import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
 import { supportWorkRead } from "./support-work.js";
 // Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
@@ -3362,7 +3363,62 @@ export interface ProgramAdjustment {
 // and missing-pattern GAPS (no core / grip / mobility programmed). Plain words,
 // most-actionable first, deduped. This is the calm "what the system noticed"
 // surface — pull, never push.
+//
+// MEMOIZED (repo/training-cache.ts). One Today open asks this question up to three
+// times — the /program/adjustments route, todayAgenda's adaptations candidate, and the
+// coach-context build — and each pass walks every plan day's progression (~1.4k
+// statements). The KEY is the coach-context backstop (counts + high-water marks + the
+// update odometer over every table this read touches, plus profile and settings by
+// value) and the local date, so any write that could change an adaptation lands a new
+// key. The optional arguments are serialized into the key too: a caller may thread a
+// balance / acute-gate view built for a DIFFERENT date than today, and keying on
+// "arguments were supplied" alone would let one caller's view answer another's
+// question. Bounded to a handful of slots (the argument shapes are few and fixed) and
+// cleared with every other training memo; structuredClone on the way out, because
+// consumers sort and annotate these rows.
+const PROGRAM_ADJUSTMENTS_MEMO_SLOTS = 8;
+const programAdjustmentsCache = new Map<string, ProgramAdjustment[]>();
+registerTrainingCacheClear(() => {
+  programAdjustmentsCache.clear();
+});
+
+/** Stable, cheap key fragment for one optional argument (Maps ordered by their keys). */
+function adjustmentsArgKey(arg: unknown): string {
+  if (arg === undefined) return "-";
+  try {
+    if (arg instanceof Map)
+      return JSON.stringify([...arg.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+    return JSON.stringify(arg ?? null);
+  } catch {
+    return `unserializable:${Math.random()}`; // never-matching → compute rather than guess
+  }
+}
+
 export function programAdjustments(
+  balArg?: ProgramBalance,
+  acuteArg?: Map<MuscleGroup, AcuteGateReading>,
+  opts?: { runPlan?: WeeklyRunPlan | null; dexa?: DexaTargeting | null; testWeek?: TestWeekDue | null }
+): ProgramAdjustment[] {
+  const key = [
+    localDateISO(),
+    coachContextBackstopSignature(),
+    adjustmentsArgKey(balArg),
+    adjustmentsArgKey(acuteArg),
+    adjustmentsArgKey(opts),
+  ].join("|");
+  const hit = programAdjustmentsCache.get(key);
+  if (hit) return structuredClone(hit);
+  const value = computeProgramAdjustments(balArg, acuteArg, opts);
+  // Keep the map bounded: drop the oldest insertion once past the slot budget.
+  if (programAdjustmentsCache.size >= PROGRAM_ADJUSTMENTS_MEMO_SLOTS) {
+    const oldest = programAdjustmentsCache.keys().next().value;
+    if (oldest !== undefined) programAdjustmentsCache.delete(oldest);
+  }
+  programAdjustmentsCache.set(key, value);
+  return structuredClone(value);
+}
+
+function computeProgramAdjustments(
   balArg?: ProgramBalance,
   acuteArg?: Map<MuscleGroup, AcuteGateReading>,
   opts?: { runPlan?: WeeklyRunPlan | null; dexa?: DexaTargeting | null; testWeek?: TestWeekDue | null }
