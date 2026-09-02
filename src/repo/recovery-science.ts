@@ -16,7 +16,7 @@
 //     A constraint downgrades EXPOSURE or trims VOLUME; none of them cancels a
 //     session, and none of them is a score.
 // ---------------------------------------------------------------------------
-import { sensorIsCurrent } from "./sensor-freshness.js";
+import { isLastNight, sensorIsCurrent } from "./sensor-freshness.js";
 
 // ---------- (1) the HRV decision band ----------
 //
@@ -147,8 +147,16 @@ export function sleepDebtRead(recovery: any, date: string): SleepDebtRead | null
   // A stale night behaves as absent, never as current — the sensor law, applied here
   // so a watch left in a drawer for a fortnight cannot keep constraining sessions.
   const nightFresh = sensorIsCurrent("sleep", quality?.latest_date ?? null, date);
+  // The SHORT-NIGHT arm is a one-night claim — its evidence line says "the most
+  // recent night came in at about N hours" — so it needs the night that actually
+  // ENDED on `date`, not merely a recent one. Sleep is dated by its wake day, so
+  // the window's two-day tolerance would otherwise let the night before last
+  // constrain today's session in last night's name. The DEBT arm keeps `nightFresh`
+  // below: that is a window anchor, and a window does not stop being real because
+  // this one morning went unsynced.
+  const nightIsLastNight = isLastNight(quality?.latest_date ?? null, date);
   const lastNight = Number(recovery?.recovery?.sleep_min);
-  const shortNight = nightFresh && Number.isFinite(lastNight) && lastNight > 0 && lastNight < SHORT_NIGHT_MIN;
+  const shortNight = nightIsLastNight && Number.isFinite(lastNight) && lastNight > 0 && lastNight < SHORT_NIGHT_MIN;
 
   const avg = Number(recovery?.recovery?.avg_sleep_min);
   const samples = Number(quality?.sample_count);

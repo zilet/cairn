@@ -65,6 +65,27 @@ export const SENSOR_MAX_AGE_DAYS = {
 
 export type SensorSignal = keyof typeof SENSOR_MAX_AGE_DAYS;
 
+// "LAST NIGHT" IS A DATE, NOT A TOLERANCE.
+//
+// A night is dated by the day it ENDED — Garmin's `calendarDate` is the WAKE day
+// (src/garmin.ts), and the Apple/Oura path is keyed the same way. So the night the
+// athlete has just woken from is dated `d` itself, and a row dated `d-1` is the
+// night BEFORE last.
+//
+// SENSOR_MAX_AGE_DAYS.sleep = 2 is the right tolerance for a WINDOW claim: the
+// rolling average, the sleep trend, the chronic-sleep watch, and the "a recent
+// night exists, so this window is not a stale leftover" anchor all describe recent
+// sleep in general, and a night or two of slack there is honest. It is the wrong
+// tolerance for a ONE-NIGHT claim. "You had a solid night of sleep" spoken off a
+// night dated `d-1` is not a stale reading being generous — it is a sentence about
+// a night that did not happen, on a morning the watch was not worn.
+//
+// So the one-night bound is exact: age 0, the night that ended on the day being
+// read. Past it the night is not "old evidence at a discount" — for a one-night
+// claim it is simply absent, and absence is neutral everywhere (VISION.md). The
+// trend keeps its own bound above; the two are different questions.
+export const LAST_NIGHT_MAX_AGE_DAYS = 0;
+
 // Whole days between an ISO reading date and the day being read. Null when the
 // date is missing or unparseable — callers treat that as "cannot vouch for it",
 // which resolves the same way stale does. A future-dated reading yields a
@@ -85,4 +106,15 @@ export function sensorIsCurrent(signal: SensorSignal, readingDate: string | null
   const age = sensorAgeDays(readingDate, asOf);
   if (age == null || age < 0) return false;
   return age <= SENSOR_MAX_AGE_DAYS[signal];
+}
+
+// Did this night END on the day being read? The predicate every one-night claim
+// gates on — a separate function rather than a seventh entry in SENSOR_MAX_AGE_DAYS,
+// because "last night" is not another sensor: it is a stricter question asked of the
+// same sleep reading the trend already answers at its own tolerance. Missing or
+// unparseable date, a future-dated row, or anything older than the read day → false,
+// and the caller falls through to whatever it does when no night exists at all.
+export function isLastNight(readingDate: string | null | undefined, asOf: string): boolean {
+  const age = sensorAgeDays(readingDate, asOf);
+  return age != null && age >= 0 && age <= LAST_NIGHT_MAX_AGE_DAYS;
 }

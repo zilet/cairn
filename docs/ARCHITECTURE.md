@@ -424,6 +424,23 @@ checks and `signal-state.ts`'s inherited default now resolve through this one ta
 bound moved 3→2 days to match the bound the Brief itself has always used, closing a seam where the
 signal state was voicing a night the Brief had already dropped.
 
+**"Last night" is a DATE, not a tolerance.** Sleep is dated by the day it ENDED — Garmin's
+`calendarDate` is the WAKE day, and the Apple/Oura path is keyed the same way — so the night the
+athlete has just woken from carries the read date itself, and a row dated `d-1` is the night BEFORE
+last. `SENSOR_MAX_AGE_DAYS.sleep` (2) is the right tolerance for a WINDOW claim (`avg_sleep_min`, the
+`sleep_trend` observation, the chronic-sleep watch, and the "a recent night exists, so this window is
+not a stale leftover" anchor). It is the wrong one for a ONE-NIGHT claim: at two days of slack the
+Brief told an athlete who had not worn the watch that they had had a solid night of sleep, off a
+night that ended the previous morning. Every one-night claim therefore gates on
+`LAST_NIGHT_MAX_AGE_DAYS` = 0 / `isLastNight()` (`src/repo/sensor-freshness.ts`): `signals.last_night`
+and the "Last night's sleep" evidence row (`day-read.ts`), the acute short-night predicate, the
+push-drive wearable path (and its `daily-decision.ts` mirror), the `sleep_night_short`/`sleep_night_ok`
+observation (`signal-state.ts`, gated rather than merely aged, so an older night produces no one-night
+observation at all), and `sleepDebtRead`'s short-night arm (`recovery-science.ts`, whose debt arm keeps
+the window anchor). Day-read keeps a separate `recentNight` at the window bound for the chronic path.
+On a morning with nothing dated `d` the read simply says nothing about sleep — which is what the
+midnight compute now does, with the on-open recompute picking the night up once the watch syncs.
+
 **Personal-baseline recovery bands are SAMPLE-anchored, and the band outlives its dot.**
 `src/repo/baseline-bands.ts` reads today's HRV / resting HR / sleep against the athlete's own range
 (`GET /api/recovery/baseline` → the quiet band rows under the Today wearable card). A dimension's

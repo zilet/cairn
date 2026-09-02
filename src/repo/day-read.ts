@@ -39,7 +39,7 @@ import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { planningContextEvents } from "./health.js";
 import { plainGroupWords } from "./exercise-canon.js";
 import { suppressSaturatedDue } from "./hybrid-load.js";
-import { SENSOR_MAX_AGE_DAYS, sensorAgeDays, sensorIsCurrent } from "./sensor-freshness.js";
+import { LAST_NIGHT_MAX_AGE_DAYS, SENSOR_MAX_AGE_DAYS, isLastNight, sensorIsCurrent } from "./sensor-freshness.js";
 import { getRecentSessions } from "./sessions.js";
 import { getSettings } from "./settings.js";
 import { getPlan } from "./plan.js";
@@ -2485,15 +2485,19 @@ export function dayRead(
   // redundant fetch.
   const rec = recovery ?? getRecoverySummary(14, undefined, d);
   const checkin = getCheckinByDate(d) as any;
-  // "Last night" must actually be RECENT. A wearable can stop syncing sleep for weeks
-  // (a 25-day-old night is not last night), and feeding a stale night to the Brief is
-  // what made it assert "you slept fine" off month-old data. Treat an old night as
-  // ABSENT so the read never claims how they slept from data it doesn't have.
-  // The bound itself now lives in SENSOR_MAX_AGE_DAYS, so the signal state cannot
-  // keep voicing a night this read has already dropped — and the CHECK now lives
-  // inside latestSleep(), which takes the bound as a required argument, so a future
-  // second caller cannot forget it the way an outside gate invited.
-  const lastNight = latestSleep(SENSOR_MAX_AGE_DAYS.sleep, d);
+  // "Last night" is the night that ENDED on `d`, and nothing else. Sleep is dated by
+  // its WAKE day, so a row dated d-1 is the night BEFORE last: at the window's
+  // two-day tolerance the Brief once said "you had a solid night of sleep" on a
+  // morning the watch had not been worn at all. The one-night bound is therefore
+  // exact (LAST_NIGHT_MAX_AGE_DAYS = 0), and the CHECK lives inside latestSleep(),
+  // which takes the bound as a required argument, so a caller cannot forget it the
+  // way an outside gate invited. An older night reads as ABSENT here, which is
+  // neutral — the read never claims how they slept from data it does not have.
+  const lastNight = latestSleep(LAST_NIGHT_MAX_AGE_DAYS, d);
+  // The night that ANCHORS THE WINDOW, at the window's own tolerance. Its only job
+  // is to say the rolling average still describes recent sleep rather than being a
+  // stale leftover; it is never spoken of as last night.
+  const recentNight = latestSleep(SENSOR_MAX_AGE_DAYS.sleep, d);
   const avgSleepMin = rec?.recovery?.avg_sleep_min ?? null;
   const sleepQuality = rec?.quality?.sleep_min ?? rec?.recovery?.quality?.sleep_min ?? null;
   const sleepSamples = Number(sleepQuality?.sample_count);
@@ -2505,11 +2509,14 @@ export function dayRead(
   const freshShortSleep =
     lastNight?.total_min != null && Number(lastNight.total_min) > 0 && Number(lastNight.total_min) < 360;
   const corroboratedLowSleep = lowSleep && freshShortSleep;
-  // Chronic watch / train-day caveat: the mean is real AND a current night exists
-  // so the window is not a stale leftover. Last night being SHORT as well is the
-  // REST path (`corroboratedLowSleep` / acute_sleep_corroborated) and would make
-  // these two rules unreachable if they shared that predicate.
-  const chronicLowSleep = lowSleep && lastNight != null;
+  // Chronic watch / train-day caveat: the mean is real AND a recent night exists
+  // so the window is not a stale leftover. That anchor is a WINDOW question, so it
+  // reads `recentNight` (two-day tolerance) rather than last night — a chronic
+  // pattern does not evaporate because this particular morning went unsynced. Last
+  // night being SHORT as well is the REST path (`corroboratedLowSleep` /
+  // acute_sleep_corroborated) and would make these two rules unreachable if they
+  // shared that predicate.
+  const chronicLowSleep = lowSleep && recentNight != null;
   const lowSubjective =
     checkin &&
     ((checkin.energy != null && checkin.energy <= 2) || (checkin.sleep_feel != null && checkin.sleep_feel <= 2));
@@ -3119,19 +3126,13 @@ export function dayRead(
         const backed = signalState.action.support?.level === "backed";
         const solidReadiness =
           readinessFresh && readinessCurrent != null && Number(readinessCurrent) >= PUSH_DRIVE_READINESS_FLOOR;
-        // Last night has to be PRESENT, be LAST NIGHT, and not be short. The sensor
-        // bound alone is too loose here: SENSOR_MAX_AGE_DAYS.sleep is 2, so a night
-        // from the day before yesterday is still "current" enough to be voiced — but
-        // it is not corroboration for THIS morning, and the wearable path is the one
-        // that can open a training day with no rated session behind it. So the age is
-        // tightened to the night immediately preceding `d`. An absent, stale or
-        // day-old night reads as absent, and the path simply does not open — silence
-        // is never corroboration.
-        const lastNightAge = sensorAgeDays(lastNight?.date ?? null, d);
+        // Last night has to be PRESENT, be LAST NIGHT, and not be short. `lastNight`
+        // already carries the one-night bound, and this path restates it through the
+        // same constant: the wearable path is the one that can open a training day
+        // with no rated session behind it, so an absent or older night reads as
+        // absent and the path simply does not open — silence is never corroboration.
         const sleptEnough =
-          lastNightAge != null &&
-          lastNightAge >= 0 &&
-          lastNightAge <= 1 &&
+          isLastNight(lastNight?.date ?? null, d) &&
           lastNight?.total_min != null &&
           Number(lastNight.total_min) >= 360;
         // The wearable path has no brake check of its own to inherit — the `backed`

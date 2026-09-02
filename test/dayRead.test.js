@@ -67,8 +67,11 @@ function sleepMean(avgMin, extra = {}) {
     ...(extra.delta ? { delta: extra.delta } : {}),
   };
 }
+// Sleep is dated by its WAKE day, so the night a read of `date` has just woken from
+// is dated `date` itself — a row dated the day before is the night BEFORE last, and
+// no longer speaks as last night.
 function seedCurrentNight(date, minutes = 420) {
-  return seedSleep(dayBefore(date, 1), minutes);
+  return seedSleep(date, minutes);
 }
 
 // Every rule now speaks in SEVERAL calm phrasings of the same judgement, rotated by
@@ -287,7 +290,8 @@ test("silence is not corroboration: no night at all leaves the wearable path shu
 
 test("supportive recovery_capacity with fresh HRV, resting HR and sleep opens the drive read below the readiness floor", () => {
   seedDriveMorning({ rated: false });
-  seedSleep(localDaysAgo(1), 450);
+  // Wake-day dating: last night is the night dated the read day.
+  seedSleep(DRIVE_REF, 450);
   repo.setSettings({ training_drive: "push" });
   const r = repo.dayRead(DRIVE_REF, {
     has_data: true,
@@ -316,7 +320,8 @@ test("supportive recovery_capacity with fresh HRV, resting HR and sleep opens th
 
 test("supportive recovery_capacity without fresh HRV, resting HR and sleep does not open the day", () => {
   seedDriveMorning({ rated: false });
-  seedSleep(localDaysAgo(1), 450);
+  // Wake-day dating: last night is the night dated the read day.
+  seedSleep(DRIVE_REF, 450);
   repo.setSettings({ training_drive: "push" });
   const r = repo.dayRead(DRIVE_REF, {
     has_data: true,
@@ -440,22 +445,23 @@ test("a fresh caution anywhere shuts the wearable path, even with green readines
   assert.equal(r.signals.training_drive_push, undefined);
 });
 
-// SENSOR_MAX_AGE_DAYS.sleep is 2, so a night from the day before yesterday is still
-// current enough for the read to VOICE — but it is not corroboration for this morning,
-// and the wearable path is the one that needs corroborating.
+// Sleep is dated by its WAKE day, so a row dated the day before the read is the night
+// BEFORE last. The window still sees it (SENSOR_MAX_AGE_DAYS.sleep is 2) and the trend
+// may still use it, but it is not this morning's corroboration — and the wearable path
+// is the one that needs corroborating.
 test("the night before last does not corroborate the drive read, however good it was", () => {
   seedDriveMorning({ rated: false });
-  seedSleep(localDaysAgo(2), 480);
+  seedSleep(localDaysAgo(1), 480);
   repo.setSettings({ training_drive: "push" });
 
   const r = repo.dayRead(DRIVE_REF, readiness(72));
-  assert.ok(r.signals.last_night, "the night is still visible — its AGE is what shuts the path, not its absence");
-  assert.equal(r.signals.last_night.date, localDaysAgo(2));
+  assert.equal(r.signals.last_night, null, "it is not last night, so it is not voiced as one");
   assert.notEqual(r.decision.rule_code, "push_drive_targeted_training");
 
   // Last night's own sleep, same everything else, does earn it.
-  seedSleep(localDaysAgo(1), 480);
+  seedSleep(DRIVE_REF, 480);
   const fresh = repo.dayRead(DRIVE_REF, readiness(72));
+  assert.equal(fresh.signals.last_night.date, DRIVE_REF);
   assert.equal(fresh.decision.rule_code, "push_drive_targeted_training");
 });
 
@@ -801,14 +807,15 @@ test("three caveats at once still compose into one grammatical sentence", () => 
 
 test("a fresh short night corroborating the short rolling average can suggest REST", () => {
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
-  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(dayBefore(REF, 1));
+  // Wake-day dating: the night the read has just woken from carries the read's date.
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(REF);
 
   const r = repo.dayRead(REF, sleepMean(330));
 
   assert.equal(r.kind, "rest");
   assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
   assert.equal(
-    r.decision.evidence.some((item) => item.date === dayBefore(REF, 1)),
+    r.decision.evidence.some((item) => item.date === REF),
     true
   );
   saysOneOf(r.why, "acute_sleep_corroborated");
@@ -826,7 +833,8 @@ test("a corroborated short night on an injury day still names the work-around", 
     detail: "Running and jumping aggravate it",
     start_date: REF,
   });
-  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(dayBefore(REF, 1));
+  // Wake-day dating: the night the read has just woken from carries the read's date.
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(REF);
 
   const r = repo.dayRead(REF, sleepMean(330));
 
@@ -1014,9 +1022,9 @@ test("stale sleep is NOT treated as last night (no fabricated sleep read)", () =
   db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 440)`).run(dayBefore(REF, 25));
   const stale = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(stale.signals.last_night, null);
-  // A recent night (yesterday) IS surfaced as last night.
+  // The night dated the read day (wake-day dating) IS surfaced as last night.
   resetTables("daily_metrics", "garmin_daily_metrics");
-  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 440)`).run(dayBefore(REF, 1));
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 440)`).run(REF);
   const fresh = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.ok(fresh.signals.last_night && fresh.signals.last_night.total_min === 440);
 });
@@ -1110,7 +1118,7 @@ test("a bare dayRead with nothing at all on record names the read as thin", () =
 });
 
 test("a bare dayRead with real evidence on the board does not call itself thin", () => {
-  seedSleep(isoDaysAgo(1), 420);
+  seedSleep(isoDaysAgo(0), 420); // wake-day dating: last night carries today's date
   seedTrainingDay(isoDaysAgo(1));
   const r = repo.dayRead(isoDaysAgo(0));
   assert.ok(
@@ -2673,8 +2681,8 @@ test("each reachable rule branch reports its own code and reason, never a generi
   const planned = record(repo.dayRead(REF, { has_data: false, recovery: {} }));
   assert.equal(planned.decision.rule_code, "planned_training");
 
-  // A corroborating fresh short night still reaches rest.
-  seedSleep(dayBefore(REF, 1), 300);
+  // A corroborating fresh short night still reaches rest (dated the read day).
+  seedSleep(REF, 300);
   const acute = record(repo.dayRead(REF, sleepMean(330)));
   assert.equal(acute.decision.rule_code, "acute_sleep_corroborated");
   resetTables("daily_metrics");
@@ -2736,7 +2744,7 @@ test("the endurance volume-spike rule reports a real reason (it had none at all)
 
 test("sleep evidence speaks in hours, never raw minutes", () => {
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
-  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 412)`).run(dayBefore(REF, 1));
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 412)`).run(REF);
 
   const r = repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 412 } });
   const sleep = r.decision.evidence.find((item) => item.label === "Last night's sleep");
@@ -3259,7 +3267,7 @@ test("an unrated session still counts — silence is not evidence of harm", () =
 
 test("a corroborated short night is fresh evidence about TODAY — history cannot soften it", () => {
   for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i));
-  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(dayBefore(REF, 1));
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(REF);
 
   const r = repo.dayRead(REF, sleepMean(330));
   assert.equal(r.kind, "rest");

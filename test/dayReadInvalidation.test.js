@@ -148,7 +148,9 @@ test("a Garmin daily-metrics sync that moves nothing preserves the warm Brief", 
 
 test("a Garmin sync carrying a genuinely short night still busts the Brief", () => {
   warmAgenticRead();
-  repo.upsertGarminDailyMetric({ date: localDaysAgo(1), sleep_min: 300 });
+  // Wake-day dating: only a night dated today is last night, and last night is what
+  // the acute rules branch on.
+  repo.upsertGarminDailyMetric({ date: TODAY(), sleep_min: 300 });
   assert.equal(repo.getCachedDayRead(TODAY()), null, "a decision-moving sync must still retire the read");
 });
 

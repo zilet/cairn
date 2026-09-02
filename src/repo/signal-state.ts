@@ -5,7 +5,13 @@
 // retain their own provenance/conflicts and only meet at one bounded INTERNAL
 // arbitration index that emits plain-language posture/reasons (never a score).
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { SENSOR_MAX_AGE_DAYS, type SensorSignal, sensorIsCurrent } from "./sensor-freshness.js";
+import {
+  LAST_NIGHT_MAX_AGE_DAYS,
+  SENSOR_MAX_AGE_DAYS,
+  type SensorSignal,
+  isLastNight,
+  sensorIsCurrent,
+} from "./sensor-freshness.js";
 import { recoveryTrendBars } from "./recovery-trend.js";
 import { hrvTrendRead, performanceChannelRead } from "./recovery-science.js";
 import type { SensorCadence } from "./sensor-cadence.js";
@@ -1801,7 +1807,12 @@ export function planningSignalState(input: {
   // ONE night. `recovery.sleep_min` is the latest dated reading (getRecoverySummary's
   // `current(...)`), never an average — so the direction bands stay as they were (under
   // 5h owns the day, under 6h is a caution) while the words claim only that night.
-  if (current.sleep_min != null)
+  // And "that night" means the night that ENDED on `date`: sleep is dated by its wake
+  // day, so the window's two-day tolerance would let a night dated d-1 be voiced as
+  // last night on a morning the watch was not worn. Gated rather than merely aged:
+  // past the bound there is no one-night observation at all, which is the same
+  // neutral absence an unworn watch already produces (see LAST_NIGHT_MAX_AGE_DAYS).
+  if (current.sleep_min != null && isLastNight(quality.sleep_min?.latest_date ?? null, date))
     addRecovery(
       "sleep",
       "sleep_min",
@@ -1810,7 +1821,7 @@ export function planningSignalState(input: {
         ? "The most recent recorded night came in short."
         : "The most recent recorded night supports the planned day.",
       Number(current.sleep_min) < 360 ? "sleep_night_short" : "sleep_night_ok",
-      SENSOR_MAX_AGE_DAYS.sleep
+      LAST_NIGHT_MAX_AGE_DAYS
     );
   // The multi-night trend, which is the only evidence a chronic sentence may be spoken
   // for. Same <6h line day-read's own `low_sleep` flag uses, off the same `avg_sleep_min`,

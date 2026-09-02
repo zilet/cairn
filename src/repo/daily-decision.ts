@@ -28,7 +28,7 @@ import { personalResponseModifierFor } from "./reaction-model.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getSettings } from "./settings.js";
-import { SENSOR_MAX_AGE_DAYS, sensorAgeDays, sensorIsCurrent } from "./sensor-freshness.js";
+import { LAST_NIGHT_MAX_AGE_DAYS, isLastNight, sensorIsCurrent } from "./sensor-freshness.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { hasFreshBrake, type SignalConfidence, type SignalDimensionState } from "./signal-state.js";
@@ -992,15 +992,14 @@ export function gatherDailyDecisionSnapshot(
   };
 }
 
+// Same one-night question day-read's push-drive path asks, so the fingerprint and
+// the read cannot disagree about whether last night backed the day. Sleep is dated
+// by its WAKE day, so only a night dated `date` itself is last night; an older one
+// reads as absent (LAST_NIGHT_MAX_AGE_DAYS).
 function lastNightSleepsEnough(date: string): boolean {
-  const lastNight = safe(() => latestSleep(SENSOR_MAX_AGE_DAYS.sleep, date), null);
-  const lastNightAge = sensorAgeDays(lastNight?.date ?? null, date);
+  const lastNight = safe(() => latestSleep(LAST_NIGHT_MAX_AGE_DAYS, date), null);
   return (
-    lastNightAge != null &&
-    lastNightAge >= 0 &&
-    lastNightAge <= 1 &&
-    lastNight?.total_min != null &&
-    Number(lastNight.total_min) >= 360
+    isLastNight(lastNight?.date ?? null, date) && lastNight?.total_min != null && Number(lastNight.total_min) >= 360
   );
 }
 

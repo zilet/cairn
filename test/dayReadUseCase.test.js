@@ -809,9 +809,10 @@ test("recovery data that DOES move the decision still retires the cached read", 
   // A 14-day mean needs the sample floor before it can speak. Two already-short
   // nights plus last night at 7h20m is a chronic watch, not a rest — the plan
   // day still stands. n=1 of five hours is absence, never a corroborating night.
-  repo.recordDailyMetrics("apple", localDaysAgo(3), { sleep_min: 300 });
+  // Wake-day dating: last night is dated the read day itself.
   repo.recordDailyMetrics("apple", localDaysAgo(2), { sleep_min: 300 });
-  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 440 });
+  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 300 });
+  repo.recordDailyMetrics("apple", localDaysAgo(0), { sleep_min: 440 });
   const baseline = repo.dayRead(date);
   assert.equal(baseline.kind, "train");
   repo.saveDayRead(date, {
@@ -826,7 +827,7 @@ test("recovery data that DOES move the decision still retires the cached read", 
 
   // Last night comes in at five hours — a predicate the rules genuinely branch
   // on once the chronic mean is already established.
-  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 300 });
+  repo.recordDailyMetrics("apple", localDaysAgo(0), { sleep_min: 300 });
 
   assert.equal(repo.getCachedDayRead(date), null, "a real change must still bust the Brief");
   assert.equal(armed, 1, "and arm the background re-warm");

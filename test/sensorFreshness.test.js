@@ -215,22 +215,24 @@ const sleepState = (latestDate, sleepMin) =>
     },
   });
 
-test("a night past the sleep bound stops bearing on the posture", () => {
-  const bound = repo.SENSOR_MAX_AGE_DAYS.sleep;
-  const fresh = sleepState(localDaysAgo(bound), 250);
-  const stale = sleepState(localDaysAgo(bound + 1), 250);
+// The ONE-NIGHT bound, which is exact: sleep is dated by its wake day, so only a
+// night dated the read day is last night. The window's own two-day tolerance still
+// governs the trend — a different claim, asked of the same reading.
+test("only the night that ended on the read day bears on the posture", () => {
+  const fresh = sleepState(localDaysAgo(repo.LAST_NIGHT_MAX_AGE_DAYS), 250);
+  const nightBefore = sleepState(localDaysAgo(repo.LAST_NIGHT_MAX_AGE_DAYS + 1), 250);
   const dim = (state) => state.dimensions.recovery_capacity;
 
-  assert.equal(dim(fresh).status, "constrained", "a night still inside the bound owns the day");
+  assert.equal(dim(fresh).status, "constrained", "last night owns the day");
   assert.ok(dim(fresh).coverage.active_fields.includes("sleep"));
 
-  assert.equal(dim(stale).status, "unknown", "a day past it, the same short night decides nothing");
-  assert.equal(dim(stale).coverage.active_fields.includes("sleep"), false);
-  assert.ok(dim(stale).coverage.stale_fields.includes("sleep"), "it is carried as stale, not deleted");
+  assert.equal(dim(nightBefore).status, "unknown", "the night BEFORE last decides nothing");
+  assert.equal(dim(nightBefore).coverage.active_fields.includes("sleep"), false);
 });
 
 test("a stale short night never becomes a caution — absence stays neutral", () => {
   const stale = sleepState(localDaysAgo(repo.SENSOR_MAX_AGE_DAYS.sleep + 5), 250);
+  assert.equal(repo.LAST_NIGHT_MAX_AGE_DAYS, 0, "the one-night claim is age 0, never a tolerance");
   const nothing = repo.planningSignalState({ date: localDaysAgo(0) });
   assert.equal(stale.action.readiness, nothing.action.readiness);
   assert.equal(stale.action.posture, nothing.action.posture);
@@ -251,7 +253,7 @@ test("the signal state's sleep bound is the one day-read has always used", () =>
 // ---- decision site: the day read ---------------------------------------------
 
 test("a night past the bound leaves the Brief with no last_night to speak from", () => {
-  garminDay(repo.SENSOR_MAX_AGE_DAYS.sleep + 1, { sleep_min: 250, hrv_ms: 40 });
+  garminDay(repo.LAST_NIGHT_MAX_AGE_DAYS + 1, { sleep_min: 250, hrv_ms: 40 });
   const read = repo.dayRead(localDaysAgo(0));
   assert.equal(read.signals.last_night, null, "the read never claims how they slept from data it lacks");
 });

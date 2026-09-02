@@ -196,6 +196,14 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   (a stale wearable reading behaves as absent, never as current) and `hybrid-load.ts`'s `acuteGate()`
   (the one "is this muscle recovering" question — call it, never re-derive a window). Details in
   `docs/ARCHITECTURE.md`.
+- **"Last night" is the night dated the READ DAY; `d-1` is trend only.** Sleep rows are dated by the
+  WAKE day, so a row dated `d-1` is the night before last. Every one-night claim —
+  `signals.last_night`, the "Last night's sleep" evidence row, the acute short-night rule, the
+  push-drive wearable path, the `sleep_night_*` observation, `sleepDebtRead`'s short-night arm —
+  gates on `LAST_NIGHT_MAX_AGE_DAYS` = 0 / `isLastNight()` (`src/repo/sensor-freshness.ts`). The
+  WINDOW claims (`avg_sleep_min`, `sleep_trend`, the chronic-sleep watch and its "a recent night
+  exists" anchor) keep `SENSOR_MAX_AGE_DAYS.sleep` = 2. A morning with no night of its own says
+  nothing about sleep — never a night before last wearing last night's words.
 - **Logged intake is evidence only when the day reads complete** — `classifyIntakeDay`
   (`src/repo/intake-window.ts`) is the one credibility rule: a morning→evening span carrying at
   least `SPANNING_DAY_MIN_KCAL`, or, when NOTHING on the day could be placed in time, a whole day
