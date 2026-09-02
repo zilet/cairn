@@ -75,7 +75,20 @@ self.addEventListener("fetch", (e) => {
   // Never cache the rest of API or MCP — always hit network.
   if (url.pathname.startsWith("/api") || url.pathname.startsWith("/mcp")) return;
   if (e.request.mode === "navigate") {
-    e.respondWith(fetch(e.request).catch(() => caches.match("/index.html")));
+    // Cache-FIRST for the app shell. The installed PWA opens over a tailnet that
+    // may be asleep or flapping, and a network-first navigation blocks on fetch("/")
+    // until the OS gives up — tens of seconds of white screen before the identical
+    // cached shell would have been served. The precached /index.html is the same
+    // bytes the network would return for this CACHE version, so waiting buys nothing.
+    //
+    // A deploy still lands on the next open, one layer up: the browser re-fetches
+    // sw.js itself (never from this handler — sw.js is served no-cache and the
+    // registration.update() in app/sw-recovery.ts runs on resume), the new worker
+    // precaches the new shell and skipWaiting()s, clients.claim() fires
+    // controllerchange, and the page reloads once. THAT reload is a navigation
+    // answered from the NEW cache. So the shell is always instant and never stale
+    // by more than the one reload the update flow already performs.
+    e.respondWith(caches.match("/index.html").then((r) => r || fetch(e.request)));
     return;
   }
   e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));

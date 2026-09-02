@@ -2,9 +2,10 @@
 // Compile dependency-free browser client slices from src/client into stable
 // public/js filenames. This is intentionally explicit during migration: no
 // bundler, no runtime deps, and no surprise asset names for the service worker.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 import ts from "typescript";
 
 const currentFile = fileURLToPath(import.meta.url);
@@ -552,7 +553,11 @@ const compilerOptions = {
   ignoreDeprecations: "6.0",
   module: ts.ModuleKind.None,
   moduleDetection: ts.ModuleDetectionKind.Legacy,
-  removeComments: false,
+  // Comments are ~29% of the shipped bundle bytes and buy the browser nothing: the
+  // source of truth is src/client/**.ts, which keeps every one of them. Each bundle
+  // still carries the generated header and the `// ==== file ====` separators, which
+  // this script writes AFTER transpiling, so provenance in the served file survives.
+  removeComments: true,
   target: ts.ScriptTarget.ES2022,
 };
 
@@ -613,6 +618,94 @@ export function buildClient() {
 
   console.log(`✓ built client output (${CLIENT_OUTPUTS.length} file${CLIENT_OUTPUTS.length === 1 ? "" : "s"})`);
   buildBundles();
+  pruneBundleIntermediates();
+  precompressAssets();
+}
+
+// ---------------------------------------------------------------------------
+// Shipping: prune, then precompress. Both run AFTER bundling, on what is served.
+// ---------------------------------------------------------------------------
+
+/** The hand-written classic shim — a bundle INPUT that lives in git, never generated. */
+const HANDWRITTEN_PUBLIC_JS = new Set(["public/js/10-boot.js"]);
+
+/**
+ * Every per-module intermediate the bundler consumed. index.html loads only the
+ * bundles, so after buildBundles() these are dead weight in the image and on the
+ * deploy rsync — 236 files / ~2.2 MB of publicly reachable, unused JS.
+ *
+ * Off by default: the client test suite reads these per-module outputs directly
+ * (`readFileSync("public/js/<module>.js")` in ~158 test files), so a local build
+ * must keep them. Set CAIRN_PRUNE_CLIENT_INTERMEDIATES=1 for a build whose output
+ * is shipped rather than tested — the Dockerfile builder stage does exactly that.
+ */
+export function pruneBundleIntermediates() {
+  if (!/^(1|true|yes|on)$/i.test((process.env.CAIRN_PRUNE_CLIENT_INTERMEDIATES || "").trim())) return;
+  const served = new Set(BUNDLES.map((bundle) => bundle.output));
+  const removable = new Set();
+  for (const bundle of BUNDLES) {
+    for (const input of bundle.inputs) {
+      if (!HANDWRITTEN_PUBLIC_JS.has(input) && !served.has(input)) removable.add(input);
+    }
+  }
+  let removed = 0;
+  for (const file of removable) {
+    const target = path.join(root, file);
+    if (!existsSync(target)) continue;
+    rmSync(target);
+    removed += 1;
+  }
+  console.log(`✓ pruned ${removed} bundled intermediate${removed === 1 ? "" : "s"} from public/js`);
+}
+
+/**
+ * Assets index.html loads, each of which gets a `.br` and `.gz` sibling.
+ * public/index.html, public/styles.css and public/art.js are hand-authored (not
+ * emitted by this script) but are still part of the shell, so they are compressed
+ * here too — this is the one place that knows what a deploy actually serves.
+ */
+const PRECOMPRESS_EXTRA = ["public/index.html", "public/styles.css", "public/art.js", "public/cairn-body-figure.js"];
+
+/**
+ * Write the compressed representations ONCE per build, so the server never spends
+ * Raspberry Pi CPU compressing the same 2.7 MB shell per request.
+ * src/staticCompression.ts serves the sibling when Accept-Encoding allows;
+ * express.static still serves the raw file to anything else, so a missing sibling
+ * only ever costs bytes, never a 404.
+ *
+ * Missing inputs are skipped rather than fatal: a stage that compiles the client
+ * without the hand-authored shell files present is still a valid build.
+ */
+export function precompressAssets() {
+  const targets = [...BUNDLES.map((bundle) => bundle.output), ...PRECOMPRESS_EXTRA];
+  let raw = 0;
+  let gz = 0;
+  let br = 0;
+  let written = 0;
+  for (const file of targets) {
+    const source = path.join(root, file);
+    if (!existsSync(source)) {
+      console.log(`• precompress: skipped ${file} (not present in this build stage)`);
+      continue;
+    }
+    const bytes = readFileSync(source);
+    const gzipped = zlib.gzipSync(bytes, { level: zlib.constants.Z_BEST_COMPRESSION });
+    const brotlied = zlib.brotliCompressSync(bytes, {
+      params: {
+        [zlib.constants.BROTLI_PARAM_QUALITY]: zlib.constants.BROTLI_MAX_QUALITY,
+        [zlib.constants.BROTLI_PARAM_SIZE_HINT]: bytes.length,
+      },
+    });
+    writeFileSync(`${source}.gz`, gzipped);
+    writeFileSync(`${source}.br`, brotlied);
+    raw += bytes.length;
+    gz += gzipped.length;
+    br += brotlied.length;
+    written += 1;
+  }
+  const kb = (n) => `${(n / 1024).toFixed(0)} KB`;
+  const label = `${written} asset${written === 1 ? "" : "s"}`;
+  console.log(`✓ precompressed ${label} (${kb(raw)} raw → ${kb(gz)} gzip → ${kb(br)} brotli)`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === currentFile) {

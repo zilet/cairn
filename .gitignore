@@ -7,6 +7,11 @@ dist/
 public/js/*.js
 !public/js/10-boot.js
 
+# build-time precompressed representations of the served app shell, written by
+# scripts/build-client.mjs and served by src/staticCompression.ts.
+public/**/*.gz
+public/**/*.br
+
 # runtime SQLite database (created on first boot)
 /data/
 *.db

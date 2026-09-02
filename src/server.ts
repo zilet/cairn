@@ -22,6 +22,7 @@ import { runWithBrainSnapshot } from "./brain/snapshot.js";
 import * as repo from "./repo.js";
 import { apiDiagnosticMiddleware, registerProcessDiagnosticHandlers } from "./diagnostics.js";
 import { installSmokeLifetime } from "./smoke-lifetime.js";
+import { jsonCompression, precompressedStatic } from "./staticCompression.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
@@ -107,6 +108,11 @@ app.use((req, _res, next) => {
   return runWithBrainSnapshot(() => runWithTimeZone(tz, () => next()));
 });
 
+// gzip JSON bodies over ~1KB when the caller accepts it. Mounted immediately in
+// front of the router so it wraps res.json for every REST route and nothing else:
+// SSE streams write through res.write and are untouched.
+app.use("/api", jsonCompression);
+
 // REST API
 app.use("/api", api);
 
@@ -115,7 +121,10 @@ app.post("/mcp", handleMcpPost);
 app.get("/mcp", methodNotAllowed);
 app.delete("/mcp", methodNotAllowed);
 
-// PWA (static)
+// PWA (static). The precompressed layer goes FIRST: it hands a capable browser the
+// `.br`/`.gz` sibling the build wrote, and falls through to express.static for
+// everything else (no sibling, no Accept-Encoding, a range request, an icon).
+app.use(precompressedStatic(PUBLIC_DIR));
 app.use(
   express.static(PUBLIC_DIR, {
     setHeaders(res, filePath) {

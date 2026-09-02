@@ -3062,7 +3062,31 @@ order); `index.html` loads just those bundles (`/art.js` still first) while `sw.
 `10-boot.js` is a 2-line shim (`startAppShell()`) — the boot sequence lives in
 `src/client/app/startup.ts`. `sw.js` `skipWaiting()`s on install and the client reloads once on
 `controllerchange` (`src/client/app/service-worker.ts`, guarded against the first-ever install), so a
-deploy goes live on the next open.
+deploy goes live on the next open. Navigations are answered **cache-first** from the precached
+`/index.html`: the installed PWA opens over a tailnet that may be asleep, and a network-first
+navigation blocks on `fetch("/")` for as long as the OS takes to give up. Freshness comes from the
+layer above — the browser re-fetches `sw.js` (served `no-cache`), the new worker precaches the new
+shell, and the `controllerchange` reload is itself a navigation answered from the NEW cache.
+
+What the build emits, and what a deploy ships:
+
+- **Comments are stripped** from the generated output (`removeComments: true`); the source of truth
+  is `src/client/**.ts`, which keeps every one of them. So a contract test must assert a documentary
+  comment against the TypeScript source, never against `public/js/*.js`.
+- **Precompressed siblings.** After bundling, the script writes a `.gz` (level 9) and a `.br`
+  (quality 11) next to every asset `index.html` loads — the seven bundles, `styles.css`,
+  `index.html`, `art.js`, `cairn-body-figure.js`. `src/staticCompression.ts` serves the sibling when
+  `Accept-Encoding` allows, mounted in front of `express.static`, with the ORIGINAL content type, a
+  weak per-representation ETag and `Vary: Accept-Encoding`. Zero runtime CPU for the shell, and the
+  raw file still answers anything that cannot decode. `sw.js` and `manifest.json` are deliberately
+  excluded so `express.static` keeps owning their `no-cache` contract. JSON API bodies over ~1 KB are
+  gzipped at request time by the same module; SSE never is, because streams write through
+  `res.write`, not `res.json`.
+- **Per-module intermediates are pruned from a shipped build.** The bundler consumes ~236 per-module
+  outputs `index.html` never loads. `CAIRN_PRUNE_CLIENT_INTERMEDIATES=1` deletes them after
+  bundling, leaving `public/js` = seven bundles + `10-boot.js` + compressed siblings; the Dockerfile
+  builder sets it. A local build keeps them, because the client test suite reads those per-module
+  files directly.
 
 ### Illustration libraries
 

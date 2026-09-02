@@ -14,9 +14,16 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci
 COPY scripts/build-client.mjs ./scripts/build-client.mjs
 COPY src ./src
 # The bundling step concatenates every generated client output PLUS the one
-# hand-written classic shim, public/js/10-boot.js — the only public/ file the
-# builder needs from git (everything else in public/js is regenerated from src/client).
+# hand-written classic shim, public/js/10-boot.js (everything else in public/js is
+# regenerated from src/client). The three hand-authored shell files come along too
+# so the build's precompress step can write their .br/.gz siblings here rather than
+# leaving the runtime to compress them per request.
 COPY public/js/10-boot.js ./public/js/10-boot.js
+COPY public/index.html public/styles.css public/art.js ./public/
+# Ship only what index.html loads: drop the ~236 per-module intermediates the
+# bundler already concatenated. They stay on disk for a local build (the client
+# test suite reads them directly); an image build has no such reader.
+ENV CAIRN_PRUNE_CLIENT_INTERMEDIATES=1
 # NO tsbuildcache mount here. tsc is `incremental` with tsBuildInfoFile under
 # .tsbuildcache/. A persisted cache mount would carry that .tsbuildinfo across
 # builds while `dist/` (in the image layer) starts fresh each time — so tsc,
@@ -67,6 +74,15 @@ COPY public/icons ./public/icons
 COPY public/vendor ./public/vendor
 COPY --from=builder /app/public/cairn-body-figure.js ./public/cairn-body-figure.js
 COPY --from=builder /app/public/js ./public/js
+# Precompressed siblings of the shell files copied from git above. public/js's own
+# .br/.gz came along with the directory copy on the line before. Named explicitly,
+# so a missing sibling fails the build instead of silently shipping raw bytes.
+COPY --from=builder \
+  /app/public/index.html.br /app/public/index.html.gz \
+  /app/public/styles.css.br /app/public/styles.css.gz \
+  /app/public/art.js.br /app/public/art.js.gz \
+  /app/public/cairn-body-figure.js.br /app/public/cairn-body-figure.js.gz \
+  ./public/
 COPY seed-art ./seed-art
 COPY agents.json ./
 

@@ -1497,8 +1497,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const appDisciplinePrimer = read("public/js/app-discipline-primer.js");
   const appOnboarding = read("public/js/app-onboarding.js");
   const appStartup = read("public/js/app-startup.js");
-  const dateUtils = read("public/js/date-utils.js");
-  const htmlUtils = read("public/js/html-utils.js");
   const markdownClient = read("public/js/markdown-client.js");
   const uiComponents = read("public/js/ui-components.js");
   const uiFeedback = read("public/js/ui-feedback-client.js");
@@ -1508,7 +1506,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const uiMotionClient = read("public/js/ui-motion-client.js");
   const exerciseDetailClient = read("public/js/exercise-detail-client.js");
   const exerciseDetailController = read("public/js/exercise-detail-controller.js");
-  const formatUtils = read("public/js/format-utils.js");
   const apiClient = read("public/js/api-client.js");
   const appDownload = read("public/js/app-download.js");
   const appSwRecovery = read("public/js/app-sw-recovery.js");
@@ -1519,7 +1516,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const agentLoginClient = read("public/js/agent-login-client.js");
   const agentJobClient = read("public/js/agent-job-client.js");
   const coreState = read("public/js/01-core.js");
-  const artController = read("public/js/art-controller.js");
   const pwaInstall = read("public/js/pwa-install-coach.js");
   const uiHeader = read("public/js/ui-header-client.js");
   const restTimer = read("public/js/rest-timer.js");
@@ -1563,7 +1559,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todayPlanSurfaceRendererClient = read("public/js/today-plan-surface-renderer.js");
   const todayRenderStateClient = read("public/js/today-render-state-client.js");
   const todayPostRenderWiringClient = read("public/js/today-post-render-wiring.js");
-  const todayDependenciesClient = read("public/js/today-dependencies.js");
   const todayScreenRuntimeDepsClient = read("public/js/today-screen-runtime-deps.js");
   const progressDataClient = read("public/js/progress-data-client.js");
   const progressEnduranceClient = read("public/js/progress-endurance-client.js");
@@ -1689,6 +1684,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const health = read("public/js/07-me-health.js");
   const records = read("public/js/08-me-records.js");
   const chat = read("public/js/09-plan-chat.js");
+  // Where a screen documents that a helper MOVED, the pointer is a comment — and the
+  // client build strips comments out of the generated bundle. Assert those pointers
+  // against the TypeScript source that actually carries them.
+  const todaySource = read("src/client/today-screen.ts");
+  const mealsSource = read("src/client/coach-meals-screen.ts");
+  const chatSource = read("src/client/chat-screen.ts");
   const boot = read("public/js/10-boot.js");
   const sw = read("public/sw.js");
   const dockerfile = read("Dockerfile");
@@ -3568,23 +3569,25 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
       bootPos("/js/app-startup.js") < bootPos("/js/10-boot.js"),
     "app-startup.js must load after app shell helpers and before 10-boot.js"
   );
-  assert.match(dateUtils, /\/\/ @ts-check/);
-  assert.match(htmlUtils, /\/\/ @ts-check/);
-  assert.match(markdownClient, /\/\/ @ts-check/);
-  assert.match(uiComponents, /\/\/ @ts-check/);
-  assert.match(exerciseDetailClient, /\/\/ @ts-check/);
-  assert.match(exerciseDetailController, /\/\/ @ts-check/);
-  assert.match(formatUtils, /\/\/ @ts-check/);
-  assert.match(apiClient, /\/\/ @ts-check/);
-  assert.match(appDownload, /\/\/ @ts-check/);
-  assert.match(appSwRecovery, /\/\/ @ts-check/);
-  assert.match(artController, /\/\/ @ts-check/);
-  assert.match(uiHeader, /\/\/ @ts-check/);
-  assert.match(agentLoginModelClient, /\/\/ @ts-check/);
-  assert.match(agentLoginAssetsClient, /\/\/ @ts-check/);
-  assert.match(agentLoginModalClient, /\/\/ @ts-check/);
-  assert.match(agentLoginSessionClient, /\/\/ @ts-check/);
-  assert.match(agentJobClient, /\/\/ @ts-check/);
+  // The @ts-check gate is written in the TypeScript SOURCE, and the client build
+  // strips comments out of the generated public/js output. Assert it where it lives.
+  assert.match(read("src/client/date-utils.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/html-utils.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/markdown-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/ui-components.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/exercise-detail-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/exercise-detail-controller.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/format-utils.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/api-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/download.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/sw-recovery.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/art-controller.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/ui-header-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/agent-login-model-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/agent-login-assets-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/agent-login-modal-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/agent-login-session-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/agent-job-client.ts"), /\/\/ @ts-check/);
   assert.match(agentJobClientSource, /function\s+registerJobReconnector/);
   assert.match(agentJobClientSource, /async function\s+enqueueJob/);
   assert.match(agentJobClientSource, /function\s+openJobStream/);
@@ -3594,66 +3597,66 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(agentJobClient, /Object\.assign\(globalThis,\s*\{/);
   assert.doesNotMatch(chat, /\bconst\s+jobStreams\b/);
   assert.doesNotMatch(chat, /\bfunction\s+registerJobReconnector\b/);
-  assert.match(chat, /Durable agent job helpers live in \/js\/agent-job-client\.js/);
-  assert.match(pwaInstall, /\/\/ @ts-check/);
-  assert.match(agentLoginClient, /\/\/ @ts-check/);
-  assert.match(restTimer, /\/\/ @ts-check/);
-  assert.match(coachingFocusClient, /\/\/ @ts-check/);
-  assert.match(todayActivityClient, /\/\/ @ts-check/);
-  assert.match(swrCache, /\/\/ @ts-check/);
-  assert.match(todayAgendaClient, /\/\/ @ts-check/);
-  assert.match(todayTrainingClient, /\/\/ @ts-check/);
-  assert.match(todayProgressionController, /\/\/ @ts-check/);
-  assert.match(todayAddExerciseController, /\/\/ @ts-check/);
-  assert.match(todayBriefClient, /\/\/ @ts-check/);
-  assert.match(cardioPlanClient, /\/\/ @ts-check/);
-  assert.match(todaySessionSuggestClient, /\/\/ @ts-check/);
-  assert.match(todaySessionSuggestController, /\/\/ @ts-check/);
-  assert.match(todaySessionStatusClient, /\/\/ @ts-check/);
-  assert.match(todayProgramAdjustmentsClient, /\/\/ @ts-check/);
-  assert.match(todayWeekAheadClient, /\/\/ @ts-check/);
-  assert.match(todayContextClient, /\/\/ @ts-check/);
-  assert.match(todayGarminReconciliationClient, /\/\/ @ts-check/);
-  assert.match(todaySideLoadersClient, /\/\/ @ts-check/);
-  assert.match(todayDependenciesClient, /\/\/ @ts-check/);
-  assert.match(progressDataClient, /\/\/ @ts-check/);
-  assert.match(progressEnduranceClient, /\/\/ @ts-check/);
-  assert.match(progressComponentsClient, /\/\/ @ts-check/);
-  assert.match(progressChartScrubClient, /\/\/ @ts-check/);
-  assert.match(progressChartClient, /\/\/ @ts-check/);
-  assert.match(progressTrendWeightClient, /\/\/ @ts-check/);
-  assert.match(progressRunPlanClient, /\/\/ @ts-check/);
-  assert.match(progressRouteDepsClient, /\/\/ @ts-check/);
-  assert.match(progressVolumeClient, /\/\/ @ts-check/);
-  assert.match(progressEnergyClient, /\/\/ @ts-check/);
-  assert.match(progressEnergySurfaceClient, /\/\/ @ts-check/);
-  assert.match(progressCalendarClient, /\/\/ @ts-check/);
-  assert.match(progressMuscleTrajectoryClient, /\/\/ @ts-check/);
-  assert.match(progressDexaTargetingClient, /\/\/ @ts-check/);
-  assert.match(progressPerformanceClient, /\/\/ @ts-check/);
-  assert.match(progressProgramAdjustmentsClient, /\/\/ @ts-check/);
-  assert.match(progressTestWeekClient, /\/\/ @ts-check/);
-  assert.match(captureReads, /\/\/ @ts-check/);
-  assert.match(capture, /\/\/ @ts-check/);
-  assert.match(mealRecipeClient, /\/\/ @ts-check/);
-  assert.match(mealRecipeController, /\/\/ @ts-check/);
-  assert.match(meProfileController, /\/\/ @ts-check/);
-  assert.match(healthClient, /\/\/ @ts-check/);
-  assert.match(healthDocsClient, /\/\/ @ts-check/);
-  assert.match(chatClient, /\/\/ @ts-check/);
-  assert.match(chatTurnRecordsClient, /\/\/ @ts-check/);
-  assert.match(chatTurnClient, /\/\/ @ts-check/);
-  assert.match(settingsClient, /\/\/ @ts-check/);
-  assert.match(appRouter, /\/\/ @ts-check/);
-  assert.match(appRouteSync, /\/\/ @ts-check/);
-  assert.match(appRenderDispatch, /\/\/ @ts-check/);
-  assert.match(appTabs, /\/\/ @ts-check/);
-  assert.match(appJobReconnectors, /\/\/ @ts-check/);
-  assert.match(appMobileViewport, /\/\/ @ts-check/);
-  assert.match(appServiceWorker, /\/\/ @ts-check/);
-  assert.match(appDisciplinePrimer, /\/\/ @ts-check/);
-  assert.match(appOnboarding, /\/\/ @ts-check/);
-  assert.match(appStartup, /\/\/ @ts-check/);
+  assert.match(chatSource, /Durable agent job helpers live in \/js\/agent-job-client\.js/);
+  assert.match(read("src/client/pwa-install-coach.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/agent-login-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/rest-timer.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/coaching-focus-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-activity-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/swr-cache.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-agenda-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-training-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-progression-controller.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-add-exercise-controller.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-brief-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/cardio-plan-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-session-suggest-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-session-suggest-controller.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-session-status-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-program-adjustments-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-week-ahead-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-context-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-garmin-reconciliation-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-side-loaders.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/today-dependencies.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-data-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-endurance-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-components-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-chart-scrub-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-chart-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-trend-weight-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-run-plan-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-route-deps-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-volume-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-energy-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-energy-surface-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-calendar-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-muscle-trajectory-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-dexa-targeting-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-performance-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-program-adjustments-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/progress-test-week-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/capture-reads-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/capture.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/meal-recipe-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/meal-recipe-controller.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/me-profile-controller.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/health-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/health-docs-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/chat-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/chat-turn-records-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/chat-turn-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/settings-client.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/router.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/route-sync.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/render-dispatch.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/tabs.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/job-reconnectors.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/mobile-viewport.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/service-worker.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/discipline-primer.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/onboarding.ts"), /\/\/ @ts-check/);
+  assert.match(read("src/client/app/startup.ts"), /\/\/ @ts-check/);
   assert.match(publicScriptCheck, /ts\.createSourceFile/);
   assert.match(publicScriptCheck, /topLevelBindings/);
   assert.match(publicScriptCheck, /prior\.lexical\s*\|\|\s*binding\.lexical/);
@@ -5785,7 +5788,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appSwRecovery, /startServiceWorkerLifecycle\(\)/);
   assert.match(appSwRecovery, /registerServiceWorkerLifecycle/);
   assert.match(appSwRecovery, /__cairnSwLifecycleStarted/);
-  assert.match(coreState, /\/\/ @ts-check/);
+  assert.match(read("src/client/app/state.ts"), /\/\/ @ts-check/);
   assert.match(
     coreState,
     /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/
@@ -5811,7 +5814,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(markdownClient, /Object\.assign\(globalThis, \{/);
   assert.match(markdownClient, /CairnMarkdown/);
   assert.doesNotMatch(ui, /function\s+mdToHtml|function\s+mdInline|function\s+mdSafeUrl/);
-  assert.match(saveBar, /\/\/ @ts-check/);
+  assert.match(read("src/client/save-bar.ts"), /\/\/ @ts-check/);
   assert.match(saveBar, /Object\.assign\(globalThis, \{ hideSaveBar, mountSaveBar \}\)/);
   assert.match(saveBar, /Object\.assign\(window, \{ hideSaveBar, mountSaveBar \}\)/);
   assert.match(swrCache, /Object\.assign\(globalThis, \{/);
@@ -5901,7 +5904,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.doesNotMatch(today, /function\s+garminConfigured|function\s+cardioSyncLine|function\s+wireCardioSync/);
   assert.doesNotMatch(today, /const\s+HR_ZONE_COLORS/);
-  assert.match(today, /cardio-sync-client\.js/);
+  assert.match(todaySource, /cardio-sync-client\.js/);
   assert.match(todayLatelyClient, /CairnTodayLately/);
   assert.match(todayLatelyClient, /garminSessionCard/);
   assert.match(todayLatelyClient, /rowHtml: latelyRow/);
@@ -6063,7 +6066,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(meals, /CairnCoachProposalController\.runCoachProposal/);
   assert.match(meals, /CairnCoachProposalController\.renderProposals/);
-  assert.match(meals, /coach-proposal-controller\.js/);
+  assert.match(mealsSource, /coach-proposal-controller\.js/);
   assert.doesNotMatch(
     meals,
     /lastApplyClamp|function\s+coachProposalOpOpts|function\s+renderProposals|async function\s+applyProposalById|function\s+reconnectProposal/
@@ -6315,7 +6318,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(dayFuelController, /CairnDayFuel/);
   assert.match(meals, /CairnDayFuelController\.loadDayFuel/);
-  assert.match(meals, /meal-plan-client\.js/);
+  assert.match(mealsSource, /meal-plan-client\.js/);
   assert.match(meals, /CairnMealPlannerController\.renderMealPlans/);
   assert.match(meals, /CairnMealPlan\.mealPlannerBodyHtml\(current, mealPrefs/);
   assert.match(mealSwapRowActionsController, /recipeController\.openMealSheet/);
@@ -6561,19 +6564,19 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatHeaderControllerSource, /function settleFreshPill/);
   assert.match(settingsClient, /Object\.assign\(globalThis, \{/);
   assert.match(settingsClient, /CairnSettingsClient/);
-  assert.match(settingsSurface, /\/\/ @ts-check/);
+  assert.match(read("src/client/settings-surface-client.ts"), /\/\/ @ts-check/);
   assert.match(settingsSurface, /CairnSettingsSurface/);
-  assert.match(settingsData, /\/\/ @ts-check/);
+  assert.match(read("src/client/settings-data-client.ts"), /\/\/ @ts-check/);
   assert.match(settingsData, /CairnSettingsData/);
-  assert.match(settingsDataController, /\/\/ @ts-check/);
+  assert.match(read("src/client/settings-data-controller.ts"), /\/\/ @ts-check/);
   assert.match(settingsDataController, /CairnSettingsDataController/);
   assert.match(settingsDataController, /render: renderSettingsData/);
-  assert.match(settingsAgents, /\/\/ @ts-check/);
+  assert.match(read("src/client/settings-agents-client.ts"), /\/\/ @ts-check/);
   assert.match(settingsAgents, /CairnSettingsAgents/);
-  assert.match(settingsAgentsController, /\/\/ @ts-check/);
+  assert.match(read("src/client/settings-agents-controller.ts"), /\/\/ @ts-check/);
   assert.match(settingsAgentsController, /CairnSettingsAgentsController/);
   assert.match(settingsAgentsController, /render: renderSettingsAgents/);
-  assert.match(settingsSourcesAutomationController, /\/\/ @ts-check/);
+  assert.match(read("src/client/settings-sources-automation-controller.ts"), /\/\/ @ts-check/);
   assert.match(settingsSourcesAutomationController, /CairnSettingsSourcesAutomationController/);
   assert.match(settingsSourcesAutomationController, /renderSources: renderSettingsSources/);
   assert.match(settingsSourcesAutomationController, /renderAutomation: renderSettingsAutomation/);
@@ -6583,7 +6586,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayScreenRuntimeSource, /CairnTodayCards\.exerciseCardHtml/);
   assert.match(todayScreenRuntimeSource, /CairnTodayCards\.cardioPlanCardHtml/);
   assert.doesNotMatch(today, /const\s+offPlan\s*=\s*!it\.fromPlan|class="ex ex-cardio-done/);
-  assert.match(settingsScreen, /\/\/ @ts-check/);
+  assert.match(read("src/client/settings-screen.ts"), /\/\/ @ts-check/);
   assert.match(settingsScreen, /Object\.assign\(globalThis, \{/);
   assert.match(settingsScreen, /SET_SEG/);
   assert.match(settingsScreen, /renderSettings/);
@@ -6945,9 +6948,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     chat,
     /function\s+chatComposerReleaseStaleInputFocus|function\s+chatComposerRecoverInputFocusFromTap/
   );
-  assert.match(chat, /Durable chat turn helpers live in \/js\/chat-turn-client\.js/);
-  assert.match(chat, /Static chat message rendering lives in \/js\/chat-message-client\.js/);
-  assert.match(chat, /Chat history\/search helpers live in \/js\/chat-history-client\.js/);
+  assert.match(chatSource, /Durable chat turn helpers live in \/js\/chat-turn-client\.js/);
+  assert.match(chatSource, /Static chat message rendering lives in \/js\/chat-message-client\.js/);
+  assert.match(chatSource, /Chat history\/search helpers live in \/js\/chat-history-client\.js/);
   assert.doesNotMatch(chat, /\bconst\s+CHAT_DRAFT_KEY\b|\blet\s+chatStream\b|\bconst\s+chatPendingBubbles\b/);
   assert.doesNotMatch(
     chat,
@@ -6959,7 +6962,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(planEnduranceClient, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(
-    chat,
+    chatSource,
     /Plan editor orchestration lives in \/js\/plan-editor-controller\.js; Plan Endurance lives in \/js\/plan-endurance-client\.js/
   );
   assert.doesNotMatch(
