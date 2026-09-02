@@ -525,6 +525,59 @@ test("the fortnight of silence starts when the change LANDS, not when it is deci
   assert.match(after.reason, /settling window/i);
 });
 
+function otherLaneNutritionTargetDecision(overrides = {}) {
+  return recordDecision({
+    effective_date: today(),
+    kind: "nutrition_target",
+    domain: "nutrition",
+    summary: "A protective raise landed by a different lane",
+    rationale: null,
+    source: "recovery-package-brain",
+    source_ref_type: null,
+    source_ref_key: null,
+    status: "applied",
+    autonomy_tier: "quiet_apply",
+    risk_class: "low",
+    reversible: true,
+    context: null,
+    action: null,
+    specialist: null,
+    applied_at: `${today()} 12:00:00`,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+    ...overrides,
+  });
+}
+
+// The cooldown is cross-lane on purpose: the number it settles is the target's own
+// kcal value, and that number has exactly one value regardless of which lane moved
+// it last. A raise landed by a DIFFERENT lane must hold this watch off just as an
+// applied raise of its own would — otherwise the watch mints a second, redundant ask
+// on top of a target that has not finished settling.
+test("a nutrition_target decision landed by a DIFFERENT lane inside the window also holds the watch off", () => {
+  seedTarget(2200);
+  seedRecoverySignals();
+  otherLaneNutritionTargetDecision();
+
+  const result = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(result.action, "none");
+  assert.match(result.reason, /settling window/i);
+  const drafts = repo.listProposals(20).filter((p) => String(p.agent) === "energy-deficiency-brain");
+  assert.equal(drafts.length, 0, "no proposal is minted while another lane's raise is still settling");
+});
+
+// Once that other lane's move is older than the cooldown, it no longer holds this
+// watch off — the window is bounded, not a permanent lock on the target.
+test("a different lane's nutrition_target decision OLDER than the cooldown does not hold the watch off", () => {
+  seedTarget(2200);
+  seedRecoverySignals();
+  otherLaneNutritionTargetDecision({ applied_at: `${addDaysISO(today(), -(15))} 12:00:00` });
+
+  const result = runEnergyDeficiencyWatch(today(), { read: clusterRead() });
+  assert.equal(result.action, "protective_raise_scheduled");
+});
+
 // `applied_at` is an INSTANT stamped by datetime('now') — UTC — while the watch runs
 // on a LOCAL calendar day. West of Greenwich the two disagree every evening: a raise
 // that landed at 6 PM carries a UTC stamp dated tomorrow, and reading the stamp's

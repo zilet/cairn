@@ -70,8 +70,8 @@ export interface EnergyDeficiencyWatchResult {
 }
 
 /**
- * Has one of this watch's protective moves already been SETTLED inside the window —
- * either by landing, or by the athlete saying no?
+ * Has a protective move already been SETTLED inside the window — either by landing,
+ * or by the athlete saying no?
  *
  * Read off the ledger rather than a stamp written at decision time, and that is the
  * whole point. A nutrition target never applies when it is decided — it waits for a
@@ -90,6 +90,18 @@ export interface EnergyDeficiencyWatchResult {
  * (a discard also clears the in-flight guard, so nothing else stopped it). So every
  * terminal status of our own opens the same fortnight: the athlete's answer buys the
  * quiet that an applied change buys.
+ *
+ * CROSS-LANE ON PURPOSE. The number this settles is `nutrition_targets.target_kcal`,
+ * and that number has exactly one value regardless of which lane moved it last. The
+ * ordinary cut/protective-raise/adherence machinery and this watch all write the same
+ * `kind: "nutrition_target"` decision row under their own `source`; a raise the
+ * recovery-package lane landed settles the target exactly as much as one this watch
+ * landed itself. Filtering by `source === WATCH_AGENT` here would make a target this
+ * watch did not move invisible to its own settling window, so a fresh cross-lane
+ * raise (still inside `underfueling.ts`'s own seven-day settling read) would sit
+ * right next to a second, redundant ask from this watch on top of it. Ownership of
+ * the ACTION stays scoped to this watch (`ourDecisions`, used by `moveAlreadyInFlight`
+ * and the expectations/insight code) — only the cooldown widens to "any lane".
  */
 const SETTLED_STATUSES = ["applied", "rejected", "reverted", "canceled"];
 
@@ -113,7 +125,10 @@ function settledLocalDate(decision: any): string {
 
 function settledWithinCooldown(today: string): boolean {
   try {
-    return ourDecisions(SETTLED_STATUSES).some((decision) => {
+    // Every lane's landed/declined nutrition_target rows, not just this watch's own
+    // — see the doc comment above SETTLED_STATUSES for why the cooldown is cross-lane
+    // while ownership of the action stays scoped to this watch.
+    return anyLaneNutritionTargetDecisions(SETTLED_STATUSES).some((decision) => {
       // Only an applied row carries `applied_at`; a decline is dated by when it was
       // decided. The effective date is the last resort, for a row carrying neither.
       const settled = settledLocalDate(decision);
@@ -126,14 +141,30 @@ function settledWithinCooldown(today: string): boolean {
 }
 
 /**
- * This watch's own decisions in the given statuses.
+ * Every lane's `nutrition_target` decisions in the given statuses — used ONLY for the
+ * cross-lane settling window (`settledWithinCooldown`). A calorie-target move landed
+ * by a different lane (the ordinary cut machinery, adherence, the recovery-package
+ * lane) settles this watch's cooldown exactly as much as one it landed itself,
+ * because the thing being settled is the target's number, not which lane wrote it.
+ */
+function anyLaneNutritionTargetDecisions(statuses: string[]): any[] {
+  return listBrainDecisions({ domain: "nutrition", kind: "nutrition_target", limit: 50 }).filter((decision) =>
+    statuses.includes(String(decision.status))
+  );
+}
+
+/**
+ * This watch's OWN decisions in the given statuses — identity, not settling.
  *
  * Identity is `decision.source`, which the autonomy layer copies from the proposal's
  * agent and which SURVIVES apply. The proposal reference does not: applying a
  * nutrition target re-points `source_ref_type`/`source_ref_key` at the
  * `nutrition_targets` row it wrote, so a guard that reached back through the proposal
- * silently stopped recognising its own landed moves — and a settling window that
- * cannot see the change it is settling is not a settling window at all.
+ * silently stopped recognising its own landed moves. Used for `moveAlreadyInFlight`
+ * and the expectations/insight writers, which are this watch's own bookkeeping and
+ * must not fire off a different lane's decision row. The settling window itself is
+ * cross-lane (`anyLaneNutritionTargetDecisions`) — see the doc comment on
+ * `SETTLED_STATUSES`.
  */
 function ourDecisions(statuses: string[]): any[] {
   return listBrainDecisions({ domain: "nutrition", kind: "nutrition_target", limit: 50 }).filter(

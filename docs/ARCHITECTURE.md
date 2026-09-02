@@ -1092,7 +1092,11 @@ NOTHING. There is no "recovery mode" exit path on purpose: when the arms recover
 finding a cluster and the ordinary cut derivation resumes, because two ways to set one number is how
 they come to disagree. `src/repo/energy-deficiency-snapshot.ts` memoizes the read (it is the module's
 one expensive evaluation) so the scheduler pass and the coach prompt can never describe the same day
-differently, and projects the small `CoachEnergyDeficiency` a person's coach is allowed to see.
+differently, and projects the small `CoachEnergyDeficiency` a person's coach is allowed to see. The
+watch's own 14-day settling cooldown is deliberately cross-lane: it holds off on ANY applied/declined
+`nutrition_target` ledger row within the window, not just its own, because a calorie-target move landed
+by a different lane (the ordinary cut machinery, adherence) settles the same number this watch would
+otherwise ask to move again.
 
 ### Person, memory, chat
 
