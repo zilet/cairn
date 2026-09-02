@@ -4,6 +4,7 @@ import { connectedBrainRouter } from "./routes/connected-brain.js";
 import { dayCoachRouter } from "./routes/day-coach.js";
 import { healthDocsRouter } from "./routes/health-docs.js";
 import { todayRouter } from "./routes/today.js";
+import { todaySideRouter } from "./routes/today-side.js";
 import { chatRouter } from "./routes/chat.js";
 import { agentJobsRouter } from "./routes/agent-jobs.js";
 import { systemRouter } from "./routes/system.js";
@@ -34,6 +35,7 @@ export const api = Router();
 api.use(idempotencyGuard);
 
 api.use("/", todayRouter);
+api.use("/", todaySideRouter);
 api.use("/", dayCoachRouter);
 api.use("/", connectedBrainRouter);
 api.use("/", systemRouter);

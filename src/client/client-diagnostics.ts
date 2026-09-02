@@ -57,7 +57,7 @@ const CLIENT_API_ROUTE_FAMILIES = [
   "run-compliance", "run-plan", "run-zones", "search", "session-primer", "session-suggest", "sessions",
   "sets", "settings", "since-last", "stats", "strength-journey", "suggestions", "supplements",
   "symptom-links", "team-week", "telemetry", "test-week", "today", "today-agenda", "today-plan-day",
-  "today-read", "training-agenda", "training-symptoms", "trajectory", "turns", "update-check",
+  "today-read", "today-side", "training-agenda", "training-symptoms", "trajectory", "turns", "update-check",
   "update-status", "version", "volume", "week-ahead", "week-wins", "whole-person-trajectory",
 ];
 const CLIENT_API_ROUTE_FAMILY_SET = new Set(CLIENT_API_ROUTE_FAMILIES);

@@ -1862,6 +1862,26 @@ export interface ClientTodayAggregate {
   exercises: ClientExercise[];
 }
 
+/**
+ * The composite Today side read (`GET /today-side`, src/routes/today-side.ts): the
+ * small independent panels the PWA used to fetch one at a time, answered in one
+ * trip. Every key is exactly what its individual route returns.
+ *
+ * Every key is also NULLABLE on purpose — a read that fails degrades to `null` for
+ * its own panel alone, and the client falls back to that panel's own request.
+ */
+export interface ClientTodaySideRead {
+  date: ISODateString | string;
+  context_events: ClientContextEvent[] | null;
+  health_synthesis: ClientHealthSynthesisResponse | null;
+  garmin_daily: ClientGarminDailyMetric[] | null;
+  recovery_baseline: ClientRecoveryBaselineRead | null;
+  mealplans: ClientMealPlan[] | null;
+  directives: ClientDirectivesResponse | null;
+  insights: ClientInsight[] | null;
+  team_week: ClientTeamWeek | null;
+}
+
 export interface ClientTodayPlanDaySelection {
   day_number: number;
   focus: string | null;
@@ -3080,6 +3100,7 @@ export interface ClientApiResponses {
   "/api/calendar": ClientTrainingCalendarResponse;
   "/api/week-wins": ClientWeekWinsResponse;
   "/api/today": ClientTodayAggregate;
+  "/api/today-side": ClientTodaySideRead;
   "/api/today-plan-day": ClientTodayPlanDaySelection | null;
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };

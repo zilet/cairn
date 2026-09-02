@@ -91,6 +91,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/calendar",
   "/week-wins",
   "/today",
+  "/today-side",
   "/today-plan-day",
   "/today-read",
   "/today-read/reshape",

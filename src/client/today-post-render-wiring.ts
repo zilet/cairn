@@ -65,6 +65,16 @@ type TodayPostRenderWiringApi = {
 };
 
 (() => {
+  // Kick the composite side read and hand it to the side loaders. Both globals are
+  // reached lazily (they live in other client modules sharing this one scope), and
+  // any failure is swallowed by the prime itself — the loaders then fetch their own.
+  function primeTodaySide(date: string): void {
+    const loaders = (globalThis as { CairnTodaySideLoaders?: { primeTodaySide?: (date: string, promise: unknown) => void } })
+      .CairnTodaySideLoaders;
+    if (typeof loaders?.primeTodaySide !== "function" || typeof api !== "function") return;
+    loaders.primeTodaySide(date, api(`/today-side?date=${encodeURIComponent(date)}`));
+  }
+
   function applyPendingCapture(deps: TodayPostRenderWiringDeps): boolean {
     const phrase = String(deps.state.capturePrefill || "").trim();
     if (!phrase) return false;
@@ -101,6 +111,13 @@ type TodayPostRenderWiringApi = {
     // content change). Both await the in-flight promise inside upgradeBriefInPlace.
     if (deps.read?._provisional || deps.read?._cached) deps.upgradeBriefInPlace(deps.state.logDate, deps.isToday);
     if (deps.showPlan) deps.loadTrainingProvenance(deps.isToday);
+
+    // ONE trip for the side panels below (meal hint, context banner, health lever,
+    // wearable strip + recovery bands). Each loader takes its slice from this
+    // prefetch when it is there and falls back to its own GET when it is not, so
+    // the panels stay independent and a failed composite costs nothing but the
+    // round trip it saved. Fired here, not awaited: the paint already happened.
+    primeTodaySide(deps.state.logDate);
 
     deps.loadTableHint();
     deps.setupWeightChip();

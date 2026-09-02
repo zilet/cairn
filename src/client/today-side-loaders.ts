@@ -49,9 +49,48 @@ type TodaySideLoaderDeps = {
   stagger(index?: number | null): string;
 };
 
+type TodaySideComposite = Record<string, unknown>;
+
 (() => {
   function isCurrentToday(deps: TodaySideLoaderDeps): boolean {
     return deps.state.tab === "today";
+  }
+
+  // ---- the composite side read (GET /today-side), primed once per render ----
+  // These panels are independent small GETs fired in the same burst, so the render
+  // that starts them can ask for all of them in ONE trip instead (see
+  // src/routes/today-side.ts). The composite is a PREFETCH, never a requirement:
+  // a loader takes its key if one was primed for the date it is drawing, and
+  // otherwise fetches exactly as it did before — so every call site that isn't the
+  // Today post-render wiring (compat bridges, the phase-2 health lever after the
+  // prime was already spent) keeps working untouched.
+  //
+  // Each key is handed out AT MOST ONCE. A second draw of the same panel is a
+  // deliberate refresh, and a one-shot prime can never age into a stale answer
+  // that outlives the render it belongs to.
+  let sidePrefetch: { date: string; promise: Promise<TodaySideComposite | null>; taken: Set<string> } | null = null;
+
+  function primeTodaySide(date: unknown, promise: Promise<unknown> | unknown): void {
+    sidePrefetch = {
+      date: String(date || ""),
+      promise: Promise.resolve(promise)
+        .then((value) => (value && typeof value === "object" ? value as TodaySideComposite : null))
+        .catch(() => null),
+      taken: new Set<string>(),
+    };
+  }
+
+  // The primed value for `key`, or `undefined` when the caller should fetch its
+  // own. A key the server could not read comes back null (per-key degradation) —
+  // that reads as `undefined` here too, so the individual route still gets its
+  // chance rather than the panel silently going dark.
+  async function sideValue(deps: TodaySideLoaderDeps, key: string): Promise<unknown> {
+    const prime = sidePrefetch;
+    if (!prime || prime.date !== deps.state.logDate || prime.taken.has(key)) return undefined;
+    prime.taken.add(key);
+    const data = await prime.promise;
+    const value = data ? data[key] : undefined;
+    return value == null ? undefined : value;
   }
 
   // Today: the "body's reaction" card for a strength session reconciled from Garmin.
@@ -110,8 +149,10 @@ type TodaySideLoaderDeps = {
   async function loadRecoveryBands(deps: TodaySideLoaderDeps): Promise<void> {
     const slot = deps.root.querySelector<HTMLElement>("#wearBands");
     if (!slot) return;
-    let data: unknown;
-    try { data = await deps.api("/recovery/baseline"); } catch { return; }
+    let data: unknown = await sideValue(deps, "recovery_baseline");
+    if (data === undefined) {
+      try { data = await deps.api("/recovery/baseline"); } catch { return; }
+    }
     if (!isCurrentToday(deps) || !slot.isConnected) return;
     const dims = data && typeof data === "object" && Array.isArray((data as { dimensions?: unknown }).dimensions)
       ? ((data as { dimensions: Array<Record<string, unknown>> }).dimensions)
@@ -145,8 +186,10 @@ type TodaySideLoaderDeps = {
     // The recovery bands share the wearable card's fold but their own slot + data
     // source, so kick them off independently of the Garmin-cell early returns below.
     void loadRecoveryBands(deps);
-    let rows: unknown = [];
-    try { rows = await deps.api("/garmin/daily?limit=1"); } catch { return; }
+    let rows: unknown = await sideValue(deps, "garmin_daily");
+    if (rows === undefined) {
+      try { rows = await deps.api("/garmin/daily?limit=1"); } catch { return; }
+    }
     if (!isCurrentToday(deps) || !slot.isConnected) return;
     const m = Array.isArray(rows) ? rows[0] as Record<string, unknown> : null;
     if (!m || !m.date) return;
@@ -183,8 +226,13 @@ type TodaySideLoaderDeps = {
   async function loadTableHint(deps: TodaySideLoaderDeps): Promise<void> {
     const wrap = deps.root.querySelector<HTMLElement>("#tableHint");
     if (!wrap) return;
+    const primedPlans = await sideValue(deps, "mealplans");
     let plans: TodaySideMealPlan[] = [];
-    try { plans = await deps.api("/mealplans?limit=6") as TodaySideMealPlan[]; } catch { return; }
+    if (primedPlans === undefined) {
+      try { plans = await deps.api("/mealplans?limit=6") as TodaySideMealPlan[]; } catch { return; }
+    } else {
+      plans = primedPlans as TodaySideMealPlan[];
+    }
     if (!isCurrentToday(deps) || !wrap.isConnected) return;
     const p = CairnMealPlan.currentMealPlan(plans) as TodaySideMealPlan | null;
     const constraintState = p?.constraint_state ?? p?.parsed?.constraint_state;
@@ -208,8 +256,13 @@ type TodaySideLoaderDeps = {
   async function loadContextBanner(deps: TodaySideLoaderDeps): Promise<void> {
     const wrap = deps.root.querySelector<HTMLElement>("#ctxEvents");
     if (!wrap) return;
+    const primedEvents = await sideValue(deps, "context_events");
     let events: TodaySideContextEvent[] = [];
-    try { events = await deps.api("/context-events?active=1") as TodaySideContextEvent[]; } catch { events = []; }
+    if (primedEvents === undefined) {
+      try { events = await deps.api("/context-events?active=1") as TodaySideContextEvent[]; } catch { events = []; }
+    } else {
+      events = primedEvents as TodaySideContextEvent[];
+    }
     if (!isCurrentToday(deps) || !wrap.isConnected) return;
     wrap.innerHTML = CairnTodayContext.contextBannerHtml(events);
   }
@@ -218,8 +271,13 @@ type TodaySideLoaderDeps = {
   async function loadHealthFocusBanner(deps: TodaySideLoaderDeps): Promise<void> {
     const wrap = deps.root.querySelector<HTMLElement>("#ctxHealth");
     if (!wrap) return;
+    const primedSynthesis = await sideValue(deps, "health_synthesis");
     let data: TodaySideHealthSynthesisBanner | null = null;
-    try { data = await deps.api("/health/synthesis") as TodaySideHealthSynthesisBanner; } catch { data = null; }
+    if (primedSynthesis === undefined) {
+      try { data = await deps.api("/health/synthesis") as TodaySideHealthSynthesisBanner; } catch { data = null; }
+    } else {
+      data = primedSynthesis as TodaySideHealthSynthesisBanner;
+    }
     if (!isCurrentToday(deps) || !wrap.isConnected) return;
     wrap.innerHTML = CairnTodayContext.healthFocusBannerHtml(data);
     if (!wrap.innerHTML) return;
@@ -231,6 +289,7 @@ type TodaySideLoaderDeps = {
   }
 
   const CAIRN_TODAY_SIDE_LOADERS = {
+    primeTodaySide,
     garminSessionCard,
     loadWearable,
     loadRecoveryBands,

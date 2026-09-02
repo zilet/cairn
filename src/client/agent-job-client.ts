@@ -185,19 +185,51 @@ function teardownJobs(pred?: ((jobId: string) => boolean) | unknown): void {
 }
 
 // Built-in delta painter: accumulate the streamed prose into the anchor card as
-// escaped text with a blinking caret (mirrors chat's .stream-text/.stream-caret). The
-// done renderer swaps in the final structured card in place. Streamed chunks are
-// UNTRUSTED text, so everything goes through escHtml.
+// TEXT with a blinking caret (mirrors chat's .stream-text/.stream-caret). The done
+// renderer swaps in the final structured card in place.
+//
+// The prose lives in a Text node created once, and each delta appends to it. A
+// text node cannot carry markup, so untrusted streamed chunks need no escaping
+// here — the browser can never read them as HTML. That also retires the old
+// rebuild, which re-escaped and re-parsed the WHOLE reading on every delta (a few
+// hundred HTML parses of a growing string for one long reading) and then read
+// scrollHeight immediately after, forcing a synchronous layout per delta on the
+// main thread while the card was on screen.
+const jobStreamTextNodes = new WeakMap<HTMLElement, Text>();
+let jobStreamScrollBox: HTMLElement | null = null;
+let jobStreamScrollQueued = false;
+
+// Deltas arrive far faster than the screen refreshes, so the scroll pin happens
+// once per FRAME, not once per delta — one layout read instead of hundreds.
+function queueJobStreamScroll(box: HTMLElement): void {
+  jobStreamScrollBox = box;
+  if (jobStreamScrollQueued) return;
+  jobStreamScrollQueued = true;
+  const frame = typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame
+    : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16);
+  frame(() => {
+    jobStreamScrollQueued = false;
+    const target = jobStreamScrollBox;
+    jobStreamScrollBox = null;
+    if (target) target.scrollTop = target.scrollHeight;
+  });
+}
+
 function paintJobStream(host: Element | null, accumulated: string): void {
   if (!(host instanceof HTMLElement)) return;
   let box = host.querySelector(".job-stream");
+  // Whether THIS call laid down the markup: a body we just created already carries
+  // its caret and nothing else, so it needs no second innerHTML write.
+  let freshBody = false;
   if (!box) {
+    freshBody = true;
     // A loading card may carry a [data-stream-slot] — then the prose streams INSIDE
     // the card chrome (the caption yields via .is-streaming) instead of replacing
     // the whole anchor with bare text. Anchors without a slot keep the old takeover.
     const slot = host.querySelector<HTMLElement>("[data-stream-slot]");
     const mount = slot ?? host;
-    mount.innerHTML = `<div class="job-stream"><div class="job-stream-text"></div></div>`;
+    mount.innerHTML = `<div class="job-stream"><div class="job-stream-text"><span class="stream-caret" aria-hidden="true"></span></div></div>`;
     if (slot) {
       slot.hidden = false;
       host.classList.add("is-streaming");
@@ -205,10 +237,23 @@ function paintJobStream(host: Element | null, accumulated: string): void {
     box = mount.querySelector(".job-stream");
   }
   const body = box?.querySelector(".job-stream-text");
-  if (body instanceof HTMLElement) {
-    body.innerHTML = `${escHtml(accumulated)}<span class="stream-caret" aria-hidden="true"></span>`;
-    if (box instanceof HTMLElement) box.scrollTop = box.scrollHeight;
+  if (!(body instanceof HTMLElement)) return;
+  let node = jobStreamTextNodes.get(body);
+  if (!node || node.parentNode !== body) {
+    // A body re-created under us (the done renderer, another paint): put the caret
+    // back before seeding the text node. Every delta after this is a text append —
+    // the markup is written once per stream, not once per delta.
+    if (!freshBody) body.innerHTML = `<span class="stream-caret" aria-hidden="true"></span>`;
+    node = (body.ownerDocument ?? document).createTextNode("");
+    body.insertBefore(node, body.firstChild);
+    jobStreamTextNodes.set(body, node);
   }
+  const painted = node.data;
+  if (accumulated !== painted) {
+    if (accumulated.length > painted.length && accumulated.startsWith(painted)) node.appendData(accumulated.slice(painted.length));
+    else node.data = accumulated;
+  }
+  if (box instanceof HTMLElement) queueJobStreamScroll(box);
 }
 
 async function runOp(_kind: string, body: Record<string, unknown>, opts: AgentRunOptions = {}): Promise<AgentJob | undefined> {
@@ -295,7 +340,12 @@ async function runOp(_kind: string, body: Record<string, unknown>, opts: AgentRu
   return job;
 }
 
+// Namespaced so the painter can be exercised directly against a fake host (the
+// rest of this module stays on the flat compatibility surface below).
+const CAIRN_AGENT_JOB_STREAM = { paintJobStream };
+
 Object.assign(globalThis, {
+  CairnAgentJobStream: CAIRN_AGENT_JOB_STREAM,
   registerJobReconnector,
   enqueueJob,
   openJobStream,
@@ -306,6 +356,7 @@ Object.assign(globalThis, {
 
 if (typeof window !== "undefined") {
   Object.assign(window, {
+    CairnAgentJobStream: CAIRN_AGENT_JOB_STREAM,
     registerJobReconnector,
     enqueueJob,
     openJobStream,

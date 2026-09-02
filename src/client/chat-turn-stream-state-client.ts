@@ -28,6 +28,11 @@ function createChatTurnStreamState(deps: ChatTurnStreamStateDeps): ChatTurnStrea
   const renderVersion = new Map<number, number>();
   const raf = deps.requestFrame || requestAnimationFrame;
   const doc = deps.document || document;
+  // What each bubble body currently has painted. Re-running markdownToHtml over the
+  // whole accumulated reply for text that has not changed since the last frame is
+  // pure waste, and it costs the most exactly when the reply is longest. Keyed by
+  // the element, so a re-created bubble always renders.
+  const paintedMarkdown = new WeakMap<HTMLElement, string>();
 
   function renderStreamMarkdown(id: number): void {
     const el = deps.getBubble(id);
@@ -38,9 +43,12 @@ function createChatTurnStreamState(deps: ChatTurnStreamStateDeps): ChatTurnStrea
     // pin — so the scroll follows the render by one atomic step instead of running
     // a frame ahead of it (which left the caret drifting below the fold). A user
     // who scrolled up to read (>200px off the bottom) is never yanked down.
+    const text = streamText.get(id) || "";
+    if (paintedMarkdown.get(body) === text) return;
     const log = deps.getLog();
     const stick = !!log && log.scrollHeight - log.scrollTop - log.clientHeight < 200;
-    body.innerHTML = deps.markdownToHtml(streamText.get(id) || "");
+    body.innerHTML = deps.markdownToHtml(text);
+    paintedMarkdown.set(body, text);
     const caret = doc.createElement("span");
     caret.className = "stream-caret";
     caret.setAttribute("aria-hidden", "true");

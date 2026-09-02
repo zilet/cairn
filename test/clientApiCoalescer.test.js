@@ -164,12 +164,22 @@ test("TTL cache: only the configured paths are cacheable — everything else nev
   assert.equal(c.isMicroCachePath("/profile"), true);
   assert.equal(c.isMicroCachePath("/stats"), true);
   assert.equal(c.isMicroCachePath("/coaching-focus"), true);
+  // Both are read from several Today sites inside one render burst, and those
+  // bursts do not always overlap — in-flight dedupe alone misses them.
+  assert.equal(c.isMicroCachePath("/exercises"), true);
+  assert.equal(c.isMicroCachePath("/plan"), true);
   assert.equal(c.isMicroCachePath("/today"), false);
   assert.equal(c.isMicroCachePath("/stats?date=2026-07-09"), false, "query-param'd paths stay uncached");
+  assert.equal(c.isMicroCachePath("/plan?date=2026-07-09"), false, "a dated plan read is its own request");
 
   c.store("/today", { a: 1 });
   assert.equal(c.cacheSize(), 0);
   assert.equal(c.peekFresh("/today"), undefined);
+
+  c.store("/exercises", [{ name: "Back Squat" }]);
+  assert.deepEqual(c.peekFresh("/exercises"), [{ name: "Back Squat" }]);
+  c.invalidateAll();
+  assert.equal(c.peekFresh("/exercises"), undefined, "any write still clears it");
 });
 
 test("TTL cache: serves a fresh hit within the window and expires after it", () => {

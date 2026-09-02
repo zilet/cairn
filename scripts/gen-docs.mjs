@@ -100,6 +100,7 @@ const routes = [
   ...parseApiRoutes(read("src/routes/program.ts"), { receiver: "programRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/system.ts"), { receiver: "systemRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/today.ts"), { receiver: "todayRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/today-side.ts"), { receiver: "todaySideRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/training-log.ts"), { receiver: "trainingLogRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/body-metrics.ts"), { receiver: "bodyMetricsRouter", prefix: "" }),
 ];

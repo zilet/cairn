@@ -186,7 +186,12 @@ type ApiCoalescer = {
 };
 
 const API_MICRO_TTL_MS = 1500;
-const API_MICRO_CACHE_PATHS: readonly string[] = ["/settings", "/profile", "/stats", "/coaching-focus"];
+// `/exercises` and `/plan` join the hot four: both are read from several Today
+// sites inside one render burst (the data loader, the compatibility bridge, the
+// add-exercise flow) and those bursts do not always overlap, so in-flight dedupe
+// alone misses them. Any write still clears the whole micro-cache, and the TTL is
+// 1.5 s, so neither can serve a stale plan into a surface the athlete just changed.
+const API_MICRO_CACHE_PATHS: readonly string[] = ["/settings", "/profile", "/stats", "/coaching-focus", "/exercises", "/plan"];
 const API_GET_TIMEOUT_MS = 20000;
 
 class CairnApiError extends Error {
