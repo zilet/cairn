@@ -26,18 +26,21 @@ type TodayMainShellApi = {
   }
 
   function captureRowHtml(currentWeight: unknown, isToday: boolean): string {
-    // checkinSlot and tagsSlot render only when their loader has something to
-    // show (no check-in noted yet / the quiet tag chip row) — both are empty
-    // <div>s here that stay quiet (`:empty{display:none}`) until their loader
-    // fills them in during post-render wiring. Food frequents moved into the
-    // Chat composer (prefill, not one-tap re-log) — capture stays in Chat.
+    // tagsSlot renders only when its loader has something to show (the quiet tag
+    // chip row) — an empty <div> here that stays quiet (`:empty{display:none}`)
+    // until post-render wiring fills it. Food frequents moved into the Chat
+    // composer (prefill, not one-tap re-log) — capture stays in Chat.
+    //
+    // The morning check-in is NOT here any more. It belongs under the sentence that
+    // asks how the body is, not in a footer three surfaces below it, so the Brief
+    // itself mounts `#checkinSlot` on the rest/easy reads where the question is
+    // actually being asked (today-brief-client.ts).
     return `<div class="capture-row reveal" style="--i:1">
       <div class="wt-inline" id="wtInline" hidden>
         <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)">
         <button id="wtInlineGo" class="logbtn">+</button>
       </div>
       <button id="wtChipMini" class="wt-mini" type="button" title="Log bodyweight">${weightChipLabel(currentWeight)}<span class="stat-plus">+</span></button>
-      ${isToday ? `<div id="checkinSlot" class="checkin-slot"></div>` : ""}
       ${isToday ? `<div id="tagsSlot" class="tags-slot"></div>` : ""}
     </div>`;
   }

@@ -146,55 +146,130 @@ function setupVoiceCapture(): void {
 // and a frequent is a starting draft to edit, never a verbatim one-tap re-log.
 
 // ---------- optional how-you-feel (offered, never required) ----------
-// A subtle, dismissible 1–5 mood/energy tap. If a check-in already exists for
-// today it shows as a calm "noted" line; otherwise a small "how are you feeling?"
-// affordance that expands on tap. Feeds the Brief's day-read; never nags.
+// The morning check-in, in WORDS. Three scales — energy, sleep, soreness — because
+// those are the three the read actually leans on (`freshStatementHold`), and because
+// the ceiling-easy sentence literally asks "tell me if that changes" and until now
+// had no affordance beneath it. Mounted by the Brief on today's rest/easy reads only
+// (see today-brief-client.ts): pull, never push. Nothing is required, one tap is a
+// complete answer, and waving it off silences it for the day.
+//
+// It never prints a score. A dot's meaning is its WORD (aria-label and title), and
+// the answered state is a sentence — "feeling strong · slept well · a little sore" —
+// not "energy 4/5". A number on the Brief's own screen is an Amendment 2 violation
+// however small it is.
+type CheckinField = {
+  key: "energy" | "sleep_feel" | "soreness";
+  label: string;
+  // 1→5, the word each dot means.
+  words: readonly [string, string, string, string, string];
+  // 1→5, the same rung spoken back in the answered line.
+  done: readonly [string, string, string, string, string];
+};
+
+const CHECKIN_FIELDS: readonly CheckinField[] = [
+  {
+    key: "energy",
+    label: "energy",
+    words: ["running on empty", "low", "steady", "good", "strong"],
+    done: ["running on empty", "low energy", "feeling steady", "feeling good", "feeling strong"],
+  },
+  {
+    key: "sleep_feel",
+    label: "sleep",
+    words: ["barely slept", "rough night", "okay", "slept well", "slept deeply"],
+    done: ["barely slept", "slept rough", "slept okay", "slept well", "slept deeply"],
+  },
+  {
+    key: "soreness",
+    label: "soreness",
+    words: ["nothing sore", "a little sore", "sore", "pretty sore", "very sore"],
+    done: ["nothing sore", "a little sore", "sore today", "pretty sore", "very sore"],
+  },
+];
+
+// One question, asked a few different ways, stable for the whole day — the same
+// pickDayVariant rotation the deterministic reads use, so a daily affordance never
+// becomes one sentence printed at the athlete every morning for a month.
+const CHECKIN_LEADS = [
+  "How's the body this morning?",
+  "How are you landing today?",
+  "How does today feel so far?",
+];
+
+function checkinLead(iso: string): string {
+  const ms = Date.parse(`${String(iso ?? "").slice(0, 10)}T00:00:00Z`);
+  const dayIndex = Number.isFinite(ms) ? Math.floor(ms / 864e5) : 0;
+  const span = CHECKIN_LEADS.length;
+  return CHECKIN_LEADS[((dayIndex % span) + span) % span];
+}
+
+const CHECKIN_DISMISS_KEY = "cairn.checkin.dismissed.v1";
+
+function checkinDismissedToday(iso: string): boolean {
+  try {
+    return localStorage.getItem(CHECKIN_DISMISS_KEY) === iso;
+  } catch {
+    return false;
+  }
+}
+
+function dismissCheckinForToday(iso: string): void {
+  try {
+    localStorage.setItem(CHECKIN_DISMISS_KEY, iso);
+  } catch { /* private mode / full storage — the dismiss just doesn't persist */ }
+}
+
+function checkinAnswered(c: CaptureCheckin | null | undefined): boolean {
+  if (!c) return false;
+  return CHECKIN_FIELDS.some((field) => (c as Record<string, unknown>)[field.key] != null) || c.mood != null;
+}
+
 async function loadCheckin(): Promise<void> {
   const slot = view.querySelector<HTMLElement>("#checkinSlot");
   if (!slot) return;
+  const today = localISO();
   let existing: CaptureCheckin | null = null;
-  try { existing = await api("/checkins?date=" + localISO()) as CaptureCheckin | null; } catch { existing = null; }
+  try { existing = await api("/checkins?date=" + today) as CaptureCheckin | null; } catch { existing = null; }
   if (state.tab !== "today" || !slot.isConnected) return;
-  if (existing && (existing.mood != null || existing.energy != null)) {
-    renderCheckinDone(slot, existing);
+  if (checkinAnswered(existing)) {
+    renderCheckinDone(slot, existing as CaptureCheckin);
     return;
   }
-  // collapsed by default — one quiet line, opt-in
-  slot.innerHTML = `<button class="checkin-open" id="checkinOpen" type="button">
-      <span class="checkin-open-dot" aria-hidden="true"></span>
-      how are you feeling?
-    </button>`;
-  const open = slot.querySelector("#checkinOpen");
-  if (open) open.addEventListener("click", () => renderCheckinForm(slot));
+  // Waved off this morning — stay gone until tomorrow. Asking again after a dismiss
+  // is the definition of nagging.
+  if (checkinDismissedToday(today)) { slot.innerHTML = ""; return; }
+  renderCheckinForm(slot, today);
 }
 
 const FEEL_FACES = ["·", "◦", "○", "◍", "●"]; // 1→5, quiet glyphs, no emoji
-function feelScale(kind: "mood" | "energy", label: string): string {
+function feelScale(field: CheckinField): string {
   const dots = FEEL_FACES.map((g, i) =>
-    `<button class="feel-dot" data-feel="${kind}" data-val="${i + 1}" aria-label="${escAttr(label + " " + (i + 1))}">${g}</button>`
+    `<button class="feel-dot" type="button" data-feel="${escAttr(field.key)}" data-val="${i + 1}" title="${escAttr(field.words[i])}" aria-label="${escAttr(`${field.label}: ${field.words[i]}`)}">${g}</button>`
   ).join("");
-  return `<div class="feel-row"><span class="feel-lbl lbl">${escHtml(label)}</span><div class="feel-dots">${dots}</div></div>`;
+  return `<div class="feel-row"><span class="feel-lbl lbl">${escHtml(field.label)}</span><div class="feel-dots">${dots}</div></div>`;
 }
 
-function renderCheckinForm(slot: HTMLElement): void {
+function renderCheckinForm(slot: HTMLElement, iso?: string): void {
+  const today = iso || localISO();
   slot.innerHTML = `<div class="checkin-form chip-in">
-      ${feelScale("mood", "mood")}
-      ${feelScale("energy", "energy")}
+      <span class="checkin-lead">${escHtml(checkinLead(today))}</span>
+      ${CHECKIN_FIELDS.map(feelScale).join("")}
       <button class="checkin-dismiss" id="checkinDismiss" type="button" aria-label="Not now">✕</button>
     </div>`;
-  const picked: { mood?: number; energy?: number } = {};
+  const picked: Partial<Record<CheckinField["key"], number>> = {};
   slot.querySelectorAll<HTMLElement>(".feel-dot").forEach((b) =>
     b.addEventListener("click", async () => {
-      const kind = b.dataset.feel === "energy" ? "energy" : "mood";
+      const field = CHECKIN_FIELDS.find((f) => f.key === b.dataset.feel);
+      if (!field) return;
       const val = Number(b.dataset.val);
-      picked[kind] = val;
-      // highlight selected + everything below it (a 1–5 scale fill)
-      slot.querySelectorAll<HTMLElement>(`.feel-dot[data-feel="${kind}"]`).forEach((d) =>
+      picked[field.key] = val;
+      // highlight selected + everything below it (a five-rung scale fill)
+      slot.querySelectorAll<HTMLElement>(`.feel-dot[data-feel="${field.key}"]`).forEach((d) =>
         d.classList.toggle("feel-dot-on", Number(d.dataset.val) <= val));
       try {
         const saved = await api("/checkins", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mood: picked.mood, energy: picked.energy }),
+          body: JSON.stringify({ ...picked }),
         }) as CaptureCheckin;
         if (saved && !saved.error) {
           renderCheckinDone(slot, saved);
@@ -204,13 +279,27 @@ function renderCheckinForm(slot: HTMLElement): void {
       } catch { /* silent — it's optional */ }
     }));
   const dismiss = slot.querySelector("#checkinDismiss");
-  if (dismiss) dismiss.addEventListener("click", () => { slot.innerHTML = ""; });
+  if (dismiss) dismiss.addEventListener("click", () => {
+    dismissCheckinForToday(today);
+    slot.innerHTML = "";
+  });
+}
+
+function checkinRung(value: unknown): number | null {
+  const n = Number(value);
+  if (value == null || !Number.isFinite(n)) return null;
+  return Math.max(1, Math.min(5, Math.round(n)));
 }
 
 function renderCheckinDone(slot: HTMLElement, c: CaptureCheckin): void {
-  const parts = [];
-  if (c.mood != null) parts.push(`mood ${Number(c.mood)}/5`);
-  if (c.energy != null) parts.push(`energy ${Number(c.energy)}/5`);
+  const parts: string[] = [];
+  for (const field of CHECKIN_FIELDS) {
+    const rung = checkinRung((c as unknown as Record<string, unknown>)[field.key]);
+    if (rung != null) parts.push(field.done[rung - 1]);
+  }
+  // A legacy row carrying only the retired mood field still deserves an answered
+  // state — just never a number for it.
+  if (!parts.length && c.mood != null) parts.push("you checked in");
   if (!parts.length) { slot.innerHTML = ""; return; }
   slot.innerHTML = `<div class="checkin-done chip-in"><span class="checkin-done-mark" aria-hidden="true">✓</span> ${escHtml(parts.join(" · "))}</div>`;
 }

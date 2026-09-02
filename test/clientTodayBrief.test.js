@@ -816,3 +816,144 @@ test("Today Brief never renders the look-back block on a routed past date", () =
   );
   assert.doesNotMatch(html, /brief-lookback/);
 });
+
+// ---- the morning check-in's mount (Finding 5, render half) ----
+
+test("Today Brief mounts the check-in slot only on today's own rest/easy read", () => {
+  const brief = loadTodayBrief();
+  const base = { headline: "Today", why: "Let it settle.", signals: {} };
+
+  for (const kind of ["rest", "easy"]) {
+    const html = brief.briefHtml({ ...base, kind }, { isToday: true });
+    assert.match(html, /id="checkinSlot"/, `${kind} read mounts the check-in`);
+    // It sits under the sentence that asks the question, not below the actions.
+    assert.ok(html.indexOf('class="brief-why"') < html.indexOf('id="checkinSlot"'));
+    assert.ok(html.indexOf('id="checkinSlot"') < html.indexOf('class="brief-launch"'));
+  }
+
+  for (const kind of ["train", "done"]) {
+    assert.doesNotMatch(
+      brief.briefHtml({ ...base, kind }, { isToday: true }),
+      /id="checkinSlot"/,
+      `${kind} read asks nothing`
+    );
+  }
+
+  assert.doesNotMatch(
+    brief.briefHtml({ ...base, kind: "rest" }, { isToday: false }),
+    /id="checkinSlot"/,
+    "a routed past date is not a morning to check in on"
+  );
+});
+
+// ---- the freshness stamp (Finding 6, client half) ----
+
+test("Today Brief stamp says evidence freshness and read time separately when they differ", () => {
+  const brief = loadTodayBrief();
+  const read = {
+    kind: "easy",
+    headline: "Keep it light",
+    why: "Load has been stacking.",
+    signals: {},
+    computed_at: "2026-03-15T12:39:00.000Z",
+    evidence_as_of: "2026-03-15T12:35:00.000Z",
+  };
+  const html = brief.briefHtml(read, { isToday: true });
+
+  assert.match(html, /As of .* sync/);
+  assert.match(html, /Read at /);
+  assert.doesNotMatch(html, /Updated /, "the ambiguous single stamp is gone once evidence is dated");
+  assert.equal(html.match(/brief-stamp-line/g)?.length, 2);
+});
+
+test("Today Brief stamp collapses to one line when evidence and read share a minute", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    {
+      kind: "easy",
+      headline: "Keep it light",
+      why: "Load has been stacking.",
+      signals: {},
+      computed_at: "2026-03-15T12:35:10.000Z",
+      evidence_as_of: "2026-03-15T12:35:40.000Z",
+    },
+    { isToday: true }
+  );
+
+  assert.match(html, /As of .* sync/);
+  assert.doesNotMatch(html, /Read at /);
+});
+
+test("Today Brief stamp falls back to the read's own time when the server sends no evidence stamp", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    { kind: "easy", headline: "Keep it light", why: "", signals: {}, computed_at: "2026-03-15T12:39:00.000Z" },
+    { isToday: true }
+  );
+
+  assert.match(html, /Updated /);
+  assert.doesNotMatch(html, /As of |Read at /);
+});
+
+// ---- the earned default and the trade (Finding 10 + Finding 4's button) ----
+
+function overriddenRead(days, extra = {}) {
+  return {
+    kind: "easy",
+    headline: "Keep it light",
+    why: "Load has been stacking.",
+    signals: { easy_outcome_feedback: { active: days.length >= 2, overridden_and_fine: days } },
+    ...extra,
+  };
+}
+
+test("Today Brief keeps the generic label and hides the trade below two overridden mornings", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(overriddenRead(["2026-03-13"]), { isToday: true, planDayName: "Pull" });
+
+  assert.match(html, /Train anyway/);
+  assert.doesNotMatch(html, /data-tradetomorrow/);
+  assert.doesNotMatch(html, /Pull day/);
+});
+
+test("Today Brief names the plan day and offers the trade after two overridden mornings", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(overriddenRead(["2026-03-12", "2026-03-13"]), {
+    isToday: true,
+    planDayName: "Pull",
+  });
+
+  assert.match(html, /brief-redirect-primary" data-redirect="reveal-plan">Pull day · your plan</);
+  assert.match(html, /data-tradetomorrow>Train today, rest tomorrow</);
+  assert.doesNotMatch(html, /Train anyway/);
+  // "Ask for a session" stays, and stays last.
+  assert.ok(html.indexOf("data-tradetomorrow") < html.indexOf('data-redirect="ask-session"'));
+});
+
+test("Today Brief leaves the plan-day label off when no plan day resolved, and still offers the trade", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(overriddenRead(["2026-03-12", "2026-03-13"]), { isToday: true });
+
+  assert.match(html, /Train anyway/, "a button naming the wrong day would be worse than a generic one");
+  assert.match(html, /data-tradetomorrow/);
+});
+
+test("Today Brief escapes a plan-day name and never repeats the word day", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(overriddenRead(["2026-03-12", "2026-03-13"]), {
+    isToday: true,
+    planDayName: "Recovery day <x>",
+  });
+
+  assert.match(html, /Recovery day &lt;x&gt; · your plan/);
+  assert.doesNotMatch(html, /day day/);
+});
+
+test("Today Brief treats crossing the second overridden morning as a material difference", () => {
+  const brief = loadTodayBrief();
+  const one = overriddenRead(["2026-03-13"]);
+  const two = overriddenRead(["2026-03-12", "2026-03-13"]);
+
+  assert.equal(brief.materiallyDiffers(one, two), true);
+  assert.equal(brief.materiallyDiffers(two, { ...two }), false);
+});

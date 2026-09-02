@@ -32,6 +32,11 @@ type TodayBriefSignalRow = { label: string; state: string; tone: "ok" | "watch" 
 
 type TodayBriefHtmlOptions = {
   showPlan?: boolean;
+  // The programmed day today's read is pointing at ("Push", "Pull"), resolved by
+  // the controller from the read's own plan selection. Only used to LABEL the
+  // train-anyway action once the athlete's own pattern has earned it — an absent
+  // name simply keeps the generic label.
+  planDayName?: unknown;
   // Whether the plan/logging surface below is rendering the finished-session
   // "Log more" done card. On a `done` read, when neither showPlan nor showDone
   // is true nothing below the Brief offers a way in — see the entry action below.
@@ -268,18 +273,78 @@ type TodayBriefHtmlOptions = {
     </div>`;
   }
 
-  function todayBriefUpdatedHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
-    const raw = read?.computed_at || read?.decision?.computed_at;
+  // A bare clock time only means "today" on today. Browsing back to an earlier
+  // date, "Updated 6:12 AM" reads as this morning when it is a stamp from another
+  // day entirely — so a past date says which day.
+  function todayBriefStampWhen(raw: unknown, isToday: boolean): string {
     const stamp = raw ? new Date(String(raw)) : null;
     if (!stamp || !Number.isFinite(stamp.getTime())) return "";
-    // A bare clock time only means "today" on today. Browsing back to an earlier
-    // date, "Updated 6:12 AM" reads as this morning when it is a stamp from another
-    // day entirely — so a past date says which day.
-    const when = isToday
+    return isToday
       ? stamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
       : stamp.toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+
+  // The stamp's INNER content, so the controller can patch it in place when a
+  // recompute moved nothing else (see todayBriefMateriallyDiffers — a bare clock
+  // tick must never rewrite the whole Brief).
+  //
+  // Two different facts hide behind one line. `evidence_as_of` is when the data the
+  // read leaned on last landed; `computed_at` is when the sentence was written. When
+  // the server sends both and they disagree, say both — "Updated 4:00 AM" over a
+  // 7:39 row read as "your data is from 4 AM", which it never was. A server that
+  // sends no `evidence_as_of` keeps exactly the old single line.
+  function todayBriefUpdatedInnerHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
+    const readWhen = todayBriefStampWhen(read?.computed_at || read?.decision?.computed_at, isToday);
+    const evidenceWhen = todayBriefStampWhen(
+      (read as { evidence_as_of?: unknown } | null | undefined)?.evidence_as_of,
+      isToday
+    );
+    if (!readWhen && !evidenceWhen) return "";
     const decisive = todayBriefDecisiveReason(read, kind);
-    return `<div class="brief-updated">${escHtml(`Updated ${when}`)}${decisive ? ` <span aria-hidden="true">·</span> ${escHtml(decisive)}` : ""}</div>`;
+    const tail = decisive ? ` <span aria-hidden="true">·</span> ${escHtml(decisive)}` : "";
+    if (evidenceWhen && readWhen && evidenceWhen !== readWhen) {
+      return `<div class="brief-stamp-line">${escHtml(`As of ${evidenceWhen} sync`)}</div><div class="brief-stamp-line">${escHtml(`Read at ${readWhen}`)}${tail}</div>`;
+    }
+    if (evidenceWhen) return `${escHtml(`As of ${evidenceWhen} sync`)}${tail}`;
+    return `${escHtml(`Updated ${readWhen}`)}${tail}`;
+  }
+
+  function todayBriefUpdatedHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
+    const inner = todayBriefUpdatedInnerHtml(read, kind, isToday);
+    return inner ? `<div class="brief-updated">${inner}</div>` : "";
+  }
+
+  // The morning check-in's mount point, and the ONLY place it is allowed to appear:
+  // today's own rest/easy Brief, directly under the sentence that asks how the body
+  // is. It is a mount, not a prompt — `loadCheckin` (capture.ts) fills it only when
+  // nothing is logged for the date and the athlete hasn't waved it off today, and
+  // `:empty{display:none}` keeps it invisible until then. A train/done read gets
+  // nothing: the day already has its answer.
+  function todayBriefCheckinSlotHtml(kind: string, isToday: boolean): string {
+    if (!isToday) return "";
+    if (kind !== "rest" && kind !== "easy") return "";
+    return `<div id="checkinSlot" class="checkin-slot brief-checkin"></div>`;
+  }
+
+  // How many recent quiet mornings the athlete trained through with nothing saying it
+  // cost them (`easy_outcome_feedback.overridden_and_fine`, server-derived). Two is
+  // the point at which "Train anyway" stops being the honest label for what they are
+  // about to do.
+  function todayBriefOverriddenMornings(read: TodayBriefRead | null | undefined): number {
+    const signals = read?.signals && typeof read.signals === "object" ? (read.signals as Record<string, unknown>) : {};
+    const feedback =
+      signals.easy_outcome_feedback && typeof signals.easy_outcome_feedback === "object"
+        ? (signals.easy_outcome_feedback as Record<string, unknown>)
+        : null;
+    const days = feedback && Array.isArray(feedback.overridden_and_fine) ? feedback.overridden_and_fine : [];
+    return days.length;
+  }
+
+  // "Push" → "Push day"; a name that already says day is left alone.
+  function todayBriefPlanDayLabel(name: unknown): string {
+    const trimmed = String(name ?? "").trim().slice(0, 60);
+    if (!trimmed) return "";
+    return /\bdays?\b/i.test(trimmed) ? trimmed : `${trimmed} day`;
   }
 
   function todayBriefHtml(read: TodayBriefRead | null | undefined, options: TodayBriefHtmlOptions = {}): string {
@@ -306,6 +371,15 @@ type TodayBriefHtmlOptions = {
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
     const lookBack = todayBriefLookBackHtml(read, options.isToday !== false);
 
+    const checkinSlot = todayBriefCheckinSlotHtml(kind, options.isToday !== false);
+    // The athlete's own recent pattern, read back to them as the default. Two quiet
+    // mornings trained through with nothing saying it cost them, and "Train anyway"
+    // is no longer the honest name for the tap — the plan day is. Nothing about what
+    // the buttons DO changes; this is the label and the order.
+    const leaning =
+      options.isToday === true && (kind === "rest" || kind === "easy") && todayBriefOverriddenMornings(read) >= 2;
+    const planDay = leaning ? todayBriefPlanDayLabel(options.planDayName) : "";
+
     const actions: string[] = [];
     if (kind === "train") {
       actions.push(todayBriefRedirect("start-session", "Start session", true));
@@ -318,7 +392,16 @@ type TodayBriefHtmlOptions = {
         actions.push(todayBriefRedirect("start-session", "Log training", false));
       }
     } else if (!options.showPlan) {
-      actions.push(todayBriefRedirect("reveal-plan", "Train anyway", false));
+      actions.push(
+        planDay ? todayBriefRedirect("reveal-plan", `${planDay} · your plan`, true) : todayBriefRedirect("reveal-plan", "Train anyway", false)
+      );
+    }
+    // The trade: take today, and claim tomorrow as the rest. Offered only once the
+    // pattern says the quiet morning is going to be trained through anyway — a
+    // suggestion the athlete can act on, never a condition on training today. Hidden
+    // for good the moment the server says it cannot honour one (see the actions client).
+    if (leaning) {
+      actions.push(`<button class="brief-redirect brief-trade" data-tradetomorrow>Train today, rest tomorrow</button>`);
     }
     if (kind !== "done") actions.push(todayBriefRedirect("ask-session", "Ask for a session", false));
 
@@ -366,6 +449,7 @@ type TodayBriefHtmlOptions = {
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
+      ${checkinSlot}
       ${weekWins}
       ${recovery}
       ${forward ? `<button class="brief-forward" data-redirect="view-week" title="See your week"><span class="brief-forward-arrow" aria-hidden="true">↗</span><span class="brief-forward-txt">${forward}</span></button>` : ""}
@@ -411,6 +495,9 @@ type TodayBriefHtmlOptions = {
     // is a material difference. The primary SURFACE alone is compared — the rest of
     // the decision is ordering the Brief itself never draws.
     if (todayBriefYieldsLead(a) !== todayBriefYieldsLead(b)) return true;
+    // Crossing the second overridden morning adds a button (and relabels another),
+    // so the count is rendered content even though the rest of `signals` is not.
+    if (todayBriefOverriddenMornings(a) !== todayBriefOverriddenMornings(b)) return true;
     const hasStamp = (read: TodayBriefRead): boolean => !!(read.computed_at || read.decision?.computed_at);
     if (hasStamp(a) !== hasStamp(b)) return true;
     return false;
@@ -542,6 +629,10 @@ type TodayBriefHtmlOptions = {
     signalsRows: todayBriefSignalsRows,
     periodizationHtml: todayBriefPeriodizationHtml,
     updatedHtml: todayBriefUpdatedHtml,
+    updatedInnerHtml: todayBriefUpdatedInnerHtml,
+    checkinSlotHtml: todayBriefCheckinSlotHtml,
+    overriddenMornings: todayBriefOverriddenMornings,
+    planDayLabel: todayBriefPlanDayLabel,
     decisiveReason: todayBriefDecisiveReason,
     recoveryHtml: todayBriefRecoveryHtml,
     lookBackHtml: todayBriefLookBackHtml,

@@ -92,6 +92,10 @@ class FakeElement {
     this.attributes.set(name, String(value));
   }
 
+  getAttribute(name) {
+    return this.attributes.has(name) ? this.attributes.get(name) : null;
+  }
+
   removeAttribute(name) {
     this.attributes.delete(name);
   }
@@ -126,6 +130,7 @@ class FakeElement {
     if (selector === "[data-redirect]") return Object.hasOwn(this.dataset, "redirect");
     if (selector === "[data-steerreset]") return Object.hasOwn(this.dataset, "steerreset");
     if (selector === "[data-briefwhy]") return Object.hasOwn(this.dataset, "briefwhy");
+    if (selector === "[data-tradetomorrow]") return Object.hasOwn(this.dataset, "tradetomorrow");
     return false;
   }
 
@@ -201,6 +206,8 @@ function loadController(opts = {}) {
           || Number(a.est_minutes || 0) !== Number(b.est_minutes || 0);
       },
       signalsText: () => "signals",
+      kind: (read) => String(read?.kind || "train"),
+      updatedInnerHtml: (read) => `stamp:${read?.computed_at || ""}`,
     },
   };
   if (opts.localStorage) context.localStorage = opts.localStorage;
@@ -525,4 +532,115 @@ test("a completed-state upgrade repaints all of Today so stale Start controls di
   assert.deepEqual(plain(harness.renders), [{ soft: true }]);
   assert.equal(harness.deps.state.brief.read.kind, "done");
   assert.equal(brief.classList.contains("is-thinking"), false);
+});
+
+// ---- the freshness stamp is patched, not deferred (Finding 6, controller half) ----
+
+test("a recompute that moved only the stamp patches that one node and leaves the sentence alone", async () => {
+  const harness = loadController();
+  const shown = {
+    kind: "easy",
+    headline: "Keep it light",
+    why: "Load has been stacking.",
+    focus: null,
+    est_minutes: 20,
+    signals: {},
+    computed_at: "2026-03-15T08:00:00.000Z",
+    _cached: true,
+  };
+  const fresh = { ...shown, computed_at: "2026-03-15T11:39:00.000Z", _cached: false };
+
+  const brief = harness.rootEl.appendChild(new FakeElement("section", { className: "brief" }));
+  const stamp = brief.appendChild(new FakeElement("div", { className: "brief-updated" }));
+  stamp.innerHTML = "stamp:2026-03-15T08:00:00.000Z";
+
+  harness.deps.state.brief = { date: "2026-07-01", override: "", read: shown };
+  harness.deps.state._briefInflight = { date: "2026-07-01", override: "", promise: Promise.resolve(fresh) };
+
+  await harness.controller.upgradeBriefInPlace("2026-07-01", true, harness.deps);
+
+  assert.equal(stamp.innerHTML, "stamp:2026-03-15T11:39:00.000Z");
+  // The Brief itself was not rewritten: same node, no settle animation, no recount.
+  assert.equal(harness.rootEl.children[0], brief);
+  assert.deepEqual(harness.countUps, []);
+  assert.equal(harness.deps.state.brief.read.computed_at, "2026-03-15T11:39:00.000Z");
+});
+
+// ---- the plan day's own name reaches the Brief (Finding 10) ----
+
+test("briefHtml resolves the plan-day name from the read's own plan selection", () => {
+  const harness = loadController();
+  const seen = [];
+  harness.context.CairnTodayBrief.briefHtml = (read, opts) => {
+    seen.push(opts.planDayName);
+    return `<section class="brief">${read?.headline || ""}</section>`;
+  };
+  harness.deps.state.plan = [
+    { day_number: 1, name: "Push", items: [] },
+    { day_number: 2, name: "Pull", items: [] },
+  ];
+
+  harness.controller.briefHtml(
+    { kind: "easy", headline: "Easy", signals: { plan_selection: { selected: { day_number: 2 } } } },
+    { isToday: true },
+    harness.deps
+  );
+  // No selection in the read: the surface's own selected day is the fallback.
+  harness.deps.state.day = 1;
+  harness.controller.briefHtml({ kind: "easy", headline: "Easy", signals: {} }, { isToday: true }, harness.deps);
+  // A day number that is not in the loaded plan names nothing at all.
+  harness.deps.state.day = 9;
+  harness.controller.briefHtml({ kind: "easy", headline: "Easy", signals: {} }, { isToday: true }, harness.deps);
+
+  assert.deepEqual(seen, ["Pull", "Push", ""]);
+});
+
+// ---- the rest trade (Finding 4's button) ----
+
+// The trade handler is async through a fetch and a view transition; drain the
+// microtask queue rather than guessing how many turns that is.
+async function flush() {
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+}
+
+function tradeHarness(respond) {
+  const harness = loadController();
+  const brief = harness.rootEl.appendChild(new FakeElement("section", { className: "brief" }));
+  const button = brief.appendChild(new FakeElement("button", { dataset: { tradetomorrow: "" } }));
+  const posts = [];
+  harness.deps.api = async (path, opts) => {
+    posts.push({ path, opts });
+    return respond();
+  };
+  harness.controller.wireBrief({ kind: "easy", headline: "Easy", focus: null, signals: {} }, { isToday: true }, harness.deps);
+  return { harness, brief, button, posts };
+}
+
+test("the rest trade POSTs today's date and repaints from the read the server hands back", async () => {
+  const traded = { kind: "train", headline: "Pull day", why: "You traded tomorrow.", focus: "Pull", signals: {} };
+  const { harness, brief, button, posts } = tradeHarness(() => ({ ok: true, read: traded }));
+
+  button.click();
+  await flush();
+
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].path, "/today-read/trade-rest");
+  assert.equal(posts[0].opts.method, "POST");
+  assert.deepEqual(JSON.parse(posts[0].opts.body), { date: "2026-07-01" });
+  assert.equal(harness.deps.state.brief.read.headline, "Pull day");
+  assert.equal(harness.transitions.length, 1);
+  assert.equal(brief.children.includes(button), true, "a trade that landed keeps its button until the repaint");
+});
+
+test("the rest trade hides itself when the server refuses, and when the endpoint isn't there at all", async () => {
+  for (const respond of [() => ({ ok: false, error: "rest_grade_readiness" }), () => { throw new Error("404"); }]) {
+    const { harness, brief, button } = tradeHarness(respond);
+
+    button.click();
+    await flush();
+
+    assert.equal(brief.children.includes(button), false, "a trade the server won't honour stops being offered");
+    assert.equal(harness.transitions.length, 0, "and nothing repaints");
+    assert.equal(harness.deps.state.brief, null);
+  }
 });

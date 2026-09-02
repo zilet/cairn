@@ -61,18 +61,25 @@ function loadCapture(overrides = {}) {
 
 function elementStub(overrides = {}) {
   const listeners = {};
-  return {
+  const stub = {
     innerHTML: "",
     isConnected: true,
     dataset: {},
     classList: { add() {}, remove() {}, toggle() {} },
     querySelectorAll: () => [],
+    // The check-in's own dismiss button, captured so a test can tap it. Any other
+    // lookup falls through to whatever the override supplies.
+    querySelector: (sel) =>
+      sel === "#checkinDismiss"
+        ? { addEventListener: (_type, handler) => { stub._listeners_dismiss = handler; } }
+        : null,
     addEventListener(type, handler) {
       listeners[type] = handler;
     },
     _listeners: listeners,
     ...overrides,
   };
+  return stub;
 }
 
 test("capture.ts no longer exports the Today frequents surface (moved to the Chat composer)", () => {
@@ -81,9 +88,8 @@ test("capture.ts no longer exports the Today frequents surface (moved to the Cha
   assert.equal(capture.relogFrequent, undefined);
 });
 
-test("check-in slot offers a one-tap ask when nothing is logged for today", async () => {
-  const open = elementStub();
-  const slot = elementStub({ querySelector: (sel) => (sel === "#checkinOpen" ? open : null) });
+test("check-in slot asks the morning question in words, with three scales and no scores", async () => {
+  const slot = elementStub();
   const capture = loadCapture({
     view: { querySelector: (sel) => (sel === "#checkinSlot" ? slot : null) },
     api: async () => null,
@@ -91,55 +97,82 @@ test("check-in slot offers a one-tap ask when nothing is logged for today", asyn
 
   await capture.loadCheckin();
 
-  assert.match(slot.innerHTML, /how are you feeling\?/);
-  assert.equal(typeof open._listeners.click, "function");
+  assert.match(slot.innerHTML, /How's the body this morning\?|How are you landing today\?|How does today feel so far\?/);
+  for (const field of ["energy", "sleep_feel", "soreness"]) {
+    assert.match(slot.innerHTML, new RegExp(`data-feel="${field}"`), `${field} is collectable`);
+  }
+  // Every dot means a WORD — the number only ever rides as the stored value.
+  assert.match(slot.innerHTML, /aria-label="energy: strong"/);
+  assert.match(slot.innerHTML, /aria-label="sleep: barely slept"/);
+  assert.match(slot.innerHTML, /aria-label="soreness: a little sore"/);
+  assert.doesNotMatch(slot.innerHTML, /\/5/);
 });
 
-test("check-in slot shows the noted line once mood or energy is already logged today", async () => {
+test("check-in slot speaks an answered day back in words, never as n/5", async () => {
   const slot = elementStub();
   const capture = loadCapture({
     view: { querySelector: (sel) => (sel === "#checkinSlot" ? slot : null) },
-    api: async () => ({ mood: 4, energy: 3 }),
+    api: async () => ({ energy: 5, sleep_feel: 4, soreness: 2 }),
   });
 
   await capture.loadCheckin();
 
-  assert.match(slot.innerHTML, /mood 4\/5/);
-  assert.match(slot.innerHTML, /energy 3\/5/);
+  assert.match(slot.innerHTML, /feeling strong · slept well · a little sore/);
+  assert.doesNotMatch(slot.innerHTML, /\/5/);
+  assert.doesNotMatch(slot.innerHTML, /data-feel/, "an answered day stops asking");
 });
 
-test("tapping a feel-dot writes the check-in through the existing /checkins endpoint", async () => {
-  // Drive the whole ambient flow through the exported entry points (loadCheckin
-  // -> tap "how are you feeling?" -> tap a feel-dot) rather than reaching for
-  // the unexported render helper directly, so this exercises the real wiring.
-  const dot = elementStub({ dataset: { feel: "mood", val: "4" } });
-  const open = elementStub();
-  const slot = elementStub({
-    querySelector: (sel) => (sel === "#checkinOpen" ? open : null),
+test("check-in slot stays silent for the rest of a day it was waved off", async () => {
+  const store = new Map();
+  const slot = elementStub();
+  const capture = loadCapture({
+    view: { querySelector: (sel) => (sel === "#checkinSlot" ? slot : null) },
+    api: async () => null,
+    localStorage: {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => { store.set(k, String(v)); },
+    },
   });
+
+  await capture.loadCheckin();
+  const dismiss = slot._listeners_dismiss;
+  assert.equal(typeof dismiss, "function");
+  dismiss();
+  assert.equal(slot.innerHTML, "");
+
+  await capture.loadCheckin();
+  assert.equal(slot.innerHTML, "", "and it does not come back the same morning");
+});
+
+test("tapping the word-scales writes energy, sleep and soreness through the existing /checkins endpoint", async () => {
+  // Drive the real wiring: loadCheckin draws the row, then a tap on each scale.
+  const dots = [
+    elementStub({ dataset: { feel: "energy", val: "4" } }),
+    elementStub({ dataset: { feel: "sleep_feel", val: "5" } }),
+    elementStub({ dataset: { feel: "soreness", val: "2" } }),
+  ];
+  const slot = elementStub({ querySelectorAll: (sel) => (sel === ".feel-dot" ? dots : []) });
   const calls = [];
   const capture = loadCapture({
     view: { querySelector: (sel) => (sel === "#checkinSlot" ? slot : null) },
     // loadCheckin's own GET lookup (no opts) must see nothing logged yet, so it
-    // draws the ask rather than the "noted" line; only the POST write is recorded.
+    // draws the scales; only the POST writes are recorded.
     api: async (path, opts) => {
       if (!opts) return null;
       calls.push([path, opts]);
-      return { mood: 4, error: false };
+      return { energy: 4, sleep_feel: 5, soreness: 2, error: false };
     },
   });
 
-  await capture.loadCheckin(); // draws the "how are you feeling?" ask, wires #checkinOpen
-  // Once tapped, renderCheckinForm re-renders the slot and wires every .feel-dot
-  // it drew — swap querySelectorAll to hand back our fake dot at that point.
-  slot.querySelectorAll = (sel) => (sel === ".feel-dot" ? [dot] : []);
-  await open._listeners.click();
-  await dot._listeners.click();
+  await capture.loadCheckin();
+  for (const dot of dots) await dot._listeners.click();
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
   assert.equal(calls[0][0], "/checkins");
   assert.equal(calls[0][1].method, "POST");
-  assert.deepEqual(JSON.parse(calls[0][1].body), { mood: 4 });
+  // Each tap sends everything answered so far; the last carries all three fields.
+  assert.deepEqual(JSON.parse(calls[0][1].body), { energy: 4 });
+  assert.deepEqual(JSON.parse(calls[2][1].body), { energy: 4, sleep_feel: 5, soreness: 2 });
 });
 
 test("setupVoiceCapture mounts on the chat composer's mic/input pair, not Today's dead #qlMic/#qlInput", () => {

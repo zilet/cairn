@@ -22,7 +22,7 @@ function loadRenderer() {
   return context.CairnTodayPlanSurfaceRenderer;
 }
 
-function render(items, { logDate = "2026-07-29" } = {}) {
+function render(items, { logDate = "2026-07-29", extra = {} } = {}) {
   const renderer = loadRenderer();
   const carded = [];
   const html = renderer.buildHtml(
@@ -56,6 +56,7 @@ function render(items, { logDate = "2026-07-29" } = {}) {
       isRunDay: false,
       prefillFor: () => ({}),
       rxFor: () => null,
+      ...extra,
     },
     {
       planSurface: {
@@ -145,4 +146,56 @@ test("every decision narration reaches the surface, deduped but never capped", (
 
   const lines = [...html.matchAll(/<div class="session-brain sess-line">([^<]*)</g)].map((m) => m[1]);
   assert.deepEqual(lines, ["Held the squat load.", "Rotated the row.", "Trimmed a set from the curl."]);
+});
+
+
+// ---- the cap has a sentence on the Train tab (Finding 9) ----
+
+// The envelope's own athlete-facing reason, once, under the day header. Without it
+// a capped day is a shorter plan with fewer sets and nothing saying why.
+function renderWithHeader(extra) {
+  return render([{ exercise: "Back Squat" }], {
+    extra: { focus: false, ...extra },
+  });
+}
+
+test("the plan surface renders the envelope's first rationale under the day header", () => {
+  const { html } = renderWithHeader({
+    session: {
+      daily_session: {
+        rationale: [
+          { code: "run_intensity_caution", text: "Yesterday's run sat above your easy ceiling <b>, so today holds its load." },
+          { code: "other", text: "Never rendered." },
+        ],
+      },
+    },
+  });
+
+  assert.match(html, /class="session-cap sess-line"/);
+  assert.match(html, /Yesterday's run sat above your easy ceiling &lt;b&gt;, so today holds its load\./);
+  assert.doesNotMatch(html, /Never rendered/, "only the first entry — the day's read — is the line");
+});
+
+test("the plan surface renders nothing when the envelope carries no rationale", () => {
+  assert.doesNotMatch(renderWithHeader({}).html, /session-cap/);
+  assert.doesNotMatch(renderWithHeader({ session: { daily_session: { rationale: [] } } }).html, /session-cap/);
+  assert.doesNotMatch(renderWithHeader({ session: { daily_session: { rationale: [{ text: "   " }] } } }).html, /session-cap/);
+});
+
+test("the plan surface takes an explicitly-passed cap line over the composition's", () => {
+  const { html } = renderWithHeader({
+    capRationale: "Shorter today on purpose.",
+    session: { daily_session: { rationale: [{ text: "From the composition." }] } },
+  });
+
+  assert.match(html, /Shorter today on purpose\./);
+  assert.doesNotMatch(html, /From the composition/);
+});
+
+test("the focused single-card view stays bare — no header, no cap line", () => {
+  const { html } = render([{ exercise: "Back Squat" }], {
+    extra: { session: { daily_session: { rationale: [{ text: "Held today." }] } } },
+  });
+
+  assert.doesNotMatch(html, /session-cap/);
 });

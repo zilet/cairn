@@ -3020,6 +3020,34 @@ non-weekly `/api/insights` with thumbs up/down (`PUT /api/insights/:id`) and opt
 logging with prefill + `N / M` progress, "+ Add exercise", and the bodyweight quick-add chip. The
 "Garmin · body's reaction" card (`garminSessionCard`) surfaces the reconciled strength session.
 
+Four details of the Brief are easy to get wrong from the markup alone:
+
+- **The morning check-in mounts INSIDE the Brief**, not in the capture row. `todayBriefHtml`
+  (`src/client/today-brief-client.ts`) emits `#checkinSlot` directly under the `why`, and only on
+  today's own **rest/easy** read — the sentence that asks how the body is, is where the answer goes.
+  `loadCheckin` (`src/client/capture.ts`) then fills it only when `GET /checkins?date=` is null and
+  the athlete hasn't waved it off today (a `localStorage` date stamp, wrapped in try/catch). It
+  collects the three fields the read actually brakes on — `energy` / `sleep_feel` / `soreness` — and
+  speaks entirely in **words**: a dot's meaning is its `aria-label`/`title`, and the answered state
+  is a sentence ("feeling strong · slept well · a little sore"). Never `n/5`; a score on the Brief's
+  own screen is an Amendment 2 violation. Any repaint that replaces the Brief node re-runs the
+  loader (`remountCheckin`, `today-brief-controller.ts`).
+- **The freshness stamp is two facts.** `evidence_as_of` (when the data last landed) and
+  `computed_at` (when the sentence was written) render on two lines when they differ, one when they
+  don't, and fall back to the old single `Updated …` line when the server sends no evidence stamp.
+  A stamp move is still deliberately NOT a material difference (`todayBriefMateriallyDiffers`) — the
+  controller patches the `.brief-updated` node in place instead of rewriting the Brief.
+- **The action labels follow the athlete's own pattern.** At two or more recent overridden quiet
+  mornings (`signals.easy_outcome_feedback.overridden_and_fine`), the primary action is named for
+  the plan day itself ("Pull day · your plan", resolved by the controller from
+  `signals.plan_selection.selected.day_number` against the loaded plan) and "Train today, rest
+  tomorrow" is offered second, POSTing `/api/today-read/trade-rest` and repainting from the returned
+  read. Nothing about what the buttons DO changes. A refusal (`{ok:false}` at 200) or a server with
+  no such endpoint hides the trade button and leaves today exactly as it was.
+- **The plan surface says why it is short.** `today-plan-surface-renderer.ts` renders the envelope's
+  first `rationale[]` entry as one `.session-cap` line under the day header, and nothing at all when
+  none is carried.
+
 **Progress** holds History/1RM/Volume/Weight/Calendar plus an **Energy Balance** view
 (`/api/nutrition/expenditure`, with an optional adaptive **nutrition check-in** →
 `/api/nutrition/checkin`); a History session is **tap-to-edit** (correct logged set numbers + notes

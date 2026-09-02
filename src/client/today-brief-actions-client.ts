@@ -97,6 +97,40 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
     }
   }
 
+  // "Train today, rest tomorrow" — the athlete taking the day and CLAIMING tomorrow
+  // as the rest, in one tap. The server owns whether the trade is allowed (a
+  // rest-grade morning, a symptom or anything clinical is a floor, never a trade)
+  // and answers `{ok:false}` at HTTP 200 when it isn't; either way the button simply
+  // goes away rather than arguing. A server with no such endpoint at all (404 →
+  // thrown) lands in exactly the same place, so this degrades to today's behavior.
+  async function tradeRestTomorrow(button: HTMLElement, deps: ClientTodayBriefActionsDeps): Promise<void> {
+    if (button.getAttribute("aria-busy") === "true") return;
+    button.setAttribute("aria-busy", "true");
+    let result: { ok?: unknown; read?: unknown } | null = null;
+    try {
+      result = await deps.api("/today-read/trade-rest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: deps.state.logDate }),
+      }) as { ok?: unknown; read?: unknown } | null;
+    } catch {
+      result = null;
+    }
+    button.removeAttribute("aria-busy");
+    const read =
+      result && result.ok === true && result.read && typeof result.read === "object"
+        ? (result.read as TodayBriefActionsDayRead)
+        : null;
+    if (!read || !read.kind) {
+      button.remove();
+      return;
+    }
+    deps.state.brief = { date: deps.state.logDate, override: read.override || "", read };
+    deps.toast("Tomorrow's held for rest");
+    if (deps.state.tab !== "today") return;
+    await deps.withViewTransition(() => deps.renderToday());
+  }
+
   function wireBriefActions(
     read: TodayBriefActionsDayRead,
     _options: { isToday?: boolean },
@@ -145,6 +179,12 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
     brief.querySelectorAll<HTMLElement>("[data-redirect]").forEach((button) =>
       button.addEventListener("click", () => {
         handleBriefRedirect(button.dataset.redirect, button, deps);
+      })
+    );
+
+    brief.querySelectorAll<HTMLElement>("[data-tradetomorrow]").forEach((button) =>
+      button.addEventListener("click", () => {
+        void tradeRestTomorrow(button, deps);
       })
     );
 

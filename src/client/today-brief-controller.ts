@@ -22,6 +22,9 @@ type TodayBriefControllerPlanDay = {
 type TodayBriefControllerState = {
   tab?: string;
   logDate: string;
+  // Which programmed day the plan surface currently has selected; null until the
+  // session preparation resolves one.
+  day?: number | null;
   brief?: { date: string; override: string; read: TodayBriefControllerDayRead } | null;
   _briefInflight?: { date: string; override: string; promise: Promise<TodayBriefControllerDayRead> } | null;
   _briefMorph?: boolean;
@@ -174,6 +177,35 @@ type TodayBriefControllerDeps = {
     return read;
   }
 
+  // The freshness stamp is deliberately NOT a material difference (a bare clock tick
+  // rewriting the whole Brief is the churn `materiallyDiffers` exists to prevent) —
+  // but it was then simply left stale, so "Updated 4:00 AM" stood over a 7:39 row all
+  // morning. Patch the one node instead: the cheapest possible repaint, and the
+  // sentence above it never moves.
+  function patchBriefStamp(
+    briefEl: HTMLElement | null | undefined,
+    read: TodayBriefControllerDayRead | null | undefined,
+    isToday: boolean,
+  ): void {
+    const stamp = briefEl ? briefEl.querySelector(".brief-updated") : null;
+    if (!stamp) return;
+    const inner = CairnTodayBrief.updatedInnerHtml(read, CairnTodayBrief.kind(read), isToday);
+    if (!inner) return;
+    stamp.innerHTML = inner;
+  }
+
+  // The check-in mounts INSIDE the Brief now, so any repaint that replaces the Brief
+  // node drops it. Re-run its loader against the fresh DOM; it is a no-op whenever
+  // the slot is absent (a train/done read) or the day is already answered.
+  function remountCheckin(): void {
+    const load = (globalThis as { loadCheckin?: () => unknown }).loadCheckin;
+    if (typeof load === "function") {
+      try {
+        void load();
+      } catch {}
+    }
+  }
+
   async function upgradeBriefInPlace(date: string, isToday: boolean, deps: TodayBriefControllerDeps): Promise<void> {
     const inflight = deps.state._briefInflight;
     if (!inflight || inflight.date !== date) return;
@@ -204,9 +236,11 @@ type TodayBriefControllerDeps = {
       return;
     }
     // A cached paint that matches the network truth: adopt the fresh read into
-    // state (drops the _cached flag) but touch ZERO DOM — no settle animation.
+    // state (drops the _cached flag) but touch ZERO DOM apart from the stamp — no
+    // settle animation, no rewritten sentence.
     if (silent && shown && !CairnTodayBrief.materiallyDiffers(shown, read)) {
       deps.state.brief = { date, override: inflight.override || read.override || "", read };
+      patchBriefStamp(briefEl, read, isToday);
       briefEl?.classList.remove("is-thinking");
       return;
     }
@@ -238,6 +272,7 @@ type TodayBriefControllerDeps = {
     fresh.classList.add(deps.reducedMotion() ? "" : "brief-settle");
     live.replaceWith(fresh);
     wireBrief(read, { isToday }, deps);
+    remountCheckin();
     deps.runCountUps(fresh);
     if (showPlan) deps.loadTrainingProvenance(isToday);
   }
@@ -263,6 +298,36 @@ type TodayBriefControllerDeps = {
     }
   }
 
+  // The name of the programmed day this read is pointing at, for the action label
+  // once the athlete's own pattern has earned it. The read's OWN plan selection
+  // leads (`signals.plan_selection.selected.day_number` — the day the server chose
+  // for this morning); the surface's current selection is the fallback. No match in
+  // the loaded plan means no name, and the generic label stands — a button naming
+  // the wrong day would be worse than one naming none.
+  function briefPlanDayName(read: TodayBriefControllerDayRead | null | undefined, deps: TodayBriefControllerDeps): string {
+    const plan = Array.isArray(deps.state.plan) ? deps.state.plan : [];
+    if (!plan.length) return "";
+    const signals = read?.signals && typeof read.signals === "object" ? (read.signals as Record<string, unknown>) : {};
+    const selection =
+      signals.plan_selection && typeof signals.plan_selection === "object"
+        ? (signals.plan_selection as Record<string, unknown>)
+        : null;
+    const selected =
+      selection && selection.selected && typeof selection.selected === "object"
+        ? (selection.selected as Record<string, unknown>)
+        : null;
+    const candidates = [selected?.day_number, deps.state.day];
+    for (const candidate of candidates) {
+      if (candidate == null) continue;
+      const dayNumber = Number(candidate);
+      if (!Number.isFinite(dayNumber)) continue;
+      const match = plan.find((day) => Number(day?.day_number) === dayNumber);
+      const name = String(match?.name ?? "").trim();
+      if (name) return name;
+    }
+    return "";
+  }
+
   function briefHtml(
     read: TodayBriefControllerDayRead | null | undefined,
     options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown } = {},
@@ -274,6 +339,7 @@ type TodayBriefControllerDeps = {
       showDone: !!options.showDone,
       isToday: !!options.isToday,
       activeOverride,
+      planDayName: briefPlanDayName(read, deps),
       morph: !!deps.state._briefMorph,
       reducedMotion: deps.reducedMotion(),
       offlineDismissed: CairnTodayBriefActionsClient.offlineDismissed(),

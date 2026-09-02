@@ -495,6 +495,7 @@ declare global {
     reducedMotion(): boolean;
     collapseEl(el: Element, done?: () => void): void;
     activateTab(tab: string): unknown;
+    toast(message: string): void;
     escapeHtml(value: unknown): string;
     revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
     revealSessionComposer(): unknown;
@@ -4358,8 +4359,14 @@ declare global {
           morph?: boolean;
           reducedMotion?: boolean;
           offlineDismissed?: boolean;
+          planDayName?: unknown;
         }
       ): string;
+      updatedHtml(read: Partial<ClientDayRead> | null | undefined, kind: string, isToday?: boolean): string;
+      updatedInnerHtml(read: Partial<ClientDayRead> | null | undefined, kind: string, isToday?: boolean): string;
+      checkinSlotHtml(kind: string, isToday: boolean): string;
+      overriddenMornings(read: Partial<ClientDayRead> | null | undefined): number;
+      planDayLabel(name: unknown): string;
       materiallyDiffers(
         a: (Partial<ClientDayRead> & { _provisional?: unknown }) | null | undefined,
         b: (Partial<ClientDayRead> & { _provisional?: unknown }) | null | undefined

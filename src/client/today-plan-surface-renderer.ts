@@ -60,6 +60,9 @@ type TodayPlanSurfaceRendererOptions = {
   hasGarmin: boolean;
   isRunDay: boolean;
   preserveItemOrder?: boolean;
+  // The envelope's first rationale entry, when the caller already holds it. Optional:
+  // the renderer also reads it off the composition on the session.
+  capRationale?: unknown;
   prefillFor(item: TodayPlanSurfaceRendererItem): TodayPlanSurfaceRendererPrefill;
   attributionFor?(item: TodayPlanSurfaceRendererItem): TodayPlanSurfaceRendererAttribution | null;
   rxFor(name: unknown): unknown;
@@ -106,6 +109,38 @@ type TodayPlanSurfaceRendererApi = {
     const dayIndex = Number.isFinite(ms) ? Math.floor(ms / 864e5) : 0;
     const span = SESSION_EASED_LINES.length;
     return SESSION_EASED_LINES[((dayIndex % span) + span) % span];
+  }
+
+  // The envelope's own athlete-facing sentence for why today's session is shaped the
+  // way it is — the FIRST rationale entry, which the server keeps as the day's read
+  // (`daily-decision.ts` orders it that way deliberately). A capped day used to
+  // render as a shorter plan with fewer sets and no reason at all; this is that
+  // reason, once, under the day header.
+  //
+  // Read from wherever the envelope reaches this surface, in order of specificity,
+  // because the entry rides on the composition the server hands back. Absent
+  // everywhere — an older server, a day with nothing to explain — renders NOTHING;
+  // an empty line is worse than none.
+  function envelopeRationaleText(options: TodayPlanSurfaceRendererOptions): string {
+    const first = (value: unknown): string => {
+      const list = Array.isArray(value) ? value : [];
+      const head = list[0];
+      if (typeof head === "string") return head.trim();
+      if (head && typeof head === "object") return String((head as { text?: unknown }).text ?? "").trim();
+      return "";
+    };
+    const session = options.session && typeof options.session === "object" ? options.session : null;
+    const composition =
+      session && session.daily_session && typeof session.daily_session === "object"
+        ? (session.daily_session as Record<string, unknown>)
+        : null;
+    const day = options.day && typeof options.day === "object" ? (options.day as Record<string, unknown>) : null;
+    const candidates = [options.capRationale, composition?.rationale, day?.rationale];
+    for (const candidate of candidates) {
+      const text = typeof candidate === "string" ? candidate.trim() : first(candidate);
+      if (text) return text.slice(0, 240);
+    }
+    return "";
   }
 
   function easedNote(item: TodayPlanSurfaceRendererItem): boolean {
@@ -204,6 +239,10 @@ type TodayPlanSurfaceRendererApi = {
         exTotal: options.exTotal,
         hasSyncedCardioToday: options.hasSyncedCardioToday,
       }, surfaceDeps);
+      const capLine = envelopeRationaleText(options);
+      if (capLine) {
+        html += `<div class="session-cap sess-line">${surfaceDeps.escapeHtml(capLine)}</div>`;
+      }
     }
 
     html += deps.planSurface.daySwitchHtml(options.plan, options.activeDay, surfaceDeps);

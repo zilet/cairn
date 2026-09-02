@@ -627,6 +627,11 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 /* One easing stated once for the whole session, instead of on every card. */
 .session-eased{margin:0 0 12px;color:var(--muted)}
 
+/* Why today's session is shaped the way it is — the envelope's own sentence, under
+   the day header. A shorter plan with no reason reads as the app losing track; this
+   is that reason, said once, in the quiet register. */
+.session-cap{margin:0 0 12px;color:var(--muted)}
+
 /* Same for the decision's own narration: it describes the session, so it sits above
    the cards once. This is CONTEXT, not a caution — it prints on ordinary days, and in
    warn red every one of them read as an alarm. It takes the quiet inset-surface
@@ -3001,6 +3006,9 @@ body.sheet-open{overflow:hidden}
 .brief-updated{
   margin-top:9px;color:var(--muted-2);font-size:.67rem;line-height:1.4;
 }
+/* when evidence freshness and the read's own stamp disagree, they are two facts and
+   get two lines — "As of 7:35 AM sync" over "Read at 7:39 AM" */
+.brief-stamp-line{display:block}
 
 /* the optional "tap to see why" detail — plain language, never a number */
 .brief-why-more{
@@ -3291,6 +3299,13 @@ body.swr-busy::after{
   background:var(--card-2);border:1px solid var(--line);border-radius:var(--radius-sm);
   padding:10px 13px;position:relative;
 }
+/* the rotating question above the three scales — same quiet register as .checkin-open */
+.checkin-lead{
+  flex:1 0 100%;color:var(--muted);font-family:var(--font-ui);
+  font-size:.8rem;font-style:italic;line-height:1.4;
+}
+/* mounted inside the Brief now (under the `why`), not in the capture-row footer */
+.brief-checkin{margin:13px 0 0}
 .feel-row{display:flex;align-items:center;gap:9px}
 .feel-lbl{color:var(--muted)}
 .feel-dots{display:inline-flex;gap:3px}

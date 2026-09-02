@@ -35,7 +35,7 @@ test("Today lead keeps bodyweight capture reachable and omits standalone typed, 
   assert.doesNotMatch(html, /id="goalSlot"|id="goalLine"/);
 });
 
-test("Today lead carries the quiet check-in slot on today's own date, without the retired frequents strip", () => {
+test("Today lead leaves the check-in to the Brief and keeps the tag chips, without the retired frequents strip", () => {
   const shell = loadMainShell();
   const html = shell.leadHtml(
     {
@@ -48,10 +48,13 @@ test("Today lead carries the quiet check-in slot on today's own date, without th
   );
 
   assert.doesNotMatch(html, /id="freqFoods"/);
-  assert.match(html, /id="checkinSlot" class="checkin-slot"/);
+  assert.match(html, /id="tagsSlot" class="tags-slot"/);
+  // The check-in moved under the Brief's own sentence (today-brief-client.ts) —
+  // a footer three surfaces below the question was never where it belonged.
+  assert.doesNotMatch(html, /id="checkinSlot"/);
 });
 
-test("Today lead omits the check-in slot when browsing a day other than today", () => {
+test("Today lead omits the day-scoped slots when browsing a day other than today", () => {
   const shell = loadMainShell();
   const html = shell.leadHtml(
     {
@@ -64,7 +67,7 @@ test("Today lead omits the check-in slot when browsing a day other than today", 
   );
 
   assert.doesNotMatch(html, /id="freqFoods"/);
-  assert.doesNotMatch(html, /id="checkinSlot"/);
+  assert.doesNotMatch(html, /id="checkinSlot"|id="tagsSlot"/);
 });
 
 test("This week owns trajectory stats without rendering a standalone pace offer", () => {
