@@ -644,3 +644,33 @@ test("the rest trade hides itself when the server refuses, and when the endpoint
     assert.equal(harness.deps.state.brief, null);
   }
 });
+
+// Removing the button was never enough on its own: `leaning` is a property of the
+// READ, so the very next repaint rendered the offer straight back and the athlete
+// could tap a trade the server had already refused, over and over.
+test("a repaint after a refused trade stops offering it for that date", async () => {
+  const { harness, brief, button } = tradeHarness(() => ({ ok: false, error: "rest_grade_readiness" }));
+  const seen = [];
+  harness.context.CairnTodayBrief.briefHtml = (read, opts) => {
+    seen.push(opts);
+    return `<section class="brief">${opts.tradeRefused ? "" : "<button data-tradetomorrow></button>"}</section>`;
+  };
+  const read = { kind: "easy", headline: "Easy", focus: null, signals: {} };
+
+  const before = harness.controller.briefHtml(read, { isToday: true }, harness.deps);
+  assert.match(before, /data-tradetomorrow/, "the offer stands until the server says otherwise");
+  assert.equal(seen[0].tradeRefused, false);
+
+  button.click();
+  await flush();
+  assert.equal(brief.children.includes(button), false);
+
+  const after = harness.controller.briefHtml(read, { isToday: true }, harness.deps);
+  assert.equal(seen[1].tradeRefused, true, "the refusal reaches the render, not just the DOM");
+  assert.doesNotMatch(after, /data-tradetomorrow/, "and the repaint does not put the button back");
+
+  // Tomorrow is a different question — the refusal is scoped to the date it was given on.
+  harness.deps.state.logDate = "2026-07-02";
+  harness.controller.briefHtml(read, { isToday: true }, harness.deps);
+  assert.equal(seen[2].tradeRefused, false);
+});

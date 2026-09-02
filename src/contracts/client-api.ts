@@ -1882,9 +1882,6 @@ export interface ClientTodaySideRead {
   garmin_daily: ClientGarminDailyMetric[] | null;
   recovery_baseline: ClientRecoveryBaselineRead | null;
   mealplans: ClientMealPlanSummary[] | null;
-  directives: ClientDirectivesResponse | null;
-  insights: ClientInsight[] | null;
-  team_week: ClientTeamWeek | null;
 }
 
 export interface ClientTodayPlanDaySelection {

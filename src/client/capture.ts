@@ -224,6 +224,22 @@ function checkinAnswered(c: CaptureCheckin | null | undefined): boolean {
   return CHECKIN_FIELDS.some((field) => (c as Record<string, unknown>)[field.key] != null) || c.mood != null;
 }
 
+// One tap is a complete answer, but it is not THE answer — the other two scales
+// have to survive it. The draft is what the athlete has answered so far today,
+// held in module state so the reshapeToday() a save triggers (and every other
+// repaint that calls loadCheckin) re-asks the unanswered scales instead of
+// collapsing the row into the done line after the first dot.
+type CheckinDraft = { iso: string; picked: Partial<Record<CheckinField["key"], number>> };
+let _checkinDraft: CheckinDraft | null = null;
+
+function checkinDraftFor(iso: string): CheckinDraft | null {
+  return _checkinDraft && _checkinDraft.iso === iso ? _checkinDraft : null;
+}
+
+function checkinDraftComplete(draft: CheckinDraft | null): boolean {
+  return !!draft && CHECKIN_FIELDS.every((field) => draft.picked[field.key] != null);
+}
+
 async function loadCheckin(): Promise<void> {
   const slot = view.querySelector<HTMLElement>("#checkinSlot");
   if (!slot) return;
@@ -231,6 +247,15 @@ async function loadCheckin(): Promise<void> {
   let existing: CaptureCheckin | null = null;
   try { existing = await api("/checkins?date=" + today) as CaptureCheckin | null; } catch { existing = null; }
   if (state.tab !== "today" || !slot.isConnected) return;
+  // Mid-answer: the row stays a form until all three are in (or it is waved off).
+  // A form already on screen is left completely alone — re-rendering under the
+  // athlete's finger would drop the marks and the listeners mid-tap.
+  const draft = checkinDraftFor(today);
+  if (draft && !checkinDraftComplete(draft)) {
+    if (slot.querySelector(".checkin-form")) return;
+    renderCheckinForm(slot, today);
+    return;
+  }
   if (checkinAnswered(existing)) {
     renderCheckinDone(slot, existing as CaptureCheckin);
     return;
@@ -242,21 +267,29 @@ async function loadCheckin(): Promise<void> {
 }
 
 const FEEL_FACES = ["·", "◦", "○", "◍", "●"]; // 1→5, quiet glyphs, no emoji
-function feelScale(field: CheckinField): string {
+function feelScale(field: CheckinField, rung?: number | null): string {
   const dots = FEEL_FACES.map((g, i) =>
-    `<button class="feel-dot" type="button" data-feel="${escAttr(field.key)}" data-val="${i + 1}" title="${escAttr(field.words[i])}" aria-label="${escAttr(`${field.label}: ${field.words[i]}`)}">${g}</button>`
+    `<button class="feel-dot${rung != null && i + 1 <= rung ? " feel-dot-on" : ""}" type="button" data-feel="${escAttr(field.key)}" data-val="${i + 1}" title="${escAttr(field.words[i])}" aria-label="${escAttr(`${field.label}: ${field.words[i]}`)}">${g}</button>`
   ).join("");
-  return `<div class="feel-row"><span class="feel-lbl lbl">${escHtml(field.label)}</span><div class="feel-dots">${dots}</div></div>`;
+  // The answered scale says its own word back, inline, while the other two stay
+  // askable. Words only — a number here would be the same Amendment 2 violation
+  // the done line is careful to avoid.
+  const said = rung != null ? escHtml(field.done[rung - 1]) : "";
+  return `<div class="feel-row"><span class="feel-lbl lbl">${escHtml(field.label)}</span><div class="feel-dots">${dots}</div><span class="feel-said" data-said="${escAttr(field.key)}">${said}</span></div>`;
 }
 
 function renderCheckinForm(slot: HTMLElement, iso?: string): void {
   const today = iso || localISO();
+  const draft = checkinDraftFor(today);
+  // Carry whatever is already answered today back onto the freshly drawn row, so
+  // a repaint never asks a question the athlete has already answered this morning.
+  const picked: Partial<Record<CheckinField["key"], number>> = { ...(draft ? draft.picked : {}) };
+  _checkinDraft = { iso: today, picked };
   slot.innerHTML = `<div class="checkin-form chip-in">
       <span class="checkin-lead">${escHtml(checkinLead(today))}</span>
-      ${CHECKIN_FIELDS.map(feelScale).join("")}
+      ${CHECKIN_FIELDS.map((field) => feelScale(field, picked[field.key] ?? null)).join("")}
       <button class="checkin-dismiss" id="checkinDismiss" type="button" aria-label="Not now">✕</button>
     </div>`;
-  const picked: Partial<Record<CheckinField["key"], number>> = {};
   slot.querySelectorAll<HTMLElement>(".feel-dot").forEach((b) =>
     b.addEventListener("click", async () => {
       const field = CHECKIN_FIELDS.find((f) => f.key === b.dataset.feel);
@@ -266,14 +299,24 @@ function renderCheckinForm(slot: HTMLElement, iso?: string): void {
       // highlight selected + everything below it (a five-rung scale fill)
       slot.querySelectorAll<HTMLElement>(`.feel-dot[data-feel="${field.key}"]`).forEach((d) =>
         d.classList.toggle("feel-dot-on", Number(d.dataset.val) <= val));
+      const said = slot.querySelector<HTMLElement>(`[data-said="${field.key}"]`);
+      if (said) said.innerHTML = escHtml(field.done[val - 1]);
       try {
+        // POST /checkins INSERTS a row and GET ?date= reads the newest, so every
+        // tap has to carry everything answered so far — a partial body would drop
+        // the earlier scales off today's row.
         const saved = await api("/checkins", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...picked }),
         }) as CaptureCheckin;
         if (saved && !saved.error) {
-          renderCheckinDone(slot, saved);
           toast("Noted");
+          // The form stays mounted until all three are in; only then does the row
+          // become the answered sentence.
+          if (checkinDraftComplete({ iso: today, picked })) {
+            _checkinDraft = null;
+            renderCheckinDone(slot, saved);
+          }
           reshapeToday(); // a fresh check-in can shift today's read — reflect it now
         }
       } catch { /* silent — it's optional */ }
@@ -281,6 +324,14 @@ function renderCheckinForm(slot: HTMLElement, iso?: string): void {
   const dismiss = slot.querySelector("#checkinDismiss");
   if (dismiss) dismiss.addEventListener("click", () => {
     dismissCheckinForToday(today);
+    // Waving off a half-answered row still keeps what was said — the answered
+    // scales become the done line rather than vanishing.
+    const answered = _checkinDraft && _checkinDraft.iso === today ? _checkinDraft.picked : null;
+    _checkinDraft = null;
+    if (answered && CHECKIN_FIELDS.some((field) => answered[field.key] != null)) {
+      renderCheckinDone(slot, answered as unknown as CaptureCheckin);
+      return;
+    }
     slot.innerHTML = "";
   });
 }

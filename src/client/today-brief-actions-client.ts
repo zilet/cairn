@@ -8,9 +8,19 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
 
 (() => {
   let agentOfflineDismissed = false;
+  // The date the server last refused a rest-trade on. Removing the button is not
+  // enough on its own: the Brief repaints from the same read, `leaning` is still
+  // true, and the offer comes straight back — so the refusal has to be state the
+  // render can see. Per date, because tomorrow is a different question.
+  let tradeRefusedDate = "";
 
   function offlineDismissed(): boolean {
     return agentOfflineDismissed;
+  }
+
+  function tradeRefusedOn(date: unknown): boolean {
+    const iso = String(date ?? "");
+    return !!iso && tradeRefusedDate === iso;
   }
 
   function wireAgentOffline(scope: ParentNode | null | undefined, deps: ClientTodayBriefActionsDeps): void {
@@ -122,6 +132,10 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
         ? (result.read as TodayBriefActionsDayRead)
         : null;
     if (!read || !read.kind) {
+      // Refused (ok:false at HTTP 200) or no such endpoint at all. Remember it for
+      // this date so the next repaint does not re-offer a trade the server has
+      // already said it cannot honour.
+      tradeRefusedDate = String(deps.state.logDate ?? "");
       button.remove();
       return;
     }
@@ -230,6 +244,7 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
 
   const CAIRN_TODAY_BRIEF_ACTIONS_CLIENT = {
     offlineDismissed,
+    tradeRefusedOn,
     wireBriefActions,
   };
 

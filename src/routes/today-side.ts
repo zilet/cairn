@@ -1,8 +1,5 @@
 import { Router } from "express";
-import { listVisibleInsights, listDirectives, teamWeekRead } from "../domain/brain/index.js";
 import {
-  annotateDirectiveFreshness,
-  annotateDirectiveRecheck,
   getHealthSynthesisView,
   healthFocus,
   getRecoveryBaselineRead,
@@ -36,13 +33,12 @@ export type TodaySideReaders = Record<string, () => unknown>;
 /**
  * The readers, one per response key, each the individual route's own call.
  *
- * `team_week` is one deliberate difference: `GET /team-week` drains the oldest
- * unseen backlog insights (new -> seen) because it is the human-facing surface.
- * A prefetch is not that surface — draining here would age insights out on an
- * open where nobody read them — so the composite reads it WITHOUT the drain.
- * The individual route keeps the drain and stays the only place it fires.
+ * The set is exactly what `today-side-loaders.ts` reads through `sideValue`, and
+ * nothing more. A key no client asks for is pure server work and payload on the
+ * open that blocks first paint, so `directives`, `insights` and `team_week` are
+ * deliberately NOT here — those surfaces fetch their own routes when they render.
  *
- * `mealplans` is the other: the side loader only ever prints the first meal
+ * `mealplans` is one deliberate difference: the side loader only ever prints the first meal
  * name of today's row, so this key reads `listMealPlansSummary()` — the same
  * selection/freshness logic as `listMealPlans()`, projected down to the fields
  * a screen renders (`GET /mealplans?fields=summary` is the same call). The full
@@ -57,11 +53,6 @@ export const TODAY_SIDE_READERS: TodaySideReaders = {
   garmin_daily: () => listGarminDailyMetrics(1),
   recovery_baseline: () => getRecoveryBaselineRead(),
   mealplans: () => listMealPlansSummary(6),
-  directives: () => ({
-    directives: annotateDirectiveRecheck(annotateDirectiveFreshness(listDirectives({ all: false }))),
-  }),
-  insights: () => listVisibleInsights(20),
-  team_week: () => teamWeekRead({ drainBacklog: false }),
 };
 
 function todaySideDate(value: unknown): string {
@@ -82,12 +73,12 @@ export function todaySideRead(dateQuery?: unknown, readers: TodaySideReaders = T
 }
 
 // One trip for the Today screen's small independent side panels (context events,
-// health synthesis, Garmin daily, recovery bands, meal plans, directives, insights,
-// team week) instead of one GET each. A PWA convenience: every individual route
-// still exists and still owns its semantics, each key here is that route's own
-// read, and a key whose read fails comes back `null` so one panel's failure never
-// takes the others with it. `team_week` is read WITHOUT the unseen-insight backlog
-// drain — a prefetch is not the human-facing surface that earns it.
+// health synthesis, Garmin daily, recovery bands, meal plans) instead of one GET
+// each. A PWA convenience: every individual route still exists and still owns its
+// semantics, each key here is that route's own read, and a key whose read fails
+// comes back `null` so one panel's failure never takes the others with it. The key
+// set is exactly what the Today side loaders read — directives, insights and the
+// team week are NOT fanned in, because nothing on this path renders them.
 todaySideRouter.get("/today-side", (req, res) => {
   res.json(todaySideRead(req.query.date));
 });

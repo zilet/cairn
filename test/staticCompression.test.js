@@ -12,7 +12,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
@@ -189,4 +190,52 @@ test("an SSE response is never compressed or buffered", async () => {
   assert.match(res.headers["content-type"], /^text\/event-stream/);
   assert.equal(res.headers["content-encoding"], undefined);
   assert.equal(res.body.toString("utf8"), "data: one\n\ndata: two\n\n");
+});
+
+// A precompressed sibling is a CACHE of its source, and public/index.html and
+// public/styles.css are hand-authored — `tsx watch` does not regenerate their
+// .br/.gz. Editing one used to leave the old sibling in place and the server
+// happily shipped yesterday's page to every client that accepts brotli.
+test("a sibling older than its source is ignored — the edited file is what ships", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-precomp-"));
+  const file = path.join(dir, "index.html");
+  fs.writeFileSync(file, "<h1>fresh</h1>");
+  fs.writeFileSync(path.join(dir, "index.html.br"), zlib.brotliCompressSync(Buffer.from("<h1>stale</h1>")));
+  // Sibling written a minute BEFORE the source it claims to represent.
+  const past = new Date(Date.now() - 60_000);
+  fs.utimesSync(path.join(dir, "index.html.br"), past, past);
+
+  const app = express();
+  app.use(precompressedStatic(dir));
+  app.use(express.static(dir));
+  const local = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  try {
+    const at = local.address().port;
+    const get = (headers) =>
+      new Promise((resolve, reject) => {
+        const req = http.request({ host: "127.0.0.1", port: at, path: "/index.html", headers }, (res) => {
+          const chunks = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+        });
+        req.on("error", reject);
+        req.end();
+      });
+
+    const stale = await get({ "accept-encoding": "br" });
+    assert.equal(stale.status, 200);
+    assert.equal(stale.headers["content-encoding"], undefined, "the stale sibling is not served");
+    assert.equal(stale.body.toString("utf8"), "<h1>fresh</h1>");
+
+    // Regenerate it and the fast path comes straight back.
+    fs.writeFileSync(path.join(dir, "index.html.br"), zlib.brotliCompressSync(Buffer.from("<h1>fresh</h1>")));
+    const fresh = await get({ "accept-encoding": "br" });
+    assert.equal(fresh.headers["content-encoding"], "br");
+    assert.equal(zlib.brotliDecompressSync(fresh.body).toString("utf8"), "<h1>fresh</h1>");
+  } finally {
+    await new Promise((resolve) => local.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

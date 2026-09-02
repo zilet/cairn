@@ -839,7 +839,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/today-side` | One trip for the Today screen's small independent side panels (context events, health synthesis, Garmin daily, recovery bands, meal plans, directives, insights, team week) instead of one GET each. A PWA convenience: every individual route still exists and still owns its semantics, each key here is that route's own read, and a key whose read fails comes back `null` so one panel's failure never takes the others with it. `team_week` is read WITHOUT the unseen-insight backlog drain — a prefetch is not the human-facing surface that earns it. |
+| GET | `/api/today-side` | One trip for the Today screen's small independent side panels (context events, health synthesis, Garmin daily, recovery bands, meal plans) instead of one GET each. A PWA convenience: every individual route still exists and still owns its semantics, each key here is that route's own read, and a key whose read fails comes back `null` so one panel's failure never takes the others with it. The key set is exactly what the Today side loaders read — directives, insights and the team week are NOT fanned in, because nothing on this path renders them. |
 
 ## `/training-agenda`
 

@@ -57,6 +57,12 @@ type TodayPlanSessionDataApi = {
 };
 
 (() => {
+  // Mirrors MAX_BATCH_LAST_SETS in src/routes/training-log.ts — the number of
+  // names GET /last-sets will answer in one request. The client bundle cannot
+  // import from the server, so this is a hand-mirrored constant; the batch is
+  // chunked at it rather than truncated by the route.
+  const LAST_SETS_REQUEST_LIMIT = 32;
+
   function recordValue(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
   }
@@ -88,14 +94,22 @@ type TodayPlanSessionDataApi = {
         }));
         return out;
       }
-      const rows = await deps.api("/last-sets?exercises=" + batch.map(encodeURIComponent).join(",")) as
-        | Record<string, Record<string, unknown> | null>
-        | null;
-      for (const name of batch) {
-        const value = rows && typeof rows === "object" && name in rows ? rows[name] : null;
-        out[name] = value ?? null;
-        // Write through to the per-exercise key every other reader still uses.
-        deps.storeCached("last-set:" + name, out[name]);
+      // GET /last-sets answers at most MAX_BATCH_LAST_SETS names per request
+      // (src/routes/training-log.ts) and silently drops the tail. Ask in chunks
+      // that size, and pin ONLY the names the response actually answered — a
+      // name the server never spoke about is unknown, not "no last set", and
+      // caching a false null under its SWR key would pin that lie for the render.
+      for (let i = 0; i < batch.length; i += LAST_SETS_REQUEST_LIMIT) {
+        const chunk = batch.slice(i, i + LAST_SETS_REQUEST_LIMIT);
+        const rows = await deps.api("/last-sets?exercises=" + chunk.map(encodeURIComponent).join(",")) as
+          | Record<string, Record<string, unknown> | null>
+          | null;
+        for (const name of chunk) {
+          if (!rows || typeof rows !== "object" || !(name in rows)) continue;
+          out[name] = rows[name] ?? null;
+          // Write through to the per-exercise key every other reader still uses.
+          deps.storeCached("last-set:" + name, out[name]);
+        }
       }
       return out;
     };

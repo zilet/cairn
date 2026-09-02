@@ -175,6 +175,106 @@ test("tapping the word-scales writes energy, sleep and soreness through the exis
   assert.deepEqual(JSON.parse(calls[2][1].body), { energy: 4, sleep_feel: 5, soreness: 2 });
 });
 
+// A slot whose innerHTML write really replaces its children: `.feel-dot` lookups
+// only answer while the form markup is actually mounted. Without that, a test
+// holding dot stubs outside the slot keeps tapping a row the code already tore
+// down — which is exactly how the one-tap collapse hid for as long as it did.
+function checkinSlotStub(dots) {
+  let html = "";
+  const stub = elementStub({
+    querySelectorAll: (sel) => (sel === ".feel-dot" && /data-feel=/.test(html) ? dots : []),
+    querySelector: (sel) => {
+      if (sel === "#checkinDismiss") {
+        return { addEventListener: (_type, handler) => { stub._listeners_dismiss = handler; } };
+      }
+      // The inline word echo the tap writes into the answered row. Standing in for
+      // a real node means an in-place DOM write shows up in the slot's markup, the
+      // way it does in a browser.
+      const said = /^\[data-said="([^"]+)"\]$/.exec(sel);
+      if (said && html.includes(`data-said="${said[1]}"`)) {
+        return {
+          set innerHTML(value) {
+            html = html.replace(`data-said="${said[1]}"></span>`, `data-said="${said[1]}">${value}</span>`);
+          },
+        };
+      }
+      return null;
+    },
+  });
+  Object.defineProperty(stub, "innerHTML", {
+    get: () => html,
+    set: (value) => { html = String(value ?? ""); },
+    configurable: true,
+  });
+  return stub;
+}
+
+test("one tap does not collapse the check-in — the other scales stay askable", async () => {
+  const dots = [
+    elementStub({ dataset: { feel: "energy", val: "4" } }),
+    elementStub({ dataset: { feel: "sleep_feel", val: "5" } }),
+    elementStub({ dataset: { feel: "soreness", val: "2" } }),
+  ];
+  const slot = checkinSlotStub(dots);
+  const posts = [];
+  let row = null;
+  const capture = loadCapture({
+    view: { querySelector: (sel) => (sel === "#checkinSlot" ? slot : null) },
+    toast: () => {},
+    api: async (path, opts) => {
+      if (!opts) return row; // the GET lookup — answers with whatever is stored
+      posts.push(JSON.parse(opts.body));
+      row = { ...JSON.parse(opts.body), error: false };
+      return row;
+    },
+  });
+
+  await capture.loadCheckin();
+  assert.match(slot.innerHTML, /data-feel="soreness"/);
+
+  await dots[0]._listeners.click();
+  assert.match(slot.innerHTML, /data-feel="sleep_feel"/, "the form node survives the first tap");
+  assert.match(slot.innerHTML, /data-feel="soreness"/);
+  assert.doesNotMatch(slot.innerHTML, /checkin-done/, "and it has not jumped to the answered line");
+  // The answered scale says its word inline — never a number.
+  assert.match(slot.innerHTML, /feeling good/);
+  assert.doesNotMatch(slot.innerHTML, /\/5/);
+
+  // A repaint mid-answer (reshapeToday -> loadCheckin) sees a row already
+  // carrying energy, and must still re-ask the two scales that are open.
+  await capture.loadCheckin();
+  assert.match(slot.innerHTML, /data-feel="sleep_feel"/, "a repaint re-asks the unanswered scales");
+  assert.doesNotMatch(slot.innerHTML, /checkin-done/);
+  assert.match(slot.innerHTML, /feeling good/, "and remembers what was already said");
+
+  // The second and third taps still land.
+  await dots[1]._listeners.click();
+  assert.match(slot.innerHTML, /data-feel="soreness"/);
+  await dots[2]._listeners.click();
+
+  assert.equal(posts.length, 3);
+  assert.deepEqual(posts[2], { energy: 4, sleep_feel: 5, soreness: 2 });
+  assert.match(slot.innerHTML, /feeling good · slept deeply · a little sore/, "all three answered ends in the sentence");
+  assert.doesNotMatch(slot.innerHTML, /data-feel/, "and only then does it stop asking");
+});
+
+test("waving off a half-answered check-in keeps what was already said", async () => {
+  const dots = [elementStub({ dataset: { feel: "energy", val: "5" } })];
+  const slot = checkinSlotStub(dots);
+  const capture = loadCapture({
+    view: { querySelector: (sel) => (sel === "#checkinSlot" ? slot : null) },
+    toast: () => {},
+    api: async (_path, opts) => (opts ? { energy: 5, error: false } : null),
+  });
+
+  await capture.loadCheckin();
+  await dots[0]._listeners.click();
+  slot._listeners_dismiss();
+
+  assert.match(slot.innerHTML, /feeling strong/);
+  assert.doesNotMatch(slot.innerHTML, /data-feel/);
+});
+
 test("setupVoiceCapture mounts on the chat composer's mic/input pair, not Today's dead #qlMic/#qlInput", () => {
   const mic = { hidden: true };
   const input = {};

@@ -4369,6 +4369,7 @@ declare global {
           morph?: boolean;
           reducedMotion?: boolean;
           offlineDismissed?: boolean;
+          tradeRefused?: boolean;
           planDayName?: unknown;
         }
       ): string;
@@ -4398,6 +4399,9 @@ declare global {
 
     CairnTodayBriefActionsClient: {
       offlineDismissed(): boolean;
+      // True once the server has refused a rest-trade on that date, so the Brief
+      // stops re-offering it on every repaint.
+      tradeRefusedOn(date: unknown): boolean;
       wireBriefActions(
         read: Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown },
         options: { isToday?: boolean },

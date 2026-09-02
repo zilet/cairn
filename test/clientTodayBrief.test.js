@@ -957,3 +957,17 @@ test("Today Brief treats crossing the second overridden morning as a material di
   assert.equal(brief.materiallyDiffers(one, two), true);
   assert.equal(brief.materiallyDiffers(two, { ...two }), false);
 });
+
+test("Today Brief drops the trade once the server has refused it, keeping the plan-day label", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(overriddenRead(["2026-03-12", "2026-03-13"]), {
+    isToday: true,
+    planDayName: "Pull",
+    tradeRefused: true,
+  });
+
+  assert.doesNotMatch(html, /data-tradetomorrow/, "a refused trade is not re-offered on the next paint");
+  // The earned default is untouched — the refusal is about tomorrow, not today.
+  assert.match(html, /data-redirect="reveal-plan">Pull day · your plan</);
+  assert.match(html, /data-redirect="ask-session"/);
+});

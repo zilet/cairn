@@ -343,6 +343,7 @@ type TodayBriefControllerDeps = {
       morph: !!deps.state._briefMorph,
       reducedMotion: deps.reducedMotion(),
       offlineDismissed: CairnTodayBriefActionsClient.offlineDismissed(),
+      tradeRefused: CairnTodayBriefActionsClient.tradeRefusedOn(deps.state.logDate),
     });
   }
 

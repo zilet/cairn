@@ -162,6 +162,60 @@ test("Today plan/session data helper loads cached last sets and refreshes stale 
   assert.deepEqual(plain(requests), [{ path: "/last-set?exercise=Bench", opts: { key: "last-set:Bench" } }]);
 });
 
+// GET /last-sets answers at most MAX_BATCH_LAST_SETS (32) names and drops the
+// tail silently. Asking for more in one request used to pin a false "no last set"
+// into the SWR key of every name past that cut — a lie the whole render then read.
+test("last sets are asked in chunks the route can answer, and only answered names are cached", async () => {
+  const context = loadPreparation();
+  const data = context.CairnTodayPlanSessionData;
+  const names = Array.from({ length: 40 }, (_, i) => `Lift ${i + 1}`);
+  const requests = [];
+  const cached = new Map();
+
+  const result = await data.loadLastSets(names, {}, {
+    state: { logDate: "2026-06-30" },
+    peekCached: () => null,
+    cachedApi: async () => null,
+    storeCached: (key, value) => { cached.set(key, value); },
+    api: async (path) => {
+      requests.push(path);
+      const asked = decodeURIComponent(path.split("exercises=")[1]).split(",");
+      // The real route slices at 32 and answers nothing about the rest.
+      const rows = {};
+      for (const name of asked.slice(0, 32)) rows[name] = { weight: 100 + names.indexOf(name) };
+      return rows;
+    },
+    isCardioItem: () => false,
+  });
+
+  assert.equal(requests.length, 2, "40 names go out as two requests, not one truncated one");
+  assert.equal(decodeURIComponent(requests[0].split("exercises=")[1]).split(",").length, 32);
+  assert.equal(decodeURIComponent(requests[1].split("exercises=")[1]).split(",").length, 8);
+  // Every name gets its real answer, including the ones past position 32.
+  assert.deepEqual(plain(result["Lift 40"]), { weight: 139 });
+  assert.equal(cached.size, 40);
+  assert.deepEqual(plain(cached.get("last-set:Lift 33")), { weight: 132 });
+});
+
+test("a name the /last-sets response never mentions is not cached as 'no last set'", async () => {
+  const context = loadPreparation();
+  const data = context.CairnTodayPlanSessionData;
+  const cached = new Map();
+
+  await data.loadLastSets(["Bench", "Squat"], {}, {
+    state: { logDate: "2026-06-30" },
+    peekCached: () => null,
+    cachedApi: async () => null,
+    storeCached: (key, value) => { cached.set(key, value); },
+    // A server that answers about Bench and says nothing about Squat.
+    api: async () => ({ Bench: { weight: 185 } }),
+    isCardioItem: () => false,
+  });
+
+  assert.deepEqual(plain(cached.get("last-set:Bench")), { weight: 185 });
+  assert.equal(cached.has("last-set:Squat"), false, "silence is unknown, never a pinned null");
+});
+
 test("Today plan/session preparation assembles cardio, pending off-plan, prescriptions, and prefill data", async () => {
   const context = loadPreparation();
   const apiRequests = [];

@@ -7,10 +7,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { todaySideRead, TODAY_SIDE_READERS } from "../dist/routes/today-side.js";
-import { listVisibleInsights, listDirectives, teamWeekRead } from "../dist/domain/brain/index.js";
 import {
-  annotateDirectiveFreshness,
-  annotateDirectiveRecheck,
   getHealthSynthesisView,
   healthFocus,
   getRecoveryBaselineRead,
@@ -49,10 +46,6 @@ test("todaySideRead mirrors the individual routes key for key", () => {
   // listMealPlansSummary() projection, not the full listMealPlans() payload — see
   // src/routes/today-side.ts.
   assert.deepEqual(side.mealplans, listMealPlansSummary(6));
-  assert.deepEqual(side.insights, listVisibleInsights(20));
-  assert.deepEqual(side.directives, {
-    directives: annotateDirectiveRecheck(annotateDirectiveFreshness(listDirectives({ all: false }))),
-  });
   const view = getHealthSynthesisView();
   assert.deepEqual(side.health_synthesis, {
     synthesis: view.synthesis,
@@ -60,10 +53,20 @@ test("todaySideRead mirrors the individual routes key for key", () => {
     stale: view.stale,
     stale_reason: view.stale_reason,
   });
-  // The one deliberate difference: the composite is a prefetch, so it reads the
-  // team's week WITHOUT draining the unseen-insight backlog. GET /team-week is the
-  // human-facing surface and stays the only place that drain fires.
-  assert.deepEqual(side.team_week, teamWeekRead({ drainBacklog: false }));
+});
+
+// The composite is on the path that blocks Today's first paint, so a key nothing
+// renders is pure cost. `directives`, `insights` and `team_week` were exactly that
+// — computed and shipped every open, read by no client loader — and they are gone.
+test("the composite carries only the keys today-side-loaders.ts actually reads", () => {
+  const side = todaySideRead("2026-01-02");
+  assert.deepEqual(
+    Object.keys(side).filter((key) => key !== "date").sort(),
+    ["context_events", "garmin_daily", "health_synthesis", "mealplans", "recovery_baseline"]
+  );
+  for (const gone of ["directives", "insights", "team_week"]) {
+    assert.equal(gone in side, false, `${gone} is not fanned in — its own route serves it`);
+  }
 });
 
 test("todaySideRead falls back to a bad date the same way the individual routes do", () => {

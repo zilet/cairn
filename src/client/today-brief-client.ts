@@ -46,6 +46,9 @@ type TodayBriefHtmlOptions = {
   morph?: boolean;
   reducedMotion?: boolean;
   offlineDismissed?: boolean;
+  // The server already answered "no" to a rest-trade on this date. The offer stays
+  // gone for the rest of the day rather than reappearing on the next repaint.
+  tradeRefused?: boolean;
 };
 
 (() => {
@@ -399,8 +402,10 @@ type TodayBriefHtmlOptions = {
     // The trade: take today, and claim tomorrow as the rest. Offered only once the
     // pattern says the quiet morning is going to be trained through anyway — a
     // suggestion the athlete can act on, never a condition on training today. Hidden
-    // for good the moment the server says it cannot honour one (see the actions client).
-    if (leaning) {
+    // for good the moment the server says it cannot honour one — `tradeRefused` is
+    // that refusal, carried in by the controller, because removing the button alone
+    // left the next repaint free to render it straight back (see the actions client).
+    if (leaning && !options.tradeRefused) {
       actions.push(`<button class="brief-redirect brief-trade" data-tradetomorrow>Train today, rest tomorrow</button>`);
     }
     if (kind !== "done") actions.push(todayBriefRedirect("ask-session", "Ask for a session", false));
