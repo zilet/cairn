@@ -14,7 +14,7 @@ import { startBrainReviewJobSubscriber } from "./brainReviewJobs.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled, requireAuth, authStartupError, rateLimitGuard, rateLimitEnabled, tokenMatches, checkRateLimit } from "./auth.js";
-import { setAgentRunSink, loadAgents, invalidateAgentConfigured } from "./agents.js";
+import { setAgentRunSink, loadAgents, invalidateAgentConfigured, warmAgentProbes } from "./agents.js";
 import { startLoginSession, killActiveLoginSession } from "./agentLogin.js";
 import { reportScriptCspHash } from "./report.js";
 import { runWithTimeZone } from "./tz.js";
@@ -185,6 +185,10 @@ const server = app.listen(PORT, HOST, () => {
     console.error("[boot] ensureActiveBlock failed:", err);
   }
   maybeScheduleAgentCliAutoUpdate();
+  // Probe the coaching CLIs here instead of leaving it to the first request that
+  // asks for the rotation — which was the first Brief after every restart, and
+  // paid several seconds of `--version` spawns for it. Staggered and best-effort.
+  warmAgentProbes();
   // Re-process any free-text entries left 'pending' by a prior restart.
   recoverPendingEnrich();
   // Re-drain queued chat turns and fail any interrupted mid-flight (their actions

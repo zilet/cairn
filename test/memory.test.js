@@ -129,3 +129,46 @@ test("promotions are untouched by the floor — nothing is retired by promoting 
   assert.equal(applied.promoted, 1);
   assert.equal(repo.getMemory(observation.id).kind, "preference");
 });
+
+// Surfacing memories to the coach stamps last_referenced_at. That stamp used to
+// be one autocommit per row — forty WAL commits (forty fsyncs) on every coach
+// context rebuild. It is now a single batched UPDATE: same rows, same stamp, one
+// statement. This pins the batching so it cannot quietly regress to a loop.
+test("memoryForCoach stamps every surfaced row in ONE update statement", () => {
+  const facts = [
+    "Sleeps poorly the night before a race",
+    "Keeps almonds in the car for long drives",
+    "Dislikes rowing machines entirely",
+    "Trains at a gym two blocks from work",
+    "Drinks black coffee before every lift",
+    "Wears a knee sleeve on squat days",
+    "Cycles to work on Fridays",
+    "Avoids dairy in the evening",
+    "Prefers podcasts over music while running",
+    "Travels for work most of November",
+  ];
+  for (const fact of facts) repo.addMemory(fact, "observation", "enrichment");
+  db.prepare(`UPDATE memory SET last_referenced_at = NULL`).run();
+
+  const original = db.prepare.bind(db);
+  const touches = [];
+  db.prepare = (sql) => {
+    if (/UPDATE\s+memory\s+SET\s+last_referenced_at/i.test(sql)) touches.push(sql);
+    return original(sql);
+  };
+  let surfaced;
+  try {
+    surfaced = repo.memoryForCoach(40);
+  } finally {
+    db.prepare = original;
+  }
+
+  assert.equal(surfaced.length, facts.length, "the fixture rows are all in the surfaced set");
+  assert.equal(touches.length, 1, "one batched UPDATE, not one per surfaced row");
+  const stamped = db
+    .prepare(`SELECT id FROM memory WHERE last_referenced_at IS NOT NULL ORDER BY id`)
+    .all()
+    .map((r) => r.id);
+  const expected = [...surfaced.map((r) => r.id)].sort((a, b) => a - b);
+  assert.deepEqual(stamped, expected, "exactly the surfaced rows were stamped");
+});

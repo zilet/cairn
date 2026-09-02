@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
-import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
+import { GARMIN_DAILY_ROW_COLS, getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
 import {
   cleanClinicalFacts,
   getLatestHealthReview,
@@ -2802,7 +2802,10 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
       .all(since, today) as Record<string, any>[];
     const garminRows = db
       .prepare(
-        `SELECT * FROM garmin_daily_metrics WHERE date >= ? AND date <= ? ORDER BY date DESC, updated_at DESC, id DESC`
+        // Projected, not `SELECT *`: this resolver runs twice per call over a
+        // multi-week window and reads only normalized fields — pulling
+        // `raw_json` (~57 KB/row) moved megabytes per Today open for nothing.
+        `SELECT ${GARMIN_DAILY_ROW_COLS} FROM garmin_daily_metrics WHERE date >= ? AND date <= ? ORDER BY date DESC, updated_at DESC, id DESC`
       )
       .all(since, today) as Record<string, any>[];
     const dates = new Map<string, ResolvedRow>();

@@ -1063,6 +1063,16 @@ const GARMIN_DAILY_COLS = [
   "training_load_balance",
 ] as const;
 
+// Every stored column EXCEPT `raw_json`. The multi-day window reads (the coach
+// summary below, `getRecoverySummary`'s resolver in coach.ts) only ever touch
+// normalized columns, but `raw_json` averages ~57 KB per row (max ~225 KB), so a
+// `SELECT *` over a 14-56 day window moved megabytes per call for nothing.
+// Project instead — same row shape minus the blob. Keep in sync with the
+// `garmin_daily_metrics` CREATE TABLE in db.ts; the single-row/list routes that
+// genuinely want the blob keep using `SELECT *` + `hydrateJson`.
+const GARMIN_DAILY_ROW_COL_LIST = ["id", "source_id", "date", ...GARMIN_DAILY_COLS, "created_at", "updated_at"];
+export const GARMIN_DAILY_ROW_COLS = GARMIN_DAILY_ROW_COL_LIST.join(", ");
+
 function isRealIsoDate(value: unknown): value is string {
   const text = String(value ?? "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
@@ -1567,7 +1577,7 @@ export function getGarminCoachSummary(days = 14, asOfDate = localDateISO()) {
   // PRODUCTIVE_9, while keeping e.g. readiness current=26 beside average=55.9.
   const metricRowsRaw = db
     .prepare(
-      `SELECT * FROM garmin_daily_metrics WHERE date >= ? AND date <= ? ORDER BY date DESC, updated_at DESC, id DESC`
+      `SELECT ${GARMIN_DAILY_ROW_COLS} FROM garmin_daily_metrics WHERE date >= ? AND date <= ? ORDER BY date DESC, updated_at DESC, id DESC`
     )
     .all(since, today) as Record<string, any>[];
   const byDate = new Map<string, Record<string, any>>();

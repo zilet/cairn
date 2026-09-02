@@ -208,15 +208,21 @@ export function deleteMemory(id: number) {
 
 // Stamp a set of memory ids as just-surfaced-to-the-coach (recency-of-reference,
 // distinct from created_at/updated_at). Bounded and best-effort.
+//
+// ONE statement, not one per id: this runs on every coach-context rebuild, and
+// forty separate autocommits are forty WAL commits (each an fsync — brutal on
+// the Pi's SD card) for a stamp that is second-resolution anyway. `datetime('now')`
+// is evaluated once per statement, so the batched form also gives every surfaced
+// row the same stamp instead of a spread across the loop.
 function touchMemoryReferenced(ids: number[]) {
-  if (!ids?.length) return;
-  const stmt = db.prepare(`UPDATE memory SET last_referenced_at = datetime('now') WHERE id = ?`);
-  for (const id of ids.slice(0, 60)) {
-    try {
-      stmt.run(id);
-    } catch {
-      /* best effort */
-    }
+  const unique = [...new Set((ids ?? []).filter((id) => Number.isInteger(id)))].slice(0, 60);
+  if (!unique.length) return;
+  try {
+    db.prepare(
+      `UPDATE memory SET last_referenced_at = datetime('now') WHERE id IN (${unique.map(() => "?").join(", ")})`
+    ).run(...unique);
+  } catch {
+    /* best effort */
   }
 }
 

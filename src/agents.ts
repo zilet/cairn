@@ -362,6 +362,34 @@ export function invalidateAgentConfigured(name?: string): void {
   }
 }
 
+// Fill the per-process probe caches (presence, login verdict, version) at boot
+// rather than inside whichever request first asks for the agent rotation. Each
+// probe is a `--version`-class spawn; lazily they all landed together on the
+// first `GET /today-read` after a restart, so the first Brief after every deploy
+// waited on four CLI launches (seconds on a Pi). Nothing about the caches or the
+// probes changes — only WHEN they fill; every one stays available on demand, and
+// `invalidateAgentConfigured` still forces a re-probe after a login or an update.
+// One agent per macrotask so the warm-up never holds the event loop for the whole
+// run, and entirely best-effort: a failed probe just leaves that cache cold for
+// the lazy path to fill exactly as it did before.
+export function warmAgentProbes(): void {
+  const names = Object.keys(loadAgents());
+  const step = (index: number): void => {
+    if (index >= names.length) return;
+    try {
+      const name = names[index];
+      const cmd = loadAgents()[name]?.command;
+      if (cmd) commandPresent(cmd);
+      agentConfigured(name);
+      agentVersion(name);
+    } catch {
+      /* best effort */
+    }
+    setImmediate(() => step(index + 1));
+  };
+  setImmediate(() => step(0));
+}
+
 // ---------- version / model visibility (read-only) ----------
 // A cheap `<cmd> --version`, cached per command like the presence probe. Strips
 // the print to the first clean version-looking token so a chatty banner doesn't

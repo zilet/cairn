@@ -139,15 +139,21 @@ function authoritativeGarminBlob(value: unknown): unknown {
   return projected;
 }
 
+// Hoisted deliberately: building an Intl.DateTimeFormat resolves the locale on
+// every construction, and humanDate runs for every accountable plan change on
+// every getPlan() — ~1 s of a single Today open. The options are constant and
+// the zone is pinned to UTC, so one shared formatter is byte-identical output.
+const HUMAN_DATE_FMT = new Intl.DateTimeFormat("en-US", {
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
 function humanDate(date: string): string {
   const parsed = new Date(`${date}T12:00:00Z`);
   if (!Number.isFinite(parsed.getTime())) return date;
-  return new Intl.DateTimeFormat("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(parsed);
+  return HUMAN_DATE_FMT.format(parsed);
 }
 
 function startOfWeek(date: string): string {
