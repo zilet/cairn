@@ -9,7 +9,7 @@ import {
 } from "../domain/health/index.js";
 import { listContextEvents } from "../domain/person/index.js";
 import { listGarminDailyMetrics } from "../domain/training/index.js";
-import { listMealPlans } from "../domain/nutrition/index.js";
+import { listMealPlansSummary } from "../domain/nutrition/index.js";
 import { localDateISO } from "../repo/shared.js";
 
 export const todaySideRouter = Router();
@@ -36,11 +36,17 @@ export type TodaySideReaders = Record<string, () => unknown>;
 /**
  * The readers, one per response key, each the individual route's own call.
  *
- * `team_week` is the one deliberate difference: `GET /team-week` drains the
- * oldest unseen backlog insights (new -> seen) because it is the human-facing
- * surface. A prefetch is not that surface — draining here would age insights out
- * on an open where nobody read them — so the composite reads it WITHOUT the
- * drain. The individual route keeps the drain and stays the only place it fires.
+ * `team_week` is one deliberate difference: `GET /team-week` drains the oldest
+ * unseen backlog insights (new -> seen) because it is the human-facing surface.
+ * A prefetch is not that surface — draining here would age insights out on an
+ * open where nobody read them — so the composite reads it WITHOUT the drain.
+ * The individual route keeps the drain and stays the only place it fires.
+ *
+ * `mealplans` is the other: the side loader only ever prints the first meal
+ * name of today's row, so this key reads `listMealPlansSummary()` — the same
+ * selection/freshness logic as `listMealPlans()`, projected down to the fields
+ * a screen renders (`GET /mealplans?fields=summary` is the same call). The full
+ * `GET /mealplans` route and the MCP tool the coach reasons over are unchanged.
  */
 export const TODAY_SIDE_READERS: TodaySideReaders = {
   context_events: () => listContextEvents({ activeOnly: true }),
@@ -50,7 +56,7 @@ export const TODAY_SIDE_READERS: TodaySideReaders = {
   },
   garmin_daily: () => listGarminDailyMetrics(1),
   recovery_baseline: () => getRecoveryBaselineRead(),
-  mealplans: () => listMealPlans(6),
+  mealplans: () => listMealPlansSummary(6),
   directives: () => ({
     directives: annotateDirectiveRecheck(annotateDirectiveFreshness(listDirectives({ all: false }))),
   }),

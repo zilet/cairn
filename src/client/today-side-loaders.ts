@@ -1,13 +1,15 @@
 // @ts-check
 // Today side loaders: slot-bound async panels that sit around the main render path.
 
-type TodaySideMealPlan = Record<string, unknown> & {
+// The slim projection from listMealPlansSummary() (server: src/repo/nutrition.ts) —
+// only what this screen renders, plus the `adequate` verdict the server already
+// computed so this loader never needs the kcal/protein totals a full plan carries.
+type TodaySideMealPlan = {
+  id?: number;
   status?: string;
   constraint_state?: { status?: string } | null;
-  parsed?: {
-    constraint_state?: { status?: string } | null;
-    days?: Array<Record<string, unknown> & { meals?: Array<Record<string, unknown>> }>;
-  };
+  adequate?: boolean;
+  days?: Array<{ day?: string; meals?: Array<{ name?: string }> }>;
 };
 
 type TodaySideContextEvent = Record<string, unknown> & {
@@ -222,6 +224,19 @@ type TodaySideComposite = Record<string, unknown>;
     deps.runCountUps(slot);
   }
 
+  // Mirror the server's canonical-current selection (listMealPlansSummary already
+  // carries the server's own assessMealPlanAdequacy() verdict as `adequate`, so
+  // there's no need to re-derive it from kcal/protein totals the slim shape omits):
+  // a kept/accepted/applied adequate plan wins, else an adequate draft, else none.
+  const KEPT_MEAL_PLAN_STATUSES = ["accepted", "applied", "kept"];
+  function currentMealPlanSummary(plans: TodaySideMealPlan[]): TodaySideMealPlan | null {
+    return (
+      plans.find((plan) => KEPT_MEAL_PLAN_STATUSES.includes(String(plan.status)) && plan.adequate) ||
+      plans.find((plan) => plan.status === "draft" && plan.adequate) ||
+      null
+    );
+  }
+
   // Today: a one-line pointer to the day's planned meals.
   async function loadTableHint(deps: TodaySideLoaderDeps): Promise<void> {
     const wrap = deps.root.querySelector<HTMLElement>("#tableHint");
@@ -229,21 +244,19 @@ type TodaySideComposite = Record<string, unknown>;
     const primedPlans = await sideValue(deps, "mealplans");
     let plans: TodaySideMealPlan[] = [];
     if (primedPlans === undefined) {
-      try { plans = await deps.api("/mealplans?limit=6") as TodaySideMealPlan[]; } catch { return; }
+      try { plans = await deps.api("/mealplans?limit=6&fields=summary") as TodaySideMealPlan[]; } catch { return; }
     } else {
       plans = primedPlans as TodaySideMealPlan[];
     }
     if (!isCurrentToday(deps) || !wrap.isConnected) return;
-    const p = CairnMealPlan.currentMealPlan(plans) as TodaySideMealPlan | null;
-    const constraintState = p?.constraint_state ?? p?.parsed?.constraint_state;
-    if (constraintState?.status === "refresh_needed") return;
-    const parsed = p?.parsed;
-    const days = parsed && Array.isArray(parsed.days) ? parsed.days : [];
+    const p = currentMealPlanSummary(plans);
+    if (p?.constraint_state?.status === "refresh_needed") return;
+    const days = Array.isArray(p?.days) ? p.days : [];
     const lbl = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date(deps.state.logDate + "T12:00:00").getDay()];
     const day = days.find((d) => String(d.day || "").toLowerCase().startsWith(lbl));
     const meals = day && Array.isArray(day.meals) ? day.meals : [];
     if (!meals.length) return;
-    const first = meals[0].name || meals[0].meal || "";
+    const first = meals[0].name || "";
     wrap.innerHTML = `<button class="tablehint" id="tableHintBtn">
       <span class="lbl">Table</span> ${deps.escapeHtml(first)}${meals.length > 1 ? `<span class="tablehint-more"> +${meals.length - 1}</span>` : ""}<span class="tablehint-go">→</span>
     </button>`;

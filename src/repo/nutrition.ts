@@ -1500,6 +1500,46 @@ export function listMealPlans(limit = 10) {
   return plans;
 }
 
+// A slim projection of listMealPlans() for surfaces that only ever paint "what's
+// the current week and what's for dinner" — the PWA's Today side loaders, not the
+// coaching brain, which still needs the full nutrition detail. Drops raw_output,
+// parsed_json, and every per-meal macro/ingredient field a screen never renders.
+// `adequate` is the server's own assessMealPlanAdequacy() verdict for the plan, so
+// a client can pick the canonical current row (kept/accepted/applied first, else a
+// checked draft) without needing the kcal/protein totals this shape omits.
+export interface MealPlanSummary {
+  id: number;
+  week_of: string | null;
+  status: string;
+  created_at: string | null;
+  constraint_state: MealPlanConstraintState | null;
+  adequate: boolean;
+  days: Array<{ day: string; meals: Array<{ name: string }> }>;
+}
+
+export function listMealPlansSummary(limit = 10): MealPlanSummary[] {
+  const plans = listMealPlans(limit) as any[];
+  return plans.map((plan) => {
+    const parsed = plan.parsed && typeof plan.parsed === "object" ? plan.parsed : {};
+    const days = Array.isArray(parsed.days) ? parsed.days : [];
+    const adequacy = assessMealPlanAdequacy(parsed);
+    return {
+      id: plan.id,
+      week_of: plan.week_of ?? null,
+      status: plan.status,
+      created_at: plan.created_at ?? null,
+      constraint_state: plan.constraint_state ?? parsed.constraint_state ?? null,
+      adequate: adequacy.ok && adequacy.checked,
+      days: days.map((day: any) => ({
+        day: String(day?.day ?? ""),
+        meals: (Array.isArray(day?.meals) ? day.meals : []).map((meal: any) => ({
+          name: String(meal?.name ?? meal?.meal ?? ""),
+        })),
+      })),
+    };
+  });
+}
+
 function recordMealPlanStatusDecision(plan: any, transition: string): void {
   if (!plan?.id || !["accepted", "applied", "discarded", "superseded"].includes(transition)) return;
   try {

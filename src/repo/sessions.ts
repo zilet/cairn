@@ -2035,7 +2035,10 @@ export function exportAll() {
     garmin: {
       sources: listGarminSources(),
       activities: listGarminActivities(100000),
-      daily_metrics: listGarminDailyMetrics(100000),
+      // Full-data export/backup is lossless by contract (see the comments on the
+      // other tables above) — explicit {raw:true} keeps raw_json in the backup even
+      // though listGarminDailyMetrics's ordinary callers no longer get it by default.
+      daily_metrics: listGarminDailyMetrics(100000, { raw: true }),
     },
   };
 }

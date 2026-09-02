@@ -69,8 +69,10 @@ garminRouter.post("/garmin/activities", (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+// `raw_json` (device wire payload, ~57 KB/row) is dropped by default; `?raw=1`
+// includes it. Nothing on the read side uses it — only ingest writes it.
 garminRouter.get("/garmin/daily", (req, res) =>
-  res.json(listGarminDailyMetrics(req.query.limit ? Number(req.query.limit) : 30))
+  res.json(listGarminDailyMetrics(req.query.limit ? Number(req.query.limit) : 30, { raw: req.query.raw === "1" }))
 );
 garminRouter.post("/garmin/daily", (req, res) => {
   try {

@@ -329,7 +329,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/garmin/activities` |  |
 | POST | `/api/garmin/activities` |  |
-| GET | `/api/garmin/daily` |  |
+| GET | `/api/garmin/daily` | `raw_json` (device wire payload, ~57 KB/row) is dropped by default; `?raw=1` includes it. Nothing on the read side uses it — only ingest writes it. |
 | POST | `/api/garmin/daily` |  |
 | POST | `/api/garmin/export-backfill` | Send FINISHED Cairn strength sessions from before the 7-day sync window back to Garmin. Dry run unless {apply:true}: the preview says what each session would do and which lifts the FIT catalog cannot place, and nothing is written or queued. Applying enqueues ordinary garmin_export jobs, oldest first, on the serial queue. |
 | POST | `/api/garmin/reconcile` | Reconcile synced Garmin strength activities into the day's Cairn session: the deterministic physiology merge runs now; the agentic narrative/extrapolation is queued on the serial enrichment queue. {date} for one day, else {days} window. |
@@ -501,7 +501,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/mealplans` |  |
+| GET | `/api/mealplans` | `?fields=summary` trims to {id, week_of, status, created_at, constraint_state, adequate, days:[{day, meals:[{name}]}]} — what a screen actually renders, without the full parsed_json/raw_output every row otherwise carries. Additive: the default response is unchanged. |
 | GET | `/api/mealplans/:id` |  |
 | POST | `/api/mealplans/:id/:status` |  |
 

@@ -14,6 +14,7 @@ import {
   nutritionProgress,
   listFoodNotes,
   listMealPlans,
+  listMealPlansSummary,
   setMealPlanStatus,
   updateFoodNote,
   updateMealPlanDays,
@@ -48,9 +49,14 @@ nutritionRouter.post("/coach/mealplan", async (req, res) => {
   }
 });
 
-nutritionRouter.get("/mealplans", (req, res) =>
-  res.json(listMealPlans(req.query.limit ? Number(req.query.limit) : 10))
-);
+// `?fields=summary` trims to {id, week_of, status, created_at, constraint_state,
+// adequate, days:[{day, meals:[{name}]}]} — what a screen actually renders,
+// without the full parsed_json/raw_output every row otherwise carries. Additive:
+// the default response is unchanged.
+nutritionRouter.get("/mealplans", (req, res) => {
+  const limit = req.query.limit ? Number(req.query.limit) : 10;
+  res.json(req.query.fields === "summary" ? listMealPlansSummary(limit) : listMealPlans(limit));
+});
 
 nutritionRouter.get("/mealplans/:id", (req, res) => {
   const plan = getMealPlan(Number(req.params.id));

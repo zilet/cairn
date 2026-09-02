@@ -1,8 +1,9 @@
 // The composite Today side read (GET /today-side, src/routes/today-side.ts).
 //
 // Two things must hold for a fan-in endpoint that exists only to save round trips:
-// every key has to say exactly what the individual route it replaces says, and one
-// failing read has to cost that one key and nothing else.
+// every key has to say exactly what the individual route it replaces says (mealplans
+// is the one deliberate exception — the slim listMealPlansSummary() projection), and
+// one failing read has to cost that one key and nothing else.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { todaySideRead, TODAY_SIDE_READERS } from "../dist/routes/today-side.js";
@@ -16,7 +17,7 @@ import {
 } from "../dist/domain/health/index.js";
 import { listContextEvents } from "../dist/domain/person/index.js";
 import { listGarminDailyMetrics } from "../dist/domain/training/index.js";
-import { listMealPlans } from "../dist/domain/nutrition/index.js";
+import { listMealPlans, listMealPlansSummary } from "../dist/domain/nutrition/index.js";
 import { db, repo, resetTables, completeMealWeek } from "./_seed.js";
 
 beforeEach(() => {
@@ -44,7 +45,10 @@ test("todaySideRead mirrors the individual routes key for key", () => {
   assert.deepEqual(side.context_events, listContextEvents({ activeOnly: true }));
   assert.deepEqual(side.garmin_daily, listGarminDailyMetrics(1));
   assert.deepEqual(side.recovery_baseline, getRecoveryBaselineRead());
-  assert.deepEqual(side.mealplans, listMealPlans(6));
+  // mealplans is the one other deliberate difference: the composite reads the slim
+  // listMealPlansSummary() projection, not the full listMealPlans() payload — see
+  // src/routes/today-side.ts.
+  assert.deepEqual(side.mealplans, listMealPlansSummary(6));
   assert.deepEqual(side.insights, listVisibleInsights(20));
   assert.deepEqual(side.directives, {
     directives: annotateDirectiveRecheck(annotateDirectiveFreshness(listDirectives({ all: false }))),

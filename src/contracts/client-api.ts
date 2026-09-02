@@ -1866,7 +1866,11 @@ export interface ClientTodayAggregate {
 /**
  * The composite Today side read (`GET /today-side`, src/routes/today-side.ts): the
  * small independent panels the PWA used to fetch one at a time, answered in one
- * trip. Every key is exactly what its individual route returns.
+ * trip. Every key is exactly what its individual route returns, with one
+ * deliberate exception: `mealplans` is the slim `ClientMealPlanSummary[]`
+ * projection (same as `GET /mealplans?fields=summary`), because the Today side
+ * loader only ever prints a meal name — the full `GET /mealplans` route is
+ * unchanged for consumers that need the whole plan.
  *
  * Every key is also NULLABLE on purpose — a read that fails degrades to `null` for
  * its own panel alone, and the client falls back to that panel's own request.
@@ -1877,7 +1881,7 @@ export interface ClientTodaySideRead {
   health_synthesis: ClientHealthSynthesisResponse | null;
   garmin_daily: ClientGarminDailyMetric[] | null;
   recovery_baseline: ClientRecoveryBaselineRead | null;
-  mealplans: ClientMealPlan[] | null;
+  mealplans: ClientMealPlanSummary[] | null;
   directives: ClientDirectivesResponse | null;
   insights: ClientInsight[] | null;
   team_week: ClientTeamWeek | null;
@@ -2263,6 +2267,20 @@ export interface ClientMealPlan {
   autonomy?: ClientProposalAutonomy | null;
   constraint_state?: ClientMealPlanConstraintState | null;
   [key: string]: unknown;
+}
+
+// Slim projection from listMealPlansSummary() (`GET /mealplans?fields=summary`,
+// src/repo/nutrition.ts) — meal NAMES only, no macros/ingredients/raw_output.
+// `adequate` is the server's own assessMealPlanAdequacy() verdict, so a client can
+// pick the canonical current plan without the kcal/protein totals this shape omits.
+export interface ClientMealPlanSummary {
+  id: number;
+  week_of: string | null;
+  status: string;
+  created_at: string | null;
+  constraint_state?: ClientMealPlanConstraintState | null;
+  adequate: boolean;
+  days: Array<{ day: string; meals: Array<{ name: string }> }>;
 }
 
 export interface ClientProposal {

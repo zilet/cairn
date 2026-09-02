@@ -1525,10 +1525,19 @@ export function updateSessionGarminNarrative(
   return getSessionDetail(sessionId);
 }
 
-export function listGarminDailyMetrics(limit = 30) {
-  return (db.prepare(`SELECT * FROM garmin_daily_metrics ORDER BY date DESC LIMIT ?`).all(limit) as any[]).map((r) =>
-    hydrateJson(r)
-  );
+// `raw_json` averages ~57 KB/row (max 225 KB observed) and nothing on the read
+// side ever looks at it — only the ingest/upsert path writes it. Every ordinary
+// caller (the Today wearable strip, the coach's recovery window) gets the normal
+// columns only; pass {raw:true} for the rare consumer that actually wants the
+// wire payload back (a full-data export, a debug dump).
+export function listGarminDailyMetrics(limit = 30, opts: { raw?: boolean } = {}) {
+  if (opts.raw) {
+    return (db.prepare(`SELECT * FROM garmin_daily_metrics ORDER BY date DESC LIMIT ?`).all(limit) as any[]).map((r) =>
+      hydrateJson(r)
+    );
+  }
+  const cols = ["id", "source_id", "date", "created_at", "updated_at", ...GARMIN_DAILY_COLS].join(", ");
+  return db.prepare(`SELECT ${cols} FROM garmin_daily_metrics ORDER BY date DESC LIMIT ?`).all(limit) as any[];
 }
 
 export function getGarminCoachSummary(days = 14, asOfDate = localDateISO()) {
