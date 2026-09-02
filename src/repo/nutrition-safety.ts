@@ -33,9 +33,22 @@ export interface MealPlanAdequacyDay {
   fiber_g: number | null;
 }
 
+// `macros_ok` is the kcal/protein half of the verdict on its own — true when a complete
+// week hit both daily targets, whatever fiber did. It exists because a screen that only
+// wants to know "is this the week's real plan" must not lose its hint over fiber: the
+// PWA's Today meal pointer used to derive adequacy client-side from kcal/protein alone,
+// and `ok` (which fiber can fail) is not the same question. The persistence gate and the
+// agent contract keep reading `ok`.
 export type MealPlanAdequacy =
-  | { ok: true; checked: boolean; fiber_checked: boolean; days: MealPlanAdequacyDay[] }
-  | { ok: false; checked: true; fiber_checked: boolean; error: string; days: MealPlanAdequacyDay[] };
+  | { ok: true; checked: boolean; fiber_checked: boolean; macros_ok: boolean; days: MealPlanAdequacyDay[] }
+  | {
+      ok: false;
+      checked: true;
+      fiber_checked: boolean;
+      macros_ok: boolean;
+      error: string;
+      days: MealPlanAdequacyDay[];
+    };
 
 export const MEAL_PLAN_FIBER_FLOOR_G = 30;
 export const MEAL_PLAN_FIBER_MIN_DAY_FRACTION = 0.8;
@@ -78,7 +91,7 @@ export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
   const days = mealPlanDayTotals(parsed);
   const fiberTracked = days.length > 0 && days.every((day) => day.fiber_g != null);
   const fiberWasVerified = parsed?.quality_validation?.fiber?.status === "verified";
-  if (days.length < 5 || days.length > 7) return { ok: true, checked: false, fiber_checked: false, days };
+  if (days.length < 5 || days.length > 7) return { ok: true, checked: false, fiber_checked: false, macros_ok: false, days };
 
   const targetKcal = Number(parsed?.daily_kcal);
   const targetProtein = Number(parsed?.daily_protein_g);
@@ -87,6 +100,7 @@ export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
       ok: false,
       checked: true,
       fiber_checked: false,
+      macros_ok: false,
       error: "Meal plan rejected: complete weeks require positive daily calorie and protein targets.",
       days,
     };
@@ -109,6 +123,7 @@ export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
       ok: false,
       checked: true,
       fiber_checked: false,
+      macros_ok: false,
       error: `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal and ${mismatch.protein_g} g protein, outside the daily target tolerance around ${Math.round(targetKcal)} kcal and ${Math.round(targetProtein)} g protein.`,
       days,
     };
@@ -125,12 +140,13 @@ export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
         ok: false,
         checked: true,
         fiber_checked: false,
+        macros_ok: true,
         error:
           "Meal plan rejected: a previously fiber-verified week cannot omit a meal fiber estimate; supply the missing estimate or re-draft the plan.",
         days,
       };
     }
-    return { ok: true, checked: true, fiber_checked: false, days };
+    return { ok: true, checked: true, fiber_checked: false, macros_ok: true, days };
   }
   const rawFiberTarget = Number(parsed?.daily_fiber_g);
   if (!Number.isFinite(rawFiberTarget) || rawFiberTarget <= 0) {
@@ -138,6 +154,7 @@ export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
       ok: false,
       checked: true,
       fiber_checked: true,
+      macros_ok: true,
       error: "Meal plan rejected: a fiber-tracked week requires a positive daily_fiber_g target.",
       days,
     };
@@ -154,11 +171,12 @@ export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
       ok: false,
       checked: true,
       fiber_checked: true,
+      macros_ok: true,
       error: `Meal plan rejected: ${detail}; a fiber-tracked week must average at least ${fiberTarget} g/day with no day below ${minimumDay} g.`,
       days,
     };
   }
-  return { ok: true, checked: true, fiber_checked: true, days };
+  return { ok: true, checked: true, fiber_checked: true, macros_ok: true, days };
 }
 
 // The lean-safe kcal/protein floors a goal read implies. Extracted so the verify

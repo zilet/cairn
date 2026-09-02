@@ -2268,8 +2268,10 @@ export interface ClientMealPlan {
 
 // Slim projection from listMealPlansSummary() (`GET /mealplans?fields=summary`,
 // src/repo/nutrition.ts) — meal NAMES only, no macros/ingredients/raw_output.
-// `adequate` is the server's own assessMealPlanAdequacy() verdict, so a client can
-// pick the canonical current plan without the kcal/protein totals this shape omits.
+// `adequate` is the kcal/protein half of the server's own assessMealPlanAdequacy()
+// verdict (`macros_ok`), so a client can pick the canonical current plan without the
+// totals this shape omits. Fiber is deliberately NOT part of it — a fiber-short week is
+// still the week being eaten, and the persistence gate owns fiber.
 export interface ClientMealPlanSummary {
   id: number;
   week_of: string | null;

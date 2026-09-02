@@ -416,3 +416,42 @@ function withTzSubprocess(buildScript) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test("a refused draft re-opens when training evidence moves, not only when the hour rolls over", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  const draft = nutritionDraft("weekly nutrition response", 2250);
+  backdateHours(draft.id, 3);
+
+  assert.equal(adoptOrphanedDrafts().adopted, 0, "review posture refuses it");
+  // The first refusal stamps the picture as it was BEFORE the review decision it is about
+  // to insert existed, so the sweep after it necessarily re-derives once; the stamp only
+  // settles on the second pass. Sweep twice so this test is about the evidence, not that.
+  adoptOrphanedDrafts();
+  const held = repo.listBrainDecisions({ kind: "nutrition_target" })[0];
+  const firstStamp = held?.context?.adopt_attempted_signature;
+  assert.ok(firstStamp, "the refusal recorded the picture it was made under");
+
+  // A marker only a RE-DERIVATION overwrites. The skip path never touches the receipt.
+  const stale = "2000-01-01T00:00:00.000Z";
+  repo.patchBrainDecision(held.id, { context: { ...held.context, adopt_attempted_at: stale } });
+
+  adoptOrphanedDrafts();
+  const unchanged = repo.listBrainDecisions({ kind: "nutrition_target" })[0];
+  assert.equal(unchanged.context?.adopt_attempted_at, stale, "the same picture yields the same answer, uncomputed");
+  assert.equal(unchanged.context?.adopt_attempted_signature, firstStamp);
+
+  // Evidence the sweep signature cannot see: a logged set is neither a proposal nor a
+  // decision, and it flips no status — yet it is exactly the kind of thing that clears a
+  // fuel hold and makes yesterday's refusal wrong. The training backstop in the stamp is
+  // what carries it, so the very next sweep re-derives instead of waiting out the hour.
+  repo.logSetByName({ exercise: "Orphan Refusal Row", weight: 95, reps: 8, date: localDateISO() });
+
+  adoptOrphanedDrafts();
+  const reopened = repo.listBrainDecisions({ kind: "nutrition_target" })[0];
+  assert.notEqual(reopened.context?.adopt_attempted_at, stale, "the refusal was re-derived on the next sweep");
+  assert.notEqual(
+    reopened.context?.adopt_attempted_signature,
+    firstStamp,
+    "under a picture that has genuinely moved"
+  );
+});

@@ -1506,7 +1506,11 @@ export function listMealPlans(limit = 10) {
 // parsed_json, and every per-meal macro/ingredient field a screen never renders.
 // `adequate` is the server's own assessMealPlanAdequacy() verdict for the plan, so
 // a client can pick the canonical current row (kept/accepted/applied first, else a
-// checked draft) without needing the kcal/protein totals this shape omits.
+// checked draft) without needing the kcal/protein totals this shape omits. It is the
+// MACRO half of that verdict deliberately: the screens reading this pick a week to point
+// at, which is the kcal/protein question the client used to answer for itself, and a
+// fiber-short week is still the week the athlete is eating. Fiber failures belong to the
+// persistence gate (`ok`), which is unchanged.
 export interface MealPlanSummary {
   id: number;
   week_of: string | null;
@@ -1529,7 +1533,7 @@ export function listMealPlansSummary(limit = 10): MealPlanSummary[] {
       status: plan.status,
       created_at: plan.created_at ?? null,
       constraint_state: plan.constraint_state ?? parsed.constraint_state ?? null,
-      adequate: adequacy.ok && adequacy.checked,
+      adequate: adequacy.checked && adequacy.macros_ok,
       days: days.map((day: any) => ({
         day: String(day?.day ?? ""),
         meals: (Array.isArray(day?.meals) ? day.meals : []).map((meal: any) => ({

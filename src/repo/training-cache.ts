@@ -165,7 +165,16 @@ function installCoachContextUpdateOdometer(): ReturnType<typeof db.prepare> | nu
 // Prepared LAZILY, not at module load: db.ts runs its CREATE TABLEs and migrations on
 // import, and a statement naming these tables must not compile before they exist.
 // Prepared ONCE, because this runs on every getCoachContext call including the hits.
+// A MISSING odometer is retried rather than latched: TEMP objects are transactional, so
+// a first call that happened inside a transaction the caller later rolled back loses the
+// table it just created. Caching that failure would disable the memo for the life of the
+// process over a transaction that merely failed — every getCoachContext rebuilding from
+// scratch forever. The read side (coachContextBackstopSignature) drops the whole handle on
+// a throw for the same reason.
 function coachContextBackstopStatements(): CoachContextBackstopStatements {
+  if (coachContextBackstop && !coachContextBackstop.updates) {
+    coachContextBackstop.updates = installCoachContextUpdateOdometer();
+  }
   if (!coachContextBackstop) {
     coachContextBackstop = {
       counts: db.prepare(
@@ -204,12 +213,27 @@ function withoutBookkeepingColumns(row: unknown): Record<string, unknown> {
   return out;
 }
 
+// The counter ROW is seeded inside whatever transaction is open on the first call, so a
+// rollback can take the row (or the whole temp table) while these prepared statements stay
+// cached — every later read comes back empty and this returns a never-matching key for the
+// life of the process, silently ending every coach-context memo hit. An empty read means
+// "reinstall and re-seed", retried once inside the same call.
 export function coachContextBackstopSignature(): string {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const key = coachContextBackstopKey();
+    if (key) return key;
+    coachContextBackstop = null;
+  }
+  return `nocoach:${Math.random()}`; // never-matching: rebuild rather than risk staleness
+}
+
+/** One attempt at the signature; null when the odometer is missing or unreadable. */
+function coachContextBackstopKey(): string | null {
   try {
     const prepared = coachContextBackstopStatements();
-    if (!prepared.updates) return `nocoach:${Math.random()}`; // no update odometer → never memoize
+    if (!prepared.updates) return null; // no update odometer → never memoize
     const updates = (prepared.updates.get() as any)?.n ?? null;
-    if (updates === null) return `nocoach:${Math.random()}`;
+    if (updates === null) return null;
     return [
       currentTrainingDataVersion(),
       currentFoodDataVersion(),
@@ -220,7 +244,7 @@ export function coachContextBackstopSignature(): string {
       JSON.stringify(withoutBookkeepingColumns(prepared.settings.get())),
     ].join("|");
   } catch {
-    return `nocoach:${Math.random()}`; // never-matching: rebuild rather than risk staleness
+    return null; // the temp table went with a rollback — the caller reinstalls and retries
   }
 }
 

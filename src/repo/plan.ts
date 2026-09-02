@@ -69,21 +69,42 @@ type AccountablePlanChange = {
 // ONE statement on the read side, because this runs on every getPlan() / getPlanDay()
 // call, hits included.
 const ACCOUNTABLE_UPDATE_TABLE = "_cairn_plan_accountable_updates";
-let accountableBackstop: ReturnType<typeof db.prepare> | null = null;
-let accountableBackstopFailed = false;
 
-function accountableBackstopStatement(): ReturnType<typeof db.prepare> | null {
-  if (accountableBackstop || accountableBackstopFailed) return accountableBackstop;
-  try {
-    db.exec(`CREATE TEMP TABLE IF NOT EXISTS ${ACCOUNTABLE_UPDATE_TABLE} (n INTEGER NOT NULL)`);
-    const seeded = db.prepare(`SELECT COUNT(*) AS c FROM ${ACCOUNTABLE_UPDATE_TABLE}`).get() as any;
-    if (!seeded?.c) db.exec(`INSERT INTO ${ACCOUNTABLE_UPDATE_TABLE} (n) VALUES (0)`);
-    for (const t of ["brain_decisions", "plan_proposals"]) {
+// Installing an odometer is IDEMPOTENT and RETRY-SAFE, and nothing latches a failure:
+// TEMP objects are transactional, so a CREATE that runs inside a savepoint the caller
+// later rolls back is undone WITH it. A permanent "this connection refused temp objects"
+// flag would then disable the odometer for the life of the process over a transaction
+// that merely failed — every plan read falling back to a never-matching key forever. So
+// creation is attempted again whenever there is no prepared statement, and a read that
+// throws (the table vanished under a rollback) drops the statement so the next call
+// rebuilds it.
+function installOdometer(
+  counterTable: string,
+  triggerPrefix: string,
+  tables: readonly string[],
+  events: readonly ("INSERT" | "UPDATE" | "DELETE")[]
+): void {
+  db.exec(`CREATE TEMP TABLE IF NOT EXISTS ${counterTable} (n INTEGER NOT NULL)`);
+  const seeded = db.prepare(`SELECT COUNT(*) AS c FROM ${counterTable}`).get() as any;
+  if (!seeded?.c) db.exec(`INSERT INTO ${counterTable} (n) VALUES (0)`);
+  for (const t of tables) {
+    for (const event of events) {
       db.exec(
-        `CREATE TEMP TRIGGER IF NOT EXISTS _cairn_plan_accountable_u_${t} AFTER UPDATE ON ${t}
-         BEGIN UPDATE ${ACCOUNTABLE_UPDATE_TABLE} SET n = n + 1; END`
+        `CREATE TEMP TRIGGER IF NOT EXISTS ${triggerPrefix}_${event.toLowerCase()}_${t} AFTER ${event} ON ${t}
+         BEGIN UPDATE ${counterTable} SET n = n + 1; END`
       );
     }
+  }
+}
+
+let accountableBackstop: ReturnType<typeof db.prepare> | null = null;
+
+function accountableBackstopStatement(): ReturnType<typeof db.prepare> | null {
+  if (accountableBackstop) return accountableBackstop;
+  try {
+    installOdometer(ACCOUNTABLE_UPDATE_TABLE, "_cairn_plan_accountable_u", ["brain_decisions", "plan_proposals"], [
+      "UPDATE",
+    ]);
     accountableBackstop = db.prepare(
       `SELECT (SELECT n FROM ${ACCOUNTABLE_UPDATE_TABLE}) AS u,
               (SELECT COUNT(*) FROM brain_decisions) AS dc,
@@ -92,22 +113,79 @@ function accountableBackstopStatement(): ReturnType<typeof db.prepare> | null {
               (SELECT COALESCE(MAX(id),0) FROM plan_proposals) AS pm`
     );
   } catch {
-    accountableBackstopFailed = true;
     accountableBackstop = null;
   }
   return accountableBackstop;
 }
 
+// The counter ROW is seeded inside whatever transaction happens to be open on the first
+// call, so a rollback can take the row (or the whole temp table) while the prepared
+// statement stays cached and every later read comes back empty — a never-matching key for
+// the life of the process, and every memo below silently stops hitting. An empty read is
+// therefore treated as "reinstall and re-seed", retried once in the SAME call so a single
+// rollback costs no key at all.
 function accountableBackstopSignature(): string {
-  try {
-    const stmt = accountableBackstopStatement();
-    if (!stmt) return `noaccountable:${Math.random()}`;
-    const r = stmt.get() as any;
-    if (r?.u == null) return `noaccountable:${Math.random()}`;
-    return [r.u, r.dc, r.dm, r.pc, r.pm].join("|");
-  } catch {
-    return `noaccountable:${Math.random()}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const stmt = accountableBackstopStatement();
+      if (!stmt) break;
+      const r = stmt.get() as any;
+      if (r?.u != null) return [r.u, r.dc, r.dm, r.pc, r.pm].join("|");
+    } catch {
+      /* the temp table went with a rollback — fall through and reinstall */
+    }
+    accountableBackstop = null;
   }
+  return `noaccountable:${Math.random()}`;
+}
+
+// The PLAN's own mutation odometer, and the reason it exists: an in-place
+// `UPDATE plan_items` moves no row COUNT and no MAX(id), so trainingBackstopSignature()
+// is blind to it, and the writers that matter most defer their training-version bump —
+// applyPlanChange's `defer_cache_bump` holds it until the apply savepoint commits, which
+// is AFTER the post-apply quality gate has already re-read the plan. Without this
+// counter, planCacheKey() is byte-identical across a prescription rewrite, the gate
+// validates the memoized PRE-mutation plan, and a proposal that introduces a structural
+// error commits instead of rolling back.
+//
+// So SQLite counts plan mutations for us — INSERT, UPDATE and DELETE on plan_items and
+// plan_days — and the memo moves regardless of when the version bump lands. The counter
+// is TEMP and therefore transactional, which is exactly right here: a rolled-back apply
+// takes its increments with it, so the key returns to the pre-mutation key for a plan
+// that really is pre-mutation again.
+const PLAN_MUTATION_TABLE = "_cairn_plan_mutations";
+let planMutationBackstop: ReturnType<typeof db.prepare> | null = null;
+
+function planMutationStatement(): ReturnType<typeof db.prepare> | null {
+  if (planMutationBackstop) return planMutationBackstop;
+  try {
+    installOdometer(PLAN_MUTATION_TABLE, "_cairn_plan_mut", ["plan_items", "plan_days"], [
+      "INSERT",
+      "UPDATE",
+      "DELETE",
+    ]);
+    planMutationBackstop = db.prepare(`SELECT n FROM ${PLAN_MUTATION_TABLE}`);
+  } catch {
+    planMutationBackstop = null;
+  }
+  return planMutationBackstop;
+}
+
+function planMutationSignature(): string {
+  // Same seed-row rollback hazard, same answer: reinstall and re-read once before giving
+  // up on the key.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const stmt = planMutationStatement();
+      if (!stmt) break;
+      const n = (stmt.get() as any)?.n;
+      if (n != null) return String(n);
+    } catch {
+      /* the temp table went with a rollback — fall through and reinstall */
+    }
+    planMutationBackstop = null;
+  }
+  return `noplanmut:${Math.random()}`;
 }
 
 // MEMOIZED (repo/training-cache.ts): this map is rebuilt on EVERY getPlan()/getPlanDay()
@@ -464,7 +542,11 @@ function decorateAccountablePlan(days: any[]): any[] {
 let planCache: { key: string; value: any[] } | null = null;
 
 function planCacheKey(): string {
-  return `${currentTrainingDataVersion()}|${trainingBackstopSignature()}|${accountableBackstopSignature()}`;
+  // planMutationSignature() is what makes this key honest for an in-place prescription
+  // rewrite whose training-version bump is deferred to the apply's commit — see the
+  // odometer above. Without it the post-apply quality gate re-reads a cached plan that
+  // predates the mutation it is supposed to be judging.
+  return `${currentTrainingDataVersion()}|${trainingBackstopSignature()}|${accountableBackstopSignature()}|${planMutationSignature()}`;
 }
 
 export function getPlan() {

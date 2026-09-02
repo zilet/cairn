@@ -196,6 +196,33 @@ test("bounded proposal validation is atomic when a change leaves a touched day i
   assert.equal(repo.getProposal(proposal.id).status, "draft");
 });
 
+test("the post-apply gate judges the MUTATED plan, not a memoized pre-mutation copy", () => {
+  repo.replacePlan(cleanWeek());
+  // A SWAP is the pure in-place case: it rewrites one plan_items row's exercise_id, so the
+  // row count is unchanged, MAX(id) is unchanged, and proposal application defers the
+  // training-version bump until its savepoint commits — which happens AFTER this gate runs.
+  // Rotating a movement onto its own twin is therefore a breach only the post-apply
+  // validation can catch, and it can only catch it if getPlan() has moved off the
+  // pre-mutation memo.
+  const proposal = repo.createProposal("test", "duplicate by rotation", "", {
+    summary: "rotate a movement onto the one already there",
+    changes: [{ day_number: 2, swap: { from: "Lat Pulldown", to: "Seated Cable Row" } }],
+  });
+  const result = repo.applyProposal(proposal.id);
+  assert.equal(result.ok, false, "the apply refused");
+  assert.match(result.error, /structural quality check/i);
+  assert.ok(
+    result.skipped.some((entry) => entry.quality_code === "canonical_duplicate"),
+    "and named the duplicate it refused over"
+  );
+  assert.deepEqual(
+    repo.getPlanDay(2).items.map((item) => item.exercise),
+    ["Seated Cable Row", "Lat Pulldown"],
+    "the rollback left day 2 exactly as it was"
+  );
+  assert.equal(repo.getProposal(proposal.id).status, "draft", "and the proposal stays a live draft");
+});
+
 test("full restructures fail before mutation, while a deliberate manual override is explicit", () => {
   repo.replacePlan(cleanWeek());
   const invalid = [

@@ -49,7 +49,7 @@ import { buildProgressionProposal } from "../../repo/progression.js";
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { capProtectiveRaise, cutReaffirmation, deriveCutTarget } from "../../repo/cut-target.js";
 import { getSettings } from "../../repo/settings.js";
-import { registerTrainingCacheClear } from "../../repo/training-cache.js";
+import { registerTrainingCacheClear, trainingBackstopSignature } from "../../repo/training-cache.js";
 import {
   draftIsRegenerationProduct,
   regenerableProducer,
@@ -1305,8 +1305,26 @@ export function orphanSweepSignature(leadMode?: string): string {
     const counts = Object.values(prepared.counts.get() as Record<string, number>).join(",");
     return `${counts}|${updates}|${leadMode ?? getSettings().lead_mode}`;
   } catch {
+    // A TEMP odometer is transactional: one created inside a transaction that later rolled
+    // back is gone, and the prepared statements cached above then point at nothing. Drop
+    // them so the next call reinstalls the odometer instead of sweeping forever.
+    orphanSweepStatements = null;
     return `nosweep:${Math.random()}`; // never-matching: sweep rather than skip real work
   }
+}
+
+/**
+ * FNV-1a over a signature string, so a long backstop key can ride inside a persisted
+ * ledger receipt without bloating it. Compared for equality only — never decoded, and
+ * never a security boundary.
+ */
+function hashSignature(value: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    h ^= value.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
 }
 
 // The temp odometer and the prepared statements survive `test/_isolate.mjs`'s out-of-band
@@ -1743,10 +1761,31 @@ export function adoptOrphanedDrafts(): {
   let skipped = 0;
   const now = Date.now();
   // The receipt stamped onto a REFUSED adoption below (see `adopt_attempted_signature`).
-  // The signature is the substance; the hour bucket is a self-healing floor, so anything
-  // the signature legitimately cannot see (a decision's context edited in place, say)
-  // costs at most one re-derivation an hour instead of one a minute.
-  const refusalStamp = `${orphanSweepSignature(leadMode)}|hour:${new Date().toISOString().slice(0, 13)}`;
+  //
+  // orphanSweepSignature covers the DRAFTS and the LEDGER (plan_proposals /
+  // brain_decisions counts, status transitions, lead_mode) — but a refusal is a reading
+  // of the athlete, not of those two tables. The evidence that most often lifts one lives
+  // elsewhere entirely: a logged set that clears a fuel hold, a finished session, a new
+  // bodyweight, a plan edit, a goal change. None of that moves the sweep signature, and
+  // an hour bucket alone would leave a stale refusal standing for up to an hour after the
+  // very evidence that overturns it landed.
+  //
+  // So the training backstop rides along: the same COUNT + MAX(id) + profile signature the
+  // read memos key on, over logged_sets / sessions / activities / bodyweight / daily
+  // metrics / the plan, plus the in-process training write counter. A training write
+  // therefore RE-OPENS every refused draft on the next sweep. It is hashed only to keep the
+  // ledger receipt short — it is compared, never read.
+  //
+  // Deliberately NOT the coach-context backstop, wide as it is: its odometer counts every
+  // UPDATE to brain_decisions, and this sweep's own receipt is such an update — the stamp
+  // would move each time it was written and could never match itself.
+  //
+  // The hour bucket stays as the self-healing floor for what neither signature can see (a
+  // decision's context edited in place, a clock-driven input), costing at most one
+  // re-derivation an hour rather than one a minute.
+  const refusalStamp = `${orphanSweepSignature(leadMode)}|train:${hashSignature(
+    trainingBackstopSignature()
+  )}|hour:${new Date().toISOString().slice(0, 13)}`;
   // Newest first (listProposals orders id DESC): at most one orphan per explicit
   // provenance + SEMANTIC intent is adopted. Legacy chat drafts qualify only in
   // coach-led postures and only through an explicit persisted chat provenance.
@@ -1885,8 +1924,9 @@ export function adoptOrphanedDrafts(): {
         // STAMP THE REFUSAL, so the next sweep does not re-derive it from scratch. The
         // signature is the receipt's whole point: it says WHICH picture this answer was
         // given under, so the skip above lifts itself the moment that picture moves.
-        // Written into the decision the refusal just recorded — an UPDATE, which moves no
-        // count or MAX(rowid), so stamping cannot invalidate the signature it stores.
+        // Written into the decision the refusal just recorded — an UPDATE that touches no
+        // status, no count and no MAX(rowid), and no table the training backstop watches,
+        // so stamping cannot invalidate either half of the signature it stores.
         const heldId = Number((result as any)?.decision?.id);
         if (heldId > 0) {
           const heldContext = (getBrainDecision(heldId)?.context ?? {}) as Record<string, any>;

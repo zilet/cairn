@@ -63,6 +63,10 @@ function planTarget(plan) {
   return plan[0]?.items?.[0]?.target_weight ?? null;
 }
 
+function planSets(plan) {
+  return plan[0]?.items?.[0]?.sets ?? null;
+}
+
 test("getPlan serves a memo hit for an unchanged plan, at a handful of statements", () => {
   seedPlan();
   const [first] = counted(() => repo.getPlan());
@@ -148,4 +152,49 @@ test("an applied proposal's accountability reaches the next getPlan", () => {
   assert.equal(item.target_weight, 140, "the new prescription is on the plan");
   assert.ok(Number(item.brain_decision_id) > 0, "the applied decision decorates the item");
   assert.match(String(item.brain_change_reason ?? ""), /step/i, "the change's own reason came with it");
+});
+
+test("an in-place plan edit that defers its cache bump still moves the plan memo", () => {
+  seedPlan(135);
+  assert.equal(planTarget(repo.getPlan()), 135, "the seeded prescription is memoized");
+
+  // `defer_cache_bump` is what proposal application uses: the training-version bump waits
+  // for the apply savepoint to commit, so between the write and that commit the plan's own
+  // mutation odometer is the ONLY thing that can move the key. This edit is a pure in-place
+  // UPDATE — no row count changes, no MAX(id) moves — which is exactly the shape both the
+  // training backstop and the accountability signature are blind to. Without the odometer
+  // the next read is served the PRE-mutation plan, and the post-apply quality gate (which
+  // is the next reader) validates a plan that no longer exists.
+  repo.applyPlanChange(
+    { day_number: 1, exercise: "Memo Bench Press", target_weight: 145 },
+    { defer_cache_bump: true, defer_day_read_invalidation: true }
+  );
+
+  assert.equal(planTarget(repo.getPlan()), 145, "the memo reflects the mutation, not the pre-mutation plan");
+});
+
+test("a deferred in-place edit that breaks the plan is visible to the quality validator", () => {
+  seedPlan(135);
+  repo.applyPlanChange(
+    { day_number: 1, exercise: "Memo Bench Press", sets: 3, rep_low: 5, rep_high: 8 },
+    { defer_cache_bump: true, defer_day_read_invalidation: true }
+  );
+  assert.equal(repo.validateTrainingPlan(repo.getPlan()).errors.length, 0, "a sane edit reads clean");
+
+  // The reviewer's scenario, at the seam that matters: a structural error introduced by an
+  // in-place UPDATE has to reach validateTrainingPlan through getPlan(). Written directly
+  // so the assertion is about the MEMO, not about which prescriptions applyPlanChange is
+  // willing to clamp on the way in.
+  const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = 1`).get();
+  db.prepare(`UPDATE plan_items SET sets = 25 WHERE plan_day_id = ?`).run(day.id);
+
+  const stored = db.prepare(`SELECT sets FROM plan_items WHERE plan_day_id = ?`).get(day.id);
+  assert.equal(stored.sets, 25, "the database really holds the broken prescription");
+  assert.equal(planSets(repo.getPlan()), 25, "and getPlan() reports what the database holds");
+  const report = repo.validateTrainingPlan(repo.getPlan());
+  assert.equal(report.ok, false, "the gate sees the breach instead of a clean pre-mutation copy");
+  assert.ok(
+    report.errors.some((entry) => entry.code === "invalid_sets"),
+    "and names it"
+  );
 });

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runOrphanSweepIfDue, resetOrphanSweepGateForTest, dailyWindowOperationDue } from "../dist/scheduler.js";
+import { resetTrainingDataCache } from "../dist/repo/training-cache.js";
 import * as repo from "../dist/repo.js";
 import { db } from "../dist/db.js";
 
@@ -125,4 +126,17 @@ test("a small-hours slot opened in its hour stays pollable after the hour has pa
   assert.equal(dailyWindowOperationDue(inHour, 4, key), true, "in its hour the slot opens and is due");
   assert.ok(repo.getSchedulerOperation(key, slot), "opening the slot in its hour writes the marker row");
   assert.equal(dailyWindowOperationDue(afterHours, 4, key), true, "and it stays pollable for the rest of the day");
+});
+
+test("the per-test cache reset clears the sweep gate, so no test starts with it closed", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  assert.equal(runOrphanSweepIfDue(), true, "the first pass sweeps");
+  assert.equal(runOrphanSweepIfDue(Date.now() + 60_000), false, "and the gate is now closed");
+
+  // The gate is process-global, and the harness wipes the DB out-of-band between tests.
+  // Registering the reset with the same clear every memo in this round uses means a test
+  // never inherits a closed gate from the one before it — whether or not it remembers to
+  // call resetOrphanSweepGateForTest itself.
+  resetTrainingDataCache();
+  assert.equal(runOrphanSweepIfDue(Date.now() + 60_000), true, "a wiped-DB test starts unswept");
 });

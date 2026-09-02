@@ -225,8 +225,9 @@ type TodaySideComposite = Record<string, unknown>;
   }
 
   // Mirror the server's canonical-current selection (listMealPlansSummary already
-  // carries the server's own assessMealPlanAdequacy() verdict as `adequate`, so
-  // there's no need to re-derive it from kcal/protein totals the slim shape omits):
+  // carries the server's own assessMealPlanAdequacy() kcal/protein verdict as
+  // `adequate`, matching the rule this loader used to run for itself, so there's no need
+  // to re-derive it from totals the slim shape omits):
   // a kept/accepted/applied adequate plan wins, else an adequate draft, else none.
   const KEPT_MEAL_PLAN_STATUSES = ["accepted", "applied", "kept"];
   function currentMealPlanSummary(plans: TodaySideMealPlan[]): TodaySideMealPlan | null {

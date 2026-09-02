@@ -25,6 +25,7 @@ import {
   buildRunPlanWithAutonomy,
 } from "./domain/brain/autonomy-service.js";
 import { lastAppliedRunPlanDate } from "./repo/sessions.js";
+import { registerTrainingCacheClear } from "./repo/training-cache.js";
 import { enqueueAgentJob, ensureWeekAheadJob } from "./agentJobs.js";
 import {
   BoundaryApplyError,
@@ -217,6 +218,12 @@ export function resetOrphanSweepGateForTest(): void {
   lastOrphanSweepSignature = null;
   lastOrphanSweepAt = 0;
 }
+
+// …and it is registered with the same reset every other memo in this round uses, so the
+// per-test wipe clears it whether or not a test remembers to call the export above. Two
+// wiped tests can otherwise land on the same signature and the second one starts with the
+// gate already closed — a sweep it needed silently skipped.
+registerTrainingCacheClear(resetOrphanSweepGateForTest);
 
 export function acceptsWeeklyCoachProposal(parsed: unknown): boolean {
   return isPlanProposalResult(parsed);

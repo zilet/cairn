@@ -369,9 +369,12 @@ export function invalidateAgentConfigured(name?: string): void {
 // waited on four CLI launches (seconds on a Pi). Nothing about the caches or the
 // probes changes — only WHEN they fill; every one stays available on demand, and
 // `invalidateAgentConfigured` still forces a re-probe after a login or an update.
-// One agent per macrotask so the warm-up never holds the event loop for the whole
-// run, and entirely best-effort: a failed probe just leaves that cache cold for
-// the lazy path to fill exactly as it did before.
+// One PROBE per macrotask, not one agent: presence, login and version are three separate
+// `spawnSync` calls, and running an agent's three inside one tick put three synchronous
+// CLI launches in a single macrotask — on a Pi that is seconds of blocked event loop,
+// which is exactly what a warm-up must not do. Split onto their own ticks, no macrotask
+// holds more than one spawn. Entirely best-effort: a failed probe just leaves that cache
+// cold for the lazy path to fill exactly as it did before.
 export function warmAgentProbes(): void {
   // The one read OUTSIDE the per-agent try, and the boot path runs it inside
   // app.listen — so an agents.json that parses to null (or fails to parse at all)
@@ -383,14 +386,22 @@ export function warmAgentProbes(): void {
   } catch {
     return;
   }
-  const step = (index: number): void => {
-    if (index >= names.length) return;
-    try {
-      const name = names[index];
+  // One probe per macrotask: presence, login and version each spawn a process,
+  // and three spawnSyncs in one tick blocked the event loop for over a second
+  // on a Pi right after the server started listening.
+  const probes: Array<() => void> = [];
+  for (const name of names) {
+    probes.push(() => {
       const cmd = loadAgents()[name]?.command;
       if (cmd) commandPresent(cmd);
-      agentConfigured(name);
-      agentVersion(name);
+    });
+    probes.push(() => agentConfigured(name));
+    probes.push(() => agentVersion(name));
+  }
+  const step = (index: number): void => {
+    if (index >= probes.length) return;
+    try {
+      probes[index]();
     } catch {
       /* best effort */
     }
