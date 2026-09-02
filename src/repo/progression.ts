@@ -3382,13 +3382,28 @@ registerTrainingCacheClear(() => {
   programAdjustmentsCache.clear();
 });
 
-/** Stable, cheap key fragment for one optional argument (Maps ordered by their keys). */
+/**
+ * Stable, cheap key fragment for one optional argument (Maps ordered by their keys).
+ *
+ * The absent and empty cases are answered without serializing anything, because they are
+ * the common ones: a caller that supplies no view at all, and an acute-gate map with no
+ * readings yet, would otherwise pay a JSON round-trip on every call including the hits.
+ * A real view is still serialized BY VALUE, never by identity — two callers that
+ * assembled an equal view must share one memo slot, and an identity-keyed shortcut would
+ * quietly stop them doing that.
+ */
 function adjustmentsArgKey(arg: unknown): string {
   if (arg === undefined) return "-";
+  if (arg === null) return "null";
   try {
-    if (arg instanceof Map)
+    if (arg instanceof Map) {
+      if (arg.size === 0) return "[]"; // what the serialized empty entry list already was
       return JSON.stringify([...arg.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
-    return JSON.stringify(arg ?? null);
+    }
+    // An all-null options object is deliberately NOT folded into an empty one:
+    // `"runPlan" in opts` is how the reader tells "explicitly no run plan" from "go read
+    // one", so {runPlan: null} and {} are different questions.
+    return JSON.stringify(arg);
   } catch {
     return `unserializable:${Math.random()}`; // never-matching → compute rather than guess
   }

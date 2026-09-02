@@ -19,6 +19,7 @@ import { repo } from "./_seed.js";
 import { getCoachContext, getCoachingFocus, resetCoachContextMemo } from "../dist/repo/coach.js";
 import { recordDiagnosticEvent } from "../dist/repo/diagnostics.js";
 import { recordRequestMetric } from "../dist/repo/request-metrics.js";
+import { db } from "../dist/db.js";
 
 // A fixed instant well inside its own hour in every UTC offset (including the
 // :30 and :45 ones), so a test that ticks a minute stays inside one hour.
@@ -162,4 +163,26 @@ test("the agent rotation cursor is not part of the key, but the rest of settings
 
   repo.setSettings({ coach_hour: (repo.getSettings().coach_hour + 1) % 24 });
   assert.notEqual(getCoachContext(), first, "a real settings change still rebuilds");
+});
+
+test("a rollback that eats the odometer's seed row does not end memoization for good", () => {
+  resetCoachContextMemo();
+  // The TEMP counter table and its seed row are created on the FIRST signature call. If
+  // that call lands inside a transaction the caller later rolls back, both go with it —
+  // and a cached prepared statement over a table that no longer holds a row returns an
+  // empty read forever, i.e. a never-matching key and a memo that silently never hits
+  // again. Force exactly that shape.
+  getCoachContext(); // installs and seeds the counter, whenever in this process that happens
+  db.exec("SAVEPOINT odometer_probe");
+  db.exec("DELETE FROM _cairn_coach_ctx_updates"); // what a rollback of the seeding call leaves
+  db.exec("RELEASE odometer_probe");
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS c FROM _cairn_coach_ctx_updates").get().c,
+    0,
+    "the counter really has no row to read"
+  );
+
+  resetCoachContextMemo();
+  const first = getCoachContext();
+  assert.equal(getCoachContext(), first, "the odometer was reinstalled and the memo hits again");
 });

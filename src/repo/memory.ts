@@ -214,6 +214,11 @@ export function deleteMemory(id: number) {
 // the Pi's SD card) for a stamp that is second-resolution anyway. `datetime('now')`
 // is evaluated once per statement, so the batched form also gives every surfaced
 // row the same stamp instead of a spread across the loop.
+//
+// THE BOUND MOVED, deliberately: it caps the statement's PARAMETERS (60 distinct ids)
+// rather than the caller's raw list, so a caller that hands the same id twice no longer
+// spends a slot on the duplicate. Sixty stays the ceiling on how large this statement can
+// get, which is the thing the bound was protecting.
 function touchMemoryReferenced(ids: number[]) {
   const unique = [...new Set((ids ?? []).filter((id) => Number.isInteger(id)))].slice(0, 60);
   if (!unique.length) return;

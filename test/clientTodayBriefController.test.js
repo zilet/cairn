@@ -651,7 +651,7 @@ test("the rest trade hides itself when the server refuses, and when the endpoint
 test("a repaint after a refused trade stops offering it for that date", async () => {
   const { harness, brief, button } = tradeHarness(() => ({ ok: false, error: "rest_grade_readiness" }));
   const seen = [];
-  harness.context.CairnTodayBrief.briefHtml = (read, opts) => {
+  harness.context.CairnTodayBrief.briefHtml = (_read, opts) => {
     seen.push(opts);
     return `<section class="brief">${opts.tradeRefused ? "" : "<button data-tradetomorrow></button>"}</section>`;
   };

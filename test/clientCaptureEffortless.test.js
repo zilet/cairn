@@ -221,7 +221,7 @@ test("one tap does not collapse the check-in — the other scales stay askable",
   const capture = loadCapture({
     view: { querySelector: (sel) => (sel === "#checkinSlot" ? slot : null) },
     toast: () => {},
-    api: async (path, opts) => {
+    api: async (_path, opts) => {
       if (!opts) return row; // the GET lookup — answers with whatever is stored
       posts.push(JSON.parse(opts.body));
       row = { ...JSON.parse(opts.body), error: false };

@@ -6,6 +6,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { completeMealWeek, db, repo, resetTables } from "./_seed.js";
+import { assessMealPlanAdequacy } from "../dist/repo/nutrition-safety.js";
 
 beforeEach(() => resetTables("meal_plans", "profile"));
 
@@ -50,6 +51,21 @@ test("adequate mirrors assessMealPlanAdequacy — a complete week is adequate, a
 
   assert.equal(complete.adequate, true);
   assert.equal(partial.adequate, false);
+});
+
+test("a fiber-short week keeps its hint — `adequate` is the kcal/protein question", () => {
+  // Every meal carries a fiber estimate, so the week is fiber-TRACKED and misses the
+  // fiber floor by a mile; its kcal and protein land exactly on target. The persistence
+  // gate rejects it on fiber, and that is right. The Today pointer must still find it:
+  // this is the week the athlete is eating, and the screen used to answer the kcal/protein
+  // question for itself before the server started sending a verdict.
+  const week = completeMealWeek({ daily_fiber_g: 30 });
+  for (const day of week.days) for (const meal of day.meals) meal.fiber_g = 2;
+  const id = insertPlan("accepted", week, "2026-02-02");
+
+  assert.equal(assessMealPlanAdequacy(week).ok, false, "fiber still fails the write gate");
+  assert.equal(assessMealPlanAdequacy(week).macros_ok, true, "while kcal and protein pass");
+  assert.equal(repo.listMealPlansSummary(10).find((p) => p.id === id).adequate, true);
 });
 
 test("the first meal name of today's day survives the projection", () => {

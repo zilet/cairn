@@ -2384,9 +2384,16 @@ function freshStatementHold(date: string, checkin: any): FreshStatementField | n
 // inside it is meant to be the one object the Brief and the coach both hold (see
 // test/dayReadUseCase "one signal state per date per request"). Treat what comes back as
 // read-only; a consumer that needs to change a field copies it first.
-let dayReadCache: { key: string; value: DayRead } | null = null;
+// EIGHT SLOTS, the same budget programAdjustments uses, rather than one. A single slot
+// makes two interleaved dates evict each other on every call — the look-ahead asks for
+// tomorrow between two of today's reads, and a one-slot memo then recomputes both from
+// scratch, forever. The distinct keys in one request are few and fixed (a date or two,
+// one hour), so a handful of slots turns that thrash into hits; the map is cleared with
+// every other training memo, and the oldest insertion is dropped once past the budget.
+const DAY_READ_MEMO_SLOTS = 8;
+const dayReadCache = new Map<string, DayRead>();
 registerTrainingCacheClear(() => {
-  dayReadCache = null;
+  dayReadCache.clear();
 });
 
 export function dayRead(
@@ -2401,9 +2408,14 @@ export function dayRead(
   const d = date || localDateISO();
   const now = nowContext();
   const key = `${d}|${now.hour}|${now.tz ?? ""}|${coachContextBackstopSignature()}`;
-  if (dayReadCache && dayReadCache.key === key) return dayReadCache.value;
+  const hit = dayReadCache.get(key);
+  if (hit) return hit;
   const value = computeDayRead(d);
-  dayReadCache = { key, value };
+  if (dayReadCache.size >= DAY_READ_MEMO_SLOTS) {
+    const oldest = dayReadCache.keys().next().value;
+    if (oldest !== undefined) dayReadCache.delete(oldest);
+  }
+  dayReadCache.set(key, value);
   return value;
 }
 

@@ -198,3 +198,63 @@ test("a deferred in-place edit that breaks the plan is visible to the quality va
     "and names it"
   );
 });
+
+test("a rollback that eats the plan odometer's seed row does not end memoization for good", () => {
+  seedPlan();
+  // Both TEMP counters (the accountability odometer and the plan-mutation one) are created
+  // and seeded on the FIRST getPlan. Inside a savepoint the caller rolls back, the table
+  // and its row go with it — and a cached statement over a counter with no row would
+  // return an empty read forever: a never-matching key, and a memo that silently never
+  // hits again.
+  for (const day of [2, 3, 4]) {
+    repo.savePlanDay(day, `Day ${day}`, "full body", [
+      { exercise: `Memo Lift ${day}`, sets: 3, rep_low: 5, rep_high: 8, target_weight: 100 },
+    ]);
+  }
+  repo.getPlan(); // installs and seeds both counters, whenever in this process that happens
+  for (const counter of ["_cairn_plan_accountable_updates", "_cairn_plan_mutations"]) {
+    db.exec(`DELETE FROM ${counter}`); // what a rollback of the seeding call leaves behind
+    assert.equal(
+      db.prepare(`SELECT COUNT(*) AS c FROM ${counter}`).get().c,
+      0,
+      `${counter} really has no row to read`
+    );
+  }
+
+  const [first, missStatements] = counted(() => repo.getPlan());
+  for (const counter of ["_cairn_plan_accountable_updates", "_cairn_plan_mutations"]) {
+    assert.equal(
+      db.prepare(`SELECT COUNT(*) AS c FROM ${counter}`).get().c,
+      1,
+      `${counter} was re-seeded rather than left unreadable`
+    );
+  }
+  const [second, hitStatements] = counted(() => repo.getPlan());
+  assert.deepEqual(second, first, "the reinstalled odometer serves the same plan");
+  assert.ok(
+    hitStatements < missStatements,
+    `the memo hits again: ${hitStatements} statements against ${missStatements} for the rebuild`
+  );
+});
+
+test("the bare day-read memo holds more than one date, so two interleaved reads both hit", () => {
+  seedPlan();
+  const today = localDateISO();
+  const tomorrow = new Date(`${today}T12:00:00Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const nextDay = tomorrow.toISOString().slice(0, 10);
+
+  // Two rounds first: a first read of a date can WRITE (its day_reads row), which moves
+  // the backstop and invalidates both keys. Once those settle, only eviction is left to
+  // explain a miss.
+  repo.dayRead(today);
+  repo.dayRead(nextDay);
+  repo.dayRead(today);
+  repo.dayRead(nextDay);
+  const a = repo.dayRead(today);
+  const b = repo.dayRead(nextDay);
+  // A single-slot memo evicts today when the look-ahead asks for tomorrow, so this pair
+  // recomputes forever. Eight slots turn the interleave into hits.
+  assert.equal(repo.dayRead(today), a, "today's read survived the look-ahead");
+  assert.equal(repo.dayRead(nextDay), b, "and tomorrow's survived today's");
+});
