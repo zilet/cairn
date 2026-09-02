@@ -124,6 +124,15 @@ function ensureSchedulerOperation(operation: string, slotStamp: string): Schedul
   return getSchedulerOperation(op, slot)!;
 }
 
+// The row-creating half of the old `schedulerOperationDue`, kept as an EXPLICIT call for
+// the one caller that wants the row FOR ITSELF: `dailyWindowOperationDue` uses the row's
+// existence as "this slot was opened today", which is what keeps a small-hours slot
+// pollable for the rest of the day. Every other caller asks the pure question below and
+// lets the claim path create the row.
+export function ensureSchedulerOperationRow(operation: string, slotStamp: string): SchedulerOperation {
+  return ensureSchedulerOperation(operation, slotStamp);
+}
+
 // A database with no scheduler_operations rows has never run a scheduler at
 // all — the signal startScheduler uses to tell a fresh install (owes no
 // catch-up) from an upgraded one (a missed slot should catch up).
@@ -136,8 +145,16 @@ function isoMs(value: string | null): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+// A PURE READ. This is polled by every scheduler tick, once per slot, every minute of
+// every idle day — so it must not WRITE. It used to `ensureSchedulerOperation`, which
+// meant an INSERT OR IGNORE per slot per minute (up to 13 of them) purely to answer a
+// question. Rows are created by the claim path (`claimSchedulerOperation`) and, where the
+// row itself is the marker, by an explicit `ensureSchedulerOperationRow` call. An absent
+// row means the slot has never been claimed, which is exactly what a fresh 'pending' row
+// used to say: due.
 export function schedulerOperationDue(operation: string, slotStamp: string, now = new Date()): boolean {
-  const row = ensureSchedulerOperation(operation, slotStamp);
+  const row = getSchedulerOperation(operation, slotStamp);
+  if (!row) return true;
   if (row.status === "succeeded" || row.status === "no_op" || row.status === "exhausted") return false;
   const current = now.getTime();
   if (row.status === "running") {

@@ -19,6 +19,7 @@ import {
 } from "./brainEvaluator.js";
 import {
   adoptOrphanedDrafts,
+  orphanSweepSignature,
   applyDueAnnouncedDecisions,
   applyProposalWithAutonomy,
   buildRunPlanWithAutonomy,
@@ -127,7 +128,13 @@ export function dailyWindowOperationDue(now: Date, hour: number, stateKey: strin
   if (repo.getAppState(stateKey) === slotStamp) return false;
   const existing = repo.getSchedulerOperation(stateKey, slotStamp);
   if (existing) return repo.schedulerOperationDue(stateKey, slotStamp, now);
-  return nowContext(now).hour === hour && repo.schedulerOperationDue(stateKey, slotStamp, now);
+  if (nowContext(now).hour !== hour) return false;
+  // In the window with no row yet: OPEN the slot explicitly. `schedulerOperationDue` is a
+  // pure read now, so the row it used to create as a side effect is created here instead —
+  // and it is load-bearing, because the branch above is what keeps a slot that was opened
+  // in its hour pollable after the hour has passed.
+  repo.ensureSchedulerOperationRow(stateKey, slotStamp);
+  return repo.schedulerOperationDue(stateKey, slotStamp, now);
 }
 
 // The small-hours hour the quiet nightly memory/learning pass prefers — an hour
@@ -160,6 +167,55 @@ export function seedMemorySlotOnFreshInstall(now = new Date()) {
   if (repo.getAppState(MEMORY_MAINT_STATE_KEY)) return;
   if (repo.hasSchedulerHistory()) return;
   repo.setAppState(MEMORY_MAINT_STATE_KEY, localToday(now));
+}
+
+// ---- THE ORPHAN-DRAFT SWEEP GATE ----
+//
+// Adopting orphaned drafts runs ahead of the boundary pass's once-a-day gate: the sweep is
+// deterministic, agent-free and idempotent (an adopted draft gains a ledger row and is
+// skipped thereafter), so a bounded change parked as a bare draft — demoted by a
+// since-fixed policy, or proposed in a since-elapsed budget week — flips to its scheduled
+// state promptly rather than at the next calendar-day boundary.
+//
+// It used to run on EVERY minute tick, which on a quiet Pi meant walking 100 decisions and
+// 50 proposals 1440 times a day to reach the same answer, and could re-run a 42-day
+// evidence capture each time for a draft that keeps being refused. Now it runs when its
+// INPUTS moved — `orphanSweepSignature`: COUNT + MAX(rowid) + a status-transition odometer
+// over plan_proposals and brain_decisions, plus lead_mode — so a NEW draft still flips
+// within the minute, which is the promise that mattered.
+//
+// THE CADENCE FLOOR exists because two of the sweep's inputs are the CLOCK, not a row: a
+// draft ages out of the 2-hour adoption grace window, and a surprise budget rolls over
+// into a new week. Neither moves a signature. Ten minutes is 1/12 of that grace window —
+// invisible against a wait the athlete already has — and takes a quiet day from 1440
+// sweeps to 144.
+const ORPHAN_SWEEP_CADENCE_MS = 10 * 60 * 1000;
+let lastOrphanSweepSignature: string | null = null;
+let lastOrphanSweepAt = 0;
+
+// Exported so the idle-cost test drives the real gate rather than a restatement of it.
+// Isolated so a failure here never blocks the boundary application that follows it.
+export function runOrphanSweepIfDue(now = Date.now()): boolean {
+  try {
+    const signature = orphanSweepSignature();
+    if (signature === lastOrphanSweepSignature && now - lastOrphanSweepAt < ORPHAN_SWEEP_CADENCE_MS) return false;
+    lastOrphanSweepSignature = signature;
+    lastOrphanSweepAt = now;
+    const orphans = adoptOrphanedDrafts();
+    if (orphans.adopted) console.log(`[brain] adopted ${orphans.adopted} orphaned draft(s) into the autonomy ledger.`);
+    return true;
+  } catch (e: any) {
+    recordSchedulerFailure("adopt_orphaned_drafts", e);
+    console.error(`[brain] orphaned-draft adoption failed: ${e?.message ?? e}`);
+    return false;
+  }
+}
+
+// The gate remembers a signature across calls, and the test harness wipes the DB
+// out-of-band between tests — so a fresh test must start from an unswept state.
+export function resetOrphanSweepGateForTest(): void {
+  lastOrphanSweepSignature = null;
+  lastOrphanSweepAt = 0;
 }
 
 export function acceptsWeeklyCoachProposal(parsed: unknown): boolean {
@@ -317,21 +373,7 @@ export function startScheduler() {
   let boundaryApplyDate = "";
   const boundaryApplyTick = () => {
     const today = localToday();
-    // Adopt orphaned drafts on EVERY tick, ahead of the once-a-day gate below: the
-    // sweep is deterministic, agent-free, and idempotent (an adopted draft gains a
-    // ledger row and is skipped thereafter), so a bounded change that was parked as
-    // a bare draft (demoted by a since-fixed policy, or proposed in a since-elapsed
-    // budget week) flips to its scheduled state within a minute — not at the next
-    // calendar-day boundary pass. Isolated so a failure here never blocks the
-    // boundary application below.
-    try {
-      const orphans = adoptOrphanedDrafts();
-      if (orphans.adopted)
-        console.log(`[brain] adopted ${orphans.adopted} orphaned draft(s) into the autonomy ledger.`);
-    } catch (e: any) {
-      recordSchedulerFailure("adopt_orphaned_drafts", e);
-      console.error(`[brain] orphaned-draft adoption failed: ${e?.message ?? e}`);
-    }
+    runOrphanSweepIfDue();
     if (boundaryApplyDate === today) return;
     boundaryApplyDate = today;
     try {
@@ -483,6 +525,10 @@ export function startScheduler() {
   let coachBusy = false;
   const tick = async () => {
     if (coachBusy) return;
+    // No cheaper pre-check exists for this one (nor for proactiveTick below): the slot
+    // stamp these compare against app_state is built from settings.coach_day/coach_hour,
+    // so the settings row has to be read before there is a stamp to compare. Both are a
+    // single SELECT on a one-row table.
     const s = repo.getSettings();
     if (!s.coach_enabled) return;
     // The proactive evolution pass below is the richer whole-team review. Do not
@@ -1163,10 +1209,13 @@ export function startScheduler() {
   let updateCheckBusy = false;
   const updateCheckTick = async () => {
     if (updateCheckBusy) return;
-    if (!repo.getSettings().update_check_enabled) return;
     const today = localToday();
     const now = new Date();
+    // The day's stamp FIRST. Both reads are one statement, but the slot is acknowledged
+    // for all but one minute of the day, so asking the cheaper, more selective question
+    // first drops a settings read (and its JSON parsing) from every other idle minute.
     if (!dailySlotDue(now, "update_check_last_date")) return;
+    if (!repo.getSettings().update_check_enabled) return;
     updateCheckBusy = true;
     try {
       await runScheduled("update_check_last_date", today, "update_check_last_date", async () => {
@@ -1283,15 +1332,24 @@ export function startScheduler() {
   let runPlanApplyBusy = false;
   const runPlanApplyTick = async () => {
     if (runPlanApplyBusy) return;
-    const settings = repo.getSettings();
     const now = new Date();
+    // The Monday slot's stamp depends on settings.coach_hour ONLY on the target day
+    // itself — on the other six, `weeklySlotStamp` walks back to the same Monday whatever
+    // the hour is. So when the two extreme hours agree, the stamp is settings-independent
+    // and the acknowledged-slot check can be made without loading settings at all: six
+    // days in seven, this tick costs one app_state read instead of two statements.
+    const stampAtMidnight = weeklySlotStamp(now, RUN_PLAN_APPLY_DAY, 0);
+    if (
+      stampAtMidnight === weeklySlotStamp(now, RUN_PLAN_APPLY_DAY, 23) &&
+      repo.getAppState(RUN_PLAN_APPLY_STATE_KEY) === stampAtMidnight
+    )
+      return;
+    const settings = repo.getSettings();
     if (!runPlanApplyDue(now, settings)) return;
     const slot = weeklySlotStamp(now, RUN_PLAN_APPLY_DAY, settings.coach_hour);
     runPlanApplyBusy = true;
     try {
-      await runScheduled(RUN_PLAN_APPLY_STATE_KEY, slot, RUN_PLAN_APPLY_STATE_KEY, () =>
-        weeklyRunPlanApplyTask(slot)
-      );
+      await runScheduled(RUN_PLAN_APPLY_STATE_KEY, slot, RUN_PLAN_APPLY_STATE_KEY, () => weeklyRunPlanApplyTask(slot));
     } finally {
       runPlanApplyBusy = false;
     }

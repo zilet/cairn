@@ -49,6 +49,7 @@ import { buildProgressionProposal } from "../../repo/progression.js";
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { capProtectiveRaise, cutReaffirmation, deriveCutTarget } from "../../repo/cut-target.js";
 import { getSettings } from "../../repo/settings.js";
+import { registerTrainingCacheClear } from "../../repo/training-cache.js";
 import {
   draftIsRegenerationProduct,
   regenerableProducer,
@@ -1244,6 +1245,78 @@ export function buildRunPlanWithAutonomy(
 // we never yank it into the autonomy ledger the instant it appears.
 const ORPHAN_ADOPTION_GRACE_MS = 2 * 60 * 60 * 1000;
 
+// ---- THE SWEEP'S INPUT SIGNATURE ----
+//
+// `adoptOrphanedDrafts` is polled every minute forever, and on an idle Pi it re-reads a
+// hundred rows and can re-run a 42-day evidence capture to reach the same answer it
+// reached a minute ago. This is the cheap "could the answer have moved?" question, in the
+// exact shape `training-cache.ts` established for the read memos: COUNT + MAX(rowid) of
+// the two tables the sweep reads (catches inserts and deletes), a TEMP AFTER-UPDATE
+// odometer over the same two (catches an in-place status flip — a draft applied, a
+// decision canceled, which counts and maxima are blind to), and `lead_mode`, the one
+// setting that changes what the sweep is allowed to do.
+//
+// Used in two places: the scheduler gates the whole sweep on it, and a draft whose
+// adoption was REFUSED records it, so the refusal is not re-derived until an input moves.
+// A failure yields a never-matching key — sweep rather than risk skipping real work.
+const ORPHAN_SWEEP_TABLES = ["plan_proposals", "brain_decisions"] as const;
+const ORPHAN_SWEEP_UPDATE_TABLE = "_cairn_orphan_sweep_updates";
+let orphanSweepStatements: { counts: ReturnType<typeof db.prepare>; updates: ReturnType<typeof db.prepare> } | null =
+  null;
+
+// Prepared LAZILY, like the training-cache backstop: db.ts creates these tables on import,
+// so a statement naming them must not compile before they exist.
+function orphanSweepPrepared(): { counts: ReturnType<typeof db.prepare>; updates: ReturnType<typeof db.prepare> } {
+  if (!orphanSweepStatements) {
+    db.exec(`CREATE TEMP TABLE IF NOT EXISTS ${ORPHAN_SWEEP_UPDATE_TABLE} (n INTEGER NOT NULL)`);
+    const seeded = db.prepare(`SELECT COUNT(*) AS c FROM ${ORPHAN_SWEEP_UPDATE_TABLE}`).get() as any;
+    if (!seeded?.c) db.exec(`INSERT INTO ${ORPHAN_SWEEP_UPDATE_TABLE} (n) VALUES (0)`);
+    for (const t of ORPHAN_SWEEP_TABLES) {
+      db.exec(
+        // STATUS transitions only. The sweep itself writes a receipt into a decision's
+        // context (below), and a blanket AFTER UPDATE would count that write — the
+        // signature would move every time the sweep ran, so a stamped refusal could never
+        // match and the whole gate would be self-defeating. A status flip is the in-place
+        // change the sweep actually cares about (a draft applied or superseded, a decision
+        // canceled or observed); the 10-minute cadence in the scheduler is the backstop
+        // for anything neither counts nor status can see.
+        `CREATE TEMP TRIGGER IF NOT EXISTS _cairn_orphan_sweep_u_${t} AFTER UPDATE ON ${t}
+         WHEN OLD.status IS NOT NEW.status
+         BEGIN UPDATE ${ORPHAN_SWEEP_UPDATE_TABLE} SET n = n + 1; END`
+      );
+    }
+    orphanSweepStatements = {
+      counts: db.prepare(
+        `SELECT ${ORPHAN_SWEEP_TABLES.map(
+          (t, i) => `(SELECT COUNT(*) FROM ${t}) AS c${i}, (SELECT COALESCE(MAX(rowid),0) FROM ${t}) AS m${i}`
+        ).join(", ")}`
+      ),
+      updates: db.prepare(`SELECT n FROM ${ORPHAN_SWEEP_UPDATE_TABLE}`),
+    };
+  }
+  return orphanSweepStatements;
+}
+
+export function orphanSweepSignature(leadMode?: string): string {
+  try {
+    const prepared = orphanSweepPrepared();
+    const updates = (prepared.updates.get() as any)?.n;
+    if (updates == null) return `nosweep:${Math.random()}`;
+    const counts = Object.values(prepared.counts.get() as Record<string, number>).join(",");
+    return `${counts}|${updates}|${leadMode ?? getSettings().lead_mode}`;
+  } catch {
+    return `nosweep:${Math.random()}`; // never-matching: sweep rather than skip real work
+  }
+}
+
+// The temp odometer and the prepared statements survive `test/_isolate.mjs`'s out-of-band
+// table wipe, but the counts do not — and two wiped tests could otherwise land on the same
+// signature. Dropping the prepared handles on the same reset the read memos use keeps a
+// stamped refusal from one test invisible to the next.
+registerTrainingCacheClear(() => {
+  orphanSweepStatements = null;
+});
+
 function legacyBackgroundNormalizedPayload(
   proposal: any,
   sourceBurstProposalIds: number[]
@@ -1441,12 +1514,18 @@ function carriesPendingChange(action: unknown): boolean {
 // would pin every such record at 'ask' forever, which is the state this sweep exists to
 // clear. Its executable siblings still route through applyProposalWithAutonomy, which
 // derives reversibility from the real change.
-function reofferParkedAdvisory(decision: ParkedDecision, context: Record<string, any>): boolean {
+type CairnLeadModeValue = ReturnType<typeof getSettings>["lead_mode"];
+
+function reofferParkedAdvisory(
+  decision: ParkedDecision,
+  context: Record<string, any>,
+  leadMode: CairnLeadModeValue
+): boolean {
   const policy = decideAutonomyTier({
     kind: decision.kind,
     risk_class: decision.risk_class,
     reversible: true,
-    lead_mode: getSettings().lead_mode,
+    lead_mode: leadMode,
     clinical: decision.risk_class === "clinical",
   });
   if (policy.tier === "ask" || policy.tier === "clinician") return false;
@@ -1571,11 +1650,15 @@ function recordRetiredDraftReceipt(args: {
 // the sweep retry it on the next tick. Floors above are never re-offered, and under
 // 'review_everything' the sweep does nothing at all — the athlete has asked to see
 // everything, so nothing may be adopted or set aside on their behalf.
-export function thawParkedReviewDecisions(): { thawed: number; superseded: number; skipped: number } {
+export function thawParkedReviewDecisions(
+  // Read ONCE per sweep by the caller and threaded down, not re-read per decision: this
+  // walks up to 100 rows a tick and `reofferParkedAdvisory` asked for the same row each time.
+  leadMode: CairnLeadModeValue = getSettings().lead_mode
+): { thawed: number; superseded: number; skipped: number } {
   let thawed = 0;
   let superseded = 0;
   let skipped = 0;
-  if (getSettings().lead_mode === "review_everything") return { thawed, superseded, skipped };
+  if (leadMode === "review_everything") return { thawed, superseded, skipped };
   for (const decision of listBrainDecisions({ status: "review", limit: 100 })) {
     try {
       const context = (decision.context ?? {}) as Record<string, any>;
@@ -1621,7 +1704,7 @@ export function thawParkedReviewDecisions(): { thawed: number; superseded: numbe
       const stampedContext = (stamped.context ?? {}) as Record<string, any>;
       if (!proposal || proposal.status !== "draft") {
         // No live draft behind it: this is a reading, not a pending change.
-        if (reofferParkedAdvisory(stamped, stampedContext)) thawed += 1;
+        if (reofferParkedAdvisory(stamped, stampedContext, leadMode)) thawed += 1;
         else skipped += 1;
         continue;
       }
@@ -1652,11 +1735,18 @@ export function adoptOrphanedDrafts(): {
   // adoption: a decision re-offered here may retire the very draft the loop below would
   // otherwise walk. Deliberately called from inside this sweep rather than wired into
   // the scheduler separately, so the two can never drift apart in ordering.
-  const thaw = thawParkedReviewDecisions();
+  // ONE settings read for the whole sweep — the thaw pass and the adoption loop below
+  // both need lead_mode, and it cannot change underneath a synchronous pass.
+  const leadMode = getSettings().lead_mode;
+  const thaw = thawParkedReviewDecisions(leadMode);
   let adopted = 0;
   let skipped = 0;
   const now = Date.now();
-  const leadMode = getSettings().lead_mode;
+  // The receipt stamped onto a REFUSED adoption below (see `adopt_attempted_signature`).
+  // The signature is the substance; the hour bucket is a self-healing floor, so anything
+  // the signature legitimately cannot see (a decision's context edited in place, say)
+  // costs at most one re-derivation an hour instead of one a minute.
+  const refusalStamp = `${orphanSweepSignature(leadMode)}|hour:${new Date().toISOString().slice(0, 13)}`;
   // Newest first (listProposals orders id DESC): at most one orphan per explicit
   // provenance + SEMANTIC intent is adopted. Legacy chat drafts qualify only in
   // coach-led postures and only through an explicit persisted chat provenance.
@@ -1722,6 +1812,23 @@ export function adoptOrphanedDrafts(): {
         continue;
       }
       if (provenance !== "background_chat") handledIntents.add(handlingKey);
+      // A REVIEW hold is deliberately NOT terminal — it is re-offered when posture or
+      // policy inputs move. But "re-offered when they move" is not "re-derived every
+      // minute": re-deriving it costs a 42-day evidence capture plus a full
+      // applyProposalWithAutonomy to reach the same refusal it reached a minute ago. So a
+      // refusal records the sweep signature it was made under (below), and while that
+      // signature still stands the answer is already known. Any real move — a new proposal
+      // or decision row, a status flip, a lead_mode change — changes the signature and the
+      // draft is re-offered on the very next sweep, exactly as before. Placed AFTER the
+      // intent is claimed above so an older sibling never inherits a shot this draft owns.
+      if (String(proposal.autonomy?.status ?? "") === "review") {
+        const heldId = Number(proposal.autonomy?.id);
+        const heldContext = (heldId > 0 ? (getBrainDecision(heldId)?.context ?? {}) : {}) as Record<string, any>;
+        if (heldContext.adopt_attempted_signature === refusalStamp) {
+          skipped += 1;
+          continue;
+        }
+      }
       // After a recent same-kind veto the system does NOT silently re-apply similar
       // substance: it ANNOUNCES (lands at the natural boundary with a Coach discussion
       // path, no decision demanded). With no veto, normal quiet-apply policy applies. Either way
@@ -1775,6 +1882,22 @@ export function adoptOrphanedDrafts(): {
         // Its savepoint already rolled back atomically; keep walking newest→oldest
         // inside the same burst until one candidate genuinely owns the repair.
         skipped += 1;
+        // STAMP THE REFUSAL, so the next sweep does not re-derive it from scratch. The
+        // signature is the receipt's whole point: it says WHICH picture this answer was
+        // given under, so the skip above lifts itself the moment that picture moves.
+        // Written into the decision the refusal just recorded — an UPDATE, which moves no
+        // count or MAX(rowid), so stamping cannot invalidate the signature it stores.
+        const heldId = Number((result as any)?.decision?.id);
+        if (heldId > 0) {
+          const heldContext = (getBrainDecision(heldId)?.context ?? {}) as Record<string, any>;
+          patchBrainDecision(heldId, {
+            context: {
+              ...heldContext,
+              adopt_attempted_at: new Date().toISOString(),
+              adopt_attempted_signature: refusalStamp,
+            },
+          });
+        }
       }
     } catch {
       // Per-draft error isolation: a throwing adoption must never break the pass.
