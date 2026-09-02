@@ -152,6 +152,9 @@ const SECONDS_STEP_FRAC = 0.1; // ~10% of the current hold…
 const SECONDS_STEP_MIN = 3; // …never smaller than 3s (a real nudge on a short hold)
 const SECONDS_STEP_MAX = 20; // …never larger than 20s in one step (a long hold doesn't leap)
 const DELOAD_FRAC = 0.1; // a deload backs the load off ~10%
+// Reps genuinely in hand. At RIR ≥ 2 the set was finished with room to spare; at
+// RIR ≤ 1 it was a grind. The one place the engine draws that line.
+const RIR_IN_RESERVE = 2;
 // A REPEAT deload inside this window is not another identical cut — the second one
 // escalates structurally (a lower rep window, or the movement itself rotates). See
 // the escalation branch in repsPrescription and appliedProgressionDeloads (plan.ts).
@@ -1857,7 +1860,8 @@ function repsPrescription(
   // RIR ≥ 2 still counts even below the ceiling for the rep stage.
   const rirLogged = lastRir != null;
   const strong =
-    doseEligibility.eligible && (status === "progressing" || (rirLogged ? (lastRir as number) >= 2 : true));
+    doseEligibility.eligible &&
+    (status === "progressing" || (rirLogged ? (lastRir as number) >= RIR_IN_RESERVE : true));
   // The card must not tell an athlete who never logs RIR to come back at "RIR 2+".
   // Where a phrasing names the rating, the same meaning also exists spoken in reps;
   // the RIR wording is picked ONLY when an RIR was actually logged.
@@ -1882,6 +1886,21 @@ function repsPrescription(
   const earnedByWork = hasRange ? (topSetEarnsLoad ? topSetAtTop : allSetsAtTop) && strong : openEarned;
   // The REP stage: strong work with a rep still to win inside the (possibly widened) range.
   const repStageEligible = hasRange && strong && roomInRange && !allSetsAtTop;
+  // Every working set finished at the TOP of the prescribed range with reps still in
+  // hand. That is the athlete OUT-DOING the card in the only way a held target allows:
+  // the card caps the reps and fixes the weight, so there is nothing left to give but
+  // reserve, and reserve is exactly what they showed. A grind (RIR ≤ 1) is not this.
+  // It takes a SESSION, not a set: a lone logged top set is trusted for reading the
+  // working weight, but it is not evidence the card was worked through, so at least two
+  // capped working sets are required (or the whole card, when it asks for one).
+  const workingRir = workingSets.map((s) => s.rir).filter((r): r is number => r != null);
+  const cappedWithReserve =
+    hasRange &&
+    allSetsAtTop &&
+    workingSets.length >= Math.min(sets, 2) &&
+    (workingRir.length > 0
+      ? workingRir.every((r) => r >= RIR_IN_RESERVE)
+      : rirLogged && (lastRir as number) >= RIR_IN_RESERVE);
   // A recovery or peak week adds nothing new — neither load nor another rep. The
   // work was real; it just waits for the week to turn over.
   const phaseHolds = !!policy?.holds_load && (earnedByWork || repStageEligible);
@@ -1966,19 +1985,22 @@ function repsPrescription(
     status === "plateaued" &&
     !(
       // A "plateau" is a claim about the ATHLETE, but when the log shows them
-      // OUT-DOING the card — heavier than the plan asked, or more working sets
-      // than it prescribed — the flat trend is the PLAN's doing (a held target can
-      // only ever reproduce itself), so the earned ladders below own the decision.
-      // An athlete logging an RIR while merely repeating the prescription for weeks
-      // keeps the plateau read: they had effort in hand and took no step, so the
-      // stall is real and rotation is the answer. With NO felt rating, capping the
+      // OUT-DOING the card — heavier than the plan asked, more working sets than it
+      // prescribed, or every working set capping the rep range with reps still in
+      // reserve — the flat trend is the PLAN's doing (a held target can only ever
+      // reproduce itself), so the earned ladders below own the decision.
+      // The athlete cannot take a step the card withholds: at a fixed weight and a
+      // capped range, finishing at RIR ≥ 2 IS the out-doing, and calling it a stall
+      // rotated a movement out from under someone who did exactly what was asked.
+      // A GRIND (RIR ≤ 1) is different and keeps the plateau read — the reps were not
+      // in hand, so the load is genuinely where they are. With NO felt rating, capping the
       // range is the only signal there is, and double progression's step is its
       // answer — the step when the range is capped, one more rep when it is not
       // (repStageEligible), and a capped top set over uncapped backoffs falls to the
       // finish-the-range ask below. A cut that genuinely vetoes promotion (reduce off goal, sliding
       // anchors) keeps the plateau read too — deferring would hand out a step the
       // cut rules just refused.
-      (planBehind || workingSets.length > sets || !rirLogged) &&
+      (planBehind || workingSets.length > sets || !rirLogged || cappedWithReserve) &&
       (earnedByWork || repStageEligible || (hasRange && topSetAtTop && !allSetsAtTop && strong)) &&
       !cutVetoesPromotion(brakeCtx?.cut?.() ?? NO_CUT_PRESSURE, { status })
     )

@@ -344,6 +344,72 @@ test("vary: a long flat plateau (not grinding) suggests rotating a variation", (
   assert.equal(p.suggested.weight, 400, "load held while a variation is suggested");
 });
 
+test("capping the range at RIR 2 for weeks is the CARD's plateau — the step, never a rotation", () => {
+  // The live case: the card said 95 lb for 8-10 and the athlete kept finishing every
+  // working set at 10 with two reps in hand. A held target can only reproduce itself,
+  // so the flat trend is the plan's — rotating the movement out blamed the athlete for
+  // following the card. The earned ladder owns it: the load steps.
+  makeExercise("Incline Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Incline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 95, focus: "Push" });
+  for (const d of [35, 28, 21, 14, 7])
+    for (let s = 1; s <= 3; s++) logSet("Incline Bench Press", isoDaysAgo(d), { weight: 95, reps: 10, rir: 2, setNum: s });
+  for (let s = 1; s <= 2; s++) logSet("Incline Bench Press", isoDaysAgo(1), { weight: 95, reps: 10, rir: 2, setNum: s });
+
+  const p = nextPrescription("Incline Bench Press");
+  assert.equal(p.action, "overload", "reps in hand at the ceiling earn the step");
+  assert.equal(p.suggested.weight, 100, "a clamped +5 lb compound step from the logged 95");
+  assert.ok(!p.vary_to, "no rotation is proposed");
+});
+
+test("a capped range at RIR 1 is a GRIND — the plateau read stands", () => {
+  // Same shape, one difference that matters: nothing was left in reserve. The load
+  // really is where the athlete is, so the plateau branch keeps the decision.
+  makeExercise("Machine Chest Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Machine Chest Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 115, focus: "Push" });
+  for (const d of [35, 28, 21, 14, 7, 1])
+    for (let s = 1; s <= 3; s++) logSet("Machine Chest Press", isoDaysAgo(d), { weight: 115, reps: 10, rir: 1, setNum: s });
+
+  const p = nextPrescription("Machine Chest Press");
+  assert.notEqual(p.action, "overload", "a grind at the ceiling never buys the step");
+  assert.ok(["deload", "vary", "technique", "hold"].includes(p.action), `a plateau answer, got ${p.action}`);
+});
+
+test("a load that ROSE is reaching, not grinding — RIR 0-1 at a new weight never steps it back", () => {
+  // The live case: 65 → 75 with reps at 75 climbing 5 → 7. Reading the low RIR as a
+  // grind flagged the lift plateaued and cut it to 70 the day after the athlete
+  // pressed 75 for 7/6/6. Low RIR only reads as a grind when the LOAD isn't moving.
+  makeExercise("Barbell Overhead Press", { muscle_group: "shoulders" });
+  planWith(1, { exercise: "Barbell Overhead Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 75, focus: "Push" });
+  for (const d of [28, 21, 14])
+    for (let s = 1; s <= 3; s++) logSet("Barbell Overhead Press", isoDaysAgo(d), { weight: 65, reps: 10, rir: 2, setNum: s });
+  logSet("Barbell Overhead Press", isoDaysAgo(7), { weight: 65, reps: 10, rir: 2, setNum: 1 });
+  logSet("Barbell Overhead Press", isoDaysAgo(7), { weight: 65, reps: 10, rir: 0, setNum: 2 });
+  logSet("Barbell Overhead Press", isoDaysAgo(7), { weight: 75, reps: 5, rir: 0, setNum: 3 });
+  logSet("Barbell Overhead Press", isoDaysAgo(1), { weight: 75, reps: 7, rir: 1, setNum: 1 });
+  logSet("Barbell Overhead Press", isoDaysAgo(1), { weight: 75, reps: 6, rir: 0, setNum: 2 });
+  logSet("Barbell Overhead Press", isoDaysAgo(1), { weight: 75, reps: 6, rir: 0, setNum: 3 });
+
+  const p = nextPrescription("Barbell Overhead Press");
+  assert.notEqual(p.action, "deload", "a lift that just went up is not cut back");
+  assert.notEqual(p.action, "vary", "and it is not rotated out either");
+  assert.equal(p.suggested.weight, 75, "the new working load is held while the range fills in");
+});
+
+test("a genuine grind at ONE load still reads plateaued and still deloads", () => {
+  // Four sessions at the same top weight with the reps bought at RIR 0-1: the load is
+  // not moving and nothing is in reserve. That is the grind the rule is for.
+  makeExercise("Barbell Overhead Press", { muscle_group: "shoulders" });
+  planWith(1, { exercise: "Barbell Overhead Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 100, focus: "Push" });
+  for (const d of [28, 21])
+    for (let s = 1; s <= 3; s++) logSet("Barbell Overhead Press", isoDaysAgo(d), { weight: 100, reps: 8, rir: 1, setNum: s });
+  for (const d of [10, 1])
+    for (let s = 1; s <= 3; s++) logSet("Barbell Overhead Press", isoDaysAgo(d), { weight: 100, reps: 8, rir: 0, setNum: s });
+
+  const p = nextPrescription("Barbell Overhead Press");
+  assert.equal(p.action, "deload", "a real grind at a static load still backs the load off");
+  assert.ok(p.suggested.weight < 100, "the deload is a real step down");
+});
+
 test("injury constraint HOLDS load even when reps were earned", () => {
   makeExercise("Barbell Row", { muscle_group: "back", constraint_note: "left elbow — keep light, no heavy pulls" });
   planWith(1, { exercise: "Barbell Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 135, focus: "Pull" });

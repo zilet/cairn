@@ -417,6 +417,9 @@ function isoDaysAgo(d: string, n: number): string {
 
 // ---- per-lift progression ----
 const REPS_RECENT = 8; // analyze the most recent N sessions (state, not ancient history)
+// How many trailing sessions at ONE top load make a stall. Both stall reads use it:
+// the plain static-load count, and the grinding read's "the load isn't moving" half.
+const STATIC_STALL_SESSIONS = 3;
 
 // The comparable-exposure counter and its recovery-week eligibility rule live in
 // the leaf module `lift-comparability.ts` — see the header there for why. Kept
@@ -475,17 +478,27 @@ function gradeRepsLift(name: string, mg: string | null, through: string): Graded
       ? Math.max(1, Math.round(dayIndex(latest.date, recent[recent.length - staticCount].date) / 7))
       : null;
 
-  // Grinding: recent top sets taken at RIR 0-1 while the load isn't moving.
+  // Grinding: recent top sets taken at RIR 0-1 WHILE THE LOAD ISN'T MOVING — and that
+  // second half has to be CHECKED, not assumed. RIR 0-1 at a load the athlete has just
+  // stepped UP to is reaching, not stalling; reading it as a grind flagged a lift that
+  // had gone 65 → 75 as plateaued and stepped it back to 70 the day after the athlete
+  // pressed 75 for 7/6/6. So the low-RIR sets have to belong to the trailing run of
+  // sessions at the SAME top load as the latest one, and that run has to be as long as
+  // the static stall's own bar — below three sessions at one load there is not enough
+  // at a single weight to call anything stuck. Filtering by those dates also scopes
+  // these rows to the day being read, which the raw query does not do on its own.
+  const staticDates = new Set(recent.slice(recent.length - staticCount).map((p) => String(p.date)));
   const ex = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
   let grinding = false;
-  if (ex) {
+  if (ex && staticCount >= STATIC_STALL_SESSIONS) {
     const rirRows = db
       .prepare(
-        `SELECT ls.rir AS rir, s.id AS session_id FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        `SELECT ls.rir AS rir, s.id AS session_id, s.date AS date FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
        WHERE ls.exercise_id = ? AND ls.rir IS NOT NULL ORDER BY s.date DESC, ls.id DESC LIMIT 24`
       )
       .all(ex.id) as any[];
     const comparableRirRows = rirRows
+      .filter((row) => staticDates.has(String(row.date)))
       .filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id)))
       .slice(0, 6);
     const lowRir = comparableRirRows.filter((r) => Number(r.rir) <= 1).length;
@@ -497,13 +510,13 @@ function gradeRepsLift(name: string, mg: string | null, through: string): Graded
   // two weeks of data would be a false alarm).
   const enough = recent.length >= 4 && spanDays >= 14;
   const stall_signals: string[] = [];
-  if (enough && staticCount >= 3) stall_signals.push(`same top load ${staticCount} sessions running`);
+  if (enough && staticCount >= STATIC_STALL_SESSIONS) stall_signals.push(`same top load ${staticCount} sessions running`);
   if (enough && grinding) stall_signals.push("top sets grinding (RIR 0–1) without the load moving");
   let status: LiftStatus;
   if (!enough) status = "new";
   else if (trendWk != null && trendWk >= 0.5) status = "progressing";
   else if (trendWk != null && trendWk <= -0.75) status = "regressing";
-  else if (staticCount >= 3 || grinding) status = "plateaued";
+  else if (staticCount >= STATIC_STALL_SESSIONS || grinding) status = "plateaued";
   else status = "maintaining";
 
   let suggested_action: LiftAction;

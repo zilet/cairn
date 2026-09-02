@@ -177,6 +177,21 @@ cutting weight cannot fix a food problem. A plateaued lift under cut pressure ea
 `PLATEAU_CUT_PATIENCE_WEEKS` (2) extra weeks before a variation is offered — holding ground on a real
 deficit is the win, not a stall to reshuffle away from.
 
+**A plateau is a claim about the ATHLETE, and the card has to be innocent before it is made.** Two
+reads used to blame the athlete for following the plan. In `progression.ts`, the escape that hands a
+"plateaued" lift back to the earned ladders required the log to show the athlete out-doing the card —
+heavier than prescribed, or more working sets than asked — so an athlete who kept finishing every
+working set at the top of the range with reps in reserve read as a stall and got the movement rotated
+out. Capping the range at `RIR_IN_RESERVE` (2) now joins that first conjunct: at a fixed weight and a
+capped range there is nothing left to give but reserve, so reserve IS the out-doing, and a held target
+can only ever reproduce itself. It takes a session rather than a lone set (at least two capped working
+sets, or the whole card when it prescribes one), and a grind — RIR ≤ 1, nothing in hand — still reads
+as a real plateau. In `program-state.ts`, `grinding` counted low-RIR sets without checking its own
+"while the load isn't moving" premise, so a lift that had just gone 65 → 75 was flagged plateaued and
+stepped back to 70 the day after a PR. The low-RIR sets must now come from the trailing run of
+sessions at the SAME top load as the latest one, and that run has to reach `STATIC_STALL_SESSIONS` (3)
+— the static stall's own bar, below which there is not enough at one weight to call anything stuck.
+
 **Promotion is earned by performance: a soft fuel hold and fast weight loss no longer veto an earned
 step.** `CutPressure` (`progression.ts`) used to collapse into one `deep`/`any` boolean that any fuel
 signal could veto a promotion through. It now carries `hold` (the fuel read asks aggression held — a

@@ -87,6 +87,29 @@ test("a stuck-and-grinding lift reads 'plateaued' with a stall signal", () => {
   );
 });
 
+test("low RIR at a load that just went UP is reaching, not grinding", () => {
+  // 65 → 75 with reps at the new weight climbing. RIR 0-1 there is the cost of a
+  // heavier bar, not a stall — and the grind flag is a claim about a load that ISN'T
+  // moving, so it must not fire until the top load has actually sat still.
+  for (const d of [28, 21, 14])
+    for (let s = 0; s < 3; s++)
+      repo.logSetByName({ exercise: "Push Press", weight: 65, reps: 10, rir: 2, date: back(d) });
+  repo.logSetByName({ exercise: "Push Press", weight: 65, reps: 10, rir: 2, date: back(7) });
+  repo.logSetByName({ exercise: "Push Press", weight: 65, reps: 10, rir: 0, date: back(7) });
+  repo.logSetByName({ exercise: "Push Press", weight: 75, reps: 5, rir: 0, date: back(7) });
+  repo.logSetByName({ exercise: "Push Press", weight: 75, reps: 7, rir: 1, date: back(0) });
+  repo.logSetByName({ exercise: "Push Press", weight: 75, reps: 6, rir: 0, date: back(0) });
+  repo.logSetByName({ exercise: "Push Press", weight: 75, reps: 6, rir: 0, date: back(0) });
+
+  const lift = repo.getProgramState(REF).lifts.find((l) => l.exercise === "Push Press");
+  assert.ok(lift, "the lift is analyzed");
+  assert.notEqual(lift.status, "plateaued", "a lift whose load rose is not stuck");
+  assert.ok(
+    !lift.stall_signals.some((s) => /grind/.test(s)),
+    "no grind flag while the load is moving"
+  );
+});
+
 test("a lift with only a couple of sessions reads 'new', never a false plateau", () => {
   repo.logSetByName({ exercise: "Front Squat", weight: 185, reps: 5, date: back(7) });
   repo.logSetByName({ exercise: "Front Squat", weight: 185, reps: 5, date: back(0) });

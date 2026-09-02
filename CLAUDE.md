@@ -359,7 +359,12 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   felt rating. A logged RIR still speaks in both directions: RIR ≤1 was a grind and holds the step;
   RIR ≥2 counts even below the ceiling. Card copy must not tell an athlete who never logs RIR to come
   back at "RIR 2+" — the RIR-flavored phrasing in `progression-voice.ts` is picked only when an RIR was
-  actually logged; an athlete who never rates gets the same meaning spoken in reps.
+  actually logged; an athlete who never rates gets the same meaning spoken in reps. **Capping the
+  card's range with RIR ≥2 is the CARD's plateau, not the athlete's** — at a fixed weight and a capped
+  range there is nothing left to give but reserve, so the flat trend hands the decision to the earned
+  ladders (never a rotation); a grind (RIR ≤1) keeps the plateau read. And `grinding` in
+  `src/repo/program-state.ts` means low RIR *while the load is not moving*, so it requires a trailing
+  run of sessions at the same top load — low RIR at a weight just stepped up is reaching.
 - **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
   as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.
   Details in `docs/ARCHITECTURE.md`.
