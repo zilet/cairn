@@ -28,7 +28,7 @@
 // ============================================================================
 import { db } from "../db.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
-import { updateInsight } from "./coach.js";
+import { updateInsight } from "./insights.js";
 import { listActiveDirectives } from "./directives-read.js";
 import { getBrainDecision, listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
 import { listAttentionSchedule } from "./attention.js";
@@ -129,7 +129,7 @@ function clip(value: unknown, max = 150): string {
   return clipText(value, max, { collapseWhitespace: true, ellipsis: "…", wordBoundary: true, sentenceBoundary: true });
 }
 
-function isoDay(value: unknown): string {
+function localDayKey(value: unknown): string {
   const s = String(value ?? "");
   // A bare YYYY-MM-DD is already a local day key (effective_date, window_end) —
   // pass it through untouched (parseDbTime would read it as UTC midnight and
@@ -380,7 +380,7 @@ function didGroups(windowStart: string, asOf: string): TeamWeekDomainGroup[] {
     for (const d of decisions) {
       // Window on when the team acted: an applied change lands at applied_at, an
       // announced one was decided at created_at (its effective_date may be future).
-      const when = isoDay(d.applied_at ?? d.created_at ?? d.effective_date);
+      const when = localDayKey(d.applied_at ?? d.created_at ?? d.effective_date);
       if (!when || when < windowStart || when > asOf) continue;
       const summary = String(d.summary ?? "")
         .replace(/\s+/g, " ")
@@ -526,7 +526,7 @@ function flaggedItems(windowStart: string, asOf: string): TeamWeekFlag[] {
   const out: TeamWeekFlag[] = [];
   try {
     for (const d of listActiveDirectives() as any[]) {
-      const when = isoDay(d?.created_at);
+      const when = localDayKey(d?.created_at);
       if (!when || when < windowStart || when > asOf) continue;
       const text = clip(d?.directive, 200);
       if (!text || isInformationalNote(text)) continue;
@@ -538,7 +538,7 @@ function flaggedItems(windowStart: string, asOf: string): TeamWeekFlag[] {
   }
   try {
     for (const d of listBrainDecisions({ status: "review", limit: 60 })) {
-      const when = isoDay(d.created_at ?? d.effective_date);
+      const when = localDayKey(d.created_at ?? d.effective_date);
       if (!when || when < windowStart || when > asOf) continue;
       const text = clip(d.summary, 200);
       if (!text || isInformationalNote(text)) continue;
@@ -581,7 +581,7 @@ function watchingItems(asOf: string): TeamWeekWatch[] {
   const horizon = addDaysISO(asOf, 21) ?? asOf; // "near" — the next few weeks
   try {
     for (const entry of listAttentionSchedule({ includeReleased: false, limit: 100 })) {
-      const due = entry.next_due ? isoDay(entry.next_due) : "";
+      const due = entry.next_due ? localDayKey(entry.next_due) : "";
       if (!due || due < asOf || due > horizon) continue; // only genuinely upcoming checks
       const text = capitalize(clip(humanizeWatchReason(entry.reason), 160));
       if (!text) continue;
@@ -592,7 +592,7 @@ function watchingItems(asOf: string): TeamWeekWatch[] {
   }
   try {
     for (const exp of listBrainExpectations({ status: "pending", limit: 100 })) {
-      const end = isoDay(exp.window_end);
+      const end = localDayKey(exp.window_end);
       if (!end || end <= asOf) continue; // still maturing = window not yet closed
       const decision = getBrainDecision(exp.decision_id);
       if (!decision || (decision.status !== "applied" && decision.status !== "announced")) continue;
@@ -638,7 +638,7 @@ function landedItems(windowStart: string, asOf: string): TeamWeekLanded[] {
       .all(addDaysISO(windowStart, -1) ?? windowStart, addDaysISO(asOf, 1) ?? asOf) as any[];
     const seen = new Set<string>();
     for (const row of rows) {
-      const when = isoDay(row?.evaluated_at);
+      const when = localDayKey(row?.evaluated_at);
       if (when < windowStart || when > asOf) continue;
       const verdict = String(row?.verdict ?? "");
       if (!CONCLUSIVE_VERDICTS.has(verdict)) continue; // inconclusive/canceled is filler — drop it
@@ -649,7 +649,7 @@ function landedItems(windowStart: string, asOf: string): TeamWeekLanded[] {
       const key = `${text}|${verdict}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ text, verdict, when: isoDay(row?.evaluated_at) });
+      out.push({ text, verdict, when: localDayKey(row?.evaluated_at) });
       if (out.length >= 6) break;
     }
   } catch {
@@ -675,7 +675,7 @@ function insightItems(windowStart: string, asOf: string, drainBacklog: boolean):
     for (const row of recent) {
       const text = clip(row?.text, 200);
       if (!text) continue;
-      const when = isoDay(row?.created_at);
+      const when = localDayKey(row?.created_at);
       if (when < windowStart || when > asOf) continue;
       out.push({ id: Number(row.id), text, when, backlog: false });
     }
@@ -710,9 +710,9 @@ function insightItems(windowStart: string, asOf: string, drainBacklog: boolean):
         if (drained >= 2) break;
         const text = clip(row?.text, 200);
         if (!text) continue;
-        if (isoDay(row?.created_at) >= windowStart) continue;
+        if (localDayKey(row?.created_at) >= windowStart) continue;
         drained++;
-        out.push({ id: Number(row.id), text, when: isoDay(row?.created_at), backlog: true });
+        out.push({ id: Number(row.id), text, when: localDayKey(row?.created_at), backlog: true });
         try {
           updateInsight(Number(row.id), { status: "seen" });
         } catch {

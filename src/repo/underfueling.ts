@@ -9,6 +9,7 @@ import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 // + the shared near-goal band), deliberately not the recomposition read, which
 // consumes this module.
 import { atOrNearGoal } from "./goal-proximity.js";
+import { finite } from "../lib/numbers.js";
 
 export type UnderfuelingState =
   | "insufficient_signal"
@@ -305,12 +306,6 @@ function postCorrectionAthleteResponse(
     }
   }
   return { families, evidence_keys: [...evidence] };
-}
-
-function finite(value: unknown): number | null {
-  if (value == null || (typeof value === "string" && value.trim() === "")) return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
 }
 
 function targetForDate(date: string): any | null {

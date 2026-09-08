@@ -20,6 +20,8 @@ import { seed } from "./seed.js";
 import { installSeedArt } from "./art.js";
 import * as repo from "./repo.js";
 import { localDateISO } from "./repo/shared.js";
+import { log } from "./log.js";
+import { round5 } from "./lib/numbers.js";
 
 const DAY = 86_400_000;
 const now = new Date();
@@ -28,7 +30,6 @@ const now = new Date();
 // localDateISO() — a UTC slice here made iso(0) "tomorrow" between 00:00 and
 // ~04:00 UTC on hosts west of UTC, crashing the whole demo seed every evening.
 const iso = (daysAgo: number): string => localDateISO(new Date(now.getTime() - daysAgo * DAY));
-const round5 = (n: number) => Math.round(n / 5) * 5;
 
 // ---------- wipe (idempotent rebuild on a throwaway DB) ----------
 function wipe() {
@@ -737,7 +738,7 @@ export function seedDemo() {
     learnings: (db.prepare(`SELECT COUNT(*) c FROM memory WHERE kind='learning' AND superseded_by IS NULL`).get() as any).c,
     garmin_unreconciled: (db.prepare(`SELECT COUNT(*) c FROM garmin_activities WHERE session_id IS NULL`).get() as any).c,
   };
-  console.log("Demo data seeded:", JSON.stringify(counts));
+  log.info(`Demo data seeded: ${JSON.stringify(counts)}`);
 }
 
 // CLI entry: `npm run seed:demo` (against a THROWAWAY DB — see the header).

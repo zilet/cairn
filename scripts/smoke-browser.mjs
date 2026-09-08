@@ -63,8 +63,19 @@ const requiredGlobals = {
   CairnChatAttachment: "object",
   CairnMealRecipeController: "object",
   CairnDayFuelController: "object",
-  CairnMeMemoryController: "object",
   CairnSettingsAgents: "object",
+  // ensureBundle is the eager half of the lazy me-health bundle contract.
+  ensureBundle: "function",
+};
+
+// Globals the LAZY me-health bundle brings with it. Absent on boot by design
+// (index.html no longer loads bundle-05); asserted once a Stand/Me route has
+// navigated, which is what proves the on-demand injection actually works.
+const lazyMeHealthGlobals = {
+  CairnStand: "object",
+  CairnMeMemoryController: "object",
+  CairnHealthClient: "object",
+  renderMe: "function",
 };
 
 const chromeCandidates = [
@@ -474,6 +485,28 @@ async function assertGlobals(cdp) {
   ok(result && result.missing.length === 0, "critical app globals are present", JSON.stringify(result?.missing || []));
 }
 
+// The me-health bundle is injected on the first Stand/Me navigation. Assert both
+// halves: the loader marked its <script> loaded, and the bundle's globals landed.
+async function assertLazyMeHealth(cdp, label) {
+  const globalsJson = JSON.stringify(lazyMeHealthGlobals);
+  const result = await evaluate(cdp, `(() => {
+    const required = ${globalsJson};
+    const missing = [];
+    for (const [name, expected] of Object.entries(required)) {
+      const actual = window[name] === null ? "null" : typeof window[name];
+      if (actual !== expected) missing.push(name + ":" + actual);
+    }
+    return {
+      missing,
+      injected: !!document.querySelector('script[data-cairn-bundle="me-health"][data-cairn-bundle-loaded="1"]'),
+      eagerTags: [...document.querySelectorAll("script[src]")].filter((s) => s.src.includes("bundle-05")).length
+    };
+  })()`);
+  ok(result?.injected === true, `${label} injected the lazy me-health bundle`, JSON.stringify(result));
+  ok(result?.missing.length === 0, `${label} lazy me-health globals are present`, JSON.stringify(result?.missing || []));
+  ok(result?.eagerTags === 1, `${label} loaded bundle-05 exactly once`, JSON.stringify(result));
+}
+
 function describeConsole(args) {
   return (args || []).map((arg) => arg.value ?? arg.description ?? arg.type ?? "").join(" ");
 }
@@ -514,6 +547,7 @@ async function smokeRoute(cdp, base, route) {
   try {
     await navigateAndHydrate(cdp, base, route.path, route.tab);
     await assertGlobals(cdp);
+    if (route.tab === "stand" || route.tab === "me") await assertLazyMeHealth(cdp, route.path);
     const state = await evaluate(cdp, `(() => {
       const view = document.querySelector("#view");
       return {

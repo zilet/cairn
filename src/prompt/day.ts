@@ -1,6 +1,18 @@
 // Day-driver prompts: the Brief day-read, the on-demand session, the quiet
 // cross-domain insight, and the standing weekly read.
-import * as repo from "../repo.js";
+import { getCardioForDate } from "../repo/activities.js";
+import { getCoachContext } from "../repo/coach.js";
+import { dayRead, dayReadPeriodizationContext, forwardLook, recentDayReads } from "../repo/day-read.js";
+import type { DayRead } from "../repo/day-read.js";
+import { suggestAlternatives } from "../repo/exercise-variations.js";
+import { feltSignalDayLines } from "../repo/felt-signals.js";
+import { dayFuelDemand } from "../repo/fuel-demand.js";
+import { dayFuelState } from "../repo/fuel-state.js";
+import { withFlexibleRunLookahead } from "../repo/hybrid-run-lookahead.js";
+import { INSIGHT_PROMPT_COVERED_LIMIT, INSIGHT_PROMPT_UNKEYED_LIMIT, describeInsightIntentKey, renderInsightFacetVocabulary } from "../repo/insight-intent.js";
+import { learnedModelDayLines } from "../repo/learned-models.js";
+import { getSessionByDate, sessionSummary } from "../repo/sessions.js";
+import { hybridDayContext } from "../repo/training-read.js";
 import type { CoachContext } from "../repo/coach-context.js";
 import { promptData } from "./context-projection.js";
 import { localDateISO } from "../repo/shared.js";
@@ -111,7 +123,7 @@ function trainingRhythmLine(allSessions: any[], date?: string): string {
 function renderRecentReads(date: string): string {
   let prior: Array<{ date: string; kind: string; headline: string | null; why: string | null }> = [];
   try {
-    prior = repo.recentDayReads(date, 3);
+    prior = recentDayReads(date, 3);
   } catch {
     return "";
   }
@@ -216,9 +228,9 @@ HOW YOUR READS HAVE ACTUALLY LANDED:${restLine}${easyLine}
 // Where today sits in the program, so a deload day 3 of 7 is not proposed as though
 // rest were a new idea. "" when no block and no overlay are running.
 function renderPeriodization(date: string): string {
-  let context: ReturnType<typeof repo.dayReadPeriodizationContext>;
+  let context: ReturnType<typeof dayReadPeriodizationContext>;
   try {
-    context = repo.dayReadPeriodizationContext(date);
+    context = dayReadPeriodizationContext(date);
   } catch {
     return "";
   }
@@ -275,7 +287,7 @@ function debriefFacts(date: string): string {
   const lines: string[] = [];
   // 1) Today's session — the top set per lift + the volume done.
   try {
-    const sess: any = repo.getSessionByDate(date);
+    const sess: any = getSessionByDate(date);
     const sets: any[] = Array.isArray(sess?.sets) ? sess.sets : [];
     if (sets.length) {
       const top = new Map<string, any>();
@@ -297,7 +309,7 @@ function debriefFacts(date: string): string {
         return "logged";
       };
       const lifts = [...top.entries()].slice(0, 8).map(([name, s]) => `${name} ${fmtSet(s)}`);
-      const sum: any = repo.sessionSummary?.(sess.id) ?? null;
+      const sum: any = sessionSummary?.(sess.id) ?? null;
       const vol =
         sum && sum.tonnage > 0
           ? ` (${sum.sets} sets · ${Math.round(sum.tonnage).toLocaleString()} lb)`
@@ -314,7 +326,7 @@ function debriefFacts(date: string): string {
   // REAL effort instead of guessing ("an easy run" when it was a hard one). Plain
   // numbers, never a score; skip silently when nothing endurance was logged today.
   try {
-    const cardio: any[] = repo.getCardioForDate?.(date) ?? [];
+    const cardio: any[] = getCardioForDate?.(date) ?? [];
     for (const c of cardio.slice(0, 2)) {
       const bits: string[] = [];
       if (c?.distance_km != null) bits.push(`${Math.round(Number(c.distance_km) * 10) / 10} km`);
@@ -330,7 +342,7 @@ function debriefFacts(date: string): string {
   }
   // 2) Forward — the day-ahead (the SAME forwardLook the Brief's forward line uses).
   try {
-    const fwd: any = repo.forwardLook(date);
+    const fwd: any = forwardLook(date);
     if (fwd?.next_focus) lines.push(`NEXT SESSION leans toward: ${fwd.next_focus}.`);
     if (Array.isArray(fwd?.due) && fwd.due.length) {
       lines.push(`DUE THIS WEEK (under its productive range — a good forward focus): ${fwd.due.join(", ")}.`);
@@ -344,7 +356,7 @@ function debriefFacts(date: string): string {
   // a nudge; on-pace (even with grams still to eat) and comfortably-met do not. Never
   // a score. No derivable target → no fuel line, exactly as before.
   try {
-    const fuel = repo.dayFuelState(date);
+    const fuel = dayFuelState(date);
     if (fuel) {
       if (fuel.bucket === "behind") {
         const recency =
@@ -375,7 +387,7 @@ export function buildDayReadPrompt(
   opts: {
     override?: string;
     date?: string;
-    baseline?: repo.DayRead;
+    baseline?: DayRead;
     // The wording already on the athlete's screen for this date, when there is one.
     // Only ever passed when the day's CALL has changed — an unchanged call keeps its
     // sentence without asking anyone (see the prose pin in src/dayread.ts) — so this
@@ -383,7 +395,7 @@ export function buildDayReadPrompt(
     currentWording?: { headline?: string | null; why?: string | null } | null;
   } = {}
 ): string {
-  const context = dateScopedPromptContext(ctx ?? repo.getCoachContext(), opts.date);
+  const context = dateScopedPromptContext(ctx ?? getCoachContext(), opts.date);
   // The baseline the CALLER will clamp, persist and fingerprint — passed in so the
   // prompt describes the exact read the server-policy layer then acts on. Computing
   // a second one here is what opened the rich/thin seam: the agent was told
@@ -391,7 +403,7 @@ export function buildDayReadPrompt(
   // enforceDayReadSafetyPosture / enforceRecoveryWeekCadence clamped against
   // another, and the persisted row took its `signals` and `input_fingerprint` from
   // the second. The bare fallback stays for callers that only want the prose.
-  const baseline = opts.baseline ?? repo.dayRead(opts.date, context.recovery, context.signal_state);
+  const baseline = opts.baseline ?? dayRead(opts.date, context.recovery, context.signal_state);
   // ===== FELT SIGNALS block (wave/felt-signals — self-contained, delimited) =====
   // What the athlete's OWN subjective signals reveal, relevant to TODAY: a recurring
   // Brief-override rhythm on this weekday (pre-acknowledge, never gate), a persistent
@@ -400,7 +412,7 @@ export function buildDayReadPrompt(
   const feltDate = opts.date || (context as any).now?.date || localDateISO();
   let feltBlock = "";
   try {
-    const feltLines = repo.feltSignalDayLines(feltDate, (context as any).felt_signals?.patterns);
+    const feltLines = feltSignalDayLines(feltDate, (context as any).felt_signals?.patterns);
     if (feltLines.length) {
       feltBlock = `\nFELT SIGNALS (learned from THEIR OWN steers, check-ins and fuel reads — a suggestion to pre-acknowledge in a friend's voice when it fits, NEVER a gate or a number; usually one calm clause is plenty):\n${feltLines.map((l) => `- ${l}`).join("\n")}\n`;
     }
@@ -415,7 +427,7 @@ export function buildDayReadPrompt(
   // adherence-neutral, a suggestion never a gate; "" when there's nothing to say.
   let learnedBlock = "";
   try {
-    const learnedLines = repo.learnedModelDayLines(feltDate, (context as any).learned_models?.patterns);
+    const learnedLines = learnedModelDayLines(feltDate, (context as any).learned_models?.patterns);
     if (learnedLines.length) {
       learnedBlock = `\nLEARNED CROSS-DOMAIN READS (from THEIR OWN history — coincidences to weave in a friend's voice when it fits, NEVER causal claims, a number, or a gate; usually one calm clause is plenty):\n${learnedLines.map((l) => `- ${l}`).join("\n")}\n`;
     }
@@ -547,7 +559,7 @@ export function buildDayReadPrompt(
   const fuelDemandLine = (() => {
     if (baseline.kind === "done") return "";
     try {
-      const demand: any = repo.dayFuelDemand(opts.date || context.now?.date || localDateISO());
+      const demand: any = dayFuelDemand(opts.date || context.now?.date || localDateISO());
       if (demand?.demand !== "big") return "";
       const drivers = Array.isArray(demand.drivers) && demand.drivers.length ? ` (${demand.drivers.join("; ")})` : "";
       return `\nTODAY'S FUEL DEMAND: today carries bigger work than an ordinary day${drivers}. If food comes up at all, ONE calm clause is enough — carbohydrate earns its place around that work. DATA.fuel_demand carries the same read for the days ahead. This is never a change to their accepted daily target, and never a judgement about what they have or haven't eaten.`;
@@ -642,15 +654,15 @@ export function buildSessionPrompt(
   ctx?: CoachContext,
   opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}
 ): string {
-  const context = dateScopedPromptContext(ctx ?? repo.getCoachContext(), opts.date);
-  const read = repo.dayRead(opts.date, context.recovery, context.signal_state);
+  const context = dateScopedPromptContext(ctx ?? getCoachContext(), opts.date);
+  const read = dayRead(opts.date, context.recovery, context.signal_state);
   // Runner+lifter sequencing (hybrid interference/synergy) — deterministic, quiet when
   // there's nothing to sequence. Anchored to the same date the day-read used.
   const dateISO = opts.date || (context as any).now?.date || localDateISO();
   const hybrid = (() => {
     try {
       // Same flexible-agenda override as dayRead so KEY RUN TOMORROW matches the Brief.
-      return repo.withFlexibleRunLookahead(repo.hybridDayContext(dateISO), dateISO);
+      return withFlexibleRunLookahead(hybridDayContext(dateISO), dateISO);
     } catch {
       return null;
     }
@@ -682,7 +694,7 @@ export function buildSessionPrompt(
         seen.add(name);
         // Injury-aware swaps so "easier on the legs" with a bad knee never offers a
         // knee-loading alternative.
-        const alts = (repo.suggestAlternatives(name, { limit: 3, injuryAreas }) as any[]).map((v) => v.name);
+        const alts = (suggestAlternatives(name, { limit: 3, injuryAreas }) as any[]).map((v) => v.name);
         if (alts.length) lines.push(`- ${name} → ${alts.join(", ")}`);
         if (lines.length >= 12) break;
       }
@@ -737,7 +749,7 @@ ${promptData(context, "session")}`;
 // agent returns is re-verified and clamped server-side (exclusions, load caps,
 // safe novel-exercise rules), so this prompt is guidance, not the safety layer.
 export function buildDailyCompositionPrompt(envelope: any, ctx?: CoachContext): string {
-  const context = dateScopedPromptContext(ctx ?? repo.getCoachContext(), envelope?.date);
+  const context = dateScopedPromptContext(ctx ?? getCoachContext(), envelope?.date);
   const muscles = envelope?.muscles ?? {};
   const caps = envelope?.caps ?? {};
   const candidates = Array.isArray(envelope?.candidates) ? envelope.candidates : [];
@@ -839,7 +851,7 @@ export function buildInsightPrompt(
   liked: string[] = [],
   priorKeys: string[] = []
 ): string {
-  const context = ctx ?? repo.getCoachContext();
+  const context = ctx ?? getCoachContext();
   // What's already been covered is stated as TERRITORY, not as sentences. Listing the
   // prose invited a rewrite of it (the model reads "don't say this" and writes the
   // same claim in new words, which the text guard then waves through); naming the
@@ -851,11 +863,11 @@ export function buildInsightPrompt(
   // key need all of it) and can run to a couple hundred rows over 90 days. Newest
   // first: the corpus is built id-DESC.
   const coveredLines = priorKeys
-    .map((k) => repo.describeInsightIntentKey(k))
+    .map((k) => describeInsightIntentKey(k))
     .filter((d): d is string => !!d)
-    .slice(0, repo.INSIGHT_PROMPT_COVERED_LIMIT)
+    .slice(0, INSIGHT_PROMPT_COVERED_LIMIT)
     .map((d) => `  - ${d}`);
-  const recentTexts = recent.slice(0, repo.INSIGHT_PROMPT_UNKEYED_LIMIT);
+  const recentTexts = recent.slice(0, INSIGHT_PROMPT_UNKEYED_LIMIT);
   const coveredBlock = coveredLines.length
     ? `\nALREADY COVERED (these connections are spent — do NOT make the same link again in different words; find genuinely new territory, or return found:false):\n${coveredLines.join("\n")}\n`
     : "";
@@ -899,7 +911,7 @@ THE CONSTITUTION (binding):
 ${coveredBlock}${recentBlock}${likedBlock}
 NAME WHAT YOU CONNECTED. Alongside the prose, tag the two sides of the connection with facets from
 this closed list, and say which way each one moved ("up" / "down" — bigger/smaller, better/worse):
-${repo.renderInsightFacetVocabulary()}
+${renderInsightFacetVocabulary()}
 The two facets MUST come from different domains — a link inside one domain is not a cross-domain
 connection. Pick the closest facet; if nothing on the list fits either side, the connection isn't one
 this can carry, so return {"found": false}.
@@ -930,7 +942,7 @@ const WEEKLY_READ_SCHEMA = `{
 // other quiet line. Same calm voice as the cross-domain pass; honest continuity
 // (six steady weeks is "nice", a light week is fine), never streak pressure.
 export function buildWeeklyReadPrompt(ctx?: CoachContext): string {
-  const base = ctx ?? repo.getCoachContext();
+  const base = ctx ?? getCoachContext();
   // "At most ONE calm accountability verdict" is enforced here, not just asked of
   // the model: the weekly read's data carries only the single most recently
   // evaluated decisive outcome, so a second verdict cannot be mentioned. Other

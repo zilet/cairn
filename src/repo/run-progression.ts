@@ -41,7 +41,8 @@ import {
   weeklyKm as recordedWeeklyKm,
 } from "./program-state.js";
 import { legLoadGroupsPhrase, NO_LEG_LOAD, type StrengthLegLoad, strengthLegLoad } from "./hybrid-load.js";
-import { createProposal, getEnduranceGoal, getProfile, supersedeAutoRunPlanDrafts } from "./profile.js";
+import { getEnduranceGoal, getProfile } from "./profile.js";
+import { createProposal, supersedeAutoRunPlanDrafts } from "./proposals.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "./reaction-model.js";
 import {
   raceRamp,
@@ -58,18 +59,9 @@ import { localDateISO } from "./shared.js";
 import { lowerBodyPlanDayNumbers } from "./training-read.js";
 import { getTrainingIntent, type ResolvedTrainingIntent } from "./training-intent.js";
 import type { CoachPersonalModifier } from "../brain/coach-context-contract.js";
+import { round1 } from "../lib/numbers.js";
+import { isoDaysAgo, mondayOf } from "../lib/dates.js";
 
-// ---------------------------------------------------------------------------
-// Shared small helpers
-// ---------------------------------------------------------------------------
-function mondayOf(dateISO: string): string {
-  const d = new Date(dateISO + "T00:00:00Z");
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-  return d.toISOString().slice(0, 10);
-}
-function isoDaysAgo(dateISO: string, n: number): string {
-  return new Date(new Date(dateISO + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
-}
 function shiftDaysISO(dateISO: string, n: number): string {
   return isoDaysAgo(dateISO, -n);
 }
@@ -81,9 +73,6 @@ function nextDayNumber(n: number): number {
 }
 function prevDayNumber(n: number): number {
   return n === 1 ? 7 : n - 1;
-}
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
 }
 function cap1(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;

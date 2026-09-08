@@ -17,7 +17,9 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 import { normalizedExerciseKey } from "./exercise-canon.js";
 import { getHrModel, type HrModel } from "./hr-model.js";
 import { getEnduranceGoal } from "./profile.js";
-import { localDateISO, localDayOfStamp } from "./shared.js";
+import { daysBetweenISO, localDateISO, localDayOfStamp } from "./shared.js";
+import { isoDay } from "../lib/dates.js";
+import { finite as num } from "../lib/numbers.js";
 
 export type CalibrationKind = "lthr_tt" | "benchmark_run" | "strength_topset";
 
@@ -113,26 +115,6 @@ const BENCHMARK_HR_TOLERANCE = 4;
 // ceiling so a drift upward doesn't push it into a different kind of run.
 const BENCHMARK_HR_BELOW_Z2_TOP = 2;
 
-// Null-safe: Number(null) is 0, so a missing column would otherwise read as a
-// real zero (see the same guard in hr-model.ts).
-function num(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function isoDay(value: unknown): string {
-  return String(value ?? "").slice(0, 10);
-}
-
-function daysBetween(fromISO: string | null | undefined, toISO: string): number | null {
-  if (!fromISO) return null;
-  const a = Date.parse(`${isoDay(fromISO)}T00:00:00Z`);
-  const b = Date.parse(`${isoDay(toISO)}T00:00:00Z`);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-  return Math.round((b - a) / 864e5);
-}
-
 function shiftISO(dateISO: string, days: number): string {
   const ms = Date.parse(`${isoDay(dateISO)}T00:00:00Z`);
   if (!Number.isFinite(ms)) return isoDay(dateISO);
@@ -140,6 +122,14 @@ function shiftISO(dateISO: string, days: number): string {
 }
 
 /** anchored / aging / stale from an age in days, or "never" when nothing anchors it. */
+// Age in days of a dated datum, or null when it has no date at all. The signed
+// arithmetic is the canonical `daysBetweenISO`; the nullable FROM side is this
+// module's own contract — a calibration event that was never recorded has no age,
+// and must never read as "today".
+function ageInDays(fromISO: string | null | undefined, toISO: string): number | null {
+  return fromISO ? daysBetweenISO(toISO, fromISO) : null;
+}
+
 function freshnessFor(ageDays: number | null, anchoredMax: number, agingMax: number): CalibrationStatusItem["freshness"] {
   if (ageDays == null) return "never";
   if (ageDays < anchoredMax) return "anchored";
@@ -426,7 +416,7 @@ function slideFromDays(days: LiftDay[], asOf: string): SlideRead {
   }
   const latest = window[window.length - 1]?.est_1rm ?? 0;
   if (!(peak > 0) || !(latest < peak)) return NO_SLIDE;
-  const age = daysBetween(peakDate, asOf);
+  const age = ageInDays(peakDate, asOf);
   return {
     regressing: true,
     deep: latest < peak * (1 - UNVERIFIED_HOLD_SLIDE_FRAC),
@@ -537,7 +527,7 @@ function liftRead(key: string, ids: number[], asOf: string): LiftRead {
   const days = liftDays(ids, asOf);
   const history = historyFromDays(days);
   const anchor = anchorFrom(key, history, asOf);
-  const freshness = freshnessFor(daysBetween(anchor.anchored_on, asOf), STRENGTH_ANCHORED_DAYS, STRENGTH_AGING_DAYS);
+  const freshness = freshnessFor(ageInDays(anchor.anchored_on, asOf), STRENGTH_ANCHORED_DAYS, STRENGTH_AGING_DAYS);
   return {
     key,
     days,
@@ -607,7 +597,7 @@ export function verifiedStrengthAnchor(exerciseName: string, dateISO?: string): 
   const asOf = isoDay(dateISO || localDateISO());
   const anchor = strengthAnchor(exerciseName, asOf);
   if (!anchor.anchored_on || anchor.verified_est_1rm == null || anchor.verified_est_1rm <= 0) return null;
-  const age = daysBetween(anchor.anchored_on, asOf);
+  const age = ageInDays(anchor.anchored_on, asOf);
   if (age == null || age >= STRENGTH_ANCHORED_DAYS) return null;
   return { est_1rm: anchor.verified_est_1rm, anchored_on: anchor.anchored_on };
 }
@@ -691,7 +681,7 @@ export function calibrationStatus(dateISO?: string): { as_of: string; items: Cal
   // Threshold HR. Only a field test anchors it — a sustained-effort estimate is
   // precisely the thing a test would replace.
   const lthrEvent = lastCalibration("lthr_tt", "lthr", asOf);
-  const lthrFreshness = freshnessFor(daysBetween(lthrEvent?.date, asOf), LTHR_ANCHORED_DAYS, LTHR_AGING_DAYS);
+  const lthrFreshness = freshnessFor(ageInDays(lthrEvent?.date, asOf), LTHR_ANCHORED_DAYS, LTHR_AGING_DAYS);
   pushEndurance({
     key: "lthr",
     domain: "endurance",
@@ -708,7 +698,7 @@ export function calibrationStatus(dateISO?: string): { as_of: string; items: Cal
   // aerobic efficiency becomes readable at all.
   const benchmarkEvent = lastCalibration("benchmark_run", "easy_pace", asOf);
   const benchmarkFreshness = freshnessFor(
-    daysBetween(benchmarkEvent?.date, asOf),
+    ageInDays(benchmarkEvent?.date, asOf),
     EASY_PACE_ANCHORED_DAYS,
     EASY_PACE_AGING_DAYS
   );
@@ -1016,7 +1006,7 @@ export interface CalibrationCoachView {
 export function calibrationForCoach(dateISO?: string): CalibrationCoachView {
   const asOf = isoDay(dateISO || localDateISO());
   const recent = recentCalibrations(4, asOf).filter((event) => {
-    const age = daysBetween(event.date, asOf);
+    const age = ageInDays(event.date, asOf);
     return age != null && age <= 60;
   });
   return {

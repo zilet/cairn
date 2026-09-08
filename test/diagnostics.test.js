@@ -232,7 +232,7 @@ test("request correlation returns generic 500 and records one bounded issue", ()
     console.error = originalError;
   }
   assert.equal(response.statusCode, 500);
-  assert.deepEqual(response.body, { error: "internal error", request_id: id });
+  assert.deepEqual(response.body, { ok: false, error: "internal error", request_id: id });
   response.emit("finish");
 
   const exception = db

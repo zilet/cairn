@@ -110,9 +110,10 @@ curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.
 git clone https://github.com/zilet/cairn.git && cd cairn && ./quickstart.sh
 ```
 
-`quickstart.sh` detects Docker (preferred, no Node needed on the host) or falls back to local Node
-24, starts Cairn, waits for health, and prints the URL. **Node 24 is required** for a non-Docker
-run — that's where `node:sqlite` is unflagged. The Docker image bundles it.
+`quickstart.sh` resolves a running container engine — Docker, Podman, or Apple's `container`,
+whichever is installed and answering (preferred, no Node needed on the host) — or falls back to
+local Node 24, starts Cairn, waits for health, and prints the URL. **Node 24 is required** for a
+non-container run — that's where `node:sqlite` is unflagged. The container image bundles it.
 
 **First paint is real**, no agent required. For chat, adaptive coaching, and meal plans, add **one**
 agent: open **Settings → Agents**, tap **Install** on the provider you use, then **Connect**. A

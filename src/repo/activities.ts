@@ -8,6 +8,7 @@ import { getSettings } from "./settings.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { deriveSessionTitle } from "./training-read.js";
 import { addDaysISO, localDateISO, chatHistoryTimeLabel } from "./shared.js";
+import { round1 } from "../lib/numbers.js";
 
 // ---------- activities ----------
 export function parseActivity(text: string) {
@@ -1592,7 +1593,6 @@ export function getGarminCoachSummary(days = 14, asOfDate = localDateISO()) {
   const byDate = new Map<string, Record<string, any>>();
   for (const row of metricRowsRaw) if (!byDate.has(String(row.date))) byDate.set(String(row.date), row);
   const metricRows = [...byDate.values()];
-  const round1 = (value: number): number => Math.round(value * 10) / 10;
   const avg = (col: string): number | null => {
     const values = metricRows
       .filter((row) => row[col] != null)

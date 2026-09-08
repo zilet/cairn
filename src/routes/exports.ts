@@ -16,15 +16,17 @@ exportsRouter.get("/export", (_req, res) => {
   res.send(JSON.stringify(data, null, 2));
 });
 
-exportsRouter.get("/export/db", async (_req, res) => {
+exportsRouter.get("/export/db", async (_req, res, next) => {
   const tmp = path.join(os.tmpdir(), `cairn-snap-${process.pid}-${Date.now()}.db`);
   try {
     snapshotDbTo(tmp);
     res.download(tmp, `cairn-${todayISO()}.db`, (_err) => {
       fs.rm(tmp, { force: true }, () => {});
     });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 

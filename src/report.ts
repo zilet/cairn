@@ -16,6 +16,7 @@
 import crypto from "node:crypto";
 import * as repo from "./repo.js";
 import { formatReportDate, formatReportDateShort, reportDateISO, reportDaysBetween, reportTodayISO } from "./reportDates.js";
+import { round1 } from "./lib/numbers.js";
 
 function esc(s: unknown): string {
   return String(s ?? "")
@@ -315,10 +316,6 @@ function isDexaSupportOnlyBodyCompName(name: string): boolean {
 
 function appendNote(base: string | null, note: string): string {
   return base ? `${base} ${note}` : note;
-}
-
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
 }
 
 interface BodyMetricEstimate {

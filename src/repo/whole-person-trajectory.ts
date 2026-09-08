@@ -13,6 +13,7 @@ import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { matchOptimalZone, optimalDistance } from "./propagation-data.js";
 import { recoverySessionDose } from "./training-read.js";
 import { getTrainingIntent, type TrainingPriority } from "./training-intent.js";
+import { isoDay } from "../lib/dates.js";
 
 export type WholePersonVerdict = "better" | "holding" | "worse" | "unknown";
 export type WholePersonDomain =
@@ -171,10 +172,6 @@ interface StrengthExplanations {
   live: string[];
   /** Tested, outlived, kept as dated history in `why`. These suppress nothing. */
   spent: string[];
-}
-
-function isoDay(value: unknown): string {
-  return String(value ?? "").slice(0, 10);
 }
 
 function contextEventEffectiveEnd(row: {

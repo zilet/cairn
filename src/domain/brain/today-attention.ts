@@ -33,7 +33,7 @@
 // ============================================================================
 
 import { db } from "../../db.js";
-import { listVisibleInsights } from "../../repo/coach.js";
+import { listVisibleInsights } from "../../repo/insights.js";
 import { localDateISO } from "../../repo/shared.js";
 
 export type TodayAttentionSurface = "brief" | "feedback" | "insight" | "weekly" | "fuel";

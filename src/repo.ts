@@ -12,6 +12,8 @@ export * from "./repo/sessions.js";
 export * from "./repo/session-dose-log.js"; // a completed log outranks a felt low-performance rating
 export * from "./repo/adaptive-session.js";
 export * from "./repo/profile.js";
+export * from "./repo/proposals.js"; // the draft→apply ledger, split out of profile.ts
+export * from "./repo/recovery-week.js"; // the recovery-week state machine, split out of profile.ts
 export * from "./repo/location-context.js";
 export * from "./repo/training-intent.js";
 export * from "./repo/endurance-capacity.js";
@@ -59,6 +61,9 @@ export * from "./repo/next-checkup.js"; // athlete-facing "next checkup" read: d
 export * from "./repo/prevent.js"; // AHA PREVENT (2023) base-model risk engine (pure math)
 export * from "./repo/coach-context.js";
 export * from "./repo/coach.js";
+export * from "./repo/family.js"; // family-member CRUD (split out of coach.ts)
+export * from "./repo/directives.js"; // health-directive write/lifecycle + reconcile (split out of coach.ts)
+export * from "./repo/insights.js"; // insights CRUD + weekly-read freshness (split out of coach.ts)
 export * from "./repo/insight-intent.js"; // WHAT an insight connects (facet pair + polarity), so a genuine rephrase can be refused
 export * from "./repo/baseline-bands.js"; // personal-baseline recovery + training-load reads
 export * from "./repo/sensor-freshness.js"; // how old a wearable reading may be before it behaves as absent
@@ -76,6 +81,9 @@ export * from "./repo/intelligence.js";
 export * from "./repo/program-state.js";
 export * from "./repo/training-playbook.js"; // plateau/adherence playbook suggestions for plan evolution
 export * from "./repo/progression.js";
+export * from "./repo/equipment.js"; // the persisted equipment profile (split out of progression.ts)
+export * from "./repo/exercise-preferences.js"; // learned like/dislike memories + the bounded variation re-rank
+export * from "./repo/plan-swap.js"; // "rotate one in": plan-slot resolution + the swap propose→apply path
 export * from "./repo/volume-guard.js"; // prescribed VOLUME has no ladder back up: bound a cut, record what it owes, climb back
 export * from "./repo/daily-decision.js"; // Stage 2: the deterministic daily-session decision envelope (policy-versioned, reason-coded)
 export * from "./repo/daily-composition.js"; // Stage 3: server-side normalizer + deterministic fallback for bounded agent composition

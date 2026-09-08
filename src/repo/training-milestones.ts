@@ -11,6 +11,7 @@ import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
 import { getProgramState, type LiftState, type ProgramState } from "./program-state.js";
 import { enduranceTestsDue } from "./run-progression.js";
 import { clipText, localDateISO } from "./shared.js";
+import { round5 } from "../lib/numbers.js";
 
 export interface StrengthMilestoneInput {
   key: string;
@@ -90,10 +91,6 @@ function slug(text: string): string {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "") || "benchmark"
   );
-}
-
-function round5(n: number): number {
-  return Math.round(n / 5) * 5;
 }
 
 function liftStatus(lift: LiftState | undefined | null): AttentionSignalStatus {

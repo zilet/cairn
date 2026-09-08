@@ -31,6 +31,8 @@ import { weeklyKm } from "./program-state.js";
 import { RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { canonicalGroup } from "./exercise-canon.js";
 import { beliefDispositionMap, learnedModelBeliefId } from "./belief-dispositions.js";
+import { isoDaysAgo } from "../lib/dates.js";
+import { median } from "../lib/numbers.js";
 
 export interface LearnedPattern {
   id: string;
@@ -65,20 +67,8 @@ const SLEEP_FUEL_MIN_HUNGER_DELTA = 0.4; // short-night hunger must exceed norma
 
 // ---- small local helpers ----------------------------------------------------
 
-function isoDaysAgo(dateISO: string, n: number): string {
-  const base = Date.parse(dateISO + "T00:00:00Z");
-  return new Date(base - n * 864e5).toISOString().slice(0, 10);
-}
-
 function mean(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
-}
-
-function median(values: number[]): number {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 function round(v: number, dp = 2): number {
@@ -206,7 +196,7 @@ function enduranceStrengthInterference(refDate: string): LearnedPattern | null {
   if (pairs.length < INTERFERENCE_MIN_PAIRS) return null;
 
   // The athlete's OWN typical run week: the median km across the qualifying pairs.
-  const med = median(pairs.map((p) => p.km));
+  const med = median(pairs.map((p) => p.km)) ?? 0;
   if (med <= 0) return null;
   const big = pairs.filter((p) => p.km >= med * INTERFERENCE_BIG_FACTOR);
   const typical = pairs.filter((p) => p.km < med * INTERFERENCE_BIG_FACTOR);

@@ -4,7 +4,7 @@ import {
   currentLiftCapacities,
   deleteSet,
   dismissAnchorObjectiveSuggestion,
-  finishSession,
+  finishSessionWithHeadline,
   getLastSet,
   getProgress,
   getStrengthJourney,
@@ -143,9 +143,15 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
 
   server.tool(
     "finish_session",
-    "Mark a session finished (optionally attaching notes) and return its summary (sets, tonnage, PRs).",
+    "Mark a session finished (optionally attaching notes) and return its summary (sets, tonnage, PRs) plus the rotated 'done' headline today's Brief will show. An empty or whitespace-only note is treated as no note, so it never overwrites an existing one.",
     { id: z.number().int(), notes: z.string().nullable().optional() },
-    async ({ id, notes }) => asText(finishSession(id, notes ?? null))
+    // Mirrors POST /api/sessions/:id/finish: the same note normalization (an
+    // empty/whitespace-only note stays null so the repo's COALESCE preserves an
+    // existing one) and the same use case, so both surfaces return the headline.
+    async ({ id, notes }) => {
+      const note = notes == null || !String(notes).trim() ? null : String(notes).trim();
+      return asText(finishSessionWithHeadline(id, note));
+    }
   );
 
   server.tool(

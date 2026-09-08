@@ -21,6 +21,7 @@ import { lsqSlopePerDay } from "../repo/health.js";
 import { addDaysISO } from "../repo/shared.js";
 import { robustWeightEvidence } from "../repo/weight-evidence.js";
 import { verifiedTopSetInWindow } from "../repo/calibration.js";
+import { coerceFinite as finite } from "../lib/numbers.js";
 
 export const MATURITY_EVALUATOR_VERSION = "brain-maturity-v1";
 
@@ -42,11 +43,6 @@ export interface MetricEvaluator {
   evaluator: BrainExpectation["evaluator"];
   version: string;
   observe(context: EvaluatorContext): MetricObservation;
-}
-
-function finite(value: unknown): number | null {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
 }
 
 function rounded(value: number, digits = 2): number {

@@ -2,6 +2,7 @@ import { enqueueAgentJob } from "./agentJobs.js";
 import { onBrainEvent, type RoutedBrainEvent } from "./brainEvents.js";
 import { createBrainReviewAgentJob } from "./repo/chat.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
+import { log } from "./log.js";
 
 const DEFAULT_COOLDOWN_MS = 10 * 60_000;
 let unsubscribe: (() => void) | null = null;
@@ -48,7 +49,7 @@ export function persistBrainReviewEvent(
         enqueue(Number(stored.job.id));
       } catch (error: any) {
         recordAsyncFailure("brain_review", "enqueue", error);
-        console.error(`[brain] could not enqueue review job#${stored.job.id} (${diagnosticErrorName(error)})`);
+        log.error(`[brain] could not enqueue review job#${stored.job.id} (${diagnosticErrorName(error)})`);
       }
     });
   }
@@ -65,7 +66,7 @@ export function startBrainReviewJobSubscriber(deps: BrainReviewSubscriberDeps = 
       // Signal review is additive. A persistence failure must never block the
       // originating workout, food log, sync, or health write.
       recordAsyncFailure("brain_review", "persist", error);
-      console.error(`[brain] signal review skipped safely (${diagnosticErrorName(error)})`);
+      log.error(`[brain] signal review skipped safely (${diagnosticErrorName(error)})`);
     }
   });
   unsubscribe = () => {

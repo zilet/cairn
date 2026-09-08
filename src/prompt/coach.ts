@@ -1,7 +1,13 @@
 // Training-plan prompts: the coach's next-week target proposal and the deeper
 // program-evolution proposal. Both emit PLAN_SCHEMA; the server-owned autonomy
 // policy decides whether each result lands, announces, or waits for review.
-import * as repo from "../repo.js";
+import { getCoachContext } from "../repo/coach.js";
+import { normalizedExerciseKey } from "../repo/exercise-canon.js";
+import { examplesForGroup, suggestAlternatives } from "../repo/exercise-variations.js";
+import { pressSlotKey } from "../repo/plan-quality.js";
+import { getProgramState } from "../repo/program-state.js";
+import { availableEquipment } from "../repo/equipment.js";
+import { programBalance } from "../repo/progression.js";
 import { localDateISO } from "../repo/shared.js";
 import { promptData } from "./context-projection.js";
 import {
@@ -92,7 +98,7 @@ function renderBlock(ctx: any): string {
 }
 // Training-target proposal prompt (existing coach).
 export function buildCoachPrompt(userInstruction?: string): string {
-  const ctx = repo.getCoachContext();
+  const ctx = getCoachContext();
   const disc = disciplineOf(ctx);
   const coachRole = disc === "endurance"
     ? "an endurance coach (with strength as supporting work)"
@@ -174,8 +180,8 @@ ${promptData(ctx, "coach")}`;
 // is the SAME PLAN_SCHEMA (changes/cardio/days) → a DRAFT proposal for review;
 // nothing auto-applies. Constitution: a suggestion, never a gate; no scores.
 export function buildProgramEvolutionPrompt(userInstruction?: string, state?: any): string {
-  const ctx = repo.getCoachContext();
-  state = state ?? repo.getProgramState();
+  const ctx = getCoachContext();
+  state = state ?? getProgramState();
   // Concrete variation candidates for any stalled lift, so "rotate a variation"
   // is actionable — the agent gets real same-pattern options to choose from
   // (it still respects constraint_notes/injuries and starts light).
@@ -185,7 +191,7 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
   const injuryAreas = activeInjuryAreas(ctx);
   // Rank candidates by the user's available equipment + a bias toward heavier
   // COMPOUND loading (their explicit goal), never re-suggesting what's already planned.
-  const equip = (() => { try { return repo.availableEquipment(); } catch { return []; } })();
+  const equip = (() => { try { return availableEquipment(); } catch { return []; } })();
   const equipList = equip.length ? equip : undefined;
   const plannedNames = (Array.isArray(ctx?.plan) ? ctx.plan : [])
     .flatMap((day: any) => Array.isArray(day?.items) ? day.items : [])
@@ -196,7 +202,7 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
     .map((l: any) => {
       // Injury-aware: the candidate list must not include movements that load an
       // injured area (else it contradicts the "never load an injured area" rule).
-      const names = (repo.suggestAlternatives(l.exercise, {
+      const names = (suggestAlternatives(l.exercise, {
         limit: 20,
         injuryAreas,
         preferCompound: true,
@@ -205,10 +211,10 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
       }) as any[])
         .map((v) => v.name)
         .filter((name) => {
-          const key = repo.normalizedExerciseKey(name);
-          const slot = repo.pressSlotKey(name);
+          const key = normalizedExerciseKey(name);
+          const slot = pressSlotKey(name);
           return !plannedNames.some((planned) =>
-            repo.normalizedExerciseKey(planned) === key || (slot != null && repo.pressSlotKey(planned) === slot)
+            normalizedExerciseKey(planned) === key || (slot != null && pressSlotKey(planned) === slot)
           );
         })
         .slice(0, 4);
@@ -230,11 +236,11 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
   try {
     // Reuse the balance getCoachContext already computed (program_balance); only
     // recompute as a fallback if it's absent.
-    const bal: any = ctx?.program_balance ?? repo.programBalance();
+    const bal: any = ctx?.program_balance ?? programBalance();
     const due: string[] = Array.isArray(bal?.due) ? bal.due : [];
     const over: string[] = Array.isArray(bal?.over) ? bal.over : [];
     if (due.length || over.length) {
-      const ex = (g: string) => (repo.examplesForGroup(g, 2) as string[]).join(", ");
+      const ex = (g: string) => (examplesForGroup(g, 2) as string[]).join(", ");
       weakBlock = `\nVOLUME BALANCE — REBALANCE toward weak points (this is how a real coach builds a body, not by repeating the same lifts):\n${
         due.length ? `- LAGGING (under their productive set range or untrained lately): ${due.slice(0, 6).join(", ")}. Bias any added/rotated movement to a lagging group — e.g. ${due.slice(0, 2).map((g) => `${g} (${ex(g)})`).join("; ")}.\n` : ""
       }${over.length ? `- WELL-SERVED (running high): ${over.join(", ")} — you may redirect a set or two from here to a lagging group rather than adding net volume.\n` : ""}`;
@@ -370,7 +376,7 @@ const WEEK_COMPOSE_SCHEMA = `{
 // starting dose. The placement rules read on a RING (the template repeats, so Sunday
 // runs into Monday) — the same cyclic adjacency weekLayoutRead judges a live week on.
 export function buildWeekComposePrompt(userInstruction?: string): string {
-  const ctx = repo.getCoachContext();
+  const ctx = getCoachContext();
   const disc = disciplineOf(ctx);
   const coachRole = disc === "endurance"
     ? "an endurance coach (with strength as supporting work)"
@@ -379,7 +385,7 @@ export function buildWeekComposePrompt(userInstruction?: string): string {
       : "a strength coach";
   // What the athlete can actually load. On a blank slate this is often the only
   // hard constraint on movement selection, so it leads rather than trails.
-  const equip = (() => { try { return repo.availableEquipment(); } catch { return []; } })();
+  const equip = (() => { try { return availableEquipment(); } catch { return []; } })();
   const equipBlock = equip.length
     ? `\nAVAILABLE EQUIPMENT: ${equip.join(", ")}. Every movement in this week must be one they can load with this. Bias the main lifts toward heavier compound options they can progress on.\n`
     : `\nNO EQUIPMENT PROFILE ON RECORD: prefer movements that work in a normal gym, and keep at least one option per pattern that needs nothing but bodyweight.\n`;

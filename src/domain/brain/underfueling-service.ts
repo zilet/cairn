@@ -11,15 +11,9 @@ import {
 import { MEAL_REFRESH_INSTRUCTION_KEY, MEAL_REFRESH_REQUEST_KEY } from "../../repo/meal-refresh-retry.js";
 import { getActiveNutritionTarget } from "../../repo/nutrition.js";
 import { getPlan } from "../../repo/plan.js";
-import {
-  createProposal,
-  getProposal,
-  recompositionStageAt,
-  RECOVERY_WEEK_INSTRUCTION,
-  RECOVERY_WEEK_INSTRUCTION_PREFIX,
-  recoveryWeekStatus,
-  setProposalStatus,
-} from "../../repo/profile.js";
+import { recompositionStageAt } from "../../repo/profile.js";
+import { createProposal, getProposal, setProposalStatus } from "../../repo/proposals.js";
+import { RECOVERY_WEEK_INSTRUCTION, RECOVERY_WEEK_INSTRUCTION_PREFIX, recoveryWeekStatus } from "../../repo/recovery-week.js";
 import { buildVolumeRestoreProposal } from "../../repo/progression.js";
 import { activeRecoveryWeekLedger } from "../../repo/recovery-week-ledger.js";
 import { recoveryWeekMayBeAnnounced } from "../../repo/recovery-refusal.js";

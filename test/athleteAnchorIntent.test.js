@@ -94,7 +94,7 @@ test("the schema enforces one active objective PER LIFT, not one overall", () =>
 });
 
 test("migration v98 is idempotent, additive, and preserves a v97-shaped active objective", () => {
-  const migrate = readFileSync(join(root, "src/migrate.ts"), "utf8");
+  const migrate = readFileSync(join(root, "src/migrations/v051-100.ts"), "utf8");
   const source = migrate.slice(migrate.indexOf("version: 98"));
   assert.match(source, /DROP INDEX IF EXISTS idx_strength_objectives_one_active\b/);
   assert.match(source, /CREATE UNIQUE INDEX IF NOT EXISTS idx_strength_objectives_one_active_per_lift/);

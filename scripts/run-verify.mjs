@@ -5,6 +5,8 @@ const initialJobs = [
   { name: "docs", steps: [["npm", "run", "docs:check"]] },
   { name: "actions", steps: [["npm", "run", "actions:check"]] },
   { name: "launch safety", steps: [["npm", "run", "launch:check"]] },
+  { name: "schema two-step", steps: [["npm", "run", "schema:check"]] },
+  { name: "lint", steps: [["npm", "run", "lint"]] },
 ];
 
 const clientJobs = [

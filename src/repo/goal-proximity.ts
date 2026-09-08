@@ -23,11 +23,7 @@ import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { effectiveGoalMode, getProfile } from "./profile.js";
 import { NEAR_GOAL_REMAINING_LB } from "./recomposition-stage.js";
 import { localDateISO } from "./shared.js";
-
-function finite(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
+import { coerceFinite as finite } from "../lib/numbers.js";
 
 /**
  * How far BELOW a lose-mode goal the athlete may sit and still be read as "at the

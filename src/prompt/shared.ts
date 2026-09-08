@@ -3,13 +3,16 @@
 // render* conductor / program-state / performance helpers. Imported by the
 // per-domain prompt modules and re-exported (with the public render* helpers +
 // COACHING_STANCE) through the src/prompt.ts barrel. Behavior-preserving split.
-import * as repo from "../repo.js";
+import { guidelineFor } from "../guidelines.js";
+import { getLocationContext } from "../repo/location-context.js";
+import { annotateDirectiveFreshness } from "../repo/propagation.js";
 import { extractJson } from "../agents.js";
 import type { CoachContext, PartialCoachContext } from "../repo/coach-context.js";
 import { type SensorSignal, sensorIsCurrent } from "../repo/sensor-freshness.js";
 import { RECOVERY_SAMPLE_FLOOR } from "../repo/recovery-trend.js";
 import { localDateISO } from "../repo/shared.js";
 import { pickDayVariant } from "../repo/brain/day-read-rules.js";
+import { coerceFinite } from "../lib/numbers.js";
 
 // getCoachContext deliberately describes the host's current local day. Dated
 // prompts are historical/forward planning surfaces, so patch only their compact
@@ -17,7 +20,7 @@ import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 export function dateScopedPromptContext(context: CoachContext, date?: string): CoachContext {
   if (!date) return context;
   try {
-    return { ...context, location: repo.getLocationContext({ on: date }) };
+    return { ...context, location: getLocationContext({ on: date }) };
   } catch {
     return context;
   }
@@ -67,23 +70,10 @@ ${CHAT_ACTION_SENTINEL}
 ${schema}${empty}`;
 }
 
-// The non-streaming counterpart to renderStreamingContract: ONE canonical "return
-// only JSON" preamble. ~25 hand-written variants had drifted into two wordings ("no
-// fences" vs the stricter "ONE bare JSON object only — no markdown fences"), so the
-// bar an op set depended on which builder its author copied. The strictest wording
-// wins here. Op-specific clauses are options rather than a reason to hand-write the
-// preamble again: `note` extends the contract sentence, `lead` introduces the schema
-// (an alternative "nothing to say" answer), `after` follows it.
-export function renderJsonContract(
-  schema: string,
-  opts: { note?: string; lead?: string; after?: string } = {}
-): string {
-  const note = opts.note ? ` ${opts.note.trim()}` : "";
-  const lead = opts.lead ? `\n${opts.lead.trim()}` : "";
-  const after = opts.after ? `\n${opts.after.trim()}` : "";
-  return `OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.${note}${lead}
-${schema}${after}`;
-}
+// The non-streaming JSON output contract lives in its own leaf module (importing
+// nothing) so `src/symptomCapture.ts` can use it without pulling this file — and the
+// repo cluster it imports — into a cycle. Re-exported for the existing importers.
+export { renderJsonContract } from "./json-contract.js";
 
 // The two mechanical ENCODINGS every plan-shaping prompt has to state. These are
 // storage contracts (see src/repo), not coaching taste — a prompt that words them
@@ -435,7 +425,7 @@ export function renderRunCompliance(ctx: any, focus: "training" | "day" | "weekl
 // hard rule; returns "" when neither is available (quiet by default).
 function directiveCitationTag(d: any): string {
   if (d?.citation) return ` [${String(d.citation).trim()}]`;
-  const g = d?.marker ? repo.guidelineFor(String(d.marker)) : null;
+  const g = d?.marker ? guidelineFor(String(d.marker)) : null;
   return g ? ` [general guidance · ${g.source}]` : "";
 }
 
@@ -494,7 +484,7 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     // annotateDirectiveFreshness anchors each acute finding to its actual LAB reading
     // date (not when the review ran), so a 2-week-old hs-CRP ages out instead of capping
     // training every morning. Chronic markers (ApoB/LDL/Lp(a)) never decay → stay fresh.
-    const annotated = repo.annotateDirectiveFreshness(relevant);
+    const annotated = annotateDirectiveFreshness(relevant);
     // A TRANSIENT acute finding (a fresh hs-CRP/ESR drawn during an active illness/
     // injury/hard-block window) is informational the same way an aging one is — it
     // must NOT cap today's training. Split it out of "honor these" alongside stale.
@@ -968,7 +958,10 @@ export function renderTodayFuel(ctx: any): string {
   const count = Number(intake?.count ?? entries.length);
   if (!intake || !entries.length || !Number.isFinite(count) || count <= 0) return "";
 
-  const num = (v: any) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
+  const num = (v: any) => {
+    const n = coerceFinite(v);
+    return n == null ? null : Math.round(n);
+  };
   const macroBits = (src: any) => {
     const bits: string[] = [];
     const kcal = num(src?.kcal);

@@ -37,6 +37,7 @@ import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { weeklyKm } from "./program-state.js";
 import { SUSTAINABLE_LONG_STEP_FACTOR, SUSTAINABLE_WEEKLY_BUILD_FACTOR } from "./run-ramp.js";
 import { addDaysISO } from "./shared.js";
+import { coerceFinite as finite } from "../lib/numbers.js";
 
 /**
  * Below this, distance is not the thing being trained. A 3 km easy shakeout is a
@@ -87,11 +88,6 @@ export interface LongRunRamp {
 function toHalfKm(km: number): number {
   return Math.round(km * 2) / 2;
 }
-
-const finite = (value: unknown): number | null => {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-};
 
 /**
  * The arithmetic, with no database and no side effects.

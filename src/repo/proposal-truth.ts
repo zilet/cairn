@@ -4,6 +4,8 @@ import { db } from "../db.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { clampEvidenceDate, clampProposalProvenanceDates } from "./proposal-provenance-clamp.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { stableJson } from "../lib/numbers.js";
+import { isoDate } from "../lib/dates.js";
 
 // Re-exported so `src/repo.ts` and its callers keep one import site for proposal
 // truth; the clamp itself lives in a db-free module because migration 92 needs it.
@@ -39,7 +41,6 @@ export interface ProposalFreshness {
   checked_at: string;
 }
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_DATE =
   /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?\b/i;
 const HISTORICAL =
@@ -47,13 +48,6 @@ const HISTORICAL =
 
 function object(value: unknown): Record<string, any> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, any>) : null;
-}
-
-function isoDate(value: unknown): string | null {
-  const text = String(value ?? "").trim();
-  if (!ISO_DATE.test(text)) return null;
-  const parsed = new Date(`${text}T00:00:00Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text ? text : null;
 }
 
 function datePart(value: unknown): string | null {
@@ -64,17 +58,6 @@ function datePart(value: unknown): string | null {
 
 function hash(value: unknown): string {
   return createHash("sha256").update(stableJson(value)).digest("hex");
-}
-
-function stableJson(value: unknown): string {
-  if (value === undefined) return "null";
-  if (value == null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-    .join(",")}}`;
 }
 
 const NON_AUTHORITATIVE_KEYS = new Set([

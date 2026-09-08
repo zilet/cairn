@@ -1,3 +1,4 @@
+import { isoDate as canonicalIsoDate } from "../lib/dates.js";
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
@@ -70,10 +71,12 @@ export function boundedInteger(value: unknown, min: number, max: number): number
   return Number.isInteger(number) && number >= min && number <= max ? number : null;
 }
 
+// Deliberately STRICTER than the canonical `isoDate`: agent JSON must supply a bare
+// string day key, so a number, a Date, or a padded " 2026-01-01 " is a contract
+// violation here even though the canonical reader would coerce or trim it. The
+// parse itself is the canonical one.
 export function isoDate(value: unknown): string | null {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : null;
+  return typeof value === "string" && canonicalIsoDate(value) === value ? value : null;
 }
 
 export function isoDateTime(value: unknown): string | null {

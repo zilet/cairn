@@ -2,7 +2,13 @@
 // research grounding, the elite-coach synthesis, marker reconciliation, and the
 // week-ahead forward look.
 import { HEALTH_DOCUMENT_KIND_SCHEMA } from "../healthDocumentKinds.js";
-import * as repo from "../repo.js";
+import { getCoachContext } from "../repo/coach.js";
+import { getMarkerHistory } from "../repo/health.js";
+import { healthFocus } from "../repo/health-focus.js";
+import { markerResponseCoachLine } from "../repo/marker-response.js";
+import { listMemory } from "../repo/memory.js";
+import { getProfile } from "../repo/profile.js";
+import { prioritizeMarkers } from "../repo/propagation.js";
 import { renderEvidencePack } from "../evidencePack.js";
 import type { CoachContext } from "../repo/coach-context.js";
 import { promptData } from "./context-projection.js";
@@ -75,8 +81,8 @@ export function buildHealthIngestPrompt(
   kindHint: string,
   opts?: { emphasizeCompleteness?: boolean; missed?: { got: number; expected: number }; inventory?: string[] }
 ): string {
-  const profile = repo.getProfile();
-  const recentMemory = (repo.listMemory(40) as any[]).map((m) => m.content);
+  const profile = getProfile();
+  const recentMemory = (listMemory(40) as any[]).map((m) => m.content);
   // A bare folder path is a dead end for an autonomous CLI: it reaches for `ls`
   // or `find`, headless mode auto-denies the command permission, and the run
   // exits 0 with EMPTY stdout — the whole import silently degrades. Listing the
@@ -259,8 +265,8 @@ export function buildHealthReviewPrompt(grounding?: {
     confidence?: string | null;
   }[];
 }): string {
-  const ctx = repo.getCoachContext();
-  const markers = repo.getMarkerHistory();
+  const ctx = getCoachContext();
+  const markers = getMarkerHistory();
   const passages = Array.isArray(grounding?.passages) ? grounding!.passages!.slice(0, 12) : [];
   const groundingBlock = passages.length
     ? `\nRETRIEVED EVIDENCE (host-side research the system ran for you — these are real, cited sources;
@@ -282,13 +288,13 @@ ${evidencePack}\n`
     : "";
   // Impact-ranked view (distance from OPTIMAL, most-actionable first) so the
   // review LEADS with the highest-impact markers, not just lab-flagged ones.
-  const priority = repo.prioritizeMarkers();
+  const priority = prioritizeMarkers();
   // The lab loop, closed: at most ONE calm line when a past plan/meal change coincided
   // with a marker moving (or not) — surfaced pull-only so the coach can weigh repeating
   // what worked. Humble correlation framing, never causal, no scores. Silent otherwise.
   const learnedMarkerLine = (() => {
     try {
-      return repo.markerResponseCoachLine();
+      return markerResponseCoachLine();
     } catch {
       return null;
     }
@@ -548,7 +554,7 @@ const HEALTH_SYNTHESIS_SCHEMA = `{
 function renderHealthDrivers(ctx: any): string {
   const bits: string[] = [];
   try {
-    const pm: any = repo.prioritizeMarkers();
+    const pm: any = prioritizeMarkers();
     const body = (Array.isArray(pm?.markers) ? pm.markers : []).filter(
       (m: any) => m?.group === "body" || /body comp/i.test(m?.group_label || "")
     );
@@ -576,8 +582,8 @@ function renderHealthDrivers(ctx: any): string {
 }
 
 export function buildHealthSynthesisPrompt(ctx?: CoachContext): string {
-  const context = ctx ?? repo.getCoachContext();
-  const focus = repo.healthFocus();
+  const context = ctx ?? getCoachContext();
+  const focus = healthFocus();
   return `${CAIRN_PERSONA}
 
 You read bloodwork like a preventive-medicine
@@ -647,7 +653,7 @@ const WEEK_AHEAD_SCHEMA = `{
 }`;
 
 export function buildWeekAheadPrompt(ctx?: CoachContext): string {
-  const context = ctx ?? repo.getCoachContext();
+  const context = ctx ?? getCoachContext();
   const todayName = new Date().toLocaleDateString("en-US", { weekday: "long" });
   return `${CAIRN_PERSONA}
 

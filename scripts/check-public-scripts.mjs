@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { BUNDLES } from "./build-client.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -15,9 +16,19 @@ function readRepo(file) {
   return readFileSync(path.join(root, file), "utf8");
 }
 
+// index.html's own <script src> list, PLUS every bundle it does not load
+// eagerly. A `lazy` bundle is injected at navigation time into the SAME global
+// scope as the rest of the shell, so it is exactly as exposed to a duplicate
+// top-level binding as an eager one — checking only index.html would leave the
+// biggest bundle unguarded. Lazy bundles go last, matching their real execution
+// order (nothing runs them before boot has finished).
 function scriptSources() {
   const index = readRepo("public/index.html");
-  return [...index.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)].map((m) => m[1]);
+  const eager = [...index.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)].map((m) => m[1]);
+  const lazy = BUNDLES.filter((bundle) => bundle.lazy)
+    .map((bundle) => bundle.output.replace(/^public/, ""))
+    .filter((src) => !eager.includes(src));
+  return [...eager, ...lazy];
 }
 
 function bindingNames(name) {

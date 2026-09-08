@@ -40,6 +40,7 @@ import {
 } from "./training-intent.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import { longestRunNovelty } from "./training-read.js";
+import { stableJson, finite } from "../lib/numbers.js";
 
 // The deterministic daily-decision envelope (Stage 2 of the adaptive daily
 // training plan). This is the
@@ -452,12 +453,6 @@ export interface DailyDecisionReach {
 
 const KNEE_GROUPS = ["quads", "hamstrings", "calves", "glutes"];
 
-function finite(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
 function text(value: unknown, max = 200): string | null {
   if (value == null) return null;
   const s = String(value).replace(/\s+/g, " ").trim();
@@ -519,19 +514,6 @@ function dedupe(values: Array<string | null | undefined>): string[] {
     out.push(v);
   }
   return out;
-}
-
-// A stable, key-sorted serialization so two evaluations of an equivalent snapshot
-// hash identically regardless of object key insertion order.
-function stableJson(value: unknown): string {
-  if (value === undefined) return "null";
-  if (value == null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  const obj = value as Record<string, unknown>;
-  return `{${Object.keys(obj)
-    .sort()
-    .map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`)
-    .join(",")}}`;
 }
 
 export function dailyDecisionFingerprint(snapshot: DailyDecisionSnapshot): string {

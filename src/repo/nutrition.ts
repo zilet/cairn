@@ -5,7 +5,7 @@ import { emitBrainEvent as queueBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
 import { recordDecision } from "./brain-decisions.js";
 import { markerInterventionRecording } from "./marker-response.js";
-import { invalidateDayRead } from "./day-read.js";
+import { invalidateDayRead } from "./day-read-cache.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { newestHealthDocDate } from "./health.js";
 import { computeGoalCheck, recompositionStageAt } from "./profile.js";
@@ -32,10 +32,13 @@ import {
   clockLabel,
   mealLabelForTime,
   approxTimeForMealLabel,
+  addDaysISO,
 } from "./shared.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpFoodDataVersion } from "./training-cache.js";
 import { nutritionRelevantDirectives } from "./nutrition-progress.js";
+import { log } from "../log.js";
+import { round1 } from "../lib/numbers.js";
 
 // ---------- accepted nutrition targets (adaptive-nutrition loop OUTPUT) ----------
 // Persist an accepted target so the fuel card / goal math / next check-in read the
@@ -136,7 +139,7 @@ function nutritionTrendExpectation(
         max: Math.round((expectedTrend + tolerance) * 100) / 100,
       },
       window_start: effectiveDate,
-      window_end: addDaysISO(effectiveDate, 28),
+      window_end: addDaysISO(effectiveDate, 28) ?? effectiveDate,
       minimum_data: metric === "intake_to_weight_response" ? { weigh_ins: 6, intake_days: 10 } : { weigh_ins: 6 },
       confounder_policy: "exclude_context_events",
       confidence: "tentative",
@@ -178,7 +181,7 @@ const CUT_TREND_FLOOR_LB_WK = -0.15;
 // prediction) whenever it is not.
 function flowingWaistTape(effectiveDate: string): { value: number; date: string } | null {
   try {
-    const since = addDaysISO(effectiveDate, -WAIST_FLOW_WINDOW_DAYS);
+    const since = addDaysISO(effectiveDate, -WAIST_FLOW_WINDOW_DAYS) ?? effectiveDate;
     const rows = db
       .prepare(
         `SELECT date, waist_in AS value FROM body_measurements
@@ -219,7 +222,6 @@ function bodyMeasurementExpectation(
   if (predictedTrendLbWk > CUT_TREND_FLOOR_LB_WK) return null;
   const tape = flowingWaistTape(effectiveDate);
   if (!tape) return null;
-  const round1 = (value: number) => Math.round(value * 10) / 10;
   return {
     metric_key: "body_measurement_direction",
     subject_key: "waist_in",
@@ -232,7 +234,7 @@ function bodyMeasurementExpectation(
     },
     target: { max: round1(tape.value + WAIST_TAPE_NOISE_IN) },
     window_start: effectiveDate,
-    window_end: addDaysISO(effectiveDate, WAIST_WINDOW_DAYS),
+    window_end: addDaysISO(effectiveDate, WAIST_WINDOW_DAYS) ?? effectiveDate,
     minimum_data: { measurements: WAIST_FLOW_MIN_READINGS },
     confounder_policy: "exclude_context_events",
     confidence: "tentative",
@@ -614,7 +616,7 @@ export function nutritionTargetKcalByDay(start: string, end: string): Map<string
   }
   let index = 0;
   let inForce: number | null = null;
-  for (let day: string = from; day <= through; day = addDaysISO(day, 1)) {
+  for (let day: string = from; day <= through; day = addDaysISO(day, 1) ?? day) {
     while (index < rows.length && String(rows[index].effective_date).slice(0, 10) <= day) {
       const value = Number(rows[index].target_kcal);
       if (Number.isFinite(value) && value > 0) inForce = value;
@@ -1180,10 +1182,6 @@ function weekdayAbbr(iso: string): string {
   const t = Date.parse(`${iso}T00:00:00Z`);
   return Number.isFinite(t) ? WEEKDAY_ABBR[new Date(t).getUTCDay()] : "";
 }
-function addDaysISO(iso: string, n: number): string {
-  const t = Date.parse(`${iso}T00:00:00Z`);
-  return Number.isFinite(t) ? new Date(t + n * 864e5).toISOString().slice(0, 10) : iso;
-}
 
 // A BOUNDED view of the current meal plan for the coach brain: today's + tomorrow's
 // meals + the daily targets + a freshness flag. So chat / the day-read / insights can
@@ -1239,7 +1237,7 @@ export function mealPlanForCoach() {
     nutrition_pattern:
       parsed.nutrition_pattern && typeof parsed.nutrition_pattern === "object" ? parsed.nutrition_pattern : null,
     today: pick(today, "today"),
-    tomorrow: pick(addDaysISO(today, 1), "tomorrow"),
+    tomorrow: pick(addDaysISO(today, 1) ?? today, "tomorrow"),
     stale: freshness.stale,
     stale_reason: freshness.reason,
     constraint_state: constraintState,
@@ -2004,7 +2002,7 @@ function canonicalFoodNoteWhen(opts: FoodNoteWhen | undefined): {
   // used before any of this existed; strict throws.
   const refuse = (problem: string): void => {
     if (!lenient) throw new RangeError(problem);
-    console.warn(`[food] ignoring a stated time — ${problem}`);
+    log.warn(`[food] ignoring a stated time — ${problem}`);
   };
 
   let date = today;
@@ -2307,8 +2305,8 @@ export function intakeLoggingMode(
   const days = Number.isFinite(Number(windowDays))
     ? Math.max(3, Math.min(90, Math.trunc(Number(windowDays))))
     : INTAKE_LOGGING_WINDOW_DAYS;
-  const through = addDaysISO(asOf, -1);
-  const since = addDaysISO(through, -(days - 1));
+  const through = addDaysISO(asOf, -1) ?? asOf;
+  const since = addDaysISO(through, -(days - 1)) ?? through;
   let window: ReturnType<typeof completedIntakeRange>;
   try {
     window = completedIntakeRange(since, through, through);
@@ -2514,7 +2512,7 @@ export function updateFoodNote(id: number, fields: any) {
       const problem = foodNoteDateProblem(value, today);
       if (!problem) nextDate = value;
       else if (!lenient) throw new RangeError(problem);
-      else console.warn(`[food] note#${id}: keeping ${previousDate} — ${problem}`);
+      else log.warn(`[food] note#${id}: keeping ${previousDate} — ${problem}`);
     }
   }
   if (f.eaten_at !== undefined) {
@@ -2525,7 +2523,7 @@ export function updateFoodNote(id: number, fields: any) {
       const normalized = normalizeWallClock(value);
       if (normalized) nextTime = normalized;
       else if (!lenient) throw new RangeError(FOOD_NOTE_TIME_PROBLEM);
-      else console.warn(`[food] note#${id}: keeping the stored time — ${FOOD_NOTE_TIME_PROBLEM}`);
+      else log.warn(`[food] note#${id}: keeping the stored time — ${FOOD_NOTE_TIME_PROBLEM}`);
     }
   }
   if (nextDate !== previousDate || nextTime !== previousTime) {
@@ -2560,4 +2558,146 @@ export function hydrate(row: any) {
     parsed = null;
   }
   return { ...row, parsed };
+}
+
+// ---------- T5: frequent foods by time of day ----------
+// summary/count/last_at are the load-bearing fields; the macro carry-through
+// (kcal/protein_g/carbs_g/fat_g, all optional) is additive — populated from the
+// most recent occurrence's parsed_json when present, so a one-tap re-log can
+// prefill macros without another agent call. Absent when never enriched.
+export interface FrequentFood {
+  summary: string;
+  count: number;
+  // Number of distinct logged days behind the count. A count can be inflated by
+  // duplicate entries from one meal; planning code uses this to distinguish a
+  // recurring staple from a one-off event without weakening the capture chips.
+  distinct_days: number;
+  last_at: string;
+  kcal?: number | null;
+  protein_g?: number | null;
+  carbs_g?: number | null;
+  fat_g?: number | null;
+}
+
+// Collapse a food summary into a grouping key: lowercase, fold whitespace, drop
+// trailing punctuation and a leading "a/an/the". Slightly broader than a bare
+// toLowerCase() so "Chicken & rice", "chicken and rice " and "the chicken &
+// rice." all group together — but conservative on purpose (no stemming, no
+// synonym table) so genuinely different meals stay distinct.
+function frequentFoodKey(s: string): string {
+  return String(s)
+    .toLowerCase()
+    .replace(/[.,;:!?]+$/g, "") // trailing punctuation
+    .replace(/\s*&\s*/g, " and ") // "&" ⇒ "and" so both spellings merge
+    .replace(/^\s*(a|an|the)\s+/, "") // leading article
+    .replace(/\s+/g, " ") // fold internal whitespace
+    .trim();
+}
+
+// Recent distinct foods logged near a given hour-of-day (±2h), most-frequent
+// first — powers one-tap "frequents" in fast logging. Deterministic, null-safe.
+export function frequentFoods(hour?: number): FrequentFood[] {
+  const targetHour = Number.isInteger(hour) && hour! >= 0 && hour! <= 23 ? hour! : new Date().getHours();
+  // Push the ±2h hour band into SQL (created_at is UTC "YYYY-MM-DD HH:MM:SS", so
+  // substr pos 12-13 is the hour) so the LIMIT is a horizon over MATCHING rows,
+  // not a blanket recency truncation — otherwise a heavy logger's rarely-used
+  // off-peak slot could fall entirely outside the 400 newest rows and return [].
+  // The hour set wraps midnight naturally.
+  const bandHours: number[] = [];
+  for (let dh = -2; dh <= 2; dh++) bandHours.push((((targetHour + dh) % 24) + 24) % 24);
+  // Match on WHEN IT WAS EATEN wherever that is recorded, falling back to the write
+  // time for every row that has none. Since a note can be backdated ("a late dinner
+  // last night", logged this morning), created_at alone would file that dinner under
+  // breakfast and quietly poison the time-of-day frequents. eaten_at is a LOCAL
+  // "HH:MM" so its hour is directly comparable to targetHour, which is also local.
+  const rows = db
+    .prepare(
+      `SELECT created_at, eaten_at, COALESCE(date, substr(created_at, 1, 10)) AS log_date, meal, parsed_json FROM food_notes
+     WHERE CAST(COALESCE(substr(eaten_at, 1, 2), substr(created_at, 12, 2)) AS INTEGER) IN (${bandHours.map(() => "?").join(",")})
+     ORDER BY id DESC LIMIT 400`
+    )
+    .all(...bandHours) as any[];
+  const agg = new Map<string, { count: number; last_at: string; days: Set<string> }>();
+  for (const r of rows) {
+    // eaten_at is local "HH:MM"; created_at is stored UTC ("YYYY-MM-DD HH:MM:SS").
+    // Read whichever this row has and accept a ±2h window (wrapping midnight).
+    const hh = r.eaten_at ? Number(String(r.eaten_at).slice(0, 2)) : Number(String(r.created_at ?? "").slice(11, 13));
+    if (!Number.isFinite(hh)) continue;
+    const diff = Math.min(Math.abs(hh - targetHour), 24 - Math.abs(hh - targetHour));
+    if (diff > 2) continue;
+    let parsed: any = null;
+    try {
+      parsed = r.parsed_json ? JSON.parse(r.parsed_json) : null;
+    } catch {
+      parsed = null;
+    }
+    const summary = String(parsed?.summary ?? r.meal ?? "").trim();
+    if (!summary) continue;
+    const key = frequentFoodKey(summary);
+    if (!key) continue;
+    const cur = agg.get(key);
+    if (cur) {
+      cur.count++;
+      if (r.log_date) cur.days.add(String(r.log_date));
+      if (String(r.created_at) > cur.last_at) cur.last_at = String(r.created_at);
+    } else {
+      const days = new Set<string>();
+      if (r.log_date) days.add(String(r.log_date));
+      agg.set(key, { count: 1, last_at: String(r.created_at), days });
+    }
+  }
+  // Recover display casing from the NEWEST occurrence of each key (rows are
+  // id-DESC, so the first one we see per key wins), and macros from the newest
+  // occurrence that actually CARRIES them — the most recent log of a food is
+  // often a quick text entry not yet enriched, so we want the freshest enriched
+  // estimate to prefill, not null.
+  const display = new Map<string, string>();
+  const macros = new Map<
+    string,
+    { kcal: number | null; protein_g: number | null; carbs_g: number | null; fat_g: number | null }
+  >();
+  const num = (v: any): number | null => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  for (const r of rows) {
+    let parsed: any = null;
+    try {
+      parsed = r.parsed_json ? JSON.parse(r.parsed_json) : null;
+    } catch {
+      parsed = null;
+    }
+    const summary = String(parsed?.summary ?? r.meal ?? "").trim();
+    if (!summary) continue;
+    const key = frequentFoodKey(summary);
+    if (!key) continue;
+    if (!display.has(key)) display.set(key, summary);
+    if (!macros.has(key)) {
+      const m = {
+        kcal: num(parsed?.kcal),
+        protein_g: num(parsed?.protein_g),
+        carbs_g: num(parsed?.carbs_g),
+        fat_g: num(parsed?.fat_g),
+      };
+      // Only lock in macros once we find an occurrence that has at least one —
+      // skip bare text logs so a later (older) enriched row can supply them.
+      if (m.kcal != null || m.protein_g != null || m.carbs_g != null || m.fat_g != null) macros.set(key, m);
+    }
+  }
+  return [...agg.entries()]
+    .map(([key, v]) => {
+      const m = macros.get(key);
+      return {
+        summary: display.get(key) ?? key,
+        count: v.count,
+        distinct_days: v.days.size,
+        last_at: v.last_at,
+        kcal: m?.kcal ?? null,
+        protein_g: m?.protein_g ?? null,
+        carbs_g: m?.carbs_g ?? null,
+        fat_g: m?.fat_g ?? null,
+      };
+    })
+    .sort((a, b) => b.count - a.count || (b.last_at > a.last_at ? 1 : -1))
+    .slice(0, 8);
 }

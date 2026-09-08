@@ -8,7 +8,7 @@
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { listBrainDecisions } from "./brain-decisions.js";
-import { invalidateDayRead } from "./day-read.js";
+import { invalidateDayRead } from "./day-read-cache.js";
 import { daysBetweenISO, localDateISO, localDayOfStamp } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 

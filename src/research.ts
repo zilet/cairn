@@ -13,7 +13,9 @@
 // cached. NO caller blocks or crashes on a research failure. INFORMATIONAL, not
 // medical advice — clinical questions defer to a clinician.
 
-import * as repo from "./repo.js";
+import { addEvidence, getEvidence, isPlausibleSourceUrl, normTopic } from "./repo/evidence.js";
+import { prioritizeMarkers } from "./repo/propagation.js";
+import { getAgentConfig, getSettings } from "./repo/settings.js";
 import { RESEARCH_SCHEMA } from "./agent-contracts.js";
 import { runChosen } from "./runChosen.js";
 import { buildResearchPrompt } from "./prompt.js";
@@ -36,7 +38,7 @@ export interface ResearchResult {
 // the exact deterministic behavior the system has today.
 export function researchEnabled(): boolean {
   try {
-    return !!repo.getSettings().research_enabled;
+    return !!getSettings().research_enabled;
   } catch {
     return false;
   }
@@ -69,7 +71,7 @@ export function researchAutoEligible(): ResearchAutoEligibility {
   let usable: string[] = [];
   try {
     // The usable set = enabled + binary present + env ok + not known-logged-out.
-    usable = repo.getAgentConfig().filter((a: any) => a.usable).map((a: any) => a.name);
+    usable = getAgentConfig().filter((a: any) => a.usable).map((a: any) => a.name);
   } catch {
     usable = [];
   }
@@ -102,7 +104,7 @@ function validateSources(raw: any, claim: any): ValidatedResearchSource[] {
   for (const s of list) {
     if (!s || typeof s !== "object") continue;
     const url = String(s.url ?? "").trim();
-    if (!repo.isPlausibleSourceUrl(url)) continue;
+    if (!isPlausibleSourceUrl(url)) continue;
     const title = String(s.title ?? "")
       .trim()
       .slice(0, 300);
@@ -156,19 +158,19 @@ export async function researchEvidence(
   markers: string[] = [],
   opts: { agent?: string; force?: boolean; timeoutMs?: number } = {}
 ): Promise<ResearchResult> {
-  const topic = repo.normTopic(question);
+  const topic = normTopic(question);
   if (!topic) return { ok: false, enabled: researchEnabled(), topic, evidence: [], error: "empty question" };
 
   if (!researchEnabled()) {
     // Degrade to today's behavior: serve whatever is already cached (if anything),
     // never reach for the network.
-    const cached = repo.getEvidence({ topic, limit: 20 });
+    const cached = getEvidence({ topic, limit: 20 });
     return { ok: false, enabled: false, topic, evidence: cached, cached: true, error: "research disabled" };
   }
 
   // Cache hit (unless force): no agent call.
   if (!opts.force) {
-    const cached = repo.getEvidence({ topic, limit: 20 });
+    const cached = getEvidence({ topic, limit: 20 });
     const usable = cached.filter((row: any) => row?.provenance?.usable_for_claim === true);
     if (usable.length) return { ok: true, enabled: true, topic, evidence: usable, cached: true };
   }
@@ -200,7 +202,7 @@ export async function researchEvidence(
     const sources = validateSources(c.sources, c);
     if (!sources.length) continue; // sourceless claim → discarded
     const src = sources[0];
-    const row = repo.addEvidence({
+    const row = addEvidence({
       topic,
       marker: c.marker ?? null,
       claim: c.claim ?? null,
@@ -260,7 +262,7 @@ export async function gatherReviewGrounding(agent?: string): Promise<
   if (!researchEnabled()) return [];
   let priorityMarkers: any[] = [];
   try {
-    const { markers } = repo.prioritizeMarkers();
+    const { markers } = prioritizeMarkers();
     // Only off-optimal / flagged markers are worth grounding; cap to the top few
     // so a review never fans out into a dozen agent calls.
     priorityMarkers = (markers as any[])

@@ -16,6 +16,7 @@ import {
   type CoachReadToolResult,
 } from "./read-tools.js";
 import type { JsonObject, JsonValue } from "./contract-utils.js";
+import { coerceFinite as finite } from "../lib/numbers.js";
 
 export interface CoachReadToolExecutionContext {
   run_id: string;
@@ -76,11 +77,6 @@ function cappedText(value: unknown, max = 500): string | null {
   if (value == null) return null;
   const text = String(value).replace(/\s+/g, " ").trim();
   return text ? text.slice(0, max) : null;
-}
-
-function finite(value: unknown): number | null {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
 }
 
 function parsedObject(value: unknown): Record<string, unknown> | null {

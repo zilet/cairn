@@ -4,7 +4,29 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { db } from "./db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
-import * as repo from "./repo.js";
+import { getActivity, getGarminActivity, reconcileGarminStrength, setActivityEnrichStatus, updateActivityFields, updateSessionGarminNarrative } from "./repo/activities.js";
+import { applyCcdaHealthBackfill, backfillCcdaHealthDocument, dateUndatedPanels, extractCcdaHealthData } from "./repo/ccda.js";
+import type { CcdaHealthExtraction } from "./repo/ccda.js";
+import { recordedClientTimeZone } from "./repo/client-tz.js";
+import { refreshDoctorLoopAttention } from "./repo/doctor-loop.js";
+import { applyExerciseEnrichment, ensureGarminMapping, getExercise, getExerciseDetail, setExerciseEnrichStatus } from "./repo/exercises.js";
+import { getSessionGarminExport } from "./repo/garmin-strength-export.js";
+import { MAX_MARKERS_PER_PANEL, addHealthReview, cleanClinicalFacts, estimateMarkerCandidates, getHealthDocumentRaw, plausibleMarkerValue, reconcileHealthDocumentContextEvents, replaceHealthPanels, setHealthDocEnrichStatus, updateHealthDocFields } from "./repo/health.js";
+import { dedupeHealthDocuments } from "./repo/health-dedupe.js";
+import { getHealthSynthesis } from "./repo/health-focus.js";
+import { recordHealthOutcomeEvents } from "./repo/health-outcomes.js";
+import { applyImagingAnalysisResult, imagingStudyHasContent, imagingStudyRevisionState, imagingStudySourceHash, imagingStudySourceKind, listImagingPromptFilesRaw, replaceDerivedImagingStudies } from "./repo/imaging.js";
+import type { ImagingStudyRevisionState } from "./repo/imaging.js";
+import { isNonAnalyteMarkerName } from "./repo/marker-canon.js";
+import { addMemory } from "./repo/memory.js";
+import { getFoodNote, setFoodNoteEnrichStatus, updateFoodNoteParsed } from "./repo/nutrition.js";
+import { deriveDirectives } from "./repo/propagation.js";
+import { getRecentSessions, getSessionDetail, importGarminActivitySets } from "./repo/sessions.js";
+import type { GarminSetImportInput } from "./repo/sessions.js";
+import { executionProfileForTask, getGeminiApiKey, getSettings, pickAgentOrderForTask } from "./repo/settings.js";
+import { registerSymptomExtractionHook } from "./repo/symptom-extraction-hooks.js";
+import { attachSymptomReportEvent, getSymptomReport, listPendingSymptomReports, setSymptomReportExtraction } from "./repo/symptom-reports.js";
+import { getTrainingSymptom, listTrainingSymptoms, recordMovementTolerance, recurTrainingSymptom, reportTrainingSymptom, resolveTrainingSymptomByArea } from "./repo/training-symptoms.js";
 import { AgentFallbackError, extractJson, runAgentWithFallback } from "./agents.js";
 import {
   clampFoodMacro,
@@ -59,6 +81,7 @@ export {
   coerceNutritionPattern,
   normalizeFoodCaptureParsed,
 } from "./foodCapture.js";
+import { log } from "./log.js";
 
 const execFileP = promisify(execFile);
 
@@ -140,7 +163,7 @@ export function settleStaleImagingJob(
   }
 ): { status: "pending" | "retry_needed"; requeued: boolean } {
   const action = staleImagingWorkerAction(reason);
-  repo.setHealthDocEnrichStatus(id, action.status);
+  setHealthDocEnrichStatus(id, action.status);
   if (action.requeue) schedule({ kind: "health", id });
   return { status: action.status, requeued: action.requeue };
 }
@@ -260,7 +283,7 @@ async function unzipToFolder(zipPath: string): Promise<string | null> {
       const total = Number(mTotal[1]);
       const count = Number(mTotal[2]);
       if (total > ZIP_MAX_UNCOMPRESSED || count > ZIP_MAX_FILES) {
-        console.warn(`[enrich] zip too large to ingest (${total} bytes, ${count} files) — skipping unpack.`);
+        log.warn(`[enrich] zip too large to ingest (${total} bytes, ${count} files) — skipping unpack.`);
         return null;
       }
     }
@@ -270,7 +293,7 @@ async function unzipToFolder(zipPath: string): Promise<string | null> {
     await execFileP("unzip", ["-o", "-qq", zipPath, "-d", destDir], { timeout: 60_000, maxBuffer: 16 * 1024 * 1024 });
     return destDir;
   } catch (e: any) {
-    console.warn(`[enrich] unzip failed (${e?.code ?? e?.message ?? e}) — handing the archive to the agent as-is.`);
+    log.warn(`[enrich] unzip failed (${e?.code ?? e?.message ?? e}) — handing the archive to the agent as-is.`);
     return null;
   }
 }
@@ -324,9 +347,9 @@ function garminSetIsTimed(set: any): boolean {
 // Normalize one Garmin activity's usable detected sets before handing the whole
 // batch to the repo-owned atomic importer. Repeated exercise names remain valid:
 // Garmin emits one item per working set, not one item per exercise.
-function garminDetectedSetInputs(ga: any): repo.GarminSetImportInput[] {
+function garminDetectedSetInputs(ga: any): GarminSetImportInput[] {
   const sets = Array.isArray(ga?.exercise_sets) ? ga.exercise_sets : [];
-  const usable: repo.GarminSetImportInput[] = [];
+  const usable: GarminSetImportInput[] = [];
   for (const set of sets) {
     const name = garminExerciseName(set);
     if (!name) continue;
@@ -348,9 +371,9 @@ function garminDetectedSetInputs(ga: any): repo.GarminSetImportInput[] {
   return usable;
 }
 
-function agentGarminSetInputs(parsed: any): repo.GarminSetImportInput[] {
+function agentGarminSetInputs(parsed: any): GarminSetImportInput[] {
   if (!Array.isArray(parsed?.sets)) return [];
-  const usable: repo.GarminSetImportInput[] = [];
+  const usable: GarminSetImportInput[] = [];
   for (const raw of parsed.sets) {
     const exercise = asStr(raw?.exercise);
     if (!exercise) continue;
@@ -402,7 +425,7 @@ export function pendingEnrichJobsForTests(): Array<{ kind: Kind; id: number }> {
 // CLI, a storage-only test — a verbatim report is still written; it simply waits.
 // Ahead of the background backlog: a body report is written the moment the athlete
 // says it, and the structure derived from it is what the next screen reads.
-repo.registerSymptomExtractionHook((reportId) => enqueueEnrich("symptom", reportId, { front: true }));
+registerSymptomExtractionHook((reportId) => enqueueEnrich("symptom", reportId, { front: true }));
 
 /**
  * Whether this free text is worth an agent call at all. Re-exported from the one
@@ -422,7 +445,7 @@ export { symptomTextMentionsBody };
  * request zone when a drain happens to start inside one.
  */
 export function inOwnerTimeZone<T>(fn: () => T): T {
-  return runWithTimeZone(activeTimeZone() ?? repo.recordedClientTimeZone(), fn);
+  return runWithTimeZone(activeTimeZone() ?? recordedClientTimeZone(), fn);
 }
 
 async function drain(): Promise<void> {
@@ -441,7 +464,7 @@ async function drain(): Promise<void> {
         } catch {
           /* ignore */
         }
-        console.error(`[enrich] job ${job.kind}#${job.id} failed (${diagnosticErrorName(e)})`);
+        log.error(`[enrich] job ${job.kind}#${job.id} failed (${diagnosticErrorName(e)})`);
         // The batch's review refresh is enqueued by the LAST health document to finish
         // (shouldEnqueueReviewRefresh). If that document is the one that threw, the
         // refresh would be lost for the whole batch — so a failing health job still
@@ -466,14 +489,14 @@ function markStatus(job: Job, status: string): void {
   // rows' (no 'in_progress' — a report is never half-extracted, it either yielded a
   // structure or it did not), so it is set only through its own dedicated path.
   if (job.kind === "symptom") {
-    repo.setSymptomReportExtraction(job.id, status === "done" ? "done" : status === "skipped" ? "skipped" : "failed");
+    setSymptomReportExtraction(job.id, status === "done" ? "done" : status === "skipped" ? "skipped" : "failed");
     return;
   }
-  if (job.kind === "activity") repo.setActivityEnrichStatus(job.id, status);
+  if (job.kind === "activity") setActivityEnrichStatus(job.id, status);
   // food_photo shares the food_notes row + its status column with food.
-  else if (job.kind === "food" || job.kind === "food_photo") repo.setFoodNoteEnrichStatus(job.id, status);
-  else if (job.kind === "exercise") repo.setExerciseEnrichStatus(job.id, status);
-  else repo.setHealthDocEnrichStatus(job.id, status);
+  else if (job.kind === "food" || job.kind === "food_photo") setFoodNoteEnrichStatus(job.id, status);
+  else if (job.kind === "exercise") setExerciseEnrichStatus(job.id, status);
+  else setHealthDocEnrichStatus(job.id, status);
 }
 
 function markFailed(job: Job, error: unknown = new Error("invalid enrichment output")): void {
@@ -482,7 +505,7 @@ function markFailed(job: Job, error: unknown = new Error("invalid enrichment out
 }
 
 function healthDocHasStructuredContent(id: number): boolean {
-  const row = repo.getHealthDocumentRaw(id) as any;
+  const row = getHealthDocumentRaw(id) as any;
   if (!row) return false;
   const parsed = row.parsed_json && typeof row.parsed_json === "object"
     ? row.parsed_json
@@ -494,7 +517,7 @@ function healthDocHasStructuredContent(id: number): boolean {
       }
     })();
   return (
-    repo.imagingStudyHasContent(parsed?.imaging_study) ||
+    imagingStudyHasContent(parsed?.imaging_study) ||
     (Array.isArray(parsed?.markers) && parsed.markers.length > 0) ||
     (Array.isArray(parsed?.clinical_facts) && parsed.clinical_facts.length > 0) ||
     (Array.isArray(parsed?.panels) && parsed.panels.some((p: any) =>
@@ -574,7 +597,7 @@ export function describeAgentDegrade(error: unknown): { reason: string; detail: 
 
 function noteDeterministicIngest(id: number, reason: string, detail: string): void {
   try {
-    const row = repo.getHealthDocumentRaw(id) as any;
+    const row = getHealthDocumentRaw(id) as any;
     if (!row) return;
     let parsed: any = {};
     try {
@@ -588,21 +611,21 @@ function noteDeterministicIngest(id: number, reason: string, detail: string): vo
       detail: String(detail || "").slice(0, 240),
       at: new Date().toISOString(),
     };
-    repo.updateHealthDocFields(id, { parsed_json: { ...parsed, ingest } });
+    updateHealthDocFields(id, { parsed_json: { ...parsed, ingest } });
   } catch (e: any) {
-    console.warn(`[enrich] health#${id}: could not record the degraded ingest state (${e?.message ?? e}).`);
+    log.warn(`[enrich] health#${id}: could not record the degraded ingest state (${e?.message ?? e}).`);
   }
   recordDegradedOperation("enrichment", "health", reason);
 }
 
 function clearDeterministicIngest(id: number): void {
   try {
-    const row = repo.getHealthDocumentRaw(id) as any;
+    const row = getHealthDocumentRaw(id) as any;
     if (!row?.parsed_json) return;
     const parsed = typeof row.parsed_json === "string" ? JSON.parse(row.parsed_json) : row.parsed_json;
     if (!parsed || typeof parsed !== "object" || !parsed.ingest) return;
     const { ingest: _dropped, ...rest } = parsed;
-    repo.updateHealthDocFields(id, { parsed_json: rest });
+    updateHealthDocFields(id, { parsed_json: rest });
   } catch { /* the mark is advisory; failing to clear it must not fail the job */ }
 }
 
@@ -617,15 +640,15 @@ async function processJob(job: Job): Promise<void> {
   // Check enablement BEFORE picking an agent: pickAgentOrder() advances the
   // round-robin cursor as a side effect, so calling it for a job we then skip
   // would burn rotation state against a phantom invocation.
-  const settings = repo.getSettings();
+  const settings = getSettings();
   if (!settings.enrich_enabled) {
     if (job.kind === "health") {
-      const backfill = repo.backfillCcdaHealthDocument(job.id);
+      const backfill = backfillCcdaHealthDocument(job.id);
       if (backfill.wrote) {
-        console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (agent enrichment off).`);
+        log.info(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (agent enrichment off).`);
         noteDeterministicIngest(job.id, "enrichment_off", "Agent analysis is switched off in Settings.");
         markStatus(job, "done");
-        try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+        try { deriveDirectives(); } catch (e: any) { log.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
         return;
       }
@@ -639,15 +662,15 @@ async function processJob(job: Job): Promise<void> {
   // pickAgentOrderForTask resolves an `agent_routes.health`/`.enrich` pin first (if
   // usable), then falls to that task class's policy.
   const task = job.kind === "health" ? "health" : "enrich";
-  const order = repo.pickAgentOrderForTask(task);
+  const order = pickAgentOrderForTask(task);
   if (!order.length) {
     if (job.kind === "health") {
-      const backfill = repo.backfillCcdaHealthDocument(job.id);
+      const backfill = backfillCcdaHealthDocument(job.id);
       if (backfill.wrote) {
-        console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (no usable agent).`);
+        log.info(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (no usable agent).`);
         noteDeterministicIngest(job.id, "no_agent_enabled", "No agent is enabled — turn one on in Settings.");
         markStatus(job, "done");
-        try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+        try { deriveDirectives(); } catch (e: any) { log.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
         return;
       }
@@ -671,15 +694,15 @@ async function processJob(job: Job): Promise<void> {
   // Carry the health source out of the branch so the completeness retry below can
   // re-read it (text sources only) and re-prompt without re-deriving the path.
   let healthSource: HealthSource | null = null;
-  let imagingBaseRevisionState: repo.ImagingStudyRevisionState | null = null;
-  let ccdaExtraction: ReturnType<typeof repo.extractCcdaHealthData> | null = null;
+  let imagingBaseRevisionState: ImagingStudyRevisionState | null = null;
+  let ccdaExtraction: ReturnType<typeof extractCcdaHealthData> | null = null;
   if (job.kind === "health") {
-    const row = repo.getHealthDocumentRaw(job.id) as any;
+    const row = getHealthDocumentRaw(job.id) as any;
     if (row?.kind === "imaging") {
-      imagingBaseRevisionState = repo.imagingStudyRevisionState(job.id);
+      imagingBaseRevisionState = imagingStudyRevisionState(job.id);
       // Raw DICOM objects never enter an agent prompt. Only ordinary written
       // attachments and bounded server-rendered representative PNGs are eligible.
-      const files = repo.listImagingPromptFilesRaw(job.id) as any[];
+      const files = listImagingPromptFilesRaw(job.id) as any[];
       const promptFiles = files.map((file) => {
         const safe = safeUploadPath(file.file_path);
         return safe && fs.existsSync(safe) ? {
@@ -698,7 +721,7 @@ async function processJob(job: Job): Promise<void> {
       markStatus(job, "in_progress");
       healthSource = { fp: promptFiles[0].path, mime: promptFiles[0].mime, kind: "imaging", isDir: false, imaging: true };
       let existing: any = null;
-      try { existing = row.parsed_json ? JSON.parse(row.parsed_json)?.imaging_study : null; } catch {}
+      try { existing = row.parsed_json ? JSON.parse(row.parsed_json)?.imaging_study : null; } catch { /* a malformed stored parse just means there is no prior study to build on */ }
       prompt = buildImagingStudyPrompt(promptFiles, existing);
       schema = IMAGING_STUDY_JSON_SCHEMA;
       timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
@@ -727,12 +750,12 @@ async function processJob(job: Job): Promise<void> {
       }
       healthSource = { fp: target, mime: (row?.mime ?? "").toString(), kind: row?.kind || "other", isDir };
       try {
-        ccdaExtraction = repo.extractCcdaHealthData(target);
+        ccdaExtraction = extractCcdaHealthData(target);
         if (ccdaExtraction.files && (ccdaExtraction.clinical_facts.length || ccdaExtraction.vitals_panels.length)) {
-          console.log(`[enrich] health#${job.id}: deterministic CCDA found ${ccdaExtraction.clinical_facts.length} fact(s), ${ccdaExtraction.vitals_panels.length} vitals panel(s), ${ccdaExtraction.blood_pressure_readings.length} BP reading(s).`);
+          log.info(`[enrich] health#${job.id}: deterministic CCDA found ${ccdaExtraction.clinical_facts.length} fact(s), ${ccdaExtraction.vitals_panels.length} vitals panel(s), ${ccdaExtraction.blood_pressure_readings.length} BP reading(s).`);
         }
       } catch (e: any) {
-        console.warn(`[enrich] health#${job.id}: deterministic CCDA extraction skipped (${e?.message ?? e}).`);
+        log.warn(`[enrich] health#${job.id}: deterministic CCDA extraction skipped (${e?.message ?? e}).`);
         ccdaExtraction = null;
       }
       prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other", {
@@ -767,7 +790,7 @@ async function processJob(job: Job): Promise<void> {
     // ordinary enrichment is cheap structuring.
     const fb = await runAgentWithFallback(order, prompt, {
       timeoutMs,
-      profile: repo.executionProfileForTask(task),
+      profile: executionProfileForTask(task),
       schema,
     });
     parsed = fb.result?.parsed ?? null;
@@ -780,20 +803,20 @@ async function processJob(job: Job): Promise<void> {
     // agent has read it — whether the run succeeded, failed, or threw.
     if (extractedDir) {
       try { fs.rmSync(extractedDir, { recursive: true, force: true }); }
-      catch (e: any) { console.warn(`[enrich] failed to clean up ${extractedDir}: ${e?.message ?? e}`); }
+      catch (e: any) { log.warn(`[enrich] failed to clean up ${extractedDir}: ${e?.message ?? e}`); }
     }
   }
 
   if (!parsed || typeof parsed !== "object") {
     if (job.kind === "health" && ccdaExtraction) {
-      const backfill = repo.applyCcdaHealthBackfill(job.id, ccdaExtraction);
+      const backfill = applyCcdaHealthBackfill(job.id, ccdaExtraction);
       if (backfill.wrote) {
         const degrade = describeAgentDegrade(agentFailure);
-        console.warn(`[enrich] health#${job.id}: agent returned no usable JSON (${degrade.reason}); deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s).`);
+        log.warn(`[enrich] health#${job.id}: agent returned no usable JSON (${degrade.reason}); deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s).`);
         noteDeterministicIngest(job.id, degrade.reason, degrade.detail);
         foldDuplicateHealthPanels(job.id);
         markStatus(job, "done");
-        try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+        try { deriveDirectives(); } catch (e: any) { log.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
         return;
       }
@@ -802,17 +825,17 @@ async function processJob(job: Job): Promise<void> {
       const fallback = applyTextVisitNoteFallback(job.id, healthSource);
       if (fallback.applied) {
         const degrade = describeAgentDegrade(agentFailure);
-        console.warn(`[enrich] health#${job.id}: agent returned no usable JSON (${degrade.reason}); deterministic visit-note fallback wrote ${fallback.facts} fact(s).`);
+        log.warn(`[enrich] health#${job.id}: agent returned no usable JSON (${degrade.reason}); deterministic visit-note fallback wrote ${fallback.facts} fact(s).`);
         noteDeterministicIngest(job.id, degrade.reason, degrade.detail);
         foldDuplicateHealthPanels(job.id);
         markStatus(job, "done");
-        try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+        try { deriveDirectives(); } catch (e: any) { log.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
         return;
       }
     }
     if (job.kind === "health" && healthDocHasStructuredContent(job.id)) {
-      console.warn(`[enrich] health#${job.id}: agent returned no usable JSON; kept existing structured ingest.`);
+      log.warn(`[enrich] health#${job.id}: agent returned no usable JSON; kept existing structured ingest.`);
       markStatus(job, "done");
       return;
     }
@@ -838,7 +861,7 @@ async function processJob(job: Job): Promise<void> {
     let shouldRetry = false;
     let expected = 0;
     if (isText) {
-      try { expected = repo.estimateMarkerCandidates(fs.readFileSync(healthSource.fp, "utf8")); }
+      try { expected = estimateMarkerCandidates(fs.readFileSync(healthSource.fp, "utf8")); }
       catch { /* unreadable → no estimate, no text-path retry */ }
       shouldRetry = expected >= 40 && got < expected * 0.8;
     } else if (looksThinForBinaryHealthDoc(healthSource.kind, got)) {
@@ -847,18 +870,18 @@ async function processJob(job: Job): Promise<void> {
     }
     if (shouldRetry) {
       const why = isText ? `the source lists ~${expected}` : `a comprehensive panel should carry far more`;
-      console.warn(`[enrich] health#${job.id}: extracted ${got} markers but ${why} — retrying Claude-first for completeness.`);
+      log.warn(`[enrich] health#${job.id}: extracted ${got} markers but ${why} — retrying Claude-first for completeness.`);
       try {
         const fb2 = await runAgentWithFallback(
-          repo.pickAgentOrderForTask("health"),
+          pickAgentOrderForTask("health"),
           buildHealthIngestPrompt(healthSource.fp, false, healthSource.kind, { emphasizeCompleteness: true, missed: { got, expected } }),
-          { timeoutMs: HEALTH_INGEST_TIMEOUT_MS, profile: repo.executionProfileForTask("health"), schema: HEALTH_INGEST_SCHEMA },
+          { timeoutMs: HEALTH_INGEST_TIMEOUT_MS, profile: executionProfileForTask("health"), schema: HEALTH_INGEST_SCHEMA },
         );
         const parsed2 = fb2.result?.parsed ?? null;
         const got2 = parsed2 && typeof parsed2 === "object" ? countIngestMarkers(parsed2) : 0;
         if (got2 > got) {
           parsed = parsed2;
-          console.log(`[enrich] health#${job.id}: retry improved extraction ${got} → ${got2} markers.`);
+          log.info(`[enrich] health#${job.id}: retry improved extraction ${got} → ${got2} markers.`);
         }
       } catch { /* keep the first parse */ }
     }
@@ -873,7 +896,7 @@ async function processJob(job: Job): Promise<void> {
       : null;
   if (healthApply?.status === "stale") {
     const settled = settleStaleImagingJob(job.id, healthApply.reason);
-    console.warn(
+    log.warn(
       `[enrich] imaging#${job.id}: analysis became stale (${healthApply.reason}); ` +
         (settled.requeued ? "queued one fresh pass." : "kept user state; manual retry needed.")
     );
@@ -881,9 +904,9 @@ async function processJob(job: Job): Promise<void> {
   }
   const appliedFields = job.kind === "health" ? healthApply?.status === "applied" : applyStructured(job, parsed.structured);
   const ccdaBackfill =
-    job.kind === "health" && ccdaExtraction ? repo.applyCcdaHealthBackfill(job.id, ccdaExtraction) : null;
+    job.kind === "health" && ccdaExtraction ? applyCcdaHealthBackfill(job.id, ccdaExtraction) : null;
   if (ccdaBackfill?.wrote) {
-    console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${ccdaBackfill.clinicalFacts} fact(s), ${ccdaBackfill.resultMarkers} lab marker(s) across ${ccdaBackfill.resultPanels} panel(s), ${ccdaBackfill.vitalMarkers} vital marker(s), ${ccdaBackfill.bpReadings}/${ccdaBackfill.extractedBpReadings} BP row(s).`);
+    log.info(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${ccdaBackfill.clinicalFacts} fact(s), ${ccdaBackfill.resultMarkers} lab marker(s) across ${ccdaBackfill.resultPanels} panel(s), ${ccdaBackfill.vitalMarkers} vital marker(s), ${ccdaBackfill.bpReadings}/${ccdaBackfill.extractedBpReadings} BP row(s).`);
   }
   if (job.kind === "health") foldDuplicateHealthPanels(job.id);
 
@@ -895,7 +918,7 @@ async function processJob(job: Job): Promise<void> {
       const content = (m?.content ?? "").toString().trim();
       if (!content) continue;
       try {
-        repo.addMemory(content, m?.kind || "observation", "enrich");
+        addMemory(content, m?.kind || "observation", "enrich");
         addedMemory++;
       } catch {
         /* one bad memory item shouldn't fail the job */
@@ -909,7 +932,7 @@ async function processJob(job: Job): Promise<void> {
     if (fallback.applied) {
       fallbackApplied = true;
       addedMemory += fallback.addedMemory;
-      console.warn(`[enrich] health#${job.id}: agent returned no usable health ingest; deterministic visit-note fallback wrote ${fallback.facts} fact(s).`);
+      log.warn(`[enrich] health#${job.id}: agent returned no usable health ingest; deterministic visit-note fallback wrote ${fallback.facts} fact(s).`);
     }
   }
 
@@ -924,15 +947,15 @@ async function processJob(job: Job): Promise<void> {
     // re-trigger can retry. activity/food keep their regex parse, so 'done' is fine.
     if (job.kind === "health") {
       if (healthDocHasStructuredContent(job.id)) {
-        console.warn(`[enrich] health#${job.id}: agent returned parseable JSON but no markers/summary/memory (wrong shape?) — kept existing structured ingest.`);
+        log.warn(`[enrich] health#${job.id}: agent returned parseable JSON but no markers/summary/memory (wrong shape?) — kept existing structured ingest.`);
         markStatus(job, "done");
         return;
       }
-      console.warn(`[enrich] health#${job.id}: agent returned parseable JSON but no markers/summary/memory (wrong shape?) — marking failed (nothing ingested).`);
+      log.warn(`[enrich] health#${job.id}: agent returned parseable JSON but no markers/summary/memory (wrong shape?) — marking failed (nothing ingested).`);
       markFailed(job);
       return;
     }
-    console.warn(`[enrich] ${job.kind}#${job.id}: agent returned parseable JSON but nothing usable (wrong shape?) — kept regex parse.`);
+    log.warn(`[enrich] ${job.kind}#${job.id}: agent returned parseable JSON but nothing usable (wrong shape?) — kept regex parse.`);
   }
 
   // The agent ran, but only the deterministic passes actually wrote: the import
@@ -956,13 +979,13 @@ async function processJob(job: Job): Promise<void> {
     // First, let the agent align any new analyte synonyms this lab introduced
     // (e.g. an abbreviation the KB never saw) so the merged series feed everything
     // below. Fail-open: the deterministic normalizer + KB already ran at read time.
-    try { await reconcileMarkers("auto"); } catch (e: any) { console.warn(`[enrich] marker reconcile failed: ${e?.message}`); }
-    try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+    try { await reconcileMarkers("auto"); } catch (e: any) { log.warn(`[enrich] marker reconcile failed: ${e?.message}`); }
+    try { deriveDirectives(); } catch (e: any) { log.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
     // Recompute the lab/marker recheck cadence NOW (event-driven), alongside the
     // directive propagation, so a mid-day upload's "next checkup" recheck surfaces
     // immediately instead of waiting for the nightly checkup_attention_date op. The
     // GET /health/next-checkup read is otherwise read-only. Fail-open like the rest.
-    try { repo.refreshDoctorLoopAttention(); } catch (e: any) { console.warn(`[enrich] doctor-loop attention refresh failed: ${e?.message}`); }
+    try { refreshDoctorLoopAttention(); } catch (e: any) { log.warn(`[enrich] doctor-loop attention refresh failed: ${e?.message}`); }
     // "Worse than last time" is an EVENT (owner ruling R1). The outcome annotations were
     // pull-only — nobody ever computed them unless the user opened the read — so a panel
     // that came back further off-optimal left no trace anywhere: the directive quietly
@@ -970,7 +993,7 @@ async function processJob(job: Job): Promise<void> {
     // happened. Recording them HERE, on the ingest that produced the new reading, is what
     // makes a worsening marker a dated fact the ledger and the insight layer can both see.
     // Fingerprint-idempotent, so every document in a batch may call it. Fail-open.
-    try { repo.recordHealthOutcomeEvents(); } catch (e: any) { console.warn(`[enrich] health outcome events failed: ${e?.message}`); }
+    try { recordHealthOutcomeEvents(); } catch (e: any) { log.warn(`[enrich] health outcome events failed: ${e?.message}`); }
     // deriveDirectives() busts today's cached Brief itself (a lab reshapes the read).
     enqueueReviewRefresh();
   }
@@ -981,13 +1004,13 @@ async function processJob(job: Job): Promise<void> {
 // 'done' status is never touched because of a review problem.
 async function processReviewJob(): Promise<void> {
   reviewQueued = false; // a health doc finishing while we run may queue the next refresh
-  const settings = repo.getSettings();
+  const settings = getSettings();
   if (!settings.enrich_enabled) return;
   // Faithful clinical reading matters more than spreading load: default the whole-picture
   // health review to the Claude-first health order (an explicit `health_review` pin still
   // wins — same task label the interactive runHealthReview op uses), NOT the round-robin
   // rotation.
-  const order = repo.pickAgentOrderForTask("health_review");
+  const order = pickAgentOrderForTask("health_review");
   if (!order.length) return;
 
   const prompt = buildHealthReviewPrompt();
@@ -997,7 +1020,7 @@ async function processReviewJob(): Promise<void> {
   try {
     const fb = await runAgentWithFallback(order, prompt, {
       timeoutMs: ENRICH_TIMEOUT_MS,
-      profile: repo.executionProfileForTask("health_review"),
+      profile: executionProfileForTask("health_review"),
       // The SAME schema the interactive op enforces, which means it also names the
       // coach_read protocol — this one-shot prompt carries no read-tool instructions,
       // but the schema still offers `requests` as a legal shape. So this site pairs it
@@ -1011,13 +1034,13 @@ async function processReviewJob(): Promise<void> {
     raw = fb.result?.raw;
     parsed = fb.result?.parsed ?? null;
   } catch (e: any) {
-    console.warn(`[enrich] health review refresh failed: ${e?.message ?? e}`);
+    log.warn(`[enrich] health review refresh failed: ${e?.message ?? e}`);
     return;
   }
 
-  const saved = parsed && typeof parsed === "object" ? repo.addHealthReview(parsed, agent, raw) : null;
+  const saved = parsed && typeof parsed === "object" ? addHealthReview(parsed, agent, raw) : null;
   if (!saved) {
-    console.warn("[enrich] health review refresh: agent returned no usable review — previous review kept.");
+    log.warn("[enrich] health review refresh: agent returned no usable review — previous review kept.");
   }
 
   // New labs landed → refresh the elite-coach whole-picture synthesis on the fresh
@@ -1026,12 +1049,12 @@ async function processReviewJob(): Promise<void> {
   // exists (the user opted into the read at least once) — never conjure one uninvited.
   // Non-blocking + silent-degrade: a failure keeps the previous synthesis, the Stand
   // overview's existing stale/refresh affordance simply finds fresher data on its own.
-  if (shouldRegenerateSynthesis(repo.getHealthSynthesis())) {
+  if (shouldRegenerateSynthesis(getHealthSynthesis())) {
     try {
       const r = await synthesizeHealth("auto");
-      console.log(r.ok ? "[enrich] health synthesis refreshed after new labs." : "[enrich] health synthesis: kept previous (no usable read).");
+      log.info(r.ok ? "[enrich] health synthesis refreshed after new labs." : "[enrich] health synthesis: kept previous (no usable read).");
     } catch (e: any) {
-      console.warn(`[enrich] health synthesis refresh failed: ${e?.message ?? e}`);
+      log.warn(`[enrich] health synthesis refresh failed: ${e?.message ?? e}`);
     }
   }
 }
@@ -1044,13 +1067,13 @@ async function processReviewJob(): Promise<void> {
 // a clean no-op (the deterministic merge stands) when enrichment/agents are off.
 // Exported for focused offline policy tests.
 export async function processGarminStrengthJob(garminActivityId: number): Promise<void> {
-  let ga = repo.getGarminActivity(garminActivityId) as any;
+  let ga = getGarminActivity(garminActivityId) as any;
   if (!ga) return;
   // Ensure the deterministic merge happened (a re-enqueue after restart / manual
   // trigger may reach here before reconcileGarminStrength has run).
   if (!ga.session_id) {
-    try { repo.reconcileGarminStrength(garminActivityId); } catch { /* not strength / nothing to attach */ }
-    ga = repo.getGarminActivity(garminActivityId) as any;
+    try { reconcileGarminStrength(garminActivityId); } catch { /* not strength / nothing to attach */ }
+    ga = getGarminActivity(garminActivityId) as any;
   }
   if (!ga?.session_id) return; // not a strength activity, or no session to attach to
 
@@ -1058,7 +1081,7 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
   const detectedSets = garminDetectedSetInputs(ga);
   // The repo operation re-reads authority and set count inside its savepoint. This
   // closes the reconcile→job race and commits all sets with their ledger marker.
-  const initialImport = repo.importGarminActivitySets({
+  const initialImport = importGarminActivitySets({
     session_id: ga.session_id,
     date: ga.date,
     activity_key: setImportKey,
@@ -1075,7 +1098,7 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
   // re-enqueued or manually triggered strength job reconciles outside a sync, and
   // before the enrichment gate because the write-back is deterministic.
   try {
-    const priorExport = repo.getSessionGarminExport(ga.session_id);
+    const priorExport = getSessionGarminExport(ga.session_id);
     if (priorExport?.source === "manual" && String(ga.external_id ?? "") !== priorExport.activity_id) {
       enqueueEnrich("garmin_export", ga.session_id);
     }
@@ -1099,24 +1122,24 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     /* provenance unavailable → fall through to the ordinary agentic path */
   }
   if (cairnAuthored) {
-    console.log(
+    log.info(
       `[enrich] garmin_strength#${garminActivityId}: Cairn authored this activity — reconciled, no narrative (own echo).`
     );
     return;
   }
 
-  const settings = repo.getSettings();
+  const settings = getSettings();
   if (!settings.enrich_enabled) {
     // The physiology and any atomic deterministic set import stand; skip narrative.
     if (logged) {
-      console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) deterministically (no narrative — enrichment off).`);
+      log.info(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) deterministically (no narrative — enrichment off).`);
     }
     return;
   }
-  const order = repo.pickAgentOrderForTask("enrich");
+  const order = pickAgentOrderForTask("enrich");
   if (!order.length) {
     if (logged) {
-      console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) deterministically (no agent for narrative).`);
+      log.info(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) deterministically (no agent for narrative).`);
     }
     return;
   }
@@ -1126,7 +1149,7 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
   try {
     const fb = await runAgentWithFallback(order, buildGarminStrengthPrompt(ga), {
       timeoutMs: ENRICH_TIMEOUT_MS,
-      profile: repo.executionProfileForTask("enrich"),
+      profile: executionProfileForTask("enrich"),
       schema: GARMIN_STRENGTH_SCHEMA,
     });
     agent = fb.agent ?? null;
@@ -1145,9 +1168,9 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
   if (detectedSets.length === 0) {
     // This explicit refresh is also what keeps prompt-time state from being treated
     // as current after a potentially long-running external agent call.
-    const refreshedSession = repo.getSessionDetail(ga.session_id);
+    const refreshedSession = getSessionDetail(ga.session_id);
     const agentSets = refreshedSession ? agentGarminSetInputs(parsed) : [];
-    const fallbackImport = repo.importGarminActivitySets({
+    const fallbackImport = importGarminActivitySets({
       session_id: ga.session_id,
       date: ga.date,
       activity_key: setImportKey,
@@ -1156,8 +1179,8 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     logged += fallbackImport.imported;
   }
 
-  const session = repo.getSessionDetail(ga.session_id) as any;
-  repo.updateSessionGarminNarrative(ga.session_id, {
+  const session = getSessionDetail(ga.session_id) as any;
+  updateSessionGarminNarrative(ga.session_id, {
     summary: asStr(parsed.summary) ?? null,
     intensity: ["easy", "moderate", "hard"].includes(parsed.intensity) ? parsed.intensity : null,
     // When Cairn owns the sets, an agent's ignored reconstruction must not make the
@@ -1165,7 +1188,7 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     extrapolated: !!session?.garmin?.extrapolated,
     agent,
   });
-  if (logged) console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) into session ${ga.session_id} (kg→lb in code).`);
+  if (logged) log.info(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) into session ${ga.session_id} (kg→lb in code).`);
 }
 
 // ---- finished Cairn strength session → Garmin ------------------------------------
@@ -1179,11 +1202,11 @@ export async function processGarminExportJob(sessionId: number): Promise<void> {
   try {
     const { exportSessionToGarmin } = await import("./garminExport.js");
     const result = await exportSessionToGarmin(sessionId);
-    if (result.skipped) console.log(`[enrich] garmin_export#${sessionId}: skipped (${result.skipped}).`);
-    else if (result.ok) console.log(`[enrich] garmin_export#${sessionId}: ${result.mode} → activity ${result.activity_id}.`);
-    else console.warn(`[enrich] garmin_export#${sessionId}: ${result.error}`);
+    if (result.skipped) log.info(`[enrich] garmin_export#${sessionId}: skipped (${result.skipped}).`);
+    else if (result.ok) log.info(`[enrich] garmin_export#${sessionId}: ${result.mode} → activity ${result.activity_id}.`);
+    else log.warn(`[enrich] garmin_export#${sessionId}: ${result.error}`);
   } catch (e: any) {
-    console.warn(`[enrich] garmin_export#${sessionId} failed: ${e?.message ?? e}`);
+    log.warn(`[enrich] garmin_export#${sessionId} failed: ${e?.message ?? e}`);
   }
 }
 
@@ -1198,16 +1221,16 @@ export async function processGarminExportJob(sessionId: number): Promise<void> {
 // wrong-shape reply → the deterministic classification stands and we mark 'done'.
 // Exported so the offline test can drive the graceful-degradation paths directly.
 export async function processExerciseJob(id: number): Promise<void> {
-  const ex = repo.getExercise(id) as any;
+  const ex = getExercise(id) as any;
   if (!ex) return; // deleted while queued — nothing to enrich, no status to set
 
-  const settings = repo.getSettings();
+  const settings = getSettings();
   if (!settings.enrich_enabled) {
-    repo.setExerciseEnrichStatus(id, "skipped");
+    setExerciseEnrichStatus(id, "skipped");
     return;
   }
 
-  const order = repo.pickAgentOrderForTask("enrich");
+  const order = pickAgentOrderForTask("enrich");
   let finalName = String(ex.name);
   let group: string | null = ex.muscle_group ?? null;
   let equipment: string | null = ex.equipment ?? null;
@@ -1217,12 +1240,12 @@ export async function processExerciseJob(id: number): Promise<void> {
     // Mark in-progress BEFORE the first await so a crash leaves a recoverable
     // marker (recoverPendingEnrich re-enqueues 'in_progress' too), and the art
     // route keeps deferring name-only generation while the job runs.
-    repo.setExerciseEnrichStatus(id, "in_progress");
+    setExerciseEnrichStatus(id, "in_progress");
     let parsed: any = null;
     try {
-      const fb = await runAgentWithFallback(order, buildExerciseEnrichPrompt(repo.getExerciseDetail(ex.name)), {
+      const fb = await runAgentWithFallback(order, buildExerciseEnrichPrompt(getExerciseDetail(ex.name)), {
         timeoutMs: ENRICH_TIMEOUT_MS,
-        profile: repo.executionProfileForTask("enrich"),
+        profile: executionProfileForTask("enrich"),
         schema: EXERCISE_ENRICH_SCHEMA,
       });
       parsed = fb.result?.parsed ?? null;
@@ -1232,7 +1255,7 @@ export async function processExerciseJob(id: number): Promise<void> {
     if (parsed && typeof parsed === "object") {
       // Apply the classification safely (canonical merge/rename, fill-only group/
       // equipment/mode); the returned id/name reflect any merge or rename.
-      const applied = repo.applyExerciseEnrichment(id, {
+      const applied = applyExerciseEnrichment(id, {
         canonical: asStr(parsed.canonical),
         muscle_group: asStr(parsed.muscle_group ?? parsed.group),
         mode: asStr(parsed.mode),
@@ -1244,14 +1267,14 @@ export async function processExerciseJob(id: number): Promise<void> {
         garmin_exercise: asStr(parsed.garmin_exercise),
       });
       finalName = applied.name || finalName;
-      const updated = repo.getExercise(applied.id) as any;
+      const updated = getExercise(applied.id) as any;
       group = updated?.muscle_group ?? group;
       equipment = updated?.equipment ?? equipment;
       // A rename can change what the deterministic mapper would say ("db incline press"
       // → "Incline Dumbbell Press" is a catalog hit where the raw label was not), so
       // re-run the mapper on the final name for anything the agent left unmapped.
       if (!updated?.garmin_category) {
-        try { repo.ensureGarminMapping(applied.id); } catch { /* mapping is best-effort */ }
+        try { ensureGarminMapping(applied.id); } catch { /* mapping is best-effort */ }
       }
     }
     // Warm the how-to guide into ai_cache so the first ⓘ tap serves instantly. Its
@@ -1271,7 +1294,7 @@ export async function processExerciseJob(id: number): Promise<void> {
   // 'done' whenever an agent was available (the deterministic row already stands, so
   // even a soft agent miss leaves a usable exercise — the guide hydrates lazily and
   // art was attempted); 'skipped' only when there was no agent at all.
-  repo.setExerciseEnrichStatus(id, order.length ? "done" : "skipped");
+  setExerciseEnrichStatus(id, order.length ? "done" : "skipped");
 }
 
 // ---- verbatim pain report → structure ------------------------------------------
@@ -1289,7 +1312,7 @@ function symptomCaptureMovements(sessionId: number | null, on: string): { sessio
   const recent: string[] = [];
   try {
     if (sessionId != null) {
-      const detail = repo.getSessionDetail(sessionId) as any;
+      const detail = getSessionDetail(sessionId) as any;
       for (const set of Array.isArray(detail?.sets) ? detail.sets : []) {
         const name = String(set?.exercise ?? "").trim();
         if (name && !session.includes(name)) session.push(name);
@@ -1299,7 +1322,7 @@ function symptomCaptureMovements(sessionId: number | null, on: string): { sessio
     /* a report can arrive with no session attached — that is normal */
   }
   try {
-    for (const row of repo.getRecentSessions(10, { through: on }) as any[]) {
+    for (const row of getRecentSessions(10, { through: on }) as any[]) {
       for (const set of Array.isArray(row?.sets) ? row.sets : []) {
         const name = String(set?.exercise ?? "").trim();
         if (name && !session.includes(name) && !recent.includes(name)) recent.push(name);
@@ -1314,7 +1337,7 @@ function symptomCaptureMovements(sessionId: number | null, on: string): { sessio
 function symptomAreaMatch(label: string, on: string): any | null {
   const key = symptomAreaKey(label);
   if (!key) return null;
-  const events = repo.listTrainingSymptoms({ on, include_resolved: true, seed_legacy: false });
+  const events = listTrainingSymptoms({ on, include_resolved: true, seed_legacy: false });
   return (
     events
       .filter((event: any) => event.scope !== "systemic" && symptomAreaKey(event.area_text) === key)
@@ -1338,7 +1361,7 @@ export function applySymptomExtraction(
   result: { found: boolean; reports: SymptomCaptureReport[] }
 ): { events: number; observations: number } {
   const out = { events: 0, observations: 0 };
-  const report = repo.getSymptomReport(reportId);
+  const report = getSymptomReport(reportId);
   if (!report || !result.found) return out;
   const on = report.reported_on;
 
@@ -1348,7 +1371,7 @@ export function applySymptomExtraction(
       // No place named, so the label is the athlete's own phrase, clamped by the
       // same short-label normalizer every other write crosses. It can never load a
       // lift — scope 'systemic' is checked before relevance ever runs.
-      event = repo.reportTrainingSymptom({
+      event = reportTrainingSymptom({
         area_text: entry.quote,
         report_text: entry.quote,
         onset_on: on,
@@ -1360,15 +1383,15 @@ export function applySymptomExtraction(
     } else if (entry.change === "resolved") {
       // Closing a watch is still the athlete's call — this only carries out a
       // closure they stated in their own words.
-      event = entry.area_label ? repo.resolveTrainingSymptomByArea(entry.area_label, on) : null;
+      event = entry.area_label ? resolveTrainingSymptomByArea(entry.area_label, on) : null;
     } else {
       const matched = entry.area_label ? symptomAreaMatch(entry.area_label, on) : null;
       if (matched && matched.status === "resolved" && (entry.change === "new" || entry.change === "worse")) {
         // It came back. The dedicated recurrence path owns the epoch reset; a plain
         // re-report would open a second, orphaned record for the same place.
-        event = repo.recurTrainingSymptom(matched.id, { on, area_text: entry.area_label ?? undefined });
+        event = recurTrainingSymptom(matched.id, { on, area_text: entry.area_label ?? undefined });
       } else {
-        event = repo.reportTrainingSymptom({
+        event = reportTrainingSymptom({
           area_text: entry.area_label!,
           report_text: entry.quote,
           onset_on: on,
@@ -1383,11 +1406,11 @@ export function applySymptomExtraction(
     // EVERY watch this sentence produced points back at it, not just the first. A note
     // naming two places opens two watches, and the second used to render with no words
     // and age as though the athlete had never spoken about it.
-    repo.attachSymptomReportEvent(reportId, Number(event.id));
+    attachSymptomReportEvent(reportId, Number(event.id));
     for (const movement of entry.movements) {
       try {
-        const before = toleranceSnapshot(repo.getTrainingSymptom(Number(event.id), on));
-        repo.recordMovementTolerance({
+        const before = toleranceSnapshot(getTrainingSymptom(Number(event.id), on));
+        recordMovementTolerance({
           symptom_event_id: Number(event.id),
           movement: movement.name,
           observed_on: on,
@@ -1398,7 +1421,7 @@ export function applySymptomExtraction(
         // Comparing the two hydrated OBJECTS was always true — they are freshly built
         // every call — so a re-applied extraction counted a write per movement it had
         // already recorded. Compare what a write would actually move.
-        if (toleranceSnapshot(repo.getTrainingSymptom(Number(event.id), on)) !== before) out.observations++;
+        if (toleranceSnapshot(getTrainingSymptom(Number(event.id), on)) !== before) out.observations++;
       } catch {
         /* one unmappable movement must not lose the rest of the report */
       }
@@ -1422,20 +1445,20 @@ function toleranceSnapshot(event: any): string {
  * Exported so the offline test can drive those refusals directly.
  */
 export async function processSymptomJob(id: number): Promise<void> {
-  const report = repo.getSymptomReport(id);
+  const report = getSymptomReport(id);
   if (!report) return; // deleted while queued
   // Extraction runs ONCE per report. A re-enqueue (crash recovery, a manual retry of
   // a sibling job) must not re-ask an agent about words it already read.
   if (report.extraction_status !== "pending") return;
 
-  const settings = repo.getSettings();
+  const settings = getSettings();
   if (!settings.enrich_enabled) {
-    repo.setSymptomReportExtraction(id, "skipped");
+    setSymptomReportExtraction(id, "skipped");
     return;
   }
-  const order = repo.pickAgentOrderForTask("enrich");
+  const order = pickAgentOrderForTask("enrich");
   if (!order.length) {
-    repo.setSymptomReportExtraction(id, "skipped");
+    setSymptomReportExtraction(id, "skipped");
     return;
   }
 
@@ -1443,8 +1466,7 @@ export async function processSymptomJob(id: number): Promise<void> {
   const ctx: SymptomCaptureContext = {
     text: report.text,
     reported_on: report.reported_on,
-    active_events: repo
-      .listTrainingSymptoms({ on: report.reported_on, include_resolved: false, seed_legacy: false })
+    active_events: listTrainingSymptoms({ on: report.reported_on, include_resolved: false, seed_legacy: false })
       .map((event: any) => ({
         id: Number(event.id),
         area_label: String(event.area_text),
@@ -1458,7 +1480,7 @@ export async function processSymptomJob(id: number): Promise<void> {
   try {
     const fb = await runAgentWithFallback(order, buildSymptomCapturePrompt(ctx), {
       timeoutMs: ENRICH_TIMEOUT_MS,
-      profile: repo.executionProfileForTask("enrich"),
+      profile: executionProfileForTask("enrich"),
       // Derived from the same vocabulary constants coerceSymptomCapture enforces.
       schema: SYMPTOM_CAPTURE_JSON_SCHEMA,
     });
@@ -1467,25 +1489,25 @@ export async function processSymptomJob(id: number): Promise<void> {
     parsed = null;
   }
   if (!parsed || typeof parsed !== "object") {
-    console.warn(`[enrich] symptom#${id}: no usable JSON — the athlete's words stand as written.`);
+    log.warn(`[enrich] symptom#${id}: no usable JSON — the athlete's words stand as written.`);
     markFailed({ kind: "symptom", id });
     return;
   }
 
   const validation = coerceSymptomCapture(parsed, ctx);
   if (!validation.ok) {
-    console.warn(`[enrich] symptom#${id}: extraction rejected (${validation.reason}) — words kept, nothing derived.`);
+    log.warn(`[enrich] symptom#${id}: extraction rejected (${validation.reason}) — words kept, nothing derived.`);
     markFailed({ kind: "symptom", id });
     return;
   }
   try {
     applySymptomExtraction(id, validation.result);
   } catch (e: any) {
-    console.warn(`[enrich] symptom#${id}: applying the extraction failed (${e?.message ?? e}).`);
+    log.warn(`[enrich] symptom#${id}: applying the extraction failed (${e?.message ?? e}).`);
     markFailed({ kind: "symptom", id });
     return;
   }
-  repo.setSymptomReportExtraction(id, "done", validation.result);
+  setSymptomReportExtraction(id, "done", validation.result);
 }
 
 // ---- food photo → macros (vision) ----------------------------------------------
@@ -1506,40 +1528,40 @@ export async function processSymptomJob(id: number): Promise<void> {
 // (no image_path / a non-absolute path / no usable agent all end terminal,
 // before any agent is reached).
 export async function processFoodPhotoJob(id: number): Promise<void> {
-  const settings = repo.getSettings();
+  const settings = getSettings();
   if (!settings.enrich_enabled) {
-    repo.setFoodNoteEnrichStatus(id, "skipped");
+    setFoodNoteEnrichStatus(id, "skipped");
     return;
   }
-  const row = repo.getFoodNote(id) as any;
+  const row = getFoodNote(id) as any;
   if (!row) return; // deleted while queued — nothing to enrich, no status to set
   const fp = (row.image_path ?? "").toString().trim();
   if (!fp) {
     // No photo on the note (e.g. enqueued for the wrong kind) — fall back to the
     // text enricher is not our job here; just treat as not-applicable.
-    repo.setFoodNoteEnrichStatus(id, "skipped");
+    setFoodNoteEnrichStatus(id, "skipped");
     return;
   }
   // The image is always stored as an absolute path under UPLOADS_DIR. Refuse
   // anything else rather than resolving relative to cwd — same guard as 'health',
   // and the only thing constraining the agent's file read to uploaded images.
   if (!path.isAbsolute(fp)) {
-    repo.setFoodNoteEnrichStatus(id, "skipped");
+    setFoodNoteEnrichStatus(id, "skipped");
     return;
   }
   // A vision read hands the agent a local file to look at — prefer the strongest
   // file-reading transcriber (Claude-first), the same "health" task the doc-ingest
   // kind uses (and pin), rather than the load-spreading round-robin.
-  const order = repo.pickAgentOrderForTask("health");
-  const hasGeminiVision = !!repo.getGeminiApiKey();
+  const order = pickAgentOrderForTask("health");
+  const hasGeminiVision = !!getGeminiApiKey();
   if (!hasGeminiVision && !order.length) {
-    repo.setFoodNoteEnrichStatus(id, "skipped");
+    setFoodNoteEnrichStatus(id, "skipped");
     return;
   }
 
   // Mark in-progress BEFORE the first await so a crash leaves a recoverable marker
   // (recoverPendingEnrich re-enqueues 'in_progress' too) instead of a stuck row.
-  repo.setFoodNoteEnrichStatus(id, "in_progress");
+  setFoodNoteEnrichStatus(id, "in_progress");
 
   const hint = (row.parsed?.summary ?? row.raw_output ?? row.meal ?? "").toString().trim();
   let parsed: any = null;
@@ -1550,7 +1572,7 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
       parsed = await runGeminiFoodPhoto(fp, hint || undefined);
       wrote = !!parsed && applyFoodPhoto(id, parsed);
     } catch (e: any) {
-      console.warn(`[enrich] food_photo#${id}: Gemini vision failed (${e?.message ?? e}); falling back to CLI agent.`);
+      log.warn(`[enrich] food_photo#${id}: Gemini vision failed (${e?.message ?? e}); falling back to CLI agent.`);
     }
   }
 
@@ -1558,7 +1580,7 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
     try {
       const fb = await runAgentWithFallback(order, buildFoodPhotoPrompt(fp, hint || undefined), {
         timeoutMs: ENRICH_TIMEOUT_MS,
-        profile: repo.executionProfileForTask("health"),
+        profile: executionProfileForTask("health"),
         schema: FOOD_PHOTO_SCHEMA,
       });
       parsed = fb.result?.parsed ?? null;
@@ -1578,15 +1600,15 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
   if (!wrote) {
     // Parseable JSON but nothing usable (e.g. a coach-proposal response) — the
     // as-logged note stands; surface it as failed so a re-trigger can retry.
-    console.warn(`[enrich] food_photo#${id}: agent returned parseable JSON but no usable macros (wrong shape?) — kept as-logged note.`);
+    log.warn(`[enrich] food_photo#${id}: agent returned parseable JSON but no usable macros (wrong shape?) — kept as-logged note.`);
     markFailed({ kind: "food_photo", id });
     return;
   }
-  repo.setFoodNoteEnrichStatus(id, "done");
+  setFoodNoteEnrichStatus(id, "done");
 }
 
 async function runGeminiFoodPhoto(absPath: string, hint?: string): Promise<any | null> {
-  const apiKey = repo.getGeminiApiKey();
+  const apiKey = getGeminiApiKey();
   if (!apiKey) return null;
   const buf = fs.readFileSync(absPath);
   if (!buf.length) throw new Error("empty image file");
@@ -1636,7 +1658,7 @@ function mimeForImage(fp: string): string {
 // offline test can exercise the coerce/clamp + merge discipline directly (the
 // agent never runs in the harness).
 export function applyFoodPhoto(id: number, parsed: any): boolean {
-  const cur = (repo.getFoodNote(id) as any)?.parsed ?? {};
+  const cur = (getFoodNote(id) as any)?.parsed ?? {};
   const merged: Record<string, any> = { ...cur };
   let changed = false;
   let usableMacro = false;
@@ -1696,7 +1718,7 @@ export function applyFoodPhoto(id: number, parsed: any): boolean {
     merged.basis = provenance.basis;
   }
 
-  if (changed) repo.updateFoodNoteParsed(id, merged);
+  if (changed) updateFoodNoteParsed(id, merged);
   return changed;
 }
 
@@ -1707,10 +1729,10 @@ function isImageAccessFailureNote(v: any): boolean {
 
 function jobRawText(job: Job): string {
   if (job.kind === "activity") {
-    const row = repo.getActivity(job.id) as any;
+    const row = getActivity(job.id) as any;
     return (row?.raw_text ?? "").toString().trim();
   }
-  const row = repo.getFoodNote(job.id) as any;
+  const row = getFoodNote(job.id) as any;
   return (row?.raw_output ?? "").toString().trim();
 }
 
@@ -1942,12 +1964,12 @@ function clinicalNoteFallbackFromText(text: string): { doc_date: string | null; 
 
 function reconcileHealthDocContext(id: number): void {
   try {
-    const matches = repo.reconcileHealthDocumentContextEvents(id);
+    const matches = reconcileHealthDocumentContextEvents(id);
     if (matches.length) {
-      console.log(`[enrich] health#${id}: resolved ${matches.length} matched context event(s).`);
+      log.info(`[enrich] health#${id}: resolved ${matches.length} matched context event(s).`);
     }
   } catch (e: any) {
-    console.warn(`[enrich] health#${id}: context-event reconciliation failed: ${e?.message || e}`);
+    log.warn(`[enrich] health#${id}: context-event reconciliation failed: ${e?.message || e}`);
   }
 }
 
@@ -1959,8 +1981,8 @@ function applyTextVisitNoteFallback(id: number, source: HealthSource | null): { 
   catch { return { applied: false, facts: 0, addedMemory: 0 }; }
   const fallback = clinicalNoteFallbackFromText(text);
   if (!fallback || (!fallback.clinical_facts.length && !fallback.summary)) return { applied: false, facts: 0, addedMemory: 0 };
-  const row = repo.getHealthDocumentRaw(id) as any;
-  repo.updateHealthDocFields(id, {
+  const row = getHealthDocumentRaw(id) as any;
+  updateHealthDocFields(id, {
     parsed_json: {
       markers: [],
       clinical_facts: fallback.clinical_facts,
@@ -1976,11 +1998,11 @@ function applyTextVisitNoteFallback(id: number, source: HealthSource | null): { 
     }),
     doc_date: fallback.doc_date ?? row?.doc_date ?? null,
   });
-  try { repo.replaceHealthPanels(id, [], row?.original_name ?? null); } catch { /* best effort cleanup */ }
+  try { replaceHealthPanels(id, [], row?.original_name ?? null); } catch { /* best effort cleanup */ }
   let addedMemory = 0;
   for (const m of fallback.memory) {
     try {
-      if (repo.addMemory(m.content, m.kind || "observation", "health-note-fallback")) addedMemory++;
+      if (addMemory(m.content, m.kind || "observation", "health-note-fallback")) addedMemory++;
     } catch { /* one memory should not fail the fallback */ }
   }
   reconcileHealthDocContext(id);
@@ -1997,17 +2019,17 @@ export function applyHealthIngestResult(
   parsed: any,
   opts: {
     imagingBaseRevision?: string | null;
-    imagingBaseRevisionState?: repo.ImagingStudyRevisionState | null;
-    ccda?: repo.CcdaHealthExtraction | null;
+    imagingBaseRevisionState?: ImagingStudyRevisionState | null;
+    ccda?: CcdaHealthExtraction | null;
   } = {}
 ): HealthIngestApplyResult {
-  const row = repo.getHealthDocumentRaw(id) as any;
+  const row = getHealthDocumentRaw(id) as any;
   if (row?.kind === "imaging") {
-    const result = repo.applyImagingAnalysisResult(id, parsed, {
-      sourceKind: repo.imagingStudySourceKind(id),
+    const result = applyImagingAnalysisResult(id, parsed, {
+      sourceKind: imagingStudySourceKind(id),
       extractor: "health-enrichment",
       sourceDocId: row.source_doc_id ?? null,
-      sha256: repo.imagingStudySourceHash(id),
+      sha256: imagingStudySourceHash(id),
       baseRevision: opts.imagingBaseRevision,
       baseRevisionState: opts.imagingBaseRevisionState,
     });
@@ -2025,8 +2047,8 @@ export function applyHealthIngest(
   parsed: any,
   opts: {
     imagingBaseRevision?: string | null;
-    imagingBaseRevisionState?: repo.ImagingStudyRevisionState | null;
-    ccda?: repo.CcdaHealthExtraction | null;
+    imagingBaseRevisionState?: ImagingStudyRevisionState | null;
+    ccda?: CcdaHealthExtraction | null;
   } = {}
 ): boolean {
   return applyHealthIngestResult(id, parsed, opts).status === "applied";
@@ -2038,30 +2060,30 @@ export function applyHealthIngest(
 // this upload's own rows so an ingest never rewrites what it did not touch.
 function foldDuplicateHealthPanels(id: number): void {
   try {
-    const folded = repo.dedupeHealthDocuments({ scopeSourceId: id });
+    const folded = dedupeHealthDocuments({ scopeSourceId: id });
     if (folded.merged) {
-      console.log(
+      log.info(
         `[enrich] health#${id}: folded ${folded.merged} duplicate panel(s) into ${folded.clusters.length} existing record(s) (+${folded.added_markers} marker(s)).`
       );
     }
   } catch (e: any) {
-    console.warn(`[enrich] health#${id}: duplicate fold failed: ${e?.message ?? e}`);
+    log.warn(`[enrich] health#${id}: duplicate fold failed: ${e?.message ?? e}`);
   }
 }
 
-function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: repo.CcdaHealthExtraction | null): boolean {
-  const row = repo.getHealthDocumentRaw(id) as any;
+function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: CcdaHealthExtraction | null): boolean {
+  const row = getHealthDocumentRaw(id) as any;
   // MyChart/CCDA bundles may carry radiology reports alongside labs. Persist
   // those as derived first-class imaging records linked to the source artifact;
   // they are never flattened into lab panels or markers.
   const derivedImaging = Array.isArray(parsed?.imaging_studies)
-    ? repo.replaceDerivedImagingStudies(id, parsed.imaging_studies, row?.original_name ?? null, {
+    ? replaceDerivedImagingStudies(id, parsed.imaging_studies, row?.original_name ?? null, {
         complete: parsed?.imaging_studies_complete === true,
       })
     : [];
   const panels = ingestPanels(parsed);
   const panelFacts = panels.flatMap((p: any) => Array.isArray(p?.clinical_facts) ? p.clinical_facts : []);
-  const clinicalFacts = repo.cleanClinicalFacts([
+  const clinicalFacts = cleanClinicalFacts([
     ...(Array.isArray(parsed?.clinical_facts) ? parsed.clinical_facts : []),
     ...panelFacts,
   ]);
@@ -2069,23 +2091,23 @@ function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: repo.CcdaHe
   const cleanMarkers = (raw: any): any[] =>
     (Array.isArray(raw) ? raw : [])
       .filter((m: any) => m && typeof m === "object")
-      .slice(0, repo.MAX_MARKERS_PER_PANEL)
+      .slice(0, MAX_MARKERS_PER_PANEL)
       .map((m: any) => ({
         name: asStr(m.name) ?? "",
         value: typeof m.value === "number" ? m.value : asStr(m.value) ?? null,
         unit: asStr(m.unit) ?? null,
         flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
       }))
-      .filter((m: any) => m.name && !repo.isNonAnalyteMarkerName(m.name))
+      .filter((m: any) => m.name && !isNonAnalyteMarkerName(m.name))
       // Numeric plausibility / unit-error guard (mirrors insertHealthPanels): the
       // primary-panel ingest path writes via updateHealthDocFields, so it must run
       // the same defensive check or a transcription typo / unit mix-up would poison
       // the connected brain's directives. Conservative — only CLEAR impossibilities.
       .filter((m: any) => {
         try {
-          const v = repo.plausibleMarkerValue(m.name, m.value, m.unit);
+          const v = plausibleMarkerValue(m.name, m.value, m.unit);
           if (!v.plausible) {
-            console.warn(`[enrich] dropped implausible marker "${m.name}" = ${m.value}${m.unit ? ` ${m.unit}` : ""}: ${v.reason ?? "out of physiologic range"}`);
+            log.warn(`[enrich] dropped implausible marker "${m.name}" = ${m.value}${m.unit ? ` ${m.unit}` : ""}: ${v.reason ?? "out of physiologic range"}`);
             return false;
           }
         } catch { /* guard unavailable → keep the marker (fail-open) */ }
@@ -2125,8 +2147,8 @@ function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: repo.CcdaHe
   // upload keeps riding the source row, which carries the athlete's own date.
   const undated = cleaned.filter((p) => !p.doc_date).length;
   if (undated && cleaned.length > 1) {
-    const placed = repo.dateUndatedPanels(cleaned, ccda);
-    console.warn(
+    const placed = dateUndatedPanels(cleaned, ccda);
+    log.warn(
       `[enrich] health#${id}: ${undated} undated panel(s) — ${placed.dated} placed by matching readings, ${placed.dropped} dropped.`
     );
     cleaned = placed.panels as typeof cleaned;
@@ -2141,7 +2163,7 @@ function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: repo.CcdaHe
     const summary = asStr(parsed?.summary) ?? null;
     const out: Record<string, any> = { markers: [] };
     if (clinicalFacts.length) out.clinical_facts = clinicalFacts;
-    repo.updateHealthDocFields(id, {
+    updateHealthDocFields(id, {
       parsed_json: out,
       kind: inferHealthDocumentKind({
         kind: row?.kind,
@@ -2154,7 +2176,7 @@ function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: repo.CcdaHe
       }),
       summary,
     });
-    repo.replaceHealthPanels(id, [], row?.original_name ?? null);
+    replaceHealthPanels(id, [], row?.original_name ?? null);
     reconcileHealthDocContext(id);
     return true;
   }
@@ -2190,13 +2212,13 @@ function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: repo.CcdaHe
   // Prefer the cross-import overview as the source row's summary when there are
   // multiple panels (it reads as "what this whole import means"); else the panel's.
   fields.summary = (rest.length ? asStr(parsed?.summary) : null) ?? primary.summary ?? asStr(parsed?.summary) ?? null;
-  repo.updateHealthDocFields(id, fields);
+  updateHealthDocFields(id, fields);
 
   // Older panels become their own dated records (replacing any prior set, so a
   // re-analysis is idempotent).
-  const created = repo.replaceHealthPanels(id, rest, row?.original_name ?? null);
+  const created = replaceHealthPanels(id, rest, row?.original_name ?? null);
   if (created.length) {
-    console.log(`[enrich] health#${id}: split import into ${cleaned.length} dated panel(s) (${created.length} derived).`);
+    log.info(`[enrich] health#${id}: split import into ${cleaned.length} dated panel(s) (${created.length} derived).`);
   }
   reconcileHealthDocContext(id);
   return true;
@@ -2217,7 +2239,7 @@ function applyStructured(job: Job, structured: any): boolean {
     const rpe = asNum(structured.rpe); if (rpe !== undefined) fields.rpe = rpe;
     const notes = asStr(structured.notes); if (notes !== undefined) fields.notes = notes;
     if (Object.keys(fields).length) {
-      repo.updateActivityFields(job.id, fields);
+      updateActivityFields(job.id, fields);
       return true;
     }
     return false;
@@ -2226,7 +2248,7 @@ function applyStructured(job: Job, structured: any): boolean {
   // food: merge the agent's coerced estimate over the existing parsed_json blob,
   // through the SHARED food-capture coercion (src/foodCapture.ts) so this path, the
   // photo path and chat's log_food agree on one shape.
-  const cur = (repo.getFoodNote(job.id) as any)?.parsed ?? {};
+  const cur = (getFoodNote(job.id) as any)?.parsed ?? {};
   const merged: Record<string, any> = { ...cur };
   let changed = false;
   // Meal totals are BUILT UP from the ingredient rows when the agent gave no
@@ -2289,7 +2311,7 @@ function applyStructured(job: Job, structured: any): boolean {
     merged.confidence = provenance.confidence;
     merged.basis = provenance.basis;
   }
-  if (changed) repo.updateFoodNoteParsed(job.id, merged);
+  if (changed) updateFoodNoteParsed(job.id, merged);
   return changed;
 }
 
@@ -2320,14 +2342,14 @@ export function recoverPendingEnrich(): {
     .all() as any[];
   // A verbatim pain report whose extraction never ran. The words survived the crash
   // (they were written synchronously); only the structuring is owed.
-  const symptoms = repo.listPendingSymptomReports();
+  const symptoms = listPendingSymptomReports();
   for (const a of acts) enqueueEnrich("activity", a.id);
   for (const f of foods) enqueueEnrich(f.image_path ? "food_photo" : "food", f.id);
   for (const h of health) enqueueEnrich("health", h.id);
   for (const x of exercises) enqueueEnrich("exercise", x.id);
   for (const s of symptoms) enqueueEnrich("symptom", s.id);
   if (acts.length || foods.length || health.length || exercises.length || symptoms.length) {
-    console.log(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health + ${exercises.length} exercise + ${symptoms.length} symptom pending job(s).`);
+    log.info(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health + ${exercises.length} exercise + ${symptoms.length} symptom pending job(s).`);
   }
   return {
     activities: acts.length,

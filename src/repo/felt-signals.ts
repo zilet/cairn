@@ -26,6 +26,7 @@ import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { localDateISO } from "./shared.js";
 import { beliefDispositionMap, feltSignalBeliefId } from "./belief-dispositions.js";
+import { isoDaysAgo } from "../lib/dates.js";
 
 export interface FeltSignalPattern {
   id: string;
@@ -67,11 +68,6 @@ const FUELING_PERSIST_FRACTION = 0.6;
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 // ---- small local helpers ----------------------------------------------------
-
-function isoDaysAgo(dateISO: string, n: number): string {
-  const base = Date.parse(dateISO + "T00:00:00Z");
-  return new Date(base - n * 864e5).toISOString().slice(0, 10);
-}
 
 // Calendar weekday (0=Sun..6=Sat) of a local date key. Uses UTC getters over the
 // date's own midnight so the weekday is a pure function of the Y/M/D string,

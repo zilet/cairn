@@ -1,4 +1,5 @@
 import { canonicalBodyweightSeries, type CanonicalBodyweightPoint } from "./bodyweight.js";
+import { median } from "../lib/numbers.js";
 
 export interface RobustWeightEvidence {
   since: string;
@@ -12,13 +13,6 @@ export interface RobustWeightEvidence {
   terminal_shock_date: string | null;
   level_shift: "none" | "unconfirmed" | "corroborated";
   evidence_keys: string[];
-}
-
-function median(values: number[]): number {
-  if (!values.length) return Number.NaN;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 function calendarSpanDays(from: string, to: string): number {
@@ -35,7 +29,7 @@ function theilSenSlope(xs: number[], ys: number[]): number {
       if (dx > 0) slopes.push((ys[j] - ys[i]) / dx);
     }
   }
-  const value = median(slopes);
+  const value = median(slopes) ?? Number.NaN;
   return Number.isFinite(value) ? value : 0;
 }
 
@@ -55,12 +49,12 @@ export function robustWeightTrend<T extends { date: string; weight_lb: number }>
   const last = points.at(-1)!;
   const prior = points.slice(0, -1);
   const recent = prior.slice(-3).map((point) => Number(point.weight_lb));
-  const recentMedian = median(recent);
+  const recentMedian = median(recent) ?? Number.NaN;
   const xs = prior.map((point) => Date.parse(`${point.date}T00:00:00Z`) / 86_400_000);
   const ys = prior.map((point) => Number(point.weight_lb));
   const slope = theilSenSlope(xs, ys);
   const lastX = Date.parse(`${last.date}T00:00:00Z`) / 86_400_000;
-  const predicted = median(ys.map((y, i) => y + slope * (lastX - xs[i])));
+  const predicted = median(ys.map((y, i) => y + slope * (lastX - xs[i]))) ?? Number.NaN;
   const reference = Number.isFinite(predicted) ? predicted : recentMedian;
   const threshold = Math.max(2, Math.abs(recentMedian) * 0.0125);
   const shock = Number.isFinite(reference) && Math.abs(Number(last.weight_lb) - reference) >= threshold;
@@ -85,7 +79,8 @@ export function robustWeightTrend<T extends { date: string; weight_lb: number }>
   const baselineYs = baseline.map((point) => Number(point.weight_lb));
   const baselineSlope = theilSenSlope(baselineXs, baselineYs);
   const firstClusterX = Date.parse(`${cluster[0].date}T00:00:00Z`) / 86_400_000;
-  const predictedFirst = median(baselineYs.map((y, i) => y + baselineSlope * (firstClusterX - baselineXs[i])));
+  const predictedFirst =
+    median(baselineYs.map((y, i) => y + baselineSlope * (firstClusterX - baselineXs[i]))) ?? Number.NaN;
   const firstResidual = Number(cluster[0].weight_lb) - predictedFirst;
   if (!Number.isFinite(firstResidual) || Math.abs(firstResidual) < threshold) {
     return shock
@@ -102,7 +97,7 @@ export function robustWeightTrend<T extends { date: string; weight_lb: number }>
   const shrink = Math.min(1, earnedShift / Math.abs(firstResidual));
   const adjusted = cluster.map((point) => {
     const x = Date.parse(`${point.date}T00:00:00Z`) / 86_400_000;
-    const expected = median(baselineYs.map((y, i) => y + baselineSlope * (x - baselineXs[i])));
+    const expected = median(baselineYs.map((y, i) => y + baselineSlope * (x - baselineXs[i]))) ?? Number.NaN;
     return { ...point, weight_lb: expected + (Number(point.weight_lb) - expected) * shrink };
   });
   return {

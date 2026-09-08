@@ -25,9 +25,9 @@
 
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
 import { hasRecentDecisionVeto, insertBrainExpectation, listBrainDecisions } from "../../repo/brain-decisions.js";
-import { addInsight } from "../../repo/coach.js";
+import { addInsight } from "../../repo/insights.js";
 import { getActiveNutritionTarget } from "../../repo/nutrition.js";
-import { createProposal, getProposal } from "../../repo/profile.js";
+import { createProposal, getProposal } from "../../repo/proposals.js";
 import { db } from "../../db.js";
 import {
   type EnergyDeficiencyRead,

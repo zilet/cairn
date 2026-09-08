@@ -40,7 +40,7 @@ export function validatedAppleHealthShortcutUrl(raw: unknown, requestBaseUrl: st
     // CAIRN_APPLE_HEALTH_SHORTCUT_URL, must be HTTPS, and must match the exact
     // request host + port, so this does not admit arbitrary remote URLs.
     if (url.host === requestUrl.host && url.pathname.endsWith(".shortcut")) return url.toString();
-  } catch {}
+  } catch { /* an unparseable configured URL is simply not a same-origin asset */ }
   return null;
 }
 

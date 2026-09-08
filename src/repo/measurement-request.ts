@@ -42,6 +42,7 @@ import { cutReaffirmation } from "./cut-target.js";
 import { canonicalBodyweightSeries } from "./bodyweight.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import type { TodayAgendaCandidate } from "./today-agenda.js";
+import { dayEpoch } from "../lib/dates.js";
 
 // ---- thresholds --------------------------------------------------------------
 
@@ -97,13 +98,6 @@ export interface MeasurementRequest {
 }
 
 const DAY_MS = 864e5;
-
-function dayEpoch(iso: unknown): number | null {
-  const text = String(iso ?? "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
-  const t = Date.parse(`${text}T00:00:00Z`);
-  return Number.isFinite(t) ? t : null;
-}
 
 // Days between a datum and today, or null when the date is unusable. A FUTURE
 // date is a clock problem rather than staleness and reads as age 0, exactly as

@@ -119,7 +119,11 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
     return false;
   })();
 
-  if (!state.setSeg || !SET_SEG.some(([k]) => k === state.setSeg)) state.setSeg = "you";
+  // Same landing default as the router — read from the route definitions so the
+  // URL contract and the seg bar can never disagree about where Settings opens.
+  if (!state.setSeg || !SET_SEG.some(([k]) => k === state.setSeg)) {
+    state.setSeg = (window.CairnRoutes?.routeDefinitions?.defaults.settingsSection || "you") as ClientSettingsSection;
+  }
 
   // ---- Stable shell. The sub-nav band + a #setSlice container persist across slice
   // swaps (only #setSlice's innerHTML changes), so the save-bar sentinel below — which

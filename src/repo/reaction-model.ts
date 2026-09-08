@@ -55,6 +55,8 @@ import type {
   CoachPersonalSafetyGuardrail,
   CoachWhatWorksForYou,
 } from "../brain/coach-context-contract.js";
+import { log } from "../log.js";
+import { isoDaysAgo } from "../lib/dates.js";
 
 export interface ReactionPattern {
   id: string;
@@ -73,11 +75,6 @@ export interface ReactionPattern {
 const REACTION_MODEL_VERSION = 1;
 
 // ---- small local helpers (kept in-lane; no cross-layer imports) -------------
-
-function isoDaysAgo(date: string, n: number): string {
-  const base = Date.parse(date + "T00:00:00Z");
-  return new Date(base - n * 864e5).toISOString().slice(0, 10);
-}
 
 // Ordinary least-squares correlation coefficient (Pearson r) over paired points.
 // Returns null when degenerate (n<3, or no variance on either axis). INTERNAL —
@@ -1042,7 +1039,7 @@ function reportDroppedModifiers(dropped: CoachPersonalModifier[]): void {
     seen.add(label);
     labels.push(label);
   }
-  console.warn(
+  log.warn(
     `[reaction-model] personal-response slots full: ${labels.length} learned modifier(s) dropped and the universal default stands for them — ${labels.join(", ")}`
   );
 }
@@ -2390,7 +2387,7 @@ export function liftLedgerRead(exercise: string): LiftLedgerRead {
     // verdicts all sit past the 200th row would silently read as "the ledger has
     // nothing to say" when it does. Same observability rule as
     // reportDroppedModifiers above: a cap may bind, but never silently.
-    console.warn(`[reaction-model] liftLedgerRead hit its 200-row ceiling; older verdicts for "${name}" may be unread`);
+    log.warn(`[reaction-model] liftLedgerRead hit its 200-row ceiling; older verdicts for "${name}" may be unread`);
   }
   const verdicts = rows
     .filter((row) => normalizedExerciseKey(String(row.subject_key ?? "")) === key)

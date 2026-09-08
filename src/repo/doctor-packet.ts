@@ -1,6 +1,6 @@
 import { todayISO } from "../db.js";
 import { annotateDirectiveFreshness, prioritizeMarkers } from "./propagation.js";
-import { listDirectives } from "./coach.js";
+import { listDirectives } from "./directives.js";
 import { doctorLoopRead, type DoctorLoopRead } from "./doctor-loop.js";
 import { cardiovascularRiskRead } from "./risk.js";
 import { healthFocus, type HealthFocus } from "./health-focus.js";

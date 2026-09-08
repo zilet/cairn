@@ -18,6 +18,7 @@ import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { localDateISO } from "./shared.js";
 import type { ChallengeVerdict } from "./training-response.js";
 import { activeRelevantTrainingSymptoms, symptomGatesComparability } from "./training-symptoms.js";
+import { finite } from "../lib/numbers.js";
 
 export {
   doseComparability,
@@ -201,12 +202,6 @@ const lower = (s: unknown) =>
   String(s ?? "")
     .trim()
     .toLowerCase();
-const finite = (v: unknown): number | null => {
-  if (v == null || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};
-
 function loggedSetsFor(sessionId: number): any[] {
   return db
     .prepare(

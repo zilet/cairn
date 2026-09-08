@@ -15,10 +15,12 @@ import { getAppState, setAppState } from "./app-state.js";
 import { classifyConstraint, normalizedExerciseKey } from "./exercise-canon.js";
 import { classifyPattern, type Equipment, type MovementPattern } from "./exercise-variations.js";
 import { injuryAffectsExercise, listContextEvents } from "./health.js";
-import { availableEquipment, nextPrescription, recentAutoregulation, type Prescription } from "./progression.js";
+import { availableEquipment } from "./equipment.js";
+import { nextPrescription, recentAutoregulation, type Prescription } from "./progression.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { getProgramState, type LiftState, type ProgramState } from "./program-state.js";
 import { localDateISO } from "./shared.js";
+import { round1, round5 } from "../lib/numbers.js";
 
 export type StrengthObjectiveTargetKind = "return_to_personal_best" | "explicit_est_1rm";
 export type StrengthObjectiveStatus = "active" | "superseded" | "completed" | "archived";
@@ -174,10 +176,6 @@ export function getActiveStrengthObjectiveForExercise(exercise: string): Strengt
       )
       .get(key)
   );
-}
-
-function round1(value: number): number {
-  return Math.round(value * 10) / 10;
 }
 
 function epley(weight: number, reps: number): number {
@@ -777,10 +775,6 @@ const STANDARD_REACHABLE_MAX_LB = 35;
 const PB_REGRESSION_MIN_LB = 10;
 const PB_BEST_MAX_AGE_DAYS = 540;
 const ANCHOR_HISTORY_FRESH_DAYS = 45;
-
-function round5(value: number): number {
-  return Math.round(value / 5) * 5;
-}
 
 function daysSinceStamp(stamp: string | null): number | null {
   if (!stamp) return null;

@@ -23,7 +23,10 @@
 
     if (tab === "today") return renderToday();
     if (tab === "session") return renderSession();
-    if (tab === "stand") return CairnStand.renderStand();
+    // Stand and Me live in the lazily-injected me-health bundle. Await it before
+    // calling into it: switchTab already awaits this promise and routes a
+    // rejection (a failed script fetch) to the tab's error state.
+    if (tab === "stand") return ensureBundle("me-health").then(() => CairnStand.renderStand());
     if (tab === "plan") {
       const jump = state.planJump || state.planSeg || "edit";
       state.planJump = null;
@@ -35,7 +38,7 @@
     }
     if (tab === "progress") return (PROGRESS_HANDLERS[defaultProgressSeg()] || renderHistory)();
     if (tab === "chat") return renderChat();
-    if (tab === "me") return renderMe();
+    if (tab === "me") return ensureBundle("me-health").then(() => renderMe());
     return renderSettings();
   }
 

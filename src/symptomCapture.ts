@@ -29,7 +29,7 @@
 //     enhancement, never a gatekeeper.
 
 import type { JsonSchema } from "./json-schema.js";
-import { renderJsonContract } from "./prompt/shared.js";
+import { renderJsonContract } from "./prompt/json-contract.js";
 import { SYMPTOM_AREA_MAX } from "./repo/symptom-area.js";
 
 export const SYMPTOM_CHANGE_VALUES = ["new", "worse", "same", "better", "resolved"] as const;

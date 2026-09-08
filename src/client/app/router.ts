@@ -50,6 +50,15 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
 
   const ROUTE_TABS: ClientTabName[] = [...(routeDefinitions()?.tabs || ["today"])];
 
+  // ONE default for the Settings landing section, read from the route definitions
+  // (src/contracts/client-routes.ts, mirrored in route-state.ts) rather than
+  // repeated as a literal here. The definitions used to say "agents" while both
+  // call sites below fell back to "you" — the literals won, so nothing shipped
+  // wrong, but the contract disagreed with the behaviour it was meant to describe.
+  function defaultSettingsSection(): ClientSettingsSection {
+    return (routeDefinitions()?.defaults.settingsSection || "you") as ClientSettingsSection;
+  }
+
   // "Today" is a moving target, not a bookmark. Pinning it as an absolute ?date=
   // means the next launch restores a date that has since become yesterday, and the
   // header then reads "Yesterday" on a fresh open. Only a deliberately chosen other
@@ -137,7 +146,7 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
       }
       state.meSeg = routeKey(route.section, options.meSections, "profile") as ClientMeSection;
     } else if (tab === "settings") {
-      state.setSeg = routeKey(route.section, options.settingsSections, state.setSeg || "you") as ClientSettingsSection;
+      state.setSeg = routeKey(route.section, options.settingsSections, state.setSeg || defaultSettingsSection()) as ClientSettingsSection;
     } else if (tab === "chat") {
       state.pendingChatSession = route.session || null;
     }
@@ -166,7 +175,7 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     } else if (tab === "me") {
       route.section = routeKey(state.meSeg, options.meSections, "profile") as AppRoute["section"];
     } else if (tab === "settings") {
-      route.section = routeKey(state.setSeg, options.settingsSections, "you") as AppRoute["section"];
+      route.section = routeKey(state.setSeg, options.settingsSections, defaultSettingsSection()) as AppRoute["section"];
     } else if (tab === "chat" && state.pendingChatSession) {
       route.session = state.pendingChatSession;
     }

@@ -40,6 +40,7 @@ import {
   DAILY_SESSION_SUGGESTION_NORMALIZATION,
   normalizeSessionSuggestionResult,
 } from "./repo/adaptive-session.js";
+import { coerceFinite } from "./lib/numbers.js";
 
 export { DAILY_SESSION_SUGGESTION_NORMALIZATION, normalizeSessionSuggestionResult };
 
@@ -53,12 +54,8 @@ function text(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function finite(value: unknown): boolean {
-  return Number.isFinite(Number(value));
-}
-
 function positive(value: unknown): boolean {
-  return finite(value) && Number(value) > 0;
+  return coerceFinite(value) != null && Number(value) > 0;
 }
 
 export function isSessionSuggestionResult(value: unknown): boolean {

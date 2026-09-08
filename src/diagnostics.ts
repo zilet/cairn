@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { getBuildStamp } from "./build-info.js";
 import type { ProviderUnavailableError } from "./provider-unavailable.js";
+import { log } from "./log.js";
 import { recordDiagnosticEvent } from "./repo/diagnostics.js";
 import { normalizeServerApiRouteTemplate, recordRequestMetric } from "./repo/request-metrics.js";
 import {
@@ -30,7 +31,7 @@ export function diagnosticErrorName(error: unknown): string {
 }
 
 /** V8's first stack line repeats Error.message, so retain frames only. */
-function diagnosticStackFrames(error: unknown): string | null {
+export function diagnosticStackFrames(error: unknown): string | null {
   return telemetryStackFrames(error);
 }
 
@@ -252,7 +253,7 @@ export interface ProcessDiagnosticOptions {
 export function registerProcessDiagnosticHandlers(options: ProcessDiagnosticOptions = {}): () => void {
   const target = options.process ?? process;
   const exit = options.exit ?? ((code) => process.exit(code));
-  const log = options.log ?? ((message) => console.error(message));
+  const emitLine = options.log ?? ((message: string) => log.error(message));
   const sink = options.sink ?? recordDiagnosticEvent;
 
   const capture = (kind: "unhandled_rejection" | "uncaught_exception", reason: unknown) => {
@@ -272,7 +273,7 @@ export function registerProcessDiagnosticHandlers(options: ProcessDiagnosticOpti
     } catch {
       /* injected sinks may throw; process handling must still be decisive */
     }
-    log(`[server] ${kind}: ${errorName}`);
+    emitLine(`[server] ${kind}: ${errorName}`);
   };
 
   const onRejection = (reason: unknown) => capture("unhandled_rejection", reason);

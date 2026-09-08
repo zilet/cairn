@@ -25,14 +25,8 @@ import {
   normalizeExerciseName,
 } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
-import {
-  activeRecoveryWeek,
-  type ActiveRecoveryWeek,
-  effectiveGoalMode,
-  getEnduranceGoal,
-  getPrimaryDiscipline,
-  getProfile,
-} from "./profile.js";
+import { effectiveGoalMode, getEnduranceGoal, getPrimaryDiscipline, getProfile } from "./profile.js";
+import { activeRecoveryWeek, type ActiveRecoveryWeek } from "./recovery-week.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 // The week-SHAPE read (does the lifting week compose with the running week). A leaf
 // module by construction — it takes the run plan as an optional injected value rather
@@ -54,6 +48,7 @@ import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./trai
 import { getTrainingIntent } from "./training-intent.js";
 import { recoverySignalIsDecisionGrade } from "./sensor-cadence.js";
 import { countComparableDoseShortfallSessions } from "./session-dose-log.js";
+import { isoDaysAgo } from "../lib/dates.js";
 
 // ---- ACWR low-base guards ---------------------------------------------------
 // An acute-vs-chronic ratio is only meaningful once there's a real CHRONIC base
@@ -409,10 +404,6 @@ function lsqSlopePerDay(pts: { x: number; y: number }[]): number | null {
 
 function dayIndex(iso: string, base: string): number {
   return Math.round((new Date(iso + "T00:00:00Z").getTime() - new Date(base + "T00:00:00Z").getTime()) / 864e5);
-}
-
-function isoDaysAgo(d: string, n: number): string {
-  return new Date(new Date(d + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
 }
 
 // ---- per-lift progression ----

@@ -13,6 +13,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { executeCoachReadTool, type CoachReadToolExecutionContext } from "./brain/read-tool-runtime.js";
 import { COACH_READ_TOOL_CATALOG, type CoachReadToolName } from "./brain/read-tools.js";
+import { log } from "./log.js";
+import { telemetryErrorName } from "./telemetry-privacy.js";
 
 type ToolRegistrar = Pick<McpServer, "tool">;
 
@@ -101,7 +103,11 @@ export async function startCoachReadMcpListener(opts: {
     try {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
-    } catch {
+    } catch (err) {
+      // The bounded read-only loop's own transport. Name the failure so an operator
+      // can tell a dead loop from a quiet one; the payload carries athlete text, so
+      // only the error name travels.
+      log.warn(`[coach-read] MCP transport failed (${telemetryErrorName(err)})`);
       if (!res.headersSent)
         res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal error" }, id: null });
     }

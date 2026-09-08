@@ -9,13 +9,13 @@ import assert from "node:assert/strict";
 import { db, repo, isoDaysAgo } from "./_seed.js";
 import { effectiveVolumeByGroup } from "../dist/repo/exercise-variations.js";
 import { getVolumeByMuscle } from "../dist/repo/sessions.js";
+import { buildProgressionProposal } from "../dist/repo/progression.js";
 import {
   applySwapSmart,
   buildAndApplySwap,
-  buildProgressionProposal,
   findPlanDayForExercise,
   resolvePlanSwapSlot,
-} from "../dist/repo/progression.js";
+} from "../dist/repo/plan-swap.js";
 
 function reset() {
   for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "program_blocks", "plan_proposals", "activities"]) {

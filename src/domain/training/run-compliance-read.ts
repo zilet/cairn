@@ -24,9 +24,10 @@ import {
   runComplianceWeekStart,
   type RunCompliance,
 } from "../../repo/sessions.js";
+import { dayEpoch, isoDay, mondayOf } from "../../lib/dates.js";
 
 export function runComplianceRead(dateISO?: string): RunCompliance {
-  const weekStart = runComplianceWeekStart(dateISO ? mondayOf(dateISO) : undefined);
+  const weekStart = runComplianceWeekStart(dateISO ? weekStartOf(dateISO) : undefined);
   const applied = getRunCompliance(weekStart);
   if (!appliedRunPlanNeedsRefresh(weekStart)) return applied;
 
@@ -86,11 +87,10 @@ function shiftDays(dateISO: string, days: number): string {
   return new Date(Date.parse(`${dateISO}T00:00:00Z`) + days * 864e5).toISOString().slice(0, 10);
 }
 
-// Monday of the week a given date falls in (the anchor every weekly read shares).
-function mondayOf(dateISO: string): string {
-  const parsed = Date.parse(`${String(dateISO).slice(0, 10)}T00:00:00Z`);
-  if (!Number.isFinite(parsed)) return runComplianceWeekStart();
-  const d = new Date(parsed);
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-  return d.toISOString().slice(0, 10);
+// Monday of the week a given date falls in (the anchor every weekly read shares),
+// falling back to the CURRENT week when the date is unusable — this read's own
+// contract, on top of the canonical `mondayOf`, which throws there instead.
+function weekStartOf(dateISO: string): string {
+  const day = isoDay(dateISO);
+  return dayEpoch(day) == null ? runComplianceWeekStart() : mondayOf(day);
 }

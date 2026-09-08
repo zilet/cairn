@@ -59,7 +59,7 @@ function patientKey(): Buffer {
       const candidate = fs.readFileSync(PATIENT_KEY_PATH);
       if (candidate.length >= 32) legacy = candidate;
     }
-  } catch {}
+  } catch { /* no legacy key file — the generated one below is the key */ }
   const proposed = legacy ?? crypto.randomBytes(32);
   db.prepare("INSERT OR IGNORE INTO private_runtime_secrets (key, value) VALUES (?, ?)").run(
     PATIENT_SECRET_KEY,
@@ -71,7 +71,7 @@ function patientKey(): Buffer {
   if (legacy && key.length === legacy.length && crypto.timingSafeEqual(key, legacy)) {
     try {
       fs.rmSync(PATIENT_KEY_PATH, { force: true });
-    } catch {}
+    } catch { /* best-effort tidy: the key now lives in the DB either way */ }
   }
   return key;
 }
@@ -267,7 +267,7 @@ async function zipCandidates(filePath: string, candidateDir: string, progress: (
     const fail = (error: unknown) => {
       try {
         zip.close();
-      } catch {}
+      } catch { /* closing a zip we are already failing on adds nothing */ }
       reject(error instanceof DicomImportError ? error : new DicomImportError("invalid_zip"));
     };
     zip.once("error", fail);
@@ -718,7 +718,7 @@ function persistCandidates(candidates: Candidate[], targetStudyId: number | null
     for (const owned of createdPaths)
       try {
         fs.rmSync(owned, { force: true });
-      } catch {}
+      } catch { /* rollback cleanup: the original error below is what matters */ }
     throw error;
   }
   return { study_ids: [...new Set(studyIds)], instances_indexed: indexed, studies_created: createdStudies };
@@ -794,7 +794,7 @@ export function recoverDicomImports() {
         const candidate = safeUploadPath(path.join(directory, name));
         if (candidate && !referenced.has(candidate)) fs.rmSync(candidate, { force: true });
       }
-    } catch {}
+    } catch { /* orphan sweep is opportunistic; an unreadable dir is left for the next pass */ }
   }
   const liveStaging = new Set<string>();
   for (const row of db
@@ -810,7 +810,7 @@ export function recoverDicomImports() {
       const candidate = safeUploadPath(path.join(STAGING_DIR, name));
       if (candidate && !liveStaging.has(candidate)) discardDicomStagingPath(candidate);
     }
-  } catch {}
+  } catch { /* orphan sweep is opportunistic; an unreadable dir is left for the next pass */ }
   const quarantine = recoverImagingQuarantines();
   const rows = db
     .prepare("SELECT id FROM dicom_import_jobs WHERE status IN ('queued','running') ORDER BY id")

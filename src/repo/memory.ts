@@ -301,10 +301,10 @@ function hydrateSuggestion(r: any) {
     outcome: any = null;
   try {
     payload = r.payload_json ? JSON.parse(r.payload_json) : null;
-  } catch {}
+  } catch { /* a malformed stored payload reads as absent, never as a throw */ }
   try {
     outcome = r.outcome_json ? JSON.parse(r.outcome_json) : null;
-  } catch {}
+  } catch { /* a malformed stored outcome reads as absent, never as a throw */ }
   return { ...r, payload, outcome };
 }
 

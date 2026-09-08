@@ -15,10 +15,11 @@ import {
   upsertAttentionSchedule,
 } from "../../repo/attention.js";
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
-import { createProposal, setProposalStatus } from "../../repo/profile.js";
+import { createProposal, setProposalStatus } from "../../repo/proposals.js";
 import { getPlan } from "../../repo/plan.js";
 import { addDaysISO, clipText, localDateISO } from "../../repo/shared.js";
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
+import { log } from "../../log.js";
 
 // A change that demonstrably missed its prediction used to stay applied forever
 // with nobody told. This turns that one fact into ONE quiet in-app note, filed on
@@ -542,7 +543,7 @@ export function queueExpectationRevisions(
         // Nothing landed and nothing is waiting — do not leave a dangling draft.
         try {
           setProposalStatus(Number(proposal.id), "discarded");
-        } catch {}
+        } catch (err) { log.warn("[brain] could not discard the dangling draft", { error: err }); }
         const outcome: RevisionOutcome = {
           ...base,
           status: "skipped",

@@ -39,13 +39,15 @@ export const nutritionRouter = Router();
 // pass against the lean-safe / longevity floors before persisting (see
 // coachOps.draftMealPlan). The persisted plan is the verified draft; `verified`
 // carries the "checked against your floors" signal. Verify fails open.
-nutritionRouter.post("/coach/mealplan", async (req, res) => {
+nutritionRouter.post("/coach/mealplan", async (req, res, next) => {
   const { agent, instruction } = req.body ?? {};
   if (backgroundOp(res, "meal_plan", { agent: agent ?? null, instruction }, agent)) return;
   try {
     res.json(await draftMealPlan(agent, instruction));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 
@@ -115,14 +117,16 @@ nutritionRouter.get("/nutrition/progress", (req, res) => {
 // holds it under explicit review posture. Most weeks nothing has moved
 // (change:false) and no proposal is created. ok:false (status 200) is the
 // designed failure signal, mirroring the swap/recipe endpoints.
-nutritionRouter.post("/nutrition/checkin", async (req, res) => {
+nutritionRouter.post("/nutrition/checkin", async (req, res, next) => {
   const b = req.body ?? {};
   const window = b.window ? Number(b.window) : undefined;
   if (backgroundOp(res, "nutrition_checkin", { agent: b.agent ?? null, window }, b.agent)) return;
   try {
     res.json(await nutritionCheckin(b.agent, window));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 
@@ -181,7 +185,7 @@ nutritionRouter.post("/nutrition/fueling-feedback", (req, res) => {
 // hint ("let's go with fish"). ok:false (status 200) is the designed failure
 // signal when the agent returns garbage — the PWA api() helper reads the body
 // regardless of status.
-nutritionRouter.post("/meal-plans/:id/swap", async (req, res) => {
+nutritionRouter.post("/meal-plans/:id/swap", async (req, res, next) => {
   const b = req.body ?? {};
   const id = Number(req.params.id);
   const plan = getMealPlan(id);
@@ -205,15 +209,17 @@ nutritionRouter.post("/meal-plans/:id/swap", async (req, res) => {
         hint: b.hint,
       })
     );
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 
 // Agentic recipe for ONE planned meal, cached on the meal inside parsed_json.
 // Cached recipe → instant { ok, recipe, cached:true } unless force. Like the
 // swap endpoint, ok:false at status 200 is the designed failure signal.
-nutritionRouter.post("/meal-plans/:id/recipe", async (req, res) => {
+nutritionRouter.post("/meal-plans/:id/recipe", async (req, res, next) => {
   const b = req.body ?? {};
   const id = Number(req.params.id);
   const plan = getMealPlan(id);
@@ -231,8 +237,10 @@ nutritionRouter.post("/meal-plans/:id/recipe", async (req, res) => {
   if (backgroundOp(res, "recipe", { agent: b.agent ?? null, id, day, meal_index: mealIndex }, b.agent)) return;
   try {
     res.json(await generateRecipe(b.agent, { plan, id, day, mealIndex }));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 

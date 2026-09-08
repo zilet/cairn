@@ -40,8 +40,10 @@ curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.
 docker compose up -d
 ```
 
-The compose file attached to a release already points at that release's GHCR image tag. Either way,
-then open:
+The compose file attached to a release is generated from the committed
+[`deploy/docker-compose.release.yml`](../deploy/docker-compose.release.yml) — the release workflow
+substitutes that release's pinned GHCR image tag in for `:latest` and attaches the result to the
+GitHub release. Either way, then open:
 
 ```text
 http://localhost:8787

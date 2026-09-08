@@ -3,6 +3,7 @@ import { estimatePreventRisk, type PreventInputs } from "./prevent.js";
 import { matchOptimalZone } from "./propagation-data.js";
 import { currentBodyFatEstimate, getProfile } from "./profile.js";
 import { joinList } from "./shared.js";
+import { round1 } from "../lib/numbers.js";
 
 type PreventAssumption = { input: string; assumed: string; reason: string };
 
@@ -30,10 +31,6 @@ type RiskProjection = {
   expected_direction: "lower" | "higher";
   why: string;
 };
-
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
-}
 
 function asNumber(v: unknown): number | null {
   // null/undefined/"" must read as absent, NOT 0 — `Number(null)` is 0, which

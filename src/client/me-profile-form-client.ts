@@ -277,8 +277,8 @@ type MeProfileFormContext = {
   ): string {
     const { discipline, enduranceGoal, enduranceMode, goalMode, unit, trainingIntent } = context;
     const reqWarn = goal?.requested?.aggressive
-      ? `<div class="ex-flag" style="margin-top:0"><b>Goal too aggressive for lean mass.</b> ${goal.message}</div>`
-      : `<div class="sess-line">${goal?.message || ""}</div>`;
+      ? `<div class="ex-flag" style="margin-top:0"><b>Goal too aggressive for lean mass.</b> ${deps.escapeHtml(goal.message ?? "")}</div>`
+      : `<div class="sess-line">${deps.escapeHtml(goal?.message || "")}</div>`;
     const n = (id: string, label: string, val: unknown, step: number | string = 1) => profileNumberInputHtml(deps, id, label, val, step);
 
     // Body figures shown in the athlete's chosen unit; server storage stays imperial.

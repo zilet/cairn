@@ -11,6 +11,7 @@ import {
   classifyRecompositionStage,
   type RecompositionStageKind,
 } from "./recomposition-stage.js";
+import { finite, round1, round2 } from "../lib/numbers.js";
 
 export type { RecompositionStageKind } from "./recomposition-stage.js";
 export { NEAR_GOAL_REMAINING_LB, isNearGoal } from "./recomposition-stage.js";
@@ -76,14 +77,6 @@ type PhaseLike = {
   target_weight_lb?: number | null;
   status?: string | null;
 } | null;
-
-const round1 = (value: number): number => Math.round(value * 10) / 10;
-const round2 = (value: number): number => Math.round(value * 100) / 100;
-const finite = (value: unknown): number | null => {
-  if (value == null || (typeof value === "string" && !value.trim())) return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-};
 
 function remainingToGoalLb(current: number | null, goal: number | null): number | null {
   if (current == null || goal == null) return null;

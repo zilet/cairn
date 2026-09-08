@@ -1,8 +1,14 @@
 # Cairn — Operations & Update Playbook
 
 Practical reference for deploying, updating, migrating, backing up, and restoring Cairn on a
-Docker host. Cairn is single-user and has no built-in auth; keep it on localhost, a LAN,
-Tailscale/VPN, or another trusted private network.
+Docker host. Cairn is single-user and ships with no auth by default; set `CAIRN_AUTH_TOKEN`
+(and `CAIRN_REQUIRE_AUTH=1` to fail closed at boot) whenever the port is reachable beyond
+loopback — a LAN, a tailnet, or a public proxy. Otherwise keep it on localhost, a LAN,
+Tailscale/VPN, or another trusted private network. See `SECURITY.md` for the full posture.
+
+> Every `docker` / `docker compose` command in this doc works unchanged with Podman
+> (`podman` / `podman compose`) — see the container-engine note in
+> [`DEPLOYMENT.md`](DEPLOYMENT.md). Commands below are not individually rewritten for both.
 
 ---
 
@@ -162,15 +168,24 @@ backup (see Backups below) rather than trying to reverse the migration.
 
 ## How migrations work
 
-`src/migrate.ts` exports:
+`src/migrate.ts` is the **runner**, not the ladder. It exports:
 
-- `MIGRATIONS` — an ordered array of `{ version: number, name: string, up(db) }` objects.
+- `MIGRATIONS` — the ordered array of `{ version: number, name: string, up(db) }` entries,
+  concatenated from the range files under `src/migrations/`.
 - `runMigrations(db)` — reads `PRAGMA user_version`, runs every entry whose `version` is
   greater, then sets `user_version` to the highest applied version.
 
-The authoritative, ordered list and current version live in `src/migrate.ts` (`MIGRATIONS`) — kept
-there rather than duplicated here so they cannot drift. Run `npm run migrate` to print the current
-version and apply any pending migrations.
+The entries themselves live in `src/migrations/v001-050.ts`, `src/migrations/v051-100.ts` and
+`src/migrations/v101-150.ts` — **append a new migration to the range file that covers the next
+version**. The entry shape and the `addColumn` / `hasTable` DDL helpers are in
+`src/migrations/helpers.ts` (re-exported from `src/migrate.ts`, so an older import path still
+works). `src/migrations/frozen/` holds byte-frozen copies of the transforms four data-repair
+migrations need: a shipped repair must keep computing what it computed on the day it ran, so those
+files are **never edited or reformatted** (biome ignores the directory).
+
+The authoritative, ordered list and current version live in those range files — kept there rather
+than duplicated here so they cannot drift. Run `npm run migrate` to print the current version and
+apply any pending migrations.
 
 Every migration is additive and idempotent — an `ALTER TABLE … ADD COLUMN` wrapped in try/catch (so
 re-running is a no-op), plus a couple of `CREATE INDEX IF NOT EXISTS`. None backfill or drop data, so
@@ -199,7 +214,8 @@ DB_PATH=/tmp/copy.db npm run migrate   # against a copy, for testing
 
 ### How to add a schema change
 
-1. Open `src/migrate.ts`. Append a new entry to `MIGRATIONS` with the next integer version:
+1. Open the range file covering the next integer version (`src/migrations/v101-150.ts` for
+   versions 101-150). Append an entry with the next version:
 
    ```ts
    {
@@ -217,7 +233,10 @@ DB_PATH=/tmp/copy.db npm run migrate   # against a copy, for testing
    rename without a data-preserving strategy.
 
 2. Also add the column to the matching `CREATE TABLE IF NOT EXISTS` in `src/db.ts` so
-   freshly seeded DBs get it from the start.
+   freshly seeded DBs get it from the start. This is the **two-step**, and `npm run schema:check`
+   (`scripts/check-schema-two-step.mjs`, part of `npm run verify`) enforces it: it reads the
+   migration files and `src/db.ts` statically and fails when a migrated column never reaches a
+   create block, or when two branches claim the same version number.
 
 3. Test locally against a **copy** of the prod DB before deploying:
 
@@ -346,3 +365,29 @@ worker count and file order, and the worker default scales with cores (`min(8, c
 One gotcha: the `npm run format` script hardcodes `biome format --write .` (the whole
 repo, which is not biome-clean at rest) — to format only the files you touched, run
 `./node_modules/.bin/biome format --write <files>` directly.
+
+## Scripts
+
+Every script under `scripts/`, one line each (from its own header comment):
+
+| Script | What it does |
+|---|---|
+| `benchmark-chat-routing.mjs` | Deterministic, offline policy benchmark for the pure adaptive-chat classifier. No CLI, network, database, or provider calls. |
+| `build-client.mjs` | Compiles the dependency-free browser client slices from `src/client` into stable `public/js` filenames (no bundler, no runtime deps). |
+| `backup-example.sh` | Template backup script for a running Cairn instance: pulls a JSON export and a `VACUUM INTO` SQLite snapshot, rotates old copies. Copy and adjust for cron. |
+| `check-action-pins.mjs` | Verifies GitHub Actions workflow steps are pinned to commit SHAs, not moving tags. |
+| `check-client-build-output.mjs` | Guards that every served `public/js` bundle can be recreated from TypeScript sources in a fresh checkout (generated output is gitignored). |
+| `check-launch-safety.mjs` | Guards the public quickstart docs from regressing to an internet-footgun: copy-paste `docker run` blocks must bind loopback unless deliberately widened. |
+| `check-public-scripts.mjs` | Guards the classic browser app-shell script graph against global-scope hazards (duplicate top-level bindings across `<script>` tags). |
+| `check-sw-cache.mjs` | CI guard for the app-shell precache contract: the `CACHE` placeholder is intact, `CORE_ASSETS` mirrors the bundle manifest, and `index.html` loads exactly the non-lazy bundles. The version itself is derived at serve time (`src/swVersion.ts`). |
+| `container-tool.sh` | Shared shell function resolving which container engine (Docker, Podman, or Apple's `container`) and Compose front-end this machine has, by binary rather than shell alias. Sourced by `quickstart.sh`, `quickstart-rpi.sh`, and `setup-phone.sh`. |
+| `docker-entrypoint.sh` | Container entrypoint: starts as root to fix mounted-volume ownership, then drops privileges to the unprivileged `app` user before running the main process. |
+| `gen-docs.mjs` | Generates `docs/API.md` and `docs/MCP-TOOLS.md` straight from route/tool registrations in source, via `npm run docs:index`, so they never drift. |
+| `gen-prevent-coefficients.mjs` | One-off generator that reads the validated AHA PREVENT (2023) coefficient artifact (gitignored, external) and emits the typed `src/repo/prevent-coefficients.ts`; betas are never hand-transcribed. |
+| `install-agent-cli.mjs` | Installs or updates a pinned third-party coaching CLI (npm exact version, or a checksum-verified vendor script installer) — see `SECURITY.md`. |
+| `quickstart-rpi.sh` | Guided Cairn setup for a Raspberry Pi (arm64); strongly recommends a container engine over direct Node, since the Pi's host Node is usually too old. |
+| `run-verify.mjs` | Runs `npm run verify`'s independent gates (docs, actions, launch safety, and more) in parallel staged groups. |
+| `setup-phone.sh` | Puts Cairn on your phone privately in one step via Tailscale Serve, degrading gracefully to manual instructions if anything is missing. |
+| `smoke-browser.mjs` | Dependency-free browser smoke test for the generated PWA app shell via local Chrome + CDP; a release/manual gate, not part of `npm run verify`. |
+| `smoke-server.mjs` | Shared helper module (server entrypoint, `withServer`) imported by `test/smoke.mjs` and `smoke-browser.mjs`; not run directly. |
+| `update-agent-clis.sh` | Stable `cairn-update-agent-clis` entrypoint wrapper that execs `install-agent-cli.mjs`, so every install/update command is an argv array with no shell interpolation. |

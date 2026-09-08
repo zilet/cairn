@@ -35,6 +35,7 @@ import type { WeeklyRunPlan } from "./run-progression.js";
 import type { PlanDayGroups } from "./training-read.js";
 import { dayLoad, hybridDayContext, planDayStrengthGroups } from "./training-read.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { mondayOf } from "../lib/dates.js";
 
 export type FuelDemandLevel = "light" | "standard" | "big";
 
@@ -162,12 +163,6 @@ function runDaysFromAgenda(asOf: string, opts?: FuelDemandOpts): RunDayRead {
   } catch {
     return { available: false, byDate: new Map() };
   }
-}
-
-function mondayOf(dateISO: string): string {
-  const d = new Date(`${dateISO}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-  return d.toISOString().slice(0, 10);
 }
 
 const NO_RUN_READ: RunDayRead = { available: false, byDate: new Map() };

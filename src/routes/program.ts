@@ -49,13 +49,15 @@ export const programRouter = Router();
 // across reloads, exactly like session-suggest / meal-plan; when bg ops are off it
 // runs inline and returns the legacy body unchanged. draftCoachProposal owns the
 // agent run + proposal persistence so both paths return byte-for-byte the same body.
-programRouter.post("/agent/run", async (req, res) => {
+programRouter.post("/agent/run", async (req, res, next) => {
   const { agent, instruction } = req.body ?? {};
   if (backgroundOp(res, "proposal", { agent: agent ?? null, instruction: instruction ?? "" }, agent)) return;
   try {
     res.json(await draftCoachProposal(agent, instruction));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 
@@ -65,7 +67,7 @@ programRouter.post("/agent/run", async (req, res) => {
 // at its natural boundary and a structural restructure announces first (one-tap Undo,
 // surprise budget honored); under 'review_everything' it parks as a DRAFT proposal for
 // review — same propose→apply path as /agent/run. The `autonomy` field says which.
-programRouter.post("/program/evolve", async (req, res) => {
+programRouter.post("/program/evolve", async (req, res, next) => {
   const { agent, instruction } = req.body ?? {};
   // Long agentic call → a durable background job by default (the PWA streams the
   // evolving caption + reconnects across reloads, like session-suggest); inline
@@ -74,8 +76,10 @@ programRouter.post("/program/evolve", async (req, res) => {
   if (backgroundOp(res, "evolve_program", { agent: agent ?? null, instruction: instruction ?? "" }, agent)) return;
   try {
     res.json(await evolveProgram(agent, instruction));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 
@@ -86,7 +90,7 @@ programRouter.post("/program/evolve", async (req, res) => {
 // structural: it announces first and lands at a natural boundary with one-tap Undo.
 // Same durable-background-job shape as /program/evolve. With a week already on the
 // plan composeWeek returns the designed { ok:false, error } at 200 pointing at evolve.
-programRouter.post("/program/compose-week", async (req, res) => {
+programRouter.post("/program/compose-week", async (req, res, next) => {
   const { agent, instruction } = req.body ?? {};
   // The job input is persisted and later String()ed, so a junk shape would be
   // stored as "[object Object]" and read back as if the athlete had said it.
@@ -95,8 +99,10 @@ programRouter.post("/program/compose-week", async (req, res) => {
   if (backgroundOp(res, "compose_week", { agent: agent ?? null, instruction: asked ?? "" }, agent)) return;
   try {
     res.json(await composeWeek(agent, asked));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 

@@ -1,4 +1,4 @@
-import { localDateISO } from "./shared.js";
+import { addDaysISO, localDateISO } from "./shared.js";
 import { listContextEvents } from "./health.js";
 
 // ============================================================================
@@ -140,14 +140,6 @@ export function contextEventIsRestTrade(ev: any): boolean {
     }
   }
   return !!meta && typeof meta === "object" && (meta as any)[REST_TRADE_META_KEY] === true;
-}
-
-// Add N days to a YYYY-MM-DD string → a YYYY-MM-DD string (UTC, DST-safe for a
-// plain day count). Returns null on an unparseable date.
-function addDaysISO(iso: string, days: number): string | null {
-  const t = Date.parse(`${iso}T00:00:00Z`);
-  if (!Number.isFinite(t)) return null;
-  return new Date(t + days * 864e5).toISOString().slice(0, 10);
 }
 
 // Classify one event into its effect flags + a decay horizon. Returns null when

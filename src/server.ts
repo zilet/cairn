@@ -2,7 +2,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
-import { api } from "./api.js";
+import { api, apiErrorHandler } from "./api.js";
 import { handleMcpPost, methodNotAllowed } from "./mcp.js";
 import { seedIfEmpty } from "./seed.js";
 import { startScheduler } from "./scheduler.js";
@@ -23,6 +23,8 @@ import * as repo from "./repo.js";
 import { apiDiagnosticMiddleware, registerProcessDiagnosticHandlers } from "./diagnostics.js";
 import { installSmokeLifetime } from "./smoke-lifetime.js";
 import { jsonCompression, precompressedStatic } from "./staticCompression.js";
+import { serviceWorkerScript } from "./swVersion.js";
+import { log } from "./log.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
@@ -43,7 +45,7 @@ installSmokeLifetime();
 setAgentRunSink((r) => repo.recordAgentRun(r));
 
 if (await seedIfEmpty()) {
-  console.log(
+  log.info(
     process.env.CAIRN_SEED_DEMO === "1"
       ? "Database was empty — seeded with the full-coverage demo dataset (CAIRN_SEED_DEMO=1)."
       : "Database was empty — seeded with the default plan."
@@ -104,7 +106,9 @@ app.use((req, _res, next) => {
   // Remember the device's zone (cheap: writes only on change) so the scheduler's
   // boot-warm + nightly Brief precompute — which run OUTSIDE any request — compute
   // "today" in the device's calendar, not the server's. Best-effort; never blocks.
-  try { repo.recordClientTimeZone(tz); } catch {}
+  // Best-effort: the zone is a convenience for out-of-request work (see above), so a
+  // write failure must never fail the request that carried the header.
+  try { repo.recordClientTimeZone(tz); } catch (err) { log.debug("[tz] could not record the client time zone", { error: err }); }
   return runWithBrainSnapshot(() => runWithTimeZone(tz, () => next()));
 });
 
@@ -121,6 +125,13 @@ app.post("/mcp", handleMcpPost);
 app.get("/mcp", methodNotAllowed);
 app.delete("/mcp", methodNotAllowed);
 
+// The service worker is SERVED, not shipped verbatim: its cache name is a content
+// hash over the shell it precaches (src/swVersion.ts), so a deploy can never land
+// with a stale cache version nobody remembered to bump. Mounted ahead of both
+// static layers so this substituted body is the only /sw.js reachable; sw.js is
+// deliberately never precompressed, so no `.br`/`.gz` sibling can shadow it.
+app.get("/sw.js", serviceWorkerScript(PUBLIC_DIR));
+
 // PWA (static). The precompressed layer goes FIRST: it hands a capable browser the
 // `.br`/`.gz` sibling the build wrote, and falls through to express.static for
 // everything else (no sibling, no Accept-Encoding, a range request, an icon).
@@ -129,13 +140,13 @@ app.use(
   express.static(PUBLIC_DIR, {
     setHeaders(res, filePath) {
       const base = path.basename(filePath);
-      if (base === "manifest.json" || base === "sw.js") {
+      if (base === "manifest.json") {
         // Always revalidate: an install-capable browser (Chrome/Android/desktop)
         // re-reads the manifest to refresh the home-screen icon, so a bumped icon
-        // set must never be served stale from an HTTP cache. sw.js is the same
-        // deal one level up — the browser's own periodic/registration.update()
-        // re-fetch of the worker script must see the new CACHE version bump
-        // immediately rather than a browser-HTTP-cached copy of the old one.
+        // set must never be served stale from an HTTP cache. (sw.js gets the
+        // same treatment one level up, from the derived-version handler above —
+        // the browser's periodic/registration.update() re-fetch must see the new
+        // cache name immediately, not a browser-HTTP-cached copy of the old one.)
         res.setHeader("Cache-Control", "no-cache");
       } else if (filePath.includes(`${path.sep}icons${path.sep}`) && /\.v\d+\./.test(base)) {
         // Versioned icon urls (…v2.*) are immutable — the filename changes when the
@@ -158,25 +169,31 @@ app.get(/^\/app(?:\/.*)?$/, (_req, res) => {
   res.sendFile("index.html", { root: PUBLIC_DIR, dotfiles: "deny" });
 });
 
+// The SAME JSON error handler the /api router ends with, registered once more at the
+// app level. Body parsing and the static/deep-link layers run OUTSIDE that router, so
+// a payload-too-large or malformed-JSON body would otherwise reach Express's default
+// handler and answer HTML — which the PWA's api() helper cannot read.
+app.use(apiErrorHandler);
+
 // Fail closed before binding: if the operator demanded auth (CAIRN_REQUIRE_AUTH)
 // but no token is set, refuse to start rather than serve an open instance.
 const startupAuthError = authStartupError({ requireAuth, authEnabled });
 if (startupAuthError) {
-  console.error(`\n  SECURITY: ${startupAuthError}\n`);
+  log.error(`SECURITY: ${startupAuthError}`);
   process.exit(1);
 }
 
 const server = app.listen(PORT, HOST, () => {
-  console.log(`Cairn running:`);
-  console.log(`  app  -> http://${HOST}:${PORT}/`);
-  console.log(`  api  -> http://${HOST}:${PORT}/api/plan`);
-  console.log(`  mcp  -> http://${HOST}:${PORT}/mcp  (POST, Streamable HTTP)`);
-  console.log(
+  log.info(`Cairn running:`);
+  log.info(`  app  -> http://${HOST}:${PORT}/`);
+  log.info(`  api  -> http://${HOST}:${PORT}/api/plan`);
+  log.info(`  mcp  -> http://${HOST}:${PORT}/mcp  (POST, Streamable HTTP)`);
+  log.info(
     authEnabled
       ? `  auth -> CAIRN_AUTH_TOKEN set: /api and /mcp require the token`
       : `  auth -> none (set CAIRN_AUTH_TOKEN to gate /api and /mcp; keep the port private)`
   );
-  if (rateLimitEnabled) console.log(`  rate -> per-IP limit active on /api and /mcp`);
+  if (rateLimitEnabled) log.info(`  rate -> per-IP limit active on /api and /mcp`);
   // Subscribe before any scheduler/recovery work can emit a material signal.
   // The callback only persists a bounded job and queues its async worker.
   startBrainReviewJobSubscriber();
@@ -191,7 +208,7 @@ const server = app.listen(PORT, HOST, () => {
     const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
     if (hasPlan) repo.ensureActiveBlock();
   } catch (err) {
-    console.error("[boot] ensureActiveBlock failed:", err);
+    log.error("[boot] ensureActiveBlock failed", { error: err });
   }
   maybeScheduleAgentCliAutoUpdate();
   // Probe the coaching CLIs here instead of leaving it to the first request that
@@ -214,8 +231,10 @@ const server = app.listen(PORT, HOST, () => {
   setTimeout(() => {
     try {
       const { queued, skipped } = warmArt();
-      if (queued > 0) console.log(`[art] cache warm-up: queued ${queued}, skipped ${skipped}`);
-    } catch {}
+      if (queued > 0) log.info(`[art] cache warm-up: queued ${queued}, skipped ${skipped}`);
+    } catch (err) {
+      log.warn("[art] cache warm-up failed", { error: err });
+    }
   }, 5000);
 });
 
@@ -284,7 +303,9 @@ server.on("upgrade", (req, socket, head) => {
     if (!isKnownAgent(agent)) {
       try {
         ws.send(JSON.stringify({ t: "error", message: "unknown agent" }));
-      } catch {}
+      } catch {
+        /* the peer may already be gone; the close below is what matters */
+      }
       ws.close(1008, "unknown agent");
       return;
     }
@@ -299,7 +320,9 @@ server.on("upgrade", (req, socket, head) => {
         onData: (buf) => {
           try {
             ws.send(buf, { binary: true });
-          } catch {}
+          } catch {
+            /* a closed socket drops PTY output by design — ws.on("close") kills the session */
+          }
         },
         onExit: (code) => {
           // The login may have just written this agent's auth state — drop the
@@ -307,16 +330,23 @@ server.on("upgrade", (req, socket, head) => {
           // card flips Installed → Connected without a server restart.
           try {
             invalidateAgentConfigured(agent);
-          } catch {}
+          } catch (err) {
+            log.warn("[agent-login] could not invalidate the cached configured verdict", { agent, error: err });
+          }
           try {
             ws.send(JSON.stringify({ t: "exit", code }));
-          } catch {}
+          } catch {
+            /* peer already gone — nothing to tell it */
+          }
           ws.close();
         },
         onError: (err) => {
+          log.warn("[agent-login] session error", { agent });
           try {
             ws.send(JSON.stringify({ t: "error", message: String(err?.message || err) }));
-          } catch {}
+          } catch {
+            /* peer already gone — nothing to tell it */
+          }
           ws.close();
         },
       });
@@ -326,11 +356,16 @@ server.on("upgrade", (req, socket, head) => {
       if (msg.startsWith("BUSY")) {
         try {
           ws.send(JSON.stringify({ t: "busy" }));
-        } catch {}
+        } catch {
+          /* peer already gone — nothing to tell it */
+        }
       } else {
+        log.warn("[agent-login] could not start the login session", { agent });
         try {
           ws.send(JSON.stringify({ t: "error", message: msg }));
-        } catch {}
+        } catch {
+          /* peer already gone — nothing to tell it */
+        }
       }
       ws.close();
       return;
@@ -366,12 +401,16 @@ server.on("upgrade", (req, socket, head) => {
     ws.on("close", () => {
       try {
         session?.kill();
-      } catch {}
+      } catch {
+        /* already dead is the outcome we wanted */
+      }
     });
     ws.on("error", () => {
       try {
         session?.kill();
-      } catch {}
+      } catch {
+        /* already dead is the outcome we wanted */
+      }
     });
   });
 });
@@ -388,9 +427,9 @@ let shuttingDown = false;
 function shutdown(signal: string) {
   if (shuttingDown) return; // a second signal during teardown — let the watchdog handle it
   shuttingDown = true;
-  console.log(`[server] ${signal} received — shutting down cleanly.`);
+  log.info(`[server] ${signal} received — shutting down cleanly.`);
   const force = setTimeout(() => {
-    console.warn("[server] shutdown timed out — forcing exit.");
+    log.warn("[server] shutdown timed out — forcing exit.");
     process.exit(0);
   }, 8000);
   force.unref?.();
@@ -398,7 +437,7 @@ function shutdown(signal: string) {
   try {
     server.close(() => {
       clearTimeout(force);
-      console.log("[server] HTTP server closed.");
+      log.info("[server] HTTP server closed.");
       process.exit(0);
     });
   } catch {

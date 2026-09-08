@@ -4,7 +4,13 @@
 // instant. The scheduler precomputes it nightly; api.ts / mcp.ts serve the cache
 // on a hit and call computeDayRead() on a miss. Kept in its own module so the
 // agent-running orchestration lives in one place (api and mcp were near-duplicates).
-import * as repo from "./repo.js";
+import { recordedClientTimeZone } from "./repo/client-tz.js";
+import { latestSleep } from "./repo/coach.js";
+import { dayRead } from "./repo/day-read.js";
+import { getCachedDayRead, saveDayRead } from "./repo/day-read-cache.js";
+import { dayReadProseIdentity } from "./repo/day-read-prose.js";
+import { SENSOR_MAX_AGE_DAYS } from "./repo/sensor-freshness.js";
+import { interactiveTimeoutForOp } from "./repo/settings.js";
 import { buildDayReadPrompt } from "./prompt.js";
 import { runChosenWithCoachReads } from "./runChosen.js";
 import { localDateISO } from "./repo/shared.js";
@@ -18,6 +24,7 @@ import {
   RECOVERY_WEEK_SOFTEN_WHY,
   violatesReadingGrammar,
 } from "./repo/day-read.js";
+import { log } from "./log.js";
 
 // The PWA drives every request with its LOCAL calendar date (state.logDate), so
 // the cache key — and the nightly precompute — must use the server's local date
@@ -41,7 +48,7 @@ export function warmDate(tz: string | undefined, now: Date = new Date()): string
 
 // warmDate bound to the last recorded client zone — the date the scheduler warms.
 export function warmToday(now: Date = new Date()): string {
-  return warmDate(repo.recordedClientTimeZone(), now);
+  return warmDate(recordedClientTimeZone(), now);
 }
 
 function decisionAt(): string {
@@ -521,7 +528,7 @@ function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {
 // Returns null when the cached row cannot carry the day's wording, in which case the
 // caller runs the ordinary agentic compute.
 export function pinnedDayReadProse(date: string, baseline: any, identity: string, cachedRow?: any): any | null {
-  const cached = cachedRow === undefined ? repo.getCachedDayRead(date) : cachedRow;
+  const cached = cachedRow === undefined ? getCachedDayRead(date) : cachedRow;
   if (!cached || cached.curated) return null;
   // Floor prose is a transient outage artifact, not the day's wording: leave the
   // self-heal path (ensureDayReadRefresh) free to replace it with an agent sentence.
@@ -566,13 +573,13 @@ export function pinnedDayReadProse(date: string, baseline: any, identity: string
 // they can't poison tomorrow's instant open. Always resolves to a real read.
 export async function computeDayRead(opts: { date?: string; override?: string; agent?: string } = {}): Promise<any> {
   const { date, override, agent } = opts;
-  const baseline = repo.dayRead(date);
+  const baseline = dayRead(date);
   const resolvedDate = date || localToday();
-  const identity = repo.dayReadProseIdentity(resolvedDate, baseline);
+  const identity = dayReadProseIdentity(resolvedDate, baseline);
   let out: any;
   // The pin, above the agent call: a same-identity recompute re-stamps the wording
   // the athlete already read instead of paying for — and printing — a new sentence.
-  const cached = override?.trim() ? null : repo.getCachedDayRead(resolvedDate);
+  const cached = override?.trim() ? null : getCachedDayRead(resolvedDate);
   const pinned = override?.trim() ? null : pinnedDayReadProse(resolvedDate, baseline, identity, cached);
   // The clamps still run over the pinned row (they are identity-preserving by
   // construction, and a safety floor must never be skipped because the wording is old).
@@ -602,7 +609,7 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
     } = await runChosenWithCoachReads(agent, prompt, {
       op: "day_read",
       mode: "ordinary",
-      timeoutMs: repo.interactiveTimeoutForOp("day_read"),
+      timeoutMs: interactiveTimeoutForOp("day_read"),
       acceptParsed: (parsed) => isValidDayReadAgentResult(decodeDayReadAgentProse(parsed), baseline),
       schema: DAY_READ_SCHEMA,
     });
@@ -690,8 +697,8 @@ function finishDayRead(read: any, baseline: any, opts: { override?: string; date
   // each of them returns a fresh object spread from the baseline, which would drop it.
   out.prose_identity = identity;
   try {
-    repo.saveDayRead(resolvedDate, out);
-  } catch {}
+    saveDayRead(resolvedDate, out);
+  } catch (err) { log.warn("[brief] could not cache the day read", { error: err }); }
   return out;
 }
 
@@ -739,7 +746,7 @@ export function resetDayReadComputeCoalescing(): void {
 export async function precomputeDayRead(date?: string): Promise<void> {
   try {
     await computeCanonicalDayRead({ date: date || localToday() });
-  } catch {}
+  } catch (err) { log.debug("[brief] precompute did not land", { error: err }); }
 }
 
 // Has LAST NIGHT actually landed for this date? The watch syncs on its own clock
@@ -749,7 +756,7 @@ export async function precomputeDayRead(date?: string): Promise<void> {
 // before the night it describes existed.
 export function sleepRowExistsFor(date: string): boolean {
   try {
-    return repo.latestSleep(repo.SENSOR_MAX_AGE_DAYS.sleep, date)?.date === date;
+    return latestSleep(SENSOR_MAX_AGE_DAYS.sleep, date)?.date === date;
   } catch {
     return false;
   }
@@ -762,11 +769,11 @@ export function sleepRowExistsFor(date: string): boolean {
 export function precomputeDayReadFloor(date?: string): void {
   const resolvedDate = date || localToday();
   try {
-    const baseline = repo.dayRead(resolvedDate);
+    const baseline = dayRead(resolvedDate);
     finishDayRead(
       { ...baseline, headline: dayReadHeadline(baseline, resolvedDate), source: "deterministic" },
       baseline,
-      { date: resolvedDate, identity: repo.dayReadProseIdentity(resolvedDate, baseline) }
+      { date: resolvedDate, identity: dayReadProseIdentity(resolvedDate, baseline) }
     );
-  } catch {}
+  } catch (err) { log.warn("[brief] deterministic floor warm failed", { error: err }); }
 }

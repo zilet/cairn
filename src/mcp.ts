@@ -31,6 +31,7 @@ import {
   registerMcpMetricOperation,
 } from "./repo/request-metrics.js";
 import { telemetryErrorName, telemetryIdentifier, telemetryStackFrames } from "./telemetry-privacy.js";
+import { log } from "./log.js";
 
 const KNOWN_MCP_METHODS = new Map([
   ["initialize", "initialize"],
@@ -123,6 +124,9 @@ export async function handleMcpPost(req: Request, res: Response) {
     await transport.handleRequest(req, res, req.body);
   } catch (err) {
     const errorName = telemetryErrorName(err);
+    // Same privacy rule as the REST handler: the error NAME and the scrubbed frames,
+    // never the raw message (MCP payloads carry athlete text).
+    log.error(`[mcp] ${tool} failed (${errorName})`, { stack: telemetryStackFrames(err) ?? undefined });
     recordDiagnosticEvent({
       source: "mcp",
       kind: "server_exception",

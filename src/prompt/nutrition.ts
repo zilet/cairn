@@ -1,7 +1,13 @@
 // Nutrition prompts: the weekly meal plan, the adaptive check-in retarget, the
 // single-meal swap, and the per-meal recipe. Owns the household-diet renderer.
 import { todayISO } from "../db.js";
-import * as repo from "../repo.js";
+import { getCoachContext } from "../repo/coach.js";
+import { estimateExpenditure } from "../repo/expenditure.js";
+import { listFuelingFeedback } from "../repo/fueling.js";
+import { frequentFoods } from "../repo/nutrition.js";
+import { computeGoalCheck, getProfile } from "../repo/profile.js";
+import { weeklyAerobicLoad } from "../repo/sessions.js";
+import { getSettings } from "../repo/settings.js";
 import type { CoachContext } from "../repo/coach-context.js";
 import { promptData } from "./context-projection.js";
 import {
@@ -198,7 +204,7 @@ function renderAcuteLoadNote(ctx: any): string {
     ctx?.aerobic_week ??
     (() => {
       try {
-        return repo.weeklyAerobicLoad();
+        return weeklyAerobicLoad();
       } catch {
         return null;
       }
@@ -229,7 +235,7 @@ function renderAcuteLoadNote(ctx: any): string {
 const FUEL_ENERGY_WORD: Record<number, string> = { 1: "running low", 2: "steady", 3: "plenty" };
 const FUEL_HUNGER_WORD: Record<number, string> = { 1: "not hungry", 2: "satisfied", 3: "hungry" };
 function renderFuelingFeedback(context: any): string {
-  const rows = Array.isArray(context?.fueling) ? context.fueling : repo.listFuelingFeedback(14);
+  const rows = Array.isArray(context?.fueling) ? context.fueling : listFuelingFeedback(14);
   const lines = (Array.isArray(rows) ? rows : [])
     .slice(0, 14)
     .map((r: any) => {
@@ -569,19 +575,19 @@ function foodPatternIsCurrent(lastAt: unknown, maxAgeDays = 42): boolean {
 
 // Goal-aware weekly meal-plan prompt.
 export function buildMealPlanPrompt(userInstruction?: string): string {
-  const ctx = repo.getCoachContext();
+  const ctx = getCoachContext();
   const planningMemory = memoryForMealPlanning((ctx as any)?.memory);
   const planningCtx = { ...ctx, memory: planningMemory };
-  const prefs = (repo.getSettings().meal_prefs || "").trim();
+  const prefs = (getSettings().meal_prefs || "").trim();
   const split = (ctx.plan as any[])
     .map((d: any) => `Day ${d.day_number}: ${d.name}${d.focus ? ` (${d.focus})` : ""}`)
     .join("; ");
   // Make the plan adapt to the user's REAL inputs, not just a static goal number:
   // (1) the foods they actually log, (2) their measured expenditure, (3) current fatigue.
-  const exp = repo.estimateExpenditure(21);
+  const exp = estimateExpenditure(21);
   const freqMap = new Map<string, any>();
   for (const h of [8, 13, 19])
-    for (const f of repo.frequentFoods(h).slice(0, 4)) {
+    for (const f of frequentFoods(h).slice(0, 4)) {
       // Capture chips may surface a one-off for convenient re-logging. A weekly
       // planner needs stronger evidence: at least two distinct logged days, with
       // a recent occurrence so an old phase does not become a permanent habit.
@@ -701,10 +707,10 @@ const NUTRITION_CHECKIN_SCHEMA = `{
 // logging week is a reason for LESS confidence, never a target cut and never a
 // scold. Macro floors: protect protein first, then fat, then carbs flex.
 export function buildNutritionCheckinPrompt(ctx?: CoachContext, opts: { windowDays?: number } = {}): string {
-  const context = ctx ?? repo.getCoachContext();
-  const exp = repo.estimateExpenditure(opts.windowDays ?? 21);
-  const goal: any = (context as any)?.goal ?? repo.computeGoalCheck();
-  const profile: any = (context as any)?.profile ?? repo.getProfile();
+  const context = ctx ?? getCoachContext();
+  const exp = estimateExpenditure(opts.windowDays ?? 21);
+  const goal: any = (context as any)?.goal ?? computeGoalCheck();
+  const profile: any = (context as any)?.profile ?? getProfile();
   // The current target the user is eating to: the ACCEPTED adaptive-nutrition
   // target if one has been persisted (this loop's own prior output), else the
   // current mode-aware formula target.
@@ -714,7 +720,7 @@ export function buildNutritionCheckinPrompt(ctx?: CoachContext, opts: { windowDa
   const targetIsAccepted = eff?.source === "accepted";
   // A retarget must respect a HARD whole-diet identity too (it steers macros and
   // is echoed back to the coach) — scan the profile diet + meal prefs.
-  const mealPrefs = (repo.getSettings().meal_prefs || "").trim();
+  const mealPrefs = (getSettings().meal_prefs || "").trim();
   const dietSources = [profile?.dietary_restrictions, explicitHardDietMealPrefs(mealPrefs)];
   const hardDiet = renderHardDiet(dietSources);
   const plantProteinNote = isPlantForward(dietSources)
@@ -812,14 +818,14 @@ export function buildMealSwapPrompt(args: { plan: any; day: string; mealIndex: n
   );
   const meals = Array.isArray(dayObj?.meals) ? dayObj.meals : [];
   const current = meals[mealIndex];
-  const profile = repo.getProfile();
-  const goal = repo.computeGoalCheck();
-  const prefs = (repo.getSettings().meal_prefs || "").trim();
+  const profile = getProfile();
+  const goal = computeGoalCheck();
+  const prefs = (getSettings().meal_prefs || "").trim();
   // The connected brain must reach the swap too — otherwise a flagged marker's
   // nutrition directive (e.g. "tilt toward fish/poultry, lower saturated fat")
   // is silently ignored and the replacement can reintroduce a steered-away food.
   // renderConnectedBrain returns "" when there are no active directives.
-  const ctx = repo.getCoachContext();
+  const ctx = getCoachContext();
   // The swap must honor a HARD whole-diet identity too — declared in the profile,
   // in meal prefs, OR in the free-text hint ("I'm vegan now").
   const dietSources = [
@@ -898,10 +904,10 @@ export function buildRecipePrompt(args: { plan: any; day: string; mealIndex: num
   );
   const meals = Array.isArray(dayObj?.meals) ? dayObj.meals : [];
   const current = meals[mealIndex];
-  const profile = repo.getProfile();
-  const goal = repo.computeGoalCheck();
-  const prefs = (repo.getSettings().meal_prefs || "").trim();
-  const ctx = repo.getCoachContext();
+  const profile = getProfile();
+  const goal = computeGoalCheck();
+  const prefs = (getSettings().meal_prefs || "").trim();
+  const ctx = getCoachContext();
   // The recipe must comply with a HARD whole-diet identity (profile diet or meal prefs).
   const dietSources = [
     (profile as any)?.dietary_restrictions,

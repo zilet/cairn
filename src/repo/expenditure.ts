@@ -7,12 +7,13 @@
 import { db } from "../db.js";
 import { listContextEvents } from "./health.js";
 import { measuredRmrAssessment } from "./metabolism.js";
-import { KCAL_PER_LB, getProfile, projectGoalPace } from "./profile.js";
+import { getProfile, KCAL_PER_LB, projectGoalPace } from "./profile.js";
 import { LB_PER_KG, addDaysISO, localDateISO } from "./shared.js";
 import { foodBackstopSignature, registerTrainingCacheClear, trainingBackstopSignature } from "./training-cache.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 import { completedIntakeWindow } from "./intake-window.js";
 import { robustWeightEvidence } from "./weight-evidence.js";
+import { median } from "../lib/numbers.js";
 
 export interface ExpenditureEstimate {
   // Best current maintenance estimate. The outcome-calibrated value remains an
@@ -127,13 +128,6 @@ function calendarSpanDays(from: string, to: string): number {
   return Number.isFinite(a) && Number.isFinite(b) ? Math.max(0, Math.round((b - a) / 86_400_000)) : 0;
 }
 
-function median(values: number[]): number {
-  if (!values.length) return Number.NaN;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
 function activityPattern(byDay: Map<string, number>): {
   typical: number;
   allowance: number;
@@ -144,9 +138,9 @@ function activityPattern(byDay: Map<string, number>): {
 } {
   const entries = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b));
   const values = entries.map(([, value]) => value);
-  const typical = Math.round(median(values));
+  const typical = Math.round(median(values) ?? Number.NaN);
   const deviations = values.map((value) => Math.abs(value - typical));
-  const mad = median(deviations);
+  const mad = median(deviations) ?? Number.NaN;
   const threshold = typical + Math.max(400, Number.isFinite(mad) ? mad * 3 : 0);
   const exceptional = values.filter((value) => value > threshold);
   const span = entries.length ? calendarSpanDays(entries[0][0], entries.at(-1)![0]) + 1 : 0;
@@ -633,7 +627,7 @@ export function measuredRmrWeightAdjustment(
   if (!nearest) return null; // never invent test-time weight
   const recent = canonicalBodyweightSeries({ since: addDaysISO(through, -13), through });
   if (!recent.length) return null;
-  const currentWeight = median(recent.slice(-3).map((point) => Number(point.weight_lb)));
+  const currentWeight = median(recent.slice(-3).map((point) => Number(point.weight_lb))) ?? Number.NaN;
   const deltaLb = currentWeight - Number(nearest.weight_lb);
   if (!Number.isFinite(deltaLb) || Math.abs(deltaLb) < 5) return null;
   // Mifflin's weight coefficient is ~4.54 kcal/lb. Keep the correction modest

@@ -35,6 +35,7 @@ import {
   type SignalPosture,
   type UnifiedSignalState,
 } from "./signal-state.js";
+import { coerceFinite as num } from "../lib/numbers.js";
 
 // Re-exported so existing importers keep resolving `FocusDomain` from the conductor.
 export type { FocusCandidate, FocusDomain } from "./focus-candidate.js";
@@ -383,10 +384,6 @@ interface Candidate {
   caveat_cause?: string;
 }
 
-function num(v: unknown): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 function lc(s: unknown): string {
   return String(s ?? "")
     .trim()

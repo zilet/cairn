@@ -30,7 +30,7 @@ import {
 import { feltSignalsForBeliefs } from "./felt-signals.js";
 import { learnedModelsForBeliefs } from "./learned-models.js";
 import { whatWorksForYouForBeliefs } from "./reaction-model.js";
-import { listDirectives } from "./coach.js";
+import { listDirectives } from "./directives.js";
 
 export type BeliefGroupKind = "learned_model" | "felt_signal" | "personal_modifier";
 

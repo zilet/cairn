@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_ENV_DENYLIST, buildAgentSpawnOptions } from "./agentExecution.js";
 import { commandPresent, invalidateAgentConfigured, loadAgents } from "./agents.js";
+import { log } from "./log.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_SCRIPT = path.join(__dirname, "..", "scripts", "update-agent-clis.sh");
@@ -178,7 +179,7 @@ export function maybeScheduleAgentCliAutoUpdate() {
 
   const intervalHours = Math.max(1, Number(process.env.AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS || 168));
   const run = () => {
-    console.log(`[agent-clis] auto-update starting; interval=${intervalHours}h`);
+    log.info(`[agent-clis] auto-update starting; interval=${intervalHours}h`);
     startInstalledAgentCliUpdate("auto");
   };
 

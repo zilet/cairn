@@ -9,6 +9,7 @@
 // specialist already said. Null-safe throughout — no opinions, an unparseable
 // blob, or an empty recommendation all yield null, and the caller renders nothing.
 import { SPECIALIST_DOMAINS, type SpecialistDomain } from "./specialist-contract.js";
+import { clipText } from "../repo/shared.js";
 
 // The four+ specialists, given a calm human voice. Keyed by the durable
 // SpecialistDomain so the label tracks whatever the conference actually stored.
@@ -28,10 +29,7 @@ export interface SpecialistVoiceLine {
 }
 
 function clip(value: unknown, max = 180): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
+  return clipText(value, max, { collapseWhitespace: true, ellipsis: "" });
 }
 
 function isSpecialistDomain(value: unknown): value is SpecialistDomain {

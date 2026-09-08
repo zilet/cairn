@@ -17,6 +17,7 @@ import { selectedPlanDayForDate } from "./plan-selection.js";
 import { getOrCreateSessionRow } from "./session-core.js";
 import { localDateISO } from "./shared.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
+import { stableJson, finite } from "../lib/numbers.js";
 
 // planSnapshot's session-header "why", athlete-voice and rotating (VISION.md:
 // suggestion voice, never engineering vocabulary). Index 0 of each set is also
@@ -111,12 +112,6 @@ function boundedProse(value: unknown, max: number): string | null {
   if (value == null) return null;
   const text = String(value).replace(/\s+/g, " ").trim();
   return text ? truncateAtWord(text, max) : null;
-}
-
-function finite(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
 }
 
 function boundedNumber(value: unknown, min: number, max: number, integer = false): number | null {
@@ -366,17 +361,6 @@ function parseJson(value: unknown): unknown {
   } catch {
     return null;
   }
-}
-
-function stableJson(value: unknown): string {
-  if (value === undefined) return "null";
-  if (value == null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  const object = value as Record<string, unknown>;
-  return `{${Object.keys(object)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`)
-    .join(",")}}`;
 }
 
 function requestFingerprint(input: {

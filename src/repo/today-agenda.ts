@@ -46,7 +46,7 @@ import { cutQualityRead, type CutQualityActive } from "./cut-quality.js";
 import { fuelingFollowThroughDue } from "./fueling.js";
 import { addDaysISO, clipText, localDateISO, localDayOfStamp } from "./shared.js";
 import { getCachedDayRead } from "./intelligence.js";
-import { listVisibleInsights } from "./coach.js";
+import { listVisibleInsights } from "./insights.js";
 import { listActiveDirectives } from "./directives-read.js";
 import { acuteGates } from "./hybrid-load.js";
 import { programAdjustments, programBalance } from "./progression.js";
@@ -62,7 +62,7 @@ import { healthFocus } from "./propagation.js";
 import { standingMomentum } from "./standing.js";
 // The waiting-draft 'plan' candidate — now the ONE Today surface that points at a
 // review-needed draft (the duplicate side-loader card was retired).
-import { listAttentionReviewHeldProposals, listProposals, listReviewHeldProposals } from "./profile.js";
+import { listAttentionReviewHeldProposals, listProposals, listReviewHeldProposals } from "./proposals.js";
 import { isProtectiveFuelAsk } from "./protective-fuel-draft.js";
 // The two NEW Era-2 candidate producers, built by sibling agents. They land at
 // integration time; import them now (do not stub). Each returns a fully-formed

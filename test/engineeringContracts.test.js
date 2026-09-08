@@ -220,13 +220,33 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
   // The flattened bundle order reproduces the canonical boot order, and both the
   // index.html <script> graph and the sw precache load the bundles in manifest order.
   const bundleUrls = BUNDLES.map((bundle) => `/${bundle.output.replace(/^public\//, "")}`);
+  // A bundle marked `lazy` is deliberately absent from index.html: it is injected
+  // on first navigation to the destination that owns it. index.html loads exactly
+  // the eager ones; the precache below still covers all of them, so an installed
+  // PWA gets the lazy bundle offline too.
+  const eagerBundleUrls = BUNDLES.filter((bundle) => !bundle.lazy).map(
+    (bundle) => `/${bundle.output.replace(/^public\//, "")}`
+  );
   const indexScripts = [...index.matchAll(/<script src="([^"]+)" defer><\/script>/g)].map((m) => m[1]);
   const indexBundleScripts = indexScripts.filter((src) => src.startsWith("/js/"));
   assert.deepEqual(
     indexBundleScripts,
-    bundleUrls,
-    "index.html must load every bundle in manifest order and nothing else under /js"
+    eagerBundleUrls,
+    "index.html must load every EAGER bundle in manifest order and nothing else under /js"
   );
+  // Each lazy bundle is reachable only through the loader's own table.
+  const lazyLoader = readFileSync(path.join(root, "src/client/app/lazy-bundles.ts"), "utf8");
+  for (const bundle of BUNDLES.filter((b) => b.lazy)) {
+    const url = `/${bundle.output.replace(/^public\//, "")}`;
+    assert.ok(
+      !indexBundleScripts.includes(url),
+      `${url} is lazy — index.html must not load it eagerly`
+    );
+    assert.ok(
+      lazyLoader.includes(`"${bundle.lazy}": "${url}"`),
+      `src/client/app/lazy-bundles.ts must map "${bundle.lazy}" to ${url}`
+    );
+  }
   const swBundleScripts = [...sw.matchAll(/"(\/js\/[^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(
     swBundleScripts,
@@ -528,11 +548,13 @@ test("generated API docs include mounted route modules", () => {
   const trainingLogRoutes = read("src/routes/training-log.ts");
   const parity = read("test/surfaceParity.test.js");
   assert.doesNotMatch(api, /api\.(get|post|put|delete|patch)\(/, "src/api.ts should stay a mount-only registry");
-  assert.match(api, /api\.use\("\/chat",\s*chatRouter\)/);
+  // api.ts mounts through the API_MOUNTS table (one row per router) so the same list
+  // can be audited for duplicate endpoints — assert the row, not a bare api.use call.
+  assert.match(api, /prefix: "\/chat", router: chatRouter \}/);
   assert.doesNotMatch(api, /api\.(get|post|put|delete|patch)\("\/chat(?:\/|")/);
   assert.match(chatRoutes, /chatRouter\.post\("\/"/);
   assert.match(chatRoutes, /chatRouter\.get\("\/turns"/);
-  assert.match(api, /api\.use\("\/",\s*connectedBrainRouter\)/);
+  assert.match(api, /prefix: "\/", router: connectedBrainRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:health(?:\/|")|markers(?:\/|")|reaction-model"|trajectory"|context-effect"|next-step(?:\/|")|coaching-focus"|directives(?:\/|")|symptom-links"|research"|evidence(?:\/|")|insights(?:\/|"))/
@@ -552,7 +574,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(connectedBrainRoutes, /getEvidence\(\{\s*topic,\s*marker\s*\}\)/);
   assert.match(connectedBrainRoutes, /runResearch/);
   assert.match(connectedBrainRoutes, /addMemory\(text,\s*"insight",\s*"insight-feedback"\)/);
-  assert.match(api, /api\.use\("\/",\s*dayCoachRouter\)/);
+  assert.match(api, /prefix: "\/", router: dayCoachRouter \}/);
   assert.doesNotMatch(api, /api\.(get|post|put|delete|patch)\("\/(?:today-read(?:\/|")|session-suggest"|week-ahead")/);
   assert.match(dayCoachRoutes, /dayCoachRouter\.get\("\/today-read"/);
   assert.match(dayCoachRoutes, /dayCoachRouter\.post\("\/today-read\/reshape"/);
@@ -568,16 +590,16 @@ test("generated API docs include mounted route modules", () => {
   assert.match(dayReadUseCase, /getCachedDayRead/);
   assert.match(dayCoachRoutes, /backgroundOp\(res,\s*"session_suggest"/);
   assert.match(dayCoachRoutes, /createAgentJob\(\{\s*kind:\s*"day_read_override"/);
-  assert.match(api, /api\.use\("\/agent-jobs",\s*agentJobsRouter\)/);
+  assert.match(api, /prefix: "\/agent-jobs", router: agentJobsRouter \}/);
   assert.doesNotMatch(api, /api\.(get|post|put|delete|patch)\("\/agent-jobs(?:\/|")/);
   assert.match(agentJobRoutes, /agentJobsRouter\.get\("\/"/);
   assert.match(agentJobRoutes, /agentJobsRouter\.get\("\/:id\/stream"/);
-  assert.match(api, /api\.use\("\/",\s*artRouter\)/);
+  assert.match(api, /prefix: "\/", router: artRouter \}/);
   assert.doesNotMatch(api, /api\.(get|post|put|delete|patch)\("\/art(?:\/|")/);
   assert.match(artRoutes, /artRouter\.get\("\/art"/);
   assert.match(artRoutes, /artRouter\.post\("\/art\/warm"/);
   assert.match(artRoutes, /artRouter\.get\("\/art\/manifest"/);
-  assert.match(api, /api\.use\("\/",\s*operatorRouter\)/);
+  assert.match(api, /prefix: "\/", router: operatorRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:agents(?:\/|")|agent-clis\/update|settings"|agent-stats")/
@@ -585,7 +607,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(operatorRoutes, /operatorRouter\.get\("\/agents"/);
   assert.match(operatorRoutes, /operatorRouter\.put\("\/settings"/);
   assert.match(operatorRoutes, /operatorRouter\.get\("\/agent-stats"/);
-  assert.match(api, /api\.use\("\/",\s*personContextRouter\)/);
+  assert.match(api, /prefix: "\/", router: personContextRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:context-events(?:\/|")|injury-impacts"|family(?:\/|")|supplements(?:\/|")|onboard")/
@@ -596,12 +618,12 @@ test("generated API docs include mounted route modules", () => {
   assert.match(personContextRoutes, /personContextRouter\.post\("\/supplements\/understand"/);
   assert.match(personContextRoutes, /personContextRouter\.post\("\/onboard"/);
   assert.match(personContextRoutes, /onboardFromText/);
-  assert.match(api, /api\.use\("\/",\s*garminRouter\)/);
+  assert.match(api, /prefix: "\/", router: garminRouter \}/);
   assert.doesNotMatch(api, /api\.(get|post|put|delete|patch)\("\/garmin(?:\/|")/);
   assert.match(garminRoutes, /garminRouter\.post\("\/garmin\/sync"/);
   assert.match(garminRoutes, /await import\("\.\.\/garmin\.js"\)/);
   assert.match(garminRoutes, /await import\("\.\.\/enrich\.js"\)/);
-  assert.match(api, /api\.use\("\/",\s*exportsRouter\)/);
+  assert.match(api, /prefix: "\/", router: exportsRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:export(?:\/|")|health-export"|health-report(?:\.txt)?")/
@@ -609,12 +631,12 @@ test("generated API docs include mounted route modules", () => {
   assert.match(exportRoutes, /exportsRouter\.get\("\/export"/);
   assert.match(exportRoutes, /exportsRouter\.get\("\/health-report\.txt"/);
   assert.match(exportRoutes, /fs\.rm\(tmp,\s*\{\s*force:\s*true\s*\}/);
-  assert.match(api, /api\.use\("\/",\s*healthMetricsRouter\)/);
+  assert.match(api, /prefix: "\/", router: healthMetricsRouter \}/);
   assert.doesNotMatch(api, /api\.(get|post|put|delete|patch)\("\/(?:health-metrics|recovery)(?:\/|")/);
   assert.match(healthMetricsRoutes, /healthMetricsRouter\.post\("\/health-metrics"/);
   assert.match(healthMetricsRoutes, /\.slice\(0,\s*366\)/);
   assert.match(healthMetricsRoutes, /healthMetricsRouter\.get\("\/recovery"/);
-  assert.match(api, /api\.use\("\/",\s*memoryLearningRouter\)/);
+  assert.match(api, /prefix: "\/", router: memoryLearningRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:memory(?:\/|")|profile\/grow-about-me"|suggestions(?:\/|")|learnings")/
@@ -626,7 +648,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(memoryLearningRoutes, /memoryLearningRouter\.get\("\/learnings"/);
   assert.match(memoryLearningRoutes, /consolidateMemory/);
   assert.match(memoryLearningRoutes, /reconcileOutcomes/);
-  assert.match(api, /api\.use\("\/",\s*nutritionRouter\)/);
+  assert.match(api, /prefix: "\/", router: nutritionRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:coach\/mealplan|mealplans(?:\/|")|nutrition(?:\/|")|meal-plans(?:\/|")|food-notes(?:\/|")|frequent-foods"|chat-images(?:\/|"))/
@@ -636,11 +658,11 @@ test("generated API docs include mounted route modules", () => {
   assert.match(nutritionRoutes, /nutritionRouter\.put\("\/food-notes\/:id"/);
   assert.match(nutritionRoutes, /nutritionRouter\.get\("\/chat-images\/:name"/);
   assert.match(nutritionRoutes, /backgroundOp\(res,\s*"nutrition_checkin"/);
-  assert.match(api, /api\.use\("\/",\s*systemRouter\)/);
+  assert.match(api, /prefix: "\/", router: systemRouter \}/);
   assert.doesNotMatch(api, /api\.(get|post|put|delete|patch)\("\/(?:health|version|update-status|update-check)"/);
   assert.match(systemRoutes, /systemRouter\.get\("\/health"/);
   assert.match(systemRoutes, /systemRouter\.post\("\/update-check"/);
-  assert.match(api, /api\.use\("\/",\s*personRouter\)/);
+  assert.match(api, /prefix: "\/", router: personRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:profile"|goal"|bodyweight(?:\/|")|blood-pressure(?:\/|")|checkins(?:\/|"))/
@@ -648,7 +670,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(personRoutes, /personRouter\.get\("\/profile"/);
   assert.match(personRoutes, /personRouter\.post\("\/blood-pressure"/);
   assert.match(personRoutes, /personRouter\.get\("\/checkins"/);
-  assert.match(api, /api\.use\("\/",\s*planExercisesRouter\)/);
+  assert.match(api, /prefix: "\/", router: planExercisesRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:plan(?:\/|\.ics"|")|exercises(?:\/|")|exercise(?:\/|")|program\/variations")/
@@ -664,7 +686,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(planExerciseRoutes, /planExercisesRouter\.post\("\/exercises\/reconcile-groups"/);
   assert.match(planExerciseRoutes, /planExercisesRouter\.get\("\/program\/variations"/);
   assert.match(planExerciseRoutes, /decodeURIComponent\(req\.params\.name\)/);
-  assert.match(api, /api\.use\("\/",\s*programRouter\)/);
+  assert.match(api, /prefix: "\/", router: programRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:agent\/run|program(?:\/|")|proposals(?:\/|")|program-state"|performance"|run-plan"|run-zones"|muscle-trajectory"|test-week"|dexa-targeting")/
@@ -683,7 +705,7 @@ test("generated API docs include mounted route modules", () => {
   // so under lead_mode a bounded target nudge quiet-applies at its natural boundary while
   // REST + MCP share the ONE wrapper and can't drift.
   assert.match(programRoutes, /buildProgressionWithAutonomy/);
-  assert.match(api, /api\.use\("\/",\s*trainingLogRouter\)/);
+  assert.match(api, /prefix: "\/", router: trainingLogRouter \}/);
   assert.doesNotMatch(
     api,
     /api\.(get|post|put|delete|patch)\("\/(?:sessions(?:\/|")|last-set"|sets(?:\/|")|progress(?:\/|")|activities(?:\/|")|recent-training"|stats"|endurance-prs"|run-compliance"|cardio"|endurance-goal"|volume"|calendar")/
@@ -695,8 +717,8 @@ test("generated API docs include mounted route modules", () => {
   assert.match(trainingLogRoutes, /trainingLogRouter\.get\("\/activities\/:id"/);
   assert.match(trainingLogRoutes, /trainingLogRouter\.get\("\/cardio"/);
   assert.match(trainingLogRoutes, /localToday\(\)/);
-  assert.match(api, /api\.use\("\/health-docs",\s*healthDocsRouter\)/);
-  assert.match(api, /api\.use\("\/",\s*todayRouter\)/);
+  assert.match(api, /prefix: "\/health-docs", router: healthDocsRouter \}/);
+  assert.match(api, /prefix: "\/", router: todayRouter \}/);
   assert.match(genDocs, /src\/routes\/agent-jobs\.ts/);
   assert.match(genDocs, /receiver:\s*"agentJobsRouter",\s*prefix:\s*"\/agent-jobs"/);
   assert.match(parity, /src\/routes\/agent-jobs\.ts/);
@@ -1096,7 +1118,8 @@ test("Stand SWR + depth land in the generated bundle", () => {
 
 test("chat session index is created only after the v49 column migration", () => {
   const schema = read("src/db.ts");
-  const migrations = read("src/migrate.ts");
+  // The ladder's entries live in range files; src/migrate.ts only concatenates them.
+  const migrations = ["src/migrations/v001-050.ts", "src/migrations/v051-100.ts"].map(read).join("\n");
   assert.doesNotMatch(
     schema,
     /CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages\(session_id\)/,
@@ -7052,13 +7075,13 @@ test("the recovery-week instruction prefix is one contract across client and ser
   // waiting draft (pendingRecoveryDraft) and retires stale ones by this PREFIX. If
   // either side rewords its literal, the button/review-link state machine silently
   // dies — pin them to each other.
-  const server = read("src/repo/profile.ts");
+  const server = read("src/repo/recovery-week.ts");
   const ledger = read("src/repo/recovery-week-ledger.ts");
   const client = read("src/client/progress-program-controller.ts");
   assert.match(
     server,
     /export\s*\{[^}]*\bRECOVERY_WEEK_INSTRUCTION_PREFIX\b[^}]*\}/,
-    "profile.ts exports RECOVERY_WEEK_INSTRUCTION_PREFIX"
+    "recovery-week.ts exports RECOVERY_WEEK_INSTRUCTION_PREFIX"
   );
   const m = ledger.match(/RECOVERY_WEEK_INSTRUCTION_PREFIX = "([^"]+)"/);
   assert.ok(m, "the recovery ledger declares the instruction prefix");
@@ -7104,7 +7127,9 @@ test("every chat reply receipt is appended and split through the one shared shap
   // the separator. When they were two independent literals, the split quietly stopped
   // matching and a verified plan receipt vanished from the bubble for a change that had
   // really landed — so neither side may hand-roll it.
-  const src = stripLineComments(read("src/chatTurns.ts"));
+  // The reconcilers were extracted out of chatTurns.ts into their own module; chatTurns
+  // re-exports them, so the contract follows the code rather than the old address.
+  const src = stripLineComments(read("src/chat-reconcile.ts"));
   assert.match(src, /^const RECEIPT_JOIN = "\\n\\n";$/m, "the separator is declared once, by name");
   assert.doesNotMatch(
     src,
@@ -7156,13 +7181,13 @@ test("every chat reply receipt is appended and split through the one shared shap
 
   // Belt and suspenders: the name scan only sees functions whose NAME marks them
   // as receipt-shaped — a differently-named helper (`foldReceiptInto`, say) would
-  // slip past it. The historical home of every reconciler, the region between
-  // RECEIPT_JOIN's declaration and logPhotoFood, is therefore still held to
-  // exactly one literal separator (RECEIPT_JOIN's own), catching by position
-  // what the name scan cannot see.
+  // slip past it. Every reconciler now lives in this one module, so the whole region
+  // from RECEIPT_JOIN's declaration to the end of the file is held to exactly one
+  // literal separator (RECEIPT_JOIN's own), catching by position what the name scan
+  // cannot see.
   const regionStart = src.indexOf("const RECEIPT_JOIN");
-  const regionEnd = src.indexOf("function logPhotoFood");
-  assert.ok(regionStart > 0 && regionEnd > regionStart, "the reconciler region still precedes logPhotoFood");
+  const regionEnd = src.length;
+  assert.ok(regionStart > 0 && regionEnd > regionStart, "the reconciler region is still in this module");
   assert.equal(
     (src.slice(regionStart, regionEnd).match(/\\n\\n/g) || []).length,
     1,
@@ -7190,6 +7215,21 @@ test("every chat reply receipt is appended and split through the one shared shap
     `expected at least one appendReceipt( per receipt-shape function found (${receiptShapeFns.length}); ` +
       `saw ${appendCount} appendReceipt( occurrences`
   );
+
+  // And the contract only holds while chat-reconcile.ts stays the ONE address. A
+  // receipt-shaped helper written back into chatTurns.ts would be invisible to every
+  // scan above, so require chatTurns to declare none — it may re-export them, never
+  // define one.
+  const turns = stripLineComments(read("src/chatTurns.ts"));
+  const strays = [...turns.matchAll(/^(?:export\s+)?(?:async\s+)?(?:function\s+|const\s+)(\w+)/gm)]
+    .map((m) => m[1])
+    .filter((name) => receiptShapeRe.test(name));
+  assert.deepEqual(
+    strays,
+    [],
+    "src/chatTurns.ts declares a receipt-shape helper again — the reconcilers live in " +
+      `src/chat-reconcile.ts, which is the only file the scans above read: ${strays.join(", ")}`
+  );
 });
 
 test("the directive event edges re-derive on both surfaces", () => {
@@ -7208,4 +7248,200 @@ test("the directive event edges re-derive on both surfaces", () => {
   assert.match(connectedBrainTools, /setDirectiveStatusByUser\(id, status\)/);
   assert.doesNotMatch(connectedBrainRoutes, /updateDirective\(/);
   assert.doesNotMatch(connectedBrainTools, /updateDirective\(/);
+});
+
+// ---------------------------------------------------------------------------
+// One definition per shared date/number helper
+// ---------------------------------------------------------------------------
+// These helpers used to be re-implemented privately in 4-14 modules apiece, with
+// silent divergences in exactly the places that matter: whether a missing date
+// reads as null or as 0, whether `Number(null)` is allowed to become a reading of
+// zero, whether a day difference is signed. That is a plausible-wrong-answer
+// machine — a freshness gate reading "0 days old" for a datum that has no date at
+// all. `src/lib/dates.ts` and `src/lib/numbers.ts` now own one canonical copy each.
+//
+// A module that genuinely needs different semantics keeps its own copy and names
+// itself in HELPER_COPY_ALLOWLIST with the reason. Everything else imports.
+const CANONICAL_DATE_HELPERS = [
+  "isoDay",
+  "isoDate",
+  "dayEpoch",
+  "addDaysISO",
+  "daysBetweenISO",
+  "isoDaysAgo",
+  "mondayOf",
+];
+const CANONICAL_NUMBER_HELPERS = ["finite", "coerceFinite", "round1", "round2", "round5", "median", "stableJson"];
+
+// (file, helper) pairs that deliberately keep a private implementation.
+const HELPER_COPY_ALLOWLIST = new Map([
+  ["src/brain/contract-utils.ts:isoDate", "stricter agent-contract reader (bare string only); delegates the parse"],
+  ["src/repo/imaging.ts:isoDate", "reads a length-capped free-text field, not a day key"],
+  ["src/repo/imaging.ts:finite", "clamps into a caller-supplied [min, max] band"],
+  ["src/domain/brain/conference-conflicts.ts:finite", "typeof-number only — a numeric STRING is not evidence here"],
+  [
+    "src/garmin.ts:isoDaysAgo",
+    "different signature and frame: takes a WINDOW LENGTH, not a date — it counts back from today " +
+      "inclusively (days - 1) and keys the result with localDateISO in the device zone, which " +
+      "src/lib/dates.ts is zone-free by design and cannot do",
+  ],
+]);
+
+test("the shared date and number helpers have exactly one definition each", () => {
+  const names = [...CANONICAL_DATE_HELPERS, ...CANONICAL_NUMBER_HELPERS];
+  const declaration = new RegExp(
+    String.raw`^(?:export )?(?:function (${names.join("|")})\(|const (${names.join("|")}) = (?:\(|function))`,
+    "gm"
+  );
+
+  // src/lib holds the canonical copies; src/client is a separate build with no ESM
+  // imports at all; src/migrations/frozen is frozen by definition (a shipped
+  // migration must keep computing exactly what it computed when it ran).
+  const files = sourceFilesUnder("src", [".ts"]).filter(
+    (file) =>
+      !file.startsWith("src/lib/") && !file.startsWith("src/client/") && !file.startsWith("src/migrations/frozen/")
+  );
+
+  const offenders = [];
+  for (const file of files) {
+    const src = stripLineComments(read(file));
+    for (const match of src.matchAll(declaration)) {
+      const helper = match[1] || match[2];
+      if (HELPER_COPY_ALLOWLIST.has(`${file}:${helper}`)) continue;
+      offenders.push(`${file}: ${helper}`);
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    "these modules re-declare a helper that src/lib/dates.ts or src/lib/numbers.ts already owns — " +
+      "import it instead, or add the pair to HELPER_COPY_ALLOWLIST with the divergence it needs:\n" +
+      offenders.join("\n")
+  );
+
+  // And the canonical modules really do export what the allowlist is measured against.
+  const dates = read("src/lib/dates.ts");
+  const numbers = read("src/lib/numbers.ts");
+  for (const helper of CANONICAL_DATE_HELPERS) {
+    assert.match(dates, new RegExp(`^export function ${helper}\\(`, "m"), `src/lib/dates.ts exports ${helper}`);
+  }
+  for (const helper of CANONICAL_NUMBER_HELPERS) {
+    assert.match(numbers, new RegExp(`^export function ${helper}\\(`, "m"), `src/lib/numbers.ts exports ${helper}`);
+  }
+
+  // The canonical date module must stay importable from anywhere — including a
+  // migration — so it may not reach back into src/ for anything.
+  assert.doesNotMatch(dates, /^import /m, "src/lib/dates.ts must stay dependency-free");
+  assert.doesNotMatch(numbers, /^import /m, "src/lib/numbers.ts must stay dependency-free");
+});
+
+test("prompt builders and coaching ops import concrete repo modules, never the repo barrel", () => {
+  // src/repo.ts is an `export *` barrel over ~130 modules. A module that imports it takes
+  // an edge to EVERY repo module at once, and when anything in the repo cluster imports
+  // that module back, the barrel joins the cycle and drags the whole cluster in with it.
+  // That is exactly what src/prompt/shared.ts used to do: one `import * as repo` there put
+  // repo.ts inside the server's largest strongly-connected component, which measured 108
+  // modules; importing the defining modules directly instead cut it to 87.
+  //
+  // Routes (src/routes/*) and MCP tools (src/surfaces/mcp/*) keep using the barrel by
+  // design — nothing in the repo cluster imports them back, so they add no cycle.
+  const offenders = [];
+  for (const dir of ["src/prompt", "src/coachOps"]) {
+    for (const entry of readdirSync(path.join(root, dir))) {
+      if (!entry.endsWith(".ts")) continue;
+      const rel = `${dir}/${entry}`;
+      const src = read(rel);
+      // `from "../repo.js"` / `from "./repo.js"` — the barrel — but NOT `from "../repo/x.js"`.
+      if (/from\s+"(?:\.\.?\/)+repo\.js"/.test(stripLineComments(src))) offenders.push(rel);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `these files import the src/repo.ts barrel and would re-form the cycle: ${offenders.join(", ")}`
+  );
+
+  // And the split is real: coachOps.ts is a pure re-export barrel over src/coachOps/, so
+  // every existing `from "./coachOps.js"` importer keeps working unchanged.
+  const barrel = read("src/coachOps.ts");
+  for (const mod of ["shared", "training", "nutrition", "health", "memory"]) {
+    assert.match(barrel, new RegExp(`export \\* from "\\./coachOps/${mod}\\.js";`), `barrel re-exports ${mod}`);
+  }
+  assert.doesNotMatch(stripLineComments(barrel), /\bfunction\b|\bclass\b/, "the barrel holds no logic of its own");
+});
+
+// Who may import the ROOT barrels. src/prompt.ts and src/coachOps.ts are `export *` over
+// their own directories, so importing one takes an edge to every prompt builder / every
+// coaching op at once — the same shape that put src/repo.ts inside the SCC. Routes and MCP
+// tools are exempt by design (nothing in the clusters imports them back, so they close no
+// cycle); every other importer is frozen here, so a new one is a decision someone makes on
+// purpose rather than a barrel that quietly regrows its in-degree.
+const ROOT_BARREL_IMPORTERS = new Map([
+  [
+    "src/prompt.ts",
+    [
+      "src/chatStreamFilter.ts",
+      "src/chatTurns.ts",
+      "src/coachOps/health.ts",
+      "src/coachOps/memory.ts",
+      "src/coachOps/nutrition.ts",
+      "src/coachOps/training.ts",
+      "src/dayread.ts",
+      "src/enrich.ts",
+      "src/jobStreamFilter.ts",
+      "src/research.ts",
+      "src/runChosen.ts",
+      "src/scheduler.ts",
+    ],
+  ],
+  [
+    "src/coachOps.ts",
+    [
+      "src/agentJobs.ts",
+      "src/contracts/client-compat.ts",
+      "src/domain/brain/day-read-use-case.ts",
+      "src/enrich.ts",
+      "src/runChosen.ts",
+      "src/scheduler.ts",
+    ],
+  ],
+]);
+
+test("only the declared callers import the src/prompt.ts and src/coachOps.ts root barrels", () => {
+  const files = sourceFilesUnder("src", [".ts"]).filter((file) => !file.startsWith("src/client/"));
+  const byBarrel = new Map([...ROOT_BARREL_IMPORTERS.keys()].map((barrel) => [barrel, []]));
+
+  for (const file of files) {
+    const src = stripLineComments(read(file));
+    for (const match of src.matchAll(/from\s+"(\.[^"]+)"/g)) {
+      const resolved = path
+        .normalize(path.join(path.dirname(file), match[1].replace(/\.js$/, ".ts")))
+        .replaceAll("\\", "/");
+      if (resolved === file) continue;
+      const seen = byBarrel.get(resolved);
+      if (seen && !seen.includes(file)) seen.push(file);
+    }
+  }
+
+  for (const [barrel, allowed] of ROOT_BARREL_IMPORTERS) {
+    // Routes and MCP tools are the intended barrel consumers and are not enumerated.
+    const found = byBarrel
+      .get(barrel)
+      .filter((file) => !file.startsWith("src/routes/") && !file.startsWith("src/surfaces/mcp/"))
+      .sort();
+    assert.deepEqual(
+      found,
+      [...allowed].sort(),
+      `the set of modules importing the ${barrel} barrel changed. Routes and src/surfaces/mcp/* are ` +
+        "exempt; anything else takes an edge to every module behind the barrel, so import the " +
+        "defining module instead — or add this file to ROOT_BARREL_IMPORTERS deliberately"
+    );
+  }
+
+  // And the allowlists describe files that exist, so a rename cannot leave a dead entry
+  // silently widening the contract.
+  for (const [, allowed] of ROOT_BARREL_IMPORTERS) {
+    for (const file of allowed) assert.ok(existsSync(path.join(root, file)), `${file} still exists`);
+  }
 });

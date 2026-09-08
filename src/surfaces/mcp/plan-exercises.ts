@@ -9,7 +9,6 @@ import {
   findExercise,
   getExerciseDetail,
   getExerciseGuide,
-  getPlan,
   getPlanDay,
   getPlanQuality,
   importExerciseGuides,
@@ -27,6 +26,7 @@ import {
   updateTarget,
   upsertExercise,
 } from "../../domain/training/index.js";
+import { getPlanWithPurpose } from "../../repo.js";
 import { PlanQualityError } from "../../repo/plan-quality.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
@@ -66,9 +66,11 @@ const planItemShape = z.object({
 export function registerPlanExerciseTools(server: McpToolRegistrar) {
   server.tool(
     "get_plan",
-    "Get the full weekly training plan: every day with its exercises, sets, rep ranges, target weights, injury notes, and day_type. A day with day_type 'rest' is a deliberate rest day and carries an empty items array; the emptiness is the prescription, not missing data.",
+    "Get the full weekly training plan: every day with its exercises, sets, rep ranges, target weights, injury notes, day_type, and the grounded 'purpose' line for that day. A day with day_type 'rest' is a deliberate rest day and carries an empty items array; the emptiness is the prescription, not missing data.",
     {},
-    async () => asText(getPlan())
+    // Same payload as GET /api/plan — getPlanWithPurpose attaches the per-day
+    // purpose line, so the two surfaces stay mirrors.
+    async () => asText(getPlanWithPurpose())
   );
 
   server.tool(

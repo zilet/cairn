@@ -12,7 +12,8 @@
  */
 
 import { db } from "../db.js";
-import { activeRecoveryWeek, getEnduranceGoal } from "./profile.js";
+import { getEnduranceGoal } from "./profile.js";
+import { activeRecoveryWeek } from "./recovery-week.js";
 import { recoveryCycleAt } from "./recovery-cycles.js";
 import { recordTestWeek } from "./muscle-trajectory.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";

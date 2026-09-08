@@ -139,13 +139,15 @@ connectedBrainRouter.get("/health/review", (_req, res) => res.json(getLatestHeal
 // Run a fresh whole-picture health review via the shared agent rotation.
 // Like the meal swap, ok:false at status 200 is the designed failure signal
 // when the agent returns garbage (addHealthReview rejects the shape).
-connectedBrainRouter.post("/health/review", async (req, res) => {
+connectedBrainRouter.post("/health/review", async (req, res, next) => {
   const agent = req.body?.agent;
   if (backgroundOp(res, "health_review", { agent: agent ?? null }, agent)) return;
   try {
     res.json(await runHealthReview(agent));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 
@@ -245,13 +247,15 @@ connectedBrainRouter.get("/health/synthesis", (_req, res) => {
   res.json({ synthesis: view.synthesis, focus: healthFocus(), stale: view.stale, stale_reason: view.stale_reason });
 });
 
-connectedBrainRouter.post("/health/synthesis", async (req, res) => {
+connectedBrainRouter.post("/health/synthesis", async (req, res, next) => {
   const agent = req.body?.agent;
   if (backgroundOp(res, "health_synthesis", { agent: agent ?? null }, agent)) return;
   try {
     res.json(await synthesizeHealth(agent));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 
@@ -324,14 +328,16 @@ connectedBrainRouter.get("/evidence/summary", (_req, res) => res.json(evidenceSu
 // settings.research_enabled: when off, serves only cached evidence and returns
 // ok:false (the designed signal, at 200): never reaches the network. Informational,
 // not medical advice.
-connectedBrainRouter.post("/research", async (req, res) => {
+connectedBrainRouter.post("/research", async (req, res, next) => {
   try {
     const question = String(req.body?.question ?? "").trim();
     if (!question) return res.status(400).json({ ok: false, error: "question required" });
     const markers = Array.isArray(req.body?.markers) ? req.body.markers.map(String) : [];
     res.json(await runResearch(question, { markers, agent: req.body?.agent, force: !!req.body?.force }));
-  } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 
@@ -348,14 +354,16 @@ connectedBrainRouter.get("/insights", (req, res) =>
 // health review, ok:false at status 200 is the designed failure signal: the
 // agent found nothing real (found:false) or returned an unusable shape. NO push
 // notification ever fires; the result simply waits in-app.
-connectedBrainRouter.post("/insights/generate", async (req, res) => {
+connectedBrainRouter.post("/insights/generate", async (req, res, next) => {
   const agent = req.body?.agent;
   const kind = req.body?.kind === "weekly_read" ? "weekly_read" : "insight";
   if (backgroundOp(res, kind, { agent: agent ?? null, kind: req.body?.kind }, agent)) return;
   try {
     res.json(await generateInsight(agent, req.body?.kind));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 

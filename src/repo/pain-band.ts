@@ -43,6 +43,7 @@ import { db } from "../db.js";
 import { canonicalGroup } from "./exercise-canon.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
+import { isoDay } from "../lib/dates.js";
 
 export type PainBand = "green" | "amber" | "red";
 
@@ -117,10 +118,6 @@ const DOMS_NOVELTY_WINDOW_DAYS = 10;
 const DOMS_REINTRODUCTION_GAP_DAYS = 28;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function isoDay(value: unknown): string {
-  return String(value ?? "").slice(0, 10);
-}
 
 function movementSlug(name: string): string {
   return `movement:${String(name)

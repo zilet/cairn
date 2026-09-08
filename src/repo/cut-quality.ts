@@ -19,6 +19,7 @@ import { estimateExpenditure, type ExpenditureEstimate } from "./expenditure.js"
 import { getProgramState, type LiftState, type ProgramState } from "./program-state.js";
 import { normalizeExerciseName } from "./exercise-canon.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { coerceFinite as finite } from "../lib/numbers.js";
 
 export type CutQualityVerdict = "preserving" | "mixed" | "sliding" | "insufficient";
 
@@ -57,11 +58,6 @@ const LIFT_RECENCY_DAYS = 28;
 // Below this many established lifts the strength channel is too thin to call
 // (neutral 'insufficient', never a blame).
 const MIN_ESTABLISHED_LIFTS = 3;
-
-function finite(v: unknown): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 // Cheap compound/primary-movement gate over the NORMALIZED exercise name (reuses
 // exercise-canon's normalizer). Anchor selection prefers these so the read speaks to

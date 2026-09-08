@@ -90,7 +90,7 @@ dayCoachRouter.post("/today-read/trade-rest", (req, res) => {
 // lets the suggestion keep its movements when it is accepted on a rest day
 // (acceptance revalidates against the live envelope and would otherwise clamp
 // every item away); the PWA sends it, agents must opt in explicitly.
-dayCoachRouter.post("/session-suggest", async (req, res) => {
+dayCoachRouter.post("/session-suggest", async (req, res, next) => {
   const b = req.body ?? {};
   const input = {
     agent: b.agent ?? null,
@@ -122,8 +122,10 @@ dayCoachRouter.post("/session-suggest", async (req, res) => {
         date: input.date,
       })
     );
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 
@@ -133,7 +135,7 @@ dayCoachRouter.post("/session-suggest", async (req, res) => {
 // an absent/malformed/over-excluded output degrades to a deterministic session.
 // Preview-only (never applied); accept it later via /daily-session/prepare with
 // source agent_suggest + this job's id. Always returns a usable session.
-dayCoachRouter.post("/session-compose", async (req, res) => {
+dayCoachRouter.post("/session-compose", async (req, res, next) => {
   const b = req.body ?? {};
   const input = {
     agent: b.agent ?? null,
@@ -154,8 +156,10 @@ dayCoachRouter.post("/session-compose", async (req, res) => {
         date: input.date,
       })
     );
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 

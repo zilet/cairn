@@ -22,7 +22,7 @@ import {
   usableGuideRecords,
 } from "../dist/repo/exercise-guide.js";
 import { findOrCreateExercise, mergeExercises } from "../dist/repo/exercises.js";
-import { getExerciseDetail } from "../dist/repo/profile.js";
+import { getExerciseDetail } from "../dist/repo/exercises.js";
 import {
   autoImportExerciseGuidesIfEmpty,
   ensureGuideImage,

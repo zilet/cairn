@@ -7,6 +7,7 @@ import {
   type MuscleGroup,
 } from "./exercise-canon.js";
 import { classifyPattern, indirectGroupsForExercise, type MovementPattern } from "./exercise-variations.js";
+import { finite } from "../lib/numbers.js";
 
 export type PlanQualitySeverity = "error" | "warning";
 
@@ -34,12 +35,6 @@ export interface PlanQualityDay {
   day_type?: unknown;
   items?: unknown;
 }
-
-const finite = (value: unknown): number | null => {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-};
 
 // Implement-agnostic slot for loaded horizontal chest presses. This intentionally
 // distinguishes flat/incline/decline while folding barbell vs dumbbell: two incline

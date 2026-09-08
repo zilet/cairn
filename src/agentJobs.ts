@@ -31,6 +31,7 @@ import { normalizeStrictCaseConferenceDecision } from "./brain/case-conference-c
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import { addDaysISO, localDateISO } from "./repo/shared.js";
 import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
+import { log } from "./log.js";
 
 // Durable, in-process agent-job engine — the GENERALIZATION of chatTurns.ts for
 // the other blocking agentic ops. An op is no longer a request held open for
@@ -323,7 +324,7 @@ const runner = createSerialRunner(processAgentJob, (id, e) => {
     /* ignore */
   }
   recordAsyncFailure("agent_jobs", "runner_backstop", e);
-  console.error(`[jobs] job#${id} failed (${diagnosticErrorName(e)})`);
+  log.error(`[jobs] job#${id} failed (${diagnosticErrorName(e)})`);
 });
 
 export function enqueueAgentJob(id: number): void {
@@ -663,7 +664,7 @@ export function recoverAgentJobs(): { requeued: number; interrupted: number } {
   if (interrupted) recordAsyncFailure("agent_jobs", "restart_interruption", new Error("interrupted"));
   for (const id of requeue) enqueueAgentJob(id);
   if (requeue.length || interrupted) {
-    console.log(`[jobs] recovered ${requeue.length} queued + ${interrupted} interrupted job(s).`);
+    log.info(`[jobs] recovered ${requeue.length} queued + ${interrupted} interrupted job(s).`);
   }
   return { requeued: requeue.length, interrupted };
 }

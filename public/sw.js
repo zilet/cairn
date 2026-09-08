@@ -1,4 +1,14 @@
-const CACHE = "cairn-v567";
+// The cache version is DERIVED, never hand-bumped. src/swVersion.ts hashes the
+// bytes of every asset listed in CORE_ASSETS + OPTIONAL_ASSETS below (plus this
+// file), and the server rewrites this literal to `cairn-<hash>` when it serves
+// /sw.js. So any change to a precached asset ships a new cache name by
+// construction, and an unchanged shell keeps the name it had.
+//
+// The literal below is the fallback for anything reading this file straight off
+// disk (a dev static server, an offline checkout). Keep it EXACTLY as written —
+// scripts/check-sw-cache.mjs asserts the placeholder is present, and the server
+// substitutes it by exact match.
+const CACHE = "cairn-shell-dev";
 // Generated artwork lives in its own cache: the images are content-keyed and
 // immutable on the server, so they stay valid across app deploys. Keeping them
 // out of the versioned CACHE (and off the activate-cleanup list) means a deploy

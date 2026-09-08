@@ -203,9 +203,11 @@ type TodaySideComposite = Record<string, unknown>;
       cells.push(`<span class="wear-cell"><span class="wear-n numeral" data-cu="${Number(m.steps) || 0}" data-cufmt="k">0</span><span class="wear-l lbl">steps</span></span>`);
     }
     if (m.sleep_min != null) {
+      // Duration only. Garmin's own sleep_score is a 0-100 grade, and the
+      // constitution bans printing a score anywhere in the app — the number is
+      // still carried on the payload for the brain, it just never renders.
       const v = Math.max(0, Math.round(Number(m.sleep_min) || 0));
-      const score = m.sleep_score != null ? ` · ${Math.round(Number(m.sleep_score))}` : "";
-      cells.push(`<span class="wear-cell"><span class="wear-n numeral">${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}</span><span class="wear-l lbl">sleep${score}</span></span>`);
+      cells.push(`<span class="wear-cell"><span class="wear-n numeral">${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}</span><span class="wear-l lbl">sleep</span></span>`);
     }
     if (m.resting_hr != null) {
       cells.push(`<span class="wear-cell"><span class="wear-n numeral" data-cu="${Math.round(Number(m.resting_hr)) || 0}">0</span><span class="wear-l lbl">rest hr</span></span>`);

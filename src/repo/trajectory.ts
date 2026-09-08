@@ -27,12 +27,7 @@
  * low-level domain modules that own each signal.
  */
 
-import {
-  computeGoalCheck,
-  getEnduranceGoal,
-  getProfile,
-  projectGoalPace,
-} from "./profile.js";
+import { computeGoalCheck, getEnduranceGoal, getProfile, projectGoalPace } from "./profile.js";
 import { blockForCoach, getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 // forwardLook may not exist on every build of intelligence.js (it landed in a

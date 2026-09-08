@@ -8,7 +8,8 @@
 // This lives in its own leaf module so coachOps / dayread / research can share ONE
 // copy: research can't import coachOps (coachOps imports research → a cycle), and
 // three drifting hand-rolled copies is exactly what this consolidates.
-import * as repo from "./repo.js";
+import { recordAgentRun } from "./repo/agent-telemetry.js";
+import { executionProfileForOp, pickAgentOrderForTask, pickResearchAgentOrder, taskForOp } from "./repo/settings.js";
 import {
   DEFAULT_TIMEOUT_MS,
   runAgentWithFallback,
@@ -43,8 +44,8 @@ import { createJobStreamFilter } from "./jobStreamFilter.js";
 // brain_review) gets the Claude-first order; everything else rotates. Kept
 // pure/testable: the injected repo funcs decide the actual order.
 export function defaultOrderForOp(op: string): string[] {
-  if (op === "research") return repo.pickResearchAgentOrder();
-  return repo.pickAgentOrderForTask(repo.taskForOp(op));
+  if (op === "research") return pickResearchAgentOrder();
+  return pickAgentOrderForTask(taskForOp(op));
 }
 
 // Resolve the agent ORDER for an op: an explicitly-named agent (not "auto"/blank) is
@@ -63,7 +64,7 @@ export function resolveOrder(agent: string | undefined, op: string): string[] {
 // model/reasoning on the opts still wins per field. Without this, effort was inherited
 // from whatever the CLI's home settings said, so dev and prod ran at different depths.
 function profileForRun(opts: { profile?: RunOpts["profile"] }, op: string): RunOpts["profile"] {
-  return opts.profile ?? repo.executionProfileForOp(op);
+  return opts.profile ?? executionProfileForOp(op);
 }
 
 export async function runChosen(agent: string | undefined, prompt: string, opts: RunOpts & { op?: string } = {}) {
@@ -457,7 +458,7 @@ function recordStreamedRun(
   error?: string
 ): void {
   try {
-    repo.recordAgentRun({
+    recordAgentRun({
       op,
       agent,
       ok: accepted,

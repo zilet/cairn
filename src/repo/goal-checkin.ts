@@ -1,8 +1,9 @@
 import { todayISO } from "../db.js";
 import { type CadencePolicy, applyAttentionObservation, getAttentionSchedule } from "./attention.js";
-import { type GoalMode, effectiveGoalMode, getProfile } from "./profile.js";
+import { effectiveGoalMode, getProfile, type GoalMode } from "./profile.js";
 import { robustWeightEvidence } from "./weight-evidence.js";
 import type { TodayAgendaCandidate } from "./today-agenda.js";
+import { addDaysISO, daysBetweenISO } from "./shared.js";
 
 // ----------------------------------------------------------------------------
 // A periodic, gentle "is this still your goal?" (VISION §12 item 5).
@@ -69,25 +70,14 @@ const MIN_RECHECK_DAYS = 14;
 // silent change of heart is still caught (~6 months).
 const BACKSTOP_DAYS = 180;
 
-function daysBetween(fromISO: string, toISO: string): number {
-  const a = Date.parse(`${fromISO}T00:00:00Z`);
-  const b = Date.parse(`${toISO}T00:00:00Z`);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
-  return Math.round((b - a) / 86_400_000);
-}
-
-function addDaysISO(iso: string, n: number): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
 // True when the measured bodyweight trend over the last DIVERGENCE_WINDOW_DAYS
 // visibly disagrees with the declared goal mode. Thin coverage (few weigh-ins,
 // short span) reads as absent evidence, not disagreement — never nags about
 // missing logs.
 function detectDivergence(mode: GoalMode, asOf: string): boolean {
-  const since = addDaysISO(asOf, -DIVERGENCE_WINDOW_DAYS);
+  // `asOf` is always a real day key, so the null arm is unreachable; falling back to
+  // `asOf` keeps a degenerate window rather than widening it.
+  const since = addDaysISO(asOf, -DIVERGENCE_WINDOW_DAYS) ?? asOf;
   const evidence = robustWeightEvidence(since, asOf);
   const adequate = evidence.weigh_ins >= DIVERGENCE_MIN_WEIGH_INS && evidence.span_days >= DIVERGENCE_MIN_SPAN_DAYS;
   if (!adequate || evidence.trend_lb_wk == null) return false;
@@ -193,7 +183,9 @@ export function goalCheckinCandidate(asOf: string = todayISO()): TodayAgendaCand
     return null;
   }
 
-  const daysSinceChecked = daysBetween(entry.last_checked || asOf, asOf);
+  // Signed age of the last check. 0 when the stored date is unusable — this reads
+  // "checked just now", the same conservative answer the private copy gave.
+  const daysSinceChecked = daysBetweenISO(asOf, entry.last_checked || asOf) ?? 0;
   if (daysSinceChecked < MIN_RECHECK_DAYS) return null; // recently shown/confirmed/dismissed — stay quiet
 
   const mode = effectiveGoalMode(prof);

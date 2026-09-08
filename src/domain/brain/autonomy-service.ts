@@ -30,19 +30,9 @@ import {
 import { mealPlanDraftUnseen, mealPlanRefreshShape } from "../../repo/meal-plan-refresh.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
-import {
-  applyProposal,
-  computeGoalCheck,
-  getProfile,
-  getProposal,
-  listProposals,
-  setProfile,
-  type NormalizedProposalApplyPayload,
-  type OrphanSiblingCleanup,
-  RECOVERY_WEEK_INSTRUCTION_PREFIX,
-  revertRecoveryWeekIfOwned,
-  setProposalStatus,
-} from "../../repo/profile.js";
+import { computeGoalCheck, getProfile, setProfile } from "../../repo/profile.js";
+import { applyProposal, getProposal, listProposals, setProposalStatus, type NormalizedProposalApplyPayload, type OrphanSiblingCleanup } from "../../repo/proposals.js";
+import { RECOVERY_WEEK_INSTRUCTION_PREFIX, revertRecoveryWeekIfOwned } from "../../repo/recovery-week.js";
 import { MEAL_REFRESH_REQUEST_KEY } from "../../repo/meal-refresh-retry.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "../../repo/proposal-intent.js";
 import { buildProgressionProposal } from "../../repo/progression.js";
@@ -70,6 +60,7 @@ import {
   verifyProposalEvidenceSnapshot,
   verifyProposalEvidenceFreshness,
 } from "../../repo/proposal-truth.js";
+import { log } from "../../log.js";
 
 // Ruling A: the two deterministic progression builders — buildProgressionProposal
 // (createProposal agent "auto-progression", src/repo/progression.ts) and
@@ -2946,7 +2937,7 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
             explanation: "This was stopped before we could tell because the user asked to put it back.",
             evaluator_version: `${expectation.evaluator_version}/user-veto`,
           });
-        } catch {}
+        } catch (err) { log.debug("[brain] could not close the expectation on a user veto", { error: err }); }
       }
       const reverted = transitionBrainDecision(id, "reverted");
       if (!reverted) throw new Error("the decision could not transition to reverted");

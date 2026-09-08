@@ -47,6 +47,7 @@ import {
 import { PLAN_PROPOSAL_SCHEMA, isPlanProposalResult } from "./agent-contracts.js";
 import { autoImportExerciseGuidesIfEmpty } from "./domain/training/exercise-guide-use-case.js";
 import { createHash } from "node:crypto";
+import { log } from "./log.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
@@ -203,11 +204,11 @@ export function runOrphanSweepIfDue(now = Date.now()): boolean {
     lastOrphanSweepSignature = signature;
     lastOrphanSweepAt = now;
     const orphans = adoptOrphanedDrafts();
-    if (orphans.adopted) console.log(`[brain] adopted ${orphans.adopted} orphaned draft(s) into the autonomy ledger.`);
+    if (orphans.adopted) log.info(`[brain] adopted ${orphans.adopted} orphaned draft(s) into the autonomy ledger.`);
     return true;
   } catch (e: any) {
     recordSchedulerFailure("adopt_orphaned_drafts", e);
-    console.error(`[brain] orphaned-draft adoption failed: ${e?.message ?? e}`);
+    log.error(`[brain] orphaned-draft adoption failed`, { error: e });
     return false;
   }
 }
@@ -252,12 +253,12 @@ async function runScheduled<T>(
       const cause = result.cause ?? new Error(result.error);
       if (cause instanceof ProviderUnavailableError) recordProviderUnavailable(operation, cause);
       else recordSchedulerFailure(operation, cause);
-      console.error(`[scheduler] ${operation} ${result.status}: ${result.error}`);
+      log.error(`[scheduler] ${operation} ${result.status}`, { error: cause });
     }
     return result;
   } catch (error: any) {
     recordSchedulerFailure(operation, error);
-    console.error(`[scheduler] ${operation} ownership failed: ${error?.message ?? error}`);
+    log.error(`[scheduler] ${operation} ownership failed`, { error });
     return null;
   }
 }
@@ -287,10 +288,7 @@ export const RUN_PLAN_APPLY_DAY = 1; // Monday
 
 // The gate, exported so the ownership test drives the real one: bg ops off means
 // the cadence is off, and the Monday slot is miss-tolerant like every other.
-export function runPlanApplyDue(
-  now: Date,
-  settings: { bg_ops_enabled: boolean; coach_hour: number }
-): boolean {
+export function runPlanApplyDue(now: Date, settings: { bg_ops_enabled: boolean; coach_hour: number }): boolean {
   if (!settings.bg_ops_enabled) return false;
   return weeklySlotDue(now, RUN_PLAN_APPLY_DAY, settings.coach_hour, RUN_PLAN_APPLY_STATE_KEY);
 }
@@ -311,21 +309,21 @@ export function weeklyRunPlanApplyTask(weekStartISO: string): repo.SchedulerTask
   // "lead" posture this tick would otherwise quiet-apply a machine week straight
   // over the athlete's own. Handing over the run week stays an explicit act.
   if (lastAppliedRunPlanDate() === null) {
-    console.log(`[proactive] no auto run plan has ever been applied — the run week is the athlete's (calm no-op).`);
+    log.debug(`[proactive] no auto run plan has ever been applied — the run week is the athlete's (calm no-op).`);
     return { outcome: "no_op" };
   }
   if (runPlanAppliedSince(weekStartISO)) {
-    console.log(`[proactive] this week's run plan is already applied (calm no-op).`);
+    log.debug(`[proactive] this week's run plan is already applied (calm no-op).`);
     return { outcome: "no_op" };
   }
   const result = buildRunPlanWithAutonomy(weekStartISO);
   if (!result.ok) {
     // A designed ok:false — no running history / goal to shape a week from.
-    console.log(`[proactive] no run week to prescribe (calm no-op).`);
+    log.debug(`[proactive] no run week to prescribe (calm no-op).`);
     return { outcome: "no_op" };
   }
   const autonomy: any = result.autonomy;
-  console.log(
+  log.info(
     autonomy?.pending || autonomy?.announced
       ? `[proactive] scheduled this week's run plan for its natural boundary.`
       : autonomy?.tier === "quiet_apply"
@@ -386,17 +384,17 @@ export function startScheduler() {
     try {
       const result = applyDueAnnouncedDecisions(today);
       if (result.applied.length)
-        console.log(`[brain] applied ${result.applied.length} announced change(s) at their natural boundary.`);
+        log.info(`[brain] applied ${result.applied.length} announced change(s) at their natural boundary.`);
       // Also not a failure: the draft's evidence had moved, so the producing op was
       // re-run against the current picture and the replacement is in the ledger under
       // its own freshly earned tier. Nobody was asked to adjudicate a diff.
       if (result.regenerated.length)
-        console.log(`[brain] regenerated ${result.regenerated.length} stale draft(s) against current evidence.`);
+        log.info(`[brain] regenerated ${result.regenerated.length} stale draft(s) against current evidence.`);
       // A refusal, not a failure: the change was judged against the evidence in force
       // on the day it came due, declined, and given a receipt. It never reaches the
       // async-failure counter, which exists to say something is broken.
       if (result.set_aside.length)
-        console.log(`[brain] set aside ${result.set_aside.length} change(s) the record had outrun by their boundary.`);
+        log.info(`[brain] set aside ${result.set_aside.length} change(s) the record had outrun by their boundary.`);
       if (result.failed.length) {
         // ONE EVENT PER TAXONOMY CLASS, AND ONLY FOR THE ENDINGS THAT ARE DEFECTS.
         //
@@ -417,11 +415,11 @@ export function startScheduler() {
         }
         for (const [outcomeClass, count] of counts) {
           recordAsyncFailure("apply", `announced_boundary:${outcomeClass}`, new BoundaryApplyError(outcomeClass));
-          console.error(`[brain] ${count} announced change(s) could not be applied (${outcomeClass}).`);
+          log.error(`[brain] ${count} announced change(s) could not be applied (${outcomeClass}).`);
         }
         const calm = result.failed_outcomes.filter((outcome) => outcome.calm);
         if (calm.length)
-          console.log(
+          log.info(
             `[brain] ${calm.length} announced change(s) ended without applying, as designed ` +
               `(${[...new Set(calm.map((outcome) => outcome.class))].join(", ")}); they remain reviewable.`
           );
@@ -431,7 +429,7 @@ export function startScheduler() {
       // applyDueAnnouncedDecisions, so a pass-level throw is an anomaly —
       // retrying it every 60s would just repeat the same failure all day.
       recordSchedulerFailure("announced_change_boundary", e);
-      console.error(`[brain] announced-change boundary pass failed: ${e?.message ?? e}`);
+      log.error(`[brain] announced-change boundary pass failed`, { error: e });
     }
   };
 
@@ -472,7 +470,7 @@ export function startScheduler() {
           revisionClaimResult.operation.last_error || "revision conference lease exhausted"
         );
         recordSchedulerFailure("brain_revision_conference", terminalError);
-        console.error(`[brain] revision conference exhausted after an expired final lease.`);
+        log.error(`[brain] revision conference exhausted after an expired final lease.`);
       }
       if (!revisionClaim) return;
       const reason = regressionDue
@@ -503,7 +501,7 @@ export function startScheduler() {
         },
       }) as any;
       enqueueAgentJob(Number(job.id));
-      console.log(
+      log.info(
         `[brain] queued a whole-person revision conference (${regressionDue ? "regression" : phaseDue ? "phase" : "monthly"}).`
       );
     } catch (e: any) {
@@ -515,7 +513,7 @@ export function startScheduler() {
       }
       repo.setAppState("brain_revision_check_date", "");
       recordSchedulerFailure("brain_revision_check", e);
-      console.error(`[brain] revision conference check failed: ${e?.message ?? e}`);
+      log.error(`[brain] revision conference check failed`, { error: e });
     } finally {
       revisionBusy = false;
     }
@@ -563,7 +561,7 @@ export function startScheduler() {
         });
         const proposal = repo.createProposal(agent, "auto: weekly review", result.raw, result.parsed);
         const autonomy = applyProposalWithAutonomy(Number(proposal.id), { requested_tier: "quiet_apply" });
-        console.log(
+        log.info(
           autonomy?.pending || autonomy?.announced
             ? `Auto-coach scheduled a proposal via ${agent} for its natural boundary.`
             : autonomy?.tier === "quiet_apply"
@@ -682,7 +680,7 @@ export function startScheduler() {
       if (underfuelDue) {
         await runScheduled("underfuel_control_last_date", localToday(now), "underfuel_control_last_date", () => {
           const result = runUnderfuelingControlLoop(localToday(now));
-          if (result.action !== "none") console.log(`[proactive] fuel-protection loop scheduled ${result.action}.`);
+          if (result.action !== "none") log.info(`[proactive] fuel-protection loop scheduled ${result.action}.`);
           return { outcome: result.action === "none" ? "no_op" : "succeeded", value: result };
         });
       }
@@ -690,7 +688,7 @@ export function startScheduler() {
         await runScheduled("energy_deficiency_watch_date", localToday(now), "energy_deficiency_watch_date", () => {
           const result = runEnergyDeficiencyWatch(localToday(now));
           if (result.action !== "none")
-            console.log(`[proactive] low-energy-availability watch scheduled ${result.action}.`);
+            log.info(`[proactive] low-energy-availability watch scheduled ${result.action}.`);
           return { outcome: result.action === "none" ? "no_op" : "succeeded", value: result };
         });
       }
@@ -699,7 +697,7 @@ export function startScheduler() {
           const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
           if (hasPlan) {
             const entries = repo.refreshTrainingBenchmarkAttention();
-            console.log(`[proactive] refreshed training benchmark attention (${entries.length} signal(s)).`);
+            log.info(`[proactive] refreshed training benchmark attention (${entries.length} signal(s)).`);
             return { outcome: "succeeded", value: entries };
           }
           return { outcome: "no_op" };
@@ -712,7 +710,7 @@ export function startScheduler() {
           const hasMarkers = ((repo.getMarkerHistory() as any).markers || []).length > 0;
           if (hasMarkers) {
             const entries = repo.refreshDoctorLoopAttention();
-            console.log(`[proactive] refreshed lab/marker recheck attention (${entries.length} signal(s)).`);
+            log.info(`[proactive] refreshed lab/marker recheck attention (${entries.length} signal(s)).`);
             return { outcome: "succeeded", value: entries };
           }
           return { outcome: "no_op" };
@@ -733,13 +731,13 @@ export function startScheduler() {
             const ageDays = startedStamp ? daysBetweenStamps(startedStamp, localToday(now)) : 0;
             if (ageDays >= 6) {
               const advanced = repo.advanceBlockWeek();
-              console.log(
+              log.info(
                 advanced
                   ? `[proactive] advanced the training block to ${advanced.phase} (week ${advanced.week_index} of ${advanced.total_weeks}).`
                   : `[proactive] no block to advance (calm no-op).`
               );
             } else {
-              console.log(`[proactive] ensured an active training block (${block.focus}, week ${block.week_index}).`);
+              log.info(`[proactive] ensured an active training block (${block.focus}, week ${block.week_index}).`);
             }
             return { outcome: "succeeded", value: block };
           }
@@ -754,7 +752,7 @@ export function startScheduler() {
           const r = await generateInsight("auto", "connection", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
           if (!r.ok && r.agent_status !== "ok")
             throw schedulerTaskError("insight_last_date", r, "insight provider unavailable");
-          console.log(
+          log.info(
             r.ok ? `[proactive] stored a quiet insight.` : `[proactive] no genuine insight tonight (calm no-op).`
           );
           return { outcome: r.ok ? "succeeded" : "no_op", value: r };
@@ -766,9 +764,7 @@ export function startScheduler() {
           const r = await generateInsight("auto", "weekly_read", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
           if (!r.ok && r.agent_status !== "ok")
             throw schedulerTaskError("weekly_read_last_slot", r, "weekly read provider unavailable");
-          console.log(
-            r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`
-          );
+          log.info(r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`);
           return { outcome: r.ok ? "succeeded" : "no_op", value: r };
         });
       }
@@ -784,12 +780,8 @@ export function startScheduler() {
           async () => {
             const r = await synthesizeHealth("auto");
             if (!r.ok)
-              throw schedulerTaskError(
-                "weekly_health_synthesis_last_slot",
-                r,
-                "health synthesis provider unavailable"
-              );
-            console.log(`[proactive] refreshed the health synthesis.`);
+              throw schedulerTaskError("weekly_health_synthesis_last_slot", r, "health synthesis provider unavailable");
+            log.info(`[proactive] refreshed the health synthesis.`);
             return { outcome: "succeeded", value: r };
           }
         );
@@ -812,7 +804,7 @@ export function startScheduler() {
             if (!r.ok)
               throw schedulerTaskError("nutrition_checkin_last_slot", r, "nutrition check-in provider unavailable");
             const autonomy: any = r.autonomy;
-            console.log(
+            log.info(
               r.change
                 ? autonomy?.pending || autonomy?.announced
                   ? `[proactive] scheduled an adaptive nutrition change for its natural boundary.`
@@ -855,7 +847,7 @@ export function startScheduler() {
               repo.supersedeSchedulerOperation("meal_plan_refresh_last_slot", weeklySlot);
               repo.setAppState("meal_plan_refresh_last_slot", weeklySlot);
             }
-            console.log(
+            log.info(
               r.ok && (r.autonomy?.announced || r.autonomy?.pending)
                 ? `[proactive] prepared the owned meal reshape; it lands at tomorrow's food-day boundary.`
                 : r.ok
@@ -864,7 +856,7 @@ export function startScheduler() {
             );
           } catch (e: any) {
             recordSchedulerFailure("meal_plan_refresh_owned", e);
-            console.error(`[proactive] owned meal reshape failed: ${e?.message ?? e}`);
+            log.error(`[proactive] owned meal reshape failed`, { error: e });
           }
         } else {
           const weeklySlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
@@ -873,7 +865,7 @@ export function startScheduler() {
               coordinated_update: nutritionChanged,
             });
             if (!r.ok) throw schedulerTaskError("meal_plan_refresh_last_slot", r, "meal-plan provider unavailable");
-            console.log(
+            log.info(
               r.autonomy?.announced || r.autonomy?.pending
                 ? `[proactive] prepared the next meal plan; it lands at tomorrow's food-day boundary.`
                 : `[proactive] prepared the next meal plan under the configured review posture.`
@@ -897,7 +889,7 @@ export function startScheduler() {
           // stays a calm no-op forever, and the blank slate is answered on request.
           const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
           if (!hasPlan) {
-            console.log(`[proactive] no plan to evolve yet (calm no-op).`);
+            log.debug(`[proactive] no plan to evolve yet (calm no-op).`);
             return { outcome: "no_op" };
           } else {
             const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION);
@@ -918,7 +910,7 @@ export function startScheduler() {
                 /* trigger read unavailable → leave stamps as-is */
               }
             }
-            console.log(
+            log.info(
               r.autonomy?.pending || r.autonomy?.announced
                 ? `[proactive] scheduled a plan evolution for its natural boundary.`
                 : r.autonomy?.tier === "quiet_apply"
@@ -944,9 +936,7 @@ export function startScheduler() {
             const r: any = await evolveProgram("auto", repo.RECOVERY_WEEK_INSTRUCTION);
             if (!r.ok)
               throw schedulerTaskError("recovery_auto_draft_date", r, "recovery auto-draft provider unavailable");
-            console.log(
-              `[proactive] lead mode: auto-drafted the recovery week (lands at the boundary; Undo from Plan).`
-            );
+            log.info(`[proactive] lead mode: auto-drafted the recovery week (lands at the boundary; Undo from Plan).`);
             return { outcome: "succeeded", value: r };
           }
           return { outcome: "no_op" };
@@ -986,7 +976,7 @@ export function startScheduler() {
                 repo.setAppState("program_evolution_trigger_sig", trig.signature);
                 repo.setAppState("program_evolution_last_draft_date", localToday(now));
               }
-              console.log(
+              log.info(
                 r.autonomy?.pending || r.autonomy?.announced
                   ? `[proactive] data-triggered plan evolution scheduled (${trig.reasons.length} reason(s)).`
                   : r.autonomy?.tier === "quiet_apply"
@@ -995,7 +985,7 @@ export function startScheduler() {
               );
               return { outcome: "succeeded", value: r };
             } else if (trig.due) {
-              console.log(`[proactive] training shifted but already drafted / within cooldown (calm no-op).`);
+              log.debug(`[proactive] training shifted but already drafted / within cooldown (calm no-op).`);
             }
             return { outcome: "no_op" };
           }
@@ -1023,14 +1013,14 @@ export function startScheduler() {
       garminBusy = true;
       garminDueAt = Date.now() + GARMIN_INTERVAL_MS;
       const r = await syncGarmin(); // records garmin_last_sync_at/status itself
-      if (r.ok) console.log(`[garmin] auto-sync ok: ${r.activities} activities, ${r.daily_metrics} daily metric days.`);
+      if (r.ok) log.info(`[garmin] auto-sync ok: ${r.activities} activities, ${r.daily_metrics} daily metric days.`);
       else {
         recordSchedulerFailure("garmin_auto_sync", new Error(String(r.error || "sync failed")));
-        console.error(`[garmin] auto-sync failed: ${r.error}`);
+        log.error("[garmin] auto-sync failed", { error: new Error(String(r.error || "sync failed")) });
       }
     } catch (e: any) {
       recordSchedulerFailure("garmin_auto_sync", e);
-      console.error(`[garmin] auto-sync error: ${e?.message ?? e}`);
+      log.error(`[garmin] auto-sync error`, { error: e });
     } finally {
       garminBusy = false;
     }
@@ -1061,14 +1051,14 @@ export function startScheduler() {
       // lands first (a floor row self-heals via ensureDayReadRefresh on open).
       if (sleepRowExistsFor(stamp)) {
         await precomputeDayRead(stamp);
-        console.log(`[brief] precomputed today's day-read for ${stamp}.`);
+        log.info(`[brief] precomputed today's day-read for ${stamp}.`);
       } else {
         precomputeDayReadFloor(stamp);
-        console.log(`[brief] warmed the deterministic floor for ${stamp} (last night has not synced yet).`);
+        log.info(`[brief] warmed the deterministic floor for ${stamp} (last night has not synced yet).`);
       }
     } catch (e: any) {
       recordSchedulerFailure("day_read_precompute", e);
-      console.error(`[brief] nightly precompute failed: ${e?.message ?? e}`);
+      log.error(`[brief] nightly precompute failed`, { error: e });
     } finally {
       precomputeBusy = false;
     }
@@ -1093,17 +1083,17 @@ export function startScheduler() {
         try {
           const rec = repo.reconcileSuggestions();
           if (rec.learnings > 0)
-            console.log(`[memory] reconciled ${rec.reconciled} suggestions → ${rec.learnings} learnings.`);
+            log.info(`[memory] reconciled ${rec.reconciled} suggestions → ${rec.learnings} learnings.`);
         } catch (e: any) {
           recordSchedulerFailure("memory_reconcile", e);
-          console.error(`[memory] reconcile failed: ${e?.message ?? e}`);
+          log.error(`[memory] reconcile failed`, { error: e });
         }
         // 1a. Mature generalized expectations before rebuilding the response model,
         // so the same nightly pass can learn from any newly authoritative verdict.
         try {
           const evaluated = evaluateMatureExpectations(stamp, { limit: 200 });
           if (evaluated.evaluated > 0) {
-            console.log(`[brain] evaluated ${evaluated.evaluated}/${evaluated.scanned} matured expectation(s).`);
+            log.info(`[brain] evaluated ${evaluated.evaluated}/${evaluated.scanned} matured expectation(s).`);
           }
           // A change that missed its prediction used to stay applied forever with
           // nobody told. File ONE quiet in-app note per such change on the
@@ -1112,7 +1102,7 @@ export function startScheduler() {
           const noted = surfaceExpectationMisses(evaluated.evaluations, stamp);
           const quieted = releaseStaleExpectationFollowups(stamp);
           if (noted.length || quieted) {
-            console.log(`[brain] change follow-ups: ${noted.length} noted, ${quieted} released.`);
+            log.info(`[brain] change follow-ups: ${noted.length} noted, ${quieted} released.`);
           }
           // …and the second half of the same fact: where the miss says the CHANGE
           // made the work worse, draft the step back and hand it to the autonomy
@@ -1122,14 +1112,14 @@ export function startScheduler() {
           const revisions = queueExpectationRevisions(evaluated.evaluations, stamp);
           const queued = revisions.filter((entry: { status: string }) => entry.status === "queued");
           if (revisions.length) {
-            console.log(
+            log.info(
               `[brain] step-backs: ${queued.length} queued (${queued.map((entry: { tier?: string | null }) => entry.tier ?? "?").join(", ") || "-"}), ` +
                 `${revisions.length - queued.length} skipped.`
             );
           }
         } catch (e: any) {
           recordSchedulerFailure("maturity_evaluation", e);
-          console.error(`[brain] maturity evaluation failed: ${e?.message ?? e}`);
+          log.error(`[brain] maturity evaluation failed`, { error: e });
         }
         // 1b. Rebuild the PERSONAL-RESPONSE model (deterministic) from the freshly
         //     reconciled history + latest logs — cache it + promote the load-bearing
@@ -1138,7 +1128,7 @@ export function startScheduler() {
           repo.saveReactionModel();
         } catch (e: any) {
           recordSchedulerFailure("reaction_model_rebuild", e);
-          console.error(`[memory] reaction-model rebuild failed: ${e?.message ?? e}`);
+          log.error(`[memory] reaction-model rebuild failed`, { error: e });
         }
         // 1b′. Rebuild the FELT-SIGNALS model (deterministic) — what the athlete's own
         //      subjective steers / check-ins / fueling reads reveal — and cache it so
@@ -1148,7 +1138,7 @@ export function startScheduler() {
           repo.saveFeltSignals();
         } catch (e: any) {
           recordSchedulerFailure("felt_signals_rebuild", e);
-          console.error(`[memory] felt-signals rebuild failed: ${e?.message ?? e}`);
+          log.error(`[memory] felt-signals rebuild failed`, { error: e });
         }
         // 1b″. Rebuild the LEARNED CROSS-DOMAIN models (deterministic) — endurance→
         //      strength interference + short-sleep→fueling — and cache them so
@@ -1158,7 +1148,7 @@ export function startScheduler() {
           repo.saveLearnedModels();
         } catch (e: any) {
           recordSchedulerFailure("learned_models_rebuild", e);
-          console.error(`[memory] learned-models rebuild failed: ${e?.message ?? e}`);
+          log.error(`[memory] learned-models rebuild failed`, { error: e });
         }
         // 1c. Write the plain-language NARRATIVE over the freshly rebuilt patterns
         //     (agentic, best-effort). A quiet/failed agent leaves the prior narrative,
@@ -1166,22 +1156,22 @@ export function startScheduler() {
         try {
           const { refreshReactionNarrative } = await import("./coachOps.js");
           const rn: any = await refreshReactionNarrative("auto");
-          if (rn.ok && rn.narrative) console.log(`[memory] refreshed the reaction-model narrative.`);
+          if (rn.ok && rn.narrative) log.info(`[memory] refreshed the reaction-model narrative.`);
         } catch (e: any) {
           recordSchedulerFailure("reaction_narrative_refresh", e);
-          console.error(`[memory] reaction-model narrative refresh failed: ${e?.message ?? e}`);
+          log.error(`[memory] reaction-model narrative refresh failed`, { error: e });
         }
         // 2. Agentic consolidation + about-me growth — best-effort, lazy-imported.
         try {
           const { consolidateMemory, growAboutMe } = await import("./coachOps.js");
           const c = await consolidateMemory("auto");
           if (c.ok && (c.merged || c.superseded || c.promoted))
-            console.log(`[memory] consolidated: ${c.merged} merged, ${c.superseded} superseded, ${c.promoted} promoted.`);
+            log.info(`[memory] consolidated: ${c.merged} merged, ${c.superseded} superseded, ${c.promoted} promoted.`);
           const g = await growAboutMe("auto");
-          if (g.ok && (g as any).changed) console.log(`[memory] grew about_me from memory.`);
+          if (g.ok && (g as any).changed) log.info(`[memory] grew about_me from memory.`);
         } catch (e: any) {
           recordSchedulerFailure("memory_consolidation", e);
-          console.error(`[memory] nightly consolidation failed: ${e?.message ?? e}`);
+          log.error(`[memory] nightly consolidation failed`, { error: e });
         }
         // 3. Agentic exercise-name tidy — best-effort, pull-never-push. Messy /
         //    duplicate movement titles self-align over time so the volume +
@@ -1192,10 +1182,10 @@ export function startScheduler() {
           // athlete may have set (that override is reserved for the user-initiated "Tidy").
           const x: any = await reconcileExercises("auto", undefined, { authoritativeGroups: false });
           if (x.ok && x.applied)
-            console.log(`[memory] tidied exercise names: ${x.applied} alias(es) across ${x.aligned} movement(s).`);
+            log.info(`[memory] tidied exercise names: ${x.applied} alias(es) across ${x.aligned} movement(s).`);
         } catch (e: any) {
           recordSchedulerFailure("exercise_reconciliation", e);
-          console.error(`[memory] nightly exercise tidy failed: ${e?.message ?? e}`);
+          log.error(`[memory] nightly exercise tidy failed`, { error: e });
         }
         // Every step above isolates its own failure, so reaching here means the pass
         // ran. Acknowledging the day is what makes the next tick skip it — and what a
@@ -1229,8 +1219,8 @@ export function startScheduler() {
         const r = await checkForUpdate();
         if (r.error) throw new Error(String(r.error));
         if (r.update_available)
-          console.log(`[update] a newer Cairn is available: ${r.latest} (running ${r.current}) — see Settings → Data.`);
-        else console.log(`[update] up to date (${r.current}).`);
+          log.info(`[update] a newer Cairn is available: ${r.latest} (running ${r.current}) — see Settings → Data.`);
+        else log.debug(`[update] up to date (${r.current}).`);
         return { outcome: "succeeded", value: r };
       });
     } finally {
@@ -1268,7 +1258,7 @@ export function startScheduler() {
         const out = repo.deriveDirectives();
         // Log only when something actually moved — an unchanged pass is the common case
         // and must stay silent.
-        if (out.derived > 0) console.log(`[brain] re-derived the connected brain (${out.derived} directive(s) moved).`);
+        if (out.derived > 0) log.info(`[brain] re-derived the connected brain (${out.derived} directive(s) moved).`);
         return { outcome: "succeeded", value: out };
       });
     } finally {
@@ -1364,10 +1354,10 @@ export function startScheduler() {
 
   const s = repo.getSettings(); // also lazily creates the row (seeding env defaults)
   const schedulerZone = repo.recordedClientTimeZone() ?? "server local time until a device reports its zone";
-  console.log(
+  log.info(
     `Background coaching cadence: day=${s.coach_day}, hour=${s.coach_hour}, timezone=${schedulerZone}, strategy=${s.agent_strategy}.`
   );
-  console.log(
+  log.info(
     s.proactive_enabled
       ? "Quiet proactivity enabled (insights wait in-app; never pushed)."
       : "Quiet proactivity disabled (enable it in Settings)."
@@ -1409,7 +1399,7 @@ export function startScheduler() {
       const today = warmToday();
       if (!repo.getCachedDayRead(today)) {
         precomputeDayRead(today)
-          .then(() => console.log(`[brief] warmed today's day-read for ${today}.`))
+          .then(() => log.info(`[brief] warmed today's day-read for ${today}.`))
           .catch((error) => recordSchedulerFailure("day_read_boot_warm", error));
       }
     }),
@@ -1425,7 +1415,7 @@ export function startScheduler() {
     inOwnerTimeZone(() => {
       autoImportExerciseGuidesIfEmpty()
         .then((result) => {
-          if (result?.ok) console.log(`[exercise-guide] auto-imported ${result.records} movements at boot.`);
+          if (result?.ok) log.info(`[exercise-guide] auto-imported ${result.records} movements at boot.`);
         })
         .catch((error) => recordSchedulerFailure("exercise_guide_auto_import", error));
     }),

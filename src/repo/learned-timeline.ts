@@ -1,6 +1,6 @@
 import { listMemory, getOutcomeLearnings, type MemoryRow } from "./memory.js";
-import { listDirectives } from "./coach.js";
-import { listProposals } from "./profile.js";
+import { listDirectives } from "./directives.js";
+import { listProposals } from "./proposals.js";
 import { listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { whatWorksForYou } from "./reaction-model.js";

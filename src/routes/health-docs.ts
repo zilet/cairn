@@ -80,7 +80,7 @@ export async function stageDicomRequest(req: any): Promise<{ path: string; bytes
     stream.destroy();
     try {
       fs.rmSync(stagingPath, { force: true });
-    } catch {}
+    } catch { /* staging cleanup; the original error is rethrown below */ }
     throw error;
   }
 }
@@ -293,7 +293,7 @@ healthDocsRouter.post("/:id/imaging-files", (req, res) => {
   } catch (error: any) {
     try {
       fs.rmSync(filePath, { force: true });
-    } catch {}
+    } catch { /* upload cleanup; the 400 below is the answer the caller gets */ }
     res.status(400).json({ error: error?.message ?? "upload failed" });
   }
 });
@@ -361,7 +361,7 @@ healthDocsRouter.put("/:id/imaging-recommendations/:recommendationId/status", (r
   res.json(updated);
 });
 
-healthDocsRouter.post("/", (req, res) => {
+healthDocsRouter.post("/", (req, res, next) => {
   const b = req.body ?? {};
   if (
     normalizeHealthDocumentKind(b.kind) === "imaging" ||
@@ -413,8 +413,10 @@ healthDocsRouter.post("/", (req, res) => {
       import("../enrich.js").then((m) => m.enqueueEnrich("health", row.id)).catch(() => {});
     }
     res.json(row);
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 

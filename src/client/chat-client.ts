@@ -68,7 +68,7 @@ function chatShellHtml(): string {
       <div class="chatdock">
         <div id="chatFuelSlot" class="chatfuel-slot"></div>
         <div id="chatPreview" class="chat-preview" hidden>
-          <img alt="">
+          <img alt="Attached photo">
           <span class="chat-preview-hint">Photo attached — I'll estimate &amp; log it</span>
           <button id="chatPreviewX" class="xbtn chip-x" aria-label="Remove photo">✕</button>
         </div>

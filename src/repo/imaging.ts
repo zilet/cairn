@@ -1851,7 +1851,7 @@ export function deleteImagingStudy(
   } catch (error: any) {
     try {
       fs.rmSync(quarantineDir, { recursive: true, force: true });
-    } catch {}
+    } catch { /* cleanup of a quarantine we could not create; the caller returns the failure */ }
     return {
       deleted: 0,
       derived: 0,
@@ -1908,7 +1908,7 @@ export function deleteImagingStudy(
   } catch (error: any) {
     try {
       db.exec("ROLLBACK");
-    } catch {}
+    } catch { /* rollback cleanup: the restore + failure result below is what matters */ }
     const restored = restoreQuarantine(quarantineDir, manifest, directorySync);
     return {
       deleted: 0,

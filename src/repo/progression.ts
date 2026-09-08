@@ -14,7 +14,7 @@
 // (e.g. −30 = 30 lb assist); timed lifts progress in seconds, never load.
 // ============================================================================
 import { db } from "../db.js";
-import { emitBrainEvent } from "../brainEvents.js";
+import { round5 } from "../lib/numbers.js";
 import {
   canonicalGroup,
   classifyConstraint,
@@ -23,21 +23,23 @@ import {
   movementKey,
   type MuscleGroup,
   MUSCLE_LANDMARKS,
-  normalizeExerciseName,
   normalizedExerciseKey,
   plainGroupWords,
-  resolveGroup,
 } from "./exercise-canon.js";
 import {
   type Equipment,
   effectiveVolumeByGroup,
   examplesForGroup,
   type ExerciseVariation,
-  parseEquipment,
   suggestAlternatives,
   type VolumeSet,
 } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
+// The equipment profile and the learned like/dislike memories are leaf reads the
+// prescription consumes; they live in their own modules so this engine keeps to
+// prescription, autoregulation and the proposal builders.
+import { availableEquipment } from "./equipment.js";
+import { type ParsedPreference, learnedPreferences, preferenceRerank } from "./exercise-preferences.js";
 import { getSettings } from "./settings.js";
 import { relatedLiftStart } from "./related-lift.js";
 import {
@@ -54,7 +56,6 @@ import * as voice from "./progression-voice.js";
 import { painAreaLoadsGroup } from "./pain-relevance.js";
 export { painAreaLoadsExercise } from "./pain-relevance.js";
 import {
-  addExerciseToPlanDay,
   appliedProgressionDeloads,
   appliedProgressionEscalations,
   getPlan,
@@ -83,13 +84,7 @@ import { applyPersonalResponseModifier, liftLedgerRead, whatWorksForYou } from "
 // createProposal + the auto-progression dedup live in profile.js; imported here (as
 // run-progression.ts does for buildRunPlanProposal) so REST + MCP share ONE proposal
 // builder instead of duplicating the change-shaping logic (and drifting).
-import {
-  applyProposal,
-  createProposal,
-  getProfile,
-  setProposalStatus,
-  supersedeAutoProgressionDrafts,
-} from "./profile.js";
+import { createProposal, setProposalStatus, supersedeAutoProgressionDrafts } from "./proposals.js";
 import {
   VOLUME_RESTORE_AGENT,
   VOLUME_RESTORE_INSTRUCTION,
@@ -495,44 +490,7 @@ export function movementTenureWeeks(name: string, date = localDateISO()): number
   return Math.round(days / 7);
 }
 
-// The athlete's available equipment, parsed from the persisted profile.equipment
-// free-text field. Empty → no constraint (rank neutrally).
-export function availableEquipment(): Equipment[] {
-  try {
-    return parseEquipment((getProfile() as any)?.equipment ?? null);
-  } catch {
-    return [];
-  }
-}
-
-// Read/write the persisted equipment/preference profile (profile.equipment free
-// text). Kept here (a direct column write) rather than in setProfile so the big
-// profile upsert stays untouched — setProfile never lists equipment, so it never
-// clobbers it. Returns the stored text + the parsed Equipment types.
-export function getEquipmentProfile(): { equipment: string | null; parsed: Equipment[] } {
-  const eq = (() => {
-    try {
-      return (getProfile() as any)?.equipment ?? null;
-    } catch {
-      return null;
-    }
-  })();
-  return { equipment: eq, parsed: parseEquipment(eq) };
-}
-
-export function setEquipmentProfile(equipment: string | null): { equipment: string | null; parsed: Equipment[] } {
-  const val = equipment == null ? null : String(equipment).trim().slice(0, 1000) || null;
-  const existing = db.prepare(`SELECT id FROM profile WHERE id = 1`).get();
-  if (existing) db.prepare(`UPDATE profile SET equipment = ? WHERE id = 1`).run(val);
-  else db.prepare(`INSERT INTO profile (id, equipment) VALUES (1, ?)`).run(val);
-  return { equipment: val, parsed: parseEquipment(val) };
-}
-
 // ---- small helpers ----
-function round5(n: number): number {
-  return Math.round(n / 5) * 5;
-}
-
 // The relative timed step for a hold of `seconds`: ~10% of the hold, clamped to
 // [MIN, MAX] so short and long holds both progress proportionally.
 function timedStep(seconds: number, modifier?: CoachPersonalModifier | null): number {
@@ -731,161 +689,6 @@ function planItemFor(name: string): {
     }
   }
   return null;
-}
-
-// The PLAN SLOT a lift resolves to, matched with the same tiered ladder applyPlanSwap
-// uses (exact normalized name → conservative key → movementKey) — so a surface with
-// only a lift name (e.g. the conductor's swap payload, which names the LOGGED lift)
-// finds the slot even when the plan spells the movement with a different implement
-// ("Barbell Bench Press" logged, "DB Bench Press" planned). Lowest day_number within
-// the winning tier; tiers never mix (an exact match elsewhere always beats a
-// movement-family match). Null when nothing on the plan trains that movement.
-export function resolvePlanSwapSlot(name: string): { day: number; plan_name: string } | null {
-  const raw = String(name ?? "").trim();
-  if (!raw) return null;
-  try {
-    const rows = db
-      .prepare(
-        `SELECT pd.day_number AS d, e.name AS ex_name
-         FROM plan_items pi
-         JOIN plan_days pd ON pd.id = pi.plan_day_id
-         JOIN exercises e ON e.id = pi.exercise_id
-        ORDER BY pd.day_number, pi.position`
-      )
-      .all() as any[];
-    const norm = normalizeExerciseName(raw);
-    const key = normalizedExerciseKey(raw);
-    const move = movementKey(raw);
-    const hit =
-      rows.find((r) => normalizeExerciseName(r.ex_name) === norm) ??
-      rows.find((r) => normalizedExerciseKey(r.ex_name) === key) ??
-      rows.find((r) => movementKey(r.ex_name) === move);
-    if (!hit || !Number.isFinite(Number(hit.d))) return null;
-    return { day: Number(hit.d), plan_name: String(hit.ex_name) };
-  } catch {
-    return null;
-  }
-}
-
-// Back-compat day-only view of resolvePlanSwapSlot (existing callers + MCP).
-export function findPlanDayForExercise(name: string): number | null {
-  return resolvePlanSwapSlot(name)?.day ?? null;
-}
-
-// The plan day best suited to host a movement of `group` — the day already doing the
-// most work for that muscle group (ties → the earliest day). Null when no plan day
-// trains it at all.
-function bestPlanDayForGroup(group: MuscleGroup): number | null {
-  try {
-    const rows = db
-      .prepare(
-        `SELECT pd.day_number AS d, e.name AS ex_name, e.muscle_group AS mg
-         FROM plan_items pi
-         JOIN plan_days pd ON pd.id = pi.plan_day_id
-         JOIN exercises e ON e.id = pi.exercise_id`
-      )
-      .all() as any[];
-    const counts = new Map<number, number>();
-    for (const r of rows) {
-      if (resolveGroup(String(r.ex_name ?? ""), r.mg) !== group) continue;
-      const d = Number(r.d);
-      if (!Number.isFinite(d)) continue;
-      counts.set(d, (counts.get(d) ?? 0) + 1);
-    }
-    let best: number | null = null;
-    for (const [d, n] of counts) {
-      if (best == null || n > (counts.get(best) ?? 0) || (n === (counts.get(best) ?? 0) && d < best)) best = d;
-    }
-    return best;
-  } catch {
-    return null;
-  }
-}
-
-// The full "rotate one in" intent behind one tap: resolve WHERE the outgoing lift
-// lives (tiered — the plan's implement spelling never blocks the athlete's), swap
-// that slot, and when the movement isn't represented anywhere, ADD the incoming
-// variation to the day already training that muscle group instead of dead-ending.
-// The message says what actually happened, in the plan's own names. REST + MCP both
-// call this so the surfaces never drift.
-export function applySwapSmart(
-  from: string,
-  to: string,
-  day?: number | null,
-): { ok: false; error: string } | { ok: true; mode: "swapped" | "added"; day: number; from?: string; exercise: string; message: string; swapped?: any } {
-  const f = String(from ?? "").trim();
-  const t = String(to ?? "").trim();
-  if (!f) return { ok: false, error: "from exercise required" };
-  if (!t) return { ok: false, error: "to exercise required" };
-
-  // day == null must stay NaN so the slot resolution runs — Number(null) is 0,
-  // which reads as a (nonexistent) explicit day 0 and breaks the whole ladder.
-  let d = day == null ? Number.NaN : Number(day);
-  let planName = f;
-  if (!Number.isFinite(d)) {
-    const slot = resolvePlanSwapSlot(f);
-    if (slot) {
-      d = slot.day;
-      planName = slot.plan_name;
-    } else {
-      // Nothing on the plan trains this movement — land the variation on the day
-      // that already works the muscle group (the athlete asked for it; an error
-      // toast would just make them do this by hand from the Plan tab).
-      const group = groupForName(f) ?? groupForName(t);
-      const hostDay = group ? bestPlanDayForGroup(group) : null;
-      if (hostDay == null) return { ok: false, error: `couldn't find ${f} — or a day that trains it — on your plan` };
-      let added: ReturnType<typeof addExerciseToPlanDay>;
-      try {
-        // The LEAD clause only — addExerciseToPlanDay grounds the movement and adds
-        // the starting cue that grounding earned. A lift with real logged history
-        // must not be told to start light just because it arrived by this path
-        // rather than by a swap.
-        added = addExerciseToPlanDay(hostDay, t, `Added as a fresh variation for ${f}`);
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
-      }
-      if (!added) return { ok: false, error: `couldn't add ${t} to your plan` };
-      emitBrainEvent({
-        kind: "exercise_swapped",
-        domain: "training",
-        date: localDateISO(),
-        subject_key: `${f} -> ${t} (added)`.slice(0, 160),
-      });
-      return {
-        ok: true,
-        mode: "added",
-        day: added.day,
-        exercise: added.exercise,
-        message: `${f} isn't on your plan — added ${added.exercise} to day ${added.day} instead (nothing removed)`,
-      };
-    }
-  }
-  // Pass the RESOLVED plan spelling as `from` so the apply hits its exact-match tier.
-  const applied = buildAndApplySwap(d, planName, t);
-  if (!applied.ok) return applied;
-  const renamed = planName.toLowerCase() !== f.toLowerCase();
-  return {
-    ok: true,
-    mode: "swapped",
-    day: d,
-    from: planName,
-    exercise: t,
-    message: renamed
-      ? `Rotated ${t} in for ${planName} (your plan's slot for ${f}) on day ${d}`
-      : `Rotated ${t} in for ${planName} on day ${d}`,
-    swapped: applied.swapped,
-  };
-}
-
-// The canonical muscle group for a lift name — stored group when the exercise
-// exists, else classified from the name.
-function groupForName(name: string): MuscleGroup | null {
-  try {
-    const row = db.prepare(`SELECT muscle_group FROM exercises WHERE LOWER(name) = LOWER(?)`).get(name) as any;
-    return resolveGroup(name, row?.muscle_group ?? null);
-  } catch {
-    return classifyMuscleGroup(name);
-  }
 }
 
 function currentTarget(plan: ReturnType<typeof planItemFor>, mode: "reps" | "timed"): PrescriptionTarget | null {
@@ -1139,124 +942,6 @@ function loadedDeltaText(current: number | null, next: number | null): string {
   const d = next - current;
   if (d === 0) return `hold ${current} lb`;
   return d > 0 ? `+${d} lb` : `−${Math.abs(d)} lb`;
-}
-
-// ---- preference-aware novelty (bounded, deterministic) ----------------------
-// A parsed 'preference' memory: a polarity (a like vs a "dislikes X"/"hates X"
-// phrasing) plus the load-bearing keyword tokens it names. Used ONLY to gently
-// re-rank same-pattern variation candidates the athlete already qualifies for —
-// it NEVER pulls in a candidate injury/pattern filters excluded, and never
-// overrides pattern-correctness (it reorders the passing list, never adds to it).
-export interface ParsedPreference {
-  polarity: 1 | -1; // like (+1) vs dislike (-1)
-  tokens: Set<string>; // distinctive keyword tokens named in the memory
-}
-
-// A negative-preference phrasing ("dislikes X" / "hates X" / "avoid X" / "not a
-// fan of X" / "don't like X"). Anything else on a 'preference' memory reads as a
-// positive like. Deliberately conservative — exact/substring only, no NLP. Only a
-// leading word boundary is anchored so common suffixes still match (dislike →
-// dislikes, hate → hates, avoid → avoiding).
-const PREF_DISLIKE_RE =
-  /\b(dislike|hate|avoid|can'?t stand|cannot stand|not a fan|no thanks|rather not|don'?t (?:like|enjoy|want)|doesn'?t (?:like|enjoy|want))/i;
-
-// Generic words that never discriminate one same-pattern candidate from another
-// (so "loves squats" doesn't uniformly light up every squat variation) — dropped
-// from both the memory tokens and the candidate's distinctive tokens.
-const PREF_STOPWORDS = new Set(
-  "the a an and or to of in on for is are do does did have has i im my me you your with at as be it that this so but not more most really always usually prefer prefers like likes love loves enjoy enjoys favou favour favourite favorite exercise exercises workout workouts lift lifts move moves movement movements work works working train trains training day days".split(
-    " "
-  )
-);
-
-function prefTokens(s: string): string[] {
-  return String(s ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length >= 3 && !PREF_STOPWORDS.has(w));
-}
-
-// Equipment → the plain words a memory might use to name it (so "prefers dumbbell
-// work" boosts every DB candidate). Matched once per candidate. Deliberately only
-// unambiguous, ≥3-char words: no "bb"/"db"/"kb" (2-char tokens are dropped anyway)
-// and no "hack"/"smith" (those are specific movement names, not generic equipment,
-// so they'd wrongly demote Leg Press off a "hates hack squats" memory).
-const PREF_EQUIP_ALIASES: Record<Equipment, string[]> = {
-  barbell: ["barbell"],
-  dumbbell: ["dumbbell", "dumbell", "dumbbells"],
-  machine: ["machine", "machines"],
-  cable: ["cable", "cables", "pulley"],
-  kettlebell: ["kettlebell", "kettlebells"],
-  bodyweight: ["bodyweight", "calisthenic", "calisthenics"],
-};
-
-// Parse 'preference' memory contents into polarity + tokens. Empty/tokenless rows
-// are dropped. Pure + deterministic — exported for direct unit testing.
-export function parsePreferenceMemories(contents: Array<string | null | undefined>): ParsedPreference[] {
-  const out: ParsedPreference[] = [];
-  for (const raw of contents) {
-    const text = String(raw ?? "").trim();
-    if (!text) continue;
-    const tokens = new Set(prefTokens(text));
-    if (!tokens.size) continue;
-    out.push({ polarity: PREF_DISLIKE_RE.test(text) ? -1 : 1, tokens });
-  }
-  return out;
-}
-
-// The learned-preference score for ONE candidate against the original lift. The
-// candidate's DISTINCTIVE tokens (its name tokens MINUS the original's, so the
-// shared pattern noun like "squat" never counts) plus its equipment aliases are
-// matched against each preference; a match contributes polarity×strength. 0 when
-// nothing matches (the calm, common answer). Pure — exported for unit testing.
-export function preferenceSignal(
-  candidate: { name: string; equipment: Equipment },
-  originalName: string,
-  prefs: ParsedPreference[]
-): number {
-  if (!prefs.length) return 0;
-  const originalTokens = new Set(prefTokens(originalName));
-  const distinctive = prefTokens(candidate.name).filter((t) => !originalTokens.has(t));
-  const equipAliases = PREF_EQUIP_ALIASES[candidate.equipment] ?? [];
-  let score = 0;
-  for (const p of prefs) {
-    let strength = 0;
-    for (const t of distinctive) if (p.tokens.has(t)) strength++;
-    if (equipAliases.some((a) => p.tokens.has(a))) strength++; // equipment mention counts once
-    if (strength > 0) score += p.polarity * strength;
-  }
-  return score;
-}
-
-// Stable-sort variation candidates by their learned-preference score (liked first,
-// disliked last), preserving the input order for ties — so the equipment/compound
-// ranking suggestAlternatives already applied is the tiebreak. NEVER filters: a
-// disliked candidate is demoted, never removed, and nothing new is ever added, so
-// injury/pattern constraints upstream always win. Pure — exported for unit testing.
-export function preferenceRerank(
-  candidates: ExerciseVariation[],
-  originalName: string,
-  prefs: ParsedPreference[]
-): ExerciseVariation[] {
-  if (!prefs.length || candidates.length < 2) return candidates;
-  return candidates
-    .map((c, i) => ({ c, i, s: preferenceSignal(c, originalName, prefs) }))
-    .sort((a, b) => b.s - a.s || a.i - b.i)
-    .map((x) => x.c);
-}
-
-// The athlete's live 'preference' memories, parsed. Read once per day's pass and
-// threaded into every lift's context. Null-safe — no memory / no preferences → [].
-export function learnedPreferences(): ParsedPreference[] {
-  try {
-    const rows = db
-      .prepare(`SELECT content FROM memory WHERE kind = 'preference' AND superseded_by IS NULL ORDER BY id DESC LIMIT 40`)
-      .all() as any[];
-    return parsePreferenceMemories(rows.map((r) => String(r?.content ?? "")));
-  } catch {
-    return [];
-  }
 }
 
 // ---- periodization: is this lift one the phase speaks to? --------------------
@@ -3067,68 +2752,6 @@ export function buildVolumeRestoreProposal(
   for (const draftId of openVolumeRestoreDraftIds()) setProposalStatus(draftId, "superseded");
   const proposal = createProposal(VOLUME_RESTORE_AGENT, VOLUME_RESTORE_INSTRUCTION, "", parsed);
   return { ok: true, proposal };
-}
-
-// Build a DRAFT proposal to ROTATE one exercise out for another on a day — the
-// propose→apply path behind Today's "rotate one in" chips (and MCP swap_exercise).
-// Never auto-applies; the swap only lands when the athlete taps Apply. Returns the
-// designed { ok:false, error } (status 200 at the surface) on bad input.
-export function buildSwapProposal(
-  day: number,
-  from: string,
-  to: string
-): { ok: false; error: string } | { ok: true; proposal: any } {
-  const d = Number(day);
-  if (!Number.isFinite(d)) return { ok: false, error: "day required" };
-  const f = String(from ?? "").trim();
-  const t = String(to ?? "").trim();
-  if (!f) return { ok: false, error: "from exercise required" };
-  if (!t) return { ok: false, error: "to exercise required" };
-  const parsed = {
-    summary: `Rotate ${f} → ${t} on day ${d}`,
-    changes: [{ day_number: d, swap: { from: f, to: t }, reason: `Rotate a same-pattern variation in for ${f}.` }],
-  };
-  const proposal = createProposal("exercise-swap", `swap ${f} → ${t}`, "", parsed);
-  return { ok: true, proposal };
-}
-
-// Swap one exercise for another on a day AND APPLY it immediately — the in-session
-// "rotate one in" intent: the athlete taps a variation and it lands in the plan now,
-// so the very next render shows the new movement ready to log against. This is the
-// "adapts as I go" path (no Coach review gate); the plan quietly follows the athlete.
-// Builds through the same tested buildSwapProposal → applyProposal path so REST + MCP
-// never drift, and discards the draft if the apply can't land (e.g. `from` not on the
-// day) so nothing is left dangling. Returns the applied result or the designed
-// { ok:false, error } at 200.
-export function buildAndApplySwap(
-  day: number,
-  from: string,
-  to: string
-): { ok: false; error: string } | { ok: true; swapped: any } {
-  const draft = buildSwapProposal(day, from, to);
-  if (!draft.ok) return draft;
-  try {
-    const applied = applyProposal(draft.proposal.id) as { ok?: boolean; error?: string; skipped?: Array<{ error?: string }> };
-    if (!applied || applied.ok === false) {
-      setProposalStatus(draft.proposal.id, "discarded");
-      // Prefer the per-change error (e.g. '"X" is not on day N to swap out') over
-      // the apply layer's generic line — the surface toasts this verbatim.
-      const detail = Array.isArray(applied?.skipped) ? applied.skipped.find((s) => s?.error)?.error : undefined;
-      return { ok: false, error: detail || applied?.error || "couldn't apply that swap" };
-    }
-    // savePlanDay already emitted plan_changed; the explicit swap kind carries
-    // WHICH movement rotated out/in so the review can speak to the rotation.
-    emitBrainEvent({
-      kind: "exercise_swapped",
-      domain: "training",
-      date: localDateISO(),
-      subject_key: `${from} -> ${to}`.slice(0, 160),
-    });
-    return { ok: true, swapped: applied };
-  } catch (e: any) {
-    setProposalStatus(draft.proposal.id, "discarded");
-    return { ok: false, error: e?.message || "couldn't apply that swap" };
-  }
 }
 
 // ---- program balance (volume per canonical group) ---------------------------

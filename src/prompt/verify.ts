@@ -1,6 +1,7 @@
 // Self-critique verify prompts: the bounded second-pass safety checkers for a
 // drafted meal plan and a suggested session.
-import * as repo from "../repo.js";
+import { getCoachContext } from "../repo/coach.js";
+import { athleteDietaryDeclarations } from "../repo/nutrition.js";
 import type { FloorViolation } from "../repo/verify-floors.js";
 import { renderFloorViolations } from "../repo/verify-floors.js";
 import { promptData } from "./context-projection.js";
@@ -55,7 +56,7 @@ function declaredConstraintsSection(draft: any, dietaryInstruction?: unknown): s
   const lines: string[] = [];
   const clean = (value: unknown) => String(value ?? "").trim();
   try {
-    const declared = repo.athleteDietaryDeclarations(dietaryInstruction, draft);
+    const declared = athleteDietaryDeclarations(dietaryInstruction, draft);
     if (clean(declared.restrictions)) lines.push(`- DIETARY RESTRICTIONS (profile): ${clean(declared.restrictions)}`);
     if (Array.isArray(declared.hardDietKeys) && declared.hardDietKeys.length)
       lines.push(`- HARD DIET (every meal, item and substitution): ${declared.hardDietKeys.join(", ")}`);
@@ -97,7 +98,7 @@ THE DRAFTED PLAN TO CHECK:
 ${JSON.stringify(draft)}
 
 DATA (allergies, restrictions, household, food memory, life and health context):
-${promptData(repo.getCoachContext(), "meal_plan_verify")}
+${promptData(getCoachContext(), "meal_plan_verify")}
 
 ${VERIFY_RESULT_NOTE}`;
 }
@@ -108,7 +109,7 @@ export function buildSessionVerifyPrompt(
   opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {},
   violations: FloorViolation[] = []
 ): string {
-  const ctx = dateScopedPromptContext(repo.getCoachContext(), opts.date);
+  const ctx = dateScopedPromptContext(getCoachContext(), opts.date);
   const limits: string[] = [];
   if (opts.equipment) limits.push(`- EQUIPMENT: only movements possible with: ${opts.equipment.trim()}.`);
   if (opts.constraints) limits.push(`- CONSTRAINTS: ${opts.constraints.trim()}.`);

@@ -3,7 +3,8 @@ import type { WeeklyRunPlan, RunPlanPrescription } from "./run-progression.js";
 import { weeklyRunPlan } from "./run-progression.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { cardioEffort, sessionLoad } from "./training-read.js";
-import { addDaysISO, localDateISO } from "./shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
+import { mondayOf } from "../lib/dates.js";
 
 export type FlexibleRunKind = "easy" | "quality" | "long";
 export type FlexibleRunStatus = "open" | "completed";
@@ -57,12 +58,6 @@ interface RunObservation {
   distance_km: number | null;
   quality: boolean;
   signals: string[];
-}
-
-function mondayOf(dateISO: string): string {
-  const d = new Date(`${dateISO}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-  return d.toISOString().slice(0, 10);
 }
 
 function validNumber(value: unknown): number | null {
@@ -339,10 +334,6 @@ function suggestedDatesFor(run: RunPlanPrescription, asOf: string, weekEnd: stri
   return run.kind_label === "easy" ? ranked : ranked.filter((date) => !blocked.has(date));
 }
 
-function daysBetween(a: string, b: string): number {
-  return Math.round(Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 864e5);
-}
-
 export function flexibleTrainingAgenda(
   date?: string,
   opts?: {
@@ -426,8 +417,10 @@ export function flexibleTrainingAgenda(
       if (aKey !== bKey) return aKey - bKey;
       const aAnchor = provisionalDate(weekStart, a.run.day_number);
       const bAnchor = provisionalDate(weekStart, b.run.day_number);
-      const aDistance = daysBetween(aAnchor, asOf);
-      const bDistance = daysBetween(bAnchor, asOf);
+      // ABSOLUTE distance from today: this sorts by "closest to now", so a date two
+      // days behind and one two days ahead are equally close. 0 for an unusable date.
+      const aDistance = Math.abs(daysBetweenISO(aAnchor, asOf) ?? 0);
+      const bDistance = Math.abs(daysBetweenISO(bAnchor, asOf) ?? 0);
       return aDistance - bDistance || a.run.day_number - b.run.day_number;
     });
   for (const row of openIndexes) {
@@ -435,7 +428,8 @@ export function flexibleTrainingAgenda(
     const suggested =
       suggestedDatesFor(row.run, windowStart, weekEnd, blocked).find(
         (candidate) =>
-          !usedDates.has(candidate) && (!key || keyDates.every((existing) => daysBetween(candidate, existing) >= 2))
+          !usedDates.has(candidate) &&
+          (!key || keyDates.every((existing) => Math.abs(daysBetweenISO(candidate, existing) ?? 0) >= 2))
       ) ?? null;
     row.intent.suggested_date = suggested;
     if (suggested) {

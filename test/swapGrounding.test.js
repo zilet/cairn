@@ -12,12 +12,8 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
-import {
-  applySwapSmart,
-  buildAndApplySwap,
-  buildProgressionProposal,
-  nextPrescription,
-} from "../dist/repo/progression.js";
+import { buildProgressionProposal, nextPrescription } from "../dist/repo/progression.js";
+import { applySwapSmart, buildAndApplySwap } from "../dist/repo/plan-swap.js";
 import { classifyLiftSlot, relatedLiftStart, RELATED_LIFT_RATIOS } from "../dist/repo/related-lift.js";
 import { localDateISO } from "../dist/repo/shared.js";
 

@@ -125,7 +125,7 @@ projects, tokens, volumes, and Tailscale HTTPS origins.
 ```bash
 git clone https://github.com/zilet/cairn.git
 cd cairn
-./quickstart.sh                 # guided: detects Docker or Node 24, seeds, prints the URL
+./quickstart.sh                 # guided: resolves Docker/Podman/container or falls back to Node 24, seeds, prints the URL
 ```
 
 `./quickstart.sh` creates `.env` from `.env.example`, starts Cairn, waits for `/api/health`, and

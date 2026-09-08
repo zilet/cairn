@@ -28,13 +28,18 @@
 // on the next sync.
 import { createHash } from "node:crypto";
 import { garminErrorStatus, makeGarminClient, rawDelete, rawGet, rawPost, rawPut } from "./garmin.js";
-import * as repo from "./repo.js";
+import { garminSourceLabel, reconcileGarminStrength, upsertGarminActivity, upsertGarminSource } from "./repo/activities.js";
+import { ensureGarminMapping } from "./repo/exercises.js";
+import { garminWeightGrams } from "./repo/garmin-exercise-map.js";
+import { clearSessionGarminExport, deleteGarminActivityByExternalId, garminExportSetRows, getSessionGarminExport, listSessionGarminStrengthActivities, recordSessionGarminExport, sessionGarminExportContext } from "./repo/garmin-strength-export.js";
+import { getGarminCredentials, getSettings } from "./repo/settings.js";
 import { localDateISO } from "./repo/shared.js";
 import type {
   GarminExportSetRow,
   GarminLinkedStrengthActivity,
   GarminSessionExportRecord,
 } from "./repo/garmin-strength-export.js";
+import { log } from "./log.js";
 
 // ---- the write surface -----------------------------------------------------
 export interface GarminStrengthWriteApi {
@@ -256,7 +261,7 @@ function slotFor(set: GarminExportPayloadSet): { repetitionCount: number | null;
   const timed = set.mode === "timed";
   return {
     repetitionCount: timed ? null : set.reps == null ? null : Math.max(0, Math.round(set.reps)),
-    weight: timed ? null : repo.garminWeightGrams(set.weight),
+    weight: timed ? null : garminWeightGrams(set.weight),
     duration: timed && set.duration_sec != null && set.duration_sec > 0 ? Math.round(set.duration_sec) : DEFAULT_SET_SEC,
   };
 }
@@ -410,7 +415,7 @@ function payloadSetsFor(rows: GarminExportSetRow[]): GarminExportPayloadSet[] {
       // does not scan the catalog four times.
       let mapped = mappedByExercise.get(row.exercise_id);
       if (!mapped) {
-        mapped = repo.ensureGarminMapping(row.exercise_id);
+        mapped = ensureGarminMapping(row.exercise_id);
         mappedByExercise.set(row.exercise_id, mapped);
       }
       if (mapped.status !== "mapped" || !mapped.category) continue;
@@ -501,7 +506,7 @@ export function isCairnAuthoredName(name: string | null | undefined): boolean {
 export function sessionOwnsGarminActivity(sessionId: number, externalId: string | null | undefined): boolean {
   const id = String(externalId ?? "").trim();
   if (!id) return false;
-  const prior = repo.getSessionGarminExport(sessionId);
+  const prior = getSessionGarminExport(sessionId);
   if (!prior) return false;
   if (prior.source === "manual" && prior.activity_id === id) return true;
   return cairnAuthoredIds(prior).includes(id);
@@ -613,10 +618,9 @@ export function planGarminExportTarget(input: {
  * skip says so.
  */
 async function retractGarminExport(sessionId: number, reason: string): Promise<GarminExportResult> {
-  const prior = repo.getSessionGarminExport(sessionId);
+  const prior = getSessionGarminExport(sessionId);
   if (!prior) return { ok: true, skipped: reason };
-  const marked = repo
-    .listSessionGarminStrengthActivities(sessionId)
+  const marked = listSessionGarminStrengthActivities(sessionId)
     .filter((row) => row.external_id && isCairnAuthoredName(row.name))
     .map((row) => String(row.external_id));
   const ours = [...new Set([...cairnAuthoredIds(prior), ...marked])];
@@ -631,13 +635,13 @@ async function retractGarminExport(sessionId: number, reason: string): Promise<G
       const status = garminErrorStatus(e);
       if (status !== 404 && status !== 410) {
         const message = e?.message ?? String(e);
-        console.warn(`[garmin-export] session ${sessionId}: could not retract activity ${activityId}: ${message}`);
+        log.warn(`[garmin-export] session ${sessionId}: could not retract activity ${activityId}: ${message}`);
         stillPending.push(activityId);
         continue;
       }
       // Already gone on Garmin's side — the local bookkeeping still has to catch up.
     }
-    repo.deleteGarminActivityByExternalId(activityId);
+    deleteGarminActivityByExternalId(activityId);
   }
   if (stillPending.length) {
     return { ok: false, error: `Garmin kept ${stillPending.length} activity we no longer have sets for` };
@@ -645,10 +649,10 @@ async function retractGarminExport(sessionId: number, reason: string): Promise<G
   // The sets themselves sat on a watch recording, which stays: its own slot labels
   // cannot be restored. Only the shells beside it were ours to withdraw.
   if (prior.source !== "manual") {
-    repo.recordSessionGarminExport(sessionId, { ...prior, created_ids: [], pending_deletes: [] });
+    recordSessionGarminExport(sessionId, { ...prior, created_ids: [], pending_deletes: [] });
     return { ok: true, skipped: `${reason}_watch_kept`, activity_id: prior.activity_id };
   }
-  repo.clearSessionGarminExport(sessionId);
+  clearSessionGarminExport(sessionId);
   return { ok: true, skipped: `${reason}_retracted`, activity_id: prior.activity_id };
 }
 
@@ -658,21 +662,21 @@ async function retractGarminExport(sessionId: number, reason: string): Promise<G
  * workout and an unchanged one are all ordinary outcomes, not errors.
  */
 export async function exportSessionToGarmin(sessionId: number): Promise<GarminExportResult> {
-  const settings = repo.getSettings();
+  const settings = getSettings();
   if (!settings.garmin_export_strength) return { ok: true, skipped: "export_disabled" };
-  if (!repo.getGarminCredentials().configured) return { ok: true, skipped: "garmin_not_configured" };
+  if (!getGarminCredentials().configured) return { ok: true, skipped: "garmin_not_configured" };
 
-  const session = repo.sessionGarminExportContext(sessionId);
+  const session = sessionGarminExportContext(sessionId);
   if (!session) return { ok: false, error: `no session ${sessionId}` };
   if (session.cairn_sets_authoritative === false) return { ok: true, skipped: "garmin_owns_sets" };
 
-  const rows = repo.garminExportSetRows(sessionId);
+  const rows = garminExportSetRows(sessionId);
   const sets = rows.length ? payloadSetsFor(rows) : [];
   if (!sets.length) return await retractGarminExport(sessionId, rows.length ? "no_mapped_exercises" : "no_logged_sets");
 
   const fingerprint = garminExportFingerprint(sets);
-  const prior = repo.getSessionGarminExport(sessionId);
-  const linked = repo.listSessionGarminStrengthActivities(sessionId).filter((row) => row.external_id);
+  const prior = getSessionGarminExport(sessionId);
+  const linked = listSessionGarminStrengthActivities(sessionId).filter((row) => row.external_id);
   const plan = planGarminExportTarget({ prior, linked, fingerprint });
   const shellsToDrop = plan.shells_to_drop;
   let targetId = plan.target_id;
@@ -717,8 +721,8 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
             // `garmin_activities` is UNIQUE on (source_id, external_id): landing the
             // shell under "default" while a labelled install syncs under its own label
             // gives the same activity two rows, and the day then reads "2 activities".
-            const garminSource = repo.upsertGarminSource({ label: repo.garminSourceLabel() }) as any;
-            const saved = repo.upsertGarminActivity(
+            const garminSource = upsertGarminSource({ label: garminSourceLabel() }) as any;
+            const saved = upsertGarminActivity(
               {
                 external_id: targetId,
                 date: String(session.date),
@@ -730,11 +734,11 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
               },
               garminSource?.id ?? null
             ) as any;
-            if (saved?.id) repo.reconcileGarminStrength(Number(saved.id));
+            if (saved?.id) reconcileGarminStrength(Number(saved.id));
           } catch (e: any) {
-            console.warn(`[garmin-export] session ${sessionId}: could not link the manual activity: ${e?.message ?? e}`);
+            log.warn(`[garmin-export] session ${sessionId}: could not link the manual activity: ${e?.message ?? e}`);
           }
-          repo.recordSessionGarminExport(sessionId, {
+          recordSessionGarminExport(sessionId, {
             activity_id: targetId,
             source,
             fingerprint: "",
@@ -771,27 +775,26 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
           for (const shellId of shellsToDrop) {
             try {
               await api.deleteActivity(shellId);
-              repo.deleteGarminActivityByExternalId(shellId);
+              deleteGarminActivityByExternalId(shellId);
             } catch (e: any) {
               const status = garminErrorStatus(e);
               if (status === 404 || status === 410) {
                 // Garmin no longer has the shell — a lost response or the athlete
                 // already deleted it. Drop the local row and do not re-arm retarget.
-                repo.deleteGarminActivityByExternalId(shellId);
+                deleteGarminActivityByExternalId(shellId);
               } else {
                 stillPending.push(shellId);
-                console.warn(
+                log.warn(
                   `[garmin-export] session ${sessionId}: manual activity ${shellId} not deleted: ${e?.message ?? e}`
                 );
               }
             }
           }
-          const survivor = repo
-            .listSessionGarminStrengthActivities(sessionId)
+          const survivor = listSessionGarminStrengthActivities(sessionId)
             .find((row) => String(row.external_id) === targetId);
           if (survivor) {
             try {
-              repo.reconcileGarminStrength(survivor.id);
+              reconcileGarminStrength(survivor.id);
             } catch {
               /* the blob rebuild is bookkeeping — the sets are already on the watch */
             }
@@ -801,13 +804,13 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
         // Prune the ledger: a shell Garmin accepted the delete for is gone locally too,
         // so it stops being ours to chase and the list cannot grow without bound.
         const survivingLocally = new Set(
-          repo.listSessionGarminStrengthActivities(sessionId).map((row) => String(row.external_id))
+          listSessionGarminStrengthActivities(sessionId).map((row) => String(row.external_id))
         );
         const remainingCreated = createdIds.filter((id) => survivingLocally.has(id) || stillPending.includes(id));
 
         const resolvedMode: "fill" | "replace" | "create" | "retarget" =
           mode === "create" || mode === "retarget" ? mode : (payload?.mode ?? priorWriteMode(prior));
-        repo.recordSessionGarminExport(sessionId, {
+        recordSessionGarminExport(sessionId, {
           activity_id: targetId,
           source,
           fingerprint,
@@ -824,7 +827,7 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
     );
   } catch (e: any) {
     const message = e?.message ?? String(e);
-    console.warn(`[garmin-export] session ${sessionId} failed: ${message}`);
+    log.warn(`[garmin-export] session ${sessionId} failed: ${message}`);
     return { ok: false, error: message };
   }
 }

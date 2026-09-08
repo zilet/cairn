@@ -176,7 +176,7 @@ test("the background run fills the slot the dedupe guards, rather than re-derivi
     /case "week_ahead": \{[\s\S]*?weekAheadRead\(agent, hooks, cacheKey\)/,
     "the week_ahead job must pass its stored cacheKey through to the read"
   );
-  const ops = fs.readFileSync(new URL("../src/coachOps.ts", import.meta.url), "utf8");
+  const ops = fs.readFileSync(new URL("../src/coachOps/training.ts", import.meta.url), "utf8");
   assert.match(
     ops,
     /const cacheKey = cacheKeyOverride\?\.trim\(\) \|\| weekAheadCacheKey\(floor\)/,
@@ -232,10 +232,10 @@ test("the scheduler warm is a calm no-op once the cache is already fresh", async
 // machinery rather than re-deriving or dropping it.
 test("weekAheadRead still bounds its agent call with interactiveTimeoutForOp — a hung CLI cannot hold the job slot", async () => {
   const fs = await import("node:fs");
-  const src = fs.readFileSync(new URL("../src/coachOps.ts", import.meta.url), "utf8");
+  const src = fs.readFileSync(new URL("../src/coachOps/training.ts", import.meta.url), "utf8");
   assert.match(
     src,
-    /runChosen\(agent, prompt, \{\s*op: WEEK_AHEAD_KIND,\s*timeoutMs: repo\.interactiveTimeoutForOp\(WEEK_AHEAD_KIND\)/,
+    /runChosen\(agent, prompt, \{\s*op: WEEK_AHEAD_KIND,\s*timeoutMs: interactiveTimeoutForOp\(WEEK_AHEAD_KIND\)/,
     "the week-ahead agent call must stay bounded by the shared interactive timeout"
   );
 });

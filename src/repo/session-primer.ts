@@ -23,12 +23,12 @@
 // ============================================================================
 import { db } from "../db.js";
 import { getActiveDailySession } from "./adaptive-session.js";
-import { getCachedDayRead } from "./day-read.js";
+import { getCachedDayRead } from "./day-read-cache.js";
 import { dayRead } from "./day-read.js";
 import { listBrainDecisions } from "./brain-decisions.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { planDayFocus, planDayCandidates, selectAdaptivePlanDay } from "./plan-selection.js";
-import { getProposal } from "./profile.js";
+import { getProposal } from "./proposals.js";
 import {
   movementTenureWeeks,
   planDayProgression,

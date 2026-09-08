@@ -71,6 +71,28 @@ function recoveryLineHtml(text: unknown, sub: unknown): string {
   return `<div class="hb-rline"><span class="hb-rphrase">${escHtml(text)}</span>${sub ? `<span class="hb-rsub">${escHtml(sub)}</span>` : ""}</div>`;
 }
 
+// The ONE sleep ladder. Duration is the only thing the app grades sleep on —
+// the wearable's own 0-100 sleep score is a score, and the constitution bans
+// printing or ranking by one. Both the recovery read's phrase and the Stand
+// tile's tone come from here so the two can never drift.
+function sleepDurationPhrase(avgSleepMin: unknown): string {
+  const hours = Number(avgSleepMin) / 60;
+  if (!Number.isFinite(hours)) return "";
+  if (hours >= 7.5) return "Sleeping well";
+  if (hours >= 6.5) return "Sleep's about right";
+  if (hours >= 5.5) return "Sleep's run a little short";
+  return "Sleep's been short";
+}
+
+// The same ladder as a tile tone. No reading → "mute" (absence is not a verdict).
+function sleepDurationTone(avgSleepMin: unknown): "ok" | "watch" | "warn" | "mute" {
+  const hours = Number(avgSleepMin) / 60;
+  if (!Number.isFinite(hours) || hours <= 0) return "mute";
+  if (hours >= 6.5) return "ok";
+  if (hours >= 5.5) return "watch";
+  return "warn";
+}
+
 // Plain-language recovery summary. Each row is a phrase, not a number to interpret.
 function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
   const recovery = summary?.recovery || {};
@@ -89,12 +111,7 @@ function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
   if (Number.isFinite(sleepMinutes) && sleepMinutes > 0) {
     const hours = Math.floor(sleepMinutes / 60);
     const minutes = Math.round(sleepMinutes % 60);
-    const sleepHours = sleepMinutes / 60;
-    const phrase =
-      sleepHours >= 7.5 ? "Sleeping well" :
-      sleepHours >= 6.5 ? "Sleep's about right" :
-      sleepHours >= 5.5 ? "Sleep's run a little short" :
-      "Sleep's been short";
+    const phrase = sleepDurationPhrase(sleepMinutes);
     const deep = Number(recovery.avg_deep_sleep_min);
     const rem = Number(recovery.avg_rem_sleep_min);
     const architecture = [
@@ -308,6 +325,8 @@ const CAIRN_HEALTH_READ = {
   recoveryNoDataHtml,
   recoveryLineHtml,
   recoveryHtml,
+  sleepDurationPhrase,
+  sleepDurationTone,
   optimalPhrase,
   priorityMarkerHtml,
   priorityMarkersSectionHtml,

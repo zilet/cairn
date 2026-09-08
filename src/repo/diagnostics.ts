@@ -370,7 +370,7 @@ export function recordDiagnosticEvents(inputs: DiagnosticEventInput[]): void {
     if (transactionStarted) {
       try {
         db.exec("ROLLBACK");
-      } catch {}
+      } catch { /* already-failed transaction: diagnostics must never break product paths */ }
     }
     /* diagnostics must never break product paths */
   } finally {

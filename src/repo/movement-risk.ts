@@ -12,6 +12,7 @@
 import { db } from "../db.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { isoDay } from "../lib/dates.js";
 
 export type MovementRiskSignal = {
   risk: "clear" | "watch" | "flagged";
@@ -33,10 +34,6 @@ const RISK_RECENT_DAYS = 28;
 const FLAGGED_MIN_PAIN_DAYS = 2;
 
 const CLEAR: MovementRiskSignal = { risk: "clear", reason: null };
-
-function isoDay(value: unknown): string {
-  return String(value ?? "").slice(0, 10);
-}
 
 function movementSlug(name: string): string {
   return `movement:${name

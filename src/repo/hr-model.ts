@@ -13,6 +13,7 @@ import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { sensorIsCurrent } from "./sensor-freshness.js";
 import { localDateISO } from "./shared.js";
+import { finite as num } from "../lib/numbers.js";
 
 export type HrZoneKey = "z1" | "z2" | "z3" | "z4" | "z5";
 
@@ -69,16 +70,6 @@ function shiftISO(dateISO: string, days: number): string {
   const ms = Date.parse(`${String(dateISO).slice(0, 10)}T00:00:00Z`);
   if (!Number.isFinite(ms)) return String(dateISO).slice(0, 10);
   return new Date(ms + days * 864e5).toISOString().slice(0, 10);
-}
-
-// Null-safe numeric coercion. The explicit null/empty guard is load-bearing:
-// Number(null) is 0, not NaN, so an EMPTY aggregate (`MAX(avg_hr)` over no rows)
-// would otherwise read as a real observation of zero — which is how a threshold
-// of 0 bpm and a zone table of all zeroes gets built out of no data at all.
-function num(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
 }
 
 // ---------- the raw observations ----------

@@ -1,5 +1,12 @@
 import { activeTimeZone } from "../tz.js";
 
+// The canonical calendar-day arithmetic now lives in `src/lib/dates.ts` (dependency-
+// free, so migrations and leaf modules can use it too). Re-exported here because
+// dozens of modules already import these two from `repo/shared.js`, and that path
+// stays the right one for repo code — everything else in this file is zone-aware and
+// belongs beside them.
+export { addDaysISO, daysBetweenISO } from "../lib/dates.js";
+
 // Intl.DateTimeFormat construction is the costly part of date formatting, and
 // getCoachContext builds these labels per logged entry (dozens per prompt). Cache
 // one formatter per (zone × shape), keyed by the zone string ("" = system-local).
@@ -84,21 +91,10 @@ function zonedMonthDay(d: Date, zone?: string): string {
   ).format(d);
 }
 
-const isoDate = (p: { year: number; month: number; day: number }) =>
+// Assemble a day key from already-zoned wall-clock parts. NOT the `isoDate`
+// validator in `src/lib/dates.ts` — this one takes parts, not a string.
+const isoDateFromParts = (p: { year: number; month: number; day: number }) =>
   `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
-
-export function addDaysISO(iso: string, days: number): string | null {
-  const t = Date.parse(`${String(iso).slice(0, 10)}T00:00:00Z`);
-  if (!Number.isFinite(t)) return null;
-  return new Date(t + days * 864e5).toISOString().slice(0, 10);
-}
-
-export function daysBetweenISO(laterISO: string, earlierISO: string): number | null {
-  const later = Date.parse(`${String(laterISO).slice(0, 10)}T00:00:00Z`);
-  const earlier = Date.parse(`${String(earlierISO).slice(0, 10)}T00:00:00Z`);
-  if (!Number.isFinite(later) || !Number.isFinite(earlier)) return null;
-  return Math.round((later - earlier) / 864e5);
-}
 
 // The local calendar date (YYYY-MM-DD). Frames in the active device zone when one
 // is in scope (X-Cairn-TZ), else the server's own zone — so a meal logged at 9 PM
@@ -106,7 +102,7 @@ export function daysBetweenISO(laterISO: string, earlierISO: string): number | n
 // this; mirror it in dayread.localToday() so getCoachContext reads the row the
 // Brief wrote. Defined here (not via dayread) to avoid a circular import.
 export function localDateISO(d: Date = new Date(), tz: string | undefined = activeTimeZone()): string {
-  return isoDate(zonedParts(d, tz));
+  return isoDateFromParts(zonedParts(d, tz));
 }
 
 // Integer count of LOCAL calendar days since the epoch — used to diff two dates
@@ -225,7 +221,7 @@ export function approxTimeForMealLabel(label: unknown): string | null {
 export function nowContext(d: Date = new Date(), tz: string | undefined = activeTimeZone()) {
   const p = zonedParts(d, tz);
   return {
-    date: isoDate(p), // YYYY-MM-DD, local
+    date: isoDateFromParts(p), // YYYY-MM-DD, local
     weekday: p.weekday, // "Tuesday"
     time: p.time, // "5:15 PM"
     hour: p.hour,

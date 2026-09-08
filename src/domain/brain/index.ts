@@ -6,6 +6,8 @@ export * from "./autonomy-service.js";
 export * from "../../repo/brain-decisions.js";
 export * from "../../repo/brain-evaluations.js";
 export * from "../../repo/coach.js";
+export * from "../../repo/directives.js";
+export * from "../../repo/insights.js";
 export * from "../../repo/coaching-focus.js";
 export * from "../../repo/context-effect.js";
 export * from "../../repo/goal-checkin.js";

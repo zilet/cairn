@@ -46,10 +46,7 @@ import {
   runAgentStreaming,
   agentSupportsStream,
   extractJson,
-  interactiveTimeoutFor,
   loadAgents,
-  resolveAgentExecutionProfile,
-  type AgentDef,
   type AgentResult,
 } from "./agents.js";
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
@@ -69,13 +66,92 @@ import { normalizeFoodCaptureParsed } from "./foodCapture.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
+import { resolveChatProfile, type ChatLane, type ChatRoutingDecision } from "./chatRouting.js";
+import { log } from "./log.js";
 import {
-  chatMessageRequestsCoaching,
-  resolveChatProfile,
-  type ChatLane,
-  type ChatRoutingDecision,
-  type ResolvedChatProfile,
-} from "./chatRouting.js";
+  hasExplicitGoalIntentInContext,
+  hasExplicitPlanEditIntent,
+  hasExplicitRunEditIntent,
+  hasExplicitStrengthObjectiveIntent,
+  hasExplicitSymptomReportIntent,
+  hasExplicitSymptomResolveIntent,
+  isFoodOnlyTurn,
+  isInstantFoodCaptureDecision,
+  isLeadingQuestion,
+} from "./chat-intent.js";
+import {
+  describeRun,
+  recordOrNull,
+  reconcileChatPlanReply,
+  reconcileChatRevertReply,
+  reconcileChatRunReply,
+  reconcileGoalIdentityReply,
+  reconcileStrengthObjectiveReply,
+  reconcileTrainingStructureReply,
+} from "./chat-reconcile.js";
+import {
+  buildChatProviderOrder,
+  chatExecutionAttemptKey,
+  chatTurnTimeoutMs,
+  cleanCliLine,
+  orderChatProvidersByAvailability,
+  resolveRuntimeChatProfile,
+  type RuntimeChatProfile,
+} from "./chat-routing-runtime.js";
+
+// The intent gates, reply reconcilers and provider/profile runtime now live in their own
+// modules. They are re-exported here so every existing importer, route and test keeps
+// resolving them from "./chatTurns.js".
+export {
+  hasExplicitGoalIntent,
+  hasExplicitGoalIntentInContext,
+  hasExplicitPlanEditIntent,
+  hasExplicitRunEditIntent,
+  hasExplicitStrengthObjectiveIntent,
+  hasExplicitSymptomReportIntent,
+  hasExplicitSymptomResolveIntent,
+  isFoodOnlyTurn,
+  isInstantFoodCaptureDecision,
+  isLeadingQuestion,
+  mentionsWhen,
+  shouldCreatePhotoFoodPlaceholder,
+} from "./chat-intent.js";
+export {
+  DECISION_REVERT_FAILED_VARIANTS,
+  DECISION_REVERT_NOT_AUTHORIZED_VARIANTS,
+  describeRun,
+  GOAL_NONE_SAVED_VARIANTS,
+  GOAL_NOT_SAVED_VARIANTS,
+  PLAN_NO_CHANGE_APPENDED_VARIANTS,
+  PLAN_NOT_LIVE_VARIANTS,
+  PLAN_NOT_SAVED_VARIANTS,
+  PLAN_UNTOUCHED_BY_QUESTION_VARIANTS,
+  PLAN_WRITE_UNVERIFIED_VARIANTS,
+  reconcileChatPlanReply,
+  reconcileChatRevertReply,
+  reconcileChatRunReply,
+  reconcileGoalIdentityReply,
+  reconcileStrengthObjectiveReply,
+  reconcileTrainingStructureReply,
+  RESTRUCTURE_DRAFT_VARIANTS,
+  RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS,
+  RESTRUCTURE_NOT_SCHEDULED_VARIANTS,
+  RUN_HELD_FOR_REVIEW_VARIANTS,
+  RUN_NOT_LIVE_VARIANTS,
+  RUN_NOT_SAVED_VARIANTS,
+  STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS,
+  STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
+  STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS,
+  TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS,
+  TRAINING_STRUCTURE_UNVERIFIED_VARIANTS,
+} from "./chat-reconcile.js";
+export {
+  buildChatProviderOrder,
+  chatExecutionAttemptKey,
+  chatTurnTimeoutMs,
+  orderChatProvidersByAvailability,
+  resolveRuntimeChatProfile,
+} from "./chat-routing-runtime.js";
 
 // Background, in-process chat-turn engine — the durable counterpart to the
 // enrichment queue. A chat turn is no longer a blocking request/response: the
@@ -148,67 +224,11 @@ const runner = createSerialRunner(processChatTurn, (id, e) => {
     /* ignore */
   }
   recordAsyncFailure("chat_turns", "runner_backstop", e);
-  console.error(`[chat] turn#${id} failed (${diagnosticErrorName(e)})`);
+  log.error(`[chat] turn#${id} failed (${diagnosticErrorName(e)})`);
 });
 
 export function enqueueChatTurn(id: number): void {
   runner.enqueue(id);
-}
-
-const INSTANT_FOOD_ALLOWED_REASONS = new Set(["explicit_food_log", "photo_food_default", "explicit_fast_request"]);
-const QUESTION_LEAD_RE = /^(?:what|why|how|when|where|who|which|did|does|do|is|are|was|were|should|could|would|can)\b/i;
-
-// Does this message place the meal in TIME at all? Deliberately a coarse "is there
-// a when here", NOT a parser — the actual resolution of "last night" into a date and
-// an hour is the agent's job, over DATA.now, one layer down. All this decides is
-// which lane gets the sentence.
-//
-// It has to exist because the instant-capture lane runs with NO agent: it is a
-// receipt path that stamps the note with today and no time. That is exactly right
-// for "just had a protein shake" and exactly wrong for "I had a late dinner last
-// night around 9", which the bypass would have silently filed under today. So any
-// temporal reference disqualifies the bypass and the turn goes to the full lane,
-// where the model reads the whole sentence and resolves the day and the hour.
-// Erring toward the full lane is cheap (one ordinary chat turn); erring the other
-// way writes the wrong day into the athlete's log.
-const MENTIONS_WHEN_RE = new RegExp(
-  [
-    // named days and relative days
-    String.raw`\b(?:yesterday|last\s+night|tonight|this\s+morning|this\s+afternoon|this\s+evening|earlier|later)\b`,
-    String.raw`\b(?:last|past|previous)\s+(?:night|evening|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week)\b`,
-    String.raw`\b(?:on\s+)?(?:mon|tues?|wed(?:nes)?|thur?s?|fri|sat(?:ur)?|sun)(?:day)?\b`,
-    // elapsed time ("a couple hours ago", "20 min ago")
-    String.raw`\b(?:\d+|a|an|a\s+couple(?:\s+of)?|a\s+few|several)\s+(?:min(?:ute)?s?|hours?|hrs?|days?)\s+ago\b`,
-    // explicit clock times ("at 8", "around 9pm", "8:30")
-    String.raw`\b(?:at|around|about|near|by|before|after|since)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)?\b`,
-    String.raw`\b\d{1,2}:\d{2}\s*(?:am|pm)?\b`,
-    String.raw`\b\d{1,2}\s*(?:am|pm)\b`,
-    // an explicit calendar date
-    String.raw`\b\d{4}-\d{2}-\d{2}\b`,
-  ].join("|"),
-  "i"
-);
-
-export function mentionsWhen(message: string | null | undefined): boolean {
-  return MENTIONS_WHEN_RE.test(String(message ?? ""));
-}
-
-export function isInstantFoodCaptureDecision(
-  decision: ChatRoutingDecision | null | undefined,
-  message: string | null | undefined
-): boolean {
-  if (!decision || decision.lane !== "capture") return false;
-  const reasons = decision.reason_codes;
-  // A bare photo is cheap to classify in the capture lane, but it is not consent
-  // to log food. The receipt-only bypass requires explicit food-log language.
-  if (!reasons.includes("explicit_food_log")) return false;
-  if (reasons.some((reason) => !INSTANT_FOOD_ALLOWED_REASONS.has(reason))) return false;
-  const text = String(message ?? "").trim();
-  if (chatMessageRequestsCoaching(text)) return false;
-  if (text && (text.includes("?") || QUESTION_LEAD_RE.test(text))) return false;
-  // A meal placed in time is a remembering, not a receipt — let the agent read it.
-  if (mentionsWhen(text)) return false;
-  return true;
 }
 
 export function inferCaptureMeal(message: string | null | undefined, hour = nowContext().hour): string {
@@ -392,11 +412,6 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
 // Lazy import of enrich.js mirrors repo.addFoodNote: enrich.ts imports chatTurns
 // is not a cycle today, but the lazy import keeps the queue trigger uniform with
 // the rest of the loop and side-steps any future ordering surprise.
-const PHOTO_FOOD_HINT_RE =
-  /\b(food|meal|breakfast|lunch|dinner|snack|plate|bowl|ate|eating|calor(?:y|ies)|macro|protein|carb|fat|fiber|weigh(?:ed)?|grams?|oz|serving|portion|recipe|restaurant|label|packag(?:e|ing)|menu)\b/i;
-const PHOTO_NON_FOOD_HINT_RE =
-  /\b(physique|body|mirror|pose|form|equipment|bike|run|shoe|injur(?:y|ed)?|pain|dexa|scan|lab|blood|chart|screenshot)\b/i;
-
 function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
@@ -419,10 +434,6 @@ function memoryKind(value: unknown): MemoryKind | undefined {
   return typeof value === "string" && value.trim() ? (value as MemoryKind) : undefined;
 }
 
-function recordOrNull(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
 function proposalMeta(draft: unknown): { id: unknown; kind: "restructure" | "plan_update"; summary: unknown } {
   const row = recordOrNull(draft) ?? {};
   const parsed = recordOrNull(row.parsed);
@@ -431,28 +442,6 @@ function proposalMeta(draft: unknown): { id: unknown; kind: "restructure" | "pla
     kind: parsed && Array.isArray(parsed.days) ? "restructure" : "plan_update",
     summary: parsed?.summary,
   };
-}
-
-export function shouldCreatePhotoFoodPlaceholder(message: string | null | undefined): boolean {
-  const s = (message ?? "").toString().trim();
-  if (!s) return false; // a bare photo must be identified by vision before any food write
-  if (PHOTO_FOOD_HINT_RE.test(s)) return true;
-  if (PHOTO_NON_FOOD_HINT_RE.test(s)) return false;
-  return false;
-}
-
-// A meal is useful recovery/fuel context, but it is not by itself evidence that a
-// lift should change. This backstop prevents an overreaching chat model from
-// turning a food capture into a surprise training intervention. If the athlete
-// also reports a training, recovery, pain, or life signal, the targeted coaching
-// path remains available.
-const FOOD_TURN_RE =
-  /\b(food|meal|breakfast|lunch|dinner|snack|plate|bowl|salad|chicken|restaurant|cafe|café|ate|eating|calor(?:y|ies)|macro|protein|carb|fat|fiber|portion|recipe|menu)\b/i;
-const TRAINING_SIGNAL_RE =
-  /\b(workout|train(?:ing|ed)?|lift(?:ing|ed)?|session|exercise|bench|squat|deadlift|press|row|run|ride|cycle|pain|sore|soreness|injur(?:y|ed)|recovery|sleep|hrv|fatigue|travel|trip|ill|sick)\b/i;
-export function isFoodOnlyTurn(message: string | null | undefined, imagePath?: string | null): boolean {
-  const text = String(message ?? "");
-  return (Boolean(imagePath) || FOOD_TURN_RE.test(text)) && !TRAINING_SIGNAL_RE.test(text);
 }
 
 type ClinicalPlanSignal = {
@@ -738,72 +727,6 @@ const GOAL_IDENTITY_FIELDS = new Set([
   "training_intent",
 ]);
 
-// Identity-level goals must come from an explicit athlete statement, never from
-// a coach inference or an answer to a "what should my goal be?" question.
-function isExploratoryGoalQuestion(text: string): boolean {
-  return /\b(?:what|which)\b.{0,30}\b(?:goals?|targets?|priorities)\b|\b(?:should|could|would)\s+i\b.{0,30}\b(?:goals?|targets?|weigh|train|run|race)\b|\b(?:should|could|would)\s+i\b.{0,40}\b(?:get|drop|come|cut|slim|lean|lose|gain)\b/i.test(
-    text
-  );
-}
-
-export function hasExplicitGoalIntent(message: string | null | undefined): boolean {
-  const text = String(message ?? "").trim();
-  if (!text) return false;
-  if (isExploratoryGoalQuestion(text)) return false;
-  return (
-    /\bmy\s+(?:new\s+)?(?:goal|goals|priorities)\s+(?:is|are|will be)\b/i.test(text) ||
-    /\b(?:set|change|update)\s+(?:my\s+)?(?:goals?|targets?|priorities|discipline)\b/i.test(text) ||
-    /\bi\s+(?:want|plan|aim|intend|am going)\s+to\b.{0,80}\b(?:weigh|lose|gain|maintain|run|race|train|lift|cycle|ride|swim|complete|finish)\b/i.test(
-      text
-    ) ||
-    /\b(?:train(?:ing)?\s+for|signed?\s+up\s+for|keep\s+me\b.{0,40}\bready)\b/i.test(text) ||
-    // A stated bodyweight DESTINATION is a goal even without the word "goal":
-    // "get down to 154 lb", "drop to 154 lbs by October". The unit is required so
-    // "drop down to 135" about a barbell load never reads as a bodyweight goal.
-    /\b(?:get|drop|come|cut|slim|lean|bring\s+(?:it|me|this))\s+(?:back\s+)?(?:down\s+)?to\s+\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b/i.test(
-      text
-    ) ||
-    /\block(?:ing|ed)?\s+(?:it\s+|that\s+)?in\b.{0,60}\b\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b|\b\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b.{0,40}\block(?:ing|ed)?\s+(?:it\s+|that\s+)?in\b/i.test(
-      text
-    ) ||
-    /\b(?:my|the)\s+goal\b.{0,30}\b\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b/i.test(text)
-  );
-}
-
-// A short message that AGREES or refines a number/date rather than restating the
-// whole goal — the shape a confirmation takes at the end of a negotiation ("154 by
-// October 20th, then", "okay, let's lock that in"). Never a question.
-function carriesGoalAffirmation(text: string): boolean {
-  if (!text || isExploratoryGoalQuestion(text)) return false;
-  return (
-    /\b(?:ok(?:ay)?|yes|yep|yeah|sure|sounds\s+good|deal|agreed?|do\s+that|go\s+with|let'?s|lock(?:ing)?\s+(?:it\s+|that\s+)?in|make\s+it|confirm(?:ed)?|that\s+works)\b/i.test(
-      text
-    ) ||
-    /\b\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b/i.test(text) ||
-    /\bby\s+(?:early\s+|mid[-\s]?|late\s+|end\s+of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i.test(
-      text
-    ) ||
-    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?\b/i.test(text)
-  );
-}
-
-// Goal negotiation is a CONVERSATION, not one sentence: the athlete states the goal,
-// the coach pushes back on the timeline, the athlete confirms a refined number/date.
-// A per-message gate reads that final confirmation as inexplicit and silently drops
-// the write the athlete believes just happened. So a confirmation-shaped message may
-// carry forward an explicit statement from the athlete's OWN recent messages — never
-// from the coach's suggestion text, which is not searched at all. A "fresh start"
-// archives the thread and closes the window.
-export function hasExplicitGoalIntentInContext(
-  message: string | null | undefined,
-  recentAthleteMessages: readonly string[]
-): boolean {
-  if (hasExplicitGoalIntent(message)) return true;
-  const text = String(message ?? "").trim();
-  if (!text || !carriesGoalAffirmation(text)) return false;
-  return recentAthleteMessages.some((m) => hasExplicitGoalIntent(m));
-}
-
 // The athlete's own recent, still-live messages — the negotiation window above.
 // Current message excluded (it is the one being judged).
 const GOAL_CONTEXT_LOOKBACK_MESSAGES = 8;
@@ -819,123 +742,6 @@ function recentAthleteStatements(excludeMessageId?: number | null): string[] {
   } catch {
     return [];
   }
-}
-
-// Strength objectives are narrower than general profile/race goals: one named lift
-// plus a chosen return-to-best or numeric destination. Exploratory "what should I"
-// questions and broad comeback talk never create durable state.
-export function hasExplicitStrengthObjectiveIntent(message: string | null | undefined): boolean {
-  const text = String(message ?? "").trim();
-  if (!text) return false;
-  if (
-    /\b(?:what|which|how (?:much|heavy))\b.{0,45}\b(?:goal|target|lift|bench|squat|deadlift|press)\b|\b(?:should|could|would)\s+i\b/i.test(
-      text
-    )
-  )
-    return false;
-  const namedLift =
-    /\b(?:bench(?: press)?|squat|deadlift|overhead press|ohp|barbell press|dumbbell press|db press|row|pull[- ]?up)\b/i.test(
-      text
-    );
-  if (!namedLift) return false;
-  return (
-    /\b(?:set|change|update)\s+(?:my\s+)?(?:strength\s+)?(?:goal|target|objective)\b/i.test(text) ||
-    /\b(?:set|change|update)\s+(?:my\s+)?(?:bench(?: press)?|squat|deadlift|overhead press|ohp|barbell press|dumbbell press|db press|row|pull[- ]?up)\s+(?:goal|target|objective)\b/i.test(
-      text
-    ) ||
-    /\b(?:my\s+(?:strength\s+)?goal\s+is|i\s+(?:want|aim|plan|intend)\s+to)\b.{0,100}\b(?:return|get back|build|reach|hit)\b/i.test(
-      text
-    ) ||
-    /\b(?:return|get back)\b.{0,80}\b(?:personal best|\bpb\b|\bpr\b|old max|previous max)\b/i.test(text) ||
-    /\bi\s+(?:want|aim|plan|intend)\s+to\b.{0,120}\bback\s+to\s+(?:my\s+)?(?:personal best|\bpb\b|\bpr\b|old max|previous max)\b/i.test(
-      text
-    )
-  );
-}
-
-// A question is a conversation, not an authorization. The coach may still PROPOSE the
-// change; it just doesn't carry the athlete's own word with it, so autonomy policy
-// decides on its ordinary terms instead of on `explicit_user_request`.
-//
-// ONE guard for every training-edit gate below. It used to sit on the run gate alone,
-// which meant the identical sentence ("Can you make tomorrow's run 8k?") quiet-applied
-// through plan_update and held through set_run. Where the two gates disagreed, the
-// conservative reading is the one that survives.
-// `will` belongs here for the same reason `would` does: the revert gate's own
-// per-sentence strip already treats "will you " as the same politeness wrapper as
-// "can|could|would you ", so leaving it out of this alternation made one modal flip
-// the outcome — "Would you undo that?" was conversation while "Will you undo that?"
-// was a veto. Adding it also makes "Will you make tomorrow's run 8k?" a question to
-// the plan/run edit gates, which is the point: one reading for one sentence form.
-function isLeadingQuestion(text: string): boolean {
-  return /^(?:should|could|would|will|can|what|how|why|is|do|does)\b/i.test(text) && /\?\s*$/.test(text);
-}
-
-export function hasExplicitPlanEditIntent(message: string | null | undefined): boolean {
-  const text = String(message ?? "")
-    .replace(/[‘’]/g, "'")
-    .trim();
-  if (!text) return false;
-  if (isLeadingQuestion(text)) return false;
-  const verb =
-    /\b(adjust|update|change|edit|fix|make|move|restructure|reshape|rebuild|switch|optimi[sz]e|remove|delete|drop|skip|replace|swap|add)\b/i;
-  const object =
-    /\b(plan|program|split|session|workout|today['’]?s|today|tonight|exercise|movement|sets?|reps?|bench|press|squat|deadlift|row|run|ride|cardio|lift)\b/i;
-  return verb.test(text) && object.test(text);
-}
-
-// A run prescription is durable training state, so the athlete's own words are what
-// authorize writing it directly (explicit_user_request).
-export function hasExplicitRunEditIntent(message: string | null | undefined): boolean {
-  const text = String(message ?? "")
-    .replace(/[‘’]/g, "'")
-    .trim();
-  if (!text) return false;
-  if (isLeadingQuestion(text)) return false;
-  const verb =
-    /\b(?:make|set|change|adjust|update|move|drop|cut|shorten|lengthen|extend|bump|raise|lower|swap|replace|add|turn|keep)\b/i;
-  const object =
-    /\b(?:runs?|running|jog|jogging|mileage|tempo|intervals?|long run|easy run|quality run|threshold|shakeout)\b/i;
-  return verb.test(text) && object.test(text);
-}
-
-// A symptom record is a bounded factual capture, but still durable health-adjacent
-// state. The model may only write it when the athlete independently asks Cairn to
-// record it; merely mentioning pain or asking a question is not mutation authority.
-export function hasExplicitSymptomReportIntent(message: string | null | undefined): boolean {
-  const text = String(message ?? "")
-    .replace(/[‘’]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return false;
-  const write = /\b(?:log|record|note|track|save|add|report)\b/i;
-  const symptom = /\b(?:pain|painful|ache|aching|aches|hurt|hurts|sore|soreness|discomfort|niggle)\b/i;
-  const resolvedOrNegated =
-    /\b(?:resolved|pain[- ]free|no longer (?:hurts?|aching|aches|sore|painful)|not (?:in pain|hurting|aching|sore|painful)|(?:does(?:n't|nt| not)|did(?:n't|nt| not)) (?:hurt|ache)|(?:is(?:n't|nt| not)|was(?:n't|nt| not)) (?:hurting|aching|sore|painful)|(?:pain|ache|aching|soreness|discomfort|niggle) (?:(?:is|has|feels?) (?:gone|resolved|cleared)|(?:went|has gone) away)|no (?:pain|ache|aching|soreness|discomfort|niggle))\b/i;
-  const negatedWrite =
-    /\b(?:do not|don't|dont|never|stop|avoid)\b[\s\S]{0,32}\b(?:log|record|note|track|save|add|report)\b/i;
-  return write.test(text) && symptom.test(text) && !resolvedOrNegated.test(text) && !negatedWrite.test(text);
-}
-
-// Closing a pain note is the athlete's call, not the coach's read. The model may
-// only close one when they say so in this turn — a good session, a week of silence,
-// or a question about how it's going is never authority to close the record.
-export function hasExplicitSymptomResolveIntent(message: string | null | undefined): boolean {
-  const text = String(message ?? "")
-    .replace(/[‘’]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return false;
-  if (/\?\s*$/.test(text)) return false;
-  const subject =
-    /\b(?:pain|painful|ache|aching|aches|hurt|hurts|hurting|sore|soreness|discomfort|niggle|symptom|injury|knee|knees|shoulder|shoulders|elbow|elbows|wrist|hip|hips|groin|glute|back|lumbar|ankle|ankles|achilles|calf|calves|shin|foot|feet|forearm|note)\b/i;
-  const closeCommand =
-    /\b(?:close|resolve|clear)\b|\bmark(?:\s+(?:it|that|them))?\s+(?:as\s+)?(?:resolved|healed|better|fine|done)\b/i;
-  const healed =
-    /\b(?:healed|all better|resolved|pain[- ]free|no longer (?:hurts?|hurting|aching|sore|painful|bothering)|(?:is|has|are) (?:gone|cleared)|cleared up|went away|no (?:more )?(?:pain|ache|aching|soreness|discomfort|niggle))\b/i;
-  const negated = /\b(?:do not|don't|dont|never|not|stop)\b[\s\S]{0,24}\b(?:close|resolve|clear|mark)\b/i;
-  if (negated.test(text)) return false;
-  return subject.test(text) && (closeCommand.test(text) || healed.test(text));
 }
 
 // A training-STRUCTURE request is the athlete asking for a different shape of
@@ -1597,18 +1403,6 @@ export function verifyRunReadback(
   return { ok: mismatches.length === 0, day_number: dayNumber, mismatches, run: stored, strength_items: strengthItems };
 }
 
-export function describeRun(run: StoredRun | null | undefined): string {
-  if (!run) return "that run";
-  const trim = (value: number) => String(Math.round(value * 100) / 100);
-  const dose =
-    run.target_distance_km != null
-      ? `${trim(run.target_distance_km)} km`
-      : run.target_duration_min != null
-        ? `${trim(run.target_duration_min)} min`
-        : null;
-  return [run.label, dose, run.target_zone].filter(Boolean).join(" · ");
-}
-
 function runEditFromAction(action: SetRunAction): RunEdit {
   return {
     day_number: Number(action.day_number),
@@ -1775,582 +1569,6 @@ export function splitPlanChangesForRuns(changes: unknown[]): SplitPlanChanges {
   return { strength, runs };
 }
 
-function replyClaimsPlanSuccess(reply: string): boolean {
-  return /\b(?:i(?:['’]ve| have)?\s+(?:now\s+)?(?:updated|adjusted|saved|applied|pushed|changed|removed|added)|(?:updated|adjusted|saved|applied|pushed|changed)\s+(?:your|today['’]?s|the)\s+(?:live\s+)?(?:plan|program|session|workout)|(?:plan|program|session|workout)\s+is\s+(?:now\s+)?(?:updated|saved|live))\b/i.test(
-    reply
-  );
-}
-
-// ── CHAT_REFUSAL_VARIANTS ────────────────────────────────────────────────────
-// The reconcilers below are the athlete-facing truth about what did NOT happen,
-// and their inputs are deterministic: the same guard, the same review posture, the
-// same off-contract model response produces the same branch. A single literal there
-// prints the identical sentence in the chat bubble every time the athlete walks into
-// it — the same failure the day read had before its prose became a variant set
-// (`src/repo/brain/day-read-rules.ts`). Add a PHRASING to a set here; never add a
-// literal at the call site.
-//
-// Every set carries a stable invariant phrase — "your current plan is unchanged",
-// "held for review", "this week's runs are unchanged", "your existing objective is
-// unchanged" — because the thing that must survive rotation is the FACT, not the
-// wording. Index 0 is the canonical phrasing. Keys are per-site so two sets never
-// rotate in lockstep.
-export const RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS = [
-  "That structural plan change is held for review under the current policy; it is not live yet.",
-  "That reshape is held for review, so your week is still exactly as it was.",
-  "That structural plan change sits held for review for now; nothing about your week has moved.",
-  "A change to the shape of your week is held for review under your current setting, so it isn't live.",
-] as const;
-
-export const RESTRUCTURE_NOT_SCHEDULED_VARIANTS: ReadonlyArray<(reason: string) => string> = [
-  (reason) => `That structural plan change was not scheduled, so your current plan is unchanged: ${reason}`,
-  (reason) => `Nothing went on the calendar from that reshape — your current plan is unchanged: ${reason}`,
-  (reason) => `The structural change never got a date, so your current plan is unchanged: ${reason}`,
-  (reason) => `That reshape didn't take, and your current plan is unchanged: ${reason}`,
-] as const;
-
-export const RESTRUCTURE_DRAFT_VARIANTS = [
-  "That structural plan change is a draft for review; it is not live yet.",
-  "What came back is a draft for review rather than a live change — your week is untouched.",
-  "That reshape landed as a draft for review, so nothing has moved on your plan.",
-  "It's a draft for review at this point; the structural change isn't live.",
-] as const;
-
-export const PLAN_NOT_SAVED_VARIANTS = [
-  "I didn't save a plan change from that response, so your current plan is unchanged.",
-  "Nothing from that response reached the plan — your current plan is unchanged.",
-  "No plan write came out of that, so your current plan is unchanged.",
-  "I stopped short of writing anything there; your current plan is unchanged.",
-] as const;
-
-export const PLAN_NO_CHANGE_APPENDED_VARIANTS = [
-  "No plan change was saved from this response.",
-  "For the record: no plan change was saved from this response.",
-  "To be clear, no plan change was saved here.",
-  "Nothing landed on the plan — no plan change was saved from this response.",
-] as const;
-
-export const PLAN_UNTOUCHED_BY_QUESTION_VARIANTS = [
-  "I haven't changed or scheduled your plan from that question; your current training split is unchanged.",
-  "That was a question, not a change — your current training split is unchanged.",
-  "Nothing was written or put on the calendar from that question; your current training split is unchanged.",
-  "I answered rather than acted there, so your current training split is unchanged.",
-] as const;
-
-export const PLAN_WRITE_UNVERIFIED_VARIANTS = [
-  "The plan write completed, but I couldn't verify the full stored prescription. Reopen Today before training; I won't claim the displayed plan is confirmed.",
-  "The write went through, but I couldn't read the whole stored prescription back. Reopen Today before training rather than taking my word for it.",
-  "That change was written, though the full stored prescription didn't confirm. Reopen Today before training — I'd rather you see the real thing.",
-  "The plan write landed but didn't fully confirm on readback. Reopen Today before training; I won't call the displayed plan confirmed.",
-] as const;
-
-export const PLAN_NOT_LIVE_VARIANTS: ReadonlyArray<(reason: string) => string> = [
-  (reason) => `That plan change is not live. Your current plan is unchanged: ${reason}`,
-  (reason) => `That one didn't land — it is not live, and your current plan is unchanged: ${reason}`,
-  (reason) => `To be straight with you: that change is not live, so your current plan is unchanged: ${reason}`,
-  (reason) => `Your current plan is unchanged, because that change is not live: ${reason}`,
-] as const;
-
-export const RUN_NOT_SAVED_VARIANTS = [
-  "I didn't save a run change from that response, so this week's runs are unchanged.",
-  "Nothing from that response reached your running — this week's runs are unchanged.",
-  "No run write came out of that, so this week's runs are unchanged.",
-  "I stopped short of writing a run there; this week's runs are unchanged.",
-] as const;
-
-export const RUN_HELD_FOR_REVIEW_VARIANTS = [
-  "That run change is held for review under the current policy; it is not live yet.",
-  "That run change is held for review, so it isn't live yet.",
-  "Your review setting keeps that run change held for review rather than live.",
-  "The run edit is held for review for now; nothing has moved on the week.",
-] as const;
-
-export const RUN_NOT_LIVE_VARIANTS: ReadonlyArray<(reason: string) => string> = [
-  (reason) => `That run change is not live, so this week's runs are unchanged: ${reason}.`,
-  (reason) => `That run change didn't land, so this week's runs are unchanged: ${reason}.`,
-  (reason) => `This week's runs are unchanged — the run change is not live: ${reason}.`,
-  (reason) => `Nothing moved on the running side; this week's runs are unchanged: ${reason}.`,
-] as const;
-
-export const STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS = [
-  "I didn't save a strength objective from that response, so your existing objective is unchanged.",
-  "No strength objective came out of that response — your existing objective is unchanged.",
-  "Nothing was written to your strength goals there, so your existing objective is unchanged.",
-  "I stopped short of saving an objective from that; your existing objective is unchanged.",
-] as const;
-
-export const STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS = [
-  "No strength objective was saved from this response.",
-  "For the record: no strength objective was saved from this response.",
-  "To be clear, no strength objective was saved here.",
-  "Nothing landed on your strength goals — no strength objective was saved.",
-] as const;
-
-export const GOAL_NOT_SAVED_VARIANTS = [
-  'I didn\'t actually change your stored goal there — nothing is locked. Say it directly ("set my goal to 165 lb by June 1") or set it in Me → Profile, and it will stick.',
-  'That didn\'t reach your stored goal — it\'s unchanged. A direct sentence ("set my goal to 165 lb by June 1") or Me → Profile will lock it for real.',
-  'To be straight with you: the goal on file is unchanged. Tell me plainly — "set my goal to X lb by DATE" — or use Me → Profile, and it will save.',
-  "Nothing was written to your goal just now, so the one on file still stands. Say it as a direct instruction or set it in Me → Profile to lock it.",
-] as const;
-
-export const GOAL_NONE_SAVED_VARIANTS = [
-  "For the record: your stored goal didn't change from this.",
-  "To be clear, no goal change was saved here — the one on file stands.",
-  "Nothing landed on your stored goal from this exchange.",
-  "Your goal on file is unchanged by this.",
-] as const;
-
-export const TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS = [
-  "Nothing was actually flagged to the coach lane there, so your plan and its structure are unchanged.",
-  "To be straight with you: no request reached the coach lane, and your training structure is unchanged.",
-  "I didn't get that hand-off recorded, so nothing is waiting on the coach lane and your plan is unchanged.",
-  "No structure request was saved from this — your plan and split stay exactly as they are.",
-] as const;
-
-export const TRAINING_STRUCTURE_UNVERIFIED_VARIANTS: ReadonlyArray<(reason: string) => string> = [
-  (reason) => `I couldn't verify that hand-off, so I won't claim it's waiting: ${reason}.`,
-  (reason) => `That request didn't read back cleanly, so I won't claim the coach lane has it: ${reason}.`,
-  (reason) => `I can't confirm that reached the coach lane, so I won't say it did: ${reason}.`,
-  (reason) => `That hand-off isn't confirmed on my side, so I won't claim it's queued: ${reason}.`,
-] as const;
-
-export const DECISION_REVERT_NOT_AUTHORIZED_VARIANTS: ReadonlyArray<(how: string) => string> = [
-  (how) =>
-    `I read that as a question rather than a go-ahead, so nothing was reverted. Say “${how}” and I'll roll it back.`,
-  (how) =>
-    `To be straight with you: nothing was reverted, and that decision is still standing. “${how}” is the word that puts it back.`,
-  (how) => `Nothing was reverted here — I wait for the direct ask on an Undo. Say “${how}” and it goes back.`,
-  (how) => `That one is still live: nothing was reverted. When you want it undone for real, say “${how}”.`,
-] as const;
-
-export const DECISION_REVERT_FAILED_VARIANTS: ReadonlyArray<(reason: string) => string> = [
-  (reason) => `The Undo didn't go through, so nothing was reverted: ${reason}.`,
-  (reason) => `That rollback didn't land — nothing was reverted: ${reason}.`,
-  (reason) => `Nothing was reverted; the Undo couldn't complete: ${reason}.`,
-  (reason) => `I couldn't put that one back, so nothing was reverted: ${reason}.`,
-] as const;
-
-export const STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS: ReadonlyArray<(reason: string) => string> = [
-  (reason) => `I couldn't verify that strength objective, so I won't claim it was saved: ${reason}.`,
-  (reason) => `That strength objective didn't read back cleanly, so I won't claim it was saved: ${reason}.`,
-  (reason) =>
-    `I couldn't match that strength objective against what's stored, so I won't claim it was saved: ${reason}.`,
-  (reason) => `That objective isn't confirmed on my side, so I won't claim it was saved: ${reason}.`,
-] as const;
-
-// ── the appended-receipt shape ───────────────────────────────────────────────
-// A reconciler that keeps the model's prose puts its receipt UNDER it, and the last
-// reconciler in the chain (reconcileChatRevertReply) has to take that reply apart
-// again to drop a false sentence without dropping the receipts below it. Join and
-// split are therefore one contract: every append goes through `appendReceipt`, every
-// split through `splitAppendedReceipts`, and neither may hand-roll the separator.
-// When these two drifted apart the split silently stopped matching and a verified
-// plan receipt vanished from the bubble for a change that had really landed.
-const RECEIPT_JOIN = "\n\n";
-
-function appendReceipt(reply: string, receipt: string): string {
-  return `${reply.trim()}${RECEIPT_JOIN}${receipt}`.trim();
-}
-
-// The inverse. `null` means this reply was not built by appendReceipt from that head
-// — an earlier reconciler replaced the prose outright — and the caller must not treat
-// any part of it as a receipt it can keep.
-function splitAppendedReceipts(reply: string, head: string): { head: string; receipts: string } | null {
-  const prose = head.trim();
-  const body = reply.trim();
-  if (!prose || !body.startsWith(prose)) return null;
-  const rest = body.slice(prose.length);
-  if (!rest) return { head: prose, receipts: "" };
-  if (!rest.startsWith(RECEIPT_JOIN)) return null;
-  return { head: prose, receipts: rest.slice(RECEIPT_JOIN.length).trim() };
-}
-
-export function reconcileChatPlanReply(
-  reply: string,
-  message: string | null | undefined,
-  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
-  drafts: unknown[]
-): string {
-  const explicit = hasExplicitPlanEditIntent(message);
-  const today = localDateISO();
-  const restructureEntries = applied.filter((entry) => entry.type === "plan_restructure");
-  const planEntries = applied.filter((entry) => entry.type === "plan_update");
-  const restructureDraft = drafts.some((draft: any) => Array.isArray(draft?.parsed?.days));
-
-  if (restructureEntries.length) {
-    const result = recordOrNull(restructureEntries[0].result) ?? {};
-    const decision = recordOrNull(result.decision);
-    const status = String(decision?.status ?? "");
-    if (result.scheduled === true || status === "announced" || status === "pending") {
-      const boundary = String(result.effective_date ?? decision?.effective_date ?? "the next training boundary");
-      const receipt = `Scheduled for ${boundary}; Cairn will adapt the structural plan automatically. Use Discuss with coach on Today to work through it, or say Undo before it lands.`;
-      return replyClaimsPlanSuccess(reply) ? receipt : appendReceipt(reply, receipt);
-    }
-    if (result.review_required === true || status === "review") {
-      const receipt = pickDayVariant(RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS, today, "chat-restructure-held");
-      return replyClaimsPlanSuccess(reply) ? receipt : appendReceipt(reply, receipt);
-    }
-    if (result.persisted === true || status === "applied") {
-      return "The structural plan change is live and recorded with its Undo history.";
-    }
-    const reason = String(result.error ?? restructureEntries[0].error ?? "the server could not own the change");
-    return pickDayVariant(RESTRUCTURE_NOT_SCHEDULED_VARIANTS, today, "chat-restructure-not-scheduled")(reason);
-  }
-
-  if (!planEntries.length) {
-    // A run edit IS this turn's plan change; reconcileChatRunReply owns its receipt.
-    // Without this the athlete would read "No plan change was saved" directly above
-    // the verified run receipt.
-    if (applied.some((entry) => entry.type === "set_run")) return reply;
-    if (restructureDraft && (explicit || replyClaimsPlanSuccess(reply))) {
-      return pickDayVariant(RESTRUCTURE_DRAFT_VARIANTS, today, "chat-restructure-draft");
-    }
-    if (explicit && replyClaimsPlanSuccess(reply)) {
-      return pickDayVariant(PLAN_NOT_SAVED_VARIANTS, today, "chat-plan-not-saved");
-    }
-    if (explicit) {
-      const note = pickDayVariant(PLAN_NO_CHANGE_APPENDED_VARIANTS, today, "chat-plan-no-change-note");
-      return appendReceipt(reply, note);
-    }
-    if (replyClaimsPlanSuccess(reply)) {
-      return pickDayVariant(PLAN_UNTOUCHED_BY_QUESTION_VARIANTS, today, "chat-plan-question-no-op");
-    }
-    return reply;
-  }
-
-  const results = planEntries.map((entry) => recordOrNull(entry.result) ?? {});
-  const verifiedResults = results.filter((result) => result.ok === true && result.verified === true);
-  const verified = results.length > 0 && verifiedResults.length === results.length;
-  if (verified) {
-    if (!explicit && !replyClaimsPlanSuccess(reply)) return reply;
-    const days = [
-      ...new Set(
-        results.flatMap((result: any) =>
-          Array.isArray(result.verification?.days)
-            ? result.verification.days.map((day: any) => Number(day?.day_number)).filter(Number.isFinite)
-            : []
-        )
-      ),
-    ];
-    const receipt = `Saved and verified${days.length ? ` plan day${days.length > 1 ? "s" : ""} ${days.join(", ")}` : " the plan change"}.`;
-    const adjustments = results.flatMap((result: any) => (Array.isArray(result.clamped) ? result.clamped : []));
-    const clampReceipt = adjustments.length
-      ? ` Adjusted ${adjustments
-          .slice(0, 3)
-          .map(
-            (entry: any) =>
-              `${String(entry.field).replaceAll("_", " ")} from ${entry.requested} to ${entry.applied == null ? "no prescribed load" : entry.applied}`
-          )
-          .join("; ")} to supported safe bounds.`
-      : "";
-    return appendReceipt(reply, `${receipt}${clampReceipt}`);
-  }
-
-  // Although the chat contract asks the model for one atomic plan_update, remain
-  // truthful when an off-contract response emits several. Each proposal is atomic,
-  // but a later one may commit after an earlier one failed. Never collapse that
-  // mixed outcome into "your plan is unchanged" (the exact failure that makes the
-  // live Today screen and coach prose disagree).
-  if (verifiedResults.length) {
-    repo.invalidateDayRead();
-    const days = [
-      ...new Set(
-        verifiedResults.flatMap((result: any) =>
-          Array.isArray(result.verification?.days)
-            ? result.verification.days.map((day: any) => Number(day?.day_number)).filter(Number.isFinite)
-            : []
-        )
-      ),
-    ];
-    const failed = results.filter((result) => !(result.ok === true && result.verified === true));
-    const firstFailed = failed[0] as any;
-    const failedEntry = planEntries[results.indexOf(firstFailed)];
-    const reason =
-      Array.isArray(firstFailed?.reasons) && firstFailed.reasons.length
-        ? String(firstFailed.reasons[0])
-        : String(firstFailed?.error ?? failedEntry?.error ?? "that part did not verify against the stored plan");
-    return `Part of that request is live: saved and verified${days.length ? ` plan day${days.length > 1 ? "s" : ""} ${days.join(", ")}` : " the successful plan change"}. Another requested plan change was not saved: ${reason} The stored plan reflects only the verified change${verifiedResults.length > 1 ? "s" : ""}.`;
-  }
-
-  const first = results[0] as any;
-  const reason =
-    Array.isArray(first?.reasons) && first.reasons.length
-      ? String(first.reasons[0])
-      : String(first?.error ?? planEntries[0]?.error ?? "the stored plan did not verify the requested final state");
-  // Do not retain model prose that claimed a write succeeded. The server receipt is
-  // authoritative and is what gets persisted/displayed after the streamed draft.
-  if (first?.ok === true && (Array.isArray(first?.applied) || first?.restructured === true)) {
-    return pickDayVariant(PLAN_WRITE_UNVERIFIED_VARIANTS, today, "chat-plan-write-unverified");
-  }
-  if (explicit || replyClaimsPlanSuccess(reply)) {
-    return pickDayVariant(PLAN_NOT_LIVE_VARIANTS, today, "chat-plan-not-live")(reason);
-  }
-  return reply;
-}
-
-function replyClaimsRunSuccess(reply: string): boolean {
-  if (!/\b(?:runs?|running|mileage|tempo|intervals?)\b/i.test(reply)) return false;
-  return /\b(?:i(?:['’]ve| have)?\s+(?:now\s+)?(?:set|saved|updated|changed|adjusted|moved|shortened|lengthened|scheduled|swapped|added)|(?:is|are)\s+(?:now\s+)?(?:set|saved|updated|changed|on\s+the\s+plan|live|scheduled))\b/i.test(
-    reply
-  );
-}
-
-// The run counterpart to reconcileChatPlanReply: whatever the model said it would do,
-// the athlete-facing receipt is composed from the stored run READ BACK after the
-// apply. A run that did not land — refused as ambiguous, held for review, or verified
-// against the store and found missing — says so in plain words.
-export function reconcileChatRunReply(
-  reply: string,
-  message: string | null | undefined,
-  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
-): string {
-  const today = localDateISO();
-  const entries = applied.filter((entry) => entry.type === "set_run");
-  if (!entries.length) {
-    if (hasExplicitRunEditIntent(message) && replyClaimsRunSuccess(reply)) {
-      return pickDayVariant(RUN_NOT_SAVED_VARIANTS, today, "chat-run-not-saved");
-    }
-    return reply;
-  }
-  const results = entries.map((entry) => recordOrNull(entry.result) ?? {});
-  const verified = results.filter((result) => result.verified === true);
-  const scheduled = results.filter((result) => result.verified !== true && result.scheduled === true);
-  const held = results.filter(
-    (result) => result.verified !== true && result.scheduled !== true && result.review_required === true
-  );
-  const failed = results.filter(
-    (result) => result.verified !== true && result.scheduled !== true && result.review_required !== true
-  );
-
-  const lines: string[] = [];
-  if (verified.length) {
-    const receipts = verified.map((result: any) => {
-      const check = recordOrNull(result.verification) as any;
-      return `day ${check?.day_number}: ${describeRun(check?.run)}`;
-    });
-    lines.push(
-      `Saved and verified — ${receipts.join("; ")}. Your lifting on ${verified.length > 1 ? "those days" : "that day"} is untouched.`
-    );
-  }
-  for (const result of scheduled) {
-    const decision = recordOrNull((result as any).decision);
-    const boundary = String((result as any).effective_date ?? decision?.effective_date ?? "the next training boundary");
-    lines.push(
-      `That run change is scheduled for ${boundary}; say Undo before it lands if you'd rather keep this week as it is.`
-    );
-  }
-  if (held.length) {
-    lines.push(pickDayVariant(RUN_HELD_FOR_REVIEW_VARIANTS, today, "chat-run-held"));
-  }
-  for (const result of failed) {
-    const check = recordOrNull((result as any).verification) as any;
-    const mismatches = Array.isArray(check?.mismatches) ? check.mismatches : [];
-    const reason = String(
-      (result as any).error ??
-        (mismatches.length && !mismatches.includes("not_applied")
-          ? `the stored run doesn't match what you asked for (${mismatches.join(", ")})`
-          : "the run write did not land")
-    );
-    lines.push(pickDayVariant(RUN_NOT_LIVE_VARIANTS, today, "chat-run-not-live")(reason));
-  }
-  const receipt = lines.join(" ");
-  // Model prose that claimed the write already happened is replaced, not decorated —
-  // the server receipt is the only truthful account of what is stored.
-  if (!verified.length && replyClaimsRunSuccess(reply)) return receipt;
-  return appendReceipt(reply, receipt);
-}
-
-export function reconcileStrengthObjectiveReply(
-  reply: string,
-  message: string | null | undefined,
-  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
-): string {
-  if (!hasExplicitStrengthObjectiveIntent(message)) return reply;
-  const today = localDateISO();
-  const entries = applied.filter((entry) => entry.type === "set_strength_objective");
-  if (!entries.length) {
-    if (
-      /\b(?:i(?:['’]ve| have)?\s+(?:saved|set|updated|created)|(?:strength\s+)?(?:goal|target|objective)\s+is\s+(?:now\s+)?(?:saved|set|active|live))\b/i.test(
-        reply
-      )
-    ) {
-      return pickDayVariant(STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS, today, "chat-objective-not-saved");
-    }
-    const note = pickDayVariant(STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS, today, "chat-objective-none-saved");
-    return appendReceipt(reply, note);
-  }
-  const results = entries.map((entry) => recordOrNull(entry.result) ?? {});
-  const verified = results.length > 0 && results.every((result) => result.ok === true && result.verified === true);
-  if (!verified) {
-    const reason = String(entries.find((entry) => entry.error)?.error ?? "the stored objective did not verify");
-    return pickDayVariant(STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS, today, "chat-objective-unverified")(reason);
-  }
-  const objective = results.at(-1)?.objective as any;
-  const exercise = String(objective?.exercise ?? "the anchor lift");
-  const target = Number(objective?.target_est_1rm);
-  const receipt = Number.isFinite(target)
-    ? `Strength objective saved and verified: ${exercise} to ${target} lb estimated 1RM.`
-    : `Strength objective saved and verified: ${exercise}.`;
-  return appendReceipt(reply, receipt);
-}
-
-// Prose claiming the structure request was handed off. Subject-anchored the same way
-// replyClaimsRunSuccess is: an honest sentence ("I can't change your split from here")
-// shares vocabulary with the false claim, so only the hand-off ASSERTION counts.
-function replyClaimsStructureFlagged(reply: string): boolean {
-  return /\b(?:i(?:['’]ve| have| will|['’]ll)?\s+(?:now\s+)?(?:flagged|flag|pass(?:ed)?|sen[dt]|rout(?:ed|e)|hand(?:ed)?\s+(?:it|that|this)\s+(?:off|over))\b[\s\S]{0,60}\b(?:coach|coaching)\s+lane\b|\b(?:coach|coaching)\s+lane\b[\s\S]{0,40}\b(?:has|got|will get|picks? (?:it|that) up)\b)/i.test(
-    reply
-  );
-}
-
-// Prose asserting a goal is locked/saved. Subject-anchored like replyClaimsRunSuccess:
-// the honest corrections above share vocabulary ("goal", "unchanged", "will save"), so
-// only the positive ASSERTION counts — "locking in", "your goal is now set".
-function replyClaimsGoalSaved(reply: string): boolean {
-  return /\block(?:ing|ed)?\s+(?:it\s+|that\s+)?in\b|\bgoal\b.{0,30}\b(?:is\s+)?(?:now\s+)?(?:set|saved|updated|locked|active|live)\b|\b(?:i(?:['’]ve| have)?\s+)?(?:set|saved|updated|locked)\b.{0,25}\bgoal\b/i.test(
-    reply
-  );
-}
-
-// The goal-identity counterpart to reconcileStrengthObjectiveReply. The failure this
-// closes is real and quiet: the athlete negotiates a goal over several messages, the
-// per-message gate strips the fields, and the model's prose says "locking it in" over
-// a write that never happened — the athlete walks away believing a goal the brain
-// cannot see. When goal fields APPLIED, a receipt states exactly what was saved; when
-// they were DROPPED, a lock-claiming reply is replaced with the honest correction and
-// any other reply gets a quiet for-the-record line.
-export function reconcileGoalIdentityReply(
-  reply: string,
-  droppedGoalFields: readonly string[],
-  appliedGoalPatch: Record<string, unknown> | null
-): string {
-  const today = localDateISO();
-  if (appliedGoalPatch && Object.keys(appliedGoalPatch).length) {
-    const weight = Number(appliedGoalPatch.goal_weight_lb);
-    const date = String(appliedGoalPatch.goal_date ?? "").trim();
-    const mode = String(appliedGoalPatch.goal_mode ?? "").trim();
-    const parts = [
-      Number.isFinite(weight) ? `${weight} lb` : null,
-      date ? `by ${date}` : null,
-      mode ? `(${mode})` : null,
-    ].filter(Boolean);
-    const receipt = parts.length ? `Goal saved: ${parts.join(" ")}.` : "Goal saved.";
-    return appendReceipt(reply, receipt);
-  }
-  if (!droppedGoalFields.length) return reply;
-  if (replyClaimsGoalSaved(reply)) return pickDayVariant(GOAL_NOT_SAVED_VARIANTS, today, "chat-goal-not-saved");
-  return appendReceipt(reply, pickDayVariant(GOAL_NONE_SAVED_VARIANTS, today, "chat-goal-none-saved"));
-}
-
-// The counterpart to reconcileStrengthObjectiveReply for the structure hand-off. Chat
-// promising to "flag it to your coach lane" and writing nothing is exactly the failure
-// flag_training_structure exists to close, so the reply may only make that claim when
-// an ask-tier decision genuinely landed — and when one did, the receipt says plainly
-// that it is waiting to be confirmed, not that anything changed.
-export function reconcileTrainingStructureReply(
-  reply: string,
-  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
-): string {
-  const today = localDateISO();
-  const entries = applied.filter((entry) => entry.type === "flag_training_structure");
-  if (!entries.length) {
-    if (replyClaimsStructureFlagged(reply)) {
-      return pickDayVariant(TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS, today, "chat-structure-not-flagged");
-    }
-    return reply;
-  }
-  const results = entries.map((entry) => recordOrNull(entry.result) ?? {});
-  const verified = results.length > 0 && results.every((result) => result.ok === true && result.verified === true);
-  if (!verified) {
-    const reason = String(entries.find((entry) => entry.error)?.error ?? "the request did not read back");
-    return pickDayVariant(TRAINING_STRUCTURE_UNVERIFIED_VARIANTS, today, "chat-structure-unverified")(reason);
-  }
-  return appendReceipt(
-    reply,
-    "Flagged to your coach lane — it's waiting for you to confirm, and nothing in your plan has changed yet."
-  );
-}
-
-// Prose claiming the Undo already happened. Subject-anchored on purpose, exactly as
-// replyClaimsRunSuccess is topic-anchored: an honest sentence ("nothing was reverted",
-// "I couldn't put that back") shares every verb with the false claim and differs only
-// in who is doing what, so a bare verb match would correct the truthful reply too.
-function replyClaimsRevertSuccess(reply: string): boolean {
-  return /\b(?:i(?:['’]ve| have)?\s+(?:now\s+|already\s+)?(?:reverted|undone|undid|restored|cancell?ed|rolled\s+(?:it|that|this|them|the\s+\S+|your\s+\S+)\s+back|put\s+(?:it|that|this|them|the\s+\S+|your\s+\S+)\s+back)|(?:it|that|this|the\s+(?:change|decision|update|plan|split|program)|your\s+(?:plan|split|program))(?:['’]s)?\s+(?:has\s+been|have\s+been|been|is|was|are|were)\s+(?:now\s+)?(?:reverted|rolled\s+back|undone|cancell?ed|put\s+back|restored))\b/i.test(
-    reply
-  );
-}
-
-// The Undo counterpart to reconcileChatPlanReply / reconcileChatRunReply. A
-// revert_decision the athlete never authorized (the shared question guard) leaves no
-// trace in `applied` — a refused action is not an applied one, and `applied` is the
-// chat bubble's own receipt ledger — so the refused decision ids ride their own
-// channel out of applyChatActions. Either way the decision is still live, so the false
-// sentence never survives — the same rule reconcileChatRunReply applies to a run write
-// that did not land, for the same reason: leaving it at the top of the bubble makes
-// the server's account argue with itself. A reply that never claimed the Undo happened
-// is returned untouched.
-//
-// This reconciler runs LAST, so what it reads is rarely what the model wrote: one
-// bubble can claim both a plan/run change and an Undo, and the earlier reconcilers
-// either REPLACE the whole prose (their write did not land) or APPEND a receipt under
-// it (their write did). Both shapes used to lose something.
-//
-//   - Replaced: the revert claim went with the discarded prose, and a claim-only guard
-//     reading the rewritten text then said nothing about a decision the athlete asked
-//     to undo and that is still live. So the claim is judged against the ORIGINAL model
-//     reply, and the correction is APPENDED under the receipt — that receipt is
-//     truthful and must not be thrown away.
-//   - Appended: the reply is the model's prose followed by receipts, so replacing the
-//     whole thing deleted a verified plan/objective receipt along with the false
-//     sentence — the athlete's bench really did change and the bubble no longer said
-//     so. Every append goes through `appendReceipt`, so `splitAppendedReceipts` can
-//     take the same reply apart on the same shape: the correction takes the top and
-//     the receipts keep their place below it.
-//
-// Both arms therefore keep every truthful receipt and drop only the false claim.
-export function reconcileChatRevertReply(
-  reply: string,
-  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
-  refusedReverts: readonly number[],
-  proposedReply: string
-): string {
-  const today = localDateISO();
-  const failed = applied.filter(
-    (entry) => entry.type === "revert_decision" && (recordOrNull(entry.result)?.ok !== true || !!entry.error)
-  );
-  // Nothing to correct: a true claim about a revert that really applied passes through.
-  if (!failed.length && !refusedReverts.length) return reply;
-  const claimsNow = replyClaimsRevertSuccess(reply);
-  // Judged on the model's own words, not on the data alone: a reply that never claimed
-  // the Undo happened stays untouched, deliberately.
-  if (!claimsNow && !replyClaimsRevertSuccess(proposedReply)) return reply;
-  let correction: string;
-  if (failed.length) {
-    const reason = String(
-      recordOrNull(failed[0].result)?.error ?? failed[0].error ?? "the decision could not be rolled back"
-    );
-    correction = pickDayVariant(DECISION_REVERT_FAILED_VARIANTS, today, "chat-revert-failed")(reason);
-  } else {
-    const id = refusedReverts.find((value) => Number.isInteger(value) && value > 0);
-    const how = id ? `undo decision ${id}` : "undo that decision";
-    correction = pickDayVariant(DECISION_REVERT_NOT_AUTHORIZED_VARIANTS, today, "chat-revert-not-authorized")(how);
-  }
-  if (!claimsNow) return appendReceipt(reply, correction);
-  return withoutLeadingProse(reply, proposedReply, correction);
-}
-
-// The claim is still standing, so the model's prose is still the head of the reply and
-// anything appendReceipt put after it is a receipt to keep. Swap the head for the
-// correction and re-append the rest. No receipts — or a reply this head did not build
-// (no receipt variant reads as a revert claim, so a standing claim means the prose
-// survived and that cannot happen today) — collapses to a plain replace.
-function withoutLeadingProse(reply: string, proposedReply: string, correction: string): string {
-  const split = splitAppendedReceipts(reply, proposedReply);
-  if (!split?.receipts) return correction;
-  return appendReceipt(correction, split.receipts);
-}
-
 function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: string]: unknown } | null {
   if (!turn.image_path) return null;
   // Pull out any log_food the agent emitted (it saw the photo) to seed the note.
@@ -2383,7 +1601,7 @@ function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: str
     note = row && typeof row.id === "number" ? (row as { id: number; [key: string]: unknown }) : null;
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
-    console.error(`[chat] turn#${turn.id}: failed to create photo food note: ${message}`);
+    log.error(`[chat] turn#${turn.id}: failed to create photo food note: ${message}`);
     return null;
   }
   if (!note) return null;
@@ -2450,21 +1668,6 @@ class ChatCompletionError extends Error {
     this.attempts = attempts;
     this.lastAgent = attempts.length ? attempts[attempts.length - 1].agent : null;
   }
-}
-
-function cleanCliLine(value: unknown): string {
-  const text = String(value ?? "")
-    .replace(/\u2022/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return "";
-  return (
-    text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)[0]
-      ?.slice(0, 220) || ""
-  );
 }
 
 function displayAgent(name: string | null | undefined): string {
@@ -2634,104 +1837,6 @@ function chatFailureReply(e: any): {
     meta: { error: true },
     error: message,
   };
-}
-
-export function buildChatProviderOrder(
-  chosen: string | null | undefined,
-  autoOrder: string[],
-  options: {
-    preferWeb?: boolean;
-    preserveSelectedFirst?: boolean;
-    definitions?: Record<string, Pick<AgentDef, "web_access"> | undefined>;
-  } = {}
-): string[] {
-  const selected = String(chosen ?? "").trim();
-  const base = [...new Set([...(selected && selected !== "auto" ? [selected] : []), ...autoOrder.filter(Boolean)])];
-  if (!options.preferWeb) return base;
-  const web = base.filter((name) => options.definitions?.[name]?.web_access === true);
-  if (!web.length) return base;
-  if (options.preserveSelectedFirst && selected && selected !== "auto") {
-    return [...new Set([selected, ...web, ...base])];
-  }
-  return [...web, ...base.filter((name) => !web.includes(name))];
-}
-
-/** Healthy providers first; anything under a live availability hold goes last. */
-export function orderChatProvidersByAvailability(order: string[], now: Date = new Date()): string[] {
-  if (order.length < 2) return order;
-  const heldNames = new Set<string>();
-  for (const name of order) {
-    try {
-      if (repo.getAgentAvailability(name, now)) heldNames.add(name);
-    } catch {
-      /* availability is advisory — an unreadable hold never reorders anything */
-    }
-  }
-  if (!heldNames.size) return order;
-  return [...order.filter((n) => !heldNames.has(n)), ...order.filter((n) => heldNames.has(n))];
-}
-
-type RuntimeChatProfile = {
-  requested: ResolvedChatProfile | null;
-  effective: ResolvedChatProfile | null;
-  execution: ResolvedChatProfile | null;
-  unsupported: string | null;
-};
-
-export function resolveRuntimeChatProfile(
-  definition: AgentDef | undefined,
-  requested: ResolvedChatProfile | null,
-  explicitlyBound = false
-): RuntimeChatProfile {
-  if (!requested) return { requested: null, effective: null, execution: null, unsupported: null };
-  try {
-    if (!definition) throw new Error("Unknown agent");
-    const resolved = resolveAgentExecutionProfile(definition, requested);
-    const effective = {
-      ...(resolved.effective.model ? { model: resolved.effective.model } : {}),
-      reasoning: resolved.effective.reasoning ?? requested.reasoning,
-    };
-    return {
-      requested,
-      effective,
-      // Pass only capability-validated values. In particular, a legacy custom
-      // provider with no profile flags runs with its own defaults.
-      execution: Object.keys(resolved.effective).length ? effective : null,
-      unsupported: null,
-    };
-  } catch (error: any) {
-    return {
-      requested,
-      effective: null,
-      execution: null,
-      unsupported: explicitlyBound ? cleanCliLine(error?.message ?? error) || "Execution profile unsupported" : null,
-    };
-  }
-}
-
-// The leash for one chat attempt, scaled by how much thinking this turn asked for.
-// A deep-lane turn runs at high effort, which a flat 90s cap can kill mid-think —
-// the run then reads as a failed agent and the rotation hands a deep question to
-// someone else mid-thought, which is the same silent fallthrough the job ops had.
-// Waiting is the better failure mode here: chat STREAMS (the athlete watches tokens
-// land, so a long turn is visibly working), every pending bubble carries a Stop, the
-// turn is durable in SQLite across a reload, and a genuinely dead CLI fails at spawn
-// rather than at the 90s mark. Chat's lane profile stays authoritative for
-// model/effort — that is why this reads the resolved profile rather than the task
-// table, where `chat` deliberately has no entry; only the timeout follows it.
-// Falls back to the REQUESTED effort when `execution` is null (a provider that takes
-// no profile flags, or a binding it rejected): we could not pin the effort, but the
-// question was still a deep one, so the leash tracks the ambition of the turn.
-export function chatTurnTimeoutMs(profile: Pick<RuntimeChatProfile, "execution" | "requested">): number {
-  return interactiveTimeoutFor(profile.execution?.reasoning ?? profile.requested?.reasoning);
-}
-
-export function chatExecutionAttemptKey(
-  lane: ChatLane | null,
-  agent: string,
-  profile: Pick<RuntimeChatProfile, "effective">
-): string {
-  return `${lane ?? "legacy"}\0${agent}\0${profile.effective?.model ?? ""}\0${profile.effective?.reasoning ?? "default"}`;
 }
 
 // ---------- bounded coach reads for chat ----------
@@ -3258,7 +2363,7 @@ export function recoverChatTurns(): { requeued: number; interrupted: number } {
   const { requeue, interrupted } = repo.recoverChatTurns();
   for (const id of requeue) enqueueChatTurn(id);
   if (requeue.length || interrupted) {
-    console.log(`[chat] recovered ${requeue.length} queued + ${interrupted} interrupted turn(s).`);
+    log.info(`[chat] recovered ${requeue.length} queued + ${interrupted} interrupted turn(s).`);
   }
   return { requeued: requeue.length, interrupted };
 }
@@ -3334,7 +2439,7 @@ function persistPendingLabDraft(
       kind: typeof doc.kind === "string" ? doc.kind : ((a?.kind as string) ?? null),
     };
   } catch (e: unknown) {
-    console.error(`[chat] failed to persist pending lab draft: ${e instanceof Error ? e.message : String(e)}`);
+    log.error(`[chat] failed to persist pending lab draft: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
 }

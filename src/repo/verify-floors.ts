@@ -32,6 +32,7 @@ import {
   mealPlanDayTotals,
   nutritionFloorsFor,
 } from "./nutrition-safety.js";
+import { coerceFinite as num } from "../lib/numbers.js";
 
 export interface FloorViolation {
   /** Stable machine code — the surface never renders it; tests and telemetry read it. */
@@ -62,11 +63,6 @@ export interface FloorPrecheck {
 }
 
 const clean = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
-const num = (value: unknown): number | null => {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-};
-
 // ---------------------------------------------------------------- meal plan --
 
 export interface MealPlanFloorRefs {

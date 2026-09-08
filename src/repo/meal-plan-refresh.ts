@@ -19,6 +19,7 @@
 
 import { getAppState } from "./app-state.js";
 import { TODAY_LAST_SEEN_KEY } from "./since-last.js";
+import { finite as num } from "../lib/numbers.js";
 
 export interface MealRefreshShape {
   /** True only when the week's targets AND its structure are unchanged. */
@@ -33,12 +34,6 @@ export interface MealRefreshShape {
 // make every refresh structural and this module pointless.
 const SAME_KCAL_TOLERANCE = 40;
 const SAME_PROTEIN_TOLERANCE = 8;
-
-function num(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
 
 function days(parsed: any): any[] {
   return Array.isArray(parsed?.days) ? parsed.days : [];

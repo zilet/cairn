@@ -16,7 +16,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
       planSection: "edit",
       meSection: "profile",
       healthSection: "read",
-      settingsSection: "agents",
+      settingsSection: "you",
     },
     tabs: ["today", "session", "stand", "plan", "progress", "chat", "me", "settings"],
     sections: {

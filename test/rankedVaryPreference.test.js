@@ -11,7 +11,7 @@ import {
   parsePreferenceMemories,
   preferenceSignal,
   preferenceRerank,
-} from "../dist/repo/progression.js";
+} from "../dist/repo/exercise-preferences.js";
 import { suggestAlternatives } from "../dist/repo/exercise-variations.js";
 
 test("parsePreferenceMemories reads polarity (like vs dislike) and drops empties", () => {

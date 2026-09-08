@@ -20,13 +20,14 @@ import {
 } from "./attention.js";
 import { markerSignalKey, recommendedPanel, refreshDoctorLoopAttention } from "./doctor-loop.js";
 import { getLatestHealthReview, getMarkerHistory } from "./health.js";
-import { listDirectives } from "./coach.js";
+import { listDirectives } from "./directives.js";
 import { listSupplements } from "./supplements.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { followupLabel, markerSlugFromSignalKey } from "./attention-labels.js";
 import { dexaRescanWhenText, dexaRescanWindow, latestDexaDate } from "./dexa-window.js";
 import { matchOptimalZone, optimalDistance } from "./propagation-data.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { daysBetweenISO } from "./shared.js";
 
 export type CheckupItemKind = "lab" | "dexa" | "review" | "add";
 
@@ -180,11 +181,6 @@ export function warrantedAddOnKeys(markerByKey: Map<string, MarkerLike>): Set<st
 // How far out a dated recheck stays worth listing as "upcoming".
 const UPCOMING_HORIZON_DAYS = 180;
 
-function daysBetween(a: string, b: string): number | null {
-  const ms = Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`);
-  return Number.isFinite(ms) ? Math.round(ms / 86_400_000) : null;
-}
-
 // Days → a calm plain-language horizon. Never a precise count past ~10 days, so it
 // reads like a coach ("about three weeks"), never a countdown.
 function humanHorizon(days: number): string {
@@ -208,7 +204,7 @@ function humanSpan(days: number): string {
 
 function dueWhenText(nextDue: string | null, asOf: string): string | null {
   if (!nextDue) return null;
-  const days = daysBetween(asOf, nextDue);
+  const days = daysBetweenISO(nextDue, asOf);
   if (days == null) return null;
   if (days <= 0) return "window is open";
   return `opens in ${humanHorizon(days)}`;
@@ -319,7 +315,7 @@ function recheckReadFor(
   const key = markerSignalKey(m as any);
   const entry = key ? attentionBySignal.get(key) : null;
   if (!entry || !entry.next_due) return { recheck: "none", next_due: null, text: "no recheck scheduled yet" };
-  const days = daysBetween(asOf, entry.next_due);
+  const days = daysBetweenISO(entry.next_due, asOf);
   if (days != null && days <= 0) return { recheck: "due", next_due: entry.next_due, text: "recheck window is open" };
   return {
     recheck: "upcoming",
@@ -610,7 +606,7 @@ export function nextCheckupRead(opts: { refresh?: boolean; asOf?: string } = {})
   for (const e of schedule) {
     const k = dedupeKey(e.signal_key);
     if (!e.next_due || dueSeen.has(k) || upSeen.has(k)) continue;
-    const days = daysBetween(asOf, e.next_due);
+    const days = daysBetweenISO(e.next_due, asOf);
     if (days == null || days <= 0 || days > UPCOMING_HORIZON_DAYS) continue;
     upSeen.add(k);
     upcomingDated.push(toCheckupItem(e, asOf, markerBySignal, dexaWhenText));
@@ -651,7 +647,7 @@ export function nextCheckupRead(opts: { refresh?: boolean; asOf?: string } = {})
   const lede = composeLede(dueNow, upcomingDated, orderedLabs, followThrough, warrantedAddOns, asOf);
 
   const upcomingSoon = upcomingDated.some((e) => {
-    const d = daysBetween(asOf, e.next_due || "");
+    const d = daysBetweenISO(e.next_due || "", asOf);
     return d != null && d <= SOON_DAYS;
   });
   const has_content = dueNow.length > 0 || upcomingSoon || orderedLabs.length > 0 || warrantedAddOns.length > 0;

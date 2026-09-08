@@ -33,10 +33,13 @@ running in ~30 seconds. For Raspberry Pi, use `./scripts/quickstart-rpi.sh` inst
 docker compose up -d --build      # or: podman compose up -d --build
 ```
 
-`./quickstart.sh` and `scripts/quickstart-rpi.sh` pick Docker or Podman for you — whichever is
-installed *and* running, detected by binary rather than by shell alias (`scripts/container-tool.sh`,
-override with `CAIRN_CONTAINER_TOOL=docker|podman`). Podman needs a Compose provider
-(`podman-compose`, or a `docker-compose` binary on PATH) for the compose commands in this doc.
+`./quickstart.sh` and `scripts/quickstart-rpi.sh` pick Docker, Podman, or Apple's `container` for you
+— whichever is installed *and* running, detected by binary rather than by shell alias
+(`scripts/container-tool.sh`, override with `CAIRN_CONTAINER_TOOL=docker|podman|container`). Podman
+needs a Compose provider (`podman-compose`, or a `docker-compose` binary on PATH) for the compose
+commands in this doc. Apple's `container` CLI has no Compose front-end of its own, so the `compose`
+commands in this doc do not apply to it — use Podman or Docker for the Compose path, or run the image
+directly with `container run`.
 
 Or use the [release compose](SHARING.md) without a source checkout.
 
@@ -375,7 +378,7 @@ tool is absent, so an upgrade from an older all-CLI image needs only **Install**
 ## Related docs
 
 - [`QUICKSTART.md`](QUICKSTART.md) — 30-second first run (one-command `./quickstart.sh`)
-- [`../quickstart.sh`](../quickstart.sh) — auto-detects Docker or Node 24, starts and validates
+- [`../quickstart.sh`](../quickstart.sh) — auto-resolves Docker, Podman, or Apple's `container`, else falls back to Node 24; starts and validates
 - [`../scripts/quickstart-rpi.sh`](../scripts/quickstart-rpi.sh) — Raspberry Pi setup script
 - [`OPERATIONS.md`](OPERATIONS.md) — migrations, restore, rollback
 - [`SHARING.md`](SHARING.md) — GHCR release image

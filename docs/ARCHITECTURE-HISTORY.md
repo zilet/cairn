@@ -1,8 +1,94 @@
 # Cairn architecture & migration history
 
-The append-only, per-round changelog of Cairn's schema migrations and feature builds, relocated out of `CLAUDE.md` to keep that always-loaded context file lean. This is historical narrative: the **running** schema is always source-of-truth in `src/migrate.ts`, the service-worker cache version in `public/sw.js`, and the deploy/migration/backup playbook in `docs/OPERATIONS.md`. Read it only when you need the history behind a specific migration or feature — you do not need it to work on current code.
+The append-only, per-round changelog of Cairn's schema migrations and feature builds, relocated out of `CLAUDE.md` to keep that always-loaded context file lean. This is historical narrative: the **running** schema is always source-of-truth in the ladder under `src/migrations/`, the service-worker cache version in `public/sw.js`, and the deploy/migration/backup playbook in `docs/OPERATIONS.md`. Read it only when you need the history behind a specific migration or feature — you do not need it to work on current code.
 
 ---
+
+## 2026-09-08 — Maintainability round: enforcers, one error path, god-module splits, cycle cut
+
+No schema migration. A multi-package round that fixed what a six-stream review found, then made the
+findings hard to reintroduce. Every module split below is a **behavior-preserving relocation** whose
+old address still re-exports, so no caller moved.
+
+- **Server defects.** MCP `finish_session` and `get_plan` now return the same payloads as their REST
+  routes (they had drifted). `profile.equipment` (migration v52) was missing from the `CREATE TABLE`
+  block in `src/db.ts`, so a fresh database never got the column.
+- **New enforcers.** `scripts/check-schema-two-step.mjs` (`npm run schema:check`) statically pairs
+  every migrated column with its create block and asserts migration versions are dense and unique;
+  `src/route-audit.ts` walks the mount table at load so a shadowed `(method, path)` is a boot failure.
+  Both, plus `npm run lint`, joined `npm run verify`. `scripts/check-sw-cache.mjs` diffs against the
+  nearest tag instead of `origin/main`, which local main runs far ahead of.
+- **Client defects and constitution violations.** `goal.message` is escaped on the profile form; the
+  raw Garmin sleep SCORE is gone from Today and Stand (no numeric scores — the Recovery tile now reads
+  the shipped sleep-duration ladder, which lives once on `CairnHealthRead`); `--rust` is declared;
+  focus moves into the freshly-rendered view on a tab switch; the Settings landing default is read
+  from the route definitions everywhere.
+- **One logging path.** `src/log.ts` — dependency-free, level read once from `CAIRN_LOG_LEVEL`,
+  `CAIRN_LOG_JSON=1` for one-line JSON. Every server-side `console` call routes through it. Scheduler
+  per-tick chatter dropped to **debug** (job outcomes and failures stay info/warn/error), so a Pi
+  running at the default level shows fewer calm no-op lines than before; `CAIRN_LOG_LEVEL=debug`
+  restores them.
+- **One error path.** `apiErrorHandler` honors `res.headersSent` by delegating, answers body-parser
+  faults with their own 4xx, and answers everything else with a fixed
+  `{ok:false, error:"internal error", request_id}` JSON envelope — registered at the app level too,
+  since body parsing runs outside the `/api` router. Sixteen routes that leaked `e.message` in a 500
+  no longer do.
+- **`src/migrate.ts` → `src/migrations/`.** The 2,506-line `MIGRATIONS` array split into
+  `v001-050.ts` / `v051-100.ts` / `v101-150.ts` with `helpers.ts` owning the entry type and the DDL
+  helpers; `migrate.ts` keeps the runner and re-exports. Four data-repair entries (v63, v87, v92, v97)
+  had imported LIVE repo functions, so a fresh install replayed them against today's semantics — they
+  now call verbatim snapshots under `src/migrations/frozen/`, each naming the module, function and
+  commit it was taken from. Biome ignores that directory.
+- **`src/repo/coach.ts`** shed `family.ts`, `directives.ts` and `insights.ts`.
+- **`src/repo/profile.ts`** (2,804 lines, 45 exports, the highest in-degree node of the import cycle)
+  split into `profile.ts` / `proposals.ts` / `recovery-week.ts`.
+- **`src/repo/day-read.ts`** (4,885 lines) split into `day-read-grammar.ts`, `day-read-prose.ts` and
+  `day-read-cache.ts`, leaving the read engine; `computeDayRead` itself untouched.
+- **`src/chatTurns.ts`** (3,865 lines, 82 exports) shed `chat-intent.ts` (pure sentence gates),
+  `chat-reconcile.ts` (reply reconcilers) and `chat-routing-runtime.ts` (provider order, profile,
+  timeout).
+- **`src/repo/progression.ts`** shed `equipment.ts`, `exercise-preferences.ts` and `plan-swap.ts`;
+  **`src/coachOps.ts`** became `src/coachOps/{shared,training,nutrition,health,memory}.ts` behind a
+  barrel.
+- **One definition per shared helper.** `src/lib/dates.ts` and `src/lib/numbers.ts` (both importing
+  nothing from `src/`) replace 4-14 private copies apiece that had drifted on exactly the questions
+  that decide an answer: whether a missing date reads as null or 0, whether `Number(null)` may become
+  a reading of zero, whether a day difference carries a sign.
+- **The import cycle.** `src/repo.ts` is an `export *` barrel over ~130 modules, and `prompt/shared.ts`
+  imported it — which, via `symptomCapture.ts`, put the barrel itself inside the server's largest
+  strongly-connected component. Sixteen modules moved to concrete imports (~250 call sites), cutting
+  that SCC from **130 → 108 → 87**; moving `renderJsonContract` into the leaf
+  `src/prompt/json-contract.ts` took the last prompt-side edge and brought it to **86**, leaving a
+  component that is now `src/repo/*` and nothing else.
+- **Contract tests** now guard the shape: no barrel import from a prompt builder or coaching op, one
+  definition per shared date/number helper (with a reasoned allowlist), the schema two-step, no
+  duplicate route registration, and receipt-shaped chat helpers only in `src/chat-reconcile.ts`.
+- **Docs.** `CLAUDE.md` and `docs/OPERATIONS.md` describe the migration range files and
+  `npm run schema:check`; `docs/ARCHITECTURE.md` gained a module map for the new layout and had every
+  stale location attribution corrected. The documentation-only pass that opened the round also fixed:
+  - `SECURITY.md`'s "Agent CLI updates" section named six env vars (`CLAUDE_CODE_VERSION`,
+    `AGENT_CLI_ALLOW_MOVING_TAGS`, etc.) that never existed; rewritten to describe the real mechanism —
+    per-provider `install` blocks in `agents.json` (exact npm `version`, or a script `url` + `sha256`),
+    validated unconditionally by `scripts/install-agent-cli.mjs` with no override switch.
+  - `docs/OPERATIONS.md` corrected "no built-in auth" to describe the actual default-off/
+    `CAIRN_REQUIRE_AUTH=1` fail-closed model, and now notes every `docker` command works with Podman.
+  - README.md, `docs/QUICKSTART.md`, and `docs/DEPLOYMENT.md` corrected "detects Docker" to describe
+    `scripts/container-tool.sh`'s real three-way resolution (Docker, Podman, or Apple's `container`).
+  - `docs/ARCHITECTURE.md` fixed four phantom symbols that no longer exist in the source:
+    `LONGEVITY_GUARDRAILS` (the real guardrails are inline "NON-NEGOTIABLE GUARDRAILS" prose in
+    `src/prompt/coach.ts`), `chatOpenStream`/`appendStreamDelta` (the real exports are
+    `chatMonitorEnsure`/`ensureStreamingBubble`), and `listInsights` (never existed; the real function is
+    `getInsight`).
+  - `CLAUDE.md`'s security-posture line undercounted the auth guard's exemptions (it is three routes,
+    not one) — corrected.
+  - `CLAUDE.md`'s seven deepest "Domain gotchas" paragraphs (consecutive loading days, the rest trade,
+    dose comparability, cut pressure's three shapes, RIR, marker staleness, `performed_at_full_load`)
+    were trimmed to one-line pointers; their detail already lived in `docs/ARCHITECTURE.md`, so a small
+    genuinely-missing detail (the `training_drive='push'` mechanical-authority note) was merged into the
+    existing `CutPressure` section there instead of duplicating a paragraph.
+  - Added a `docs/OPERATIONS.md` "Scripts" table covering every script under `scripts/`, and pointed
+    `docs/SHARING.md` at the committed `deploy/docker-compose.release.yml` the release workflow
+    generates the published compose file from.
 
 ## 2026-09-08 — Docker or Podman: the public scripts resolve the engine
 

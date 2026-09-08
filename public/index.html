@@ -103,15 +103,20 @@
   <!-- defer (not async) so parsing/first paint isn't blocked on ~1.5MB of JS while
        execution order is preserved exactly: defer scripts run, in document order,
        after parsing completes and before DOMContentLoaded — so art.js and the body-
-       figure lib still finish before bundle-01..07, and bundle-07's trailing
-       startAppShell() call still runs dead last, same as the old synchronous order. -->
+       figure lib still finish before the feature bundles, and bundle-07's trailing
+       startAppShell() call still runs dead last, same as the old synchronous order.
+
+       bundle-05-me-health is deliberately ABSENT: it is ~470 KB the Stand and Me
+       destinations alone need, injected on first navigation there by
+       ensureBundle("me-health") (src/client/app/lazy-bundles.ts). It stays in the
+       service worker's CORE_ASSETS, so an installed PWA still precaches it and
+       the first offline visit to Stand works. -->
   <script src="/art.js" defer></script>
   <script src="/cairn-body-figure.js" defer></script>
   <script src="/js/bundle-01-core.js" defer></script>
   <script src="/js/bundle-02-today.js" defer></script>
   <script src="/js/bundle-03-capture-progress.js" defer></script>
   <script src="/js/bundle-04-coach-meals.js" defer></script>
-  <script src="/js/bundle-05-me-health.js" defer></script>
   <script src="/js/bundle-06-chat-plan.js" defer></script>
   <script src="/js/bundle-07-settings-boot.js" defer></script>
 </body>

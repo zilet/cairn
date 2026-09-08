@@ -31,6 +31,8 @@
 //  • spot_check  — a handful of readings. Each one describes its own day and
 //    nothing more.
 //  • none        — nothing in the window. Absence, which is already neutral.
+import { dayEpoch } from "../lib/dates.js";
+
 export type WearPattern = "continuous" | "intermittent" | "spot_check" | "none";
 
 export type SensorCadence = {
@@ -57,16 +59,6 @@ export const INTERMITTENT_COVERAGE = 0.15;
 export const CADENCE_WINDOW_DAYS = 90;
 
 const DAY_MS = 864e5;
-
-// Midnight-UTC epoch for a YYYY-MM-DD string; null when it is not one. Date-only
-// strings are parsed in UTC on purpose — these are day KEYS, not instants, so a
-// local-zone parse would slip a day under a negative offset.
-function dayEpoch(iso: unknown): number | null {
-  const text = String(iso ?? "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
-  const t = Date.parse(`${text}T00:00:00Z`);
-  return Number.isFinite(t) ? t : null;
-}
 
 /**
  * Classify how the athlete wears a sensor, from the dates its readings carry.

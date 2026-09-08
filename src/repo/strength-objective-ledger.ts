@@ -6,12 +6,9 @@
 import { db } from "../db.js";
 import { normalizedExerciseKey } from "./exercise-canon.js";
 import { localDateISO } from "./shared.js";
+import { round1 } from "../lib/numbers.js";
 
 type LedgerExposure = { date: string; est_1rm: number };
-
-function round1(value: number): number {
-  return Math.round(value * 10) / 10;
-}
 
 function dayNumber(iso: string): number {
   return Math.floor(new Date(`${iso}T00:00:00Z`).getTime() / 864e5);

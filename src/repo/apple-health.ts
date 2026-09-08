@@ -153,7 +153,7 @@ export function exchangeAppleHealthPairing(
   } catch (error) {
     try {
       db.exec("ROLLBACK");
-    } catch {}
+    } catch { /* rollback cleanup: the original error is rethrown below */ }
     throw error;
   }
 

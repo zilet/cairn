@@ -14,6 +14,7 @@
       "*.mjs",
       "*.js",
       "!dist",
+      "!src/migrations/frozen",
       "!node_modules",
       "!data",
       "!public/sw.js",

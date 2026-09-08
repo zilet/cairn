@@ -17,6 +17,7 @@
 //     session, and none of them is a score.
 // ---------------------------------------------------------------------------
 import { isLastNight, sensorIsCurrent } from "./sensor-freshness.js";
+import { dayEpoch } from "../lib/dates.js";
 
 // ---------- (1) the HRV decision band ----------
 //
@@ -200,9 +201,13 @@ export interface SustainedStressRead {
   reasons: string[];
 }
 
-function isoDay(value: unknown): number | null {
-  const ms = Date.parse(`${String(value ?? "").slice(0, 10)}T00:00:00Z`);
-  return Number.isFinite(ms) ? Math.floor(ms / 864e5) : null;
+// Integer day INDEX (days since the epoch) of a date-shaped value — the sortable
+// scalar this module diffs days with. Named apart from `isoDay`, which answers the
+// same question with a STRING; conflating the two is how a comparison silently
+// starts comparing "2026-01-02" to 20455.
+function dayIndexOf(value: unknown): number | null {
+  const t = dayEpoch(value);
+  return t == null ? null : Math.floor(t / 864e5);
 }
 
 export function sustainedStressRead(input: {
@@ -210,12 +215,12 @@ export function sustainedStressRead(input: {
   checkins?: any[];
   contextEvents?: any[];
 }): SustainedStressRead | null {
-  const today = isoDay(input.date);
+  const today = dayIndexOf(input.date);
   if (today == null) return null;
   const reasons: string[] = [];
 
   const window = (Array.isArray(input.checkins) ? input.checkins : []).filter((row) => {
-    const day = isoDay(row?.date);
+    const day = dayIndexOf(row?.date);
     return day != null && day <= today && today - day < STRESS_WINDOW_DAYS;
   });
   const rated = window.filter((row) => row?.mood != null || row?.energy != null);
@@ -229,8 +234,8 @@ export function sustainedStressRead(input: {
 
   for (const event of Array.isArray(input.contextEvents) ? input.contextEvents : []) {
     if (!event || !STRESS_EVENT_KIND.test(String(event.kind ?? ""))) continue;
-    const start = isoDay(event.start_date);
-    const end = event.end_date ? isoDay(event.end_date) : null;
+    const start = dayIndexOf(event.start_date);
+    const end = event.end_date ? dayIndexOf(event.end_date) : null;
     if (start == null || start > today) continue;
     if (end != null && end < today) continue;
     // Measured to TODAY, not to the event's own end: a three-week trip on its second

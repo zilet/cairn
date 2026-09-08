@@ -16,12 +16,14 @@ export const garminRouter = Router();
 
 // ---- Garmin source data (normalized ingest boundary) ----
 garminRouter.get("/garmin/sources", (_req, res) => res.json(listGarminSources()));
-garminRouter.post("/garmin/sync", async (req, res) => {
+garminRouter.post("/garmin/sync", async (req, res, next) => {
   try {
     const { syncGarmin } = await import("../garmin.js");
     res.json(await syncGarmin(req.body ?? {}));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    // One error path: the shared handler logs it privately and answers the fixed
+    // {ok:false,error:'internal error'} envelope instead of leaking e.message.
+    next(e);
   }
 });
 // Send FINISHED Cairn strength sessions from before the 7-day sync window back to

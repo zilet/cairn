@@ -2,11 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import {
-  getSettings, getGeminiApiKey, listExercises, listMealPlans, listFoodNotes, listActivities,
-  getArtAlias, setArtAlias, addArtAsset, listArtAssets, recordArtUsage, recordDiagnosticEvent,
-} from "./repo.js";
+import { listActivities } from "./repo/activities.js";
+import { addArtAsset, getArtAlias, listArtAssets, recordArtUsage, setArtAlias } from "./repo/art-ledger.js";
+import { recordDiagnosticEvent } from "./repo/diagnostics.js";
+import { listExercises } from "./repo/exercises.js";
+import { listFoodNotes, listMealPlans } from "./repo/nutrition.js";
+import { getGeminiApiKey, getSettings } from "./repo/settings.js";
 import { artCircuitOpen, noteArtFailure, noteArtSuccess, onArtCircuitClose } from "./artCircuit.js";
+import { log } from "./log.js";
 
 // Generated artwork service: photoreal/stylized PNGs for foods, exercises, and
 // activities via Google's gemini-3.1-flash-image ("nano banana 2"), cached on
@@ -269,7 +272,7 @@ async function warmArtUnderName(
     failed.set(key, model);
     noteArtFailure(model, artErrorCode(e));
     recordArtUsage({ kind, query: normalize(text), action: "fail", model });
-    console.warn(`[art] ${kind} art failed for "${text}": ${e?.message ?? e}`);
+    log.warn(`[art] ${kind} art failed for "${text}": ${e?.message ?? e}`);
     return false;
   } finally {
     inFlight.delete(key);
@@ -303,7 +306,7 @@ function recordGeneration(kind: ArtKind, key: string, assetText: string, query: 
       message: String(e?.message ?? e).slice(0, 240),
       metadata: { model },
     });
-    console.warn(`[art] generated ${kind} "${query}" but could not record it: ${e?.message ?? e}`);
+    log.warn(`[art] generated ${kind} "${query}" but could not record it: ${e?.message ?? e}`);
     return;
   }
   noteArtSuccess(model);
@@ -340,7 +343,7 @@ async function drain(): Promise<void> {
         failed.set(job.key, model);
         noteArtFailure(model, artErrorCode(e));
         recordArtUsage({ kind: job.kind, query: normalize(job.text), action: "fail", model });
-        console.warn(`[art] generation failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
+        log.warn(`[art] generation failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
       } finally {
         inFlight.delete(job.key);
       }
@@ -458,7 +461,7 @@ async function resolveConcept(job: Job): Promise<{ key: string; text: string; re
     // Falls through to generating under the query's own key exactly as
     // before — no retry, no throw, degradation unchanged.
     recordArtUsage({ kind: job.kind, query: norm, action: "fail", model: GEMINI_TEXT_MODEL });
-    console.warn(`[art] canonicalize failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
+    log.warn(`[art] canonicalize failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
   }
   return { key: job.key, text: job.text, reused: false };
 }
@@ -674,7 +677,7 @@ async function geminiFailure(res: Response, model: string, operation: string): P
   const seenKey = `${model}:${operation}:${code}`;
   if (!loggedErrorCodes.has(seenKey)) {
     loggedErrorCodes.add(seenKey);
-    console.warn(`[art] ${operation} failed · ${model} · HTTP ${res.status} · ${code} · body: ${rawBody || "(empty)"}`);
+    log.warn(`[art] ${operation} failed · ${model} · HTTP ${res.status} · ${code} · body: ${rawBody || "(empty)"}`);
   }
   // The sink coalesces on fingerprint, so this stays one row per fault class.
   // Only Gemini's own error message travels — never the request body/prompt.

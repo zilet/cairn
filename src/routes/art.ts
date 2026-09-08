@@ -30,7 +30,7 @@ artRouter.get("/art", (req, res) => {
       fs.closeSync(fd);
       if (head[0] === 0xff && head[1] === 0xd8) mime = "image/jpeg";
       else if (head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46) mime = "image/webp";
-    } catch {}
+    } catch { /* sniffing is a nicety — the default mime already set above stands */ }
     res.setHeader("Content-Type", mime);
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     res.setHeader("X-Content-Type-Options", "nosniff");

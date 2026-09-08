@@ -64,14 +64,22 @@ full deployment and removal procedure in [`docs/HOUSEHOLDS.md`](docs/HOUSEHOLDS.
 Cairn can install or refresh third-party coaching CLIs inside the container. Treat
 that as executing vendor code on the Cairn host:
 
-- Claude Code and Codex are installed from npm at explicit versions by default,
-  not from `@latest`. Bump `CLAUDE_CODE_VERSION` or `CODEX_CLI_VERSION`
-  deliberately when rebuilding or running `cairn-update-agent-clis`.
-- Moving npm tags such as `latest` are refused unless
-  `AGENT_CLI_ALLOW_MOVING_TAGS=1` is set for a one-off update.
-- Antigravity and Grok use vendor shell installers. Cairn skips those installers
-  unless a matching `ANTIGRAVITY_INSTALL_SHA256` / `GROK_INSTALL_SHA256` is
-  provided, or you explicitly set `AGENT_INSTALL_ALLOW_UNVERIFIED=1`.
+- Every provider's install is pinned in `agents.json`, not left to a CLI default.
+  Claude Code and Codex use an `"method": "npm"` install block with an exact
+  `version` (never a moving tag like `latest`); Antigravity and Grok use a
+  `"method": "script"` block naming an HTTPS `url` and the installer's expected
+  `sha256`. `scripts/install-agent-cli.mjs` validates every install spec
+  unconditionally before running it: the npm path requires an exact semver
+  version, and the script path requires an HTTPS URL plus a 64-character hex
+  SHA-256 that the downloaded installer body is verified against after
+  download. There is no environment variable that bypasses either check — a
+  malformed or unverifiable install spec is a hard failure, not a warning.
+- To bump a CLI version: edit the matching `version` (npm) or `sha256`/`url`
+  (script) in `agents.json`, then either rebuild the image or run
+  `cairn-update-agent-clis <agent> [agent...]` inside the running container
+  (`docker compose exec -u app cairn cairn-update-agent-clis claude codex`) to
+  install the newly pinned version without a rebuild. Each installed agent card
+  in Settings → Agents also exposes an Update action that does the same thing.
 - The release workflows pin external GitHub Actions to commit SHAs. When updating
   action versions, resolve the new tag to a SHA and update the adjacent version
   comment in the workflow at the same time.

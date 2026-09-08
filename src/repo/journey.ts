@@ -1,13 +1,5 @@
 import { db } from "../db.js";
-import {
-  computeGoalCheck,
-  currentBodyFatEstimate,
-  effectiveGoalMode,
-  getProfile,
-  leannessAwareLossRates,
-  leanGainRate,
-  projectGoalPace,
-} from "./profile.js";
+import { computeGoalCheck, currentBodyFatEstimate, effectiveGoalMode, getProfile, leanGainRate, leannessAwareLossRates, projectGoalPace } from "./profile.js";
 import { localDateISO } from "./shared.js";
 import { mayProposeEaseFromCut } from "./cut-target.js";
 import { recompositionRead } from "./recomposition.js";

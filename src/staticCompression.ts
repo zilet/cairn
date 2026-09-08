@@ -42,9 +42,11 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Paths that must keep express.static's own Cache-Control contract (`no-cache`, so
- * a bumped worker/manifest is never served stale). We do not precompress them, but
- * the guard is explicit rather than incidental.
+ * Paths that must never be answered from a build-time sibling. manifest.json keeps
+ * express.static's `no-cache` contract so a bumped icon set is never stale. sw.js
+ * is answered one layer up by serviceWorkerScript() (its cache name is substituted
+ * per build), so a precompressed copy of the file on disk would ship the
+ * placeholder version — it is listed here as an explicit guard, not incidentally.
  */
 const NEVER_PRECOMPRESSED = new Set(["/sw.js", "/manifest.json"]);
 

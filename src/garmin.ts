@@ -2,8 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { emitBrainEvent } from "./brainEvents.js";
-import * as repo from "./repo.js";
+import { garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetric, upsertGarminSource } from "./repo/activities.js";
+import type { GarminActivityInput, GarminDailyMetricInput } from "./repo/activities.js";
+import { detectRunCalibration } from "./repo/calibration.js";
+import { sessionsEligibleForGarminExport } from "./repo/garmin-strength-export.js";
+import { deriveHrModel } from "./repo/hr-model.js";
+import { getGarminCredentials, getSettings, setGarminSyncStatus } from "./repo/settings.js";
 import { localDateISO } from "./repo/shared.js";
+import { log } from "./log.js";
+import { round1 } from "./lib/numbers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
@@ -243,7 +250,6 @@ const secToMin = (s: any): number | null => {
   const n = asNum(s);
   return n == null ? null : Math.round((n / 60) * 10) / 10;
 };
-const round1 = (n: number | null): number | null => (n == null ? null : Math.round(n * 10) / 10);
 
 function sourceType(a: any): string {
   return a?.activityType?.typeKey || a?.activityType?.typeId || a?.type || "other";
@@ -299,7 +305,7 @@ export function extractGarminActivityTemp(activity: any): number | null {
   return lo != null && hi != null ? round1((lo + hi) / 2) : null;
 }
 
-function activityToInput(a: any): repo.GarminActivityInput {
+function activityToInput(a: any): GarminActivityInput {
   const durationSec = asNum(a?.movingDuration) ?? asNum(a?.duration);
   const meters = asNum(a?.distance);
   return {
@@ -347,7 +353,7 @@ function activityToInput(a: any): repo.GarminActivityInput {
 // Cheap configured-check for the scheduler: saved/env credentials OR previously
 // exported token files. Never touches the network or the garmin-connect package.
 export function isGarminConfigured(): boolean {
-  if (repo.getGarminCredentials().configured) return true;
+  if (getGarminCredentials().configured) return true;
   return (
     fs.existsSync(path.join(TOKEN_DIR, "oauth1_token.json")) && fs.existsSync(path.join(TOKEN_DIR, "oauth2_token.json"))
   );
@@ -364,7 +370,7 @@ export function garminClientCredentials(username: string, password: string, hasT
 async function makeClient() {
   const mod = await import("garmin-connect");
   const GarminConnect = (mod as any).GarminConnect || (mod as any).default;
-  const { username, password } = repo.getGarminCredentials();
+  const { username, password } = getGarminCredentials();
   const hasTokenFiles =
     fs.existsSync(path.join(TOKEN_DIR, "oauth1_token.json")) &&
     fs.existsSync(path.join(TOKEN_DIR, "oauth2_token.json"));
@@ -437,7 +443,7 @@ export async function rawGet(client: any, url: string, options: RawGetOptions = 
     // But the failures used to be INVISIBLE, which masked the displayName bug
     // (a null displayName silently skipped the whole daily-summary block) and
     // made wrong-vs-unavailable endpoints indistinguishable. Log + degrade.
-    console.warn(`[garmin] GET ${full} failed: ${e?.message ?? e}`);
+    log.warn(`[garmin] GET ${full} failed: ${e?.message ?? e}`);
     return null;
   }
 }
@@ -486,7 +492,7 @@ async function getDisplayName(client: any, activities: any[] = []): Promise<stri
     const name = pickStr(profile, ["displayName", "profileId"]);
     if (name) return name;
   } catch (e: any) {
-    console.warn(`[garmin] getUserProfile failed: ${e?.message ?? e}`);
+    log.warn(`[garmin] getUserProfile failed: ${e?.message ?? e}`);
   }
   // 2. The social-profile endpoint carries the same GUID-style displayName.
   const social = await rawGet(client, "/userprofile-service/socialProfile");
@@ -531,7 +537,7 @@ async function fetchActivityDetail(
 // override with `pickNum(...) ?? m.x` where the daily summary is the better
 // source. So precedence lives in the LATER fold, not here.
 
-export function foldSleep(sleep: any, m: repo.GarminDailyMetricInput) {
+export function foldSleep(sleep: any, m: GarminDailyMetricInput) {
   const d = sleep?.dailySleepDTO;
   if (!d && !sleep) return;
   if (d) {
@@ -560,7 +566,7 @@ export function foldSleep(sleep: any, m: repo.GarminDailyMetricInput) {
 // sleep_score / avg_sleep_stress / restless_count come back null. The richer
 // wellness endpoint fills those gaps. This is a GAP-FILLER (only sets a field that's
 // still null) — it must never null out a value foldSleep already captured.
-function foldSleepDetail(sleep: any, m: repo.GarminDailyMetricInput) {
+function foldSleepDetail(sleep: any, m: GarminDailyMetricInput) {
   const d = sleep?.dailySleepDTO ?? sleep;
   if (!d) return;
   m.sleep_score = m.sleep_score ?? asNum(d.sleepScores?.overall?.value ?? d.sleepScore ?? d.overallSleepScore);
@@ -573,7 +579,7 @@ function foldSleepDetail(sleep: any, m: repo.GarminDailyMetricInput) {
   m.awake_min = m.awake_min ?? secToMin(d.awakeSleepSeconds);
 }
 
-export function foldDailySummary(s: any, m: repo.GarminDailyMetricInput) {
+export function foldDailySummary(s: any, m: GarminDailyMetricInput) {
   if (!s) return;
   m.steps = m.steps ?? pickNonNegNum(s, ["totalSteps", "steps"]);
   m.distance_m = pickNonNegNum(s, ["totalDistanceMeters"]);
@@ -608,7 +614,7 @@ export function foldDailySummary(s: any, m: repo.GarminDailyMetricInput) {
   }
 }
 
-function foldWeight(weight: any, iso: string, m: repo.GarminDailyMetricInput) {
+function foldWeight(weight: any, iso: string, m: GarminDailyMetricInput) {
   const list = weight?.dateWeightList;
   if (!Array.isArray(list) || !list.length) return;
   // Prefer a sample on this exact date, else the latest in the window.
@@ -626,14 +632,14 @@ function foldWeight(weight: any, iso: string, m: repo.GarminDailyMetricInput) {
   m.visceral_fat = asNum(sample.visceralFat);
 }
 
-function foldHrv(hrv: any, m: repo.GarminDailyMetricInput) {
+function foldHrv(hrv: any, m: GarminDailyMetricInput) {
   const sum = hrv?.hrvSummary;
   if (!sum) return;
   m.hrv_ms = pickNum(sum, ["lastNightAvg", "weeklyAvg"]) ?? m.hrv_ms;
   m.hrv_status = pickStr(sum, ["status"]) ?? m.hrv_status;
 }
 
-function foldReadiness(tr: any, m: repo.GarminDailyMetricInput) {
+function foldReadiness(tr: any, m: GarminDailyMetricInput) {
   const row = Array.isArray(tr) ? tr[0] : tr;
   if (!row) return;
   m.training_readiness = pickNonNegNum(row, ["score"]);
@@ -642,15 +648,15 @@ function foldReadiness(tr: any, m: repo.GarminDailyMetricInput) {
 async function syncDailyMetrics(client: any, sourceId: number, days: number, displayName: string | null) {
   let synced = 0;
   const unavailable = new Set<string>();
-  const rows: { iso: string; metric: repo.GarminDailyMetricInput }[] = [];
+  const rows: { iso: string; metric: GarminDailyMetricInput }[] = [];
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date(Date.now() - i * 864e5);
     const iso = localDateISO(date);
-    const metric: repo.GarminDailyMetricInput = { date: iso };
+    const metric: GarminDailyMetricInput = { date: iso };
 
     try {
       metric.steps = asNonNegNum(await client.getSteps(date));
-    } catch {}
+    } catch (err) { log.debug("[garmin] steps unavailable for this day", { date: iso, error: err }); }
 
     try {
       const sleep = await client.getSleepData(date);
@@ -658,7 +664,7 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
         foldSleep(sleep, metric);
         metric.raw = { ...((metric.raw as any) || {}), sleep };
       }
-    } catch {}
+    } catch (err) { log.debug("[garmin] sleep unavailable for this day", { date: iso, error: err }); }
 
     // The daily user summary is the workhorse: stress, body battery dynamics,
     // SpO2, respiration, intensity minutes, calories, floors, HR extremes.
@@ -735,7 +741,7 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
         foldWeight(weight, iso, metric);
         metric.raw = { ...((metric.raw as any) || {}), weight };
       }
-    } catch {}
+    } catch (err) { log.debug("[garmin] weight unavailable for this day", { date: iso, error: err }); }
 
     if (Object.keys(metric).length > 1) rows.push({ iso, metric });
   }
@@ -804,7 +810,7 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     // A sync is one recovery boundary, not N per-row review candidates. The
     // caller compares the before/after current state and may emit one material
     // transition after the batch.
-    repo.upsertGarminDailyMetric(metric, sourceId, { emitEvent: false });
+    upsertGarminDailyMetric(metric, sourceId, { emitEvent: false });
     synced++;
   }
   return synced;
@@ -905,14 +911,14 @@ async function fetchExerciseSets(client: any, activityId: string | number): Prom
 export async function syncGarmin(options: { days?: number; limit?: number; daily?: boolean } = {}) {
   const days = Math.max(1, Math.min(180, options.days ?? Number(process.env.GARMIN_SYNC_DAYS ?? 30)));
   const limit = Math.max(1, Math.min(200, options.limit ?? Number(process.env.GARMIN_SYNC_LIMIT ?? 100)));
-  const source = repo.upsertGarminSource({
-    label: repo.garminSourceLabel(),
+  const source = upsertGarminSource({
+    label: garminSourceLabel(),
     mode: "unofficial",
     auth_status: "not_configured",
   }) as any;
   try {
     const client = await makeClient();
-    repo.upsertGarminSource({ label: source.label, mode: "unofficial", auth_status: "connected" });
+    upsertGarminSource({ label: source.label, mode: "unofficial", auth_status: "connected" });
     const since = isoDaysAgo(days);
     const rows = await client.getActivities(0, limit);
     let activities = 0;
@@ -926,7 +932,7 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
     for (const row of rows || []) {
       const input = activityToInput(row);
       if (input.date && input.date < since) continue;
-      const strength = repo.isStrengthGarminType(sourceType(row));
+      const strength = isStrengthGarminType(sourceType(row));
       // Per-activity detail (bounded): training load + running dynamics. The list
       // payload omits both; activityTrainingLoad lives in the detail's summaryDTO.
       if (detailFetches < DETAIL_LIMIT) {
@@ -951,7 +957,7 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
         if (sets) input.exercise_sets = sets;
         strengthFetches++;
       }
-      const saved = repo.upsertGarminActivity(input, source.id) as any;
+      const saved = upsertGarminActivity(input, source.id) as any;
       if (strength && saved?.id) strengthIds.push(saved.id);
       if (!strength && saved?.id && /run/i.test(String(saved.type ?? input.type ?? ""))) runIds.push(Number(saved.id));
       activities++;
@@ -962,9 +968,9 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
     // layer on the serial enrichment queue (no-op when enrichment/agents are off).
     for (const id of strengthIds) {
       try {
-        repo.reconcileGarminStrength(id);
+        reconcileGarminStrength(id);
       } catch (e: any) {
-        console.warn(`[garmin] reconcile #${id} failed: ${e?.message ?? e}`);
+        log.warn(`[garmin] reconcile #${id} failed: ${e?.message ?? e}`);
       }
     }
     // Finished Cairn sessions whose work Garmin may not have yet. Cap the lookback
@@ -972,7 +978,7 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
     // month of history into the athlete's Garmin calendar. finishSession still
     // exports the session just finished, regardless of age.
     const exportSince = isoDaysAgo(Math.min(7, days));
-    const exportIds = repo.getSettings().garmin_export_strength ? repo.sessionsEligibleForGarminExport(exportSince) : [];
+    const exportIds = getSettings().garmin_export_strength ? sessionsEligibleForGarminExport(exportSince) : [];
     if (strengthIds.length || exportIds.length) {
       import("./enrich.js")
         .then((m) => {
@@ -983,21 +989,21 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
         })
         .catch(() => {});
     }
-    const beforeRecovery = options.daily === false ? null : repo.getGarminCoachSummary(Math.min(days, 14));
+    const beforeRecovery = options.daily === false ? null : getGarminCoachSummary(Math.min(days, 14));
     const displayName = options.daily === false ? null : await getDisplayName(client, rows || []);
     const daily =
       options.daily === false ? 0 : await syncDailyMetrics(client, source.id, Math.min(days, 14), displayName);
     if (options.daily !== false) {
-      const afterRecovery = repo.getGarminCoachSummary(Math.min(days, 14));
+      const afterRecovery = getGarminCoachSummary(Math.min(days, 14));
       emitMaterialGarminRecoveryTransition(beforeRecovery, afterRecovery, source.id);
     }
-    repo.upsertGarminSource({
+    upsertGarminSource({
       label: source.label,
       mode: "unofficial",
       auth_status: "connected",
       last_sync_at: new Date().toISOString(),
     });
-    repo.setGarminSyncStatus(`ok: ${activities} activit${activities === 1 ? "y" : "ies"} · ${daily} daily`);
+    setGarminSyncStatus(`ok: ${activities} activit${activities === 1 ? "y" : "ies"} · ${daily} daily`);
     // A synced run is where a calibration test physically HAPPENED, so read the
     // freshly landed runs for a test signature (a 30-min threshold effort, a
     // fixed-HR benchmark) before re-deriving the personal HR model — a detected
@@ -1007,20 +1013,20 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
     try {
       for (const id of runIds) {
         try {
-          repo.detectRunCalibration(id);
+          detectRunCalibration(id);
         } catch {
           /* a detection is additive — it must never fail a sync */
         }
       }
-      repo.deriveHrModel(localDateISO());
+      deriveHrModel(localDateISO());
     } catch (e: any) {
-      console.warn(`[garmin] HR-model refresh skipped: ${e?.message ?? e}`);
+      log.warn(`[garmin] HR-model refresh skipped: ${e?.message ?? e}`);
     }
     return { ok: true, source_id: source.id, days, activities, daily_metrics: daily };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
-    repo.upsertGarminSource({ label: source.label, mode: "unofficial", auth_status: "failed" });
-    repo.setGarminSyncStatus(`failed: ${msg}`);
+    upsertGarminSource({ label: source.label, mode: "unofficial", auth_status: "failed" });
+    setGarminSyncStatus(`failed: ${msg}`);
     return { ok: false, source_id: source.id, error: msg };
   }
 }

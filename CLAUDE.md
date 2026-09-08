@@ -49,18 +49,27 @@ release flow: `docs/SHARING.md`.
 ## The traps that actually bite
 
 **Schema changes are two-step.** For a brand-new table, add a `CREATE TABLE IF NOT EXISTS` in
-`src/db.ts` and you're done. To add a **column to an existing table** you must do BOTH: (1) add it to
-the matching `CREATE TABLE IF NOT EXISTS` in `db.ts` so fresh DBs get it, and (2) append an entry to
-`MIGRATIONS` in `src/migrate.ts` with the next integer `version` and an idempotent `up(db)` doing the
-`ALTER TABLE … ADD COLUMN` inside a try/catch. `runMigrations(db)` runs at the bottom of `db.ts` on
-every boot. **Down-migrations do not exist** — back up before deploying schema changes. Never
-hardcode the current schema version in docs; `src/migrate.ts` is the source of truth.
+`src/db.ts` and you're done. For a **column on an existing table** do BOTH: (1) add it to that table's
+create block in `db.ts` so fresh DBs get it, and (2) append an entry with the next integer `version`
+and an idempotent try/catch `ALTER TABLE … ADD COLUMN` to the range file covering it — `v001-050.ts` /
+`v051-100.ts` / `v101-150.ts` under `src/migrations/`, helpers in `migrations/helpers.ts`, `migrate.ts`
+only the runner, frozen snapshots in `migrations/frozen/` never edited or reformatted. `npm run
+schema:check` (in `npm run verify`) fails half a two-step. **No down-migrations** — back up first, and
+never hardcode the schema version in docs; the range files own it.
 
-**Any change under `public/` MUST bump the `CACHE` constant in `public/sw.js` in the same commit** —
-otherwise installed PWA clients serve the stale assets forever. New static assets must also be added
-to the precache `ASSETS` list. (The worker `skipWaiting()`s and the client reloads once on
-`controllerchange`, so a deploy goes live on next open — but only if the version bump made the
-browser fetch the new worker at all.)
+**The service-worker cache version is DERIVED — never hand-bump it.** `public/sw.js` ships the
+placeholder `const CACHE = "cairn-shell-dev"`; `src/swVersion.ts` serves `/sw.js` with that literal
+replaced by `cairn-<hash>`, a content hash over every asset the worker precaches. So a changed shell
+always ships a new cache name and an unchanged one never re-downloads. What you MUST still do by
+hand: **add every new static asset to `CORE_ASSETS` in `public/sw.js`** — an asset missing there is
+neither cached offline nor covered by the hash. Do not rename the placeholder (the substitution is
+an exact match, and `scripts/check-sw-cache.mjs` asserts it).
+
+**`index.html` does not load every bundle.** A bundle marked `lazy: "<name>"` in `BUNDLES`
+(`scripts/build-client.mjs`) — today only `bundle-05-me-health`, the Stand/Me/Records surfaces — is
+injected on first navigation by `ensureBundle("<name>")` (`src/client/app/lazy-bundles.ts`) and is
+still precached. So an eager bundle may reference a lazy bundle's globals ONLY from inside a
+function that runs after that navigation, never at top level.
 
 **`public/js/*.js` is generated** from `src/client/**/*.ts` by `npm run client:build`; the only
 hand-written file there is the `10-boot.js` shim. Never hand-edit generated output. The client
@@ -86,7 +95,8 @@ allowlist. `getCoachContext()` itself is untouched, so routes, MCP tools and the
 see everything — but adding a key there does NOT make it reach any prompt until you add it to that
 site, and a new prompt registers a site rather than interpolating `JSON.stringify(ctx)` (which
 silently restores a ~2× payload). Never trim by slicing the serialized string; that hands the agent
-malformed JSON.
+malformed JSON. And **prompt builders and coaching ops import concrete `src/repo/<module>.js`, never
+the `src/repo.ts` barrel** (contract test) — the barrel is for routes and MCP.
 
 **`dayRead()`'s optional args each override only their OWN input** — only `unifiedState` scopes the
 whole signal state; omit it and the state builds RICH via `dayPlanningSignalState()`, the same builder
@@ -100,7 +110,7 @@ an HTTP error. And single-row `?date=` / `last-set` lookups return **`200 + null
 404, because the PWA's `api()` helper resolves to the body regardless of status, so a 404 error
 object would read as a truthy hit.
 
-**Structured output is enforced where a `coachOps.ts` call site passes `RunOpts.schema`; every other
+**Structured output is enforced where a `src/coachOps/*` call site passes `RunOpts.schema`; every other
 op is prose-only.** Every field a consumer READS must be named in the schema (an unnamed field is
 silently dropped by constrained decoding, not preserved by `additionalProperties: true`), and a
 schema is inert while streaming or for `stub` — the prose `OUTPUT CONTRACT` stays the floor
@@ -124,18 +134,18 @@ worker.
 REST endpoints are **defined** in two dozen routers under `src/routes/*.ts` (`src/api.ts` only *mounts*
 them). MCP tools are **defined** in `src/surfaces/mcp/*.ts` (`src/mcp.ts` only *registers* them).
 Both call the same layer beneath: use-case services in `src/domain/*` and data/domain modules in
-`src/repo/*` (barrelled by `src/repo.ts`), with prompts in `src/prompt.ts` and client-facing DTOs in
-`src/contracts/*`. MCP ⊆ REST, and the two surfaces stay near-mirror wrappers.
+`src/repo/*` (barrelled by `src/repo.ts`), with prompt builders in `src/prompt/*` (barrelled by
+`src/prompt.ts`) and client-facing DTOs in `src/contracts/*`. MCP ⊆ REST, near-mirror wrappers.
 
 So: **business logic belongs in `domain`/`repo`/`prompt`.** Adding a capability usually means the
 matching `src/routes/*` router AND `src/surfaces/mcp/*` module plus the underlying domain/repo
 function — never `api.ts`/`mcp.ts` themselves, which are just registries.
 
 Multi-step **agentic** operations both surfaces run (session-suggest, nutrition check-in, meal swap,
-recipe, health review, insight generate) live in **`src/coachOps.ts`**, each returning a plain
-`{ok, …}` that a route wraps in `res.json(...)` and an MCP tool wraps in `asText(...)`. The shared
-`runChosen(agent, prompt)` lives in `src/runChosen.ts`. Put new agentic orchestration in `coachOps`,
-not duplicated in the surfaces.
+recipe, health review, insight generate) live in **`src/coachOps/*`** (`shared`, `training`, `nutrition`,
+`health`, `memory`, barrelled by `src/coachOps.ts`) — each returns a plain `{ok, …}` a route wraps in
+`res.json(...)` and an MCP tool in `asText(...)`. Shared `runChosen(agent, prompt)`: `src/runChosen.ts`.
+Put new agentic orchestration in `coachOps/*`, not duplicated in the surfaces.
 
 Generated, authoritative inventories: **`docs/API.md`** (endpoints) and **`docs/MCP-TOOLS.md`**
 (tools), both from `npm run docs:index`. Subsystem depth — repo functions, prompt builders, chat
@@ -278,33 +288,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   on the first eligible compound (`src/repo/daily-composition.ts`), computed from the LOGGED working
   weight, never a plan target; composition reports back so the persisted envelope never promises a
   reach that is not on a card. `item.reach` persists only for server-derived items.
-- **Consecutive loading days are a caveat, never a brake of their own** (`daily_decision_v7`,
-  `src/repo/day-read.ts`/`daily-decision.ts`). A day counts as loading when it is hard, or moderate
-  STRENGTH work, or genuinely hard cardio (asked directly via `hardCardioDay` — an easy/moderate run
-  never extends a strength-led athlete's streak, and the day's own grade is unchanged). Below the hard
-  ceiling (5), an uncorroborated run rides only as `STACKED_DAYS_CAVEAT` on the train/easy read — the
-  athlete still gets their day. `accumulated_load_rest` fires as REST only when a CURRENT signal
-  corroborates (low readiness, low subjective, a recovery-week dose overrun, a fresh brake,
-  `recovery_capacity` watch/constrained with fresh data, anything clinical today or a clinical hold
-  starting tomorrow). At the ceiling with nothing corroborating and recovery still supportive, the
-  read is EASY under the same code — not rest, and not another train day the drive preference can keep
-  reopening. `supportiveCapacityBacksDay()` (exported from `day-read.ts`) is the ONE helper both the
-  push-drive rest-answer rule and the envelope's `reach` resolver use for the wearable-corroboration
-  path, so the two answers cannot drift. `train_anyway` from a rest morning holds the WORKING load
-  (`intensity:'hold'`, never `'deload'` unless a phase/repeated-under independently says so) and its
-  duration comes from the plan day's own estimate, not the quiet read's 20-minute clock.
-- **The rest trade is carried by the CALENDAR; the ring is never touched.** "Train today, rest
-  tomorrow" (`tradeRestDay`, `src/domain/brain/rest-trade.ts`, behind `POST /api/today-read/trade-rest`
-  and the `trade_rest_day` MCP tool) writes ONE context event for `date+1` with
-  `meta:{claims_day:true, rest_trade:true}` — the claim the existing hold rules already honor — and
-  returns the read with `train_anyway:true`. Plan rotation, anchors and the week's shape do not move,
-  and nothing in `plan-selection.ts` learns about trades. `REST_TRADE_META_KEY` is what makes tomorrow
-  speak as `day_traded_rest` rather than `day_claimed_rest`. It is offered only on a rhythm-shaped
-  quiet day, and a rest-grade reading / active symptom / clinical hold refuses at 200 with
-  `{ok:false, error}` — floors are not trades. Its sibling law in the envelope: an EASY baseline the
-  athlete trains through, with a SOFT brake and their own log behind it, opens the DURATION and volume
-  only (`quietDayOpensOnEvidence`, `daily-decision.ts`) — intensity stays `hold`, the reach stays
-  parked, and every safety floor still caps.
+- **Consecutive loading days are a caveat, never a brake of their own** — `daily_decision_v7`,
+  `src/repo/day-read.ts`/`daily-decision.ts`. Details in `docs/ARCHITECTURE.md`.
+- **The rest trade is carried by the CALENDAR; the ring is never touched** — `tradeRestDay`,
+  `src/domain/brain/rest-trade.ts`. Details in `docs/ARCHITECTURE.md`.
 - **Day-read prose is a variant set, never one literal.** A stable input fires a stable rule every
   morning, so a single sentence per rule printed verbatim for weeks. Rules carry their own athlete-
   facing `reasons` (`src/repo/brain/day-read-rules.ts`), and every athlete-facing string — outcome
@@ -342,11 +329,8 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   order is the display order** — conventional clinical lab-review order, mirrored by the doctor
   export and the in-app catalog. Full ordering rules and the non-clinical-marker filter live in
   `docs/ARCHITECTURE.md`.
-- **Marker staleness is per-class, not one number.** `src/repo/marker-validity.ts` classifies every
-  marker (`genetic` never age-doubted / `slow` / `standard` default / `fast`); horizons, cluster
-  rules and the honor-vs-informational split all derive from it, and its `(label, bucket, band)`
-  entries feed the derive signature — extend the table there, never hardcode an age threshold.
-  Details in `docs/ARCHITECTURE.md`.
+- **Marker staleness is per-class, not one number** — `src/repo/marker-validity.ts`; extend the
+  table there, never hardcode an age threshold. Details in `docs/ARCHITECTURE.md`.
 - **Directives never change anything by themselves.** A flagged marker propagates into
   `health_directives` via `deriveDirectives()`; sources `'markers'` (deterministic) and
   `'health_review'` (agent-emitted) coexist and each clears/rewrites only its own rows. One
@@ -373,46 +357,17 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   synthesized from a label would be indistinguishable from one they actually said — the label's hour
   orders a day at read time only, and is never stored.
 
-- **Dose comparability is a per-lift question, not a per-session one.** Each `dose_evidence` entry
-  carries its own `comparable` flag and reasons in `facts_json` — a shortfall blocks only the lift
-  that fell short, an endurance day blocks only the muscles it actually loaded. `dose_context.comparable`
-  is telemetry only; the progression engine reads the per-dose flags, never that session-level rollup.
-  `settings.training_drive='push'` has bounded mechanical authority in progression (keeps an earned overload/vary/introduce step under
-  a fuel hold AND its full set count under a fuel `reduce`, top set dropped in both) — but every
-  promotion still needs `mayPromoteLoad` (an eligible finished dose, no VETOING cut pressure —
-  `sliding`, or `reduce` off goal), and every safety floor ignores drive entirely. Details in
-  `docs/ARCHITECTURE.md`.
-- **Work done is evidence — a prescription is a suggestion, the log is the truth.** `performed_at_full_load`
-  (`src/repo/outcome-comparability.ts`) is computed per dose against the LOGGED working load —
-  `recentWorkingWeight`/`recentWorkingSeconds` primary, the plan target only as a no-history fallback,
-  never the forward prescription progression is about to write — and it drops `recovery_dose`/`travel`
-  from that dose's non-comparable reasons; illness and a relevant symptom stay full safety floors. The
-  `recovery` flag is STRUCTURED — an active/recheck `recovery_cycles` row, a stored `recovery_cycle`
-  on the decision context, or an applied recovery-week stamp — never a regex over stored envelope
-  prose. Mechanism, the `facts_json` schema versions (owned by `src/repo/daily-reconciliation.ts`), and
-  the read path per version: `docs/ARCHITECTURE.md`.
-- **Cut pressure has three shapes, and only two veto an earned promotion.** `CutPressure` (`progression.ts`)
-  splits `hold` (a soft fuel read — never vetoes), `reduce` (an outright lighter fuel dose — vetoes
-  unless `near_goal`: `atOrNearGoal` (`src/repo/goal-proximity.ts`), within `NEAR_GOAL_REMAINING_LB`
-  = 2.5 lb of a live lose-mode goal INCLUDING a goal already reached — where it also stops shrinking
-  the plan at all, since the answer to underfueling at the destination is more food, not a smaller
-  session), `sliding`
-  (anchor lifts actually dropping, or this lift regressing/shortfall — ALWAYS vetoes), and `fast_loss`
-  (losing faster than lean-safe but not sliding — never vetoes an earned load step, only parks the
-  challenge top set/heavy single). `deep` is the `sliding || fast_loss` alias other readers still
-  consult as "the cut is running hot"; promotion itself reads `sliding`/`fast_loss` directly.
-- **RIR is optional, and its absence is not weakness.** The finish flow never asks for RIR, so most
-  logged sets carry none. With no RIR logged, capping the prescribed rep range on every working set
-  IS the strength signal (classic double progression) — the completeness gates require the cap, not a
-  felt rating. A logged RIR still speaks in both directions: RIR ≤1 was a grind and holds the step;
-  RIR ≥2 counts even below the ceiling. Card copy must not tell an athlete who never logs RIR to come
-  back at "RIR 2+" — the RIR-flavored phrasing in `progression-voice.ts` is picked only when an RIR was
-  actually logged; an athlete who never rates gets the same meaning spoken in reps. **Capping the
-  card's range with RIR ≥2 is the CARD's plateau, not the athlete's** — at a fixed weight and a capped
-  range there is nothing left to give but reserve, so the flat trend hands the decision to the earned
-  ladders (never a rotation); a grind (RIR ≤1) keeps the plateau read. And `grinding` in
-  `src/repo/program-state.ts` means low RIR *while the load is not moving*, so it requires a trailing
-  run of sessions at the same top load — low RIR at a weight just stepped up is reaching.
+- **Dose comparability is a per-lift question, not a per-session one** — `dose_evidence`/
+  `dose_context.comparable` (`progression.ts`), and `training_drive='push'`'s bounded mechanical
+  authority. Details in `docs/ARCHITECTURE.md`.
+- **Work done is evidence — a prescription is a suggestion, the log is the truth** —
+  `performed_at_full_load` (`src/repo/outcome-comparability.ts`). Details in `docs/ARCHITECTURE.md`.
+- **Cut pressure has three shapes, and only two veto an earned promotion** — `CutPressure`
+  (`progression.ts`): `hold` never vetoes, `reduce` vetoes unless `near_goal`, `sliding` always
+  vetoes, `fast_loss` never vetoes a load step. Details in `docs/ARCHITECTURE.md`.
+- **RIR is optional, and its absence is not weakness** — with no RIR logged, capping the prescribed
+  rep range on every working set IS the strength signal (`program-state.ts`/`progression-voice.ts`).
+  Details in `docs/ARCHITECTURE.md`.
 - **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
   as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.
   Details in `docs/ARCHITECTURE.md`.
@@ -434,8 +389,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 ## Security posture
 
 Single-user, trusted-network by default: **no authentication unless `CAIRN_AUTH_TOKEN` is set**, in
-which case one global guard in `src/auth.ts` gates `/api` and `/mcp` (exempting `GET /api/health` and
-the static shell). The PWA sends `X-Cairn-Token` (or `?token=` on direct resource URLs via
+which case one global guard in `src/auth.ts` gates `/api` and `/mcp`, exempting only `/api/health`
+(any method), `GET /api/apple-health/config`, and `POST /api/apple-health/pairing/exchange` — plus
+the static PWA shell, which stays ungated so it can render a token prompt. The PWA sends
+`X-Cairn-Token` (or `?token=` on direct resource URLs via
 `withToken()`); API/MCP clients use `Authorization: Bearer`. An optional per-IP rate limiter
 (`CAIRN_RATE_LIMIT`) is wired *before* the auth guard so it also blunts token brute-force. Uploads
 land in `data/uploads/` behind a raster-image/PDF mime allowlist (no SVG), and the 25 MB body limit is

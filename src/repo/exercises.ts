@@ -12,8 +12,13 @@ import {
   resolveGroup,
   setExerciseAlias,
 } from "./exercise-canon.js";
-import { repointGuidesOnMerge } from "./exercise-guide.js";
+import {
+  getExerciseGuideByExerciseId,
+  getGuideSuggestionForExercise,
+  repointGuidesOnMerge,
+} from "./exercise-guide.js";
 import { isValidGarminRef, mapExerciseToGarmin, sameExerciseIdentity } from "./garmin-exercise-map.js";
+import { getProgress } from "./sessions.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
@@ -714,4 +719,33 @@ export function recentWorkingSeconds(name: string, sessionsBack = 3, beforeExclu
   ) as any;
   const value = Number(row?.best_seconds);
   return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+// ---------- exercise guide ----------
+export function getExerciseDetail(name: string) {
+  const ex = findExercise(name);
+  if (!ex) return { found: false, name };
+  const recent = db
+    .prepare(
+      `SELECT s.date AS date, ls.weight, ls.reps, ls.rir, ls.duration_sec FROM logged_sets ls
+       JOIN sessions s ON s.id = ls.session_id
+       WHERE ls.exercise_id = ? ORDER BY s.date DESC, ls.id DESC LIMIT 8`
+    )
+    .all(ex.id);
+  const appears = db
+    .prepare(
+      `SELECT pd.day_number, pd.name AS day_name, pi.sets, pi.rep_low, pi.rep_high, pi.target_weight, pi.note, pi.warmup_sets, pi.target_seconds
+       FROM plan_items pi JOIN plan_days pd ON pd.id = pi.plan_day_id
+       WHERE pi.exercise_id = ? ORDER BY pd.day_number`
+    )
+    .all(ex.id);
+  // The instructional layer rides along on the detail the sheet already fetches —
+  // one round-trip, and `null` (the ordinary state, before any import) simply means
+  // the sheet renders without a "How to" section.
+  const guide = getExerciseGuideByExerciseId(Number(ex.id));
+  // And when nothing matched confidently, the parked candidate rides along too — the
+  // sheet is the one place a human can answer the question the matcher could not.
+  // Never both: a linked guide means there is nothing left to ask.
+  const guide_suggestion = guide ? null : getGuideSuggestionForExercise(String(ex.name));
+  return { found: true, ...ex, progress: getProgress(ex.name), recent, appears, guide, guide_suggestion };
 }

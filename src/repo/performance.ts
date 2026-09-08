@@ -26,7 +26,7 @@ import { findExercise } from "./exercises.js";
 import { getProfile, listWeight } from "./profile.js";
 import { type LiftState, getProgramState, type ProgramState } from "./program-state.js";
 import { type ProgramBalance, programBalance } from "./progression.js";
-import { localDateISO } from "./shared.js";
+import { daysBetweenISO, localDateISO } from "./shared.js";
 // Running re-tests + the cadenced strength test week + the DEXA lever. Imported for
 // types + a lazy compute (called only inside performanceStanding/performanceLever,
 // never at module init, so the run-progression → coach → performance cycle resolves
@@ -482,12 +482,6 @@ export function strengthImbalances(caps: LiftCapacity[]): Imbalance[] {
 // a GRIP (dead-hang) test when those are programmed but stale. Conservative + pull.
 const TEST_STALE_DAYS = 42;
 
-function daysBetween(fromISO: string, refISO: string): number | null {
-  const a = Date.parse(String(fromISO) + "T00:00:00Z");
-  const b = Date.parse(String(refISO) + "T00:00:00Z");
-  return Number.isFinite(a) && Number.isFinite(b) ? Math.round((b - a) / 864e5) : null;
-}
-
 function lastHeavyTestDays(exerciseName: string, refISO: string): number | null {
   const ex = findExercise(exerciseName);
   if (!ex) return null;
@@ -498,7 +492,7 @@ function lastHeavyTestDays(exerciseName: string, refISO: string): number | null 
     )
     .get(ex.id, refISO) as any;
   if (!row?.d) return null;
-  return daysBetween(String(row.d), refISO);
+  return daysBetweenISO(refISO, String(row.d));
 }
 
 function lastTimedTestDays(exerciseName: string, refISO: string): number | null {
@@ -511,7 +505,7 @@ function lastTimedTestDays(exerciseName: string, refISO: string): number | null 
     )
     .get(ex.id, refISO) as any;
   if (!row?.d) return null;
-  return daysBetween(String(row.d), refISO);
+  return daysBetweenISO(refISO, String(row.d));
 }
 
 export function testsDue(caps: LiftCapacity[], lifts: LiftState[], refISO: string): PerfTestDue[] {

@@ -35,6 +35,11 @@ function loadRenderDispatch(options = {}) {
     renderCoach: () => calls.push(["renderCoach"]),
     renderFoodJournal: () => calls.push(["renderFoodJournal"]),
     renderHistory: () => calls.push(["renderHistory"]),
+    ensureBundle: (name) => {
+      calls.push(["ensureBundle", name]);
+      return options.bundleFails ? Promise.reject(new Error("boom")) : Promise.resolve();
+    },
+    CairnStand: { renderStand: () => calls.push(["renderStand"]) },
     renderMe: () => calls.push(["renderMe"]),
     renderMeals: () => calls.push(["renderMeals"]),
     renderPlanEditor: () => calls.push(["renderPlanEditor"]),
@@ -120,4 +125,25 @@ test("render dispatcher respects endurance visibility and progress fallback", ()
   const fallback = loadRenderDispatch({ progressSeg: "missing" });
   fallback.context.renderTab("progress");
   assert.equal(fallback.calls.at(-1)[0], "renderHistory");
+});
+
+// Stand and Me live in the lazily-injected me-health bundle. The dispatcher must
+// wait for it rather than calling into globals that do not exist yet, and a
+// failed injection must surface as a rejected render (switchTab's error state)
+// rather than a silently blank destination.
+test("Stand and Me await the lazy me-health bundle before rendering", async () => {
+  const env = loadRenderDispatch();
+
+  await env.context.renderTab("stand");
+  assert.deepEqual(env.calls.slice(-2), [["ensureBundle", "me-health"], ["renderStand"]]);
+
+  await env.context.renderTab("me");
+  assert.deepEqual(env.calls.slice(-2), [["ensureBundle", "me-health"], ["renderMe"]]);
+});
+
+test("a failed me-health injection rejects the render instead of throwing blind", async () => {
+  const env = loadRenderDispatch({ bundleFails: true });
+
+  await assert.rejects(Promise.resolve(env.context.renderTab("stand")), /boom/);
+  assert.ok(!env.calls.some(([name]) => name === "renderStand"));
 });

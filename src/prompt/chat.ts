@@ -7,7 +7,9 @@ import {
   renderChatActionSchema,
   type ChatAction,
 } from "../chatActions.js";
-import * as repo from "../repo.js";
+import { getCoachContext } from "../repo/coach.js";
+import { listMemory } from "../repo/memory.js";
+import { mealPlanConstraintSnapshot } from "../repo/nutrition.js";
 import type { ChatLane } from "../chatRouting.js";
 import { renderChatLinkedPagesBlock, type ChatLinkedPage } from "../chatLinks.js";
 import { promptData } from "./context-projection.js";
@@ -165,7 +167,7 @@ function captureContext(ctx: any): Record<string, unknown> {
     }));
   let hardConstraints: unknown = null;
   try {
-    hardConstraints = repo.mealPlanConstraintSnapshot();
+    hardConstraints = mealPlanConstraintSnapshot();
   } catch {
     hardConstraints = null;
   }
@@ -218,7 +220,7 @@ export function buildChatPrompt(
   options: BuildChatPromptOptions = {}
 ): string {
   const lane = options.lane ?? "coach";
-  const ctx = repo.getCoachContext();
+  const ctx = getCoachContext();
   // Prefix each turn with its relative time (when known) so the agent sees the
   // conversation's RHYTHM — what's from this morning vs minutes ago — not a flat,
   // timeless wall of text it would mistake for one continuous moment.
@@ -363,7 +365,7 @@ const DISTILL_SCHEMA = `{
 // archived and extracts only the durable facts worth carrying into the memory
 // table. The reset never blocks on this — an agent failure still archives.
 export function buildChatDistillPrompt(history: { role: string; content: string }[]): string {
-  const known = (repo.listMemory(60) as any[]).map((m) => `- ${m.content}`).join("\n");
+  const known = (listMemory(60) as any[]).map((m) => `- ${m.content}`).join("\n");
   const convo = (history || [])
     .slice(-80)
     .map((m) => `${m.role === "user" ? "User" : "Coach"}: ${String(m.content ?? "").slice(0, 600)}`)
@@ -431,7 +433,7 @@ function memoryLedgerLine(m: any): string {
 }
 
 export function buildMemoryConsolidationPrompt(): string {
-  const rows = (repo.listMemory(120) as any[]).map(memoryLedgerLine).join("\n");
+  const rows = (listMemory(120) as any[]).map(memoryLedgerLine).join("\n");
   return `${CAIRN_PERSONA}
 
 Right now you are acting as Cairn's coaching-memory librarian. Tidy the user's memory store so it stays a
@@ -479,7 +481,7 @@ const ABOUT_ME_SCHEMA = `{
 // (which the user curates) is preserved and only extended/sharpened with what the
 // data clearly supports. The user still edits it freely afterward.
 export function buildAboutMeGrowthPrompt(): string {
-  const ctx = repo.getCoachContext();
+  const ctx = getCoachContext();
   const profile = ctx.profile || {};
   const mem = ctx.memory.map((m) => `- (${m.kind ?? "observation"}) ${String(m.content ?? "").slice(0, 240)}`).join("\n");
   const family = (ctx.family as any[] || []).map((f: any) => `- ${f.name ?? "member"}${f.relation ? ` (${f.relation})` : ""}${f.notes ? `: ${String(f.notes).slice(0, 120)}` : ""}`).join("\n");

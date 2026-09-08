@@ -109,16 +109,25 @@ version). You can also run it manually with `npm run migrate`.
 
 **Down-migrations are not supported — back up before deploying schema changes.**
 
-## The PWA cache version (don't forget this)
+## The PWA cache version (derived, not yours to bump)
 
 `public/` is dependency-free vanilla JS served by a cache-first service worker.
 
-> **Any change to a file under `public/` MUST bump the `CACHE` version constant
-> at the top of `public/sw.js` in the same commit.**
+> **The cache version is computed from the shell's own bytes. Do not hand-bump it.**
 
-Skip this and installed PWA clients will keep serving stale assets forever — so CI
-fails a PR that touches `public/` without bumping the cache (see the table above). The
-visual contract (the "Atelier" design system) lives in `docs/DESIGN.md` — read it
+`public/sw.js` ships the placeholder `const CACHE = "cairn-shell-dev"`, and the server
+rewrites it to `cairn-<hash>` when it serves `/sw.js` (`src/swVersion.ts`) — a content
+hash over every asset the worker precaches. A changed shell always ships a new cache
+name; an unchanged one never re-downloads.
+
+What is still yours: **add every new static asset to `CORE_ASSETS` in `public/sw.js`.**
+An asset missing there is neither available offline nor covered by the hash, which is
+exactly how installed clients used to end up serving stale bytes forever. CI checks that
+contract (see the table above). Note too that `index.html` does not load every bundle —
+one marked `lazy` in `scripts/build-client.mjs` is injected on demand by
+`src/client/app/lazy-bundles.ts`, so nothing may reference its globals at top level.
+
+The visual contract (the "Atelier" design system) lives in `docs/DESIGN.md` — read it
 before touching `styles.css` or view markup.
 
 ## Before you open a PR: `npm run verify`
@@ -137,7 +146,7 @@ remembering:
 |---|---|---|
 | `npm test` | Logic/behavior regressions (builds `dist/` first) | Fix the failing test |
 | `npm run docs:check` | `src/api.ts` / `src/mcp.ts` changed but the reference indexes weren't regenerated | `npm run docs:index` and commit `docs/API.md` + `docs/MCP-TOOLS.md` |
-| `scripts/check-sw-cache.mjs` (PRs) | A file under `public/` changed but `public/sw.js`'s `CACHE` version wasn't bumped | Bump `const CACHE = "cairn-vNN"` in `public/sw.js` |
+| `scripts/check-sw-cache.mjs` (PRs) | The precache contract drifted: a new bundle missing from `CORE_ASSETS`, `index.html` loading a `lazy` bundle, or the `CACHE` placeholder renamed | Add the asset to `CORE_ASSETS` (the version itself is derived in `src/swVersion.ts` — never hand-bumped) |
 
 ## Testing
 

@@ -15,6 +15,7 @@ import {
   type AgentAvailabilityState,
   type AgentFailure,
 } from "./agentAvailability.js";
+import { log } from "./log.js";
 export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,7 +37,7 @@ function debugAgentStderr(name: string, code: number | null, stderr: string) {
   if (!AGENT_DEBUG) return;
   const s = (stderr || "").trim();
   if (!s) return;
-  console.error(`[agent:${name}] exit ${code} stderr:\n${s.slice(0, 4000)}`);
+  log.error(`[agent:${name}] exit ${code} stderr:\n${s.slice(0, 4000)}`);
 }
 
 export type ReasoningLevel = "low" | "medium" | "high" | "xhigh" | "max";

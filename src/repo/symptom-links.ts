@@ -1,7 +1,7 @@
 import { listCheckins } from "./coach.js";
 import { listContextEvents } from "./health.js";
 import { type OptimalZone, markerSide, matchOptimalZone, prioritizeMarkers } from "./propagation.js";
-import { joinList, localDateISO } from "./shared.js";
+import { addDaysISO, joinList, localDateISO } from "./shared.js";
 
 // ============================================================================
 // SYMPTOM → MARKER REASONING — the connective tissue between what the athlete
@@ -186,12 +186,6 @@ export interface SymptomLinksOpts {
   includeCheckins?: boolean; // default true — also scan check-in notes
   windowDays?: number;      // recency window for DB-read symptom sources (default 180)
   max?: number;             // cap on returned links (default 6)
-}
-
-function addDaysISO(iso: string, days: number): string | null {
-  const t = Date.parse(`${iso}T00:00:00Z`);
-  if (!Number.isFinite(t)) return null;
-  return new Date(t + days * 864e5).toISOString().slice(0, 10);
 }
 
 // The searchable symptom text of a context_event: title + detail + meta.impact.

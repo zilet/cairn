@@ -25,6 +25,7 @@ import { strengthBenchmarkMilestones, type StrengthMilestoneInput } from "./trai
 import { followupLabel, markerSlugFromSignalKey } from "./attention-labels.js";
 import { dexaRescanWindow, latestDexaDate } from "./dexa-window.js";
 import { addDaysISO, clipText, daysBetweenISO, localDateISO } from "./shared.js";
+import { round1 } from "../lib/numbers.js";
 
 export type ForwardTimelineKind = "goal" | "phase" | "recheck" | "retest" | "rescan" | "milestone" | "block";
 
@@ -68,10 +69,6 @@ function iso(value: unknown): string | null {
   if (value == null || value === "") return null;
   const s = String(value).trim().slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
-}
-
-function round1(value: number): number {
-  return Math.round(value * 10) / 10;
 }
 
 function clip(text: unknown, max = 200): string {

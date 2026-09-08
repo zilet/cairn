@@ -1894,6 +1894,11 @@ declare global {
   declare function openOnboarding(): void;
   declare function primeArtManifest(): Promise<void>;
   declare function jobReconnect(): Promise<void>;
+  /** Names of the bundles index.html does NOT load eagerly (see build-client's BUNDLES). */
+  declare type ClientLazyBundleName = "me-health";
+  /** Inject a lazily-loaded app-shell bundle once; resolves after it has executed. */
+  declare function ensureBundle(name: ClientLazyBundleName): Promise<void>;
+  declare function bundleLoaded(name: ClientLazyBundleName): boolean;
   declare function startAppShell(): void;
 
   type ChatComposerControllerMessage = Partial<ClientChatMessage> &
@@ -2017,6 +2022,8 @@ declare global {
     downloadFile(href: string): void;
     CairnRoutes?: ClientRoutesApi;
     registerAppJobReconnectors(): void;
+    ensureBundle(name: ClientLazyBundleName): Promise<void>;
+    bundleLoaded(name: ClientLazyBundleName): boolean;
     installMobileViewportGuards(): void;
     installDayRolloverWatcher(): void;
     installWakeLockWatcher(): void;
@@ -2676,6 +2683,8 @@ declare global {
       recoveryNoDataHtml(message?: string): string;
       recoveryLineHtml(text: unknown, sub: unknown): string;
       recoveryHtml(summary: Record<string, unknown> | null | undefined): string;
+      sleepDurationPhrase(avgSleepMin: unknown): string;
+      sleepDurationTone(avgSleepMin: unknown): "ok" | "watch" | "warn" | "mute";
       optimalPhrase(marker: Record<string, unknown> | null | undefined): {
         word: string;
         tone: "ok" | "warn" | "watch";

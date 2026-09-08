@@ -4,7 +4,7 @@ import {
   landedBrainDecisions,
   upcomingBrainDecisions,
 } from "../../repo/brain-decisions.js";
-import { recoveryWeekStatus } from "../../repo/profile.js";
+import { recoveryWeekStatus } from "../../repo/recovery-week.js";
 
 export interface PlanUpcomingItem {
   summary: string;

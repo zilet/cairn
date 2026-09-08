@@ -921,7 +921,8 @@ test("the chat client invalidates plan cache on confirmed persistence without lo
   const client = readFileSync(new URL("../src/client/chat-turn-client.ts", import.meta.url), "utf8");
   assert.match(client, /result\.verified === true \|\| result\.persisted === true \|\| result\.committed === true/);
   assert.match(client, /swrInvalidate\("plan"\)/);
-  const server = readFileSync(new URL("../src/chatTurns.ts", import.meta.url), "utf8");
+  // The plan reconciler now lives in src/chat-reconcile.ts (chatTurns re-exports it).
+  const server = readFileSync(new URL("../src/chat-reconcile.ts", import.meta.url), "utf8");
   assert.match(server, /const verified = results\.length > 0 && verifiedResults\.length === results\.length/);
 });
 

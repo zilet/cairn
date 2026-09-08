@@ -29,7 +29,7 @@
 // the program state — mirroring performanceStanding(date, { programState, ... }).
 // ============================================================================
 import { db } from "../db.js";
-import { localDateISO } from "./shared.js";
+import { daysBetweenISO, localDateISO } from "./shared.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { getAttentionSchedule } from "./attention.js";
 import {
@@ -326,12 +326,6 @@ export interface TestWeekOpts {
   block?: ProgramBlock | null; // injected active block (else read live)
 }
 
-function daysBetweenISO(fromISO: string, refISO: string): number | null {
-  const a = Date.parse(String(fromISO) + "T00:00:00Z");
-  const b = Date.parse(String(refISO) + "T00:00:00Z");
-  return Number.isFinite(a) && Number.isFinite(b) ? Math.round((b - a) / 864e5) : null;
-}
-
 // Benchmark-ish compound names — these re-test capacity best. Used to LEAD the
 // key-lift list before falling back to the strongest reps lifts overall.
 const BENCHMARK_RE = /squat|bench|deadlift|\bpress\b|overhead|\brow\b|pull[\s-]?up|chin[\s-]?up|\bohp\b|\brdl\b/i;
@@ -394,7 +388,7 @@ function detectDeFactoTestWeek(keyLifts: string[], onOrBefore: string): string |
   for (const anchor of events) {
     const inWindow = new Set<string>();
     for (const e of events) {
-      const gap = daysBetweenISO(e.date, anchor.date);
+      const gap = daysBetweenISO(anchor.date, e.date);
       if (gap != null && gap >= 0 && gap <= DE_FACTO_TEST_WEEK_SPAN_DAYS) inWindow.add(e.lift);
     }
     if (inWindow.size >= 2) return anchor.date;
@@ -420,7 +414,7 @@ export function testWeekDue(date?: string, opts: TestWeekOpts = {}): TestWeekDue
 
   const last = getAppState(TEST_WEEK_STATE_KEY);
   const last_test_week = last && /^\d{4}-\d{2}-\d{2}/.test(last) ? last.slice(0, 10) : null;
-  const sinceDays = last_test_week ? daysBetweenISO(last_test_week, d) : null;
+  const sinceDays = last_test_week ? daysBetweenISO(d, last_test_week) : null;
 
   // The active periodization block reaching its 'realization' phase IS a test
   // week — that's the phase's whole point (peak / express the block's work).
@@ -458,7 +452,7 @@ export function testWeekDue(date?: string, opts: TestWeekOpts = {}): TestWeekDue
         due = true;
         why = "Your main lifts are due a re-test — a heavy-ish test session re-reads your real ceilings before the next build.";
       } else if (attn.next_due != null) {
-        const wk = Math.max(0, Math.round((daysBetweenISO(d, attn.next_due) ?? 0) / 7));
+        const wk = Math.max(0, Math.round((daysBetweenISO(attn.next_due, d) ?? 0) / 7));
         why = wk > 0
           ? `Next strength test in about ${wk} week${wk === 1 ? "" : "s"}.`
           : "A test week is coming up soon.";

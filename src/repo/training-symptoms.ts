@@ -9,6 +9,7 @@ import {
   latestSymptomReportForEvent,
   recordSymptomReport,
 } from "./symptom-reports.js";
+import { requireIsoDate } from "../lib/dates.js";
 
 export type SymptomFreshness = "acute_movement_brake" | "hold_easy_recheck" | "stale_needs_recheck";
 
@@ -97,15 +98,8 @@ export interface MovementToleranceInput {
   evidence?: ToleranceEvidence;
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
 function validDate(value: unknown, fallback = localDateISO()): string {
-  const date = String(value ?? fallback);
-  const parsed = DATE_RE.test(date) ? new Date(`${date}T00:00:00Z`) : null;
-  if (!parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
-    throw new Error("date must be a real YYYY-MM-DD");
-  }
-  return date;
+  return requireIsoDate(value, fallback);
 }
 
 export function eventScope(value: unknown): SymptomScope {

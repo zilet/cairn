@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { RECOVERY_WEEK_INSTRUCTION, RECOVERY_WEEK_INSTRUCTION_PREFIX, shouldAutoDraftRecoveryWeek } from "../dist/repo/profile.js";
+import { RECOVERY_WEEK_INSTRUCTION, RECOVERY_WEEK_INSTRUCTION_PREFIX, shouldAutoDraftRecoveryWeek } from "../dist/repo/recovery-week.js";
 
 // The lead-mode recovery auto-draft (scheduler tick g) keys off the SAME conductor
 // read that renders "your coach sets this up automatically" — these are the guards

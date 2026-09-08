@@ -1,3 +1,4 @@
+import { finite } from "../lib/numbers.js";
 export const SESSION_PRESCRIPTION_LIMITS = {
   sets: 20,
   reps: 100,
@@ -32,12 +33,6 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function present(value: unknown): boolean {
   return value !== undefined && value !== null && value !== "";
-}
-
-function finite(value: unknown): number | null {
-  if (!present(value)) return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
 }
 
 function positiveNumber(

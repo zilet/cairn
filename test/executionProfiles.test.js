@@ -259,9 +259,16 @@ test("every routable task except chat declares an execution profile", () => {
 // Scan the source rather than hardcoding: a THIRD verify op added later must fail
 // here instead of quietly inheriting the CLI's defaults.
 test("every self-critique verify op declares an execution profile", () => {
-  const src = fs.readFileSync(path.join(root, "src", "coachOps.ts"), "utf8");
+  // The ops live under src/coachOps/ (one file per domain) behind the coachOps.ts
+  // re-export barrel, so scan the whole directory rather than the barrel itself.
+  const opsDir = path.join(root, "src", "coachOps");
+  const src = fs
+    .readdirSync(opsDir)
+    .filter((f) => f.endsWith(".ts"))
+    .map((f) => fs.readFileSync(path.join(opsDir, f), "utf8"))
+    .join("\n");
   const ops = [...new Set([...src.matchAll(/"([a-z_]+_verify)"/g)].map((m) => m[1]))];
-  assert.ok(ops.length >= 2, `expected to find the verify ops in coachOps.ts, found ${ops.length}`);
+  assert.ok(ops.length >= 2, `expected to find the verify ops under src/coachOps/, found ${ops.length}`);
   assert.ok(ops.includes("session_verify") && ops.includes("meal_plan_verify"), `found: ${ops.join(", ")}`);
   for (const op of ops) {
     // taskForOp must not remap these away from their own key, or the pin is a no-op.

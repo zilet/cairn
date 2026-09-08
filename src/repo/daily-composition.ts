@@ -20,6 +20,7 @@ import {
 import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
+import { round5, finite } from "../lib/numbers.js";
 
 // Stage 3 of the adaptive daily training plan — bounded agent composition.
 // The agent composes INSIDE the deterministic Stage 2 envelope; it never
@@ -212,12 +213,6 @@ function applyRecoveryCycleTarget(item: any, envelope: DailyDecisionEnvelope): b
   return true;
 }
 
-function finite(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
 function holdAnchor(exercise: string, envelope: DailyDecisionEnvelope) {
   const planDay = envelope.template.day_number == null ? null : (getPlanDay(envelope.template.day_number) as any);
   const planned = (Array.isArray(planDay?.items) ? planDay.items : []).find(
@@ -306,10 +301,6 @@ export const REACH_AMRAP_NOTES: readonly [string, ...string[]] = [
   "Finish with as many clean reps as you have — stop with one in reserve",
   "Last set is the reach: clean reps, one left in the tank",
 ];
-
-function round5(n: number): number {
-  return Math.round(n / 5) * 5;
-}
 
 // A peak single is a near-maximal effort, and every day-level brake in this file
 // exists because near-maximal is exactly what those days are not for. The

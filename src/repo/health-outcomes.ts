@@ -1,5 +1,7 @@
 import { db } from "../db.js";
-import { addInsight, isDuplicateInsight, listDirectives } from "./coach.js";
+import { round2 } from "../lib/numbers.js";
+import { listDirectives } from "./directives.js";
+import { addInsight, isDuplicateInsight } from "./insights.js";
 import {
   type InsightEvidenceEpoch,
   insightFacetForSurface,
@@ -14,6 +16,7 @@ import { markerValidityHorizons } from "./marker-validity.js";
 import { addMemory } from "./memory.js";
 import { capStr } from "./nutrition.js";
 import { markerSide, matchOptimalZone, optimalDistance } from "./propagation-data.js";
+import { round1 } from "../lib/numbers.js";
 
 export type HealthOutcome = "improving" | "unchanged" | "worsening";
 
@@ -80,14 +83,6 @@ function dateOnly(value: unknown): string | null {
 
 function folded(value: unknown): string {
   return String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function round1(value: number): number {
-  return Math.round(value * 10) / 10;
-}
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function numeric(value: unknown): number | null {

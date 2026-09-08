@@ -1,23 +1,33 @@
 #!/usr/bin/env node
 // CI guard for the repo's #1 footgun: a cache-first service worker.
 //
-// If a change touches an app-shell asset, a generated client source, or the client
-// bundle manifest, the `const CACHE = "cairn-vNN"` constant at the top of
-// public/sw.js MUST move in the same diff — otherwise already-installed PWA clients
-// keep serving the STALE bundle forever (a client once silently fell ~40 versions
-// behind). See CONTRIBUTING.md "The PWA cache version". Also validates that the
-// classic app-shell script graph and service-worker precache list stay aligned.
-// Pure git plumbing, no deps.
+// The cache VERSION is no longer a human's job. public/sw.js ships the
+// placeholder `const CACHE = "cairn-shell-dev"`, and src/swVersion.ts rewrites it
+// at serve time to a content hash over everything the worker precaches — so a
+// changed shell always ships a new cache name, and an unchanged one never
+// re-downloads. What a human still owns is the PRECACHE LIST: an asset missing
+// from CORE_ASSETS is neither cached offline nor covered by the hash.
 //
-// Usage: node scripts/check-sw-cache.mjs [baseRef]   (baseRef defaults to origin/main)
-import { execFileSync } from "node:child_process";
+// So this script asserts the derived-version contract still holds end to end:
+//   - the placeholder literal is present and intact (the server substitutes it
+//     by exact match; a rename here silently freezes the version);
+//   - CORE_ASSETS mirrors the build-client BUNDLES manifest exactly, so a new
+//     bundle cannot be born unprecached;
+//   - index.html loads the eager bundles, in manifest order, and NONE of the
+//     bundles marked `lazy` (those are injected by src/client/app/lazy-bundles.ts);
+//   - every precached url exists on disk.
+// Pure git/fs plumbing, no deps.
+//
+// Usage: node scripts/check-sw-cache.mjs
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { BUNDLES } from "./build-client.mjs";
 
-const base = process.argv[2] || "origin/main";
-const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/** Must match SW_CACHE_PLACEHOLDER in src/swVersion.ts. */
+const CACHE_PLACEHOLDER = "cairn-shell-dev";
 
 function readRepo(file) {
   return readFileSync(path.join(root, file), "utf8");
@@ -40,6 +50,11 @@ function duplicates(values) {
   return [...dupes];
 }
 
+/** `public/js/bundle-01-core.js` -> `/js/bundle-01-core.js` */
+function servedUrl(output) {
+  return output.replace(/^public/, "");
+}
+
 function assertPublicAssetContract() {
   const index = readRepo("public/index.html");
   const sw = readRepo("public/sw.js");
@@ -48,6 +63,18 @@ function assertPublicAssetContract() {
   const optional = quotedArrayValues(sw, "OPTIONAL_ASSETS");
   const allCached = [...core, ...optional];
   const errors = [];
+
+  // The version is derived from this literal being substitutable. Assert the
+  // placeholder rather than a diff-window "did someone bump it" heuristic.
+  const cacheLiteral = /const CACHE\s*=\s*["']([^"']+)["']/.exec(sw);
+  if (!cacheLiteral) {
+    errors.push("public/sw.js is missing its `const CACHE = \"…\"` declaration");
+  } else if (cacheLiteral[1] !== CACHE_PLACEHOLDER) {
+    errors.push(
+      `public/sw.js CACHE must stay the placeholder "${CACHE_PLACEHOLDER}" (got "${cacheLiteral[1]}") — ` +
+        "the served version is derived in src/swVersion.ts and substituted by exact match"
+    );
+  }
 
   for (const [name, values] of [
     ["CORE_ASSETS", core],
@@ -66,21 +93,42 @@ function assertPublicAssetContract() {
   }
 
   if (scripts[0] !== "/art.js") errors.push("public/index.html must load /art.js before feature scripts");
-  // index.html loads a handful of concatenated bundles (bundle-NN-*.js) instead of
-  // the ~216 individual modules; the ordered constituents live in the build-client
-  // BUNDLES manifest. Here we only enforce that index.html loads bundle files and
-  // that the bundle set + order is exactly mirrored by CORE_ASSETS, so the boot
-  // graph and the precache never drift apart.
+
+  // The BUNDLES manifest is the authority on which bundles exist and in what
+  // order; CORE_ASSETS must mirror it exactly (so every bundle is precached and
+  // folded into the derived version), and index.html must load exactly the eager
+  // subset — a `lazy` bundle is injected by ensureBundle() at navigation time.
+  const manifestBundles = BUNDLES.map((bundle) => servedUrl(bundle.output));
+  const eagerBundles = BUNDLES.filter((bundle) => !bundle.lazy).map((bundle) => servedUrl(bundle.output));
+  const lazyBundles = BUNDLES.filter((bundle) => bundle.lazy).map((bundle) => servedUrl(bundle.output));
   const indexBundles = scripts.filter((src) => src.startsWith("/js/"));
   const coreBundles = core.filter((src) => src.startsWith("/js/"));
+
   if (indexBundles.some((src) => !/^\/js\/bundle-\d+[\w-]*\.js$/.test(src))) {
     errors.push(`public/index.html must load only /js/bundle-*.js scripts (got: ${indexBundles.join(", ")})`);
   }
-  if (JSON.stringify(indexBundles) !== JSON.stringify(coreBundles)) {
+  if (JSON.stringify(coreBundles) !== JSON.stringify(manifestBundles)) {
     errors.push(
-      "public/index.html bundle scripts and CORE_ASSETS bundles must match in order " +
-        `(index.html: ${indexBundles.join(", ")} | CORE_ASSETS: ${coreBundles.join(", ")})`
+      "sw.js CORE_ASSETS bundles must mirror the build-client BUNDLES manifest exactly " +
+        `(CORE_ASSETS: ${coreBundles.join(", ")} | manifest: ${manifestBundles.join(", ")})`
     );
+  }
+  if (JSON.stringify(indexBundles) !== JSON.stringify(eagerBundles)) {
+    errors.push(
+      "public/index.html must load exactly the non-lazy bundles, in manifest order " +
+        `(index.html: ${indexBundles.join(", ")} | expected: ${eagerBundles.join(", ")})`
+    );
+  }
+
+  // A lazy bundle is only reachable through the loader's own table.
+  if (lazyBundles.length) {
+    const loader = readRepo("src/client/app/lazy-bundles.ts");
+    for (const bundle of BUNDLES.filter((b) => b.lazy)) {
+      const url = servedUrl(bundle.output);
+      if (!loader.includes(`"${bundle.lazy}": "${url}"`)) {
+        errors.push(`src/client/app/lazy-bundles.ts must map "${bundle.lazy}" to "${url}"`);
+      }
+    }
   }
 
   const missingFiles = allCached
@@ -96,64 +144,10 @@ function assertPublicAssetContract() {
     for (const error of errors) console.error(`    ${error}`);
     process.exit(1);
   }
-  console.log(`✓ public app-shell cache contract is aligned (${scripts.length} boot script(s), ${core.length} core asset(s))`);
+  console.log(
+    `✓ public app-shell cache contract is aligned (${scripts.length} eager boot script(s), ` +
+      `${lazyBundles.length} lazy bundle(s), ${core.length} core asset(s), version derived from the shell)`
+  );
 }
 
 assertPublicAssetContract();
-
-let changed = [];
-try {
-  changed = git("diff", "--name-only", `${base}...HEAD`).split("\n").filter(Boolean);
-} catch (e) {
-  // Base ref unavailable (shallow clone, local run without the base fetched) — fall
-  // through to the local working-tree check below. CI normally has the base.
-  console.log(`• base ref ${base} unavailable (${e.message.split("\n")[0]}) — checking local diff only`);
-}
-const localChanged = [
-  ...git("diff", "--name-only").split("\n").filter(Boolean),
-  ...git("diff", "--cached", "--name-only").split("\n").filter(Boolean),
-  ...git("ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean),
-];
-changed = [...new Set([...changed, ...localChanged])];
-
-// public/js is generated and ignored, so a source-only client change can alter a
-// cache-first bundle without appearing as a public/ diff. Treat every client
-// source (and the build manifest that composes those sources) as an app-shell
-// asset change too. This stays deliberately bounded to inputs that can affect a
-// precached browser artifact.
-const assetChanges = changed.filter(
-  (f) =>
-    (f.startsWith("public/") && f !== "public/sw.js") ||
-    f.startsWith("src/client/") ||
-    f === "scripts/build-client.mjs"
-);
-if (assetChanges.length === 0) {
-  console.log("✓ no app-shell asset or generated-client source changes — sw.js cache bump not required");
-  process.exit(0);
-}
-
-// Did the CACHE constant line itself change in this diff?
-let swDiff = "";
-try {
-  swDiff = git("diff", `${base}...HEAD`, "--", "public/sw.js");
-} catch {
-  /* no diff for sw.js at all */
-}
-try {
-  swDiff += "\n" + git("diff", "--", "public/sw.js");
-  swDiff += "\n" + git("diff", "--cached", "--", "public/sw.js");
-} catch {
-  /* local sw diff unavailable */
-}
-const removedCache = [...swDiff.matchAll(/^-\s*const CACHE\s*=\s*["']([^"']+)["']/gm)].map((m) => m[1]);
-const addedCache = [...swDiff.matchAll(/^\+\s*const CACHE\s*=\s*["']([^"']+)["']/gm)].map((m) => m[1]);
-const cacheBumped = addedCache.some((next) => removedCache.some((prev) => prev !== next));
-
-if (!cacheBumped) {
-  console.error("✗ app-shell assets or generated-client sources changed but the public/sw.js CACHE version was not bumped:");
-  for (const f of assetChanges) console.error(`    ${f}`);
-  console.error('\n  Bump the `const CACHE = "cairn-vNN"` constant at the top of public/sw.js in');
-  console.error("  the same change, or installed PWA clients will serve stale assets forever.");
-  process.exit(1);
-}
-console.log(`✓ app-shell assets or generated-client sources changed and sw.js CACHE was bumped (${assetChanges.length} input file(s))`);

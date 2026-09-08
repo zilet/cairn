@@ -36,7 +36,7 @@ import { listTrainingSymptoms } from "../../repo/training-symptoms.js";
 import { getSettings } from "../../repo/settings.js";
 import { patchBrainDecision, recordDecision } from "../../repo/brain-decisions.js";
 import { MAX_DEFERRED_EXPECTATIONS } from "../../repo/brain/change-expectations.js";
-import { createProposal } from "../../repo/profile.js";
+import { createProposal } from "../../repo/proposals.js";
 import { changesReduceSets } from "../../repo/volume-guard.js";
 import { runChosen, runChosenWithCoachReads } from "../../runChosen.js";
 import { applyProposalWithAutonomy } from "./autonomy-service.js";

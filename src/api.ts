@@ -23,9 +23,12 @@ import { trainingLogRouter } from "./routes/training-log.js";
 import { bodyMetricsRouter } from "./routes/body-metrics.js";
 import { journeyRouter } from "./routes/journey.js";
 import { appleHealthRouter } from "./routes/apple-health.js";
-import { diagnosticErrorName, recordUnexpectedApiError, requestId } from "./diagnostics.js";
+import { diagnosticErrorName, diagnosticStackFrames, recordUnexpectedApiError, requestId } from "./diagnostics.js";
+import { telemetryRequestPathLabel } from "./telemetry-privacy.js";
+import { log } from "./log.js";
 import { registerMountedApiRouteFamilies } from "./repo/diagnostics.js";
 import { idempotencyGuard } from "./idempotency.js";
+import { assertNoDuplicateApiRoutes, type ApiMount } from "./route-audit.js";
 
 export const api = Router();
 
@@ -34,35 +37,49 @@ export const api = Router();
 // when the header is absent (every non-outbox request).
 api.use(idempotencyGuard);
 
-api.use("/", todayRouter);
-api.use("/", todaySideRouter);
-api.use("/", dayCoachRouter);
-api.use("/", connectedBrainRouter);
-api.use("/", systemRouter);
-api.use("/", personRouter);
-api.use("/", artRouter);
-api.use("/", operatorRouter);
-api.use("/", garminRouter);
-api.use("/", exportsRouter);
-api.use("/", healthMetricsRouter);
-api.use("/", nutritionRouter);
-api.use("/", planExercisesRouter);
-api.use("/", programRouter);
-api.use("/", memoryLearningRouter);
-api.use("/", personContextRouter);
-api.use("/", trainingLogRouter);
-api.use("/", bodyMetricsRouter);
-api.use("/", journeyRouter);
-api.use("/", appleHealthRouter);
-api.use("/chat", chatRouter);
-api.use("/agent-jobs", agentJobsRouter);
+// The mount table, in mount order. It is a TABLE rather than twenty api.use() calls
+// so the same list can be audited: assertNoDuplicateApiRoutes below reads every
+// (method, path) back off these routers and throws at module load when two of them
+// claim the same endpoint — with ~20 routers mounted at "/", a path defined twice is
+// silently shadowed by whichever router mounted first, and Express says nothing.
+const API_MOUNTS: ApiMount[] = [
+  { name: "today", prefix: "/", router: todayRouter },
+  { name: "today-side", prefix: "/", router: todaySideRouter },
+  { name: "day-coach", prefix: "/", router: dayCoachRouter },
+  { name: "connected-brain", prefix: "/", router: connectedBrainRouter },
+  { name: "system", prefix: "/", router: systemRouter },
+  { name: "person", prefix: "/", router: personRouter },
+  { name: "art", prefix: "/", router: artRouter },
+  { name: "operator", prefix: "/", router: operatorRouter },
+  { name: "garmin", prefix: "/", router: garminRouter },
+  { name: "exports", prefix: "/", router: exportsRouter },
+  { name: "health-metrics", prefix: "/", router: healthMetricsRouter },
+  { name: "nutrition", prefix: "/", router: nutritionRouter },
+  { name: "plan-exercises", prefix: "/", router: planExercisesRouter },
+  { name: "program", prefix: "/", router: programRouter },
+  { name: "memory-learning", prefix: "/", router: memoryLearningRouter },
+  { name: "person-context", prefix: "/", router: personContextRouter },
+  { name: "training-log", prefix: "/", router: trainingLogRouter },
+  { name: "body-metrics", prefix: "/", router: bodyMetricsRouter },
+  { name: "journey", prefix: "/", router: journeyRouter },
+  { name: "apple-health", prefix: "/", router: appleHealthRouter },
+  { name: "chat", prefix: "/chat", router: chatRouter },
+  { name: "agent-jobs", prefix: "/agent-jobs", router: agentJobsRouter },
+  { name: "health-docs", prefix: "/health-docs", router: healthDocsRouter },
+];
 
-api.use("/health-docs", healthDocsRouter);
+for (const mount of API_MOUNTS) api.use(mount.prefix, mount.router);
 
-// The three mounts above that carry a PREFIX. A prefixed mount contributes exactly
-// one route family — its own prefix — and Express keeps the mount path inside a
-// closure, so it is the one part of the map that cannot be read back off the router.
-const PREFIXED_MOUNTS = ["chat", "agent-jobs", "health-docs"];
+// Boot-time contract, not a test-only nicety: a shadowed endpoint reads as live code
+// and fails only in production, so this throws before the server can serve anything.
+assertNoDuplicateApiRoutes(API_MOUNTS);
+
+// The mounts that carry a PREFIX. A prefixed mount contributes exactly one route
+// family — its own prefix — and Express keeps the mount path inside a closure, so it
+// is the one part of the map that cannot be read back off the router.
+const PREFIXED_MOUNTS = API_MOUNTS.filter((mount) => mount.prefix !== "/").map((mount) =>
+  mount.prefix.replace(/^\//, "")
+);
 
 /**
  * The route families THIS build serves: the first path segment of every route the
@@ -103,13 +120,54 @@ function mountedApiRouteFamilies(): string[] {
 
 registerMountedApiRouteFamilies(mountedApiRouteFamilies());
 
+/**
+ * A client's own malformed request, surfaced by body-parser before any route ran.
+ * Express 5 + body-parser set `type` and a 4xx `status`; anything else is ours.
+ * Returning 500 for these would file an operator alert for a caller's typo.
+ */
+function clientRequestFault(err: unknown): { status: number; message: string } | null {
+  const type = (err as any)?.type;
+  const status = Number((err as any)?.status ?? (err as any)?.statusCode);
+  if (type === "entity.too.large") return { status: 413, message: "request body too large" };
+  if (type === "entity.parse.failed") return { status: 400, message: "invalid JSON body" };
+  if (type === "encoding.unsupported") return { status: 415, message: "unsupported content encoding" };
+  if (Number.isFinite(status) && status >= 400 && status < 500) return { status, message: "bad request" };
+  return null;
+}
+
 // Global JSON error handler — registered LAST so any uncaught route error
 // returns JSON, not Express's default HTML error page (the PWA's api() helper
-// calls r.json() and would break on HTML).
-export function apiErrorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+// calls r.json() and would break on HTML). server.ts registers it a second time
+// at the app level, because body parsing runs BEFORE this router is reached and
+// its errors would otherwise fall through to Express's HTML page.
+export function apiErrorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
+  // Half-written response (a stream, a partially flushed body): only Express's own
+  // finalhandler can close the socket correctly from here.
+  if (res.headersSent) return next(err);
+
+  const id = requestId(req) || "unknown";
+  const client = clientRequestFault(err);
+  if (client) {
+    // Not a defect — the request-finish hook in diagnostics.ts records the 4xx.
+    log.warn(`[api] request ${id} rejected (${diagnosticErrorName(err)})`, {
+      method: req.method,
+      path: telemetryRequestPathLabel(req.originalUrl),
+      status: client.status,
+    });
+    res.status(client.status).json({ ok: false, error: client.message, request_id: requestId(req) || null });
+    return;
+  }
+
   recordUnexpectedApiError(err, req);
-  console.error(`[api] request ${requestId(req) || "unknown"} failed (${diagnosticErrorName(err)})`);
-  res.status(500).json({ error: "internal error", request_id: requestId(req) || null });
+  // The raw message and the raw stack can carry athlete text, so neither is logged:
+  // the error NAME plus the scrubbed frames are the operator-useful, private-safe
+  // pair, and the request id ties the line to the durable diagnostic row.
+  log.error(`[api] request ${id} failed (${diagnosticErrorName(err)})`, {
+    method: req.method,
+    path: telemetryRequestPathLabel(req.originalUrl),
+    stack: diagnosticStackFrames(err) ?? undefined,
+  });
+  res.status(500).json({ ok: false, error: "internal error", request_id: requestId(req) || null });
 }
 
 api.use(apiErrorHandler);

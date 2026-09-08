@@ -237,6 +237,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/me-records-screen.ts", output: "public/js/08-me-records.js" },
   { source: "src/client/health-docs-client.ts", output: "public/js/health-docs-client.js" },
   { source: "src/client/route-state.ts", output: "public/js/route-state.js" },
+  { source: "src/client/app/lazy-bundles.ts", output: "public/js/app-lazy-bundles.js" },
   { source: "src/client/app/router.ts", output: "public/js/app-router.js" },
   { source: "src/client/app/route-sync.ts", output: "public/js/app-route-sync.js" },
   { source: "src/client/app/render-dispatch.ts", output: "public/js/app-render-dispatch.js" },
@@ -259,6 +260,11 @@ export const CLIENT_OUTPUTS = [
 // REPRODUCES THE CANONICAL <script> SEQUENCE EXACTLY — this manifest is now the
 // authoritative encoding of that order. Every CLIENT_OUTPUTS output (plus the
 // hand-written classic shim public/js/10-boot.js) appears in exactly one bundle.
+//
+// A bundle carrying `lazy: "<name>"` is NOT loaded by index.html: it is injected
+// on demand by ensureBundle("<name>") (src/client/app/lazy-bundles.ts), so its
+// globals must never be referenced EAGERLY from an earlier bundle — only from
+// inside a function that runs after the destination has navigated.
 //
 // Splitting the larger bundles further was evaluated and DECLINED: `defer` on
 // the <script> tags already unblocked first paint, the IIFE shared-global model
@@ -428,14 +434,26 @@ export const BUNDLES = [
       "public/js/meal-planner-controller.js",
       "public/js/coach-proposal-controller.js",
       "public/js/06-coach-meals.js",
+      // Food-note formatting + the food detail sheet USED to head bundle-05.
+      // They are food, not health: day-fuel-controller (this bundle) and
+      // ui-shell (bundle-01) call them from the Plan/Today surfaces, which must
+      // keep working without the lazily-loaded Me/Health bundle. Moving them
+      // here keeps the canonical <script> order byte-for-byte — bundle-04 runs
+      // immediately before bundle-05, and these were its first two entries.
+      "public/js/food-note-client.js",
+      "public/js/food-detail-controller.js",
     ],
   },
   {
     output: "public/js/bundle-05-me-health.js",
     label: "Me / Health / Records",
+    // LAZY: index.html does not load this one. ~470 KB of classic script that
+    // only the Stand and Me destinations need; src/client/app/lazy-bundles.ts
+    // injects it on the first navigation to either, keyed by this name. It stays
+    // in the service worker's CORE_ASSETS so an installed PWA precaches it and
+    // the first offline visit to Stand still works.
+    lazy: "me-health",
     inputs: [
-      "public/js/food-note-client.js",
-      "public/js/food-detail-controller.js",
       "public/js/health-docs-client.js",
       "public/js/me-profile-form-client.js",
       "public/js/me-profile-controller.js",
@@ -531,6 +549,7 @@ export const BUNDLES = [
       "public/js/settings-sources-automation-controller.js",
       "public/js/settings-screen.js",
       "public/js/route-state.js",
+      "public/js/app-lazy-bundles.js",
       "public/js/app-router.js",
       "public/js/app-route-sync.js",
       "public/js/app-render-dispatch.js",

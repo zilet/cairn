@@ -218,12 +218,23 @@ test("Settings opens onto You by default, with Agents & System pushed to the end
   assert.equal(keys[0], "you");
   assert.deepEqual(keys.slice(-2), ["agents", "system"]);
 
+  // The default lives in ONE place — the route definitions — and every call site
+  // reads it from there. It used to be a "you" literal repeated at three call
+  // sites while the definitions themselves said "agents": the literals won, so
+  // nothing shipped wrong, but the contract described behaviour that never ran.
+  const routes = readFileSync(join(root, "src/contracts/client-routes.ts"), "utf8");
+  assert.match(routes, /settingsSection: "you"/);
+  const routeStateSrc = readFileSync(join(root, "src/client/route-state.ts"), "utf8");
+  assert.match(routeStateSrc, /settingsSection: "you"/, "route-state.ts mirrors the definitions verbatim");
+
   const screen = readFileSync(join(root, "src/client/settings-screen.ts"), "utf8");
-  assert.match(screen, /if \(!state\.setSeg \|\| !SET_SEG\.some\(\(\[k\]\) => k === state\.setSeg\)\) state\.setSeg = "you";/);
+  assert.match(screen, /if \(!state\.setSeg \|\| !SET_SEG\.some\(\(\[k\]\) => k === state\.setSeg\)\)/);
+  assert.match(screen, /routeDefinitions\?\.defaults\.settingsSection \|\| "you"/);
 
   const router = readFileSync(join(root, "src/client/app/router.ts"), "utf8");
-  assert.match(router, /state\.setSeg = routeKey\(route\.section, options\.settingsSections, state\.setSeg \|\| "you"\)/, "a remembered/deep-linked segment is still honored — only the fallback default changed");
-  assert.match(router, /route\.section = routeKey\(state\.setSeg, options\.settingsSections, "you"\)/);
+  assert.match(router, /routeDefinitions\(\)\?\.defaults\.settingsSection \|\| "you"/);
+  assert.match(router, /state\.setSeg = routeKey\(route\.section, options\.settingsSections, state\.setSeg \|\| defaultSettingsSection\(\)\)/, "a remembered/deep-linked segment is still honored — only the fallback default changed");
+  assert.match(router, /route\.section = routeKey\(state\.setSeg, options\.settingsSections, defaultSettingsSection\(\)\)/);
 });
 
 // One quiet line of write-back state under the toggle. "Is this actually doing

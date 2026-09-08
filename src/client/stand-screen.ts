@@ -312,12 +312,14 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     if (!Number.isFinite(m) || m <= 0) return "";
     return `${Math.floor(m / 60)}h ${Math.round(m % 60)}m`;
   }
+  // Tone comes from sleep DURATION, never from Garmin's 0-100 sleep score — a
+  // score is a grade, and grading is banned. The ladder itself lives with the
+  // recovery read (CairnHealthRead.sleepDurationTone) so the tile and the
+  // detail below it can never speak different words about the same nights.
   function recoveryStatus(): StandStatus {
     const rec = recoveryData();
     if (!rec) return "mute";
-    const score = Number(rec.avg_sleep_score);
-    if (Number.isFinite(score)) return score >= 75 ? "ok" : score >= 60 ? "watch" : "warn";
-    return "ok";
+    return CairnHealthRead.sleepDurationTone(rec.avg_sleep_min);
   }
   // Recovery is a time-sensitive signal — a window average only reads as "now"
   // while the wearable is actually syncing. No reading from today or yesterday →

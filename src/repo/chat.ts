@@ -899,7 +899,7 @@ export function saveAiCache(
   // Keep the cache bounded — old rows are never served past their staleness.
   try {
     db.prepare(`DELETE FROM ai_cache WHERE computed_at < datetime('now','-30 days')`).run();
-  } catch {}
+  } catch { /* bounding the cache is housekeeping — never fail the write it rode in on */ }
 }
 
 // ---------- chat history (read-only browse + search over archived turns) ----------

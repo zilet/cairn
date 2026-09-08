@@ -5,7 +5,7 @@ export const CLIENT_ROUTE_DEFINITIONS = {
     planSection: "edit",
     meSection: "profile",
     healthSection: "read",
-    settingsSection: "agents",
+    settingsSection: "you",
   },
   tabs: ["today", "session", "stand", "plan", "progress", "chat", "me", "settings"],
   sections: {

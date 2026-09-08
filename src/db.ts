@@ -395,6 +395,7 @@ CREATE TABLE IF NOT EXISTS profile (
   about_me TEXT,                         -- rich free-text understanding (history, work, food likes/dislikes, what "better" means)
   allergies TEXT,                        -- free-text food allergies (HARD safety exclusion for meals)
   dietary_restrictions TEXT,             -- free-text diet (vegetarian, pescatarian, no pork, …) — respected strongly
+  equipment TEXT,                        -- free-text description of the equipment actually available (v52); NULL = not captured
   primary_discipline TEXT DEFAULT 'strength', -- strength | endurance | hybrid — shapes coach framing + day-read + stats (v35)
   endurance_sport TEXT,                  -- optional free text: running | cycling | triathlon | rowing | … (v35)
   endurance_goal_json TEXT,              -- the endurance OBJECTIVE (race | standing), orthogonal to discipline (v37)

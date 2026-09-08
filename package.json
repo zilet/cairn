@@ -30,6 +30,7 @@
     "docs:check": "node scripts/gen-docs.mjs --check",
     "bench:chat-routing": "node scripts/benchmark-chat-routing.mjs",
     "actions:check": "node scripts/check-action-pins.mjs",
+    "schema:check": "node scripts/check-schema-two-step.mjs",
     "tsc": "node node_modules/typescript-7/bin/tsc",
     "client:check": "npm run tsc -- -p tsconfig.client.build.json --noEmit",
     "client:build": "node scripts/build-client.mjs",

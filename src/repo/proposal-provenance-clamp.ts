@@ -1,3 +1,4 @@
+import { isoDate } from "../lib/dates.js";
 // The temporal law for reason provenance, with no database behind it.
 //
 // Evidence is what has ALREADY happened, so an `evidence_date` can never sit after
@@ -10,17 +11,8 @@
 // Both callers live elsewhere: `src/repo/proposal-truth.ts` runs it on the rehydration
 // path, and migration 92 runs it once over the rows already on disk.
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
 function record(value: unknown): Record<string, any> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, any>) : null;
-}
-
-function isoDate(value: unknown): string | null {
-  const text = String(value ?? "").trim();
-  if (!ISO_DATE.test(text)) return null;
-  const parsed = new Date(`${text}T00:00:00Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text ? text : null;
 }
 
 // THE clamp. Non-ISO input is returned untouched — this decides dates, it does not

@@ -14,6 +14,7 @@
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 import { getProfile } from "./profile.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { round2 } from "../lib/numbers.js";
 
 export interface GoalPacePoint {
   date: string;
@@ -50,10 +51,6 @@ function clampWindowDays(value: number): number {
 // Days since the Unix epoch for an ISO date — the x-axis unit for the regression.
 function dayNumber(iso: string): number {
   return Date.parse(`${iso}T00:00:00Z`) / 864e5;
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 // A weight only ever makes sense as a positive number; a wild projection is clamped

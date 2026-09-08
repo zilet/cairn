@@ -1,3 +1,4 @@
+import { round1 } from "../lib/numbers.js";
 // ============================================================================
 // run-ramp.ts — the GOAL-ANCHORED half of run planning, as pure arithmetic.
 //
@@ -104,10 +105,6 @@ export interface RaceRamp {
    * is not failing at anything; this only decides which sentence gets said.
    */
   fit: RaceRampFit;
-}
-
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
 }
 
 function clamp(n: number, lo: number, hi: number): number {

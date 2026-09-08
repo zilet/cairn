@@ -22,6 +22,7 @@ import {
 import { CARDIO_GRADE, HARD_EFFORT } from "./heavy-load.js";
 import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { median } from "../lib/numbers.js";
 
 export type MovementBucket = "push" | "pull" | "lower" | "core" | "mobility" | "other";
 export type TrainingLoad = "hard" | "moderate" | "easy";
@@ -181,13 +182,6 @@ export function deriveSessionTitle(sessionId: number, planDayId?: number | null,
   }
 
   return loggedTitle || planDayName || "Session";
-}
-
-function median(xs: number[]): number | null {
-  if (!xs.length) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
 export type RecoveryDoseClassification = "compliant" | "above-plan" | "overdose" | "unknown";

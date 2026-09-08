@@ -51,6 +51,7 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 import { CADENCE_WINDOW_DAYS, type WearPattern, classifyWearPattern } from "./sensor-cadence.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import type { TodayAgendaCandidate } from "./today-agenda.js";
+import { dayEpoch } from "../lib/dates.js";
 
 // ---- thresholds --------------------------------------------------------------
 
@@ -131,16 +132,6 @@ export interface SensorRecheck {
 }
 
 const DAY_MS = 864e5;
-
-// Midnight-UTC epoch for a YYYY-MM-DD string; null when it is not one. Date-only
-// strings parse in UTC because these are day KEYS, not instants (same reasoning
-// as sensor-cadence.ts).
-function dayEpoch(iso: unknown): number | null {
-  const text = String(iso ?? "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
-  const t = Date.parse(`${text}T00:00:00Z`);
-  return Number.isFinite(t) ? t : null;
-}
 
 function plainList(words: string[]): string {
   if (words.length <= 1) return words[0] ?? "";

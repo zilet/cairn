@@ -61,6 +61,8 @@ import { computeGoalCheck } from "./profile.js";
 import { getProgramState } from "./program-state.js";
 import { recoveryTrendBars } from "./recovery-trend.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
+import { isoDay } from "../lib/dates.js";
+import { finite } from "../lib/numbers.js";
 
 // ---- the tri-state ------------------------------------------------------------
 
@@ -110,18 +112,6 @@ const MAX_PROTECTIVE_STEP_KCAL = 250;
 
 const DAY_MS = 864e5;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function isoDay(value: unknown): string {
-  return String(value ?? "").slice(0, 10);
-}
-
-// `Number(null)` is 0 and 0 is finite, so absence must be coerced to null EXPLICITLY
-// or a missing maintenance anchor reads as a maintenance of zero.
-function finite(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
 
 function mean(values: number[]): number | null {
   if (!values.length) return null;

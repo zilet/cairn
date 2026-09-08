@@ -38,19 +38,15 @@
 
 import { db } from "../db.js";
 import { estimateExpenditure } from "./expenditure.js";
-import {
-  KCAL_PER_LB,
-  currentBodyFatEstimate,
-  effectiveGoalMode,
-  getProfile,
-  leannessAwareLossRates,
-} from "./profile.js";
+import { currentBodyFatEstimate, effectiveGoalMode, getProfile, KCAL_PER_LB, leannessAwareLossRates } from "./profile.js";
 import { getAttentionSchedule } from "./attention.js";
 import { activeBlockContext } from "./program-blocks.js";
 import { getProgramState, strengthBlockPeaking } from "./program-state.js";
 import { getLatestNutritionTarget, intakeLoggingMode, type KnownIntakeLoggingMode } from "./nutrition.js";
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { dayEpoch } from "../lib/dates.js";
+import { finite } from "../lib/numbers.js";
 
 // ---- constants ---------------------------------------------------------------
 
@@ -206,23 +202,6 @@ export interface CutTargetDerivation {
 }
 
 const DAY_MS = 864e5;
-
-function dayEpoch(iso: unknown): number | null {
-  const text = String(iso ?? "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
-  const t = Date.parse(`${text}T00:00:00Z`);
-  return Number.isFinite(t) ? t : null;
-}
-
-// Absence must stay ABSENT. `Number(null)` is 0 and `Number("")` is 0, both
-// finite, so a bare Number.isFinite check silently turns "no reading" into a
-// reading of zero — which here would read a missing maintenance anchor as a
-// maintenance of 0 kcal and a missing protein figure as a protein floor of none.
-function finite(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
 
 function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, value));

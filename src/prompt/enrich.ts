@@ -8,7 +8,12 @@ import {
   FOOD_PROVENANCE_SCHEMA,
   foodCaptureGuardrailLines,
 } from "../foodCapture.js";
-import * as repo from "../repo.js";
+import { listActivities } from "../repo/activities.js";
+import { listExercises } from "../repo/exercises.js";
+import { listMemory } from "../repo/memory.js";
+import { getPlan } from "../repo/plan.js";
+import { computeGoalCheck, getProfile } from "../repo/profile.js";
+import { getSessionByDate } from "../repo/sessions.js";
 import { renderJsonContract } from "./shared.js";
 
 const ENRICH_ACTIVITY_SCHEMA = `{
@@ -81,7 +86,7 @@ export interface FoodPreparationContext {
 // prompt boundary, even when a note mixes preparation details with health,
 // medication, family, location, schedule, or other private context.
 export function foodEnrichmentPreparationContext(limit = 40): FoodPreparationContext {
-  const contents = (repo.listMemory(limit) as any[]).map((memory) => String(memory?.content || ""));
+  const contents = (listMemory(limit) as any[]).map((memory) => String(memory?.content || ""));
   const cookingMethods = FOOD_PREPARATION_METHODS.filter(([, pattern]) =>
     contents.some((content) => pattern.test(content))
   ).map(([canonical]) => canonical);
@@ -94,10 +99,10 @@ export function foodEnrichmentPreparationContext(limit = 40): FoodPreparationCon
 // Background enrichment of a free-text log into cleaner structured data, plus
 // distilling genuinely notable durable facts into memory. Light context only.
 export function buildEnrichPrompt(kind: "activity" | "food", raw: string): string {
-  const profile = repo.getProfile();
-  const goal = repo.computeGoalCheck();
+  const profile = getProfile();
+  const goal = computeGoalCheck();
   const recentMemory =
-    kind === "food" ? foodEnrichmentPreparationContext() : (repo.listMemory(40) as any[]).map((m) => m.content);
+    kind === "food" ? foodEnrichmentPreparationContext() : (listMemory(40) as any[]).map((m) => m.content);
 
   const guardrails = `GUARDRAILS:
 - Never invent numbers. Use null for anything not stated or not reasonably inferable.
@@ -110,7 +115,7 @@ export function buildEnrichPrompt(kind: "activity" | "food", raw: string): strin
 - Keep memory items short and factual. Respect any constraints/preferences already on record.`;
 
   if (kind === "activity") {
-    const recentActivities = repo.listActivities(10);
+    const recentActivities = listActivities(10);
     return `You enrich a single free-text cardio/activity log into clean structured data for a
 training tracker. A fast offline regex already produced a rough parse; your job is to improve it
 and extract any durable fact worth remembering.
@@ -164,8 +169,8 @@ ${raw}`;
 // matters most here and honest provenance is what keeps it from reading as measured.
 // Rough is fine; honest > precise. Constitution: never moralize the food, never a score.
 export function buildFoodPhotoPrompt(absPath: string, hint?: string): string {
-  const profile = repo.getProfile();
-  const goal = repo.computeGoalCheck();
+  const profile = getProfile();
+  const goal = computeGoalCheck();
   const preparationContext = foodEnrichmentPreparationContext();
   return `You estimate the nutrition of a meal from a PHOTO of the plate, for a user's food log.
 The photo is a local image file saved on this machine.
@@ -254,21 +259,21 @@ const GARMIN_STRENGTH_SCHEMA = `{
 export function buildGarminStrengthPrompt(garminActivity: any): string {
   const ga = garminActivity ?? {};
   const date = ga.date || "";
-  const session = date ? repo.getSessionByDate(date) : null;
+  const session = date ? getSessionByDate(date) : null;
   const logged = Array.isArray((session as any)?.sets) ? (session as any).sets : [];
   // What the user already logged by hand for this day — NEVER duplicate these.
   const loggedExercises = [...new Set(logged.map((s: any) => s.exercise).filter(Boolean))];
-  const exercises = (repo.listExercises() as any[]).map((e) => ({
+  const exercises = (listExercises() as any[]).map((e) => ({
     name: e.name,
     mode: e.mode || "reps",
     muscle_group: e.muscle_group || null,
   }));
-  const plan = (repo.getPlan() as any[]).map((d) => ({
+  const plan = (getPlan() as any[]).map((d) => ({
     day: d.name,
     focus: d.focus || null,
     exercises: (d.items || []).map((it: any) => it.exercise),
   }));
-  const profile = repo.getProfile();
+  const profile = getProfile();
 
   // The physiology + detected sets Garmin gave us for THIS activity.
   const activity = {

@@ -33,7 +33,7 @@ import {
   setBrainExpectationStatus,
   transitionBrainDecision,
 } from "../brain-decisions.js";
-import { activeRecoveryWeek } from "../profile.js";
+import { activeRecoveryWeek } from "../recovery-week.js";
 import { readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
 import { SENSOR_MAX_AGE_DAYS, sensorIsCurrent } from "../sensor-freshness.js";
 import { addDaysISO, localDateISO } from "../shared.js";
