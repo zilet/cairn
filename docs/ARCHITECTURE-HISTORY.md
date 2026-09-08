@@ -4,6 +4,13 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-08 — Docker or Podman: the public scripts resolve the engine
+
+No schema migration, no `public/` change. `scripts/container-tool.sh` resolves Docker, Podman or
+Apple's `container` by binary (override with `CAIRN_CONTAINER_TOOL`) and picks the matching Compose
+front-end; `quickstart.sh`, `scripts/quickstart-rpi.sh`, the phone-setup hint and the launch-safety
+check use it instead of hardcoding `docker`. The quickstart, deployment and sharing docs say so.
+
 ## 2026-09-08 — A trip is a confounder, and rest already taken is the recovery dose
 
 No schema migration, no `public/` change. Diagnosed live on the Pi: a three-day family camping trip

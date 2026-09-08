@@ -97,7 +97,7 @@ docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
-Open **http://localhost:8787** — you land on the Brief immediately. Three named volumes keep your
+(Podman works as-is: `podman run …`.) Open **http://localhost:8787** — you land on the Brief immediately. Three named volumes keep your
 data (`cairn-data`), your CLI logins (`cairn-home`), and any tools you install (`cairn-tools`)
 across updates, so rebuilds touch none of them. To update: `docker pull ghcr.io/zilet/cairn:latest`
 and re-run. Add `-e TZ=America/New_York` for your timezone — set your own.

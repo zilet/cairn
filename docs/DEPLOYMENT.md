@@ -27,11 +27,16 @@ running in ~30 seconds. For Raspberry Pi, use `./scripts/quickstart-rpi.sh` inst
 
 ---
 
-## Shape 1 — Docker on any host (simplest)
+## Shape 1 — Docker or Podman on any host (simplest)
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build      # or: podman compose up -d --build
 ```
+
+`./quickstart.sh` and `scripts/quickstart-rpi.sh` pick Docker or Podman for you — whichever is
+installed *and* running, detected by binary rather than by shell alias (`scripts/container-tool.sh`,
+override with `CAIRN_CONTAINER_TOOL=docker|podman`). Podman needs a Compose provider
+(`podman-compose`, or a `docker-compose` binary on PATH) for the compose commands in this doc.
 
 Or use the [release compose](SHARING.md) without a source checkout.
 

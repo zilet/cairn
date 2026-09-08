@@ -52,10 +52,16 @@ if [ "$TOTAL_MEM_MB" -lt 1800 ]; then
   warn "Then re-run this script."
 fi
 
-# ---------- Docker check / optional install ----------
+# ---------- container engine check / optional Docker install ----------
 
-if ! command -v docker >/dev/null 2>&1; then
-  warn "Docker is not installed."
+# Docker or Podman, whichever is installed and running (scripts/container-tool.sh).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/container-tool.sh"
+
+if ! resolve_container_tool && [ -z "${CONTAINER_CLI:-}" ]; then
+  case "$CONTAINER_TOOL_WHY" in
+    *"not running"*) die "$CONTAINER_TOOL_WHY. Start it (e.g. sudo systemctl start docker) and re-run." ;;
+  esac
+  warn "No container engine found ($CONTAINER_TOOL_WHY)."
   ask "Install Docker via get.docker.com? (safe for Raspberry Pi OS / Ubuntu)"
   read -r answer
   case "$answer" in
@@ -79,16 +85,10 @@ if ! command -v docker >/dev/null 2>&1; then
   esac
 fi
 
-COMPOSE=""
-if docker compose version >/dev/null 2>&1; then
-  COMPOSE="docker compose"
-elif command -v docker-compose >/dev/null 2>&1; then
-  COMPOSE="docker-compose"
-else
-  die "docker compose plugin not found. Install it: sudo apt-get install docker-compose-plugin"
-fi
+resolve_container_tool --require-compose \
+  || die "${CONTAINER_TOOL_WHY}. $(compose_install_hint)"
 
-success "Docker and Compose found: $($COMPOSE version --short 2>/dev/null || echo ok)."
+success "$CONTAINER_TOOL_WHY: $($COMPOSE version --short 2>/dev/null || echo ok)."
 
 # ---------- already running? ----------
 
@@ -122,7 +122,7 @@ info "  cairn-data  -- SQLite DB, uploads, art cache (survives rebuilds)"
 info "  cairn-home  -- CLI logins (~/.claude, ~/.codex, etc.)"
 info "  cairn-tools -- optional provider binaries (safe to reinstall)"
 info "Back them up periodically with:"
-info "  docker run --rm -v cairn-data:/data -v \"\$PWD\":/backup busybox tar czf /backup/cairn-data-\$(date +%F).tgz -C /data ."
+info "  $CONTAINER_CLI run --rm -v cairn-data:/data -v \"\$PWD\":/backup busybox tar czf /backup/cairn-data-\$(date +%F).tgz -C /data ."
 
 # ---------- build and start ----------
 

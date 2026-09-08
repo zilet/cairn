@@ -71,8 +71,8 @@ than any checked-in browser files.
 ## Ways To Run It
 
 - **Occasional local container:** start Cairn on a laptop with
-  `docker compose up -d`, use `http://localhost:8787`, and stop it when you are
-  done.
+  `docker compose up -d` (or `podman compose up -d` — every command here is
+  engine-agnostic), use `http://localhost:8787`, and stop it when you are done.
 - **Always-on home box / VM / Raspberry Pi:** keep the release compose running
   on a Docker host and access it from devices on the same LAN, VPN, or tailnet.
 - **Household members:** run the same released image as a separate Compose

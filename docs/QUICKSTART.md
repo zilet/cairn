@@ -23,6 +23,12 @@ docker run -d --name cairn -p 127.0.0.1:8787:8787 \
 
 Open **http://localhost:8787** — you land on the Brief. That's the whole install.
 
+> **Docker or Podman.** Every `docker …` command in these docs works unchanged with Podman
+> (`podman run`, `podman compose`) and the scripts detect whichever engine is installed and
+> running (`scripts/container-tool.sh`; force one with `CAIRN_CONTAINER_TOOL=podman`). Podman
+> needs a Compose provider (`podman-compose` or a `docker-compose` binary) for the compose paths;
+> the single `run` command below needs neither.
+
 This binds Cairn to this computer only. Widen to your LAN, for example
 `-p 8787:8787`, only on a private network and with `CAIRN_AUTH_TOKEN` set.
 

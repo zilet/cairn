@@ -87,7 +87,7 @@ step "Cairn -> phone setup (Tailscale Serve, private)"
 # 1) Cairn reachable locally?
 if ! curl -fsS "http://localhost:${PORT}/api/health" >/dev/null 2>&1; then
   warn "Cairn does not look like it's running on http://localhost:${PORT}."
-  info "Start it first (./quickstart.sh or docker compose up -d), then re-run this."
+  info "Start it first (./quickstart.sh, or 'docker compose up -d' / 'podman compose up -d'), then re-run this."
 fi
 
 # 2) Tailscale present?

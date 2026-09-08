@@ -36,17 +36,17 @@ for (const file of DOCS) {
 }
 
 const unsafe = fenced.filter((b) =>
-  /\bdocker\s+run\b/.test(b.text) &&
+  /\b(?:docker|podman|container)\s+run\b/.test(b.text) &&
   /(^|\s)-p\s+8787:8787(\s|\\|$)/.test(b.text) &&
   !/(^|\s)-p\s+127\.0\.0\.1:8787:8787(\s|\\|$)/.test(b.text)
 );
 
 if (unsafe.length) {
-  console.error("✗ Public docker run quickstart binds Cairn to all interfaces:");
+  console.error("✗ Public container run quickstart binds Cairn to all interfaces:");
   for (const b of unsafe) console.error(`    ${b.file}:${b.start}`);
   console.error("\n  Use `-p 127.0.0.1:8787:8787` in copy-paste quickstarts.");
   console.error("  Mention widening to `-p 8787:8787` only as an explicit, authenticated/private-network step.");
   process.exit(1);
 }
 
-console.log(`✓ ${DOCS.join(", ")} docker run quickstarts bind loopback by default`);
+console.log(`✓ ${DOCS.join(", ")} container run quickstarts bind loopback by default`);

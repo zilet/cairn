@@ -4,6 +4,9 @@
 # Usage: ./quickstart.sh [--dev]  (--dev forces npm run dev instead of npm start)
 set -euo pipefail
 
+# Engine detection shared with scripts/quickstart-rpi.sh and the private deploy.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/container-tool.sh"
+
 BOLD='\033[1m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -50,16 +53,16 @@ print_success_banner() {
   printf "\n"
   if [ "${USE_DOCKER:-0}" = "1" ]; then
     printf "  A) Claude Code (Anthropic Pro/Max):\n"
-    printf "       docker compose exec -u app -it cairn claude\n"
+    printf "       %s exec -u app -it cairn claude\n" "$COMPOSE"
     printf "\n"
     printf "  B) Codex (ChatGPT):\n"
-    printf "       docker compose exec -u app -it cairn codex login\n"
+    printf "       %s exec -u app -it cairn codex login\n" "$COMPOSE"
     printf "\n"
     printf "  C) Grok (SuperGrok / X Premium+):\n"
-    printf "       docker compose exec -u app -it cairn grok -p hello\n"
+    printf "       %s exec -u app -it cairn grok -p hello\n" "$COMPOSE"
     printf "\n"
     printf "  D) Antigravity / Google (Google account):\n"
-    printf "       docker compose exec -u app -it cairn agy\n"
+    printf "       %s exec -u app -it cairn agy\n" "$COMPOSE"
     printf "\n"
     printf "  E) stub -- offline, no key, great for exploring:\n"
     printf "       Settings -> Agents -> enable stub\n"
@@ -102,21 +105,15 @@ setup_env() {
 }
 
 try_docker() {
-  banner "Cairn quickstart -- Docker path"
+  banner "Cairn quickstart -- container path"
 
-  if ! command -v docker >/dev/null 2>&1; then
+  # Docker, Podman or Apple's container CLI — whichever is installed AND running.
+  # Resolved by binary, never by shell alias (see scripts/container-tool.sh).
+  if ! resolve_container_tool --require-compose; then
+    [ -n "${CONTAINER_CLI:-}" ] && warn "$CONTAINER_TOOL_WHY. $(compose_install_hint)"
     return 1
   fi
-
-  COMPOSE=""
-  if docker compose version >/dev/null 2>&1; then
-    COMPOSE="docker compose"
-  elif command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE="docker-compose"
-  else
-    warn "Docker is installed but neither 'docker compose' nor 'docker-compose' is available."
-    return 1
-  fi
+  info "$CONTAINER_TOOL_WHY"
 
   if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
     success "Cairn is already running at http://localhost:${PORT}."
@@ -128,13 +125,13 @@ try_docker() {
   setup_env
 
   banner "Heads up before the first build"
-  info "The first Docker build bakes the coaching CLIs into the image -- expect ~3-6 minutes."
+  info "The first image build bakes the coaching CLIs into the image -- expect ~3-6 minutes."
   info "Later rebuilds are fast (BuildKit caches the layers)."
   info "The beta 'agy' (Antigravity) and 'grok' installers can fail on some architectures"
   info "(e.g. Raspberry Pi / arm64). That's fine -- claude and codex still work, and you can"
   info "set INSTALL_ANTIGRAVITY/INSTALL_GROK to \"0\" in docker-compose.yml to skip them."
   info ""
-  info "Building and starting Cairn with Docker..."
+  info "Building and starting Cairn with $CONTAINER_CLI..."
   $COMPOSE up -d --build
 
   USE_DOCKER=1
@@ -203,13 +200,10 @@ for arg in "$@"; do
   esac
 done
 
-if command -v docker >/dev/null 2>&1; then
-  if docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1; then
-    try_docker
-  else
-    warn "Docker is installed but Compose is not available; falling back to local Node."
-    try_node "$DEV_MODE"
-  fi
+if try_docker; then
+  :
 else
+  # No usable engine+Compose pair (or the container path declined) — local Node.
+  [ -n "${CONTAINER_CLI:-}" ] && warn "Falling back to local Node."
   try_node "$DEV_MODE"
 fi
