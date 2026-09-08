@@ -219,6 +219,12 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   missing logs; and during an affirmed cut a protective raise stops at **measured** maintenance
   (`capProtectiveRaise`, `src/repo/cut-target.ts`) — protection buys maintenance, never a surplus,
   and a `formula_estimate` anchor is not a measurement, so it can only ever hold the target.
+- **A trip is a confounder, and rest already taken is the recovery dose.** A subdued `sleep_feel`/
+  `soreness` dated inside a `trip` context event never proves fuel persistence (`travelWindowDates`,
+  `src/repo/underfueling.ts` — recorded as `…:travel-confounded`, never silently dropped), and
+  `REST_SPAN_CREDIT_DAYS` = 3 untrained days ending yesterday cap the recovery package's training
+  consequence at `hold_aggression` (the calorie step stands; the control loop mints a recovery WEEK only
+  when the read says `reduce`). The quiet-day escalation voice breaks its streak on a trip day.
 - **Sessions are keyed by date** — `getOrCreateSession` reuses today's session, so logged sets
   accumulate into one session per day.
 - **Garmin strength is a session, not an activity.** `upsertGarminActivity` deliberately skips the

@@ -82,6 +82,9 @@ export interface UnderfuelingOptions {
   // `persistent_strain` branch). Injectable so a fixture can state the athlete's
   // proximity to the destination without staging a whole profile.
   atOrNearGoal?: boolean;
+  // Consecutive calendar days ending yesterday with nothing trained (see
+  // `untrainedSpanEndingYesterday`). Injectable for fixtures; computed otherwise.
+  restSpanDays?: number;
 }
 
 const MATERIAL_GAP_FRAC = 0.11;
@@ -90,6 +93,9 @@ const MIN_CREDIBLE_DIARY_DAYS = 3;
 const MIN_AGREEING_CHANNELS = 2;
 const SETTLING_DAYS = 7;
 const PERSISTENCE_WINDOW_DAYS = 21;
+// A span of nothing trained this long, ending yesterday, IS the recovery dose the
+// `recovery_package` asks training for (see `restTaken` in `underfuelingRead`).
+export const REST_SPAN_CREDIT_DAYS = 3;
 
 // Training consequence of a soft fueling hold: `action.training` may only be
 // `hold_aggression` when the strain is decision-grade — the diary confirms a
@@ -152,6 +158,87 @@ function hasAthleteResponse(families: Set<CausalFamily>): boolean {
   return [...families].some((family) => ATHLETE_RESPONSE_FAMILIES.has(family));
 }
 
+// TRAVEL CONFOUNDS THE RECOVERY RESPONSE. A subdued sleep-feel or a sore body on a
+// day inside a trip window is the tent, the drive and the strange bed talking, not
+// energy availability — read as a fuel response it flipped one settling read into
+// `persistent_strain` off a single check-in taken on the drive home. Every date a
+// trip covers is returned so both the 7-day recovery channel and the post-correction
+// persistence gate skip recovery evidence on it (felt energy and hunger still count:
+// those are fuel questions wherever they are asked). Closing a trip from the Life
+// surface stamps `resolved_at` = the day it was closed; that day and the ones before it
+// were still the trip, so a closed trip keeps confounding the dates it covered (the
+// window ends at the EARLIER of `end_date` and `resolved_at`). An open-ended trip with
+// neither is capped at `OPEN_TRIP_MAX_DAYS` from its start, so a trip nobody closed
+// cannot blind the recovery read forever.
+export const OPEN_TRIP_MAX_DAYS = 21;
+function tripWindowEnd(row: any): string | null {
+  const start = row?.start_date ? String(row.start_date) : null;
+  const ends = [row?.end_date, row?.resolved_at].filter(Boolean).map(String);
+  if (!ends.length) return start ? addDaysISO(start, OPEN_TRIP_MAX_DAYS) : null;
+  return ends.sort()[0];
+}
+function tripRows(from: string, to: string): any[] {
+  try {
+    return db
+      .prepare(
+        `SELECT start_date, end_date, resolved_at FROM context_events
+          WHERE kind = 'trip' AND (archived IS NULL OR archived = 0)
+            AND (start_date IS NULL OR start_date <= ?)
+            AND (end_date IS NULL OR end_date >= ?)
+            AND (resolved_at IS NULL OR resolved_at >= ?)`
+      )
+      .all(to, from, from) as any[];
+  } catch {
+    return [];
+  }
+}
+export function tripCoversDay(iso: string): boolean {
+  return tripRows(iso, iso).some((row) => {
+    const end = tripWindowEnd(row);
+    return end == null || end >= iso;
+  });
+}
+function travelWindowDates(since: string, today: string): Set<string> {
+  const out = new Set<string>();
+  for (const row of tripRows(since, today)) {
+    const from = row.start_date && String(row.start_date) > since ? String(row.start_date) : since;
+    const end = tripWindowEnd(row);
+    const to = end && end < today ? end : today;
+    for (let d: string | null = from; d && d <= to; d = addDaysISO(d, 1)) out.add(d);
+  }
+  return out;
+}
+
+// Consecutive calendar days ending YESTERDAY with nothing trained. A run, a ride, a
+// logged set, a finished or rated session, or a Garmin-reconciled one closes the span;
+// a bare session row does not — opening the plan or skipping an exercise creates one
+// with no work in it. Today is never counted: the morning read runs before anything
+// could have been trained.
+export function untrainedSpanEndingYesterday(today: string, limit = 14): number {
+  let span = 0;
+  for (let back = 1; back <= limit; back++) {
+    const iso = addDaysISO(today, -back);
+    if (!iso) break;
+    let trained = false;
+    try {
+      trained =
+        !!db
+          .prepare(
+            `SELECT 1 FROM sessions s WHERE s.date = ?
+               AND (s.finished_at IS NOT NULL OR s.garmin_json IS NOT NULL
+                    OR s.performance IS NOT NULL OR s.soreness IS NOT NULL
+                    OR EXISTS (SELECT 1 FROM logged_sets ls WHERE ls.session_id = s.id)) LIMIT 1`
+          )
+          .get(iso) || !!db.prepare(`SELECT 1 FROM activities WHERE date = ? LIMIT 1`).get(iso);
+    } catch {
+      return span;
+    }
+    if (trained) break;
+    span++;
+  }
+  return span;
+}
+
 // Persistence is a chronological claim: the athlete must have actually reported
 // or logged a low response on a strictly later calendar date than the upward
 // correction. Nutrition targets and these observations are date-only, so a row on
@@ -166,6 +253,7 @@ function postCorrectionAthleteResponse(
   if (!correctionDate) return { families: new Set(), evidence_keys: [] };
   const families = new Set<CausalFamily>();
   const evidence = new Set<string>();
+  const travel = travelWindowDates(correctionDate, today);
   const fuel = db
     .prepare(`SELECT date, energy, hunger FROM fueling_feedback WHERE date > ? AND date <= ? ORDER BY date`)
     .all(correctionDate, today) as any[];
@@ -189,8 +277,12 @@ function postCorrectionAthleteResponse(
       evidence.add(`checkins.energy:${String(row.date)}:post-correction-low`);
     }
     if ((sleep != null && sleep <= 2) || (soreness != null && soreness >= 4)) {
-      families.add("recovery_response");
-      evidence.add(`checkins.recovery:${String(row.date)}:post-correction-low`);
+      if (travel.has(String(row.date))) {
+        evidence.add(`checkins.recovery:${String(row.date)}:travel-confounded`);
+      } else {
+        families.add("recovery_response");
+        evidence.add(`checkins.recovery:${String(row.date)}:post-correction-low`);
+      }
     }
   }
   const sessions = db
@@ -204,8 +296,12 @@ function postCorrectionAthleteResponse(
       evidence.add(`sessions.performance:${String(row.date)}:post-correction-low`);
     }
     if (soreness != null && soreness >= 4) {
-      families.add("recovery_response");
-      evidence.add(`sessions.recovery:${String(row.date)}:post-correction-low`);
+      if (travel.has(String(row.date))) {
+        evidence.add(`sessions.recovery:${String(row.date)}:travel-confounded`);
+      } else {
+        families.add("recovery_response");
+        evidence.add(`sessions.recovery:${String(row.date)}:post-correction-low`);
+      }
     }
   }
   return { families, evidence_keys: [...evidence] };
@@ -342,6 +438,7 @@ function subjectiveChannels(
   const sessions = db
     .prepare(`SELECT date, performance, soreness FROM sessions WHERE date BETWEEN ? AND ? ORDER BY date`)
     .all(since, today) as any[];
+  const travel = travelWindowDates(since, today);
   const lowFuelDays = new Set(
     fuel
       .filter((row) => {
@@ -369,21 +466,23 @@ function subjectiveChannels(
       .map((row) => String(row.date))
   );
   const energyLow = new Set([...lowFuelDays, ...lowEnergyDays]);
-  const poorRecovery = new Set([
-    ...checkins
-      .filter((row) => {
-        const sleep = finite(row.sleep_feel);
-        const soreness = finite(row.soreness);
-        return (sleep != null && sleep <= 2) || (soreness != null && soreness >= 4);
-      })
-      .map((row) => String(row.date)),
-    ...sessions
-      .filter((row) => {
-        const soreness = finite(row.soreness);
-        return soreness != null && soreness >= 4;
-      })
-      .map((row) => String(row.date)),
-  ]);
+  const poorRecovery = new Set(
+    [
+      ...checkins
+        .filter((row) => {
+          const sleep = finite(row.sleep_feel);
+          const soreness = finite(row.soreness);
+          return (sleep != null && sleep <= 2) || (soreness != null && soreness >= 4);
+        })
+        .map((row) => String(row.date)),
+      ...sessions
+        .filter((row) => {
+          const soreness = finite(row.soreness);
+          return soreness != null && soreness >= 4;
+        })
+        .map((row) => String(row.date)),
+    ].filter((date) => !travel.has(date))
+  );
   return {
     felt: {
       key: "felt_energy",
@@ -736,6 +835,16 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
   // pre-existing behaviour rather than licensing the softer one.
   const nearDestination =
     typeof opts.atOrNearGoal === "boolean" ? opts.atOrNearGoal : (() => { try { return atOrNearGoal(today); } catch { return false; } })();
+  // REST ALREADY TAKEN IS THE RECOVERY DOSE. The recovery package asks training to
+  // reduce so the body gets a lighter stretch while calories step up. An athlete
+  // coming off three or more days with nothing trained (a trip, a family weekend, a
+  // week of life) has just taken exactly that stretch — asking for it again on the
+  // first morning back reads "take it easy" to someone who is rested. The calorie
+  // step still stands; the training consequence caps at `hold_aggression`, the same
+  // shape as at the destination, and progression's own ladders decide the rest.
+  const restSpanDays =
+    typeof opts.restSpanDays === "number" ? opts.restSpanDays : untrainedSpanEndingYesterday(today);
+  const restTaken = restSpanDays >= REST_SPAN_CREDIT_DAYS;
   const action: UnderfuelingRead["action"] =
     state === "execution_gap"
       ? {
@@ -765,10 +874,20 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
               // training away to pay for a cut that is already over, so the training
               // consequence is capped at `hold_aggression` — and only where the strain
               // is decision-grade at all; otherwise training simply proceeds.
-              training: nearDestination ? (holdAggression ? "hold_aggression" : "proceed") : "reduce",
+              training: nearDestination
+                ? holdAggression
+                  ? "hold_aggression"
+                  : "proceed"
+                : restTaken
+                  ? holdAggression
+                    ? "hold_aggression"
+                    : "proceed"
+                  : "reduce",
               line: nearDestination
                 ? "You are at the weight you were heading for and the strain signals still agree, so fuel steps toward maintenance while training keeps its shape."
-                : "The correction has had time to settle and several independent channels still agree; coordinate a recovery week with another bounded move toward maintenance.",
+                : restTaken
+                  ? "The correction has had time to settle and several independent channels still agree; the days just taken off already count as the recovery stretch, so fuel steps toward maintenance while training keeps its shape."
+                  : "The correction has had time to settle and several independent channels still agree; coordinate a recovery week with another bounded move toward maintenance.",
             }
           : state === "settling"
             ? {

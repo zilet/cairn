@@ -100,7 +100,7 @@ import { readsLowReadiness, readsRestGradeReadiness, SUPPORTIVE_READINESS } from
 import { withFlexibleRunLookahead } from "./hybrid-run-lookahead.js";
 import { dayFuelState } from "./fuel-state.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
-import type { UnderfuelingRead } from "./underfueling.js";
+import { tripCoversDay, type UnderfuelingRead } from "./underfueling.js";
 
 // ---------- T1: day intelligence ----------
 export interface DayRead {
@@ -1426,14 +1426,22 @@ export interface DayReadContinuity {
 
 const QUIET_KINDS = new Set(["easy", "rest"]);
 
+// A quiet day inside a trip window was the trip's quiet day, not Cairn's. The
+// escalation voice ("this makes the third quiet day — if the rest still feels right,
+// take it") exists so a read that keeps counselling rest stops re-arguing itself; on
+// the first morning home from three days away it told a rested athlete to keep
+// resting, counting days the calendar had already claimed. A trip day breaks the
+// streak the way an unknown day does. `tripCoversDay` is the fuel read's own window
+// predicate, so the two surfaces cannot disagree about what a trip covered.
 export function dayReadContinuity(date: string, priorReads?: PriorDayRead[]): DayReadContinuity {
   const prior = priorReads ?? recentDayReads(date, 7);
   const dayBefore = (iso: string, back: number) =>
     new Date(new Date(`${iso}T00:00:00Z`).getTime() - back * 864e5).toISOString().slice(0, 10);
   let quiet = 0;
   for (let back = 1; back <= prior.length; back++) {
-    const row = prior.find((r) => r.date === dayBefore(date, back));
-    if (!row || !QUIET_KINDS.has(row.kind)) break;
+    const iso = dayBefore(date, back);
+    const row = prior.find((r) => r.date === iso);
+    if (!row || !QUIET_KINDS.has(row.kind) || tripCoversDay(iso)) break;
     quiet++;
   }
   const yesterdayRow = prior.find((r) => r.date === dayBefore(date, 1)) ?? null;

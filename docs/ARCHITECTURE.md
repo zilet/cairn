@@ -222,6 +222,30 @@ not-earned sentence; `voice.CUT_HOLDING_WIN` is now reserved for the case it act
 `reduce`/`sliding` HOLD, never a plan-behind catch-up or a phase hold, and never a `fast_loss` day
 (which has its own, separate reason for holding).
 
+**Travel confounds the recovery response, and rest already taken is the recovery dose.** The
+`persistent_strain` gate needs an athlete response dated strictly AFTER the upward correction; a
+subdued `sleep_feel` or high `soreness` on a day inside a `trip` context-event window is the tent
+and the drive talking, not energy availability, so `travelWindowDates()` (`src/repo/underfueling.ts`,
+the same window predicate `daily-reconciliation.ts`'s `travel_window` confounder uses) drops it from
+BOTH the seven-day `recovery` channel and `postCorrectionAthleteResponse()`. The exclusion is recorded
+as `checkins.recovery:<date>:travel-confounded` / `sessions.recovery:<date>:travel-confounded` in
+`evidence_keys`, never silently. Felt energy and hunger still count on a trip day — those are fuel
+questions wherever they are asked. Separately, `recovery_package` asks training to `reduce` so the body
+gets a lighter stretch while calories step up; when `untrainedSpanEndingYesterday()` (counted back
+from yesterday, today never counted; a day is trained by an activity, a logged set, or a finished /
+rated / Garmin-reconciled session — a bare session row from opening the plan or skipping an exercise
+is not work) reaches `REST_SPAN_CREDIT_DAYS` = 3, that stretch has just happened, and the training
+consequence caps at `hold_aggression` (or `proceed` when the strain is not decision-grade) exactly as
+at the destination — the calorie step is untouched, and `runUnderfuelingControlLoop` mints the
+recovery-WEEK half only when the read's `action.training` is actually `reduce` (a week already LIVE is
+still linked as history; a bare draft is not routed). A closed trip keeps confounding the dates it
+covered (the window ends at the earlier of `end_date` and `resolved_at`), and an open-ended one is
+capped at `OPEN_TRIP_MAX_DAYS` = 21 from its start. The Brief's continuity voice honours the same
+fact through the same predicate: `dayReadContinuity()` breaks the quiet streak on a trip-covered day
+(`tripCoversDay`), so the first morning home never opens with "this makes the fourth quiet day" to an
+athlete the calendar, not Cairn, kept quiet. `trainingBackstopSignature` keys context events on
+archived/resolved/date aggregates too, so editing or closing one invalidates the cached fuel read.
+
 **Work done is evidence — a prescription is a suggestion, the log is the truth.**
 `src/repo/outcome-comparability.ts` (schema 4 in `DailySessionOutcomeFacts.facts_json`, db-free so
 `migrate.ts` and `daily-reconciliation.ts` share one transform) adds `performed_at_full_load` to every

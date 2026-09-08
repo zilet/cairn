@@ -254,6 +254,32 @@ test("a nutrition modifier earned in another recomposition stage does not change
   assert.equal(proposal.parsed.nutrition.delta_kcal, 150);
 });
 
+test("a persistent read that keeps training's shape schedules the fuel step alone — no recovery week is minted", () => {
+  // At/near goal, or coming off three untrained days, `underfuelingRead` caps the
+  // training consequence at `hold_aggression`. Announcing a recovery week on top would
+  // contradict the read's own line, so only the bounded move toward maintenance runs.
+  seedTarget();
+  seedPlan();
+  const priorPlan = planShape(repo.getPlan());
+  const rested = read("persistent_strain", "persistent-rested");
+  rested.action = {
+    ...rested.action,
+    training: "hold_aggression",
+    line: "The days just taken off already count as the recovery stretch, so fuel steps toward maintenance while training keeps its shape.",
+  };
+  const result = runUnderfuelingControlLoop(today(), { read: rested });
+  assert.equal(result.action, "nutrition_correction_scheduled");
+  assert.equal(result.recovery, null);
+  assert.match(result.reason, /keeps its shape/i);
+  assert.ok(result.nutrition?.decision, "the fuel half is scheduled on its own");
+  assert.deepEqual(planShape(repo.getPlan()), priorPlan, "the plan is not reshaped");
+  assert.equal(
+    repo.listBrainDecisions({ limit: 100 }).filter((d) => d.context?.coordination_key === result.coordination_key).length,
+    1,
+    "only the nutrition decision carries the coordination key — no recovery week, no package link"
+  );
+});
+
 test("persistent strain links a reversible recovery week and fuel step, applies them at boundaries, and is idempotent", () => {
   seedTarget();
   seedPlan();

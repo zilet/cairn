@@ -726,20 +726,29 @@ export function runUnderfuelingControlLoop(
       // could not have been about, and only that reopens the announcement. The same
       // fuel read saying the same thing tomorrow is not new information.
       const announcement = recoveryWeekMayBeAnnounced(today);
+      // THE READ DECIDES WHETHER A WEEK IS ASKED FOR. `persistent_strain` caps its
+      // training consequence at `hold_aggression` at/near the goal weight and when the
+      // athlete has just taken the rest a recovery week would prescribe (see
+      // `underfuelingRead`). Announcing a recovery week on top would contradict the
+      // read's own line — "training keeps its shape" — so the week-reshaping half is
+      // only minted when the read actually says `reduce`. A week that is ALREADY live
+      // or drafted is still linked: that is history, not a new ask.
+      const weekAsked = read.action.training === "reduce";
       if (existingRecoveryDecision && existingRecovery && existingRecovery.state !== "drafted") {
         recovery = linkedExistingRecovery(existingRecoveryDecision, existingRecovery.state);
       } else if (existingRecovery?.state === "drafted") {
         // A bare draft is not scheduled. Route that exact proposal through autonomy
         // now, preserving its immutable history and avoiding a duplicate reshape.
-        const draft = announcement.allowed ? getProposal(existingRecovery.proposal_id) : null;
+        const draft = announcement.allowed && weekAsked ? getProposal(existingRecovery.proposal_id) : null;
         if (draft) recovery = routeRecoveryProposal(Number(draft.id), coordinationKey);
-      } else if (!existingRecovery && announcement.allowed) {
+      } else if (!existingRecovery && announcement.allowed && weekAsked) {
         const proposal = recoveryProposal(read, coordinationKey);
         if (proposal) recovery = routeRecoveryProposal(Number(proposal.id), coordinationKey);
       }
-      if (!announcement.allowed && !recovery) {
+      if ((!announcement.allowed || !weekAsked) && !recovery) {
         // The fuel half still stands on its own: food is the corrective the athlete
-        // never refused. Only the week-reshaping half is held back.
+        // never refused (or the only one the read asked for). Only the week-reshaping
+        // half is held back.
         return {
           ok: true,
           read,
@@ -747,7 +756,9 @@ export function runUnderfuelingControlLoop(
           coordination_key: coordinationKey,
           nutrition,
           recovery: null,
-          reason: `You already said no to a recovery week on ${announcement.refused_on}, and nothing new has come up since, so that stands.`,
+          reason: !announcement.allowed
+            ? `You already said no to a recovery week on ${announcement.refused_on}, and nothing new has come up since, so that stands.`
+            : `Training keeps its shape (${read.action.line}), so only the bounded move toward maintenance is scheduled.`,
         };
       }
       // Same guard for the recovery half: a held recovery review keeps at most one live

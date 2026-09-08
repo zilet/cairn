@@ -4,6 +4,25 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-08 — A trip is a confounder, and rest already taken is the recovery dose
+
+No schema migration, no `public/` change. Diagnosed live on the Pi: a three-day family camping trip
+(`trip` context event, nothing trained on its last three days) ended, and the first morning home read
+"Take it easy." The ledger showed why: the fuel engine's `persistent_strain` gate needs one athlete
+response dated after the last upward correction, and the only one it found was a morning check-in
+tapped on the drive home (`sleep_feel: 2` — tent sleep). That single row upgraded a settling read into
+`recovery_package` / `training: reduce`, signal-state turned it into an EASY posture, and the
+continuity voice counted the trip's quiet days as Cairn's ("this makes the third quiet day"). Three
+changes: `travelWindowDates()` drops recovery-response evidence (sleep-feel / soreness) dated inside a
+trip window from both the seven-day recovery channel and `postCorrectionAthleteResponse()`, recording
+`…:travel-confounded` keys (felt energy and hunger still count); `untrainedSpanEndingYesterday()` ≥
+`REST_SPAN_CREDIT_DAYS` = 3 caps the package's training consequence at `hold_aggression` (calorie step
+untouched) and `runUnderfuelingControlLoop` mints the recovery-WEEK half only when the read says
+`reduce`; and `dayReadContinuity()` breaks the quiet streak on a trip-covered day. Details in
+`docs/ARCHITECTURE.md` ("Travel confounds the recovery response").
+
+---
+
 ## 2026-09-02 — Tool policy: the CLIs stop treating coaching prompts as tasks; zero-cost login probes
 
 No schema migration, sw **v567**. Diagnosed live on the Pi: the rotation's "Couldn't reach a coaching

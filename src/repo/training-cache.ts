@@ -280,7 +280,9 @@ export function trainingBackstopSignature(): string {
            (SELECT COUNT(*) FROM garmin_daily_metrics) AS gdc, (SELECT COALESCE(MAX(id),0) FROM garmin_daily_metrics) AS gdm,
            (SELECT COUNT(*) FROM plan_days) AS pdc, (SELECT COALESCE(MAX(id),0) FROM plan_days) AS pdm,
            (SELECT COUNT(*) FROM plan_items) AS pic, (SELECT COALESCE(MAX(id),0) FROM plan_items) AS pim,
-           (SELECT COUNT(*) FROM context_events) AS cec, (SELECT COALESCE(MAX(id),0) FROM context_events) AS cem`,
+           (SELECT COUNT(*) FROM context_events) AS cec, (SELECT COALESCE(MAX(id),0) FROM context_events) AS cem,
+           (SELECT COALESCE(SUM(archived),0) || ':' || COUNT(resolved_at) || ':' || COALESCE(MAX(end_date),'') || ':' || COALESCE(MAX(start_date),'')
+              FROM context_events) AS ces`,
       )
       .get() as any;
     const p = db
@@ -292,6 +294,9 @@ export function trainingBackstopSignature(): string {
       currentTrainingDataVersion(),
       r?.lsc, r?.lsm, r?.sc, r?.sm, r?.ec, r?.em, r?.ac, r?.am, r?.gac, r?.gam,
       r?.bwc, r?.bwm, r?.dmc, r?.dmm, r?.gdc, r?.gdm, r?.pdc, r?.pdm, r?.pic, r?.pim, r?.cec, r?.cem,
+      // Editing, archiving, closing or re-dating an existing context event moves the
+      // read too (a trip window confounds the fuel read) — COUNT/MAX(id) only see inserts.
+      r?.ces,
       p?.weight_lb ?? "", p?.height_cm ?? "", p?.activity_factor ?? "", p?.measured_rmr_kcal ?? "",
       p?.measured_rmr_date ?? "", p?.goal_weight_lb ?? "", p?.goal_date ?? "", p?.goal_mode ?? "",
       p?.sex ?? "", p?.age ?? "",

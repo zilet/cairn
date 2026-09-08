@@ -2,7 +2,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
 import { addDaysISO } from "../dist/repo/shared.js";
-import { underfuelingRead } from "../dist/repo/underfueling.js";
+import { OPEN_TRIP_MAX_DAYS, tripCoversDay, underfuelingRead, untrainedSpanEndingYesterday } from "../dist/repo/underfueling.js";
 import { armAnd, energyDeficiencyDecision } from "../dist/repo/energy-deficiency.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import {
@@ -21,6 +21,8 @@ beforeEach(() => {
     "checkins",
     "logged_sets",
     "sessions",
+    "activities",
+    "context_events",
     "body_measurements",
     "daily_session_outcomes",
     "daily_session_compositions",
@@ -401,6 +403,151 @@ test("fresh athlete response plus an energy-balance outcome can escalate after s
     read.evidence_keys.some((key) => /sessions\.(performance|recovery):2026-07-1[34]:post-correction-low/.test(key)),
     "the escalation is explicitly anchored to a dated response after the correction took effect"
   );
+});
+
+// ── PART 3b: travel confounds the recovery response; rest taken is the recovery dose ──
+
+function trip(fromDelta, toDelta, title = "Camping weekend") {
+  db.prepare(
+    `INSERT INTO context_events (kind, title, detail, start_date, end_date) VALUES ('trip', ?, '', ?, ?)`
+  ).run(title, day(fromDelta), day(toDelta));
+}
+
+function poorSleepCheckin(delta) {
+  db.prepare(`INSERT INTO checkins (date, energy, sleep_feel, soreness) VALUES (?, 3, 2, 1)`).run(day(delta));
+}
+
+test("a subdued sleep-feel check-in inside a trip window never proves post-correction persistence", () => {
+  // The live shape: an upward correction eight days old, a materially low diary, a
+  // fast scale trend and regressing lifts — and the ONLY athlete response after the
+  // correction is one check-in tapped on the drive home from three days of camping.
+  // Sleeping in a tent is not a fuel response. Read as one, it turned a settled read
+  // into `persistent_strain` and told a rested athlete to take it easy.
+  resetTables("context_events");
+  target(2050, -30);
+  target(2200, -8);
+  for (const delta of [-1, -2, -3, -4, -5]) intake(delta, 2175);
+  trip(-4, -1);
+  poorSleepCheckin(-1);
+
+  const confounded = underfuelingRead(TODAY, {
+    expenditure: fastExp,
+    goal,
+    programState: strainedProgram,
+    wholePerson: strainedWhole,
+    restSpanDays: 0,
+  });
+  assert.notEqual(confounded.state, "persistent_strain");
+  assert.notEqual(confounded.action.kind, "recovery_package");
+  assert.ok(
+    confounded.evidence_keys.some((key) => key === `checkins.recovery:${day(-1)}:travel-confounded`),
+    "the exclusion is recorded as evidence, never silently dropped"
+  );
+  assert.ok(!confounded.evidence_keys.some((key) => /post-correction-low/.test(key)));
+
+  // The same check-in on an ordinary day IS the response the gate waits for.
+  resetTables("context_events");
+  const ordinary = underfuelingRead(TODAY, {
+    expenditure: fastExp,
+    goal,
+    programState: strainedProgram,
+    wholePerson: strainedWhole,
+    restSpanDays: 0,
+  });
+  assert.equal(ordinary.state, "persistent_strain");
+  assert.ok(ordinary.evidence_keys.some((key) => key === `checkins.recovery:${day(-1)}:post-correction-low`));
+});
+
+test("a trip-day check-in is also left out of the seven-day recovery channel", () => {
+  resetTables("context_events");
+  target(2200, -30);
+  for (const delta of [-1, -2, -3, -4, -5]) intake(delta, 2175);
+  trip(-3, -1);
+  poorSleepCheckin(-1);
+  poorSleepCheckin(-2);
+  const read = underfuelingRead(TODAY, { expenditure: fastExp, goal, restSpanDays: 0 });
+  const recovery = read.channels.find((c) => c.key === "recovery");
+  assert.equal(recovery.direction, "unknown", "two subdued nights in a tent are not a recovery strain");
+});
+
+test("persistent strain after three or more untrained days keeps training's shape — the rest is already taken", () => {
+  // The recovery package asks training to reduce so the body gets a lighter stretch
+  // while calories step up. Coming off three days with nothing trained, that stretch
+  // has just happened; asking for it again on the first morning back reads "take it
+  // easy" to someone who is rested. The calorie step stands; training holds aggression.
+  target(2050, -30);
+  target(2200, -8);
+  for (const delta of [-1, -2, -3, -4, -5]) intake(delta, 2175);
+  lowSession(-4);
+  lowSession(-5);
+
+  const rested = underfuelingRead(TODAY, {
+    expenditure: fastExp,
+    goal,
+    programState: strainedProgram,
+    wholePerson: strainedWhole,
+  });
+  assert.equal(rested.state, "persistent_strain");
+  assert.equal(rested.action.kind, "recovery_package");
+  assert.equal(rested.action.kcal_delta, 250, "the fuel half of the package is untouched");
+  assert.equal(rested.action.training, "hold_aggression");
+  assert.match(rested.action.line, /already count as the recovery stretch/i);
+
+  // Two days off is not the stretch; the ask stands.
+  const twoOff = underfuelingRead(TODAY, {
+    expenditure: fastExp,
+    goal,
+    programState: strainedProgram,
+    wholePerson: strainedWhole,
+    restSpanDays: 2,
+  });
+  assert.equal(twoOff.state, "persistent_strain");
+  assert.equal(twoOff.action.training, "reduce");
+});
+
+test("untrainedSpanEndingYesterday counts back from yesterday and stops only at real work", () => {
+  assert.equal(untrainedSpanEndingYesterday(TODAY), 14, "an empty record is bounded by the limit");
+  db.prepare(`INSERT INTO activities (date, type, duration_min) VALUES (?, 'run', 30)`).run(day(-4));
+  assert.equal(untrainedSpanEndingYesterday(TODAY), 3);
+  // A bare session row is not training: opening the plan, skipping an exercise or a
+  // Garmin reconcile all create one with nothing in it.
+  const bare = db.prepare(`INSERT INTO sessions (date) VALUES (?)`).run(day(-2));
+  assert.equal(untrainedSpanEndingYesterday(TODAY), 3);
+  const exercise = db.prepare(`INSERT INTO exercises (name) VALUES ('Back Squat')`).run();
+  db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 5)`).run(
+    Number(bare.lastInsertRowid),
+    Number(exercise.lastInsertRowid)
+  );
+  assert.equal(untrainedSpanEndingYesterday(TODAY), 1);
+  // Today never counts: the morning read runs before anything could be trained.
+  db.prepare(`INSERT INTO activities (date, type, duration_min) VALUES (?, 'run', 30)`).run(day(0));
+  assert.equal(untrainedSpanEndingYesterday(TODAY), 1);
+});
+
+test("a closed trip still confounds the days it covered, and an open-ended one is capped", () => {
+  resetTables("context_events");
+  // Closed from the Life surface the morning home: resolved_at = today, end_date set.
+  db.prepare(
+    `INSERT INTO context_events (kind, title, detail, start_date, end_date, resolved_at) VALUES ('trip', 'Camping', '', ?, ?, ?)`
+  ).run(day(-4), day(-1), day(0));
+  assert.equal(tripCoversDay(day(-1)), true);
+  assert.equal(tripCoversDay(day(-5)), false);
+  // Closed EARLY: resolved_at before end_date ends the window there.
+  resetTables("context_events");
+  db.prepare(
+    `INSERT INTO context_events (kind, title, detail, start_date, end_date, resolved_at) VALUES ('trip', 'Cut short', '', ?, ?, ?)`
+  ).run(day(-6), day(-1), day(-3));
+  assert.equal(tripCoversDay(day(-3)), true);
+  assert.equal(tripCoversDay(day(-2)), false);
+  // Open-ended and never closed: covers OPEN_TRIP_MAX_DAYS from the start, no further.
+  resetTables("context_events");
+  db.prepare(`INSERT INTO context_events (kind, title, detail, start_date) VALUES ('trip', 'Forgot', '', ?)`).run(
+    day(-(OPEN_TRIP_MAX_DAYS + 5))
+  );
+  assert.equal(tripCoversDay(day(-(OPEN_TRIP_MAX_DAYS + 5))), true);
+  assert.equal(tripCoversDay(day(-5)), true);
+  assert.equal(tripCoversDay(day(-4)), false);
+  assert.equal(tripCoversDay(TODAY), false);
 });
 
 // ── PART 4a: an endurance-strain path feeds the same performance channel ──────────
