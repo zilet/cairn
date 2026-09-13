@@ -2,7 +2,7 @@
 # scripts/quickstart-rpi.sh -- Cairn setup for Raspberry Pi (arm64).
 # Designed for a Raspberry Pi 4/5 running Raspberry Pi OS or Ubuntu Server (64-bit).
 # Strongly recommends Docker; direct Node is NOT recommended on the Pi because
-# the host OS Node is usually too old (Cairn requires Node 24).
+# the host OS Node is usually too old (Cairn requires Node 24+; the image ships Node 26).
 set -euo pipefail
 
 BOLD='\033[1m'
@@ -31,7 +31,7 @@ ARCH=$(uname -m)
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
   success "Architecture: $ARCH (arm64 -- good)."
 elif [ "$ARCH" = "armv7l" ]; then
-  warn "Architecture: armv7l (32-bit). Cairn's Node 24 image requires a 64-bit OS."
+  warn "Architecture: armv7l (32-bit). Cairn's Node 26 image requires a 64-bit OS."
   warn "Flash a 64-bit Raspberry Pi OS (Bookworm) and re-run this script."
   die "Unsupported architecture: $ARCH"
 else

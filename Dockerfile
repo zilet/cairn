@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7.0
 
-ARG NODE_IMAGE=node:24-bookworm-slim
+ARG NODE_IMAGE=node:26-bookworm-slim
 
 # ---- builder: compile TypeScript ----
 FROM ${NODE_IMAGE} AS builder
@@ -109,6 +109,12 @@ ENV NODE_ENV=production \
     CAIRN_AGENT_CLI_MANIFEST=/app/agents.json \
     CAIRN_AGENT_CLI_MANAGER=/usr/local/lib/cairn/install-agent-cli.mjs \
     AGENT_CLI_UPDATE_SCRIPT=/usr/local/bin/cairn-update-agent-clis \
+    # V8 compile cache for the ~400 server modules dist/ loads on boot. Lives on
+    # the persistent home volume so a restart (deploy, watchdog, reboot) reuses the
+    # bytecode compiled by the previous run instead of re-parsing every file on a
+    # Pi core. Keyed by Node version + file content, so a new image simply misses
+    # once and rewarms; if the dir cannot be created Node silently runs uncached.
+    NODE_COMPILE_CACHE=/home/app/.cache/node-compile-cache \
     NPM_CONFIG_PREFIX=/home/app/.cairn-tools \
     NPM_CONFIG_CACHE=/home/app/.cairn-tools/.npm-cache \
     PATH="/home/app/.cairn-tools/bin:/home/app/.local/bin:/home/app/.grok/bin:/home/app/.antigravity-ide/antigravity-ide/bin:/usr/local/bin:${PATH}"

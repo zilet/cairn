@@ -29,7 +29,8 @@ npm run reset    # delete data/cairn.db* and re-seed a fresh DB
 
 ## Hard requirements
 
-- **Node 24 is mandatory.** That's where `node:sqlite` is unflagged. There's no
+- **Node 24 is the floor; develop on Node 26.** `node:sqlite` is unflagged from 24, and 26 is
+  what the Docker image and release workflow run. There's no
   native build step — don't add one.
 - **ESM with explicit `.js` import extensions** (the `tsconfig` is `NodeNext`).
   When you import a sibling `.ts` module, write `from "./repo.js"`, **not**

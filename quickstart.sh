@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # quickstart.sh -- get Cairn running in ~30 seconds.
-# Prefers Docker (no Node required on the host); falls back to local Node 24.
+# Prefers Docker (no Node required on the host); falls back to local Node (26 recommended, 24 minimum).
 # Usage: ./quickstart.sh [--dev]  (--dev forces npm run dev instead of npm start)
 set -euo pipefail
 
@@ -146,13 +146,13 @@ try_node() {
   banner "Cairn quickstart -- local Node path"
 
   if ! command -v node >/dev/null 2>&1; then
-    die "Node is not installed. Install Node 24 from https://nodejs.org and re-run, or install Docker."
+    die "Node is not installed. Install Node 26 from https://nodejs.org and re-run, or install Docker."
   fi
 
   local node_major
   node_major=$(node --version | sed 's/v//' | cut -d. -f1)
   if [ "$node_major" -lt 24 ]; then
-    die "Node ${node_major} detected. Cairn requires Node 24 (node:sqlite is only unflagged in Node 24+). Install from https://nodejs.org or: nvm install 24 && nvm use 24"
+    die "Node ${node_major} detected. Cairn requires Node 24 or newer (node:sqlite is only unflagged in Node 24+; 26 is what the image ships). Install from https://nodejs.org or: nvm install 26 && nvm use 26"
   fi
 
   success "Node $(node --version) found."

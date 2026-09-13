@@ -26,7 +26,7 @@ The public-ready posture is:
 
 The devcontainer:
 
-- Boots **Node 24** (required — Cairn uses `node:sqlite`, which is unflagged only on 24).
+- Boots **Node 26** (Cairn needs 24+ — `node:sqlite` is unflagged only from 24).
 - Runs `npm install && npm run build && npm run seed:demo` on create, so the sandbox opens
   to a **populated demo** (plan, history, markers) instead of an empty shell.
 - Forwards port **8787** and auto-opens the PWA.
@@ -44,7 +44,7 @@ land on the Brief.
 Docker/OCI-compatible, can [preview HTTP service ports](https://www.daytona.io/docs/en/preview/),
 and can persist files across sandbox lifecycle via the sandbox filesystem or
 [mounted volumes](https://www.daytona.io/docs/en/volumes/). Cairn's `.devcontainer/` gives Daytona
-the Node 24 environment and starts the PWA on port `8787`.
+the Node 26 environment and starts the PWA on port `8787`.
 
 ```bash
 # install the Daytona CLI first (see daytona.io docs), then:
@@ -90,7 +90,7 @@ file — see [caveats](#caveats-read-these).
 
 ## Other devcontainer hosts
 
-Any platform that reads a standard `.devcontainer/` can run Cairn the same way — it boots Node 24,
+Any platform that reads a standard `.devcontainer/` can run Cairn the same way — it boots Node 26,
 seeds the demo, and forwards port `8787`. Treat the workspace's persistence window as convenience,
 not a backup of record: for anything you want to keep, take an export (below) rather than relying on
 workspace retention.
@@ -125,7 +125,7 @@ restore. **Treat workspace persistence as convenience, not as your backup of rec
 
 ## Caveats (read these)
 
-- **Node 24 is mandatory.** The devcontainer pins it; if you roll your own image, match it.
+- **Node 24 is the floor; the devcontainer pins 26.** if you roll your own image, match it.
 - **Agents in an ephemeral sandbox.** Cairn's coaching runs through external agent CLIs. The
   *interactive OAuth* logins (Claude Code, Codex, Antigravity) authenticate against a token that
   **won't survive a sandbox rebuild**. For a sandbox, prefer:

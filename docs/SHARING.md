@@ -1,7 +1,7 @@
 # Sharing Cairn
 
 Cairn is easiest to share as a prebuilt Docker image — a single `docker run`, no clone. The lean
-image contains Cairn, Node 24, and a verified per-provider installer manifest. It contains no
+image contains Cairn, Node 26, and a verified per-provider installer manifest. It contains no
 provider CLI, user credential, or shared AI subscription.
 
 ## What Users Need

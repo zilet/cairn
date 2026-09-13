@@ -112,7 +112,7 @@ git clone https://github.com/zilet/cairn.git && cd cairn && ./quickstart.sh
 
 `quickstart.sh` resolves a running container engine — Docker, Podman, or Apple's `container`,
 whichever is installed and answering (preferred, no Node needed on the host) — or falls back to
-local Node 24, starts Cairn, waits for health, and prints the URL. **Node 24 is required** for a
+local Node, starts Cairn, waits for health, and prints the URL. **Node 24+ is required** (26 recommended — it's what the image ships) for a
 non-container run — that's where `node:sqlite` is unflagged. The container image bundles it.
 
 **First paint is real**, no agent required. For chat, adaptive coaching, and meal plans, add **one**
@@ -272,9 +272,9 @@ there. That's the whole idea.
 
 ## Contributing & license
 
-Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) (Node 24, the thin-adapter rule,
+Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) (Node 26, the thin-adapter rule,
 the migration + service-worker conventions) and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
-Licensed under [MIT](LICENSE). Built with Node 24 + TypeScript, Express, `node:sqlite`,
+Licensed under [MIT](LICENSE). Built with Node 26 + TypeScript, Express, `node:sqlite`,
 `@modelcontextprotocol/sdk`, a vanilla PWA, and Docker.
 
 <a href="https://star-history.com/#zilet/cairn&Date">

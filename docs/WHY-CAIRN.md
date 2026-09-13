@@ -157,7 +157,7 @@ Being honest about the edges is part of the voice.
 - **Not an engagement machine.** No streaks, points, badges, push nags, upsell, or "have you
   tried…" feature-pushing. It has nothing to sell and no one to retain. If it ever feels like
   it's trying to keep you in the app, that's a bug.
-- **Not zero-setup.** It's self-hosted. You run a container (or Node 24) on your own machine.
+- **Not zero-setup.** It's self-hosted. You run a container (or Node 24+) on your own machine.
   That's the price of owning your data and your model — and [`docs/QUICKSTART.md`](QUICKSTART.md)
   gets you there in about thirty seconds.
 

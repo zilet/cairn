@@ -14,6 +14,21 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 export const db = new DatabaseSync(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
+// Connection tuning for a single-writer app on slow flash (a Pi's SD card / USB
+// SSD). In WAL mode `synchronous = NORMAL` still guarantees the database can never
+// be corrupted and a commit survives a process crash; only a hard power cut during
+// the fsync window can roll back the very last transactions — the trade SQLite's
+// own docs recommend for WAL, and it removes one fsync per commit (tens of ms on
+// SD). `busy_timeout` makes a concurrent opener (a one-off CLI query against the
+// live file, the test harness's parallel processes) wait instead of throwing
+// "database is locked". The page cache (negative = KiB) and mmap window keep the
+// hot working set out of syscalls on a DB that is far smaller than either bound;
+// temp B-trees for ORDER BY / GROUP BY stay in memory.
+db.exec("PRAGMA synchronous = NORMAL;");
+db.exec("PRAGMA busy_timeout = 5000;");
+db.exec("PRAGMA temp_store = MEMORY;");
+db.exec("PRAGMA cache_size = -16384;");
+db.exec("PRAGMA mmap_size = 268435456;");
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS exercises (
@@ -399,6 +414,7 @@ CREATE TABLE IF NOT EXISTS profile (
   primary_discipline TEXT DEFAULT 'strength', -- strength | endurance | hybrid — shapes coach framing + day-read + stats (v35)
   endurance_sport TEXT,                  -- optional free text: running | cycling | triathlon | rowing | … (v35)
   endurance_goal_json TEXT,              -- the endurance OBJECTIVE (race | standing), orthogonal to discipline (v37)
+  endurance_schedule_json TEXT,          -- stated run days {days:[{dow,kind}], note?, source, updated_at}; NULL = unset (engine falls back to its own slots)
   training_intent_json TEXT,             -- ordered durable goals + endurance role/capability; NULL derives from legacy discipline + goal mode (v80)
   smoking INTEGER,                       -- 0/1, NULL = not captured (v57). Feeds AHA PREVENT; NULL assumes the lower-risk value and marks the read provisional
   bp_treated INTEGER,                    -- 0/1, NULL = not captured (v57). On antihypertensive medication — feeds AHA PREVENT the same way
@@ -953,6 +969,18 @@ CREATE TABLE IF NOT EXISTS art_aliases (
   query TEXT NOT NULL,                        -- normalized caller query
   asset_key TEXT NOT NULL,                    -- -> art_assets.key
   created_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (kind, query)
+);
+
+-- Name -> current exercise asset + version. The PWA still looks up by bare name
+-- (?q=<exercise>); the pose-aware PNG lives under asset_key, and version
+-- rides the URL as v= so the service worker can bust a stale figurine.
+CREATE TABLE IF NOT EXISTS art_index (
+  kind TEXT NOT NULL,
+  query TEXT NOT NULL,                        -- normalize() of the caller name
+  asset_key TEXT NOT NULL,                    -- -> data/art/<asset_key>.png
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT DEFAULT (datetime('now')),
   PRIMARY KEY (kind, query)
 );
 

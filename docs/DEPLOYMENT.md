@@ -124,7 +124,7 @@ The PWA prompts once and stores the token. MCP/API clients send `Authorization: 
 ## Shape 3 — Raspberry Pi (always-on home box)
 
 The Pi is a common always-on target. Host Node is often older than 24; **use Docker** so the
-container provides Node 24 without upgrading the host. The image stays lean: install only the
+container provides Node 26 without upgrading the host. The image stays lean: install only the
 coaching CLI you use from **Settings → Agents**; it persists in the `cairn-tools` volume.
 
 The fastest path uses the dedicated setup script, which handles Docker install (with consent
@@ -227,7 +227,7 @@ server process.
 
 Use a VM when you want Cairn reachable while away from home but do not want to maintain hardware.
 Start small: **1-2 vCPU, 1-2 GB RAM, 10+ GB disk** is enough for a personal instance. Docker keeps
-the Node 24 requirement inside the container.
+the Node requirement (24+, 26 shipped) inside the container.
 
 Do **not** bind `8787` to a public cloud interface. Options:
 
@@ -378,7 +378,7 @@ tool is absent, so an upgrade from an older all-CLI image needs only **Install**
 ## Related docs
 
 - [`QUICKSTART.md`](QUICKSTART.md) — 30-second first run (one-command `./quickstart.sh`)
-- [`../quickstart.sh`](../quickstart.sh) — auto-resolves Docker, Podman, or Apple's `container`, else falls back to Node 24; starts and validates
+- [`../quickstart.sh`](../quickstart.sh) — auto-resolves Docker, Podman, or Apple's `container`, else falls back to local Node 24+; starts and validates
 - [`../scripts/quickstart-rpi.sh`](../scripts/quickstart-rpi.sh) — Raspberry Pi setup script
 - [`OPERATIONS.md`](OPERATIONS.md) — migrations, restore, rollback
 - [`SHARING.md`](SHARING.md) — GHCR release image

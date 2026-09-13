@@ -353,7 +353,7 @@ question doesn't get re-litigated:
   there is no multi-package task graph to cache; the equivalent (parallel gates +
   incremental `tsc` + a sharded test runner) is hand-rolled here and dependency-free.
 - **bun** as the runtime or test runner — impossible. Cairn is built on `node:sqlite`
-  (the unflagged Node 24 built-in); bun does not provide it, so the app and its tests can
+  (the built-in unflagged from Node 24); bun does not provide it, so the app and its tests can
   only run under Node.
 - **pnpm** — marginal. ~11 direct deps; install is not a bottleneck, and switching only
   churns the lockfile with no offsetting win. Keep npm + `package-lock.json`.

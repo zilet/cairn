@@ -125,7 +125,7 @@ projects, tokens, volumes, and Tailscale HTTPS origins.
 ```bash
 git clone https://github.com/zilet/cairn.git
 cd cairn
-./quickstart.sh                 # guided: resolves Docker/Podman/container or falls back to Node 24, seeds, prints the URL
+./quickstart.sh                 # guided: resolves Docker/Podman/container or falls back to local Node 24+, seeds, prints the URL
 ```
 
 `./quickstart.sh` creates `.env` from `.env.example`, starts Cairn, waits for `/api/health`, and
@@ -138,7 +138,7 @@ docker compose up -d --build    # builds the lean app image; add provider tools 
 
 ### Run on Node, without Docker
 
-**Requires Node 24** — Cairn uses `node:sqlite`, unflagged only in 24+:
+**Requires Node 24 or newer (26 recommended)** — Cairn uses `node:sqlite`, unflagged only in 24+:
 
 ```bash
 git clone https://github.com/zilet/cairn.git
