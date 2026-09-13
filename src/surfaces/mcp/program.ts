@@ -27,6 +27,7 @@ import {
   programAdjustments,
   programBalance,
   muscleLoadPayload,
+  raceBuild,
   runZones,
   setEquipmentProfile,
   setProposalStatus,
@@ -308,6 +309,13 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "The RUNNING brain — this week's deterministic, periodized run mix (N easy Z2 + 1 long Z2 + 1 rotated quality session: tempo/threshold/VO2/hills), each with a bpm-bearing zone, distance/duration, and (for interval sessions) the interval structure. Conservative ~10%/wk build, down weeks, recovery-aware, race-week taper. The endurance counterpart to get_performance and the FLOOR the coach refines. {available:false} for a non-runner.",
     { date: z.string().optional() },
     async ({ date }) => asText(weeklyRunPlan(date))
+  );
+
+  server.tool(
+    "get_race_build",
+    "The RACE-BUILD layer over get_run_plan for a dated race: an estimated finish time / pace for the goal distance (the watch's own predictor, Riegel-adjusted, else a conservative read off the best recent run) and how it has moved; per-session pace bands (easy / long / tempo / threshold / VO2) derived from the stated target; the week-by-week ladder from this week to race week (volume, long run, down weeks, peak, taper, quality + strength hints); the seven-day leg map (runs, strength days with heavy-lower flagged, the habitual ride read off the log) with where heavy squats belong in this phase and one sentence about where the weekly ride sits. Suggestion only — a fit, never a grade. {available:false, reason} without a dated race with a distance.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(raceBuild(date))
   );
 
   server.tool(

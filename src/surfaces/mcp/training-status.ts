@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { setProfile } from "../../domain/person/index.js";
+import { getEnduranceSchedule, normalizeEnduranceSchedule, setProfile } from "../../domain/person/index.js";
 import {
   getCardioForDate,
   getEnduranceGoal,
@@ -62,6 +62,42 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
       // A race without a date can't be periodized; reject it rather than clearing the goal.
       if (goal.mode === "race" && !goal.date) return asText({ ok: false, error: "race mode requires a date (YYYY-MM-DD)" });
       return asText(setProfile({ endurance_goal: goal.mode == null ? null : goal }));
+    }
+  );
+
+  server.tool(
+    "get_endurance_schedule",
+    "The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind: easy|quality|long|any}. The run engine and rolling agenda honor these weekdays and never suggest a run off-schedule. null when unset.",
+    {},
+    async () => asText(getEnduranceSchedule())
+  );
+
+  server.tool(
+    "set_endurance_schedule",
+    "Set or clear the athlete's stated run days. Only weekdays they named — never invent a day. days is [{dow: 0-6 (0=Sunday), kind: easy|quality|long|any}]. Pass days: null to clear. A duplicate weekday keeps the first kind.",
+    {
+      days: z
+        .array(
+          z.object({
+            dow: z.number().int().min(0).max(6).describe("0=Sunday … 6=Saturday"),
+            kind: z.enum(["easy", "quality", "long", "any"]),
+          })
+        )
+        .nullable()
+        .optional()
+        .describe("omit or pass null to clear the whole schedule"),
+      note: z.string().optional(),
+    },
+    async (input) => {
+      if (input.days == null) return asText(setProfile({ endurance_schedule: null }));
+      const schedule = normalizeEnduranceSchedule({ days: input.days, note: input.note, source: "athlete" });
+      if (!schedule) {
+        return asText({
+          ok: false,
+          error: "endurance_schedule requires at least one valid day (dow 0-6, kind easy|quality|long|any)",
+        });
+      }
+      return asText(setProfile({ endurance_schedule: schedule }));
     }
   );
 }

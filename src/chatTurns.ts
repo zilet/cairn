@@ -2546,6 +2546,15 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.setProfile({ endurance_goal: goal }) });
           break;
         }
+        case "set_endurance_schedule": {
+          const schedule = repo.normalizeEnduranceSchedule({ days: a.days, note: a.note, source: "chat" });
+          if (!schedule) {
+            applied.push({ type: a.type, error: "invalid endurance_schedule" });
+            break;
+          }
+          applied.push({ type: a.type, result: repo.setProfile({ endurance_schedule: schedule }) });
+          break;
+        }
         case "set_strength_objective": {
           if (!explicitStrengthObjectiveIntent) break;
           const objective = repo.setStrengthObjective({

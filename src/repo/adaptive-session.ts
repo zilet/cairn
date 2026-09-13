@@ -11,6 +11,7 @@ import {
 import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getAgentJob } from "./chat.js";
+import { isKnownBodyweightMovement, normalizedExerciseKey } from "./exercise-canon.js";
 import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { getPlanDay } from "./plan.js";
 import { selectedPlanDayForDate } from "./plan-selection.js";
@@ -43,6 +44,8 @@ const SESSION_WHY_ROTATION = [
 
 export const DAILY_SESSION_SOURCES = ["adaptive_plan", "agent_suggest", "manual_plan", "athlete_override"] as const;
 export const DAILY_SESSION_SUGGESTION_NORMALIZATION = "daily_session_v1";
+export const SESSION_LOAD_BASES = ["bodyweight", "assisted", "loaded", "open"] as const;
+export type SessionLoadBasis = (typeof SESSION_LOAD_BASES)[number];
 
 export type DailySessionSource = (typeof DAILY_SESSION_SOURCES)[number];
 
@@ -423,7 +426,7 @@ function plannedTarget(exercise: string, field: "target_weight" | "target_second
   return finite(row?.value);
 }
 
-function safeAgentWeight(exercise: string, requested: unknown): number | null {
+export function safeAgentWeight(exercise: string, requested: unknown): number | null {
   const value = boundedNumber(requested, -1000, 5000);
   if (value == null || value === 0) return null;
   if (boundedText(findExercise(exercise)?.constraint_note, 500)) return null;
@@ -444,6 +447,155 @@ function safeAgentSeconds(exercise: string, requested: unknown): number | null {
   if (baseline == null || baseline <= 0) return value;
   if (boundedText(findExercise(exercise)?.constraint_note, 500)) return Math.min(value, Math.round(baseline));
   return Math.min(value, Math.round(baseline + Math.max(10, baseline * 0.1)));
+}
+
+function resolveAgentWeight(
+  exercise: string,
+  requested: unknown,
+  agentSource: boolean,
+  athleteSource: boolean,
+  trustedAgentNormalized: boolean
+): number | null {
+  if (agentSource) {
+    return trustedAgentNormalized
+      ? boundedNumber(requested, -1000, 5000)
+      : safeAgentWeight(exercise, requested);
+  }
+  return athleteSource ? boundedNumber(requested, -1000, 5000) : finite(requested);
+}
+
+function resolveAgentSeconds(
+  exercise: string,
+  requested: unknown,
+  agentSource: boolean,
+  trustedAgentNormalized: boolean
+): number | null {
+  if (agentSource) {
+    return trustedAgentNormalized
+      ? boundedNumber(requested, 1, SESSION_PRESCRIPTION_LIMITS.targetSeconds, true)
+      : safeAgentSeconds(exercise, requested);
+  }
+  return boundedNumber(requested, 1, SESSION_PRESCRIPTION_LIMITS.targetSeconds, true);
+}
+
+function itemLoadBasis(exercise: string, weight: number | null): SessionLoadBasis {
+  if (weight != null && weight < 0) return "assisted";
+  if (weight != null && weight > 0) return "loaded";
+  const row = findExercise(exercise);
+  if (isKnownBodyweightMovement(exercise, row?.equipment)) return "bodyweight";
+  return "open";
+}
+
+function prefixNotes(head: unknown, rest: unknown): string | null {
+  const a = boundedProse(head, 500);
+  const b = boundedProse(rest, 500);
+  if (!a) return b;
+  if (!b || b === a || b.startsWith(a)) return a;
+  return boundedProse(`${a} ${b}`, 500);
+}
+
+function itemReps(item: Record<string, unknown>): number | null {
+  if (item.kind === "cardio" || item.mode === "timed") return null;
+  const lo = finite(item.rep_low);
+  const hi = finite(item.rep_high);
+  if (lo == null && hi == null) return null;
+  return lo != null && hi != null && lo === hi ? lo : (lo ?? hi);
+}
+
+function normalizeTopSet(
+  raw: unknown,
+  exercise: string,
+  agentSource: boolean,
+  athleteSource: boolean,
+  trustedAgentNormalized: boolean
+): Record<string, unknown> | null {
+  if (raw == null || raw === "") return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return null;
+  const top = raw as Record<string, unknown>;
+  const sets = boundedNumber(top.sets, 1, SESSION_PRESCRIPTION_LIMITS.sets, true);
+  const reps = boundedNumber(top.reps, 1, SESSION_PRESCRIPTION_LIMITS.reps, true);
+  if (sets == null || reps == null) return null;
+  return {
+    sets,
+    reps,
+    target_weight: resolveAgentWeight(
+      exercise,
+      top.target_weight,
+      agentSource,
+      athleteSource,
+      trustedAgentNormalized
+    ),
+    target_seconds: resolveAgentSeconds(
+      exercise,
+      top.target_seconds,
+      agentSource,
+      trustedAgentNormalized
+    ),
+    rir: boundedNumber(top.rir, 0, 5),
+    note: boundedProse(top.note, 500),
+  };
+}
+
+function sameLoadSign(a: number, b: number): boolean {
+  return (a < 0 && b < 0) || (a > 0 && b > 0);
+}
+
+function canFoldTopIntoBackoff(
+  first: Record<string, unknown>,
+  second: Record<string, unknown>
+): boolean {
+  if (first.kind === "cardio" || second.kind === "cardio") return false;
+  if (first.mode === "timed" || second.mode === "timed") return false;
+  if (first.mode !== second.mode) return false;
+  if (first.top_set || second.top_set) return false;
+  const key1 = normalizedExerciseKey(String(first.exercise ?? ""));
+  const key2 = normalizedExerciseKey(String(second.exercise ?? ""));
+  if (!key1 || key1 !== key2) return false;
+  const sets = finite(first.sets);
+  if (sets == null || sets < 1 || sets > 2) return false;
+  const r1 = itemReps(first);
+  const r2 = itemReps(second);
+  if (r1 == null || r2 == null || r1 >= r2) return false;
+  const w1 = finite(first.target_weight);
+  const w2 = finite(second.target_weight);
+  if (w1 == null && w2 == null) {
+    const hi = finite(first.rep_high);
+    return hi != null && hi <= 5;
+  }
+  // A null-load "top set" over a numbered backoff is meaningless; mixed
+  // null/number is not a heavier-first pair.
+  if (w1 == null || w2 == null) return false;
+  if (!sameLoadSign(w1, w2)) return false;
+  return Math.abs(w1) > Math.abs(w2);
+}
+
+function foldConsecutiveTopSets(items: Record<string, unknown>[]): Record<string, unknown>[] {
+  if (items.length < 2) return items;
+  const out: Record<string, unknown>[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const cur = items[i];
+    const next = items[i + 1];
+    if (next && canFoldTopIntoBackoff(cur, next)) {
+      const existing = next.top_set && typeof next.top_set === "object" ? (next.top_set as Record<string, unknown>) : null;
+      const fromCur = cur.top_set && typeof cur.top_set === "object" ? (cur.top_set as Record<string, unknown>) : null;
+      out.push({
+        ...next,
+        position: out.length,
+        top_set: {
+          sets: finite(cur.sets) ?? 1,
+          reps: itemReps(cur),
+          target_weight: cur.target_weight ?? null,
+          target_seconds: cur.target_seconds ?? null,
+          rir: fromCur?.rir ?? null,
+          note: prefixNotes(cur.note, fromCur?.note ?? existing?.note),
+        },
+      });
+      i += 1;
+      continue;
+    }
+    out.push({ ...cur, position: out.length });
+  }
+  return out;
 }
 
 function normalizeInterval(value: unknown): unknown {
@@ -506,12 +658,13 @@ function normalizeItem(
   const mode = core.mode as "reps" | "timed";
   const targetSeconds =
     mode === "timed" && core.target_seconds != null
-      ? agentSource
-        ? trustedAgentNormalized
-          ? core.target_seconds
-          : safeAgentSeconds(exercise, core.target_seconds)
-        : core.target_seconds
+      ? resolveAgentSeconds(exercise, core.target_seconds, agentSource, trustedAgentNormalized)
       : null;
+  const targetWeight =
+    mode === "timed"
+      ? null
+      : resolveAgentWeight(exercise, item.target_weight, agentSource, athleteSource, trustedAgentNormalized);
+  const topSet = normalizeTopSet(item.top_set, exercise, agentSource, athleteSource, trustedAgentNormalized);
   return {
     position,
     kind,
@@ -519,16 +672,7 @@ function normalizeItem(
     sets: core.sets,
     rep_low: core.rep_low,
     rep_high: core.rep_high,
-    target_weight:
-      mode === "timed"
-        ? null
-        : agentSource
-          ? trustedAgentNormalized
-            ? boundedNumber(item.target_weight, -1000, 5000)
-            : safeAgentWeight(exercise, item.target_weight)
-          : athleteSource
-            ? boundedNumber(item.target_weight, -1000, 5000)
-            : finite(item.target_weight),
+    target_weight: targetWeight,
     target_seconds: targetSeconds,
     warmup_sets: boundedNumber(item.warmup_sets, 0, 10, true),
     mode,
@@ -538,6 +682,8 @@ function normalizeItem(
     target_zone: null,
     interval: null,
     superset_group: boundedNumber(item.superset_group, 1, 50, true),
+    ...(topSet ? { top_set: topSet } : {}),
+    load_basis: itemLoadBasis(exercise, targetWeight),
     ...trustedMetadata,
   };
 }
@@ -577,11 +723,18 @@ function normalizeSessionPayload(
   };
 }
 
+export interface NormalizeSessionSuggestionOpts {
+  // Consecutive same-lift rows fold into `top_set` only on the suggest boundary.
+  // Composition must keep two agent rows as two rows and apply its per-item clamp;
+  // folding there would expand a heavy single the envelope never authorized.
+  foldTopSets?: boolean;
+}
+
 // Canonical suggestion boundary used before a result is rendered, cached, or
 // written to an agent job. This is intentionally the same agent-source path that
 // prepareDailySession re-runs later, making normalization idempotent: the preview
 // items are byte-for-byte the items that durable preparation will snapshot.
-export function normalizeSessionSuggestionResult(raw: unknown) {
+export function normalizeSessionSuggestionResult(raw: unknown, opts?: NormalizeSessionSuggestionOpts) {
   try {
     const payload = normalizeSessionPayload(raw, true, true);
     return {
@@ -589,7 +742,7 @@ export function normalizeSessionSuggestionResult(raw: unknown) {
       focus: payload.focus,
       why: payload.why,
       est_minutes: payload.est_minutes,
-      items: payload.items,
+      items: opts?.foldTopSets ? foldConsecutiveTopSets(payload.items) : payload.items,
     };
   } catch {
     return null;

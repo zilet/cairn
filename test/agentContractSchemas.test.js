@@ -172,7 +172,8 @@ test("each new schema admits a well-formed payload (over-restriction guard)", ()
       why: "Fresh legs.",
       est_minutes: 45,
       items: [
-        { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185, mode: "reps" },
+        { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185, mode: "reps",
+          top_set: { sets: 1, reps: 3, target_weight: 205, rir: 1, note: "one strong triple" } },
         { exercise: "Assisted Pull-up", sets: 3, target_weight: -30, superset_group: 1 },
         { exercise: "Plank", sets: 2, target_seconds: 45, mode: "timed" },
         { kind: "cardio", exercise: "Easy run", target_distance_km: 6, target_zone: "Z2" },
@@ -449,6 +450,13 @@ const CONSUMER_READS = [
       "items[].target_zone",
       "items[].interval",
       "items[].interval_json",
+      "items[].top_set",
+      "items[].top_set.sets",
+      "items[].top_set.reps",
+      "items[].top_set.target_weight",
+      "items[].top_set.target_seconds",
+      "items[].top_set.rir",
+      "items[].top_set.note",
     ],
   },
   {
@@ -935,6 +943,13 @@ test("the session schema never offers a value the session normalizer treats as f
   assert.equal(ok({ exercise: "Back Squat", interval: [] }), false, "an empty interval must not validate");
   assert.equal(ok({ exercise: "Back Squat", interval: null }), true);
   assert.equal(ok({ kind: "cardio", exercise: "Intervals", interval: [{ reps: 6, on: "400m" }] }), true);
+
+  const topSet = item.properties.top_set;
+  assert.deepEqual(topSet.type, ["object", "null"]);
+  assert.equal(topSet.properties.sets.exclusiveMinimum, 0);
+  assert.equal(topSet.properties.reps.exclusiveMinimum, 0);
+  assert.equal(ok({ exercise: "Back Squat", top_set: { sets: 0, reps: 3 } }), false);
+  assert.equal(ok({ exercise: "Back Squat", top_set: { sets: 1, reps: 3, target_weight: null, rir: 0 } }), true);
 
   // And the ordinary session still passes.
   assert.equal(ok({ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 }), true);

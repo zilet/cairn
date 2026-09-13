@@ -36,6 +36,18 @@ export interface CoachEnduranceGoal extends CoachRecord {
   target?: string | null;
 }
 
+export interface CoachEnduranceScheduleDay {
+  dow: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  kind: "easy" | "quality" | "long" | "any" | string;
+}
+
+export interface CoachEnduranceSchedule extends CoachRecord {
+  days: CoachEnduranceScheduleDay[];
+  note?: string;
+  source?: "athlete" | "chat" | string;
+  updated_at?: string;
+}
+
 export interface CoachGoalCheck extends CoachRecord {
   goal_mode?: CoachGoalMode | null;
   tdee?: number | null;
@@ -255,6 +267,7 @@ export interface CoachContextEnvelope {
   training_intent: ResolvedTrainingIntent;
   endurance_capacity: EnduranceCapacityRead | null;
   endurance_goal: CoachEnduranceGoal | null;
+  endurance_schedule: CoachEnduranceSchedule | null;
   goal: CoachGoalCheck | null;
   goal_mode: CoachGoalMode;
   journey: CoachRecord | null;
@@ -342,6 +355,10 @@ export interface CoachContextEnvelope {
   // restructure can be checked against the real week instead of against prose.
   // Optional so partial context builders and imported DBs never synthesize it.
   week_layout?: CoachRecord | null;
+  // The race-build layer over the run plan: estimated finish + trend, pace bands off
+  // the target, the ladder to race week, the leg map with the ride. `available:false`
+  // without a dated race. Optional for the same reason as week_layout.
+  race_build?: CoachRecord | null;
   flexible_training_agenda: CoachRecord | null;
   run_variety: CoachRecord | null;
   endurance_tests: CoachRecord[];

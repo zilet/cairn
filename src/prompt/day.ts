@@ -637,8 +637,12 @@ const SESSION_SUGGEST_SCHEMA = `{
   "items": [
     { "exercise": "<exact name; reuse plan/exercise names where sensible>",
       "sets": <number>, "rep_low": <number|null>, "rep_high": <number|null>,
-      "target_weight": <number|null>, "target_seconds": <number|null>,
-      "mode": "reps|timed", "note": "<short cue / why, optional>" },
+      "target_weight": <number|null, negative = assisted, null = bodyweight OR unanchored>,
+      "target_seconds": <number|null>,
+      "mode": "reps|timed", "note": "<short cue / why, optional>",
+      "top_set": { "sets": <number>, "reps": <number>,
+        "target_weight": <number|null>, "target_seconds": <number|null>,
+        "rir": <number|null>, "note": "<optional>" } },
     { "kind": "cardio", "exercise": "<the activity, e.g. 'Easy run' / 'Z2 ride'>",
       "target_distance_km": <number|null>, "target_duration_min": <number|null>,
       "target_zone": "<'Z2' | 'tempo' | 'easy' | null>", "note": "<optional — interval structure / cue>" }
@@ -714,6 +718,7 @@ GUARDRAILS:
 - Conservative loading; respect every exercise constraint_note (e.g. injury limits)
   and any active injury in context_events — never program loaded movement through an injured area.
 ${MECHANICS_ENCODING}
+- One item per exercise. A heavier top set / re-test before back-off work belongs in that item's \`top_set\`, never as a second item.
 - Carry over sensible working weights from the plan / recent logs where they fit. Thin data → start
   light with a "NEW — start light, log actual" note.
 - Honor the day read: if today reads as rest/easy (kind="${read.kind}"), keep this session light and

@@ -7,6 +7,7 @@ import {
 import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocumentKind } from "./healthDocumentKinds.js";
 import { CONTEXT_TAG_VOCAB, isContextTagKey } from "./contextTags.js";
 import { localDateISO } from "./repo/shared.js";
+import { normalizeEnduranceSchedule } from "./repo/profile.js";
 
 type ChatActionRecord = Record<string, unknown>;
 
@@ -26,6 +27,7 @@ export const CHAT_ACTION_TYPES = [
   "set_profile",
   "set_training_intent",
   "set_endurance_goal",
+  "set_endurance_schedule",
   "set_strength_objective",
   "add_memory",
   "update_memory",
@@ -93,6 +95,12 @@ export interface SetTrainingIntentAction extends ChatActionBase {
 export interface SetEnduranceGoalAction extends ChatActionBase {
   type: "set_endurance_goal";
   [key: string]: unknown;
+}
+
+export interface SetEnduranceScheduleAction extends ChatActionBase {
+  type: "set_endurance_schedule";
+  days: Array<{ dow: number; kind: string }>;
+  note?: unknown;
 }
 
 export interface SetStrengthObjectiveAction extends ChatActionBase {
@@ -328,6 +336,7 @@ export type ChatAction =
   | SetProfileAction
   | SetTrainingIntentAction
   | SetEnduranceGoalAction
+  | SetEnduranceScheduleAction
   | SetStrengthObjectiveAction
   | AddMemoryAction
   | UpdateMemoryAction
@@ -426,6 +435,21 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "event": "<race name — race mode>", "date": "YYYY-MM-DD — race mode",
       "label": "<readiness label, e.g. '10k-ready' — standing mode>",
       "distance_km": <number|null>, "target": "<e.g. 'sub-1:45'|null>", "weekly_km": <number|null>, "weekly_sessions": <number|null> }`,
+  },
+  set_endurance_schedule: {
+    type: "set_endurance_schedule",
+    applyMode: "immediate",
+    shape: `// Stated RUN DAYS. Use when the athlete names the weekdays they run
+    // ("plan my strength around 3 runs — Tue/Thu and a long run on the weekend").
+    // dow: 0=Sunday … 6=Saturday. kind: easy | quality | long | any.
+    // ONLY days they named — never invent a weekday they did not say. "Weekend"
+    // without Sat/Sun → Saturday (dow 6) as the long-run day.
+    { "type": "set_endurance_schedule",
+      "days": [{ "dow": 2, "kind": "quality" }, { "dow": 4, "kind": "easy" }, { "dow": 6, "kind": "long" }],
+      "note": "<optional short restatement of their words>" }`,
+    guidance: [
+      `Emit set_endurance_schedule when the athlete states which days they run. Map named weekdays only; do not fill in a third day they did not mention. Duplicate weekdays keep the first kind.`,
+    ],
   },
   set_strength_objective: {
     type: "set_strength_objective",
@@ -781,6 +805,15 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
         : null;
     case "set_endurance_goal":
       return { ...value, type: "set_endurance_goal" };
+    case "set_endurance_schedule": {
+      const schedule = normalizeEnduranceSchedule({ ...value, source: "chat" });
+      if (!schedule) return null;
+      return {
+        type: "set_endurance_schedule",
+        days: schedule.days,
+        note: schedule.note,
+      };
+    }
     case "set_strength_objective":
       return nonBlank(value.exercise) &&
         (value.target_kind === "return_to_personal_best" || value.target_kind === "explicit_est_1rm") &&

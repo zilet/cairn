@@ -87,9 +87,15 @@ const TRAINING_FULL = [
 const ENDURANCE = [
   "endurance_capacity",
   "endurance_goal",
+  "endurance_schedule",
   "run_compliance",
   "run_zones",
   "run_plan",
+  // The race-build layer (estimate + trend, pace bands, the ladder, the leg map).
+  // {available:false} for anyone without a dated race, so it costs a pure strength
+  // athlete a few bytes and gives a racer the numbers every running prompt should
+  // be shooting at.
+  "race_build",
   "flexible_training_agenda",
   "run_variety",
   "endurance_tests",

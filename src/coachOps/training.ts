@@ -52,7 +52,8 @@ export async function suggestSession(
   // the current database so a suggestion can never render as actionable and then
   // fail preparation because that movement is authoritatively timed/reps work.
   const sessionSane = (s: any) => isSessionSuggestionResult(s);
-  const cachedSession = normalizeSessionSuggestionResult(cached?.result?.session);
+  const foldTopSets = { foldTopSets: true } as const;
+  const cachedSession = normalizeSessionSuggestionResult(cached?.result?.session, foldTopSets);
   const usableCached =
     cached && cachedSession && cached.result && typeof cached.result === "object"
       ? {
@@ -98,7 +99,7 @@ export async function suggestSession(
     };
   }
   const { agent: chosen, result, tried } = run;
-  const p = normalizeSessionSuggestionResult(result.parsed);
+  const p = normalizeSessionSuggestionResult(result.parsed, foldTopSets);
   if (!p) {
     // Nothing fresh and usable — fall back to a stale cache hit rather than fail.
     if (usableCached) return usableCached.result;
@@ -124,7 +125,7 @@ export async function suggestSession(
     hooks,
     SESSION_SUGGESTION_SCHEMA
   );
-  const session = normalizeSessionSuggestionResult(draft) ?? p;
+  const session = normalizeSessionSuggestionResult(draft, foldTopSets) ?? p;
   // Outcome learning: record what was suggested so a later pass can compare it to
   // what the athlete actually trained. Best-effort; never blocks the response.
   recordSuggestion("session_suggest", opts.date ?? null, {
@@ -276,6 +277,7 @@ export function coachingCacheFreshnessFingerprint(date = localDateISO()): string
           primary_discipline: p.primary_discipline ?? null,
           endurance_sport: p.endurance_sport ?? null,
           endurance_goal_json: p.endurance_goal_json ?? null,
+          endurance_schedule_json: p.endurance_schedule_json ?? null,
           training_intent_json: p.training_intent_json ?? null,
           goal_weight_lb: p.goal_weight_lb ?? null,
           goal_bodyfat_pct: p.goal_bodyfat_pct ?? null,
@@ -365,6 +367,7 @@ export function sessionSuggestCacheKey(opts: {
           primary_discipline: profile.primary_discipline ?? null,
           endurance_sport: profile.endurance_sport ?? null,
           endurance_goal_json: profile.endurance_goal_json ?? null,
+          endurance_schedule_json: profile.endurance_schedule_json ?? null,
           training_intent_json: profile.training_intent_json ?? null,
         }
       : null;

@@ -41,7 +41,7 @@ import {
   weeklyKm as recordedWeeklyKm,
 } from "./program-state.js";
 import { legLoadGroupsPhrase, NO_LEG_LOAD, type StrengthLegLoad, strengthLegLoad } from "./hybrid-load.js";
-import { getEnduranceGoal, getProfile } from "./profile.js";
+import { getEnduranceGoal, getEnduranceSchedule, getProfile, dowToDayNumber, formatEnduranceScheduleDays, type EnduranceSchedule } from "./profile.js";
 import { createProposal, supersedeAutoRunPlanDrafts } from "./proposals.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "./reaction-model.js";
 import {
@@ -105,6 +105,34 @@ function recentRunDose(dateISO: string): { average_km: number | null; longest_km
 // context build never mutates state or rotates differently on each call.
 function weekOrdinal(mondayISO: string): number {
   return Math.floor(Date.parse(mondayISO + "T00:00:00Z") / (7 * 864e5));
+}
+
+function longSlotFromSchedule(schedule: EnduranceSchedule): number {
+  const slots = schedule.days.map((d) => ({ day: dowToDayNumber(d.dow), kind: d.kind }));
+  const named = slots.find((s) => s.kind === "long");
+  if (named) return named.day;
+  const weekend = slots.find((s) => s.day === 6) ?? slots.find((s) => s.day === 7);
+  if (weekend) return weekend.day;
+  return slots[slots.length - 1]?.day ?? 6;
+}
+
+function qualitySlotFromSchedule(schedule: EnduranceSchedule, longSlot: number): number | null {
+  const slots = schedule.days.map((d) => ({ day: dowToDayNumber(d.dow), kind: d.kind }));
+  const named = slots.find((s) => s.kind === "quality" && s.day !== longSlot);
+  if (named) return named.day;
+  const any = slots.find((s) => s.kind === "any" && s.day !== longSlot);
+  return any?.day ?? null;
+}
+
+function easySlotsFromSchedule(schedule: EnduranceSchedule, used: Set<number>, easyCount: number): number[] {
+  const remaining = schedule.days
+    .map((d) => ({ day: dowToDayNumber(d.dow), kind: d.kind }))
+    .filter((s) => !used.has(s.day))
+    .sort((a, b) => {
+      const rank = (k: string) => (k === "easy" ? 0 : k === "any" ? 1 : 2);
+      return rank(a.kind) - rank(b.kind) || a.day - b.day;
+    });
+  return remaining.slice(0, Math.max(0, easyCount)).map((s) => s.day);
 }
 
 // ---------------------------------------------------------------------------
@@ -847,6 +875,7 @@ export function weeklyRunPlan(
   const week_start = mondayOf(d);
 
   const profile = getProfile();
+  const statedSchedule = getEnduranceSchedule();
   const trainingIntent = opts?.trainingIntent ?? getTrainingIntent(profile);
   const goal = opts?.goal ?? getEnduranceGoal(d);
   const recovery =
@@ -968,8 +997,10 @@ export function weeklyRunPlan(
   const LONG_SLOT_CANDIDATES = [6, 5, 7, 4] as const;
   const ringClearOfLower = (s: number): boolean =>
     !lowerDays.has(s) && !lowerDays.has(prevDayNumber(s)) && !lowerDays.has(nextDayNumber(s));
+  const statedLongSlot = statedSchedule?.days.length ? longSlotFromSchedule(statedSchedule) : null;
   const staticLongSlot =
-    LONG_SLOT_CANDIDATES.find(ringClearOfLower) ?? LONG_SLOT_CANDIDATES.find((s) => !lowerDays.has(s)) ?? 6;
+    statedLongSlot ??
+    (LONG_SLOT_CANDIDATES.find(ringClearOfLower) ?? LONG_SLOT_CANDIDATES.find((s) => !lowerDays.has(s)) ?? 6);
   const longRunDate = shiftDaysISO(week_start, staticLongSlot - 1);
 
   // What the running legs are carrying, and whether the LIFTING block is at its own
@@ -1383,6 +1414,10 @@ export function weeklyRunPlan(
     if (raceTarget) rationale.push(pickDayVariant(RACE_VS_SUPPORTING_VARIANTS, d, "run-race-vs-supporting"));
   }
 
+  if (statedSchedule?.days.length) {
+    runDays = Math.min(runDays, statedSchedule.days.length);
+  }
+
   // --- quality session: include unless we're protecting recovery / tapering hard / very thin base ---
   // The thin-base bar drops for a runner with a dated race and a time on it: at 10–12
   // km/wk a single quality session is the difference between arriving trained and
@@ -1573,27 +1608,38 @@ export function weeklyRunPlan(
   // slot catches a week where the floor rules everything out. The quality run does the
   // same by handing the floor to qualitySlotFor, which applies it inside its own tiers
   // rather than keeping a second copy of them here.
-  const longSlot =
-    freshFloor > 0
+  const scheduled = !!statedSchedule?.days.length;
+  // A stated schedule owns the calendar: freshness/lower-adjacency may NOTE a
+  // collision but never move a run off a day the athlete named.
+  const longSlot = scheduled
+    ? staticLongSlot
+    : freshFloor > 0
       ? (LONG_SLOT_CANDIDATES.find((s) => ringClearOfLower(s) && s >= freshFloor) ??
         LONG_SLOT_CANDIDATES.find((s) => !lowerDays.has(s) && s >= freshFloor) ??
         staticLongSlot)
       : staticLongSlot;
-  const qualitySlot = freshFloor > 0 ? qualitySlotFor(longSlot, freshFloor) : staticQualitySlot;
+  const scheduledQualitySlot = scheduled && statedSchedule ? qualitySlotFromSchedule(statedSchedule, longSlot) : null;
+  let qualityRun = q;
+  if (scheduled && q && scheduledQualitySlot == null) qualityRun = null;
+  const qualitySlot = scheduled
+    ? (scheduledQualitySlot ?? staticQualitySlot)
+    : freshFloor > 0
+      ? qualitySlotFor(longSlot, freshFloor)
+      : staticQualitySlot;
 
-  const qualityMovedByLegLoad = qualitySlot !== staticQualitySlot;
-  const longMovedByLegLoad = longSlot !== staticLongSlot;
-  if (((q && qualityMovedByLegLoad) || longMovedByLegLoad) && !legLoadSaid) {
+  const qualityMovedByLegLoad = !scheduled && qualitySlot !== staticQualitySlot;
+  const longMovedByLegLoad = !scheduled && longSlot !== staticLongSlot;
+  if (((qualityRun && qualityMovedByLegLoad) || longMovedByLegLoad) && !legLoadSaid) {
     rationale.push(pickDayVariant(LEG_LOAD_PLACEMENT_VARIANTS, d, "run-placement-leg-load")(legLoadPlacementPhrase));
   }
-  if (q && !qualityMovedByLegLoad) {
+  if (qualityRun && !qualityMovedByLegLoad) {
     // Only claim the shift the athlete can check against their own week: the default
     // slot really was the day after a leg day, and the run really is clear of one now.
     // The ring pass moves the slot for other reasons too — a leg day the day BEFORE
     // it, the long run's own separation — and this sentence would then be describing
     // a week that isn't theirs. A quiet placement says nothing at all.
     const stillNearLegs = lowerDays.has(qualitySlot) || dayAfterLower.has(qualitySlot);
-    if (qualitySlot !== 2 && dayAfterLower.has(2) && !stillNearLegs) {
+    if (!scheduled && qualitySlot !== 2 && dayAfterLower.has(2) && !stillNearLegs) {
       rationale.push("Shifted the quality run off the day after your leg day so the hard efforts don't stack.");
     } else if (stillNearLegs) {
       rationale.push(
@@ -1602,19 +1648,26 @@ export function weeklyRunPlan(
     }
   }
   if (!longMovedByLegLoad) {
-    if (longSlot !== 6) {
+    if (!scheduled && longSlot !== 6) {
       rationale.push("Placed the long run clear of your planned leg days so the legs are fresh for it.");
-    } else if (lowerDays.has(6)) {
+    } else if (lowerDays.has(longSlot) || (scheduled && (lowerDays.has(longSlot) || dayAfterLower.has(longSlot)))) {
       rationale.push(
         "Couldn't fully separate the long run from a leg day this week — keep it easy so the legs stay honest."
       );
     }
   }
+  if (scheduled && statedSchedule) {
+    rationale.push(`Anchored to your stated run days (${formatEnduranceScheduleDays(statedSchedule)}).`);
+  }
 
   const runs: RunPlanPrescription[] = [];
   const z2 = zoneTag("Z2", zones, hrModel);
-  // Easy slots, prefer non-adjacent to the hard days.
-  const easySlots = [1, 4, 7, 3, 5].slice(0, easyCount);
+  // Easy slots, prefer non-adjacent to the hard days — unless a stated schedule
+  // already named the days, in which case remaining scheduled dows are the only ones.
+  const scheduledUsed = new Set<number>([longSlot, ...(qualityRun ? [qualitySlot] : [])]);
+  const easySlots = scheduled && statedSchedule
+    ? easySlotsFromSchedule(statedSchedule, scheduledUsed, easyCount + (q && !qualityRun ? 1 : 0))
+    : [1, 4, 7, 3, 5].slice(0, easyCount);
   for (const slot of easySlots) {
     runs.push({
       day_number: slot,
@@ -1629,18 +1682,18 @@ export function weeklyRunPlan(
       interval: null,
     });
   }
-  if (q) {
+  if (qualityRun) {
     runs.push({
       day_number: qualitySlot,
-      label: q.label,
+      label: qualityRun.label,
       kind_label: "quality",
-      target_distance_km: q.distance,
-      target_duration_min: q.duration,
-      target_zone: zoneTag(q.zoneKey, zones, hrModel),
-      note: q.note,
-      day_name: q.label,
+      target_distance_km: qualityRun.distance,
+      target_duration_min: qualityRun.duration,
+      target_zone: zoneTag(qualityRun.zoneKey, zones, hrModel),
+      note: qualityRun.note,
+      day_name: qualityRun.label,
       focus: "Endurance · quality",
-      interval: q.interval,
+      interval: qualityRun.interval,
     });
   }
   runs.push({
@@ -1657,20 +1710,25 @@ export function weeklyRunPlan(
   });
 
   // De-dupe day slots (an easy slot must never collide with the quality/long days).
-  const used = new Set<number>([qualitySlot, longSlot]);
+  // On a stated schedule the remaining days are already exclusive — never spill
+  // onto an unscheduled weekday to resolve a collision.
+  const used = new Set<number>([...(qualityRun ? [qualitySlot] : []), longSlot]);
   for (const r of runs) {
     if (r.kind_label !== "easy") continue;
     if (used.has(r.day_number)) {
-      const free = [1, 4, 7, 3, 5, 2, 6].find((s) => !used.has(s));
-      if (free) r.day_number = free;
+      if (!scheduled) {
+        const free = [1, 4, 7, 3, 5, 2, 6].find((s) => !used.has(s));
+        if (free) r.day_number = free;
+      }
     }
     used.add(r.day_number);
   }
   runs.sort((a, b) => a.day_number - b.day_number);
 
-  const quality_focus = q ? q.label : null;
-  const easyLabel = `${easyCount} easy`;
-  const mix_summary = `${easyLabel} + 1 long${q ? ` + 1 ${qualityType}` : ""}`;
+  const quality_focus = qualityRun ? qualityRun.label : null;
+  const placedEasyCount = runs.filter((r) => r.kind_label === "easy").length;
+  const easyLabel = `${placedEasyCount} easy`;
+  const mix_summary = `${easyLabel} + 1 long${qualityRun ? ` + 1 ${qualityType}` : ""}`;
   const phaseWord = goal?.is_race && goal.phase ? `${goal.phase} phase` : "steady";
   const holdClause = firmHold
     ? `, ${holdMarkerPhrase(firmHold)}`
@@ -1680,7 +1738,7 @@ export function weeklyRunPlan(
   const prescribedKm = round1(
     runs.reduce((sum, run) => sum + (run.target_distance_km != null ? Number(run.target_distance_km) : 0), 0)
   );
-  const why = `~${Math.round(prescribedKm || weeklyKm)} km this week (${phaseWord}): ${mix_summary}${q ? `, with ${q.label.toLowerCase()} as the quality work` : ", all easy aerobic"}${holdClause}.`;
+  const why = `~${Math.round(prescribedKm || weeklyKm)} km this week (${phaseWord}): ${mix_summary}${qualityRun ? `, with ${qualityRun.label.toLowerCase()} as the quality work` : ", all easy aerobic"}${holdClause}.`;
 
   // The fit, said plainly and only when it has something to say. A trajectory that
   // reaches what the distance leans on needs no sentence at all; one that does not

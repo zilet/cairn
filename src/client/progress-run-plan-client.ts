@@ -57,6 +57,138 @@ function weeklyRunPlanCard(plan: WeeklyRunPlan | null | undefined): string {
     </div>`;
 }
 
+// ---- the race build ----
+// One card between the goal and this week's runs: where the estimate sits against
+// the target and how it has moved, the paces the sessions should touch, the ladder
+// to race week, and the seven-day leg map with the ride and heavy-lower days. Every
+// number is the server's; nothing here is a grade.
+type RaceBuild = import("../contracts/client-api.js").ClientRaceBuild;
+
+function raceClock(sec: unknown): string {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`;
+}
+
+function racePace(secPerKm: unknown): string {
+  const s = Math.max(0, Math.round(Number(secPerKm) || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+const RACE_FIT_WORD: Record<string, string> = {
+  fits: "inside the target",
+  stretch: "a stretch the build can close",
+  beyond_horizon: "the distance itself is the honest goal this time",
+};
+
+const RACE_WEEK_KIND_WORD: Record<string, string> = {
+  build: "Build",
+  down: "Down week",
+  peak: "Peak",
+  taper: "Taper",
+  race: "Race week",
+};
+
+function raceBuildCard(build: RaceBuild | null | undefined): string {
+  if (!build || build.available === false || !build.race) return "";
+  const race = build.race;
+  const p = build.prediction;
+  const target = race.target;
+
+  // The headline pair: estimate vs target.
+  let numbers = "";
+  if (p || target) {
+    const estimate = p
+      ? `<div class="rbuild-num"><span class="lbl">Reads like</span><span class="numeral rbuild-clock">${escHtml(raceClock(p.estimate_sec))}</span><span class="rbuild-pace">${escHtml(racePace(p.estimate_pace_sec_per_km))} /km</span></div>`
+      : "";
+    const goal = target
+      ? `<div class="rbuild-num"><span class="lbl">Shooting for</span><span class="numeral rbuild-clock">${escHtml(raceClock(target.sec))}</span><span class="rbuild-pace">${escHtml(racePace(target.pace_sec_per_km))} /km</span></div>`
+      : "";
+    numbers = `<div class="rbuild-nums">${estimate}${goal}</div>`;
+  }
+  const trendBits: string[] = [];
+  if (p?.trend) {
+    trendBits.push(
+      p.trend.word === "steady"
+        ? "Holding steady over the last month."
+        : `${Math.max(1, Math.round(Math.abs(p.trend.delta_sec) / 60))} min ${p.trend.word} over the last month.`
+    );
+  }
+  if (p?.fit && target) {
+    const fitWord = RACE_FIT_WORD[p.fit] || "";
+    const lead = p.fit === "fits" ? fitWord.charAt(0).toUpperCase() + fitWord.slice(1) : `${raceClock(Math.abs(p.gap_sec || 0))} off — ${fitWord}`;
+    trendBits.push(`${lead}.`);
+  }
+  if (p) trendBits.push(`From ${p.basis_detail}.`);
+  const trend = trendBits.length ? `<div class="wrun-note rbuild-trend">${escHtml(trendBits.join(" "))}</div>` : "";
+
+  // This week's quality session, with a pace on it.
+  const q = build.this_week?.quality;
+  const quality = q
+    ? `<div class="wrun-focus"><span class="lbl">This week's quality</span> ${escHtml(q.label)}${q.pace ? ` · <span class="numeral">${escHtml(q.pace.text)}</span>` : " · by effort"}</div>`
+    : "";
+
+  // Pace bands.
+  const bands = build.paces?.bands?.filter((b) => b.key !== "race") || [];
+  const paces = bands.length
+    ? `<div class="rbuild-paces">${bands
+        .map((b) => `<div class="rbuild-band"><span class="rbuild-band-k">${escHtml(b.label)}</span><span class="numeral rbuild-band-v">${escHtml(b.text)}</span></div>`)
+        .join("")}</div>`
+    : "";
+
+  // The leg map: one ring, seven cells.
+  const legMap = Array.isArray(build.leg_map) && build.leg_map.length
+    ? `<div class="rbuild-map">${build.leg_map
+        .map((d) => {
+          const bits: string[] = [];
+          if (d.run) bits.push(`${runKindLabel(d.run.kind)} run${d.run.km != null ? ` ${fmtKm(d.run.km)}` : ""}`);
+          if (d.strength) bits.push(d.strength.heavy_lower ? `Heavy legs · ${d.strength.name}` : d.strength.name);
+          if (d.ride) bits.push(build.ride ? build.ride.label : "ride");
+          return `<div class="rbuild-day${d.hard ? " is-hard" : ""}"><span class="rbuild-day-k">${escHtml(d.weekday.slice(0, 3))}</span><span class="rbuild-day-v">${bits.length ? escHtml(bits.join(" · ")) : "—"}</span></div>`;
+        })
+        .join("")}</div>`
+    : "";
+
+  // The ladder.
+  const ladder = Array.isArray(build.weeks) && build.weeks.length
+    ? `<div class="wrun-rows rbuild-ladder">${build.weeks
+        .map((w) => `<div class="wrun-row ${w.kind === "peak" || w.kind === "build" ? "wrun-quality" : "wrun-easy"}${w.current ? " is-current" : ""}">
+            <div class="wrun-row-head">
+              <span class="wrun-kind">${escHtml(w.weeks_to_race === 0 ? "Race week" : `${w.weeks_to_race} wk out`)}</span>
+              <span class="wrun-label">${escHtml(RACE_WEEK_KIND_WORD[w.kind] || w.kind)}${w.current ? " · this week" : ""}</span>
+              <span class="numeral rbuild-week-km">${escHtml(`${fmtKm(w.km)} km · long ${fmtKm(w.long_km)}`)}</span>
+            </div>
+            <div class="wrun-note">${escHtml(w.quality_hint)}</div>
+          </div>`)
+        .join("")}</div>`
+    : "";
+
+  const strengthBits: string[] = [];
+  if (build.strength) {
+    strengthBits.push(build.strength.principle);
+    if (build.strength.layout) strengthBits.push(build.strength.layout);
+  }
+  if (build.ride) strengthBits.push(build.ride.placement);
+  const whyBits = [build.why, ...strengthBits].filter(Boolean);
+
+  const phaseLabel = { base: "Base", build: "Building", sharpen: "Sharpening", taper: "Tapering", past: "Done" }[race.phase] || "";
+  return `<div class="wrun-card rbuild reveal" style="${stagger(0)}" data-race-build>
+      <div class="wrun-head">
+        <span class="lbl">Race build</span>
+        <span class="wrun-mix">${escHtml(`${race.weeks_to_race} weeks to go${phaseLabel ? ` · ${phaseLabel}` : ""}`)}</span>
+      </div>
+      ${numbers}
+      ${trend}
+      ${quality}
+      ${paces}
+      ${legMap}
+      ${ladder ? `<details class="rbuild-more"><summary>The build, week by week</summary>${ladder}</details>` : ""}
+      ${whyBits.length ? `<div class="wrun-why"><span class="lbl">How it fits together</span>${whyBits.map((why) => `<p>${escHtml(why)}</p>`).join("")}</div>` : ""}
+    </div>`;
+}
+
 function trainingAgendaDate(date: unknown): string {
   return humanDate(String(date || ""));
 }
@@ -331,6 +463,7 @@ const CAIRN_PROGRESS_RUN_PLAN = {
   runKindClass,
   runKindLabel,
   weeklyRunPlanCard,
+  raceBuildCard,
   trainingAgendaCard,
   enduranceGoalCard,
   runComplianceLine,
@@ -343,6 +476,7 @@ Object.assign(globalThis, {
   runKindClass,
   runKindLabel,
   weeklyRunPlanCard,
+  raceBuildCard,
   trainingAgendaCard,
   enduranceGoalCard,
   runComplianceLine,
@@ -356,6 +490,7 @@ if (typeof window !== "undefined") {
     runKindClass,
     runKindLabel,
     weeklyRunPlanCard,
+    raceBuildCard,
     trainingAgendaCard,
     enduranceGoalCard,
     runComplianceLine,

@@ -18,7 +18,7 @@ type TodayAddExerciseDeps = {
     prefill: Record<string, unknown>,
     revealIdx: unknown,
     rx: unknown,
-    lastSet?: unknown,
+    lastSet?: unknown
   ): string;
   wireGuides(card: Element): void;
   wireLogRow(row: Element | null): void;
@@ -31,6 +31,172 @@ type TodayAddExerciseDeps = {
 };
 
 (() => {
+  // Same fold as server `normalizeExerciseName`: lowercase, collapse
+  // non-alphanumerics to a single space, trim. Client-local — do not import
+  // server modules into the PWA bundle.
+  function exerciseNameKey(raw: string): string {
+    return String(raw ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function lookupExModeEntry(
+    exModes: Record<string, string> | undefined,
+    name: string
+  ): { name: string; mode: string } | null {
+    if (!exModes || !name) return null;
+    const direct = exModes[name];
+    if (direct) return { name, mode: direct };
+    const folded = exerciseNameKey(name);
+    if (!folded) return null;
+    for (const [key, mode] of Object.entries(exModes)) {
+      if (exerciseNameKey(key) === folded) return { name: key, mode };
+    }
+    return null;
+  }
+
+  function rememberExMode(state: TodayAddExerciseState, name: string, mode: string): void {
+    const modes = (state.exModes ??= {});
+    modes[name] = mode;
+  }
+
+  function forgetExMode(state: TodayAddExerciseState, name: string): void {
+    const modes = state.exModes;
+    if (!modes) return;
+    delete modes[name];
+  }
+
+  function exerciseRowFromResponse(value: unknown): { name: string; mode?: string; muscle_group?: string } | null {
+    if (!value || typeof value !== "object") return null;
+    const rec = value as Record<string, unknown>;
+    const name = String(rec.name ?? "").trim();
+    if (!name) return null;
+    return {
+      name,
+      mode: rec.mode == null || rec.mode === "" ? undefined : String(rec.mode),
+      muscle_group: rec.muscle_group == null || rec.muscle_group === "" ? undefined : String(rec.muscle_group),
+    };
+  }
+
+  function setEncodedData(el: HTMLElement | null, attr: string, value: string): void {
+    if (!el) return;
+    el.dataset[attr] = encodeURIComponent(value);
+  }
+
+  function renamePendingOffPlan(state: TodayAddExerciseState, fromName: string, toName: string, mode?: string): void {
+    const list = state.pendingOffPlan?.[state.logDate];
+    if (!list) return;
+    const fromKey = exerciseNameKey(fromName);
+    const toKey = exerciseNameKey(toName);
+    const kept: TodayAddExercisePending[] = [];
+    const seen = new Set<string>();
+    for (const pending of list) {
+      const nextName = exerciseNameKey(pending.name) === fromKey ? toName : pending.name;
+      const key = exerciseNameKey(nextName);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      kept.push({
+        name: nextName,
+        mode: (exerciseNameKey(pending.name) === fromKey && mode) || pending.mode || "reps",
+      });
+    }
+    if (toKey && !seen.has(toKey) && fromKey !== toKey) {
+      kept.push({ name: toName, mode: mode || "reps" });
+    }
+    state.pendingOffPlan![state.logDate] = kept;
+  }
+
+  // Rewrite an optimistic off-plan card to the server's canonical row: title,
+  // data-card / data-ex (what POST /sets reads), exModes, pendingOffPlan. If a
+  // card for that canonical name is already on the surface, merge rather than
+  // leave two. Exported for unit tests.
+  function applyCanonicalExerciseName(
+    cardEl: HTMLElement | null,
+    typedName: string,
+    row: { name: string; mode?: string; muscle_group?: string },
+    deps: TodayAddExerciseDeps
+  ): HTMLElement | null {
+    if (!cardEl) return null;
+    const canonical = String(row.name || "").trim();
+    if (!canonical) return cardEl;
+    const canonicalKey = exerciseNameKey(canonical);
+    const nextMode = row.mode || cardEl.dataset.mode || "reps";
+
+    const other =
+      [...deps.root.querySelectorAll<HTMLElement>(".ex[data-card]")].find(
+        (el) => el !== cardEl && exerciseNameKey(el.dataset.card || "") === canonicalKey
+      ) || null;
+    if (other) {
+      const optimisticHasSets = !!cardEl.querySelector(".logged .chip");
+      const otherHasSets = !!other.querySelector(".logged .chip");
+      if (!optimisticHasSets) {
+        cardEl.remove();
+        forgetExMode(deps.state, typedName);
+        rememberExMode(deps.state, canonical, nextMode);
+        renamePendingOffPlan(deps.state, typedName, canonical, nextMode);
+        other.scrollIntoView({ behavior: "smooth", block: "center" });
+        (other.querySelector<HTMLElement>(".in-r") || other.querySelector<HTMLElement>(".in-dur"))?.focus();
+        return other;
+      }
+      if (!otherHasSets) other.remove();
+    }
+
+    cardEl.dataset.card = canonical;
+    if (row.mode) cardEl.dataset.mode = row.mode;
+    const logRow = cardEl.querySelector<HTMLElement>(".logrow");
+    setEncodedData(logRow, "ex", canonical);
+    if (row.mode && logRow) logRow.dataset.mode = row.mode;
+    const nameBtn = cardEl.querySelector<HTMLElement>(".ex-name");
+    if (nameBtn) {
+      setEncodedData(nameBtn, "guide", canonical);
+      const icon = nameBtn.querySelector(".guide-i");
+      nameBtn.innerHTML = `${deps.escapeHtml(canonical)} `;
+      if (icon) nameBtn.appendChild(icon);
+      else {
+        const span = document.createElement("span");
+        span.className = "guide-i";
+        span.textContent = "ⓘ";
+        nameBtn.appendChild(span);
+      }
+    }
+    const skipBtn = cardEl.querySelector<HTMLElement>("[data-skip]");
+    if (skipBtn) {
+      setEncodedData(skipBtn, "skip", canonical);
+      skipBtn.setAttribute?.("aria-label", `Skip ${canonical} today`);
+    }
+    const removeBtn = cardEl.querySelector<HTMLElement>("[data-remove-card]");
+    if (removeBtn) removeBtn.setAttribute?.("aria-label", `Remove ${canonical}`);
+    if (logRow) {
+      const dur = logRow.querySelector<HTMLElement>(".in-dur");
+      if (dur) dur.setAttribute?.("aria-label", `${canonical} duration`);
+    }
+
+    if (typedName !== canonical) forgetExMode(deps.state, typedName);
+    rememberExMode(deps.state, canonical, nextMode);
+    renamePendingOffPlan(deps.state, typedName, canonical, nextMode);
+    return cardEl;
+  }
+
+  async function reconcilePostedExercise(
+    cardEl: HTMLElement | null,
+    typedName: string,
+    posted: Promise<unknown>,
+    deps: TodayAddExerciseDeps
+  ): Promise<void> {
+    try {
+      const row = exerciseRowFromResponse(await posted);
+      if (!row || !cardEl) return;
+      const next = applyCanonicalExerciseName(cardEl, typedName, row, deps);
+      if (next && exerciseNameKey(row.name) !== exerciseNameKey(typedName)) {
+        void hydrateFromNetwork(next, row.name, deps);
+      }
+    } catch {
+      // The optimistic card stays as typed; a failed POST only means no rewrite.
+    }
+  }
+
   function setMode(modeWrap: Element, mode: string): void {
     modeWrap.querySelectorAll<HTMLElement>(".modebtn").forEach((button) => {
       button.classList.toggle("active", button.dataset.exmode === mode);
@@ -49,27 +215,41 @@ type TodayAddExerciseDeps = {
     try {
       const rows = await deps.api("/exercises");
       const exercises = Array.isArray(rows) ? rows : [];
-      deps.state.exModes = Object.fromEntries(exercises.map((row) => {
-        const ex = row && typeof row === "object" ? row as Record<string, unknown> : {};
-        return [String(ex.name || ""), String(ex.mode || "reps")];
-      }).filter(([name]) => name));
-      datalist.innerHTML = exercises.map((row) => {
-        const ex = row && typeof row === "object" ? row as Record<string, unknown> : {};
-        return `<option value="${deps.escapeAttr(ex.name)}">${deps.escapeHtml(ex.muscle_group || "")}</option>`;
-      }).join("");
+      deps.state.exModes = Object.fromEntries(
+        exercises
+          .map((row) => {
+            const ex = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+            return [String(ex.name || ""), String(ex.mode || "reps")];
+          })
+          .filter(([name]) => name)
+      );
+      datalist.innerHTML = exercises
+        .map((row) => {
+          const ex = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+          return `<option value="${deps.escapeAttr(ex.name)}">${deps.escapeHtml(ex.muscle_group || "")}</option>`;
+        })
+        .join("");
     } catch {
       // Free-typed names still work.
     }
   }
 
   function existingCardFor(root: ParentNode, name: string): HTMLElement | null {
-    return [...root.querySelectorAll<HTMLElement>(".ex[data-card]")]
-      .find((el) => (el.dataset.card || "").toLowerCase() === name.toLowerCase()) || null;
+    const folded = exerciseNameKey(name);
+    return (
+      [...root.querySelectorAll<HTMLElement>(".ex[data-card]")].find(
+        (el) => exerciseNameKey(el.dataset.card || "") === folded
+      ) || null
+    );
   }
 
   function skippedButtonFor(root: ParentNode, name: string): HTMLElement | null {
-    return [...root.querySelectorAll<HTMLElement>("#skipLine [data-unskip]")]
-      .find((button) => decodeURIComponent(button.dataset.unskip || "").toLowerCase() === name.toLowerCase()) || null;
+    const folded = exerciseNameKey(name);
+    return (
+      [...root.querySelectorAll<HTMLElement>("#skipLine [data-unskip]")].find(
+        (button) => exerciseNameKey(decodeURIComponent(button.dataset.unskip || "")) === folded
+      ) || null
+    );
   }
 
   // Shared GET /last-set fetch — feeds both the "Last time: …" prefill/line and the
@@ -79,7 +259,7 @@ type TodayAddExerciseDeps = {
   async function fetchLastSet(name: string, deps: TodayAddExerciseDeps): Promise<Record<string, unknown> | null> {
     try {
       const last = await deps.api("/last-set?exercise=" + encodeURIComponent(name));
-      return last && typeof last === "object" ? last as Record<string, unknown> : null;
+      return last && typeof last === "object" ? (last as Record<string, unknown>) : null;
     } catch {
       return null;
     }
@@ -94,7 +274,7 @@ type TodayAddExerciseDeps = {
       if (typeof peekCached !== "function") return null;
       const peek = peekCached<unknown>("last-set:" + name);
       const data = peek ? peek.data : null;
-      return data && typeof data === "object" ? data as Record<string, unknown> : null;
+      return data && typeof data === "object" ? (data as Record<string, unknown>) : null;
     } catch {
       return null;
     }
@@ -113,7 +293,7 @@ type TodayAddExerciseDeps = {
     name: string,
     mode: string | null,
     lastSet: Record<string, unknown> | null,
-    deps: TodayAddExerciseDeps,
+    deps: TodayAddExerciseDeps
   ): HTMLElement | null {
     const tpl = document.createElement("template");
     tpl.innerHTML = deps
@@ -139,18 +319,15 @@ type TodayAddExerciseDeps = {
     el.value = next;
   }
 
-  function applyPrefill(
-    logRow: HTMLElement,
-    lastSet: Record<string, unknown>,
-    deps: TodayAddExerciseDeps,
-  ): void {
+  function applyPrefill(logRow: HTMLElement, lastSet: Record<string, unknown>, deps: TodayAddExerciseDeps): void {
     if (logRow.dataset.mode === "timed") {
       const seconds = Number(lastSet.duration_sec);
-      const text = lastSet.duration_sec == null || !Number.isFinite(seconds)
-        ? null
-        : deps.fmtDur
-          ? deps.fmtDur(seconds)
-          : String(seconds);
+      const text =
+        lastSet.duration_sec == null || !Number.isFinite(seconds)
+          ? null
+          : deps.fmtDur
+            ? deps.fmtDur(seconds)
+            : String(seconds);
       fillInput(logRow.querySelector<HTMLInputElement>(".in-dur"), text);
       return;
     }
@@ -177,7 +354,7 @@ type TodayAddExerciseDeps = {
   function hydrateLastSet(
     cardEl: HTMLElement | null,
     lastSet: Record<string, unknown> | null,
-    deps: TodayAddExerciseDeps,
+    deps: TodayAddExerciseDeps
   ): void {
     if (!cardEl || !lastSet || cardEl.isConnected === false) return;
     const logRow = cardEl.querySelector<HTMLElement>(".logrow");
@@ -197,12 +374,21 @@ type TodayAddExerciseDeps = {
     CairnTodaySessionSetModel.wireLastSetLine(logRow, lastSet, deps);
   }
 
-  async function hydrateFromNetwork(cardEl: HTMLElement | null, name: string, deps: TodayAddExerciseDeps): Promise<void> {
+  async function hydrateFromNetwork(
+    cardEl: HTMLElement | null,
+    name: string,
+    deps: TodayAddExerciseDeps
+  ): Promise<void> {
     if (!cardEl) return;
     hydrateLastSet(cardEl, await fetchLastSet(name, deps), deps);
   }
 
-  function replaceEmptyExistingCard(existing: HTMLElement, name: string, mode: string, deps: TodayAddExerciseDeps): HTMLElement | null {
+  function replaceEmptyExistingCard(
+    existing: HTMLElement,
+    name: string,
+    mode: string,
+    deps: TodayAddExerciseDeps
+  ): HTMLElement | null {
     const cached = peekLastSet(name);
     const fresh = buildCard(name, mode, cached, deps);
     if (!fresh) return null;
@@ -213,10 +399,14 @@ type TodayAddExerciseDeps = {
     return fresh;
   }
 
-  function insertOffPlanCard(name: string, mode: string | null | undefined, deps: TodayAddExerciseDeps): HTMLElement | null {
+  function insertOffPlanCard(
+    name: string,
+    mode: string | null | undefined,
+    deps: TodayAddExerciseDeps
+  ): HTMLElement | null {
     deps.state.pendingOffPlan ??= {};
     const list = (deps.state.pendingOffPlan[deps.state.logDate] ??= []);
-    if (!list.some((pending) => pending.name.toLowerCase() === name.toLowerCase())) {
+    if (!list.some((pending) => exerciseNameKey(pending.name) === exerciseNameKey(name))) {
       list.push({ name, mode: mode || "reps" });
     }
 
@@ -246,10 +436,12 @@ type TodayAddExerciseDeps = {
     if (!btn || !form || !input || !go || !datalist || !modeWrap) return;
 
     let mode = "reps";
-    modeWrap.querySelectorAll<HTMLElement>("[data-exmode]").forEach((button) => button.addEventListener("click", () => {
-      mode = button.dataset.exmode || "reps";
-      setMode(modeWrap, mode);
-    }));
+    modeWrap.querySelectorAll<HTMLElement>("[data-exmode]").forEach((button) =>
+      button.addEventListener("click", () => {
+        mode = button.dataset.exmode || "reps";
+        setMode(modeWrap, mode);
+      })
+    );
     const chooseMode = (nextMode: string) => {
       mode = nextMode;
       setMode(modeWrap, mode);
@@ -263,7 +455,7 @@ type TodayAddExerciseDeps = {
     });
 
     input.addEventListener("input", () => {
-      const knownMode = (deps.state.exModes || {})[input.value.trim()];
+      const knownMode = lookupExModeEntry(deps.state.exModes, input.value.trim())?.mode;
       if (knownMode) chooseMode(knownMode);
     });
 
@@ -271,11 +463,14 @@ type TodayAddExerciseDeps = {
     // inserted and the form is reset before any request is made. Only the
     // "Last time" hydration trails behind, and it is never awaited here.
     const addNow = (): void => {
-      const name = (input.value || "").trim();
-      if (!name) {
+      const typed = (input.value || "").trim();
+      if (!typed) {
         input.focus();
         return;
       }
+
+      const catalog = lookupExModeEntry(deps.state.exModes, typed);
+      const name = catalog?.name ?? typed;
 
       const existing = existingCardFor(deps.root, name);
       if (existing) {
@@ -291,11 +486,12 @@ type TodayAddExerciseDeps = {
         // The mode is the athlete's own statement about the movement, and the card
         // is rebuilt from it locally either way — so paint it now and let the write
         // catch up. A failed POST costs only the server-side memory of the mode.
-        (deps.state.exModes ??= {})[name] = mode;
-        deps.postExerciseMode(name, mode).catch(() => {});
+        rememberExMode(deps.state, name, mode);
+        const posted = deps.postExerciseMode(typed, mode);
         const fresh = replaceEmptyExistingCard(existing, name, mode, deps);
         resetAddForm(input, form, btn, modeWrap);
         void hydrateFromNetwork(fresh, name, deps);
+        void reconcilePostedExercise(fresh, name, posted, deps);
         return;
       }
 
@@ -306,39 +502,48 @@ type TodayAddExerciseDeps = {
         return;
       }
 
-      const known = (deps.state.exModes || {})[name];
+      const known = catalog?.mode;
+      let posted: Promise<unknown> | null = null;
       if (!known) {
         // A genuinely-new off-plan movement. Persist it now so the exercises row
         // exists immediately — that lets the background brain canonicalize it,
         // write a how-to guide, and generate good art (the 'exercise' enrichment
         // kind). Fire-and-forget: the card renders regardless, and a failed POST
         // just means no enrichment this time. Optimistically mark it known so a
-        // rapid re-add doesn't double-post.
-        (deps.state.exModes ??= {})[name] = mode || "reps";
-        deps.postExerciseMode(name, mode || "reps").catch(() => {});
+        // rapid re-add doesn't double-post. When POST resolves, rewrite the card
+        // to the canonical name so later POST /sets use it.
+        rememberExMode(deps.state, name, mode || "reps");
+        posted = deps.postExerciseMode(typed, mode || "reps");
       } else if (mode === "timed" && known !== "timed") {
         // Known reps exercise being re-added as timed — the card is built with the
         // requested mode locally, so this write never gates the insertion either.
-        (deps.state.exModes ??= {})[name] = "timed";
-        deps.postExerciseMode(name, "timed").catch(() => {});
+        rememberExMode(deps.state, name, "timed");
+        posted = deps.postExerciseMode(typed, "timed");
       }
       const cardEl = insertOffPlanCard(name, mode, deps);
       resetAddForm(input, form, btn, modeWrap);
       void hydrateFromNetwork(cardEl, name, deps);
+      if (posted) void reconcilePostedExercise(cardEl, name, posted, deps);
     };
 
     // One tap means one card. Insertion is synchronous, and addNow() no-ops when
     // the name already has a card (existingCardFor), so a tap+Enter in the same
     // breath still lands as one insert.
-    const add = (): void => { addNow(); };
+    const add = (): void => {
+      addNow();
+    };
 
-    go.addEventListener("click", () => { add(); });
+    go.addEventListener("click", () => {
+      add();
+    });
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") add();
     });
   }
 
   const CAIRN_TODAY_ADD_EXERCISE_CONTROLLER = {
+    exerciseNameKey,
+    applyCanonicalExerciseName,
     appendOffPlanCard,
     setupAddExercise,
   };

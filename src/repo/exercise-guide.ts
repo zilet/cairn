@@ -20,7 +20,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db } from "../db.js";
-import { listExerciseAliases, movementKey, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
+import {
+  expandExerciseAbbreviations,
+  listExerciseAliases,
+  movementKey,
+  normalizeExerciseName,
+  normalizedExerciseKey,
+} from "./exercise-canon.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -124,37 +130,14 @@ export function usableGuideRecords(raw: unknown): ExerciseGuideRecord[] {
 
 // ---- matching ---------------------------------------------------------------
 
-// Cairn's own vocabulary is abbreviated the way a lifter writes on a phone ("Incline
-// DB Press"); the dataset spells implements out. Expanding the abbreviations before
-// keying lets those meet WITHOUT loosening the key — "DB" becomes "dumbbell", so a
-// dumbbell press still cannot collapse onto a barbell one.
-const ABBREVIATIONS: Record<string, string> = {
-  db: "dumbbell",
-  dbs: "dumbbell",
-  bb: "barbell",
-  kb: "kettlebell",
-  kbs: "kettlebell",
-  ohp: "overhead press",
-  rdl: "romanian deadlift",
-  bw: "bodyweight",
-};
-
-function expandAbbreviations(name: string): string {
-  return normalizeExerciseName(name)
-    .split(" ")
-    .filter(Boolean)
-    .map((token) => ABBREVIATIONS[token] ?? token)
-    .join(" ");
-}
-
 /** The high-confidence key: the canon merge key, with abbreviations spelled out first. */
 export function guideMatchKey(name: string): string {
-  return normalizedExerciseKey(expandAbbreviations(name));
+  return normalizedExerciseKey(expandExerciseAbbreviations(name));
 }
 
 /** The low-confidence key: implements stripped, so it collapses barbell/dumbbell siblings. */
 export function guideMovementKey(name: string): string {
-  return movementKey(expandAbbreviations(name));
+  return movementKey(expandExerciseAbbreviations(name));
 }
 
 // A dataset name like "Barbell Bench Press - Medium Grip" carries a trailing

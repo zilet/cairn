@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**333 routes** across 115 groups.
+**336 routes** across 116 groups.
 
 ## `/activities`
 
@@ -71,11 +71,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/art` | Cache hit -> the cached image, immutable-cached. Miss -> 204 immediately and a background generation is queued when generation is available; the client simply retries later. No key / disabled / known-failed also returns 204. |
+| GET | `/api/art` | Cache hit -> the cached image, immutable-cached, ETag = asset key. The URL is versioned (`v=`) so immutable stays honest. Miss -> 204 immediately. Exercise misses never fire a name-only generate: they enqueue `exercise_art` (or produce from classifyMuscleGroup / detectImplement when no row exists). |
 | GET | `/api/art/manifest` | Which PWA art queries already have a cached image, as "kind\|q" tokens. Not cached because readiness changes as the background queue produces images. |
-| POST | `/api/art/regenerate` | Repair path for an image that came back wrong (the classic: a cable lateral raise rendered as a plank, because the name alone under-specified the pose and the style references filled the gap). Drops the cached file and generates again under the SAME key, with the richest prompt we can build — for an exercise that means its muscle group, implement, and the pose from its cached how-to guide. Designed-failure convention: {ok:false, error} at HTTP 200. |
+| POST | `/api/art/regenerate` | Repair path for an image that came back wrong. Drops the parked failure, bumps `art_index.version`, and generates under a new pose-aware key with the richest prompt we can build. A repeat within 60s or while a regen is in flight returns {ok:true, regenerated:false, reason}. Designed-failure convention: {ok:false} at HTTP 200 when generation is unavailable. |
 | GET | `/api/art/stats` | Artwork spend telemetry: estimated Gemini cost since art was last enabled, all-time totals, generations avoided via semantic reuse, and cache size. Also returns `health`: when art last rendered, failures in the last 7 days, the last upstream error code, and whether the circuit breaker has paused generation. |
-| POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for. Safe no-op when generation is unavailable. |
+| GET | `/api/art/versions` | Current exercise art versions, keyed like the PWA token (`exercise\|Name`). Optional `?q=a,b,c` (≤200 names, each ≤120 chars) returns only those; with no `q`, the most recently used 500 rows. Fetched once at boot and kept in memory. |
+| POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for. Safe no-op when generation is unavailable. Exercises go through the context-aware producer, never a name-only prompt. |
 
 ## `/beliefs`
 
@@ -582,6 +583,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/profile` | Read the athlete profile, including optional manual home_location. An active dated trip may override effective coaching location without rewriting home. |
 | PUT | `/api/profile` | Partially update the athlete profile. Omitted fields stay unchanged; explicit null/empty clears nullable fields such as home_location. |
+| GET | `/api/profile/endurance-schedule` | The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind: easy\|quality\|long\|any}. The run engine and rolling agenda honor these weekdays. null when unset. MCP: get_endurance_schedule. |
 | POST | `/api/profile/grow-about-me` | Grow profile.about_me from typed memory + family + check-ins (augments, never overwrites blindly). changed:false is the calm, common answer. |
 
 ## `/program`
@@ -629,6 +631,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | POST | `/api/proposals/:id/apply` |  |
 | POST | `/api/proposals/:id/discard` |  |
 | POST | `/api/proposals/:id/lead` |  |
+
+## `/race-build`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/race-build` | The RACE-BUILD layer over the run plan: an estimated finish/pace for the dated race and how it is moving, per-session pace bands off the target, the week-by-week ladder to race week, and the seven-day leg map (runs + heavy-lower days + the habitual ride) with where heavy squats belong in this phase. Suggestion only; {available:false, reason} without a dated race with a distance. |
 
 ## `/reaction-model`
 

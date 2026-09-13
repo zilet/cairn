@@ -146,6 +146,16 @@ test("the editor carries a rest day through the model, the read view, and the ed
   assert.match(read, /Day 3 · Rest/, "the read view names the seam");
   assert.match(read, /rest day/i);
   assert.doesNotMatch(read, /No exercises yet/, "emptiness is the prescription, not a gap to fill");
+  assert.doesNotMatch(read, /prog-train/, "there is nothing to train on a rest day, so nothing offers to");
+
+  // An EMPTY training day is not startable either: a Start button into an empty
+  // session was the bug ("an Easy day I could actually start, with no exercises").
+  const emptyTraining = editor.progDayHtml(
+    editor.dayModelFromPlan({ day_number: 2, name: "Easy", focus: "Easy day", items: [] }),
+    1
+  );
+  assert.doesNotMatch(emptyTraining, /prog-train/);
+  assert.match(emptyTraining, /data-editday="1"/, "it can still be edited into a day");
 
   const edit = editor.pdayHtml(rest, 0);
   assert.match(edit, /data-restday="0"/, "there is a way to unmark it");

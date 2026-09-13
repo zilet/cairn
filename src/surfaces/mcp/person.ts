@@ -108,6 +108,24 @@ export function registerPersonTools(server: McpToolRegistrar) {
         .string()
         .optional()
         .describe("optional free text naming the athlete's endurance sport, up to 60 chars; '' clears, omit to leave unchanged"),
+      endurance_schedule: z
+        .object({
+          days: z
+            .array(
+              z.object({
+                dow: z.number().int().min(0).max(6).describe("0=Sunday … 6=Saturday"),
+                kind: z.enum(["easy", "quality", "long", "any"]),
+              })
+            )
+            .min(1),
+          note: z.string().optional(),
+          source: z.enum(["athlete", "chat"]).optional(),
+        })
+        .nullable()
+        .optional()
+        .describe(
+          "stated run days the engine honors; only weekdays the athlete named. null clears. Never invent days they did not say"
+        ),
       training_intent: z
         .object({
           priorities: z

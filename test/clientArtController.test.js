@@ -18,6 +18,7 @@ function escAttr(value) {
 function loadArtController(options = {}) {
   const listeners = new Map();
   const storage = new Map(options.storage || []);
+  const apiCalls = [];
   class FakeImage {
     constructor() {
       this.dataset = {};
@@ -34,15 +35,42 @@ function loadArtController(options = {}) {
     remove() {
       this.removed = true;
     }
+    closest(sel) {
+      if (sel === ".artile") return { classList: this.classList };
+      return null;
+    }
   }
   const context = {
     HTMLImageElement: FakeImage,
     clearTimeout: () => {},
     document: {
       addEventListener: (type, handler) => listeners.set(type, handler),
+      body: {
+        appendChild() {},
+        contains() {
+          return false;
+        },
+      },
+      createElement: () => {
+        const el = {
+          className: "",
+          style: {},
+          innerHTML: "",
+          querySelector: () => ({ addEventListener: () => {} }),
+          contains: () => false,
+          remove: () => {},
+          setAttribute: () => {},
+        };
+        return el;
+      },
     },
     encodeURIComponent,
     escAttr,
+    escHtml: (value) =>
+      String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;"),
     globalThis: null,
     localStorage: {
       getItem: (key) => storage.get(key) ?? null,
@@ -56,17 +84,21 @@ function loadArtController(options = {}) {
     window: {
       CairnArt: {
         food: (query) => `<svg data-food="${escAttr(query)}"></svg>`,
+        exercise: (query) => `<svg data-ex="${escAttr(query)}"></svg>`,
       },
     },
     withToken: (path) => `${path}&token=t`,
-    api: async (path) => {
+    api: async (path, opts) => {
+      apiCalls.push({ path, opts });
+      if (path === "/art/versions") return options.versions || { versions: {} };
+      if (path === "/art/regenerate") return options.regenerate || { ok: true, regenerated: true, version: 2 };
       assert.equal(path, "/art/manifest");
       return options.manifest || {};
     },
   };
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/art-controller.js"), "utf8"), context);
-  return { context, listeners, storage, FakeImage };
+  return { context, listeners, storage, FakeImage, apiCalls };
 }
 
 test("art controller renders generated photo tiles with escaped eager-ready state", async () => {
@@ -116,4 +148,47 @@ test("art controller records loaded photos and retries failed ready images once"
   assert.equal(img.classList.contains("instant"), false);
   assert.equal(img.dataset.retried, "1");
   assert.equal(img.src, "/api/art?kind=food&q=stale&r=1");
+});
+
+test("art controller treats a cooldown regenerate as a quiet no-op", async () => {
+  const env = loadArtController({
+    versions: { versions: { "exercise|Farmer's Carry": 1 } },
+    regenerate: { ok: true, regenerated: false, reason: "cooldown", version: 1 },
+  });
+  await env.context.primeArtManifest();
+  const img = new env.FakeImage();
+  img.dataset.artKind = "exercise";
+  img.dataset.artQ = "Farmer's Carry";
+  img.dataset.artkey = "exercise|Farmer's Carry";
+  img.isConnected = true;
+  const srcBefore = img.src;
+
+  await env.context.redrawExerciseArt(img, "Farmer's Carry");
+  assert.equal(img.src, srcBefore, "did not swap the tile");
+  assert.equal(img.classList.contains("art-redrawing"), false);
+});
+
+test("art controller posts regenerate and swaps the tile to the new versioned URL", async () => {
+  const env = loadArtController({
+    versions: { versions: { "exercise|Farmer's Carry": 1 } },
+    regenerate: { ok: true, regenerated: true, version: 2 },
+  });
+  await env.context.primeArtManifest();
+  const html = env.context.artImg("exercise", "Farmer's Carry", "artile-sm", "<svg></svg>");
+  assert.match(html, /v=1/);
+  assert.match(html, /data-art-kind="exercise"/);
+
+  const img = new env.FakeImage();
+  img.dataset.artKind = "exercise";
+  img.dataset.artQ = "Farmer's Carry";
+  img.dataset.artkey = "exercise|Farmer's Carry";
+  img.isConnected = true;
+
+  await env.context.redrawExerciseArt(img, "Farmer's Carry");
+  const regen = env.apiCalls.find((c) => c.path === "/art/regenerate");
+  assert.ok(regen, "posted /art/regenerate");
+  assert.equal(regen.opts.method, "POST");
+  assert.match(String(regen.opts.body), /Farmer's Carry/);
+  assert.match(img.src, /kind=exercise/);
+  assert.match(img.src, /v=2/);
 });

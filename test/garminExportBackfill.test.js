@@ -359,16 +359,17 @@ test("a mapped lift that never went through enrichment is refined too", async ()
 
   assert.equal(dry.batch[0].session_id, sessionId);
   assert.deepEqual(dry.unmapped_exercises, [], "nothing was unmappable");
+  // Intentionally title-cases a lowercase-starting word in mixed case ("press"/"machine").
   assert.deepEqual(
     dry.refine_candidates.map((row) => [row.exercise, row.reason]),
-    [["Bench press machine", "never_enriched"]]
+    [["Bench Press Machine", "never_enriched"]]
   );
 
   repo.setSettings({ enrich_enabled: true });
   const on = await garminExportBackfill({ apply: true, refine_unmapped: true });
   assert.deepEqual(
     on.refine_queued.map((row) => [row.exercise, row.reason]),
-    [["Bench press machine", "never_enriched"]]
+    [["Bench Press Machine", "never_enriched"]]
   );
   assert.equal(repo.getExercise(legacy.id).enrichment_status, "pending");
 

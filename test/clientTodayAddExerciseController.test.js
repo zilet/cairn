@@ -31,7 +31,11 @@ async function flushAsync() {
 class FakeClassList {
   constructor(owner) {
     this.owner = owner;
-    this.names = new Set(String(owner.className || "").split(/\s+/).filter(Boolean));
+    this.names = new Set(
+      String(owner.className || "")
+        .split(/\s+/)
+        .filter(Boolean)
+    );
   }
 
   contains(name) {
@@ -56,6 +60,7 @@ class FakeElement {
     this.className = attrs.className || "";
     this.dataset = { ...(attrs.dataset || {}) };
     this.value = attrs.value || "";
+    this.textContent = attrs.textContent || "";
     this.hidden = false;
     this.children = [];
     this.parentElement = null;
@@ -152,9 +157,15 @@ class FakeElement {
   }
 
   matches(selector) {
-    if (selector === "#skipLine [data-unskip]") return this.dataset.unskip != null && this.parentElement?.id === "skipLine";
-    if (selector === ".logged .chip") return this.classList.contains("chip") && this.parentElement?.classList.contains("logged");
+    if (selector === "#skipLine [data-unskip]")
+      return this.dataset.unskip != null && this.parentElement?.id === "skipLine";
+    if (selector === ".logged .chip")
+      return this.classList.contains("chip") && this.parentElement?.classList.contains("logged");
     if (selector === ".ex[data-card]") return this.classList.contains("ex") && this.dataset.card != null;
+    if (selector === ".ex-name") return this.classList.contains("ex-name");
+    if (selector === ".guide-i") return this.classList.contains("guide-i");
+    if (selector === "[data-skip]") return this.dataset.skip != null;
+    if (selector === "[data-remove-card]") return this.dataset.removeCard != null;
     if (selector.startsWith("#")) return this.id === selector.slice(1);
     if (selector.startsWith(".")) return this.classList.contains(selector.slice(1));
     if (selector === "[data-exmode]") return this.dataset.exmode != null;
@@ -192,10 +203,24 @@ class FakeTemplate {
         mode: decodeAttr(html.match(/data-mode="([^"]*)"/)?.[1] || "reps"),
       },
     });
-    const logrow = card.appendChild(new FakeElement("div", {
-      className: "logrow",
-      dataset: { mode: card.dataset.mode || "reps" },
-    }));
+    const title = card.dataset.card || "";
+    const nameBtn = card.appendChild(
+      new FakeElement("button", {
+        className: "ex-name",
+        dataset: { guide: html.match(/data-guide="([^"]*)"/)?.[1] || encodeURIComponent(title) },
+        textContent: title,
+      })
+    );
+    nameBtn.appendChild(new FakeElement("span", { className: "guide-i", textContent: "ⓘ" }));
+    const logrow = card.appendChild(
+      new FakeElement("div", {
+        className: "logrow",
+        dataset: {
+          mode: card.dataset.mode || "reps",
+          ex: html.match(/data-ex="([^"]*)"/)?.[1] || encodeURIComponent(title),
+        },
+      })
+    );
     card.appendChild(new FakeElement("div", { className: "logged" }));
     const inputMatches = [...html.matchAll(/<input[^>]*class="([^"]*)"[^>]*>/g)];
     if (inputMatches.length) {
@@ -211,10 +236,12 @@ class FakeTemplate {
     // real element to find via row.closest(".ex").querySelector(".ex-lastset").
     const lastsetText = html.match(/class="ex-lastset"[^>]*>([^<]*)/);
     if (html.includes('class="ex-lastset"')) {
-      card.appendChild(new FakeElement("div", {
-        className: "ex-lastset",
-        textContent: lastsetText?.[1] || "Last time: mock",
-      }));
+      card.appendChild(
+        new FakeElement("div", {
+          className: "ex-lastset",
+          textContent: lastsetText?.[1] || "Last time: mock",
+        })
+      );
     }
     this.content.firstElementChild = card;
   }
@@ -251,7 +278,7 @@ function loadController() {
     window: null,
     globalThis: null,
     document: {
-      createElement: (tag) => tag === "template" ? new FakeTemplate() : new FakeElement(tag),
+      createElement: (tag) => (tag === "template" ? new FakeTemplate() : new FakeElement(tag)),
       activeElement: null,
     },
     peekCached: () => null,
@@ -279,23 +306,33 @@ function loadController() {
     },
     postExerciseMode: async (name, mode) => {
       modes.push({ name, mode });
-      return { ok: true };
+      return { name, mode, muscle_group: null };
     },
     exCard: (item, _logged, prefill, _revealIdx, _rx, lastSet) => {
       const last = lastSet
         ? `<div class="ex-lastset">Last time: ${lastSet.weight ?? lastSet.duration_sec ?? ""} × ${lastSet.reps ?? ""}</div>`
         : "";
+      const encoded = encodeURIComponent(item.exercise);
       if (item.mode === "timed") {
-        return `<article class="ex" data-card="${item.exercise}" data-mode="timed"><div class="logrow"><input class="in-dur" value="${prefill.duration_sec ?? ""}"></div><div class="logged"></div>${last}</article>`;
+        return `<article class="ex" data-card="${item.exercise}" data-mode="timed"><button class="ex-name" data-guide="${encoded}">${item.exercise} <span class="guide-i">ⓘ</span></button><div class="logrow" data-ex="${encoded}"><input class="in-dur" value="${prefill.duration_sec ?? ""}"></div><div class="logged"></div>${last}</article>`;
       }
-      return `<article class="ex" data-card="${item.exercise}" data-mode="reps"><div class="logrow"><input class="in-w" value="${prefill.weight ?? ""}"><input class="in-r" value="${prefill.reps ?? ""}"><input class="in-rir" value="${prefill.rir ?? ""}"></div><div class="logged"></div>${last}</article>`;
+      return `<article class="ex" data-card="${item.exercise}" data-mode="reps"><button class="ex-name" data-guide="${encoded}">${item.exercise} <span class="guide-i">ⓘ</span></button><div class="logrow" data-ex="${encoded}"><input class="in-w" value="${prefill.weight ?? ""}"><input class="in-r" value="${prefill.reps ?? ""}"><input class="in-rir" value="${prefill.rir ?? ""}"></div><div class="logged"></div>${last}</article>`;
     },
     wireGuides: (card) => guides.push(card),
     wireLogRow: (row) => logRows.push(row),
-    wireSkips: () => { skipWires += 1; },
+    wireSkips: () => {
+      skipWires += 1;
+    },
     toast: (message) => toasts.push(message),
-    escapeHtml: (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
-    escapeAttr: (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll('"', "&quot;"),
+    escapeHtml: (value) =>
+      String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;"),
+    escapeAttr: (value) =>
+      String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll('"', "&quot;"),
     parseDur: (text) => {
       const num = Number(text);
       return Number.isFinite(num) ? num : null;
@@ -319,7 +356,9 @@ function loadController() {
     guides,
     logRows,
     toasts,
-    get skipWires() { return skipWires; },
+    get skipWires() {
+      return skipWires;
+    },
   };
 }
 
@@ -344,7 +383,10 @@ test("Today add-exercise controller loads known exercises and appends off-plan c
   assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Dead hang", mode: "timed" }]);
   assert.deepEqual(harness.requests, ["/exercises", "/last-set?exercise=Dead%20hang"]);
   assert.deepEqual(harness.modes, []);
-  assert.equal(harness.rootEl.children.indexOf(harness.guides[0]) < harness.rootEl.children.indexOf(harness.addBlock), true);
+  assert.equal(
+    harness.rootEl.children.indexOf(harness.guides[0]) < harness.rootEl.children.indexOf(harness.addBlock),
+    true
+  );
   assert.equal(harness.logRows[0].className, "logrow");
   assert.equal(harness.skipWires, 1);
   assert.equal(harness.form.hidden, true);
@@ -367,7 +409,11 @@ test("Today add-exercise controller persists a brand-new off-plan exercise (reps
 
   assert.deepEqual(harness.modes, [{ name: "Zercher squat", mode: "reps" }], "new reps exercise is persisted");
   assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Zercher squat", mode: "reps" }]);
-  assert.equal(harness.deps.state.exModes["Zercher squat"], "reps", "marked known so a rapid re-add doesn't double-post");
+  assert.equal(
+    harness.deps.state.exModes["Zercher squat"],
+    "reps",
+    "marked known so a rapid re-add doesn't double-post"
+  );
   assert.equal(harness.form.hidden, true);
 });
 
@@ -379,22 +425,35 @@ test("Today add-exercise controller persists a brand-new TIMED off-plan exercise
   await flushAsync();
 
   harness.input.value = "Copenhagen plank";
-  harness.modeWrap.querySelectorAll("[data-exmode]").find((button) => button.dataset.exmode === "timed").click();
+  harness.modeWrap
+    .querySelectorAll("[data-exmode]")
+    .find((button) => button.dataset.exmode === "timed")
+    .click();
   harness.go.click();
   await flushAsync();
 
-  assert.deepEqual(harness.modes, [{ name: "Copenhagen plank", mode: "timed" }], "new timed exercise is persisted with its mode");
-  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Copenhagen plank", mode: "timed" }]);
+  assert.deepEqual(
+    harness.modes,
+    [{ name: "Copenhagen plank", mode: "timed" }],
+    "new timed exercise is persisted with its mode"
+  );
+  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [
+    { name: "Copenhagen plank", mode: "timed" },
+  ]);
 });
 
 test("Today add-exercise controller restores skipped exercises and protects existing typed cards", async () => {
   const harness = loadController();
-  const existing = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Push-up", mode: "reps" } }));
+  const existing = harness.rootEl.appendChild(
+    new FakeElement("article", { className: "ex", dataset: { card: "Push-up", mode: "reps" } })
+  );
   const logged = existing.appendChild(new FakeElement("div", { className: "logged" }));
   logged.appendChild(new FakeElement("span", { className: "chip" }));
   existing.appendChild(new FakeElement("input", { className: "in-r" }));
   const skipLine = harness.rootEl.appendChild(new FakeElement("div", { id: "skipLine" }));
-  const skipped = skipLine.appendChild(new FakeElement("button", { dataset: { unskip: encodeURIComponent("Cable row") } }));
+  const skipped = skipLine.appendChild(
+    new FakeElement("button", { dataset: { unskip: encodeURIComponent("Cable row") } })
+  );
 
   await harness.controller.setupAddExercise(harness.deps);
 
@@ -404,7 +463,10 @@ test("Today add-exercise controller restores skipped exercises and protects exis
   assert.equal(skipped.clicks, 1);
 
   harness.input.value = "Push-up";
-  harness.modeWrap.querySelectorAll("[data-exmode]").find((button) => button.dataset.exmode === "timed").click();
+  harness.modeWrap
+    .querySelectorAll("[data-exmode]")
+    .find((button) => button.dataset.exmode === "timed")
+    .click();
   harness.go.click();
   await flushAsync();
 
@@ -455,13 +517,18 @@ test("Today add-exercise controller omits the last-time line when there's no las
 
 test("Today add-exercise controller fetches and wires the last-time line on the mode-switch replace path", async () => {
   const harness = loadController();
-  const existing = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Row", mode: "reps" } }));
+  const existing = harness.rootEl.appendChild(
+    new FakeElement("article", { className: "ex", dataset: { card: "Row", mode: "reps" } })
+  );
   existing.appendChild(new FakeElement("div", { className: "logged" }));
 
   await harness.controller.setupAddExercise(harness.deps);
 
   harness.input.value = "Row";
-  harness.modeWrap.querySelectorAll("[data-exmode]").find((button) => button.dataset.exmode === "timed").click();
+  harness.modeWrap
+    .querySelectorAll("[data-exmode]")
+    .find((button) => button.dataset.exmode === "timed")
+    .click();
   harness.go.click();
   await flushAsync();
 
@@ -478,7 +545,9 @@ test("Today add-exercise controller inserts the card before /last-set answers", 
   harness.deps.api = async (path) => {
     harness.requests.push(path);
     if (path === "/exercises") return [];
-    return new Promise((resolve) => { resolveLastSet = resolve; });
+    return new Promise((resolve) => {
+      resolveLastSet = resolve;
+    });
   };
   await harness.controller.setupAddExercise(harness.deps);
 
@@ -527,7 +596,9 @@ test("Today add-exercise controller updates a stale peeked last-set once the net
   harness.deps.api = async (path) => {
     harness.requests.push(path);
     if (path === "/exercises") return [];
-    return new Promise((resolve) => { resolveLastSet = resolve; });
+    return new Promise((resolve) => {
+      resolveLastSet = resolve;
+    });
   };
   await harness.controller.setupAddExercise(harness.deps);
 
@@ -565,7 +636,9 @@ test("Today add-exercise controller keeps a typed prefill when the network last-
   harness.deps.api = async (path) => {
     harness.requests.push(path);
     if (path === "/exercises") return [];
-    return new Promise((resolve) => { resolveLastSet = resolve; });
+    return new Promise((resolve) => {
+      resolveLastSet = resolve;
+    });
   };
   await harness.controller.setupAddExercise(harness.deps);
 
@@ -583,4 +656,151 @@ test("Today add-exercise controller keeps a typed prefill when the network last-
   assert.equal(reps.value, "12", "a typed value is not overwritten by the network last-set");
   assert.equal(logRow.querySelector(".in-w").value, "40", "untouched fields still take the network prefill");
   assert.equal(logRow.querySelector(".in-rir").value, "1");
+});
+
+test("exerciseNameKey folds case, whitespace, and punctuation like the server", () => {
+  const harness = loadController();
+  const key = harness.controller.exerciseNameKey;
+  assert.equal(key("Bench Press"), "bench press");
+  assert.equal(key("  bench   press  "), "bench press");
+  assert.equal(key("bench-press"), "bench press");
+  assert.equal(key("DB Bench Press"), "db bench press");
+});
+
+test("applyCanonicalExerciseName rewrites title, data-card, and data-ex used by POST /sets", () => {
+  const harness = loadController();
+  const card = harness.rootEl.appendChild(
+    new FakeElement("article", {
+      className: "ex",
+      dataset: { card: "bench press", mode: "reps" },
+    })
+  );
+  const nameBtn = card.appendChild(
+    new FakeElement("button", {
+      className: "ex-name",
+      dataset: { guide: encodeURIComponent("bench press") },
+      textContent: "bench press",
+    })
+  );
+  nameBtn.appendChild(new FakeElement("span", { className: "guide-i", textContent: "ⓘ" }));
+  const logrow = card.appendChild(
+    new FakeElement("div", {
+      className: "logrow",
+      dataset: { ex: encodeURIComponent("bench press"), mode: "reps" },
+    })
+  );
+  logrow.appendChild(new FakeElement("input", { className: "in-r", value: "8" }));
+  card.appendChild(new FakeElement("div", { className: "logged" }));
+  harness.deps.state.exModes = { "bench press": "reps" };
+  harness.deps.state.pendingOffPlan = { "2026-06-30": [{ name: "bench press", mode: "reps" }] };
+
+  const next = harness.controller.applyCanonicalExerciseName(
+    card,
+    "bench press",
+    {
+      name: "Bench Press",
+      mode: "reps",
+    },
+    harness.deps
+  );
+
+  assert.equal(next, card);
+  assert.equal(card.dataset.card, "Bench Press");
+  assert.equal(decodeURIComponent(logrow.dataset.ex), "Bench Press");
+  assert.match(nameBtn.innerHTML, /Bench Press/);
+  assert.equal(harness.deps.state.exModes["Bench Press"], "reps");
+  assert.equal(harness.deps.state.exModes["bench press"], undefined);
+  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Bench Press", mode: "reps" }]);
+
+  const payload = harness.context.CairnTodaySessionSetModel.logPayloadFromRow(logrow, harness.deps);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.body.exercise, "Bench Press");
+});
+
+test("applyCanonicalExerciseName merges into an existing canonical card", () => {
+  const harness = loadController();
+  const existing = harness.rootEl.appendChild(
+    new FakeElement("article", {
+      className: "ex",
+      dataset: { card: "Dumbbell Bench Press", mode: "reps" },
+    })
+  );
+  existing.appendChild(new FakeElement("div", { className: "logged" }));
+  existing.appendChild(new FakeElement("input", { className: "in-r" }));
+  const optimistic = harness.rootEl.appendChild(
+    new FakeElement("article", {
+      className: "ex",
+      dataset: { card: "db bench press", mode: "reps" },
+    })
+  );
+  optimistic.appendChild(
+    new FakeElement("div", { className: "logrow", dataset: { ex: encodeURIComponent("db bench press") } })
+  );
+  optimistic.appendChild(new FakeElement("div", { className: "logged" }));
+  harness.deps.state.pendingOffPlan = { "2026-06-30": [{ name: "db bench press", mode: "reps" }] };
+
+  const next = harness.controller.applyCanonicalExerciseName(
+    optimistic,
+    "db bench press",
+    {
+      name: "Dumbbell Bench Press",
+      mode: "reps",
+    },
+    harness.deps
+  );
+
+  assert.equal(next, existing);
+  assert.equal(optimistic.parentElement, null, "the typed-name card is removed");
+  assert.equal(existing.scrolls.length, 1);
+  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [
+    { name: "Dumbbell Bench Press", mode: "reps" },
+  ]);
+});
+
+test("Today add-exercise controller rewrites the card to the POST /exercises canonical name", async () => {
+  const harness = loadController();
+  harness.deps.postExerciseMode = async (name, mode) => {
+    harness.modes.push({ name, mode });
+    return { name: "Bench Press", mode: "reps", muscle_group: "chest" };
+  };
+  await harness.controller.setupAddExercise(harness.deps);
+
+  harness.input.value = "bench press";
+  harness.go.click();
+
+  const optimistic = harness.rootEl.querySelector(".ex[data-card]");
+  assert.equal(optimistic.dataset.card, "bench press", "the card appears instantly with the typed name");
+
+  await flushAsync();
+
+  const card = harness.rootEl.querySelector(".ex[data-card]");
+  assert.equal(card.dataset.card, "Bench Press");
+  assert.equal(decodeURIComponent(card.querySelector(".logrow").dataset.ex), "Bench Press");
+  assert.match(card.querySelector(".ex-name").innerHTML, /Bench Press/);
+  assert.equal(harness.deps.state.exModes["Bench Press"], "reps");
+  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Bench Press", mode: "reps" }]);
+  assert.deepEqual(harness.modes, [{ name: "bench press", mode: "reps" }]);
+});
+
+test("Today add-exercise controller looks up mode case-insensitively", async () => {
+  const harness = loadController();
+  await harness.controller.setupAddExercise(harness.deps);
+  harness.btn.click();
+  await flushAsync();
+
+  harness.input.value = "dead hang";
+  harness.input.dispatch("input");
+  assert.equal(
+    harness.modeWrap.querySelectorAll(".modebtn").find((b) => b.dataset.exmode === "timed").classList.contains("active"),
+    true,
+    "typing a catalog name in a different case selects its stored mode"
+  );
+  harness.go.click();
+  await flushAsync();
+
+  assert.deepEqual(harness.modes, [], "a catalog hit does not re-POST");
+  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Dead hang", mode: "timed" }]);
+  const card = harness.rootEl.querySelector(".ex[data-card]");
+  assert.equal(card.dataset.card, "Dead hang");
+  assert.equal(card.dataset.mode, "timed");
 });

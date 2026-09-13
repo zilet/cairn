@@ -19,6 +19,60 @@ export function setArtAlias(kind: string, query: string, assetKey: string) {
   ).run(kind, query, assetKey);
 }
 
+export function getArtIndex(kind: string, query: string): { asset_key: string; version: number } | null {
+  const row = db
+    .prepare(`SELECT asset_key, version FROM art_index WHERE kind = ? AND query = ?`)
+    .get(kind, query) as any;
+  if (!row) return null;
+  return { asset_key: String(row.asset_key), version: Number(row.version) || 1 };
+}
+
+export function setArtIndex(kind: string, query: string, assetKey: string, version: number) {
+  db.prepare(
+    `INSERT INTO art_index (kind, query, asset_key, version, updated_at) VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(kind, query) DO UPDATE SET
+       asset_key = excluded.asset_key,
+       version = excluded.version,
+       updated_at = datetime('now')`
+  ).run(kind, query, assetKey, Number(version) || 1);
+}
+
+export function listArtIndex(
+  kind?: string,
+  opts?: { limit?: number }
+): Array<{ kind: string; query: string; asset_key: string; version: number }> {
+  const limit = Number.isInteger(opts?.limit) && Number(opts?.limit) > 0 ? Number(opts?.limit) : null;
+  const sql = kind
+    ? `SELECT kind, query, asset_key, version FROM art_index WHERE kind = ? ORDER BY updated_at DESC, query${
+        limit ? " LIMIT ?" : ""
+      }`
+    : `SELECT kind, query, asset_key, version FROM art_index ORDER BY updated_at DESC, kind, query${
+        limit ? " LIMIT ?" : ""
+      }`;
+  const rows = (
+    kind
+      ? limit
+        ? db.prepare(sql).all(kind, limit)
+        : db.prepare(sql).all(kind)
+      : limit
+        ? db.prepare(sql).all(limit)
+        : db.prepare(sql).all()
+  ) as any[];
+  return rows.map((row) => ({
+    kind: String(row.kind),
+    query: String(row.query),
+    asset_key: String(row.asset_key),
+    version: Number(row.version) || 1,
+  }));
+}
+
+export function artIndexUsesKey(assetKey: string, exceptKind?: string, exceptQuery?: string): boolean {
+  const row = db
+    .prepare(`SELECT 1 AS n FROM art_index WHERE asset_key = ? AND NOT (kind = ? AND query = ?) LIMIT 1`)
+    .get(assetKey, exceptKind ?? "", exceptQuery ?? "") as any;
+  return !!row;
+}
+
 export function addArtAsset(key: string, kind: string, text: string) {
   db.prepare(
     `INSERT INTO art_assets (key, kind, text) VALUES (?, ?, ?)
@@ -27,9 +81,9 @@ export function addArtAsset(key: string, kind: string, text: string) {
 }
 
 export function listArtAssets(kind: string, limit = 150): { key: string; text: string }[] {
-  return db.prepare(
-    `SELECT key, text FROM art_assets WHERE kind = ? ORDER BY created_at DESC, key LIMIT ?`
-  ).all(kind, limit) as any[];
+  return db
+    .prepare(`SELECT key, text FROM art_assets WHERE kind = ? ORDER BY created_at DESC, key LIMIT ?`)
+    .all(kind, limit) as any[];
 }
 
 export function recordArtUsage(u: {
@@ -47,9 +101,15 @@ export function recordArtUsage(u: {
     `INSERT INTO art_usage (kind, query, asset_key, action, model, input_tokens, output_tokens, est_cost_usd, est_saved_usd)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
-    u.kind, String(u.query).slice(0, 200), u.asset_key ?? null, u.action, u.model ?? null,
-    u.input_tokens ?? null, u.output_tokens ?? null,
-    Number(u.est_cost_usd ?? 0) || 0, Number(u.est_saved_usd ?? 0) || 0
+    u.kind,
+    String(u.query).slice(0, 200),
+    u.asset_key ?? null,
+    u.action,
+    u.model ?? null,
+    u.input_tokens ?? null,
+    u.output_tokens ?? null,
+    Number(u.est_cost_usd ?? 0) || 0,
+    Number(u.est_saved_usd ?? 0) || 0
   );
 }
 
@@ -63,7 +123,8 @@ export interface ArtUsageTotals {
 }
 
 function artUsageTotals(since?: string | null): ArtUsageTotals {
-  const sql = `SELECT
+  const sql =
+    `SELECT
       COALESCE(SUM(CASE WHEN action = 'generate' THEN 1 ELSE 0 END), 0) AS images_generated,
       COALESCE(SUM(CASE WHEN action = 'canonicalize' THEN 1 ELSE 0 END), 0) AS canonicalize_calls,
       COALESCE(SUM(CASE WHEN action = 'reuse' THEN 1 ELSE 0 END), 0) AS reused,
@@ -77,8 +138,8 @@ function artUsageTotals(since?: string | null): ArtUsageTotals {
     canonicalize_calls: Number(row?.canonicalize_calls ?? 0),
     reused: Number(row?.reused ?? 0),
     failed: Number(row?.failed ?? 0),
-    est_cost_usd: Number((Number(row?.est_cost_usd ?? 0)).toFixed(6)),
-    est_saved_usd: Number((Number(row?.est_saved_usd ?? 0)).toFixed(6)),
+    est_cost_usd: Number(Number(row?.est_cost_usd ?? 0).toFixed(6)),
+    est_saved_usd: Number(Number(row?.est_saved_usd ?? 0).toFixed(6)),
   };
 }
 
@@ -98,12 +159,8 @@ export interface ArtHealth {
  * "why not"; the in-process breaker answers "is it currently paused".
  */
 export function getArtHealth(): ArtHealth {
-  const lastSuccess = db
-    .prepare(`SELECT MAX(created_at) AS at FROM art_usage WHERE action = 'generate'`)
-    .get() as any;
-  const lastFailure = db
-    .prepare(`SELECT MAX(created_at) AS at FROM art_usage WHERE action = 'fail'`)
-    .get() as any;
+  const lastSuccess = db.prepare(`SELECT MAX(created_at) AS at FROM art_usage WHERE action = 'generate'`).get() as any;
+  const lastFailure = db.prepare(`SELECT MAX(created_at) AS at FROM art_usage WHERE action = 'fail'`).get() as any;
   const failures = db
     .prepare(`SELECT COUNT(*) AS n FROM art_usage WHERE action = 'fail' AND created_at >= datetime('now', '-7 days')`)
     .get() as any;
@@ -117,7 +174,11 @@ export function getArtHealth(): ArtHealth {
       )
       .get() as any;
     // geminiFailure() writes "<code>: <upstream message>".
-    const code = String(row?.message ?? "").split(":").slice(0, 2).join(":").trim();
+    const code = String(row?.message ?? "")
+      .split(":")
+      .slice(0, 2)
+      .join(":")
+      .trim();
     lastErrorCode = code || null;
   } catch {
     /* health must never break on a telemetry read */

@@ -526,7 +526,7 @@ function contextFacts(windowStart: string, throughDate: string): Record<string, 
       `SELECT name, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date,
               goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor,
               notes, about_me, primary_discipline, endurance_sport, endurance_goal_json,
-              equipment
+              endurance_schedule_json, equipment
          FROM profile WHERE id = 1`
     )
     .get() as any;

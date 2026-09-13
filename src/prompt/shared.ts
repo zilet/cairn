@@ -1312,6 +1312,17 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
     if (Array.isArray(rp.rationale) && rp.rationale.length) {
       lines.push(`  Why this week: ${rp.rationale.join(" ")}`);
     }
+    const schedule = ctx?.endurance_schedule as { days?: Array<{ dow?: number; kind?: string }> } | null;
+    if (schedule && Array.isArray(schedule.days) && schedule.days.length) {
+      const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const stated = schedule.days
+        .map((d) => {
+          const day = names[Number(d.dow)] ?? `day ${d.dow}`;
+          return d.kind && d.kind !== "any" ? `${day} (${d.kind})` : day;
+        })
+        .join(", ");
+      lines.push(`  Stated run days: ${stated}. Never propose a run on any other weekday.`);
+    }
     lines.push(
       "  Plan day numbers are provisional anchors, not fixed-day obligations. Actual logs and the rolling read control completion and the next opening; never call an off-day run missed, never repeat a completed intention, and never add catch-up volume."
     );
@@ -1343,6 +1354,39 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
       }
     }
     if (agenda.next?.guidance) lines.push(`  Next: ${agenda.next.guidance}`);
+  }
+  // The race build, when there is a dated race to build toward: the estimate and its
+  // movement, the pace every quality session should touch, the ladder ahead, and
+  // where the lifting and the ride sit against the key runs. Numbers the agent is
+  // handed, never asked to invent — and a fit, never a grade.
+  const build = ctx?.race_build as any;
+  if (build?.available && build.race) {
+    const r = build.race;
+    const fmt = (sec: number) => {
+      const s = Math.max(0, Math.round(sec));
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+      return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
+    };
+    lines.push(`RACE BUILD (${r.event || "race"} · ${r.distance_km} km · ${r.date} · ${r.weeks_to_race} weeks out · ${r.phase} phase): ${build.why}`);
+    if (build.prediction) {
+      const p = build.prediction;
+      const trend = p.trend ? `; ${p.trend.word} by ${fmt(Math.abs(p.trend.delta_sec))} since ${p.trend.since}` : "";
+      const fit = p.fit ? `; fit against target: ${p.fit}` : "";
+      lines.push(`  Estimate: ${fmt(p.estimate_sec)} (${fmt(p.estimate_pace_sec_per_km)} /km) from ${p.basis_detail}${trend}${fit}.`);
+    }
+    if (r.target) lines.push(`  Target: ${fmt(r.target.sec)} = ${fmt(r.target.pace_sec_per_km)} /km.`);
+    if (build.paces?.bands?.length) {
+      lines.push(`  Pace bands (off the ${build.paces.anchored_on}): ${build.paces.bands.map((b: any) => `${b.label} ${b.text}`).join("; ")}. Prescribe quality work in these bands; hills by effort.`);
+    }
+    if (Array.isArray(build.weeks) && build.weeks.length) {
+      lines.push(
+        `  Ladder: ${build.weeks.map((w: any) => `wk-${w.weeks_to_race} ${w.kind} ${w.km} km (long ${w.long_km})`).join(" → ")}.`
+      );
+    }
+    if (build.strength) {
+      lines.push(`  Strength in this phase: ${build.strength.principle}${build.strength.heavy_lower_days?.length ? ` Heavy lower days: ${build.strength.heavy_lower_days.join(", ")}.` : ""}${build.strength.layout ? ` Layout: ${build.strength.layout}` : ""}`);
+    }
+    if (build.ride) lines.push(`  Weekly ride (${build.ride.label}, usually ${build.ride.weekday}, ${build.ride.weeks_seen} of the last ${build.ride.weeks_window} weeks): ${build.ride.placement}`);
   }
   // Mono-stimulus running → a gentle variety nudge (only fires with enough history).
   if (variety?.note) {

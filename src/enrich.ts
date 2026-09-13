@@ -59,7 +59,8 @@ import {
 } from "./agent-contracts.js";
 import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
 import { explainExercise, exercisePoseFromExplanation, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
-import { GEMINI_TEXT_MODEL, warmExerciseArt } from "./art.js";
+import { GEMINI_TEXT_MODEL, clearArtFailures, produceExerciseArt, warmExerciseArt } from "./art.js";
+import { classifyMuscleGroup, detectImplement } from "./repo/exercise-canon.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
 import { diagnosticErrorName, recordAsyncFailure, recordDegradedOperation } from "./diagnostics.js";
 import { safeUploadPath } from "./uploadPaths.js";
@@ -115,6 +116,10 @@ const execFileP = promisify(execFile);
 // applies it exclusively via the existing lifecycle repo functions. id is the
 // symptom_reports row id; it carries its own extraction_status machine. A failure
 // costs nothing: the words stay stored and rendered.
+// 'exercise_art' is the light producer for a figurine: no agent, no rename, just
+// pose-aware warmExerciseArt for an existing exercises row. id is the exercises
+// row id; it has no status column of its own. Enqueued on an /api/art miss so
+// the name-only serve path can never win the PNG.
 // 'garmin_export' pushes a finished Cairn strength session BACK to Garmin as that
 // day's exercise sets (src/garminExport.ts). id is the sessions row id; like
 // garmin_strength it has no status column of its own, and every outcome — connector
@@ -128,6 +133,7 @@ type Kind =
   | "garmin_strength"
   | "garmin_export"
   | "exercise"
+  | "exercise_art"
   | "symptom";
 interface Job {
   kind: Kind;
@@ -484,7 +490,7 @@ async function drain(): Promise<void> {
 }
 
 function markStatus(job: Job, status: string): void {
-  if (job.kind === "review" || job.kind === "garmin_strength" || job.kind === "garmin_export") return; // no row status of their own
+  if (job.kind === "review" || job.kind === "garmin_strength" || job.kind === "garmin_export" || job.kind === "exercise_art") return; // no row status of their own
   // symptom_reports.extraction_status is a narrower machine than the enrichment
   // rows' (no 'in_progress' — a report is never half-extracted, it either yielded a
   // structure or it did not), so it is set only through its own dedicated path.
@@ -635,6 +641,7 @@ async function processJob(job: Job): Promise<void> {
   if (job.kind === "garmin_export") return processGarminExportJob(job.id);
   if (job.kind === "food_photo") return processFoodPhotoJob(job.id);
   if (job.kind === "exercise") return processExerciseJob(job.id);
+  if (job.kind === "exercise_art") return processExerciseArtJob(job.id);
   if (job.kind === "symptom") return processSymptomJob(job.id);
 
   // Check enablement BEFORE picking an agent: pickAgentOrder() advances the
@@ -1286,15 +1293,33 @@ export async function processExerciseJob(id: number): Promise<void> {
     } catch { /* best-effort — art still warms without a pose */ }
   }
 
-  // Muscle/equipment/pose-aware art under the bare-name key (self-degrades: no key /
-  // art disabled / already cached / known-failed → no-op). Runs EVEN with no CLI
-  // agent — the art call is a direct Gemini request keyed off the deterministic group.
-  try { await warmExerciseArt(finalName, { muscle_group: group, equipment, pose }); } catch { /* best-effort */ }
+  // Muscle/equipment/pose-aware art is the SINGLE producer for exercise
+  // figurines. Clear a parked failure so a richer prompt (guide pose just
+  // landed) gets its attempt; warmExerciseArt no-ops when a file already exists.
+  try {
+    clearArtFailures("exercise", finalName);
+    await warmExerciseArt(finalName, {
+      muscle_group: group || classifyMuscleGroup(finalName),
+      equipment: equipment || detectImplement(finalName),
+      pose,
+    });
+  } catch { /* best-effort */ }
 
   // 'done' whenever an agent was available (the deterministic row already stands, so
   // even a soft agent miss leaves a usable exercise — the guide hydrates lazily and
   // art was attempted); 'skipped' only when there was no agent at all.
   setExerciseEnrichStatus(id, order.length ? "done" : "skipped");
+}
+
+// Light producer: pose-aware art for an existing movement, no agent, no rename.
+// The /api/art miss path enqueues this so a name-only generate can never win.
+export async function processExerciseArtJob(id: number): Promise<void> {
+  const ex = getExercise(id) as any;
+  if (!ex) return;
+  try {
+    clearArtFailures("exercise", String(ex.name));
+    await produceExerciseArt(String(ex.name));
+  } catch { /* best-effort — a miss just retries next view */ }
 }
 
 // ---- verbatim pain report → structure ------------------------------------------

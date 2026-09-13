@@ -95,7 +95,7 @@ test("the week_compose site exists and serializes exactly its allowlisted keys",
   assert.deepEqual(Object.keys(parsed).sort(), [...new Set(expected)].sort());
 
   // Kept: what the prompt text or one of its render helpers genuinely reads.
-  for (const key of ["profile", "memory", "goal", "discipline", "training_intent", "plan", "recent_sessions", "program_state", "endurance_goal", "run_zones", "directives", "health", "recovery", "signal_state"]) {
+  for (const key of ["profile", "memory", "goal", "discipline", "training_intent", "plan", "recent_sessions", "program_state", "endurance_goal", "endurance_schedule", "run_zones", "directives", "health", "recovery", "signal_state"]) {
     assert.ok(Object.hasOwn(parsed, key), `week_compose keeps ${key}`);
   }
   // Dropped: the read layer a RUNNING program produces, and the lanes this prompt

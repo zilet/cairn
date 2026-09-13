@@ -75,6 +75,7 @@ const SITES = [
     kept: [
       "training_intent",
       "endurance_capacity",
+      "endurance_schedule",
       "recovery",
       "signal_state",
       "coaching_focus",
@@ -93,6 +94,7 @@ const SITES = [
     kept: [
       "training_intent",
       "endurance_capacity",
+      "endurance_schedule",
       "plan",
       "recent_sessions",
       "program_state",

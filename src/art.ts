@@ -3,9 +3,27 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { listActivities } from "./repo/activities.js";
-import { addArtAsset, getArtAlias, listArtAssets, recordArtUsage, setArtAlias } from "./repo/art-ledger.js";
+import {
+  addArtAsset,
+  artIndexUsesKey,
+  getArtAlias,
+  getArtIndex,
+  listArtAssets,
+  listArtIndex,
+  recordArtUsage,
+  setArtAlias,
+  setArtIndex,
+} from "./repo/art-ledger.js";
 import { recordDiagnosticEvent } from "./repo/diagnostics.js";
-import { listExercises } from "./repo/exercises.js";
+import {
+  classifyMuscleGroup,
+  detectImplement,
+  getExerciseAlias,
+  normalizeExerciseName,
+  normalizedExerciseKey,
+} from "./repo/exercise-canon.js";
+import { findExercise, listExercises } from "./repo/exercises.js";
+import { exercisePoseFromExplanation, getCachedExerciseExplanation } from "./coachOps/training.js";
 import { listFoodNotes, listMealPlans } from "./repo/nutrition.js";
 import { getGeminiApiKey, getSettings } from "./repo/settings.js";
 import { artCircuitOpen, noteArtFailure, noteArtSuccess, onArtCircuitClose } from "./artCircuit.js";
@@ -78,8 +96,7 @@ const IMAGE_COST_USD = Number(process.env.ART_IMAGE_COST_USD || 0.067);
 // is $0.134 per 1K/2K image as of 2026-08) while food and activity still bill at
 // the flash rate. Unset falls back to ART_IMAGE_COST_USD, so a single-model
 // install is unchanged.
-const EXERCISE_IMAGE_COST_USD =
-  Number(process.env.ART_EXERCISE_IMAGE_COST_USD || 0) || IMAGE_COST_USD;
+const EXERCISE_IMAGE_COST_USD = Number(process.env.ART_EXERCISE_IMAGE_COST_USD || 0) || IMAGE_COST_USD;
 const TEXT_IN_USD_PER_M = Number(process.env.ART_TEXT_IN_USD_PER_M || 0.75);
 const TEXT_OUT_USD_PER_M = Number(process.env.ART_TEXT_OUT_USD_PER_M || 3.75);
 
@@ -96,27 +113,29 @@ export function isArtKind(kind: string): kind is ArtKind {
 }
 
 // Optional generation context. Only the exercise kind uses it today: a classified
-// muscle group + implement sharpens the clay-figurine prompt WITHOUT changing the
-// cache key (the key is still sha1(kind:name)), so the bare-name query still hits it.
+// muscle group + implement + pose clause. For exercises these inputs HASH into
+// the asset key (so a farmer's carry and a hammer curl cannot share a PNG);
+// `art_index` maps the bare name the PWA still queries to the current asset.
 export interface ArtContext {
   muscle_group?: string | null;
   equipment?: string | null;
   // A one-or-two-sentence description of the MOVEMENT itself, taken from the
   // exercise's how-to guide (setup + move). The name alone under-specifies a
   // pose — "Cable Lateral Raise" rendered as a plank, because the style
-  // references were the only pose signal the model had. Like the rest of this
-  // context it never touches `key`.
+  // references were the only pose signal the model had.
   pose?: string | null;
 }
 
 // How much of the movement description rides along. Long enough for a setup and
 // a move sentence, short enough that it can't drown the styling text.
-const POSE_MAX_CHARS = 220;
+export const POSE_MAX_CHARS = 360;
 
 // A compact " — the pose: <movement description>" clause for the exercise prompt.
 // Sanitized to a single plain sentence run: no newlines, no runaway length.
 export function exercisePoseClause(context?: ArtContext | null): string {
-  const raw = String(context?.pose ?? "").replace(/\s+/g, " ").trim();
+  const raw = String(context?.pose ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!raw) return "";
   let pose = raw;
   if (pose.length > POSE_MAX_CHARS) {
@@ -140,18 +159,27 @@ export function exerciseContextClause(context?: ArtContext | null): string {
   return bits.length ? ` — ${bits.join(" ")}` : "";
 }
 
-// Baked-in style prompts per kind. Caller text feeds the image prompt only —
-// it never influences the filesystem path beyond the sha1 cache key. `context`
-// (exercise only) enriches the prompt without touching that key.
+// Baked-in style prompts per kind. Caller text feeds the image prompt; for
+// exercises the pose clause leads so it is not the thing the model deprioritizes
+// after a long studio-style boilerplate.
 export function stylePrompt(kind: ArtKind, text: string, context?: ArtContext | null): string {
   switch (kind) {
     case "food":
       return `Professional studio food photography of ${text}. Plated on simple cream ceramic, centered, soft diffused natural light, photographed against a seamless warm cream studio background (#F4EFE6), gentle soft shadow beneath the dish, slightly elevated three-quarter angle, appetizing, hyper-detailed, no text, no hands, no props other than the dish. Square 1:1.`;
-    case "exercise":
-      return `Hand-sculpted matte clay figurine of a person performing ${text}${exerciseContextClause(context)}${exercisePoseClause(context)}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
+    case "exercise": {
+      const poseLead = exercisePoseLead(context);
+      return `${poseLead}Hand-sculpted matte clay figurine of a person performing ${text}${exerciseContextClause(context)}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
+    }
     case "activity":
       return `Hand-sculpted matte clay figurine of a person doing ${text}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
   }
+}
+
+/** Pose as a LEADING sentence so the movement isn't buried under studio boilerplate. */
+export function exercisePoseLead(context?: ArtContext | null): string {
+  const clause = exercisePoseClause(context);
+  if (!clause) return "";
+  return `${clause.replace(/^ — /, "").replace(/^the pose:/i, "The pose:")}. `;
 }
 
 function normalize(text: string): string {
@@ -159,25 +187,122 @@ function normalize(text: string): string {
 }
 
 export function cacheKey(kind: ArtKind, text: string): string {
-  return crypto.createHash("sha1").update(`${kind}:${normalize(text)}`).digest("hex");
+  return crypto
+    .createHash("sha1")
+    .update(`${kind}:${normalize(text)}`)
+    .digest("hex");
+}
+
+/** Short hash of the prompt inputs that distinguish one exercise figurine from another. */
+export function exerciseContextHash(text: string, context?: ArtContext | null): string {
+  const packed = [
+    normalize(text),
+    normalize(String(context?.equipment ?? "")),
+    normalize(String(context?.muscle_group ?? "")),
+    normalize(String(context?.pose ?? "").replace(/\s+/g, " ")),
+  ].join("|");
+  return crypto.createHash("sha1").update(packed).digest("hex").slice(0, 12);
+}
+
+/** Pose-aware, versioned asset key. Name-only lookup goes through `art_index`. */
+export function exerciseAssetKey(text: string, context: ArtContext | null | undefined, version: number): string {
+  const v = Number(version) > 0 ? Number(version) : 1;
+  return crypto
+    .createHash("sha1")
+    .update(`exercise:${exerciseContextHash(text, context)}:v${v}`)
+    .digest("hex");
+}
+
+/** On-disk PNG names are sha1 hex (cacheKey / exerciseAssetKey). Anything else is refused. */
+export function isArtAssetKey(key: string): boolean {
+  return /^[a-f0-9]{40}$/.test(key);
 }
 
 function fileForKey(key: string): string {
+  if (!isArtAssetKey(key)) throw new Error("invalid art asset key");
   return path.join(ART_DIR, `${key}.png`);
 }
 
-// Absolute path to the cached PNG, or null when not (yet) generated. Resolves
-// through art_aliases, so any phrasing already mapped to an existing asset
-// serves that asset's file.
+export function assetKeyFromPath(file: string): string {
+  return path.basename(file, path.extname(file));
+}
+
+function indexQuery(text: string): string {
+  return normalize(text);
+}
+
+export function currentArtIndex(kind: ArtKind, text: string): { asset_key: string; version: number } | null {
+  return getArtIndex(kind, indexQuery(text));
+}
+
+function existingFile(key: string | null | undefined): string | null {
+  if (!key || !isArtAssetKey(key)) return null;
+  const file = fileForKey(key);
+  return fs.existsSync(file) ? file : null;
+}
+
+// Absolute path to the cached PNG, or null when not (yet) generated. Exercises
+// resolve through art_index (bare name → current pose-aware asset). Other kinds
+// still use the name-only key, then art_aliases.
 export function cachedArtPath(kind: ArtKind, text: string): string | null {
-  const direct = fileForKey(cacheKey(kind, text));
-  if (fs.existsSync(direct)) return direct;
-  const aliasKey = getArtAlias(kind, normalize(text));
-  if (aliasKey) {
-    const file = fileForKey(aliasKey);
-    if (fs.existsSync(file)) return file;
+  if (kind === "exercise") {
+    const idx = getArtIndex(kind, indexQuery(text));
+    const indexed = existingFile(idx?.asset_key);
+    if (indexed) return indexed;
   }
-  return null;
+  const direct = existingFile(cacheKey(kind, text));
+  if (direct) return direct;
+  const aliasKey = getArtAlias(kind, normalize(text));
+  return existingFile(aliasKey);
+}
+
+/** Current asset version for a name-only query. Missing → 0 (no figurine yet). */
+export function artVersion(kind: ArtKind, text: string): number {
+  const idx = getArtIndex(kind, indexQuery(text));
+  if (idx && existingFile(idx.asset_key)) return idx.version;
+  if (cachedArtPath(kind, text)) return 1;
+  return 0;
+}
+
+const ART_VERSIONS_CAP = 500;
+const ART_VERSIONS_NAME_MAX = 120;
+
+/**
+ * Cheap version map the PWA fetches once (`GET /api/art/versions`) and keeps in
+ * memory, keyed the same way `artImg` tokens are (`kind|q`). Chosen over stuffing
+ * `art_v` onto every session/plan row so every surface shares one map without
+ * growing the hot payload. Optional `queries` (the `?q=` list) returns only those
+ * names; with no list, the most recently used 500 indexed rows.
+ */
+export function artVersions(opts?: { queries?: string[] | undefined }): { versions: Record<string, number> } {
+  const versions: Record<string, number> = {};
+  const byNorm = new Map<string, number>();
+  const named = opts?.queries?.length
+    ? opts.queries.map((q) => String(q ?? "").trim().slice(0, ART_VERSIONS_NAME_MAX)).filter(Boolean)
+    : null;
+
+  if (named) {
+    for (const name of named) {
+      const v = artVersion("exercise", name);
+      if (v <= 0) continue;
+      byNorm.set(indexQuery(name), v);
+      versions[`exercise|${name}`] = v;
+      versions[`exercise|${indexQuery(name)}`] = v;
+    }
+    return { versions };
+  }
+
+  for (const row of listArtIndex("exercise", { limit: ART_VERSIONS_CAP })) {
+    if (!existingFile(row.asset_key)) continue;
+    byNorm.set(row.query, row.version);
+    versions[`exercise|${row.query}`] = row.version;
+  }
+  for (const { kind, q } of enumeratePwaArt()) {
+    if (kind !== "exercise") continue;
+    const v = byNorm.get(indexQuery(q));
+    if (v && v > 0) versions[`${kind}|${q}`] = v;
+  }
+  return { versions };
 }
 
 // ---- serial generation queue (in-flight dedup by cache key) ----
@@ -185,25 +310,59 @@ interface Job {
   key: string;
   kind: ArtKind;
   text: string;
-  context?: ArtContext | null; // exercise-only prompt enrichment; never affects `key`
+  context?: ArtContext | null; // exercise prompt + pose-aware key
 }
 
 const queue: Job[] = [];
 const inFlight = new Set<string>(); // queued or generating, by cache key
+const REGEN_COOLDOWN_MS = 60_000;
+const regenInFlight = new Set<string>(); // (kind, normalized q) — versioned keys do not debounce force
+const regenCooldownUntil = new Map<string, number>();
+
+/** Test seam: clear the regenerate in-flight / cooldown gates between cases. */
+export function resetArtRegenGate(): void {
+  regenInFlight.clear();
+  regenCooldownUntil.clear();
+}
 // Keys that failed this process lifetime, mapped to the image model that failed
 // them — don't hammer the API; a server restart clears the map so a retry is
 // allowed. So does that model's circuit breaker closing: an outage that fails
 // 300 keys must not need a restart to recover. Keys are cleared per model, so a
 // recovering flash model doesn't un-park keys still waiting on a broken pro one.
 const failed = new Map<string, string>();
+const failedKeysByQuery = new Map<string, Set<string>>();
 onArtCircuitClose((model) => {
   for (const [key, failedModel] of failed) if (failedModel === model) failed.delete(key);
+  for (const [query, keys] of failedKeysByQuery) {
+    for (const key of keys) if (!failed.has(key)) keys.delete(key);
+    if (!keys.size) failedKeysByQuery.delete(query);
+  }
 });
+
+function queryFailId(kind: ArtKind, text: string): string {
+  return `${kind}:${normalize(text)}`;
+}
+
+function markFailedKey(kind: ArtKind, text: string, key: string, model: string): void {
+  failed.set(key, model);
+  const id = queryFailId(kind, text);
+  let keys = failedKeysByQuery.get(id);
+  if (!keys) {
+    keys = new Set();
+    failedKeysByQuery.set(id, keys);
+  }
+  keys.add(key);
+}
 
 // Enqueue background generation for a cache miss. Returns true if the request
 // was queued (or already in flight); false when generation is unavailable
 // (no key / disabled / known-failed) or the file already exists.
+//
+// Exercise art never takes this name-only path. A miss schedules the
+// context-aware producer (`produceExerciseArt`) instead — muscle group,
+// implement, and pose from the row / classifier, never a bare name.
 export function requestArt(kind: ArtKind, text: string): boolean {
+  if (kind === "exercise") return requestExerciseArt(text);
   if (!getGeminiApiKey()) return false;
   if (!getSettings().art_enabled) return false;
   // Gate on the model THIS kind would use: a broken exercise model must not
@@ -219,36 +378,122 @@ export function requestArt(kind: ArtKind, text: string): boolean {
   return true;
 }
 
-// Generate muscle-group/equipment-aware art for a just-classified exercise, under
-// the BARE-NAME cache key (so the PWA's plain `?q=<name>` request resolves straight
-// to it — no alias needed, no key drift). Called by the background 'exercise'
-// enrichment job. Degrades exactly like requestArt (no key / art disabled / known-
-// failed → no-op) and never double-pays: skips when the image already exists (a
-// recovery re-run, or the serve path beat it) or is in flight. Records the spend
-// ledger like the serve path. Returns true only when it generated a new image.
+function requestExerciseArt(text: string): boolean {
+  const name = String(text ?? "").trim();
+  if (!name) return false;
+  if (!getGeminiApiKey()) return false;
+  if (!getSettings().art_enabled) return false;
+  if (artCircuitOpen(imageModelFor("exercise"))) return false;
+  if (cachedArtPath("exercise", name)) return false;
+  const ctx = buildExerciseArtContext(name);
+  const version = Math.max(1, artVersion("exercise", name) || 1);
+  const key = exerciseAssetKey(name, ctx, version);
+  if (failed.has(key)) return false;
+  void produceExerciseArt(name).catch(() => {});
+  return true;
+}
+
+/**
+ * The single exercise-art producer: always generate with muscle group /
+ * equipment / pose context. Called from the enrich `exercise` / `exercise_art`
+ * jobs, from `requestArt("exercise")` / `warmArt()`, and from the serve-route
+ * fallback when no exercise row exists. Never a bare name.
+ */
+export async function produceExerciseArt(name: string, context?: ArtContext | null): Promise<boolean> {
+  const text = String(name ?? "").trim();
+  if (!text) return false;
+  return warmExerciseArt(text, context ?? buildExerciseArtContext(text));
+}
+
+/** Fill muscle_group / equipment / pose from the row, then the deterministic floor. */
+export function buildExerciseArtContext(name: string, extra?: ArtContext | null): ArtContext {
+  const row = findExercise(name) as { muscle_group?: string | null; equipment?: string | null } | undefined;
+  let pose = extra?.pose ?? null;
+  if (!pose) {
+    try {
+      const guide: any = getCachedExerciseExplanation(name);
+      pose = exercisePoseFromExplanation(guide?.explanation);
+    } catch {
+      /* a missing guide is the ordinary state — the classifier still shapes the prompt */
+    }
+  }
+  return {
+    muscle_group: extra?.muscle_group || row?.muscle_group || classifyMuscleGroup(name) || null,
+    equipment: extra?.equipment || row?.equipment || detectImplement(name) || null,
+    pose: pose || null,
+  };
+}
+
+export function clearArtFailures(kind: ArtKind, text: string): void {
+  const id = queryFailId(kind, text);
+  const keys = failedKeysByQuery.get(id);
+  if (keys) {
+    for (const key of keys) failed.delete(key);
+    failedKeysByQuery.delete(id);
+  }
+  failed.delete(cacheKey(kind, text));
+  const idx = getArtIndex(kind, indexQuery(text));
+  if (idx) failed.delete(idx.asset_key);
+}
+
+// Generate muscle-group/equipment/pose-aware art for an exercise. The PWA still
+// looks up by bare name; art_index points that name at the pose-aware file.
+// Called by the background 'exercise' / 'exercise_art' enrichment jobs.
 export async function warmExerciseArt(name: string, context?: ArtContext | null): Promise<boolean> {
   return warmArtUnderName("exercise", name, context);
 }
 
+export type ArtRegenerateOutcome =
+  | { ok: true; regenerated: true; version: number }
+  | { ok: true; regenerated: false; reason: "cooldown" | "in_flight"; version: number }
+  | { ok: false; regenerated: false };
+
 /**
- * Force a fresh image for an existing (kind, q) under its own cache key: drop the
- * cached file, forget the key's failure, generate again. The repair path for a
- * figurine that came back wrong (a lateral raise rendered as a plank). Respects
- * the circuit breaker and records the spend exactly like the warm path — a
- * regeneration is a paid generation. Returns true only when a new image landed.
+ * Force a fresh image for an existing (kind, q): forget the failure, bump the
+ * exercise version, generate again under a new pose-aware key. The repair path
+ * for a figurine that came back wrong. Respects the circuit breaker and records
+ * the spend exactly like the warm path — a regeneration is a paid generation.
+ * Per (kind, normalized q): in-flight and a 60s cooldown no-op so a repeated
+ * long-press cannot burn Gemini spend. `force` still bumps the versioned asset
+ * key; the query-level gate is what actually debounces.
  */
-export async function regenerateArt(kind: ArtKind, q: string, context?: ArtContext | null): Promise<boolean> {
-  return warmArtUnderName(kind, q, context, true);
+export async function regenerateArt(
+  kind: ArtKind,
+  q: string,
+  context?: ArtContext | null
+): Promise<ArtRegenerateOutcome> {
+  const text = String(q ?? "").trim();
+  const version = () => artVersion(kind, text);
+  if (!text) return { ok: false, regenerated: false };
+  if (!getGeminiApiKey() || !getSettings().art_enabled) return { ok: false, regenerated: false };
+  const model = imageModelFor(kind);
+  if (artCircuitOpen(model)) return { ok: false, regenerated: false };
+
+  const id = queryFailId(kind, text);
+  if (regenInFlight.has(id)) {
+    return { ok: true, regenerated: false, reason: "in_flight", version: version() };
+  }
+  const until = regenCooldownUntil.get(id) ?? 0;
+  if (Date.now() < until) {
+    return { ok: true, regenerated: false, reason: "cooldown", version: version() };
+  }
+
+  regenInFlight.add(id);
+  regenCooldownUntil.set(id, Date.now() + REGEN_COOLDOWN_MS);
+  try {
+    const landed = await warmArtUnderName(kind, text, context, true);
+    if (!landed) return { ok: false, regenerated: false };
+    return { ok: true, regenerated: true, version: version() };
+  } finally {
+    regenInFlight.delete(id);
+  }
 }
 
-// The shared body behind warmExerciseArt and regenerateArt: generate under the
-// BARE query's own key. `force` drops the cached file and the known-failed mark
-// first; without it an existing image or a known failure is a no-op.
 async function warmArtUnderName(
   kind: ArtKind,
   name: string,
   context?: ArtContext | null,
-  force = false,
+  force = false
 ): Promise<boolean> {
   const text = String(name ?? "").trim();
   if (!text) return false;
@@ -256,20 +501,25 @@ async function warmArtUnderName(
   if (!getSettings().art_enabled) return false;
   const model = imageModelFor(kind);
   if (artCircuitOpen(model)) return false;
+  if (kind === "exercise") return warmExerciseUnderName(text, context, force, model);
   const key = cacheKey(kind, text);
-  if (inFlight.has(key)) return false;              // the serve queue is already on it
+  if (inFlight.has(key)) return false;
   if (force) {
     failed.delete(key);
-    try { fs.rmSync(fileForKey(key), { force: true }); } catch { /* a file we can't drop we can still overwrite */ }
+    try {
+      fs.rmSync(fileForKey(key), { force: true });
+    } catch {
+      /* a file we can't drop we can still overwrite */
+    }
   } else {
     if (failed.has(key)) return false;
-    if (fs.existsSync(fileForKey(key))) return false; // already generated (enriched or name-only)
+    if (fs.existsSync(fileForKey(key))) return false;
   }
   inFlight.add(key);
   try {
     await generate({ key, kind, text, context });
   } catch (e: any) {
-    failed.set(key, model);
+    markFailedKey(kind, text, key, model);
     noteArtFailure(model, artErrorCode(e));
     recordArtUsage({ kind, query: normalize(text), action: "fail", model });
     log.warn(`[art] ${kind} art failed for "${text}": ${e?.message ?? e}`);
@@ -279,6 +529,100 @@ async function warmArtUnderName(
   }
   recordGeneration(kind, key, normalize(text), normalize(text), model);
   return true;
+}
+
+async function warmExerciseUnderName(
+  text: string,
+  context: ArtContext | null | undefined,
+  force: boolean,
+  model: string
+): Promise<boolean> {
+  const ctx = context ?? buildExerciseArtContext(text);
+  const q = indexQuery(text);
+  const current = getArtIndex("exercise", q);
+  const currentFile = existingFile(current?.asset_key) || (!current ? existingFile(cacheKey("exercise", text)) : null);
+  const currentVersion = current?.version || (currentFile ? 1 : 0);
+  const version = force ? currentVersion + 1 || 1 : currentVersion || 1;
+  const key = exerciseAssetKey(text, ctx, version);
+
+  if (inFlight.has(key)) return false;
+  if (force) {
+    clearArtFailures("exercise", text);
+    if (
+      current?.asset_key &&
+      isArtAssetKey(current.asset_key) &&
+      current.asset_key !== key &&
+      !artIndexUsesKey(current.asset_key, "exercise", q)
+    ) {
+      try {
+        fs.rmSync(fileForKey(current.asset_key), { force: true });
+      } catch {
+        /* keep generating even if the old file sticks */
+      }
+    }
+  } else {
+    if (failed.has(key)) return false;
+    if (currentFile) return false; // already generated — regenerateArt is the repair path
+    const reused = findReusableExerciseAsset(text, key);
+    if (reused) {
+      setArtIndex("exercise", q, reused.key, version);
+      setArtAlias("exercise", q, reused.key);
+      recordArtUsage({
+        kind: "exercise",
+        query: q,
+        asset_key: reused.key,
+        action: "reuse",
+        est_saved_usd: imageCostFor("exercise"),
+      });
+      return false;
+    }
+  }
+
+  inFlight.add(key);
+  try {
+    await generate({ key, kind: "exercise", text, context: ctx });
+  } catch (e: any) {
+    markFailedKey("exercise", text, key, model);
+    noteArtFailure(model, artErrorCode(e));
+    recordArtUsage({ kind: "exercise", query: q, action: "fail", model });
+    log.warn(`[art] exercise art failed for "${text}": ${e?.message ?? e}`);
+    return false;
+  } finally {
+    inFlight.delete(key);
+  }
+  setArtIndex("exercise", q, key, version);
+  setArtAlias("exercise", q, key);
+  recordGeneration("exercise", key, normalize(text), q, model);
+  return true;
+}
+
+function exerciseNamesLinked(a: string, b: string): boolean {
+  const keyA = normalizedExerciseKey(a);
+  const keyB = normalizedExerciseKey(b);
+  if (keyA && keyA === keyB) return true;
+  const na = normalizeExerciseName(a);
+  const nb = normalizeExerciseName(b);
+  if (!na || !nb) return false;
+  const aliasA = getExerciseAlias(na);
+  const aliasB = getExerciseAlias(nb);
+  if (aliasA?.canonical) {
+    const c = String(aliasA.canonical);
+    if (normalizeExerciseName(c) === nb || normalizedExerciseKey(c) === keyB) return true;
+  }
+  if (aliasB?.canonical) {
+    const c = String(aliasB.canonical);
+    if (normalizeExerciseName(c) === na || normalizedExerciseKey(c) === keyA) return true;
+  }
+  return false;
+}
+
+function findReusableExerciseAsset(name: string, excludeKey: string): { key: string; text: string } | null {
+  for (const asset of listArtAssets("exercise", 150)) {
+    if (asset.key === excludeKey) continue;
+    if (!existingFile(asset.key)) continue;
+    if (exerciseNamesLinked(name, asset.text)) return asset;
+  }
+  return null;
 }
 
 /**
@@ -293,8 +637,12 @@ function recordGeneration(kind: ArtKind, key: string, assetText: string, query: 
   try {
     addArtAsset(key, kind, assetText);
     recordArtUsage({
-      kind, query, asset_key: key,
-      action: "generate", model, est_cost_usd: imageCostFor(kind),
+      kind,
+      query,
+      asset_key: key,
+      action: "generate",
+      model,
+      est_cost_usd: imageCostFor(kind),
     });
   } catch (e: any) {
     recordDiagnosticEvent({
@@ -340,7 +688,7 @@ async function drain(): Promise<void> {
         }
       } catch (e: any) {
         // A failing job must never break the loop.
-        failed.set(job.key, model);
+        markFailedKey(job.kind, job.text, job.key, model);
         noteArtFailure(model, artErrorCode(e));
         recordArtUsage({ kind: job.kind, query: normalize(job.text), action: "fail", model });
         log.warn(`[art] generation failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
@@ -361,11 +709,16 @@ async function drain(): Promise<void> {
 // on it. The verdict is persisted in art_aliases, so each unique phrase pays
 // for at most one text call ever. Any failure (no model, bad JSON, timeout)
 // falls back to generating under the query's own key — the original behavior.
+//
+// Exercises are the exception: Gemini-text "semantic match" is how distinct
+// movements got aliased onto one another's figurine. Reuse only when
+// normalizedExerciseKey matches or an explicit exercise_aliases row already
+// links them, and never rewrite the prompt away from the athlete's name.
 
 function matcherPrompt(kind: ArtKind, text: string, existing: { text: string }[]): string {
   const list = existing.map((a, i) => `${i}: ${a.text}`).join("\n");
   const strictness =
-    kind === "exercise" || kind === "activity"
+    kind === "activity"
       ? "Be strict: a different movement, equipment, or activity is NOT a match (barbell vs dumbbell bench press are different images; 'DB bench' and 'dumbbell bench press' are the same image)."
       : "Ignore brands, quantities, plating words, and word order; the same dish phrased differently IS a match. Different dishes are not.";
   return `You manage a cache of generated illustrations for a fitness app. A new ${kind} entry needs an image.
@@ -418,23 +771,39 @@ function textCost(inTokens: number, outTokens: number): number {
 
 // Resolve a queued query to the asset it should serve: an existing asset
 // (reused: true — no image call) or a canonical key/text to generate under.
-async function resolveConcept(job: Job): Promise<{ key: string; text: string; reused: boolean }> {
+// Exported so tests can pin the exercise reuse rule without going through drain.
+export async function resolveConcept(job: {
+  kind: ArtKind;
+  text: string;
+  key?: string;
+  context?: ArtContext | null;
+}): Promise<{ key: string; text: string; reused: boolean }> {
+  const fallbackKey =
+    job.key ?? (job.kind === "exercise" ? exerciseAssetKey(job.text, job.context, 1) : cacheKey(job.kind, job.text));
+  if (job.kind === "exercise") return resolveExerciseConcept(job.text, fallbackKey);
+
   const norm = normalize(job.text);
-  // Comparison window: the 150 most recent assets of this kind. Older assets
-  // can still be hit directly or via existing aliases, just not matched anew.
   const existing = listArtAssets(job.kind, 150);
   try {
     const { json, in_tokens, out_tokens } = await geminiText(matcherPrompt(job.kind, job.text, existing));
     recordArtUsage({
-      kind: job.kind, query: norm, action: "canonicalize", model: GEMINI_TEXT_MODEL,
-      input_tokens: in_tokens, output_tokens: out_tokens, est_cost_usd: textCost(in_tokens, out_tokens),
+      kind: job.kind,
+      query: norm,
+      action: "canonicalize",
+      model: GEMINI_TEXT_MODEL,
+      input_tokens: in_tokens,
+      output_tokens: out_tokens,
+      est_cost_usd: textCost(in_tokens, out_tokens),
     });
     const idx = Number(json?.match);
-    if (Number.isInteger(idx) && idx >= 0 && idx < existing.length && fs.existsSync(fileForKey(existing[idx].key))) {
+    if (Number.isInteger(idx) && idx >= 0 && idx < existing.length && existingFile(existing[idx].key)) {
       setArtAlias(job.kind, norm, existing[idx].key);
       recordArtUsage({
-        kind: job.kind, query: norm, asset_key: existing[idx].key,
-        action: "reuse", est_saved_usd: imageCostFor(job.kind),
+        kind: job.kind,
+        query: norm,
+        asset_key: existing[idx].key,
+        action: "reuse",
+        est_saved_usd: imageCostFor(job.kind),
       });
       return { key: existing[idx].key, text: existing[idx].text, reused: true };
     }
@@ -442,28 +811,45 @@ async function resolveConcept(job: Job): Promise<{ key: string; text: string; re
     if (canonical) {
       const key = cacheKey(job.kind, canonical);
       if (key !== cacheKey(job.kind, norm)) setArtAlias(job.kind, norm, key);
-      // Two phrasings can canonicalize to the same phrase even when the asset
-      // fell outside the comparison window — that's still a cache hit.
-      if (fs.existsSync(fileForKey(key))) {
-        recordArtUsage({ kind: job.kind, query: norm, asset_key: key, action: "reuse", est_saved_usd: imageCostFor(job.kind) });
+      if (existingFile(key)) {
+        recordArtUsage({
+          kind: job.kind,
+          query: norm,
+          asset_key: key,
+          action: "reuse",
+          est_saved_usd: imageCostFor(job.kind),
+        });
         return { key, text: canonical, reused: true };
       }
       return { key, text: canonical, reused: false };
     }
   } catch (e: any) {
-    // Record the failure in the existing spend ledger (same "fail" action the
-    // image path already uses) so a persistent misconfiguration — e.g. an
-    // invalid GEMINI_TEXT_MODEL — shows up as a standing count in
-    // GET /api/art/stats / get_art_stats instead of degrading silently
-    // forever. `model` is GEMINI_TEXT_MODEL here vs GEMINI_IMAGE_MODEL on an
-    // image-generate failure, so the two are distinguishable in the raw
-    // art_usage rows even though both roll into the same "failed" total.
-    // Falls through to generating under the query's own key exactly as
-    // before — no retry, no throw, degradation unchanged.
     recordArtUsage({ kind: job.kind, query: norm, action: "fail", model: GEMINI_TEXT_MODEL });
     log.warn(`[art] canonicalize failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
   }
-  return { key: job.key, text: job.text, reused: false };
+  return { key: fallbackKey, text: job.text, reused: false };
+}
+
+function resolveExerciseConcept(text: string, fallbackKey: string): { key: string; text: string; reused: boolean } {
+  const norm = indexQuery(text);
+  const existing = listArtAssets("exercise", 150);
+  for (const asset of existing) {
+    if (!existingFile(asset.key)) continue;
+    if (!exerciseNamesLinked(text, asset.text)) continue;
+    setArtAlias("exercise", norm, asset.key);
+    const version = getArtIndex("exercise", norm)?.version || 1;
+    setArtIndex("exercise", norm, asset.key, version);
+    recordArtUsage({
+      kind: "exercise",
+      query: norm,
+      asset_key: asset.key,
+      action: "reuse",
+      est_saved_usd: imageCostFor("exercise"),
+    });
+    // Keep the athlete's name as the prompt text — never canonicalize it away.
+    return { key: asset.key, text, reused: true };
+  }
+  return { key: fallbackKey, text, reused: false };
 }
 
 // ---- cache warm-up ----
@@ -472,10 +858,18 @@ async function resolveConcept(job: Job): Promise<{ key: string; text: string; re
 // types map to an explicit phrase. Substring match over the lowercased type,
 // in insertion order; no match falls back to the raw type.
 const ACT_ART_PHRASE: Record<string, string> = {
-  ride: "riding a road bicycle", bike: "riding a road bicycle", cycl: "riding a road bicycle",
-  run: "running", jog: "jogging", hike: "hiking with a backpack",
-  walk: "walking briskly", swim: "swimming freestyle", row: "rowing on a rowing machine",
-  yoga: "holding a yoga pose", climb: "climbing an indoor wall", ski: "cross-country skiing",
+  ride: "riding a road bicycle",
+  bike: "riding a road bicycle",
+  cycl: "riding a road bicycle",
+  run: "running",
+  jog: "jogging",
+  hike: "hiking with a backpack",
+  walk: "walking briskly",
+  swim: "swimming freestyle",
+  row: "rowing on a rowing machine",
+  yoga: "holding a yoga pose",
+  climb: "climbing an indoor wall",
+  ski: "cross-country skiing",
 };
 
 function actArtText(a: any): string {
@@ -487,7 +881,9 @@ function actArtText(a: any): string {
 // The PWA's artImg() truncates every query to 120 chars before hitting
 // /api/art — warm-up queries must match or the cache keys diverge.
 function pwaQuery(q: any): string {
-  return String(q ?? "").trim().slice(0, 120);
+  return String(q ?? "")
+    .trim()
+    .slice(0, 120);
 }
 
 // Every (kind, query) pair the PWA will request art for — the single source of
@@ -513,14 +909,13 @@ export function enumeratePwaArt(): { kind: ArtKind; q: string }[] {
   // b) meal plans — most recent non-discarded plan + any current draft.
   //    Query built exactly like the PWA (public/js/) mealRowHtml.
   const plans = listMealPlans(20) as any[];
-  const targets = [
-    plans.find((p) => p?.status !== "discarded"),
-    plans.find((p) => p?.status === "draft"),
-  ].filter((p, i, arr) => p && arr.indexOf(p) === i);
+  const targets = [plans.find((p) => p?.status !== "discarded"), plans.find((p) => p?.status === "draft")].filter(
+    (p, i, arr) => p && arr.indexOf(p) === i
+  );
   for (const plan of targets) {
     for (const d of Array.isArray(plan?.parsed?.days) ? plan.parsed.days : []) {
       for (const m of Array.isArray(d?.meals) ? d.meals : []) {
-        const items = Array.isArray(m?.items) ? m.items.join(", ") : (m?.items || "");
+        const items = Array.isArray(m?.items) ? m.items.join(", ") : m?.items || "";
         push("food", `${m?.name || m?.meal || ""} ${items}`.trim());
       }
     }
@@ -672,7 +1067,10 @@ function geminiErrorMessage(rawBody: string): string {
  * `operation` is "generate" or "canonicalize".
  */
 async function geminiFailure(res: Response, model: string, operation: string): Promise<Error> {
-  const rawBody = await res.text().then((t) => t.slice(0, ERROR_BODY_CHARS)).catch(() => "");
+  const rawBody = await res
+    .text()
+    .then((t) => t.slice(0, ERROR_BODY_CHARS))
+    .catch(() => "");
   const code = geminiErrorCode(res.status, rawBody);
   const seenKey = `${model}:${operation}:${code}`;
   if (!loggedErrorCodes.has(seenKey)) {
@@ -735,7 +1133,7 @@ function styleReferenceParts(kind: ArtKind, excludeKey: string): any[] {
   const parts: any[] = [];
   for (const asset of listArtAssets("exercise", 24)) {
     if (parts.length >= STYLE_REFERENCE_LIMIT) break;
-    if (asset.key === excludeKey) continue;
+    if (asset.key === excludeKey || !isArtAssetKey(asset.key)) continue;
     try {
       const file = fileForKey(asset.key);
       if (!fs.existsSync(file)) continue;
@@ -780,10 +1178,7 @@ async function generate(job: Job, opts: { model?: string; styleRefs?: boolean } 
       body: JSON.stringify({
         contents: [
           {
-            parts: [
-              { text: stylePrompt(job.kind, job.text, job.context) },
-              ...refs,
-            ],
+            parts: [{ text: stylePrompt(job.kind, job.text, job.context) }, ...refs],
           },
         ],
         generationConfig: { responseModalities: ["TEXT", "IMAGE"] },

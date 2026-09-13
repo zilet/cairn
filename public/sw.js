@@ -58,17 +58,50 @@ self.addEventListener("activate", (e) => {
   );
 });
 
-// Generated art: cache-first in the persistent ART_CACHE. The first successful
-// load is stored; every later render/reload paints instantly from Cache Storage
-// (and works offline). Only 200s are cached — a 204 (not generated yet) and any
-// retry (&r=1) stay uncached so they re-fetch and pick up the image once it lands.
+// Generated art: cache-first in the persistent ART_CACHE, keyed by the full
+// request URL (so `v=` is part of the identity). Only 200s are cached — a 204
+// (not generated yet) stays uncached so the next try can pick the image up.
+// `&r=1` is just another URL; a 200 for it WOULD be cached. Prefer `v=` for
+// busting. When a 200 for v=N lands, older v<N entries for the same kind+q
+// are evicted so the art cache does not grow unbounded.
+//
+// Eviction helpers are mirrored from src/artCachePolicy.ts (classic SW cannot
+// import that module). Keep them in sync.
+function artCacheIdentity(url) {
+  try {
+    const parsed = new URL(url, "http://cairn.local");
+    if (parsed.pathname !== "/api/art") return null;
+    const kind = parsed.searchParams.get("kind") || "";
+    const q = parsed.searchParams.get("q") || "";
+    if (!kind || !q) return null;
+    const raw = parsed.searchParams.get("v");
+    const v = raw == null || raw === "" ? 0 : Number(raw);
+    return { kind, q, v: Number.isFinite(v) && v > 0 ? v : 0 };
+  } catch {
+    return null;
+  }
+}
+function shouldEvictCachedArt(cachedUrl, incomingUrl) {
+  const incoming = artCacheIdentity(incomingUrl);
+  const cached = artCacheIdentity(cachedUrl);
+  if (!incoming || !cached) return false;
+  if (incoming.kind !== cached.kind || incoming.q !== cached.q) return false;
+  return cached.v < incoming.v;
+}
 async function artCacheFirst(request) {
   const cache = await caches.open(ART_CACHE);
   const hit = await cache.match(request);
   if (hit) return hit;
   try {
     const res = await fetch(request);
-    if (res && res.status === 200) cache.put(request, res.clone()).catch(() => {});
+    if (res && res.status === 200) {
+      cache.put(request, res.clone()).catch(() => {});
+      cache.keys().then((keys) => {
+        for (const req of keys) {
+          if (shouldEvictCachedArt(req.url, request.url)) cache.delete(req);
+        }
+      }).catch(() => {});
+    }
     return res;
   } catch {
     // Offline + uncached → surface an error so the <img> onerror keeps the SVG.

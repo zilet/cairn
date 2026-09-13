@@ -10,34 +10,62 @@ type SuggestedSessionLike = Partial<ClientSessionSuggestion> | null | undefined;
 (() => {
   const SESSION_VIBES = ["easier on the legs", "30 min", "upper body", "no barbell", "low impact", "push hard"];
 
+  function todaySuggestLoadSuffix(item: SuggestedItemLike, weight: unknown = item?.target_weight): string {
+    const n = weight == null || weight === "" ? null : Number(weight);
+    const hasNum = n != null && Number.isFinite(n);
+    if (hasNum && n < 0) return ` · ${Math.abs(n)} assist`;
+    if (hasNum && n > 0) return ` · ${n} lb`;
+    const basis = item && typeof item === "object" ? item.load_basis : undefined;
+    if (basis === "bodyweight") return " · BW";
+    return "";
+  }
+
+  function todaySuggestMainRx(item: SuggestedItemLike): string {
+    const it = item && typeof item === "object" ? item : {};
+    const timed = it.mode === "timed" || it.target_seconds != null;
+    if (timed) {
+      const secs = it.target_seconds != null ? fmtDur(it.target_seconds) : "time";
+      return `${it.sets ?? "?"} × ${secs}`;
+    }
+    const lo = it.rep_low;
+    const hi = it.rep_high;
+    const reps = lo != null && hi != null ? (lo === hi ? `${lo}` : `${lo}–${hi}`) : (lo ?? hi ?? "");
+    return `${it.sets ?? "?"}${reps ? ` × ${reps}` : ""}${todaySuggestLoadSuffix(it)}`;
+  }
+
+  function todaySuggestTopSetRx(item: SuggestedItemLike): string | null {
+    const top = item && typeof item === "object" ? item.top_set : null;
+    if (!top || typeof top !== "object") return null;
+    const reps = top.reps != null ? String(top.reps) : "";
+    let line = `${top.sets ?? 1}${reps ? ` × ${reps}` : ""} top set`;
+    if (top.rir != null && Number.isFinite(Number(top.rir))) line += ` · RIR ${top.rir}`;
+    line += todaySuggestLoadSuffix(item, top.target_weight);
+    return line;
+  }
+
   function todaySuggestItemHtml(item: SuggestedItemLike, index = 0): string {
     const it = item && typeof item === "object" ? item : {};
     const exercise = String(it.exercise || "Exercise");
     const name = escHtml(exercise);
-    const timed = it.mode === "timed" || it.target_seconds != null;
-    let prescription: string;
-    if (timed) {
-      const secs = it.target_seconds != null ? fmtDur(it.target_seconds) : "time";
-      prescription = `${it.sets ?? "?"} × ${secs}`;
-    } else {
-      const lo = it.rep_low;
-      const hi = it.rep_high;
-      const reps = lo != null && hi != null ? (lo === hi ? `${lo}` : `${lo}–${hi}`) : (lo ?? hi ?? "");
-      prescription = `${it.sets ?? "?"}${reps ? ` × ${reps}` : ""}`;
-      if (it.target_weight != null) {
-        prescription += Number(it.target_weight) < 0 ? ` · ${Math.abs(Number(it.target_weight))} assist` : ` · ${it.target_weight} lb`;
-      } else {
-        prescription += " · BW";
-      }
-    }
+    const topLine = todaySuggestTopSetRx(it);
+    const mainLine = todaySuggestMainRx(it);
+    const rx = topLine
+      ? `<div>${escHtml(topLine)}</div><div>${escHtml(mainLine)}</div>`
+      : escHtml(mainLine);
+    const notes = [
+      it.top_set && typeof it.top_set === "object" && it.top_set.note && it.top_set.note !== it.note
+        ? String(it.top_set.note)
+        : "",
+      it.note ? String(it.note) : "",
+    ].filter(Boolean);
     const tile = artImg("exercise", exercise, "artile-sm sug-art", art("exercise", exercise));
     return `<div class="sug-item reveal" style="${stagger(index + 1)}">
       ${tile}
       <div class="sug-item-main">
         <div class="sug-item-name">${name}</div>
-        ${it.note ? `<div class="sug-item-note">${escHtml(it.note)}</div>` : ""}
+        ${notes.map((n) => `<div class="sug-item-note">${escHtml(n)}</div>`).join("")}
       </div>
-      <div class="sug-item-rx numeral">${escHtml(prescription)}</div>
+      <div class="sug-item-rx numeral">${rx}</div>
     </div>`;
   }
 

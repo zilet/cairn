@@ -6,6 +6,7 @@ import {
   classifyMuscleGroup,
   cleanExerciseName,
   detectExerciseMode,
+  expandedExerciseKey,
   getExerciseAlias,
   normalizeExerciseName,
   normalizedExerciseKey,
@@ -74,12 +75,32 @@ export function findOrCreateExercise(name: string, muscle_group?: string, constr
   //     under a messier name) — self-align: record the alias so the raw variant
   //     resolves directly next time, and reuse the existing exercise.
   const key = normalizedExerciseKey(name);
+  const all = db.prepare(`SELECT name FROM exercises`).all() as Array<{ name: string }>;
   if (key) {
-    const all = db.prepare(`SELECT name FROM exercises`).all() as Array<{ name: string }>;
     const sameKey = all.find((e) => normalizedExerciseKey(e.name) === key);
     if (sameKey) {
       if (normalizeExerciseName(sameKey.name) !== norm) setExerciseAlias(norm, sameKey.name);
       return findExercise(sameKey.name);
+    }
+  }
+
+  // (b2) Abbreviation-aware reuse: "db bench press" should find "Dumbbell Bench
+  //      Press". UNIQUE hit only — if another row's expanded key equals the input
+  //      OR is a token-prefix extension of it ("DB Bench Press Incline"), we insert
+  //      the cleaned name rather than pick. Mirrors the guide matcher.
+  const expandedKey = expandedExerciseKey(name);
+  if (expandedKey && expandedKey !== key) {
+    const exact: Array<{ name: string }> = [];
+    const siblings: Array<{ name: string }> = [];
+    for (const row of all) {
+      const existingKey = expandedExerciseKey(row.name);
+      if (existingKey === expandedKey) exact.push(row);
+      else if (existingKey.startsWith(`${expandedKey} `)) siblings.push(row);
+    }
+    if (exact.length === 1 && siblings.length === 0) {
+      const hit = exact[0];
+      if (norm && normalizeExerciseName(hit.name) !== norm) setExerciseAlias(norm, hit.name);
+      return findExercise(hit.name);
     }
   }
 
@@ -212,8 +233,8 @@ export function setExerciseEnrichStatus(id: number, status: string) {
 }
 
 // Whether an exercise's background enrichment is still running — the art route
-// checks this to DEFER a name-only image so the enrichment job's muscle/equipment-
-// aware art (generated under the SAME cache key) wins without a wasted generation.
+// checks this to wait for the full job's pose-aware producer instead of firing
+// a parallel exercise_art generate (the two share warmExerciseArt / inFlight).
 export function exerciseArtPending(name: string): boolean {
   const row = db.prepare(`SELECT enrichment_status FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
   const s = String(row?.enrichment_status ?? "");

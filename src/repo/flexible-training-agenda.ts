@@ -5,6 +5,11 @@ import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { cardioEffort, sessionLoad } from "./training-read.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { mondayOf } from "../lib/dates.js";
+import {
+  getEnduranceSchedule,
+  isoDow,
+  nextScheduledRunWeekday,
+} from "./profile.js";
 
 export type FlexibleRunKind = "easy" | "quality" | "long";
 export type FlexibleRunStatus = "open" | "completed";
@@ -325,8 +330,12 @@ function datesBetween(start: string, end: string): string[] {
 function suggestedDatesFor(run: RunPlanPrescription, asOf: string, weekEnd: string, blocked: Set<string>): string[] {
   const candidates = datesBetween(asOf, weekEnd);
   if (!candidates.length) return [];
+  const schedule = getEnduranceSchedule();
+  const scheduledDows = schedule?.days.length ? new Set(schedule.days.map((d) => d.dow)) : null;
+  const eligible = scheduledDows ? candidates.filter((date) => scheduledDows.has(isoDow(date))) : candidates;
+  if (!eligible.length) return [];
   const anchor = provisionalDate(mondayOf(asOf), run.day_number);
-  const ranked = candidates.sort((a, b) => {
+  const ranked = eligible.sort((a, b) => {
     const da = Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${anchor}T00:00:00Z`));
     const db = Math.abs(Date.parse(`${b}T00:00:00Z`) - Date.parse(`${anchor}T00:00:00Z`));
     return da - db || a.localeCompare(b);
@@ -437,9 +446,12 @@ export function flexibleTrainingAgenda(
       if (key) keyDates.push(suggested);
     }
     const shifted = suggested != null && suggested !== row.intent.provisional_date;
+    const nextWeekday = suggested == null ? nextScheduledRunWeekday(asOf, row.intent.kind) : null;
     row.intent.rationale =
       suggested == null
-        ? `No clean, separated opening remains for this ${row.intent.kind} run; leave it open without catch-up volume.`
+        ? nextWeekday
+          ? `Your next scheduled run day is ${nextWeekday}; leave this ${row.intent.kind} run open without catch-up volume.`
+          : `No clean, separated opening remains for this ${row.intent.kind} run; leave it open without catch-up volume.`
         : shifted && key
           ? `The day number is only an anchor; this window moves the ${row.intent.kind} run around actual lower-body and cardio load.`
           : "This is a movable weekly intention; choose the calmest compatible opening in the window.";

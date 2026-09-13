@@ -378,6 +378,16 @@ export interface ClientArtManifestResponse {
   enabled: boolean;
 }
 
+export interface ClientArtVersionsResponse {
+  versions: Record<string, number>;
+}
+
+export interface ClientArtRegenerateResponse extends ClientOkResponse {
+  regenerated?: boolean;
+  version?: number;
+  reason?: "cooldown" | "in_flight";
+}
+
 export interface ClientArtUsageTotals {
   images_generated: number;
   canonicalize_calls: number;
@@ -1098,6 +1108,89 @@ export interface ClientWeeklyRunPlan {
   quality_focus: string | null;
   mix_summary: string;
   why: string;
+}
+
+// The race-build layer over the run plan (GET /api/race-build). Mirrors
+// src/repo/race-build.ts's RaceBuild; every number here is a suggestion in the
+// athlete's register — a fit, never a grade.
+export type ClientRaceFit = "fits" | "stretch" | "beyond_horizon";
+export interface ClientRacePaceBand {
+  key: "easy" | "long" | "tempo" | "threshold" | "vo2" | "race";
+  label: string;
+  slow_sec_per_km: number;
+  fast_sec_per_km: number;
+  text: string;
+}
+export interface ClientRaceBuildWeek {
+  week_start: ISODateString | string;
+  weeks_to_race: number;
+  phase: "base" | "build" | "sharpen" | "taper" | "past";
+  kind: "build" | "down" | "peak" | "taper" | "race";
+  km: number;
+  long_km: number;
+  quality_hint: string;
+  strength_hint: string;
+  current: boolean;
+}
+export interface ClientLegMapDay {
+  day_number: number;
+  weekday: string;
+  run: { kind: ClientFlexibleRunKind; label: string; km: number | null } | null;
+  strength: { name: string; heavy_lower: boolean } | null;
+  ride: boolean;
+  hard: boolean;
+}
+export interface ClientRaceBuild {
+  available: boolean;
+  as_of: ISODateString | string;
+  race: {
+    event: string | null;
+    date: ISODateString | string;
+    distance_km: number;
+    days_to_race: number;
+    weeks_to_race: number;
+    phase: "base" | "build" | "sharpen" | "taper" | "past";
+    target: { sec: number; pace_sec_per_km: number; raw: string; kind: "time" | "pace" } | null;
+    target_raw: string | null;
+  } | null;
+  prediction: {
+    estimate_sec: number;
+    estimate_pace_sec_per_km: number;
+    basis: "watch_predictor" | "recent_run_riegel";
+    basis_detail: string;
+    as_of: ISODateString | string;
+    trend: { delta_sec: number; since: ISODateString | string; word: "faster" | "steady" | "slower" } | null;
+    gap_sec: number | null;
+    fit: ClientRaceFit | null;
+  } | null;
+  paces: { anchored_on: "target" | "estimate"; race_pace_sec_per_km: number; bands: ClientRacePaceBand[] } | null;
+  this_week: {
+    week_start: ISODateString | string;
+    km: number;
+    long_km: number | null;
+    quality: { label: string; pace: ClientRacePaceBand | null } | null;
+    why: string;
+  } | null;
+  weeks: ClientRaceBuildWeek[];
+  leg_map: ClientLegMapDay[];
+  strength: { heavy_lower_days: string[]; principle: string; layout: string | null; clean: boolean } | null;
+  ride: {
+    label: string;
+    day_number: number;
+    weekday: string;
+    weeks_seen: number;
+    weeks_window: number;
+    typical_min: number | null;
+    typical_load: "light" | "moderate" | "heavy";
+    placement: string;
+  } | null;
+  review: {
+    weeks: { week_start: ISODateString | string; km: number; runs: number }[];
+    longest_recent_km: number | null;
+    volume_word: "rising" | "steady" | "easing" | null;
+  };
+  why: string;
+  reason: string | null;
 }
 
 export type ClientFlexibleRunKind = "easy" | "quality" | "long";
@@ -3071,6 +3164,8 @@ export interface ClientApiResponses {
   "/api/brain/decisions/waiting": ClientBrainDecisionSummary[];
   "/api/agent-clis/update": ClientAgentCliUpdateStatus;
   "/api/art/manifest": ClientArtManifestResponse;
+  "/api/art/versions": ClientArtVersionsResponse;
+  "/api/art/regenerate": ClientArtRegenerateResponse;
   "/api/art/stats": ClientArtStatsResponse;
   "/api/apple-health/config": ClientAppleHealthConfig;
   "/api/apple-health/connections": ClientAppleHealthConnectionsResponse;
@@ -3175,6 +3270,7 @@ export interface ClientApiResponses {
   "/api/program-state": ClientProgramState;
   "/api/performance": ClientPerformanceStanding;
   "/api/run-plan": ClientWeeklyRunPlan;
+  "/api/race-build": ClientRaceBuild;
   "/api/training-agenda": ClientFlexibleTrainingAgenda;
   "/api/run-zones": ClientRunZones;
   "/api/muscle-trajectory": ClientMuscleGroupTrajectory;

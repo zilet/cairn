@@ -133,6 +133,15 @@ export function setProfile(p: any) {
           ? null
           : (serializeEnduranceGoal(p.endurance_goal) ?? cur.endurance_goal_json ?? null)
         : (cur.endurance_goal_json ?? null),
+    // Stated run days (v101). undefined leaves intact, null clears, else it's
+    // normalized (dow 0–6 + kind) and re-serialized; an unusable non-null shape
+    // preserves the current schedule rather than erasing it.
+    endurance_schedule_json:
+      p.endurance_schedule !== undefined
+        ? p.endurance_schedule == null
+          ? null
+          : (serializeEnduranceSchedule(p.endurance_schedule) ?? cur.endurance_schedule_json ?? null)
+        : (cur.endurance_schedule_json ?? null),
     // Ordered durable athlete intent (v80). An explicit null clears back to the
     // backward-compatible derived view; malformed non-null input is
     // non-destructive so a bad client cannot erase an explicit hierarchy.
@@ -151,8 +160,8 @@ export function setProfile(p: any) {
     statin: p.statin !== undefined ? coerceFlag(p.statin) : (cur.statin ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, home_location, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, training_intent_json, smoking, bp_treated, statin, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, home_location, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, endurance_schedule_json, training_intent_json, smoking, bp_treated, statin, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
        home_location=excluded.home_location,
@@ -162,7 +171,7 @@ export function setProfile(p: any) {
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
-       endurance_goal_json=excluded.endurance_goal_json, training_intent_json=excluded.training_intent_json,
+       endurance_goal_json=excluded.endurance_goal_json, endurance_schedule_json=excluded.endurance_schedule_json, training_intent_json=excluded.training_intent_json,
        smoking=excluded.smoking, bp_treated=excluded.bp_treated, statin=excluded.statin, updated_at=datetime('now')`
   ).run(
     merged.name,
@@ -186,6 +195,7 @@ export function setProfile(p: any) {
     merged.primary_discipline,
     merged.endurance_sport,
     merged.endurance_goal_json,
+    merged.endurance_schedule_json,
     merged.training_intent_json,
     merged.smoking,
     merged.bp_treated,
@@ -204,6 +214,7 @@ export function setProfile(p: any) {
     "goal_date",
     "goal_mode",
     "endurance_goal_json",
+    "endurance_schedule_json",
     "training_intent_json",
     "start_weight_lb",
     "start_date",
@@ -223,7 +234,7 @@ export function setProfile(p: any) {
     "bp_treated",
     "statin",
   ]);
-  if (profileChanges.includes("home_location")) invalidateDayRead();
+  if (profileChanges.includes("home_location") || goalChanges.includes("endurance_schedule_json")) invalidateDayRead();
   if (goalChanges.length)
     emitBrainEvent({
       kind: "goal_changed",
@@ -427,6 +438,116 @@ export function getEnduranceGoal(today?: string):
   const phase =
     days < 0 ? "past" : weeks <= 2 ? "taper" : weeks <= sharpenTo ? "sharpen" : weeks <= buildTo ? "build" : "base";
   return { ...g, is_race: true, days_to_race: days, weeks_to_race: Math.max(0, weeks), phase };
+}
+
+// ---------- endurance schedule (v101) ----------
+// The athlete's STATED run days — orthogonal to the endurance objective and to
+// primary_discipline. When set, weeklyRunPlan anchors day_numbers to these dows
+// and the rolling agenda never suggests a run on an unscheduled weekday.
+// Unusable input returns null (= clear / leave intact at the trust boundary).
+export const ENDURANCE_SCHEDULE_KINDS = ["easy", "quality", "long", "any"] as const;
+export type EnduranceScheduleKind = (typeof ENDURANCE_SCHEDULE_KINDS)[number];
+export type EnduranceScheduleSource = "athlete" | "chat";
+export type EnduranceScheduleDay = {
+  dow: 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sunday
+  kind: EnduranceScheduleKind;
+};
+export type EnduranceSchedule = {
+  days: EnduranceScheduleDay[];
+  note?: string;
+  source: EnduranceScheduleSource;
+  updated_at: string;
+};
+export const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+const SCHEDULE_KIND_SET = new Set<string>(ENDURANCE_SCHEDULE_KINDS);
+const SCHEDULE_SOURCE_SET = new Set<string>(["athlete", "chat"]);
+
+export function isoDow(dateISO: string): 0 | 1 | 2 | 3 | 4 | 5 | 6 {
+  return new Date(`${dateISO}T00:00:00Z`).getUTCDay() as 0 | 1 | 2 | 3 | 4 | 5 | 6;
+}
+export function dowToDayNumber(dow: number): number {
+  return dow === 0 ? 7 : dow;
+}
+
+export function normalizeEnduranceSchedule(
+  input: any,
+  opts?: { source?: EnduranceScheduleSource }
+): EnduranceSchedule | null {
+  let raw: any = input;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!raw || typeof raw !== "object") return null;
+  if (!Array.isArray(raw.days) || !raw.days.length) return null;
+  const days: EnduranceScheduleDay[] = [];
+  const seen = new Set<number>();
+  for (const entry of raw.days) {
+    if (!entry || typeof entry !== "object") return null;
+    const dow = Number(entry.dow);
+    if (!Number.isInteger(dow) || dow < 0 || dow > 6) return null;
+    const kind = String(entry.kind ?? "")
+      .trim()
+      .toLowerCase();
+    if (!SCHEDULE_KIND_SET.has(kind)) return null;
+    if (seen.has(dow)) continue;
+    seen.add(dow);
+    days.push({ dow: dow as EnduranceScheduleDay["dow"], kind: kind as EnduranceScheduleKind });
+  }
+  if (!days.length) return null;
+  days.sort((a, b) => a.dow - b.dow);
+  const sourceRaw = String(raw.source ?? opts?.source ?? "athlete")
+    .trim()
+    .toLowerCase();
+  const source: EnduranceScheduleSource = SCHEDULE_SOURCE_SET.has(sourceRaw)
+    ? (sourceRaw as EnduranceScheduleSource)
+    : (opts?.source ?? "athlete");
+  const note = capStr(raw.note, 240);
+  const updatedRaw = typeof raw.updated_at === "string" ? raw.updated_at.trim().slice(0, 40) : "";
+  const updated_at = updatedRaw || new Date().toISOString();
+  return { days, ...(note ? { note } : {}), source, updated_at };
+}
+
+function serializeEnduranceSchedule(input: any, sourceDefault: EnduranceScheduleSource = "athlete"): string | null {
+  if (input == null) return null;
+  const g = normalizeEnduranceSchedule(input, { source: sourceDefault });
+  return g ? JSON.stringify({ ...g, updated_at: new Date().toISOString() }) : null;
+}
+
+export function getEnduranceSchedule(): EnduranceSchedule | null {
+  const p = getProfile();
+  return normalizeEnduranceSchedule(p?.endurance_schedule_json);
+}
+
+/** null when no schedule is set; otherwise whether `dateISO`'s weekday is one of the stated run days. */
+export function isStatedRunDay(dateISO: string): boolean | null {
+  const schedule = getEnduranceSchedule();
+  if (!schedule?.days.length) return null;
+  const dow = isoDow(dateISO);
+  return schedule.days.some((d) => d.dow === dow);
+}
+
+export function formatEnduranceScheduleDays(schedule: EnduranceSchedule): string {
+  return schedule.days
+    .map((d) => `${WEEKDAY_NAMES[d.dow]}${d.kind !== "any" ? ` (${d.kind})` : ""}`)
+    .join(", ");
+}
+
+export function nextScheduledRunWeekday(asOf: string, kind?: EnduranceScheduleKind): string | null {
+  const schedule = getEnduranceSchedule();
+  if (!schedule?.days.length) return null;
+  const wanted = kind ? schedule.days.filter((d) => d.kind === kind || d.kind === "any") : schedule.days;
+  const pool = wanted.length ? wanted : schedule.days;
+  for (let ahead = 1; ahead <= 7; ahead++) {
+    const date = addDaysISO(asOf, ahead);
+    if (!date) continue;
+    const dow = isoDow(date);
+    if (pool.some((d) => d.dow === dow)) return WEEKDAY_NAMES[dow];
+  }
+  return WEEKDAY_NAMES[pool[0].dow];
 }
 
 // ---------- bodyweight log ----------

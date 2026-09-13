@@ -8,6 +8,7 @@ type ProgressEndurancePRRows = import("../contracts/client-api.js").ClientEndura
 type ProgressEnduranceCompliance = import("../contracts/client-api.js").ClientRunCompliance;
 type ProgressEnduranceSportBests = import("../contracts/client-api.js").ClientSportBests;
 type ProgressEnduranceRunPlan = import("../contracts/client-api.js").ClientWeeklyRunPlan;
+type ProgressEnduranceRaceBuild = import("../contracts/client-api.js").ClientRaceBuild;
 type ProgressEnduranceAgenda = import("../contracts/client-api.js").ClientFlexibleTrainingAgenda;
 type ProgressEnduranceProgramState = import("../contracts/client-api.js").ClientProgramState;
 type ProgressEnduranceCalibration = import("../contracts/client-api.js").ClientCalibrationStatusResponse;
@@ -79,13 +80,14 @@ type ProgressEnduranceSnapshot = {
   compliance: ProgressEnduranceCompliance | null;
   settings: unknown;
   runPlan: ProgressEnduranceRunPlan | null;
+  raceBuild: ProgressEnduranceRaceBuild | null;
   agenda: ProgressEnduranceAgenda | null;
   programState: ProgressEnduranceProgramState | null;
   calibration: ProgressEnduranceCalibration | null;
 };
 // v3: the snapshot gained the calibration read, so a v2 payload would paint a
-// body with one card silently missing until the revalidate landed.
-const PROGRESS_ENDURANCE_SNAP_KEY = "cairn.endurance.v3";
+// body with one card silently missing until the revalidate landed. v4: the race build.
+const PROGRESS_ENDURANCE_SNAP_KEY = "cairn.endurance.v4";
 
 function progressEnduranceSaveSnapshot(data: ProgressEnduranceSnapshot): void {
   try { sessionStorage.setItem(PROGRESS_ENDURANCE_SNAP_KEY, JSON.stringify(data)); } catch { /* quota — skip */ }
@@ -112,6 +114,7 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
       snap.compliance,
       snap.settings,
       snap.runPlan,
+      snap.raceBuild,
       snap.agenda,
       snap.programState,
       snap.calibration,
@@ -128,6 +131,7 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
   let compliance: ProgressEnduranceCompliance | null = null;
   let settings: unknown = null;
   let runPlan: ProgressEnduranceRunPlan | null = null;
+  let raceBuild: ProgressEnduranceRaceBuild | null = null;
   let agenda: ProgressEnduranceAgenda | null = null;
   let programState: ProgressEnduranceProgramState | null = null;
   let calibration: ProgressEnduranceCalibration | null = null;
@@ -139,6 +143,7 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
       deps.api("/run-compliance").catch(() => null),
       deps.api("/settings").then((row) => (row && (row as { settings?: unknown }).settings) || null).catch(() => null),
       deps.api("/run-plan").catch(() => null),
+      deps.api("/race-build").catch(() => null),
       deps.api(`/training-agenda?date=${encodeURIComponent(localISO())}`).catch(() => null),
       deps.api("/program-state").catch(() => null),
       deps.api(`/calibration/status?date=${encodeURIComponent(localISO())}`).catch(() => null),
@@ -149,9 +154,10 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
     compliance = results[3] as ProgressEnduranceCompliance | null;
     settings = results[4];
     runPlan = results[5] as ProgressEnduranceRunPlan | null;
-    agenda = results[6] as ProgressEnduranceAgenda | null;
-    programState = results[7] as ProgressEnduranceProgramState | null;
-    calibration = results[8] as ProgressEnduranceCalibration | null;
+    raceBuild = results[6] as ProgressEnduranceRaceBuild | null;
+    agenda = results[7] as ProgressEnduranceAgenda | null;
+    programState = results[8] as ProgressEnduranceProgramState | null;
+    calibration = results[9] as ProgressEnduranceCalibration | null;
   } catch {
     stats = null;
   }
@@ -169,6 +175,7 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
     compliance,
     settings,
     runPlan,
+    raceBuild,
     agenda,
     programState,
     calibration,
@@ -183,6 +190,7 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
       fresh.compliance,
       fresh.settings,
       fresh.runPlan,
+      fresh.raceBuild,
       fresh.agenda,
       fresh.programState,
       fresh.calibration,
@@ -198,6 +206,7 @@ function paintProgressEnduranceBody(
   compliance: ProgressEnduranceCompliance | null,
   settings: unknown,
   runPlan: ProgressEnduranceRunPlan | null,
+  raceBuild: ProgressEnduranceRaceBuild | null,
   agenda: ProgressEnduranceAgenda | null,
   programState: ProgressEnduranceProgramState | null,
   calibration: ProgressEnduranceCalibration | null,
@@ -211,6 +220,7 @@ function paintProgressEnduranceBody(
   const calibrationHtml = enduranceCalibrationLine(calibration?.status || null);
   const agendaHtml = trainingAgendaCard(agenda);
   const runPlanHtml = weeklyRunPlanCard(runPlan);
+  const raceBuildHtml = raceBuildCard(raceBuild);
   const hybridHtml = hybridLoadCardHtml(programState?.hybrid || null, 1);
   const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(progressEnduranceRecord(settings), {}) : "";
   const sportRows = progressEnduranceSportRows(endRow);
@@ -228,7 +238,7 @@ function paintProgressEnduranceBody(
     prs.best_pace.length > 0
   );
   if (!hasWeek && !hasPRs) {
-    body.innerHTML = deps.hero("Endurance", []) + goalHtml + agendaHtml + complianceHtml + calibrationHtml + runPlanHtml + hybridHtml + syncHtml +
+    body.innerHTML = deps.hero("Endurance", []) + goalHtml + raceBuildHtml + agendaHtml + complianceHtml + calibrationHtml + runPlanHtml + hybridHtml + syncHtml +
       deps.empty(deps.art("activity", "run"),
         goalHtml
           ? "No runs logged yet - log one on Today (a phrase like \"ran 8 km easy\" is plenty) and your weekly runs build toward this."
@@ -258,12 +268,13 @@ function paintProgressEnduranceBody(
     deps.hero("Endurance", heroStats) +
     coachLineHtml +
     goalHtml +
+    raceBuildHtml +
     agendaHtml +
     complianceHtml +
     calibrationHtml +
     runPlanHtml +
     hybridHtml;
-  const hasLead = !!(agendaHtml || runPlanHtml || goalHtml || coachLineHtml || hybridHtml);
+  const hasLead = !!(agendaHtml || runPlanHtml || raceBuildHtml || goalHtml || coachLineHtml || hybridHtml);
   let deep = "";
 
   if (sportRows.length) {

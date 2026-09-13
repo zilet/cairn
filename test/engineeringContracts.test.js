@@ -420,7 +420,11 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   // rebuild lifts need, mirroring GET /api/strength-journeys and /api/strength-objectives.
   // The rest trade: +1 (trade_rest_day) in src/surfaces/mcp/day-coach.ts — the MCP
   // mirror of POST /api/today-read/trade-rest, "train today, rest tomorrow".
-  assert.equal(tools.length, 261, "tool count changes only for reviewed MCP additions");
+  // Stated run days: +2 (get_endurance_schedule, set_endurance_schedule) in
+  // src/surfaces/mcp/training-status.ts — the MCP mirror of profile.endurance_schedule.
+  // The race build: +1 (get_race_build) in src/surfaces/mcp/program.ts — the MCP mirror
+  // of GET /api/race-build (estimate + trend, pace bands, the ladder, the leg map).
+  assert.equal(tools.length, 264, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -520,9 +524,12 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.doesNotMatch(mcp, /server\.tool\("get_weekly_stats"/);
   assert.doesNotMatch(mcp, /server\.tool\("get_endurance_prs"/);
   assert.doesNotMatch(mcp, /server\.tool\("set_endurance_goal"/);
+  assert.doesNotMatch(mcp, /server\.tool\("set_endurance_schedule"/);
   assert.match(trainingStatusTools, /server\.tool\(\s*"get_weekly_stats"/);
   assert.match(trainingStatusTools, /server\.tool\(\s*"get_endurance_prs"/);
   assert.match(trainingStatusTools, /server\.tool\(\s*"set_endurance_goal"/);
+  assert.match(trainingStatusTools, /server\.tool\(\s*"get_endurance_schedule"/);
+  assert.match(trainingStatusTools, /server\.tool\(\s*"set_endurance_schedule"/);
 });
 
 test("generated API docs include mounted route modules", () => {

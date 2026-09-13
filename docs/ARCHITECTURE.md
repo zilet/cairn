@@ -188,7 +188,15 @@ optional sport-duration capability. `endurance_goal_json` remains the separate d
 objective; a temporary race may shape the week without silently becoming the athlete's durable
 identity. `weeklyRunPlan()` creates a conservative weekly running dose, while
 `flexibleTrainingAgenda()` reconciles that dose with actual run logs and the lower-body/cardio work
-that really occurred. Its day numbers are provisional anchors: a compatible early or late run closes
+that really occurred. When the athlete has stated run days (`endurance_schedule` on `profile` —
+`{days:[{dow, kind: easy|quality|long|any}], note?, source, updated_at}`), those weekdays are the
+only legal slots: the engine anchors `day_number`s to them (long onto a `long`/weekend dow, quality
+onto a `quality` dow, easy onto the rest) and the agenda will not suggest a date whose weekday is
+off-schedule, leaving the intent undated with "your next scheduled run day is <weekday>" rather than
+spilling onto Friday after a Thursday run. Heavy-lower adjacency stays a soft note and never moves a
+run off a named day. With no schedule the engine keeps its own provisional slots (quality ~day 2,
+long ~day 6). A run the athlete actually logged on an unscheduled day still closes a compatible
+intention — the log is truth. Its day numbers are otherwise provisional anchors: a compatible early or late run closes
 one intention, a completed intention is never prescribed twice, and every completed run reserves its
 actual date from the remaining run intentions even when it does not match one. Moderate/hard
 cross-training also reserves its date; light cross-training may still share a clean easy-run opening.
@@ -1616,6 +1624,18 @@ cross-domain connection or `{found:false}`, deduped against `recentInsightTexts`
 `buildWeeklyReadPrompt` (a standing "how the week went + the one change" stored as a `weekly_read`
 insight).
 
+`buildSessionPrompt`'s contract (`SESSION_SUGGEST_SCHEMA` in `src/prompt/day.ts`, JSON twin
+`SESSION_ITEM_SCHEMA` / `SESSION_SUGGESTION_SCHEMA`) is one item per exercise. A heavier top set
+or re-test before back-off work belongs on that item as `top_set: { sets, reps, target_weight,
+target_seconds, rir, note }`, never as a second row; `normalizeSessionSuggestionResult` folds
+consecutive same-exercise rows (via `normalizedExerciseKey`) that look like that pattern as a
+backstop. `load_basis` (`bodyweight` | `assisted` | `loaded` | `open`) is computed server-side
+from the clamped weight plus a small implement heuristic in `exercise-canon.ts` — a null
+`target_weight` on a barbell/cable lift is `open` ("you choose"), not BW; only known unloaded
+movements (pull-up / push-up / dip / plank / hang, without "weighted"/"assisted") print "BW".
+On accept, `normalizeComposedSession` expands `top_set` into the same two-card shape the
+peak/reach path already inserts, and skips a second insertion when the item already carries one.
+
 `buildDayReadPrompt` also takes an optional `baseline` (`opts.baseline`, threaded by `computeDayRead`
 — see "One rich signal state" above) and carries a paired guardrail against overclaiming last night's
 sleep: alongside the existing "no sleep data synced" guard, a ONE NIGHT IS NOT A TREND line tells the
@@ -2144,23 +2164,51 @@ authoritative. Adding a new `src/surfaces/mcp/*.ts` module needs no update to th
 ## Generated artwork (`src/art.ts`)
 
 Photoreal/stylized images for foods, exercises and activities via Google's `gemini-3.1-flash-image`
-(override with `GEMINI_IMAGE_MODEL`; needs `GEMINI_API_KEY`), cached in `data/art/` as
-`sha1(kind:normalized text).png`. A strictly serial in-process queue (mirrors the `enrich.ts`
-pattern: in-flight dedup by cache key, a throwing job never breaks the drain loop, plus an in-memory
-negative cache so failed keys aren't retried until the durable circuit breaker closes) generates on
-cache miss while `GET
+(override with `GEMINI_IMAGE_MODEL`; needs `GEMINI_API_KEY`), cached in `data/art/` as PNGs named by
+asset key. A strictly serial in-process queue (mirrors the `enrich.ts` pattern: in-flight dedup by
+cache key, a throwing job never breaks the drain loop, plus an in-memory negative cache so failed
+keys aren't retried until the durable circuit breaker closes) generates on cache miss while `GET
 /api/art` returns 204 immediately. It's a **direct REST call** (global fetch, 60s AbortController
 timeout, atomic tmp-then-rename write) — NOT an `agents.json` CLI run. Degrades gracefully: no key /
 `settings.art_enabled` off / known-failed → 204, nothing runs.
 
-**Semantic cache layer.** Before any image call, `resolveConcept()` runs one cheap Gemini *text* call
-(`GEMINI_TEXT_MODEL`, default `gemini-3.6-flash`, 20s timeout, temperature 0) asking whether the
-query would render essentially the same picture as an existing `art_assets` row (comparison window:
-150 most recent per kind; strict for exercise/activity — different movement/equipment is not a match;
-lenient for food — same dish reworded is) and, if not, what canonical phrase to file the new image
-under. The verdict persists in `art_aliases` (normalized query → asset key), so each unique phrase
-pays at most one text call ever and `cachedArtPath`/`requestArt` resolve through aliases on every
-later hit. Any canonicalize failure falls back to generating under the query's own key.
+**One producer for exercise figurines.** `requestArt("exercise")` and boot `warmArt()` never fire a
+name-only image prompt. A `/api/art` miss for an exercise returns 204 and, if the row exists, enqueues
+the light `exercise_art` enrich kind (`processExerciseArtJob` → `produceExerciseArt`); if no row,
+`produceExerciseArt` builds context from `classifyMuscleGroup` / `detectImplement`
+(`src/repo/exercise-canon.ts`) and still never generates from the bare name. The full `exercise`
+enrichment job is the other caller of the same producer (`warmExerciseArt` with muscle group,
+equipment, and the how-to pose). Pose cap is 360 characters, and the pose clause leads the prompt
+so it is not deprioritized under the studio boilerplate.
+
+**Pose-aware key + version.** Food and activity keys stay `sha1(kind:normalized text)`. Exercise
+keys hash the normalized name + equipment + muscle_group + pose, plus an integer `version`.
+`art_index` (new table, `CREATE TABLE IF NOT EXISTS` in `src/db.ts`) maps the PWA's bare name to the
+current `asset_key` + `version`. `GET /api/art` resolves name → current file. `regenerateArt` bumps
+the version and writes a new asset. Chosen exposure for the client: `GET /api/art/versions` (a tiny
+`{versions:{"exercise|Name":n}}` map, fetched once at boot and kept in memory) rather than stuffing
+`art_v` onto every session/plan row — every surface that calls `artImg` can share it without growing
+the hot payload. The tile URL is `/api/art?kind=exercise&q=<name>&v=<n>`.
+
+**Semantic reuse is strict for exercises.** `resolveConcept` for `kind === "exercise"` never asks
+Gemini text to canonicalize or "semantically match". It reuses an existing asset only when
+`normalizedExerciseKey` matches or an explicit `exercise_aliases` row already links the names, and
+it never rewrites the prompt away from the athlete's exercise name. Food and activity keep the
+cheap Gemini-text canonicalize path (`GEMINI_TEXT_MODEL`, default `gemini-3.6-flash`).
+
+**Cache-busting end to end.** The serve route keeps `Cache-Control: public, max-age=31536000,
+immutable` (the URL now versions) and sets `ETag` to the asset key. `public/sw.js` `artCacheFirst`
+is still cache-first, keyed by the full URL including `v`. On a 200 for `v=N` it evicts older `v<N`
+(and unversioned) entries for the same `kind+q` so `cairn-art-v1` does not grow unbounded. `&r=1` is
+just another URL — a 200 for it is cached; prefer `v=` for busting. Eviction helpers live in
+`src/artCachePolicy.ts`; the SW inlines a mirror.
+
+**Athlete repair path.** Long-press / right-click on an exercise tile (wired once in
+`src/client/art-controller.ts`, so every `artImg("exercise", …)` surface including the session card
+gets it) offers "Redraw this figure", `POST /api/art/regenerate`, then swaps the tile to `&v=N+1`
+and polls that URL a few times. A failed generation stays uncached; `clearArtFailures` runs on
+regenerate and when enrichment lands so a better prompt gets its attempt. The circuit breaker
+(`src/artCircuit.ts`) is unchanged.
 
 **Spend telemetry.** Every paid call (and every avoided generation) is recorded via
 `repo.recordArtUsage` into `art_usage` — actions `generate` (flat `ART_IMAGE_COST_USD`, default
@@ -2773,6 +2821,49 @@ and anchoring that live prescription at the week START so it cannot grow as the 
 consumers that judge SHORTFALL (coach context, Today, the team week, the underfueling read) instead
 take `vouchedRunCompliance()`, where a prescription that cannot speak for the judged week reads as
 absent rather than as current. A hand-authored endurance week is never overruled.
+
+## The race build (`src/repo/race-build.ts`)
+
+The coaching layer OVER the weekly run engine for a dated race with a distance — read-only, no
+new profile fields, and `{available:false, reason}` for everyone else. `raceBuild(date)` returns:
+
+- **`prediction`** — an estimated finish / pace for the goal distance. The watch's own race
+  predictor leads when it has one inside ~3 weeks (`garmin_daily_metrics.race_predict_*`, the
+  nearest standard distance Riegel-adjusted to the exact race distance), with a `trend` against the
+  reading closest to four weeks earlier; otherwise a Riegel extrapolation off the fastest recent
+  run of ≥5 km, labelled conservative because a training run is not a race. Against a parsed
+  `target` (`parseRaceTarget` reads "sub-1:45", "1h45", "105 min", "4:55/km", "8:00/mi"; a bare
+  m:ss under 10 minutes is h:mm only on a ≥15 km race) it reports `gap_sec` and a `fit` band —
+  `fits` / `stretch` / `beyond_horizon`, the same vocabulary as `goal_feasibility`, never a grade.
+- **`paces`** — per-session bands (easy / long / tempo / threshold / VO2) as offsets from the race
+  pace, distance-aware (`paceBandsFor`): on a half, tempo IS race pace and threshold/VO2 sit
+  faster; on a 5k the race is the hard pace, so tempo sits slower. Anchored on the target when
+  there is one, else the estimate. `this_week.quality.pace` puts a number on the engine's quality
+  label (`paceKeyForQuality`; hills stay effort-based).
+- **`weeks`** — the ladder from this week to race week, `projectRaceBuildWeeks` walking
+  `raceRamp()` one Monday at a time (each week the engine's own next safe step off the one before,
+  the first week replaced by the live `weeklyRunPlan` prescription so the ladder never disagrees
+  with the run-plan card). Week `kind` follows the ENGINE's arithmetic, not the calendar: for a
+  weekend race the peak is the week before race week and the taper is race week itself, so the
+  ladder shows build → peak → race rather than inventing a taper week the engine will not
+  prescribe. `weeks_to_race` on each rung is the calendar count for the label.
+- **`leg_map`** — the seven-day ring (Mon–Sun plan template): the run per day, the strength day
+  with `heavy_lower` from `lowerBodyPlanDayNumbers()`, and the habitual ride.
+- **`strength`** — the phase's heavy-lower principle (`STRENGTH_HINT`: heavy after the quality
+  run or the day after the long run in the build, maintenance loads sharpening, ~80% and the last
+  heavy lower ~10 days out in the taper) plus `weekLayoutRead`'s ONE collision sentence when the
+  lifting and running stack. The read never moves a plan day.
+- **`ride`** — the weekly ride as a PATTERN read off the log (`recentEnduranceImpacts(42)`, labels
+  matching ride/MTB/gravel; three of six weeks makes a habit, fewer is an outing): modal weekday,
+  typical duration/load, and one sentence about where it sits — on the long-run day, the day before
+  the long/quality run, on the heavy-lower day, or clear of all three.
+
+Surfaces: `GET /api/race-build`, MCP `get_race_build`, the "Race build" card on Progress →
+Endurance (`raceBuildCard`, fetched into the endurance snapshot v4), and the `race_build` key in
+the ENDURANCE prompt bundle, rendered by `renderRunPlan` as a RACE BUILD block (estimate, target,
+pace bands, ladder, strength principle, ride placement) so every running prompt is shooting at the
+same numbers. `coach.ts` computes it once per context as `raceBuildView`, reusing `runPlanView` and
+`weekLayoutView`.
 
 ## Background enrichment (`src/enrich.ts`)
 

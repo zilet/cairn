@@ -22,6 +22,7 @@ import { getProgramState, type ProgramState } from "./program-state.js";
 import { getStrengthJourney } from "./strength-objectives.js";
 import { performanceStanding } from "./performance.js";
 import { weekLayoutRead } from "../domain/training/week-layout.js";
+import { raceBuild } from "./race-build.js";
 import { enduranceTestsDue, runVarietyRead, runZones, weeklyRunPlan } from "./run-progression.js";
 import { hrModelForCoach } from "./hr-model.js";
 import { calibrationForCoach } from "./calibration.js";
@@ -37,7 +38,7 @@ import { listFuelingFeedback } from "./fueling.js";
 import { fuelDemandWeek } from "./fuel-demand.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
-import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile, listWeight } from "./profile.js";
+import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getEnduranceSchedule, getProfile, listWeight } from "./profile.js";
 import { activeRecoveryWeek, recoveryWeekStatus } from "./recovery-week.js";
 import { bodyCompositionRead } from "./standing.js";
 import {
@@ -561,6 +562,7 @@ interface CoachContextSignals {
   runZonesView: any;
   runPlanView: any;
   weekLayoutView: any;
+  raceBuildView: any;
   flexibleTrainingAgendaView: any;
   dexaTargetingView: any;
   testWeekView: any;
@@ -889,11 +891,13 @@ function buildRunningSlice(
 ): Pick<
   CoachContext,
   | "endurance_goal"
+  | "endurance_schedule"
   | "endurance_capacity"
   | "run_compliance"
   | "run_zones"
   | "run_plan"
   | "week_layout"
+  | "race_build"
   | "flexible_training_agenda"
   | "run_variety"
   | "endurance_tests"
@@ -905,6 +909,7 @@ function buildRunningSlice(
     runZonesView,
     runPlanView,
     weekLayoutView,
+    raceBuildView,
     flexibleTrainingAgendaView,
     runVarietyView,
     enduranceTestsView,
@@ -917,6 +922,9 @@ function buildRunningSlice(
     // unset. Orthogonal to discipline: a strength-first athlete can hold a standing
     // running goal ("running on the side"). The coach prescribes runs accordingly.
     endurance_goal: getEnduranceGoal(),
+    // Stated run days (v101). When set, the run engine and rolling agenda honor
+    // these weekdays and never propose a run off-schedule. Null when unset.
+    endurance_schedule: getEnduranceSchedule(),
     // Standing duration capability read from matching logged outings. Observational
     // only: it never mutates the plan and is null when endurance has no role/target.
     endurance_capacity: enduranceCapacityView,
@@ -946,6 +954,11 @@ function buildRunningSlice(
     // conversation, and the plan-shaping prompts get it as data rather than as a
     // rule they are asked to remember. `clean:true` for a week with nothing to stack.
     week_layout: weekLayoutView,
+    // The race-build layer over the run plan (null / unavailable without a dated race
+    // with a distance): the estimated finish and its trend, pace bands off the target,
+    // the ladder to race week, and the seven-day leg map with the ride and heavy-lower
+    // days. Reuses the run plan and week layout already computed above.
+    race_build: raceBuildView,
     // A rolling reconciliation of the provisional run slots against what was
     // actually logged. Calendar anchors remain compatible with the stored plan,
     // but completion and the next clean opening follow reality.
@@ -1262,6 +1275,13 @@ function getCoachContextFromSnapshot(): CoachContext {
   const weekLayoutView = brainSignal(`week_layout:${today}`, () => {
     try {
       return weekLayoutRead(today, { runPlan: runPlanView, agenda: flexibleTrainingAgendaView });
+    } catch {
+      return null;
+    }
+  });
+  const raceBuildView = brainSignal(`race_build:${today}`, () => {
+    try {
+      return raceBuild(today, { runPlan: runPlanView, weekLayout: weekLayoutView });
     } catch {
       return null;
     }
@@ -1604,6 +1624,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     runZonesView,
     runPlanView,
     weekLayoutView,
+    raceBuildView,
     flexibleTrainingAgendaView,
     dexaTargetingView,
     testWeekView,

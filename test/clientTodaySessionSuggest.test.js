@@ -55,7 +55,7 @@ test("Today session suggestion card renders escaped suggested items", () => {
     items: [
       { exercise: "Pull-up <assisted>", sets: 3, rep_low: 6, rep_high: 8, target_weight: -30, note: "smooth reps <only>" },
       { exercise: "Dead hang", mode: "timed", sets: 2, target_seconds: 45 },
-      { exercise: "Push-up", sets: 2, rep_low: 12, rep_high: 12, target_weight: null },
+      { exercise: "Push-up", sets: 2, rep_low: 12, rep_high: 12, target_weight: null, load_basis: "bodyweight" },
     ],
   }, { checked: true, adjustments: ["protein <floor>"] });
 
@@ -72,6 +72,52 @@ test("Today session suggestion card renders escaped suggested items", () => {
   assert.doesNotMatch(html, />Log these</);
   assert.match(html, /protein &lt;floor&gt;/);
   assert.doesNotMatch(html, /Upper <pull>|smooth reps <only>|protein <floor>/);
+});
+
+test("open load prints nothing, bodyweight still prints BW, and a top_set shares one tile", () => {
+  const suggest = loadTodaySessionSuggest();
+  const html = suggest.cardHtml({
+    name: "Pull",
+    why: "A re-test day.",
+    items: [
+      {
+        exercise: "Barbell Bent-Over Row",
+        sets: 2,
+        rep_low: 6,
+        rep_high: 6,
+        target_weight: 135,
+        load_basis: "loaded",
+        top_set: { sets: 1, reps: 3, rir: 1, note: "one strong triple" },
+      },
+    ],
+  });
+
+  assert.match(html, /1 × 3 top set · RIR 1/);
+  assert.match(html, /2 × 6 · 135 lb/);
+  assert.match(html, /one strong triple/);
+  assert.equal((html.match(/class="sug-item /g) || []).length, 1, "top set + back-off share one tile");
+  assert.equal((html.match(/sug-item-name/g) || []).length, 1);
+
+  const openHtml = suggest.itemHtml({
+    exercise: "Cable Row",
+    sets: 3,
+    rep_low: 8,
+    rep_high: 10,
+    target_weight: null,
+    load_basis: "open",
+  });
+  assert.match(openHtml, /3 × 8–10/);
+  assert.doesNotMatch(openHtml, /BW/);
+
+  const bwHtml = suggest.itemHtml({
+    exercise: "Neutral-Grip Pull-Up",
+    sets: 3,
+    rep_low: 6,
+    rep_high: 8,
+    target_weight: null,
+    load_basis: "bodyweight",
+  });
+  assert.match(bwHtml, /3 × 6–8 · BW/);
 });
 
 test("Today session suggestion helper renders empty, loading, failure, and composer states", () => {

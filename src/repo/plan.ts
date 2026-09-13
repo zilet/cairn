@@ -1283,7 +1283,7 @@ export function replacePlanChecked(
     // A full restructure DECLARES the whole week, so an omitted day_type here means
     // 'training' rather than "leave it as it was" — the alternative would let a week
     // that never mentions rest inherit yesterday's seam in a day now full of work.
-    day_type: planDayTypeForRestructure(day.day_type),
+    day_type: planDayTypeForRestructure(day.day_type, (day.items ?? []).length),
     items: withAuthoritativeExerciseModes(day.items ?? []),
   }));
   const quality = validateTrainingPlan(normalized);
@@ -1941,12 +1941,20 @@ export function resolvePlanDayType(day_number: number, declared: unknown, itemCo
 // inherit yesterday's seam into a day now full of work. Every snapshot this repo takes
 // of a plan therefore has to carry day_type through (trainingPlanSnapshot does), or an
 // Undo would quietly erase the rest day it is meant to restore.
-function planDayTypeForRestructure(declared: unknown): PlanDayType {
+//
+// The one exception is a day the restructure left EMPTY without saying what it is: a
+// week that hands over `{ name: "Easy", items: [] }` and no day_type has described a
+// rest day in everything but the word. Storing it as training produced a startable
+// "session" with nothing in it — a Start button into an empty room. Emptiness is the
+// rest day's prescription (see plan_days in db.ts), so an undeclared empty day IS one.
+// A day that explicitly says `training` with no items is left alone: the editor's
+// "Add day" scaffold means it, and the surfaces no longer offer to start it anyway.
+function planDayTypeForRestructure(declared: unknown, itemCount?: number): PlanDayType {
   const normalized = normalizePlanDayType(declared);
   if (normalized) return normalized;
   if (declared != null && String(declared).trim() !== "")
     throw new Error(`Unknown plan day type "${String(declared)}" — a plan day is 'training' or 'rest'.`);
-  return "training";
+  return itemCount === 0 ? "rest" : "training";
 }
 
 /** The one place the zero-items invariant is stated. Throws with the athlete's own words. */
@@ -2215,7 +2223,7 @@ export function replacePlan(
       savePlanDay(d.day_number, d.name || `Day ${i + 1}`, d.focus ?? null, d.items || [], {
         deferTrainingVersionBump: true,
         deferDayReadInvalidation: true,
-        day_type: planDayTypeForRestructure(d.day_type),
+        day_type: planDayTypeForRestructure(d.day_type, (d.items || []).length),
       })
     );
     return getPlan();

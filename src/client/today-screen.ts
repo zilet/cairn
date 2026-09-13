@@ -385,8 +385,26 @@ async function renderToday(opts: any = {}) {
   // On Today, the plan area is a calm launch card into the isolated Session
   // destination (logging no longer lives inline here). The done card still shows
   // inline.
+  // A launch card must have something to launch. A plan day that carries no items
+  // (an "Easy" day the plan named but never filled, a rest day surfaced by a Train-
+  // anyway override) used to render a Start button into an empty session; a read
+  // that says easy/rest already leads above, so an empty day says nothing here.
+  // (No plan at all is different: that card is the deliberate "Open session" door.)
+  const nothingToStart =
+    todayState.plan.length > 0 &&
+    !hasLoggedSets &&
+    exDone === 0 &&
+    !isRunDay &&
+    !cardioItems.length &&
+    (prep.dailySession
+      ? !(prep.dailySession.items || []).length
+      : sessionPreview?.item_count != null
+        ? sessionPreview.item_count === 0
+        : !(day?.items || []).length);
   html +=
-    showPlan && !showDone
+    showPlan && !showDone && nothingToStart
+      ? ""
+      : showPlan && !showDone
       ? sessionLaunchCardHtml({
           day,
           dailySession: prep.dailySession,

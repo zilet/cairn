@@ -601,6 +601,17 @@ export interface ClientPrescription {
   top_set?: ClientPrescriptionTopSet | null;
 }
 
+export type ClientSessionLoadBasis = "bodyweight" | "assisted" | "loaded" | "open";
+
+export interface ClientSessionTopSet {
+  sets: number;
+  reps: number;
+  target_weight?: number | null;
+  target_seconds?: number | null;
+  rir?: number | null;
+  note?: string | null;
+}
+
 export interface ClientSessionSuggestionItem {
   exercise: string;
   kind?: "strength" | "cardio" | string | null;
@@ -611,6 +622,11 @@ export interface ClientSessionSuggestionItem {
   target_seconds?: number | null;
   mode?: "reps" | "timed" | string | null;
   note?: string | null;
+  // Heavier re-test / top set on this same lift. Absent on a single-tier item.
+  top_set?: ClientSessionTopSet | null;
+  // Server-derived. Null target_weight is BW only when this is "bodyweight";
+  // "open" means the athlete picks the first load.
+  load_basis?: ClientSessionLoadBasis;
   target_distance_km?: number | null;
   target_duration_min?: number | null;
   target_zone?: string | null;

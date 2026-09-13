@@ -694,11 +694,27 @@ const SESSION_ITEM_SCHEMA: JsonSchema = {
     // Expanded into rep_low/rep_high by normalizePrescriptionItem when the model
     // prescribes a single rep target instead of a range.
     target_reps: { type: ["integer", "null"], exclusiveMinimum: 0 },
-    // Negative = assisted, null = bodyweight. Never a `minimum`.
+    // Negative = assisted, null = bodyweight OR an unanchored load (the athlete
+    // picks it). Never a `minimum`. Server-derived `load_basis` disambiguates.
     target_weight: { type: ["number", "null"] },
     target_seconds: { type: ["number", "null"], exclusiveMinimum: 0 },
     mode: { type: ["string", "null"] },
     note: { type: ["string", "null"] },
+    // A heavier top set / re-test on the SAME lift. One item per exercise —
+    // never a second row. Sets/reps here are exclusiveMinimum 0 for the same
+    // reason as the parent: a 0 would be present and fatal on a cardio sibling.
+    top_set: {
+      type: ["object", "null"],
+      additionalProperties: true,
+      properties: {
+        sets: { type: ["integer", "null"], exclusiveMinimum: 0 },
+        reps: { type: ["integer", "null"], exclusiveMinimum: 0 },
+        target_weight: { type: ["number", "null"] },
+        target_seconds: { type: ["number", "null"], exclusiveMinimum: 0 },
+        rir: { type: ["number", "null"], minimum: 0, maximum: 5 },
+        note: { type: ["string", "null"] },
+      },
+    },
     superset_group: { type: ["integer", "null"], minimum: 1 },
     // A 0 here is not a harmless "no warmup sets": boundedNumber would store it as 0
     // rather than null, and on a CARDIO item it is a present strength field, which is

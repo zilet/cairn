@@ -39,7 +39,8 @@ release flow: `docs/SHARING.md`.
 
 ## Hard requirements
 
-- **Node 24 is mandatory** — that's where `node:sqlite` is unflagged. No native build step.
+- **Node 24 is the floor, Node 26 is what ships** — `node:sqlite` is unflagged from 24; the Docker
+  image, the release workflow and the primary CI lane run 26. No native build step.
 - **ESM with explicit `.js` import extensions** (`tsconfig` is `NodeNext`). Importing a sibling `.ts`
   module is written `from "./repo.js"`, never `"./repo"`.
 - **Every string rendered into `innerHTML` goes through `escHtml`/`escAttr`.** The only exceptions
@@ -63,7 +64,8 @@ replaced by `cairn-<hash>`, a content hash over every asset the worker precaches
 always ships a new cache name and an unchanged one never re-downloads. What you MUST still do by
 hand: **add every new static asset to `CORE_ASSETS` in `public/sw.js`** — an asset missing there is
 neither cached offline nor covered by the hash. Do not rename the placeholder (the substitution is
-an exact match, and `scripts/check-sw-cache.mjs` asserts it).
+an exact match, and `scripts/check-sw-cache.mjs` asserts it). **Art URLs carry `v=`; never strip it**
+— the SW cache-first layer keys on the full URL and evicts older `v` for the same `kind+q`.
 
 **`index.html` does not load every bundle.** A bundle marked `lazy: "<name>"` in `BUNDLES`
 (`scripts/build-client.mjs`) — today only `bundle-05-me-health`, the Stand/Me/Records surfaces — is
@@ -237,6 +239,21 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   when the read says `reduce`). The quiet-day escalation voice breaks its streak on a trip day.
 - **Sessions are keyed by date** — `getOrCreateSession` reuses today's session, so logged sets
   accumulate into one session per day.
+- **Stated run days are structured and anchor the run engine** — `endurance_schedule`
+  (`profile.endurance_schedule_json`) is the athlete's named weekdays for easy/quality/long runs;
+  `weeklyRunPlan` and `flexibleTrainingAgenda` honor those dows and never spill a suggestion onto
+  an unscheduled day. A logged run on an unscheduled day still counts (the log is truth).
+- **The race build is a read OVER the run engine, never a second engine** — `raceBuild()`
+  (`src/repo/race-build.ts`) walks `raceRamp()` Monday by Monday for the ladder, so a week's km is
+  always the engine's own next step; its `kind` follows the engine's `ceil(days/7)` count (a
+  weekend race has peak → race week, no invented taper week). Finish estimates prefer the watch's
+  predictor (≤3 weeks old, Riegel-adjusted) over a Riegel off a training run, and every comparison
+  is a `fits`/`stretch`/`beyond_horizon` FIT, never a grade. The weekly ride is a PATTERN read off
+  the log (3 of 6 weeks) — no new field. Details in `docs/ARCHITECTURE.md`.
+- **An empty plan day is never startable.** A restructure's undeclared empty day is stored as
+  `rest` (`planDayTypeForRestructure`, `src/repo/plan.ts`); an explicit empty `training` day
+  survives as a scaffold but neither Today's launch card nor the Plan editor's Train button offers
+  to start it. No plan at all is different — that card is the deliberate "Open session" door.
 - **Garmin strength is a session, not an activity.** `upsertGarminActivity` deliberately skips the
   generic `activities` row for a strength type (no duplicate). `reconcileGarminStrength()` does the
   deterministic merge (physiology onto `sessions.garmin_json`, link, delete stale row) *always*, even

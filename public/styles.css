@@ -362,6 +362,21 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
    no scale — so a re-render or reload never flashes the wire placeholder */
 .artimg .artimg-photo.instant{opacity:1;transform:none;transition:none}
 
+/* quiet long-press / right-click repair on an exercise figurine */
+.art-redraw-menu{
+  position:fixed;z-index:70;min-width:11rem;
+  background:var(--card);color:var(--ink);border:1px solid var(--line);
+  border-radius:var(--radius-sm);box-shadow:var(--shadow-md);
+  padding:6px;font-family:var(--font-ui);
+}
+.art-redraw-btn{
+  appearance:none;display:block;width:100%;margin:0;border:0;background:transparent;
+  color:var(--ink);font:inherit;font-size:.86rem;font-weight:560;text-align:left;
+  padding:8px 10px;border-radius:10px;cursor:pointer;
+}
+.art-redraw-btn:hover,.art-redraw-btn:focus-visible{background:var(--accent-wash);outline:none}
+.artile.art-redrawing .artimg-photo{opacity:.45}
+
 /* -------------------------------------------------------------------
    06 · Stat strip (Today)
    ------------------------------------------------------------------- */
@@ -5779,6 +5794,33 @@ button.prow-name:hover{color:var(--accent)}
 .wrun-why .lbl{display:block;color:var(--muted);margin-bottom:6px}
 .wrun-why p{font-size:.84rem;line-height:1.5;color:var(--ink-2);margin:0 0 5px}
 .wrun-why p:last-child{margin-bottom:0}
+
+/* ── the race build (Progress → Endurance) ─────────────────────────────────────── */
+.rbuild-nums{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px}
+.rbuild-num{display:flex;flex-direction:column;gap:2px;min-width:120px}
+.rbuild-num .lbl{color:var(--muted)}
+.rbuild-clock{font-family:var(--font-display);font-variation-settings:"opsz" 96;font-weight:600;
+  font-size:1.6rem;line-height:1.05;color:var(--ink);letter-spacing:-.01em}
+.rbuild-pace{font-size:.8rem;color:var(--ink-2)}
+.rbuild-trend{margin-top:8px}
+.rbuild-paces{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px 12px;margin-top:12px}
+.rbuild-band{display:flex;flex-direction:column;gap:1px;padding:7px 9px;background:var(--card-2);border-radius:var(--radius-sm)}
+.rbuild-band-k{font-family:var(--font-ui);font-size:.6rem;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted)}
+.rbuild-band-v{font-variation-settings:"opsz" 32;font-weight:560;font-size:.9rem;color:var(--ink)}
+.rbuild-map{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:13px}
+.rbuild-day{display:flex;flex-direction:column;gap:3px;padding:7px 5px;border-radius:var(--radius-sm);
+  background:var(--card-2);border-top:2px solid transparent;min-height:56px}
+.rbuild-day.is-hard{border-top-color:var(--gold)}
+.rbuild-day-k{font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.rbuild-day-v{font-size:.7rem;line-height:1.3;color:var(--ink-2);overflow-wrap:anywhere}
+.rbuild-more{margin-top:12px}
+.rbuild-more>summary{cursor:pointer;font-size:.84rem;color:var(--accent-deep);list-style:none}
+.rbuild-more>summary::-webkit-details-marker{display:none}
+.rbuild-ladder{margin-top:10px}
+.rbuild-ladder .wrun-row.is-current{box-shadow:inset 0 0 0 1px var(--line)}
+.rbuild-week-km{margin-left:auto;font-size:.84rem;color:var(--ink-2)}
+@media (max-width:420px){.rbuild-map{grid-template-columns:repeat(4,1fr)}}
 
 /* ── a test week is about due (Progress → Program banner) ───────────────────────── */
 .ptest-slot:empty{display:none}

@@ -40,6 +40,7 @@ function loadProgressEnduranceController() {
     enduranceGoalCard: () => "",
     runComplianceLine: () => "",
     weeklyRunPlanCard: () => "",
+    raceBuildCard: (build) => (build?.available ? "race-build:open" : ""),
     trainingAgendaCard: (agenda) => agenda?.available ? "agenda:open" : "",
     enduranceCoachLine: () => "",
     enduranceCalibrationLine: (status) =>
@@ -123,6 +124,7 @@ test("progress endurance controller fans out reads and paints the empty enduranc
     "/run-compliance",
     "/settings",
     "/run-plan",
+    "/race-build",
     "/training-agenda?date=2026-06-30",
     "/program-state",
     "/calibration/status?date=2026-06-30",

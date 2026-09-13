@@ -6,13 +6,13 @@
 // path is byte-for-byte the original (so existing cached art never drifts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { stylePrompt, exerciseContextClause, exercisePoseClause, cacheKey } from "../dist/art.js";
+import { stylePrompt, exerciseContextClause, exercisePoseClause, cacheKey, exerciseAssetKey } from "../dist/art.js";
 import { exercisePoseFromExplanation } from "../dist/coachOps.js";
 
 test("exerciseContextClause folds muscle group + equipment into a compact clause", () => {
   assert.equal(
     exerciseContextClause({ muscle_group: "back", equipment: "a cable machine" }),
-    " — a back exercise using a cable machine",
+    " — a back exercise using a cable machine"
   );
   assert.equal(exerciseContextClause({ muscle_group: "quads" }), " — a quads exercise");
   assert.equal(exerciseContextClause({ equipment: "a barbell" }), " — using a barbell");
@@ -49,7 +49,7 @@ test("stylePrompt('exercise') without context is unchanged (existing cache keys/
 test("exercisePoseClause sanitizes the movement description into one plain run", () => {
   assert.equal(
     exercisePoseClause({ pose: "Stand side-on to a low cable\npulley.  Raise the arm out to shoulder height." }),
-    " — the pose: Stand side-on to a low cable pulley. Raise the arm out to shoulder height",
+    " — the pose: Stand side-on to a low cable pulley. Raise the arm out to shoulder height"
   );
   assert.equal(exercisePoseClause({ pose: "   " }), "");
   assert.equal(exercisePoseClause({}), "");
@@ -59,11 +59,11 @@ test("exercisePoseClause sanitizes the movement description into one plain run",
 
 test("exercisePoseClause caps the description so it can't drown the styling text", () => {
   const clause = exercisePoseClause({ pose: "word ".repeat(200) });
-  assert.ok(clause.length <= " — the pose: ".length + 220, `clause was ${clause.length} chars`);
+  assert.ok(clause.length <= " — the pose: ".length + 360, `clause was ${clause.length} chars`);
   assert.doesNotMatch(clause, /\s$/, "trimmed at a word boundary");
 });
 
-test("stylePrompt('exercise') describes the pose after the context clause", () => {
+test("stylePrompt('exercise') leads with the pose so it is not buried under studio boilerplate", () => {
   const p = stylePrompt("exercise", "Cable Lateral Raise", {
     muscle_group: "shoulders",
     equipment: "a cable machine",
@@ -71,18 +71,32 @@ test("stylePrompt('exercise') describes the pose after the context clause", () =
   });
   assert.match(
     p,
-    /performing Cable Lateral Raise — a shoulders exercise using a cable machine — the pose: Stand side-on to a low pulley holding the handle in the outside hand\. Raise the straight arm out to the side to shoulder height, terracotta/,
+    /^The pose: Stand side-on to a low pulley holding the handle in the outside hand\. Raise the straight arm out to the side to shoulder height\. Hand-sculpted/
   );
+  assert.match(p, /performing Cable Lateral Raise — a shoulders exercise using a cable machine, terracotta/);
   assert.match(p, /clay figurine/, "still the same clay-figurine studio style");
 });
 
-test("the pose never touches the cache key (a bare ?q= request still hits it)", () => {
-  assert.equal(cacheKey("exercise", "Cable Lateral Raise"), cacheKey("exercise", "Cable Lateral Raise"));
-  const withPose = stylePrompt("exercise", "Cable Lateral Raise", { pose: "Raise the arm to the side" });
-  const without = stylePrompt("exercise", "Cable Lateral Raise");
-  assert.notEqual(withPose, without, "the prompt does change");
-  // cacheKey takes only (kind, text) — there is no context argument to leak into it.
-  assert.equal(cacheKey.length, 2);
+test("same name + different pose hashes to a different asset key", () => {
+  const a = exerciseAssetKey(
+    "Farmer's Carry",
+    { muscle_group: "forearms", equipment: "a trap bar", pose: "Walk tall" },
+    1
+  );
+  const b = exerciseAssetKey(
+    "Farmer's Carry",
+    { muscle_group: "forearms", equipment: "a trap bar", pose: "A different walk" },
+    1
+  );
+  const v2 = exerciseAssetKey(
+    "Farmer's Carry",
+    { muscle_group: "forearms", equipment: "a trap bar", pose: "Walk tall" },
+    2
+  );
+  assert.notEqual(a, b, "pose is part of the asset key");
+  assert.notEqual(a, v2, "version is part of the asset key");
+  assert.equal(cacheKey("exercise", "Farmer's Carry"), cacheKey("exercise", "Farmer's Carry"));
+  assert.equal(cacheKey.length, 2, "name-only cacheKey stays the food/activity (and legacy) lookup");
 });
 
 test("no pose → the prompt is byte-for-byte what it is today", () => {
@@ -99,7 +113,7 @@ test("exercisePoseFromExplanation takes the first sentence of setup and move", (
       move: "Raise the arm out to shoulder height. Lower slowly.",
       feel: "Side delt.",
     }),
-    "Stand side-on to a low pulley. Raise the arm out to shoulder height",
+    "Stand side-on to a low pulley. Raise the arm out to shoulder height"
   );
   assert.equal(exercisePoseFromExplanation(null), null);
   assert.equal(exercisePoseFromExplanation(undefined), null);

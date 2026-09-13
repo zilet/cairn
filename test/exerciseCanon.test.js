@@ -12,10 +12,26 @@ import { db, repo } from "./_seed.js";
 import { localDateISO } from "../dist/repo/shared.js";
 
 beforeEach(() => {
-  try { db.prepare("DELETE FROM logged_sets").run(); } catch { /* ok */ }
-  try { db.prepare("DELETE FROM sessions").run(); } catch { /* ok */ }
-  try { db.prepare("DELETE FROM exercises").run(); } catch { /* ok */ }
-  try { db.prepare("DELETE FROM plan_items").run(); } catch { /* ok */ }
+  try {
+    db.prepare("DELETE FROM logged_sets").run();
+  } catch {
+    /* ok */
+  }
+  try {
+    db.prepare("DELETE FROM sessions").run();
+  } catch {
+    /* ok */
+  }
+  try {
+    db.prepare("DELETE FROM exercises").run();
+  } catch {
+    /* ok */
+  }
+  try {
+    db.prepare("DELETE FROM plan_items").run();
+  } catch {
+    /* ok */
+  }
 });
 
 // ---- classifyMuscleGroup on the REAL exercise names in the live DB ----
@@ -86,6 +102,32 @@ test("classifyMuscleGroup: forearm/grip exercises", () => {
   const { classifyMuscleGroup } = repo;
   assert.equal(classifyMuscleGroup("Dead hang"), "forearms");
   assert.equal(classifyMuscleGroup("Dead hang timed"), "forearms");
+  assert.equal(classifyMuscleGroup("Farmer's Carry"), "forearms");
+});
+
+test("detectImplement reads the implement from the name", () => {
+  const { detectImplement } = repo;
+  assert.equal(detectImplement("Barbell Bench Press"), "a barbell");
+  assert.equal(detectImplement("DB Hammer Curl"), "dumbbells");
+  assert.equal(detectImplement("Seated Cable Row"), "a cable machine");
+  assert.equal(detectImplement("Farmer's Carry"), null);
+});
+
+test("isKnownBodyweightMovement: hangs and abbreviated implements", () => {
+  const { isKnownBodyweightMovement } = repo;
+  assert.equal(isKnownBodyweightMovement("Hang Clean"), false);
+  assert.equal(isKnownBodyweightMovement("Hang Snatch"), false);
+  assert.equal(isKnownBodyweightMovement("Hang Power Clean"), false);
+  assert.equal(isKnownBodyweightMovement("Dead Hang"), true);
+  assert.equal(isKnownBodyweightMovement("DB Pull-Up"), false);
+  assert.equal(isKnownBodyweightMovement("Neutral-Grip Pull-Up"), true);
+  assert.equal(isKnownBodyweightMovement("Weighted Pull-Up"), false);
+});
+
+test("expandedExerciseKey re-tokenizes multi-word abbreviations", () => {
+  const { expandedExerciseKey } = repo;
+  assert.equal(expandedExerciseKey("OHP Press"), expandedExerciseKey("Overhead Press"));
+  assert.equal(expandedExerciseKey("OHP"), expandedExerciseKey("Overhead Press"));
 });
 
 test("classifyMuscleGroup: mobility exercises", () => {
@@ -188,8 +230,12 @@ test("planExerciseMerges: no merge proposed for truly distinct exercises", () =>
 
 test("planExerciseMerges: reads from DB when names omitted and exercises exist", () => {
   // Seed two exercises whose keys collide.
-  db.prepare("INSERT OR IGNORE INTO exercises (name, muscle_group, mode) VALUES ('Dead hang', 'forearms', 'timed')").run();
-  db.prepare("INSERT OR IGNORE INTO exercises (name, muscle_group, mode) VALUES ('Dead hang timed', 'forearms', 'timed')").run();
+  db.prepare(
+    "INSERT OR IGNORE INTO exercises (name, muscle_group, mode) VALUES ('Dead hang', 'forearms', 'timed')"
+  ).run();
+  db.prepare(
+    "INSERT OR IGNORE INTO exercises (name, muscle_group, mode) VALUES ('Dead hang timed', 'forearms', 'timed')"
+  ).run();
   const { planExerciseMerges } = repo;
   const merges = planExerciseMerges();
   const hangMerge = merges.find((m) => m.from === "Dead hang timed" || m.into === "Dead hang timed");
@@ -217,7 +263,9 @@ test("reconcileExerciseGroups: folds legacy 'legs' → 'quads'", () => {
 });
 
 test("reconcileExerciseGroups: folds legacy 'posterior' → 'hamstrings'", () => {
-  db.prepare("INSERT OR IGNORE INTO exercises (name, muscle_group, mode) VALUES ('Romanian Deadlift', 'posterior', 'reps')").run();
+  db.prepare(
+    "INSERT OR IGNORE INTO exercises (name, muscle_group, mode) VALUES ('Romanian Deadlift', 'posterior', 'reps')"
+  ).run();
   const { reconcileExerciseGroups } = repo;
   reconcileExerciseGroups();
   const ex = db.prepare("SELECT muscle_group FROM exercises WHERE name = 'Romanian Deadlift'").get();
@@ -225,7 +273,9 @@ test("reconcileExerciseGroups: folds legacy 'posterior' → 'hamstrings'", () =>
 });
 
 test("reconcileExerciseGroups: leaves already-canonical groups unchanged", () => {
-  db.prepare("INSERT OR IGNORE INTO exercises (name, muscle_group, mode) VALUES ('Incline DB Press', 'chest', 'reps')").run();
+  db.prepare(
+    "INSERT OR IGNORE INTO exercises (name, muscle_group, mode) VALUES ('Incline DB Press', 'chest', 'reps')"
+  ).run();
   const { reconcileExerciseGroups } = repo;
   const result = reconcileExerciseGroups();
   // The exercise should not appear in changes (already correct).
@@ -240,7 +290,9 @@ test("getProgress: assisted lift (negative weight) with known bodyweight gives n
   try {
     db.prepare("INSERT OR IGNORE INTO profile (id, weight_lb) VALUES (1, 185)").run();
     db.prepare("UPDATE profile SET weight_lb = 185 WHERE id = 1").run();
-  } catch { /* ok */ }
+  } catch {
+    /* ok */
+  }
 
   const ex = repo.upsertExercise({ name: "Assisted Pull-Up", muscle_group: "back" });
   const today = localDateISO();
@@ -263,7 +315,9 @@ test("getProgress: assisted lift without known bodyweight yields null best1rm, n
   // Clear bodyweight from profile.
   try {
     db.prepare("UPDATE profile SET weight_lb = NULL WHERE id = 1").run();
-  } catch { /* ok if profile doesn't exist */ }
+  } catch {
+    /* ok if profile doesn't exist */
+  }
 
   const ex = repo.upsertExercise({ name: "Machine Assisted Dip", muscle_group: "chest" });
   const today = localDateISO();
@@ -313,8 +367,28 @@ test("cleanExerciseName PRESERVES an already well-cased name (never mangles deli
   const { cleanExerciseName } = repo;
   assert.equal(cleanExerciseName("Barbell Bench Press"), "Barbell Bench Press");
   assert.equal(cleanExerciseName("DB Shoulder Press"), "DB Shoulder Press");
+  assert.equal(cleanExerciseName("DB Bench Press"), "DB Bench Press");
+  assert.equal(cleanExerciseName("Pull-Up"), "Pull-Up");
+  assert.equal(cleanExerciseName("EZ-Bar Curl"), "EZ-Bar Curl");
+  assert.equal(cleanExerciseName("Farmer's Carry"), "Farmer's Carry");
+  // First-character uppercase preserves the whole word, including mixed internals
+  // and hyphen tails ("up"/"over" stay lowercase).
+  assert.equal(cleanExerciseName("ZTest Knee Wibble"), "ZTest Knee Wibble");
+  assert.equal(cleanExerciseName("McGill Curl"), "McGill Curl");
+  assert.equal(cleanExerciseName("Atomic Push-up"), "Atomic Push-up");
+  assert.equal(cleanExerciseName("Bent-over Row"), "Bent-over Row");
+  // Parentheticals may stay lowercase; that is a deliberate display form.
+  assert.equal(cleanExerciseName("Face Pull (cable)"), "Face Pull (cable)");
   // but it still strips trailing set/rep noise off an otherwise-clean name
   assert.equal(cleanExerciseName("Barbell Bench Press 3x5"), "Barbell Bench Press");
+});
+
+test("cleanExerciseName title-cases messy mixed case (not just all-lower / ALL-CAPS)", () => {
+  const { cleanExerciseName } = repo;
+  assert.equal(cleanExerciseName("Bench press"), "Bench Press");
+  assert.equal(cleanExerciseName("bEnch Press"), "Bench Press");
+  assert.equal(cleanExerciseName("Romanian deadlift"), "Romanian Deadlift");
+  assert.equal(cleanExerciseName("face pull (cable)"), "Face Pull (cable)");
 });
 
 test("detectExerciseMode flags holds as timed, loaded work as reps", () => {
@@ -337,7 +411,10 @@ test("findOrCreateExercise REUSES by normalized name instead of duplicating (and
   assert.equal(rows.length, 1, "no duplicate exercise was created");
   // the raw variant self-aligns next time via a persisted alias
   const aliases = repo.listExerciseAliases().map((x) => x.alias);
-  assert.ok(aliases.some((al) => /incline db press/.test(al)), "an alias was recorded for reuse");
+  assert.ok(
+    aliases.some((al) => /incline db press/.test(al)),
+    "an alias was recorded for reuse"
+  );
 });
 
 test("findOrCreateExercise stores a CLEANED display name + auto group/mode on create", () => {
@@ -347,10 +424,47 @@ test("findOrCreateExercise stores a CLEANED display name + auto group/mode on cr
   assert.equal(ex.muscle_group, "forearms", "auto-classified to a group");
 });
 
+test("findOrCreateExercise reuses a unique abbreviation expansion and records an alias", () => {
+  db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Dumbbell Bench Press', 'chest', 'reps')").run();
+  const row = repo.findOrCreateExercise("db bench press");
+  assert.equal(row.name, "Dumbbell Bench Press");
+  const aliases = repo.listExerciseAliases().map((x) => x.alias);
+  assert.ok(aliases.includes("db bench press"), "the typed abbreviation is remembered");
+  assert.equal(repo.listExercises().filter((e) => /bench press/i.test(e.name)).length, 1, "no sibling row");
+});
+
+test("findOrCreateExercise abbreviation reuse is unique-hit only (prefix sibling is a tie)", () => {
+  // Tie rule: reuse only when exactly one existing row's expanded key equals the
+  // input's expanded key AND no other row's expanded key is a token-prefix
+  // extension of it. "Dumbbell Bench Press" equals "db bench press"; "DB Bench
+  // Press Incline" extends it — two candidates, so insert the cleaned name.
+  db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Dumbbell Bench Press', 'chest', 'reps')").run();
+  db.prepare(
+    "INSERT INTO exercises (name, muscle_group, mode) VALUES ('DB Bench Press Incline', 'chest', 'reps')"
+  ).run();
+  const before = repo
+    .listExercises()
+    .map((e) => e.name)
+    .sort();
+  const row = repo.findOrCreateExercise("db bench press");
+  assert.equal(row.name, "DB Bench Press", "ambiguous expansion inserts the cleaned typed name");
+  assert.ok(!before.includes(row.name), "a new row, not a reuse of either sibling");
+  const names = repo
+    .listExercises()
+    .map((e) => e.name)
+    .sort();
+  assert.deepEqual(names, ["DB Bench Press", "DB Bench Press Incline", "Dumbbell Bench Press"].sort());
+});
+
 test("planExerciseAliases (pure validator) folds messy variants onto a clean canonical", () => {
   const items = [{ name: "incline db press lol" }, { name: "Incline DB Press" }];
   const groups = [
-    { members: ["incline db press lol", "Incline DB Press"], canonical: "Incline DB Press", group: "chest", mode: "reps" },
+    {
+      members: ["incline db press lol", "Incline DB Press"],
+      canonical: "Incline DB Press",
+      group: "chest",
+      mode: "reps",
+    },
   ];
   const aliases = repo.planExerciseAliases(items, groups);
   assert.ok(aliases.length >= 1, "produces at least one alias row");
@@ -369,8 +483,12 @@ test("distinctExerciseNames returns logged/planned movements with group + usage 
   const ex = repo.findOrCreateExercise("Barbell Bench Press", "chest");
   const today = localDateISO();
   const sess = repo.getOrCreateSession(today);
-  db.prepare("INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 8)").run(sess.id, ex.id);
-  db.prepare("INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 2, 135, 8)").run(sess.id, ex.id);
+  db.prepare(
+    "INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 8)"
+  ).run(sess.id, ex.id);
+  db.prepare(
+    "INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 2, 135, 8)"
+  ).run(sess.id, ex.id);
   const names = repo.distinctExerciseNames();
   const bench = names.find((n) => /bench press/i.test(n.name));
   assert.ok(bench, "the logged movement appears");

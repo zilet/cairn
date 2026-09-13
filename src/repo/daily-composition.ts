@@ -1,4 +1,4 @@
-import { normalizeSessionSuggestionResult } from "./adaptive-session.js";
+import { normalizeSessionSuggestionResult, safeAgentWeight } from "./adaptive-session.js";
 // Imported explicitly, NOT leaned on as a global: client-globals.d.ts declares a
 // `pickDayVariant` for the client bundle's shared scope, so a server module that
 // forgets this import still typechecks and then throws at runtime.
@@ -19,6 +19,7 @@ import {
 } from "./exercises.js";
 import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
+import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 import { round5, finite } from "../lib/numbers.js";
 
@@ -276,11 +277,13 @@ function clampHeldTarget(item: any, envelope: DailyDecisionEnvelope): boolean {
 // the heavy set survived only as prose inside the candidate's note, and the
 // composed session the athlete actually read was the back-off block alone.
 //
-// It is inserted HERE, from the envelope, and nowhere else. Both composition
-// paths (the deterministic fallback and the agent's own) come through this
-// normalizer, so one insertion point covers both; and because `normalizeItem`
-// whitelists item fields, an agent has no way to author or forge a top set of its
-// own. Like every other authorized number, it is the server's to grant.
+// It is inserted HERE, from the envelope — except that a session-suggest item
+// may already carry a nested `top_set` (one lift, two tiers). That nested
+// object expands into the same two-card shape, and peak/reach insertion is
+// skipped on that lift so a re-test is not doubled. Consecutive same-lift
+// agent rows are NOT folded here (fold is suggest-only); a heavier load still
+// cannot be forged: the expanded card's `target_weight` is clamped by
+// safeAgentWeight and the same envelope guards the peak path uses.
 
 const TOP_SET_NOTES: readonly [string, ...string[]] = [
   "Work up to this single, then drop to the block below.",
@@ -451,6 +454,50 @@ function reachTopSetItemFor(backoff: any, working: number, dateISO: string): Rec
     interval: null,
     superset_group: null,
     reach: { weight, reps: 3, note },
+  };
+}
+
+// Expand an agent-authored nested top_set into the same two-card shape peak/reach
+// already produce: a leading top-set card, then the back-off block, same name.
+function agentTopSetItemFor(backoff: any, top: any, dateISO: string): Record<string, unknown> | null {
+  if (!top || typeof top !== "object") return null;
+  if (backoff?.kind === "cardio" || backoff?.mode === "timed") return null;
+  const sets = Math.max(1, Number(top.sets) || 1);
+  const reps = finite(top.reps);
+  if (reps == null || reps <= 0) return null;
+  const requested = finite(top.target_weight);
+  const weight = requested == null ? null : safeAgentWeight(String(backoff.exercise ?? ""), requested);
+  const seconds = finite(top.target_seconds);
+  const blockWeight = finite(backoff?.target_weight);
+  if (weight != null && blockWeight != null && weight <= blockWeight) return null;
+  const note =
+    typeof top.note === "string" && top.note.trim()
+      ? top.note.trim()
+      : pickDayVariant(TOP_SET_NOTES, dateISO, "daily-composition:top-set");
+  return {
+    position: 0,
+    kind: "strength",
+    exercise: backoff.exercise,
+    sets,
+    rep_low: reps,
+    rep_high: reps,
+    target_weight: weight,
+    target_seconds: seconds,
+    warmup_sets: null,
+    mode: "reps",
+    note,
+    target_distance_km: null,
+    target_duration_min: null,
+    target_zone: null,
+    interval: null,
+    superset_group: null,
+    load_basis:
+      weight != null && weight < 0 ? "assisted" : weight != null && weight > 0 ? "loaded" : (backoff.load_basis ?? null),
+    reach: {
+      ...(weight != null ? { weight } : {}),
+      reps,
+      note,
+    },
   };
 }
 
@@ -702,6 +749,8 @@ export function normalizeComposedSession(
   raw: unknown,
   envelope: DailyDecisionEnvelope
 ): { session: ComposedSession | null; validation: CompositionValidation } {
+  // Fold is suggest-only. Two consecutive same-lift rows stay two rows here so
+  // the per-item authorized-target clamp can hold every card to the envelope.
   const base = normalizeSessionSuggestionResult(raw);
   const rejected: Array<{ exercise: string; reason: string }> = [];
   if (!base) {
@@ -762,6 +811,10 @@ export function normalizeComposedSession(
       : String(item.exercise ?? "");
     if (isCardio) item.exercise = exercise;
     const candidate = candidates.get(exercise.toLowerCase());
+    if (isCardio && cardioPlanIdentity(item).sport === "run" && isStatedRunDay(envelope.date) === false) {
+      rejected.push({ exercise, reason: "not_scheduled_run_day" });
+      continue;
+    }
     if (envelope.kind === "rest" && item.kind !== "cardio" && envelope.request.train_anyway !== true) {
       rejected.push({ exercise, reason: "rest_requires_train_anyway" });
       continue;
@@ -971,6 +1024,20 @@ export function normalizeComposedSession(
   let reachLanded = false;
   for (const item of capped) {
     delete item.reach;
+    const nestedTop = item.top_set;
+    delete item.top_set;
+    if (nestedTop && topSetsAllowed && remainingSets >= 1 && capped.length + topSetsInserted + 1 <= cap) {
+      const top = agentTopSetItemFor(item, nestedTop, envelope.date);
+      if (top) {
+        withTopSets.push(top);
+        remainingSets = Math.max(0, remainingSets - 1);
+        insertedTopSet = true;
+        topSetsInserted += 1;
+        changed = true;
+        withTopSets.push(item);
+        continue;
+      }
+    }
     const isHost =
       !reachHostConsumed && isReachHostItem(item, reducedExercises, saturatedGroups, excluded);
     const hostLoad = isHost ? reachHostLoad(String(item.exercise ?? "")) : null;

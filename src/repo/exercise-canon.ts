@@ -199,6 +199,46 @@ export function normalizedExerciseKey(name: string): string {
   return (kept.length ? kept : tokens.map(foldPluralToken)).join(" ");
 }
 
+// Cairn's own vocabulary is abbreviated the way a lifter writes on a phone
+// ("Incline DB Press"); catalog names and the exercise-guide dataset spell
+// implements out. Expanding before keying lets those meet WITHOUT loosening the
+// key — "DB" becomes "dumbbell", so a dumbbell press still cannot collapse onto
+// a barbell one. Shared with the guide matcher so the two never drift.
+export const EXERCISE_ABBREVIATIONS: Record<string, string> = {
+  db: "dumbbell",
+  dbs: "dumbbell",
+  bb: "barbell",
+  kb: "kettlebell",
+  kbs: "kettlebell",
+  ohp: "overhead press",
+  rdl: "romanian deadlift",
+  bw: "bodyweight",
+};
+
+export function expandExerciseAbbreviations(name: string): string {
+  const tokens = normalizeExerciseName(name).split(" ").filter(Boolean);
+  const out: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const expansion = EXERCISE_ABBREVIATIONS[tokens[i]];
+    if (expansion) {
+      const parts = expansion.split(" ").filter(Boolean);
+      out.push(...parts);
+      // Multi-word expansions ("ohp" → "overhead press") are re-tokenized; a
+      // following token already covered by the expansion ("OHP Press") is not
+      // keyed twice.
+      while (i + 1 < tokens.length && parts.includes(tokens[i + 1])) i += 1;
+    } else {
+      out.push(tokens[i]);
+    }
+  }
+  return out.join(" ");
+}
+
+/** Merge key with abbreviations spelled out first. Identity keys stay on normalizedExerciseKey. */
+export function expandedExerciseKey(name: string): string {
+  return normalizedExerciseKey(expandExerciseAbbreviations(name));
+}
+
 // The SWAP-SLOT key: additionally strips implement/equipment tokens so a lift and its
 // re-implemented sibling ("Barbell Bench Press" ↔ "DB Bench Press") resolve to the
 // same PLAN SLOT — the plan often names one implement while the athlete logs another,
@@ -213,6 +253,97 @@ export function movementKey(name: string): string {
   const tokens = normalizeExerciseName(name).split(" ").filter(Boolean);
   const kept = tokens.filter((t) => !IMPLEMENT_TOKENS.has(t) && !NON_DISTINGUISHING.has(t));
   return (kept.length ? kept : tokens).join(" ");
+}
+
+// Deterministic implement phrase for art prompts when the exercise row has no
+// equipment tag yet. First matching token wins; "bar" is skipped (too generic).
+// LOADED_IMPLEMENT_RE is derived from these keys so `db`/`bb` cannot drift.
+const IMPLEMENT_PHRASE: Record<string, string> = {
+  barbell: "a barbell",
+  bb: "a barbell",
+  dumbbell: "dumbbells",
+  dumbbells: "dumbbells",
+  db: "dumbbells",
+  kettlebell: "a kettlebell",
+  kb: "a kettlebell",
+  machine: "a machine",
+  smith: "a smith machine",
+  cable: "a cable machine",
+  ez: "an EZ bar",
+  trap: "a trap bar",
+  hex: "a hex bar",
+  landmine: "a landmine",
+  band: "a band",
+  banded: "a band",
+};
+const LOADED_IMPLEMENT_EXTRA = ["rope", "ropes", "plate", "plates"] as const;
+
+function escapeImplementToken(token: string): string {
+  return token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function loadedImplementAlternation(): string {
+  const forms = new Set<string>(LOADED_IMPLEMENT_EXTRA);
+  for (const key of Object.keys(IMPLEMENT_PHRASE)) {
+    forms.add(key);
+    if (key.length > 2 && !key.endsWith("s")) forms.add(`${key}s`);
+  }
+  return [...forms]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeImplementToken)
+    .join("|");
+}
+
+const LOADED_IMPLEMENT_RE = new RegExp(`\\b(?:${loadedImplementAlternation()})\\b`);
+const WEIGHTED_OR_ASSISTED_RE = /\b(weighted|assisted)\b/;
+// Classic unloaded gymnastics / calisthenics names. Match the movement key so
+// "Neutral-Grip Pull-Up" still counts, and require the name not to say weighted
+// or assisted (those are a loaded/assisted variant of the same pattern).
+const BODYWEIGHT_MOVE_RE = /\b(pull[- ]?ups?|chin[- ]?ups?|push[- ]?ups?|dips?|planks?)\b/;
+// Hangs are bodyweight only as dead-hang / hanging holds — never Olympic
+// "hang clean" / "hang snatch" / "hang power clean".
+const HANG_HOLD_RE =
+  /\bdead\s+hangs?\b|\bhanging\b|\bbar\s+hangs?\b|\bhangs?\s+(?:holds?|time|for\s+time)\b|\bhangs?$/;
+
+function equipmentSignalsBodyweight(equipment: string): boolean {
+  return (
+    /\bbody\s*only\b/.test(equipment) ||
+    /\bbodyweight\b/.test(equipment) ||
+    equipment === "none" ||
+    equipment === "body"
+  );
+}
+
+function isHangHoldName(text: string): boolean {
+  return HANG_HOLD_RE.test(text);
+}
+
+// True when a null target_weight on this movement should render as BW. False
+// for barbell/cable/machine names (null there is an unanchored load — open).
+export function isKnownBodyweightMovement(name: string, equipment?: string | null): boolean {
+  const norm = expandExerciseAbbreviations(name);
+  if (!norm) return false;
+  if (WEIGHTED_OR_ASSISTED_RE.test(norm)) return false;
+  const equip = expandExerciseAbbreviations(equipment ?? "");
+  if (equip && LOADED_IMPLEMENT_RE.test(equip)) return false;
+  if (LOADED_IMPLEMENT_RE.test(norm)) return false;
+  if (equip && equipmentSignalsBodyweight(equip)) return true;
+  const key = movementKey(expandExerciseAbbreviations(name));
+  return (
+    BODYWEIGHT_MOVE_RE.test(key) ||
+    BODYWEIGHT_MOVE_RE.test(norm) ||
+    isHangHoldName(key) ||
+    isHangHoldName(norm)
+  );
+}
+
+export function detectImplement(name: string): string | null {
+  const tokens = normalizeExerciseName(name).split(" ").filter(Boolean);
+  for (const token of tokens) {
+    const phrase = IMPLEMENT_PHRASE[token];
+    if (phrase) return phrase;
+  }
+  return null;
 }
 
 // ---- legacy / free-form group → canonical group -----------------------------
@@ -400,8 +531,45 @@ const ACRONYM_CASING: Record<string, string> = {
   jm: "JM",
   ttb: "TTB",
   bw: "BW",
+  ssb: "SSB",
   amrap: "AMRAP",
 };
+
+// Title-case connectors that look deliberate when left lowercase. Used both to
+// detect intentional casing and to keep them lower when we retitle a messy name.
+const TITLE_CONNECTORS = new Set(["of", "on", "to", "the", "and", "with", "a", "for"]);
+
+function isShortAllCaps(token: string): boolean {
+  return /^[A-Z]{1,4}$/.test(token);
+}
+
+function isParenthetical(token: string): boolean {
+  return /^\(.*\)$/.test(token);
+}
+
+// A WORD is intentionally cased (preserve verbatim) when:
+//   - its FIRST character is uppercase — including mixed internals and hyphen
+//     tails ("ZTest", "McGill", "Push-up", "Bent-over"). Do not re-case hyphen
+//     sub-parts of a word that already starts uppercase.
+//   - OR it is all-caps ≤4 chars (DB, RDL, OHP)
+//   - OR it is a lowercase connector and not the first word
+//   - OR it is a parenthetical ("(cable)")
+// A word starting lowercase (and not a connector/parenthetical) is messy and
+// triggers title-casing of the whole name.
+function isIntentionallyCasedWord(token: string, isFirst: boolean): boolean {
+  if (!token) return false;
+  if (isParenthetical(token)) return true;
+  if (isShortAllCaps(token)) return true;
+  if (/^[A-Z]/.test(token)) return true;
+  const lower = token.toLowerCase();
+  if (ACRONYM_CASING[lower] && token === ACRONYM_CASING[lower]) return true;
+  if (!isFirst && TITLE_CONNECTORS.has(lower) && token === lower) return true;
+  return false;
+}
+
+function looksIntentionallyCased(tokens: string[]): boolean {
+  return tokens.length > 0 && tokens.every((t, i) => isIntentionallyCasedWord(t, i === 0));
+}
 
 // Filler / noise tokens to strip from a messy title before cleaning.
 const FILLER_TOKENS = new Set([
@@ -474,31 +642,31 @@ export function cleanExerciseName(raw: string): string {
     .filter(Boolean)
     .filter((t) => !FILLER_TOKENS.has(t.toLowerCase()))
     .filter(Boolean);
-  // CONSERVATIVE: if the title (after stripping notation/filler) is ALREADY
-  // well-cased — it has both upper- and lower-case letters and no snake_case — it
-  // was named deliberately ("Barbell Bench Press", "ZTest Knee Ext", "DB Press").
-  // Preserve it verbatim; only re-case the genuinely-messy forms (all-lowercase,
-  // ALL-CAPS, snake_case). The point is to tidy messy input, never mangle clean names.
+  // Preserve verbatim only when every word looks INTENTIONALLY cased: first
+  // character uppercase (ZTest, McGill, Push-up — hyphen tails stay as typed),
+  // a short all-caps token (DB, KB, RDL, OHP, SSB, EZ), a lowercase connector
+  // that is not the first word (of/on/to/the/and/with/a/for), or a parenthetical.
+  // Mixed-mess ("Bench press", "bEnch Press") is retitled. Snake_case always
+  // retitles. Parentheticals may stay lowercase ("Face Pull (cable)").
   const joined = tokens.join(" ").trim();
-  if (joined && /[a-z]/.test(joined) && /[A-Z]/.test(joined) && !/_/.test(joined)) {
+  if (joined && !/_/.test(joined) && looksIntentionallyCased(tokens)) {
     return joined.length > 80 ? joined.slice(0, 80).trim() : joined;
   }
   // Title-Case each word, but keep known acronyms/implements sensible.
-  const cased = tokens.map((t) => {
+  const titleCaseSegment = (seg: string): string => {
+    const segLower = seg.toLowerCase();
+    if (ACRONYM_CASING[segLower]) return ACRONYM_CASING[segLower];
+    return seg ? seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase() : seg;
+  };
+  const cased = tokens.map((t, i) => {
     const lower = t.toLowerCase();
+    if (i > 0 && TITLE_CONNECTORS.has(lower)) return lower;
     if (ACRONYM_CASING[lower]) return ACRONYM_CASING[lower];
     // hyphenated word: case each segment ("t-bar" → "T-Bar")
     if (t.includes("-")) {
-      return t
-        .split("-")
-        .map((seg) => {
-          const segLower = seg.toLowerCase();
-          if (ACRONYM_CASING[segLower]) return ACRONYM_CASING[segLower];
-          return seg ? seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase() : seg;
-        })
-        .join("-");
+      return t.split("-").map(titleCaseSegment).join("-");
     }
-    return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+    return titleCaseSegment(t);
   });
   let clean = cased.join(" ").trim();
   if (clean.length > 80) clean = clean.slice(0, 80).trim();

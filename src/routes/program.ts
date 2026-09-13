@@ -33,6 +33,7 @@ import {
   setProposalStatus,
   supportWorkRead,
   testWeekDue,
+  raceBuild,
   trainingPlaybook,
   updateBlock,
   weeklyRunPlan,
@@ -289,6 +290,14 @@ programRouter.get("/performance", (req, res) =>
 // Both degrade to {available:false} for a non-runner / no zones.
 programRouter.get("/run-plan", (req, res) =>
   res.json(weeklyRunPlan(req.query.date ? String(req.query.date) : undefined))
+);
+// The RACE-BUILD layer over the run plan: an estimated finish/pace for the dated race
+// and how it is moving, per-session pace bands off the target, the week-by-week
+// ladder to race week, and the seven-day leg map (runs + heavy-lower days + the
+// habitual ride) with where heavy squats belong in this phase. Suggestion only;
+// {available:false, reason} without a dated race with a distance.
+programRouter.get("/race-build", (req, res) =>
+  res.json(raceBuild(req.query.date ? String(req.query.date) : undefined))
 );
 // Rolling weekly run intentions: actual compatible logs close intentions and
 // suggested openings move around real strength/endurance load. Any completed

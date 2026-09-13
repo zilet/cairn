@@ -10,6 +10,7 @@ import {
   computeGoalCheck,
   getCheckinByDate,
   getEnduranceCapacity,
+  getEnduranceSchedule,
   getProfile,
   getTrainingIntent,
   listCheckins,
@@ -26,6 +27,10 @@ export const personRouter = Router();
 // Read the athlete profile, including optional manual home_location. An active
 // dated trip may override effective coaching location without rewriting home.
 personRouter.get("/profile", (_req, res) => res.json(getProfile()));
+// The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind:
+// easy|quality|long|any}. The run engine and rolling agenda honor these weekdays.
+// null when unset. MCP: get_endurance_schedule.
+personRouter.get("/profile/endurance-schedule", (_req, res) => res.json(getEnduranceSchedule()));
 // Partially update the athlete profile. Omitted fields stay unchanged; explicit
 // null/empty clears nullable fields such as home_location.
 personRouter.put("/profile", (req, res) => {
@@ -38,6 +43,7 @@ personRouter.put("/profile", (req, res) => {
     "goal_weight_lb" in body ||
     "goal_date" in body ||
     "endurance_goal" in body ||
+    "endurance_schedule" in body ||
     "training_intent" in body
   ) {
     try {

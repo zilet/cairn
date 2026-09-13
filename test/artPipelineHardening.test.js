@@ -27,17 +27,16 @@ let responder = () => okImage();
 
 // A minimal but real PNG header, so the mime sniffer accepts a cached file as a
 // style reference exactly as it would a Gemini-produced one.
-const PNG_BYTES = Buffer.concat([
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  Buffer.alloc(64, 7),
-]);
+const PNG_BYTES = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]);
 
 function okImage() {
   return {
     ok: true,
     status: 200,
     json: async () => ({
-      candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: PNG_BYTES.toString("base64") } }] } }],
+      candidates: [
+        { content: { parts: [{ inlineData: { mimeType: "image/png", data: PNG_BYTES.toString("base64") } }] } },
+      ],
     }),
     text: async () => "",
   };
@@ -82,6 +81,7 @@ beforeEach(() => {
     circuit.noteArtSuccess(model);
   }
   circuit.resetArtCircuit();
+  art.resetArtRegenGate();
   const artDir = path.join(process.env.DATA_DIR, "art");
   if (fs.existsSync(artDir)) fs.rmSync(artDir, { recursive: true, force: true });
 });
@@ -156,7 +156,10 @@ test("the pro model carries up to 3 cached exercise images as inline style refer
 
 test("a non-OK response yields a groupable error code carrying the API status", () => {
   assert.equal(art.geminiErrorCode(400, GEMINI_400), "400:INVALID_ARGUMENT");
-  assert.equal(art.geminiErrorCode(429, JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED" } })), "429:RESOURCE_EXHAUSTED");
+  assert.equal(
+    art.geminiErrorCode(429, JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED" } })),
+    "429:RESOURCE_EXHAUSTED"
+  );
   // A non-JSON body (proxy/HTML error) still groups stably rather than collapsing
   // every distinct fault into one bucket.
   const html = art.geminiErrorCode(502, "<html>Bad Gateway</html>");
@@ -265,10 +268,7 @@ test("an open exercise circuit does not abandon the food and activity backlog", 
     calls.some((c) => c.url.includes(art.GEMINI_IMAGE_MODEL)),
     `the flash image model was called: ${calls.map((c) => c.url).join(", ")}`
   );
-  assert.ok(
-    !calls.some((c) => c.url.includes(EXERCISE_MODEL)),
-    "and nothing went to the paused model"
-  );
+  assert.ok(!calls.some((c) => c.url.includes(EXERCISE_MODEL)), "and nothing went to the paused model");
 });
 
 // ---- per-model spend estimate ----
@@ -308,26 +308,27 @@ test("pregenerate() respects an open circuit instead of hammering a dead upstrea
 // A figurine can land wrong (a cable lateral raise rendered as a plank). The
 // cache is keyed by name, so without a force path the bad image is permanent.
 
-test("regenerateArt replaces the cached file under the SAME key", async () => {
+test("regenerateArt writes a new versioned asset; name-only lookup follows it", async () => {
   assert.equal(await art.warmExerciseArt("cable lateral raise"), true);
   const file = art.cachedArtPath("exercise", "cable lateral raise");
   assert.ok(file, "the first generation cached a file");
+  assert.equal(art.artVersion("exercise", "cable lateral raise"), 1);
   fs.writeFileSync(file, Buffer.from("the wrong picture"));
 
   calls = [];
-  assert.equal(await art.regenerateArt("exercise", "cable lateral raise"), true);
-  assert.equal(calls.length, 1, "a regeneration is a real, paid generation");
-  assert.equal(
-    art.cachedArtPath("exercise", "cable lateral raise"),
-    file,
-    "the key — and so the PWA's plain ?q= request — is unchanged"
-  );
-  assert.equal(fs.readFileSync(file).subarray(0, 4).toString("hex"), "89504e47", "fresh bytes replaced the bad ones");
+  const regen = await art.regenerateArt("exercise", "cable lateral raise");
+  assert.equal(regen.ok, true);
+  assert.equal(regen.regenerated, true);
+  assert.equal(calls.length, 1, "a regeneration is a paid generation");
+  assert.equal(art.artVersion("exercise", "cable lateral raise"), 2, "regenerate bumps the version");
+  const next = art.cachedArtPath("exercise", "cable lateral raise");
+  assert.ok(next, "name-only lookup still resolves");
+  assert.notEqual(next, file, "the pose-aware key moved");
+  assert.equal(fs.readFileSync(next).subarray(0, 4).toString("hex"), "89504e47", "fresh bytes");
 });
 
-test("regenerateArt carries the pose into the prompt without touching the key", async () => {
+test("regenerateArt carries the pose into the prompt and keeps name-only lookup working", async () => {
   await art.warmExerciseArt("cable lateral raise");
-  const bareKeyFile = art.cachedArtPath("exercise", "cable lateral raise");
 
   calls = [];
   await art.regenerateArt("exercise", "cable lateral raise", {
@@ -336,8 +337,9 @@ test("regenerateArt carries the pose into the prompt without touching the key", 
     pose: "Stand side-on to a low pulley. Raise the straight arm out to shoulder height.",
   });
   const prompt = calls[0].body.contents[0].parts[0].text;
-  assert.match(prompt, /the pose: Stand side-on to a low pulley/);
-  assert.equal(art.cachedArtPath("exercise", "cable lateral raise"), bareKeyFile, "same file, richer prompt");
+  assert.match(prompt, /The pose: Stand side-on to a low pulley/);
+  assert.ok(art.cachedArtPath("exercise", "cable lateral raise"), "bare name still resolves to the current asset");
+  assert.equal(art.artVersion("exercise", "cable lateral raise"), 2);
 });
 
 test("regenerateArt spends nothing while the circuit is open, and keeps the old image", async () => {
@@ -348,7 +350,9 @@ test("regenerateArt spends nothing while the circuit is open, and keeps the old 
   }
 
   calls = [];
-  assert.equal(await art.regenerateArt("exercise", "goblet squat"), false);
+  const blocked = await art.regenerateArt("exercise", "goblet squat");
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.regenerated, false);
   assert.equal(calls.length, 0, "an open circuit spends nothing");
   assert.ok(fs.existsSync(file), "and a picture we cannot replace is not thrown away");
 });
@@ -362,8 +366,38 @@ test("regenerateArt retries a key the failure map had parked", async () => {
   calls = [];
   assert.equal(await art.warmExerciseArt("seated row"), false, "the warm path still refuses a known-failed key");
   assert.equal(calls.length, 0);
-  assert.equal(await art.regenerateArt("exercise", "seated row"), true, "an explicit repair clears it");
+  const repaired = await art.regenerateArt("exercise", "seated row");
+  assert.equal(repaired.ok, true);
+  assert.equal(repaired.regenerated, true, "an explicit repair clears it");
   assert.equal(calls.length, 1);
+});
+
+test("two immediate regenerates spend one image call", async () => {
+  calls = [];
+  const first = await art.regenerateArt("exercise", "cable crunch");
+  const second = await art.regenerateArt("exercise", "cable crunch");
+  assert.equal(first.ok, true);
+  assert.equal(first.regenerated, true);
+  assert.equal(second.ok, true);
+  assert.equal(second.regenerated, false);
+  assert.equal(second.reason, "cooldown");
+  assert.equal(calls.length, 1, "the cooldown / in-flight gate holds the second long-press");
+});
+
+test("a path-escape art asset key is refused before the filesystem", () => {
+  assert.equal(art.isArtAssetKey("../etc/passwd"), false);
+  assert.equal(art.isArtAssetKey("../" + "a".repeat(40)), false);
+  assert.equal(art.isArtAssetKey(art.cacheKey("exercise", "bench press")), true);
+  ledger.setArtAlias("exercise", "escaped", "../etc/passwd");
+  assert.equal(art.cachedArtPath("exercise", "escaped"), null);
+});
+
+test("GET art versions with ?q= returns only those names", async () => {
+  assert.equal(await art.warmExerciseArt("goblet squat"), true);
+  assert.equal(await art.warmExerciseArt("seated row"), true);
+  const named = art.artVersions({ queries: ["goblet squat"] });
+  assert.ok(named.versions["exercise|goblet squat"]);
+  assert.equal(named.versions["exercise|seated row"], undefined);
 });
 
 // ---- POST /api/art/regenerate ------------------------------------------------
@@ -385,13 +419,14 @@ test("the regenerate route validates kind and q, and reports failure at HTTP 200
   assert.equal(tooLong.body.ok, false);
 });
 
-test("the regenerate route generates under the query's own key", async () => {
+test("the regenerate route generates and returns the new version", async () => {
   const post = await regeneratePost();
   calls = [];
   const res = await post({ kind: "exercise", q: "cable lateral raise" });
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body, { ok: true, regenerated: true });
-  assert.equal(calls.length, 1);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.regenerated, true);
+  assert.equal(res.body.version, 1);
   assert.ok(art.cachedArtPath("exercise", "cable lateral raise"), "the image is cached where the PWA looks for it");
 });
 

@@ -138,7 +138,7 @@ function progDayHtml(day: PlanEditorDay, dayIndex: number): string {
             ${day.focus ? `<div class="prog-focus">${escHtml(day.focus)}</div>` : ""}
           </div>
           <div class="prog-head-actions">
-            <button class="ghostbtn prog-train" data-trainday="${dayIndex}">Train</button>
+            ${rest || !items.length ? "" : `<button class="ghostbtn prog-train" data-trainday="${dayIndex}">Train</button>`}
             <button class="ghostbtn prog-edit" data-editday="${dayIndex}">Edit day</button>
           </div>
         </div>
