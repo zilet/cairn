@@ -20,7 +20,7 @@ image itself.
 | Volume | Mounted at | Contents |
 |---|---|---|
 | `cairn-data` | `/data` | `cairn.db` + `-wal` + `-shm` (SQLite WAL files) |
-| `cairn-home` | `/home/app` | Provider login directories |
+| `cairn-home` | `/home/app` | Provider login directories, plus the V8 compile cache (`.cache/node-compile-cache`, regenerable) |
 | `cairn-tools` | `/home/app/.cairn-tools` | Optional provider binaries; regenerable, omitted from backups |
 
 For local dev, the DB lives at `./data/cairn.db` (relative to the project root). The path is
@@ -308,6 +308,18 @@ docker compose start
 
 Prefer the VACUUM INTO snapshot (`/api/export/db`) which handles this automatically.
 
+### SQLite connection settings
+
+`src/db.ts` opens the one connection with `journal_mode=WAL`, `foreign_keys=ON`, and a tuning set
+chosen for a single-writer app on slow flash (a Pi's SD card or USB SSD): `synchronous=NORMAL`,
+`busy_timeout=5000`, `temp_store=MEMORY`, a 16 MB page cache and a 256 MB mmap window. In WAL mode
+`synchronous=NORMAL` still guarantees the file can never be corrupted and a committed write
+survives a process crash; only a hard power cut inside the fsync window can roll back the last
+transaction or two — SQLite's own recommendation for WAL, and it removes one fsync per commit.
+`busy_timeout` is what lets a one-off read-only query against the live file (or the test
+harness's parallel processes) wait for the writer instead of failing with "database is locked".
+None of these persist in the file; they are per-connection and re-applied on every boot.
+
 ### Restore
 
 1. Stop the container:
@@ -357,6 +369,12 @@ question doesn't get re-litigated:
   only run under Node.
 - **pnpm** — marginal. ~11 direct deps; install is not a bottleneck, and switching only
   churns the lockfile with no offsetting win. Keep npm + `package-lock.json`.
+
+Runtime boot is also cheap by construction: the image sets `NODE_COMPILE_CACHE` under the
+`cairn-home` volume, so a restart (deploy, watchdog, reboot) reuses the V8 bytecode compiled by
+the previous run for the ~400 server modules instead of re-parsing them on a Pi core. The cache
+is keyed by Node version and file content, so a new image simply misses once and rewarms, and an
+unwritable directory makes Node run uncached rather than fail.
 
 The real wins were structural, not tooling swaps: the suite wipes the DB before every
 test (`test/_isolate.mjs`, injected via `--import`) so correctness is independent of

@@ -92,6 +92,13 @@ importing everything from `./repo.js` unchanged.
 - Plan/sessions/sets; plan editing (`savePlanDay`/`deletePlanDay`/`replacePlan`); session-by-date
   lookup (`getSessionByDate`) and last-set prefill (`getLastSet`); session finish + summary
   (`finishSession`/`sessionSummary`).
+- **Plan day types.** `plan_days.day_type` is `training` or `rest`, and a rest day carries no items.
+  The reverse is enforced at the write: `planDayTypeForRestructure(declared, itemCount)` stores an
+  UNDECLARED empty day as `rest`, so a restructure or an agent's `days[]` payload can never mint a
+  startable day with nothing on it. An explicitly declared empty `training` day survives as the Plan
+  editor's "Add day" scaffold — but it is not startable: Today's launch card and the editor's Train
+  button both check for items first. No plan at all is a different state; that card is the
+  deliberate "Open session" door.
 - Epley est-1RM (`getProgress`) and PR detection (in `logSetByName`, returns `pr`/`est_1rm` — for
   `mode:'timed'` exercises a PR is a new max `duration_sec` and `est_1rm` stays null).
 - Exercise CRUD (`listExercises`/`upsertExercise`/`updateExercise` — `mode` is `'reps'` or
@@ -2856,7 +2863,9 @@ new profile fields, and `{available:false, reason}` for everyone else. `raceBuil
 - **`ride`** — the weekly ride as a PATTERN read off the log (`recentEnduranceImpacts(42)`, labels
   matching ride/MTB/gravel; three of six weeks makes a habit, fewer is an outing): modal weekday,
   typical duration/load, and one sentence about where it sits — on the long-run day, the day before
-  the long/quality run, on the heavy-lower day, or clear of all three.
+  the long/quality run, on the heavy-lower day, the day after the long run (a loaded weekend: keep
+  it the recovery spin), or clear of all of them. A ride in a clean slot is never asked to move;
+  the clear-slot sentence rotates through `pickDayVariant` like every other athlete-facing line.
 
 Surfaces: `GET /api/race-build`, MCP `get_race_build`, the "Race build" card on Progress →
 Endurance (`raceBuildCard`, fetched into the endurance snapshot v4), and the `race_build` key in

@@ -4,6 +4,38 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-13 — Race build over the run engine; an empty plan day is never startable; Node 26
+
+No schema migration (`user_version` stays where v101 left it).
+
+- **Race build** (`src/repo/race-build.ts`, new). A read-only coaching layer OVER `weeklyRunPlan` /
+  `raceRamp` for a dated race with a distance — never a second engine. `raceBuild(date)` returns an
+  estimated finish/pace (watch race predictor ≤3 weeks old, Riegel-adjusted to the exact distance,
+  with a four-week trend; else a conservative Riegel off the fastest recent ≥5 km run), a parsed
+  `target` with `gap_sec` and a `fits`/`stretch`/`beyond_horizon` FIT, distance-aware pace bands
+  (easy/long/tempo/threshold/VO2), a Monday-by-Monday ladder to race week whose `kind` follows the
+  engine's own `ceil(days/7)` count, a seven-day leg map with `heavy_lower` strength days, the
+  phase's heavy-lower principle plus `weekLayoutRead`'s collision sentence, and the weekly ride read
+  as a PATTERN off the log (three of six weeks) with one placement sentence. Surfaces: `GET
+  /api/race-build`, MCP `get_race_build`, the "Race build" card on Progress → Endurance, and the
+  `race_build` key in the ENDURANCE prompt bundle rendered as a RACE BUILD block. Details in
+  `docs/ARCHITECTURE.md` "The race build".
+- **Empty plan days.** The plan schema enforced "a rest day has no items" but never the reverse, so
+  a restructure handing over `{name:"Easy", items:[]}` with no `day_type` landed as a startable
+  training day. `planDayTypeForRestructure` (`src/repo/plan.ts`) now stores an undeclared empty day
+  as `rest`; an explicit empty `training` day survives as the editor's scaffold but Today's launch
+  card and the Plan editor's Train button no longer offer to start it. A plan with no days at all
+  keeps the deliberate "Open session" door.
+- **Node 26.** The Docker image (`node:26-bookworm-slim`), devcontainer, release workflow and the
+  primary CI lane run Node 26; Node 24 stays the `engines` floor (it is where `node:sqlite` was
+  unflagged) and the second CI lane. `@types/node` → 26.
+- **Runtime tuning.** `src/db.ts` sets `synchronous=NORMAL`, `busy_timeout=5000`,
+  `temp_store=MEMORY`, a 16 MB page cache and a 256 MB mmap window on the one connection (WAL was
+  already on). The image sets `NODE_COMPILE_CACHE` under the persistent `cairn-home` volume so a
+  restart reuses V8 bytecode for the ~400 server modules. See `docs/OPERATIONS.md`.
+- Also landed with this round: the art cache policy (`src/artCachePolicy.ts`), session-suggest
+  tiers, the structured `endurance_schedule` read and the Garmin export backfill, each with tests.
+
 ## 2026-09-08 — Maintainability round: enforcers, one error path, god-module splits, cycle cut
 
 No schema migration. A multi-package round that fixed what a six-stream review found, then made the

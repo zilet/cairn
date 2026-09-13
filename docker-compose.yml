@@ -85,7 +85,8 @@ services:
 #               runMigrations() applies any new schema migrations automatically
 #               on every boot (tracked via PRAGMA user_version), so a new image
 #               upgrades the schema in place — no manual migration step needed.
-# cairn-home  — CLI logins (~/.claude, ~/.codex, ~/.gemini, ~/.grok).
+# cairn-home  — CLI logins (~/.claude, ~/.codex, ~/.gemini, ~/.grok) and the
+#               regenerable V8 compile cache (~/.cache/node-compile-cache).
 # cairn-tools — lazily installed, regenerable provider binaries. Keeping this
 #               separate avoids inflating credential backups.
 #
