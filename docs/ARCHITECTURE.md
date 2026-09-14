@@ -1836,6 +1836,27 @@ reading would silently close a Thursday ask on a Monday restructure's landing. A
 the landing does NOT answer is handed back to the coach via `ensureStructureBuildInFlight` in the same
 pass, rather than left open with nothing building it.
 
+**Two doors, one standing ask.** Chat is no longer the only way to ask for a different SHAPE of week:
+the Plan tab carries a collapsed "Redraw my week" entry under the upcoming strip (rendered only when
+a week exists — a blank plan keeps the compose-week entry, since redrawing an empty room is the same
+door twice). Both write through ONE function, `requestStructureRedraw({request, source})`, which owns
+the standing-flag reuse, the `recordDecision` write, the `enqueueStructureBuild` hand-off and the
+server-owned readback; `standingTrainingStructureFlag` lives beside it and accepts either source, so
+a request typed on Plan and the same words later said in chat resolve to the SAME flag rather than
+drafting the week twice. A Plan-sourced row records `source:'plan'` + `context.requested_on_plan`
+(chat keeps `requested_in_chat`); nothing else differs. `POST /api/plan/redraw` returns the receipt
+(`{ok, verified, decision_id, decision, posture, lands_on, build, built_decision}`, with the designed
+`ok:false` at 200 for a blank or over-long ask), and `GET /api/plan/redraw` → `structureRedrawStatus()`
+reports the current `posture` plus up to three standing asks (live build, `outcome`, failure reason,
+`review_required`, the change each was built into, and the flag's own athlete-facing sentence) so a
+reload repaints the in-flight state instead of losing it. Mirrored as MCP `request_plan_redraw` /
+`get_plan_redraw`. The Plan slot deliberately speaks ONE line about a failed build, not the flag's
+sentence: a failure sets `review_required`, so `awaitingBrainDecisions` already stands the full
+rationale paragraph in the Changes segment's "Waiting on you" — and that paragraph's tail points at
+the Plan tab the athlete is already on. An in-flight request under lead is filtered OUT of that
+waiting read on purpose (it is the coach's work, not a question), which is exactly why
+`GET /api/plan/redraw` exists as its surface; do not loosen that filter to cover it.
+
 **Structure builds survive a restart.** `enqueueStructureBuild` is the one hand-off every caller
 (chat, `ensureStructureBuildInFlight`, boot recovery) goes through to create the `evolve_program` job
 and stamp the flag; `MAX_AUTOMATIC_STRUCTURE_REBUILDS` (2) caps how many times the SERVER may retry a

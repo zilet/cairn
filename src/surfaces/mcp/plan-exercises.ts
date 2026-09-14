@@ -26,6 +26,11 @@ import {
   updateTarget,
   upsertExercise,
 } from "../../domain/training/index.js";
+import {
+  MIN_REDRAW_REQUEST_CHARS,
+  requestStructureRedraw,
+  structureRedrawStatus,
+} from "../../domain/brain/structure-request.js";
 import { getPlanWithPurpose } from "../../repo.js";
 import { PlanQualityError } from "../../repo/plan-quality.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
@@ -92,6 +97,29 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "The calm forward look for the Plan surface: queued training/recovery changes the brain will land soon (e.g. a recovery week landing Monday, a bounded target change), each with its summary and effective_date. Deduped against the recovery-week draft; returns null when nothing is waiting.",
     {},
     async () => asText(planUpcomingNote())
+  );
+
+  server.tool(
+    "request_plan_redraw",
+    "Ask the coach to redraw the shape of the training week in the athlete's own words — which days they train, what the week is built around, what to drop (e.g. 'move heavy legs to Thursday', 'build my week around my six anchors', 'drop to three days'). The coach drafts the whole week in the background; under the default lead posture it lands at the next natural boundary with a one-tap Undo, and under review_everything it waits for the athlete to confirm. Asking again with the same words never builds a second week — it points back at the one already in flight. Mirrors POST /api/plan/redraw. Returns the server's own readback: ok/verified, the request row's decision_id, the posture and landing day, and the background build.",
+    {
+      // No upper bound here on purpose: the domain trims and slices to the same bound
+      // chat does, so a long ask through any door is stored as the SAME sentence and
+      // collapses onto one standing request instead of building the week twice.
+      request: z
+        .string()
+        .min(MIN_REDRAW_REQUEST_CHARS)
+        .describe("the athlete's own sentence about how the training week should change; trimmed to ~1,000 characters"),
+      agent: z.string().optional().describe("CLI backend to build it with; omit for the configured rotation"),
+    },
+    async ({ request, agent }) => asText(requestStructureRedraw({ request, source: "plan", agent: agent ?? null }))
+  );
+
+  server.tool(
+    "get_plan_redraw",
+    "The redraw requests still standing: what the athlete asked for, whether a build is queued or running, whether it was built into a change that has not landed yet, and the coach's own sentence about when it lands (or that it is waiting to be confirmed). A failed build reports its calm reason and review_required. Newest first, at most three. Mirrors GET /api/plan/redraw.",
+    {},
+    async () => asText(structureRedrawStatus())
   );
 
   server.tool(

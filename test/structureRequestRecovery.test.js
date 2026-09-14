@@ -219,7 +219,10 @@ test("a failed build is a question the athlete can see, with a door and no gate 
   const waiting = repo.awaitingBrainDecisions(50).find((row) => row.id === flag.id);
   assert.ok(waiting, "a failure the athlete cannot see is a request lost");
   assert.match(waiting.explanation, /could not build it just now \(no agent\)/);
-  assert.match(waiting.explanation, /ask again, or evolve the plan from the Plan tab/, "a door, not a dead end");
+  assert.match(waiting.explanation, /ask again when you like/, "a door, not a dead end");
+  // This sentence surfaces in "Waiting on you", which the PLAN tab renders — so a tail
+  // pointing at the Plan tab sent the athlete to where they already were.
+  assert.doesNotMatch(waiting.explanation, /from the Plan tab/);
   assert.doesNotMatch(waiting.explanation, /you must|you need to/i, "never a gate");
 });
 

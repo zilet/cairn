@@ -34,6 +34,11 @@ import {
   updateTarget,
   upsertExercise,
 } from "../domain/training/index.js";
+import {
+  MIN_REDRAW_REQUEST_CHARS,
+  requestStructureRedraw,
+  structureRedrawStatus,
+} from "../domain/brain/structure-request.js";
 import { getPlanWithPurpose } from "../repo.js";
 
 export const planExercisesRouter = Router();
@@ -55,6 +60,44 @@ planExercisesRouter.get("/plan/recovery-status", (_req, res) => res.json(recover
 // change), so a reshaped week announces itself instead of arriving silently.
 // Deduped against the recovery banner's draft; null when nothing is waiting.
 planExercisesRouter.get("/plan/upcoming", (_req, res) => res.json(planUpcomingNote()));
+
+// REDRAW MY WEEK — the Plan tab's own door to the structure hand-off. Chat's
+// `flag_training_structure` used to be the only one, which meant the athlete had to know
+// the magic words; this is the same function, so the same ask typed here or said there
+// resolves to ONE standing flag and ONE built week. What comes back is the server's own
+// readback of what is genuinely in flight, never a claim made at the door.
+//
+// ok:false at HTTP 200 is the designed failure signal (the PWA's api() helper resolves to
+// the body regardless of status), not an HTTP error.
+planExercisesRouter.post("/plan/redraw", (req, res) => {
+  try {
+    // A STRING or nothing. `String(anything)` would have turned an object body into
+    // "[object Object]", stored that as the athlete's own words, and put a real build
+    // behind it — a coerced value is not a request.
+    const raw = req.body?.request;
+    if (typeof raw !== "string") return res.json({ ok: false, error: "say what to change" });
+    const request = raw.trim();
+    // Only the FLOOR is refused here. The ceiling is the domain's, which slices to the
+    // same bound chat does, so one long ask through either door stays one ask.
+    if (request.length < MIN_REDRAW_REQUEST_CHARS) {
+      return res.json({ ok: false, error: "say what to change" });
+    }
+    const agentRaw = req.body?.agent;
+    if (agentRaw != null && typeof agentRaw !== "string") {
+      return res.json({ ok: false, error: "name the agent, or leave it out" });
+    }
+    const agent = typeof agentRaw === "string" && agentRaw.trim() ? agentRaw.trim() : null;
+    res.json(requestStructureRedraw({ request, source: "plan", agent }));
+  } catch (e: any) {
+    // The designed failure signal, not a 500: the PWA's api() helper resolves to the body
+    // regardless of status, so a thrown error must still read as an answer.
+    res.json({ ok: false, error: e?.message ?? "couldn't hand that to your coach" });
+  }
+});
+
+// What is standing right now, so a reload repaints the in-flight state instead of losing
+// it, and a build the coach could not do is visible rather than silent.
+planExercisesRouter.get("/plan/redraw", (_req, res) => res.json(structureRedrawStatus()));
 
 // Subscribe-able iCal of the training template — pull-not-push. Each plan day is
 // a weekly-recurring all-day event (Day 1 → Monday by default; ?start=0..6 to

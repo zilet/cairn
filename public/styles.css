@@ -504,6 +504,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .weekahead{background:var(--card);border-left:3px solid var(--sage);box-shadow:var(--shadow-sm);
   border-radius:var(--radius-sm);padding:13px 15px;margin:2px 0 14px}
 .weekahead-h{margin-bottom:9px}
+.weekahead-race{margin-bottom:9px;font-size:.82rem;color:var(--muted)}
 .weekahead-days{display:flex;flex-direction:column}
 .wa-row{display:flex;align-items:baseline;gap:9px;padding:6px 0;
   border-bottom:1px solid rgba(45,40,32,.06)}
@@ -6100,6 +6101,25 @@ button.prow-name:hover{color:var(--accent)}
 .plan-upcoming-when{color:var(--sage-text);font-weight:600}
 /* The conductor's own sentence to the athlete, under the change it explains. */
 .plan-upcoming-why{margin:6px 0 0;font-size:.83rem;line-height:1.5;color:var(--muted)}
+/* Redraw my week: the Plan tab's own door to the structure hand-off chat has always
+   had. Same footnote-weight disclosure family as .plan-upcoming above, so at rest it is
+   one quiet strip and never competes with the week itself. */
+.plan-redraw{margin:2px 0 14px;display:flex;flex-direction:column;gap:8px}
+.plan-redraw>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.plan-redraw>summary::-webkit-details-marker{display:none}
+.plan-redraw>summary::before{content:"▸";font-size:.65rem;color:var(--muted);transition:transform .15s ease}
+.plan-redraw[open]>summary::before{transform:rotate(90deg)}
+.plan-redraw>summary:hover .plan-upcoming-strip{color:var(--ink-2)}
+.plan-redraw-body{display:flex;flex-direction:column;gap:8px}
+.plan-redraw-line{margin:0;font-size:.85rem;line-height:1.5;color:var(--muted)}
+.plan-redraw-text{width:100%}
+.plan-redraw-error{margin:0;font-size:.83rem;line-height:1.5;color:var(--muted)}
+.plan-redraw-go{align-self:flex-start}
+.plan-redraw-live{margin:2px 0 14px;background:var(--card);border:1px solid var(--line);
+  border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;gap:6px}
+.plan-redraw-mast{display:block;color:var(--sage-text);letter-spacing:.08em}
+.plan-redraw-ask{margin:0;font-size:.88rem;line-height:1.45;color:var(--ink)}
+.plan-redraw-why{margin:0;font-size:.83rem;line-height:1.5;color:var(--muted)}
 /* Empty plan: never a dead end — ask the team for a first week, build a day, or
    just start training. Same .draftbtn family at both scales; the divider sets the
    compose entry apart from the two manual routes without adding a second card. */

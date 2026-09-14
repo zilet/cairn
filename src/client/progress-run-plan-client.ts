@@ -91,7 +91,7 @@ const RACE_WEEK_KIND_WORD: Record<string, string> = {
   race: "Race week",
 };
 
-function raceBuildCard(build: RaceBuild | null | undefined): string {
+function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?: boolean }): string {
   if (!build || build.available === false || !build.race) return "";
   const race = build.race;
   const p = build.prediction;
@@ -174,10 +174,23 @@ function raceBuildCard(build: RaceBuild | null | undefined): string {
   const whyBits = [build.why, ...strengthBits].filter(Boolean);
 
   const phaseLabel = { base: "Base", build: "Building", sharpen: "Sharpening", taper: "Tapering", past: "Done" }[race.phase] || "";
+  // Match the ladder's own label at the edges: 0 weeks out is "race week", 1
+  // is singular ("1 week to go") — never "1 weeks to go".
+  const countdownWord = race.weeks_to_race === 0
+    ? "race week"
+    : race.weeks_to_race === 1
+      ? "1 week to go"
+      : `${race.weeks_to_race} weeks to go`;
+  // The goal card directly above already states the countdown + phase — when
+  // this card is placed right under it (Plan -> Endurance, and Progress ->
+  // Endurance which also stacks goal then race build), don't say it twice.
+  const countHtml = opts?.underGoal
+    ? ""
+    : `<span class="wrun-mix">${escHtml(`${countdownWord}${phaseLabel ? ` · ${phaseLabel}` : ""}`)}</span>`;
   return `<div class="wrun-card rbuild reveal" style="${stagger(1)}" data-race-build>
       <div class="wrun-head">
         <span class="lbl">Race build</span>
-        <span class="wrun-mix">${escHtml(`${race.weeks_to_race} weeks to go${phaseLabel ? ` · ${phaseLabel}` : ""}`)}</span>
+        ${countHtml}
       </div>
       ${numbers}
       ${trend}

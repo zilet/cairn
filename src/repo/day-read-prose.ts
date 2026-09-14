@@ -9,6 +9,7 @@
 // LAW (see CLAUDE.md): a rule's words are a VARIANT SET, never one literal, rotated by
 // calendar date through pickDayVariant. Add a phrasing to the set; never a literal.
 import { pickDayVariant, type DayReadRuleOutcome } from "./brain/day-read-rules.js";
+import { mondayOf } from "../lib/dates.js";
 import { SIGNAL_VOICE_REGISTRY, signalVoice, type SignalVoiceRef } from "./signal-state.js";
 import type { MesoPhase, MesocycleState } from "./program-state.js";
 import type { getEnduranceGoal } from "./profile.js";
@@ -1231,6 +1232,61 @@ export function weekAheadDayNote(kind: WeekAheadDay["kind"], date: string, meso:
   const variants = WEEK_AHEAD_MESO_NOTE[phase];
   if (!variants) return null;
   return pickDayVariant(variants, date, `weekahead-note:lift:${phase}`);
+}
+
+// The week-ahead card's own quiet race line — context, not a countdown. A dated
+// race an athlete never sees mentioned on Today reads as the coach not knowing
+// about it; this is the one place that names it. Terse label-style line, so no
+// pickDayVariant rotation (that's for full sentences). null on no race goal, an
+// unusable date, or a race that has already happened.
+//
+// Spoken words for the machine phase key, matching the race-build card's own
+// phaseLabel (src/client/progress-run-plan-client.ts) so the vocabulary is one
+// contract across the two surfaces — never the raw "build"/"sharpen" key, which
+// is engineering vocabulary the athlete never wrote.
+const WEEK_AHEAD_RACE_PHASE_WORD: Record<"base" | "build" | "sharpen" | "taper", string> = {
+  base: "base",
+  build: "building",
+  sharpen: "sharpening",
+  taper: "tapering",
+};
+
+export function weekAheadRaceLine(
+  goal: ReturnType<typeof getEnduranceGoal>,
+  asOf: string
+): {
+  label: string;
+  date: string;
+  weeks_to_race: number;
+  days_to_race: number;
+  phase: "base" | "build" | "sharpen" | "taper";
+  text: string;
+} | null {
+  if (!goal || !goal.is_race || !goal.date) return null;
+  const phase = goal.phase;
+  if (phase == null || phase === "past") return null;
+  const days = goal.days_to_race;
+  if (!Number.isFinite(days as number)) return null;
+  const label = goal.event || "Race";
+  // CALENDAR week count, matching the Plan ladder (raceBuild's projectRaceBuildWeeks,
+  // src/repo/race-build.ts) rather than getEnduranceGoal's ceil(days/7): the week
+  // that holds race day is race week whatever weekday the start line falls on, so a
+  // race on Saturday read on the Tuesday before is "race week" on BOTH surfaces, not
+  // "1 week out" here and "race week" there.
+  const weeks = Math.round((Date.parse(`${mondayOf(goal.date)}T00:00:00Z`) - Date.parse(`${mondayOf(asOf)}T00:00:00Z`)) / (7 * 864e5));
+  const isRaceWeek = weeks <= 0;
+  const weeksWord = weeks === 1 ? "week" : "weeks";
+  const text = isRaceWeek
+    ? `${label} · race week`
+    : `${label} · ${weeks} ${weeksWord} out · ${WEEK_AHEAD_RACE_PHASE_WORD[phase]}`;
+  return {
+    label,
+    date: goal.date as string,
+    weeks_to_race: weeks,
+    days_to_race: days as number,
+    phase,
+    text,
+  };
 }
 
 // ---------- one wording per morning ----------

@@ -234,7 +234,9 @@ function paintProgressEnduranceBody(
   const calibrationHtml = enduranceCalibrationLine(calibration?.status || null);
   const agendaHtml = trainingAgendaCard(agenda);
   const runPlanHtml = weeklyRunPlanCard(runPlan);
-  const raceBuildHtml = raceBuildCard(raceBuild);
+  // The goal card is painted directly above this one in both html branches
+  // below, and it already states the countdown + phase — never say it twice.
+  const raceBuildHtml = raceBuildCard(raceBuild, { underGoal: true });
   const hybridHtml = hybridLoadCardHtml(programState?.hybrid || null, 1);
   const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(progressEnduranceRecord(settings), {}) : "";
   const sportRows = progressEnduranceSportRows(endRow);

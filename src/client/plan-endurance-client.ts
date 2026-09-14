@@ -4,6 +4,7 @@
 type EnduranceGoalRow = import("../contracts/client-api.js").ClientEnduranceGoal;
 type EnduranceComplianceRow = import("../contracts/client-api.js").ClientRunCompliance;
 type EnduranceAgenda = import("../contracts/client-api.js").ClientFlexibleTrainingAgenda;
+type EnduranceRaceBuild = import("../contracts/client-api.js").ClientRaceBuild;
 
 type EnduranceProposal = {
   id?: unknown;
@@ -30,17 +31,19 @@ async function renderPlanEndurance(): Promise<void> {
   let agenda: EnduranceAgenda | null = null;
   let plan: unknown = [];
   let settings: Record<string, unknown> | null = null;
+  let raceBuild: EnduranceRaceBuild | null = null;
   try {
-    [goal, compliance, agenda, plan, settings] = await Promise.all([
+    [goal, compliance, agenda, plan, settings, raceBuild] = await Promise.all([
       api("/endurance-goal").catch(() => null),
       api("/run-compliance").catch(() => null),
       api(`/training-agenda?date=${encodeURIComponent(localISO())}`).catch(() => null),
       api("/plan").catch(() => []),
       api("/settings").then((response) => (enduranceModel().record(response).settings as Record<string, unknown> | null) || null).catch(() => null),
+      api("/race-build").catch(() => null),
     ]);
   } catch { /* paint with whatever resolved */ }
   if (token !== pollToken || !view.querySelector("#endPlanBody")) return;
-  paintPlanEndurance(goal, compliance, agenda, plan, settings);
+  paintPlanEndurance(goal, compliance, agenda, plan, settings, raceBuild);
 }
 
 function paintPlanEndurance(
@@ -49,6 +52,7 @@ function paintPlanEndurance(
   agenda: EnduranceAgenda | null,
   plan: unknown,
   settings: Record<string, unknown> | null,
+  raceBuild?: EnduranceRaceBuild | null,
 ): void {
   const body = view.querySelector("#endPlanBody");
   if (!body) return;
@@ -63,7 +67,12 @@ function paintPlanEndurance(
          <div class="end-goal-sub">Set a race or a standing readiness target in <b>Settings → You → Profile</b> and the coach will periodize your running toward it.</div>
        </div>`;
 
-  const rampHtml = rampHtmlForGoal(goal);
+  const raceBuildHtml = raceBuild && raceBuild.available !== false && raceBuild.race && typeof raceBuildCard === "function"
+    ? raceBuildCard(raceBuild, { underGoal: true })
+    : "";
+  // The race build's own week-by-week ladder supersedes the generic "typical
+  // arc" ramp placeholder — show one or the other, never both.
+  const rampHtml = raceBuildHtml ? "" : rampHtmlForGoal(goal);
   const standingNote = goal && goal.mode === "standing"
     ? `<div class="end-ramp-note reveal" style="${stagger(1)}"><span class="lbl">Steady readiness</span> — no race to peak for, so the plan holds a sustainable rhythm rather than ramping.${goal.weekly_km ? ` Target around <b>${escHtml(goal.weekly_km)} km/wk</b>.` : ""}</div>`
     : "";
@@ -120,12 +129,15 @@ function paintPlanEndurance(
     </div>`;
 
   const leadHtml = goal
-    ? `<p class="end-lead">Your running plan — the build, this week's runs, and a quick way to shape them.</p>`
+    ? raceBuildHtml
+      ? `<p class="end-lead">Your running plan — the build to race day, this week's runs, and a quick way to shape them.</p>`
+      : `<p class="end-lead">Your running plan — the build, this week's runs, and a quick way to shape them.</p>`
     : "";
   body.innerHTML =
     `<div id="endUpcomingSlot"></div>` +
     goalHtml +
     leadHtml +
+    raceBuildHtml +
     rampHtml +
     standingNote +
     agendaHtml +

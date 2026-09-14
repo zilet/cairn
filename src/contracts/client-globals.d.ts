@@ -1561,7 +1561,7 @@ declare global {
   declare function sessionCardHtml(session: unknown, index: number): string;
   declare function numOrNull(value: unknown): number | null;
   declare function weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
-  declare function raceBuildCard(build: ClientRaceBuild | null | undefined): string;
+  declare function raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean }): string;
   declare function trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
   declare function enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
   declare function runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
@@ -3544,7 +3544,7 @@ declare global {
       runKindClass(kind: unknown): string;
       runKindLabel(kind: unknown): string;
       weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
-      raceBuildCard(build: ClientRaceBuild | null | undefined): string;
+      raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean }): string;
       trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
       enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
       runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;

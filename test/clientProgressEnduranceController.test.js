@@ -40,7 +40,7 @@ function loadProgressEnduranceController() {
     enduranceGoalCard: () => "",
     runComplianceLine: () => "",
     weeklyRunPlanCard: () => "",
-    raceBuildCard: (build) => (build?.available ? "race-build:open" : ""),
+    raceBuildCard: (build, opts) => (build?.available ? `race-build:open${opts?.underGoal ? ":underGoal" : ""}` : ""),
     trainingAgendaCard: (agenda) => agenda?.available ? "agenda:open" : "",
     enduranceCoachLine: () => "",
     enduranceCalibrationLine: (status) =>
@@ -173,4 +173,24 @@ test("progress endurance controller keeps stale reads from repainting", async ()
   // never overwrites it once the read is stale — not that the placeholder itself
   // is blank.
   assert.equal(view.querySelector("#endBody").innerHTML, "loading:Reading your week...");
+});
+
+test("progress endurance controller asks the race build card to drop its own countdown, since the goal card above already states it", async () => {
+  const controller = loadProgressEnduranceController();
+  const { deps, view } = controllerDeps({
+    api: async (path) => {
+      if (path === "/stats") return { endurance: null };
+      if (path === "/endurance-prs") return { sports: [], longest_km: null, longest_min: null, best_pace: [] };
+      if (path === "/settings") return { settings: {} };
+      if (path === "/race-build") return { available: true, race: { weeks_to_race: 4, phase: "build" } };
+      if (path.startsWith("/training-agenda")) return { available: true, intents: [] };
+      if (path === "/program-state") return { hybrid: null };
+      if (path.startsWith("/calibration/status")) return { status: { as_of: "2026-06-30", items: [] }, due: [] };
+      return null;
+    },
+  });
+
+  await controller.render(deps);
+
+  assert.match(view.querySelector("#endBody").innerHTML, /race-build:open:underGoal/);
 });

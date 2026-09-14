@@ -1439,6 +1439,21 @@ export interface ClientWeekAheadDay {
   note?: string | null;
 }
 
+// A quiet race line for the week-ahead card — context, not a countdown. Composed
+// fresh at serve time (never cached), so it rides on the deterministic floor and
+// both fresh/stale agent responses alike. Absent when there's no dated race goal,
+// no usable date, or the race has already happened.
+export interface ClientWeekAheadRace {
+  label: string;
+  date: ISODateString;
+  weeks_to_race: number;
+  days_to_race: number;
+  phase: "base" | "build" | "sharpen" | "taper";
+  // The one athlete-facing line, e.g. "Half marathon · 6 weeks out · building"
+  // or "Half marathon · race week".
+  text: string;
+}
+
 export type ClientWeekAheadResponse =
   | {
       ok: true;
@@ -1450,6 +1465,7 @@ export type ClientWeekAheadResponse =
       // already filling the cache for next time (GET never waits on it). The
       // Today rail only reads ok/days/summary and ignores this marker.
       computing?: true;
+      race?: ClientWeekAheadRace | null;
     }
   | {
       ok: true;
@@ -1462,6 +1478,7 @@ export type ClientWeekAheadResponse =
       // Set when this is a stale cache hit served while a refresh is already
       // queued in the background (GET never waits on it).
       computing?: true;
+      race?: ClientWeekAheadRace | null;
     }
   | {
       ok: false;
@@ -3148,6 +3165,72 @@ export interface ClientBodyMetricsSummary {
   comp: ClientBodyCompFocus;
 }
 
+// ---- redraw my week (POST/GET /api/plan/redraw) ----
+//
+// The Plan tab's own door to the training-STRUCTURE hand-off that chat has always had.
+// The receipt is a server-owned readback, not a claim made at the door: `verified` is
+// true only when the stored request row carries the athlete's own words AND something is
+// genuinely in flight for them.
+
+export interface ClientPlanRedrawBuild {
+  job_id: number;
+  status: string;
+}
+
+/** The request row itself — the PWA reads only its athlete-facing sentence. */
+export interface ClientPlanRedrawDecision {
+  id: number;
+  status: string;
+  summary?: string;
+  rationale?: string | null;
+  action?: { kind?: string; request?: string; user_explanation?: string } | null;
+}
+
+export interface ClientPlanRedrawBuiltDecision {
+  id: number;
+  status: string;
+  effective_date: string | null;
+  summary?: string;
+}
+
+export interface ClientPlanRedrawReceipt {
+  ok: boolean;
+  /** The designed ok:false-at-200 signal carries the reason here. */
+  error?: string;
+  verified?: boolean;
+  decision_id?: number | null;
+  decision?: ClientPlanRedrawDecision | null;
+  /** "lands" = announces and lands at the boundary with Undo; "asks" = waits to be confirmed. */
+  posture?: "lands" | "asks";
+  lands_on?: string | null;
+  build?: ClientPlanRedrawBuild | null;
+  built_decision?: ClientPlanRedrawBuiltDecision | null;
+}
+
+export interface ClientPlanRedrawStanding {
+  decision_id: number;
+  request: string;
+  summary: string;
+  source: string;
+  posture: "lands" | "asks";
+  lands_on: string | null;
+  build: ClientPlanRedrawBuild | null;
+  outcome: "built" | "failed" | null;
+  error: string | null;
+  review_required: boolean;
+  built_decision: ClientPlanRedrawBuiltDecision | null;
+  explanation: string | null;
+  asked_at: string | null;
+}
+
+export interface ClientPlanRedrawStatus {
+  /** Server policy — what the built week will do, so the entry's copy never promises otherwise. */
+  posture: "lands" | "asks";
+  /** The stored-sentence bound; the composer's maxlength, so the client never restates it. */
+  max_chars: number;
+  standing: ClientPlanRedrawStanding[];
+}
+
 export interface ClientApiResponses {
   "/api/health": ClientHealthResponse;
   "/api/ready": ClientReadinessResponse;
@@ -3180,6 +3263,8 @@ export interface ClientApiResponses {
   "/api/blood-pressure": ClientBloodPressureReading[];
   "/api/checkins": ClientCheckin[] | ClientCheckin | null;
   "/api/plan": ClientPlanDay[];
+  // POST asks for a redraw and answers with the receipt; GET reports what is standing.
+  "/api/plan/redraw": ClientPlanRedrawReceipt | ClientPlanRedrawStatus;
   "/api/exercises": ClientExercise[];
   "/api/exercises/reconcile-names": ClientExerciseNameReconcileResponse;
   "/api/exercise-guides/status": ClientExerciseGuideStatus;

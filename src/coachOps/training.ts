@@ -10,13 +10,14 @@ import { deterministicComposedSession, normalizeComposedSession } from "../repo/
 import { decideDailySession } from "../repo/daily-decision.js";
 import { getDailySessionOutcome } from "../repo/daily-reconciliation.js";
 import { dayRead, weekAheadPlan } from "../repo/day-read.js";
+import { weekAheadRaceLine } from "../repo/day-read-prose.js";
 import { MUSCLE_GROUPS, authoritativeGroup, canonicalGroup, cleanExerciseName, normalizeExerciseName, normalizedExerciseKey, planExerciseAliases, setExerciseAlias, shouldAutoApplyMerge, validateExerciseMergePlan } from "../repo/exercise-canon.js";
 import { distinctExerciseNames, findExercise, getExerciseDetail, listExercises, mergeExercises, updateExercise } from "../repo/exercises.js";
 import { listContextEvents } from "../repo/health.js";
 import { getLocationContext } from "../repo/location-context.js";
 import { recordSuggestion } from "../repo/memory.js";
 import { getPlan } from "../repo/plan.js";
-import { getProfile } from "../repo/profile.js";
+import { getEnduranceGoal, getProfile } from "../repo/profile.js";
 import { getProgramState } from "../repo/program-state.js";
 import { createProposal, getProposal } from "../repo/proposals.js";
 import { RECOVERY_WEEK_INSTRUCTION_PREFIX, supersedeRecoveryWeekDrafts } from "../repo/recovery-week.js";
@@ -987,7 +988,10 @@ export function weekAheadCacheKey(floor: ReturnType<typeof weekAheadPlan>, date 
 // true` marks a floor/stale answer a background read is already chasing; the
 // PWA's today-week-ahead-client only reads ok/days/summary and ignores it.
 export function weekAheadServe(date = localDateISO()): {
-  response: Awaited<ReturnType<typeof weekAheadRead>> & { computing?: true };
+  response: Awaited<ReturnType<typeof weekAheadRead>> & {
+    computing?: true;
+    race?: ReturnType<typeof weekAheadRaceLine>;
+  };
   needsRefresh: boolean;
   cacheKey: string;
 } {
@@ -995,9 +999,18 @@ export function weekAheadServe(date = localDateISO()): {
   const cacheKey = weekAheadCacheKey(floor, date);
   const cached = getAiCache(WEEK_AHEAD_KIND, cacheKey);
   const cachedSane = sanitizeWeekAhead(cached?.result);
+  // Composed fresh at serve time, never stored inside the AI cache blob: the
+  // race line must reflect TODAY's days-to-race even when a day-old cached
+  // week-ahead is served, and it must ride on the deterministic floor too.
+  let race: ReturnType<typeof weekAheadRaceLine> = null;
+  try {
+    race = weekAheadRaceLine(getEnduranceGoal(date), date);
+  } catch {
+    race = null;
+  }
   if (cached && cachedSane && !cached.stale) {
     return {
-      response: { ok: true, ...cachedSane, source: "agent", cached: true, agent: cached.chosen_agent },
+      response: { ok: true, ...cachedSane, source: "agent", cached: true, agent: cached.chosen_agent, race },
       needsRefresh: false,
       cacheKey,
     };
@@ -1012,6 +1025,7 @@ export function weekAheadServe(date = localDateISO()): {
         stale: true,
         agent: cached?.chosen_agent ?? null,
         computing: true,
+        race,
       },
       needsRefresh: true,
       cacheKey,
@@ -1025,6 +1039,7 @@ export function weekAheadServe(date = localDateISO()): {
       source: "deterministic",
       cached: false,
       computing: true,
+      race,
     },
     needsRefresh: true,
     cacheKey,

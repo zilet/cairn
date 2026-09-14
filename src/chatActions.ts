@@ -8,6 +8,7 @@ import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocument
 import { CONTEXT_TAG_VOCAB, isContextTagKey } from "./contextTags.js";
 import { localDateISO } from "./repo/shared.js";
 import { normalizeEnduranceSchedule } from "./repo/profile.js";
+import { MAX_REDRAW_REQUEST_CHARS } from "./domain/brain/structure-request.js";
 
 type ChatActionRecord = Record<string, unknown>;
 
@@ -16,10 +17,11 @@ type ChatActionRecord = Record<string, unknown>;
 // it has to match across surfaces or chat becomes the loose one.
 const SYMPTOM_AREA_INPUT_MAX = 120;
 
-// A structure request is one athlete sentence, not a transcript. The decision
-// contract truncates a rationale at 1,500 characters anyway; bounding it here keeps
-// the stored ask readable and the shape check honest about what it accepted.
-export const TRAINING_STRUCTURE_REQUEST_MAX = 1_000;
+// A structure request is one athlete sentence, not a transcript. The bound is the
+// DOMAIN's — `requestStructureRedraw` writes the row for chat and for the Plan tab alike,
+// and normalises to this number before it looks for a standing ask — so chat slices to
+// exactly what will be stored. Kept under chat's own historical name for its callers.
+export const TRAINING_STRUCTURE_REQUEST_MAX = MAX_REDRAW_REQUEST_CHARS;
 
 export const CHAT_ACTION_TYPES = [
   "log_activity",

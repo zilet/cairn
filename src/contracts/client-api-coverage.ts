@@ -45,6 +45,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/blood-pressure",
   "/checkins",
   "/plan",
+  "/plan/redraw",
   "/plan/:day",
   "/plan/:day/target",
   "/exercises",

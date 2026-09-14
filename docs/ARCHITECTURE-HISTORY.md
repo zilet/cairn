@@ -21,6 +21,28 @@ No schema migration (`user_version` stays where v101 left it).
   `retireAnsweredStructureRequests` now retires only the request whose own build produced the landing
   or an equivalently-worded standing ask (`normalizeStructureRequestText`/`structureRequestText`),
   never every standing request — a Monday restructure no longer silently closes a Thursday one.
+- **Redraw my week has a door on the Plan tab** (`src/domain/brain/structure-request.ts`,
+  `src/routes/plan-exercises.ts`, `src/surfaces/mcp/plan-exercises.ts`,
+  `src/client/plan-editor-controller.ts`). A training-STRUCTURE request used to be reachable only by
+  knowing the magic words in chat. `requestStructureRedraw({request, source})` is now the ONE hand-off
+  both doors write through (`standingTrainingStructureFlag` moved here from `src/chatTurns.ts` and
+  accepts either `source`), so a request typed on Plan and the same words later said in chat resolve
+  to one standing flag with one build behind it. `POST /api/plan/redraw` takes the words and answers
+  with the server-owned receipt (`ok:false` at 200 for a blank/over-long ask); `GET /api/plan/redraw`
+  (`structureRedrawStatus()`) reports what is standing — live build, failure reason, the change it was
+  built into — so a reload never loses the in-flight state. Mirrored as MCP `request_plan_redraw` /
+  `get_plan_redraw`. Plan → Training paints a collapsed "Redraw my week" disclosure under the upcoming
+  strip (only when a week exists — a blank plan keeps the compose entry), swaps to the in-flight card
+  on submit and polls until the build settles.
+- **The race build sits where running is planned, and Today names the race**
+  (`src/client/plan-endurance-client.ts`, `src/repo/day-read-prose.ts`, `src/coachOps/training.ts`,
+  `src/client/today-week-ahead-client.ts`). Plan → Endurance now renders `raceBuildCard` right under
+  the running goal — the engine's own week-by-week ladder, pace bands and leg map — and drops the
+  generic "typical arc" ramp placeholder when a real build exists (unchanged otherwise). Today's
+  "The week ahead" card carries one quiet race line ("Half marathon · 6 weeks out · building";
+  `weekAheadRaceLine`), composed at serve time in `weekAheadServe` from `getEnduranceGoal()` and
+  never stored in the week-ahead cache, so a day-old cached read still says today's distance to the
+  race. Context, never a countdown: no line at all once the race has passed.
 - **Autonomy: dead premises retire, review holds never double**
   (`src/domain/brain/autonomy-service.ts`). `adoptOrphanedDrafts()` now runs
   `retireDraftsWithDeadPremise()` first: a held swap/removal draft whose target movement has left the

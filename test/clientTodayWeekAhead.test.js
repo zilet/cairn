@@ -56,3 +56,35 @@ test("Today week-ahead omits empty or failed reads", () => {
   assert.equal(weekAhead.cardHtml({ ok: false, days: [{ label: "Nope" }] }), "");
   assert.equal(weekAhead.cardHtml({ ok: true, days: [] }), "");
 });
+
+test("Today week-ahead renders the quiet race line, with the date tucked into a title", () => {
+  const weekAhead = loadTodayWeekAhead();
+  const html = weekAhead.cardHtml({
+    ok: true,
+    days: [{ day: "Mon", kind: "run", label: "Z2 run" }],
+    summary: "",
+    race: { label: "Half marathon", date: "2026-10-26", weeks_to_race: 6, days_to_race: 42, phase: "build", text: "Half marathon · 6 weeks out · building" },
+  });
+
+  assert.match(html, /weekahead-race/);
+  assert.match(html, /Half marathon · 6 weeks out · building/);
+  assert.match(html, /title="2026-10-26"/);
+});
+
+test("Today week-ahead still renders the card with only a race line and no days", () => {
+  const weekAhead = loadTodayWeekAhead();
+  const html = weekAhead.cardHtml({
+    ok: true,
+    days: [],
+    summary: "",
+    race: { label: "Half marathon", date: "2026-10-26", weeks_to_race: 1, days_to_race: 3, phase: "taper", text: "Half marathon · race week" },
+  });
+
+  assert.match(html, /The week ahead/);
+  assert.match(html, /Half marathon · race week/);
+});
+
+test("Today week-ahead renders nothing when there are neither days nor a race", () => {
+  const weekAhead = loadTodayWeekAhead();
+  assert.equal(weekAhead.cardHtml({ ok: true, days: [], summary: "", race: null }), "");
+});

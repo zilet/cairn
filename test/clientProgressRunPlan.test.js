@@ -303,3 +303,32 @@ test("rolling training agenda renders movable openings and actual completion evi
   assert.match(noOpening, /No clean opening remains this week/);
   assert.doesNotMatch(noOpening, /intentions are covered/);
 });
+
+test("race build card states the countdown once when placed directly under a goal card", () => {
+  const runPlan = loadRunPlan();
+  const build = { available: true, race: { weeks_to_race: 4, phase: "build" } };
+
+  const standalone = runPlan.raceBuildCard(build);
+  assert.match(standalone, /4 weeks to go/);
+  assert.match(standalone, /Building/);
+
+  // Plan -> Endurance (and Progress -> Endurance) paint the goal card
+  // immediately above this one, which already states the countdown + phase —
+  // repeating it here would be the same fact twice.
+  const underGoal = runPlan.raceBuildCard(build, { underGoal: true });
+  assert.doesNotMatch(underGoal, /4 weeks to go/);
+  assert.doesNotMatch(underGoal, /wrun-mix/);
+  assert.match(underGoal, /Race build/);
+});
+
+test("race build card head uses singular/race-week wording at the countdown's edges", () => {
+  const runPlan = loadRunPlan();
+
+  const oneWeekOut = runPlan.raceBuildCard({ available: true, race: { weeks_to_race: 1, phase: "sharpen" } });
+  assert.match(oneWeekOut, /1 week to go/);
+  assert.doesNotMatch(oneWeekOut, /1 weeks to go/);
+
+  const raceWeek = runPlan.raceBuildCard({ available: true, race: { weeks_to_race: 0, phase: "sharpen" } });
+  assert.match(raceWeek, /race week/);
+  assert.doesNotMatch(raceWeek, /0 weeks to go/);
+});

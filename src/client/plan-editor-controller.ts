@@ -195,6 +195,188 @@ function loadPlanUpcomingNote(token: number, slotSel = "#planUpcomingSlot"): voi
     .catch(() => {});
 }
 
+// ---------- redraw my week ----------
+// A training-STRUCTURE request ("build my week around my six anchors", "drop to three
+// days", "move heavy legs to Thursday") used to have exactly one door: knowing the magic
+// words in chat. This is the same hand-off in plain sight, on the tab the week lives on —
+// and it writes the SAME standing flag, so asking here and asking in chat can never build
+// the week twice. Pull-never-push: collapsed to a footnote strip at rest, it waits to be
+// tapped and never announces itself.
+type PlanRedrawStatus = import("../contracts/client.js").ClientPlanRedrawStatus;
+type PlanRedrawStanding = import("../contracts/client.js").ClientPlanRedrawStanding;
+type PlanRedrawReceipt = import("../contracts/client.js").ClientPlanRedrawReceipt;
+
+const PLAN_REDRAW_POLL_MS = 4_000;
+// ~10 minutes of asking, then it stops; the next render reads the state again, so a build
+// that outlives the poll is never lost — only the live ticking is.
+const PLAN_REDRAW_POLL_LIMIT = 150;
+// Fallback only, for the first paint before the status read resolves: the real bound is
+// `max_chars` on that read, so the server stays the one place the number lives.
+const PLAN_REDRAW_FALLBACK_MAX_CHARS = 1000;
+
+// The one sentence of guidance, in the posture the server will actually take: under lead
+// the built week ANNOUNCES and lands with a one-tap Undo; only review_everything waits.
+function planRedrawGuidance(posture: string): string {
+  const tail = posture === "asks"
+    ? "and waits for you to confirm"
+    : "and it lands at the next natural boundary with Undo";
+  return `Tell the coach how the week should change — which days, what it's built around, what to drop. It drafts the whole week ${tail}.`;
+}
+
+function planRedrawComposerHtml(
+  posture: string,
+  error: string,
+  draft: string,
+  open: boolean,
+  maxChars: number
+): string {
+  const max = maxChars > 0 ? maxChars : PLAN_REDRAW_FALLBACK_MAX_CHARS;
+  return `<details class="plan-redraw reveal"${open ? " open" : ""}>
+    <summary><span class="lbl plan-upcoming-strip">Redraw my week</span></summary>
+    <div class="plan-redraw-body">
+      <p class="plan-redraw-line">${escHtml(planRedrawGuidance(posture))}</p>
+      <textarea id="planRedrawText" class="form-textarea plan-redraw-text" rows="2" maxlength="${max}" placeholder="e.g. move heavy legs to Thursday, or build the week around my six anchors">${escHtml(draft)}</textarea>
+      ${error ? `<p class="plan-redraw-error">${escHtml(error)}</p>` : ""}
+      <button class="logbtn plan-redraw-go" type="button" id="planRedrawGo" data-posture="${escAttr(posture)}" data-max="${max}">Redraw</button>
+    </div>
+  </details>`;
+}
+
+// In flight: the coach's own athlete-facing sentence (posture + landing day, already
+// written server-side), which quotes the ask itself — so the athlete's words are echoed
+// back only when that sentence did not already carry them, never twice.
+function planRedrawInFlightHtml(request: string, explanation: string): string {
+  const echo = request && !explanation.includes(request);
+  return `<div class="plan-redraw-live reveal">
+    <span class="lbl plan-redraw-mast">Redrawing your week…</span>
+    ${echo ? `<p class="plan-redraw-ask">“${escHtml(request)}”</p>` : ""}
+    ${explanation ? `<p class="plan-redraw-why">${escHtml(explanation)}</p>` : ""}
+  </div>`;
+}
+
+// The one row worth a surface: something in flight outranks a failure to report, and a
+// request already built into a change belongs in "Coming up", not here.
+function planRedrawEntry(status: PlanRedrawStatus | null): PlanRedrawStanding | null {
+  const rows = status && Array.isArray(status.standing) ? status.standing : [];
+  return rows.find((row) => !!row?.build) || rows.find((row) => row?.outcome === "failed") || null;
+}
+
+// `posture` and `max_chars` are the read's CURRENT top-level ones, never a row's: a row's
+// posture was stamped when its build was enqueued, so an athlete who has since changed
+// lead_mode would be promised the old one by the box they are about to type into.
+//
+// A FAILED build renders the composer and nothing else, opened. The failure is not ours to
+// report: settleStructureBuild sets review_required, so the flag's own paragraph is already
+// standing in "Waiting on you" — which this very tab paints, in the slot directly above
+// this one. A sentence here would be the same failure stacked twice on one screen. The
+// ledger keeps the account; this slot keeps the door.
+function planRedrawHtml(status: PlanRedrawStatus | null): string {
+  const posture = String(status?.posture ?? "lands");
+  const maxChars = Number(status?.max_chars) || PLAN_REDRAW_FALLBACK_MAX_CHARS;
+  const entry = planRedrawEntry(status);
+  if (entry?.build) return planRedrawInFlightHtml(String(entry.request ?? ""), String(entry.explanation ?? ""));
+  if (entry?.outcome === "failed") return planRedrawComposerHtml(posture, "", "", true, maxChars);
+  return planRedrawComposerHtml(posture, "", "", false, maxChars);
+}
+
+function paintPlanRedraw(token: number, html: string): void {
+  if (token !== pollToken || state.tab !== "plan") return;
+  const slot = $("#planRedrawSlot");
+  if (!slot) return;
+  slot.innerHTML = html;
+  const btn = slot.querySelector<HTMLButtonElement>("#planRedrawGo");
+  btn?.addEventListener("click", () => { void submitPlanRedraw(token, slot, btn); });
+}
+
+async function submitPlanRedraw(token: number, slot: Element, btn: HTMLButtonElement): Promise<void> {
+  if (btn.disabled) return;
+  const box = slot.querySelector<HTMLTextAreaElement>("#planRedrawText");
+  const request = String(box?.value ?? "").trim();
+  const posture = btn.dataset.posture || "lands";
+  const maxChars = Number(btn.dataset.max) || PLAN_REDRAW_FALLBACK_MAX_CHARS;
+  if (!request) {
+    paintPlanRedraw(token, planRedrawComposerHtml(posture, "Say what should change.", "", true, maxChars));
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Redrawing…";
+  const receipt = (await api("/plan/redraw", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request }),
+  }).catch(() => null)) as PlanRedrawReceipt | null;
+  if (token !== pollToken || state.tab !== "plan") return;
+  // ok:false at 200 is the designed signal, not an HTTP error — the server's own
+  // sentence IS the answer, spoken inline rather than thrown at a toast.
+  if (!receipt || receipt.ok === false) {
+    const said = String(receipt?.error ?? "").trim();
+    paintPlanRedraw(token, planRedrawComposerHtml(posture, said || "Couldn't hand that to your coach right now — try again in a bit.", request, true, maxChars));
+    return;
+  }
+  // Re-asking for something already BUILT comes back pointing at that change, with no
+  // live build behind it. Painting "Redrawing your week…" over that would be four
+  // seconds of a sentence that was never true — so read the state once and paint what
+  // is actually there, and surface the built change where it lives.
+  if (receipt.built_decision && !receipt.build) {
+    loadPlanUpcomingNote(token);
+    swrInvalidate("plan");
+    loadPlanRedraw(token);
+    return;
+  }
+  paintPlanRedraw(token, planRedrawInFlightHtml(request, String(receipt.decision?.action?.user_explanation ?? "")));
+  pollPlanRedraw(token, 0);
+}
+
+// The build has landed (or there is nothing left in flight): the change now speaks for
+// itself in "Coming up". Never rebuild the editor out from under an open day edit or a
+// dirty savebar — the same guard the /plan revalidate keeps; the slots still refresh.
+function planRedrawSettled(token: number): void {
+  loadPlanUpcomingNote(token);
+  swrInvalidate("plan");
+  if (view.querySelector(".pday") || document.querySelector(".savebar.show")) {
+    loadPlanRedraw(token);
+    return;
+  }
+  void renderPlanEditor();
+}
+
+function pollPlanRedraw(token: number, tries: number): void {
+  if (typeof setTimeout !== "function" || tries >= PLAN_REDRAW_POLL_LIMIT) return;
+  setTimeout(() => {
+    if (token !== pollToken || state.tab !== "plan" || !$("#planRedrawSlot")) return;
+    void api("/plan/redraw")
+      .then((data) => {
+        if (token !== pollToken || state.tab !== "plan") return;
+        const status = data as PlanRedrawStatus;
+        const entry = planRedrawEntry(status);
+        if (entry?.build) {
+          paintPlanRedraw(token, planRedrawInFlightHtml(String(entry.request ?? ""), String(entry.explanation ?? "")));
+          pollPlanRedraw(token, tries + 1);
+          return;
+        }
+        if (entry?.outcome === "failed") {
+          paintPlanRedraw(token, planRedrawHtml(status));
+          return;
+        }
+        planRedrawSettled(token);
+      })
+      .catch(() => pollPlanRedraw(token, tries + 1));
+  }, PLAN_REDRAW_POLL_MS);
+}
+
+// Read once on render, so a reload never loses an in-flight redraw and a failed one is
+// still visible the next time the tab opens.
+function loadPlanRedraw(token: number): void {
+  void api("/plan/redraw")
+    .then((data) => {
+      if (token !== pollToken || state.tab !== "plan") return;
+      const status = data as PlanRedrawStatus;
+      paintPlanRedraw(token, planRedrawHtml(status));
+      if (planRedrawEntry(status)?.build) pollPlanRedraw(token, 0);
+    })
+    .catch(() => {});
+}
+
 // Autocomplete for the plan editor's free-text exercise field — a <datalist> fed
 // from the exercise catalog. Free text still works (a genuinely new exercise is
 // legitimate); this just makes an existing one easy to find without retyping.
@@ -352,7 +534,7 @@ async function renderPlanEditor(): Promise<void> {
 
   const icsUrl = withToken("/api/plan.ics");
   const calFooter = helpers.calendarFooterHtml(plan, location.host, icsUrl);
-  view.innerHTML = segBar("edit", planSeg()) + `<div id="planRecoverySlot"></div><div id="planUpcomingSlot"></div><div id="planedit"></div>
+  view.innerHTML = segBar("edit", planSeg()) + `<div id="planRecoverySlot"></div><div id="planUpcomingSlot"></div><div id="planRedrawSlot"></div><div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
     <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}
     <datalist id="exerciseNames"></datalist>`;
@@ -571,6 +753,10 @@ async function renderPlanEditor(): Promise<void> {
     onSave: persistPlan,
     onDiscard: () => renderPlanEditor(),
   });
+
+  // A blank plan already has the compose-week entry — asking to REDRAW a week that does
+  // not exist yet would be two doors to the same empty room.
+  if (!planIsBlank()) loadPlanRedraw(token);
 
   draw();
 }

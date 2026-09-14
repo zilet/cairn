@@ -38,9 +38,28 @@ class FakeElement {
     this._innerHTML = String(value || "");
     this.children = [];
     if (this._innerHTML.includes('id="planedit"')) {
+      this.append(new FakeElement("div", { id: "planRedrawSlot" }));
       this.append(new FakeElement("div", { id: "planedit" }));
       this.append(new FakeElement("button", { id: "addDay" }));
       this.append(new FakeElement("div", { id: "planstatus" }));
+      return;
+    }
+    // The redraw entry's own slot: the composer's textarea + button, or the in-flight
+    // card, painted asynchronously from GET /plan/redraw.
+    if (this.id === "planRedrawSlot") {
+      const box = this._innerHTML.match(/<textarea id="planRedrawText"[^>]*>([\s\S]*?)<\/textarea>/);
+      if (box) this.append(new FakeTextArea("textarea", { id: "planRedrawText", value: decodeAttr(box[1]) }));
+      const go = this._innerHTML.match(/<button[^>]*id="planRedrawGo"[^>]*>/);
+      if (go) {
+        const posture = go[0].match(/data-posture="([^"]*)"/)?.[1] || "";
+        const max = go[0].match(/data-max="([^"]*)"/)?.[1] || "";
+        this.append(
+          new FakeElement("button", {
+            id: "planRedrawGo",
+            dataset: { posture: decodeAttr(posture), max: decodeAttr(max) },
+          })
+        );
+      }
       return;
     }
     if (this.id === "planedit") {
@@ -578,4 +597,288 @@ test("each ending of the compose job says something true", async () => {
   // A genuine failure with nothing to say still gets a calm, non-blaming line.
   options.onFail(null);
   assert.match(harness.toasts.at(-1), /couldn't shape a week right now/i);
+});
+
+// ---------- redraw my week ----------
+// A training-STRUCTURE request used to be reachable only by knowing the magic words in
+// chat. These pin the Plan tab's own door: where it appears, that a blank plan keeps the
+// compose entry instead, that a reload repaints an in-flight redraw rather than losing
+// it, and that a submit hands over the athlete's words and says what happens next.
+
+// The controller's slot painting rides on a fetch promise, so let the microtask queue
+// drain before reading the DOM.
+async function flush(times = 6) {
+  for (let i = 0; i < times; i += 1) await Promise.resolve();
+}
+
+function withRedrawApi(harness, respond) {
+  const calls = [];
+  harness.context.api = async (path, opts) => {
+    calls.push({ path, opts });
+    if (path === "/plan/redraw") return respond(path, opts);
+    return {};
+  };
+  return calls;
+}
+
+const A_WEEK = [
+  {
+    day_number: 1,
+    name: "Upper",
+    focus: "Push",
+    items: [{ kind: "strength", exercise: "Bench", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 }],
+  },
+];
+
+test("a week that exists gets a quiet redraw entry, in the posture the server will take", async () => {
+  const harness = loadPlanEditorController(A_WEEK);
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  const slot = harness.view.querySelector("#planRedrawSlot");
+  assert.match(slot.innerHTML, /Redraw my week/, "collapsed footnote strip at rest");
+  assert.match(slot.innerHTML, /id="planRedrawText"/, "a box to say it in their own words");
+  assert.match(slot.innerHTML, /id="planRedrawGo"/);
+  assert.match(slot.innerHTML, /lands at the next natural boundary with Undo/, "lead posture, stated honestly");
+  assert.match(slot.innerHTML, /maxlength="1000"/, "the box holds exactly what the server will keep");
+  // Suggestion, not a gate, and no score anywhere in the copy.
+  assert.doesNotMatch(slot.innerHTML, /you must|required|\d{1,3}\s*(?:\/\s*100|%)/i);
+  assert.ok(
+    harness.requests.some((request) => request.path === "/plan/redraw"),
+    "the entry reads what is already standing before it paints"
+  );
+});
+
+test("under review_everything the entry promises a confirm step, not an automatic landing", async () => {
+  const harness = loadPlanEditorController(A_WEEK);
+  withRedrawApi(harness, () => ({ posture: "asks", standing: [] }));
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  const slot = harness.view.querySelector("#planRedrawSlot");
+  assert.match(slot.innerHTML, /waits for you to confirm/);
+  assert.doesNotMatch(slot.innerHTML, /lands at the next natural boundary/);
+});
+
+test("the composer's bound is the server's, not a number the client keeps its own copy of", async () => {
+  const harness = loadPlanEditorController(A_WEEK);
+  withRedrawApi(harness, () => ({ posture: "lands", max_chars: 777, standing: [] }));
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  assert.match(harness.view.querySelector("#planRedrawSlot").innerHTML, /maxlength="777"/);
+});
+
+test("a blank plan keeps the compose entry and offers no redraw — one door to an empty room", async () => {
+  const harness = loadPlanEditorController([]);
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  assert.equal(harness.view.querySelector("#planRedrawSlot").innerHTML, "");
+  assert.deepEqual(harness.requests.filter((request) => request.path === "/plan/redraw"), []);
+  assert.match(harness.view.querySelector("#planedit").innerHTML, /id="planComposeWeek"/);
+});
+
+test("an in-flight redraw repaints itself on reload instead of offering the box again", async () => {
+  const harness = loadPlanEditorController(A_WEEK);
+  withRedrawApi(harness, () => ({
+    posture: "lands",
+    standing: [
+      {
+        decision_id: 7,
+        request: "Build my week around my six anchors",
+        summary: "Build my week around my six anchors",
+        source: "plan",
+        posture: "lands",
+        lands_on: "2026-07-10",
+        build: { job_id: 3, status: "running" },
+        outcome: null,
+        error: null,
+        review_required: false,
+        built_decision: null,
+        explanation:
+          "You asked for a change to how your training is built: “Build my week around my six anchors”. " +
+          "The coach is rebuilding the week around it now; it lands today with a one-tap Undo. Nothing has changed yet.",
+        asked_at: "2026-07-10T09:00:00Z",
+      },
+    ],
+  }));
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  const slot = harness.view.querySelector("#planRedrawSlot");
+  assert.match(slot.innerHTML, /Redrawing your week…/);
+  assert.match(slot.innerHTML, /Build my week around my six anchors/, "their own words, echoed back");
+  assert.match(slot.innerHTML, /lands today with a one-tap Undo/, "the coach's own sentence, not a second wording");
+  assert.doesNotMatch(slot.innerHTML, /id="planRedrawText"/, "no second box while one is already building");
+  // The server sentence already quotes the ask; echoing it again above would print the
+  // athlete's own words to them twice.
+  assert.equal(
+    slot.innerHTML.match(/Build my week around my six anchors/g).length,
+    1,
+    "the ask appears once, not once per element"
+  );
+});
+
+test("a build the coach could not do is shown with the box back underneath", async () => {
+  const harness = loadPlanEditorController(A_WEEK);
+  withRedrawApi(harness, () => ({
+    posture: "lands",
+    standing: [
+      {
+        decision_id: 9,
+        request: "Drop to three days",
+        summary: "Drop to three days",
+        source: "plan",
+        posture: "lands",
+        lands_on: null,
+        build: null,
+        outcome: "failed",
+        error: "the coach was unavailable",
+        review_required: true,
+        built_decision: null,
+        explanation: "The coach could not build it just now. Nothing has changed — ask again.",
+        asked_at: "2026-07-10T09:00:00Z",
+      },
+    ],
+  }));
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  const slot = harness.view.querySelector("#planRedrawSlot");
+  assert.match(slot.innerHTML, /id="planRedrawText"/, "asking again is one tap away");
+  assert.match(slot.innerHTML, /<details class="plan-redraw reveal" open>/, "and the box is already open");
+  // The failure itself belongs to the ledger, not to this slot. settleStructureBuild sets
+  // review_required, so the flag's own paragraph is already standing in "Waiting on you" —
+  // which THIS tab paints, in #planUpcomingSlot directly above. Anything here would stack
+  // the same failure twice on one screen.
+  assert.doesNotMatch(slot.innerHTML, /plan-redraw-failed/, "no second report of it");
+  assert.doesNotMatch(slot.innerHTML, /didn't go through|the coach was unavailable|Nothing changed/);
+});
+
+test("the redraw tap posts the athlete's words and paints what happens next", async () => {
+  const harness = loadPlanEditorController(A_WEEK);
+  const calls = withRedrawApi(harness, (_path, opts) =>
+    opts?.method === "POST"
+      ? {
+          ok: true,
+          verified: true,
+          decision_id: 11,
+          decision: {
+            id: 11,
+            status: "review",
+            action: {
+              kind: "training_structure_request",
+              request: "Move heavy legs to Thursday",
+              user_explanation: "The coach is rebuilding the week around it now; it lands tomorrow with a one-tap Undo.",
+            },
+          },
+          posture: "lands",
+          lands_on: "2026-07-11",
+          build: { job_id: 4, status: "queued" },
+          built_decision: null,
+        }
+      : { posture: "lands", standing: [] }
+  );
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  const slot = harness.view.querySelector("#planRedrawSlot");
+  slot.querySelector("#planRedrawText").value = "  Move heavy legs to Thursday  ";
+  slot.querySelector("#planRedrawGo").click();
+  await flush();
+
+  const post = calls.find((call) => call.path === "/plan/redraw" && call.opts?.method === "POST");
+  assert.ok(post, "the tap posts the request");
+  assert.deepEqual(JSON.parse(post.opts.body), { request: "Move heavy legs to Thursday" }, "trimmed, verbatim");
+  const painted = harness.view.querySelector("#planRedrawSlot").innerHTML;
+  assert.match(painted, /Redrawing your week…/);
+  assert.match(painted, /Move heavy legs to Thursday/);
+  assert.match(painted, /lands tomorrow with a one-tap Undo/, "the server's sentence, spoken verbatim");
+});
+
+test("the designed ok:false at 200 is spoken inline, with the typed words kept", async () => {
+  const harness = loadPlanEditorController(A_WEEK);
+  withRedrawApi(harness, (_path, opts) =>
+    opts?.method === "POST" ? { ok: false, error: "say what to change" } : { posture: "lands", standing: [] }
+  );
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  const slot = harness.view.querySelector("#planRedrawSlot");
+  slot.querySelector("#planRedrawText").value = "hm";
+  slot.querySelector("#planRedrawGo").click();
+  await flush();
+
+  const painted = harness.view.querySelector("#planRedrawSlot").innerHTML;
+  assert.match(painted, /say what to change/, "the server's own sentence IS the answer");
+  assert.match(painted, /id="planRedrawText"/, "the box comes back");
+  assert.match(painted, />hm</, "with what they typed still in it");
+  assert.deepEqual(harness.toasts, [], "no toast spam");
+});
+
+test("the box under a failure offers the posture in force NOW, not the one the build was stamped with", async () => {
+  // lead_mode changed to review_everything while that build was in flight. The row still
+  // carries the posture it was enqueued under; the composer must not promise it.
+  const harness = loadPlanEditorController(A_WEEK);
+  withRedrawApi(harness, () => ({
+    posture: "asks",
+    standing: [
+      {
+        decision_id: 12,
+        request: "Drop to three days",
+        summary: "Drop to three days",
+        source: "plan",
+        posture: "lands",
+        lands_on: null,
+        build: null,
+        outcome: "failed",
+        error: "the coach was unavailable",
+        review_required: true,
+        built_decision: null,
+        explanation: "…",
+        asked_at: "2026-07-10T09:00:00Z",
+      },
+    ],
+  }));
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  const slot = harness.view.querySelector("#planRedrawSlot");
+  assert.match(slot.innerHTML, /waits for you to confirm/, "the read's current posture wins");
+  assert.doesNotMatch(slot.innerHTML, /lands at the next natural boundary/);
+});
+
+test("re-asking for something already built never claims a build is running", async () => {
+  // The receipt points at a change that exists and has not landed, with no live build
+  // behind it. Painting "Redrawing your week…" over that would be four seconds of a
+  // sentence that was never true.
+  const harness = loadPlanEditorController(A_WEEK);
+  withRedrawApi(harness, (_path, opts) =>
+    opts?.method === "POST"
+      ? {
+          ok: true,
+          verified: true,
+          decision_id: 11,
+          decision: { id: 11, status: "superseded", action: { kind: "training_structure_request" } },
+          posture: "lands",
+          lands_on: "2026-07-11",
+          build: null,
+          built_decision: { id: 21, status: "announced", effective_date: "2026-07-11", summary: "Rebuilt week" },
+        }
+      : { posture: "lands", standing: [] }
+  );
+  await harness.context.renderPlanEditor();
+  await flush();
+
+  const slot = harness.view.querySelector("#planRedrawSlot");
+  slot.querySelector("#planRedrawText").value = "Move heavy legs to Thursday";
+  slot.querySelector("#planRedrawGo").click();
+  await flush();
+
+  const painted = harness.view.querySelector("#planRedrawSlot").innerHTML;
+  assert.doesNotMatch(painted, /Redrawing your week…/, "nothing is being redrawn");
+  assert.match(painted, /id="planRedrawText"/, "it reads the real state and paints that");
+  // The change it points at belongs in "Coming up", so that strip is refreshed too.
+  assert.ok(harness.invalidations.includes("plan"));
 });

@@ -65,16 +65,10 @@ import {
 import { normalizeFoodCaptureParsed } from "./foodCapture.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
-import {
-  enqueueStructureBuild,
-  liveStructureBuild,
-  normalizeStructureRequestText,
-  structureRequestExplanation,
-  structureRequestLandingDate,
-  structureRequestPosture,
-  structureRequestTask,
-  structureRequestWasBuilt,
-} from "./domain/brain/structure-request.js";
+// The re-ask lookup that used to live here moved beside the hand-off it guards, in
+// src/domain/brain/structure-request.ts — both doors (chat and the Plan tab) have to
+// resolve to the ONE standing flag, so one module owns both.
+import { requestStructureRedraw } from "./domain/brain/structure-request.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import { resolveChatProfile, type ChatLane, type ChatRoutingDecision } from "./chatRouting.js";
@@ -767,60 +761,6 @@ export function flagTrainingStructureAuthorized(message: string | null | undefin
     .trim();
   if (!text) return false;
   return !isLeadingQuestion(text);
-}
-
-// The athlete's sentence, compared the way a person compares two asks: case- and
-// whitespace-insensitive. An EXACT re-ask already collapses onto the standing row
-// (recordDecision fingerprints {kind, refs, effective_date, action}, and the
-// brain_decisions fingerprint index is UNIQUE with INSERT OR IGNORE) — so the only
-// thing that used to stack was a NEAR-duplicate: the same request retyped with
-// different capitalisation or spacing.
-function normalizedStructureRequest(text: string): string {
-  return normalizeStructureRequestText(text);
-}
-
-/**
- * The training-structure flag already standing for this same ask, if there is one.
- * Scoped exactly to what the athlete would recognise as "the thing I already asked
- * for": a chat-sourced `training_structure` request whose stored rationale (their own
- * words) matches and whose outcome is still in play — already BUILT into a change that
- * is announced / pending / held and not yet landed (the flag is then `superseded` by
- * that decision, and re-asking must point at it, not draft the same week a second
- * time), or still standing as a request row. A materially different request matches
- * nothing and is flagged fresh.
- *
- * `observed` counts as standing. It is what the thaw sweep re-files an unanswered ask
- * as, and it is the SAME ask — reading it as terminal was a dead end, because the
- * decision fingerprint is unique and a re-ask of those words resolves back onto this
- * very row (recordDecision only walks past canceled/rejected/reverted/superseded). The
- * caller decides what to do with it; every caller must be able to put a build behind it.
- */
-export function standingTrainingStructureFlag(request: string): any | null {
-  const wanted = normalizedStructureRequest(request);
-  if (!wanted) return null;
-  const isSameAsk = (row: any) =>
-    row?.source === "chat" &&
-    (row?.action as any)?.kind === "training_structure_request" &&
-    normalizedStructureRequest(String(row?.rationale ?? "")) === wanted;
-  try {
-    // A live change built from those words outranks the request row that asked for it.
-    const built = repo
-      .listBrainDecisions({ status: "superseded", kind: "training_structure", limit: 100 })
-      .find((row: any) => {
-        if (!isSameAsk(row)) return false;
-        const by = Number(row?.superseded_by);
-        const change = by > 0 ? (repo.getBrainDecision(by) as any) : null;
-        return !!change && ["announced", "pending", "review"].includes(String(change.status ?? ""));
-      });
-    if (built) return built;
-    for (const status of ["review", "observed"] as const) {
-      const standing = repo.listBrainDecisions({ status, kind: "training_structure", limit: 100 }).find(isSameAsk);
-      if (standing) return standing;
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 function decisionReferences(text: string): number[] {
@@ -2850,120 +2790,22 @@ export function applyChatActions(
           // THE PROMISE HAS TO LEAVE A TRACE. A reply that says "I'll flag it to your
           // coach lane" and writes nothing is the bug this closes. The durable artifact
           // is an ask-tier `training_structure` decision holding the athlete's own
-          // sentence as its rationale — it is never applied from here, and the athlete
-          // confirms it on the decision surfaces exactly as any other ask.
+          // sentence as its rationale, and the athlete's words go to the program-evolution
+          // op as a background job; the ONE autonomy policy decides how the built week
+          // lands. `requestStructureRedraw` owns all of that, because the Plan tab offers
+          // the same door and a request typed there must resolve to the SAME standing
+          // flag as the same words said here.
           if (!flagTrainingStructureAuthorized(message)) break;
-          const request = a.request;
-          const requestSummary = typeof a.summary === "string" && a.summary.trim() ? a.summary.trim() : request;
-          // What happens next is SERVER POLICY, read once here so the receipt and the
-          // ledger agree: under lead / announce_first the built change announces and
-          // lands at the next natural boundary with a one-tap Undo; only under
-          // review_everything does it wait to be confirmed (Amendment 1).
-          const posture = structureRequestPosture();
-          const landsOn = structureRequestLandingDate();
-          const explanation = structureRequestExplanation(request, posture, landsOn);
-          // Re-asking must not stack a second build, which is what the prompt guidance
-          // already promises. An identical sentence collapses on the decision fingerprint;
-          // a near-duplicate (retyped, recapitalised) is caught here and points back at
-          // the SAME standing flag — in the review queue, or already built into a change
-          // that has not landed yet. History stays immutable — nothing is rewritten, the
-          // athlete simply still has exactly one thing in flight.
-          const standing = standingTrainingStructureFlag(request);
-          const recorded = standing
-            ? { decision: standing }
-            : repo.recordDecision({
-            effective_date: null,
-            kind: "training_structure",
-            domain: "training",
-            summary: requestSummary.slice(0, 300),
-            // The athlete's words, verbatim — never the model's paraphrase.
-            rationale: request,
-            source: "chat",
-            source_ref_type: null,
-            source_ref_key: null,
-            // The REQUEST row is the receipt that the ask was taken, not the change. It
-            // sits at `review`/`ask` only while the coach is building; the built change
-            // then supersedes it under its own earned tier (settleStructureBuild).
-            status: "review",
-            autonomy_tier: "ask",
-            risk_class: "moderate",
-            // There is no plan mutation to take back; the built change carries the Undo.
-            reversible: false,
-            input_fingerprint: null,
-            context: {
-              review_required: posture === "asks",
-              requested_in_chat: true,
-              athlete_request: request,
-              chat_turn_id: ctx.turnId ?? null,
-              evidence_observed_at: new Date().toISOString(),
-            },
-            action: {
-              kind: "training_structure_request",
-              request,
-              user_explanation: explanation,
-            },
-            specialist: null,
-            applied_at: null,
-            reverted_at: null,
-            superseded_by: null,
-            evaluator_version: null,
-          });
-          let stored = repo.getBrainDecision(Number(recorded.decision.id)) as any;
-          // THE HAND-OFF ITSELF. The athlete's words go to the program-evolution op as a
-          // durable background job; the op drafts the restructure and the ONE autonomy
-          // policy decides how it lands. Enqueued once per standing request: a flag whose
-          // build is still queued/running, or already built into a live change, reuses
-          // it. Anything else — a build that FAILED, one a restart killed, an `observed`
-          // row the thaw re-filed — is handed to the coach again, because a re-ask that
-          // enqueues nothing is a request lost in silence. Asking again is the door.
-          const builtInto =
-            stored?.status === "superseded" && Number(stored.superseded_by) > 0
-              ? (repo.getBrainDecision(Number(stored.superseded_by)) as any)
-              : null;
-          let build = builtInto ? null : liveStructureBuild(stored);
-          if (stored && !builtInto && !build && !structureRequestWasBuilt(stored)) {
-            try {
-              const handed = enqueueStructureBuild({
-                decision: stored,
-                trigger: "athlete",
-                agent: ctx.agent === "auto" ? null : (ctx.agent ?? null),
-                task: structureRequestTask(request, requestSummary === request ? null : requestSummary),
-                explanation,
-                enqueue: ctx.enqueueJob ?? enqueueAgentJob,
-              });
-              if (handed) {
-                stored = handed.decision ?? stored;
-                build = { job_id: handed.job_id, status: "queued" };
-              }
-            } catch (error) {
-              recordAsyncFailure("chat", "structure_build_enqueue", error);
-            }
-          }
-          // Server-owned readback: the receipt may only claim a hand-off that is genuinely
-          // in flight with the athlete's own words — a request row in the review queue with
-          // a live build behind it, or one already built into a change that has not landed.
-          // Compared through the same normalization the reuse lookup uses, so a re-flagged
-          // near-duplicate verifies against the standing row it points at — the stored
-          // rationale stays the athlete's ORIGINAL sentence, verbatim.
-          const sameWords =
-            !!stored &&
-            stored.kind === "training_structure" &&
-            normalizedStructureRequest(String(stored.rationale ?? "")) === normalizedStructureRequest(request);
-          const verified = sameWords && (!!builtInto || (stored.status === "review" && !!build));
           applied.push({
             type: a.type,
-            result: {
-              ok: verified,
-              verified,
-              decision_id: stored?.id ?? null,
-              decision: stored ?? null,
-              posture,
-              lands_on: posture === "lands" ? landsOn : null,
-              build,
-              built_decision: builtInto
-                ? { id: builtInto.id, status: builtInto.status, effective_date: builtInto.effective_date ?? null }
-                : null,
-            },
+            result: requestStructureRedraw({
+              request: a.request,
+              summary: typeof a.summary === "string" ? a.summary : null,
+              source: "chat",
+              agent: ctx.agent ?? null,
+              chat_turn_id: ctx.turnId ?? null,
+              enqueue: ctx.enqueueJob ?? enqueueAgentJob,
+            }),
           });
           break;
         }

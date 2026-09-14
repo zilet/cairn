@@ -44,14 +44,28 @@ type TodayWeekAheadResponse = import("../contracts/client.js").ClientWeekAheadRe
     return read.ok === true && typeof read.summary === "string" ? read.summary : "";
   }
 
+  // Context, not a countdown: one quiet line naming the dated race, with the
+  // race date tucked into a title/secondary span rather than spoken aloud.
+  function todayWeekAheadRaceHtml(value: unknown): string {
+    const read = todayWeekAheadRecord(value);
+    const race = read.ok === true ? (read as { race?: unknown }).race : null;
+    if (!race || typeof race !== "object") return "";
+    const text = typeof (race as { text?: unknown }).text === "string" ? (race as { text: string }).text : "";
+    if (!text) return "";
+    const date = typeof (race as { date?: unknown }).date === "string" ? (race as { date: string }).date : "";
+    return `<div class="weekahead-race"${date ? ` title="${escAttr(date)}"` : ""}><span>${escHtml(text)}</span></div>`;
+  }
+
   function todayWeekAheadCardHtml(value: unknown): string {
     const days = todayWeekAheadDays(value);
-    if (!days.length) return "";
+    const raceHtml = todayWeekAheadRaceHtml(value);
+    if (!days.length && !raceHtml) return "";
     const rows = days.map(todayWeekAheadRowHtml).join("");
     const summary = todayWeekAheadSummary(value);
     return `<div class="weekahead reveal" style="--i:0">
       <div class="weekahead-h"><span class="lbl">The week ahead</span></div>
-      <div class="weekahead-days">${rows}</div>
+      ${raceHtml}
+      ${rows ? `<div class="weekahead-days">${rows}</div>` : ""}
       ${summary ? `<div class="weekahead-sum">${escHtml(summary)}</div>` : ""}
     </div>`;
   }

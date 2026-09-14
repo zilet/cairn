@@ -22,6 +22,119 @@ function loadPlanEnduranceClient() {
   return context.CairnPlanEndurance;
 }
 
+// A minimal fake element good enough to drive paintPlanEndurance(): innerHTML
+// stores/returns the painted string, querySelector/querySelectorAll are inert
+// (the module's post-paint wiring null-checks or forEach()s over them).
+class FakePaintElement {
+  constructor() {
+    this._html = "";
+  }
+
+  set innerHTML(value) {
+    this._html = value;
+  }
+
+  get innerHTML() {
+    return this._html;
+  }
+
+  querySelector() {
+    return null;
+  }
+
+  querySelectorAll() {
+    return [];
+  }
+}
+
+// Loads the real module (model + client) plus every other global
+// paintPlanEndurance touches, so `paintPlanEndurance` can be invoked directly
+// against a fake #endPlanBody and its painted HTML inspected.
+function loadPlanEnduranceForPaint({ raceBuildCard } = {}) {
+  const body = new FakePaintElement();
+  const view = { querySelector: (selector) => (selector === "#endPlanBody" ? body : null) };
+  const context = {
+    Array,
+    Object,
+    String,
+    Number,
+    view,
+    stagger: (index) => `--i:${index}`,
+    humanDate: (iso) => String(iso || ""),
+    cardioLabel: (item) => String(item?.label || "Run"),
+    cardioPrescription: (item) => String(item?.target_distance_km ? `${item.target_distance_km} km` : ""),
+    fmtKm: (km) => String(km),
+    enduranceGoalCard: (goal) => `<div class="end-goal">${String(goal?.event || "")}</div>`,
+    trainingAgendaCard: () => "",
+    runComplianceLine: () => "",
+    cardioSyncLine: undefined,
+    wireCardioSync: undefined,
+    loadPlanUpcomingNote: undefined,
+    ...(raceBuildCard !== undefined ? { raceBuildCard } : {}),
+  };
+  context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/plan-endurance-model.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/plan-endurance-client.js"), "utf8"), context);
+  return { context, body };
+}
+
+const RACE_GOAL = { mode: "race", phase: "build", event: "Fall 10K", weeks_to_race: 4 };
+
+test("plan endurance paints the race build card and drops the generic ramp when a build is available", () => {
+  const calls = [];
+  const { context, body } = loadPlanEnduranceForPaint({
+    raceBuildCard: (build, opts) => {
+      calls.push(opts);
+      return build?.available !== false && build?.race ? '<div data-race-build class="wrun-card rbuild"></div>' : "";
+    },
+  });
+
+  context.paintPlanEndurance(RACE_GOAL, null, null, [], {}, { available: true, race: { weeks_to_race: 4, phase: "build" } });
+
+  assert.match(body.innerHTML, /data-race-build/);
+  assert.doesNotMatch(body.innerHTML, /class="end-ramp reveal"/);
+  // The goal card directly above this one already states the countdown +
+  // phase — Plan must ask for the card's short head, not the full one.
+  // The stub records opts born in the module's own realm, so compare by value.
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.underGoal, true);
+});
+
+test("plan endurance keeps today's ramp when the race build is unavailable or the fetch failed", () => {
+  const { context, body } = loadPlanEnduranceForPaint({
+    raceBuildCard: (build) => (build?.available !== false && build?.race ? '<div data-race-build></div>' : ""),
+  });
+
+  context.paintPlanEndurance(RACE_GOAL, null, null, [], {}, { available: false });
+
+  assert.doesNotMatch(body.innerHTML, /data-race-build/);
+  assert.match(body.innerHTML, /class="end-ramp reveal"/);
+});
+
+test("plan endurance keeps today's ramp when the race-build fetch rejected (raceBuild is null)", () => {
+  const { context, body } = loadPlanEnduranceForPaint({
+    raceBuildCard: (build) => (build?.available !== false && build?.race ? '<div data-race-build></div>' : ""),
+  });
+
+  context.paintPlanEndurance(RACE_GOAL, null, null, [], {}, null);
+
+  assert.doesNotMatch(body.innerHTML, /data-race-build/);
+  assert.match(body.innerHTML, /class="end-ramp reveal"/);
+});
+
+test("plan endurance never crashes when raceBuildCard is not yet loaded (a different bundle)", () => {
+  // raceBuildCard is defined in progress-run-plan-client.ts, a different
+  // bundle — plan-endurance-client.ts must guard with typeof, never assume
+  // the global exists.
+  const { context, body } = loadPlanEnduranceForPaint();
+
+  context.paintPlanEndurance(RACE_GOAL, null, null, [], {}, { available: true, race: { weeks_to_race: 4, phase: "build" } });
+
+  assert.doesNotMatch(body.innerHTML, /data-race-build/);
+  assert.match(body.innerHTML, /class="end-ramp reveal"/);
+});
+
 test("plan endurance helper renders the current race phase ramp", () => {
   const endurance = loadPlanEnduranceClient();
 
@@ -79,4 +192,11 @@ test("plan endurance orchestration uses the rolling agenda and movable anchor la
   assert.match(source, /Suggested anchor/);
   assert.match(source, /movable weekly intentions/);
   assert.doesNotMatch(source, /each run lands on its day|>Day \$\{|tempo on Thursday/);
+});
+
+test("plan endurance fetches the race build alongside the rest of the segment's reads", () => {
+  const source = readFileSync(join(root, "src/client/plan-endurance-client.ts"), "utf8");
+  assert.match(source, /api\("\/race-build"\)\.catch\(\(\) => null\)/);
+  assert.match(source, /typeof raceBuildCard === "function"/);
+  assert.match(source, /the build to race day, this week's runs/);
 });
