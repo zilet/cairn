@@ -25,7 +25,7 @@ function dayRolloverTarget(
   current: string,
   measured: string,
   dayPicked: boolean,
-  dayPickedOn?: string | null,
+  dayPickedOn?: string | null
 ): string | null {
   if (!measured || measured === current) return null;
   if (dayPicked && (current > measured || current !== dayPickedOn)) return null;
@@ -58,11 +58,34 @@ function dayRolloverTarget(
     return Math.max(0, next.getTime() - now.getTime()) + 1000;
   }
 
-  function checkRollover(): void {
+  // One timestamp, no polling: the moment this watcher last confirmed the active
+  // tab fresh (a rollover repaint, a stale-paint repaint, or simply a foreground
+  // event that found nothing stale). A phone locked for a long stretch and
+  // unlocked on the SAME calendar day never trips dayRolloverTarget — nothing else
+  // re-fetches the tab on its own — so a return from more than 5 minutes away
+  // still deserves a repaint; the SWR cache underneath paints the (instant) cached
+  // snapshot immediately and revalidates quietly behind it, same as any other
+  // tab entry.
+  const STALE_PAINT_MS = 5 * 60 * 1000;
+  let lastPaintAt = Date.now();
+
+  function repaintStaleActiveTab(): void {
     const s = g.state;
-    if (!s || typeof g.localISO !== "function") return;
+    const now = Date.now();
+    const stale = now - lastPaintAt >= STALE_PAINT_MS;
+    lastPaintAt = now;
+    if (!stale || !s || typeof g.activateTab !== "function") return;
+    g.activateTab(s.tab, { syncRoute: false });
+  }
+
+  // Returns whether a day rollover actually repainted, so callers can skip the
+  // separate stale-paint repaint above (a rollover already repaints fresh).
+  function checkRollover(): boolean {
+    const s = g.state;
+    if (!s || typeof g.localISO !== "function") return false;
     const target = dayRolloverTarget(s.logDate, g.localISO(), !!s.dayPicked, s.dayPickedOn ?? null);
-    if (!target) return;
+    if (!target) return false;
+    lastPaintAt = Date.now();
     s.logDate = target;
     // Landing on the new day is the same arrival as "Back to today": the pick that
     // named yesterday is spent, and the plan day chosen under it would otherwise
@@ -80,6 +103,13 @@ function dayRolloverTarget(
     // The URL still carries the date we just left. Replace it (never push — this is a
     // correction, not navigation) so the next cold launch doesn't restore yesterday.
     if (typeof g.syncRouteFromState === "function") g.syncRouteFromState("replace");
+    return true;
+  }
+
+  // The single entry both foreground listeners call: a rollover already repaints
+  // fresh, so the stale-paint check only runs when the day itself didn't change.
+  function checkFreshness(): void {
+    if (!checkRollover()) repaintStaleActiveTab();
   }
 
   function armMidnightTimer(): void {
@@ -95,15 +125,16 @@ function dayRolloverTarget(
 
   function installDayRolloverWatcher(): void {
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") checkRollover();
+      if (document.visibilityState === "visible") checkFreshness();
     });
-    window.addEventListener("pageshow", () => checkRollover());
+    window.addEventListener("pageshow", () => checkFreshness());
     armMidnightTimer();
   }
 
   Object.assign(globalThis, { installDayRolloverWatcher, dayRolloverTarget });
 
   if (typeof window !== "undefined") {
-    (window as typeof window & { installDayRolloverWatcher?: () => void }).installDayRolloverWatcher = installDayRolloverWatcher;
+    (window as typeof window & { installDayRolloverWatcher?: () => void }).installDayRolloverWatcher =
+      installDayRolloverWatcher;
   }
 }

@@ -353,6 +353,37 @@ test("Today Brief train/easy/rest actions are unaffected by the done-state entry
   assert.match(rest, /data-redirect="ask-session"/);
 });
 
+test("Today Brief withholds Start session on a genuinely empty plan day, but still offers it once there's something to launch", () => {
+  const brief = loadTodayBrief();
+
+  // A train read whose plan/preview/logged-sets all agree the day is empty (the
+  // same witness today-screen.ts's launch card uses) must not leave the Brief
+  // offering a Start button into a session with nothing to open.
+  const empty = brief.briefHtml(
+    { kind: "train", headline: "Push day", why: "", signals: {} },
+    { isToday: true, showPlan: false, showDone: false, nothingToStart: true }
+  );
+  assert.doesNotMatch(empty, /data-redirect="start-session"/);
+  assert.doesNotMatch(empty, /Start session/);
+  // The other train-day action stays available.
+  assert.match(empty, /data-redirect="ask-session"/);
+
+  // A day that does carry items (nothingToStart false, or simply omitted) keeps
+  // the Start action exactly as before.
+  const hasItems = brief.briefHtml(
+    { kind: "train", headline: "Push day", why: "", signals: {} },
+    { isToday: true, showPlan: false, showDone: false, nothingToStart: false }
+  );
+  assert.match(hasItems, /data-redirect="start-session"/);
+  assert.match(hasItems, /Start session/);
+
+  const omitted = brief.briefHtml(
+    { kind: "train", headline: "Push day", why: "", signals: {} },
+    { isToday: true, showPlan: false, showDone: false }
+  );
+  assert.match(omitted, /data-redirect="start-session"/);
+});
+
 test("Today Brief stops the thinking shimmer once a fetch has terminally failed", () => {
   const brief = loadTodayBrief();
   const stillLoading = brief.briefHtml(brief.provisionalRead(), { isToday: true, reducedMotion: false });

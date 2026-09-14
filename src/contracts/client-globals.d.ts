@@ -435,6 +435,10 @@ declare global {
     > & {
       day?: number | null;
       dayPicked?: boolean;
+      // Set by today-screen.ts's renderToday alongside its own briefHtml call, so
+      // a later same-kind repaint (upgradeBriefInPlace) can reuse the exact
+      // launch-card witness instead of re-deriving it from the DOM.
+      nothingToStart?: boolean;
     };
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     invalidate(key: string): void;
@@ -734,7 +738,7 @@ declare global {
         | (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown })
         | null
         | undefined,
-      options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown }
+      options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown; nothingToStart?: unknown }
     ): string;
     briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
     revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
@@ -4386,6 +4390,7 @@ declare global {
           showPlan?: boolean;
           showDone?: boolean;
           isToday?: boolean;
+          nothingToStart?: boolean;
           activeOverride?: unknown;
           morph?: boolean;
           reducedMotion?: boolean;
@@ -4445,7 +4450,7 @@ declare global {
           | (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown })
           | null
           | undefined,
-        options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown },
+        options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown; nothingToStart?: unknown },
         deps: ClientTodayBriefControllerDeps
       ): string;
       briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;

@@ -135,9 +135,17 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
   let agenda: ProgressEnduranceAgenda | null = null;
   let programState: ProgressEnduranceProgramState | null = null;
   let calibration: ProgressEnduranceCalibration | null = null;
+  // Every other read in this fan-out already tolerates its own failure
+  // (`.catch(() => null)`); `/stats` was the one exception, so a single failed
+  // request rejected the whole `Promise.all` and the catch below discarded every
+  // OTHER card that had actually loaded, painting the calm "no history" empty
+  // state as if the athlete had never logged anything. Catch it like its
+  // neighbors and track the failure explicitly so a genuine fetch failure never
+  // reads as "nothing logged".
+  let statsFailed = false;
   try {
     const results = await Promise.all([
-      deps.api("/stats"),
+      deps.api("/stats").catch(() => { statsFailed = true; return null; }),
       deps.api("/endurance-prs").catch(() => null),
       deps.api("/endurance-goal").catch(() => null),
       deps.api("/run-compliance").catch(() => null),
@@ -160,6 +168,7 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
     calibration = results[9] as ProgressEnduranceCalibration | null;
   } catch {
     stats = null;
+    statsFailed = true;
   }
   if (!deps.isCurrent(token) || !deps.view.querySelector("#endBody")) return;
   // A failed fan-out (stats stays null only on a caught exception) must never
@@ -181,7 +190,10 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
     calibration,
   };
   const changed = !snap || JSON.stringify(snap) !== JSON.stringify(fresh);
-  progressEnduranceSaveSnapshot(fresh);
+  // A stats failure with no cached snapshot must never be persisted as the
+  // canonical "nothing logged" state — the next visit deserves another try, not
+  // a remembered empty history.
+  if (!statsFailed) progressEnduranceSaveSnapshot(fresh);
   if (changed) {
     paintProgressEnduranceBody(
       fresh.end,
@@ -195,6 +207,7 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
       fresh.programState,
       fresh.calibration,
       deps,
+      statsFailed,
     );
   }
 }
@@ -211,6 +224,7 @@ function paintProgressEnduranceBody(
   programState: ProgressEnduranceProgramState | null,
   calibration: ProgressEnduranceCalibration | null,
   deps: ProgressEnduranceControllerDeps,
+  statsFailed = false,
 ): void {
   const body = deps.view.querySelector<HTMLElement>("#endBody");
   if (!body) return;
@@ -238,11 +252,16 @@ function paintProgressEnduranceBody(
     prs.best_pace.length > 0
   );
   if (!hasWeek && !hasPRs) {
+    // A failed /stats fetch reads identically to "never logged anything" once it
+    // collapses to a null endurance row — never say that to the athlete. Paint a
+    // calm, retryable line instead of the settled empty-history copy.
+    const emptyMessage = statsFailed
+      ? "Couldn't load your endurance stats just now - pull to refresh or check back in a moment."
+      : goalHtml
+        ? "No runs logged yet - log one on Today (a phrase like \"ran 8 km easy\" is plenty) and your weekly runs build toward this."
+        : "No runs or rides logged yet - log one on Today (a phrase like \"ran 8 km easy\" is plenty) and your mileage, zones, and pace will read here.";
     body.innerHTML = deps.hero("Endurance", []) + goalHtml + raceBuildHtml + agendaHtml + complianceHtml + calibrationHtml + runPlanHtml + hybridHtml + syncHtml +
-      deps.empty(deps.art("activity", "run"),
-        goalHtml
-          ? "No runs logged yet - log one on Today (a phrase like \"ran 8 km easy\" is plenty) and your weekly runs build toward this."
-          : "No runs or rides logged yet - log one on Today (a phrase like \"ran 8 km easy\" is plenty) and your mileage, zones, and pace will read here.");
+      deps.empty(deps.art("activity", "run"), emptyMessage);
     if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => deps.renderSelf());
     return;
   }

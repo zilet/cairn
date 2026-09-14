@@ -124,9 +124,11 @@ type TodayPlanSurfaceApi = {
       <button id="addExBtn" class="ghostbtn addex-btn">+ Add exercise</button>
       <div id="addExForm" class="addex-form" hidden>
         <div class="addex-row">
+          <label for="addExInput" class="sr-only">Exercise name</label>
           <input id="addExInput" type="text" autocomplete="off" placeholder="Search or type an exercise" list="exOptions">
           <datalist id="exOptions"></datalist>
-          <button id="addExGo" class="logbtn">+</button>
+          <button id="addExGo" class="logbtn" aria-label="Add exercise">+</button>
+          <button id="addExCancel" class="ghostbtn addex-cancel" type="button">Cancel</button>
         </div>
         <div class="addex-mode" id="addExMode" role="group" aria-label="Exercise type">
           <button class="modebtn active" data-exmode="reps">Reps</button>

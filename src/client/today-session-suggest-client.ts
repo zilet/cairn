@@ -38,7 +38,13 @@ type SuggestedSessionLike = Partial<ClientSessionSuggestion> | null | undefined;
     if (!top || typeof top !== "object") return null;
     const reps = top.reps != null ? String(top.reps) : "";
     let line = `${top.sets ?? 1}${reps ? ` × ${reps}` : ""} top set`;
-    if (top.rir != null && Number.isFinite(Number(top.rir))) line += ` · RIR ${top.rir}`;
+    // A bare "RIR n" reads as a score tag; the app's own vocabulary elsewhere
+    // (progress-program-controller.ts's "3-4 reps in reserve") speaks it as a
+    // cue, so this line does too.
+    if (top.rir != null && Number.isFinite(Number(top.rir))) {
+      const n = Number(top.rir);
+      line += ` · leave ${n} rep${n === 1 ? "" : "s"} in reserve`;
+    }
     line += todaySuggestLoadSuffix(item, top.target_weight);
     return line;
   }
@@ -49,9 +55,7 @@ type SuggestedSessionLike = Partial<ClientSessionSuggestion> | null | undefined;
     const name = escHtml(exercise);
     const topLine = todaySuggestTopSetRx(it);
     const mainLine = todaySuggestMainRx(it);
-    const rx = topLine
-      ? `<div>${escHtml(topLine)}</div><div>${escHtml(mainLine)}</div>`
-      : escHtml(mainLine);
+    const rx = topLine ? `<div>${escHtml(topLine)}</div><div>${escHtml(mainLine)}</div>` : escHtml(mainLine);
     const notes = [
       it.top_set && typeof it.top_set === "object" && it.top_set.note && it.top_set.note !== it.note
         ? String(it.top_set.note)
@@ -104,10 +108,11 @@ type SuggestedSessionLike = Partial<ClientSessionSuggestion> | null | undefined;
   }
 
   function todaySuggestFailureHtml(result?: unknown): string {
-    const row = result && typeof result === "object" ? result as Record<string, unknown> : {};
-    const line = row.agent_status === "unconfigured"
-      ? "Building a session needs a coaching agent — connect one in Settings. You can train anyway in the meantime."
-      : "Couldn't draft a session just now — your buddy may be offline. You can train anyway or try again.";
+    const row = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+    const line =
+      row.agent_status === "unconfigured"
+        ? "Building a session needs a coaching agent — connect one in Settings. You can train anyway in the meantime."
+        : "Couldn't draft a session just now — your buddy may be offline. You can train anyway or try again.";
     return `<div class="sug-card well-accent well-accent-sage sug-fail settle-in">
           <div class="sug-fail-line">${escHtml(line)}</div>
           <div class="sug-actions"><button class="pillbtn" data-sugaction="retry">Try again</button></div>

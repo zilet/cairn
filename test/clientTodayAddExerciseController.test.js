@@ -255,6 +255,7 @@ function loadController() {
   form.hidden = true;
   const input = form.appendChild(new FakeElement("input", { id: "addExInput" }));
   const go = form.appendChild(new FakeElement("button", { id: "addExGo" }));
+  const cancel = form.appendChild(new FakeElement("button", { id: "addExCancel" }));
   const datalist = form.appendChild(new FakeElement("datalist", { id: "exOptions" }));
   const modeWrap = form.appendChild(new FakeElement("div", { id: "addExMode" }));
   modeWrap.appendChild(new FakeElement("button", { className: "modebtn active", dataset: { exmode: "reps" } }));
@@ -348,6 +349,7 @@ function loadController() {
     form,
     input,
     go,
+    cancel,
     datalist,
     modeWrap,
     deps,
@@ -582,6 +584,31 @@ test("Today add-exercise controller creates ONE card for a double tap", async ()
   assert.equal(harness.rootEl.querySelectorAll(".ex[data-card]").length, 1);
   assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Zercher squat", mode: "reps" }]);
   assert.deepEqual(harness.modes, [{ name: "Zercher squat", mode: "reps" }], "the exercise is persisted once");
+});
+
+test("Today add-exercise controller's Cancel button and Escape both back out of the form", async () => {
+  const harness = loadController();
+  await harness.controller.setupAddExercise(harness.deps);
+
+  harness.btn.click();
+  await flushAsync();
+  harness.input.value = "some typed text";
+
+  harness.cancel.click();
+  assert.equal(harness.form.hidden, true, "Cancel hides the form");
+  assert.equal(harness.btn.hidden, false, "Cancel restores the trigger button");
+  assert.equal(harness.input.value, "", "Cancel clears whatever was typed");
+  assert.equal(harness.btn.focusCount, 1, "Cancel returns focus to the trigger");
+
+  // Reopen and back out with Escape instead.
+  harness.btn.click();
+  await flushAsync();
+  harness.input.value = "more typed text";
+  harness.input.dispatch("keydown", { key: "Escape" });
+  assert.equal(harness.form.hidden, true, "Escape hides the form");
+  assert.equal(harness.btn.hidden, false, "Escape restores the trigger button");
+  assert.equal(harness.input.value, "", "Escape clears whatever was typed");
+  assert.equal(harness.btn.focusCount, 2, "Escape returns focus to the trigger too");
 });
 
 test("Today add-exercise controller updates a stale peeked last-set once the network row arrives", async () => {

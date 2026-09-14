@@ -46,7 +46,7 @@ function weeklyRunPlanCard(plan: WeeklyRunPlan | null | undefined): string {
     .join("");
   const rationale = plan.rationale.filter(Boolean);
   const whyBits = [plan.why, ...rationale].filter(Boolean);
-  return `<div class="wrun-card reveal" style="${stagger(0)}">
+  return `<div class="wrun-card reveal" style="${stagger(5)}">
       <div class="wrun-head">
         <span class="lbl">This week's runs</span>
         ${plan.mix_summary ? `<span class="wrun-mix">${escHtml(plan.mix_summary)}</span>` : ""}
@@ -174,7 +174,7 @@ function raceBuildCard(build: RaceBuild | null | undefined): string {
   const whyBits = [build.why, ...strengthBits].filter(Boolean);
 
   const phaseLabel = { base: "Base", build: "Building", sharpen: "Sharpening", taper: "Tapering", past: "Done" }[race.phase] || "";
-  return `<div class="wrun-card rbuild reveal" style="${stagger(0)}" data-race-build>
+  return `<div class="wrun-card rbuild reveal" style="${stagger(1)}" data-race-build>
       <div class="wrun-head">
         <span class="lbl">Race build</span>
         <span class="wrun-mix">${escHtml(`${race.weeks_to_race} weeks to go${phaseLabel ? ` · ${phaseLabel}` : ""}`)}</span>
@@ -253,7 +253,7 @@ function trainingAgendaCard(agenda: FlexibleTrainingAgenda | null | undefined): 
     : hasOpen
       ? "No clean opening remains this week"
       : "The week's run intentions are covered";
-  return `<div class="wrun-card reveal" style="${stagger(0)}" data-training-agenda>
+  return `<div class="wrun-card reveal" style="${stagger(2)}" data-training-agenda>
       <div class="wrun-head">
         <span class="lbl">Movable running week</span>
         <span class="wrun-mix">${escHtml(next)}</span>
@@ -307,7 +307,7 @@ function enduranceGoalCard(goal: EnduranceGoal | null | undefined): string {
 function runComplianceLine(compliance: RunCompliance | null | undefined): string {
   if (!compliance || !compliance.in_words) return "";
   if (!compliance.prescribed_sessions && !compliance.actual_sessions) return "";
-  return `<div class="end-compliance reveal" style="${stagger(0)}">
+  return `<div class="end-compliance reveal" style="${stagger(3)}">
       <span class="lbl">This week's runs</span>
       <span class="end-compliance-v">${escHtml(compliance.in_words)}</span>
     </div>`;
@@ -453,7 +453,7 @@ function enduranceCalibrationLine(status: CalibrationStatus | null | undefined, 
   const label = String(lead.label || "Your zones").trim() || "Your zones";
   const date = String(dateISO || status?.as_of || "").slice(0, 10) || localISO();
   const sentence = pickDayVariant(variants, date, `endurance-calibration:${lead.key}`).replace("{label}", label);
-  return `<div class="end-compliance reveal" style="${stagger(0)}">
+  return `<div class="end-compliance reveal" style="${stagger(4)}">
       <span class="lbl">Anchors</span>
       <span class="end-compliance-v">${escHtml(sentence)}</span>
     </div>`;

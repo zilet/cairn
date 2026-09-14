@@ -130,14 +130,38 @@ function artPhotoFailed(img: HTMLImageElement): void {
   }, 20000);
 }
 
-function pollArtUntilReady(img: HTMLImageElement, src: string, attempts = 6, delayMs = 1500): void {
+// `tile` keeps its `art-redrawing` class (the redraw spinner) until the FIRST
+// successful load of the redrawn image, or until the poll gives up — never
+// stripped the moment this function is merely invoked (see redrawExerciseArt,
+// which used to clear it in a `finally` right after kicking the poll off,
+// leaving up to 9s of stale artwork with no spinner).
+function pollArtUntilReady(
+  img: HTMLImageElement,
+  src: string,
+  tile: Element | null | undefined,
+  attempts = 6,
+  delayMs = 1500
+): void {
   const token = pollToken;
   let left = attempts;
+  let settled = false;
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    tile?.classList.remove("art-redrawing");
+  };
+  img.addEventListener?.("load", settle, { once: true });
   const tick = () => {
-    if (token !== pollToken || !img.isConnected) return;
+    if (token !== pollToken || !img.isConnected) {
+      settle();
+      return;
+    }
     img.src = src;
     left -= 1;
-    if (left <= 0) return;
+    if (left <= 0) {
+      settle();
+      return;
+    }
     setTimeout(tick, delayMs);
   };
   tick();
@@ -157,25 +181,34 @@ async function redrawExerciseArt(img: HTMLImageElement, query: string): Promise<
     if (!res.ok) {
       const toastFn = (globalThis as unknown as { toast?: (msg: unknown) => void }).toast;
       toastFn?.("Couldn't redraw that figure");
+      tile?.classList.remove("art-redrawing");
       return;
     }
-    if (res.regenerated === false) return;
+    if (res.regenerated === false) {
+      tile?.classList.remove("art-redrawing");
+      return;
+    }
     const nextV = Number(res.version) || currentV + 1;
     artVersions.set(token, nextV);
     markArtReady(token);
     const src = artUrl("exercise", query, nextV);
     img.dataset.retried = "";
-    pollArtUntilReady(img, src);
+    // The poll (up to 9s) now owns clearing `art-redrawing` itself — on the first
+    // successful load, or once it gives up — so the spinner stays honest instead
+    // of vanishing the instant this call returns while stale art is still showing.
+    pollArtUntilReady(img, src, tile);
   } catch {
     const toastFn = (globalThis as unknown as { toast?: (msg: unknown) => void }).toast;
     toastFn?.("Couldn't redraw that figure");
-  } finally {
     tile?.classList.remove("art-redrawing");
   }
 }
 
 let artRedrawMenu: HTMLElement | null = null;
+let artRedrawMenuCleanup: (() => void) | null = null;
 function hideArtRedrawMenu(): void {
+  artRedrawMenuCleanup?.();
+  artRedrawMenuCleanup = null;
   artRedrawMenu?.remove();
   artRedrawMenu = null;
 }
@@ -185,21 +218,41 @@ function showArtRedrawMenu(x: number, y: number, img: HTMLImageElement, query: s
   menu.className = "art-redraw-menu";
   menu.setAttribute("role", "menu");
   menu.innerHTML = `<button type="button" class="art-redraw-btn" role="menuitem">${escHtml("Redraw this figure")}</button>`;
-  menu.style.left = `${Math.max(8, x)}px`;
-  menu.style.top = `${Math.max(8, y)}px`;
+  document.body.appendChild(menu);
+  artRedrawMenu = menu;
+  // Clamp against the actual viewport (not just the top-left corner) — a
+  // long-press or right-click near the right/bottom edge used to place the menu
+  // partly off-screen.
+  const rect = menu.getBoundingClientRect();
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  menu.style.left = `${Math.min(Math.max(8, x), maxLeft)}px`;
+  menu.style.top = `${Math.min(Math.max(8, y), maxTop)}px`;
   menu.querySelector("button")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     hideArtRedrawMenu();
     void redrawExerciseArt(img, query);
   });
-  document.body.appendChild(menu);
-  artRedrawMenu = menu;
   const onDoc = (ev: Event) => {
     if (artRedrawMenu && !artRedrawMenu.contains(ev.target as Node)) hideArtRedrawMenu();
   };
-  setTimeout(() => {
-    document.addEventListener("pointerdown", onDoc, { capture: true, once: true });
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") hideArtRedrawMenu();
+  };
+  // No `once` here: a tap that lands on the menu's own padding (still inside
+  // `contains`) must not close the menu, but it must not consume the ONLY
+  // outside-click listener either — `once:true` did exactly that, leaving every
+  // later genuine outside click with nothing listening. The listener is instead
+  // removed explicitly by hideArtRedrawMenu, however it gets triggered.
+  const timer = setTimeout(() => {
+    document.addEventListener("pointerdown", onDoc, { capture: true });
   }, 0);
+  document.addEventListener("keydown", onKey, { capture: true });
+  artRedrawMenuCleanup = () => {
+    clearTimeout(timer);
+    document.removeEventListener("pointerdown", onDoc, { capture: true });
+    document.removeEventListener("keydown", onKey, { capture: true });
+  };
 }
 
 function exerciseTileTarget(ev: Event): { img: HTMLImageElement; query: string } | null {

@@ -91,6 +91,58 @@ test("one-day custom prescriptions render as prescribed without becoming weekly-
   assert.match(suggestion, /agentJobId: context\.agentJobId/);
 });
 
+test("the launch card gate keeps a null preview's calm door open and only a positively-empty preview suppresses it", () => {
+  // Pin the exact expressions today-screen.ts computes, so a refactor that
+  // changes their shape fails here rather than silently changing which of the
+  // three plan-region outcomes (suppressed / launch card / plan-surface
+  // fallthrough) a given day renders into.
+  assert.match(today, /const previewHasItems = previewItemCount == null \? null : previewItemCount > 0;/);
+  assert.match(today, /const dayHasItems = !!\(day\?\.items \|\| \[\]\)\.length;/);
+  assert.match(
+    today,
+    /const nothingToStart =\s*\n\s*todayState\.plan\.length > 0 &&\s*\n\s*!hasLoggedSets &&\s*\n\s*exDone === 0 &&\s*\n\s*!isRunDay &&\s*\n\s*!cardioItems\.length &&\s*\n\s*!dayHasItems &&\s*\n\s*previewHasItems !== true;/,
+  );
+  assert.match(
+    today,
+    /showPlan && !showDone && nothingToStart\s*\n\s*\? ""\s*\n\s*: showPlan && !showDone && previewHasItems !== false\s*\n\s*\? sessionLaunchCardHtml\(/,
+  );
+
+  // A faithful reimplementation of that same formula (verified above to match
+  // the source verbatim), exercised against the four witness combinations the
+  // comment above `previewItemCount` calls out.
+  function planRegionFor({ previewItemCount, hasPlan, hasLoggedSets, dayHasItems }) {
+    const previewHasItems = previewItemCount == null ? null : previewItemCount > 0;
+    const nothingToStart =
+      hasPlan && !hasLoggedSets && !dayHasItems && previewHasItems !== true;
+    const showPlan = true;
+    const showDone = false;
+    if (showPlan && !showDone && nothingToStart) return "suppressed";
+    if (showPlan && !showDone && previewHasItems !== false) return "launch-card";
+    return "plan-surface";
+  }
+
+  assert.equal(
+    planRegionFor({ previewItemCount: null, hasPlan: true, hasLoggedSets: false, dayHasItems: true }),
+    "launch-card",
+    "a null preview never overrules a plan day that carries items",
+  );
+  assert.equal(
+    planRegionFor({ previewItemCount: null, hasPlan: false, hasLoggedSets: false, dayHasItems: false }),
+    "launch-card",
+    "no plan at all is the deliberate Open session door",
+  );
+  assert.equal(
+    planRegionFor({ previewItemCount: 0, hasPlan: true, hasLoggedSets: false, dayHasItems: true }),
+    "plan-surface",
+    "a preview/plan disagreement falls through to the plan surface renderer, not the launch card",
+  );
+  assert.equal(
+    planRegionFor({ previewItemCount: 0, hasPlan: true, hasLoggedSets: false, dayHasItems: false }),
+    "suppressed",
+    "every witness agreeing the day is empty is what suppresses the launch card",
+  );
+});
+
 test("focused cardio and legacy capture-prefill route to Chat without logging implicitly", () => {
   assert.match(today, /\.sess-dest \[data-cardio-log\]/);
   assert.match(today, /todayState\.chatPrefill = phrase;[\s\S]*activateTab\("chat"\)/);

@@ -31,6 +31,10 @@ type TodayBriefControllerState = {
   plan: TodayBriefControllerPlanDay[];
   planReveal?: { date: string; on: boolean; blank?: boolean } | null;
   progressSeg?: string;
+  // Set by today-screen.ts's renderToday alongside its own briefHtml call, so
+  // upgradeBriefInPlace can reuse the exact launch-card witness on a same-kind
+  // repaint instead of re-deriving it from the DOM.
+  nothingToStart?: boolean;
 };
 
 type TodayBriefControllerRunOptions = ClientAgentOpHandlers & {
@@ -262,8 +266,13 @@ type TodayBriefControllerDeps = {
     // redundant "Log training" action above the live Continue card.
     const showPlan = !!(deps.root.querySelector(".plansurface") || deps.root.querySelector(".sess-launch"));
     const showDone = !!deps.root.querySelector(".sessiondone");
+    // Same witness the last full renderToday used for its own briefHtml call
+    // (today-screen.ts persists it on state) — reused here rather than
+    // re-derived from the DOM, so a mid-session Brief-only repaint on a
+    // genuinely empty day withholds Start exactly like the initial paint did.
+    const nothingToStart = !!deps.state.nothingToStart;
     const tmp = document.createElement("div");
-    tmp.innerHTML = briefHtml(read, { showPlan, showDone, isToday }, deps);
+    tmp.innerHTML = briefHtml(read, { showPlan, showDone, isToday, nothingToStart }, deps);
     const fresh = tmp.firstElementChild;
     if (!fresh) {
       live.classList.remove("is-thinking");
@@ -330,7 +339,7 @@ type TodayBriefControllerDeps = {
 
   function briefHtml(
     read: TodayBriefControllerDayRead | null | undefined,
-    options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown } = {},
+    options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown; nothingToStart?: unknown } = {},
     deps: TodayBriefControllerDeps,
   ): string {
     const activeOverride = deps.state.brief && deps.state.brief.date === deps.state.logDate ? deps.state.brief.override : "";
@@ -338,6 +347,7 @@ type TodayBriefControllerDeps = {
       showPlan: !!options.showPlan,
       showDone: !!options.showDone,
       isToday: !!options.isToday,
+      nothingToStart: !!options.nothingToStart,
       activeOverride,
       planDayName: briefPlanDayName(read, deps),
       morph: !!deps.state._briefMorph,

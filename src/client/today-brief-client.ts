@@ -49,6 +49,13 @@ type TodayBriefHtmlOptions = {
   // The server already answered "no" to a rest-trade on this date. The offer stays
   // gone for the rest of the day rather than reappearing on the next repaint.
   tradeRefused?: boolean;
+  // Same "nothing to launch" witness the plan surface uses to hide its own launch
+  // card (today-screen.ts): every source — session preview, plan day items, logged
+  // sets — agrees the day is empty. Wired through by the controller once it carries
+  // the signal; undefined behaves exactly as before (Start still offered), so this
+  // stays backward compatible until that plumbing lands. See the caller's report
+  // for the exact change needed upstream.
+  nothingToStart?: boolean;
 };
 
 (() => {
@@ -266,7 +273,9 @@ type TodayBriefHtmlOptions = {
     if (!isToday) return "";
     const lookBack = read?.look_back;
     if (!lookBack || typeof lookBack !== "object") return "";
-    const passages = Array.isArray(lookBack.passages) ? lookBack.passages.filter((p) => typeof p === "string" && p.trim()) : [];
+    const passages = Array.isArray(lookBack.passages)
+      ? lookBack.passages.filter((p) => typeof p === "string" && p.trim())
+      : [];
     const win = typeof lookBack.win === "string" && lookBack.win.trim() ? lookBack.win.trim() : "";
     const sentences = [...passages, win].filter(Boolean);
     if (!sentences.length) return "";
@@ -345,7 +354,9 @@ type TodayBriefHtmlOptions = {
 
   // "Push" → "Push day"; a name that already says day is left alone.
   function todayBriefPlanDayLabel(name: unknown): string {
-    const trimmed = String(name ?? "").trim().slice(0, 60);
+    const trimmed = String(name ?? "")
+      .trim()
+      .slice(0, 60);
     if (!trimmed) return "";
     return /\bdays?\b/i.test(trimmed) ? trimmed : `${trimmed} day`;
   }
@@ -384,7 +395,7 @@ type TodayBriefHtmlOptions = {
     const planDay = leaning ? todayBriefPlanDayLabel(options.planDayName) : "";
 
     const actions: string[] = [];
-    if (kind === "train") {
+    if (kind === "train" && !options.nothingToStart) {
       actions.push(todayBriefRedirect("start-session", "Start session", true));
     } else if (kind === "done") {
       // A logged activity alone (no session row) can flip the read to "done"
@@ -396,7 +407,9 @@ type TodayBriefHtmlOptions = {
       }
     } else if (!options.showPlan) {
       actions.push(
-        planDay ? todayBriefRedirect("reveal-plan", `${planDay} · your plan`, true) : todayBriefRedirect("reveal-plan", "Train anyway", false)
+        planDay
+          ? todayBriefRedirect("reveal-plan", `${planDay} · your plan`, true)
+          : todayBriefRedirect("reveal-plan", "Train anyway", false)
       );
     }
     // The trade: take today, and claim tomorrow as the rest. Offered only once the

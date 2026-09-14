@@ -372,16 +372,6 @@ async function renderToday(opts: any = {}) {
     ? Promise.resolve(todayData.coachingFocus as any)
     : todayApi("/coaching-focus").catch(() => null);
 
-  let html = todayMainShell.leadHtml(
-    {
-      isToday,
-      briefHtml: briefHtml(read, { showPlan, showDone, isToday }),
-      conductorHtml: "",
-      currentWeight: curW,
-    },
-    todayMainShellDeps()
-  );
-
   // On Today, the plan area is a calm launch card into the isolated Session
   // destination (logging no longer lives inline here). The done card still shows
   // inline.
@@ -390,21 +380,49 @@ async function renderToday(opts: any = {}) {
   // anyway override) used to render a Start button into an empty session; a read
   // that says easy/rest already leads above, so an empty day says nothing here.
   // (No plan at all is different: that card is the deliberate "Open session" door.)
+  // A session's own item count is one witness, not the only one: a preview that
+  // reads 0 must never overrule a plan day that actually carries lifts (or logged
+  // sets) — that used to collapse the whole plan region into nothing. Suppression
+  // requires every witness to agree the day is empty; a preview/day disagreement
+  // still has something to show, just not through the launch card (fall through
+  // to the plan surface renderer below, which walks the plan day's own items).
+  // Computed above the Brief so the SAME witness gates its "Start session" action
+  // (today-brief-client.ts) — a preview/plan disagreement must not leave the Brief
+  // offering a Start button into the empty session the launch card below hides.
+  const previewItemCount = prep.dailySession
+    ? (prep.dailySession.items || []).length
+    : sessionPreview?.item_count ?? null;
+  const previewHasItems = previewItemCount == null ? null : previewItemCount > 0;
+  const dayHasItems = !!(day?.items || []).length;
   const nothingToStart =
     todayState.plan.length > 0 &&
     !hasLoggedSets &&
     exDone === 0 &&
     !isRunDay &&
     !cardioItems.length &&
-    (prep.dailySession
-      ? !(prep.dailySession.items || []).length
-      : sessionPreview?.item_count != null
-        ? sessionPreview.item_count === 0
-        : !(day?.items || []).length);
+    !dayHasItems &&
+    previewHasItems !== true;
+  // Persisted on state (not just passed to this render's briefHtml call) so a
+  // LATER, DOM-only repaint — today-brief-controller.ts's upgradeBriefInPlace,
+  // invoked from outside this closure once an agentic read lands — can reuse the
+  // exact value this render computed instead of re-deriving an approximation of
+  // the same rule from markup.
+  todayState.nothingToStart = nothingToStart;
+
+  let html = todayMainShell.leadHtml(
+    {
+      isToday,
+      briefHtml: briefHtml(read, { showPlan, showDone, isToday, nothingToStart }),
+      conductorHtml: "",
+      currentWeight: curW,
+    },
+    todayMainShellDeps()
+  );
+
   html +=
     showPlan && !showDone && nothingToStart
       ? ""
-      : showPlan && !showDone
+      : showPlan && !showDone && previewHasItems !== false
       ? sessionLaunchCardHtml({
           day,
           dailySession: prep.dailySession,

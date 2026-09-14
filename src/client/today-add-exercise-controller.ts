@@ -246,9 +246,18 @@ type TodayAddExerciseDeps = {
   function skippedButtonFor(root: ParentNode, name: string): HTMLElement | null {
     const folded = exerciseNameKey(name);
     return (
-      [...root.querySelectorAll<HTMLElement>("#skipLine [data-unskip]")].find(
-        (button) => exerciseNameKey(decodeURIComponent(button.dataset.unskip || "")) === folded
-      ) || null
+      [...root.querySelectorAll<HTMLElement>("#skipLine [data-unskip]")].find((button) => {
+        // A malformed %-sequence in the dataset (never expected, but not worth a
+        // thrown exception over) must not blow up the whole lookup — just skip
+        // that button rather than crashing the add-exercise flow around it.
+        let decoded = "";
+        try {
+          decoded = decodeURIComponent(button.dataset.unskip || "");
+        } catch {
+          return false;
+        }
+        return exerciseNameKey(decoded) === folded;
+      }) || null
     );
   }
 
@@ -431,9 +440,25 @@ type TodayAddExerciseDeps = {
     const form = deps.root.querySelector<HTMLElement>("#addExForm");
     const input = deps.root.querySelector<HTMLInputElement>("#addExInput");
     const go = deps.root.querySelector<HTMLElement>("#addExGo");
+    const cancel = deps.root.querySelector<HTMLElement>("#addExCancel");
     const datalist = deps.root.querySelector("#exOptions");
     const modeWrap = deps.root.querySelector("#addExMode");
-    if (!btn || !form || !input || !go || !datalist || !modeWrap) return;
+    if (!btn || !form || !input || !go || !cancel || !datalist || !modeWrap) return;
+
+    // Opening the form has no way back except typing something and submitting —
+    // a Cancel affordance (and Escape, the platform convention for "back out of
+    // this") restores the trigger button and clears whatever was typed.
+    const cancelAdd = (): void => {
+      resetAddForm(input, form, btn, modeWrap);
+      btn.focus();
+    };
+    cancel.addEventListener("click", cancelAdd);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelAdd();
+      }
+    });
 
     let mode = "reps";
     modeWrap.querySelectorAll<HTMLElement>("[data-exmode]").forEach((button) =>
@@ -537,7 +562,10 @@ type TodayAddExerciseDeps = {
       add();
     });
     input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") add();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        add();
+      }
     });
   }
 

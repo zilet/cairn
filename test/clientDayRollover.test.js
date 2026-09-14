@@ -74,9 +74,15 @@ test("the rollover watcher resets the pick it just outlived", () => {
     clearTimeout: () => {},
     document: {
       visibilityState: "visible",
-      addEventListener: (name, fn) => { listeners[name] = fn; },
+      addEventListener: (name, fn) => {
+        listeners[name] = fn;
+      },
     },
-    window: { addEventListener: (name, fn) => { listeners[name] = fn; } },
+    window: {
+      addEventListener: (name, fn) => {
+        listeners[name] = fn;
+      },
+    },
     state: {
       tab: "today",
       logDate: "2026-07-09",
@@ -86,8 +92,12 @@ test("the rollover watcher resets the pick it just outlived", () => {
       brief: { read: "yesterday" },
     },
     localISO: () => "2026-07-10",
-    activateTab: (tab, opts) => { context.activated = { tab, opts }; },
-    syncRouteFromState: (mode) => { context.synced = mode; },
+    activateTab: (tab, opts) => {
+      context.activated = { tab, opts };
+    },
+    syncRouteFromState: (mode) => {
+      context.synced = mode;
+    },
   };
   vm.runInNewContext(readFileSync(join(root, "public/js/app-day-rollover.js"), "utf8"), context);
   context.window.installDayRolloverWatcher();
@@ -114,14 +124,24 @@ test("the rollover watcher leaves a deliberately opened past day alone", () => {
     clearTimeout: () => {},
     document: {
       visibilityState: "visible",
-      addEventListener: (name, fn) => { listeners[name] = fn; },
+      addEventListener: (name, fn) => {
+        listeners[name] = fn;
+      },
     },
-    window: { addEventListener: (name, fn) => { listeners[name] = fn; } },
+    window: {
+      addEventListener: (name, fn) => {
+        listeners[name] = fn;
+      },
+    },
     // Opened 07-08 on 07-10 to log that day's workout, then switched apps.
     state: { tab: "today", logDate: "2026-07-08", day: 2, dayPicked: true, dayPickedOn: "2026-07-10" },
     localISO: () => "2026-07-10",
-    activateTab: () => { context.activated = true; },
-    syncRouteFromState: () => { context.synced = true; },
+    activateTab: () => {
+      context.activated = true;
+    },
+    syncRouteFromState: () => {
+      context.synced = true;
+    },
   };
   vm.runInNewContext(readFileSync(join(root, "public/js/app-day-rollover.js"), "utf8"), context);
   context.window.installDayRolloverWatcher();
@@ -133,4 +153,65 @@ test("the rollover watcher leaves a deliberately opened past day alone", () => {
   assert.equal(context.state.dayPicked, true);
   assert.equal(context.activated, undefined);
   assert.equal(context.synced, undefined);
+});
+
+// Same-day return from a long background spell (phone locked, tab backgrounded)
+// never trips dayRolloverTarget, but nothing else re-fetches the active tab on its
+// own either — so a foreground event more than 5 minutes since the last paint
+// still deserves a quiet repaint (the SWR cache underneath revalidates behind it).
+test("a same-day foreground event repaints the active tab once the last paint is stale", () => {
+  const listeners = {};
+  let now = 1_800_000_000_000;
+  class FakeDate extends Date {
+    static now() {
+      return now;
+    }
+  }
+  const context = {
+    Date: FakeDate,
+    Math,
+    Object,
+    setTimeout: () => ({ unref() {} }),
+    clearTimeout: () => {},
+    document: {
+      visibilityState: "visible",
+      addEventListener: (name, fn) => {
+        listeners[name] = fn;
+      },
+    },
+    window: {
+      addEventListener: (name, fn) => {
+        listeners[name] = fn;
+      },
+    },
+    state: { tab: "today", logDate: "2026-07-10", day: 3, dayPicked: false, dayPickedOn: null },
+    localISO: () => "2026-07-10", // same day -> never a rollover
+    activateTab: (tab, opts) => {
+      context.activatedCount = (context.activatedCount || 0) + 1;
+      context.activated = { tab, opts };
+    },
+    syncRouteFromState: () => {
+      context.synced = true;
+    },
+  };
+  vm.runInNewContext(readFileSync(join(root, "public/js/app-day-rollover.js"), "utf8"), context);
+  context.window.installDayRolloverWatcher(); // seeds lastPaintAt at `now`
+
+  // Immediately visible again — no time has passed, so no repaint yet.
+  listeners.visibilitychange();
+  assert.equal(context.activatedCount, undefined);
+
+  // Six minutes pass in the background, then the tab resumes.
+  now += 6 * 60 * 1000;
+  listeners.pageshow();
+  assert.equal(context.activatedCount, 1);
+  assert.equal(context.activated.tab, "today");
+  assert.equal(context.activated.opts.syncRoute, false);
+  // A rollover never happened, so the date/pick fields are untouched.
+  assert.equal(context.state.logDate, "2026-07-10");
+  assert.equal(context.synced, undefined);
+
+  // A second foreground event right after the repaint must not fire again.
+  listeners.visibilitychange();
+  assert.equal(context.activatedCount, 1);
 });

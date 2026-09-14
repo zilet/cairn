@@ -92,7 +92,7 @@ test("open load prints nothing, bodyweight still prints BW, and a top_set shares
     ],
   });
 
-  assert.match(html, /1 × 3 top set · RIR 1/);
+  assert.match(html, /1 × 3 top set · leave 1 rep in reserve/);
   assert.match(html, /2 × 6 · 135 lb/);
   assert.match(html, /one strong triple/);
   assert.equal((html.match(/class="sug-item /g) || []).length, 1, "top set + back-off share one tile");

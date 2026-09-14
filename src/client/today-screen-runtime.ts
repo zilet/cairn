@@ -93,7 +93,7 @@ type TodayScreenRuntimeContext = {
   reshapeToday(): Promise<void>;
   briefHtml(
     read: (Partial<TodayScreenRuntimeDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
-    options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown },
+    options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown; nothingToStart?: unknown },
   ): string;
   briefSignalsText(read: Partial<TodayScreenRuntimeDayRead> | null | undefined): string;
   revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
@@ -272,7 +272,7 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
 
   function briefHtml(
     read: (Partial<TodayScreenRuntimeDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
-    options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown },
+    options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown; nothingToStart?: unknown },
   ): string {
     return CairnTodayBriefController.briefHtml(read, options, bridge().briefDeps());
   }

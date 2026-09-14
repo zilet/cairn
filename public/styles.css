@@ -356,6 +356,9 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   grid-area:1/1;width:100%;height:100%;object-fit:cover;border-radius:50%;
   opacity:0;transform:scale(1.04);
   transition:opacity var(--dur-3) ease,transform var(--dur-3) var(--ease);
+  /* the long-press redraw menu is a custom gesture — iOS's own "save/copy image"
+     callout must never fight it over the same long-press */
+  -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
 }
 .artimg .artimg-photo.on{opacity:1;transform:scale(1)}
 /* already-generated art (known ready) paints straight over the SVG — no fade,
@@ -728,6 +731,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   flex:1;min-width:0;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
   border-radius:var(--radius-sm);padding:11px 13px;font-size:.9rem;
 }
+.addex-row .addex-cancel{flex:0 0 auto;margin-top:0}
 /* Reps / Timed toggle */
 .addex-mode{display:flex;gap:6px;margin-top:8px}
 .modebtn{
@@ -5817,10 +5821,12 @@ button.prow-name:hover{color:var(--accent)}
 .rbuild-more{margin-top:12px}
 .rbuild-more>summary{cursor:pointer;font-size:.84rem;color:var(--accent-deep);list-style:none}
 .rbuild-more>summary::-webkit-details-marker{display:none}
+.rbuild-more>summary::before{content:"▸";font-size:.7rem;transition:transform .15s ease;display:inline-block;margin-right:4px}
+.rbuild-more[open]>summary::before{transform:rotate(90deg)}
 .rbuild-ladder{margin-top:10px}
 .rbuild-ladder .wrun-row.is-current{box-shadow:inset 0 0 0 1px var(--line)}
 .rbuild-week-km{margin-left:auto;font-size:.84rem;color:var(--ink-2)}
-@media (max-width:420px){.rbuild-map{grid-template-columns:repeat(4,1fr)}}
+@media (max-width:560px){.rbuild-map{grid-template-columns:repeat(4,1fr)}}
 
 /* ── a test week is about due (Progress → Program banner) ───────────────────────── */
 .ptest-slot:empty{display:none}

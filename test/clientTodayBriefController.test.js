@@ -471,6 +471,40 @@ test("upgradeBriefInPlace treats the session launch card as a live entry (no dup
   assert.equal(brief.parentNode == null || harness.rootEl.querySelector(".brief") != null, true);
 });
 
+test("upgradeBriefInPlace reuses the nothingToStart witness today-screen.ts persisted on state", async () => {
+  const harness = loadController({ localStorage: fakeLocalStorage() });
+  harness.rootEl.appendChild(new FakeElement("section", { className: "brief" }));
+  // No .plansurface / .sess-launch in the DOM — a genuinely empty plan day.
+  const seen = [];
+  harness.context.CairnTodayBrief.briefHtml = (read, briefOpts) => {
+    seen.push(!!briefOpts.nothingToStart);
+    return `<section class="brief">${read?.headline || "Today"}</section>`;
+  };
+  const train = { kind: "train", headline: "Push day", why: "", focus: null, est_minutes: null, signals: {} };
+  harness.deps.state.brief = { date: harness.deps.state.logDate, override: "", read: train };
+  harness.deps.state.nothingToStart = true;
+  harness.deps.state._briefInflight = {
+    date: harness.deps.state.logDate,
+    override: "",
+    promise: Promise.resolve({ ...train, headline: "Push day, freshly read." }),
+  };
+
+  await harness.controller.upgradeBriefInPlace(harness.deps.state.logDate, true, harness.deps);
+  assert.deepEqual(seen, [true], "an empty day carries the witness through to the in-place repaint");
+
+  // The same day now has something to launch (the last full render set the
+  // witness to false) — the in-place repaint must follow it, not a stale true.
+  seen.length = 0;
+  harness.deps.state.nothingToStart = false;
+  harness.deps.state._briefInflight = {
+    date: harness.deps.state.logDate,
+    override: "",
+    promise: Promise.resolve({ ...train, headline: "Push day, read again." }),
+  };
+  await harness.controller.upgradeBriefInPlace(harness.deps.state.logDate, true, harness.deps);
+  assert.deepEqual(seen, [false]);
+});
+
 test("upgradeBriefInPlace adopts a terminally-failed fetch so the shimmer doesn't return on the next render", async () => {
   const harness = loadController({ localStorage: fakeLocalStorage() });
   harness.deps.reducedMotion = () => false;
@@ -593,6 +627,21 @@ test("briefHtml resolves the plan-day name from the read's own plan selection", 
   harness.controller.briefHtml({ kind: "easy", headline: "Easy", signals: {} }, { isToday: true }, harness.deps);
 
   assert.deepEqual(seen, ["Pull", "Push", ""]);
+});
+
+test("briefHtml forwards nothingToStart through to CairnTodayBrief.briefHtml's options", () => {
+  const harness = loadController();
+  const seen = [];
+  harness.context.CairnTodayBrief.briefHtml = (read, opts) => {
+    seen.push(!!opts.nothingToStart);
+    return `<section class="brief">${read?.headline || ""}</section>`;
+  };
+
+  harness.controller.briefHtml({ kind: "train", headline: "Train" }, { isToday: true, nothingToStart: true }, harness.deps);
+  harness.controller.briefHtml({ kind: "train", headline: "Train" }, { isToday: true, nothingToStart: false }, harness.deps);
+  harness.controller.briefHtml({ kind: "train", headline: "Train" }, { isToday: true }, harness.deps);
+
+  assert.deepEqual(seen, [true, false, false]);
 });
 
 // ---- the rest trade (Finding 4's button) ----
