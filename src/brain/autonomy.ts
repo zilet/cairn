@@ -144,6 +144,46 @@ export function decideAutonomyTier(input: AutonomyPolicyInput): AutonomyPolicyDe
 // underneath the athlete; every other bounded change lands tomorrow. Pure date policy —
 // `today` is a local YYYY-MM-DD and so is the answer. The autonomy service schedules
 // against this and the chat structure hand-off names the same day in its receipt.
+// THE CLINICIAN FLOOR IS DETERMINISTIC — IN BOTH DIRECTIONS. A conductor cannot
+// self-attest it away (Amendment 1), and it cannot self-attest INTO it either: a
+// specialist opinion whose `autonomy_ceiling` says "clinician" over a hill-repeat
+// stand-down, or a conductor writing `risk_class:'clinical'` on a kcal hold, is model
+// discretion deciding the tier, which is exactly what server-owned autonomy exists to
+// prevent. Live, that produced rows held for a clinician who does not exist in the
+// loop — never thawed, never applied, never askable — that sat in "Waiting on you" for
+// weeks with no door. What DOES hold the floor: the server-detected `clinical_autonomy`
+// conflict, or action text that names a diagnosis, a medication, a dose or a
+// prescription. Anything else at the clinician tier is re-read by ordinary policy.
+export const CLINICAL_ACTION_PATTERN = /diagnos|medication|dosage|\bdose\b|prescri/i;
+
+export function clinicalActionText(text: string): boolean {
+  return CLINICAL_ACTION_PATTERN.test(String(text ?? ""));
+}
+
+// Whether a RECORDED decision stands on the deterministic floor. Reads the server's own
+// marks first (`context.clinical`, `policy_inputs.clinical`, the `clinical_ceiling`
+// reason code) and, for legacy rows with no marks at all, the same text rule the
+// conductor is held to — never the bare tier or risk_class the model wrote.
+export function clinicianFloorHolds(decision: {
+  autonomy_tier?: unknown;
+  risk_class?: unknown;
+  summary?: unknown;
+  rationale?: unknown;
+  context?: unknown;
+  action?: unknown;
+}): boolean {
+  const context = (decision.context ?? {}) as Record<string, any>;
+  if (context.clinical === true || context.deterministic_clinical === true || context.policy_inputs?.clinical === true)
+    return true;
+  if (String(context.review_reason_code ?? "") === "clinical_ceiling") return true;
+  if (context.deterministic_clinical === false) return false;
+  const held = decision.autonomy_tier === "clinician" || decision.risk_class === "clinical";
+  if (!held) return false;
+  // Athlete-facing prose only — machine keys such as `dose_context` are not clinical words.
+  const spoken = String((decision.action as any)?.user_explanation ?? "");
+  return clinicalActionText(`${String(decision.summary ?? "")}\n${String(decision.rationale ?? "")}\n${spoken}`);
+}
+
 export function nextNaturalBoundary(kind: BrainDecisionKind | string, today: string): string {
   const base = new Date(`${today}T12:00:00Z`);
   if (Number.isNaN(base.getTime())) return today;

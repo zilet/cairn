@@ -185,9 +185,8 @@ test("the thaw leaves a user-locked hold exactly where it is", () => {
   assert.equal(repo.getBrainDecision(Number(held.decision.id)).status, "review");
 });
 
-test("the thaw leaves a clinician-tier hold exactly where it is", () => {
-  repo.setSettings({ lead_mode: "lead" });
-  const recorded = repo.recordDecision({
+function clinicianHold(overrides) {
+  return repo.recordDecision({
     effective_date: null,
     kind: "case_conference",
     domain: "health",
@@ -207,12 +206,45 @@ test("the thaw leaves a clinician-tier hold exactly where it is", () => {
     reverted_at: null,
     superseded_by: null,
     evaluator_version: null,
+    ...overrides,
   });
-  const id = Number(recorded.decision.id);
+}
+
+test("the thaw leaves a clinician-tier hold exactly where it is", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  // The floor as the SERVER marked it (the conductor path records deterministic_clinical).
+  const marked = Number(clinicianHold({ context: { advisory_only: true, deterministic_clinical: true } }).decision.id);
+  // …and a legacy row with no marks whose own words are clinical.
+  const worded = Number(
+    clinicianHold({
+      context: {},
+      summary: "Ferritin and B12 both sit low — worth discussing a medication review with your doctor.",
+    }).decision.id
+  );
 
   assert.equal(thawParkedReviewDecisions().thawed, 0);
-  assert.equal(repo.getBrainDecision(id).status, "review", "the clinician floor is deterministic");
-  assert.equal(repo.getBrainDecision(id).autonomy_tier, "clinician");
+  for (const id of [marked, worded]) {
+    assert.equal(repo.getBrainDecision(id).status, "review", "the clinician floor is deterministic");
+    assert.equal(repo.getBrainDecision(id).autonomy_tier, "clinician");
+  }
+});
+
+test("a conductor cannot self-attest INTO the clinician floor either", () => {
+  // Live shape: the conductor wrote risk_class 'clinical' (or a specialist's ceiling said
+  // 'clinician') over a kcal hold with nothing clinical in it. No clinician exists in the
+  // loop, so the row could never be answered — it sat in "Waiting on you" for weeks.
+  repo.setSettings({ lead_mode: "lead" });
+  const id = Number(
+    clinicianHold({
+      domain: "nutrition",
+      summary: "Hold the accepted nutrition target of ~2,175 kcal/day with 175 g protein.",
+      rationale: "Weight trend is flat and the deficit has done its work; maintenance is the honest call.",
+    }).decision.id
+  );
+  assert.equal(thawParkedReviewDecisions().thawed, 1, "re-read by ordinary policy, not the floor");
+  const after = repo.getBrainDecision(id);
+  assert.equal(after.status, "observed", "an advisory with no draft behind it files as observed");
+  assert.notEqual(after.autonomy_tier, "clinician");
 });
 
 test("the thaw stops an advisory conference from parking at review", () => {

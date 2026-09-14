@@ -1,6 +1,6 @@
 import { db } from "../../db.js";
 import { CASE_CONFERENCE_DECISION_SCHEMA, SPECIALIST_OPINION_SCHEMA } from "../../agent-contracts.js";
-import { decideAutonomyTier } from "../../brain/autonomy.js";
+import { clinicalActionText, decideAutonomyTier } from "../../brain/autonomy.js";
 import {
   normalizeStrictCaseConferenceDecision,
   type CaseConferenceDecision,
@@ -610,19 +610,29 @@ export async function runCaseConference(
   // into resolved_conflicts — or down-classifying its own risk_class — must never
   // lower that floor: a clinical decision stays clinician-directed even when the
   // clinical specialist was absent or permissive.
-  const clinicalActionText = JSON.stringify({
+  const clinicalActionJson = JSON.stringify({
     summary: decision.summary,
     revision: decision.revision,
     parallel_actions: decision.parallel_actions,
   }).toLowerCase();
   const deterministicClinical =
-    enforcedConflicts.includes("clinical_autonomy") ||
-    /diagnos|medication|dosage|\bdose\b|prescri/.test(clinicalActionText);
+    enforcedConflicts.includes("clinical_autonomy") || clinicalActionText(clinicalActionJson);
+  // …and in the OTHER direction too (clinicianFloorHolds, src/brain/autonomy.ts): a
+  // conductor's own `risk_class:'clinical'` on a change the server finds non-clinical
+  // is model discretion over the tier. It is recorded as what the conductor said and
+  // otherwise read as moderate, so a kcal hold or a hill-repeat stand-down is routed by
+  // ordinary policy instead of waiting forever for a clinician who is not in the loop.
+  const conductorRiskClass = decision.risk_class;
   if (deterministicClinical && decision.risk_class !== "clinical") decision.risk_class = "clinical";
+  if (!deterministicClinical && decision.risk_class === "clinical") decision.risk_class = "moderate";
   let specialistCeiling = opinions.reduce<(typeof TIER_ORDER)[number]>(
     (ceiling, opinion) => moreRestrictiveTier(ceiling, opinion.autonomy_ceiling),
     decision.autonomy_tier
   );
+  // A specialist may tighten a change to an ASK; only the deterministic floor makes it
+  // clinician-directed.
+  const specialistAskedForClinician = specialistCeiling === "clinician";
+  if (specialistAskedForClinician && !deterministicClinical) specialistCeiling = "ask";
   if (unresolvedConflicts.length) {
     specialistCeiling = moreRestrictiveTier(
       specialistCeiling,
@@ -649,7 +659,7 @@ export async function runCaseConference(
     reversible: decision.reversible,
     requested_tier: specialistCeiling,
     lead_mode: getSettings().lead_mode,
-    clinical: deterministicClinical || decision.risk_class === "clinical",
+    clinical: deterministicClinical,
   });
   decision.autonomy_tier = policy.tier;
 
@@ -675,6 +685,10 @@ export async function runCaseConference(
       conflict_inputs: conflictInputs,
       unavailable,
       review_window: decision.review_window,
+      // The floor as the SERVER read it, beside what the conductor and specialists said.
+      deterministic_clinical: deterministicClinical,
+      conductor_risk_class: conductorRiskClass,
+      specialist_ceiling_softened: specialistAskedForClinician && !deterministicClinical ? "clinician->ask" : null,
       trajectory,
       optimizes: boundedStrings(focus.optimizes),
       parks: boundedStrings(focus.parks),
@@ -716,7 +730,13 @@ export async function runCaseConference(
       parsed
     );
     assertActive();
-    const autonomy = applyProposalWithAutonomy(proposal.id, { requested_tier: policy.tier });
+    // The floor travels with the change: the executable decision is marked clinical by
+    // the SERVER's read, so its hold carries the clinical_ceiling code and the thaw
+    // recognises it — never by the tier alone.
+    const autonomy = applyProposalWithAutonomy(proposal.id, {
+      requested_tier: policy.tier,
+      clinical: deterministicClinical || undefined,
+    });
     const execution = executionSummary(autonomy);
     assertActive();
     // Predictions ride the CHANGE, not the record of it. Autonomy either landed

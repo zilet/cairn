@@ -391,6 +391,71 @@ test("a plan restructure announcement always points at an executable proposal", 
   assert.equal(repo.getPlan().length, 2);
 });
 
+test("a specialist's 'clinician' ceiling over a non-clinical change tightens to an ask, never the floor", async () => {
+  // Live shape: the recovery specialist wrote autonomy_ceiling 'clinician' over a
+  // hill-repeat stand-down and the conductor wrote risk_class 'clinical' on it. Neither
+  // is a clinical fact the server can see, and no clinician exists in the loop — so the
+  // held row could never be answered. The floor is deterministic in both directions.
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const result = await runCaseConference(
+    "stub",
+    { question: "Should the hill repeats stand down for two weeks?", domains: ["training", "recovery"] },
+    {
+      context: healthyContext,
+      specialistRun: async (_agent, _prompt, domain) =>
+        opinion(domain, { autonomy_ceiling: domain === "recovery" ? "clinician" : "announce" }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          risk_class: "clinical",
+          autonomy_tier: "clinician",
+          revision: {
+            type: "plan_update",
+            summary: "Bench holds while the shoulder settles",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 115, reason: "hold" }],
+          },
+        }),
+    }
+  );
+  const recorded = getBrainDecision(result.recorded_decision_id);
+  assert.notEqual(recorded.autonomy_tier, "clinician", "model discretion never sets the clinician tier");
+  assert.notEqual(recorded.risk_class, "clinical", "nor the clinical risk class");
+  assert.equal(recorded.context.deterministic_clinical, false);
+  assert.equal(recorded.context.conductor_risk_class, "clinical", "what the conductor said is on the record");
+  assert.equal(recorded.context.specialist_ceiling_softened, "clinician->ask");
+});
+
+test("a change that names a medication DOES hold the clinician floor, whatever the specialists said", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const result = await runCaseConference(
+    "stub",
+    { question: "Adjust around the iron protocol?", domains: ["training", "recovery"] },
+    {
+      context: healthyContext,
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          risk_class: "low",
+          autonomy_tier: "quiet_apply",
+          summary: "Hold bench while the ferrous sulfate medication dosage is reviewed",
+          revision: {
+            type: "plan_update",
+            summary: "Hold bench while the medication dosage is reviewed",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 115, reason: "hold" }],
+          },
+        }),
+    }
+  );
+  const recorded = getBrainDecision(result.recorded_decision_id);
+  assert.equal(recorded.autonomy_tier, "clinician");
+  assert.equal(recorded.status, "review", "held for a clinician, never applied");
+  assert.equal(recorded.context.deterministic_clinical, true);
+  assert.equal(recorded.context.review_reason_code, "clinical_ceiling", "the floor travels with the change");
+});
+
 test("a healthy, surplus-eating athlete with nothing hurt detects ZERO conflicts", () => {
   assert.deepEqual(deterministicConferenceConflicts(healthyContext()), []);
 });

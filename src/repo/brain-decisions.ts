@@ -266,10 +266,11 @@ function awaitingExplanation(decision: BrainDecision): string | null {
 
 export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
   const out: AwaitingBrainDecision[] = [];
-  for (const d of [
-    ...listBrainDecisions({ status: "review", limit: 100 }),
-    ...listBrainDecisions({ status: "observed", limit: 100 }),
-  ]) {
+  // `review` only. An `observed` row is an advisory the brain noted and chose not to
+  // act on — a report, not a question — and under a "Waiting on you" mast it reads as
+  // a task with no door (two July conference readings surfaced that way in September).
+  // It stays readable in the decisions ledger, where the reader has asked for a record.
+  for (const d of listBrainDecisions({ status: "review", limit: 100 })) {
     const id = Number(d.id);
     const explanation = awaitingExplanation(d);
     if (!Number.isFinite(id) || !explanation) continue;
@@ -280,8 +281,8 @@ export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
     // the posture says so — a `review` hold with `review_required` set, which is what
     // review_everything writes. An `observed` request (the thaw's advisory re-filing)
     // is never one; that is how two answered asks sat in "Waiting on you" for weeks.
-    if ((d.action as any)?.kind === "training_structure_request") {
-      if (d.status !== "review" || (d.context as any)?.review_required !== true) continue;
+    if ((d.action as any)?.kind === "training_structure_request" && (d.context as any)?.review_required !== true) {
+      continue;
     }
     const decided = String(d.effective_date ?? "").slice(0, 10) || stampDay(d.created_at);
     if (!decided) continue;

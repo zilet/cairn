@@ -2687,8 +2687,16 @@ announce / ask / clinician) under `settings.lead_mode`; `src/domain/brain/autono
 applies announced/quiet changes at natural boundaries (per-decision error isolation — a failing
 decision parks in `review`, never blocks the pass) with exact three-way-merge Undo, a
 3-material-change/domain/week surprise budget (`SURPRISE_BUDGET_PER_DOMAIN_WEEK`), and 90-day
-veto-rate demotion. The clinician floor is deterministic — a conductor cannot self-attest it away
-(`src/domain/brain/case-conference.ts`).
+veto-rate demotion. The clinician floor is deterministic — in BOTH directions. A conductor cannot
+self-attest it away, and cannot self-attest INTO it: what holds the floor is the server-detected
+`clinical_autonomy` conflict or action text naming a diagnosis / medication / dose / prescription
+(`clinicalActionText`); a specialist's `autonomy_ceiling:'clinician'` or the conductor's own
+`risk_class:'clinical'` over anything else tightens the change to an ASK at most, and is recorded as
+what was said (`conductor_risk_class`, `specialist_ceiling_softened`, `deterministic_clinical`).
+`clinicianFloorHolds(decision)` (`src/brain/autonomy.ts`) is the one read of a RECORDED row — the
+thaw sweep and the advisory re-offer gate on it, never on the bare tier — so a row held for a
+clinician who is not in the loop is re-read by ordinary policy instead of waiting forever
+(`src/domain/brain/case-conference.ts`). Live, four such rows sat in "Waiting on you" for weeks.
 
 **A conflict is a typed predicate, and a resolution has to cite.** The case-conference conflict layer
 lives in its own module (`src/domain/brain/conference-conflicts.ts`). Conflicts used to be detected by

@@ -1,5 +1,11 @@
 import { db } from "../../db.js";
-import { decideAutonomyTier, domainShouldDemote, nextNaturalBoundary, surpriseBudgetAllows } from "../../brain/autonomy.js";
+import {
+  clinicianFloorHolds,
+  decideAutonomyTier,
+  domainShouldDemote,
+  nextNaturalBoundary,
+  surpriseBudgetAllows,
+} from "../../brain/autonomy.js";
 import {
   athleteRestructureLandingDate,
   enqueueStructureRebuild,
@@ -1550,12 +1556,16 @@ function reofferParkedAdvisory(
   context: Record<string, any>,
   leadMode: CairnLeadModeValue
 ): boolean {
+  // The same deterministic floor the sweep gates on: a conductor's bare
+  // `risk_class:'clinical'` with nothing clinical in the text reads as moderate here,
+  // or the advisory would pin at clinician forever and never re-file.
+  const onFloor = clinicianFloorHolds(decision);
   const policy = decideAutonomyTier({
     kind: decision.kind,
-    risk_class: decision.risk_class,
+    risk_class: onFloor ? "clinical" : decision.risk_class === "clinical" ? "moderate" : decision.risk_class,
     reversible: true,
     lead_mode: leadMode,
-    clinical: decision.risk_class === "clinical",
+    clinical: onFloor,
   });
   if (policy.tier === "ask" || policy.tier === "clinician") return false;
   return !!patchBrainDecision(decision.id!, {
@@ -1695,10 +1705,13 @@ export function thawParkedReviewDecisions(
         skipped += 1;
         continue;
       }
+      // The clinician floor is DETERMINISTIC (clinicianFloorHolds): a row the server
+      // itself marked clinical stays untouched. A row at the clinician tier only because
+      // a specialist opinion or the conductor's own risk_class said so is not on the
+      // floor — it is re-read by policy below like any other hold, which is how a
+      // hill-repeat stand-down stops waiting for a clinician who is not in the loop.
       if (
-        decision.autonomy_tier === "clinician" ||
-        decision.risk_class === "clinical" ||
-        context.clinical === true ||
+        clinicianFloorHolds(decision) ||
         context.user_locked === true ||
         THAW_FLOOR_REASON_CODES.has(String(context.review_reason_code ?? ""))
       ) {

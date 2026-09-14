@@ -175,8 +175,10 @@ permission auto-deny — no CLI flag fixes that reliably (verified live; see `do
 / quiet_apply / announce / ask / clinician; bounded reversible changes land at natural boundaries,
 structural ones announce, goal-identity and anything clinical always ask. Every material decision is
 recorded in `brain_decisions` with falsifiable expectations and server-owned one-tap Undo. The
-clinician floor is deterministic — a conductor cannot self-attest it away. See
-`docs/ELITE-BRAIN-IMPLEMENTATION.md`.
+clinician floor is deterministic IN BOTH DIRECTIONS — a conductor cannot self-attest it away, and
+cannot self-attest INTO it either (`clinicianFloorHolds`, `src/brain/autonomy.ts`: a specialist's
+`autonomy_ceiling:'clinician'` or a conductor's `risk_class:'clinical'` over a non-clinical change
+tightens to an ask at most). See `docs/ELITE-BRAIN-IMPLEMENTATION.md`.
 
 **Agent selection.** Callers name an agent or pass `agent:"auto"` / omit it. Auto uses
 `repo.pickAgentOrder()` (strategy in `settings`: `round_robin` default / `random` / `priority`) and
