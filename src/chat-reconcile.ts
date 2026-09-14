@@ -502,8 +502,28 @@ export function reconcileGoalIdentityReply(
 // The counterpart to reconcileStrengthObjectiveReply for the structure hand-off. Chat
 // promising to "flag it to your coach lane" and writing nothing is exactly the failure
 // flag_training_structure exists to close, so the reply may only make that claim when
-// an ask-tier decision genuinely landed — and when one did, the receipt says plainly
-// that it is waiting to be confirmed, not that anything changed.
+// the hand-off genuinely happened — and when it did, the receipt says what the SERVER
+// will do with it, not what the model guessed: under lead / announce_first the coach is
+// building the change and it lands at the named boundary with an Undo; under
+// review_everything it will wait to be confirmed. Either way nothing has changed yet.
+function structureHandOffReceipt(result: Record<string, unknown>): string {
+  const posture = String(result.posture ?? "");
+  const built = result.built_decision as Record<string, unknown> | null | undefined;
+  if (posture === "lands") {
+    const landsOn = String(built?.effective_date ?? result.lands_on ?? "").trim();
+    const when = landsOn ? ` on ${landsOn}` : " at the next natural boundary";
+    return built
+      ? `Already in hand — your coach built that change and it lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`
+      : `Handed to your coach — it's rebuilding your week around this now, and the change lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`;
+  }
+  if (posture === "asks") {
+    return built
+      ? "Already in hand — your coach drafted that change and it's waiting for you to confirm. Nothing in your plan has changed yet."
+      : "Handed to your coach — it's drafting the change now, and because you review everything it will wait for you to confirm. Nothing in your plan has changed yet.";
+  }
+  return "Flagged to your coach lane — it's waiting for you to confirm, and nothing in your plan has changed yet.";
+}
+
 export function reconcileTrainingStructureReply(
   reply: string,
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
@@ -522,10 +542,7 @@ export function reconcileTrainingStructureReply(
     const reason = String(entries.find((entry) => entry.error)?.error ?? "the request did not read back");
     return pickDayVariant(TRAINING_STRUCTURE_UNVERIFIED_VARIANTS, today, "chat-structure-unverified")(reason);
   }
-  return appendReceipt(
-    reply,
-    "Flagged to your coach lane — it's waiting for you to confirm, and nothing in your plan has changed yet."
-  );
+  return appendReceipt(reply, structureHandOffReceipt(results.at(-1) ?? {}));
 }
 
 // Prose claiming the Undo already happened. Subject-anchored on purpose, exactly as

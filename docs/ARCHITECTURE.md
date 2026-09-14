@@ -1768,6 +1768,25 @@ Unmarked `cardio[]` entries (the Monday tick, run-plan proposals, a restructure'
 their wholesale meaning untouched. `src/repo/run-edit.ts` is the one merge both sides call, and is
 dependency-free so the repo layer can import it without a cycle.
 
+**A structure request is BUILT, not parked.** Chat has no action that rewrites the shape of a week;
+`flag_training_structure` is the hand-off, and it hands off for real (`src/domain/brain/structure-request.ts`).
+The handler records the request row (kind `training_structure`, `action.kind
+'training_structure_request'`, the athlete's sentence verbatim as `rationale`), then enqueues an
+`evolve_program` agent job whose `instruction` is `STRUCTURE_REQUEST_INSTRUCTION_PREFIX — <their
+words>` and whose `task` frames a full `days` restructure; `context.structure_build_job_id` links the
+two. The op's draft routes through `applyProposalWithAutonomy` exactly like every other restructure —
+under `lead`/`announce_first` it ANNOUNCES and lands at the next Monday with a one-tap Undo, under
+`review_everything` it holds for review — and `settleStructureBuild` (agent-job runner, both
+outcomes) then supersedes the request row with the built change's decision, so the athlete reads ONE
+row: the change itself, landing or waiting. A failed build leaves the request row standing with a
+sentence that says so, and re-asking retries it; a re-ask while a build is queued/running, or while
+the built change is still `announced`/`pending`/`review`, points back at the standing one
+(`standingTrainingStructureFlag`) instead of drafting the week twice. The thaw sweep skips a request
+whose build is live — re-filing it as an `observed` advisory mid-build was how a request used to
+vanish. The chat receipt (`reconcileTrainingStructureReply`) states the SERVER's posture and landing
+day (`result.posture`, `result.lands_on`), never "confirm" under lead; the request row's
+`user_explanation` says the same thing in the Waiting list.
+
 Progress rides an **`EventEmitter` bus** (`onTurnEvent(id, cb)`) that the SSE endpoint forwards:
 `phase` / `delta` (a live reply chunk) / `reset` (streaming fell back — clear the partial bubble) /
 terminal `done`/`error`/`canceled`. `enqueueChatTurn`/`cancelTurn`/`recoverChatTurns` are the

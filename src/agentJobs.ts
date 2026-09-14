@@ -26,6 +26,7 @@ import {
 import { readToday } from "./domain/brain/day-read-use-case.js";
 import { runCaseConference } from "./domain/brain/case-conference.js";
 import { applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
+import { settleStructureBuild } from "./domain/brain/structure-request.js";
 import type { SpecialistDomain } from "./brain/specialist-contract.js";
 import { normalizeStrictCaseConferenceDecision } from "./brain/case-conference-contract.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
@@ -419,9 +420,25 @@ async function processAgentJob(id: number): Promise<void> {
         break;
       }
       case "evolve_program": {
-        result = await evolveProgram(agent, input.instruction != null ? String(input.instruction) : undefined, hooks);
+        // `task` focuses the agent (a chat structure request's framing) WITHOUT changing
+        // the stored `instruction` — the same split the scheduler's data-triggered path uses.
+        result = await evolveProgram(
+          agent,
+          input.instruction != null ? String(input.instruction) : undefined,
+          hooks,
+          input.task != null && String(input.task).trim() ? { task: String(input.task) } : undefined
+        );
         chosen = result?.agent ?? null;
         if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
+        // A chat structure request rode in on this job: the built change supersedes the
+        // request row, or the row's sentence says plainly that the build did not happen.
+        if (Number(input.structure_flag_decision_id) > 0) {
+          try {
+            settleStructureBuild(Number(input.structure_flag_decision_id), result);
+          } catch (err) {
+            recordAsyncFailure("agent_jobs", "structure_flag_settle", err);
+          }
+        }
         break;
       }
       case "compose_week": {
@@ -622,6 +639,13 @@ async function processAgentJob(id: number): Promise<void> {
     const cur = repo.getAgentJob(id) as any;
     if (cur?.status === "canceled" || controller.signal.aborted) return; // Stop, not a failure
     if (job.kind === "case_conference") failCaseConferenceSchedulerOperation(input, e);
+    if (job.kind === "evolve_program" && Number(input.structure_flag_decision_id) > 0) {
+      try {
+        settleStructureBuild(Number(input.structure_flag_decision_id), { ok: false, error: e?.message ?? String(e) });
+      } catch (err) {
+        recordAsyncFailure("agent_jobs", "structure_flag_settle", err);
+      }
+    }
     const failed = repo.failAgentJob(id, e?.message ?? String(e));
     recordAsyncFailure("agent_jobs", job.kind, e);
     emit(id, { type: "error", job: failed, message: "Background job failed" });

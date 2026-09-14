@@ -19,6 +19,7 @@ import {
   TRAINING_STRUCTURE_UNVERIFIED_VARIANTS,
 } from "../dist/chatTurns.js";
 import { normalizeChatAction, normalizeChatActions, CHAT_ACTION_TYPES } from "../dist/chatActions.js";
+import { settleStructureBuild } from "../dist/domain/brain/structure-request.js";
 import { trainingLogRouter } from "../dist/routes/training-log.js";
 import { localDateISO } from "../dist/repo/shared.js";
 
@@ -242,38 +243,160 @@ test("REST and MCP mirror the multi-anchor list/create surfaces", async () => {
 
 const REQUEST = "I want to rebuild strength across all six of my anchor lifts in parallel.";
 
-test("flag_training_structure records an ask-tier training_structure decision with the athlete's words", () => {
+// The build job is handed to the runner through this seam so the test never spawns the
+// stub CLI in the background; what it asserts is the durable job row and the ledger.
+const enqueued = [];
+const noRunner = { enqueueJob: (id) => enqueued.push(id) };
+
+test("flag_training_structure records the request AND hands it to the coach as an evolve_program job", () => {
+  enqueued.length = 0;
+  repo.setSettings({ lead_mode: "lead" });
   const { applied } = applyChatActions(
     {
       actions: [{ type: "flag_training_structure", request: REQUEST, summary: "Rebuild six anchor lifts in parallel" }],
     },
-    { agent: "stub", message: REQUEST }
+    { agent: "stub", message: REQUEST, ...noRunner }
   );
   const entry = applied.find((row) => row.type === "flag_training_structure");
   assert.ok(entry, "the promise left a trace");
   assert.equal(entry.result.ok, true);
   assert.equal(entry.result.verified, true);
+  assert.equal(entry.result.posture, "lands", "lead mode: the built change lands, it is not an ask");
+  assert.match(String(entry.result.lands_on), /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(new Date(`${entry.result.lands_on}T12:00:00Z`).getUTCDay(), 1, "a structural change lands on a Monday");
 
   const decision = repo.getBrainDecision(entry.result.decision_id);
   assert.equal(decision.kind, "training_structure");
   assert.equal(decision.domain, "training");
-  assert.equal(decision.autonomy_tier, "ask", "never quiet_apply, never announce");
-  assert.equal(decision.status, "review");
+  assert.equal(decision.status, "review", "the request row waits only while the coach builds");
   assert.equal(decision.source, "chat");
   assert.equal(decision.rationale, REQUEST, "the athlete's own sentence, verbatim");
   assert.equal(decision.summary, "Rebuild six anchor lifts in parallel");
   assert.equal(decision.context.requested_in_chat, true);
-  assert.equal(decision.applied_at, null, "an ask tier applies nothing by itself");
+  assert.equal(decision.context.review_required, false, "nothing is asked of the athlete under lead");
+  assert.equal(decision.applied_at, null, "the request row applies nothing by itself");
+  assert.match(decision.action.user_explanation, /rebuilding the week/);
+  assert.match(decision.action.user_explanation, /one-tap Undo/);
+  assert.doesNotMatch(decision.action.user_explanation, /confirm/);
 
-  // It is genuinely queued on the surfaces the athlete already reads.
-  assert.ok(
-    repo.listBrainDecisions({ status: "review", limit: 50 }).some((row) => row.id === decision.id),
-    "the decision sits in the review queue"
-  );
+  // THE HAND-OFF: a durable evolve_program job carrying the athlete's words, linked
+  // back to the request row, actually handed to the runner.
+  const jobId = Number(decision.context.structure_build_job_id);
+  assert.ok(jobId > 0, "the request carries its build job");
+  assert.deepEqual(enqueued, [jobId], "and the job was handed to the runner exactly once");
+  assert.equal(entry.result.build.job_id, jobId);
+  const job = repo.getAgentJob(jobId);
+  assert.equal(job.kind, "evolve_program");
+  assert.equal(job.status, "queued");
+  assert.equal(job.input.structure_flag_decision_id, decision.id);
+  assert.match(job.input.instruction, /restructure the week as the athlete asked/);
+  assert.ok(job.input.instruction.includes(REQUEST), "the athlete's words ride on the proposal instruction");
+  assert.ok(job.input.task.includes(REQUEST), "and frame the task");
+  assert.match(job.input.task, /"days" restructure/);
+
+  // While the build is in flight it is visible on the surfaces the athlete already reads.
   assert.ok(
     repo.awaitingBrainDecisions(50).some((row) => row.id === decision.id),
-    "and it surfaces as something awaiting the athlete"
+    "the in-flight request is readable, with the sentence that says what happens next"
   );
+});
+
+test("under review_everything the request says it will wait to be confirmed", () => {
+  enqueued.length = 0;
+  repo.setSettings({ lead_mode: "review_everything" });
+  try {
+    const { applied } = applyChatActions(
+      { actions: [{ type: "flag_training_structure", request: REQUEST }] },
+      { agent: "stub", message: REQUEST, ...noRunner }
+    );
+    const entry = applied.find((row) => row.type === "flag_training_structure");
+    assert.equal(entry.result.verified, true);
+    assert.equal(entry.result.posture, "asks");
+    assert.equal(entry.result.lands_on, null);
+    const decision = repo.getBrainDecision(entry.result.decision_id);
+    assert.equal(decision.context.review_required, true);
+    assert.match(decision.action.user_explanation, /wait here for you to confirm/);
+    assert.equal(enqueued.length, 1, "the coach still drafts it — the posture only decides how it lands");
+  } finally {
+    repo.setSettings({ lead_mode: "lead" });
+  }
+});
+
+test("when the build produces a decision, the request row is superseded by the change itself", () => {
+  enqueued.length = 0;
+  const { applied } = applyChatActions(
+    { actions: [{ type: "flag_training_structure", request: REQUEST }] },
+    { agent: "stub", message: REQUEST, ...noRunner }
+  );
+  const flagId = applied.find((row) => row.type === "flag_training_structure").result.decision_id;
+  // Stand in for the announced restructure the autonomy layer would record.
+  const change = repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "training_structure",
+    domain: "training",
+    summary: "Rebuilt week",
+    rationale: null,
+    source: "stub",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "999",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: false,
+    input_fingerprint: null,
+    context: {},
+    action: { proposal_id: 999 },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+  settleStructureBuild(flagId, { ok: true, proposal: { id: 999 }, autonomy: { decision: change } });
+  const flag = repo.getBrainDecision(flagId);
+  assert.equal(flag.status, "superseded");
+  assert.equal(flag.superseded_by, change.id);
+  assert.equal(flag.context.structure_build_outcome, "built");
+  assert.equal(flag.context.structure_build_proposal_id, 999);
+  assert.ok(!repo.awaitingBrainDecisions(50).some((row) => row.id === flagId), "the request row leaves the queue");
+
+  // Re-asking while the built change is still announced points back at it — no second build.
+  const again = applyChatActions(
+    { actions: [{ type: "flag_training_structure", request: REQUEST }] },
+    { agent: "stub", message: REQUEST, ...noRunner }
+  ).applied.find((row) => row.type === "flag_training_structure");
+  assert.equal(again.result.verified, true);
+  assert.equal(again.result.decision_id, flagId);
+  assert.equal(again.result.built_decision.id, change.id);
+  assert.equal(again.result.build, null);
+  assert.equal(enqueued.length, 1, "nothing was enqueued a second time");
+});
+
+test("when the build fails, the request row stays and says so — and a re-ask retries it", () => {
+  enqueued.length = 0;
+  const first = applyChatActions(
+    { actions: [{ type: "flag_training_structure", request: REQUEST }] },
+    { agent: "stub", message: REQUEST, ...noRunner }
+  ).applied.find((row) => row.type === "flag_training_structure");
+  const flagId = first.result.decision_id;
+  const jobId = first.result.build.job_id;
+  repo.failAgentJob(jobId, "no agent");
+  settleStructureBuild(flagId, { ok: false, error: "no agent" });
+  const flag = repo.getBrainDecision(flagId);
+  assert.equal(flag.status, "review", "still standing");
+  assert.equal(flag.context.structure_build_outcome, "failed");
+  assert.match(flag.action.user_explanation, /could not build it just now \(no agent\)/);
+  assert.doesNotMatch(flag.action.user_explanation, /lands/);
+
+  const retry = applyChatActions(
+    { actions: [{ type: "flag_training_structure", request: REQUEST }] },
+    { agent: "stub", message: REQUEST, ...noRunner }
+  ).applied.find((row) => row.type === "flag_training_structure");
+  assert.equal(retry.result.decision_id, flagId, "the same request row");
+  assert.ok(retry.result.build.job_id > jobId, "with a fresh build job");
+  assert.equal(enqueued.length, 2);
+  assert.equal(repo.getBrainDecision(flagId).context.structure_build_outcome, null, "the failure is cleared for the retry");
+  assert.match(repo.getBrainDecision(flagId).action.user_explanation, /rebuilding the week/);
 });
 
 test("a malformed or unauthorized structure flag writes nothing", () => {
@@ -290,7 +413,7 @@ test("a malformed or unauthorized structure flag writes nothing", () => {
   // Authorization: a leading question is a conversation, not an ask.
   const { applied } = applyChatActions(
     { actions: [{ type: "flag_training_structure", request: REQUEST }] },
-    { agent: "stub", message: "Should I train all six of my anchor lifts at once?" }
+    { agent: "stub", message: "Should I train all six of my anchor lifts at once?", ...noRunner }
   );
   assert.equal(applied.filter((row) => row.type === "flag_training_structure").length, 0);
   assert.equal(repo.listBrainDecisions({ status: "review", limit: 100 }).length, before);
@@ -300,12 +423,15 @@ test("re-flagging the same request does not stack up duplicate asks", () => {
   const run = () =>
     applyChatActions(
       { actions: [{ type: "flag_training_structure", request: REQUEST }] },
-      { agent: "stub", message: REQUEST }
+      { agent: "stub", message: REQUEST, ...noRunner }
     ).applied.find((row) => row.type === "flag_training_structure");
+  enqueued.length = 0;
   const first = run();
   const second = run();
   assert.equal(first.result.decision_id, second.result.decision_id, "the same standing ask is reused");
   assert.equal(repo.listBrainDecisions({ status: "review", kind: "training_structure", limit: 100 }).length, 1);
+  assert.equal(enqueued.length, 1, "and the coach was asked to build it exactly once");
+  assert.equal(second.result.build.job_id, first.result.build.job_id, "the re-ask points at the live build");
 });
 
 test("a NEAR-duplicate re-ask reuses the standing flag; a materially different ask is flagged fresh", () => {
@@ -314,7 +440,7 @@ test("a NEAR-duplicate re-ask reuses the standing flag; a materially different a
   const flag = (request, message = request) =>
     applyChatActions(
       { actions: [{ type: "flag_training_structure", request }] },
-      { agent: "stub", message }
+      { agent: "stub", message, ...noRunner }
     ).applied.find((row) => row.type === "flag_training_structure");
 
   const first = flag(REQUEST);
@@ -377,13 +503,44 @@ test("the reply may only claim the hand-off when a decision actually landed", ()
     assert.match(text, /won't (?:claim|say)/i, text);
   }
 
-  // Verified: the prose survives and the receipt says it is WAITING, not done.
+  // Verified under lead: the prose survives and the receipt says the coach is BUILDING it
+  // and names the landing day — never "done", never "confirm".
   const verified = reconcileTrainingStructureReply(promise, [
-    { type: "flag_training_structure", result: { ok: true, verified: true, decision_id: 1 } },
+    {
+      type: "flag_training_structure",
+      result: { ok: true, verified: true, decision_id: 1, posture: "lands", lands_on: "2026-09-14", build: { job_id: 7 } },
+    },
   ]);
   assert.match(verified, /I'll flag it/);
-  assert.match(verified, /waiting for you to confirm/);
+  assert.match(verified, /rebuilding your week/);
+  assert.match(verified, /lands on 2026-09-14 with a one-tap Undo/);
+  assert.doesNotMatch(verified, /confirm/);
   assert.match(verified, /nothing in your plan has changed yet/i);
+
+  // Re-asked once the change is already built: the receipt points at it, with its own date.
+  const built = reconcileTrainingStructureReply(promise, [
+    {
+      type: "flag_training_structure",
+      result: {
+        ok: true,
+        verified: true,
+        decision_id: 1,
+        posture: "lands",
+        lands_on: "2026-09-14",
+        build: null,
+        built_decision: { id: 9, status: "announced", effective_date: "2026-09-21" },
+      },
+    },
+  ]);
+  assert.match(built, /Already in hand/);
+  assert.match(built, /lands on 2026-09-21/);
+
+  // Under review_everything the receipt says it will WAIT to be confirmed.
+  const asks = reconcileTrainingStructureReply(promise, [
+    { type: "flag_training_structure", result: { ok: true, verified: true, decision_id: 1, posture: "asks", build: { job_id: 7 } } },
+  ]);
+  assert.match(asks, /wait for you to confirm/);
+  assert.match(asks, /nothing in your plan has changed yet/i);
 
   // An unrelated reply is never rewritten.
   const untouched = "Squats looked strong today.";
@@ -396,7 +553,8 @@ test("the chat action contract advertises flag_training_structure to the model",
   const spec = source.slice(source.indexOf("flag_training_structure: {"));
   assert.match(spec, /coach lane/i, "the guidance names the hand-off the reply promises");
   assert.match(spec, /verbatim/i, "and demands the athlete's own words");
-  assert.match(spec, /confirm/i, "and says plainly that it changes nothing by itself");
+  assert.match(spec, /never say "done"/i, "and says plainly that it changes nothing in the turn");
+  assert.match(spec, /one-tap Undo/i, "and that the built change lands with an Undo under lead");
 });
 
 // ---- anchor-slide cut pressure regression -------------------------------------

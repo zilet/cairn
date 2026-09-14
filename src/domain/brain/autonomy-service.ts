@@ -1,5 +1,6 @@
 import { db } from "../../db.js";
-import { decideAutonomyTier, domainShouldDemote, surpriseBudgetAllows } from "../../brain/autonomy.js";
+import { decideAutonomyTier, domainShouldDemote, nextNaturalBoundary, surpriseBudgetAllows } from "../../brain/autonomy.js";
+import { liveStructureBuild } from "./structure-request.js";
 import type { AutonomyTier, BrainDomain } from "../../brain/decision-contract.js";
 import {
   hasRecentDecisionVeto,
@@ -221,11 +222,10 @@ function serverClinicalProvenance(value: unknown): Record<string, unknown> | nul
     : null;
 }
 
+// The date policy lives in brain/autonomy.ts (nextNaturalBoundary) so the chat structure
+// hand-off can name the same landing day in its receipt without importing this module.
 function nextBoundary(kind: ProposalShape["kind"], today = localDateISO()): string {
-  if (kind !== "training_structure") return addDaysISO(today, 1) ?? today;
-  const date = new Date(`${today}T12:00:00Z`);
-  const days = (8 - date.getUTCDay()) % 7 || 7;
-  return addDaysISO(today, days) ?? today;
+  return nextNaturalBoundary(kind, today);
 }
 
 const PLAN_ITEM_FIELDS = [
@@ -1688,6 +1688,15 @@ export function thawParkedReviewDecisions(
       // Left untouched entirely — not even stamped — so the change and the
       // apply_error that parked it stay exactly as the athlete will read them.
       if (carriesPendingChange(decision.action)) {
+        skipped += 1;
+        continue;
+      }
+      // A chat structure REQUEST whose build job is still queued or running is not an
+      // advisory to re-file: the coach is mid-way through drafting the change, and the
+      // request row is superseded by that change the moment the job settles. Re-offering
+      // it here used to turn the athlete's ask into an `observed` reading before the
+      // build had a chance to finish. Untouched, not stamped — the next tick re-reads it.
+      if (liveStructureBuild(decision)) {
         skipped += 1;
         continue;
       }

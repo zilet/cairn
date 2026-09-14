@@ -139,6 +139,19 @@ export function decideAutonomyTier(input: AutonomyPolicyInput): AutonomyPolicyDe
   };
 }
 
+// The natural boundary a scheduled change lands at: a structural change (the shape of
+// the training week) waits for the next Monday so no half-lived week is rewritten
+// underneath the athlete; every other bounded change lands tomorrow. Pure date policy —
+// `today` is a local YYYY-MM-DD and so is the answer. The autonomy service schedules
+// against this and the chat structure hand-off names the same day in its receipt.
+export function nextNaturalBoundary(kind: BrainDecisionKind | string, today: string): string {
+  const base = new Date(`${today}T12:00:00Z`);
+  if (Number.isNaN(base.getTime())) return today;
+  const days = kind === "training_structure" ? (8 - base.getUTCDay()) % 7 || 7 : 1;
+  base.setUTCDate(base.getUTCDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
 export function domainShouldDemote(reverted: number, applied: number): boolean {
   const total = Math.max(0, Math.trunc(applied));
   const vetoes = Math.max(0, Math.trunc(reverted));
