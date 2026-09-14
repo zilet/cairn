@@ -86,6 +86,48 @@ export function listArtAssets(kind: string, limit = 150): { key: string; text: s
     .all(kind, limit) as any[];
 }
 
+// ---------- art_usage retention ----------
+// The spend ledger is append-only and every cache miss writes to it (generate,
+// canonicalize, reuse, fail), so a warm loop over a large catalogue adds rows
+// faster than anything ever removed them. Mirrors agent_runs / diagnostic_events:
+// a time window plus a hard row cap, pruned lazily from the write path on an
+// interval, with a cap-pressure flag so a table already at the ceiling is
+// trimmed on every write instead of once an hour. Totals since art was enabled
+// stay honest for the retention window; older spend rolls off, which is what the
+// all-time figure is for.
+const ART_USAGE_RETENTION_DAYS = 180;
+const ART_USAGE_ROW_CAP = 20_000;
+const ART_USAGE_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
+const ART_USAGE_WRITES_PER_CAP_CHECK = 250;
+let nextArtUsagePruneAt = 0;
+let artUsageWritesUntilCapCheck = ART_USAGE_WRITES_PER_CAP_CHECK;
+let artUsageCapPressure = false;
+
+/** Best-effort retention; exported for deterministic maintenance/tests. */
+export function pruneArtUsage(now = Date.now(), force = false): void {
+  if (!force && now < nextArtUsagePruneAt) return;
+  try {
+    db.prepare(`DELETE FROM art_usage WHERE created_at < datetime('now', ?)`).run(`-${ART_USAGE_RETENTION_DAYS} days`);
+    const capped = db
+      .prepare(`DELETE FROM art_usage WHERE id NOT IN (SELECT id FROM art_usage ORDER BY id DESC LIMIT ?)`)
+      .run(ART_USAGE_ROW_CAP);
+    if (Number(capped.changes) > 0) artUsageCapPressure = true;
+    else if (artUsageCapPressure)
+      artUsageCapPressure =
+        Number((db.prepare(`SELECT COUNT(*) AS n FROM art_usage`).get() as any)?.n ?? 0) >= ART_USAGE_ROW_CAP;
+  } catch {
+    /* ledger maintenance is failure-safe — art must never break on its own telemetry */
+  } finally {
+    // Advance even after a failure, so a broken table cannot become a hot loop.
+    nextArtUsagePruneAt = now + ART_USAGE_PRUNE_INTERVAL_MS;
+  }
+}
+
+export const ART_USAGE_RETENTION = {
+  retention_days: ART_USAGE_RETENTION_DAYS,
+  row_cap: ART_USAGE_ROW_CAP,
+} as const;
+
 export function recordArtUsage(u: {
   kind: string;
   query: string;
@@ -111,6 +153,12 @@ export function recordArtUsage(u: {
     Number(u.est_cost_usd ?? 0) || 0,
     Number(u.est_saved_usd ?? 0) || 0
   );
+  artUsageWritesUntilCapCheck--;
+  if (artUsageCapPressure) pruneArtUsage(Date.now(), true);
+  else if (artUsageWritesUntilCapCheck <= 0) {
+    artUsageWritesUntilCapCheck = ART_USAGE_WRITES_PER_CAP_CHECK;
+    pruneArtUsage(Date.now(), true);
+  } else pruneArtUsage();
 }
 
 export interface ArtUsageTotals {

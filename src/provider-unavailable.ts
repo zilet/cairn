@@ -9,8 +9,9 @@
  * at its weekly limit, codex is at its usage limit, grok is out of credit".
  *
  * This is the typed carrier for that answer. It lives in its own leaf module, importing
- * nothing but the privacy contract, so both the scheduler (which throws it) and the
- * durable operation ladder in `repo/` (which defers its retry) can see it without
+ * only the privacy contract and its sibling leaf for host congestion, so both the
+ * scheduler (which throws it) and the durable operation ladder in `repo/` (which defers
+ * its retry) can see it without
  * anyone importing `agents.ts` or `repo.ts` and closing an import cycle.
  *
  * Everything it carries is TAXONOMY: a low-cardinality availability class and the agent
@@ -18,6 +19,7 @@
  */
 
 import { agentErrorClass, telemetryIdentifier } from "./telemetry-privacy.js";
+import { agentBusyErrorForOperation, isAgentBusyResult } from "./agent-busy.js";
 
 /** One entry of `AgentFallbackError.tried[]`, read defensively. */
 export interface ProviderAttempt {
@@ -128,6 +130,10 @@ export function isProviderUnavailable(result: AgenticOpResult | null | undefined
  * violation, an unusable draft — things a person should look at).
  */
 export function schedulerTaskError(operation: string, result: AgenticOpResult, fallbackMessage: string): Error {
+  // Congestion first: an op the host had no spawn permit for never reached a provider,
+  // so it is neither this operation's failure nor an availability verdict on any CLI.
+  // Typed, so runScheduled defers the slot instead of filing a task_failure.
+  if (isAgentBusyResult(result)) return agentBusyErrorForOperation(operation);
   if (isProviderUnavailable(result)) return new ProviderUnavailableError(operation, result);
   return new Error(String(result?.error || fallbackMessage));
 }

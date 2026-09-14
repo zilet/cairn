@@ -1702,6 +1702,91 @@ CREATE INDEX IF NOT EXISTS idx_exercise_guides_exercise ON exercise_guides(exerc
 CREATE INDEX IF NOT EXISTS idx_exercise_guides_name_key ON exercise_guides(name_key);
 `);
 
+// ---------- prepared-statement cache ----------
+// `db.prepare()` is called INLINE at ~630 sites, most of them inside per-row loops
+// and per-request builders, and every call re-parses and re-compiles the SQL. One
+// cold getCoachContext measured 1,632 prepare() calls — on a Pi that compile work is
+// pure overhead, because the SQL text is a literal that never varies.
+//
+// So `prepare` is memoized by SQL TEXT on the one connection. Safe here, and the
+// safety rests on exactly two properties that were audited across src/, test/ and
+// scripts/ before this was enabled:
+//
+//   1. NOTHING calls `iterate()` (zero hits repo-wide). `run()`/`get()`/`all()` each
+//      bind, step to completion and reset before returning, so handing two callers
+//      the same StatementSync — including a caller that re-enters the SAME SQL from
+//      inside a loop over its own `.all()` rows — is indistinguishable from handing
+//      them two. A half-stepped statement is the one thing that would break, and only
+//      `iterate()` produces one. If `iterate()` is ever introduced, it must take a
+//      statement from `prepareUncached()` below, not from here.
+//   2. NOTHING calls the per-statement mode setters (`setReadBigInts`,
+//      `setAllowBareNamedParameters`, `setReturnArrays` — zero hits repo-wide), which
+//      are the only way one caller's configuration could leak into another's.
+//
+// Installed AFTER runMigrations + the index block, so the schema is final for the
+// life of the process and no migration statement is ever cached. The map is bounded
+// and evicts least-recently-used, so a pathological caller building unique SQL
+// strings cannot grow it without limit.
+const STATEMENT_CACHE_MAX = 2000;
+type PreparedStatement = ReturnType<DatabaseSync["prepare"]>;
+/** The raw, un-memoized compile. The escape hatch for anything that needs a statement
+ *  of its OWN (today: nothing — see the `iterate()` note above). */
+export const prepareUncached: (sql: string) => PreparedStatement = db.prepare.bind(db);
+const statementCache = new Map<string, PreparedStatement>();
+let statementCacheHits = 0;
+let statementCacheCompiles = 0;
+let statementCacheEvictions = 0;
+
+db.prepare = function cachedPrepare(sql: string): PreparedStatement {
+  const cached = statementCache.get(sql);
+  if (cached !== undefined) {
+    statementCacheHits++;
+    // LRU touch: re-insert so the oldest key is genuinely the least recently used.
+    statementCache.delete(sql);
+    statementCache.set(sql, cached);
+    return cached;
+  }
+  // A malformed statement throws here and caches nothing, exactly as before.
+  const stmt = prepareUncached(sql);
+  statementCacheCompiles++;
+  statementCache.set(sql, stmt);
+  if (statementCache.size > STATEMENT_CACHE_MAX) {
+    const oldest = statementCache.keys().next();
+    if (!oldest.done) {
+      statementCache.delete(oldest.value);
+      statementCacheEvictions++;
+    }
+  }
+  return stmt;
+};
+
+/** Observability + test hook: how much of the prepare traffic is compile work. */
+export function statementCacheStats(): {
+  size: number;
+  max: number;
+  hits: number;
+  compiles: number;
+  evictions: number;
+  calls: number;
+} {
+  return {
+    size: statementCache.size,
+    max: STATEMENT_CACHE_MAX,
+    hits: statementCacheHits,
+    compiles: statementCacheCompiles,
+    evictions: statementCacheEvictions,
+    calls: statementCacheHits + statementCacheCompiles,
+  };
+}
+
+/** Test hook only — drops the memo so a measurement starts from a cold cache. */
+export function resetStatementCache(): void {
+  statementCache.clear();
+  statementCacheHits = 0;
+  statementCacheCompiles = 0;
+  statementCacheEvictions = 0;
+}
+
 // The LOCAL calendar day, never the UTC one: every caller uses this to day-key
 // rows or frame "today" windows, and the repo's law is UTC instants, local-day
 // keying — a UTC date here is tomorrow's key every evening once UTC rolls over.

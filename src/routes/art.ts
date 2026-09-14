@@ -8,7 +8,7 @@ import {
   artManifest,
   artVersions,
   regenerateArt,
-  produceExerciseArt,
+  enqueueExerciseArt,
   buildExerciseArtContext,
   assetKeyFromPath,
   type ArtContext,
@@ -77,10 +77,10 @@ artRouter.get("/art", (req, res) => {
       import("../enrich.js")
         .then((m) => m.enqueueEnrich("exercise_art", Number(row.id)))
         .catch(() => {
-          void produceExerciseArt(q);
+          void enqueueExerciseArt(q);
         });
     } else {
-      void produceExerciseArt(q);
+      void enqueueExerciseArt(q);
     }
     return res.status(204).end();
   }

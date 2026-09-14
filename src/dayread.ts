@@ -13,6 +13,7 @@ import { SENSOR_MAX_AGE_DAYS } from "./repo/sensor-freshness.js";
 import { interactiveTimeoutForOp } from "./repo/settings.js";
 import { buildDayReadPrompt } from "./prompt.js";
 import { runChosenWithCoachReads } from "./runChosen.js";
+import type { AgentPriority } from "./agents.js";
 import { localDateISO } from "./repo/shared.js";
 import { isValidTimeZone } from "./tz.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
@@ -571,8 +572,10 @@ export function pinnedDayReadProse(date: string, baseline: any, identity: string
 // canonical (no-override) read is persisted to the day_reads cache; escape-hatch
 // overrides ("rough night" / "train anyway") are transient and never cached so
 // they can't poison tomorrow's instant open. Always resolves to a real read.
-export async function computeDayRead(opts: { date?: string; override?: string; agent?: string } = {}): Promise<any> {
-  const { date, override, agent } = opts;
+export async function computeDayRead(
+  opts: { date?: string; override?: string; agent?: string; priority?: AgentPriority; signal?: AbortSignal } = {}
+): Promise<any> {
+  const { date, override, agent, priority, signal } = opts;
   const baseline = dayRead(date);
   const resolvedDate = date || localToday();
   const identity = dayReadProseIdentity(resolvedDate, baseline);
@@ -610,6 +613,13 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
       op: "day_read",
       mode: "ordinary",
       timeoutMs: interactiveTimeoutForOp("day_read"),
+      // The Brief the athlete just opened is a person waiting; the scheduler's warm is
+      // not. Only the first takes the spawn cap's reserved interactive permit.
+      priority,
+      // The caller's deadline, honoured all the way down: an abort drops the run out
+      // of the spawn queue or SIGKILLs the live subprocess, so a hung CLI stops
+      // holding a permit and the next attempt is a real attempt, not a re-join.
+      signal,
       acceptParsed: (parsed) => isValidDayReadAgentResult(decodeDayReadAgentProse(parsed), baseline),
       schema: DAY_READ_SCHEMA,
     });
@@ -716,7 +726,9 @@ function finishDayRead(read: any, baseline: any, opts: { override?: string; date
 // cached, and must not be answered with someone else's canonical one.
 const canonicalDayReadRuns = new Map<string, Promise<any>>();
 
-export function computeCanonicalDayRead(opts: { date?: string; agent?: string; force?: boolean } = {}): Promise<any> {
+export function computeCanonicalDayRead(
+  opts: { date?: string; agent?: string; force?: boolean; priority?: AgentPriority; signal?: AbortSignal } = {}
+): Promise<any> {
   const key = `${opts.date || localToday()}|${opts.agent ?? ""}`;
   // `force` is the explicit athlete-driven refresh: it starts its own run rather
   // than joining one that may already be mid-flight, but it still PUBLISHES that run
@@ -725,10 +737,32 @@ export function computeCanonicalDayRead(opts: { date?: string; agent?: string; f
     const existing = canonicalDayReadRuns.get(key);
     if (existing) return existing;
   }
-  const run = computeDayRead({ date: opts.date, agent: opts.agent }).finally(() => {
+  // Priority is NOT part of the key: two runs for one answer is the thing this lane
+  // exists to prevent, so an athlete arriving behind a warm joins it rather than
+  // starting a second at a higher priority.
+  // Nor is the signal: a deadline belongs to the caller that set it, and the lane
+  // still holds ONE run per date. So a joiner arriving behind a bounded run shares
+  // that bound — which is the honest outcome, since it has been waiting on the same
+  // hung agent, and every joiner (readToday, the refresh loop) already degrades to
+  // the deterministic floor on a rejection rather than failing the open.
+  const drop = () => {
     if (canonicalDayReadRuns.get(key) === run) canonicalDayReadRuns.delete(key);
-  });
+  };
+  const run = computeDayRead({
+    date: opts.date,
+    agent: opts.agent,
+    priority: opts.priority,
+    signal: opts.signal,
+  }).finally(drop);
   canonicalDayReadRuns.set(key, run);
+  // Retire the lane the moment the deadline fires, not whenever the abandoned run
+  // gets around to settling: the next attempt must start a NEW run, or the retry is
+  // a re-join and the day never gets its read. Published first, so an abort that
+  // already happened leaves nothing behind either.
+  if (opts.signal) {
+    if (opts.signal.aborted) drop();
+    else opts.signal.addEventListener("abort", drop, { once: true });
+  }
   return run;
 }
 
@@ -743,9 +777,9 @@ export function resetDayReadComputeCoalescing(): void {
 // deterministic floor (instant), and the next material change re-derives it.
 // Shares the canonical lane, so a warm that fires while an open is already
 // computing the same date costs nothing extra.
-export async function precomputeDayRead(date?: string): Promise<void> {
+export async function precomputeDayRead(date?: string, opts: { signal?: AbortSignal } = {}): Promise<void> {
   try {
-    await computeCanonicalDayRead({ date: date || localToday() });
+    await computeCanonicalDayRead({ date: date || localToday(), signal: opts.signal });
   } catch (err) { log.debug("[brief] precompute did not land", { error: err }); }
 }
 

@@ -6,7 +6,7 @@
 //   - a burst of same-day signals collapses to ONE armed recompute (coalesce)
 //   - only a TODAY invalidation arms anything (a past/future date is ignored)
 //   - a fired debounce recomputes exactly once when an agent is usable
-//   - NO usable agent -> the recompute does nothing (never re-caches a floor / spawns a CLI)
+//   - NO usable agent -> the deterministic floor is warmed instead (never spawns a CLI)
 //   - reset() clears a pending timer so it can't leak across tests
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -17,6 +17,7 @@ import {
   flushDayReadRefresh,
   resetDayReadRefresh,
 } from "../dist/dayread-refresh.js";
+import { precomputeDayReadFloor } from "../dist/dayread.js";
 
 // A deterministic fake timer: captures the scheduled callback + delay with no real
 // clock, so debounce/coalesce is asserted precisely. The debounce only ever keeps
@@ -26,8 +27,16 @@ function fakeTimer() {
   const timers = new Map();
   return {
     calls: { set: 0, clear: 0 },
-    set(fn) { this.calls.set++; const id = ++seq; timers.set(id, fn); return id; },
-    clear(id) { this.calls.clear++; timers.delete(id); },
+    set(fn) {
+      this.calls.set++;
+      const id = ++seq;
+      timers.set(id, fn);
+      return id;
+    },
+    clear(id) {
+      this.calls.clear++;
+      timers.delete(id);
+    },
     fireLatest() {
       const ids = [...timers.keys()];
       const id = ids[ids.length - 1];
@@ -35,7 +44,9 @@ function fakeTimer() {
       timers.delete(id);
       if (fn) fn();
     },
-    pending() { return timers.size; },
+    pending() {
+      return timers.size;
+    },
   };
 }
 
@@ -81,7 +92,9 @@ test("a fired debounce runs the recompute exactly ONCE when an agent is availabl
     setTimer: (fn) => timer.set(fn),
     clearTimer: (id) => timer.clear(id),
     agentsAvailable: () => true,
-    recompute: () => { recomputes++; },
+    recompute: () => {
+      recomputes++;
+    },
   });
   for (let i = 0; i < 5; i++) scheduleDayReadRefresh(FIXED_TODAY);
   assert.equal(recomputes, 0, "nothing runs until the debounce fires");
@@ -90,20 +103,71 @@ test("a fired debounce runs the recompute exactly ONCE when an agent is availabl
   assert.equal(recomputes, 1, "the coalesced burst produced exactly one recompute");
 });
 
-test("no usable agent -> the recompute does NOTHING (no floor re-cache, no CLI)", async () => {
+test("no usable agent -> warms the deterministic floor instead (no recompute, no CLI)", async () => {
   const timer = fakeTimer();
   let recomputes = 0;
+  let floorWarms = 0;
   configureDayReadRefresh({
     today: () => FIXED_TODAY,
     setTimer: (fn) => timer.set(fn),
     clearTimer: (id) => timer.clear(id),
     agentsAvailable: () => false,
-    recompute: () => { recomputes++; },
+    recompute: () => {
+      recomputes++;
+    },
+    warmFloor: () => {
+      floorWarms++;
+    },
   });
   scheduleDayReadRefresh(FIXED_TODAY);
   timer.fireLatest();
   await flushDayReadRefresh();
-  assert.equal(recomputes, 0, "the gate short-circuits before any recompute / CLI spawn");
+  assert.equal(recomputes, 0, "the gate short-circuits before any agentic recompute / CLI spawn");
+  assert.equal(floorWarms, 1, "the deterministic floor is warmed instead");
+});
+
+test("no usable agent -> an actual floor row is cached for today (not left uncached)", async () => {
+  // Real precomputeDayReadFloor writes through the real cache, which prunes rows
+  // older than 21 real-clock days on every write (day-read-cache.ts's housekeeping
+  // DELETE) — so this needs an actual near-"now" date, unlike the other tests here
+  // which never touch the real DB.
+  const realToday = new Date().toISOString().slice(0, 10);
+  const timer = fakeTimer();
+  configureDayReadRefresh({
+    today: () => realToday,
+    setTimer: (fn) => timer.set(fn),
+    clearTimer: (id) => timer.clear(id),
+    agentsAvailable: () => false,
+    warmFloor: () => precomputeDayReadFloor(realToday),
+  });
+  assert.equal(repo.getCachedDayRead(realToday), null, "starts with no cached row for the date");
+  scheduleDayReadRefresh(realToday);
+  timer.fireLatest();
+  await flushDayReadRefresh();
+  const cached = repo.getCachedDayRead(realToday);
+  assert.ok(cached, "a floor row now exists so the next open never opens uncached");
+  assert.equal(cached.source, "deterministic", "the self-heal path stays open for the real agent later");
+});
+
+test("a failed recompute still warms the deterministic floor as a fallback", async () => {
+  const timer = fakeTimer();
+  let floorWarms = 0;
+  configureDayReadRefresh({
+    today: () => FIXED_TODAY,
+    setTimer: (fn) => timer.set(fn),
+    clearTimer: (id) => timer.clear(id),
+    agentsAvailable: () => true,
+    recompute: () => {
+      throw new Error("agent spawn failed");
+    },
+    warmFloor: () => {
+      floorWarms++;
+    },
+  });
+  scheduleDayReadRefresh(FIXED_TODAY);
+  timer.fireLatest();
+  await flushDayReadRefresh();
+  assert.equal(floorWarms, 1, "a thrown recompute still leaves a floor row instead of nothing");
 });
 
 test("the REAL agent gate uses live settings — all agents disabled -> no recompute", async () => {
@@ -117,7 +181,9 @@ test("the REAL agent gate uses live settings — all agents disabled -> no recom
     setTimer: (fn) => timer.set(fn),
     clearTimer: (id) => timer.clear(id),
     // agentsAvailable left as the real default on purpose.
-    recompute: () => { recomputes++; },
+    recompute: () => {
+      recomputes++;
+    },
   });
   scheduleDayReadRefresh(FIXED_TODAY);
   timer.fireLatest();

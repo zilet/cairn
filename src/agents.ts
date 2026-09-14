@@ -15,6 +15,7 @@ import {
   type AgentAvailabilityState,
   type AgentFailure,
 } from "./agentAvailability.js";
+import { AgentBusyError, isAgentBusyError } from "./agent-busy.js";
 import { log } from "./log.js";
 export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
@@ -925,7 +926,16 @@ export interface RunOpts {
   // the same object the op's acceptance predicate checks (src/agent-contracts.ts) —
   // never a second hand-written description of the shape.
   schema?: JsonSchema;
+  // Who is waiting on this run, for the spawn cap below. "interactive" means a person
+  // is sitting in front of the surface this answers (a chat turn, an athlete's own new
+  // read): it jumps the spawn queue ahead of background work and may use the one permit
+  // reserved above the cap. Defaults to "background" — batch lanes (jobs, enrichment,
+  // the scheduler's warms) must never claim the reserved permit.
+  priority?: AgentPriority;
 }
+
+/** Whether a person is waiting on this run. See the spawn cap below. */
+export type AgentPriority = "interactive" | "background";
 
 export type AgentProfileResolver = (agent: string) => { model?: string; reasoning?: ReasoningLevel } | null | undefined;
 
@@ -1515,6 +1525,7 @@ export async function runAgentWithFallback(
         reasoning: o.reasoning,
         profile: o.profile,
         tools: o.tools,
+        priority: o.priority,
         // Kept on for the repair retry too: an agent that can enforce the contract is
         // exactly the one that should not be asked to re-derive it from prose. Agents
         // later in the rotation that can't enforce it simply ignore it.
@@ -1546,6 +1557,7 @@ export async function runAgentWithFallback(
             reasoning: o.reasoning,
             profile: o.profile,
             tools: o.tools,
+            priority: o.priority,
             schema: o.schema,
           });
         } catch {
@@ -1617,6 +1629,12 @@ export async function runAgentWithFallback(
       return null;
     } catch (e: any) {
       if (signal?.aborted) throw e; // canceled mid-run — stop the rotation
+      // The host had no spawn permit for this run. The CLI was never started, so this
+      // says nothing about the agent — and the permit is PROCESS-WIDE, so the next
+      // agent in the order would wait exactly as long and fail exactly as hard. Stop
+      // the rotation and hand the caller the typed busy error to defer on, instead of
+      // spending every remaining candidate's wait budget learning the same thing.
+      if (isAgentBusyError(e)) throw e;
       breakerNoteFail(name);
       const message = String(e?.message || "");
       const timedOut = /timed out/i.test(message);
@@ -1739,7 +1757,195 @@ export function runAgent(name: string, rawPrompt: string, opts: RunOpts | number
   // here, against the agent actually chosen.
   const { model, reasoning } = typeof opts === "number" ? {} : withResolvedProfile(name, opts);
   const schema = typeof opts === "number" ? undefined : opts.schema;
-  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema);
+  // A bare-number call site is always a background lane (enrich.ts); only an explicit
+  // opt-in claims the reserved interactive permit.
+  const priority: AgentPriority = (typeof opts === "number" ? undefined : opts.priority) ?? "background";
+  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, priority);
+}
+
+// ---------- one process-wide cap on concurrent CLI subprocesses ----------
+// Six lanes spawn coaching CLIs — chat, the agent-job runner, the enrichment queue,
+// the proactive pass, the day-read precompute and the day-read refresh — and each
+// only ever knew about ITSELF (its own serial runner or busy flag). Nothing counted
+// the total, so on a quiet morning the scheduler could have a precompute, an enrich
+// drain and a refresh in flight while the athlete opened chat, and a Pi 5 would be
+// running four Node-based CLIs at once against 8 GB and four cores: every one of
+// them slower, and the interactive one slowest of all.
+//
+// ONE semaphore, taken at the single point every lane passes through — the spawn.
+// Waiting is FIFO within a priority class, so a lane cannot starve behind a steady
+// drip from a busier one.
+//
+// PRIORITY: a run an athlete is actually waiting on — a chat turn, their own new read
+// — declares `priority: "interactive"`, and two things follow. It jumps the queue,
+// ahead of every waiting background run and behind only an earlier interactive one;
+// and it may take ONE permit ABOVE the cap, reserved, that background work can never
+// hold. Without that reserve, two background holders (a deep proposal job and an
+// enrichment drain, the ordinary quiet-morning pair) left the athlete's chat turn
+// queued behind an open SSE stream with nothing on it. At most cap+1 CLIs run at once,
+// and the extra one only ever while a person is waiting on it.
+//
+// TIMEOUT CLOCK: the permit is taken BEFORE the run's timer is armed, so an op's
+// timeout budget measures the CLI's own run and never the queue it waited in. A
+// slow queue therefore delays a run; it can never make one look like it timed out.
+// The WAIT carries its own bound of the same length: a run that cannot get a permit
+// within its own configured timeout rejects with an "agent busy" error instead of
+// waiting forever. So the worst case is honest and bounded (at most 2× the op's
+// timeout — queue, then run), and a starved lane SAYS so rather than holding a
+// surface open on a promise that will never settle. A caller with an AbortSignal
+// (chat's Stop) still drops out of the queue the moment it aborts, without spawning.
+const DEFAULT_MAX_AGENT_PROCS = 2;
+
+/** Read per acquisition, so the cap can be changed without a restart (and by a test). */
+function maxAgentProcs(): number {
+  const raw = String(process.env.CAIRN_MAX_AGENT_PROCS ?? "").trim();
+  if (!raw) return DEFAULT_MAX_AGENT_PROCS; // unset or blank — not "zero"
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_MAX_AGENT_PROCS;
+  return Math.max(1, Math.min(64, Math.floor(parsed)));
+}
+
+/**
+ * How many live processes this class of run may be one of. Background work stops at
+ * the cap; an interactive run may also take the single reserved permit above it.
+ */
+function agentSlotCeiling(priority: AgentPriority): number {
+  return priority === "interactive" ? maxAgentProcs() + 1 : maxAgentProcs();
+}
+
+interface AgentSlotWaiter {
+  priority: AgentPriority;
+  grant: () => void;
+  cancel: (error: Error) => void;
+}
+
+let activeAgentProcs = 0;
+// Ordered so every waiting interactive run sits ahead of every waiting background one,
+// FIFO within each class. The head is therefore always the next run allowed to take a
+// permit: if IT cannot, nothing behind it can either, since interactive (the class that
+// can be ahead) has the higher ceiling of the two.
+const agentSlotQueue: AgentSlotWaiter[] = [];
+
+function enqueueAgentSlotWaiter(waiter: AgentSlotWaiter): void {
+  if (waiter.priority === "background") {
+    agentSlotQueue.push(waiter);
+    return;
+  }
+  const firstBackground = agentSlotQueue.findIndex((w) => w.priority === "background");
+  if (firstBackground < 0) agentSlotQueue.push(waiter);
+  else agentSlotQueue.splice(firstBackground, 0, waiter);
+}
+
+function pumpAgentSlots(): void {
+  while (agentSlotQueue.length) {
+    const head = agentSlotQueue[0];
+    if (activeAgentProcs >= agentSlotCeiling(head.priority)) return;
+    agentSlotQueue.shift();
+    head.grant();
+  }
+}
+
+/**
+ * Take a spawn permit. Resolves with the (idempotent) release. Rejects — without
+ * spawning, and without holding a permit — if the caller's signal aborts while queued,
+ * or if `waitMs` passes without a permit becoming available.
+ */
+function acquireAgentSlot(
+  name: string,
+  signal: AbortSignal | undefined,
+  priority: AgentPriority,
+  waitMs: number
+): Promise<() => void> {
+  return new Promise<() => void>((resolve, reject) => {
+    const take = () => {
+      activeAgentProcs++;
+      let released = false;
+      resolve(() => {
+        if (released) return;
+        released = true;
+        activeAgentProcs--;
+        pumpAgentSlots();
+      });
+    };
+    if (signal?.aborted) {
+      reject(new Error(`agent "${name}" canceled`));
+      return;
+    }
+    // FIFO inside the class: a newcomer never overtakes an already-queued waiter of its
+    // own class, even when a permit happens to be free at this instant (for background
+    // it isn't — a queued background waiter means the pump has not caught up). An
+    // interactive newcomer DOES overtake waiting background ones; that is the priority.
+    const queuedAhead =
+      priority === "interactive"
+        ? agentSlotQueue.some((w) => w.priority === "interactive")
+        : agentSlotQueue.length > 0;
+    if (!queuedAhead && activeAgentProcs < agentSlotCeiling(priority)) {
+      take();
+      return;
+    }
+    let settled = false;
+    let waitTimer: ReturnType<typeof setTimeout> | undefined;
+    const detach = () => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (waitTimer) clearTimeout(waitTimer);
+    };
+    const waiter: AgentSlotWaiter = {
+      priority,
+      grant: () => {
+        if (settled) return;
+        settled = true;
+        detach();
+        take();
+      },
+      cancel: (error: Error) => {
+        if (settled) return;
+        settled = true;
+        detach();
+        reject(error);
+      },
+    };
+    const dropFromQueue = () => {
+      const at = agentSlotQueue.indexOf(waiter);
+      if (at >= 0) agentSlotQueue.splice(at, 1);
+    };
+    function onAbort() {
+      dropFromQueue();
+      waiter.cancel(new Error(`agent "${name}" canceled`));
+    }
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    // The bounded wait: this run's own timeout budget, spent again on the queue rather
+    // than deducted from the run. A lane that never reaches the front fails loudly here
+    // instead of leaving its caller (and the surface it is streaming to) waiting forever.
+    const waitBudget = Math.max(1, waitMs);
+    const waited = waitBudget >= 1000 ? `${Math.round(waitBudget / 1000)}s` : `${waitBudget}ms`;
+    waitTimer = setTimeout(() => {
+      dropFromQueue();
+      // TYPED, because every background runner has to tell this apart from a run that
+      // actually failed: it defers and retries instead of burning the row's status.
+      waiter.cancel(
+        new AgentBusyError(name, waitBudget, `agent "${name}" busy — no spawn permit within ${waited}`)
+      );
+    }, waitBudget);
+    waitTimer.unref?.();
+    enqueueAgentSlotWaiter(waiter);
+  });
+}
+
+/** Observability + test hook for the spawn cap. */
+export function agentSlotStats(): {
+  active: number;
+  waiting: number;
+  waitingInteractive: number;
+  limit: number;
+  interactiveLimit: number;
+} {
+  return {
+    active: activeAgentProcs,
+    waiting: agentSlotQueue.length,
+    waitingInteractive: agentSlotQueue.reduce((n, w) => n + (w.priority === "interactive" ? 1 : 0), 0),
+    limit: maxAgentProcs(),
+    interactiveLimit: agentSlotCeiling("interactive"),
+  };
 }
 
 // ---------- subprocess env/workdir hardening (Trust build V1) ----------
@@ -1750,7 +1956,19 @@ export function runAgent(name: string, rawPrompt: string, opts: RunOpts | number
 // itself. Prompts that hand the CLI an absolute uploaded-file path still use
 // DATA_DIR as cwd for compatibility with CLI file-read permissions.
 
-function runAgentImpl(
+interface AgentSpawnRequest {
+  name: string;
+  prompt: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  extract?: (text: string) => any | null;
+  mcpConfigArgs?: string[];
+  model?: string;
+  reasoning?: ReasoningLevel;
+  schema?: JsonSchema;
+}
+
+async function runAgentImpl(
   name: string,
   prompt: string,
   timeoutMs: number,
@@ -1759,11 +1977,35 @@ function runAgentImpl(
   mcpConfigArgs?: string[],
   model?: string,
   reasoning?: ReasoningLevel,
-  schema?: JsonSchema
+  schema?: JsonSchema,
+  priority: AgentPriority = "background"
 ): Promise<AgentResult> {
   const def = loadAgents()[name];
-  if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
+  if (!def) throw new Error(`Unknown agent "${name}"`);
+  // Queue for the spawn permit before ANY setup work (the schema tempdir included), so
+  // a run that never reaches the spawn leaves nothing behind — and so the run's own
+  // timeout timer, armed inside the spawn below, never counts the queue. The wait gets
+  // the same budget as the run, separately from it.
+  const releaseSlot = await acquireAgentSlot(name, signal, priority, timeoutMs);
+  try {
+    return await spawnAgentProcess(def, {
+      name,
+      prompt,
+      timeoutMs,
+      signal,
+      extract,
+      mcpConfigArgs,
+      model,
+      reasoning,
+      schema,
+    });
+  } finally {
+    releaseSlot();
+  }
+}
 
+function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<AgentResult> {
+  const { name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema } = request;
   const useStdin = def.input === "stdin";
   // Enforced structured output, when BOTH the caller supplied a schema and this agent
   // declares how to take one. Everything below is best-effort by design: an agent with
@@ -1989,15 +2231,48 @@ export interface StreamRunOpts extends RunOpts {
 // `raw` accumulates the full assistant text (prose + the trailing actions block),
 // parsed downstream by parseChatReply. Honors the same timeout + AbortSignal (Stop)
 // as the one-shot path. Falls back to runAgent when the agent has no stream config.
-export function runAgentStreaming(name: string, rawPrompt: string, opts: StreamRunOpts = {}): Promise<AgentResult> {
+export async function runAgentStreaming(
+  name: string,
+  rawPrompt: string,
+  opts: StreamRunOpts = {}
+): Promise<AgentResult> {
   const def = loadAgents()[name];
-  if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
+  if (!def) throw new Error(`Unknown agent "${name}"`);
   if (!def.stream?.args?.length) return runAgent(name, rawPrompt, opts); // no stream mode → one-shot
+  // Chat queues for the SAME semaphore as every background lane — a path that skipped
+  // the cap would leave the athlete's turn competing with three batch runs, which is
+  // the exact contention the cap exists to remove. It queues at ITS priority, though:
+  // a chat turn passes `priority: "interactive"` and so jumps the line and may use the
+  // reserved permit above the cap, instead of sitting behind two batch runs with the
+  // SSE stream open and nothing on it. Stop still drops a queued turn instantly (the
+  // signal is honoured while waiting), and the turn's timeout is armed at the spawn,
+  // so a wait can never be reported as a timeout.
+  const releaseSlot = await acquireAgentSlot(
+    name,
+    opts.signal,
+    opts.priority ?? "background",
+    opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  );
+  try {
+    return await spawnAgentStream(def, name, rawPrompt, opts);
+  } finally {
+    releaseSlot();
+  }
+}
+
+function spawnAgentStream(
+  def: AgentDef,
+  name: string,
+  rawPrompt: string,
+  opts: StreamRunOpts
+): Promise<AgentResult> {
+  const stream = def.stream;
+  if (!stream?.args?.length) return runAgent(name, rawPrompt, opts);
   const prompt = applyToolPolicy(rawPrompt, opts.tools);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const signal = opts.signal;
   const onDelta = opts.onDelta;
-  const format = def.stream.format;
+  const format = stream.format;
   const useStdin = def.input === "stdin";
   // No structuredArgs, deliberately: `stream.args` declares no {schema_args} slot for
   // any provider. A streamed op is prose-first (reply marker, then optional actions),
@@ -2005,7 +2280,7 @@ export function runAgentStreaming(name: string, rawPrompt: string, opts: StreamR
   // --output-format streaming-json. RunOpts.schema is therefore inert while streaming.
   const args = expandAgentArgs(
     def,
-    def.stream.args,
+    stream.args,
     prompt,
     useStdin,
     opts.mcpConfigArgs,

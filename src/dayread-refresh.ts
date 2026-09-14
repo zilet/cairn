@@ -15,9 +15,10 @@
 //     follow-up when that run finishes rather than stacking a second run behind it
 //   - only when the invalidated date COVERS TODAY (device zone) — a past/future
 //     invalidation never warms the live open
-//   - NO usable agent -> do NOTHING (never re-cache a deterministic floor; the next
-//     fetch keeps its chance to run the agent). This is also what keeps the offline
-//     test suite from spawning a CLI here.
+//   - NO usable agent (or a failed recompute) -> warm the DETERMINISTIC FLOOR only,
+//     so an invalidated row is never left uncached until the next open. This never
+//     spawns a CLI, which is also what keeps the offline test suite quiet; the
+//     self-heal path (ensureDayReadRefresh) still asks the agent again later.
 //
 // The effectful edges (the "today" comparison, the agent gate, the actual
 // recompute, the timer) are injectable so the debounce / coalesce / gating logic
@@ -25,6 +26,7 @@
 // own module so repo/day-read.ts can import it with NO static cycle — the agent
 // gate + the agent-running recompute are reached only via lazy dynamic import.
 import { localDateISO } from "./repo/shared.js";
+import { log } from "./log.js";
 
 const DEFAULT_DEBOUNCE_MS = 60_000;
 
@@ -43,6 +45,11 @@ export interface DayReadRefreshHooks {
   // The actual (agentic) recompute + re-cache of the canonical read for the date
   // the next open will request (recorded client zone).
   recompute: () => void | Promise<void>;
+  // The no-CLI fallback: re-cache the deterministic floor for the date the next
+  // open will request, so an invalidated row is never left uncached. Called
+  // instead of `recompute` when no agent is usable, and as a fallback if
+  // `recompute` throws.
+  warmFloor: () => void | Promise<void>;
   setTimer: (fn: () => void, ms: number) => TimerHandle;
   clearTimer: (h: TimerHandle) => void;
   debounceMs: number;
@@ -60,6 +67,11 @@ const DEFAULT_HOOKS: DayReadRefreshHooks = {
     // keeps the agent-running orchestration out of this module's static graph.
     const { precomputeDayRead, warmToday } = await import("./dayread.js");
     await precomputeDayRead(warmToday());
+  },
+  warmFloor: async () => {
+    // Lazy import for the same reason as `recompute` above. No agent spawn.
+    const { precomputeDayReadFloor, warmToday } = await import("./dayread.js");
+    precomputeDayReadFloor(warmToday());
   },
   setTimer: (fn, ms) => {
     const t = setTimeout(fn, ms);
@@ -127,10 +139,25 @@ function fire(): void {
 
 async function runRefresh(): Promise<void> {
   try {
-    if (!(await hooks.agentsAvailable())) return; // no usable agent -> do nothing (see contract)
+    if (!(await hooks.agentsAvailable())) {
+      // No usable agent -> warm the deterministic floor instead of leaving the
+      // invalidated row uncached (see contract). No CLI spawn either way.
+      log.debug("[brief] scheduled refresh has no usable agent; warming the deterministic floor");
+      await hooks.warmFloor();
+      return;
+    }
     await hooks.recompute();
-  } catch {
-    // A failed background warm is a calm no-op; the next fetch re-derives.
+  } catch (err) {
+    // A failed background warm still leaves the invalidated row uncached — warm
+    // the deterministic floor so a read always exists for the next open.
+    log.debug("[brief] scheduled recompute failed; warming the deterministic floor", {
+      error: (err as any)?.message,
+    });
+    try {
+      await hooks.warmFloor();
+    } catch {
+      // Best-effort recovery; the next fetch still re-derives.
+    }
   } finally {
     inFlight = null;
     // Clear the in-flight state BEFORE re-arming, so a change that landed mid-run

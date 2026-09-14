@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { emitBrainEvent } from "./brainEvents.js";
-import { garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetric, upsertGarminSource } from "./repo/activities.js";
+import { garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetrics, upsertGarminSource } from "./repo/activities.js";
+import { runWithBrainSnapshot } from "./brain/snapshot.js";
 import type { GarminActivityInput, GarminDailyMetricInput } from "./repo/activities.js";
 import { detectRunCalibration } from "./repo/calibration.js";
 import { sessionsEligibleForGarminExport } from "./repo/garmin-strength-export.js";
@@ -646,7 +647,6 @@ function foldReadiness(tr: any, m: GarminDailyMetricInput) {
 }
 
 async function syncDailyMetrics(client: any, sourceId: number, days: number, displayName: string | null) {
-  let synced = 0;
   const unavailable = new Set<string>();
   const rows: { iso: string; metric: GarminDailyMetricInput }[] = [];
   for (let i = days - 1; i >= 0; i--) {
@@ -806,14 +806,13 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     if (hill) latest.metric.hill_score = pickNumDeep(hill, ["overallScore", "hillScore", "score", "strengthScore"]);
   }
 
-  for (const { metric } of rows) {
-    // A sync is one recovery boundary, not N per-row review candidates. The
-    // caller compares the before/after current state and may emit one material
-    // transition after the batch.
-    upsertGarminDailyMetric(metric, sourceId, { emitEvent: false });
-    synced++;
-  }
-  return synced;
+  // A sync is one recovery boundary, not N per-row review candidates. The caller
+  // compares the before/after current state and may emit one material transition
+  // after the batch — and the batch writer likewise bumps the training-data version
+  // and asks the day-read question ONCE for the whole pass instead of once per day.
+  const metrics = rows.map(({ metric }) => metric);
+  upsertGarminDailyMetrics(metrics, sourceId, { emitEvent: false });
+  return rows.length;
 }
 
 export function materialGarminRecoveryTransition(before: any, after: any): string | null {
@@ -908,7 +907,30 @@ async function fetchExerciseSets(client: any, activityId: string | number): Prom
   return sets.length ? sets : null;
 }
 
-export async function syncGarmin(options: { days?: number; limit?: number; daily?: boolean } = {}) {
+export type GarminSyncOptions = { days?: number; limit?: number; daily?: boolean };
+
+/**
+ * One sync pass, under ONE brain-signal snapshot.
+ *
+ * A sync is a burst of writes that each ask the brain the same questions back:
+ * every activity upsert and every daily-metric batch reaches the guarded day-read
+ * invalidation, which rebuilds program state / training signals / the recovery
+ * window to compare fingerprints. Inside an HTTP request that work is already
+ * memoized per request (server.ts wraps every route in `runWithBrainSnapshot`), but
+ * the SCHEDULER tick has no such scope, so on the Pi — where the sync actually runs —
+ * `brainSignal` was a pass-through and each of those rebuilds started from nothing.
+ *
+ * Scoping the pass gives the background sync exactly the memo the REST route has had
+ * all along; it is parity, not a new caching regime. The writers that matter still
+ * drop the memoized keys they invalidate (see invalidateDayReadIfDecisionChanged), and
+ * the before/after recovery summaries the material-transition check compares are
+ * direct calls that were deliberately never memoized — so the transition still fires.
+ */
+export async function syncGarmin(options: GarminSyncOptions = {}) {
+  return runWithBrainSnapshot(() => syncGarminPass(options));
+}
+
+async function syncGarminPass(options: GarminSyncOptions = {}) {
   const days = Math.max(1, Math.min(180, options.days ?? Number(process.env.GARMIN_SYNC_DAYS ?? 30)));
   const limit = Math.max(1, Math.min(200, options.limit ?? Number(process.env.GARMIN_SYNC_LIMIT ?? 100)));
   const source = upsertGarminSource({

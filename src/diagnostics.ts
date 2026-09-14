@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { getBuildStamp } from "./build-info.js";
 import type { ProviderUnavailableError } from "./provider-unavailable.js";
+import { isAgentBusyError } from "./agent-busy.js";
 import { log } from "./log.js";
 import { recordDiagnosticEvent } from "./repo/diagnostics.js";
 import { normalizeServerApiRouteTemplate, recordRequestMetric } from "./repo/request-metrics.js";
@@ -146,6 +147,15 @@ export function recordSchedulerFailure(
   error: unknown,
   sink: typeof recordDiagnosticEvent = recordDiagnosticEvent
 ): void {
+  // HOST CONGESTION IS NOT A TASK FAILURE. Every agent spawn permit was held while this
+  // operation waited, so no CLI ran and nothing about the operation is broken; its row
+  // is already in `retry_wait` and the next slot will try again. Filed as its own
+  // warning-level kind, the way a provider outage is, so "the Pi was busy" never counts
+  // against "something is broken".
+  if (isAgentBusyError(error)) {
+    recordSchedulerDeferred(operation, sink);
+    return;
+  }
   const safeOperation = telemetryIdentifier(operation, 80, "scheduler_task");
   const errorName = diagnosticErrorName(error);
   sink({
@@ -172,6 +182,27 @@ export class BoundaryApplyError extends Error {
     // Taxonomy only — never the per-decision apply_error, which is free text.
     super(`announced change did not apply: ${telemetryIdentifier(outcomeClass, 40, "unknown_outcome")}`);
   }
+}
+
+/**
+ * A scheduled operation that could not start because the host had no agent spawn permit
+ * left. Deferred, not failed: it waits for the ordinary retry ladder, and the athlete
+ * has lost nothing but a slot.
+ */
+export function recordSchedulerDeferred(
+  operation: string,
+  sink: typeof recordDiagnosticEvent = recordDiagnosticEvent
+): void {
+  const safeOperation = telemetryIdentifier(operation, 80, "scheduler_task");
+  sink({
+    source: "scheduler",
+    kind: "task_deferred",
+    level: "warning",
+    operation: safeOperation,
+    fingerprint: `scheduler:task_deferred:${safeOperation}:agent_busy`,
+    message: "every agent spawn permit was busy — the operation waits for its next slot",
+    release: getBuildStamp(),
+  });
 }
 
 /**

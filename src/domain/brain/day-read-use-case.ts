@@ -281,7 +281,10 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
       // force: this is the athlete asking for a new read, so it must not be answered
       // with a run that started before their invalidation — but it still joins the
       // canonical lane, so opens arriving behind it share this one agent call.
-      const read = await computeCanonicalDayRead({ date, agent, force: true });
+      // readToday only ever runs on a request the athlete made, so every compute it
+      // reaches for is interactive: it jumps the spawn queue ahead of the scheduler's
+      // warms and the enrichment drain rather than opening the Brief on a spinner.
+      const read = await computeCanonicalDayRead({ date, agent, force: true, priority: "interactive" });
       if (recordOutcome) recordDayReadSuggestion(readDate, read, null);
       return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
     }
@@ -438,8 +441,8 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
     // background re-warm's). The canonical read now has one lane per date; a steered
     // read is transient and never cached, so it keeps its own run.
     const read = override
-      ? await computeDayRead({ date, override, agent })
-      : await computeCanonicalDayRead({ date, agent });
+      ? await computeDayRead({ date, override, agent, priority: "interactive" })
+      : await computeCanonicalDayRead({ date, agent, priority: "interactive" });
     if (recordOutcome) recordDayReadSuggestion(readDate, read, override ?? null);
     return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
   } catch (e: any) {

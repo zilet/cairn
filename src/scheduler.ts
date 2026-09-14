@@ -34,6 +34,7 @@ import {
   recordSchedulerFailure,
 } from "./diagnostics.js";
 import { ProviderUnavailableError, schedulerTaskError } from "./provider-unavailable.js";
+import { isAgentBusyError } from "./agent-busy.js";
 import { runWithTimeZone } from "./tz.js";
 import { addDaysISO, localDayOfStamp, nowContext } from "./repo/shared.js";
 import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
@@ -253,7 +254,10 @@ async function runScheduled<T>(
       const cause = result.cause ?? new Error(result.error);
       if (cause instanceof ProviderUnavailableError) recordProviderUnavailable(operation, cause);
       else recordSchedulerFailure(operation, cause);
-      log.error(`[scheduler] ${operation} ${result.status}`, { error: cause });
+      // Host congestion is a deferral, not a defect: the row is in retry_wait and the
+      // next slot tries again, so it must not shout in the log the way a failure does.
+      if (isAgentBusyError(cause)) log.warn(`[scheduler] ${operation} deferred — every agent spawn permit was busy.`);
+      else log.error(`[scheduler] ${operation} ${result.status}`, { error: cause });
     }
     return result;
   } catch (error: any) {
@@ -331,6 +335,79 @@ export function weeklyRunPlanApplyTask(weekStartISO: string): repo.SchedulerTask
         : `[proactive] this week's run plan is review-only under the configured posture.`
   );
   return { outcome: "succeeded", value: result };
+}
+
+/**
+ * A once-per-day latch that remembers the day the work FINISHED, not the day it
+ * was attempted. Stamping up front meant one throw burned the whole day: the
+ * gate said "already ran" until local midnight and the morning never got its
+ * cached read. Stamping on success gives the tick its hour back, and the attempt
+ * cap keeps that from becoming a retry storm — a run that times out every time
+ * costs two attempts, not one per minute for the rest of the hour.
+ *
+ * `busy` is released on both paths, so a latch can never be left stuck by a
+ * rejection (or by a promise that never settles, as long as the caller bounds
+ * its own await).
+ */
+export interface DailyOnceGate {
+  /** Reserve this day's run. False when busy, already done, or out of attempts. */
+  claim(stamp: string): boolean;
+  /** The work landed: this day is finished and will not be attempted again. */
+  succeed(stamp: string): void;
+  /** The work failed: release the latch so a remaining attempt can run. */
+  release(): void;
+  state(): { done: string; busy: boolean; attempts: number };
+}
+
+export function createDailyOnceGate(maxAttempts = 2): DailyOnceGate {
+  let done = "";
+  let busy = false;
+  let attemptDay = "";
+  let attempts = 0;
+  return {
+    claim(stamp: string): boolean {
+      if (busy || !stamp || stamp === done) return false;
+      if (stamp !== attemptDay) {
+        attemptDay = stamp;
+        attempts = 0;
+      }
+      if (attempts >= maxAttempts) return false;
+      attempts++;
+      busy = true;
+      return true;
+    },
+    succeed(stamp: string): void {
+      done = stamp;
+      busy = false;
+    },
+    release(): void {
+      busy = false;
+    },
+    state() {
+      return { done, busy, attempts };
+    },
+  };
+}
+
+/**
+ * Bound an await that has no timeout of its own. A scheduler tick that awaits a
+ * promise which never settles holds its busy latch forever — the stream stops
+ * for the life of the process, silently. The timer is cleared on both paths and
+ * unref'd so it can never hold the process open.
+ */
+export async function withDeadline<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not settle within ${Math.round(ms / 1000)}s`)), ms);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export function startScheduler() {
@@ -525,6 +602,9 @@ export function startScheduler() {
     const h = Number(process.env.DAYREAD_PRECOMPUTE_HOUR);
     return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 4; // default 4am local
   })();
+  // Generous relative to the day-read agent's own budget — this is a stuck-promise
+  // backstop, not a second timeout, and it still leaves the hour a retry.
+  const PRECOMPUTE_MAX_MS = 10 * 60 * 1_000;
 
   // ---- Weekly coach draft (miss-tolerant) ----
   let coachBusy = false;
@@ -1030,18 +1110,22 @@ export function startScheduler() {
   // today's canonical day-read so the morning open is instant (no agent wait on
   // the request path). Runs against the configured rotation; a failed compute
   // still caches the deterministic floor. PRECOMPUTE_HOUR is declared up top.
-  let lastPrecomputeDate = "";
-  let precomputeBusy = false;
+  // A precompute that throws must not cost the day: the gate stamps the date only
+  // once the read (or the floor) is actually cached, and caps the day at two
+  // attempts so a repeatedly failing run cannot retry every minute of the hour.
+  // The await is bounded because precomputeDayRead ends in an external agent —
+  // one that never settles would otherwise hold the latch for the life of the
+  // process and stop the nightly warm silently, forever. The deadline also ABORTS
+  // the run it gave up on, so the remaining attempt starts a fresh one instead of
+  // re-joining the dead lane (see the tick body).
+  const precomputeGate = createDailyOnceGate();
   const precomputeTick = async () => {
-    if (precomputeBusy) return;
     const now = new Date();
     if (nowContext(now).hour !== PRECOMPUTE_HOUR) return;
     // Warm the DEVICE's calendar date (recorded client zone), not the server's, so
     // a traveling owner's morning open still lands on a cached read.
     const stamp = warmToday(now);
-    if (stamp === lastPrecomputeDate) return; // already ran this day
-    lastPrecomputeDate = stamp;
-    precomputeBusy = true;
+    if (!precomputeGate.claim(stamp)) return; // already done, running, or out of attempts
     try {
       // The watch has its own sync clock, so at 04:00 last night is routinely still
       // on the device. Asking the agent for the day's sentence then writes it BLIND —
@@ -1050,17 +1134,33 @@ export function startScheduler() {
       // agent run happens after the first morning sync or the first open, whichever
       // lands first (a floor row self-heals via ensureDayReadRefresh on open).
       if (sleepRowExistsFor(stamp)) {
-        await precomputeDayRead(stamp);
+        // The deadline ABORTS the run it bounds. Releasing the latch alone left the
+        // abandoned precompute running, and computeCanonicalDayRead holds one lane
+        // per date — so the second attempt joined the same never-settling promise
+        // and the "retry" was no retry at all, while the dead CLI went on holding an
+        // agent permit. Aborting drops it out of the spawn queue or SIGKILLs the
+        // subprocess, retires the lane, and lets the retry be a real one.
+        const bail = new AbortController();
+        try {
+          await withDeadline(
+            precomputeDayRead(stamp, { signal: bail.signal }),
+            PRECOMPUTE_MAX_MS,
+            "day-read precompute"
+          );
+        } catch (e) {
+          bail.abort();
+          throw e;
+        }
         log.info(`[brief] precomputed today's day-read for ${stamp}.`);
       } else {
         precomputeDayReadFloor(stamp);
         log.info(`[brief] warmed the deterministic floor for ${stamp} (last night has not synced yet).`);
       }
+      precomputeGate.succeed(stamp);
     } catch (e: any) {
+      precomputeGate.release(); // the day is NOT spent — the hour keeps its retry
       recordSchedulerFailure("day_read_precompute", e);
       log.error(`[brief] nightly precompute failed`, { error: e });
-    } finally {
-      precomputeBusy = false;
     }
   };
 

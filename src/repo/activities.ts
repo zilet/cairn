@@ -1084,7 +1084,7 @@ function isRealIsoDate(value: unknown): value is string {
 export function upsertGarminDailyMetric(
   input: GarminDailyMetricInput,
   sourceId?: number | null,
-  options: GarminUpsertOptions & { emitEvent?: boolean } = {}
+  options: GarminUpsertOptions & { emitEvent?: boolean; deferInvalidation?: boolean } = {}
 ) {
   if (!isRealIsoDate(input.date)) throw new Error("date must be a real YYYY-MM-DD");
   const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: garminSourceLabel() });
@@ -1111,11 +1111,15 @@ export function upsertGarminDailyMetric(
      VALUES (${placeholders})
      ON CONFLICT(source_id, date) DO UPDATE SET ${updates}, updated_at = datetime('now')`
   ).run(...values);
-  bumpTrainingDataVersion(); // fresh recovery (HRV/RHR) shifts the program-state deload read
-  // A Garmin sync brings fresh recovery, but a sync is mostly re-writing numbers that
-  // drift a point or two — and it runs several times a day, per synced date. Only
-  // retire today's Brief when the decision genuinely moved (see the helper's note).
-  invalidateDayReadIfDecisionChanged();
+  // Deferred by the batch writer below, which does BOTH exactly once for the whole
+  // pass instead of once per synced day — see upsertGarminDailyMetrics.
+  if (!options.deferInvalidation) {
+    bumpTrainingDataVersion(); // fresh recovery (HRV/RHR) shifts the program-state deload read
+    // A Garmin sync brings fresh recovery, but a sync is mostly re-writing numbers that
+    // drift a point or two — and it runs several times a day, per synced date. Only
+    // retire today's Brief when the decision genuinely moved (see the helper's note).
+    invalidateDayReadIfDecisionChanged();
+  }
   const row = hydrateJson(
     db.prepare(`SELECT * FROM garmin_daily_metrics WHERE source_id = ? AND date = ?`).get(source.id, input.date)
   );
@@ -1129,6 +1133,41 @@ export function upsertGarminDailyMetric(
     });
   }
   return row;
+}
+
+/**
+ * ONE Garmin daily-metric pass, written as one pass.
+ *
+ * A sync writes up to 14 days of daily metrics in a loop, and each single-row upsert
+ * used to end with `bumpTrainingDataVersion()` + `invalidateDayReadIfDecisionChanged()`.
+ * The second of those recomputes the deterministic day read to compare fingerprints —
+ * program state, training signals, the 14-day recovery window, the 21-day expenditure,
+ * all of it — so a routine 14-day sync paid for FOURTEEN full day-read rebuilds
+ * back-to-back, synchronously, on a Pi. They all asked the same question of the same
+ * date (the guarded invalidation defaults to TODAY, whatever day the row is dated), so
+ * thirteen of them were answered against a half-written picture and thrown away.
+ *
+ * The batch defers both and does them once, after the last row lands. That is not a
+ * weaker guarantee: the surviving compare reads the FINAL state of the pass, so a
+ * decision the sync genuinely moved still retires the cached read, and a sync that
+ * only nudged numbers still leaves the athlete's warm Brief alone. It is strictly
+ * more accurate than the per-row version, which could retire a Brief on an
+ * intermediate state the completed pass then walked back.
+ */
+export function upsertGarminDailyMetrics(
+  inputs: GarminDailyMetricInput[],
+  sourceId?: number | null,
+  options: GarminUpsertOptions & { emitEvent?: boolean } = {}
+) {
+  const rows: any[] = [];
+  for (const input of inputs) {
+    rows.push(upsertGarminDailyMetric(input, sourceId, { ...options, deferInvalidation: true }));
+  }
+  if (rows.length) {
+    bumpTrainingDataVersion();
+    invalidateDayReadIfDecisionChanged();
+  }
+  return rows;
 }
 
 // hydrateJson + parse the per-activity JSON arrays (hr_zones, exercise_sets) into

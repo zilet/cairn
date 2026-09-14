@@ -19,6 +19,7 @@ import { applyImagingAnalysisResult, imagingStudyHasContent, imagingStudyRevisio
 import type { ImagingStudyRevisionState } from "./repo/imaging.js";
 import { isNonAnalyteMarkerName } from "./repo/marker-canon.js";
 import { addMemory } from "./repo/memory.js";
+import { recordArtUsage } from "./repo/art-ledger.js";
 import { getFoodNote, setFoodNoteEnrichStatus, updateFoodNoteParsed } from "./repo/nutrition.js";
 import { deriveDirectives } from "./repo/propagation.js";
 import { getRecentSessions, getSessionDetail, importGarminActivitySets } from "./repo/sessions.js";
@@ -28,6 +29,12 @@ import { registerSymptomExtractionHook } from "./repo/symptom-extraction-hooks.j
 import { attachSymptomReportEvent, getSymptomReport, listPendingSymptomReports, setSymptomReportExtraction } from "./repo/symptom-reports.js";
 import { getTrainingSymptom, listTrainingSymptoms, recordMovementTolerance, recurTrainingSymptom, reportTrainingSymptom, resolveTrainingSymptomByArea } from "./repo/training-symptoms.js";
 import { AgentFallbackError, extractJson, runAgentWithFallback } from "./agents.js";
+import {
+  AGENT_BUSY_RETRY_MS,
+  clearAgentBusyDeferrals,
+  isAgentBusyError,
+  noteAgentBusyDeferral,
+} from "./agent-busy.js";
 import {
   clampFoodMacro,
   coerceFoodIngredients,
@@ -59,9 +66,9 @@ import {
 } from "./agent-contracts.js";
 import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
 import { explainExercise, exercisePoseFromExplanation, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
-import { GEMINI_TEXT_MODEL, clearArtFailures, produceExerciseArt, warmExerciseArt } from "./art.js";
+import { GEMINI_TEXT_MODEL, clearArtFailures, enqueueExerciseArt, imageModelFor, warmExerciseArt } from "./art.js";
 import { classifyMuscleGroup, detectImplement } from "./repo/exercise-canon.js";
-import { LB_PER_KG, round2_5 } from "./repo/shared.js";
+import { LB_PER_KG, localDateISO, round2_5 } from "./repo/shared.js";
 import { diagnosticErrorName, recordAsyncFailure, recordDegradedOperation } from "./diagnostics.js";
 import { safeUploadPath } from "./uploadPaths.js";
 import { agentErrorClass } from "./telemetry-privacy.js";
@@ -82,6 +89,8 @@ export {
   coerceNutritionPattern,
   normalizeFoodCaptureParsed,
 } from "./foodCapture.js";
+import { isoDaysAgo } from "./lib/dates.js";
+import { getAppState, setAppState } from "./repo/app-state.js";
 import { log } from "./log.js";
 
 const execFileP = promisify(execFile);
@@ -454,19 +463,44 @@ export function inOwnerTimeZone<T>(fn: () => T): T {
   return runWithTimeZone(activeTimeZone() ?? recordedClientTimeZone(), fn);
 }
 
+/**
+ * What the drain does with a job that threw. A job is failed on its own merits; a job
+ * that could not get a spawn permit is DEFERRED, because nothing about it went wrong —
+ * every CLI permit was simply held elsewhere for its whole wait. Exported so the policy
+ * is testable without a CLI; the deferral budget is bounded, and a job that exhausts it
+ * fails like any other so the row never sits in `in_progress` forever.
+ */
+export function enrichFailureAction(job: { kind: Kind; id: number }, error: unknown): "defer" | "fail" {
+  if (!isAgentBusyError(error)) return "fail";
+  return noteAgentBusyDeferral("enrich", `${job.kind}#${job.id}`).defer ? "defer" : "fail";
+}
+
 async function drain(): Promise<void> {
   if (draining) return;
   draining = true;
+  let congested = false;
   try {
     while (queue.length) {
       const job = queue.shift()!;
       try {
         await inOwnerTimeZone(() => processJob(job));
+        clearAgentBusyDeferrals("enrich", `${job.kind}#${job.id}`);
       } catch (e: any) {
+        if (enrichFailureAction(job, e) === "defer") {
+          // Congestion, not a bad job: put it back at the head (its row is still
+          // 'in_progress', which is exactly what crash recovery re-enqueues) and rest
+          // the whole lane. Draining straight into the same full semaphore would spend
+          // every queued job's wait budget learning the same thing.
+          if (!queue.some((q) => q.kind === job.kind && q.id === job.id)) queue.unshift(job);
+          congested = true;
+          log.warn(`[enrich] job ${job.kind}#${job.id} deferred — every agent spawn permit was busy.`);
+          break;
+        }
         // A failing job must never break the loop. Mark it failed (regex data
         // is left intact) and continue with the next.
         try {
           markFailed(job, e);
+          clearAgentBusyDeferrals("enrich", `${job.kind}#${job.id}`);
         } catch {
           /* ignore */
         }
@@ -486,6 +520,9 @@ async function drain(): Promise<void> {
     }
   } finally {
     draining = false;
+    // Resume after the rest. Unref'd so a queue waiting on congestion never holds the
+    // process open, and guarded by `draining` so a fresh enqueue in the meantime wins.
+    if (congested && queue.length) setTimeout(() => { if (!draining) void drain(); }, AGENT_BUSY_RETRY_MS).unref?.();
   }
 }
 
@@ -803,6 +840,9 @@ async function processJob(job: Job): Promise<void> {
     parsed = fb.result?.parsed ?? null;
     if (!parsed) agentFailure = new AgentFallbackError(order, [{ agent: fb.agent ?? "agent", error: "no usable output" }]);
   } catch (e: unknown) {
+    // Not a failed ingest — no CLI ran. Let the drain defer the document instead of
+    // filing it as unreadable (its `in_progress` row is what recovery re-enqueues).
+    if (isAgentBusyError(e)) throw e;
     parsed = null;
     agentFailure = e;
   } finally {
@@ -1020,6 +1060,10 @@ async function processReviewJob(): Promise<void> {
   const order = pickAgentOrderForTask("health_review");
   if (!order.length) return;
 
+  // What this review is about to READ, captured before the prompt is built. A
+  // document that finishes ingesting while the agent is thinking is honestly not
+  // in this review, so it stays owed and the next refresh picks it up.
+  const covered = newestReviewableHealthDocId();
   const prompt = buildHealthReviewPrompt();
   let agent: string | null = null;
   let raw: string | undefined;
@@ -1041,12 +1085,19 @@ async function processReviewJob(): Promise<void> {
     raw = fb.result?.raw;
     parsed = fb.result?.parsed ?? null;
   } catch (e: any) {
+    // Congestion is the drain's to defer, not this refresh's to skip: a review the
+    // host had no permit for is still owed.
+    if (isAgentBusyError(e)) throw e;
     log.warn(`[enrich] health review refresh failed: ${e?.message ?? e}`);
     return;
   }
 
   const saved = parsed && typeof parsed === "object" ? addHealthReview(parsed, agent, raw) : null;
-  if (!saved) {
+  if (saved) {
+    // Only a review that actually landed moves the watermark. A refusal leaves
+    // the documents owed, which is what a restart should find.
+    noteHealthReviewCovered(covered);
+  } else {
     log.warn("[enrich] health review refresh: agent returned no usable review — previous review kept.");
   }
 
@@ -1161,7 +1212,8 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     });
     agent = fb.agent ?? null;
     parsed = fb.result?.parsed ?? null;
-  } catch {
+  } catch (e: any) {
+    if (isAgentBusyError(e)) throw e; // the drain defers; a narrative is not skipped for congestion
     parsed = null;
   }
   if (!parsed || typeof parsed !== "object") {
@@ -1256,7 +1308,8 @@ export async function processExerciseJob(id: number): Promise<void> {
         schema: EXERCISE_ENRICH_SCHEMA,
       });
       parsed = fb.result?.parsed ?? null;
-    } catch {
+    } catch (e: any) {
+      if (isAgentBusyError(e)) throw e; // the drain defers this job rather than classifying blind
       parsed = null;
     }
     if (parsed && typeof parsed === "object") {
@@ -1313,13 +1366,37 @@ export async function processExerciseJob(id: number): Promise<void> {
 
 // Light producer: pose-aware art for an existing movement, no agent, no rename.
 // The /api/art miss path enqueues this so a name-only generate can never win.
+//
+// It goes through art.ts's serial queue (`enqueueExerciseArt`), the same one lane
+// every other exercise miss rides, and awaits its own job. Calling the producer
+// directly left the one path a PERSON triggers — opening a screen of movements
+// with no figurines — outside that lane: one image request per enrich job, all in
+// flight together, which is the wall of 429s the queue exists to prevent.
+//
+// It deliberately does NOT clear the parked failure first. This job runs on every
+// view of a movement whose figurine is missing, so clearing meant a permanently
+// failing exercise paid for a fresh image request each time it was looked at —
+// the backoff the `failed` map exists to provide was never reached. The producer
+// already refuses a parked key for nothing; the ways out are the ones the rest of
+// the pipeline uses (the breaker closing, a restart, or an explicit regenerate),
+// plus the richer-prompt clear the full `exercise` enrichment job still does.
+//
+// A throw here is a fault OUTSIDE the producer's own generate/catch, which is the
+// one path that had no record at all: no log line, no ledger row, nothing on
+// /api/art/stats. One warn and one 'fail' row make a broken figurine visible.
 export async function processExerciseArtJob(id: number): Promise<void> {
   const ex = getExercise(id) as any;
   if (!ex) return;
+  const name = String(ex.name ?? "").trim();
+  if (!name) return;
   try {
-    clearArtFailures("exercise", String(ex.name));
-    await produceExerciseArt(String(ex.name));
-  } catch { /* best-effort — a miss just retries next view */ }
+    await enqueueExerciseArt(name);
+  } catch (e: any) {
+    log.warn(`[enrich] exercise_art#${id}: art for "${name}" failed: ${e?.message ?? e}`);
+    try {
+      recordArtUsage({ kind: "exercise", query: name, action: "fail", model: imageModelFor("exercise") });
+    } catch { /* telemetry must never break the queue */ }
+  }
 }
 
 // ---- verbatim pain report → structure ------------------------------------------
@@ -1510,7 +1587,8 @@ export async function processSymptomJob(id: number): Promise<void> {
       schema: SYMPTOM_CAPTURE_JSON_SCHEMA,
     });
     parsed = fb.result?.parsed ?? null;
-  } catch {
+  } catch (e: any) {
+    if (isAgentBusyError(e)) throw e; // the drain defers; the athlete's words are not dropped for congestion
     parsed = null;
   }
   if (!parsed || typeof parsed !== "object") {
@@ -1610,7 +1688,8 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
       });
       parsed = fb.result?.parsed ?? null;
       wrote = !!parsed && applyFoodPhoto(id, parsed);
-    } catch {
+    } catch (e: any) {
+      if (isAgentBusyError(e)) throw e; // the drain defers; the plate is not written off as unreadable
       parsed = null;
     }
   }
@@ -2340,15 +2419,136 @@ function applyStructured(job: Job, structured: any): boolean {
   return changed;
 }
 
+// How far back a status-less kind is allowed to look when recovering. Bounds the
+// work a boot can create: a restart re-checks the last week, never the archive.
+const RECOVERY_LOOKBACK_DAYS = 7;
+
+/**
+ * The Garmin strength activities whose agentic layer is still owed.
+ *
+ * `garmin_strength` has no status column, so an interrupted job left no trace and
+ * a restart simply dropped it — the deterministic physiology merge had already
+ * landed, but the day never got its one-line read. The durable source is the work
+ * itself: a linked session (only strength activities get `session_id`) whose
+ * `garmin_json` carries no narrative summary yet. Idempotent to re-run — set
+ * import is keyed by activity, the narrative is an overwrite, and an activity
+ * Cairn itself authored returns before any agent call.
+ */
+function garminStrengthJobsOwed(limit = 20): number[] {
+  const since = isoDaysAgo(localDateISO(), RECOVERY_LOOKBACK_DAYS);
+  try {
+    const rows = db
+      .prepare(
+        `SELECT ga.id AS id
+           FROM garmin_activities ga
+           JOIN sessions s ON s.id = ga.session_id
+          WHERE ga.date >= ?
+            AND (s.garmin_json IS NULL OR json_extract(s.garmin_json, '$.summary') IS NULL)
+          ORDER BY ga.date DESC, ga.id DESC
+          LIMIT ?`
+      )
+      .all(since, limit) as any[];
+    return rows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id));
+  } catch {
+    return []; // recovery is best-effort — never block boot on a telemetry-shaped read
+  }
+}
+
+// The newest health document the stored whole-picture review actually read. A
+// watermark, not a timestamp: `health_documents.created_at` is the UPLOAD time, so
+// two panels uploaded together and reviewed one at a time both sit BEFORE the
+// review that only covered the first — and the second's interrupted review looked
+// finished forever. Kept in app_state, so no column and no migration.
+const HEALTH_REVIEW_COVERED_KEY = "health_review_covered_doc_id";
+
+/** The newest health document a review would see right now, or 0 when there is none. */
+function newestReviewableHealthDocId(): number {
+  try {
+    const row = db
+      .prepare(`SELECT MAX(id) AS id FROM health_documents WHERE enrichment_status = 'done'`)
+      .get() as any;
+    const id = Number(row?.id ?? 0);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Record which documents the review that just landed was built over. Called with
+ * the watermark captured BEFORE the prompt was built — anything that finished
+ * ingesting while the agent was thinking is genuinely not in that review, and is
+ * still owed. Exported for the offline recovery test.
+ */
+export function noteHealthReviewCovered(docId: number): void {
+  if (!Number.isFinite(docId) || docId <= 0) return;
+  setAppState(HEALTH_REVIEW_COVERED_KEY, String(Math.trunc(docId)));
+}
+
+/**
+ * Whether the whole-picture health review a finished ingest owed is still missing.
+ *
+ * `review` is a follow-on job with no row of its own, so an interrupted refresh
+ * vanished on restart and the new labs sat there un-read until the next upload.
+ * The durable evidence is what was actually READ: the watermark above names the
+ * newest document the stored review covered, so a second panel from the same
+ * upload whose review never ran is still owed even though its upload time is
+ * older than that review. Bounded to the recovery window so an install that
+ * simply has no agent does not re-ask forever, and a no-op when enrichment or
+ * agents are off (processReviewJob returns early).
+ *
+ * An install that has never stamped a watermark (every DB before this existed)
+ * falls back to the old created_at ordering, so nothing changes for it until its
+ * next review lands and writes one.
+ */
+export function healthReviewOwed(): boolean {
+  try {
+    const since = isoDaysAgo(localDateISO(), RECOVERY_LOOKBACK_DAYS);
+    const row = db
+      .prepare(
+        `SELECT MAX(id) AS id, MAX(created_at) AS at FROM health_documents
+          WHERE enrichment_status = 'done' AND created_at >= ?`
+      )
+      .get(since) as any;
+    const lastDoc = row?.at ? String(row.at) : null;
+    if (!lastDoc) return false;
+    const newestDoc = Number(row?.id ?? 0);
+    const stamped = getAppState(HEALTH_REVIEW_COVERED_KEY);
+    if (stamped != null) {
+      const covered = Number(stamped);
+      if (Number.isFinite(covered)) return !Number.isFinite(newestDoc) || newestDoc > covered;
+    }
+    const review = db.prepare(`SELECT MAX(created_at) AS at FROM health_reviews`).get() as any;
+    const lastReview = review?.at ? String(review.at) : null;
+    return !lastReview || lastReview < lastDoc;
+  } catch {
+    return false;
+  }
+}
+
 // Crash recovery: re-enqueue every row left 'pending' (queued, never started) or
 // 'in_progress' (started but interrupted by a restart). Called once at startup
 // from server.ts. A re-run ends in 'done' or 'failed', so jobs don't loop.
+//
+// Three kinds carry no status column of their own and so cannot be recovered from
+// a row state — each is recovered from the work it owes instead:
+//   • garmin_strength — a linked session with no narrative yet (bounded window).
+//   • review — a done health doc newer than the one the stored review actually
+//     read (a watermark in app_state, not an upload timestamp).
+//   • exercise_art — needs nothing here. `warmArt()` runs 5s after boot and walks
+//     every uncached PWA art query through the same serial queue, under exactly
+//     the conditions (a Gemini key, art_enabled) in which this job could do
+//     anything at all. A second sweep would only re-queue what that one already
+//     holds, so recovery deliberately leaves it alone.
+// garmin_export self-heals: the next sync re-offers every eligible session.
 export function recoverPendingEnrich(): {
   activities: number;
   food: number;
   health: number;
   exercises: number;
   symptoms: number;
+  garmin_strength: number;
+  reviews: number;
 } {
   const acts = db
     .prepare(`SELECT id FROM activities WHERE enrichment_status IN ('pending','in_progress')`)
@@ -2368,13 +2568,26 @@ export function recoverPendingEnrich(): {
   // A verbatim pain report whose extraction never ran. The words survived the crash
   // (they were written synchronously); only the structuring is owed.
   const symptoms = listPendingSymptomReports();
+  const strength = garminStrengthJobsOwed();
   for (const a of acts) enqueueEnrich("activity", a.id);
   for (const f of foods) enqueueEnrich(f.image_path ? "food_photo" : "food", f.id);
   for (const h of health) enqueueEnrich("health", h.id);
   for (const x of exercises) enqueueEnrich("exercise", x.id);
   for (const s of symptoms) enqueueEnrich("symptom", s.id);
-  if (acts.length || foods.length || health.length || exercises.length || symptoms.length) {
-    log.info(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health + ${exercises.length} exercise + ${symptoms.length} symptom pending job(s).`);
+  for (const id of strength) enqueueEnrich("garmin_strength", id);
+  // After the health documents above: while any of them is still queued the
+  // refresh would be superseded before anyone read it, and the batch's last
+  // document enqueues the one that actually runs (shouldEnqueueReviewRefresh).
+  // Decided BEFORE the enqueue: enqueueReviewRefresh starts the drain synchronously
+  // and processReviewJob clears the latch as its first statement, so reading
+  // `reviewQueued` afterwards would always report nothing was queued.
+  let reviews = 0;
+  if (healthReviewOwed() && shouldEnqueueReviewRefresh(reviewQueued, healthWorkPending())) {
+    reviews = 1;
+    enqueueReviewRefresh();
+  }
+  if (acts.length || foods.length || health.length || exercises.length || symptoms.length || strength.length || reviews) {
+    log.info(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health + ${exercises.length} exercise + ${symptoms.length} symptom + ${strength.length} garmin strength + ${reviews} health review pending job(s).`);
   }
   return {
     activities: acts.length,
@@ -2382,5 +2595,7 @@ export function recoverPendingEnrich(): {
     health: health.length,
     exercises: exercises.length,
     symptoms: symptoms.length,
+    garmin_strength: strength.length,
+    reviews,
   };
 }

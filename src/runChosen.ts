@@ -31,6 +31,7 @@ import { isCoachReadQueryTurn, normalizeCoachReadQueryTurn } from "./brain/query
 import type { OpHooks } from "./coachOps.js";
 import { extractMarkedJson } from "./prompt.js";
 import { createJobStreamFilter } from "./jobStreamFilter.js";
+import { isAgentBusyError } from "./agent-busy.js";
 
 // Pick the agent order for an op left "auto"/blank by the caller — generalized over
 // EVERY task class via repo.pickAgentOrderForTask, which itself resolves a pin
@@ -179,6 +180,7 @@ function streamingCoachRun(
           model: opts.model,
           reasoning: opts.reasoning,
           profile: profileForRun(opts, op),
+          priority: opts.priority,
           onDelta: gate.push,
         });
         gate.finish();
@@ -199,6 +201,10 @@ function streamingCoachRun(
         recordStreamedRun(op, streamAgent, started, !!parsed, false, res);
       } catch (e: any) {
         if (opts.signal?.aborted) throw e; // a deliberate Stop — never retry elsewhere
+        // No spawn permit is a fact about the HOST, not about this agent or streaming:
+        // the one-shot rotation below would queue for the same process-wide permit and
+        // wait just as long. Hand the caller the typed busy error to defer on.
+        if (isAgentBusyError(e)) throw e;
         recordStreamedRun(op, streamAgent, started, false, false, null, e?.message ?? String(e));
       }
     }
@@ -388,6 +394,9 @@ export async function runChosenWithCoachReads(
         reasoning: opts.reasoning,
         profile: opts.profile,
         schema: opts.schema,
+        // Every turn of a bounded-read run inherits the caller's spawn priority: a run
+        // an athlete is waiting on must not lose the reserved permit at round two.
+        priority: opts.priority,
       })
     );
   };

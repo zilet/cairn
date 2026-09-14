@@ -311,6 +311,10 @@ interface Job {
   kind: ArtKind;
   text: string;
   context?: ArtContext | null; // exercise prompt + pose-aware key
+  // Resolved by the drain when THIS job leaves the loop, whichever way it left
+  // (generated, reused, refused by the breaker, or thrown). Only a caller that
+  // must await its own queued job sets it — see `enqueueExerciseArt`.
+  settle?: (produced: boolean) => void;
 }
 
 const queue: Job[] = [];
@@ -378,19 +382,65 @@ export function requestArt(kind: ArtKind, text: string): boolean {
   return true;
 }
 
-function requestExerciseArt(text: string): boolean {
+// A cache miss on an exercise goes onto the SAME serial queue food and activity
+// art use — never straight at the producer. warmArt() walks every uncached PWA
+// query 5s after boot, so firing the producer per name meant one image request
+// per uncached movement, all in flight at once: a Pi with forty of them met a
+// wall of 429s, every key landed in `failed`, and the breaker opened on art that
+// was working fine a minute earlier. Queued, they go out one at a time.
+// Returns whether a job is really pending — queued now, or already queued /
+// generating under this key — so `warmArt()`'s count means something.
+function requestExerciseArt(text: string, settle?: (produced: boolean) => void): boolean {
+  // Every path that does NOT push a job answers `settle` here, so a caller
+  // awaiting its own queued job can never be left hanging on a refusal.
+  const refuse = (): boolean => {
+    settle?.(false);
+    return false;
+  };
   const name = String(text ?? "").trim();
-  if (!name) return false;
-  if (!getGeminiApiKey()) return false;
-  if (!getSettings().art_enabled) return false;
-  if (artCircuitOpen(imageModelFor("exercise"))) return false;
-  if (cachedArtPath("exercise", name)) return false;
+  if (!name) return refuse();
+  if (!getGeminiApiKey()) return refuse();
+  if (!getSettings().art_enabled) return refuse();
+  if (artCircuitOpen(imageModelFor("exercise"))) return refuse();
+  if (cachedArtPath("exercise", name)) return refuse();
   const ctx = buildExerciseArtContext(name);
   const version = Math.max(1, artVersion("exercise", name) || 1);
   const key = exerciseAssetKey(name, ctx, version);
-  if (failed.has(key)) return false;
-  void produceExerciseArt(name).catch(() => {});
+  if (failed.has(key)) return refuse();
+  if (inFlight.has(key)) {
+    settle?.(false); // someone else's job owns this key — nothing of ours to wait on
+    return true; // already queued/generating — dedup
+  }
+  inFlight.add(key);
+  queue.push({ key, kind: "exercise", text: name, context: ctx, settle });
+  void drain();
   return true;
+}
+
+/**
+ * Queue exercise art the way a cache miss does, and resolve when THAT job has
+ * run. The `/api/art` miss path's enrich job (`processExerciseArtJob`) called the
+ * producer directly, which put the one path a person actually triggers — opening
+ * a movement whose figurine is missing — outside the single lane every other
+ * exercise miss rides. A screen full of uncached movements is exactly the wall of
+ * concurrent image requests the queue exists to prevent, arriving one enrich job
+ * at a time instead of all at once.
+ *
+ * Resolves false when nothing of ours was queued (empty name, no key, art off,
+ * breaker open, a parked failure, already cached, or another in-flight job
+ * already owns the key) — in each case there is nothing for the caller to wait
+ * on, and the queue's own bookkeeping has already recorded whatever happened.
+ */
+export function enqueueExerciseArt(name: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let answered = false;
+    const settle = (produced: boolean) => {
+      if (answered) return;
+      answered = true;
+      resolve(produced);
+    };
+    requestExerciseArt(name, settle);
+  });
 }
 
 /**
@@ -669,31 +719,55 @@ async function drain(): Promise<void> {
     while (queue.length) {
       const job = queue.shift()!;
       const model = imageModelFor(job.kind);
-      // The breaker for THIS job's model may have opened partway through the
-      // drain — drop the job rather than spend on a known outage, but keep
-      // draining: a broken exercise model must not abandon the food and
-      // activity backlog for the length of its cooldown.
-      if (artCircuitOpen(model)) {
-        inFlight.delete(job.key);
-        continue;
-      }
+      // Whether this job put a NEW image on disk — the answer a caller awaiting
+      // its own queued job gets, on every way out of the body below.
+      let produced = false;
       try {
-        // An earlier job this drain may have aliased this query onto an
-        // asset that now exists — nothing left to do.
-        if (cachedArtPath(job.kind, job.text)) continue;
-        const r = await resolveConcept(job);
-        if (!r.reused) {
-          await generate({ key: r.key, kind: job.kind, text: r.text });
-          recordGeneration(job.kind, r.key, normalize(r.text), normalize(job.text), model);
+        // The breaker for THIS job's model may have opened partway through the
+        // drain — drop the job rather than spend on a known outage, but keep
+        // draining: a broken exercise model must not abandon the food and
+        // activity backlog for the length of its cooldown.
+        if (artCircuitOpen(model)) {
+          inFlight.delete(job.key);
+          continue;
         }
-      } catch (e: any) {
-        // A failing job must never break the loop.
-        markFailedKey(job.kind, job.text, job.key, model);
-        noteArtFailure(model, artErrorCode(e));
-        recordArtUsage({ kind: job.kind, query: normalize(job.text), action: "fail", model });
-        log.warn(`[art] generation failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
+        try {
+          // An earlier job this drain may have aliased this query onto an
+          // asset that now exists — nothing left to do.
+          if (cachedArtPath(job.kind, job.text)) continue;
+          if (job.kind === "exercise") {
+            // Hand the key back before calling: the producer owns `inFlight` for
+            // the window it actually generates in, and would read our own
+            // reservation as someone else's in-flight job and bail. It carries its
+            // own failure bookkeeping (failed map, breaker, ledger row), so the
+            // drain adds nothing here but serialization.
+            inFlight.delete(job.key);
+            produced = await warmExerciseUnderName(job.text, job.context, false, model);
+            continue;
+          }
+          const r = await resolveConcept(job);
+          if (!r.reused) {
+            await generate({ key: r.key, kind: job.kind, text: r.text });
+            recordGeneration(job.kind, r.key, normalize(r.text), normalize(job.text), model);
+            produced = true;
+          }
+        } catch (e: any) {
+          // A failing job must never break the loop.
+          markFailedKey(job.kind, job.text, job.key, model);
+          noteArtFailure(model, artErrorCode(e));
+          recordArtUsage({ kind: job.kind, query: normalize(job.text), action: "fail", model });
+          log.warn(`[art] generation failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
+        } finally {
+          inFlight.delete(job.key);
+        }
       } finally {
-        inFlight.delete(job.key);
+        // Never let a waiter outlive its job — a settle that throws is the
+        // caller's problem, not the queue's.
+        try {
+          job.settle?.(produced);
+        } catch {
+          /* a waiter must never break the drain */
+        }
       }
     }
   } finally {

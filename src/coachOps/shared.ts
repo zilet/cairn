@@ -6,6 +6,7 @@
 import { getAgentConfig, interactiveTimeoutForOp } from "../repo/settings.js";
 import type { FloorPrecheck, FloorViolation } from "../repo/verify-floors.js";
 import { AgentFallbackError, agentInfo, listAgentModels, loadAgents } from "../agents.js";
+import { agentBusyEnvelopeFields } from "../agent-busy.js";
 import type { JsonSchema } from "../json-schema.js";
 import { runChosen } from "../runChosen.js";
 import { isVerifyResult, verifyResultSchema } from "../agent-contracts.js";
@@ -82,13 +83,21 @@ export interface OpHooks {
 
 // Exported only so the sibling coachOps/* domain modules can share it; not part
 // of the intended public surface (it was file-private before the split).
-export function agentFailure(error: unknown, hooks?: OpHooks): { agent: null; tried: { agent: string; error: string }[] } {
+export function agentFailure(
+  error: unknown,
+  hooks?: OpHooks
+): { agent: null; tried: { agent: string; error: string }[]; agent_busy?: true } {
   // A user Stop is control flow, not graceful degradation: preserve cancellation
   // so the durable job worker can mark the operation canceled instead of failed.
   if (hooks?.signal?.aborted) throw error;
   return {
     agent: null,
     tried: error instanceof AgentFallbackError ? error.tried : [],
+    // Host congestion is not a refusal on the merits: no CLI was ever started. It is
+    // NOT rethrown (an agentic endpoint answers 200 with this envelope, always) — it
+    // rides along as a field, and the durable runners defer on it instead of calling
+    // the operation done. See src/agent-busy.ts.
+    ...agentBusyEnvelopeFields(error),
   };
 }
 
