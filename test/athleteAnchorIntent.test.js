@@ -294,10 +294,12 @@ test("flag_training_structure records the request AND hands it to the coach as a
   assert.ok(job.input.task.includes(REQUEST), "and frame the task");
   assert.match(job.input.task, /"days" restructure/);
 
-  // While the build is in flight it is visible on the surfaces the athlete already reads.
+  // While the build is in flight it is the COACH's work, not an open question: under lead
+  // the request never appears in "Waiting on you" (a row there with no action was how the
+  // athlete read "confirm it" over something already being built for them).
   assert.ok(
-    repo.awaitingBrainDecisions(50).some((row) => row.id === decision.id),
-    "the in-flight request is readable, with the sentence that says what happens next"
+    !repo.awaitingBrainDecisions(50).some((row) => row.id === decision.id),
+    "an in-flight request under lead is not waiting on the athlete"
   );
 });
 

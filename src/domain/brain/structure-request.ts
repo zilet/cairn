@@ -15,7 +15,7 @@
 // superseded by it, so the athlete sees exactly one thing: the change itself, landing
 // or waiting, never a second "request" row beside it.
 import { createAgentJob, getAgentJob } from "../../repo/chat.js";
-import { getBrainDecision, patchBrainDecision } from "../../repo/brain-decisions.js";
+import { getBrainDecision, listBrainDecisions, patchBrainDecision } from "../../repo/brain-decisions.js";
 import { getSettings } from "../../repo/settings.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { addDaysISO, localDateISO } from "../../repo/shared.js";
@@ -155,6 +155,38 @@ export function enqueueStructureRebuild(input: {
     /* the queued row is durable; the runner's recovery pass will pick it up */
   }
   return { job_id: jobId };
+}
+
+// A landed restructure the athlete asked for ANSWERS every standing request about the
+// shape of the week — this one, an earlier wording of it, a stub-era flag the thaw
+// re-filed as an advisory. Each is superseded by the change that landed, so the ledger
+// reads "you asked → this is what landed" and nothing lingers as an open question over
+// a week that has already been rebuilt. Returns the ids retired.
+export function retireAnsweredStructureRequests(landedDecisionId: number): number[] {
+  const landed = getBrainDecision(landedDecisionId);
+  if (!landed || landed.status !== "applied") return [];
+  const retired: number[] = [];
+  for (const status of ["review", "observed"] as const) {
+    for (const row of listBrainDecisions({ status, kind: "training_structure", limit: 100 })) {
+      if ((row.action as any)?.kind !== "training_structure_request") continue;
+      const id = Number(row.id);
+      if (!(id > 0) || id === landedDecisionId) continue;
+      // A request whose own build is still running settles through settleStructureBuild.
+      if (liveStructureBuild(row)) continue;
+      const updated = patchBrainDecision(id, {
+        status: "superseded",
+        superseded_by: landedDecisionId,
+        context: {
+          ...((row.context ?? {}) as Record<string, unknown>),
+          review_required: false,
+          structure_request_answered_by: landedDecisionId,
+          structure_request_answered_at: new Date().toISOString(),
+        },
+      });
+      if (updated) retired.push(id);
+    }
+  }
+  return retired;
 }
 
 export interface StructureBuildRef {

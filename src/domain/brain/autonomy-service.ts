@@ -5,6 +5,7 @@ import {
   enqueueStructureRebuild,
   isAthleteRequestedRestructure,
   liveStructureBuild,
+  retireAnsweredStructureRequests,
 } from "./structure-request.js";
 import type { AutonomyTier, BrainDomain } from "../../brain/decision-contract.js";
 import {
@@ -2873,6 +2874,15 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         }
       });
       applied.push(announced.id!);
+      // The landed week answers every standing request about the shape of the week —
+      // none may linger as an open question over a plan that already changed.
+      if (athleteAsked) {
+        try {
+          retireAnsweredStructureRequests(announced.id!);
+        } catch (err) {
+          recordAsyncFailure("apply", "retire_answered_structure_requests", err);
+        }
+      }
       // The marker means exactly "THIS pass's landing is what closed the budget", so it
       // is asked through surpriseBudgetAllows rather than a literal count — the previous
       // `< 1 … >= 1` form silently encoded a budget of one and stopped firing the moment

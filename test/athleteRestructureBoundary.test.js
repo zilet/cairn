@@ -193,6 +193,88 @@ test("boundary: plan drift on the athlete's ask REBUILDS it instead of setting i
   assert.deepEqual(holds, []);
 });
 
+function structureRequestRow(status, reviewRequired, words) {
+  return repo.recordDecision({
+    effective_date: null,
+    kind: "training_structure",
+    domain: "training",
+    summary: words.slice(0, 60),
+    rationale: words,
+    source: "chat",
+    source_ref_type: null,
+    source_ref_key: null,
+    status,
+    autonomy_tier: reviewRequired ? "ask" : "announce",
+    risk_class: "moderate",
+    reversible: false,
+    input_fingerprint: null,
+    context: { review_required: reviewRequired, requested_in_chat: true, athlete_request: words },
+    action: { kind: "training_structure_request", request: words, user_explanation: `You asked: “${words}”.` },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+}
+
+test("a structure request is 'waiting on you' ONLY as a review_everything hold — never as the coach's in-flight or observed work", () => {
+  const hold = structureRequestRow("review", true, "runs Tue/Thu, please rebuild");
+  const inFlight = structureRequestRow("review", false, "runs Tue/Thu, in flight under lead");
+  const observed = structureRequestRow("observed", false, "an old ask the thaw re-filed");
+  const ids = repo.awaitingBrainDecisions().map((d) => d.id);
+  assert.ok(ids.includes(hold.id), "the athlete really is asked under review_everything");
+  assert.ok(!ids.includes(inFlight.id), "the coach is building it; nothing is asked of the athlete");
+  assert.ok(!ids.includes(observed.id), "an observed request is never an open question");
+});
+
+test("the landed week answers every standing request about the week's shape", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedWeek();
+  const older = structureRequestRow("observed", false, "align the split to Tue/Thu runs (2 weeks ago)");
+  const current = structureRequestRow("review", false, REQUEST);
+  const unrelatedHold = repo.recordDecision({
+    effective_date: null,
+    kind: "training_structure",
+    domain: "training",
+    summary: "a conference read, not a request",
+    rationale: "case conference",
+    source: "case_conference",
+    source_ref_type: null,
+    source_ref_key: null,
+    status: "review",
+    autonomy_tier: "clinician",
+    risk_class: "moderate",
+    reversible: false,
+    input_fingerprint: null,
+    context: { review_required: true },
+    action: { user_explanation: "Four strength sessions and two easy runs." },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+
+  const proposal = athleteDraft();
+  const routed = applyProposalWithAutonomy(Number(proposal.id));
+  const due = applyDueAnnouncedDecisions(routed.effective_date);
+  assert.deepEqual(due.applied, [routed.decision.id]);
+
+  for (const row of [older, current]) {
+    const after = repo.getBrainDecision(row.id);
+    assert.equal(after.status, "superseded", `request ${row.id} is answered`);
+    assert.equal(after.superseded_by, routed.decision.id, "by the change that landed");
+    assert.equal(after.context.structure_request_answered_by, routed.decision.id);
+  }
+  assert.equal(repo.getBrainDecision(unrelatedHold.id).status, "review", "only REQUESTS are answered by a landing");
+  assert.deepEqual(
+    repo.awaitingBrainDecisions().filter((d) => d.kind === "training_structure" && d.id !== unrelatedHold.id),
+    [],
+    "nothing about the week's shape is left waiting on the athlete"
+  );
+});
+
 test("boundary: under review_everything the athlete's stale ask is held for them, never rebuilt behind their back", () => {
   repo.setSettings({ lead_mode: "lead" });
   seedWeek();

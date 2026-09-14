@@ -1805,6 +1805,13 @@ drift in the plan or the training log retires the draft and decision as `superse
 runner registers itself via `registerStructureBuildEnqueuer` to avoid an import cycle; an
 unregistered enqueuer leaves a durable `queued` row for `recoverAgentJobs`). Under
 `review_everything` the stale ask is held for the athlete, never rebuilt behind their back.
+And a request row is never "Waiting on you" unless the posture says so: `awaitingBrainDecisions`
+admits a `training_structure_request` only as a `review` hold with `review_required:true` (what
+review_everything writes) — an in-flight request under lead, or an `observed` re-filing, is the
+coach's work, not the athlete's question. When the athlete's restructure lands,
+`retireAnsweredStructureRequests` supersedes every standing request row (this wording, an older one,
+a stub-era flag) with the landed decision, so nothing lingers as an open question over a week that
+already changed.
 
 Progress rides an **`EventEmitter` bus** (`onTurnEvent(id, cb)`) that the SSE endpoint forwards:
 `phase` / `delta` (a live reply chunk) / `reset` (streaming fell back — clear the partial bubble) /
