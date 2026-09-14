@@ -49,6 +49,11 @@ release flow: `docs/SHARING.md`.
 
 ## The traps that actually bite
 
+**`AgentBusyError` (`code: agent_busy`) means the host had no CLI spawn permit — never a bad job.**
+Every agent spawn goes through one process-wide semaphore (`CAIRN_MAX_AGENT_PROCS`, `src/agents.ts`);
+a runner that catches this must defer-and-retry, never fail the row or rotate to the next agent.
+Details: `docs/ARCHITECTURE.md` "The process-wide agent spawn cap".
+
 **Schema changes are two-step.** For a brand-new table, add a `CREATE TABLE IF NOT EXISTS` in
 `src/db.ts` and you're done. For a **column on an existing table** do BOTH: (1) add it to that table's
 create block in `db.ts` so fresh DBs get it, and (2) append an entry with the next integer `version`
@@ -207,6 +212,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 
 ## Domain gotchas
 
+- **A held draft's dead premise retires it, never re-asks it.** A swap/removal draft whose target
+  movement has left the plan is retired (`retire_reason:"premise_gone"`) by
+  `retireDraftsWithDeadPremise()` ahead of the thaw/adoption loop — ungated by `lead_mode`. Details in
+  `docs/ARCHITECTURE.md`.
 - **Weight encoding**: negative `weight`/`target_weight` = assisted movement (`-30` = 30 lb assist);
   `null` = bodyweight. The PWA and prompts rely on this.
 - **Timed exercises** (`exercises.mode = 'timed'`): sets log `duration_sec` (weight/reps may be

@@ -91,6 +91,17 @@ Set `TZ` in `.env` as a sensible fallback for a new install before any device ha
 background work must run before the first PWA request, that fallback frames the configured day and hour.
 For example, use `TZ=Europe/London`.
 
+### Bounding concurrent CLI subprocesses
+
+Every coaching CLI spawn (chat, agent jobs, enrichment, the proactive pass, day-read precompute and
+refresh) shares one process-wide semaphore so a resource-constrained host — a Pi 5's 8 GB / 4 cores —
+never runs more agent subprocesses at once than it can serve well. `CAIRN_MAX_AGENT_PROCS` (default
+`2`) sets the background cap; an interactive run (a chat turn, an athlete's own new read) may take one
+additional reserved permit above it. Raise it on a more capable host, or leave it if requests start
+returning "the coach is busy" (`AgentBusyError`, `code: agent_busy`) more than expected — that error
+is a transient deferral, not a failure, and the affected job/turn retries on its own. Details:
+`docs/ARCHITECTURE.md` "The process-wide agent spawn cap".
+
 ---
 
 ## Knowing when to update

@@ -98,7 +98,13 @@ importing everything from `./repo.js` unchanged.
   startable day with nothing on it. An explicitly declared empty `training` day survives as the Plan
   editor's "Add day" scaffold — but it is not startable: Today's launch card and the editor's Train
   button both check for items first. No plan at all is a different state; that card is the
-  deliberate "Open session" door.
+  deliberate "Open session" door. On Today, "nothing to start" requires EVERY witness to agree —
+  the plan day's own items, the session preview's `item_count`, and logged sets — not just the
+  session preview alone: a preview reading 0 no longer overrules a plan day that actually carries
+  lifts (`nothingToStart`, `src/client/today-screen.ts`). The same computed flag is persisted on
+  client state and threaded through `today-brief-client.ts`/`today-brief-controller.ts` so a later
+  Brief-only repaint (`upgradeBriefInPlace`) withholds "Start session" exactly like the initial paint,
+  instead of re-deriving an approximation of the rule from the DOM.
 - Epley est-1RM (`getProgress`) and PR detection (in `logSetByName`, returns `pr`/`est_1rm` — for
   `mode:'timed'` exercises a PR is a new max `duration_sec` and `est_1rm` stays null).
 - Exercise CRUD (`listExercises`/`upsertExercise`/`updateExercise` — `mode` is `'reps'` or
@@ -151,6 +157,16 @@ treats a precedence entry as a constraint). The session screen labels **Reach** 
 `item.reach` or `rx.top_set`, never by inferring a 1-set sibling card, and prefills the first
 unlogged row with the heavier look.
 
+**Only ONE challenge top set a session, whichever shape produces it.** An agent-authored nested
+`top_set` on a composed item now sets `reachHostConsumed` when it's inserted (`agentTopSetItemFor()`,
+`src/repo/daily-composition.ts`), so a later server-derived compound in the same list can no longer
+also claim the reach slot — before this a day could render both an agent-composed single AND a
+server-derived reach card. That card also no longer carries `item.reach` itself: its load comes
+through `safeAgentWeight`, which falls back to the lift's PLAN target when nothing is logged, and a
+prescription has never proved what the athlete can actually move. `agentTopSetIsReach()` instead
+judges it against the LOGGED working weight at the insertion site, so the envelope's promised reach
+only ever lands a card the athlete's own numbers back.
+
 **The muscle model reads a decaying dose, not a boolean with a cliff.** Fatigue used to be `sets >=
 4` inside a fixed 2-day window — a muscle equally smoked by 4 sets or by 30, going from smoked to
 fresh at an arbitrary midnight. `src/repo/hybrid-load.ts`'s `muscleResidual()` replaces it with
@@ -201,7 +217,10 @@ only legal slots: the engine anchors `day_number`s to them (long onto a `long`/w
 onto a `quality` dow, easy onto the rest) and the agenda will not suggest a date whose weekday is
 off-schedule, leaving the intent undated with "your next scheduled run day is <weekday>" rather than
 spilling onto Friday after a Thursday run. Heavy-lower adjacency stays a soft note and never moves a
-run off a named day. With no schedule the engine keeps its own provisional slots (quality ~day 2,
+run off a named day. That "unscheduled weekday" filter binds only the SUGGESTION engines — a run the
+athlete's own plan template prescribes on that day is structure they authored, not a machine spilling
+a session, so `normalizeComposedSession()` (`src/repo/daily-composition.ts`) never drops a
+plan-authored run for sitting on a dow `endurance_schedule` doesn't name. With no schedule the engine keeps its own provisional slots (quality ~day 2,
 long ~day 6). A run the athlete actually logged on an unscheduled day still closes a compatible
 intention — the log is truth. Its day numbers are otherwise provisional anchors: a compatible early or late run closes
 one intention, a completed intention is never prescribed twice, and every completed run reserves its
@@ -1809,9 +1828,26 @@ And a request row is never "Waiting on you" unless the posture says so: `awaitin
 admits a `training_structure_request` only as a `review` hold with `review_required:true` (what
 review_everything writes) — an in-flight request under lead, or an `observed` re-filing, is the
 coach's work, not the athlete's question. When the athlete's restructure lands,
-`retireAnsweredStructureRequests` supersedes every standing request row (this wording, an older one,
-a stub-era flag) with the landed decision, so nothing lingers as an open question over a week that
-already changed.
+`retireAnsweredStructureRequests` now retires only the request whose own build produced that landing
+— matched on build lineage, or on an equivalently-worded standing ask
+(`normalizeStructureRequestText`/`structureRequestText`) — instead of superseding every standing
+request row. Two different asks are two different weeks: an earlier bare "supersede everything"
+reading would silently close a Thursday ask on a Monday restructure's landing. Any standing request
+the landing does NOT answer is handed back to the coach via `ensureStructureBuildInFlight` in the same
+pass, rather than left open with nothing building it.
+
+**Structure builds survive a restart.** `enqueueStructureBuild` is the one hand-off every caller
+(chat, `ensureStructureBuildInFlight`, boot recovery) goes through to create the `evolve_program` job
+and stamp the flag; `MAX_AUTOMATIC_STRUCTURE_REBUILDS` (2) caps how many times the SERVER may retry a
+build on its own before settling the flag as failed with a sentence — the athlete's own re-ask is
+never capped. `recoverAgentJobs()` (boot, after interrupted jobs are failed and queued ones
+re-enqueued) calls `recoverStructureBuilds()`, which walks every standing flag with no recorded
+outcome: a job still `queued`/`running` is left to the runner, a `done` job's result is replayed
+through `settleStructureBuild`, a `canceled` one settles as stopped, and anything else tries
+`ensureStructureBuildInFlight` before falling back to settling as failed — so a restart between "job
+created" and "job settled" can no longer leave a flag holding a dead job id forever. A failed build
+now sets `review_required:true` + `review_reason_code:"structure_build_failed"` on a still-standing
+flag, which is what makes the failure sentence actually surface in "Waiting on you".
 
 Progress rides an **`EventEmitter` bus** (`onTurnEvent(id, cb)`) that the SSE endpoint forwards:
 `phase` / `delta` (a live reply chunk) / `reset` (streaming fell back — clear the partial bubble) /
@@ -1881,6 +1917,40 @@ Two operational corollaries. `DATA_DIR/.agent-workspaces/<kind>` is the cwd for 
 what an exploring CLI reads first — keep it empty (a stray CLI core dump or `*_output.json` there is
 fuel). And the `permission_denied` class is deliberately NOT a holding state: the CLI is healthy, that
 op was blocked, and the next prompt (now behind the preamble) is expected to succeed.
+
+## The process-wide agent spawn cap (`src/agents.ts`, `src/agent-busy.ts`)
+
+Six lanes spawn coaching CLIs — chat, the agent-job runner, the enrichment queue, the proactive pass,
+the day-read precompute and the day-read refresh — and until this round each only knew about ITSELF
+(its own serial runner or busy flag). Nothing counted the total, so a quiet morning could have a
+precompute, an enrich drain and a refresh in flight while the athlete opened chat: four Node-based
+CLIs at once on a Pi 5's 8 GB / 4 cores, every one of them slower and the interactive one slowest.
+
+**One semaphore, taken at the single chokepoint every lane passes through** — inside `runAgentImpl`
+and `runAgentStreaming`, before the subprocess spawns. `CAIRN_MAX_AGENT_PROCS` (default 2, read live
+per acquisition) bounds background work; a run declaring `RunOpts.priority: "interactive"` (a chat
+turn, an athlete's own new read) may additionally take ONE reserved permit above that cap, and jumps
+the FIFO queue ahead of every waiting background run (behind only an earlier interactive one) — a
+bare-number `runAgent(name, prompt, timeout)` call site is always background. Without the reserve, two
+background holders (a deep proposal job plus an enrichment drain — the ordinary quiet-morning pair)
+left a chat turn queued behind an open SSE stream with nothing on it. The permit is taken BEFORE the
+run's own timeout timer is armed, so a queue wait never counts against the op's budget; the WAIT
+itself is bounded to that same timeout, and a run that can't get a permit in time rejects with
+`AgentBusyError` (`code: "agent_busy"`, `src/agent-busy.ts`) instead of hanging. An `AbortSignal`
+(chat's Stop) drops a queued run out of line instantly, without spawning.
+
+`AgentBusyError` is a typed, TRANSIENT signal — congestion, not a bad job or a bad provider — and
+every caller treats it as defer-and-retry rather than a terminal outcome: `runAgentWithFallback` stops
+the rotation and rethrows it rather than trying the next agent (the permit is process-wide, so every
+remaining candidate would wait exactly as long and fail exactly as hard); `agentJobs.ts`,
+`enrich.ts`'s drain, and `processReviewJob`/`processGarminStrengthJob`/`processExerciseJob`/
+`processSymptomJob`/`processFoodPhotoJob` all re-queue rather than fail the row; the scheduler logs it
+as a `warn` deferral, never an `error`. `noteAgentBusyDeferral(lane, key)` bounds the retries at
+`AGENT_BUSY_MAX_DEFERRALS` (3) so a permanently over-capacity queue still eventually fails for real
+instead of retrying silently forever; `clearAgentBusyDeferrals` resets the count on any terminal
+outcome. It travels two ways: thrown from `runAgent*`, or as an `{ok:false, agent_busy:true}` field on
+a coachOp's envelope (`agentBusyEnvelopeFields`/`isAgentBusyResult`) for callers that answer 200 rather
+than throw.
 
 ## Provider availability (`src/agentAvailability.ts` + `src/repo/agent-availability.ts`)
 
@@ -2224,10 +2294,18 @@ keys aren't retried until the durable circuit breaker closes) generates on cache
 timeout, atomic tmp-then-rename write) — NOT an `agents.json` CLI run. Degrades gracefully: no key /
 `settings.art_enabled` off / known-failed → 204, nothing runs.
 
-**One producer for exercise figurines.** `requestArt("exercise")` and boot `warmArt()` never fire a
-name-only image prompt. A `/api/art` miss for an exercise returns 204 and, if the row exists, enqueues
-the light `exercise_art` enrich kind (`processExerciseArtJob` → `produceExerciseArt`); if no row,
-`produceExerciseArt` builds context from `classifyMuscleGroup` / `detectImplement`
+**One producer for exercise figurines, and one queue for every miss.** `requestArt("exercise")` and
+boot `warmArt()` never fire a name-only image prompt. Every exercise cache miss — including a
+`/api/art` miss, which enqueues the light `exercise_art` enrich kind
+(`processExerciseArtJob`) — now rides the SAME serial queue as food/activity art, rather than calling
+the producer directly per name: `requestExerciseArt()` pushes a `Job` and the drain calls
+`warmExerciseUnderName`, so a screen full of uncached movements goes out one request at a time
+instead of a wall of concurrent Gemini calls that used to trip 429s and open the breaker on art that
+was fine a minute earlier. `enqueueExerciseArt(name)` is the awaitable form
+(`processExerciseArtJob`'s caller) — it resolves once that specific job has actually run (or resolves
+`false` immediately when nothing of the caller's was queued: empty name, art off, breaker open, a
+parked failure, already cached, or another in-flight job already owns the key). If no exercise row
+exists, `produceExerciseArt` builds context from `classifyMuscleGroup` / `detectImplement`
 (`src/repo/exercise-canon.ts`) and still never generates from the bare name. The full `exercise`
 enrichment job is the other caller of the same producer (`warmExerciseArt` with muscle group,
 equipment, and the how-to pose). Pose cap is 360 characters, and the pose clause leads the prompt
@@ -2425,6 +2503,20 @@ The optional proactive coaching cadence: a 60s `setInterval` reads `settings` ea
 schedule is toggleable live) and, when `coach_enabled` and the configured `coach_day`/`coach_hour`
 match, creates one weekly proposal via the auto rotation and routes it through the shared autonomy
 policy. First-run settings seed from the legacy `COACH_AGENT`/`COACH_DAY`/`COACH_HOUR` env vars.
+
+**A precompute that throws must not cost the day, and must not hold a dead lane forever.** The
+nightly day-read precompute used to stamp `lastPrecomputeDate` up front, so one throw burned the
+whole day until local midnight. It now runs through `createDailyOnceGate()` (`src/scheduler.ts`),
+which stamps `succeed(stamp)` only once the read (or its deterministic floor) is actually cached, and
+caps a day at `maxAttempts` (default 2) so a repeatedly failing run cannot retry every minute of the
+hour. The `await` on `precomputeDayRead()` is also bounded by `withDeadline()` — a generous
+stuck-promise backstop, not a second timeout — and on timeout it ABORTS the run via an
+`AbortController` rather than merely releasing the gate: releasing alone left the abandoned precompute
+running against `computeCanonicalDayRead`'s one-lane-per-date lock, so a second attempt just joined
+the same never-settling promise while the dead CLI went on holding an agent spawn permit. Aborting
+retires the lane and SIGKILLs the subprocess (or drops it from the spawn queue), so the retry is real.
+Scheduler logging also tells congestion apart from a defect: `isAgentBusyError(cause)` logs a `warn`
+("deferred — every agent spawn permit was busy") instead of the `error` a genuine failure gets.
 
 **Provider exhaustion is availability, not a defect.** Every agentic task body ends the same way when
 no CLI can answer: the op returns its designed `{ok:false, agent_status:'all_failed'|'unconfigured',
@@ -2773,6 +2865,24 @@ ONE regeneration per draft: the receipt is the durable lineage record
 (`regenerationReceiptForDraft()`), so a replacement that goes stale in its turn falls back to the
 ordinary hold and evidence churn can never loop.
 
+**A dead premise is retired, never re-asked or re-held.** `adoptOrphanedDrafts()` now runs
+`retireDraftsWithDeadPremise()` ahead of the thaw and adoption loop: a held draft whose subject is a
+swap's `from` or a removal's `exercise` (`sets:0` counts) is retired with `retire_reason:"premise_gone"`
+once the plan no longer carries that movement — matched the same three-tier way `applyPlanSwap`
+resolves a target (exact normalized name, canonical key, movement key), and only when EVERY change in
+the payload is such a premise change (a mixed draft with a live half is never thrown away for its dead
+half). An empty plan is never evidence of removal. This runs regardless of `lead_mode`: closing a dead
+question is not the same act as adopting a live one, so the `review_everything` floor doesn't gate it.
+Separately, `holdProposalForReview()` now looks up a draft's existing review holds by proposal id
+(`listReviewDecisionsForProposal`, `src/repo/brain-decisions.ts` — queried directly against SQLite,
+not filtered out of the newest 100 `review` rows the way `listBrainDecisions` reads) and refreshes the
+oldest live one in place instead of inserting a second row when the refusal's own reason changes
+between passes; any extra duplicate found is superseded onto the survivor. It never LOOSENS a floor on
+refresh — `clinicianFloorHolds` (the deterministic read) on the existing hold can only push the
+refreshed row's tier to `clinician`, never pull it off. `decisionIsTheAthletes()` now defers entirely
+to `clinicianFloorHolds` for its clinical half, closing the last place a bare `risk_class:'clinical'`
+or `autonomy_tier:'clinician'` could self-attest a hold on or off the floor.
+
 **Training volume has no ladder back up, so a cut has to be owed back.** Progressive overload only
 ever moves load and reps; nothing in the push ladder can raise a plan item's `sets`, so a repeated
 fuel-protection deload (`applyFuelProtection`, `src/repo/progression.ts`) used to halve it forever —
@@ -2901,9 +3011,11 @@ new profile fields, and `{available:false, reason}` for everyone else. `raceBuil
   there is one, else the estimate. `this_week.quality.pace` puts a number on the engine's quality
   label (`paceKeyForQuality`; hills stay effort-based).
 - **`weeks`** — the ladder from this week to race week, `projectRaceBuildWeeks` walking
-  `raceRamp()` one Monday at a time (each week the engine's own next safe step off the one before,
-  the first week replaced by the live `weeklyRunPlan` prescription so the ladder never disagrees
-  with the run-plan card). Week `kind` follows the ENGINE's arithmetic, not the calendar: for a
+  `raceRamp()` one Monday at a time (each week the engine's own next safe step off the one before).
+  The live `weeklyRunPlan` prescription is passed IN as the current rung the walk steps off, not
+  patched onto the first rung after the walk — patching after seeded the next Monday's anchor one
+  full ramp high, since `raceRamp()` reads its anchor as the week BEFORE. Week `kind` follows the
+  ENGINE's arithmetic, not the calendar: for a
   weekend race the peak is the week before race week and the taper is race week itself, so the
   ladder shows build → peak → race rather than inventing a taper week the engine will not
   prescribe. `weeks_to_race` on each rung is the calendar count for the label.

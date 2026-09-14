@@ -4,6 +4,76 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-14 — Requests never lost, holds never doubled, one CLI lane at a time
+
+No schema migration (`user_version` stays where v101 left it).
+
+- **Structure requests are now one durable hand-off** (`src/domain/brain/structure-request.ts`).
+  Standing asks live as `brain_decisions` flags in `review`/`observed` (`standingStructureRequests`);
+  `enqueueStructureBuild` is the one path that hands a flag's words to the `evolve_program` job and
+  stamps what's in flight, used by the chat hand-off, `ensureStructureBuildInFlight`, and boot
+  recovery alike. `recoverAgentJobs()` now also calls `recoverStructureBuilds()`, which reconciles
+  every standing flag against real job state — finishes what finished, restarts what died (capped by
+  `MAX_AUTOMATIC_STRUCTURE_REBUILDS` = 2 automatic retries; the athlete's own re-ask is never capped),
+  settles what cannot be restarted — so a restart between "job created" and "job settled" no longer
+  leaves a flag holding a dead job id forever. A build that fails now sets `review_required` +
+  `review_reason_code: "structure_build_failed"` so the sentence explaining it actually surfaces.
+  `retireAnsweredStructureRequests` now retires only the request whose own build produced the landing
+  or an equivalently-worded standing ask (`normalizeStructureRequestText`/`structureRequestText`),
+  never every standing request — a Monday restructure no longer silently closes a Thursday one.
+- **Autonomy: dead premises retire, review holds never double**
+  (`src/domain/brain/autonomy-service.ts`). `adoptOrphanedDrafts()` now runs
+  `retireDraftsWithDeadPremise()` first: a held swap/removal draft whose target movement has left the
+  plan (matched the same three-tier way `applyPlanSwap` resolves a target) is retired with
+  `retire_reason: "premise_gone"` and a receipt, ungated by `lead_mode` since it closes a dead
+  question rather than adopting one. Separately, `holdProposalForReview` now looks up existing holds
+  for a draft via `listReviewDecisionsForProposal` (new, `src/repo/brain-decisions.ts`, queried by
+  proposal id rather than filtered out of the newest 100 review rows) and refreshes the oldest one in
+  place instead of inserting a duplicate every time a refusal's reason changes; `decisionIsTheAthletes`
+  now defers entirely to `clinicianFloorHolds` for the clinical half, closing the last place a
+  conductor could self-attest a hold onto or off the clinician floor via a bare tier/flag.
+- **Composition: one top set a session, plan-authored runs survive, race ladder walks live**
+  (`src/repo/daily-composition.ts`, `src/repo/race-build.ts`). An agent-nested top set now blocks a
+  later server-derived one from also claiming the day's reach slot (`reachHostConsumed`), and no
+  longer claims `reach` itself — it's evaluated against the athlete's logged working weight
+  (`agentTopSetIsReach`) since its load can fall back to a plan target. `normalizeComposedSession` no
+  longer drops a plan-authored run just because the weekday isn't in the athlete's stated schedule.
+  `projectRaceBuildWeeks` now takes the live engine's own weekly prescription as the current rung
+  the ladder steps off, instead of patching it in after the walk — which had been seeding the next
+  Monday's anchor one full ramp high.
+- **Today: the launch card only hides when every witness agrees the day is empty**
+  (`src/client/today-screen.ts`). `nothingToStart` now requires the plan day's own items, the session
+  preview, and logged sets to all read empty — a preview reading 0 no longer overrules a plan day that
+  actually carries lifts. The same flag is persisted on state and threaded through
+  `today-brief-client.ts`/`today-brief-controller.ts` so a later Brief-only repaint (`upgradeBriefInPlace`)
+  withholds "Start session" exactly like the initial paint.
+- **Background work**: exercise art now rides the same serial queue as food/activity art from every
+  entry point, including the `/api/art` miss path (`enqueueExerciseArt`, `src/art.ts`) — calling the
+  producer directly per name used to fire a wall of concurrent Gemini requests. Enrich recovery
+  (`src/enrich.ts`) now also recovers `garmin_strength` (linked sessions with no narrative yet) and
+  `review` (a `health_review_covered_doc_id` watermark in `app_state`, not upload timestamp, so a
+  panel that finished ingesting mid-review is still owed). Day-read precompute
+  (`src/scheduler.ts`) now uses a `DailyOnceGate` that stamps on success rather than on attempt, and
+  a `withDeadline` wrapper that ABORTS a stuck run so a retry starts fresh rather than rejoining a
+  dead lane. `art_usage` now has time+row-cap retention (`pruneArtUsage`, `src/repo/art-ledger.ts`).
+  `dayread-refresh.ts` now warms the deterministic floor (never a CLI spawn) when no agent is usable
+  or a recompute fails, instead of leaving an invalidated row uncached.
+- **Runtime**: `syncGarmin` now wraps its pass in `runWithBrainSnapshot` so a scheduler-triggered sync
+  gets the same per-pass memoization the REST route already had, and `upsertGarminDailyMetrics`
+  (`src/repo/activities.ts`) batches the training-data-version bump + day-read invalidation once per
+  sync instead of once per day. A new process-wide spawn semaphore (`src/agents.ts`,
+  `CAIRN_MAX_AGENT_PROCS`, default 2) caps concurrent CLI subprocesses; an interactive run (chat, a
+  fresh read) may take one reserved permit above the cap and jumps the FIFO queue ahead of background
+  work. A run that can't get a permit within its own timeout budget rejects with `AgentBusyError`
+  (`src/agent-busy.ts`, `code: "agent_busy"`) — a typed, transient signal every runner treats as
+  defer-and-retry (bounded to `AGENT_BUSY_MAX_DEFERRALS` = 3), never a failed job, tripped breaker, or
+  agent-rotation skip. `src/db.ts` now memoizes `db.prepare()` by SQL text on an LRU cache (2,000
+  statements) — a cold `getCoachContext()` measured 1,632 `prepare()` calls of literal, unchanging SQL.
+- Also landed: `formatEnduranceScheduleDays`/run-schedule rationale moved off a single literal onto a
+  variant set (`RUN_SCHEDULE_STATED_VARIANTS`); `normalizeEnduranceSchedule` now drops one bad `days`
+  entry instead of rejecting the whole schedule, and tells an explicit `days: []` (clear intent) apart
+  from "nothing was understood" (reject).
+
 ## 2026-09-13 — Race build over the run engine; an empty plan day is never startable; Node 26
 
 No schema migration (`user_version` stays where v101 left it).
