@@ -14,11 +14,11 @@
 // through the ONE policy, and when a decision exists for the built change the flag is
 // superseded by it, so the athlete sees exactly one thing: the change itself, landing
 // or waiting, never a second "request" row beside it.
-import { getAgentJob } from "../../repo/chat.js";
+import { createAgentJob, getAgentJob } from "../../repo/chat.js";
 import { getBrainDecision, patchBrainDecision } from "../../repo/brain-decisions.js";
 import { getSettings } from "../../repo/settings.js";
-import { localDateISO } from "../../repo/shared.js";
-import { nextNaturalBoundary } from "../../brain/autonomy.js";
+import { getSessionByDate } from "../../repo/sessions.js";
+import { addDaysISO, localDateISO } from "../../repo/shared.js";
 
 // Stored on the proposal as `instruction` — deliberately readable prose, because a
 // proposal's instruction is the athlete-facing fallback for a decision's reason when the
@@ -28,6 +28,49 @@ export const STRUCTURE_REQUEST_INSTRUCTION_PREFIX = "restructure the week as the
 
 export function structureRequestInstruction(request: string): string {
   return `${STRUCTURE_REQUEST_INSTRUCTION_PREFIX} — ${request.trim()}`.slice(0, 1_200);
+}
+
+// A restructure the ATHLETE asked for, recognisable by the instruction the hand-off
+// stored on it. This is the provenance every special ruling below keys on: an ask is
+// never a surprise, so it is exempt from the surprise budget; it lands at the athlete's
+// own boundary, not the week's; and evidence drift is answered by REBUILDING it, never
+// by setting it aside. Anything else — the weekly auto-evolution, a recovery week, a
+// data-triggered draft — keeps the ordinary compare-and-set rulings unchanged.
+export function isAthleteRequestedRestructure(proposal: { instruction?: unknown } | null | undefined): boolean {
+  return String(proposal?.instruction ?? "").startsWith(STRUCTURE_REQUEST_INSTRUCTION_PREFIX);
+}
+
+// The athlete's words back out of a stored instruction (the inverse of
+// structureRequestInstruction), so a rebuild can frame the same task again.
+export function requestFromInstruction(instruction: unknown): string {
+  const text = String(instruction ?? "");
+  if (!text.startsWith(STRUCTURE_REQUEST_INSTRUCTION_PREFIX)) return text.trim();
+  return text
+    .slice(STRUCTURE_REQUEST_INSTRUCTION_PREFIX.length)
+    .replace(/^\s*[—-]\s*/, "")
+    .trim();
+}
+
+// WHERE an athlete-requested restructure lands. The week boundary (next Monday) exists
+// so a week the athlete is living through is never rewritten underneath them by a change
+// they did not ask for. When they DID ask, that protection is upside down — waiting up to
+// a week to honour a direct request is the delay this module exists to remove. So the
+// ask lands today, unless training has already been logged today (a half-lived DAY is
+// the one thing still worth protecting), in which case tomorrow.
+export function athleteRestructureLandingDate(today = localDateISO()): string {
+  let trainedToday = false;
+  try {
+    trainedToday = !!getSessionByDate(today);
+  } catch {
+    trainedToday = false;
+  }
+  return trainedToday ? (addDaysISO(today, 1) ?? today) : today;
+}
+
+export function describeLandingDay(date: string, today = localDateISO()): string {
+  if (date === today) return "today";
+  if (date === addDaysISO(today, 1)) return "tomorrow";
+  return `on ${date}`;
 }
 
 // The TASK the evolution prompt is pointed at. The prompt already carries the run plan,
@@ -52,7 +95,7 @@ export function structureRequestPosture(): StructureRequestPosture {
 }
 
 export function structureRequestLandingDate(today = localDateISO()): string {
-  return nextNaturalBoundary("training_structure", today);
+  return athleteRestructureLandingDate(today);
 }
 
 // The sentence the flag carries while the build is in flight, per posture.
@@ -62,8 +105,56 @@ export function structureRequestExplanation(
   landsOn: string
 ): string {
   return posture === "lands"
-    ? `You asked for a change to how your training is built: “${request}”. The coach is rebuilding the week around it now; it lands ${landsOn} with a one-tap Undo. Nothing has changed yet.`
+    ? `You asked for a change to how your training is built: “${request}”. The coach is rebuilding the week around it now; it lands ${describeLandingDay(landsOn)} with a one-tap Undo. Nothing has changed yet.`
     : `You asked for a change to how your training is built: “${request}”. The coach is drafting it now; because you review everything, it will wait here for you to confirm. Nothing has changed yet.`;
+}
+
+// ---- rebuilding at the boundary --------------------------------------------------
+//
+// The boundary pass is deterministic and never calls an agent, but an athlete-requested
+// restructure is agent-built, so when its evidence has moved the pass cannot rewrite it
+// inline the way it rewrites a deterministic producer's draft. It hands the rewrite to
+// the SAME job kind the chat hand-off uses, with the same instruction and task, and the
+// job runner lands the fresh draft through the ordinary pass the moment it is built.
+// The enqueuer is registered by the agent-job runner at load; with none registered
+// (tests, a boot that has not reached the runner yet) the job row still exists at
+// `queued`, and recoverAgentJobs picks it up exactly like any other queued job.
+let structureBuildEnqueuer: ((jobId: number) => void) | null = null;
+
+export function registerStructureBuildEnqueuer(fn: ((jobId: number) => void) | null): void {
+  structureBuildEnqueuer = fn;
+}
+
+export function enqueueStructureRebuild(input: {
+  proposal: { id?: unknown; instruction?: unknown; agent?: unknown };
+  decision_id: number;
+  reason: string;
+}): { job_id: number } | null {
+  const request = requestFromInstruction(input.proposal.instruction);
+  if (!request) return null;
+  const agent = String(input.proposal.agent ?? "");
+  const job = createAgentJob({
+    kind: "evolve_program",
+    // The producer that built the stale draft is asked again; rotation if it was rotation.
+    agent: agent && agent !== "auto" && !agent.startsWith("auto-") ? agent : null,
+    input: {
+      instruction: String(input.proposal.instruction ?? structureRequestInstruction(request)),
+      task: structureRequestTask(request, null),
+      structure_rebuild: {
+        of_decision_id: input.decision_id,
+        of_proposal_id: Number(input.proposal.id) || null,
+        reason: input.reason.slice(0, 300),
+      },
+    },
+  }) as any;
+  const jobId = Number(job?.id);
+  if (!(jobId > 0)) return null;
+  try {
+    structureBuildEnqueuer?.(jobId);
+  } catch {
+    /* the queued row is durable; the runner's recovery pass will pick it up */
+  }
+  return { job_id: jobId };
 }
 
 export interface StructureBuildRef {

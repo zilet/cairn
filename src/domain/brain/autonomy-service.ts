@@ -1,6 +1,11 @@
 import { db } from "../../db.js";
 import { decideAutonomyTier, domainShouldDemote, nextNaturalBoundary, surpriseBudgetAllows } from "../../brain/autonomy.js";
-import { liveStructureBuild } from "./structure-request.js";
+import {
+  athleteRestructureLandingDate,
+  enqueueStructureRebuild,
+  isAthleteRequestedRestructure,
+  liveStructureBuild,
+} from "./structure-request.js";
 import type { AutonomyTier, BrainDomain } from "../../brain/decision-contract.js";
 import {
   hasRecentDecisionVeto,
@@ -1038,6 +1043,12 @@ export function applyProposalWithAutonomy(
   // (materialChangesThisWeek also excludes it from the count, so it never spends the
   // budget for other changes either).
   const routineChange = ROUTINE_CHANGE_SOURCES.has(String(proposal.agent ?? ""));
+  // A restructure the athlete asked for in their own words (the chat hand-off, or the
+  // same instruction typed into the evolve field). Their ask is an explicit request
+  // whichever caller routed it — the producer that drafted it (evolveProgram) passes no
+  // input here, so the provenance is read off the proposal itself.
+  const athleteAsked = shape.kind === "training_structure" && isAthleteRequestedRestructure(proposal);
+  const explicitRequest = !!input.explicit_user_request || athleteAsked;
   // A spent surprise budget is a WAIT, not a refusal (2026-08-17 ruling). The change
   // keeps its ledger row, its expectation and its one-tap undo; it simply announces and
   // lands at the next natural boundary, where the boundary pass re-checks the budget and
@@ -1046,10 +1057,13 @@ export function applyProposalWithAutonomy(
   // system's job, not theirs. Age and evidence freshness remain the real ceilings.
   const surpriseBudgetSpent = !surpriseBudgetAllows(
     materialChangesThisWeek(shape.domain, undefined, budgetKind),
-    !!input.safety_response || !!input.explicit_user_request || routineChange
+    !!input.safety_response || explicitRequest || routineChange
   );
   if (policy.tier === "announce" || surpriseBudgetSpent) {
-    const effectiveDate = nextBoundary(shape.kind);
+    // The week boundary protects a week the athlete did not ask to have rewritten. A
+    // restructure they DID ask for lands at their own boundary — today, or tomorrow if
+    // training is already logged today (athleteRestructureLandingDate).
+    const effectiveDate = athleteAsked ? athleteRestructureLandingDate() : nextBoundary(shape.kind);
     const recorded = recordDecision({
       effective_date: effectiveDate,
       kind: shape.kind,
@@ -1070,6 +1084,11 @@ export function applyProposalWithAutonomy(
       context: {
         natural_boundary: true,
         surprise_budget_deferred: surpriseBudgetSpent,
+        // Carried to the boundary pass, which has no caller input of its own: an
+        // athlete's request is exempt from the budget there too, and its evidence
+        // drift is answered by a rebuild rather than a hold.
+        explicit_user_request: explicitRequest,
+        athlete_requested_restructure: athleteAsked,
         coordination_key: input.coordination_key ?? null,
         coordinated_update: input.coordinated_update === true,
         orphan_sibling_cleanup: input.orphan_sibling_cleanup ?? null,
@@ -2536,8 +2555,14 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
       const boundaryBudgetKey = `${shape.domain}:${boundaryBudgetKind ?? "*"}`;
       const coordinated = (announced.context as any)?.coordinated_update === true;
       const routineChange = ROUTINE_CHANGE_SOURCES.has(String(announced.source ?? ""));
+      // The athlete's own restructure request. An ask is never a surprise, so it is
+      // exempt from the weekly budget here exactly as it was at announce time — the
+      // live failure this closes was a requested week deferred behind the automatic
+      // weekly evolution's budget consumption.
+      const athleteAsked = shape.kind === "training_structure" && isAthleteRequestedRestructure(proposal);
       const budgetBlocks = () =>
         !routineChange &&
+        !athleteAsked &&
         !surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind), coordinated);
       // Only a budget consumer that landed earlier in THIS pass gets to precede
       // freshness: its own expected plan mutation caused the sibling's CAS delta.
@@ -2560,8 +2585,70 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
           ? verifyProposalEvidenceSnapshot(decisionEvidence as any, asOf)
           : verifyProposalEvidenceFreshness(proposal.parsed, asOf)
         : null;
+      // AN ATHLETE'S REQUEST IS HONOURED, NOT HELD. The compare-and-set gate below exists
+      // so an AUTOMATIC change is never applied over a picture it was not drafted
+      // against. A restructure the athlete asked for is different in kind:
+      //   - drift in the `context` component alone (a check-in, a memory, a weigh-in,
+      //     a profile note — anything but the plan or the training log) does not change
+      //     where the days of the week go, so the change applies and the drift is
+      //     recorded on the decision rather than used to park it;
+      //   - drift in the PLAN or the TRAINING LOG is real, but the answer is to build
+      //     the same request again against today's picture — an agent-built draft has
+      //     no deterministic producer, so the rewrite is handed to the job runner and
+      //     the fresh draft lands through this very pass the moment it exists. Setting
+      //     the request aside "because the picture moved" was how a Sunday-night ask
+      //     silently died at Monday's boundary.
+      const contextOnlyDrift =
+        !!boundaryFreshness &&
+        boundaryFreshness.status === "changed" &&
+        boundaryFreshness.changed_components.length > 0 &&
+        boundaryFreshness.changed_components.every((component) => component === "context");
+      if (athleteAsked && contextOnlyDrift) {
+        patchBrainDecision(announced.id!, {
+          context: {
+            ...(announced.context ?? {}),
+            boundary_drift_tolerated: boundaryFreshness!.changed_components,
+            boundary_drift_reason: "the athlete asked for this restructure; a context change does not move the days",
+          },
+        });
+      } else if (
+        athleteAsked &&
+        boundaryFreshness &&
+        (boundaryFreshness.status === "changed" || boundaryFreshness.status === "unverified") &&
+        getSettings().lead_mode !== "review_everything"
+      ) {
+        const changed = boundaryFreshness.changed_components.join(" and ");
+        const reason =
+          boundaryFreshness.status === "changed"
+            ? `${changed || "plan or training"} evidence changed before the apply boundary`
+            : "the proposal has no compare-and-set evidence snapshot";
+        const rebuild = enqueueStructureRebuild({ proposal, decision_id: announced.id!, reason });
+        if (rebuild) {
+          withSqliteSavepoint(`rebuild_athlete_restructure_${announced.id}`, () => {
+            setProposalStatus(proposalId, "superseded", { recordDecision: false });
+            const retired = patchBrainDecision(announced.id!, {
+              status: "superseded",
+              context: {
+                ...(announced.context ?? {}),
+                review_required: false,
+                review_reason_code: "stale_snapshot",
+                regenerated_reason: "evidence_moved",
+                changed_components: boundaryFreshness.changed_components,
+                proposal_freshness: boundaryFreshness as any,
+                boundary_outcome: "stale_snapshot",
+                structure_rebuild_job_id: rebuild.job_id,
+              },
+            });
+            if (!retired) throw new Error("the stale restructure decision could not be retired");
+          });
+          regeneratedIds.push(announced.id!);
+          continue;
+        }
+        // No rebuild could be queued: fall through to the ordinary hold below.
+      }
       if (
         boundaryFreshness &&
+        !(athleteAsked && contextOnlyDrift) &&
         (boundaryFreshness.status === "changed" || boundaryFreshness.status === "unverified")
       ) {
         const regenerated = attemptStaleDraftRegeneration(proposal, shape, {

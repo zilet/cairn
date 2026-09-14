@@ -25,8 +25,12 @@ import {
 } from "./coachOps.js";
 import { readToday } from "./domain/brain/day-read-use-case.js";
 import { runCaseConference } from "./domain/brain/case-conference.js";
-import { applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
-import { settleStructureBuild } from "./domain/brain/structure-request.js";
+import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
+import {
+  isAthleteRequestedRestructure,
+  registerStructureBuildEnqueuer,
+  settleStructureBuild,
+} from "./domain/brain/structure-request.js";
 import type { SpecialistDomain } from "./brain/specialist-contract.js";
 import { normalizeStrictCaseConferenceDecision } from "./brain/case-conference-contract.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
@@ -332,6 +336,11 @@ export function enqueueAgentJob(id: number): void {
   runner.enqueue(id);
 }
 
+// The boundary pass (domain/brain/autonomy-service.ts) cannot import this module without
+// a cycle, so it hands a stale athlete-requested restructure's rebuild job back through
+// this registration instead.
+registerStructureBuildEnqueuer(enqueueAgentJob);
+
 // Kick (or join) the background job that fills/refreshes the week-ahead cache
 // for `cacheKey`. Used by GET /api/week-ahead on a cold/stale cache and by the
 // scheduler's day-rollover warm — repo.createWeekAheadAgentJob dedupes so a
@@ -437,6 +446,20 @@ async function processAgentJob(id: number): Promise<void> {
             settleStructureBuild(Number(input.structure_flag_decision_id), result);
           } catch (err) {
             recordAsyncFailure("agent_jobs", "structure_flag_settle", err);
+          }
+        }
+        // A restructure the athlete asked for is announced for THEIR boundary — today,
+        // or tomorrow if they already trained today — and the scheduler's boundary tick
+        // has usually already run for today by the time the agent finishes. So the
+        // deterministic pass is run here as well; it is idempotent, applies only what is
+        // due, and this is what turns "built" into "landed" without waiting a day.
+        if (result?.autonomy?.announced && isAthleteRequestedRestructure(result?.proposal)) {
+          try {
+            const landed = applyDueAnnouncedDecisions(localDateISO());
+            if (landed.applied.length)
+              log.info(`[jobs] landed the athlete's requested restructure (${landed.applied.length} change(s)).`);
+          } catch (err) {
+            recordAsyncFailure("agent_jobs", "structure_land_now", err);
           }
         }
         break;

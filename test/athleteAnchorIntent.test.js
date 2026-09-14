@@ -263,7 +263,7 @@ test("flag_training_structure records the request AND hands it to the coach as a
   assert.equal(entry.result.verified, true);
   assert.equal(entry.result.posture, "lands", "lead mode: the built change lands, it is not an ask");
   assert.match(String(entry.result.lands_on), /^\d{4}-\d{2}-\d{2}$/);
-  assert.equal(new Date(`${entry.result.lands_on}T12:00:00Z`).getUTCDay(), 1, "a structural change lands on a Monday");
+  assert.equal(entry.result.lands_on, localDateISO(), "an ASKED-for restructure lands at the athlete's own boundary: today");
 
   const decision = repo.getBrainDecision(entry.result.decision_id);
   assert.equal(decision.kind, "training_structure");
@@ -508,12 +508,12 @@ test("the reply may only claim the hand-off when a decision actually landed", ()
   const verified = reconcileTrainingStructureReply(promise, [
     {
       type: "flag_training_structure",
-      result: { ok: true, verified: true, decision_id: 1, posture: "lands", lands_on: "2026-09-14", build: { job_id: 7 } },
+      result: { ok: true, verified: true, decision_id: 1, posture: "lands", lands_on: localDateISO(), build: { job_id: 7 } },
     },
   ]);
   assert.match(verified, /I'll flag it/);
   assert.match(verified, /rebuilding your week/);
-  assert.match(verified, /lands on 2026-09-14 with a one-tap Undo/);
+  assert.match(verified, /lands today with a one-tap Undo/);
   assert.doesNotMatch(verified, /confirm/);
   assert.match(verified, /nothing in your plan has changed yet/i);
 
@@ -526,14 +526,14 @@ test("the reply may only claim the hand-off when a decision actually landed", ()
         verified: true,
         decision_id: 1,
         posture: "lands",
-        lands_on: "2026-09-14",
+        lands_on: localDateISO(),
         build: null,
-        built_decision: { id: 9, status: "announced", effective_date: "2026-09-21" },
+        built_decision: { id: 9, status: "announced", effective_date: "2031-01-06" },
       },
     },
   ]);
   assert.match(built, /Already in hand/);
-  assert.match(built, /lands on 2026-09-21/);
+  assert.match(built, /lands on 2031-01-06/);
 
   // Under review_everything the receipt says it will WAIT to be confirmed.
   const asks = reconcileTrainingStructureReply(promise, [

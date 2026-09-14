@@ -15,6 +15,7 @@ import {
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import type { StoredRun } from "./repo/run-edit.js";
 import { localDateISO } from "./repo/shared.js";
+import { describeLandingDay } from "./domain/brain/structure-request.js";
 
 export function recordOrNull(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -511,7 +512,7 @@ function structureHandOffReceipt(result: Record<string, unknown>): string {
   const built = result.built_decision as Record<string, unknown> | null | undefined;
   if (posture === "lands") {
     const landsOn = String(built?.effective_date ?? result.lands_on ?? "").trim();
-    const when = landsOn ? ` on ${landsOn}` : " at the next natural boundary";
+    const when = landsOn ? ` ${describeLandingDay(landsOn)}` : " at the next natural boundary";
     return built
       ? `Already in hand — your coach built that change and it lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`
       : `Handed to your coach — it's rebuilding your week around this now, and the change lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`;

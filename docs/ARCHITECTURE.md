@@ -1775,8 +1775,8 @@ The handler records the request row (kind `training_structure`, `action.kind
 `evolve_program` agent job whose `instruction` is `STRUCTURE_REQUEST_INSTRUCTION_PREFIX — <their
 words>` and whose `task` frames a full `days` restructure; `context.structure_build_job_id` links the
 two. The op's draft routes through `applyProposalWithAutonomy` exactly like every other restructure —
-under `lead`/`announce_first` it ANNOUNCES and lands at the next Monday with a one-tap Undo, under
-`review_everything` it holds for review — and `settleStructureBuild` (agent-job runner, both
+under `lead`/`announce_first` it ANNOUNCES with a one-tap Undo, under `review_everything` it holds for
+review — and `settleStructureBuild` (agent-job runner, both
 outcomes) then supersedes the request row with the built change's decision, so the athlete reads ONE
 row: the change itself, landing or waiting. A failed build leaves the request row standing with a
 sentence that says so, and re-asking retries it; a re-ask while a build is queued/running, or while
@@ -1786,6 +1786,25 @@ whose build is live — re-filing it as an `observed` advisory mid-build was how
 vanish. The chat receipt (`reconcileTrainingStructureReply`) states the SERVER's posture and landing
 day (`result.posture`, `result.lands_on`), never "confirm" under lead; the request row's
 `user_explanation` says the same thing in the Waiting list.
+
+**An athlete's ask is honoured, never held — three rulings the boundary keeps for it.** The
+instruction prefix is the provenance (`isAthleteRequestedRestructure(proposal)`, read off the draft
+because the producer passes no caller input), and an automatic restructure — weekly evolution, a
+recovery week, a data-triggered draft — keeps every ordinary compare-and-set ruling. For the ask:
+(1) it is exempt from the surprise budget at announce time AND in the boundary pass (a request is
+not a surprise; the live failure was a requested week deferred behind the weekly evolution's budget
+consumption); (2) it lands at the athlete's own boundary, `athleteRestructureLandingDate()` — today,
+or tomorrow if training is already logged today — not next Monday, which protects a week they did not
+ask to have rewritten; the job runner runs `applyDueAnnouncedDecisions(today)` right after the build
+so "built" becomes "landed" without waiting for tomorrow's tick; (3) evidence drift at the boundary is
+answered by a rebuild, not a hold: drift in the `context` component alone (a check-in, a memory, a
+weigh-in) does not move the days, so it applies with `boundary_drift_tolerated` on the decision;
+drift in the plan or the training log retires the draft and decision as `superseded`
+(`regenerated_reason:'evidence_moved'`, `structure_rebuild_job_id`) and enqueues the same
+`evolve_program` job again — same instruction, same task — through `enqueueStructureRebuild` (the
+runner registers itself via `registerStructureBuildEnqueuer` to avoid an import cycle; an
+unregistered enqueuer leaves a durable `queued` row for `recoverAgentJobs`). Under
+`review_everything` the stale ask is held for the athlete, never rebuilt behind their back.
 
 Progress rides an **`EventEmitter` bus** (`onTurnEvent(id, cb)`) that the SSE endpoint forwards:
 `phase` / `delta` (a live reply chunk) / `reset` (streaming fell back — clear the partial bubble) /
