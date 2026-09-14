@@ -455,3 +455,370 @@ test("a refused draft re-opens when training evidence moves, not only when the h
     "under a picture that has genuinely moved"
   );
 });
+
+// ---- A DEAD PREMISE IS RETIRED, AND A HELD DRAFT IS ASKED ABOUT ONCE ----------
+//
+// Live rows 26419 + 26760 both held plan_proposal 111 — "swap Decline Bench Press for
+// Chest Dips" — long after the plan was restructured and Decline Bench Press had left it
+// entirely. Two failures in one: the sweep kept re-offering a draft whose subject was
+// gone, and each held pass whose refusal signature had MOVED (a clinical ceiling one
+// week, a stale snapshot the next) recorded a second review row, so "Waiting on you"
+// showed the athlete the same dead swap twice.
+
+const CHAT_CLINICAL_PROVENANCE = { server_owned: true, source: "chat_clinical_detection", signals: ["injury"] };
+
+function swapDraft(from, to, dayNumber = 2) {
+  return repo.createProposal("claude", `chat: rotate ${from} out`, "", {
+    summary: `Swap ${from} for ${to} on day ${dayNumber}`,
+    clinical_provenance: CHAT_CLINICAL_PROVENANCE,
+    changes: [{ day_number: dayNumber, swap: { from, to }, reason: "the athlete reported chest pain" }],
+  });
+}
+
+function reviewHoldsFor(proposalId) {
+  return repo
+    .listBrainDecisions({ status: "review", limit: 100 })
+    .filter((d) => d.source_ref_type === "plan_proposal" && d.source_ref_key === String(proposalId));
+}
+
+test("a swap whose `from` exercise has left the plan retires the draft and every review row that held it", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  // The plan as it stands AFTER the restructure: Decline Bench Press is nowhere on it.
+  repo.savePlanDay(2, "Push", "chest", [
+    { exercise: "Incline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 80 },
+  ]);
+  const draft = swapDraft("Decline Bench Press", "Chest Dips");
+  const held = applyProposalWithAutonomy(draft.id, {
+    clinical: true,
+    clinical_provenance: CHAT_CLINICAL_PROVENANCE,
+  });
+  assert.equal(held.review_required, true, "the clinical swap is held for the athlete");
+  // The second live row: a duplicate hold from a later pass, exactly as the ledger held it.
+  const duplicate = repo.recordDecision({
+    effective_date: null,
+    kind: "exercise_rotation",
+    domain: "training",
+    summary: "Swap Decline Bench Press for Chest Dips on day 2",
+    rationale: null,
+    source: "claude",
+    source_ref_type: "plan_proposal",
+    source_ref_key: String(draft.id),
+    status: "review",
+    autonomy_tier: "clinician",
+    risk_class: "clinical",
+    reversible: false,
+    context: { review_required: true, review_reason_code: "stale_snapshot", clinical: true },
+    action: { proposal_id: draft.id, review_reason_code: "stale_snapshot" },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+  assert.equal(reviewHoldsFor(draft.id).length, 2, "the ledger starts from the live two-row state");
+  backdateHours(draft.id, 3);
+
+  const sweep = adoptOrphanedDrafts();
+  assert.equal(sweep.retired, 1, "the sweep retired the draft whose premise had left the plan");
+  assert.equal(repo.getProposal(draft.id).status, "superseded", "the dead draft is retired");
+  assert.deepEqual(reviewHoldsFor(draft.id), [], "nothing is left waiting on the athlete");
+
+  for (const id of [held.decision.id, duplicate.id]) {
+    const closed = repo.getBrainDecision(id);
+    assert.equal(closed.status, "superseded", "every review row that held it is closed");
+    assert.equal(closed.context.retire_reason, "premise_gone", "each closed row says why it stopped asking");
+    assert.deepEqual(closed.context.retired_movements, ["Decline Bench Press"]);
+    assert.match(closed.context.retired_explanation, /no longer in your plan/);
+    assert.equal(closed.context.review_required, false);
+  }
+
+  const receipt = repo
+    .listBrainDecisions({ status: "superseded", limit: 50 })
+    .find((d) => d.context?.review_reason_code === "premise_gone");
+  assert.ok(receipt, "a receipt a person can read was filed");
+  assert.equal(receipt.source_ref_key, String(draft.id));
+  assert.equal(receipt.action.outcome, "superseded_premise_gone");
+  assert.deepEqual(receipt.action.missing_movements, ["Decline Bench Press"]);
+  assert.match(receipt.rationale, /Decline Bench Press is no longer in your plan/);
+});
+
+test("a swap whose `from` exercise is still on the plan is left exactly where it was", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(2, "Push", "chest", [
+    { exercise: "Decline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 95 },
+  ]);
+  const draft = swapDraft("Decline Bench Press", "Chest Dips");
+  const held = applyProposalWithAutonomy(draft.id, {
+    clinical: true,
+    clinical_provenance: CHAT_CLINICAL_PROVENANCE,
+  });
+  backdateHours(draft.id, 3);
+
+  const sweep = adoptOrphanedDrafts();
+  assert.equal(sweep.retired, 0, "a live premise is never retired");
+  assert.equal(repo.getProposal(draft.id).status, "draft", "the draft stays live");
+  assert.equal(repo.getBrainDecision(held.decision.id).status, "review", "the athlete's question stands");
+});
+
+test("a swap the plan still carries on a DIFFERENT day keeps its premise — renumbering is not removal", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  // The restructure moved the lift from day 2 to day 3; the draft still names day 2.
+  repo.savePlanDay(2, "Push", "chest", [
+    { exercise: "Incline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 80 },
+  ]);
+  repo.savePlanDay(3, "Chest", "chest", [
+    { exercise: "Decline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 95 },
+  ]);
+  const draft = swapDraft("Decline Bench Press", "Chest Dips", 2);
+  backdateHours(draft.id, 3);
+
+  assert.equal(adoptOrphanedDrafts().retired, 0, "the movement is still on the plan, so the question stands");
+  assert.equal(repo.getProposal(draft.id).status, "draft");
+});
+
+test("an empty plan is never the evidence that a movement was dropped", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const draft = swapDraft("Decline Bench Press", "Chest Dips");
+  backdateHours(draft.id, 3);
+
+  assert.equal(adoptOrphanedDrafts().retired, 0, "no plan to read says nothing about what left it");
+  assert.equal(repo.getProposal(draft.id).status, "draft");
+});
+
+test("a mixed draft keeps its live half — only an all-premise payload is retired", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(2, "Push", "chest", [
+    { exercise: "Incline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 80 },
+  ]);
+  const draft = repo.createProposal("claude", "chat: rebuild the press slot", "", {
+    summary: "Drop the decline press and add a flat barbell press",
+    changes: [
+      { day_number: 2, exercise: "Decline Bench Press", remove: true },
+      { day_number: 2, exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 105 },
+    ],
+  });
+  backdateHours(draft.id, 3);
+
+  assert.equal(adoptOrphanedDrafts().retired, 0, "the add half would still do something");
+  assert.notEqual(repo.getProposal(draft.id).status, "superseded");
+});
+
+test("two successive held passes on one draft leave exactly ONE row waiting on the athlete", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(2, "Push", "chest", [
+    { exercise: "Decline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 95 },
+  ]);
+  const draft = swapDraft("Decline Bench Press", "Chest Dips");
+
+  // Pass 1 — the chat turn routes it in the athlete's own current turn, so the freshness
+  // gate is skipped and the clinical ceiling is what holds it.
+  const first = applyProposalWithAutonomy(draft.id, {
+    clinical: true,
+    clinical_provenance: CHAT_CLINICAL_PROVENANCE,
+    explicit_user_request: true,
+  });
+  assert.equal(first.review_reason_code, "clinical_ceiling");
+  // The plan moves underneath the draft, leaving its compare-and-set snapshot behind.
+  // The swap's own subject is untouched — only the reason the next pass refuses.
+  repo.savePlanDay(3, "Pull", "back", [
+    { exercise: "Barbell Row", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 },
+  ]);
+  // Pass 2 — the later autonomous sweep reaches the same draft, and its refusal SIGNATURE
+  // has moved: no explicit request, so the compare-and-set gate answers first.
+  const second = applyProposalWithAutonomy(draft.id, {});
+  assert.equal(second.review_reason_code, "stale_snapshot", "the refusal genuinely moved between passes");
+
+  const holds = reviewHoldsFor(draft.id);
+  assert.equal(holds.length, 1, "the same draft is never asked about twice");
+  assert.equal(holds[0].id, first.decision.id, "the original ask keeps its place in the queue");
+  assert.equal(holds[0].context.review_reason_code, "stale_snapshot", "refreshed in place with today's reason");
+  assert.equal(holds[0].autonomy_tier, "clinician", "and a refresh never loosens the clinician floor");
+  assert.equal(holds[0].context.clinical, true);
+});
+
+test("regeneration follows the DETERMINISTIC clinician floor, not a conductor's bare risk_class", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const asOf = localDateISO();
+  // A deterministic producer's draft — mechanically re-runnable, so a stale one is
+  // rewritten rather than asked about.
+  const draft = repo.createProposal("auto-progression", "day 1 progression", "", {
+    summary: "A routine day 1 target step",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 102, reason: "reps met the top" }],
+  });
+  // The plan moves after the draft was written, so its compare-and-set snapshot is stale
+  // by the time the boundary reads it — the ending that asks whether to regenerate.
+  repo.savePlanDay(1, "Push", "chest", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },
+  ]);
+  // A conductor wrote `risk_class:'clinical'` over an ordinary target step. Nothing in the
+  // row is clinical: no server mark, no diagnosis, no medication, no dose.
+  const announced = repo.recordDecision({
+    effective_date: asOf,
+    kind: "training_target",
+    domain: "training",
+    summary: "A routine day 1 target step",
+    rationale: "The last two sessions finished at the top of the prescribed range.",
+    source: "auto-progression",
+    source_ref_type: "plan_proposal",
+    source_ref_key: String(draft.id),
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "clinical",
+    reversible: false,
+    context: { natural_boundary: true },
+    action: { proposal_id: draft.id },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+
+  const due = applyDueAnnouncedDecisions(asOf);
+  assert.ok(
+    due.regenerated.includes(announced.id),
+    "a self-attested clinical label does not put an ordinary target step on the floor"
+  );
+});
+
+test("a held draft too old to sit in the newest-50 window is still retired when its premise goes", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(2, "Push", "chest", [
+    { exercise: "Incline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 80 },
+  ]);
+  const draft = swapDraft("Decline Bench Press", "Chest Dips");
+  const held = applyProposalWithAutonomy(draft.id, {
+    clinical: true,
+    clinical_provenance: CHAT_CLINICAL_PROVENANCE,
+  });
+  backdateHours(draft.id, 72);
+  // Push it out of the newest-50 proposal window the adoption loop walks. Only the
+  // review-held read can still reach it — and a person is still being asked about it.
+  for (let i = 0; i < 55; i++) nutritionDraft(`unrelated later draft ${i}`, 2200 + i);
+
+  assert.equal(adoptOrphanedDrafts().retired, 1, "the ask a person can still see is reachable at any age");
+  assert.equal(repo.getProposal(draft.id).status, "superseded");
+  assert.equal(repo.getBrainDecision(held.decision.id).status, "superseded");
+  assert.deepEqual(reviewHoldsFor(draft.id), []);
+});
+
+// ---- a hundred review rows is not a large ledger ---------------------------------
+//
+// `review` is a SHARED status. Every chat structure request sits there while the coach
+// builds it, the thaw re-files the unanswered ones there, and every other hold in the
+// queue competes for the same page. Both readers below used to walk the newest hundred
+// review rows and filter in JS, so past that an older hold on one draft simply stopped
+// existing for them: the premise-gone retirement left it open behind a dead draft, and
+// the duplicate fold re-created the second ask it was written to prevent. Asked by
+// proposal id, the depth of the queue stops mattering.
+
+function seedStandingStructureRequests(count) {
+  for (let i = 0; i < count; i++) {
+    const request = `move my long run to Saturday (${i})`;
+    repo.recordDecision({
+      effective_date: null,
+      kind: "training_structure",
+      domain: "training",
+      summary: request,
+      rationale: request,
+      source: "chat",
+      source_ref_type: null,
+      source_ref_key: null,
+      status: "review",
+      autonomy_tier: "ask",
+      risk_class: "moderate",
+      reversible: false,
+      context: { review_required: true, requested_in_chat: true, athlete_request: request },
+      action: { kind: "training_structure_request", request },
+      specialist: null,
+      applied_at: null,
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: null,
+    });
+  }
+}
+
+// Read straight off the ledger, never through the reader under test.
+function liveHoldIdsFor(proposalId) {
+  return db
+    .prepare(
+      `SELECT id FROM brain_decisions
+        WHERE status = 'review' AND source_ref_type = 'plan_proposal' AND source_ref_key = ?
+        ORDER BY id ASC`
+    )
+    .all(String(proposalId))
+    .map((row) => Number(row.id));
+}
+
+test("a hold buried under a hundred newer review rows is still retired when its premise goes", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(2, "Push", "chest", [
+    { exercise: "Incline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 80 },
+  ]);
+  const draft = swapDraft("Decline Bench Press", "Chest Dips");
+  const held = applyProposalWithAutonomy(draft.id, {
+    clinical: true,
+    clinical_provenance: CHAT_CLINICAL_PROVENANCE,
+  });
+  assert.equal(held.review_required, true, "the clinical swap is held for the athlete");
+  backdateHours(draft.id, 3);
+  // Standing chat requests, every one of them newer than the hold.
+  seedStandingStructureRequests(120);
+  assert.equal(
+    repo.listBrainDecisions({ status: "review", limit: 100 }).some((d) => d.id === held.decision.id),
+    false,
+    "the hold is genuinely off the page the old reader walked"
+  );
+
+  assert.equal(adoptOrphanedDrafts().retired, 1, "a buried ask is still reachable by proposal id");
+  assert.equal(repo.getProposal(draft.id).status, "superseded", "the dead draft is retired");
+  const closed = repo.getBrainDecision(held.decision.id);
+  assert.equal(closed.status, "superseded", "the buried hold stops asking");
+  assert.equal(closed.context.review_required, false, "it no longer reads as waiting on the athlete");
+  assert.equal(closed.context.retire_reason, "premise_gone", "and it says why it stopped");
+  assert.deepEqual(liveHoldIdsFor(draft.id), [], "nothing is left open behind the dead draft");
+});
+
+test("a later refusal folds into the buried hold instead of stacking a second ask", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  // The premise is alive here: this draft is still a real question, it just already has
+  // a row in the queue.
+  repo.savePlanDay(2, "Push", "chest", [
+    { exercise: "Decline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 80 },
+  ]);
+  const draft = swapDraft("Decline Bench Press", "Chest Dips");
+  // The ask the athlete has been looking at, from an earlier pass whose refusal signature
+  // was DIFFERENT — which is exactly why the decision fingerprint cannot catch the
+  // duplicate, and why the proposal id has to.
+  const first = repo.recordDecision({
+    effective_date: null,
+    kind: "exercise_rotation",
+    domain: "training",
+    summary: "Swap Decline Bench Press for Chest Dips on day 2",
+    rationale: null,
+    source: "claude",
+    source_ref_type: "plan_proposal",
+    source_ref_key: String(draft.id),
+    status: "review",
+    autonomy_tier: "clinician",
+    risk_class: "clinical",
+    reversible: false,
+    context: { review_required: true, review_reason_code: "domain_policy", clinical: true },
+    action: { proposal_id: draft.id, review_reason_code: "domain_policy" },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+  seedStandingStructureRequests(120);
+
+  const held = applyProposalWithAutonomy(draft.id, {
+    clinical: true,
+    clinical_provenance: CHAT_CLINICAL_PROVENANCE,
+  });
+  assert.equal(held.review_required, true, "the clinical swap is still held for the athlete");
+  assert.equal(held.decision.id, first.id, "today's refusal refreshed the ask already in the queue");
+  assert.deepEqual(liveHoldIdsFor(draft.id), [first.id], "one open ask per draft, however deep it sits");
+});

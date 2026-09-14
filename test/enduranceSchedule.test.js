@@ -66,29 +66,59 @@ test("normalizeEnduranceSchedule round-trips a valid schedule", () => {
   assert.ok(normalized);
   assert.equal(normalized.source, "chat");
   assert.equal(normalized.note, "three runs around lifting");
-  assert.deepEqual(
-    normalized.days,
-    [
-      { dow: 2, kind: "quality" },
-      { dow: 4, kind: "easy" },
-      { dow: 6, kind: "long" },
-    ]
-  );
+  assert.deepEqual(normalized.days, [
+    { dow: 2, kind: "quality" },
+    { dow: 4, kind: "easy" },
+    { dow: 6, kind: "long" },
+  ]);
   const again = repo.normalizeEnduranceSchedule(JSON.stringify(normalized));
   assert.deepEqual(again.days, normalized.days);
   assert.equal(again.source, normalized.source);
   assert.equal(again.note, normalized.note);
 });
 
-test("normalizeEnduranceSchedule rejects a bad dow or unknown kind", () => {
+test("normalizeEnduranceSchedule rejects input where nothing named was understood", () => {
+  // A `days` array is present but every single entry in it is unrecognized, so
+  // there is nothing valid to fall back to — this is still a rejection (leave the
+  // stored schedule alone), never confused with an athlete's explicit clear.
   assert.equal(repo.normalizeEnduranceSchedule({ days: [{ dow: 9, kind: "quality" }] }), null);
   assert.equal(repo.normalizeEnduranceSchedule({ days: [{ dow: -1, kind: "easy" }] }), null);
   assert.equal(repo.normalizeEnduranceSchedule({ days: [{ dow: 2.5, kind: "easy" }] }), null);
   assert.equal(repo.normalizeEnduranceSchedule({ days: [{ dow: 2, kind: "tempo" }] }), null);
   assert.equal(repo.normalizeEnduranceSchedule({ days: [{ dow: 2 }] }), null);
-  assert.equal(repo.normalizeEnduranceSchedule({ days: [] }), null);
+  // No `days` array at all, or unparseable / non-object input, is rejected the same way.
   assert.equal(repo.normalizeEnduranceSchedule("not-json"), null);
   assert.equal(repo.normalizeEnduranceSchedule(null), null);
+  assert.equal(repo.normalizeEnduranceSchedule({}), null);
+});
+
+test("normalizeEnduranceSchedule drops one bad entry and KEEPS the valid ones alongside it", () => {
+  // The bug this closes: one unrecognized dow/kind used to void the WHOLE
+  // schedule, so a typo on one named day silently erased every day the athlete
+  // got right. Only the bad entry is dropped now.
+  const normalized = repo.normalizeEnduranceSchedule({
+    days: [
+      { dow: 2, kind: "quality" },
+      { dow: 9, kind: "quality" }, // bad dow
+      { dow: 4, kind: "tempo" }, // bad kind
+      { dow: 6, kind: "long" },
+    ],
+  });
+  assert.ok(normalized, "the two valid entries must still produce a schedule");
+  assert.deepEqual(normalized.days, [
+    { dow: 2, kind: "quality" },
+    { dow: 6, kind: "long" },
+  ]);
+});
+
+test("normalizeEnduranceSchedule treats an explicit days: [] as a real, empty schedule (a clear) — not a rejection", () => {
+  const cleared = repo.normalizeEnduranceSchedule({ days: [], source: "chat" });
+  assert.ok(cleared, "an explicit empty schedule is a real value, not null");
+  assert.deepEqual(cleared.days, []);
+  assert.equal(cleared.source, "chat");
+  // Every existing consumer already gates on `schedule?.days.length`, so an empty
+  // schedule reads exactly like "unset" downstream.
+  assert.equal(cleared.days.length, 0);
 });
 
 test("normalizeEnduranceSchedule dedupes duplicate dows (first kind wins)", () => {
@@ -122,10 +152,7 @@ test("weeklyRunPlan with a stated schedule lands day_numbers on those dows", () 
   assert.equal(byKind.quality, 2, "quality lands on Tuesday");
   assert.equal(byKind.easy, 4, "easy lands on Thursday");
   assert.equal(byKind.long, 6, "long lands on Saturday");
-  assert.deepEqual(
-    [...new Set(plan.runs.map((r) => r.day_number))].sort(),
-    [2, 4, 6]
-  );
+  assert.deepEqual([...new Set(plan.runs.map((r) => r.day_number))].sort(), [2, 4, 6]);
   assert.ok(!plan.runs.some((r) => r.day_number === 5), "Friday is not a run day");
 });
 
@@ -229,4 +256,33 @@ test("set_endurance_schedule writes the column; a malformed payload does not", (
   const still = repo.getEnduranceSchedule();
   assert.ok(still, "the previously written schedule is intact");
   assert.equal(still.days.length, 3);
+});
+
+test("chat CAN clear a stated schedule with an explicit empty days: []", () => {
+  // The bug this closes: normalizeEnduranceSchedule used to return null for BOTH
+  // "invalid input" and "explicit days: []", so the chat action's `if (!schedule)`
+  // guard read a genuine clear request as malformed and refused to write it —
+  // an athlete could set a schedule but never clear one again from chat.
+  repo.setProfile({
+    endurance_schedule: {
+      days: [
+        { dow: 2, kind: "quality" },
+        { dow: 4, kind: "easy" },
+        { dow: 6, kind: "long" },
+      ],
+      source: "athlete",
+    },
+  });
+  assert.equal(repo.getEnduranceSchedule().days.length, 3);
+
+  const cleared = applyChatActions(
+    { actions: [{ type: "set_endurance_schedule", days: [] }] },
+    { agent: "stub", message: "clear my run schedule, just have the coach pick days" }
+  );
+  assert.equal(cleared.applied[0]?.type, "set_endurance_schedule");
+  assert.equal(cleared.applied[0]?.error, undefined, "an explicit clear is not an error");
+  const after = repo.getEnduranceSchedule();
+  assert.ok(after, "an explicit clear returns a real (empty) schedule, not null");
+  assert.equal(after.days.length, 0);
+  assert.equal(repo.isStatedRunDay("2026-04-21"), null, "an emptied schedule reads exactly like unset downstream");
 });

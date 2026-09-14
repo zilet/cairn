@@ -1,5 +1,12 @@
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import { isAgentJobKind } from "./agentJobKinds.js";
+import {
+  AGENT_BUSY_RETRY_MS,
+  clearAgentBusyDeferrals,
+  isAgentBusyError,
+  isAgentBusyResult,
+  noteAgentBusyDeferral,
+} from "./agent-busy.js";
 import * as repo from "./repo.js";
 import {
   suggestSession,
@@ -28,6 +35,7 @@ import { runCaseConference } from "./domain/brain/case-conference.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
 import {
   isAthleteRequestedRestructure,
+  recoverStructureBuilds,
   registerStructureBuildEnqueuer,
   settleStructureBuild,
 } from "./domain/brain/structure-request.js";
@@ -316,9 +324,26 @@ export function applyCaseConferenceSchedulerSuccess(input: any, result: any): bo
 // below only records a failure that escaped processAgentJob's own handling.
 const controllers = new Map<number, AbortController>();
 
+/**
+ * A job the host had no spawn permit for. Returns true when it was put back in the
+ * queue (and re-kicked after a rest), false when it has used its deferral budget and
+ * must now fail like anything else — a job deferred forever is a job nobody is told
+ * about. Shared by the thrown form and the `{ok:false, agent_busy:true}` envelope.
+ */
+function deferBusyAgentJob(id: number): boolean {
+  if (!noteAgentBusyDeferral("agent_jobs", id).defer) return false;
+  const deferred = repo.deferAgentJob(id);
+  if (!deferred || deferred.status !== "queued") return false;
+  log.warn(`[jobs] job#${id} deferred — every agent spawn permit was busy.`);
+  emit(id, { type: "phase", job: deferred });
+  setTimeout(() => enqueueAgentJob(id), AGENT_BUSY_RETRY_MS).unref?.();
+  return true;
+}
+
 const runner = createSerialRunner(processAgentJob, (id, e) => {
   // A failing job must never break the loop. processAgentJob already persists its
   // own failure; this is the last-resort backstop.
+  if (isAgentBusyError(e) && deferBusyAgentJob(id)) return;
   try {
     const cur = repo.getAgentJob(id) as any;
     if (cur && (cur.status === "queued" || cur.status === "running")) {
@@ -648,6 +673,11 @@ async function processAgentJob(id: number): Promise<void> {
     const cur = repo.getAgentJob(id) as any;
     if (cur?.status === "canceled" || controller.signal.aborted) return;
 
+    // A coachOp answers 200 with `{ok:false}` rather than throwing, so congestion
+    // arrives as a FIELD on that envelope (src/agent-busy.ts). It is the same
+    // non-event as the thrown form: defer, never persist it as this job's answer.
+    if (isAgentBusyResult(result) && deferBusyAgentJob(id)) return;
+
     const finished = repo.finishAgentJob(id, {
       result,
       chosen_agent: chosen,
@@ -657,10 +687,16 @@ async function processAgentJob(id: number): Promise<void> {
     if (job.kind === "case_conference" && finished?.status === "done") {
       applyCaseConferenceSchedulerSuccess(input, result);
     }
+    clearAgentBusyDeferrals("agent_jobs", id);
     emit(id, { type: "done", job: finished, result });
   } catch (e: any) {
     const cur = repo.getAgentJob(id) as any;
     if (cur?.status === "canceled" || controller.signal.aborted) return; // Stop, not a failure
+    // Congestion, not a failure: no CLI was ever started, so the job has not been tried
+    // yet. Put it back in the queue rather than writing an ending its kind hasn't
+    // earned — and leave the conference's scheduler claim and a structure build's
+    // pending flag alone, since neither has been answered.
+    if (isAgentBusyError(e) && deferBusyAgentJob(id)) return;
     if (job.kind === "case_conference") failCaseConferenceSchedulerOperation(input, e);
     if (job.kind === "evolve_program" && Number(input.structure_flag_decision_id) > 0) {
       try {
@@ -670,6 +706,7 @@ async function processAgentJob(id: number): Promise<void> {
       }
     }
     const failed = repo.failAgentJob(id, e?.message ?? String(e));
+    clearAgentBusyDeferrals("agent_jobs", id);
     recordAsyncFailure("agent_jobs", job.kind, e);
     emit(id, { type: "error", job: failed, message: "Background job failed" });
   } finally {
@@ -706,14 +743,40 @@ export function abortAllJobs() {
 // Crash recovery (boot): mark interrupted 'running' jobs errored (their coachOp
 // may have partially persisted a draft — re-running risks duplicates) and
 // re-enqueue the 'queued' ones that never started. Mirrors recoverChatTurns.
-export function recoverAgentJobs(): { requeued: number; interrupted: number } {
+export function recoverAgentJobs(): {
+  requeued: number;
+  interrupted: number;
+  structure_resumed: number;
+  structure_settled: number;
+} {
   const { requeue, interrupted } = repo.recoverAgentJobs();
   if (interrupted) recordAsyncFailure("agent_jobs", "restart_interruption", new Error("interrupted"));
   for (const id of requeue) enqueueAgentJob(id);
   if (requeue.length || interrupted) {
     log.info(`[jobs] recovered ${requeue.length} queued + ${interrupted} interrupted job(s).`);
   }
-  return { requeued: requeue.length, interrupted };
+  // A chat structure request rides on one of those jobs, and the flag it wrote is only
+  // ever settled by the worker. An interruption therefore left the ask holding a dead
+  // job id and no outcome — invisible, unbuildable, and re-asking those exact words
+  // resolved straight back onto it. Reconcile the flags against real job state now that
+  // interrupted jobs are terminal and queued ones are back with the runner.
+  let structure = { resumed: [] as number[], settled: [] as number[] };
+  try {
+    structure = recoverStructureBuilds();
+  } catch (err) {
+    recordAsyncFailure("agent_jobs", "structure_build_recovery", err);
+  }
+  if (structure.resumed.length || structure.settled.length) {
+    log.info(
+      `[jobs] structure requests: ${structure.resumed.length} rebuilt, ${structure.settled.length} settled after a restart.`
+    );
+  }
+  return {
+    requeued: requeue.length,
+    interrupted,
+    structure_resumed: structure.resumed.length,
+    structure_settled: structure.settled.length,
+  };
 }
 
 // Re-export so the scheduler / boot can stamp the local date consistently.

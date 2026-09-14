@@ -459,6 +459,13 @@ function reachTopSetItemFor(backoff: any, working: number, dateISO: string): Rec
 
 // Expand an agent-authored nested top_set into the same two-card shape peak/reach
 // already produce: a leading top-set card, then the back-off block, same name.
+//
+// It deliberately carries NO `reach` field. `reach` is the envelope's own promise
+// that the day earned a heavier look, and it persists only for items the server
+// derived: this card's load came through safeAgentWeight, which falls back to the
+// lift's PLAN target when nothing is logged, and a prescription has never proved
+// anything about what the athlete can move. Whether this single is the day's reach
+// is decided at the insertion site, against the LOGGED working weight.
 function agentTopSetItemFor(backoff: any, top: any, dateISO: string): Record<string, unknown> | null {
   if (!top || typeof top !== "object") return null;
   if (backoff?.kind === "cardio" || backoff?.mode === "timed") return null;
@@ -493,12 +500,20 @@ function agentTopSetItemFor(backoff: any, top: any, dateISO: string): Record<str
     superset_group: null,
     load_basis:
       weight != null && weight < 0 ? "assisted" : weight != null && weight > 0 ? "loaded" : (backoff.load_basis ?? null),
-    reach: {
-      ...(weight != null ? { weight } : {}),
-      reps,
-      note,
-    },
   };
+}
+
+// Is an agent-authored top set ALSO the day's reach? Only when it sits above the
+// weight the athlete has actually moved on an eligible host. Anything else is a
+// heavy single the agent composed — still one per session, still paid for out of
+// the budget, but not evidence the envelope's promised reach reached a card.
+function agentTopSetIsReach(
+  top: Record<string, unknown>,
+  hostLoad: { kind: "loaded"; weight: number } | { kind: "unloaded" } | null
+): boolean {
+  if (!hostLoad || hostLoad.kind !== "loaded") return false;
+  const weight = finite(top.target_weight);
+  return weight != null && weight > hostLoad.weight;
 }
 
 function applyReachAmrap(item: any, dateISO: string): boolean {
@@ -802,6 +817,30 @@ export function normalizeComposedSession(
     : null;
   const candidates = new Map(envelope.candidates.map((candidate) => [candidate.exercise.toLowerCase(), candidate]));
   const equipmentCapability = parseEquipmentCapability(envelope.request.equipment);
+  // The athlete's stated run days anchor the SUGGESTION engines — weeklyRunPlan and
+  // flexibleTrainingAgenda never spill a run onto a weekday nobody named. The
+  // athlete's own PLAN is not a suggestion: a run written into today's template is
+  // structure they authored, and composition is not where their own week quietly
+  // loses a session. So the filter only ever drops a run this day's plan did not
+  // itself prescribe. Read lazily and once — an unscheduled weekday is the only
+  // morning that asks the question at all.
+  let planRunToday = false;
+  let planRunRead = false;
+  const planPrescribesRun = (): boolean => {
+    if (planRunRead) return planRunToday;
+    planRunRead = true;
+    const dayNumber = envelope.template.day_number;
+    if (dayNumber != null) {
+      try {
+        const day = getPlanDay(Number(dayNumber)) as any;
+        const items = Array.isArray(day?.items) ? day.items : [];
+        planRunToday = items.some((it: any) => it?.kind === "cardio" && cardioPlanIdentity(it).sport === "run");
+      } catch {
+        planRunToday = false;
+      }
+    }
+    return planRunToday;
+  };
   let novelCount = 0;
   const kept: any[] = [];
   for (const item of base.items) {
@@ -811,7 +850,12 @@ export function normalizeComposedSession(
       : String(item.exercise ?? "");
     if (isCardio) item.exercise = exercise;
     const candidate = candidates.get(exercise.toLowerCase());
-    if (isCardio && cardioPlanIdentity(item).sport === "run" && isStatedRunDay(envelope.date) === false) {
+    if (
+      isCardio &&
+      cardioPlanIdentity(item).sport === "run" &&
+      isStatedRunDay(envelope.date) === false &&
+      !planPrescribesRun()
+    ) {
       rejected.push({ exercise, reason: "not_scheduled_run_day" });
       continue;
     }
@@ -1026,7 +1070,10 @@ export function normalizeComposedSession(
     delete item.reach;
     const nestedTop = item.top_set;
     delete item.top_set;
-    if (nestedTop && topSetsAllowed && remainingSets >= 1 && capped.length + topSetsInserted + 1 <= cap) {
+    const isHost =
+      !reachHostConsumed && isReachHostItem(item, reducedExercises, saturatedGroups, excluded);
+    const hostLoad = isHost ? reachHostLoad(String(item.exercise ?? "")) : null;
+    if (nestedTop && !insertedTopSet && topSetsAllowed && remainingSets >= 1 && capped.length + topSetsInserted + 1 <= cap) {
       const top = agentTopSetItemFor(item, nestedTop, envelope.date);
       if (top) {
         withTopSets.push(top);
@@ -1034,13 +1081,15 @@ export function normalizeComposedSession(
         insertedTopSet = true;
         topSetsInserted += 1;
         changed = true;
+        // ONE challenge top set a session. This lift just took it, so no later
+        // compound may host a second — without this the day could render an agent
+        // single here AND a server-derived reach further down the card list.
+        reachHostConsumed = true;
+        if (reachOpen && agentTopSetIsReach(top, hostLoad)) reachLanded = true;
         withTopSets.push(item);
         continue;
       }
     }
-    const isHost =
-      !reachHostConsumed && isReachHostItem(item, reducedExercises, saturatedGroups, excluded);
-    const hostLoad = isHost ? reachHostLoad(String(item.exercise ?? "")) : null;
     if (topSetsAllowed && remainingSets >= 1 && capped.length + topSetsInserted + 1 <= cap) {
       const candidate = candidates.get(String(item.exercise ?? "").toLowerCase());
       let top = topSetItemFor(item, candidate, envelope.date);
@@ -1079,9 +1128,11 @@ export function normalizeComposedSession(
   // ordinary day's items come out of here byte-for-byte as they always have.
   if (insertedTopSet) withTopSets.forEach((item, index) => (item.position = index));
   const finalItems = insertedTopSet ? withTopSets : capped;
-  // A peak single on a reach-open day is still a top set on a card, so the
-  // envelope must not claim there was no room for one.
-  if (reachOpen && insertedTopSet) reachLanded = true;
+  // A peak single on a reach-open day is still a top set on a card, and it says so
+  // itself: every server-derived top set carries `reach`, and the loop above reads
+  // that field. Nothing here may blanket-claim a landing for the one card shape
+  // that does NOT carry it — an agent-authored single whose load can come from a
+  // plan target. That one is judged against the logged working weight at insertion.
   reconcileEnvelopeReach(envelope, reachLanded);
 
   let est = base.est_minutes;

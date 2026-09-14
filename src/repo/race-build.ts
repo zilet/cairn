@@ -319,16 +319,24 @@ const STRENGTH_HINT: Record<RacePhase | "race_week", string> = {
 /**
  * The ladder from `asOf`'s week to race week, walked through raceRamp one Monday at a
  * time so every week is the engine's own next safe step off the week before it.
+ *
+ * `thisWeek` is the live engine's prescription for the current week, when there is
+ * one. It is not decoration: raceRamp reads its anchor as the week BEFORE, so the
+ * current rung has to BE the prescription and has to be what the next rung steps
+ * off. Hand it in and the ladder walks from what the athlete is actually running;
+ * leave it out and the walk projects the current week from the anchor like any other.
  */
 export function projectRaceBuildWeeks(
   goal: RaceRampGoal & { date: string; distance_km: number },
   asOf: string,
   anchorKm: number,
-  anchorLongKm: number
+  anchorLongKm: number,
+  thisWeek?: { km: number; long_km: number | null } | null
 ): RaceBuildWeek[] {
   const out: RaceBuildWeek[] = [];
   const raceMonday = mondayOf(goal.date);
-  let monday = mondayOf(asOf);
+  const currentMonday = mondayOf(asOf);
+  let monday = currentMonday;
   let anchor = anchorKm > 0 ? anchorKm : 6;
   let long = anchorLongKm > 0 ? anchorLongKm : Math.max(3, anchor * 0.3);
   let guard = 0;
@@ -348,26 +356,32 @@ export function projectRaceBuildWeeks(
     const e = r.weeks_to_race;
     const kind: RaceWeekKind =
       w <= 0 ? "race" : e <= 1 ? "taper" : e === 2 ? "peak" : r.down_week ? "down" : "build";
+    // THIS week is not a projection when the engine has already prescribed it. And
+    // the prescription cannot just be painted over the rung afterwards: raceRamp
+    // takes the PRIOR week's volume as its anchor, so a walk that carried its own
+    // projected step forward seeded the very next Monday one full ramp high — the
+    // patched first rung, then every week after it two steps above the ladder it
+    // claims to walk. The rung the athlete is running is the rung the walk steps off.
+    const live = monday === currentMonday && thisWeek && thisWeek.km > 0 ? thisWeek : null;
+    const km = live ? live.km : r.required_km;
+    const longKm = live ? (live.long_km ?? r.required_long_km) : r.required_long_km;
     out.push({
       week_start: monday,
       weeks_to_race: w,
       phase,
       kind,
-      km: r.required_km,
-      long_km: r.required_long_km,
+      km,
+      long_km: longKm,
       quality_hint: kind === "race" ? QUALITY_HINT.race_week : kind === "down" ? QUALITY_HINT.down : QUALITY_HINT[phase],
       strength_hint: kind === "race" ? STRENGTH_HINT.race_week : STRENGTH_HINT[phase],
-      current: monday === mondayOf(asOf),
+      current: monday === currentMonday,
     });
-    anchor = r.required_km;
-    long = r.required_long_km;
+    anchor = km;
+    long = longKm;
     const next = addDaysISO(monday, 7);
     if (!next) break;
     monday = next;
   }
-  // The first week is what the live engine actually prescribed — the loop's own step
-  // off the anchor is replaced by the caller so the ladder never disagrees with the
-  // run-plan card sitting beside it.
   return out;
 }
 
@@ -656,11 +670,15 @@ export function raceBuild(
   const anchorKm = weekKm > 0 ? weekKm : review.weeks.at(-1)?.km || 0;
   const anchorLong = longKm ?? review.longest_recent_km ?? 0;
   const rampGoal = { ...goal, date: goal.date, distance_km: distance };
-  const weeks = projectRaceBuildWeeks(rampGoal, asOf, anchorKm, anchorLong);
-  if (weeks.length && weekKm > 0) {
-    // The engine's own prescription is the truth for this week (see projectRaceBuildWeeks).
-    weeks[0] = { ...weeks[0], km: weekKm, long_km: longKm ?? weeks[0].long_km };
-  }
+  // The engine's own prescription is the truth for this week, and the rung the rest
+  // of the ladder steps off (see projectRaceBuildWeeks).
+  const weeks = projectRaceBuildWeeks(
+    rampGoal,
+    asOf,
+    anchorKm,
+    anchorLong,
+    weekKm > 0 ? { km: weekKm, long_km: longKm } : null
+  );
 
   // ---- the ring: runs, strength, ride ----
   const heavyLower = safe(() => lowerBodyPlanDayNumbers()) ?? new Set<number>();

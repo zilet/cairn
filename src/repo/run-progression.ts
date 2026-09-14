@@ -41,7 +41,14 @@ import {
   weeklyKm as recordedWeeklyKm,
 } from "./program-state.js";
 import { legLoadGroupsPhrase, NO_LEG_LOAD, type StrengthLegLoad, strengthLegLoad } from "./hybrid-load.js";
-import { getEnduranceGoal, getEnduranceSchedule, getProfile, dowToDayNumber, formatEnduranceScheduleDays, type EnduranceSchedule } from "./profile.js";
+import {
+  getEnduranceGoal,
+  getEnduranceSchedule,
+  getProfile,
+  dowToDayNumber,
+  formatEnduranceScheduleDays,
+  type EnduranceSchedule,
+} from "./profile.js";
 import { createProposal, supersedeAutoRunPlanDrafts } from "./proposals.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "./reaction-model.js";
 import {
@@ -651,6 +658,16 @@ export const STRENGTH_PEAK_PULL_DEFER_VARIANTS: ReadonlyArray<(phase: string) =>
     `Strength is at its ${phase} this block, so the run build doesn't stretch this week; it steps as usual and waits for a quieter one.`,
 ];
 
+// Reflecting the athlete's OWN stated run days back at them — never "anchored"/
+// "engine" language, which reads as Cairn narrating its own machinery rather than
+// noticing a fact the athlete already told it.
+export const RUN_SCHEDULE_STATED_VARIANTS: ReadonlyArray<(days: string) => string> = [
+  (days) => `Kept the runs on the days you named — ${days}.`,
+  (days) => `The runs stay on your usual days: ${days}.`,
+  (days) => `Placed the runs on the days you run — ${days}.`,
+  (days) => `Your run days are set — ${days} — so the week follows them.`,
+];
+
 // Placement, when the fatigue read (not the calendar) is what moved a day.
 export const LEG_LOAD_PLACEMENT_VARIANTS: ReadonlyArray<(what: string) => string> = [
   (what) => `Pushed the hard running later into the week — ${what} open it still carrying the weights.`,
@@ -1000,7 +1017,8 @@ export function weeklyRunPlan(
   const statedLongSlot = statedSchedule?.days.length ? longSlotFromSchedule(statedSchedule) : null;
   const staticLongSlot =
     statedLongSlot ??
-    (LONG_SLOT_CANDIDATES.find(ringClearOfLower) ?? LONG_SLOT_CANDIDATES.find((s) => !lowerDays.has(s)) ?? 6);
+    LONG_SLOT_CANDIDATES.find(ringClearOfLower) ?? LONG_SLOT_CANDIDATES.find((s) => !lowerDays.has(s)) ??
+    6;
   const longRunDate = shiftDaysISO(week_start, staticLongSlot - 1);
 
   // What the running legs are carrying, and whether the LIFTING block is at its own
@@ -1657,7 +1675,13 @@ export function weeklyRunPlan(
     }
   }
   if (scheduled && statedSchedule) {
-    rationale.push(`Anchored to your stated run days (${formatEnduranceScheduleDays(statedSchedule)}).`);
+    rationale.push(
+      pickDayVariant(
+        RUN_SCHEDULE_STATED_VARIANTS,
+        d,
+        "run-schedule-stated"
+      )(formatEnduranceScheduleDays(statedSchedule))
+    );
   }
 
   const runs: RunPlanPrescription[] = [];
@@ -1665,9 +1689,10 @@ export function weeklyRunPlan(
   // Easy slots, prefer non-adjacent to the hard days — unless a stated schedule
   // already named the days, in which case remaining scheduled dows are the only ones.
   const scheduledUsed = new Set<number>([longSlot, ...(qualityRun ? [qualitySlot] : [])]);
-  const easySlots = scheduled && statedSchedule
-    ? easySlotsFromSchedule(statedSchedule, scheduledUsed, easyCount + (q && !qualityRun ? 1 : 0))
-    : [1, 4, 7, 3, 5].slice(0, easyCount);
+  const easySlots =
+    scheduled && statedSchedule
+      ? easySlotsFromSchedule(statedSchedule, scheduledUsed, easyCount + (q && !qualityRun ? 1 : 0))
+      : [1, 4, 7, 3, 5].slice(0, easyCount);
   for (const slot of easySlots) {
     runs.push({
       day_number: slot,

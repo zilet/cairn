@@ -18,6 +18,7 @@ import {
   hasRecentDecisionVeto,
   listBrainDecisions,
   listBrainExpectations,
+  listReviewDecisionsForProposal,
   getBrainDecision,
   getBrainRollback,
   patchBrainDecision,
@@ -42,9 +43,10 @@ import {
 } from "../../repo/nutrition.js";
 import { mealPlanDraftUnseen, mealPlanRefreshShape } from "../../repo/meal-plan-refresh.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
+import { movementKey, normalizeExerciseName, normalizedExerciseKey } from "../../repo/exercise-canon.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
 import { computeGoalCheck, getProfile, setProfile } from "../../repo/profile.js";
-import { applyProposal, getProposal, listProposals, setProposalStatus, type NormalizedProposalApplyPayload, type OrphanSiblingCleanup } from "../../repo/proposals.js";
+import { applyProposal, getProposal, listProposals, listReviewHeldProposals, setProposalStatus, type NormalizedProposalApplyPayload, type OrphanSiblingCleanup } from "../../repo/proposals.js";
 import { RECOVERY_WEEK_INSTRUCTION_PREFIX, revertRecoveryWeekIfOwned } from "../../repo/recovery-week.js";
 import { MEAL_REFRESH_REQUEST_KEY } from "../../repo/meal-refresh-retry.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "../../repo/proposal-intent.js";
@@ -124,6 +126,107 @@ function proposalShape(proposal: any): ProposalShape {
   return { kind: "training_target", domain: "training", risk: "low" };
 }
 
+// ---- A DEAD PREMISE IS RETIRED, NEVER RE-ASKED --------------------------------
+//
+// A held draft that rotates one movement out ("swap Decline Bench Press for Chest
+// Dips") is a question ABOUT something on the plan. Restructure the plan so that
+// movement is gone, and the question has no subject left: applying it can only skip
+// the change, and asking it makes the athlete adjudicate an exercise they no longer
+// train. Live, that left a week-old swap sitting in "Waiting on you" behind a lift
+// the plan had already dropped.
+//
+// WHICH changes count as a premise: only the ones that REQUIRE an existing
+// prescription — a swap's `from`, and a removal's `exercise` (`remove:true`, or the
+// `sets:0` spelling applyPlanChange treats as a removal). An ordinary target tweak is
+// an UPSERT that ADDS the movement when the day does not carry it, so it is never
+// premise-gone; a `days` restructure replaces the plan wholesale and names nothing
+// that has to already exist.
+//
+// WHERE we look: the WHOLE plan, not the day the change references. A restructure
+// renumbers days, and a movement that merely moved from day 2 to day 3 still has its
+// premise. That is the retire-LESS of the two readings on purpose — a draft is set
+// aside only once its subject has left the plan entirely.
+type PremiseTarget = { exercise: string; day_number: number | null };
+
+// The two spellings of "take this prescription off the day" that applyPlanChange
+// honours; both throw when the movement is not there to remove.
+function removesPrescription(change: any): boolean {
+  return change?.remove === true || Number(change?.sets) === 0;
+}
+
+// `exclusive` is true only when EVERY entry in the payload is a premise change. A
+// mixed draft — one dead removal beside a live "add a back movement" — keeps a half
+// that would still do something, and retiring it would throw the athlete's intent
+// away along with the dead half.
+function proposalPremiseTargets(proposal: any): { targets: PremiseTarget[]; exclusive: boolean } {
+  const parsed = proposal?.parsed ?? {};
+  if (Array.isArray(parsed.days)) return { targets: [], exclusive: false };
+  const changes = Array.isArray(parsed.changes) ? parsed.changes : [];
+  if (!changes.length) return { targets: [], exclusive: false };
+  const targets: PremiseTarget[] = [];
+  let exclusive = !(Array.isArray(parsed.cardio) && parsed.cardio.length > 0);
+  for (const change of changes) {
+    if (String(change?.kind ?? "").toLowerCase() === "cardio") {
+      exclusive = false;
+      continue;
+    }
+    const dayNumber = Number.isFinite(Number(change?.day_number)) ? Number(change.day_number) : null;
+    const from = String(change?.swap?.from ?? "").trim();
+    if (from) {
+      targets.push({ exercise: from, day_number: dayNumber });
+      continue;
+    }
+    const exercise = String(change?.exercise ?? "").trim();
+    if (exercise && removesPrescription(change)) {
+      targets.push({ exercise, day_number: dayNumber });
+      continue;
+    }
+    exclusive = false;
+  }
+  return { targets, exclusive };
+}
+
+function planStrengthExerciseNames(): string[] {
+  const names: string[] = [];
+  for (const day of getPlan() as any[]) {
+    for (const item of Array.isArray(day?.items) ? day.items : []) {
+      if (String(item?.kind ?? "strength").toLowerCase() === "cardio") continue;
+      const name = String(item?.exercise ?? "").trim();
+      if (name) names.push(name);
+    }
+  }
+  return names;
+}
+
+// The SAME three tiers applyPlanSwap resolves a swap target with — exact normalized
+// name, then the canonical key, then the implement-agnostic movement key — so "is this
+// still on the plan" is answered by the matcher that would actually find it.
+function planCarriesMovement(planNames: string[], exercise: string): boolean {
+  const norm = normalizeExerciseName(exercise);
+  const key = normalizedExerciseKey(exercise);
+  const move = movementKey(exercise);
+  return planNames.some(
+    (name) =>
+      (!!norm && normalizeExerciseName(name) === norm) ||
+      (!!key && normalizedExerciseKey(name) === key) ||
+      (!!move && movementKey(name) === move)
+  );
+}
+
+/** The movements this draft needs and the plan no longer has, or null when it still has a premise. */
+function proposalPremiseGone(proposal: any): string[] | null {
+  const { targets, exclusive } = proposalPremiseTargets(proposal);
+  if (!targets.length || !exclusive) return null;
+  const planNames = planStrengthExerciseNames();
+  // An EMPTY plan says nothing about whether a movement was dropped — a fresh install
+  // and a plan mid-rewrite look exactly like a plan the lift was removed from. Silence
+  // is never the evidence that retires a draft.
+  if (!planNames.length) return null;
+  const gone = targets.filter((target) => !planCarriesMovement(planNames, target.exercise));
+  if (gone.length !== targets.length) return null;
+  return [...new Set(gone.map((target) => target.exercise))];
+}
+
 function proposalReasonProvenance(proposal: any): any[] {
   const parsed = proposal?.parsed ?? {};
   const owners = [
@@ -157,6 +260,16 @@ type ProposalReviewReasonCode =
 // so the code that produced this reason code has no remaining caller. Keeping the member
 // would invite a future writer to re-create the demotion the ruling removed.
 
+// Every live `review` row holding this draft, OLDEST FIRST. The oldest is the ask the
+// athlete has actually been looking at, so it is the one that keeps its place in the
+// queue. Asked of the ledger BY PROPOSAL ID (listReviewDecisionsForProposal) rather
+// than filtered out of the newest hundred review rows — structure requests and every
+// other hold share that status, so an older hold on this draft fell off the page and
+// both callers below silently missed it.
+function liveReviewHoldsForProposal(proposalId: number): ParkedDecision[] {
+  return listReviewDecisionsForProposal(proposalId).filter((decision) => decision.id != null);
+}
+
 function holdProposalForReview(
   proposal: any,
   shape: ProposalShape,
@@ -173,8 +286,22 @@ function holdProposalForReview(
   }
 ): any {
   const reasons = input.reasons.map((reason) => String(reason).trim().slice(0, 300)).filter(Boolean);
-  const tier = input.tier === "clinician" ? "clinician" : "ask";
-  const recorded = recordDecision({
+  // ONE OPEN ASK PER DRAFT. Every held adoption pass re-derives the refusal and records
+  // it, and recordDecision's fingerprint covers `action` — which carries the reason code
+  // and the reason provenance. So a pass whose refusal MOVED (a clinical ceiling one
+  // week, a stale snapshot the next) hashed differently and inserted a SECOND review row
+  // for the same draft, and "Waiting on you" showed the athlete the same swap twice. The
+  // fingerprint cannot see that the subject is identical; the proposal id can.
+  const held = liveReviewHoldsForProposal(Number(proposal.id));
+  const keep = held[0] ?? null;
+  // Never LOOSEN the floor on a refresh. `clinicianFloorHolds` is the deterministic read
+  // (the server's own marks, or clinical action text) — not the bare tier a model wrote —
+  // so a draft the server marked clinical stays clinician-directed even when today's
+  // refusal reads as an ordinary stale snapshot.
+  const floorHeld = keep ? clinicianFloorHolds(keep) : false;
+  const clinical = input.clinical === true || floorHeld;
+  const tier = input.tier === "clinician" || floorHeld ? "clinician" : "ask";
+  const fields = {
     effective_date: null,
     kind: shape.kind,
     domain: shape.domain,
@@ -185,7 +312,7 @@ function holdProposalForReview(
     source_ref_key: String(proposal.id),
     status: "review",
     autonomy_tier: tier,
-    risk_class: input.clinical ? "clinical" : shape.risk,
+    risk_class: clinical ? "clinical" : shape.risk,
     reversible: false,
     input_fingerprint: null,
     context: {
@@ -193,7 +320,7 @@ function holdProposalForReview(
       review_reason_code: input.code,
       review_reasons: reasons,
       policy_inputs: input.policy_inputs ?? {},
-      clinical: input.clinical === true,
+      clinical,
       clinical_provenance: input.clinical_provenance ?? null,
       coordination_key: input.coordination_key ?? null,
       coordinated_update: input.coordinated_update === true,
@@ -212,7 +339,27 @@ function holdProposalForReview(
     reverted_at: null,
     superseded_by: null,
     evaluator_version: null,
-  }).decision;
+  };
+  let recorded: any;
+  if (keep) {
+    // Any duplicate that already exists is folded into the surviving ask, so a ledger
+    // that acquired two rows before this rule landed heals on the next held pass.
+    for (const duplicate of held.slice(1)) {
+      transitionBrainDecision(Number(duplicate.id), "superseded", { supersededBy: keep.id ?? null });
+    }
+    // The prior context is carried, not replaced: the once-only stamps written by the
+    // sweeps that walk this row (`thaw_attempted`, the adoption refusal signature) are
+    // their guards against re-deriving the same answer every tick, and dropping them
+    // here would turn one refreshed hold into a per-tick loop.
+    recorded =
+      patchBrainDecision(Number(keep.id), {
+        ...(fields as any),
+        input_fingerprint: keep.input_fingerprint ?? null,
+        context: { ...((keep.context ?? {}) as Record<string, any>), ...fields.context },
+      }) ?? keep;
+  } else {
+    recorded = recordDecision(fields as any).decision;
+  }
   return {
     ok: true,
     applied: false,
@@ -1638,7 +1785,7 @@ function supersedeStaleDraftOnThaw(proposal: any, decision: ParkedDecision, fres
  */
 function recordRetiredDraftReceipt(args: {
   shape: { kind: string; domain: BrainDomain; risk: any };
-  outcome: "stale_proposal" | "stale_plan";
+  outcome: "stale_proposal" | "stale_plan" | "premise_gone";
   why: string;
   source: string;
   sourceRefType: "plan_proposal" | "meal_plan";
@@ -1677,6 +1824,91 @@ function recordRetiredDraftReceipt(args: {
     // The receipt is the athlete-facing half; losing it must not abort the sweep.
     recordAsyncFailure("apply", "retire_draft_receipt", err);
   }
+}
+
+/**
+ * Retire ONE draft whose premise has left the plan, with the receipt a person can read.
+ *
+ * The receipt is written first, then `setProposalStatus(…, 'superseded')` retires the
+ * draft AND every live `review` hold pointing at it in the same authoritative call
+ * (`recordDecision:false` — the specific receipt is already filed, so the generic status
+ * row would be a vaguer second one beside it). The holds are stamped BEFORE that
+ * transition, so each retired row carries why it stopped asking.
+ */
+function retireDraftWithDeadPremise(proposal: any, missing: string[]): void {
+  const shape = proposalShape(proposal);
+  const movements = missing.join(" and ");
+  const why =
+    missing.length === 1
+      ? `${movements} is no longer in your plan, so this change has nothing left to act on.`
+      : `${movements} are no longer in your plan, so this change has nothing left to act on.`;
+  const holds = liveReviewHoldsForProposal(Number(proposal.id));
+  for (const hold of holds) {
+    patchBrainDecision(Number(hold.id), {
+      context: {
+        ...((hold.context ?? {}) as Record<string, any>),
+        review_required: false,
+        retire_reason: "premise_gone",
+        retired_movements: missing,
+        retired_explanation: why,
+      },
+    });
+  }
+  recordRetiredDraftReceipt({
+    shape,
+    outcome: "premise_gone",
+    why,
+    source: proposal.agent || "autonomy",
+    sourceRefType: "plan_proposal",
+    sourceRefKey: Number(proposal.id),
+    reviewDecisionId: holds[0]?.id ?? null,
+    action: {
+      proposal_id: proposal.id,
+      outcome: "superseded_premise_gone",
+      missing_movements: missing,
+      reason_provenance: proposalReasonProvenance(proposal),
+    },
+  });
+  setProposalStatus(Number(proposal.id), "superseded", { recordDecision: false });
+}
+
+/**
+ * The premise pass, run ahead of the thaw and the adoption loop on the same sweep.
+ *
+ * Deliberately NOT gated on lead_mode. Retiring a dead premise adopts nothing and sets
+ * no live question aside — it closes one that no longer has a subject — so the
+ * review_everything floor the thaw honours does not apply: an athlete who asked to see
+ * everything is owed a queue of real questions, not a lift their plan no longer carries.
+ *
+ * Gated on the SAME grace window adoption honours: a draft written minutes ago is still
+ * in the conversation that produced it, and pulling it out from under the athlete would
+ * be the surprise this whole layer exists to avoid.
+ */
+function retireDraftsWithDeadPremise(now = Date.now()): number {
+  let retired = 0;
+  // The newest drafts (the same window adoption walks) PLUS every draft currently behind
+  // an open review row, whatever its age. The two are not the same set: a hold parked
+  // months ago sits behind a proposal long since pushed out of the newest-50 window, and
+  // that is exactly the row a person is still being asked about.
+  const seen = new Set<number>();
+  const candidates = [...(listProposals(50) as any[]), ...(listReviewHeldProposals(50) as any[])];
+  for (const proposal of candidates) {
+    try {
+      if (proposal?.status !== "draft") continue;
+      if (seen.has(Number(proposal.id))) continue;
+      seen.add(Number(proposal.id));
+      const createdAt = parseDbTime(proposal.created_at)?.getTime() ?? Number.NaN;
+      if (!Number.isFinite(createdAt) || now - createdAt < ORPHAN_ADOPTION_GRACE_MS) continue;
+      const missing = proposalPremiseGone(proposal);
+      if (!missing) continue;
+      retireDraftWithDeadPremise(proposal, missing);
+      retired += 1;
+    } catch (err) {
+      // Per-draft isolation: one unreadable payload must never break the sweep.
+      recordAsyncFailure("apply", "retire_dead_premise_draft", err);
+    }
+  }
+  return retired;
 }
 
 // Thaw for decisions frozen at `status: 'review'`. A decision parked under an older,
@@ -1781,6 +2013,8 @@ export function adoptOrphanedDrafts(): {
   skipped: number;
   thawed: number;
   superseded: number;
+  /** Drafts retired because the movement they act on has left the plan. */
+  retired: number;
 } {
   // Parked decisions thaw on the same deterministic tick as orphaned drafts, ahead of
   // adoption: a decision re-offered here may retire the very draft the loop below would
@@ -1789,6 +2023,12 @@ export function adoptOrphanedDrafts(): {
   // ONE settings read for the whole sweep — the thaw pass and the adoption loop below
   // both need lead_mode, and it cannot change underneath a synchronous pass.
   const leadMode = getSettings().lead_mode;
+  // FIRST of the three, because a draft whose premise has left the plan must not be
+  // re-offered by the thaw or re-held by the loop below: both would spend a full
+  // evidence capture to reach the same answer, and the loop would record the ask again.
+  // Retiring it here leaves its proposal 'superseded' and its holds already closed, so
+  // neither pass can see it.
+  const retired = retireDraftsWithDeadPremise();
   const thaw = thawParkedReviewDecisions(leadMode);
   let adopted = 0;
   let skipped = 0;
@@ -1977,7 +2217,7 @@ export function adoptOrphanedDrafts(): {
       skipped += 1;
     }
   }
-  return { adopted, skipped, thawed: thaw.thawed, superseded: thaw.superseded };
+  return { adopted, skipped, thawed: thaw.thawed, superseded: thaw.superseded, retired };
 }
 
 // A PENDING CHANGE IS JUDGED AGAINST THE EVIDENCE IN FORCE ON THE DAY IT APPLIES.
@@ -2270,14 +2510,26 @@ export function userSetNutritionTarget(
 // Which of the two floors regeneration must never cross, read off a decision that is
 // already in the queue (the apply-time path knows them from its own inputs). A clinical
 // ceiling and a user lock are the athlete's ask, not the system's bookkeeping.
-function decisionIsTheAthletes(decision: { risk_class?: string; context?: any; autonomy_tier?: string }): {
+//
+// The clinical half is `clinicianFloorHolds` — THE deterministic read, the same one the
+// thaw and the parked-advisory re-offer gate on. The loose test it replaces (a bare
+// `risk_class:'clinical'` or a bare clinician tier) let a conductor self-attest a
+// non-clinical hold onto the floor and so out of regeneration, which is exactly the
+// model discretion server-owned autonomy exists to prevent.
+function decisionIsTheAthletes(decision: {
+  risk_class?: unknown;
+  context?: any;
+  autonomy_tier?: unknown;
+  summary?: unknown;
+  rationale?: unknown;
+  action?: unknown;
+}): {
   clinical: boolean;
   user_locked: boolean;
 } {
   const context = (decision.context ?? {}) as Record<string, any>;
   return {
-    clinical:
-      decision.risk_class === "clinical" || decision.autonomy_tier === "clinician" || context.clinical === true,
+    clinical: clinicianFloorHolds(decision),
     user_locked: context.user_locked === true || context.policy_inputs?.user_locked === true,
   };
 }

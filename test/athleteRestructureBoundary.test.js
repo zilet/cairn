@@ -193,7 +193,7 @@ test("boundary: plan drift on the athlete's ask REBUILDS it instead of setting i
   assert.deepEqual(holds, []);
 });
 
-function structureRequestRow(status, reviewRequired, words) {
+function structureRequestRow(status, reviewRequired, words, extraContext = {}) {
   return repo.recordDecision({
     effective_date: null,
     kind: "training_structure",
@@ -208,7 +208,7 @@ function structureRequestRow(status, reviewRequired, words) {
     risk_class: "moderate",
     reversible: false,
     input_fingerprint: null,
-    context: { review_required: reviewRequired, requested_in_chat: true, athlete_request: words },
+    context: { review_required: reviewRequired, requested_in_chat: true, athlete_request: words, ...extraContext },
     action: { kind: "training_structure_request", request: words, user_explanation: `You asked: “${words}”.` },
     specialist: null,
     applied_at: null,
@@ -228,10 +228,20 @@ test("a structure request is 'waiting on you' ONLY as a review_everything hold �
   assert.ok(!ids.includes(observed.id), "an observed request is never an open question");
 });
 
-test("the landed week answers every standing request about the week's shape", () => {
+// A landing answers the ask it was BUILT for — and an ask for the same thing in other
+// words — but never a different ask. Two requests are two weeks: closing the second
+// one on the first one's landing tells the athlete they were answered when they were
+// not. So a request that neither built this change nor asked for the same thing keeps
+// standing, and (since nothing is building it) is handed back to the coach.
+test("the landed week answers the request it was built for — and leaves a different ask standing, building", () => {
   repo.setSettings({ lead_mode: "lead" });
   seedWeek();
-  const older = structureRequestRow("observed", false, "align the split to Tue/Thu runs (2 weeks ago)");
+  // Handed to the coach once already (its build died with a restart) — which is what
+  // makes resuming it a repair rather than a surprise.
+  const other = structureRequestRow("observed", false, "add a fourth lifting day and drop the arm day", {
+    structure_build_job_id: 1,
+    structure_build_outcome: null,
+  });
   const current = structureRequestRow("review", false, REQUEST);
   const unrelatedHold = repo.recordDecision({
     effective_date: null,
@@ -261,18 +271,62 @@ test("the landed week answers every standing request about the week's shape", ()
   const due = applyDueAnnouncedDecisions(routed.effective_date);
   assert.deepEqual(due.applied, [routed.decision.id]);
 
-  for (const row of [older, current]) {
-    const after = repo.getBrainDecision(row.id);
-    assert.equal(after.status, "superseded", `request ${row.id} is answered`);
-    assert.equal(after.superseded_by, routed.decision.id, "by the change that landed");
-    assert.equal(after.context.structure_request_answered_by, routed.decision.id);
-  }
+  const answered = repo.getBrainDecision(current.id);
+  assert.equal(answered.status, "superseded", "the ask this week was built for is answered");
+  assert.equal(answered.superseded_by, routed.decision.id, "by the change that landed");
+  assert.equal(answered.context.structure_request_answered_by, routed.decision.id);
+
+  const standing = repo.getBrainDecision(other.id);
+  assert.equal(standing.status, "review", "a DIFFERENT ask is not closed by someone else's week");
+  assert.equal(standing.context.structure_request_answered_by, undefined, "and is never receipted as answered");
+  const rebuildId = Number(standing.context.structure_build_job_id);
+  assert.ok(rebuildId > 0, "it is handed back to the coach instead of sitting unbuilt");
+  const rebuild = repo.getAgentJob(rebuildId);
+  assert.equal(rebuild.kind, "evolve_program");
+  assert.equal(rebuild.status, "queued");
+  assert.equal(rebuild.input.structure_flag_decision_id, other.id, "settling back onto the ask that is still open");
+  assert.ok(rebuild.input.task.includes("fourth lifting day"), "with THEIR words, not the landed week's");
+  assert.equal(standing.context.structure_auto_rebuild_attempts, 1, "and the server's own retry is counted");
+
   assert.equal(repo.getBrainDecision(unrelatedHold.id).status, "review", "only REQUESTS are answered by a landing");
   assert.deepEqual(
     repo.awaitingBrainDecisions().filter((d) => d.kind === "training_structure" && d.id !== unrelatedHold.id),
     [],
-    "nothing about the week's shape is left waiting on the athlete"
+    "and an ask being rebuilt is the coach's work, never a question put to the athlete"
   );
+});
+
+// The server may RESUME work it started; it may not start work off a sentence nobody
+// ever promised to build. A relic from before the hand-off existed stays a record.
+test("a landing never resurrects a standing ask the coach was never handed", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedWeek();
+  const relic = structureRequestRow("observed", false, "an ask from before the coach lane existed");
+  const routed = applyProposalWithAutonomy(Number(athleteDraft().id));
+  assert.deepEqual(applyDueAnnouncedDecisions(routed.effective_date).applied, [routed.decision.id]);
+
+  const after = repo.getBrainDecision(relic.id);
+  assert.equal(after.status, "observed", "untouched: not answered, and not rebuilt behind the athlete");
+  assert.equal(after.context.structure_build_job_id, undefined, "no week is drafted off it");
+});
+
+// (a) of the rule: lineage, not words. A request whose own build produced the landed
+// proposal is answered by it even when the agent reworded the ask along the way.
+test("a landing answers the request whose own build produced it, whatever the wording", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedWeek();
+  const proposal = athleteDraft();
+  const asked = structureRequestRow("review", false, "make the week work around my new shift pattern", {
+    structure_build_proposal_id: Number(proposal.id),
+  });
+  const routed = applyProposalWithAutonomy(Number(proposal.id));
+  const due = applyDueAnnouncedDecisions(routed.effective_date);
+  assert.deepEqual(due.applied, [routed.decision.id]);
+
+  const after = repo.getBrainDecision(asked.id);
+  assert.equal(after.status, "superseded", "its own build is what landed");
+  assert.equal(after.superseded_by, routed.decision.id);
+  assert.equal(after.context.structure_request_answered_by, routed.decision.id);
 });
 
 test("boundary: under review_everything the athlete's stale ask is held for them, never rebuilt behind their back", () => {

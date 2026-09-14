@@ -66,8 +66,7 @@ export function setProfile(p: any) {
       p.name !== undefined ? (p.name == null ? null : String(p.name).trim().slice(0, 120) || null) : (cur.name ?? null),
     // Durable home base (v81). Empty/null clears, undefined leaves intact.
     // Temporary travel is a dated context_event and never overwrites this field.
-    home_location:
-      p.home_location !== undefined ? normalizeLocationText(p.home_location) : (cur.home_location ?? null),
+    home_location: p.home_location !== undefined ? normalizeLocationText(p.home_location) : (cur.home_location ?? null),
     // A genuinely blank profile must remain unknown until the athlete supplies
     // sex; silently defaulting to male can select the wrong health ranges.
     sex: p.sex !== undefined ? p.sex : (cur.sex ?? null),
@@ -350,9 +349,7 @@ function realISODate(value: unknown): string | null {
   if (!ISO_DATE.test(raw)) return null;
   const [year, month, day] = raw.split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
-    ? raw
-    : null;
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? raw : null;
 }
 export function normalizeEnduranceGoal(input: any): EnduranceGoal | null {
   let g: any = input;
@@ -444,7 +441,20 @@ export function getEnduranceGoal(today?: string):
 // The athlete's STATED run days — orthogonal to the endurance objective and to
 // primary_discipline. When set, weeklyRunPlan anchors day_numbers to these dows
 // and the rolling agenda never suggests a run on an unscheduled weekday.
-// Unusable input returns null (= clear / leave intact at the trust boundary).
+//
+// null means REJECT — the input itself was not a schedule at all (not an object,
+// no `days` array present), or a non-empty `days` array named nothing this parser
+// could understand — and callers leave the stored schedule untouched. A `days`
+// array with at least one entry is never rejected as a whole for one bad sibling:
+// an entry with an unrecognized dow/kind is DROPPED rather than voiding every
+// other entry alongside it (one typo used to erase a schedule the athlete got
+// right). An explicitly empty `days: []`, told apart from the "everything got
+// dropped" case above, is the athlete's own clear intent and comes back as a real
+// (non-null) schedule with `days: []`, which reads downstream identically to
+// "unset" (every consumer already gates on `schedule?.days.length`) — that
+// distinction is what lets "clear my run days" actually clear one, instead of the
+// clear request itself reading as invalid input and leaving the old schedule in
+// place.
 export const ENDURANCE_SCHEDULE_KINDS = ["easy", "quality", "long", "any"] as const;
 export type EnduranceScheduleKind = (typeof ENDURANCE_SCHEDULE_KINDS)[number];
 export type EnduranceScheduleSource = "athlete" | "chat";
@@ -482,22 +492,29 @@ export function normalizeEnduranceSchedule(
     }
   }
   if (!raw || typeof raw !== "object") return null;
-  if (!Array.isArray(raw.days) || !raw.days.length) return null;
+  if (!Array.isArray(raw.days)) return null;
+  // An explicit `days: []` is the athlete's own clear intent, told apart from a
+  // non-empty array that happens to drop down to nothing below (every entry was
+  // unrecognized) — the former must produce a real, empty schedule; the latter is
+  // still a rejection, since nothing named was actually understood.
+  const explicitlyCleared = raw.days.length === 0;
   const days: EnduranceScheduleDay[] = [];
   const seen = new Set<number>();
   for (const entry of raw.days) {
-    if (!entry || typeof entry !== "object") return null;
+    // Drop the one bad entry, not the whole schedule — a typo'd day must never
+    // erase every day the athlete named correctly alongside it.
+    if (!entry || typeof entry !== "object") continue;
     const dow = Number(entry.dow);
-    if (!Number.isInteger(dow) || dow < 0 || dow > 6) return null;
+    if (!Number.isInteger(dow) || dow < 0 || dow > 6) continue;
     const kind = String(entry.kind ?? "")
       .trim()
       .toLowerCase();
-    if (!SCHEDULE_KIND_SET.has(kind)) return null;
+    if (!SCHEDULE_KIND_SET.has(kind)) continue;
     if (seen.has(dow)) continue;
     seen.add(dow);
     days.push({ dow: dow as EnduranceScheduleDay["dow"], kind: kind as EnduranceScheduleKind });
   }
-  if (!days.length) return null;
+  if (!explicitlyCleared && !days.length) return null; // nothing named was understood -> reject, not a clear
   days.sort((a, b) => a.dow - b.dow);
   const sourceRaw = String(raw.source ?? opts?.source ?? "athlete")
     .trim()
@@ -531,9 +548,7 @@ export function isStatedRunDay(dateISO: string): boolean | null {
 }
 
 export function formatEnduranceScheduleDays(schedule: EnduranceSchedule): string {
-  return schedule.days
-    .map((d) => `${WEEKDAY_NAMES[d.dow]}${d.kind !== "any" ? ` (${d.kind})` : ""}`)
-    .join(", ");
+  return schedule.days.map((d) => `${WEEKDAY_NAMES[d.dow]}${d.kind !== "any" ? ` (${d.kind})` : ""}`).join(", ");
 }
 
 export function nextScheduledRunWeekday(asOf: string, kind?: EnduranceScheduleKind): string | null {
@@ -772,9 +787,7 @@ export function computeGoalCheck(
   const measuredWeight = measuredRmrQuality?.freshness_weight ?? 0;
   const measuredKcal = measuredRmrQuality?.adjusted_kcal ?? measuredRmrQuality?.kcal;
   const bmr =
-    measuredRmrQuality && measuredKcal != null
-      ? formulaBmr + (measuredKcal - formulaBmr) * measuredWeight
-      : formulaBmr;
+    measuredRmrQuality && measuredKcal != null ? formulaBmr + (measuredKcal - formulaBmr) * measuredWeight : formulaBmr;
   // The manual activity factor is the cold-start seed. estimateExpenditure owns
   // the complete prior hierarchy + outcome fusion so the Goal and Energy
   // surfaces cannot disagree about which maintenance estimate is active.

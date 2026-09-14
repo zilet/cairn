@@ -14,6 +14,7 @@ import {
   LEG_LOAD_LONG_DEFER_VARIANTS,
   LEG_LOAD_PLACEMENT_VARIANTS,
   LEG_LOAD_PULL_DEFER_VARIANTS,
+  RUN_SCHEDULE_STATED_VARIANTS,
   STRENGTH_PEAK_PULL_DEFER_VARIANTS,
 } from "../dist/repo/run-progression.js";
 
@@ -1362,10 +1363,15 @@ test("every leg-load phrasing holds the reading grammar", () => {
   for (const phase of ["peak", "heaviest"]) {
     for (const say of STRENGTH_PEAK_PULL_DEFER_VARIANTS) rendered.push(say(phase));
   }
+  // The stated-run-days line reflects the athlete's OWN days back — never
+  // "anchored"/"engine" narration of Cairn's own machinery.
+  for (const days of ["Tue (quality), Thu (easy), Sat (long)", "Mon, Wed, Fri"]) {
+    for (const say of RUN_SCHEDULE_STATED_VARIANTS) rendered.push(say(days));
+  }
   for (const line of rendered) assert.equal(violatesReadingGrammar(line), null, `"${line}"`);
   // No scores, and no engineering register leaking through the band names.
   for (const line of rendered) {
-    assert.doesNotMatch(line, /residual|saturat|acwr|\bband\b|half-life/i, `"${line}"`);
+    assert.doesNotMatch(line, /residual|saturat|acwr|\bband\b|half-life|anchored|engine/i, `"${line}"`);
   }
 });
 
@@ -1375,6 +1381,7 @@ test("each leg-load set is a variant SET, with no duplicate phrasings", () => {
     ["LEG_LOAD_PULL_DEFER", LEG_LOAD_PULL_DEFER_VARIANTS, "your quads and glutes"],
     ["LEG_LOAD_PLACEMENT", LEG_LOAD_PLACEMENT_VARIANTS, "your quads and glutes"],
     ["STRENGTH_PEAK_PULL_DEFER", STRENGTH_PEAK_PULL_DEFER_VARIANTS, "peak"],
+    ["RUN_SCHEDULE_STATED", RUN_SCHEDULE_STATED_VARIANTS, "Tue (quality), Thu (easy), Sat (long)"],
   ];
   for (const [label, set, arg] of sets) {
     assert.ok(set.length >= 3, `${label}: a set, never one literal printed for weeks`);

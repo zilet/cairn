@@ -495,6 +495,40 @@ export function transitionBrainDecision(
   });
 }
 
+// Every live `review` brain_decision holding ONE plan proposal, OLDEST FIRST.
+//
+// Asked of SQLite BY PROPOSAL ID, the way listReviewHeldProposals does, and that is the
+// whole point. This used to be a page of the ledger — listBrainDecisions({status:'review',
+// limit:100}) — filtered in JS, so it only ever saw the NEWEST hundred review rows. Review
+// is a shared status: a chat structure request sits there while the coach builds, an
+// unanswered one is re-filed there, and every other hold in the queue competes for the
+// same hundred slots. Past that, an OLDER hold on this draft fell out of the page entirely
+// — so the premise-gone retirement left it open behind a dead draft, and the duplicate
+// fold re-created the second ask it exists to prevent.
+//
+// BOTH ways a hold names its draft are matched, the same pair the thaw resolves a proposal
+// id from: the `plan_proposal` source ref, and `action.proposal_id`.
+//
+// The oldest is the ask the athlete has actually been looking at, so it sorts first and
+// keeps its place in the queue.
+export function listReviewDecisionsForProposal(proposalId: number, limit = 200): BrainDecision[] {
+  const id = Math.trunc(Number(proposalId));
+  if (!(id > 0)) return [];
+  const rows = db
+    .prepare(
+      `SELECT * FROM brain_decisions
+        WHERE status = 'review'
+          AND (
+            (source_ref_type = 'plan_proposal' AND source_ref_key = ?)
+            OR json_extract(action_json, '$.proposal_id') = ?
+          )
+        ORDER BY id ASC
+        LIMIT ?`
+    )
+    .all(String(id), id, Math.max(1, Math.trunc(limit))) as any[];
+  return rows.map(hydrateDecision).filter((decision): decision is BrainDecision => !!decision);
+}
+
 // Retire every live `review` brain_decision that holds this plan proposal to
 // 'superseded'. A held draft's terminal transition (applied / discarded /
 // superseded) makes its outstanding review hold moot — the hold said "wait", and
@@ -504,14 +538,8 @@ export function transitionBrainDecision(
 // the shared repo-level implementation; the autonomy layer's supersedePriorReviewHolds
 // delegates here so the two never drift.
 export function supersedeReviewDecisionsForProposal(proposalId: number): void {
-  for (const decision of listBrainDecisions({ status: "review", limit: 100 })) {
-    if (
-      decision.source_ref_type === "plan_proposal" &&
-      decision.source_ref_key === String(proposalId) &&
-      decision.id != null
-    ) {
-      transitionBrainDecision(decision.id, "superseded");
-    }
+  for (const decision of listReviewDecisionsForProposal(proposalId)) {
+    if (decision.id != null) transitionBrainDecision(decision.id, "superseded");
   }
 }
 

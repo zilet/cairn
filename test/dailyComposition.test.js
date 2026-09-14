@@ -1557,6 +1557,198 @@ test("a fully-budgeted reach day keeps push and says the reach lives in the work
   assert.doesNotMatch(env.reach.why, /heavier look|top set if the bar/i);
 });
 
+// ── one challenge top set a session, whoever authored it ────────────────────
+// The agent's nested top_set and the server's own reach are two routes to the
+// same thing: a heavy single on a card. The day gets ONE. And an agent single is
+// not evidence the envelope's reach landed — its load comes through
+// safeAgentWeight, which falls back to the lift's PLAN target when nothing is
+// logged, and a prescription has never proved anything about what moves.
+
+test("an agent's nested top set takes the day's one challenge slot — no second heavy single", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  logWorking("Back Squat", 225);
+  logWorking("Bench Press", 155);
+  const env = reachEnvelope({
+    candidates: [
+      reachCandidate("Back Squat", 225, { muscle_group: "quads" }),
+      reachCandidate("Bench Press", 155, { muscle_group: "chest", rep_low: 6, rep_high: 8 }),
+    ],
+  });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      {
+        exercise: "Back Squat",
+        sets: 3,
+        rep_low: 5,
+        rep_high: 7,
+        target_weight: 225,
+        top_set: { sets: 1, reps: 3, target_weight: 240 },
+      },
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+    ]),
+    env
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 3, "the squat splits into two cards; the bench stays one");
+  assert.equal(
+    session.items.filter((i) => i.exercise === "Bench Press").length,
+    1,
+    "the next compound does not host a second heavy single"
+  );
+  assert.equal(session.items[0].target_weight, 240, "the agent's single leads its own block");
+  assert.equal(session.items[1].target_weight, 225);
+  assert.equal(session.items[0].reach, undefined, "an agent-authored card never carries the envelope's reach");
+  assert.equal(validation.reach_landed, true, "240 over a logged 225 is the heavier look");
+  assert.ok(!env.soft_preferences.some((e) => e.code === "reach_no_room"));
+});
+
+test("an agent single built off a plan number is not the day's reach", () => {
+  repo.upsertExercise({ name: "Incline Press", muscle_group: "chest", mode: "reps" });
+  // A plan target and nothing logged: safeAgentWeight anchors on the prescription.
+  repo.savePlanDay(1, "Push", "Upper push", [
+    { exercise: "Incline Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 200 },
+  ]);
+  const env = reachEnvelope();
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      {
+        exercise: "Incline Press",
+        sets: 3,
+        rep_low: 6,
+        rep_high: 8,
+        target_weight: 200,
+        top_set: { sets: 1, reps: 3, target_weight: 240 },
+      },
+    ]),
+    env
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 2, "the agent's own single still renders");
+  assert.equal(session.items[0].target_weight, 220, "one step off the plan number, not the asked-for 240");
+  assert.equal(session.items[0].reach, undefined);
+  assert.equal(session.items[1].reach, undefined);
+  assert.equal(validation.reach_landed, false, "no logged working weight, so nothing was proved");
+  assert.equal(env.reach.level, "push");
+  assert.ok(REACH_NO_ROOM_WHY.includes(env.reach.why));
+  assert.ok(env.soft_preferences.some((e) => e.code === "reach_no_room"));
+});
+
+test("two agent-nested top sets on one day still seat only one top-set card", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  logWorking("Back Squat", 225);
+  logWorking("Bench Press", 155);
+  const env = reachEnvelope({
+    candidates: [
+      reachCandidate("Back Squat", 225, { muscle_group: "quads" }),
+      reachCandidate("Bench Press", 155, { muscle_group: "chest", rep_low: 6, rep_high: 8 }),
+    ],
+  });
+  const { session } = normalizeComposedSession(
+    agentSession([
+      {
+        exercise: "Back Squat",
+        sets: 3,
+        rep_low: 5,
+        rep_high: 7,
+        target_weight: 225,
+        top_set: { sets: 1, reps: 3, target_weight: 240 },
+      },
+      {
+        exercise: "Bench Press",
+        sets: 3,
+        rep_low: 6,
+        rep_high: 8,
+        target_weight: 155,
+        top_set: { sets: 1, reps: 3, target_weight: 175 },
+      },
+    ]),
+    env
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 3, "the squat splits into two cards; the bench's own nested single is refused");
+  assert.equal(session.items[0].exercise, "Back Squat");
+  assert.equal(session.items[0].target_weight, 240, "the first item's nested single takes the day's one slot");
+  assert.equal(session.items[1].target_weight, 225);
+  assert.equal(
+    session.items.filter((i) => i.exercise === "Bench Press").length,
+    1,
+    "the second item's own nested top_set is dropped, not seated as a second card"
+  );
+  assert.equal(session.items[2].target_weight, 155, "the bench renders as its plain working block only");
+});
+
+// ── the athlete's own plan outranks the stated-run-days filter ───────────────
+// Stated run days anchor the SUGGESTION engines. A run written into the week's
+// own template is structure the athlete authored, and composition is not where
+// their week quietly loses a session.
+
+const WEDNESDAY = "2031-07-02"; // DATE is a Tuesday; the day after is not a stated run day
+const TUE_THU_SAT = {
+  days: [
+    { dow: 2, kind: "quality" },
+    { dow: 4, kind: "easy" },
+    { dow: 6, kind: "long" },
+  ],
+  source: "athlete",
+};
+
+function statedRunDaysProfile() {
+  repo.setProfile({
+    age: 40,
+    sex: "male",
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    endurance_schedule: TUE_THU_SAT,
+  });
+}
+
+test("a run the plan itself prescribes survives an unscheduled weekday", () => {
+  statedRunDaysProfile();
+  repo.savePlanDay(3, "Easy run", "Easy aerobic", [
+    { kind: "cardio", exercise: "Easy run", target_distance_km: 6, target_zone: "easy" },
+  ]);
+  const env = () =>
+    envelope({
+      date: WEDNESDAY,
+      template: { day_number: 3, plan_day_id: repo.getPlanDay(3).id, focus: "Easy aerobic", intent: "template" },
+    });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([{ kind: "cardio", exercise: "Easy run", target_distance_km: 6, target_zone: "easy" }]),
+    env()
+  );
+  assert.ok(session);
+  assert.equal(session.items.length, 1, "the athlete's own Wednesday run is not composition's to delete");
+  assert.equal(session.items[0].kind, "cardio");
+  assert.ok(!validation.rejected.some((r) => r.reason === "not_scheduled_run_day"));
+  // The deterministic half of the same morning keeps it too — same normalizer.
+  const deterministic = deterministicComposedSession(env());
+  assert.equal(deterministic.items.length, 1);
+  assert.equal(deterministic.items[0].kind, "cardio");
+});
+
+test("a run nobody planned is still dropped on an unscheduled weekday", () => {
+  statedRunDaysProfile();
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.savePlanDay(3, "Push", "Upper push", [
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+  ]);
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+      { kind: "cardio", exercise: "Easy run", target_distance_km: 6, target_zone: "easy" },
+    ]),
+    envelope({
+      date: WEDNESDAY,
+      template: { day_number: 3, plan_day_id: repo.getPlanDay(3).id, focus: "Upper push", intent: "template" },
+    })
+  );
+  assert.ok(session);
+  assert.ok(!session.items.some((i) => i.kind === "cardio"), "an engine-suggested run stays off an unnamed day");
+  assert.ok(validation.rejected.some((r) => r.reason === "not_scheduled_run_day"));
+});
+
 test("a non-reach day is unchanged by the reach injection path", () => {
   repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
   const { session } = normalizeComposedSession(

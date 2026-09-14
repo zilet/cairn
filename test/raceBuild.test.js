@@ -16,6 +16,7 @@ import {
   raceFit,
   riegel,
 } from "../dist/repo/race-build.js";
+import { raceRamp } from "../dist/repo/run-ramp.js";
 
 // Sunday 2026-09-13 is the as-of; Cambridge Half is Sunday 2026-11-01 (7 weeks out).
 const TODAY = "2026-09-13";
@@ -181,6 +182,31 @@ test("projectRaceBuildWeeks walks every Monday to race week: build → peak → 
   assert.equal(weeks.at(-1).strength_hint, "Legs off. A mobility session at most.");
 });
 
+test("the live week is a rung, not a patch — the walk steps off it, never off a step above it", () => {
+  const goal = { is_race: true, date: RACE, distance_km: HALF, target: "sub-1:45" };
+  // With no live prescription the current week is projected off the anchor, as before.
+  const projected = projectRaceBuildWeeks(goal, TODAY, 28, 13);
+  assert.equal(projected[0].km, raceRamp(goal, projected[0].week_start, 28, 13).required_km);
+
+  // Handed the engine's own week, the ladder REPORTS it — and walks on from it.
+  // raceRamp reads its anchor as the week BEFORE, so a walk that carried its own
+  // projected step forward put week two a full ramp above where the ladder says it
+  // starts, and every week after it inherited the gap.
+  const walked = projectRaceBuildWeeks(goal, TODAY, 28, 13, { km: 30, long_km: 14 });
+  assert.equal(walked[0].km, 30);
+  assert.equal(walked[0].long_km, 14);
+  assert.equal(walked[0].current, true);
+  const step = raceRamp(goal, walked[1].week_start, 30, 14);
+  assert.equal(walked[1].km, step.required_km, "week two is one step off week one, never two");
+  assert.equal(walked[1].long_km, step.required_long_km);
+  assert.ok(walked[1].km < projected[1].km, `${walked[1].km} should sit below the double-stepped ${projected[1].km}`);
+  // And the rest of the ladder still walks itself, rung by rung.
+  for (let i = 2; i < walked.length; i++) {
+    const rung = raceRamp(goal, walked[i].week_start, walked[i - 1].km, walked[i - 1].long_km);
+    assert.equal(walked[i].km, rung.required_km, `week ${i} is the engine's own next step`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // the read
 // ---------------------------------------------------------------------------
@@ -265,6 +291,20 @@ test("raceBuild lays out the half: estimate from the watch, fit against the targ
   for (const s of [out.why, out.strength.principle, out.ride.placement]) {
     assert.doesNotMatch(s, /\b(score|grade|must|failing)\b/i);
   }
+});
+
+test("the ladder walks on from the live engine's week, not from a step above it", () => {
+  seedRaceProfile("sub-1:45");
+  seedHybridRunner();
+  const out = raceBuild(TODAY);
+  assert.equal(out.available, true, out.reason);
+  assert.ok(out.this_week, "the live engine prescribed a week");
+  assert.equal(out.weeks[0].km, out.this_week.km, "this week is the engine's own prescription");
+  assert.equal(out.weeks[0].long_km, out.this_week.long_km);
+  const goal = { is_race: true, date: RACE, distance_km: HALF, target: "sub-1:45" };
+  const next = raceRamp(goal, out.weeks[1].week_start, out.weeks[0].km, out.weeks[0].long_km);
+  assert.equal(out.weeks[1].km, next.required_km, "week two is one ramp step off the week the athlete is running");
+  assert.equal(out.weeks[1].long_km, next.required_long_km);
 });
 
 test("raceBuild falls back to a conservative Riegel off the best recent run when the watch has no predictor", () => {

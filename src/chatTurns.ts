@@ -66,12 +66,14 @@ import { normalizeFoodCaptureParsed } from "./foodCapture.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
 import {
+  enqueueStructureBuild,
   liveStructureBuild,
+  normalizeStructureRequestText,
   structureRequestExplanation,
-  structureRequestInstruction,
   structureRequestLandingDate,
   structureRequestPosture,
   structureRequestTask,
+  structureRequestWasBuilt,
 } from "./domain/brain/structure-request.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
@@ -774,23 +776,24 @@ export function flagTrainingStructureAuthorized(message: string | null | undefin
 // thing that used to stack was a NEAR-duplicate: the same request retyped with
 // different capitalisation or spacing.
 function normalizedStructureRequest(text: string): string {
-  return String(text ?? "")
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return normalizeStructureRequestText(text);
 }
 
 /**
  * The training-structure flag already standing for this same ask, if there is one.
  * Scoped exactly to what the athlete would recognise as "the thing I already asked
  * for": a chat-sourced `training_structure` request whose stored rationale (their own
- * words) matches and whose outcome is still in play — sitting in the review queue, or
- * already BUILT into a change that is announced / pending / held and not yet landed
- * (the flag is then `superseded` by that decision, and re-asking must point at it, not
- * draft the same week a second time). A materially different request matches nothing
- * and is flagged fresh.
+ * words) matches and whose outcome is still in play — already BUILT into a change that
+ * is announced / pending / held and not yet landed (the flag is then `superseded` by
+ * that decision, and re-asking must point at it, not draft the same week a second
+ * time), or still standing as a request row. A materially different request matches
+ * nothing and is flagged fresh.
+ *
+ * `observed` counts as standing. It is what the thaw sweep re-files an unanswered ask
+ * as, and it is the SAME ask — reading it as terminal was a dead end, because the
+ * decision fingerprint is unique and a re-ask of those words resolves back onto this
+ * very row (recordDecision only walks past canceled/rejected/reverted/superseded). The
+ * caller decides what to do with it; every caller must be able to put a build behind it.
  */
 export function standingTrainingStructureFlag(request: string): any | null {
   const wanted = normalizedStructureRequest(request);
@@ -800,10 +803,7 @@ export function standingTrainingStructureFlag(request: string): any | null {
     (row?.action as any)?.kind === "training_structure_request" &&
     normalizedStructureRequest(String(row?.rationale ?? "")) === wanted;
   try {
-    const inReview = repo
-      .listBrainDecisions({ status: "review", kind: "training_structure", limit: 100 })
-      .find(isSameAsk);
-    if (inReview) return inReview;
+    // A live change built from those words outranks the request row that asked for it.
     const built = repo
       .listBrainDecisions({ status: "superseded", kind: "training_structure", limit: 100 })
       .find((row: any) => {
@@ -812,7 +812,12 @@ export function standingTrainingStructureFlag(request: string): any | null {
         const change = by > 0 ? (repo.getBrainDecision(by) as any) : null;
         return !!change && ["announced", "pending", "review"].includes(String(change.status ?? ""));
       });
-    return built ?? null;
+    if (built) return built;
+    for (const status of ["review", "observed"] as const) {
+      const standing = repo.listBrainDecisions({ status, kind: "training_structure", limit: 100 }).find(isSameAsk);
+      if (standing) return standing;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -2139,6 +2144,9 @@ export async function runChatCompletion(
             signal,
             timeoutMs: chatTurnTimeoutMs(firstProfile),
             tools: chatTools,
+            // The athlete is watching this stream: it takes the spawn cap's reserved
+            // interactive permit rather than queueing behind batch lanes.
+            priority: "interactive",
             ...(firstProfile.execution ?? {}),
             onProgress: stream.progress,
             onDelta: stream.push,
@@ -2252,6 +2260,7 @@ export async function runChatCompletion(
             signal,
             timeoutMs: chatTurnTimeoutMs(profile),
             tools: chatTools,
+            priority: "interactive",
             ...(profile.execution ?? {}),
           });
           let raw = String(res.raw ?? "");
@@ -2262,6 +2271,7 @@ export async function runChatCompletion(
               signal,
               timeoutMs: chatTurnTimeoutMs(profile),
               tools: chatTools,
+              priority: "interactive",
               ...(profile.execution ?? {}),
             });
             raw = String(res.raw ?? "");
@@ -2903,40 +2913,28 @@ export function applyChatActions(
           // durable background job; the op drafts the restructure and the ONE autonomy
           // policy decides how it lands. Enqueued once per standing request: a flag whose
           // build is still queued/running, or already built into a live change, reuses
-          // it. A flag whose build FAILED is retried on the re-ask — that is what asking
-          // again is for.
+          // it. Anything else — a build that FAILED, one a restart killed, an `observed`
+          // row the thaw re-filed — is handed to the coach again, because a re-ask that
+          // enqueues nothing is a request lost in silence. Asking again is the door.
           const builtInto =
             stored?.status === "superseded" && Number(stored.superseded_by) > 0
               ? (repo.getBrainDecision(Number(stored.superseded_by)) as any)
               : null;
           let build = builtInto ? null : liveStructureBuild(stored);
-          if (stored && stored.status === "review" && !build) {
+          if (stored && !builtInto && !build && !structureRequestWasBuilt(stored)) {
             try {
-              const job = repo.createAgentJob({
-                kind: "evolve_program",
+              const handed = enqueueStructureBuild({
+                decision: stored,
+                trigger: "athlete",
                 agent: ctx.agent === "auto" ? null : (ctx.agent ?? null),
-                input: {
-                  instruction: structureRequestInstruction(request),
-                  task: structureRequestTask(request, requestSummary === request ? null : requestSummary),
-                  structure_flag_decision_id: stored.id,
-                },
-              }) as any;
-              const context = (stored.context ?? {}) as Record<string, any>;
-              stored =
-                repo.patchBrainDecision(Number(stored.id), {
-                  action: { ...(stored.action ?? {}), user_explanation: explanation },
-                  context: {
-                    ...context,
-                    structure_build_job_id: Number(job.id),
-                    structure_build_enqueued_at: new Date().toISOString(),
-                    structure_build_outcome: null,
-                    structure_build_error: null,
-                    structure_build_posture: posture,
-                    structure_build_lands_on: posture === "lands" ? landsOn : null,
-                  },
-                }) ?? stored;
-              (ctx.enqueueJob ?? enqueueAgentJob)(Number(job.id));
-              build = { job_id: Number(job.id), status: "queued" };
+                task: structureRequestTask(request, requestSummary === request ? null : requestSummary),
+                explanation,
+                enqueue: ctx.enqueueJob ?? enqueueAgentJob,
+              });
+              if (handed) {
+                stored = handed.decision ?? stored;
+                build = { job_id: handed.job_id, status: "queued" };
+              }
             } catch (error) {
               recordAsyncFailure("chat", "structure_build_enqueue", error);
             }

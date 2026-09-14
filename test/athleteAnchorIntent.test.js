@@ -18,6 +18,8 @@ import {
   TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS,
   TRAINING_STRUCTURE_UNVERIFIED_VARIANTS,
 } from "../dist/chatTurns.js";
+import { STRUCTURE_HANDOFF_ASKS_VARIANTS, STRUCTURE_HANDOFF_LANDS_VARIANTS } from "../dist/chat-reconcile.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import { normalizeChatAction, normalizeChatActions, CHAT_ACTION_TYPES } from "../dist/chatActions.js";
 import { settleStructureBuild } from "../dist/domain/brain/structure-request.js";
 import { trainingLogRouter } from "../dist/routes/training-log.js";
@@ -263,7 +265,11 @@ test("flag_training_structure records the request AND hands it to the coach as a
   assert.equal(entry.result.verified, true);
   assert.equal(entry.result.posture, "lands", "lead mode: the built change lands, it is not an ask");
   assert.match(String(entry.result.lands_on), /^\d{4}-\d{2}-\d{2}$/);
-  assert.equal(entry.result.lands_on, localDateISO(), "an ASKED-for restructure lands at the athlete's own boundary: today");
+  assert.equal(
+    entry.result.lands_on,
+    localDateISO(),
+    "an ASKED-for restructure lands at the athlete's own boundary: today"
+  );
 
   const decision = repo.getBrainDecision(entry.result.decision_id);
   assert.equal(decision.kind, "training_structure");
@@ -397,7 +403,11 @@ test("when the build fails, the request row stays and says so — and a re-ask r
   assert.equal(retry.result.decision_id, flagId, "the same request row");
   assert.ok(retry.result.build.job_id > jobId, "with a fresh build job");
   assert.equal(enqueued.length, 2);
-  assert.equal(repo.getBrainDecision(flagId).context.structure_build_outcome, null, "the failure is cleared for the retry");
+  assert.equal(
+    repo.getBrainDecision(flagId).context.structure_build_outcome,
+    null,
+    "the failure is cleared for the retry"
+  );
   assert.match(repo.getBrainDecision(flagId).action.user_explanation, /rebuilding the week/);
 });
 
@@ -451,12 +461,12 @@ test("a NEAR-duplicate re-ask reuses the standing flag; a materially different a
   assert.equal(
     nearDuplicate.result.decision_id,
     first.result.decision_id,
-    "a retyped version of the same ask points back at the one standing flag",
+    "a retyped version of the same ask points back at the one standing flag"
   );
   assert.equal(
     repo.listBrainDecisions({ status: "review", kind: "training_structure", limit: 100 }).length,
     1,
-    "nothing stacked up",
+    "nothing stacked up"
   );
   // The athlete's ORIGINAL words are what stands — the near-duplicate never rewrites them.
   assert.equal(repo.getBrainDecision(first.result.decision_id).rationale, REQUEST);
@@ -480,7 +490,7 @@ test("the reply may only claim the hand-off when a decision actually landed", ()
   // meaning, which is what the rotation is allowed to vary the wording of.
   assert.ok(
     TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS.includes(corrected),
-    `the correction must be one of the variant set, got: ${corrected}`,
+    `the correction must be one of the variant set, got: ${corrected}`
   );
   for (const variant of TRAINING_STRUCTURE_NOT_FLAGGED_VARIANTS) {
     assert.match(variant, /unchanged|nothing (?:is|was)|no (?:structure )?request/i, variant);
@@ -497,7 +507,7 @@ test("the reply may only claim the hand-off when a decision actually landed", ()
   // refuse the claim, whichever one today picks.
   assert.ok(
     TRAINING_STRUCTURE_UNVERIFIED_VARIANTS.some((v) => v("the decision did not store") === unverified),
-    `the withdrawal must be one of the variant set, got: ${unverified}`,
+    `the withdrawal must be one of the variant set, got: ${unverified}`
   );
   for (const variant of TRAINING_STRUCTURE_UNVERIFIED_VARIANTS) {
     const text = variant("the decision did not store");
@@ -506,18 +516,36 @@ test("the reply may only claim the hand-off when a decision actually landed", ()
   }
 
   // Verified under lead: the prose survives and the receipt says the coach is BUILDING it
-  // and names the landing day — never "done", never "confirm".
+  // and names the landing day — never "done", never "confirm". The receipt itself
+  // rotates by date (pickDayVariant), so assert against the WHOLE variant set rather
+  // than one fixed phrasing — a regex covering only some phrasings passes or fails by
+  // what day it is.
   const verified = reconcileTrainingStructureReply(promise, [
     {
       type: "flag_training_structure",
-      result: { ok: true, verified: true, decision_id: 1, posture: "lands", lands_on: localDateISO(), build: { job_id: 7 } },
+      result: {
+        ok: true,
+        verified: true,
+        decision_id: 1,
+        posture: "lands",
+        lands_on: localDateISO(),
+        build: { job_id: 7 },
+      },
     },
   ]);
   assert.match(verified, /I'll flag it/);
-  assert.match(verified, /rebuilding your week/);
-  assert.match(verified, /lands today with a one-tap Undo/);
   assert.doesNotMatch(verified, /confirm/);
-  assert.match(verified, /nothing in your plan has changed yet/i);
+  assert.ok(
+    STRUCTURE_HANDOFF_LANDS_VARIANTS.some((v) => verified.endsWith(v(" today", false))),
+    `the receipt must be one of the not-yet-built lands variants, got: ${verified}`
+  );
+  for (const variant of STRUCTURE_HANDOFF_LANDS_VARIANTS) {
+    const text = variant(" today", false);
+    assert.match(text, /rebuild|reshap/i, text);
+    assert.match(text, /lands today with a one-tap Undo/, text);
+    assert.match(text, /nothing in your plan has changed yet/i, text);
+    assert.equal(violatesReadingGrammar(text), null, `variant violates the reading grammar: ${text}`);
+  }
 
   // Re-asked once the change is already built: the receipt points at it, with its own date.
   const built = reconcileTrainingStructureReply(promise, [
@@ -534,15 +562,35 @@ test("the reply may only claim the hand-off when a decision actually landed", ()
       },
     },
   ]);
-  assert.match(built, /Already in hand/);
-  assert.match(built, /lands on 2031-01-06/);
+  assert.ok(
+    STRUCTURE_HANDOFF_LANDS_VARIANTS.some((v) => built.endsWith(v(" on 2031-01-06", true))),
+    `the receipt must be one of the already-built lands variants, got: ${built}`
+  );
+  for (const variant of STRUCTURE_HANDOFF_LANDS_VARIANTS) {
+    const text = variant(" on 2031-01-06", true);
+    assert.match(text, /lands on 2031-01-06 with a one-tap Undo/, text);
+    assert.match(text, /nothing in your plan has changed yet/i, text);
+    assert.equal(violatesReadingGrammar(text), null, `variant violates the reading grammar: ${text}`);
+  }
 
   // Under review_everything the receipt says it will WAIT to be confirmed.
   const asks = reconcileTrainingStructureReply(promise, [
-    { type: "flag_training_structure", result: { ok: true, verified: true, decision_id: 1, posture: "asks", build: { job_id: 7 } } },
+    {
+      type: "flag_training_structure",
+      result: { ok: true, verified: true, decision_id: 1, posture: "asks", build: { job_id: 7 } },
+    },
   ]);
-  assert.match(asks, /wait for you to confirm/);
-  assert.match(asks, /nothing in your plan has changed yet/i);
+  assert.ok(
+    STRUCTURE_HANDOFF_ASKS_VARIANTS.some((v) => asks.endsWith(v(false))),
+    `the receipt must be one of the not-yet-built asks variants, got: ${asks}`
+  );
+  for (const variant of STRUCTURE_HANDOFF_ASKS_VARIANTS) {
+    const text = variant(false);
+    assert.match(text, /confirm/i, text);
+    assert.doesNotMatch(text, /\blands?\b/i, `an "asks" receipt must never claim it lands: ${text}`);
+    assert.match(text, /nothing in your plan has changed yet/i, text);
+    assert.equal(violatesReadingGrammar(text), null, `variant violates the reading grammar: ${text}`);
+  }
 
   // An unrelated reply is never rewritten.
   const untouched = "Squats looked strong today.";

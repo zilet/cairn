@@ -188,6 +188,58 @@ export const DECISION_REVERT_FAILED_VARIANTS: ReadonlyArray<(reason: string) => 
   (reason) => `I couldn't put that one back, so nothing was reverted: ${reason}.`,
 ] as const;
 
+// The structure hand-off receipts (structureHandOffReceipt below) are printed on
+// EVERY athlete request that hands a restructure to the coach — a stable input
+// (same posture, same built/not-built state) fires the same branch every time,
+// so these three literals used to print the identical sentence for weeks. Rotated
+// the same way as the refusal sets above: the invariant fact per branch — "lands…
+// with a one-tap Undo" / "waiting for you to confirm" / "nothing in your plan has
+// changed yet" — survives rotation, only the wording varies.
+export const STRUCTURE_HANDOFF_LANDS_VARIANTS: ReadonlyArray<(when: string, built: boolean) => string> = [
+  (when, built) =>
+    built
+      ? `Already in hand — your coach built that change and it lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`
+      : `Handed to your coach — it's rebuilding your week around this now, and the change lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`,
+  (when, built) =>
+    built
+      ? `That change is already built — it lands${when} with a one-tap Undo, and nothing in your plan has changed yet.`
+      : `Your coach has this and is rebuilding the week now — the change lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`,
+  (when, built) =>
+    built
+      ? `Done on my end: the change is built and lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`
+      : `Passed to your coach, who's reshaping the week around it now — it lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`,
+  (when, built) =>
+    built
+      ? `Already sorted — your coach built that change and it lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`
+      : `Your coach is on it and rebuilding the week now — it lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`,
+];
+
+export const STRUCTURE_HANDOFF_ASKS_VARIANTS: ReadonlyArray<(built: boolean) => string> = [
+  (built) =>
+    built
+      ? "Already in hand — your coach drafted that change and it's waiting for you to confirm. Nothing in your plan has changed yet."
+      : "Handed to your coach — it's drafting the change now, and because you review everything it will wait for you to confirm. Nothing in your plan has changed yet.",
+  (built) =>
+    built
+      ? "Your coach already drafted that change — it's waiting on your confirm. Nothing in your plan has changed yet."
+      : "Passed to your coach, who's drafting it now; since you review everything, it'll wait for your confirm. Nothing in your plan has changed yet.",
+  (built) =>
+    built
+      ? "That draft's ready and waiting for your confirm. Nothing in your plan has changed yet."
+      : "Your coach is drafting that now — it'll sit waiting for your confirm, since you review everything. Nothing in your plan has changed yet.",
+  (built) =>
+    built
+      ? "Already drafted on your coach's end, waiting on you to confirm. Nothing in your plan has changed yet."
+      : "Handed off and being drafted now; it'll wait for your confirm since you review everything. Nothing in your plan has changed yet.",
+];
+
+export const STRUCTURE_HANDOFF_FLAGGED_VARIANTS = [
+  "Flagged to your coach lane — it's waiting for you to confirm, and nothing in your plan has changed yet.",
+  "Sent to your coach lane and waiting on your confirm — nothing in your plan has changed yet.",
+  "That's flagged for your coach lane now, waiting for your go-ahead. Nothing in your plan has changed yet.",
+  "Your coach lane has it and is waiting for your confirm. Nothing in your plan has changed yet.",
+] as const;
+
 export const STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS: ReadonlyArray<(reason: string) => string> = [
   (reason) => `I couldn't verify that strength objective, so I won't claim it was saved: ${reason}.`,
   (reason) => `That strength objective didn't read back cleanly, so I won't claim it was saved: ${reason}.`,
@@ -508,21 +560,18 @@ export function reconcileGoalIdentityReply(
 // building the change and it lands at the named boundary with an Undo; under
 // review_everything it will wait to be confirmed. Either way nothing has changed yet.
 function structureHandOffReceipt(result: Record<string, unknown>): string {
+  const today = localDateISO();
   const posture = String(result.posture ?? "");
   const built = result.built_decision as Record<string, unknown> | null | undefined;
   if (posture === "lands") {
     const landsOn = String(built?.effective_date ?? result.lands_on ?? "").trim();
-    const when = landsOn ? ` ${describeLandingDay(landsOn)}` : " at the next natural boundary";
-    return built
-      ? `Already in hand — your coach built that change and it lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`
-      : `Handed to your coach — it's rebuilding your week around this now, and the change lands${when} with a one-tap Undo. Nothing in your plan has changed yet.`;
+    const when = landsOn ? ` ${describeLandingDay(landsOn)}` : " when the week next turns over";
+    return pickDayVariant(STRUCTURE_HANDOFF_LANDS_VARIANTS, today, "chat-structure-handoff-lands")(when, !!built);
   }
   if (posture === "asks") {
-    return built
-      ? "Already in hand — your coach drafted that change and it's waiting for you to confirm. Nothing in your plan has changed yet."
-      : "Handed to your coach — it's drafting the change now, and because you review everything it will wait for you to confirm. Nothing in your plan has changed yet.";
+    return pickDayVariant(STRUCTURE_HANDOFF_ASKS_VARIANTS, today, "chat-structure-handoff-asks")(!!built);
   }
-  return "Flagged to your coach lane — it's waiting for you to confirm, and nothing in your plan has changed yet.";
+  return pickDayVariant(STRUCTURE_HANDOFF_FLAGGED_VARIANTS, today, "chat-structure-handoff-flagged");
 }
 
 export function reconcileTrainingStructureReply(

@@ -16,6 +16,7 @@
 // or waiting, never a second "request" row beside it.
 import { createAgentJob, getAgentJob } from "../../repo/chat.js";
 import { getBrainDecision, listBrainDecisions, patchBrainDecision } from "../../repo/brain-decisions.js";
+import { getProposal } from "../../repo/proposals.js";
 import { getSettings } from "../../repo/settings.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { addDaysISO, localDateISO } from "../../repo/shared.js";
@@ -49,6 +50,46 @@ export function requestFromInstruction(instruction: unknown): string {
     .slice(STRUCTURE_REQUEST_INSTRUCTION_PREFIX.length)
     .replace(/^\s*[—-]\s*/, "")
     .trim();
+}
+
+// The athlete's sentence compared the way a PERSON compares two asks: case- and
+// whitespace-insensitive, smart quotes folded. The chat hand-off owned this privately;
+// the retirement rule below has to answer the same question ("is this the ask that just
+// landed?"), and two normalizers drifting apart would retire the wrong row.
+export function normalizeStructureRequestText(text: unknown): string {
+  return String(text ?? "")
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+// A flag's own words, whichever field the writer of the day used. `action.request` is
+// what the chat hand-off stores; `rationale` is the athlete's verbatim sentence.
+export function structureRequestText(
+  decision: { action?: unknown; context?: unknown; rationale?: unknown } | null
+): string {
+  const action = (decision?.action ?? {}) as Record<string, any>;
+  const context = (decision?.context ?? {}) as Record<string, any>;
+  const candidates = [action.request, context.athlete_request, decision?.rationale];
+  for (const candidate of candidates) {
+    const text = String(candidate ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+// The proposal a landed decision applied, however that decision recorded it.
+function decisionProposalId(decision: {
+  action?: unknown;
+  source_ref_type?: unknown;
+  source_ref_key?: unknown;
+}): number {
+  const fromAction = Number((decision.action as any)?.proposal_id);
+  if (fromAction > 0) return fromAction;
+  const fromRef = decision.source_ref_type === "plan_proposal" ? Number(decision.source_ref_key) : 0;
+  return fromRef > 0 ? fromRef : 0;
 }
 
 // WHERE an athlete-requested restructure lands. The week boundary (next Monday) exists
@@ -157,34 +198,264 @@ export function enqueueStructureRebuild(input: {
   return { job_id: jobId };
 }
 
-// A landed restructure the athlete asked for ANSWERS every standing request about the
-// shape of the week — this one, an earlier wording of it, a stub-era flag the thaw
-// re-filed as an advisory. Each is superseded by the change that landed, so the ledger
-// reads "you asked → this is what landed" and nothing lingers as an open question over
-// a week that has already been rebuilt. Returns the ids retired.
+// ---- the ONE build hand-off ------------------------------------------------------
+//
+// Every way a standing request gets built goes through here: the chat hand-off, the
+// boot recovery pass, and the "still unanswered" sweep a landing runs. One path means a
+// flag can never end up with a job nobody settles, or an outcome nobody enqueued for.
+
+// How many times the SERVER may re-try a build on its own before it stops and hands the
+// question back to the athlete. The athlete's own re-ask is never capped — asking again
+// is the door, and a door with a counter on it is not a door.
+export const MAX_AUTOMATIC_STRUCTURE_REBUILDS = 2;
+
+export type StructureBuildTrigger = "athlete" | "auto";
+
+// The flag rows a request can still be standing in. `review` is the in-flight/held
+// shape; `observed` is what the thaw sweep re-files an unanswered one as, and it is
+// STILL an open ask — reading it as terminal is how a re-ask became a dead end.
+const STANDING_FLAG_STATUSES = ["review", "observed"] as const;
+
+function isStructureRequestRow(row: { action?: unknown } | null | undefined): boolean {
+  return (row?.action as any)?.kind === "training_structure_request";
+}
+
+export function standingStructureRequests(): any[] {
+  const rows: any[] = [];
+  for (const status of STANDING_FLAG_STATUSES) {
+    for (const row of listBrainDecisions({ status, kind: "training_structure", limit: 100 })) {
+      if (isStructureRequestRow(row)) rows.push(row);
+    }
+  }
+  return rows;
+}
+
+// Has this request already been BUILT into a change? `built` is the only outcome that
+// means a week exists somewhere for it; every other state (unsettled, failed) means the
+// ask is still owed a draft.
+export function structureRequestWasBuilt(decision: { context?: unknown } | null | undefined): boolean {
+  return String(((decision?.context ?? {}) as Record<string, any>).structure_build_outcome ?? "") === "built";
+}
+
+/**
+ * Hand a standing request's words to the program-evolution op as a durable background
+ * job, and stamp the flag with what is now in flight.
+ *
+ * `trigger: "athlete"` is a person asking (again) — always honoured, and it clears the
+ * server's own retry count. `trigger: "auto"` is the server noticing an unanswered ask;
+ * it is capped, and at the cap the flag settles as failed WITH a review flag so the
+ * athlete reads one calm sentence instead of the coach retrying forever in silence.
+ *
+ * Returns null when nothing was enqueued (no words, capped, or the job row failed) —
+ * the capped case has already settled the flag.
+ */
+export function enqueueStructureBuild(input: {
+  decision: { id?: unknown; status?: unknown; action?: unknown; context?: unknown; rationale?: unknown };
+  trigger: StructureBuildTrigger;
+  agent?: string | null;
+  task?: string | null;
+  explanation?: string | null;
+  reason?: string | null;
+  enqueue?: ((jobId: number) => void) | null;
+}): { job_id: number; decision: any } | null {
+  const flagId = Number(input.decision?.id);
+  if (!(flagId > 0)) return null;
+  const flag = (getBrainDecision(flagId) ?? input.decision) as any;
+  const request = structureRequestText(flag);
+  if (!request) return null;
+  const context = (flag.context ?? {}) as Record<string, any>;
+  const autoAttempts = Number(context.structure_auto_rebuild_attempts) || 0;
+  if (input.trigger === "auto" && autoAttempts >= MAX_AUTOMATIC_STRUCTURE_REBUILDS) {
+    settleStructureBuild(flagId, { ok: false, error: "the coach could not build it after several tries" });
+    return null;
+  }
+  const posture = structureRequestPosture();
+  const landsOn = structureRequestLandingDate();
+  const explanation = input.explanation ?? structureRequestExplanation(request, posture, landsOn);
+  const agent = String(input.agent ?? "");
+  const job = createAgentJob({
+    kind: "evolve_program",
+    agent: agent && agent !== "auto" && !agent.startsWith("auto-") ? agent : null,
+    input: {
+      instruction: structureRequestInstruction(request),
+      task: input.task && input.task.trim() ? input.task : structureRequestTask(request, null),
+      // The link the runner settles back through — without it the flag is orphaned.
+      structure_flag_decision_id: flagId,
+    },
+  }) as any;
+  const jobId = Number(job?.id);
+  if (!(jobId > 0)) return null;
+  const updated =
+    patchBrainDecision(flagId, {
+      // An ask with a build in flight stands at `review` whatever the thaw last filed it
+      // as; a terminal row is history and is never reopened from here.
+      status: String(flag.status) === "observed" ? "review" : flag.status,
+      action: { ...((flag.action ?? {}) as Record<string, any>), user_explanation: explanation },
+      context: {
+        ...context,
+        // Under lead this is the coach's work item, not the athlete's question; the
+        // previous attempt's failure reason goes with the previous attempt.
+        review_required: posture === "asks",
+        review_reason_code: null,
+        structure_build_job_id: jobId,
+        structure_build_enqueued_at: new Date().toISOString(),
+        structure_build_outcome: null,
+        structure_build_error: null,
+        structure_build_posture: posture,
+        structure_build_lands_on: posture === "lands" ? landsOn : null,
+        structure_build_trigger: input.trigger,
+        structure_build_attempts: (Number(context.structure_build_attempts) || 0) + 1,
+        structure_auto_rebuild_attempts: input.trigger === "auto" ? autoAttempts + 1 : 0,
+        ...(input.reason ? { structure_build_reason: String(input.reason).slice(0, 300) } : {}),
+      },
+    }) ?? flag;
+  try {
+    (input.enqueue ?? structureBuildEnqueuer)?.(jobId);
+  } catch {
+    /* the queued row is durable; the runner's recovery pass will pick it up */
+  }
+  return { job_id: jobId, decision: updated };
+}
+
+// Was this ask ever actually handed to the coach? The server may only RESUME work it
+// once started. A flag with no hand-off on it is either a relic of the era before this
+// module existed or a row written by hand, and rebuilding the athlete's week off a
+// sentence nobody ever promised to build is a surprise, not a repair. Their own re-ask
+// is the door for those — `trigger: "athlete"`, which this never gates.
+function wasHandedToTheCoach(decision: { context?: unknown } | null | undefined): boolean {
+  const context = (decision?.context ?? {}) as Record<string, any>;
+  return Number(context.structure_build_job_id) > 0 || !!context.structure_build_enqueued_at;
+}
+
+// A standing request with no live build and no built change is an ask nobody is working
+// on. Put it back in flight rather than leaving it to be re-asked by an athlete who
+// already asked. No-op when a build is running, a week already exists for it, or the
+// coach was never handed it in the first place.
+export function ensureStructureBuildInFlight(
+  decision: { id?: unknown; status?: unknown; action?: unknown; context?: unknown; rationale?: unknown },
+  reason: string
+): { job_id: number; decision: any } | null {
+  if (!wasHandedToTheCoach(decision)) return null;
+  if (structureRequestWasBuilt(decision) || liveStructureBuild(decision)) return null;
+  return enqueueStructureBuild({ decision, trigger: "auto", reason });
+}
+
+/**
+ * Boot recovery for the hand-off itself (called from the agent-job recovery pass, after
+ * interrupted jobs have been failed and queued ones re-enqueued).
+ *
+ * A restart between "job created" and "job settled" used to leave the flag holding a
+ * null outcome and a dead job id forever: `liveStructureBuild` read the terminal job as
+ * "no live build", nothing ever wrote an outcome, and every later re-ask of those words
+ * found that row and enqueued nothing. This reconciles flags against real job state —
+ * finish what finished, restart what died, settle what cannot be restarted.
+ */
+export function recoverStructureBuilds(): { resumed: number[]; settled: number[] } {
+  const resumed: number[] = [];
+  const settled: number[] = [];
+  for (const row of standingStructureRequests()) {
+    const id = Number(row.id);
+    if (!(id > 0)) continue;
+    const context = (row.context ?? {}) as Record<string, any>;
+    if (context.structure_build_outcome) continue;
+    const jobId = Number(context.structure_build_job_id);
+    // No hand-off, nothing to recover: a restart cannot have interrupted a build that
+    // was never started, and this pass does not start one (see wasHandedToTheCoach).
+    if (!(jobId > 0)) continue;
+    const job = getAgentJob(jobId) as any;
+    if (!job) {
+      // The job row is gone — retention prunes terminal jobs 30 days after they finish,
+      // so this ask has been unbuilt for a month. Hand the question back; a week rebuilt
+      // now from a month-old sentence would be a surprise, not an answer.
+      settleStructureBuild(id, { ok: false, error: "the build was lost" });
+      settled.push(id);
+      continue;
+    }
+    const status = String(job.status ?? "");
+    // The runner still owns it (recoverAgentJobs re-enqueues queued rows).
+    if (status === "queued" || status === "running") continue;
+    if (status === "done") {
+      // It finished; only the settle was lost. The stored result is the same one the
+      // worker would have handed over.
+      settleStructureBuild(id, job.result);
+      settled.push(id);
+      continue;
+    }
+    // A cancel is the athlete's own Stop — never restarted behind them.
+    if (status === "canceled") {
+      settleStructureBuild(id, { ok: false, error: "the build was stopped" });
+      settled.push(id);
+      continue;
+    }
+    if (ensureStructureBuildInFlight(row, "the build was interrupted by a restart")) {
+      resumed.push(id);
+      continue;
+    }
+    // Nothing could be restarted (capped, or the job row would not write): the flag may
+    // not be left with a null outcome and no door.
+    const after = (getBrainDecision(id)?.context ?? {}) as Record<string, any>;
+    if (!after.structure_build_outcome) {
+      settleStructureBuild(id, { ok: false, error: "the build could not be restarted" });
+    }
+    settled.push(id);
+  }
+  return { resumed, settled };
+}
+
+// A landed restructure ANSWERS the request it was built for — and only that request.
+//
+// It used to answer every standing one, which reads right ("the week was rebuilt, so
+// nothing about the week is still open") and is wrong: two different asks are two
+// different weeks. An athlete who asked on Monday for their runs moved and on Thursday
+// for a fourth lifting day would have the Thursday ask silently closed by Monday's
+// landing, with a receipt saying it was answered. So a landing answers
+//   (a) the request whose own build produced it — matched on build lineage, and
+//   (b) any other standing request asking for the SAME thing in different words.
+// Anything else stays open, and — since a standing ask with no build behind it is the
+// bug this module exists to remove — is handed back to the coach to be built.
+// Returns the ids retired.
 export function retireAnsweredStructureRequests(landedDecisionId: number): number[] {
   const landed = getBrainDecision(landedDecisionId);
   if (!landed || landed.status !== "applied") return [];
+  const landedProposalId = decisionProposalId(landed);
+  const landedProposal = landedProposalId > 0 ? (getProposal(landedProposalId) as any) : null;
+  // The athlete's own words, read back out of the instruction the hand-off stored.
+  const landedWords = normalizeStructureRequestText(requestFromInstruction(landedProposal?.instruction));
   const retired: number[] = [];
-  for (const status of ["review", "observed"] as const) {
-    for (const row of listBrainDecisions({ status, kind: "training_structure", limit: 100 })) {
-      if ((row.action as any)?.kind !== "training_structure_request") continue;
-      const id = Number(row.id);
-      if (!(id > 0) || id === landedDecisionId) continue;
-      // A request whose own build is still running settles through settleStructureBuild.
-      if (liveStructureBuild(row)) continue;
-      const updated = patchBrainDecision(id, {
-        status: "superseded",
-        superseded_by: landedDecisionId,
-        context: {
-          ...((row.context ?? {}) as Record<string, unknown>),
-          review_required: false,
-          structure_request_answered_by: landedDecisionId,
-          structure_request_answered_at: new Date().toISOString(),
-        },
-      });
-      if (updated) retired.push(id);
+  for (const row of standingStructureRequests()) {
+    const id = Number(row.id);
+    if (!(id > 0) || id === landedDecisionId) continue;
+    const context = (row.context ?? {}) as Record<string, any>;
+    const builtThis =
+      (Number(context.structure_build_decision_id) > 0 &&
+        Number(context.structure_build_decision_id) === landedDecisionId) ||
+      (landedProposalId > 0 && Number(context.structure_build_proposal_id) === landedProposalId);
+    const sameAsk = !!landedWords && normalizeStructureRequestText(structureRequestText(row)) === landedWords;
+    if (!builtThis && !sameAsk) {
+      // A DIFFERENT ask. The landing says nothing about it, so it keeps standing — and
+      // if nothing is building it, that is put right here rather than waiting for the
+      // athlete to notice they were never answered.
+      try {
+        ensureStructureBuildInFlight(row, `another restructure landed (decision ${landedDecisionId})`);
+      } catch {
+        /* the flag stays standing; the boot recovery pass sweeps it again */
+      }
+      continue;
     }
+    // A request whose own build is still running settles through settleStructureBuild.
+    if (liveStructureBuild(row)) continue;
+    const updated = patchBrainDecision(id, {
+      status: "superseded",
+      superseded_by: landedDecisionId,
+      context: {
+        ...context,
+        review_required: false,
+        review_reason_code: null,
+        structure_request_answered_by: landedDecisionId,
+        structure_request_answered_at: new Date().toISOString(),
+      },
+    });
+    if (updated) retired.push(id);
   }
   return retired;
 }
@@ -227,6 +498,7 @@ export function settleStructureBuild(flagDecisionId: number, result: any): void 
       context: {
         ...context,
         review_required: false,
+        review_reason_code: null,
         structure_build_outcome: "built",
         structure_build_proposal_id: proposalId > 0 ? proposalId : null,
         structure_build_decision_id: builtDecisionId,
@@ -238,9 +510,19 @@ export function settleStructureBuild(flagDecisionId: number, result: any): void 
   const reason = String(
     result?.error ?? (result?.ok ? "the draft came back without a change to apply" : "the coach was unavailable")
   ).slice(0, 200);
+  // A FAILED build is the one state the athlete has to be able to see. It used to stay
+  // at `review` with `review_required` unset, which the "Waiting on you" reader skips
+  // for a structure request (under lead an in-flight request is the coach's work, not a
+  // question) — so the sentence explaining the failure was written into a row nothing
+  // rendered, and the ask vanished. Marking it review_required is what gives it a
+  // surface again, and the sentence gives it a door: ask again, or use the Plan tab.
+  // Only a STANDING flag is surfaced this way; a row already retired is history.
+  const standing = String(flag.status) === "review" || String(flag.status) === "observed";
   patchBrainDecision(flagDecisionId, {
+    status: String(flag.status) === "observed" ? "review" : flag.status,
     context: {
       ...context,
+      ...(standing ? { review_required: true, review_reason_code: "structure_build_failed" } : {}),
       structure_build_outcome: "failed",
       structure_build_proposal_id: proposalId > 0 ? proposalId : null,
       structure_build_error: reason,

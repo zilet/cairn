@@ -781,6 +781,16 @@ export function failAgentJob(id: number, error: unknown) {
   return getAgentJob(id);
 }
 
+// Congestion, not failure: the host had no agent spawn permit for this job, so no CLI
+// ever started and nothing about the job is wrong. Put it back in the queue for the
+// worker to pick up again — the inverse of markAgentJobRunning, guarded the same way,
+// and deliberately NOT a status the surface renders as an ending. See src/agent-busy.ts.
+export function deferAgentJob(id: number) {
+  db.prepare(`UPDATE agent_jobs SET status='queued', phase='queued', started_at=NULL, error=NULL
+              WHERE id=? AND status='running'`).run(id);
+  return getAgentJob(id);
+}
+
 // User-requested Stop. A queued job just drops; a running job is flipped here AND
 // its live subprocess aborted by the worker (which holds the AbortController).
 // Returns the job, or null if it was already terminal.
