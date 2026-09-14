@@ -153,8 +153,13 @@ export function decideAutonomyTier(input: AutonomyPolicyInput): AutonomyPolicyDe
 // loop — never thawed, never applied, never askable — that sat in "Waiting on you" for
 // weeks with no door. What DOES hold the floor: the server-detected `clinical_autonomy`
 // conflict, or action text that names a diagnosis, a medication, a dose or a
-// prescription. Anything else at the clinician tier is re-read by ordinary policy.
-export const CLINICAL_ACTION_PATTERN = /diagnos|medication|dosage|\bdose\b|prescri/i;
+// prescription drug. Anything else at the clinician tier is re-read by ordinary policy.
+//
+// Deliberately NOT `dose` or `prescri` alone: in this product a "prescribed easy dose" is
+// a training sentence (plans prescribe sets; sessions have a dose), and the looser
+// pattern is exactly what put a hill-repeat stand-down on the clinician floor live.
+export const CLINICAL_ACTION_PATTERN =
+  /diagnos|medication|\bmedicine\b|\bdrugs?\b|\bpharmac|\bdosage\b|\b\d+(?:\.\d+)?\s?(?:mg|mcg|µg|iu)\b|prescription (?:drug|medication|for)/i;
 
 export function clinicalActionText(text: string): boolean {
   return CLINICAL_ACTION_PATTERN.test(String(text ?? ""));

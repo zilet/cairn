@@ -229,6 +229,23 @@ test("the thaw leaves a clinician-tier hold exactly where it is", () => {
   }
 });
 
+test("training vocabulary is not clinical vocabulary — 'prescribed easy dose' never holds the floor", () => {
+  // The live row: a hill-repeat stand-down whose rationale read "the last four runs
+  // against a prescribed easy dose came back hot". `dose` and `prescribed` are plan
+  // words here, and the looser pattern is what parked it for a clinician.
+  repo.setSettings({ lead_mode: "lead" });
+  const id = Number(
+    clinicianHold({
+      domain: "training",
+      summary: "Stand down the Day 3 Z4 hill-repeat session for two weeks.",
+      rationale:
+        "The last four logged runs against a prescribed easy dose came back at avg HR 156–162; this is evidence, not prescription.",
+    }).decision.id
+  );
+  assert.equal(thawParkedReviewDecisions().thawed, 1);
+  assert.equal(repo.getBrainDecision(id).status, "observed");
+});
+
 test("a conductor cannot self-attest INTO the clinician floor either", () => {
   // Live shape: the conductor wrote risk_class 'clinical' (or a specialist's ceiling said
   // 'clinician') over a kcal hold with nothing clinical in it. No clinician exists in the
