@@ -15,9 +15,11 @@ import {
 } from "./structure-request.js";
 import type { AutonomyTier, BrainDomain } from "../../brain/decision-contract.js";
 import {
+  appliedDecisionForNewerSource,
   hasRecentDecisionVeto,
   listBrainDecisions,
   listBrainExpectations,
+  listDraftBackedReviewDecisions,
   listReviewDecisionsForProposal,
   getBrainDecision,
   getBrainRollback,
@@ -36,6 +38,7 @@ import {
   getLatestNutritionTarget,
   getMealPlan,
   getNutritionTarget,
+  mealPlanStatus,
   restoreMealPlanAfterUndo,
   setMealPlanStatus,
   setNutritionTarget,
@@ -46,7 +49,7 @@ import { getPlan, replacePlan } from "../../repo/plan.js";
 import { movementKey, normalizeExerciseName, normalizedExerciseKey } from "../../repo/exercise-canon.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
 import { computeGoalCheck, getProfile, setProfile } from "../../repo/profile.js";
-import { applyProposal, getProposal, listProposals, listReviewHeldProposals, setProposalStatus, type NormalizedProposalApplyPayload, type OrphanSiblingCleanup } from "../../repo/proposals.js";
+import { applyProposal, getProposal, listProposals, listReviewHeldProposals, proposalStatus, setProposalStatus, type NormalizedProposalApplyPayload, type OrphanSiblingCleanup } from "../../repo/proposals.js";
 import { RECOVERY_WEEK_INSTRUCTION_PREFIX, revertRecoveryWeekIfOwned } from "../../repo/recovery-week.js";
 import { MEAL_REFRESH_REQUEST_KEY } from "../../repo/meal-refresh-retry.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "../../repo/proposal-intent.js";
@@ -1785,7 +1788,7 @@ function supersedeStaleDraftOnThaw(proposal: any, decision: ParkedDecision, fres
  */
 function recordRetiredDraftReceipt(args: {
   shape: { kind: string; domain: BrainDomain; risk: any };
-  outcome: "stale_proposal" | "stale_plan" | "premise_gone";
+  outcome: "stale_proposal" | "stale_plan" | "premise_gone" | "source_superseded";
   why: string;
   source: string;
   sourceRefType: "plan_proposal" | "meal_plan";
@@ -1911,6 +1914,134 @@ function retireDraftsWithDeadPremise(now = Date.now()): number {
   return retired;
 }
 
+// ---- A QUESTION OUTLIVES THE DRAFT IT ASKED ABOUT BY ONE SWEEP -----------------
+//
+// A review hold is a question about ONE stored draft: apply this meal-plan week, or land
+// this plan change. Retire that draft and the question has no subject left — answering it
+// either way does nothing. Live, brain_decisions 25815 asked about meal_plans 20 for four
+// weeks after `acceptMealPlan` had superseded it in favour of a newer week, because every
+// pass that walks review rows had a reason to leave it alone: the thaw skips a row
+// carrying a pending change (`carriesPendingChange`, so a parked apply_error is never
+// observed away), and the premise pass above reads plan_proposals exercise targets only.
+//
+// So this pass asks the one question none of them ask — is the draft behind this hold
+// still live? — and closes the hold when it is not. It NEVER touches a source row: the
+// source has already ended, which is the whole trigger. It only stops asking.
+//
+// The live statuses are `draft` and nothing else, for BOTH tables. That is the same
+// reading the boundary applier takes when a due decision finds its meal plan
+// (`plan.status !== "draft"` → `canceled_moot`) and the same one the thaw takes for a
+// proposal: a week that has been accepted, applied, kept, discarded or superseded is a
+// week that is no longer waiting on an answer.
+const LIVE_DRAFT_SOURCE_STATUSES = new Set(["draft"]);
+
+type RetiredHoldSource = { ref_type: "meal_plan" | "plan_proposal"; id: number; status: string };
+
+// BOTH ways a hold names its draft, the same pair the thaw resolves a proposal id from:
+// the source ref, and the action payload the boundary applier writes.
+function holdDraftSource(decision: ParkedDecision): RetiredHoldSource | null {
+  const action = (decision.action ?? {}) as Record<string, any>;
+  // A structure request carries no source ref and names no draft — it is the athlete's
+  // own standing ask, owned by retireAnsweredStructureRequests, and never touched here.
+  if (decision.source_ref_type !== "meal_plan" && decision.source_ref_type !== "plan_proposal") return null;
+  const refType = decision.source_ref_type;
+  const id =
+    Number(decision.source_ref_key) || Number(refType === "meal_plan" ? action.meal_plan_id : action.proposal_id) || 0;
+  if (!(id > 0)) return null;
+  const status = refType === "meal_plan" ? mealPlanStatus(id) : proposalStatus(id);
+  // A source row that is not there says nothing about what happened to it. Absence is
+  // never the evidence that closes a question — the same rule the premise pass applies
+  // to an empty plan.
+  if (status == null || !status) return null;
+  return { ref_type: refType, id, status };
+}
+
+// What a person reads on the closed row, off the status the source actually reached.
+// Calm and past-tense: this reports something that already happened elsewhere, and asks
+// for nothing.
+function retiredSourceReading(source: RetiredHoldSource): string {
+  if (source.ref_type === "meal_plan") {
+    if (source.status === "superseded")
+      return "A newer meal plan has since been accepted, so this one has nothing left to decide.";
+    if (source.status === "discarded" || source.status === "rejected")
+      return "This meal plan was set aside, so there is nothing left to decide.";
+    return "This meal plan is already the week you are on, so there is nothing left to decide.";
+  }
+  if (source.status === "applied") return "This change has already landed, so there is nothing left to decide.";
+  if (source.status === "superseded")
+    return "A newer draft has since taken this one's place, so there is nothing left to decide.";
+  return "This draft was set aside, so there is nothing left to decide.";
+}
+
+/**
+ * Close ONE hold whose draft has ended, with the receipt a person can read.
+ *
+ * Same order as the premise-gone path: the hold is stamped with why it stopped asking
+ * FIRST (while it is still a `review` row), then the receipt is filed, then the hold is
+ * transitioned. `superseded_by` points at the decision that applied a LATER row of the
+ * same source table when there is one — for the live case, the decision that accepted the
+ * newer meal-plan week — so the closed row says what took its place, not merely that it
+ * closed.
+ */
+function retireHoldWithEndedSource(decision: ParkedDecision, source: RetiredHoldSource): void {
+  const why = retiredSourceReading(source);
+  const successor = appliedDecisionForNewerSource(source.ref_type, source.id);
+  patchBrainDecision(Number(decision.id), {
+    context: {
+      ...((decision.context ?? {}) as Record<string, any>),
+      review_required: false,
+      retire_reason: "source_superseded",
+      retired_source_status: source.status,
+      retired_explanation: why,
+    },
+  });
+  recordRetiredDraftReceipt({
+    shape: { kind: decision.kind, domain: decision.domain, risk: decision.risk_class },
+    outcome: "source_superseded",
+    why,
+    source: decision.source || "autonomy",
+    sourceRefType: source.ref_type,
+    sourceRefKey: source.id,
+    reviewDecisionId: decision.id ?? null,
+    action: {
+      ...(source.ref_type === "meal_plan" ? { meal_plan_id: source.id } : { proposal_id: source.id }),
+      outcome: "closed_source_superseded",
+      source_status: source.status,
+      superseded_by_decision_id: successor?.id ?? null,
+    },
+  });
+  transitionBrainDecision(Number(decision.id), "superseded", { supersededBy: successor?.id ?? null });
+}
+
+/**
+ * The ended-source pass, run ahead of the thaw on the same sweep.
+ *
+ * Deliberately NOT gated on lead_mode, and deliberately NOT gated on the thaw's floors,
+ * for the same reason the premise pass is not: closing a question whose subject has ended
+ * decides nothing on the athlete's behalf. An athlete who asked to see everything is owed
+ * a queue of real questions, and a clinician floor exists to keep a clinical CHANGE from
+ * landing without a person — there is no change here left to land.
+ *
+ * No grace window either: unlike a fresh draft, the trigger is a transition that has
+ * already happened to the source row, so there is nothing still in flight to surprise.
+ */
+function retireHoldsWithEndedSource(): number {
+  let retired = 0;
+  for (const decision of listDraftBackedReviewDecisions()) {
+    try {
+      if (decision.id == null) continue;
+      const source = holdDraftSource(decision);
+      if (!source || LIVE_DRAFT_SOURCE_STATUSES.has(source.status)) continue;
+      retireHoldWithEndedSource(decision, source);
+      retired += 1;
+    } catch (err) {
+      // Per-row isolation: one unreadable hold must never break the sweep.
+      recordAsyncFailure("apply", "retire_hold_ended_source", err);
+    }
+  }
+  return retired;
+}
+
 // Thaw for decisions frozen at `status: 'review'`. A decision parked under an older,
 // stricter policy — or by a surprise budget that has since rolled over — used to sit in
 // the queue forever showing "NEEDS YOUR DECISION", because nothing re-read it when the
@@ -2015,6 +2146,8 @@ export function adoptOrphanedDrafts(): {
   superseded: number;
   /** Drafts retired because the movement they act on has left the plan. */
   retired: number;
+  /** Review holds closed because the draft they asked about is no longer live. */
+  closed: number;
 } {
   // Parked decisions thaw on the same deterministic tick as orphaned drafts, ahead of
   // adoption: a decision re-offered here may retire the very draft the loop below would
@@ -2029,6 +2162,11 @@ export function adoptOrphanedDrafts(): {
   // Retiring it here leaves its proposal 'superseded' and its holds already closed, so
   // neither pass can see it.
   const retired = retireDraftsWithDeadPremise();
+  // SECOND, and before the thaw for the same reason: a hold whose draft has already ended
+  // must not be re-offered or re-derived. This one also reaches rows the thaw deliberately
+  // leaves alone — a parked apply_error carries a pending change, so the thaw never touches
+  // it, and nothing else ever asked whether the change it carries still exists.
+  const closed = retireHoldsWithEndedSource();
   const thaw = thawParkedReviewDecisions(leadMode);
   let adopted = 0;
   let skipped = 0;
@@ -2217,7 +2355,7 @@ export function adoptOrphanedDrafts(): {
       skipped += 1;
     }
   }
-  return { adopted, skipped, thawed: thaw.thawed, superseded: thaw.superseded, retired };
+  return { adopted, skipped, thawed: thaw.thawed, superseded: thaw.superseded, retired, closed };
 }
 
 // A PENDING CHANGE IS JUDGED AGAINST THE EVIDENCE IN FORCE ON THE DAY IT APPLIES.

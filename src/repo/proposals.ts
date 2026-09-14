@@ -153,6 +153,15 @@ export function listAttentionReviewHeldProposals(limit = 20) {
   return rows.map(hydrateProposal);
 }
 
+// The BARE status of one draft — the sibling of mealPlanStatus, and for the same reason:
+// hydrateProposal normalizes the whole stored payload and reads the ledger for the
+// draft's autonomy row, which is a great deal of work when the caller only needs to know
+// whether the draft is still live. Null means no such row.
+export function proposalStatus(id: number): string | null {
+  const row = db.prepare(`SELECT status FROM plan_proposals WHERE id = ?`).get(Math.trunc(Number(id))) as any;
+  return row ? String(row.status ?? "") : null;
+}
+
 export function getProposal(id: number) {
   const row = db.prepare(`SELECT * FROM plan_proposals WHERE id = ?`).get(id) as any;
   return row ? hydrateProposal(row) : null;

@@ -5,7 +5,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { adoptOrphanedDrafts, applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
+import {
+  adoptOrphanedDrafts,
+  applyDueAnnouncedDecisions,
+  applyMealPlanWithAutonomy,
+  applyProposalWithAutonomy,
+} from "../dist/domain/brain/autonomy-service.js";
 import * as repo from "../dist/repo.js";
 import { db } from "../dist/db.js";
 import { localDateISO } from "../dist/repo/shared.js";
@@ -821,4 +826,196 @@ test("a later refusal folds into the buried hold instead of stacking a second as
   assert.equal(held.review_required, true, "the clinical swap is still held for the athlete");
   assert.equal(held.decision.id, first.id, "today's refusal refreshed the ask already in the queue");
   assert.deepEqual(liveHoldIdsFor(draft.id), [first.id], "one open ask per draft, however deep it sits");
+});
+
+// ---- A QUESTION OUTLIVES THE DRAFT IT ASKED ABOUT BY ONE SWEEP ----------------
+//
+// Live row 25815: an announce-tier meal-plan decision parked at `review` by an apply
+// error ("Mon totals 1800 kcal, outside the ±100 kcal rounding tolerance around the
+// coordinated 1950 kcal target"), pointing at meal_plans 20. Four weeks later the
+// athlete had accepted plan 30 and plan 20 was `superseded` — and the row was still in
+// "Waiting on you", asking about a week that no longer existed. Nothing swept it: the
+// thaw leaves a parked pending change exactly where it is, and the premise pass reads
+// plan_proposals exercise targets only.
+
+const APPLY_ERROR =
+  "Mon totals 1800 kcal, outside the ±100 kcal rounding tolerance around the coordinated 1950 kcal target.";
+
+function mealWeek(summary, kcal = 2200) {
+  return {
+    summary,
+    daily_kcal: kcal,
+    daily_protein_g: 175,
+    days: Array.from({ length: 7 }, (_, index) => ({
+      day: `Day ${index + 1}`,
+      meals: [
+        { name: `${summary} breakfast`, items: "eggs and oats", kcal: 800, protein_g: 70, carbs_g: 65, fat_g: 18 },
+        {
+          name: `${summary} dinner`,
+          items: "salmon and potatoes",
+          kcal: kcal - 800,
+          protein_g: 105,
+          carbs_g: 80,
+          fat_g: 24,
+        },
+      ],
+    })),
+  };
+}
+
+// Exactly what applyDueAnnouncedDecisions' own parkForReview writes when the apply throws.
+function parkWithApplyError(decisionId) {
+  return repo.patchBrainDecision(Number(decisionId), {
+    status: "review",
+    reversible: false,
+    context: {
+      ...(repo.getBrainDecision(Number(decisionId)).context ?? {}),
+      review_required: true,
+      apply_error: APPLY_ERROR,
+      boundary_outcome: "apply_threw",
+    },
+  });
+}
+
+// A stranded meal-plan hold in the live shape: announced for its boundary, parked there
+// by a failed apply, still naming its own week.
+function strandedMealPlanHold() {
+  const current = repo.createMealPlan("stub", "", mealWeek("Current", 2250));
+  repo.acceptMealPlan(current.id);
+  const stranded = repo.createMealPlan("stub", "", mealWeek("Stranded", 2300));
+  const scheduled = applyMealPlanWithAutonomy(stranded.id);
+  assert.equal(scheduled.announced, true, "the week is announced for its natural boundary");
+  parkWithApplyError(scheduled.decision.id);
+  return { plan: stranded, decision: scheduled.decision };
+}
+
+function retirementReceipt() {
+  return repo
+    .listBrainDecisions({ status: "superseded", limit: 50 })
+    .find((d) => d.context?.review_reason_code === "source_superseded");
+}
+
+test("a meal-plan hold parked by an apply error is closed once a newer week has been accepted", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const { plan, decision } = strandedMealPlanHold();
+
+  // The newer week the athlete accepted. `acceptMealPlan` retires its siblings with ONE
+  // bulk UPDATE over meal_plans — no per-row status call — so nothing cascades to the
+  // ledger and the hold above is left naming a week that has ended.
+  const newer = repo.createMealPlan("stub", "", mealWeek("Newer", 2200));
+  repo.acceptMealPlan(newer.id);
+  assert.equal(repo.getMealPlan(plan.id).status, "superseded", "the week it asked about is gone");
+  assert.equal(repo.getBrainDecision(decision.id).status, "review", "and the question outlived it");
+
+  const sweep = adoptOrphanedDrafts();
+  assert.equal(sweep.closed, 1, "the sweep closed the question behind the retired week");
+
+  const closed = repo.getBrainDecision(decision.id);
+  assert.equal(closed.status, "superseded", "nothing is left waiting on the athlete");
+  assert.equal(closed.context.review_required, false);
+  assert.equal(closed.context.retire_reason, "source_superseded");
+  assert.equal(closed.context.retired_source_status, "superseded");
+  assert.match(closed.context.retired_explanation, /newer meal plan has since been accepted/);
+  assert.equal(closed.context.apply_error, APPLY_ERROR, "why it parked is kept, not rewritten");
+
+  const landing = repo
+    .listBrainDecisions({ status: "applied", kind: "meal_plan", limit: 20 })
+    .find((d) => d.source_ref_key === String(newer.id));
+  assert.ok(landing, "the newer week landed through its own decision");
+  assert.equal(closed.superseded_by, landing.id, "the closed row says what took its place");
+
+  const receipt = retirementReceipt();
+  assert.ok(receipt, "a receipt a person can read was filed");
+  assert.equal(receipt.source_ref_type, "meal_plan");
+  assert.equal(receipt.source_ref_key, String(plan.id));
+  assert.equal(receipt.action.meal_plan_id, plan.id);
+  assert.equal(receipt.action.outcome, "closed_source_superseded");
+  assert.equal(receipt.action.source_status, "superseded");
+  assert.equal(receipt.action.superseded_by_decision_id, landing.id);
+  assert.equal(receipt.context.superseded_review_decision_id, decision.id);
+  assert.match(receipt.rationale, /newer meal plan has since been accepted/);
+});
+
+test("the same hold is left exactly where it is while its week is still a draft", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const { plan, decision } = strandedMealPlanHold();
+  assert.equal(repo.getMealPlan(plan.id).status, "draft");
+
+  const sweep = adoptOrphanedDrafts();
+  assert.equal(sweep.closed, 0, "a live draft is never closed out from under the athlete");
+
+  const held = repo.getBrainDecision(decision.id);
+  assert.equal(held.status, "review", "the question stands");
+  assert.equal(held.context.review_required, true);
+  assert.equal(held.context.apply_error, APPLY_ERROR, "the thaw still leaves a pending change untouched");
+  assert.equal(held.context.retire_reason, undefined);
+  assert.equal(held.context.thaw_attempted, undefined);
+  assert.ok(!retirementReceipt(), "no receipt is filed for a week that is still waiting");
+});
+
+test("a hold on a meal plan the athlete accepted by hand closes against what actually happened", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const { plan, decision } = strandedMealPlanHold();
+  repo.acceptMealPlan(plan.id);
+
+  assert.equal(adoptOrphanedDrafts().closed, 1);
+  const closed = repo.getBrainDecision(decision.id);
+  assert.equal(closed.status, "superseded");
+  assert.equal(closed.context.retired_source_status, "accepted");
+  assert.match(closed.context.retired_explanation, /already the week you are on/);
+});
+
+test("a plan-proposal hold is closed when a bulk supersede retires its draft behind the ledger's back", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  // The movement is still on the plan, so the premise pass has nothing to say here —
+  // what ended is the DRAFT, not its subject.
+  repo.savePlanDay(2, "Push", "chest", [
+    { exercise: "Decline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 95 },
+  ]);
+  const draft = swapDraft("Decline Bench Press", "Chest Dips");
+  const held = applyProposalWithAutonomy(draft.id, {
+    clinical: true,
+    clinical_provenance: CHAT_CLINICAL_PROVENANCE,
+  });
+  assert.equal(held.review_required, true, "the clinical swap is held for the athlete");
+  // The leak: a bulk UPDATE retires the draft without going through setProposalStatus,
+  // so nothing supersedes the hold that names it.
+  db.prepare("UPDATE plan_proposals SET status = 'superseded' WHERE id = ?").run(Number(draft.id));
+  backdateHours(draft.id, 3);
+
+  const sweep = adoptOrphanedDrafts();
+  assert.equal(sweep.retired, 0, "the premise pass walks live drafts only");
+  assert.equal(sweep.closed, 1, "the hold behind the retired draft is closed");
+  assert.deepEqual(liveHoldIdsFor(draft.id), [], "nothing is left waiting on the athlete");
+
+  const closed = repo.getBrainDecision(held.decision.id);
+  assert.equal(closed.status, "superseded");
+  assert.equal(closed.context.retire_reason, "source_superseded");
+  assert.equal(closed.context.retired_source_status, "superseded");
+  assert.match(closed.context.retired_explanation, /newer draft has since taken/);
+
+  const receipt = retirementReceipt();
+  assert.ok(receipt, "the same receipt the meal-plan path files");
+  assert.equal(receipt.source_ref_type, "plan_proposal");
+  assert.equal(receipt.action.proposal_id, draft.id);
+  assert.equal(receipt.action.outcome, "closed_source_superseded");
+});
+
+test("a standing structure request names no draft, so the ended-source pass never touches it", () => {
+  // `review_everything` shuts the thaw off entirely, so this pass is the only one that
+  // could reach these rows — and it must not.
+  repo.setSettings({ lead_mode: "review_everything" });
+  seedStandingStructureRequests(3);
+  const before = db
+    .prepare(`SELECT id, status, context_json FROM brain_decisions WHERE kind = 'training_structure' ORDER BY id ASC`)
+    .all();
+  assert.equal(before.length, 3);
+
+  const sweep = adoptOrphanedDrafts();
+  assert.equal(sweep.closed, 0, "an ask with no draft behind it is not a question about a draft");
+
+  const after = db
+    .prepare(`SELECT id, status, context_json FROM brain_decisions WHERE kind = 'training_structure' ORDER BY id ASC`)
+    .all();
+  assert.deepEqual(after, before, "the athlete's standing ask is still waiting on them, untouched");
 });

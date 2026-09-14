@@ -32,6 +32,11 @@ No schema migration (`user_version` stays where v101 left it).
   place instead of inserting a duplicate every time a refusal's reason changes; `decisionIsTheAthletes`
   now defers entirely to `clinicianFloorHolds` for the clinical half, closing the last place a
   conductor could self-attest a hold onto or off the clinician floor via a bare tier/flag.
+  A second pass, `retireHoldsWithEndedSource()`, runs ahead of the thaw: a review hold whose source
+  `meal_plans` / `plan_proposals` row is no longer `draft` (superseded, accepted, discarded) is retired
+  with `retire_reason: "source_superseded"`, a receipt, and `superseded_by` pointing at the decision
+  that applied the newer source — this covers apply_error-parked rows the thaw deliberately leaves
+  alone (`listDraftBackedReviewDecisions`, `appliedDecisionForNewerSource`, `src/repo/brain-decisions.ts`).
 - **Composition: one top set a session, plan-authored runs survive, race ladder walks live**
   (`src/repo/daily-composition.ts`, `src/repo/race-build.ts`). An agent-nested top set now blocks a
   later server-derived one from also claiming the day's reach slot (`reachHostConsumed`), and no

@@ -1,7 +1,12 @@
 import crypto from "node:crypto";
 import { db } from "../db.js";
 import { addDaysISO, localDateISO, localDayOfStamp } from "./shared.js";
-import { type BrainDecision, type BrainDecisionStatus, normalizeBrainDecision } from "../brain/decision-contract.js";
+import {
+  type BrainDecision,
+  type BrainDecisionStatus,
+  type BrainSourceRefType,
+  normalizeBrainDecision,
+} from "../brain/decision-contract.js";
 import {
   type BrainExpectation,
   type ProposedExpectation,
@@ -541,6 +546,56 @@ export function supersedeReviewDecisionsForProposal(proposalId: number): void {
   for (const decision of listReviewDecisionsForProposal(proposalId)) {
     if (decision.id != null) transitionBrainDecision(decision.id, "superseded");
   }
+}
+
+// Every live `review` row that names a DRAFT — a plan proposal, or a meal-plan week —
+// OLDEST FIRST, whatever its age.
+//
+// The sweep that reads this asks one question of each row: is the draft behind it still
+// live? That question is only answerable for a row that names one, so the source types
+// are filtered in SQL rather than in JS — a structure request (`source_ref_type` null)
+// names no draft and is never in this list. Oldest first because the rows that have sat
+// longest are the ones most likely to have outlived what they were asking about.
+export function listDraftBackedReviewDecisions(limit = 200): BrainDecision[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM brain_decisions
+        WHERE status = 'review'
+          AND source_ref_type IN ('plan_proposal','meal_plan')
+          AND source_ref_key IS NOT NULL
+        ORDER BY id ASC
+        LIMIT ?`
+    )
+    .all(Math.max(1, Math.trunc(Number(limit) || 200))) as any[];
+  return rows.map(hydrateDecision).filter((decision): decision is BrainDecision => !!decision);
+}
+
+// The decision that APPLIED a LATER row of the same source table — the newer meal-plan
+// week that took a retired one's place. Asked in SQL by ref key rather than read out of
+// a page of recent decisions, because the row that superseded a four-week-old hold is
+// exactly the one a recent-N window cannot promise to contain.
+//
+// `source_ref_key` is TEXT holding an integer id, so the comparison and the ordering
+// both CAST — otherwise '9' sorts above '30'. The newest KEY wins, with the decision id
+// breaking a tie, so the answer is the latest landing rather than the latest write.
+export function appliedDecisionForNewerSource(
+  sourceRefType: BrainSourceRefType,
+  afterKey: number
+): BrainDecision | null {
+  const after = Math.trunc(Number(afterKey));
+  if (!Number.isFinite(after)) return null;
+  return hydrateDecision(
+    db
+      .prepare(
+        `SELECT * FROM brain_decisions
+          WHERE status = 'applied'
+            AND source_ref_type = ?
+            AND CAST(source_ref_key AS INTEGER) > ?
+          ORDER BY CAST(source_ref_key AS INTEGER) DESC, id DESC
+          LIMIT 1`
+      )
+      .get(String(sourceRefType), after)
+  );
 }
 
 export function patchBrainDecision(id: number, patch: Partial<BrainDecision>): BrainDecision | null {

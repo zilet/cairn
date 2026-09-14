@@ -1719,6 +1719,16 @@ export function restoreMealPlanAfterUndo(
   return restored;
 }
 
+// The BARE status of one meal-plan week — no hydration, no payload normalization, and
+// none of getMealPlan's constraint-freshness refresh (which writes `parsed_json` back on
+// read). A sweep that walks every open hold asks only "is this week still the draft it
+// was?", and paying a decorated read per row to answer it would write to the DB once per
+// row for nothing. Null means no such row.
+export function mealPlanStatus(id: number): string | null {
+  const row = db.prepare(`SELECT status FROM meal_plans WHERE id = ?`).get(Math.trunc(Number(id))) as any;
+  return row ? String(row.status ?? "") : null;
+}
+
 export function getMealPlan(id: number) {
   const row = db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id);
   // Singular reads are just as authoritative as current/list. Re-run the same
