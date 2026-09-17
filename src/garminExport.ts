@@ -30,6 +30,7 @@ import { createHash } from "node:crypto";
 import { garminErrorStatus, makeGarminClient, rawDelete, rawGet, rawPost, rawPut } from "./garmin.js";
 import { garminSourceLabel, reconcileGarminStrength, upsertGarminActivity, upsertGarminSource } from "./repo/activities.js";
 import { ensureGarminMapping } from "./repo/exercises.js";
+import { cairnShellActivityName, isCairnAuthoredName } from "./repo/garmin-authorship.js";
 import { garminWeightGrams } from "./repo/garmin-exercise-map.js";
 import { clearSessionGarminExport, deleteGarminActivityByExternalId, garminExportSetRows, getSessionGarminExport, listSessionGarminStrengthActivities, recordSessionGarminExport, sessionGarminExportContext } from "./repo/garmin-strength-export.js";
 import { getGarminCredentials, getSettings } from "./repo/settings.js";
@@ -366,13 +367,33 @@ export function sessionBoundStartMs(sessionDate: string | null | undefined, crea
 }
 
 // ---- fingerprint -----------------------------------------------------------
+/** The session facts a write carries ALONGSIDE the sets, and that can change alone. */
+export interface GarminExportSessionShape {
+  /** The activity's name on Garmin — the session's own title, marked. */
+  title?: string | null;
+  /** The activity's duration on Garmin. */
+  duration_min?: number | null;
+}
+
 /**
  * A stable hash of exactly what would be written: the ordered (exercise, set, load,
- * reps, duration, FIT mapping) tuples. Cheap idempotency — a re-sync, a re-finish or
- * a scheduler pass over the same unchanged session skips before touching the network,
- * while editing a single rep re-exports.
+ * reps, duration, FIT mapping) tuples, plus the two SESSION facts the same write
+ * carries. Cheap idempotency — a re-sync, a re-finish or a scheduler pass over an
+ * unchanged session skips before touching the network, while editing a single rep
+ * re-exports.
+ *
+ * The session facts belong in the hash because they are in the WRITE: a shell's NAME
+ * is the session's title and its DURATION is the session's duration. Hashing only the
+ * sets meant renaming a session, or correcting a duration that had been read back
+ * wrong, changed what Garmin should hold while the exporter went on reporting
+ * "unchanged" — so the stale value sat on the athlete's Garmin calendar with no way to
+ * correct it short of editing a rep. They are APPENDED and omitted entirely when both
+ * are absent, so a caller that passes no shape hashes exactly as it did before.
  */
-export function garminExportFingerprint(sets: GarminExportPayloadSet[] | GarminExportSetRow[]): string {
+export function garminExportFingerprint(
+  sets: GarminExportPayloadSet[] | GarminExportSetRow[],
+  session?: GarminExportSessionShape | null
+): string {
   const payload = (sets as any[])
     .map((set) =>
       [
@@ -386,7 +407,10 @@ export function garminExportFingerprint(sets: GarminExportPayloadSet[] | GarminE
       ].join(":")
     )
     .join("|");
-  return createHash("sha1").update(payload).digest("hex").slice(0, 16);
+  const title = String(session?.title ?? "").trim();
+  const duration = session?.duration_min == null ? "" : String(Number(session.duration_min));
+  const shape = title || duration ? `#${title}:${duration}` : "";
+  return createHash("sha1").update(`${payload}${shape}`).digest("hex").slice(0, 16);
 }
 
 // ---- orchestration ---------------------------------------------------------
@@ -396,14 +420,33 @@ export interface GarminExportResult {
   activity_id?: string;
   mode?: "fill" | "replace" | "create" | "retarget";
   error?: string;
+  /** How much of the log reached Garmin on a write that landed (see the RECEIPT). */
+  exported_sets?: number;
+  skipped_sets?: number;
+  skipped_exercises?: string[];
 }
 
 function hasPhysiology(activity: { avg_hr: number | null; calories: number | null }): boolean {
   return activity.avg_hr != null || activity.calories != null;
 }
 
-function payloadSetsFor(rows: GarminExportSetRow[]): GarminExportPayloadSet[] {
+/**
+ * The sets that can be written, and — the part that used to be silent — the ones that
+ * cannot. A lift the FIT catalog has no enum for is dropped from the payload on
+ * purpose: an invented member 400s the whole write, and a partial history beats none.
+ * But dropping it WITHOUT SAYING SO is how a 14-set session quietly became 8 on
+ * Garmin with nothing to read anywhere. `skipped_exercises` is the receipt.
+ */
+interface GarminExportPayloadSelection {
+  sets: GarminExportPayloadSet[];
+  skipped_sets: number;
+  skipped_exercises: string[];
+}
+
+function payloadSetsFor(rows: GarminExportSetRow[]): GarminExportPayloadSelection {
   const out: GarminExportPayloadSet[] = [];
+  const skippedExercises: string[] = [];
+  let skippedSets = 0;
   const mappedByExercise = new Map<number, { category: string | null; exercise: string | null; status: string }>();
   for (const row of rows) {
     let category = row.garmin_category;
@@ -418,7 +461,12 @@ function payloadSetsFor(rows: GarminExportSetRow[]): GarminExportPayloadSet[] {
         mapped = ensureGarminMapping(row.exercise_id);
         mappedByExercise.set(row.exercise_id, mapped);
       }
-      if (mapped.status !== "mapped" || !mapped.category) continue;
+      if (mapped.status !== "mapped" || !mapped.category) {
+        skippedSets++;
+        const name = String(row.exercise ?? "").trim();
+        if (name && !skippedExercises.includes(name)) skippedExercises.push(name);
+        continue;
+      }
       category = mapped.category;
       exercise = mapped.exercise;
     }
@@ -433,7 +481,7 @@ function payloadSetsFor(rows: GarminExportSetRow[]): GarminExportPayloadSet[] {
       garmin_exercise: exercise,
     });
   }
-  return out;
+  return { sets: out, skipped_sets: skippedSets, skipped_exercises: skippedExercises };
 }
 
 // A 400 from the exerciseSets PUT means Garmin refused one of the enum members —
@@ -475,25 +523,31 @@ async function putWithCategoryFallback(
 // in for provenance — a watch strength recording with no heart rate looks exactly like
 // an empty shell, and deleting one of those is the single unrecoverable mistake here.
 // The marker is the athlete-visible answer: it travels with the activity, survives our
-// bookkeeping being wrong, and nothing but Cairn writes it.
-const CAIRN_ACTIVITY_MARKER = " · Cairn";
-const GARMIN_ACTIVITY_NAME_MAX = 80;
+// bookkeeping being wrong, and nothing but Cairn writes it. It lives in
+// repo/garmin-authorship.ts because the INBOUND sync needs the same answer: a shell of
+// ours reports its duration and its calories differently from a watch recording, and
+// reading them the watch's way is what turned a 34-minute session into six.
+export { cairnShellActivityName, isCairnAuthoredName };
 
-/** The session's title, trimmed so the MARKER always survives the length cap. */
-export function cairnShellActivityName(title: string | null | undefined): string {
-  const base = String(title ?? "").trim() || "Strength";
-  const room = GARMIN_ACTIVITY_NAME_MAX - CAIRN_ACTIVITY_MARKER.length;
-  return `${base.slice(0, room).trim() || "Strength"}${CAIRN_ACTIVITY_MARKER}`;
+interface GarminExportReceipt {
+  exported_sets: number;
+  skipped_sets: number;
+  skipped_exercises: string[];
+}
+
+/** Does the stored record already say exactly this about what reached Garmin? */
+function sameReceipt(prior: GarminSessionExportRecord, receipt: GarminExportReceipt): boolean {
+  return (
+    prior.exported_sets === receipt.exported_sets &&
+    prior.skipped_sets === receipt.skipped_sets &&
+    (prior.skipped_exercises ?? []).join("|") === receipt.skipped_exercises.join("|")
+  );
 }
 
 /** A delete-only pass writes nothing, so the record keeps the shape it already had. */
 function priorWriteMode(prior: GarminSessionExportRecord | null): "fill" | "replace" | "create" | "retarget" {
   const kept = prior?.mode;
   return kept === "fill" || kept === "create" || kept === "retarget" ? kept : "replace";
-}
-
-export function isCairnAuthoredName(name: string | null | undefined): boolean {
-  return String(name ?? "").trimEnd().endsWith(CAIRN_ACTIVITY_MARKER);
 }
 
 /**
@@ -671,10 +725,23 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
   if (session.cairn_sets_authoritative === false) return { ok: true, skipped: "garmin_owns_sets" };
 
   const rows = garminExportSetRows(sessionId);
-  const sets = rows.length ? payloadSetsFor(rows) : [];
+  const selection = rows.length
+    ? payloadSetsFor(rows)
+    : { sets: [] as GarminExportPayloadSet[], skipped_sets: 0, skipped_exercises: [] as string[] };
+  const sets = selection.sets;
   if (!sets.length) return await retractGarminExport(sessionId, rows.length ? "no_mapped_exercises" : "no_logged_sets");
+  // The receipt travels with every write, so an unchanged re-run and a fresh one agree
+  // about what Garmin actually holds.
+  const receipt = {
+    exported_sets: sets.length,
+    skipped_sets: selection.skipped_sets,
+    skipped_exercises: selection.skipped_exercises,
+  };
 
-  const fingerprint = garminExportFingerprint(sets);
+  // The session's own title and duration ride in the write (they name and size the
+  // activity), so they ride in the fingerprint — a rename or a duration correction
+  // re-exports IN PLACE, onto the same external id.
+  const fingerprint = garminExportFingerprint(sets, { title: session.title, duration_min: session.duration_min });
   const prior = getSessionGarminExport(sessionId);
   const linked = listSessionGarminStrengthActivities(sessionId).filter((row) => row.external_id);
   const plan = planGarminExportTarget({ prior, linked, fingerprint });
@@ -683,8 +750,14 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
   let source = plan.source;
   const mode: "fill" | "replace" | "create" | "retarget" | null = plan.mode;
 
-  // Nothing changed and nothing moved — the common case on a re-sync.
-  if (plan.unchanged && prior) return { ok: true, skipped: "unchanged", activity_id: prior.activity_id };
+  // Nothing changed and nothing moved — the common case on a re-sync. The RECEIPT can
+  // still be stale or missing (a record written before it existed, or a mapping that
+  // has since been filled in), and correcting it costs nothing: no network, same
+  // fingerprint, same activity. The write itself stays skipped.
+  if (plan.unchanged && prior) {
+    if (!sameReceipt(prior, receipt)) recordSessionGarminExport(sessionId, { ...prior, ...receipt });
+    return { ok: true, skipped: "unchanged", activity_id: prior.activity_id };
+  }
 
   // A retarget whose delete failed re-arms retarget on every later pass, which would
   // otherwise re-PUT the whole set list until Garmin finally accepts the drop. When
@@ -745,6 +818,7 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
             exported_at: new Date().toISOString(),
             mode: "create",
             created_ids: [...createdIds],
+            ...receipt,
           });
         }
         if (!targetId) return { ok: false, error: "no Garmin activity to write to" };
@@ -820,8 +894,16 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
           mode: resolvedMode,
           created_ids: remainingCreated,
           pending_deletes: stillPending,
+          ...receipt,
         });
-        return { ok: true, activity_id: targetId, mode: resolvedMode };
+        return {
+          ok: true,
+          activity_id: targetId,
+          mode: resolvedMode,
+          exported_sets: receipt.exported_sets,
+          skipped_sets: receipt.skipped_sets,
+          ...(receipt.skipped_exercises.length ? { skipped_exercises: [...receipt.skipped_exercises] } : {}),
+        };
       })(),
       GARMIN_EXPORT_JOB_MS
     );

@@ -306,6 +306,48 @@ for (const category of exercisesByCategory.keys()) {
   else categoryByTokenKey.set(key, [category]);
 }
 
+// ---- hand-checked gym names -------------------------------------------------
+// FIT names some movements nothing like the gym does, and no amount of token overlap
+// bridges that: a Pallof press shares not one word with "Cable Core Press", which is
+// FIT's own name for exactly that anti-rotation hold. A name the scorer cannot reach
+// is silently absent from every write-back, so the Cairn log and the Garmin history
+// disagree and nothing anywhere says why.
+//
+// So: a short table of identities a human checked, keyed by the NORMALIZED Cairn name
+// and valued by a catalog DISPLAY name. It resolves to a catalog row like every other
+// answer — nothing here can invent an enum, and an entry whose target is not in the
+// catalog is dropped at load (a contract test asserts there are none). Keep it for
+// movements that genuinely ARE the same lift under another name; a merely-similar one
+// belongs in the agentic shortlist, which is what that layer is for.
+const GYM_NAME_ALIASES: Record<string, string> = {
+  // FIT's own name for the anti-rotation press, word for word.
+  "pallof press": "Cable Core Press",
+  "half kneeling pallof press": "Cable Core Press",
+  "pallof hold": "Cable Core Press",
+  // A reverse pec deck is the seated machine rear-delt raise. FIT files the whole
+  // rear-delt family under LATERAL_RAISE, not FLYE.
+  "reverse pec deck": "Seated Rear Lateral Raise",
+  "rear delt machine": "Seated Rear Lateral Raise",
+  // A one-arm dumbbell "pull" is a row. The bare family is deliberate: grip and
+  // posture were never stated, and every single-arm row in the catalog asserts one.
+  "single arm dumbbell pull": "Row",
+  "single arm dumbbell pulls": "Row",
+};
+
+// Keyed by the EXPANDED token set, not the literal string, so one entry covers every
+// way the gym writes it — "Single-Arm DB Pull", "Single Arm Dumbbell Pulls" and
+// "single-arm dumbbell pull" all reduce to the same key.
+const aliasRows = new Map<string, GarminCatalogRow>();
+for (const [name, display] of Object.entries(GYM_NAME_ALIASES)) {
+  const row = byDisplayNorm.get(normalizeExerciseName(display));
+  if (row) aliasRows.set(tokenKey(tokenSet(name)), row);
+}
+
+/** The hand-checked aliases that did NOT resolve to a catalog row. Always empty. */
+export function unresolvedGarminNameAliases(): string[] {
+  return Object.keys(GYM_NAME_ALIASES).filter((name) => !aliasRows.has(tokenKey(tokenSet(name))));
+}
+
 /** Every category the catalog knows, in catalog order. */
 export function garminExerciseCategories(): string[] {
   return [...exercisesByCategory.keys()];
@@ -473,6 +515,11 @@ export function mapExerciseToGarmin(
   if (exact) return hit(exact, "exact");
 
   const tokens = tokenSet(name);
+  // A hand-checked identity is as exact as a display match — it IS the same movement,
+  // spelled the way a gym spells it rather than the way FIT does.
+  const aliased = aliasRows.get(tokenKey(tokens));
+  if (aliased) return hit(aliased, "exact");
+
   const equipmentTokens = tokenSet(String(opts.equipment ?? ""));
   const enriched = new Set(tokens);
   for (const token of equipmentTokens) if (IMPLEMENT_TOKENS.has(token)) enriched.add(token);

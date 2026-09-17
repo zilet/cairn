@@ -951,7 +951,9 @@ CREATE TABLE IF NOT EXISTS settings (
   update_check_enabled INTEGER DEFAULT 1,     -- 1 = quiet daily check for a newer Cairn release (GitHub Releases API); pull-never-push, surfaced in Settings → Data
   lead_mode TEXT DEFAULT 'lead',               -- lead | announce_first | review_everything — one calm autonomy control
   training_drive TEXT DEFAULT 'steady',        -- steady | push — the athlete's standing posture toward accumulated-load rest
-  garmin_export_strength INTEGER DEFAULT 1     -- 1 = send finished Cairn strength sessions back to Garmin (see src/garminExport.ts)
+  garmin_export_strength INTEGER DEFAULT 1,    -- 1 = send finished Cairn strength sessions back to Garmin (see src/garminExport.ts)
+  garmin_last_export_attempt_at TEXT DEFAULT '', -- when the last strength write-back was ATTEMPTED (UTC ISO) — landed or not
+  garmin_last_export_status TEXT DEFAULT ''    -- short result: "ok: 8 of 14 sets" | "failed: …"; a persistently failing PUT must be visible
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each

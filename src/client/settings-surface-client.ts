@@ -229,7 +229,19 @@ function settingsGarminExportStateHtml(options: SettingsSourcesSliceOptions): st
   const rel = at ? (options.dates?.relTime ? options.dates.relTime(at) : at) : "";
   const title = at && options.dates?.absDate ? ` title="${escAttr(options.dates.absDate(at.slice(0, 10)))}"` : "";
   const text = rel ? `Last sent ${escHtml(rel)}` : "Nothing sent yet";
-  return `<div class="sess-line" style="color:var(--muted);margin-top:6px"><span${title}>${text}</span></div>`;
+  // "Last sent" only ever moves on a write that LANDED, so on its own it cannot tell a
+  // feature nobody uses from one that has been failing for two days. The attempt line
+  // says which, and only while the last attempt actually failed.
+  const settings = settingsSurfaceRecord(options.settings);
+  const failedAt = String(settings.garmin_last_export_attempt_at ?? "").trim();
+  const failed = String(settings.garmin_last_export_status ?? "").startsWith("failed");
+  const retry =
+    failed && failedAt
+      ? `<div class="sess-line" style="color:var(--muted);margin-top:4px">Last attempt didn't land ${escHtml(
+          options.dates?.relTime ? options.dates.relTime(failedAt) : failedAt
+        )} — it retries on the next sync.</div>`
+      : "";
+  return `<div class="sess-line" style="color:var(--muted);margin-top:6px"><span${title}>${text}</span></div>${retry}`;
 }
 
 function settingsSourcesSliceHtml(options: SettingsSourcesSliceOptions): string {

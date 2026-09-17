@@ -1178,3 +1178,72 @@ test("v103 folds duplicate exercises into the survivor without losing a single l
   assert.equal(d.prepare("SELECT COUNT(*) AS n FROM logged_sets").get().n, setsBefore);
   d.close();
 });
+
+// v104: Cairn's own write-back, read back wrong. A manual shell Cairn created on
+// Garmin reports its "moving" time as the summed length of the 45-second ACTIVE slots
+// Cairn itself wrote, and its calories as a constant 65.534 auto-calculation. Both
+// were stored verbatim, and a COALESCE-ing re-sync can never clear them.
+test("v104 repairs the duration and calories Cairn's own Garmin shells reported", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, duration_min REAL, garmin_json TEXT
+  );`);
+  d.exec(`CREATE TABLE garmin_activities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER, external_id TEXT, name TEXT,
+    date TEXT, duration_min REAL, calories REAL, raw_json TEXT
+  );`);
+  d.exec(`CREATE TABLE garmin_daily_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, hrv_status TEXT
+  );`);
+  d.exec(`CREATE TABLE exercises (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT,
+    garmin_category TEXT, garmin_exercise TEXT, garmin_map_status TEXT
+  );`);
+  d.exec(`INSERT INTO sessions (id, date, duration_min, garmin_json) VALUES
+    (1, '2026-09-16', 34, '{"name":"Pull · Cairn","duration_min":6,"calories":65.534}'),
+    (2, '2026-09-15', 41, '{"name":"Strength","duration_min":41,"calories":318}')`);
+  d.exec(`INSERT INTO garmin_activities (session_id, external_id, name, date, duration_min, calories, raw_json) VALUES
+    (1, '24386427797', 'Pull · Cairn', '2026-09-16', 6, 65.534, '{"duration":2040,"movingDuration":360,"calories":65.534,"isAutoCalcCalories":true}'),
+    (2, '24386400000', 'Strength', '2026-09-15', 41, 318, '{"duration":2460,"movingDuration":2460,"calories":318}')`);
+  d.exec(`INSERT INTO garmin_daily_metrics (date, hrv_status) VALUES
+    ('2026-09-16', 'NONE'), ('2026-09-15', 'BALANCED'), ('2026-09-14', 'unbalanced')`);
+  d.exec(`INSERT INTO exercises (name, garmin_map_status) VALUES
+    ('Pallof Press', 'unmapped'), ('Dead hang', 'skipped'), ('Back Squat', 'mapped')`);
+  d.exec("PRAGMA user_version = 103;");
+
+  runMigrations(d);
+
+  // The shell Cairn authored is back on the session's own measured span, and the
+  // auto-calc placeholder reads as absence.
+  const shell = d.prepare("SELECT duration_min, calories FROM garmin_activities WHERE external_id = '24386427797'").get();
+  assert.equal(shell.duration_min, 34);
+  assert.equal(shell.calories, null);
+  const repaired = JSON.parse(d.prepare("SELECT garmin_json FROM sessions WHERE id = 1").get().garmin_json);
+  assert.equal(repaired.duration_min, 34);
+  assert.equal(repaired.calories, null);
+
+  // The watch's own recording is never touched — that IS the measurement.
+  const watch = d.prepare("SELECT duration_min, calories FROM garmin_activities WHERE external_id = '24386400000'").get();
+  assert.equal(watch.duration_min, 41);
+  assert.equal(watch.calories, 318);
+  assert.equal(d.prepare("SELECT garmin_json FROM sessions WHERE id = 2").get().garmin_json.includes('"calories":318'), true);
+
+  // `NONE` is the watch saying it has no status; the documented values survive.
+  const statuses = d.prepare("SELECT date, hrv_status FROM garmin_daily_metrics ORDER BY date").all();
+  assert.deepEqual(statuses.map((r) => r.hrv_status), ["unbalanced", "BALANCED", null]);
+
+  // A remembered "unmappable" is re-armed so this round's names can land; a human's
+  // own "skipped" and an existing mapping are left exactly as they were.
+  const rows = Object.fromEntries(
+    d.prepare("SELECT name, garmin_map_status FROM exercises").all().map((r) => [r.name, r.garmin_map_status])
+  );
+  assert.equal(rows["Pallof Press"], null);
+  assert.equal(rows["Dead hang"], "skipped");
+  assert.equal(rows["Back Squat"], "mapped");
+
+  // Idempotent: a second pass finds nothing left to move.
+  d.exec("PRAGMA user_version = 103;");
+  runMigrations(d);
+  assert.equal(JSON.parse(d.prepare("SELECT garmin_json FROM sessions WHERE id = 1").get().garmin_json).duration_min, 34);
+  d.close();
+});

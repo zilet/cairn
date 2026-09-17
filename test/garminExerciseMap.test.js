@@ -10,6 +10,7 @@ import {
   isValidGarminRef,
   mapExerciseToGarmin,
   sameExerciseIdentity,
+  unresolvedGarminNameAliases,
 } from "../dist/repo/garmin-exercise-map.js";
 import { buildGarminExerciseSetsPayload } from "../dist/garminExport.js";
 
@@ -291,4 +292,35 @@ test("FILL overlays a timed hold's duration, not the watch's slot length", () =>
   assert.equal(payload.mode, "fill");
   assert.equal(payload.body.exerciseSets[0].duration, 75);
   assert.equal(payload.body.exerciseSets[0].startTime, "2026-09-01T07:30:00.0");
+});
+
+// ---- the gym's name for a movement FIT calls something else --------------------
+// Token overlap cannot bridge "Pallof Press" and "Cable Core Press" — they share no
+// word — so these lifts were silently absent from every write-back. A short table of
+// hand-checked identities resolves to a real catalog row; nothing here invents an enum.
+
+test("a Pallof press is FIT's own Cable Core Press", () => {
+  const hit = mapExerciseToGarmin("Pallof Press");
+  assert.equal(hit.category, "CORE");
+  assert.equal(hit.exercise, "CABLE_CORE_PRESS");
+  assert.ok(isValidGarminRef(hit));
+});
+
+test("a reverse pec deck is the seated rear-delt raise FIT files under LATERAL_RAISE", () => {
+  const hit = mapExerciseToGarmin("Reverse Pec Deck");
+  assert.equal(hit.category, "LATERAL_RAISE");
+  assert.equal(hit.exercise, "SEATED_REAR_LATERAL_RAISE");
+  assert.ok(isValidGarminRef(hit));
+});
+
+test("a single-arm dumbbell pull is a row, however the gym abbreviates it", () => {
+  for (const name of ["Single-Arm Dumbbell Pull", "Single Arm DB Pull", "Single-Arm DB Pulls"]) {
+    const hit = mapExerciseToGarmin(name);
+    assert.equal(hit.category, "ROW", name);
+    assert.ok(isValidGarminRef(hit), name);
+  }
+});
+
+test("every hand-checked alias points at a row the catalog actually has", () => {
+  assert.deepEqual(unresolvedGarminNameAliases(), []);
 });

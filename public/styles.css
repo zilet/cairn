@@ -2896,6 +2896,10 @@ body.sheet-open{overflow:hidden}
 .gz-seg{height:100%;min-width:1px}
 .gz-legend{font-size:.56rem;letter-spacing:.1em;color:var(--muted)}
 .garmin-sum{margin-top:8px;font-size:.86rem;line-height:1.45;color:var(--ink-2)}
+/* What actually reached Garmin, on the days some of it could not. A quiet receipt,
+   never a warning: the work is logged here either way — Garmin simply has no name
+   for that lift yet. */
+.garmin-receipt{margin-top:8px;font-size:.78rem;line-height:1.45;color:var(--muted)}
 
 /* The calm "Garmin logged a lift not in Cairn yet — reconcile?" pull-card on Today.
    Waits quietly (pull, never push); a single Reconcile action links it to a session. */
@@ -5089,6 +5093,10 @@ button.hmk-row:active{background:var(--card-2)}
 /* accent action → .linkbtn.linkbtn-plain; delta = layout + disabled */
 .cardio-sync-go{flex:0 0 auto;font-size:.74rem;letter-spacing:.02em;padding:2px 2px}
 .cardio-sync-go:disabled{color:var(--muted);cursor:default}
+/* A quiet note under the sync row — a write-back that stopped landing, a watch that
+   stopped sending sleep. It wraps (unlike the single-line status above it) because
+   the sentence matters more than the row height, and it is never a warning colour. */
+.cardio-sync-note{margin-top:5px;color:var(--muted);font-size:.72rem;line-height:1.4}
 
 /* Day-type-aware lead: a run-led session head (no focus pill — there's no set-by-set
    logging to focus into). Otherwise inherits the .session-head layout unchanged. */

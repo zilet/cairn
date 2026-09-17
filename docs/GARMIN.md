@@ -116,6 +116,52 @@ to test it on a device/account that is known to report the metric.
   `sleep_score` / `avg_sleep_stress` / `restless_count` are gap-filled from
   `/wellness-service/wellness/dailySleepData/{displayName}`.
 
+### Reading Cairn's own echo back (duration, calories, HRV status)
+
+Cairn writes strength sessions back to Garmin (below), so part of what the sync reads
+is Cairn's own shell activity — and two Garmin fields do not mean the same thing there
+as on a watch recording. The rules live in `src/repo/garmin-authorship.ts`, which the
+sync, the exporter and the repair migration all read:
+
+- **Duration.** A run or a ride is timed by `movingDuration` (it drops the time spent
+  standing at a crossing). A **strength** activity, and anything Cairn authored, is
+  timed by the elapsed `duration`: on those, "moving" time is the summed length of the
+  ACTIVE set slots, so a 34-minute session with rest between sets came back as 6
+  minutes on the training log. Reconciliation carries the same rule — a shell Cairn
+  created may LENGTHEN the session's blob but never shorten it below the session's own
+  measured span, while a watch recording's own duration always stands.
+- **Calories.** Garmin auto-calculates a figure for a manual activity that has no heart
+  rate and flags it `isAutoCalcCalories`; on a Cairn shell that is a constant 65.534 —
+  a number nobody produced. It reads as **absent**, never as a measurement. An activity
+  the athlete entered by hand keeps Garmin's estimate: that one is still theirs.
+- **HRV status.** `hrv_status` stores only `balanced` / `unbalanced` / `low` / `poor`.
+  Garmin also sends `NONE`, which is the watch saying it has no status yet; anything
+  outside the documented set is stored as NULL, so absence looks like absence.
+
+An activity Cairn authored is identified by the marker in its own NAME (` · Cairn`),
+never by physiology or by the local ledger — the ledger can lose an id, and a watch
+strength recording with no heart rate is indistinguishable from a shell by rank alone.
+
+### Sleep the watch never sent
+
+A device that stops reporting sleep is neither a Cairn bug nor an athlete failure, and
+Cairn already handles the absence correctly everywhere (a missing night is ABSENT,
+never a bad night) — which is exactly what makes the gap invisible. `sleepNightsMissing()`
+counts the nights in the last week no source reported, and the sync line says so once
+when at least three of seven are missing. A coverage fact, never a nag, and it counts
+EVERY source: a night Apple Health supplied is a night that is not missing.
+
+### One pass, one invalidation per date
+
+A sync writes dozens of efforts onto a handful of days. Each write used to pay its own
+training-cache bump, guarded day-read invalidation and daily-session reconcile, so a
+100-activity pass ran a hundred day-read rebuilds, most of them against a half-written
+picture. The activity loop now collects its touched dates in a `GarminSyncDeferral` and
+pays them once per date after the strength reconcile (`newGarminSyncDeferral` /
+`flushGarminSyncDeferral`, `src/repo/activities.ts`) — what the daily-metric writer has
+done since it was written. The surviving compare reads the pass's FINAL state, so a
+decision the sync genuinely moved still retires the cached read.
+
 `garmin_activities` now also captures per-workout body reaction: moving time,
 elevation loss, aerobic + anaerobic training effect (and label), cadence, power
 (avg/max/normalized), speed, ambient temperature, activity-level VO₂max, and the
@@ -263,8 +309,15 @@ vocabulary.
 `BENCH_PRESS` plus an optional sub-exercise such as `BARBELL_BENCH_PRESS`), and an
 unknown member 400s the whole payload. `src/repo/garmin-exercise-map.ts` resolves a
 Cairn name against a checked-in catalog (`src/garmin-exercise-catalog.json`, 1527 rows
-across 47 categories) — exact, token-key, fuzzy, or category-only — and never invents an
-enum. The pair is stored on `exercises.garmin_category` / `garmin_exercise` /
+across 47 categories) — exact, hand-checked alias, token-key, fuzzy, or category-only —
+and never invents an enum. The ALIAS step exists because FIT names some movements
+nothing like the gym does and no amount of token overlap will bridge that: a Pallof
+press shares not one word with "Cable Core Press", which is FIT's own name for exactly
+that hold. `GYM_NAME_ALIASES` is a short table of identities a human checked, keyed by
+the expanded token set (so "Single-Arm DB Pull" and "single arm dumbbell pulls" are one
+entry) and valued by a catalog DISPLAY name; an entry whose target is not in the
+catalog is dropped at load and a contract test asserts there are none. A
+merely-similar lift belongs in the agentic shortlist, not here. The pair is stored on `exercises.garmin_category` / `garmin_exercise` /
 `garmin_map_status` at insert, with no agent involved, so write-back works on a fresh
 offline install. The long tail the catalog cannot place is offered to the `exercise`
 enrichment agent as a shortlist it must choose from (or return null for), validated
@@ -277,11 +330,27 @@ Weight on the wire is **grams**. Cairn's encodings survive: a negative weight (a
 and a null (bodyweight) both send no load at all, and a timed exercise sends a duration
 with no reps.
 
+**The receipt.** A lift the catalog cannot place is left out of the payload, and that
+used to be silent — a 14-set session landed as 8 on Garmin with nothing anywhere saying
+so. Every write now records `exported_sets`, `skipped_sets` and `skipped_exercises` on
+`sessions.garmin_json.export`, and the session's Garmin card says it in one quiet line
+("8 of 14 sets on Garmin · Pallof Press, Reverse Pec Deck have no Garmin name yet").
+A write that landed whole says nothing: a receipt for complete work is noise. The
+counts are refreshed even on an `unchanged` pass, which costs no network, so a record
+written before the receipt existed heals itself. To resolve the tail, hand the
+movements to the agentic pass with `POST /api/garmin/export-backfill`
+`{apply:true, refine_unmapped:true}` (below).
+
 **Idempotency.** A successful write is recorded on `sessions.garmin_json.export` as
-`{ activity_id, source: "watch"|"manual", fingerprint, exported_at, mode }`. The
-fingerprint is a stable hash of the ordered logged sets and their mapping, so a
-re-finish, a re-sync or a scheduler pass over an unchanged session skips before touching
-the network — while editing one rep re-exports.
+`{ activity_id, source: "watch"|"manual", fingerprint, exported_at, mode }` plus the
+receipt. The fingerprint is a stable hash of the ordered logged sets and their mapping
+**plus the session's own title and duration**, because those two are in the write as
+well — the shell's name IS the session's title and its duration IS the session's
+duration. So a re-finish, a re-sync or a scheduler pass over an unchanged session skips
+before touching the network, while editing one rep, renaming the day or correcting the
+duration re-exports IN PLACE, onto the same activity id. (The re-export rewrites the
+sets; the shell's own name and duration fields on Garmin are only set at CREATE time,
+since there is no verified endpoint for editing them.)
 
 **Toggle.** Settings → Sources → Garmin Connect → "Send finished strength sessions back
 to Garmin" (`settings.garmin_export_strength`, default ON; also settable via MCP
@@ -289,6 +358,18 @@ to Garmin" (`settings.garmin_export_strength`, default ON; also settable via MCP
 queue as the `garmin_export` kind — enqueued by `finishSession` and by `syncGarmin` for
 finished sessions in the sync window — and is deliberately independent of
 `enrich_enabled`, since it is deterministic and involves no agent.
+
+**When a write stops landing.** Every failure is a quiet no-op by design, which left a
+persistently failing PUT invisible: the Cairn log looked complete, Garmin held nothing,
+and the only trace was a log line nobody reads. Each attempt now records a
+`diagnostic_events` row (`source: worker`, `kind: garmin_export`, fingerprinted by
+error class so a day of timeouts is one issue with a count) and a one-line status on
+`settings.garmin_last_export_status` / `garmin_last_export_attempt_at`
+(`src/repo/garmin-export-telemetry.ts`). The sync line and the Settings toggle read
+that status and say so once — "Last Garmin write failed 2h ago · it tries again on the
+next sync" — never more than once, and never as a demand. The two configuration skips
+(toggle off, no credentials) write neither: a feature that is switched off is not an
+outcome.
 
 ## Official Garmin API Request
 

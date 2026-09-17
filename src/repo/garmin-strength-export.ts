@@ -31,11 +31,34 @@ export interface GarminSessionExportRecord {
    * written before the plural form. Never persisted — set `pending_deletes` instead.
    */
   pending_delete?: string;
+  /**
+   * The RECEIPT: how much of the athlete's log actually reached Garmin. A lift the FIT
+   * catalog cannot place is left out of the payload — correct, since an invented enum
+   * 400s the whole write — but the SILENCE was the defect: roughly one set in six went
+   * missing with nothing anywhere saying so. These three say it, on the session itself,
+   * so a surface can name the movements that have no Garmin name yet. Absent on a
+   * record written before the receipt existed, which reads as "we don't know", never
+   * as "nothing was skipped".
+   */
+  exported_sets?: number;
+  skipped_sets?: number;
+  skipped_exercises?: string[];
 }
 
 function idList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((entry) => String(entry ?? "").trim()).filter(Boolean))];
+}
+
+function countOrNull(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : null;
+}
+
+/** Movement NAMES, deduped and bounded — a display label, never the whole log. */
+function nameList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((entry) => String(entry ?? "").trim()).filter(Boolean))].slice(0, 12);
 }
 
 export interface GarminExportSetRow {
@@ -175,6 +198,9 @@ export function getSessionGarminExport(sessionId: number): GarminSessionExportRe
   const legacyPending = String(record.pending_delete ?? "").trim();
   const pending = [...new Set([...idList(record.pending_deletes), ...(legacyPending ? [legacyPending] : [])])];
   const created = idList(record.created_ids);
+  const exported = countOrNull(record.exported_sets);
+  const skipped = countOrNull(record.skipped_sets);
+  const skippedExercises = nameList(record.skipped_exercises);
   return {
     activity_id: activityId,
     source: record.source === "watch" ? "watch" : "manual",
@@ -183,6 +209,9 @@ export function getSessionGarminExport(sessionId: number): GarminSessionExportRe
     mode: String(record.mode ?? ""),
     ...(created.length ? { created_ids: created } : {}),
     ...(pending.length ? { pending_deletes: pending, pending_delete: pending[0] } : {}),
+    ...(exported == null ? {} : { exported_sets: exported }),
+    ...(skipped == null ? {} : { skipped_sets: skipped }),
+    ...(skippedExercises.length ? { skipped_exercises: skippedExercises } : {}),
   };
 }
 
@@ -193,10 +222,15 @@ export function recordSessionGarminExport(sessionId: number, record: GarminSessi
   const blob = parseGarminBlob(row.garmin_json);
   const stored: Record<string, unknown> = { ...record };
   // Empty lists are noise in a blob a human reads; the singular field is retired.
-  for (const key of ["created_ids", "pending_deletes"]) {
+  for (const key of ["created_ids", "pending_deletes", "skipped_exercises"]) {
     if (!(stored[key] as string[] | undefined)?.length) delete stored[key];
   }
   delete stored.pending_delete;
+  // The counts stay even at zero — "0 skipped" is a real answer, and dropping it
+  // would be indistinguishable from a record written before the receipt existed.
+  for (const key of ["exported_sets", "skipped_sets"]) {
+    if (countOrNull(stored[key]) == null) delete stored[key];
+  }
   blob.export = stored;
   db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), sessionId);
 }

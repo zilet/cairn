@@ -16,6 +16,7 @@ import {
   setSettings,
 } from "../domain/operator/index.js";
 import { researchAutoEligible } from "../research.js";
+import { sleepNightsMissing } from "../repo/activities.js";
 import { getDiagnostics, ingestClientDiagnosticEvents, parseClientDiagnosticBatch } from "../repo/diagnostics.js";
 import { lastGarminStrengthExportAt } from "../repo/garmin-strength-export.js";
 import { getBuildStamp } from "../build-info.js";
@@ -44,9 +45,22 @@ operatorRouter.post("/agent-clis/:name/install", (req, res) => {
 // Settings + agent metadata. route_tasks is server-owned UI metadata for the
 // Settings routing controls, so frontend task labels cannot drift from the
 // backend allowlist.
+// Sleep coverage rides INSIDE `settings` rather than beside it: the sync surfaces
+// (Today, Plan → Endurance, Progress) already hold that object and nothing else, and
+// a fact about whether the watch is reporting belongs next to "last synced". Derived
+// per request, never stored — a settings column would go stale the moment a night
+// landed. Best-effort: a failure here must not take down the Settings screen.
+function garminInputState(): { garmin_sleep_gap_nights: number | null } {
+  try {
+    return { garmin_sleep_gap_nights: sleepNightsMissing() };
+  } catch {
+    return { garmin_sleep_gap_nights: null };
+  }
+}
+
 operatorRouter.get("/settings", (_req, res) =>
   res.json({
-    settings: getSettings(),
+    settings: { ...getSettings(), ...garminInputState() },
     agents: getAgentConfig(),
     route_tasks: listRoutableTasks(),
     research_auto_eligible: researchAutoEligible(),
@@ -57,7 +71,7 @@ operatorRouter.get("/settings", (_req, res) =>
 );
 operatorRouter.put("/settings", (req, res) =>
   res.json({
-    settings: setSettings(req.body ?? {}),
+    settings: { ...setSettings(req.body ?? {}), ...garminInputState() },
     agents: getAgentConfig(),
     route_tasks: listRoutableTasks(),
     garmin_last_export_at: lastGarminStrengthExportAt(),

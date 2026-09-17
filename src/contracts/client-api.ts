@@ -274,6 +274,15 @@ export interface ClientSettings {
   garmin_last_sync_at?: string | null;
   garmin_last_sync_status?: string | null;
   garmin_export_strength?: boolean;
+  /** Last strength write-back ATTEMPT (landed or not), and its one-line result. */
+  garmin_last_export_attempt_at?: string | null;
+  garmin_last_export_status?: string | null;
+  /**
+   * Nights in the last week no source reported sleep for. DERIVED in the route, not a
+   * settings column — it rides inside `settings` because that is the object the sync
+   * surfaces already hold. Absent when it could not be computed.
+   */
+  garmin_sleep_gap_nights?: number | null;
   agent_strategy?: string;
   agent_order?: string[];
   disabled_agents?: string[];

@@ -10,6 +10,7 @@ import type { CcdaHealthExtraction } from "./repo/ccda.js";
 import { recordedClientTimeZone } from "./repo/client-tz.js";
 import { refreshDoctorLoopAttention } from "./repo/doctor-loop.js";
 import { applyExerciseEnrichment, ensureGarminMapping, getExercise, getExerciseDetail, setExerciseEnrichStatus } from "./repo/exercises.js";
+import { recordGarminExportOutcome } from "./repo/garmin-export-telemetry.js";
 import { getSessionGarminExport } from "./repo/garmin-strength-export.js";
 import { MAX_MARKERS_PER_PANEL, addHealthReview, cleanClinicalFacts, estimateMarkerCandidates, getHealthDocumentRaw, plausibleMarkerValue, reconcileHealthDocumentContextEvents, replaceHealthPanels, setHealthDocEnrichStatus, updateHealthDocFields } from "./repo/health.js";
 import { dedupeHealthDocuments } from "./repo/health-dedupe.js";
@@ -1261,11 +1262,21 @@ export async function processGarminExportJob(sessionId: number): Promise<void> {
   try {
     const { exportSessionToGarmin } = await import("./garminExport.js");
     const result = await exportSessionToGarmin(sessionId);
+    // Every attempt leaves a durable trace (repo/garmin-export-telemetry.ts). A log
+    // line is not a surface: a PUT that has failed on every pass for two days used to
+    // be invisible, and the Cairn log looked complete while Garmin held nothing.
+    recordGarminExportOutcome(sessionId, result);
     if (result.skipped) log.info(`[enrich] garmin_export#${sessionId}: skipped (${result.skipped}).`);
-    else if (result.ok) log.info(`[enrich] garmin_export#${sessionId}: ${result.mode} → activity ${result.activity_id}.`);
-    else log.warn(`[enrich] garmin_export#${sessionId}: ${result.error}`);
+    else if (result.ok) {
+      const short = result.skipped_sets
+        ? ` (${result.exported_sets} of ${(result.exported_sets ?? 0) + result.skipped_sets} sets)`
+        : "";
+      log.info(`[enrich] garmin_export#${sessionId}: ${result.mode} → activity ${result.activity_id}${short}.`);
+    } else log.warn(`[enrich] garmin_export#${sessionId}: ${result.error}`);
   } catch (e: any) {
-    log.warn(`[enrich] garmin_export#${sessionId} failed: ${e?.message ?? e}`);
+    const message = e?.message ?? String(e);
+    recordGarminExportOutcome(sessionId, { ok: false, error: message });
+    log.warn(`[enrich] garmin_export#${sessionId} failed: ${message}`);
   }
 }
 

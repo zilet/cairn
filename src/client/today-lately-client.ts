@@ -55,6 +55,38 @@ const TODAY_LATELY_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#
     return `<div class="gz-bar">${segs}</div><div class="gz-legend lbl">time in HR zones</div>`;
   }
 
+  // What actually reached Garmin, on the days not all of it could. A lift the FIT
+  // catalog has no enum for is left out of the write-back on purpose — an invented
+  // enum would 400 the whole payload — and that used to be completely silent: roughly
+  // one set in six went missing with nothing anywhere saying so. This is the receipt.
+  // It speaks only when something was left behind; a complete write says nothing,
+  // because a receipt for work that all landed is noise.
+  const GARMIN_RECEIPT_VARIANTS: Array<(done: string, names: string, plural: boolean) => string> = [
+    (done, names, plural) => `${done} on Garmin · ${names} ${plural ? "have" : "has"} no Garmin name yet`,
+    (done, names, plural) =>
+      `Garmin has ${done} — ${names} ${plural ? "aren't" : "isn't"} in its exercise list yet`,
+    (done, names) => `${done} made it to Garmin · no Garmin name for ${names} yet`,
+  ];
+
+  function garminReceiptHtml(g: TodayLatelyRecord): string {
+    const record = latelyRecord(g.export);
+    const exported = latelyNum(record.exported_sets);
+    const skipped = latelyNum(record.skipped_sets);
+    if (exported == null || skipped == null || skipped <= 0) return "";
+    const names = (Array.isArray(record.skipped_exercises) ? record.skipped_exercises : [])
+      .map((name) => String(name ?? "").trim())
+      .filter(Boolean);
+    if (!names.length) return "";
+    const done = `${exported} of ${exported + skipped} sets`;
+    const date = String(record.exported_at ?? "").slice(0, 10) || undefined;
+    const line = pickDayVariant(GARMIN_RECEIPT_VARIANTS, date, "garmin-export-receipt")(
+      done,
+      names.join(", "),
+      names.length > 1
+    );
+    return `<div class="garmin-receipt">${escHtml(line)}</div>`;
+  }
+
   function garminSessionCard(value: unknown): string {
     const g = latelyRecord(value);
     if (!Object.keys(g).length) return "";
@@ -68,13 +100,15 @@ const TODAY_LATELY_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#
     const kcal = latelyNum(g.calories); if (kcal != null) tile(`${Math.round(kcal)}`, "kcal");
     const te = latelyNum(g.training_effect); if (te != null) tile(`${Math.round(te * 10) / 10}`, "effect");
     const bar = latelyZoneBar(g.hr_zones);
-    if (!tiles.length && !bar && !g.summary) return "";
+    const receipt = garminReceiptHtml(g);
+    if (!tiles.length && !bar && !g.summary && !receipt) return "";
     const tag = g.extrapolated ? `<span class="garmin-tag">✦ logged from Garmin</span>` : "";
     return `<div class="garmin-card reveal" style="--i:2">
       <div class="garmin-card-h"><span class="lbl">Garmin · body's reaction</span>${tag}</div>
       ${tiles.length ? `<div class="garmin-tiles">${tiles.join("")}</div>` : ""}
       ${bar}
       ${g.summary ? `<div class="garmin-sum">${escHtml(g.summary)}</div>` : ""}
+      ${receipt}
     </div>`;
   }
 

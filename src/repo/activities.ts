@@ -2,6 +2,7 @@ import { db, todayISO } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
 import { reconcileDailySessionsForDateSafe } from "./daily-reconciliation.js";
+import { isCairnAuthoredName } from "./garmin-authorship.js";
 import { invalidateDayRead, invalidateDayReadIfDecisionChanged } from "./intelligence.js";
 import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
@@ -104,7 +105,47 @@ function bestManualDuplicateId(input: {
   return best.id;
 }
 
-export function addActivity(input: any) {
+/**
+ * The per-date work a write owes the rest of the app: the training-cache bump, the
+ * guarded day-read invalidation, and the daily-session reconcile.
+ *
+ * A SYNC is a burst of writes, most of them onto the same handful of days, and each
+ * one used to pay all three — a 100-activity pass ran a hundred guarded day-read
+ * rebuilds (each of which recomputes program state, training signals, the recovery
+ * window and the expenditure window) to answer the same question about the same date,
+ * ninety-something times against a half-written picture. The daily-metric writer
+ * already batches for exactly this reason (see upsertGarminDailyMetrics); this is the
+ * same deferral for the ACTIVITY side, which is the slower half of the pass.
+ *
+ * Deferring is not a weaker guarantee: the surviving compare reads the FINAL state of
+ * the pass, so a decision the sync genuinely moved still retires the cached read, and
+ * a pass that only nudged numbers still leaves a warm Brief alone.
+ */
+export interface GarminSyncDeferral {
+  /** Dates whose guarded day-read invalidation the batch still owes. */
+  readDates: Set<string>;
+  /** Dates whose daily-session reconcile the batch still owes. */
+  sessionDates: Set<string>;
+  /** True once any deferred write asked for a training-cache bump. */
+  bump: boolean;
+}
+
+export function newGarminSyncDeferral(): GarminSyncDeferral {
+  return { readDates: new Set<string>(), sessionDates: new Set<string>(), bump: false };
+}
+
+/** Pay everything the pass deferred, once per date. Safe to call on an empty batch. */
+export function flushGarminSyncDeferral(defer: GarminSyncDeferral | null | undefined): void {
+  if (!defer) return;
+  if (defer.bump) bumpTrainingDataVersion();
+  for (const date of defer.readDates) invalidateDayReadIfDecisionChanged(date);
+  for (const date of defer.sessionDates) reconcileDailySessionsForDateSafe(date);
+  defer.readDates.clear();
+  defer.sessionDates.clear();
+  defer.bump = false;
+}
+
+export function addActivity(input: any, defer?: GarminSyncDeferral | null) {
   // Default to the LOCAL day (device-zone aware) — an evening session belongs to
   // today, not tomorrow's UTC date. An explicit input.date (e.g. a Garmin sync or
   // the PWA's picked date) still wins.
@@ -171,13 +212,15 @@ export function addActivity(input: any) {
   if (status === "pending") {
     import("../enrich.js").then((m) => m.enqueueEnrich("activity", row.id)).catch(() => {});
   }
-  bumpTrainingDataVersion(); // cardio feeds weekly-stats + program-state endurance reads
+  if (defer) defer.bump = true;
+  else bumpTrainingDataVersion(); // cardio feeds weekly-stats + program-state endurance reads
   // A logged activity (run/walk/class) is movement — today's Brief should reflect it.
   // A genuinely new effort always moves the decision fingerprint (it appears in the
   // day's effort list, and often in the day's grade), so the guarded form retires the
   // read exactly as the unconditional one did — while a re-recorded duplicate of an
   // effort already on the board no longer costs an agent run.
-  invalidateDayReadIfDecisionChanged(date);
+  if (defer) defer.readDates.add(date);
+  else invalidateDayReadIfDecisionChanged(date);
   // Garmin's richer row is committed immediately after this helper returns; its
   // authoritative upsert emits once there so initial syncs and re-syncs match.
   if (source !== "garmin") {
@@ -190,7 +233,8 @@ export function addActivity(input: any) {
       reason: source ? `${source} activity recorded` : "activity recorded",
     });
   }
-  reconcileDailySessionsForDateSafe(date);
+  if (defer) defer.sessionDates.add(date);
+  else reconcileDailySessionsForDateSafe(date);
   return row;
 }
 
@@ -830,7 +874,7 @@ export interface GarminUpsertOptions {
 export function upsertGarminActivity(
   input: GarminActivityInput,
   sourceId?: number | null,
-  options: GarminUpsertOptions = {}
+  options: GarminUpsertOptions & { defer?: GarminSyncDeferral | null } = {}
 ) {
   if (!input.external_id || !String(input.external_id).trim()) throw new Error("external_id required");
   const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: garminSourceLabel() });
@@ -861,7 +905,8 @@ export function upsertGarminActivity(
   const name = input.name ?? prev?.name ?? `Garmin ${type}`;
   const activity = strength
     ? null
-    : (addActivity({
+    : (addActivity(
+        {
         date,
         type,
         duration_min: input.duration_min ?? null,
@@ -879,7 +924,9 @@ export function upsertGarminActivity(
           ]
             .filter(Boolean)
             .join(" · ") || null,
-      }) as any);
+        },
+        options.defer
+      ) as any);
   // Built from GARMIN_ACTIVITY_MERGE_COLS so the column list, the bind order and the
   // conflict clause cannot drift apart. `date`/`type` always take the incoming value
   // (both were resolved from `prev` above, so a sparse retry still writes the stored
@@ -917,7 +964,8 @@ export function upsertGarminActivity(
      VALUES (${cols.map(() => "?").join(", ")}, datetime('now'))
      ON CONFLICT(source_id, external_id) DO UPDATE SET ${updates}, synced_at = datetime('now')`
   ).run(...values);
-  bumpTrainingDataVersion(); // a synced effort feeds weekly-stats + endurance reads
+  if (options.defer) options.defer.bump = true;
+  else bumpTrainingDataVersion(); // a synced effort feeds weekly-stats + endurance reads
   const row = hydrateJson(
     db
       .prepare(`SELECT * FROM garmin_activities WHERE source_id = ? AND external_id = ?`)
@@ -982,12 +1030,14 @@ export function upsertGarminActivity(
     // minute or a distance by 10 m still reads as material. The fingerprint bands both,
     // so the guard is what actually decides — and a moved date still retires BOTH days,
     // because the effort leaving the old day shrinks its effort list.
-    invalidateDayReadIfDecisionChanged(date);
-    if (prev?.date && String(prev.date) !== date) invalidateDayReadIfDecisionChanged(String(prev.date));
+    for (const touched of [date, ...(prev?.date && String(prev.date) !== date ? [String(prev.date)] : [])]) {
+      if (options.defer) options.defer.readDates.add(touched);
+      else invalidateDayReadIfDecisionChanged(touched);
+    }
   }
-  reconcileDailySessionsForDateSafe(date);
-  if (prev?.date && String(prev.date) !== date) {
-    reconcileDailySessionsForDateSafe(String(prev.date));
+  for (const touched of [date, ...(prev?.date && String(prev.date) !== date ? [String(prev.date)] : [])]) {
+    if (options.defer) options.defer.sessionDates.add(touched);
+    else reconcileDailySessionsForDateSafe(touched);
   }
   emitBrainEvent({
     kind: "activity_synced",
@@ -1170,6 +1220,66 @@ export function upsertGarminDailyMetrics(
   return rows;
 }
 
+// ---- HRV status vocabulary --------------------------------------------------
+// Garmin's `hrvStatus` carries one more value than the four that mean anything:
+// `NONE`, which is the device saying it has NO status yet (too few nights to build a
+// baseline). Stored verbatim it becomes a status — the coach context renders it
+// beside "balanced" and "unbalanced" as though it were one, and a model reading
+// "hrv_status: NONE" has no way to tell "no reading" from a reading. Absence must look
+// like absence, so anything outside the documented set is stored as NULL.
+export const GARMIN_HRV_STATUSES = ["balanced", "unbalanced", "low", "poor"] as const;
+
+/** The stored value, or null when Garmin reported no status (`NONE`) or junk. */
+export function normalizeGarminHrvStatus(value: unknown): string | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  // Case is preserved: consumers lowercase before comparing, and the raw casing is
+  // what the provider sent. Only membership is checked.
+  return (GARMIN_HRV_STATUSES as readonly string[]).includes(text.toLowerCase()) ? text : null;
+}
+
+// ---- sleep coverage ---------------------------------------------------------
+// How many of the recent nights the watch sent NOTHING for.
+//
+// A device that stops reporting sleep is not a Cairn bug and not an athlete failure:
+// the watch came off, the battery died, Garmin returned an empty sleep DTO. Cairn
+// handles that absence correctly everywhere — a missing night is ABSENT, never a bad
+// night — and that correctness is exactly what makes the gap invisible. The athlete
+// sees a Brief that quietly stops mentioning sleep, with no way to learn why.
+//
+// So: one number over a short window, for one calm line on the sync surface. It is a
+// COVERAGE fact, never a judgement, and it counts EVERY source — a night Apple Health
+// supplied is a night that is not missing.
+export const SLEEP_COVERAGE_WINDOW_NIGHTS = 7;
+/** Under this many missing nights the surface says nothing: a stray night is normal. */
+export const SLEEP_COVERAGE_GAP_MIN = 3;
+
+export function sleepNightsMissing(
+  windowNights: number = SLEEP_COVERAGE_WINDOW_NIGHTS,
+  asOf: string = localDateISO()
+): number {
+  const nights = Math.max(1, Math.min(31, Math.trunc(windowNights) || SLEEP_COVERAGE_WINDOW_NIGHTS));
+  const until = /^\d{4}-\d{2}-\d{2}$/.test(String(asOf ?? "")) ? String(asOf) : localDateISO();
+  const since = addDaysISO(until, -(nights - 1));
+  const covered = new Set<string>();
+  // Sleep rows are dated by the WAKE day (CLAUDE.md), so the window is plain dates.
+  for (const table of ["garmin_daily_metrics", "daily_metrics"]) {
+    try {
+      for (const row of db
+        .prepare(
+          `SELECT DISTINCT date FROM ${table}
+            WHERE sleep_min IS NOT NULL AND sleep_min > 0 AND date >= ? AND date <= ?`
+        )
+        .all(since, until) as any[]) {
+        covered.add(String(row.date));
+      }
+    } catch {
+      /* a table this install does not have contributes no coverage */
+    }
+  }
+  return Math.max(0, nights - covered.size);
+}
+
 // hydrateJson + parse the per-activity JSON arrays (hr_zones, exercise_sets) into
 // clean fields, dropping the raw *_json strings.
 function hydrateGarminActivity(r: any) {
@@ -1330,7 +1440,10 @@ function physiologyOf(row: any) {
 // from all linked same-day rows on every reconcile (not accumulated), so re-syncs
 // stay perfectly idempotent (no double-counting). A single-activity day collapses to
 // exactly the prior behaviour (the merge of a row with itself = that row).
-export function reconcileGarminStrength(garminActivityId: number) {
+export function reconcileGarminStrength(
+  garminActivityId: number,
+  options: { defer?: GarminSyncDeferral | null } = {}
+) {
   const row = db.prepare(`SELECT * FROM garmin_activities WHERE id = ?`).get(garminActivityId) as any;
   if (!row || !isStrengthGarminType(row.type)) return null;
   const date = row.date || todayISO();
@@ -1387,12 +1500,24 @@ export function reconcileGarminStrength(garminActivityId: number) {
   const existingSetAuthority = existing?.cairn_sets_authoritative;
   const setAuthority =
     typeof existingSetAuthority === "boolean" ? existingSetAuthority : preexistingSets.length > 0 ? true : undefined;
+  // When the carrier is a shell CAIRN created, the session's own duration is the
+  // measurement and the activity is the echo — so the echo may lengthen the blob but
+  // never shorten it. Garmin reports a manual strength shell's "moving" time as the
+  // summed length of the set slots Cairn wrote, which once turned a 34-minute session
+  // into six on the training log. A watch recording is not touched: that IS the
+  // measurement, and a session the athlete left running longer than they trained
+  // should read the watch's number.
+  const sessionDurationMin = session.duration_min == null ? null : Number(session.duration_min);
+  const primaryDurationMin =
+    isCairnAuthoredName(primary.name) && sessionDurationMin != null && Number.isFinite(sessionDurationMin)
+      ? Math.max(sessionDurationMin, Number(primary.duration_min) || 0)
+      : primary.duration_min;
   const blob = {
     // Identity fronted by the primary (longest) activity — preserves single-activity output.
     external_id: primary.external_id,
     type: primary.type,
     name: primary.name,
-    duration_min: primary.duration_min,
+    duration_min: primaryDurationMin,
     // Merged physiology across ALL contributing same-day activities.
     avg_hr: merged.avg_hr,
     max_hr: merged.max_hr,
@@ -1426,7 +1551,8 @@ export function reconcileGarminStrength(garminActivityId: number) {
   // never look at (dayLoad reads logged_sets and garmin_activities). A re-sync rewrites
   // a near-identical blob, so the guarded form keeps this idempotent — the sibling
   // patch path below (patchSessionGarmin) has been guarded for exactly this reason.
-  invalidateDayReadIfDecisionChanged(date);
+  if (options.defer) options.defer.readDates.add(date);
+  else invalidateDayReadIfDecisionChanged(date);
 
   let exercise_sets: any = null;
   try {
@@ -1434,8 +1560,14 @@ export function reconcileGarminStrength(garminActivityId: number) {
   } catch {
     exercise_sets = null;
   }
-  bumpTrainingDataVersion(); // links a session + deletes the stale generic activity row
-  reconcileDailySessionsForDateSafe(date);
+  // links a session + deletes the stale generic activity row
+  if (options.defer) {
+    options.defer.bump = true;
+    options.defer.sessionDates.add(date);
+  } else {
+    bumpTrainingDataVersion();
+    reconcileDailySessionsForDateSafe(date);
+  }
   // is_primary reflects whether THIS reconciled row is the day's primary (longest).
   const isPrimary = primary.external_id === (row.external_id ?? null);
   return {

@@ -25,6 +25,10 @@ function loadCardioSync() {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  // date-utils publishes pickDayVariant, which the quiet notes rotate through; the
+  // fixture's relTime stub still wins so the assertions stay on the wording.
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  context.relTime = (at) => `<${at}>`;
   vm.runInNewContext(readFileSync(join(root, "public/js/cardio-sync-client.js"), "utf8"), context);
   return context.CairnCardioSync;
 }
@@ -78,4 +82,40 @@ test("cardio sync helper renders failed sync state", () => {
 
   assert.match(html, /Sync failed/);
   assert.match(html, /cardio-sync-dot err/);
+});
+
+// ---- the quiet notes under the sync row ----------------------------------------
+// Two things could be wrong and neither was visible anywhere: a strength write-back
+// that had stopped landing, and a watch that had stopped sending sleep.
+
+const CONFIGURED = { garmin_credentials_source: "env", garmin_last_sync_at: "2026-06-30T11:00:00.000Z" };
+
+test("a Garmin write-back that stopped landing says so, with what happens next", () => {
+  const sync = loadCardioSync();
+
+  const html = sync.lineHtml({
+    ...CONFIGURED,
+    garmin_last_export_status: "failed: timeout",
+    garmin_last_export_attempt_at: "2026-06-30T10:00:00.000Z",
+  });
+
+  assert.match(html, /cardio-sync-note/);
+  assert.match(html, /didn't land|didn't take|failed/);
+  // The stub's angle brackets come back escaped — the note goes through escHtml.
+  assert.match(html, /&lt;2026-06-30T10:00:00\.000Z&gt;/);
+});
+
+test("a watch that stopped sending sleep is named once, and only past the threshold", () => {
+  const sync = loadCardioSync();
+
+  assert.match(sync.lineHtml({ ...CONFIGURED, garmin_sleep_gap_nights: 4 }), /4 of the last 7 nights/);
+  // Two stray nights is normal; the line stays quiet.
+  assert.doesNotMatch(sync.lineHtml({ ...CONFIGURED, garmin_sleep_gap_nights: 2 }), /cardio-sync-note/);
+  assert.doesNotMatch(sync.lineHtml(CONFIGURED), /cardio-sync-note/);
+});
+
+test("an unconfigured Garmin says nothing at all, notes included", () => {
+  const sync = loadCardioSync();
+
+  assert.equal(sync.lineHtml({ garmin_sleep_gap_nights: 7, garmin_last_export_status: "failed: auth" }), "");
 });

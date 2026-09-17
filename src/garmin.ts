@@ -2,10 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { emitBrainEvent } from "./brainEvents.js";
-import { garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetrics, upsertGarminSource } from "./repo/activities.js";
+import { flushGarminSyncDeferral, garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, newGarminSyncDeferral, normalizeGarminHrvStatus, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetrics, upsertGarminSource } from "./repo/activities.js";
 import { runWithBrainSnapshot } from "./brain/snapshot.js";
 import type { GarminActivityInput, GarminDailyMetricInput } from "./repo/activities.js";
 import { detectRunCalibration } from "./repo/calibration.js";
+import {
+  garminActivityCalories,
+  garminActivityDurationSec,
+  isCairnAuthoredName,
+} from "./repo/garmin-authorship.js";
 import { sessionsEligibleForGarminExport } from "./repo/garmin-strength-export.js";
 import { deriveHrModel } from "./repo/hr-model.js";
 import { getGarminCredentials, getSettings, setGarminSyncStatus } from "./repo/settings.js";
@@ -307,17 +312,28 @@ export function extractGarminActivityTemp(activity: any): number | null {
 }
 
 function activityToInput(a: any): GarminActivityInput {
-  const durationSec = asNum(a?.movingDuration) ?? asNum(a?.duration);
+  // A STRENGTH activity (and anything Cairn authored) is timed by its ELAPSED span,
+  // never by `movingDuration`: there the "moving" figure is the summed length of the
+  // ACTIVE set slots, so a 34-minute lift with rest between sets reads back as six.
+  // Runs and rides keep moving time. Calories from Garmin's own auto-calculation on a
+  // shell Cairn created are a placeholder, not a measurement. Both rules live in
+  // repo/garmin-authorship.ts so the exporter and the repair read them identically.
+  const name = a.activityName || null;
+  const cairnAuthored = isCairnAuthoredName(name);
+  const durationSec = garminActivityDurationSec(a, {
+    strength: isStrengthGarminType(sourceType(a)),
+    cairnAuthored,
+  });
   const meters = asNum(a?.distance);
   return {
     external_id: String(a.activityId),
     date: (a.startTimeLocal || a.startTimeGMT || "").slice(0, 10),
     start_time: a.startTimeLocal || a.startTimeGMT || null,
     type: sourceType(a),
-    name: a.activityName || null,
+    name,
     duration_min: secToMin(durationSec),
     distance_km: meters == null ? null : Math.round((meters / 1000) * 100) / 100,
-    calories: asNum(a.calories),
+    calories: garminActivityCalories(a, { cairnAuthored }),
     avg_hr: asNum(a.averageHR),
     max_hr: asNum(a.maxHR),
     ascent_m: asNum(a.elevationGain),
@@ -556,7 +572,9 @@ export function foldSleep(sleep: any, m: GarminDailyMetricInput) {
   }
   // SleepData top-level recovery signals.
   m.hrv_ms = asNum(sleep?.avgOvernightHrv);
-  m.hrv_status = pickStr(sleep, ["hrvStatus"]);
+  // `NONE` is the watch saying it has no status yet, not a status. Absence must look
+  // like absence, or the coach context reads it as one (repo/activities.ts).
+  m.hrv_status = normalizeGarminHrvStatus(pickStr(sleep, ["hrvStatus"]));
   m.resting_hr = asNum(sleep?.restingHeartRate);
   m.restless_count = asNonNegNum(sleep?.restlessMomentsCount);
   const bbChange = asNum(sleep?.bodyBatteryChange);
@@ -637,7 +655,7 @@ function foldHrv(hrv: any, m: GarminDailyMetricInput) {
   const sum = hrv?.hrvSummary;
   if (!sum) return;
   m.hrv_ms = pickNum(sum, ["lastNightAvg", "weeklyAvg"]) ?? m.hrv_ms;
-  m.hrv_status = pickStr(sum, ["status"]) ?? m.hrv_status;
+  m.hrv_status = normalizeGarminHrvStatus(pickStr(sum, ["status"])) ?? m.hrv_status;
 }
 
 function foldReadiness(tr: any, m: GarminDailyMetricInput) {
@@ -951,6 +969,13 @@ async function syncGarminPass(options: GarminSyncOptions = {}) {
     // Runs landed by THIS sync — the calibration reader below looks only at them,
     // so a 200-activity backfill doesn't re-read the whole history every pass.
     const runIds: number[] = [];
+    // One deferral for the whole activity pass. A sync writes dozens of efforts onto a
+    // handful of days, and each write used to pay its own guarded day-read rebuild —
+    // the single biggest cost in a pass that measured 19 s typical and 53 s worst. The
+    // daily-metric side has batched for exactly this reason since it was written; this
+    // is the same batching for the activity side. Flushed once, after the strength
+    // reconcile, so the surviving compare reads the pass's FINAL state.
+    const defer = newGarminSyncDeferral();
     for (const row of rows || []) {
       const input = activityToInput(row);
       if (input.date && input.date < since) continue;
@@ -979,7 +1004,7 @@ async function syncGarminPass(options: GarminSyncOptions = {}) {
         if (sets) input.exercise_sets = sets;
         strengthFetches++;
       }
-      const saved = upsertGarminActivity(input, source.id) as any;
+      const saved = upsertGarminActivity(input, source.id, { defer }) as any;
       if (strength && saved?.id) strengthIds.push(saved.id);
       if (!strength && saved?.id && /run/i.test(String(saved.type ?? input.type ?? ""))) runIds.push(Number(saved.id));
       activities++;
@@ -990,11 +1015,13 @@ async function syncGarminPass(options: GarminSyncOptions = {}) {
     // layer on the serial enrichment queue (no-op when enrichment/agents are off).
     for (const id of strengthIds) {
       try {
-        reconcileGarminStrength(id);
+        reconcileGarminStrength(id, { defer });
       } catch (e: any) {
         log.warn(`[garmin] reconcile #${id} failed: ${e?.message ?? e}`);
       }
     }
+    // Everything the pass deferred, once per touched date.
+    flushGarminSyncDeferral(defer);
     // Finished Cairn sessions whose work Garmin may not have yet. Cap the lookback
     // at 7 days so enabling the (default-on) toggle does not silently backfill a
     // month of history into the athlete's Garmin calendar. finishSession still

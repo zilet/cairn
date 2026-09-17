@@ -8,6 +8,7 @@ import {
   cairnShellActivityName,
   createLiveGarminStrengthApi,
   exportSessionToGarmin,
+  garminExportFingerprint,
   sessionBoundStartMs,
   setGarminStrengthApiForTests,
 } from "../dist/garminExport.js";
@@ -965,4 +966,71 @@ test("the last write-back stamp reads the most recent export across sessions", a
     mode: "create",
   });
   assert.equal(repo.lastGarminStrengthExportAt(), first, "the MOST RECENT export is the answer");
+});
+
+// ---- the receipt: what actually reached Garmin ---------------------------------
+// A lift the FIT catalog has no enum for is left out of the payload on purpose (an
+// invented member 400s the whole write), and for a long time that was completely
+// silent: a 14-set session landed as 8 on Garmin with nothing anywhere saying so.
+
+test("an export records how many sets landed and which lifts have no Garmin name", async () => {
+  install();
+  for (let i = 0; i < 3; i++) repo.logSetByName({ exercise: "Back Squat", weight: 185, reps: 5, date: TODAY });
+  for (let i = 0; i < 2; i++) repo.logSetByName({ exercise: "ZTest Knee Wibble", weight: 20, reps: 10, date: TODAY });
+  const session = repo.getSessionByDate(TODAY);
+  repo.finishSession(session.id);
+
+  const result = await exportSessionToGarmin(session.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.exported_sets, 3);
+  assert.equal(result.skipped_sets, 2);
+  assert.deepEqual(result.skipped_exercises, ["ZTest Knee Wibble"]);
+  const record = repo.getSessionGarminExport(session.id);
+  assert.equal(record.exported_sets, 3);
+  assert.equal(record.skipped_sets, 2);
+  assert.deepEqual(record.skipped_exercises, ["ZTest Knee Wibble"]);
+});
+
+test("a session whose whole log maps records a receipt with nothing left behind", async () => {
+  install();
+  const sessionId = seedFinishedSession(3);
+
+  await exportSessionToGarmin(sessionId);
+
+  const record = repo.getSessionGarminExport(sessionId);
+  assert.equal(record.exported_sets, 3);
+  assert.equal(record.skipped_sets, 0);
+  assert.equal(record.skipped_exercises, undefined);
+});
+
+// ---- the fingerprint covers the session's own shape, not just its sets ----------
+// The shell's NAME is the session's title and its DURATION is the session's duration,
+// so an edit to either changes what Garmin should hold. Hashing only the sets meant
+// the exporter reported "unchanged" forever and the stale value stayed on Garmin.
+
+test("the fingerprint moves when the session's name or duration does", () => {
+  const sets = [
+    { exercise_id: 1, set_number: 1, weight: 185, reps: 5, garmin_category: "SQUAT", garmin_exercise: "BACK_SQUAT" },
+  ];
+  const base = garminExportFingerprint(sets, { title: "Pull", duration_min: 34 });
+  assert.notEqual(base, garminExportFingerprint(sets, { title: "Pull B", duration_min: 34 }), "a rename re-exports");
+  assert.notEqual(base, garminExportFingerprint(sets, { title: "Pull", duration_min: 47 }), "a duration fix re-exports");
+  assert.equal(base, garminExportFingerprint(sets, { title: "Pull", duration_min: 34 }), "and is otherwise stable");
+  // A caller that states no shape hashes exactly as it always did.
+  assert.equal(garminExportFingerprint(sets), garminExportFingerprint(sets, null));
+});
+
+test("correcting a session's duration re-exports in place", async () => {
+  const calls = install();
+  const sessionId = seedFinishedSession(3);
+  await exportSessionToGarmin(sessionId);
+  assert.equal((await exportSessionToGarmin(sessionId)).skipped, "unchanged");
+
+  db.prepare(`UPDATE sessions SET duration_min = 47 WHERE id = ?`).run(sessionId);
+  const result = await exportSessionToGarmin(sessionId);
+
+  assert.equal(result.activity_id, "9001");
+  assert.equal(calls.create.length, 1);
+  assert.equal(calls.put.length, 2);
 });

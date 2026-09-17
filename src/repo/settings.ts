@@ -42,6 +42,8 @@ export interface Settings {
   garmin_last_sync_at: string | null; // UTC ISO of the last completed sync (ok or failed)
   garmin_last_sync_status: string; // short result line: "ok: 12 activities · 14 daily" | "failed: …"
   garmin_export_strength: boolean; // send finished Cairn strength sessions back to Garmin (default ON; Garmin stays the input for runs/recovery)
+  garmin_last_export_attempt_at: string | null; // UTC ISO of the last write-back ATTEMPT (landed or not)
+  garmin_last_export_status: string; // short result line: "ok: 8 of 14 sets" | "failed: …"
   gemini_api_key_configured: boolean;
   gemini_api_key_source: "settings" | "env" | "none";
   research_enabled: boolean; // host-side evidence research (default OFF; off ⇒ deterministic, no network)
@@ -317,6 +319,8 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["lead_mode", "TEXT DEFAULT 'lead'"],
   ["training_drive", "TEXT DEFAULT 'steady'"],
   ["garmin_export_strength", "INTEGER DEFAULT 1"],
+  ["garmin_last_export_attempt_at", "TEXT DEFAULT ''"],
+  ["garmin_last_export_status", "TEXT DEFAULT ''"],
 ];
 let settingsSchemaChecked = false;
 
@@ -468,6 +472,8 @@ function defaultSettings(): Settings {
     garmin_last_sync_at: null,
     garmin_last_sync_status: "",
     garmin_export_strength: true, // a finished Cairn strength session goes back to the watch by default
+    garmin_last_export_attempt_at: null,
+    garmin_last_export_status: "",
     gemini_api_key_configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY),
     gemini_api_key_source: process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY ? "env" : "none",
     research_enabled: false, // host-side research off by default — opt-in, deterministic when off
@@ -552,6 +558,9 @@ function rowToSettings(row: any): Settings {
     garmin_last_sync_status: row.garmin_last_sync_status == null ? "" : String(row.garmin_last_sync_status),
     // NULL on old rows (column added by the settings column repair) defaults to ON.
     garmin_export_strength: row.garmin_export_strength == null ? true : !!row.garmin_export_strength,
+    garmin_last_export_attempt_at: String(row.garmin_last_export_attempt_at ?? "").trim() || null,
+    garmin_last_export_status:
+      row.garmin_last_export_status == null ? "" : String(row.garmin_last_export_status),
     gemini_api_key_configured: !!(rowGemini || envGemini),
     gemini_api_key_source: rowGemini ? "settings" : envGemini ? "env" : "none",
     // NULL on old rows (column added by migration v28) defaults to OFF.
@@ -661,6 +670,9 @@ export function setSettings(patch: any): Settings {
     garmin_last_sync_status: cur.garmin_last_sync_status,
     garmin_export_strength:
       patch.garmin_export_strength !== undefined ? !!patch.garmin_export_strength : cur.garmin_export_strength,
+    // Write-back status is read-only here too — recorded by setGarminExportStatus().
+    garmin_last_export_attempt_at: cur.garmin_last_export_attempt_at,
+    garmin_last_export_status: cur.garmin_last_export_status,
     gemini_api_key_configured: !!geminiApiKeyForStatus || cur.gemini_api_key_configured,
     gemini_api_key_source: cur.gemini_api_key_source,
     research_enabled: patch.research_enabled !== undefined ? !!patch.research_enabled : cur.research_enabled,
@@ -759,6 +771,23 @@ export function getGarminCredentials() {
 export function setGarminSyncStatus(status: string) {
   getSettings(); // lazily creates the singleton row
   db.prepare(`UPDATE settings SET garmin_last_sync_at = ?, garmin_last_sync_status = ? WHERE id = 1`).run(
+    new Date().toISOString(),
+    String(status ?? "")
+      .trim()
+      .slice(0, 200)
+  );
+}
+
+/**
+ * Recorded by the `garmin_export` queue job (src/enrich.ts) on every write-back that
+ * was actually attempted. The sibling of setGarminSyncStatus, and for the same reason:
+ * without it a PUT that has been failing for two days is invisible — the Cairn log
+ * looks complete, Garmin quietly holds nothing, and the only trace is a log line
+ * nobody reads. Routine no-ops (the toggle off, no credentials) never write here.
+ */
+export function setGarminExportStatus(status: string) {
+  getSettings(); // lazily creates the singleton row
+  db.prepare(`UPDATE settings SET garmin_last_export_attempt_at = ?, garmin_last_export_status = ? WHERE id = 1`).run(
     new Date().toISOString(),
     String(status ?? "")
       .trim()

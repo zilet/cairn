@@ -40,6 +40,11 @@ function loadTodayLately() {
     actArtText: (activity) => `activity:${activity.type || ""}`,
   };
   context.window = context;
+  // date-utils publishes pickDayVariant, which the export receipt rotates through.
+  // It also publishes the real relTime/humanDate; the fixture's stubs win, as before.
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  context.relTime = (iso) => `rel:${iso}`;
+  context.humanDate = (iso) => `human:${iso}`;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-lately-client.js"), "utf8"), context);
   return context.CairnTodayLately;
 }
@@ -87,4 +92,39 @@ test("today lately renders expandable strength rows without leaking raw markup",
   assert.match(html, /3×/);
   assert.match(html, /rel:2026-06-30T10:00:00\.000Z/);
   assert.doesNotMatch(html, /Push <day>|Bench <press>/);
+});
+
+// ---- the Garmin export receipt --------------------------------------------------
+// A lift the FIT catalog has no enum for is left out of the write-back on purpose, and
+// that used to be silent: a 14-set session landed as 8 with nothing anywhere saying so.
+
+test("the Garmin card names the lifts that never reached Garmin", () => {
+  const lately = loadTodayLately();
+
+  const html = lately.garminSessionCard({
+    duration_min: 34,
+    export: {
+      activity_id: "24386427797",
+      exported_at: "2026-09-16T18:04:00.000Z",
+      exported_sets: 8,
+      skipped_sets: 6,
+      skipped_exercises: ["Pallof <Press>", "Reverse Pec Deck"],
+    },
+  });
+
+  assert.match(html, /garmin-receipt/);
+  assert.match(html, /8 of 14 sets/);
+  assert.match(html, /Pallof &lt;Press&gt;/);
+  assert.doesNotMatch(html, /Pallof <Press>/);
+});
+
+test("a write that landed whole says nothing — a receipt for complete work is noise", () => {
+  const lately = loadTodayLately();
+
+  const html = lately.garminSessionCard({
+    duration_min: 34,
+    export: { activity_id: "9001", exported_at: "2026-09-16T18:04:00.000Z", exported_sets: 14, skipped_sets: 0 },
+  });
+
+  assert.doesNotMatch(html, /garmin-receipt/);
 });

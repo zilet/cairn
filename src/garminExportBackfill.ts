@@ -178,7 +178,11 @@ function previewOne(
   const sets = previewSets(rows, new Map(), unmappedHere, seenInBatch);
   for (const [id, name] of unmappedHere) if (!unmappedInBatch.has(id)) unmappedInBatch.set(id, name);
 
-  const fingerprint = garminExportFingerprint(sets);
+  // The SAME shape the exporter hashes, or every preview would predict a rewrite.
+  const fingerprint = garminExportFingerprint(sets, {
+    title: session.title,
+    duration_min: session.duration_min,
+  });
   const prior = repo.getSessionGarminExport(sessionId);
   const linked = repo.listSessionGarminStrengthActivities(sessionId).filter((row) => row.external_id);
   // The exporter's OWN target reasoning, called rather than restated: provenance by
