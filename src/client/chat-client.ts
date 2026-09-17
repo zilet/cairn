@@ -416,6 +416,27 @@ function captureFoodTagInner(status: unknown, food: unknown): string {
   return `✓ ${escHtml(`${meal} · ${bits.join(" · ")}`)}`;
 }
 
+// A plan action that did NOT go live is never a plain "✓". Two shapes:
+//   * scheduled — the change is real and lands on a named day ("⏱ plan update · tomorrow");
+//   * not applied — the athlete asked for today, it could not happen today, and it was
+//     deliberately not moved to another day ("plan update · not applied").
+// The landing word is computed server-side (`landing_label`) so the chip never does its
+// own date math against a timezone it cannot see. Returns null for anything that landed,
+// failed, or is not a plan action, leaving the ordinary tag in place.
+function planLandingTag(action: unknown): { text: string; scheduled: boolean } | null {
+  if (!action || typeof action !== "object") return null;
+  const row = action as Record<string, unknown>;
+  const type = String(row.type || "");
+  if (type !== "plan_update" && type !== "plan_restructure") return null;
+  const result = row.result && typeof row.result === "object" ? (row.result as Record<string, unknown>) : null;
+  if (!result || result.ok !== true || result.applied === true || result.persisted === true) return null;
+  const label = type.replace(/_/g, " ");
+  if (result.held_reason === "today_scoped") return { text: `${label} · not applied`, scheduled: false };
+  if (result.scheduled !== true) return null;
+  const when = String(result.landing_label || result.effective_date || "").trim();
+  return { text: when ? `⏱ ${label} · ${when}` : `⏱ ${label} · scheduled`, scheduled: true };
+}
+
 function highlightTerm(text: unknown, query: unknown): string {
   const escaped = escHtml(text);
   const term = String(query || "").trim();
@@ -472,6 +493,7 @@ const CAIRN_CHAT_CLIENT = {
   captureFoodFromRow,
   captureFoodTagInner,
   captureFoodReviewInner,
+  planLandingTag,
   highlightTerm,
   historySessionRow: chatHistorySessionRow,
   historyHitRow: chatHistoryHitRow,

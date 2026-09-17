@@ -14,9 +14,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  carriesPlanApplyAffirmation,
+  draftsSessionPrescription,
   hasExplicitGoalIntent,
   hasExplicitGoalIntentInContext,
   hasExplicitPlanEditIntent,
+  hasExplicitPlanEditIntentInContext,
   hasExplicitRunEditIntent,
   hasExplicitStrengthObjectiveIntent,
   hasExplicitSymptomReportIntent,
@@ -116,6 +119,67 @@ test("hasExplicitPlanEditIntent separates a command from a question", () => {
     ["What should I change about my squat?", false],
     ["Will you make tomorrow's session easier?", false],
   ]);
+});
+
+// 2026-09-17, live: the athlete designed today's session with the coach over several
+// turns and then wrote the sentence below. None of "apply", "go with", "lock in" or
+// "do it" were verbs here, so the ask read as a background signal, the change was
+// scheduled onto the NEXT day's template, and today's session never moved.
+test("hasExplicitPlanEditIntent hears the athlete's apply words", () => {
+  table(hasExplicitPlanEditIntent, [
+    ["Ok apply it to my program for today. .I am heading to the gym now", true, "the live 2026-09-17 instruction"],
+    ["apply it", true],
+    ["go with that", true],
+    ["lock it in", true],
+    ["do it", true],
+    ["go ahead", true],
+    ["let's do it", true],
+    ["implement that session", true],
+    ["use 135 on today's bench", true],
+    ["Should I apply it today?", false, "a leading question is still a conversation"],
+    ["what sets should I do", false],
+    ["my set felt heavy", false, "reporting a set is not an instruction"],
+    ["that load was brutal today", false],
+  ]);
+});
+
+test("carriesPlanApplyAffirmation accepts a short go-ahead and nothing that reverses it", () => {
+  table(carriesPlanApplyAffirmation, [
+    ["ok", true],
+    ["Yes", true],
+    ["sounds good", true],
+    ["go ahead", true],
+    ["apply it", true],
+    ["ok but not the deadlift", false, "a reversal is not a go-ahead"],
+    ["ok?", false, "a question is never consent"],
+    ["sure, maybe later", false],
+    ["the bench felt heavy", false],
+  ]);
+});
+
+test("draftsSessionPrescription needs two prescription lines, not one number in prose", () => {
+  table(draftsSessionPrescription, [
+    ["Deadlift 3×5 @ 165\nSplit squat 2x10–12", true],
+    ["Deadlift 3 × 8–10\nCalf raise 3x12\nPlank 3x30", true],
+    ["Deadlift 3×5 @ 165", false, "one line is a mention, not a session"],
+    ["Your bench went 3x5 last week and it felt fine.", false],
+    ["", false],
+  ]);
+});
+
+test("hasExplicitPlanEditIntentInContext lets a bare go-ahead carry the drafted session", () => {
+  const drafted = "Here's today's Lower B:\n- Deadlift 3×5 @ 165\n- Split squat 2x10–12\n- Calf raise 3 × 12";
+  const chat = "Nice work today — how did the run feel?";
+  assert.equal(hasExplicitPlanEditIntentInContext("ok", drafted), true);
+  assert.equal(hasExplicitPlanEditIntentInContext("sounds good", drafted), true);
+  assert.equal(hasExplicitPlanEditIntentInContext("ok", chat), false, "a go-ahead needs something to go ahead with");
+  assert.equal(hasExplicitPlanEditIntentInContext("ok", null, true), true, "the prior turn stored a plan draft");
+  assert.equal(hasExplicitPlanEditIntentInContext("what about tomorrow?", drafted), false);
+  assert.equal(
+    hasExplicitPlanEditIntentInContext("Ok apply it to my program for today. .I am heading to the gym now", chat),
+    true,
+    "a sentence that names its own instruction needs no context at all"
+  );
 });
 
 test("hasExplicitRunEditIntent keeps its own vocabulary behind the shared question guard", () => {

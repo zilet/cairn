@@ -117,13 +117,17 @@ const COPY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 // One applied-action pill. A capture-lane food log renders a live chip tied to its
 // food_notes row (data-capture-note): a calm "filling in details…" while background
 // enrichment runs, upgraded in place to "✓ Dinner · 640 kcal · 40g protein" when it
-// lands. Every other action keeps the plain "✓ log food" tag.
+// lands. A plan change that did not go live says WHICH — scheduled for a named day, or
+// not applied at all — because a "✓" over a change that has not happened is the chip
+// telling the athlete the opposite of the truth. Every other action keeps the plain tag.
 function chatAppliedTagHtml(a: ChatScreenAppliedAction): string {
   const info = CairnChatClient.captureFoodInfo(a);
   if (info && !info.missing) {
     const active = CairnChatClient.captureFoodActive(info.status);
     return `<span class="bubble-tag capture-food${active ? " pending" : ""}" data-capture-note="${escAttr(info.id)}">${CairnChatClient.captureFoodTagInner(info.status, info.food)}</span>`;
   }
+  const landing = CairnChatClient.planLandingTag(a);
+  if (landing) return `<span class="bubble-tag">${escHtml(landing.text)}</span>`;
   const record = a as Record<string, unknown>;
   return `<span class="bubble-tag">✓ ${escHtml(String(record.type).replace(/_/g, " "))}${record.error ? " ⚠" : ""}</span>`;
 }

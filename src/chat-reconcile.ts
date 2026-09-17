@@ -102,6 +102,31 @@ export const PLAN_WRITE_UNVERIFIED_VARIANTS = [
   "The plan write landed but didn't fully confirm on readback. Reopen Today before training; I won't call the displayed plan confirmed.",
 ] as const;
 
+// A change that is real but NOT YET LIVE. The athlete asked, the server agreed, and it
+// lands on a later day — which is a perfectly good answer as long as somebody says so.
+// Nothing did: the bubble kept the model's "here's what's queued for today's slot" and
+// the chip read a plain "✓ plan_update". The invariant across the rotation is the two
+// facts that were missing: WHEN it lands, and that today is unchanged until then.
+// `when` comes from describeLandingDay, so it reads "today" / "tomorrow" / "on 2026-09-18".
+export const PLAN_SCHEDULED_NOT_LIVE_VARIANTS: ReadonlyArray<(when: string) => string> = [
+  (when) => `That lands ${when} — today's plan is unchanged until then, and one Undo before it keeps it that way.`,
+  (when) => `Nothing has moved yet: the change takes effect ${when}, and your plan stays as it is until then.`,
+  (when) =>
+    `Your plan is unchanged for now — that change is queued to land ${when}, and an Undo before then cancels it.`,
+  (when) => `Not live yet: it takes effect ${when}. Today's plan is unchanged, and you can Undo before it lands.`,
+] as const;
+
+// The athlete asked for TODAY and it could not happen today. The one thing they must
+// never have to discover for themselves is that it did not quietly become a change to
+// some other day: the premise they gave ("my legs are saturated from this morning's
+// run") belonged to the day they said it on. Invariant: "today's plan is unchanged".
+export const PLAN_TODAY_SCOPED_NOT_APPLIED_VARIANTS = [
+  "Today's plan is unchanged — you asked for today, so I didn't move that change onto another day instead.",
+  "That one didn't land: today's plan is unchanged, and I left it there rather than pushing it onto a different day.",
+  "Nothing changed on today's plan. You asked for today, so I haven't rescheduled that change for another day.",
+  "Today's plan is unchanged. That change was for today or not at all, so it isn't waiting on another day either.",
+] as const;
+
 export const PLAN_NOT_LIVE_VARIANTS: ReadonlyArray<(reason: string) => string> = [
   (reason) => `That plan change is not live. Your current plan is unchanged: ${reason}`,
   (reason) => `That one didn't land — it is not live, and your current plan is unchanged: ${reason}`,
@@ -279,9 +304,13 @@ export function reconcileChatPlanReply(
   reply: string,
   message: string | null | undefined,
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
-  drafts: unknown[]
+  drafts: unknown[],
+  // The apply path's OWN reading of this sentence, including the go-ahead that only
+  // means something beside the coach's previous message. Omitted (tests, older callers)
+  // falls back to the per-message gate, which is what this module always used.
+  explicitPlanEdit?: boolean
 ): string {
-  const explicit = hasExplicitPlanEditIntent(message);
+  const explicit = explicitPlanEdit ?? hasExplicitPlanEditIntent(message);
   const today = localDateISO();
   const restructureEntries = applied.filter((entry) => entry.type === "plan_restructure");
   const planEntries = applied.filter((entry) => entry.type === "plan_update");
@@ -331,6 +360,32 @@ export function reconcileChatPlanReply(
   const results = planEntries.map((entry) => recordOrNull(entry.result) ?? {});
   const verifiedResults = results.filter((result) => result.ok === true && result.verified === true);
   const verified = results.length > 0 && verifiedResults.length === results.length;
+  // Nothing landed, but nothing FAILED either — the server accepted the change and it
+  // is either waiting for a later day or was refused a later day on purpose. Both used
+  // to fall through to the generic "not live" branch (or, when the sentence read as a
+  // background signal, to no receipt at all), which is how a scheduled template rewrite
+  // shipped under prose describing today's session.
+  if (!verifiedResults.length) {
+    const heldToday = results.find((result) => result.ok === true && result.held_reason === "today_scoped");
+    if (heldToday) {
+      const receipt = pickDayVariant(PLAN_TODAY_SCOPED_NOT_APPLIED_VARIANTS, today, "chat-plan-today-scoped");
+      return replyClaimsPlanSuccess(reply) ? receipt : appendReceipt(reply, receipt);
+    }
+    const scheduled = results.find(
+      (result) => result.ok === true && result.applied !== true && result.scheduled === true
+    );
+    if (scheduled) {
+      const landing = String(scheduled.effective_date ?? "");
+      const when =
+        typeof scheduled.landing_label === "string" && scheduled.landing_label
+          ? scheduled.landing_label
+          : landing
+            ? describeLandingDay(landing, today)
+            : "at the next natural point in your week";
+      const receipt = pickDayVariant(PLAN_SCHEDULED_NOT_LIVE_VARIANTS, today, "chat-plan-scheduled")(when);
+      return replyClaimsPlanSuccess(reply) ? receipt : appendReceipt(reply, receipt);
+    }
+  }
   if (verified) {
     if (!explicit && !replyClaimsPlanSuccess(reply)) return reply;
     const days = [

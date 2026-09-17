@@ -29,6 +29,8 @@ import {
   PLAN_NO_CHANGE_APPENDED_VARIANTS,
   PLAN_NOT_LIVE_VARIANTS,
   PLAN_NOT_SAVED_VARIANTS,
+  PLAN_SCHEDULED_NOT_LIVE_VARIANTS,
+  PLAN_TODAY_SCOPED_NOT_APPLIED_VARIANTS,
   PLAN_UNTOUCHED_BY_QUESTION_VARIANTS,
   PLAN_WRITE_UNVERIFIED_VARIANTS,
   reconcileChatPlanReply,
@@ -2351,4 +2353,97 @@ test("every chat refusal rotates its phrasing and keeps its meaning invariant", 
 test("no two chat refusal sites rotate in lockstep on the same day", () => {
   const keys = REFUSAL_VARIANT_SITES.map((site) => site.key);
   assert.equal(new Set(keys).size, keys.length, "every refusal site needs its OWN stable key");
+});
+
+// 2026-09-17, live. The athlete designed today's session with the coach and wrote:
+// "Ok apply it to my program for today. .I am heading to the gym now". The ask read as a
+// background signal, nothing changed today, the bubble kept prose describing today's
+// slot, and the change was scheduled to rewrite the TEMPLATE the next day — carrying a
+// premise ("legs are saturated from this morning's run") that expired with the day.
+test("a today-scoped chat ask that cannot land today is never rescheduled for another day", () => {
+  repo.setSettings({ lead_mode: "announce_first" });
+  repo.savePlanDay(1, "Lower", "legs", [
+    { exercise: "Barbell Deadlift", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 },
+  ]);
+  // Training already logged today, so the athlete's own boundary is no longer today.
+  repo.logSetByName({ exercise: "Barbell Deadlift", weight: 185, reps: 5 });
+
+  const message = "Ok apply it to my program for today. .I am heading to the gym now";
+  const out = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "Lighter deadlift today",
+          changes: [{ day_number: 1, exercise: "Barbell Deadlift", target_weight: 165 }],
+        },
+      ],
+    },
+    { agent: "stub", message }
+  );
+  assert.equal(out.explicitPlanEdit, true, "the athlete's apply words are an explicit ask");
+  const result = out.applied[0].result;
+  assert.equal(result.ok, true);
+  assert.equal(result.applied, false);
+  assert.equal(result.scheduled, false);
+  assert.equal(result.held_reason, "today_scoped");
+  assert.equal(result.today_scoped, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 185, "the template is untouched");
+  assert.equal(
+    repo.listBrainDecisions({ limit: 20 }).filter((d) => d.status === "announced").length,
+    0,
+    "nothing is waiting to rewrite another day"
+  );
+
+  const reply = reconcileChatPlanReply(
+    "Here's exactly what's queued for today's Lower B slot.",
+    message,
+    out.applied,
+    out.drafts,
+    out.explicitPlanEdit
+  );
+  assert.match(reply, /today's plan is unchanged/i);
+  assert.doesNotMatch(reply, /surprise budget|natural boundary|autonomy tier/i);
+  assert.ok(
+    PLAN_TODAY_SCOPED_NOT_APPLIED_VARIANTS.includes(
+      pickDayVariant(PLAN_TODAY_SCOPED_NOT_APPLIED_VARIANTS, localDateISO(), "chat-plan-today-scoped")
+    )
+  );
+});
+
+test("a chat plan change that only lands later says so, and names the day it lands", () => {
+  repo.setSettings({ lead_mode: "announce_first" });
+  repo.savePlanDay(1, "Pull", "back", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 105 },
+  ]);
+  repo.logSetByName({ exercise: "Barbell Bench Press", weight: 105, reps: 8 });
+
+  const message = "Update my Pull bench to 135.";
+  const out = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "Bench to 135",
+          changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 135 }],
+        },
+      ],
+    },
+    { agent: "stub", message }
+  );
+  const result = out.applied[0].result;
+  assert.equal(result.ok, true);
+  assert.equal(result.scheduled, true);
+  assert.equal(result.effective_date, addDaysISO(localDateISO(), 1));
+  assert.equal(result.landing_label, "tomorrow");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 105, "nothing moved today");
+
+  const reply = reconcileChatPlanReply("I've updated your bench.", message, out.applied, out.drafts, out.explicitPlanEdit);
+  assert.equal(
+    reply,
+    pickDayVariant(PLAN_SCHEDULED_NOT_LIVE_VARIANTS, localDateISO(), "chat-plan-scheduled")("tomorrow"),
+    "the server receipt replaces a claim that the plan is already live"
+  );
+  assert.match(reply, /tomorrow/);
+  assert.doesNotMatch(reply, /I've updated/i);
 });

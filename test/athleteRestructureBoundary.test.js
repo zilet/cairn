@@ -19,7 +19,7 @@ import {
   structureRequestInstruction,
 } from "../dist/domain/brain/structure-request.js";
 import * as repo from "../dist/repo.js";
-import { localDateISO } from "../dist/repo/shared.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 
 const REQUEST = "Run Tuesday, Thursday and a long run on the weekend; fit my lifting around that.";
 
@@ -95,6 +95,25 @@ test("an athlete-requested restructure lands at THEIR boundary — today, or tom
   const tomorrow = athleteRestructureLandingDate(today);
   assert.notEqual(tomorrow, today, "a half-lived day is still protected");
   assert.equal(describeLandingDay(tomorrow), "tomorrow");
+});
+
+// A session ROW is not training. Cairn creates one the moment a day is prepared, so a
+// prepared, untouched morning used to read as "already trained" and pushed the athlete's
+// own same-day ask to tomorrow — the exact day it should have landed on.
+test("a prepared but unstarted session is not a day already lived", () => {
+  const today = localDateISO();
+  repo.getOrCreateSession(today);
+  assert.equal(athleteRestructureLandingDate(today), today, "a waiting session is not training");
+
+  repo.logSetByName({ exercise: "Back Squat", weight: 200, reps: 5, date: today });
+  assert.equal(athleteRestructureLandingDate(today), addDaysISO(today, 1), "one logged set makes the day theirs");
+});
+
+test("a finished session with no logged sets still counts as a day lived", () => {
+  const today = localDateISO();
+  const session = repo.getOrCreateSession(today);
+  repo.finishSession(Number(session.id), null);
+  assert.equal(athleteRestructureLandingDate(today), addDaysISO(today, 1));
 });
 
 test("announce: the athlete's ask is exempt from the surprise budget and is dated for today, not Monday", () => {

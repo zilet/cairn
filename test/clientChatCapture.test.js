@@ -251,3 +251,30 @@ test("the review fills the ORIGINAL message in place — a slot on render, fille
   assert.match(messageClient, /CairnChatClient\.captureFoodReviewInner\(status, food\)/);
   assert.match(messageClient, /review\.hidden = !inner/);
 });
+
+// A plan change that did NOT go live must never render as "✓ plan update": the chip was
+// the last thing telling the athlete the opposite of the truth after the reply was
+// corrected. The landing word is computed server-side, so the chip does no date math.
+test("planLandingTag names a scheduled plan change and a today-scoped refusal", () => {
+  const chat = loadChatClient();
+
+  const scheduled = chat.planLandingTag({
+    type: "plan_update",
+    result: { ok: true, applied: false, scheduled: true, landing_label: "tomorrow" },
+  });
+  assert.equal(scheduled.text, "⏱ plan update · tomorrow");
+  assert.equal(scheduled.scheduled, true);
+
+  const held = chat.planLandingTag({
+    type: "plan_update",
+    result: { ok: true, applied: false, held_reason: "today_scoped" },
+  });
+  assert.equal(held.text, "plan update · not applied");
+  assert.equal(held.scheduled, false);
+
+  // Anything that landed, failed, or is not a plan action keeps the ordinary tag.
+  assert.equal(chat.planLandingTag({ type: "plan_update", result: { ok: true, persisted: true } }), null);
+  assert.equal(chat.planLandingTag({ type: "plan_update", result: { ok: false, error: "nope" } }), null);
+  assert.equal(chat.planLandingTag({ type: "log_food", result: { ok: true, scheduled: true } }), null);
+  assert.equal(chat.planLandingTag(null), null);
+});

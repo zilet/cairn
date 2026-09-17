@@ -1171,3 +1171,61 @@ test("legacy sessions still read and log with an additive null daily_session", (
   assert.equal(session.sets.length, 1);
   assert.equal(session.plan_day_id, repo.getPlanDay(1).id);
 });
+
+// A composition is a SNAPSHOT of the plan day taken when the athlete opened the session.
+// Nothing re-took it, so a plan change applied later (chat, the boundary pass) landed on
+// the template while Today kept showing the movements already handed over — the athlete
+// read a confirmation and then trained the old session.
+test("a plan change to an unstarted prepared day is re-taken into that day's session", () => {
+  seedPlan();
+  const prepared = prepareDailySessionUseCase({ date: DATE, source: "manual_plan", day_number: 1 });
+  const before = repo.getActiveDailySession(DATE);
+  assert.ok(before.items.some((item) => item.exercise === "Barbell Bench Press"));
+
+  repo.savePlanDay(1, "Push + hinge", "Chest and posterior chain", [
+    { exercise: "Barbell Deadlift", sets: 3, rep_low: 3, rep_high: 5, target_weight: 315 },
+  ]);
+  assert.ok(
+    repo.getActiveDailySession(DATE).items.some((item) => item.exercise === "Barbell Bench Press"),
+    "the snapshot is stale until something re-takes it"
+  );
+
+  const refreshed = repo.refreshPreparedDayForPlanChange({ date: DATE, day_numbers: [1] });
+  assert.equal(refreshed.refreshed, true);
+  assert.equal(refreshed.day_number, 1);
+
+  const after = repo.getActiveDailySession(DATE);
+  assert.notEqual(Number(after.id), Number(before.id), "a new version supersedes the stale one");
+  assert.equal(Number(after.session_id), Number(prepared.session.id), "the same workout session is carried forward");
+  assert.ok(after.items.every((item) => item.exercise !== "Barbell Bench Press"));
+  assert.ok(after.items.some((item) => item.exercise === "Barbell Deadlift"));
+  assert.equal(
+    db.prepare(`SELECT status FROM daily_session_compositions WHERE id = ?`).get(before.id).status,
+    "superseded"
+  );
+});
+
+test("a session the athlete has already logged against is left exactly as it is", () => {
+  seedPlan();
+  prepareDailySessionUseCase({ date: DATE, source: "manual_plan", day_number: 1 });
+  const before = repo.getActiveDailySession(DATE);
+  repo.logSetByName({ date: DATE, exercise: "Barbell Bench Press", weight: 185, reps: 5, day_number: 1 });
+
+  repo.savePlanDay(1, "Push + hinge", "Chest and posterior chain", [
+    { exercise: "Barbell Deadlift", sets: 3, rep_low: 3, rep_high: 5, target_weight: 315 },
+  ]);
+  const refreshed = repo.refreshPreparedDayForPlanChange({ date: DATE, day_numbers: [1] });
+  assert.equal(refreshed.refreshed, false);
+  assert.equal(refreshed.reason, "session_started");
+  assert.equal(Number(repo.getActiveDailySession(DATE).id), Number(before.id), "the card never changes mid-session");
+});
+
+test("a plan change on a day this date does not hold leaves the prepared session alone", () => {
+  seedPlan();
+  prepareDailySessionUseCase({ date: DATE, source: "manual_plan", day_number: 1 });
+  const before = repo.getActiveDailySession(DATE);
+  const refreshed = repo.refreshPreparedDayForPlanChange({ date: DATE, day_numbers: [2] });
+  assert.equal(refreshed.refreshed, false);
+  assert.equal(refreshed.reason, "day_not_changed");
+  assert.equal(Number(repo.getActiveDailySession(DATE).id), Number(before.id));
+});

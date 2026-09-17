@@ -207,17 +207,95 @@ export function isLeadingQuestion(text: string): boolean {
   return /^(?:should|could|would|will|can|what|how|why|is|do|does)\b/i.test(text) && /\?\s*$/.test(text);
 }
 
+const PLAN_EDIT_VERB_RE =
+  /\b(adjust|update|change|edit|fix|make|move|restructure|reshape|rebuild|switch|optimi[sz]e|remove|delete|drop|skip|replace|swap|add)\b/i;
+const PLAN_EDIT_OBJECT_RE =
+  /\b(plan|program|split|session|workout|today['’]?s|today|tonight|exercise|movement|sets?|reps?|bench|press|squat|deadlift|row|run|ride|cardio|lift)\b/i;
+
+// The APPLY half of the athlete's vocabulary. Designing a session with the coach and
+// then saying "ok apply it to my program for today" is the most direct instruction
+// this gate will ever see, and it used to read as a background signal because none of
+// those words were verbs here — the change was drafted, announced, and scheduled onto
+// a LATER day whose premise the athlete never agreed to.
+//
+// Two shapes, because they bind differently:
+//   * a verb that still wants an object ("apply it", "go with that", "use 135 today");
+//   * a phrase that IS the whole instruction and names no object ("go ahead", "do it").
+// The pronoun object (`it|that|this`) is granted to the first shape ONLY — the ordinary
+// edit verbs keep the concrete object list, so "make it" stays conversation.
+// `put`/`set`/`load` are bound to a pronoun on purpose: bare, they are the vocabulary
+// of REPORTING a session ("my set felt heavy", "that load was brutal"), and the object
+// list would have read those as instructions.
+const PLAN_APPLY_VERB_RE =
+  /\b(?:apply|implement|use|go\s+with|lock\s+in)\b|\b(?:put|set|load)\s+(?:it|that|this|them)\b/i;
+const PLAN_APPLY_STANDALONE_RE =
+  /\b(?:go\s+ahead|go\s+for\s+it|do\s+it|lock\s+(?:it|that|this)\s+in|let'?s\s+do\s+(?:it|that|this))\b/i;
+const PLAN_APPLY_PRONOUN_RE = /\b(?:it|that|this|these|those|them)\b/i;
+
 export function hasExplicitPlanEditIntent(message: string | null | undefined): boolean {
   const text = String(message ?? "")
     .replace(/[‘’]/g, "'")
     .trim();
   if (!text) return false;
   if (isLeadingQuestion(text)) return false;
-  const verb =
-    /\b(adjust|update|change|edit|fix|make|move|restructure|reshape|rebuild|switch|optimi[sz]e|remove|delete|drop|skip|replace|swap|add)\b/i;
-  const object =
-    /\b(plan|program|split|session|workout|today['’]?s|today|tonight|exercise|movement|sets?|reps?|bench|press|squat|deadlift|row|run|ride|cardio|lift)\b/i;
-  return verb.test(text) && object.test(text);
+  if (PLAN_EDIT_VERB_RE.test(text) && PLAN_EDIT_OBJECT_RE.test(text)) return true;
+  if (PLAN_APPLY_STANDALONE_RE.test(text)) return true;
+  return PLAN_APPLY_VERB_RE.test(text) && (PLAN_EDIT_OBJECT_RE.test(text) || PLAN_APPLY_PRONOUN_RE.test(text));
+}
+
+// A bare go-ahead — "ok", "yes", "sounds good" — carries no verb and no object, so the
+// per-message gate above can never read it as an instruction. In a conversation it is
+// one: the coach laid out a session, the athlete said yes. This is the same shape the
+// goal negotiation already honours (carriesGoalAffirmation), and it is deliberately
+// narrow: short, not a question, and free of anything that reverses it.
+const PLAN_AFFIRMATION_MAX_CHARS = 120;
+const PLAN_AFFIRMATION_LEAD_RE =
+  /^(?:ok(?:ay)?|k|yes|yep|yeah|yup|sure|sounds\s+good|looks\s+good|perfect|great|deal|agreed?|do\s+it|apply\s+it|go\s+ahead|go\s+for\s+it|let'?s\s+do\s+(?:it|that|this)|lock\s+(?:it|that|this)\s+in)\b/i;
+const PLAN_AFFIRMATION_REVERSAL_RE = /\b(?:not|don'?t|do\s+not|never|hold\s+off|wait|later|maybe|instead|but)\b/i;
+
+export function carriesPlanApplyAffirmation(message: string | null | undefined): boolean {
+  const text = String(message ?? "")
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text || text.length > PLAN_AFFIRMATION_MAX_CHARS) return false;
+  if (text.includes("?") || isLeadingQuestion(text)) return false;
+  if (PLAN_AFFIRMATION_REVERSAL_RE.test(text)) return false;
+  return PLAN_AFFIRMATION_LEAD_RE.test(text);
+}
+
+// Did the coach's PREVIOUS message put a session on the table? Deterministic and
+// server-side on purpose: what turns a bare "ok" into the athlete's own instruction is
+// the shape of what they are agreeing to, never the model's own claim about it. Two or
+// more prescription lines ("Deadlift 3×5 @ 165", "Split squat 2x10–12") is a drafted
+// session; one stray number in prose is not.
+const SESSION_PRESCRIPTION_LINE_RE = /\b\d{1,2}\s*[x×*]\s*\d{1,2}(?:\s*(?:[-–—]|to)\s*\d{1,2})?\b/i;
+const SESSION_PRESCRIPTION_MIN_LINES = 2;
+
+export function draftsSessionPrescription(message: string | null | undefined): boolean {
+  const lines = String(message ?? "").split(/\r?\n/);
+  let matched = 0;
+  for (const line of lines) {
+    if (!SESSION_PRESCRIPTION_LINE_RE.test(line)) continue;
+    matched += 1;
+    if (matched >= SESSION_PRESCRIPTION_MIN_LINES) return true;
+  }
+  return false;
+}
+
+// The plan-edit gate read across the turn boundary. `priorAssistantMessage` is the
+// coach's immediately preceding message in the live thread and `priorAssistantDrafted`
+// is the server's own record that the same turn stored a plan draft; either one makes
+// the athlete's "ok" a go-ahead. The model cannot reach any of these inputs, so it can
+// never grant itself explicit status.
+export function hasExplicitPlanEditIntentInContext(
+  message: string | null | undefined,
+  priorAssistantMessage: string | null | undefined,
+  priorAssistantDrafted = false
+): boolean {
+  if (hasExplicitPlanEditIntent(message)) return true;
+  if (!carriesPlanApplyAffirmation(message)) return false;
+  return priorAssistantDrafted || draftsSessionPrescription(priorAssistantMessage);
 }
 
 // A run prescription is durable training state, so the athlete's own words are what

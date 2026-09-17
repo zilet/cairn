@@ -61,6 +61,17 @@ export interface PrepareDailySessionInput {
   provenance?: unknown;
   train_anyway?: boolean;
   replace?: boolean;
+  /**
+   * INTERNAL. Re-author the snapshot even when this request is byte-identical to the
+   * active one (`exactPlanRetry`). That retry guard compares the REQUEST — constraints
+   * and provenance — never the plan day it snapshots, so an unchanged request over a
+   * CHANGED plan day short-circuits to the stale composition. The same-day recompose
+   * (`refreshPreparedDayForPlanChange`) is exactly that request, so it says so here.
+   * The request-fingerprint guard still returns the existing row when the composed
+   * payload really is identical, so this never churns a version for nothing. No public
+   * surface passes it.
+   */
+  force_recompose?: boolean;
 }
 
 export interface AdaptiveDailySessionPreview {
@@ -1123,7 +1134,13 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
   if (existingRow && !input.replace && !canRefreshAdaptive) {
     return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
   }
-  if (existingRow && input.replace && source === "manual_plan" && exactPlanRetry(existingRow, input, source)) {
+  if (
+    existingRow &&
+    input.replace &&
+    !input.force_recompose &&
+    source === "manual_plan" &&
+    exactPlanRetry(existingRow, input, source)
+  ) {
     return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
   }
 
@@ -1347,6 +1364,81 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
     }
     return { ok: true as const, daily_session: dailySession, session_id: session.id, reused: false };
   });
+}
+
+export interface RefreshPreparedDayInput {
+  date?: string;
+  /** Plan days the change touched. Empty/omitted means "whichever day this date holds". */
+  day_numbers?: readonly number[];
+}
+
+export type RefreshPreparedDayReason =
+  | "no_active_composition"
+  | "not_plan_sourced"
+  | "plan_day_missing"
+  | "day_not_changed"
+  | "session_started"
+  | "unchanged";
+
+export interface RefreshPreparedDayResult {
+  refreshed: boolean;
+  date: string;
+  reason?: RefreshPreparedDayReason;
+  day_number?: number;
+  composition_id?: number;
+}
+
+/**
+ * Re-author an already-prepared, unstarted day after its plan day changed underneath it.
+ *
+ * A composition is a SNAPSHOT of the plan day taken when the athlete opened the session.
+ * Nothing re-took it, so a plan change applied afterwards — from chat, from the boundary
+ * pass — landed on the template while Today kept showing the movements the athlete had
+ * already been handed. They read a confirmation and then trained the old session.
+ *
+ * The rules are the ones preparation already lives by, not new ones: only a plan-sourced
+ * snapshot (`adaptive_plan` / `manual_plan`) is re-taken, only for a day the change
+ * actually touched, and only while the session is untouched — one logged set, note or
+ * rating and the day belongs to the athlete, who is told nothing changed rather than
+ * having the card rewritten mid-session. The persisted `train_anyway` consent rides
+ * along, because a day the athlete chose to train on a rest read stays that choice.
+ */
+export function refreshPreparedDayForPlanChange(input: RefreshPreparedDayInput = {}): RefreshPreparedDayResult {
+  const date = validateDate(input.date);
+  const row = activeCompositionRow(date);
+  if (!row) return { refreshed: false, date, reason: "no_active_composition" };
+  const source = sourceOf(row.source);
+  if (!PLAN_SOURCES.has(source)) return { refreshed: false, date, reason: "not_plan_sourced" };
+  const planDay = db.prepare(`SELECT day_number FROM plan_days WHERE id = ?`).get(Number(row.plan_day_id)) as any;
+  const dayNumber = boundedNumber(planDay?.day_number, 1, 60, true);
+  if (dayNumber == null) return { refreshed: false, date, reason: "plan_day_missing" };
+  const wanted = (input.day_numbers ?? []).map((day) => Number(day)).filter((day) => Number.isFinite(day));
+  if (wanted.length && !wanted.includes(dayNumber)) {
+    return { refreshed: false, date, reason: "day_not_changed", day_number: dayNumber };
+  }
+  if (sessionRowsForDate(date).some((session) => meaningfulSessionReasons(session).length > 0)) {
+    return { refreshed: false, date, reason: "session_started", day_number: dayNumber };
+  }
+  const constraints = normalizedRecord(parseJson(row.constraints_json));
+  const provenance = normalizedRecord(parseJson(row.provenance_json));
+  const prepared = prepareDailySession({
+    date,
+    source,
+    day_number: dayNumber,
+    replace: true,
+    force_recompose: true,
+    train_anyway: constraints.train_anyway === true,
+    constraints: withoutServerDecisionFields(constraints, ["train_anyway", "daily_decision"]),
+    provenance: withoutServerDecisionFields(provenance, ["label", "choice", "daily_decision"]),
+  });
+  const compositionId = boundedNumber((prepared.daily_session as any)?.id, 1, Number.MAX_SAFE_INTEGER, true);
+  return {
+    refreshed: prepared.reused !== true,
+    date,
+    day_number: dayNumber,
+    ...(prepared.reused === true ? { reason: "unchanged" as const } : {}),
+    ...(compositionId == null ? {} : { composition_id: compositionId }),
+  };
 }
 
 export function listDailySessionCompositions() {

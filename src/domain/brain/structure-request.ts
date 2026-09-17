@@ -97,16 +97,23 @@ function decisionProposalId(decision: {
 // so a week the athlete is living through is never rewritten underneath them by a change
 // they did not ask for. When they DID ask, that protection is upside down — waiting up to
 // a week to honour a direct request is the delay this module exists to remove. So the
-// ask lands today, unless training has already been logged today (a half-lived DAY is
+// ask lands today, unless training has already been LIVED today (a half-lived DAY is
 // the one thing still worth protecting), in which case tomorrow.
+//
+// "Lived" means work, not a row: at least one logged set, or a session the athlete
+// finished. The existence of a session row proves nothing — Cairn creates one the moment
+// a day is prepared, so a prepared, untouched morning read as "already trained" and
+// pushed the athlete's own same-day ask to tomorrow. That is precisely the day a same-day
+// change should land: the session is sitting there waiting, and re-preparing it is free.
 export function athleteRestructureLandingDate(today = localDateISO()): string {
-  let trainedToday = false;
+  let livedToday = false;
   try {
-    trainedToday = !!getSessionByDate(today);
+    const session = getSessionByDate(today) as { finished_at?: unknown; sets?: unknown } | null;
+    livedToday = !!session && ((Array.isArray(session.sets) && session.sets.length > 0) || session.finished_at != null);
   } catch {
-    trainedToday = false;
+    livedToday = false;
   }
-  return trainedToday ? (addDaysISO(today, 1) ?? today) : today;
+  return livedToday ? (addDaysISO(today, 1) ?? today) : today;
 }
 
 export function describeLandingDay(date: string, today = localDateISO()): string {

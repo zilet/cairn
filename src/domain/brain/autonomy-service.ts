@@ -68,6 +68,7 @@ import { setAppStateStrict } from "../../repo/app-state.js";
 import { recordAsyncFailure } from "../../diagnostics.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
+import { refreshPreparedDayForPlanChange } from "../../repo/adaptive-session.js";
 import { revertGarminReconcile } from "../../repo/activities.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 import {
@@ -693,6 +694,37 @@ function materialChangesThisWeek(
   return Number(row?.n ?? 0);
 }
 
+// The plan days a proposal's payload touches. A `changes[]` edit names them; a `days`
+// restructure replaces the whole template, so every day it declares counts. Used only
+// to ask whether TODAY's prepared session is one of them.
+function proposalPlanDayNumbers(proposal: any): number[] {
+  const days = new Set<number>();
+  const rows = [
+    ...(Array.isArray(proposal?.parsed?.changes) ? proposal.parsed.changes : []),
+    ...(Array.isArray(proposal?.parsed?.days) ? proposal.parsed.days : []),
+    ...(Array.isArray(proposal?.parsed?.cardio) ? proposal.parsed.cardio : []),
+  ];
+  for (const row of rows) {
+    const day = Number(row?.day_number);
+    if (Number.isInteger(day) && day > 0) days.add(day);
+  }
+  return [...days];
+}
+
+// Today's prepared session is a SNAPSHOT of its plan day. A change that lands today has
+// to be re-taken into it, or the athlete opens Today and trains the movements the change
+// just replaced. Fail-soft: the plan write already succeeded and must not be undone by a
+// redraw, and every refusal (`session_started` above all) is an ordinary answer.
+function refreshTodayAfterPlanLanding(proposal: any, effectiveDate: unknown): void {
+  const today = localDateISO();
+  if (String(effectiveDate ?? "") !== today) return;
+  try {
+    refreshPreparedDayForPlanChange({ date: today, day_numbers: proposalPlanDayNumbers(proposal) });
+  } catch (err) {
+    recordAsyncFailure("apply", "refresh_prepared_day", err);
+  }
+}
+
 function nextMealBoundary(today = localDateISO()): string {
   // A meal plan changes the next un-lived food day, never the day already under
   // way. That makes tomorrow the useful natural boundary regardless of which day
@@ -1012,6 +1044,75 @@ function attemptStaleDraftRegeneration(
   }
 }
 
+/**
+ * A change the athlete scoped to TODAY, which cannot land today, STOPS.
+ *
+ * The alternative is what shipped: the ask is announced for the next natural boundary
+ * and mutates the weekly template days later, carrying a premise ("legs are saturated
+ * from this morning's run") that expired the moment the day did. That is a different
+ * change from the one they asked for, made without them.
+ *
+ * So nothing is scheduled. The draft is retired the same way a dead-premise draft is —
+ * `superseded`, which also keeps the orphan-adoption sweep from picking it back up days
+ * later — and an `observed` row records that the ask was heard and answered with
+ * nothing. The receipt the athlete reads is composed by the chat reconciler.
+ */
+function holdTodayScopedProposal(proposal: any, shape: ProposalShape, wouldHaveLanded: string): any {
+  const today = localDateISO();
+  let decision: any = null;
+  try {
+    decision = recordDecision({
+      effective_date: today,
+      kind: shape.kind,
+      domain: shape.domain,
+      summary: String(proposal.parsed?.summary ?? "A change asked for today was not made.").slice(0, 300),
+      rationale:
+        "You asked for this to happen today, and it could not. Nothing was scheduled for another day — the day it was about is the only day it was for.",
+      source: proposal.agent || "autonomy",
+      source_ref_type: "plan_proposal",
+      source_ref_key: String(proposal.id),
+      status: "observed",
+      autonomy_tier: "observe",
+      risk_class: shape.risk,
+      reversible: false,
+      input_fingerprint: null,
+      context: {
+        today_scoped: true,
+        held_reason: "today_scoped",
+        would_have_landed: wouldHaveLanded,
+        evidence_keys: [`plan_proposal:${proposal.id}`, `current_plan:${shape.domain}`],
+        evidence_observed_at: new Date().toISOString(),
+      },
+      action: {
+        proposal_id: proposal.id,
+        outcome: "not_applied_today_scoped",
+        reason_provenance: proposalReasonProvenance(proposal),
+      },
+      specialist: null,
+      applied_at: null,
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: null,
+    }).decision;
+  } catch (err) {
+    // The ledger row is the receipt's evidence trail, not its gate: losing it must not
+    // turn a refusal to reschedule back into a schedule.
+    recordAsyncFailure("apply", "today_scoped_observation", err);
+  }
+  supersedePriorReviewHolds(Number(proposal.id));
+  setProposalStatus(Number(proposal.id), "superseded", { recordDecision: false });
+  return {
+    ok: true,
+    applied: false,
+    scheduled: false,
+    held_reason: "today_scoped",
+    tier: "observe",
+    requested_date: today,
+    would_have_landed: wouldHaveLanded,
+    decision,
+  };
+}
+
 export function applyProposalWithAutonomy(
   proposalId: number,
   input: {
@@ -1043,6 +1144,12 @@ export function applyProposalWithAutonomy(
     // the regeneration bound holds inside the pass that created it (the receipt carrying
     // the lineage is not written until that routing returns). No surface passes this.
     skip_regeneration?: boolean;
+    // The athlete scoped this change to TODAY in their own words ("apply it to my
+    // program for today", "heading to the gym now"). A today-scoped ask is answered
+    // today or not at all: it may never be quietly re-aimed at a later boundary, where
+    // the premise that produced it ("my legs are saturated from this morning's run")
+    // no longer holds. Set by the chat plan_update path; no public surface passes it.
+    today_scoped?: boolean;
   } = {}
 ): any {
   const proposal = getProposal(proposalId);
@@ -1218,9 +1325,17 @@ export function applyProposalWithAutonomy(
   );
   if (policy.tier === "announce" || surpriseBudgetSpent) {
     // The week boundary protects a week the athlete did not ask to have rewritten. A
-    // restructure they DID ask for lands at their own boundary — today, or tomorrow if
-    // training is already logged today (athleteRestructureLandingDate).
-    const effectiveDate = athleteAsked ? athleteRestructureLandingDate() : nextBoundary(shape.kind);
+    // change they DID ask for in their own words lands at THEIR boundary — today, or
+    // tomorrow if training is already logged today (athleteRestructureLandingDate).
+    // That used to read `athleteAsked`, which is the restructure-only flag, so a direct
+    // same-day chat instruction that reached this branch for any other reason was
+    // pushed to the next Monday: a change the athlete asked for, on a day they did not.
+    const effectiveDate = explicitRequest ? athleteRestructureLandingDate() : nextBoundary(shape.kind);
+    // Scoped to today and unable to land today: stop, rather than re-aim it at a day
+    // whose premise nobody has agreed to.
+    if (input.today_scoped && effectiveDate !== localDateISO()) {
+      return holdTodayScopedProposal(proposal, shape, effectiveDate);
+    }
     const recorded = recordDecision({
       effective_date: effectiveDate,
       kind: shape.kind,
@@ -1280,6 +1395,9 @@ export function applyProposalWithAutonomy(
 
   if (quietApplyMustWait(shape) && !input.explicit_user_request) {
     const effectiveDate = nextBoundary(shape.kind);
+    if (input.today_scoped && effectiveDate !== localDateISO()) {
+      return holdTodayScopedProposal(proposal, shape, effectiveDate);
+    }
     const recorded = recordDecision({
       effective_date: effectiveDate,
       kind: shape.kind,
@@ -3277,6 +3395,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         }
       });
       applied.push(announced.id!);
+      if (shape.domain === "training") refreshTodayAfterPlanLanding(proposal, announced.effective_date);
       // The landed week answers every standing request about the shape of the week —
       // none may linger as an open question over a plan that already changed.
       if (athleteAsked) {

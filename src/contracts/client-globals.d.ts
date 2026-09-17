@@ -2115,6 +2115,7 @@ declare global {
       captureFoodFromRow(row: unknown): { status: string; food: Record<string, unknown> };
       captureFoodTagInner(status: unknown, food: unknown): string;
       captureFoodReviewInner(status: unknown, food: unknown): string;
+      planLandingTag(action: unknown): { text: string; scheduled: boolean } | null;
     };
 
     CairnChatHeaderController: {

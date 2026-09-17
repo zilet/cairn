@@ -68,14 +68,16 @@ import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autono
 // The re-ask lookup that used to live here moved beside the hand-off it guards, in
 // src/domain/brain/structure-request.ts — both doors (chat and the Plan tab) have to
 // resolve to the ONE standing flag, so one module owns both.
-import { requestStructureRedraw } from "./domain/brain/structure-request.js";
+import { describeLandingDay, requestStructureRedraw } from "./domain/brain/structure-request.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import { resolveChatProfile, type ChatLane, type ChatRoutingDecision } from "./chatRouting.js";
 import { log } from "./log.js";
 import {
+  carriesPlanApplyAffirmation,
   hasExplicitGoalIntentInContext,
   hasExplicitPlanEditIntent,
+  hasExplicitPlanEditIntentInContext,
   hasExplicitRunEditIntent,
   hasExplicitStrengthObjectiveIntent,
   hasExplicitSymptomReportIntent,
@@ -108,9 +110,12 @@ import {
 // modules. They are re-exported here so every existing importer, route and test keeps
 // resolving them from "./chatTurns.js".
 export {
+  carriesPlanApplyAffirmation,
+  draftsSessionPrescription,
   hasExplicitGoalIntent,
   hasExplicitGoalIntentInContext,
   hasExplicitPlanEditIntent,
+  hasExplicitPlanEditIntentInContext,
   hasExplicitRunEditIntent,
   hasExplicitStrengthObjectiveIntent,
   hasExplicitSymptomReportIntent,
@@ -130,6 +135,8 @@ export {
   PLAN_NO_CHANGE_APPENDED_VARIANTS,
   PLAN_NOT_LIVE_VARIANTS,
   PLAN_NOT_SAVED_VARIANTS,
+  PLAN_SCHEDULED_NOT_LIVE_VARIANTS,
+  PLAN_TODAY_SCOPED_NOT_APPLIED_VARIANTS,
   PLAN_UNTOUCHED_BY_QUESTION_VARIANTS,
   PLAN_WRITE_UNVERIFIED_VARIANTS,
   reconcileChatPlanReply,
@@ -340,19 +347,23 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     // and skip the normal log_food application so the photo never double-logs.
     const photoFood = turn.image_path ? logPhotoFood(actions, turn) : null;
 
-    const { applied, drafts, labConfirms, refusedReverts, droppedGoalFields, appliedGoalPatch } = applyChatActions(
-      { actions },
-      {
-        agent,
-        imagePath: turn.image_path,
-        message: turn.message,
-        skipLogFood: !!photoFood,
-        turnId: id,
-        userMessageId: beforeId,
-      }
-    );
+    const { applied, drafts, labConfirms, refusedReverts, droppedGoalFields, appliedGoalPatch, explicitPlanEdit } =
+      applyChatActions(
+        { actions },
+        {
+          agent,
+          imagePath: turn.image_path,
+          message: turn.message,
+          skipLogFood: !!photoFood,
+          turnId: id,
+          userMessageId: beforeId,
+        }
+      );
     if (photoFood) applied.unshift({ type: "log_food", result: photoFood });
-    const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts);
+    // The SAME reading the apply path used. Reconciling on a second, per-message-only
+    // reading is how a go-ahead that really did authorize a change still read as a
+    // question to the receipt.
+    const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts, explicitPlanEdit);
     const runReply = reconcileChatRunReply(planReply, turn.message, applied);
     const objectiveReply = reconcileStrengthObjectiveReply(runReply, turn.message, applied);
     const goalReply = reconcileGoalIdentityReply(objectiveReply, droppedGoalFields, appliedGoalPatch);
@@ -735,6 +746,9 @@ const GOAL_IDENTITY_FIELDS = new Set([
 // The athlete's own recent, still-live messages — the negotiation window above.
 // Current message excluded (it is the one being judged).
 const GOAL_CONTEXT_LOOKBACK_MESSAGES = 8;
+// Only the immediately preceding coach message matters for a go-ahead, but the live
+// log interleaves roles, so read a few rows to be sure of finding it.
+const PRIOR_ASSISTANT_LOOKBACK_MESSAGES = 6;
 function recentAthleteStatements(excludeMessageId?: number | null): string[] {
   try {
     const rows = repo.listChatMessages(GOAL_CONTEXT_LOOKBACK_MESSAGES * 3) as any[];
@@ -747,6 +761,37 @@ function recentAthleteStatements(excludeMessageId?: number | null): string[] {
   } catch {
     return [];
   }
+}
+
+// The coach's immediately preceding message in the LIVE thread, and whether that same
+// turn stored a plan draft. Both are SERVER records, which is the whole point: what
+// turns a bare "ok" into an instruction is the shape of what the athlete is agreeing
+// to, never the model's own claim about it. Read only when the message needs it.
+function priorAssistantContext(excludeMessageId?: number | null): { message: string; drafted: boolean } {
+  try {
+    const before = excludeMessageId == null ? Number.MAX_SAFE_INTEGER : Number(excludeMessageId);
+    const rows = repo.listChatMessagesBefore(before, PRIOR_ASSISTANT_LOOKBACK_MESSAGES) as any[];
+    for (let index = rows.length - 1; index >= 0; index--) {
+      const row = rows[index];
+      if (row?.role !== "assistant") continue;
+      const meta = recordOrNull(row.meta);
+      const drafts = Array.isArray(meta?.drafts) ? meta.drafts : [];
+      const applied = Array.isArray(meta?.applied) ? meta.applied : [];
+      return {
+        message: String(row.content ?? ""),
+        drafted:
+          drafts.length > 0 ||
+          applied.some(
+            (entry: unknown) =>
+              String(recordOrNull(entry)?.type ?? "") === "plan_update" &&
+              Number(recordOrNull(recordOrNull(entry)?.result)?.proposal_id) > 0
+          ),
+      };
+    }
+  } catch {
+    /* an unreadable history is simply no context, never an authorization */
+  }
+  return { message: "", drafted: false };
 }
 
 // A training-STRUCTURE request is the athlete asking for a different shape of
@@ -861,18 +906,29 @@ export function hasExplicitDecisionRevertIntent(
   return false;
 }
 
-function todayPlanUpdateChanges(message: string | null | undefined, changes: unknown[]): unknown[] {
+// "This is about TODAY." The wording the athlete uses when the change is only worth
+// making while the day it was reasoned about is still the day: the named day, the part
+// of it, or the fact that they are walking into the gym as they type.
+const PLAN_TODAY_SCOPE_RE =
+  /\b(?:today(?:['’]s)?|tonight|this\s+(?:morning|afternoon|evening)|right\s+now)\b|\b(?:heading|going|on\s+my\s+way|off)\b[^.!?]{0,40}\b(?:gym|train|training|lift|session|workout)\b|\bat\s+the\s+gym\b|\babout\s+to\s+(?:train|lift|start)\b/i;
+// A named future/day target is an explicit athlete override, not an implicit "today"
+// reference. Keep it authoritative even if the sentence also compares it with today
+// (for example, "leave today alone; change day 3").
+const PLAN_NAMED_OTHER_DAY_RE =
+  /\b(?:tomorrow|later\s+this\s+week|next\s+(?:session|workout|week|push|pull|legs?|lower|upper|full(?:[- ]body)?|run|ride|cardio)|day\s*(?:number\s*)?\d+|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+
+// Does this instruction belong to today and nowhere else? The ONE reading both the
+// day-scoping of the changes below and the autonomy hand-off use, so a sentence can
+// never be re-aimed at a day it was not read as naming.
+function planUpdateTargetsToday(message: string | null | undefined, explicit: boolean): boolean {
   const text = String(message ?? "").trim();
-  if (!hasExplicitPlanEditIntent(text) || !/\b(?:today(?:['’]s)?|tonight)\b/i.test(text)) return changes;
-  // A named future/day target is an explicit athlete override, not an implicit
-  // "today" reference. Keep it authoritative even if the sentence also compares
-  // it with today (for example, "leave today alone; change day 3").
-  if (
-    /\b(?:tomorrow|later\s+this\s+week|next\s+(?:session|workout|week|push|pull|legs?|lower|upper|full(?:[- ]body)?|run|ride|cardio)|day\s*(?:number\s*)?\d+|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
-      text
-    )
-  )
-    return changes;
+  if (!explicit || !PLAN_TODAY_SCOPE_RE.test(text)) return false;
+  return !PLAN_NAMED_OTHER_DAY_RE.test(text);
+}
+
+function todayPlanUpdateChanges(message: string | null | undefined, changes: unknown[], explicit: boolean): unknown[] {
+  const text = String(message ?? "").trim();
+  if (!planUpdateTargetsToday(text, explicit)) return changes;
   const rows = changes.filter(
     (change): change is Record<string, unknown> => !!change && typeof change === "object" && !Array.isArray(change)
   );
@@ -1043,12 +1099,24 @@ function mergeRunVerification(
   };
 }
 
+// The plan days one turn's changes name. Used only to decide whether TODAY's prepared
+// session is one of them; an unnamed/malformed day contributes nothing.
+function planChangeDayNumbers(changes: unknown[]): number[] {
+  const days = new Set<number>();
+  for (const change of changes) {
+    const day = Number((change as Record<string, unknown> | null)?.day_number);
+    if (Number.isInteger(day) && day > 0) days.add(day);
+  }
+  return [...days];
+}
+
 function applyBackgroundPlanUpdate(
   agent: string,
   summary: unknown,
   changes: unknown[],
   explicitUserRequest: boolean,
-  clinicalProvenance: ClinicalPlanProvenance | null
+  clinicalProvenance: ClinicalPlanProvenance | null,
+  todayScoped = false
 ): unknown {
   // An endurance-shaped change is a RUN, and runs have their own writer. Splitting
   // it out here is what keeps the receipt honest: left among the strength changes an
@@ -1097,6 +1165,7 @@ function applyBackgroundPlanUpdate(
     explicit_user_request: explicitUserRequest,
     clinical: Boolean(clinicalProvenance),
     clinical_provenance: clinicalProvenance ?? undefined,
+    today_scoped: todayScoped,
   }) as any;
   const stored = repo.getProposal((proposal as any).id) as any;
   const persisted = stored?.status === "applied";
@@ -1107,11 +1176,34 @@ function applyBackgroundPlanUpdate(
         strengthBefore
       )
     : { ok: false, proposal_status: stored?.status ?? null, checks: [], days: [], runs: [] };
+  // The plan is the template; the composition is the session the athlete is HOLDING.
+  // Writing one without re-taking the other is what let a confirmed change sit on the
+  // plan all day while Today kept showing the movements it replaced.
+  if (persisted) {
+    try {
+      repo.refreshPreparedDayForPlanChange({ date: localDateISO(), day_numbers: planChangeDayNumbers(changes) });
+    } catch (err) {
+      recordAsyncFailure("chat_turns", "refresh_prepared_day", err);
+    }
+  }
+  // WHAT HAPPENED, in the words the receipt needs. `applied` is the only "it is live"
+  // signal; everything else is a wait, and a wait the athlete is never told about is
+  // the bug this closes. `scheduled` mirrors routeChatPlanRestructure's own field.
+  const decisionStatus = String(result?.decision?.status ?? stored?.autonomy?.status ?? "");
+  const scheduled =
+    result?.ok === true &&
+    result?.applied !== true &&
+    result?.held_reason !== "today_scoped" &&
+    (decisionStatus === "announced" || decisionStatus === "pending");
+  const effectiveDate = typeof result?.effective_date === "string" ? result.effective_date : null;
   return {
     background: !explicitUserRequest,
     explicit_user_request: explicitUserRequest,
+    today_scoped: todayScoped,
     proposal_id: (proposal as any).id,
     ...result,
+    scheduled,
+    ...(scheduled && effectiveDate ? { landing_label: describeLandingDay(effectiveDate, localDateISO()) } : {}),
     persisted,
     committed: persisted,
     verified: verification.ok,
@@ -2433,6 +2525,10 @@ export function applyChatActions(
     // carry-forward. Omitted in the real flow, where they are read from the live
     // (unarchived) chat log excluding the current message.
     recentAthleteMessages?: readonly string[];
+    // Test seam: the coach's immediately preceding message and whether that turn
+    // drafted a plan, for the go-ahead carry-forward. Omitted in the real flow, where
+    // both are read from the live chat log (priorAssistantContext).
+    priorAssistant?: { message?: string | null; drafted?: boolean };
     // Test seam: how a structure request's build job is handed to the agent-job
     // runner. Omitted in the real flow, where it is enqueueAgentJob.
     enqueueJob?: (id: number) => void;
@@ -2444,6 +2540,8 @@ export function applyChatActions(
   refusedReverts: number[];
   droppedGoalFields: string[];
   appliedGoalPatch: Record<string, unknown> | null;
+  /** Did the athlete's own words (or their go-ahead to a drafted session) ask for this? */
+  explicitPlanEdit: boolean;
 } {
   const applied: Array<{ type: ChatActionType; result?: unknown; error?: string }> = [];
   const drafts: unknown[] = [];
@@ -2465,6 +2563,17 @@ export function applyChatActions(
   const droppedGoalFields: string[] = [];
   let appliedGoalPatch: Record<string, unknown> | null = null;
   const explicitStrengthObjectiveIntent = !foodOnly && hasExplicitStrengthObjectiveIntent(message);
+  // ONE reading of this sentence for the whole turn. A message that names its own
+  // instruction never touches the chat log; a bare go-ahead ("ok", "apply it") reads
+  // the coach's previous message to find out what it is agreeing to.
+  const explicitPlanEdit = ((): boolean => {
+    if (hasExplicitPlanEditIntent(message)) return true;
+    if (!carriesPlanApplyAffirmation(message)) return false;
+    const prior = ctx.priorAssistant ?? priorAssistantContext(ctx.userMessageId);
+    return hasExplicitPlanEditIntentInContext(message, prior.message ?? "", prior.drafted === true);
+  })();
+  // Scoped to today in the athlete's own words: this change happens today or not at all.
+  const planUpdateTodayScoped = planUpdateTargetsToday(message, explicitPlanEdit);
   const inheritedClinical = inheritedClinicalLineage({
     turnId: ctx.turnId,
     userMessageId: ctx.userMessageId,
@@ -2845,9 +2954,10 @@ export function applyChatActions(
               result: applyBackgroundPlanUpdate(
                 ctx.agent,
                 a.summary,
-                todayPlanUpdateChanges(message, a.changes),
-                hasExplicitPlanEditIntent(message),
-                clinicalProvenance
+                todayPlanUpdateChanges(message, a.changes, explicitPlanEdit),
+                explicitPlanEdit,
+                clinicalProvenance,
+                planUpdateTodayScoped
               ),
             });
           }
@@ -2908,5 +3018,5 @@ export function applyChatActions(
       applied.push({ type: a.type, error: e instanceof Error ? e.message : String(e) });
     }
   }
-  return { applied, drafts, labConfirms, refusedReverts, droppedGoalFields, appliedGoalPatch };
+  return { applied, drafts, labConfirms, refusedReverts, droppedGoalFields, appliedGoalPatch, explicitPlanEdit };
 }

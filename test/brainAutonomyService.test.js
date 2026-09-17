@@ -7,6 +7,7 @@ import {
 } from "../dist/domain/brain/autonomy-service.js";
 import * as repo from "../dist/repo.js";
 import { db } from "../dist/db.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 
 function seedPlan() {
   repo.savePlanDay(1, "Push", "Chest", [
@@ -346,4 +347,112 @@ test("a manual apply cancels the standing announcement at once and re-apply is r
   assert.equal(again.ok, false);
   assert.match(String(again.error), /already applied/i);
   assert.equal(repo.getPlan().length, 2, "the plan was applied exactly once");
+});
+
+// 2026-09-17, live: the athlete asked in chat for today's session to change, the week's
+// training surprise budget was already spent, and the change was announced for the NEXT
+// day's template — carrying a premise ("legs are saturated from this morning's run")
+// that expired with the day. Their own ask has to land on their own day.
+test("an explicit same-day ask lands today with the week's surprise budget already spent", () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  for (const weight of [120, 125, 130]) {
+    const spent = repo.createProposal("stub", "plateau", "", {
+      summary: `bench to ${weight}`,
+      changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: weight, reason: "earned" }],
+    });
+    const landed = applyProposalWithAutonomy(spent.id, { requested_tier: "quiet_apply" });
+    assert.equal(landed.ok, true);
+    assert.equal(landed.tier, "quiet_apply");
+  }
+
+  // A background signal now waits — that part is the policy working.
+  const background = repo.createProposal("stub", "background: chat signal", "", {
+    summary: "bench to 135",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 135, reason: "a signal" }],
+  });
+  const background135 = applyProposalWithAutonomy(background.id, {
+    requested_tier: "quiet_apply",
+    explicit_user_request: true,
+  });
+  assert.equal(background135.tier, "quiet_apply", "an explicit request is never a surprise to the athlete who made it");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 135);
+
+  const asked = repo.createProposal("stub", "chat", "", {
+    summary: "bench to 140",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 140, reason: "the athlete asked" }],
+  });
+  const result = applyProposalWithAutonomy(asked.id, {
+    requested_tier: "quiet_apply",
+    explicit_user_request: true,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.tier, "quiet_apply");
+  assert.equal(result.announced, undefined, "nothing was deferred to another day");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 140, "the change the athlete asked for is live now");
+});
+
+test("an explicit request that must announce lands on the athlete's own day, never a week away", () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "announce_first" });
+  const today = localDateISO();
+
+  const asked = repo.createProposal("stub", "chat", "", {
+    summary: "bench to 140",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 140, reason: "the athlete asked" }],
+  });
+  const announced = applyProposalWithAutonomy(asked.id, {
+    requested_tier: "quiet_apply",
+    explicit_user_request: true,
+  });
+  assert.equal(announced.applied, false);
+  assert.equal(announced.announced, true);
+  assert.equal(announced.effective_date, today, "their own boundary is today");
+
+  // With training already logged today, a half-lived DAY is the one thing still worth
+  // protecting — so tomorrow, said out loud, and never silently.
+  repo.logSetByName({ exercise: "Barbell Bench Press", weight: 115, reps: 5 });
+  const later = repo.createProposal("stub", "chat", "", {
+    summary: "bench to 145",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 145, reason: "the athlete asked" }],
+  });
+  const scheduled = applyProposalWithAutonomy(later.id, {
+    requested_tier: "quiet_apply",
+    explicit_user_request: true,
+  });
+  assert.equal(scheduled.applied, false);
+  assert.equal(scheduled.effective_date, addDaysISO(today, 1));
+  assert.equal(repo.getBrainDecision(scheduled.decision.id).status, "announced");
+});
+
+test("a today-scoped ask that cannot land today is not moved onto another day", () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "announce_first" });
+  const today = localDateISO();
+  repo.logSetByName({ exercise: "Barbell Bench Press", weight: 115, reps: 5 });
+
+  const asked = repo.createProposal("stub", "chat", "", {
+    summary: "bench to 145 for today",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 145, reason: "today only" }],
+  });
+  const held = applyProposalWithAutonomy(asked.id, {
+    requested_tier: "quiet_apply",
+    explicit_user_request: true,
+    today_scoped: true,
+  });
+  assert.equal(held.ok, true);
+  assert.equal(held.applied, false);
+  assert.equal(held.scheduled, false);
+  assert.equal(held.held_reason, "today_scoped");
+  assert.equal(held.would_have_landed, addDaysISO(today, 1));
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115, "today's plan is untouched");
+  assert.equal(repo.getProposal(asked.id).status, "superseded", "nothing is left for a later sweep to adopt");
+  assert.equal(
+    repo.listBrainDecisions({ limit: 20 }).filter((d) => d.status === "announced" && d.effective_date !== today).length,
+    0,
+    "nothing was scheduled for another day"
+  );
+  const observed = repo.listBrainDecisions({ limit: 20 }).find((d) => d.context?.held_reason === "today_scoped");
+  assert.ok(observed, "the ask is recorded as heard and answered with nothing");
+  assert.equal(observed.status, "observed");
 });
