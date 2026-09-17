@@ -9,6 +9,7 @@ import {
   attachGuide,
   buildPlanICS,
   cachedGuideImage,
+  dedupeExercises,
   deleteExercise,
   deletePlanDay,
   detachGuide,
@@ -234,6 +235,23 @@ planExercisesRouter.post("/exercises/merge", (req, res) => {
   const into = String(b.into ?? "").trim();
   if (!from || !into) return res.status(400).json({ error: "from and into required" });
   res.json(mergeExercises(from, into));
+});
+
+// One row per movement, across the whole catalog: fold exercises that share a
+// movement key into the member with the most logged sets, and repoint any alias
+// whose canonical names a row that no longer exists. A bare call only REPORTS the
+// plan; the fold — which deletes rows — needs an explicit `apply: true`, mirroring
+// POST /api/health-docs/dedupe. Idempotent, so it is safe to re-run whenever the
+// catalog has drifted. Migration 103 ran the same repair once, through its frozen
+// snapshot, together with the one-time corrections that catalog needed.
+planExercisesRouter.post("/exercises/dedupe", (req, res) => {
+  const raw = req.body?.apply ?? req.query.apply;
+  const apply = ["1", "true", "yes"].includes(
+    String(raw ?? "")
+      .trim()
+      .toLowerCase()
+  );
+  res.json(dedupeExercises({ dryRun: !apply }));
 });
 
 // Exercise-name reconciliation (movement de-duplication) — the canon counterpart

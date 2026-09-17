@@ -405,6 +405,11 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **RIR is optional, and its absence is not weakness** — with no RIR logged, capping the prescribed
   rep range on every working set IS the strength signal (`program-state.ts`/`progression-voice.ts`).
   Details in `docs/ARCHITECTURE.md`.
+- **Exercise names are resolved through `resolveExerciseName` (`src/repo/exercise-canon.ts`); never
+  compare raw `exercises.name`.** One ladder (exact → one alias hop → key → a unique expanded key),
+  read by every consumer AND by the `findOrCreateExercise` write chokepoint, so a spelling can never
+  split one lift into two histories. Its `key` is the persisted `movement_key` shape — never widen
+  it. Details in `docs/ARCHITECTURE.md` "Exercise identity: one resolver".
 - **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
   as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.
   Details in `docs/ARCHITECTURE.md`.

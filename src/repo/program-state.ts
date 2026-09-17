@@ -23,6 +23,7 @@ import {
   MUSCLE_LANDMARKS,
   type MuscleGroup,
   normalizeExerciseName,
+  resolveExerciseName,
 } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import {
@@ -486,15 +487,15 @@ function gradeRepsLift(name: string, mg: string | null, through: string): Graded
   // at a single weight to call anything stuck. Filtering by those dates also scopes
   // these rows to the day being read, which the raw query does not do on its own.
   const staticDates = new Set(recent.slice(recent.length - staticCount).map((p) => String(p.date)));
-  const ex = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
+  const ex = resolveExerciseName(name);
   let grinding = false;
-  if (ex && staticCount >= STATIC_STALL_SESSIONS) {
+  if (ex.exercise_id != null && staticCount >= STATIC_STALL_SESSIONS) {
     const rirRows = db
       .prepare(
         `SELECT ls.rir AS rir, s.id AS session_id, s.date AS date FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
        WHERE ls.exercise_id = ? AND ls.rir IS NOT NULL ORDER BY s.date DESC, ls.id DESC LIMIT 24`
       )
-      .all(ex.id) as any[];
+      .all(ex.exercise_id) as any[];
     const comparableRirRows = rirRows
       .filter((row) => staticDates.has(String(row.date)))
       .filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id)))
@@ -564,8 +565,8 @@ function gradeRepsLift(name: string, mg: string | null, through: string): Graded
 // `through` for the same reason as the reps path below — the timed grade was
 // equally unbounded, so a historical read could hold up a hold logged after it.
 function gradeTimedLift(name: string, mg: string | null, through: string): GradedLift | null {
-  const ex = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
-  if (!ex) return null;
+  const ex = resolveExerciseName(name);
+  if (ex.exercise_id == null) return null;
   const rows = db
     .prepare(
       `SELECT s.id AS session_id, s.date AS date, MAX(ls.duration_sec) AS best FROM logged_sets ls
@@ -573,7 +574,7 @@ function gradeTimedLift(name: string, mg: string | null, through: string): Grade
      WHERE ls.exercise_id = ? AND ls.duration_sec IS NOT NULL AND s.date <= ?
      GROUP BY s.id, s.date ORDER BY s.date, s.id`
     )
-    .all(ex.id, through) as any[];
+    .all(ex.exercise_id, through) as any[];
   const comparableRows = rows.filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id)));
   const byDate = new Map<string, number>();
   for (const row of comparableRows) {

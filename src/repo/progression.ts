@@ -19,12 +19,14 @@ import {
   canonicalGroup,
   classifyConstraint,
   classifyMuscleGroup,
+  exerciseIdentityKey,
   isMobility,
   movementKey,
   type MuscleGroup,
   MUSCLE_LANDMARKS,
   normalizedExerciseKey,
   plainGroupWords,
+  resolveExerciseName,
 } from "./exercise-canon.js";
 import {
   type Equipment,
@@ -34,7 +36,7 @@ import {
   suggestAlternatives,
   type VolumeSet,
 } from "./exercise-variations.js";
-import { findExercise, recentWorkingWeight } from "./exercises.js";
+import { findExercise, getExercise, recentWorkingWeight } from "./exercises.js";
 // The equipment profile and the learned like/dislike memories are leaf reads the
 // prescription consumes; they live in their own modules so this engine keeps to
 // prescription, autoregulation and the proposal builders.
@@ -667,25 +669,48 @@ function planItemFor(name: string): {
   // the same reading calibration.ts uses to decide which lifts are worth re-testing.
   strength_position: number;
 } | null {
-  const lc = String(name).toLowerCase();
-  for (const day of getPlan() as any[]) {
-    let strengthPosition = 0;
-    for (const it of day.items || []) {
-      const cardio = it.kind === "cardio";
-      if (String(it.exercise || "").toLowerCase() === lc) {
-        return {
-          plan_item_id: it.id,
-          day_number: day.day_number,
-          sets: Number(it.sets) || 0,
-          rep_low: it.rep_low ?? null,
-          rep_high: it.rep_high ?? null,
-          weight: it.target_weight ?? null,
-          seconds: it.target_seconds ?? null,
-          kind: cardio ? "cardio" : "strength",
-          strength_position: strengthPosition,
-        };
+  // TIERED, mirroring resolvePlanSwapSlot: an EXACT spelling always beats a resolved
+  // one (a day that names the lift verbatim wins over a day that only aliases onto
+  // it), and tiers never mix. The second tier is the shared identity resolver — the
+  // plan may store "Incline Dumbbell Press" while the athlete logs "Incline DB
+  // Press", and a raw lowercase compare stranded that lift with no prescription.
+  const lc = String(name).toLowerCase().trim();
+  const identity = exerciseIdentityKey(name);
+  const plan = getPlan() as any[];
+  // Tier 2 resolves each plan-item name, which is a DB read; memoize so a plan with
+  // the same lift on several days costs one lookup, not one per row.
+  const identityCache = new Map<string, string>();
+  const itemIdentity = (raw: string): string => {
+    const cached = identityCache.get(raw);
+    if (cached !== undefined) return cached;
+    const key = exerciseIdentityKey(raw);
+    identityCache.set(raw, key);
+    return key;
+  };
+  const tiers: Array<(item: any) => boolean> = [
+    (it) => String(it.exercise || "").toLowerCase().trim() === lc,
+    ...(identity ? [(it: any) => itemIdentity(String(it.exercise || "")) === identity] : []),
+  ];
+  for (const matches of tiers) {
+    for (const day of plan) {
+      let strengthPosition = 0;
+      for (const it of day.items || []) {
+        const cardio = it.kind === "cardio";
+        if (matches(it)) {
+          return {
+            plan_item_id: it.id,
+            day_number: day.day_number,
+            sets: Number(it.sets) || 0,
+            rep_low: it.rep_low ?? null,
+            rep_high: it.rep_high ?? null,
+            weight: it.target_weight ?? null,
+            seconds: it.target_seconds ?? null,
+            kind: cardio ? "cardio" : "strength",
+            strength_position: strengthPosition,
+          };
+        }
+        if (!cardio) strengthPosition += 1;
       }
-      if (!cardio) strengthPosition += 1;
     }
   }
   return null;
@@ -1329,11 +1354,17 @@ export function readTrainingDrive(): TrainingDrive {
 }
 
 export function nextPrescription(
-  exerciseName: string,
+  rawExerciseName: string,
   states?: Map<string, LiftState>,
   opts?: PrescriptionOpts
 ): Prescription | null {
-  const ex = findExercise(exerciseName);
+  // Canonicalize ONCE, at the entry. Everything below this line is keyed by name —
+  // the plan slot, the logged history, the lift state, the tenure — so resolving
+  // here is what stops a prescription that found the plan item under an alias from
+  // reading no history for the same lift. An unknown name passes through unchanged.
+  const resolvedName = resolveExerciseName(rawExerciseName);
+  const exerciseName = resolvedName.exercise_id != null ? resolvedName.canonical : rawExerciseName;
+  const ex = resolvedName.exercise_id != null ? getExercise(resolvedName.exercise_id) : null;
   const mode: "reps" | "timed" = ex?.mode === "timed" ? "timed" : "reps";
   const group: string | null = ex?.muscle_group ?? null;
   // Autoregulation + acute-recovery gate. Compute lazily for a standalone call so
@@ -2349,9 +2380,10 @@ function secondsDeltaText(current: number | null, next: number | null): string {
 }
 
 // Preserve the exercise's stored display name (case) when we have it.
+// The stored display spelling for a lift. Alias-aware, so a prescription built from
+// the athlete's shorthand still names the catalog's row.
 function ex_name(name: string): string {
-  const ex = findExercise(name);
-  return ex?.name ?? name;
+  return resolveExerciseName(name).exercise_id != null ? resolveExerciseName(name).canonical : name;
 }
 
 // ---- a whole plan day's progression -----------------------------------------

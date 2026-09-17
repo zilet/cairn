@@ -6,12 +6,14 @@ import {
   classifyMuscleGroup,
   cleanExerciseName,
   detectExerciseMode,
-  expandedExerciseKey,
   getExerciseAlias,
+  implementRelaxedExerciseKey,
   normalizeExerciseName,
   normalizedExerciseKey,
+  resolveExerciseName,
   resolveGroup,
   setExerciseAlias,
+  validateExerciseMergePlan,
 } from "./exercise-canon.js";
 import {
   getExerciseGuideByExerciseId,
@@ -62,59 +64,76 @@ export function findOrCreateExercise(name: string, muscle_group?: string, constr
   const existing = findExercise(name);
   if (existing) return existing;
 
-  // (a) A persisted alias for this (raw) input maps it to a canonical exercise that
-  //     already exists — reuse that instead of creating a duplicate variant.
   const norm = normalizeExerciseName(name);
-  const alias = norm ? getExerciseAlias(norm) : null;
-  if (alias?.canonical) {
-    const aliased = findExercise(alias.canonical);
-    if (aliased) return aliased;
+  // Self-alignment writes are a DETERMINISTIC decision by this chokepoint, not an
+  // agent's call — they carry source "auto" so the alias list stays readable.
+  const selfAlign = (row: any): any => {
+    if (row && norm && normalizeExerciseName(String(row.name)) !== norm) {
+      setExerciseAlias(norm, String(row.name), "auto");
+    }
+    return row;
+  };
+
+  // (a) THE resolver decides which stored row this spelling IS: a persisted alias,
+  //     a conservative key match ("Leg Extensions" ≡ "Leg Extension"), or an
+  //     abbreviation-aware unique hit ("incline db press" → "Incline Dumbbell
+  //     Press"). One ladder, shared with every reader — a name that RESOLVES to a
+  //     row must never also create one, or the write path and the read path would
+  //     disagree about which lift the athlete just logged.
+  const resolved = resolveExerciseName(name);
+  if (resolved.exercise_id != null) {
+    const row = getExercise(resolved.exercise_id);
+    if (row) return selfAlign(row);
   }
 
-  // (b) No alias, but an existing exercise keys the same way (same movement logged
-  //     under a messier name) — self-align: record the alias so the raw variant
-  //     resolves directly next time, and reuse the existing exercise.
-  const key = normalizedExerciseKey(name);
-  const all = db.prepare(`SELECT name FROM exercises`).all() as Array<{ name: string }>;
-  if (key) {
-    const sameKey = all.find((e) => normalizedExerciseKey(e.name) === key);
-    if (sameKey) {
-      if (normalizeExerciseName(sameKey.name) !== norm) setExerciseAlias(norm, sameKey.name);
-      return findExercise(sameKey.name);
-    }
-  }
-
-  // (b2) Abbreviation-aware reuse: "db bench press" should find "Dumbbell Bench
-  //      Press". UNIQUE hit only — if another row's expanded key equals the input
-  //      OR is a token-prefix extension of it ("DB Bench Press Incline"), we insert
-  //      the cleaned name rather than pick. Mirrors the guide matcher.
-  const expandedKey = expandedExerciseKey(name);
-  if (expandedKey && expandedKey !== key) {
-    const exact: Array<{ name: string }> = [];
-    const siblings: Array<{ name: string }> = [];
-    for (const row of all) {
-      const existingKey = expandedExerciseKey(row.name);
-      if (existingKey === expandedKey) exact.push(row);
-      else if (existingKey.startsWith(`${expandedKey} `)) siblings.push(row);
-    }
-    if (exact.length === 1 && siblings.length === 0) {
-      const hit = exact[0];
-      if (norm && normalizeExerciseName(hit.name) !== norm) setExerciseAlias(norm, hit.name);
-      return findExercise(hit.name);
-    }
-  }
-
-  // (c) Genuinely new — store a CLEAN display name. Explicit muscle_group/mode still
+  // (b) Genuinely new — store a CLEAN display name. Explicit muscle_group/mode still
   //     win; otherwise auto-profile from the cleaned name. A supplied group passes
   //     through canonicalGroup() first so legacy values fold to the taxonomy.
   const cleanName = cleanExerciseName(name);
-  // Cleaning can collapse a messy raw onto an EXISTING clean name that the raw didn't
-  // match by alias/key (e.g. "Incline DB Press 3x10" → "Incline DB Press"). Reuse it
-  // (and self-align the raw) instead of an INSERT that would hit the UNIQUE(name).
-  const cleanDupe = findExercise(cleanName);
-  if (cleanDupe) {
-    if (norm && normalizeExerciseName(cleanName) !== norm) setExerciseAlias(norm, cleanDupe.name);
-    return cleanDupe;
+  // Cleaning can collapse a messy raw onto an EXISTING exercise the raw itself did
+  // not reach (e.g. "incline db press 3x10" — the set/rep notation broke every key).
+  // Resolve the CLEANED spelling too and reuse the row instead of an INSERT that
+  // would hit the UNIQUE(name).
+  const cleanResolved = cleanName && cleanName !== name ? resolveExerciseName(cleanName) : null;
+  if (cleanResolved?.exercise_id != null) {
+    const row = getExercise(cleanResolved.exercise_id);
+    if (row) return selfAlign(row);
+  }
+
+  // (c) Last resort before the INSERT: the same movement typed with a STATION word
+  //     the stored row does not carry ("Cable Rope Hammer Curl" onto "Rope Hammer
+  //     Curl"). UNIQUE hit only — and, exactly like the abbreviation tier inside the
+  //     resolver, a row whose relaxed key EXTENDS the input's ("DB Bench Press
+  //     Incline" over "db bench press") makes the read ambiguous, so this tier must
+  //     refuse rather than pick. The pair must additionally clear the merge
+  //     validator's safety guards, so it can never fold incline onto flat, an
+  //     assisted pull-up onto a strict one, or a timed hold onto a reps lift.
+  const relaxedKey = implementRelaxedExerciseKey(name);
+  if (relaxedKey) {
+    const rows = db.prepare(`SELECT id, name, muscle_group, mode FROM exercises`).all() as Array<{
+      id: number;
+      name: string;
+      muscle_group: string | null;
+      mode: string | null;
+    }>;
+    const matches: typeof rows = [];
+    let relaxedAmbiguous = false;
+    for (const row of rows) {
+      const rowKey = implementRelaxedExerciseKey(row.name);
+      if (rowKey === relaxedKey) matches.push(row);
+      else if (rowKey.startsWith(`${relaxedKey} `)) relaxedAmbiguous = true;
+    }
+    if (!relaxedAmbiguous && matches.length === 1) {
+      const candidate = matches[0];
+      const verdict = validateExerciseMergePlan(
+        { name, group: muscle_group ?? null, mode: validMode(mode) ?? null },
+        { name: candidate.name, group: candidate.muscle_group, mode: candidate.mode }
+      );
+      if (verdict.ok) {
+        const row = getExercise(Number(candidate.id));
+        if (row) return selfAlign(row);
+      }
+    }
   }
   const resolvedGroup = muscle_group != null
     ? (canonicalGroup(muscle_group) ?? muscle_group)
@@ -623,8 +642,10 @@ export function deleteExercise(name: string) {
 // history. Encoding preserved: negative = assist (closer to 0 = harder), 0/bodyweight
 // is excluded (load progression doesn't apply). sessionsBack defaults to 3.
 export function recentWorkingWeight(name: string, sessionsBack = 3, beforeExclusive?: string): number | null {
-  const ex = findExercise(name);
-  if (!ex) return null;
+  // Alias-aware: "Incline DB Press" and "Incline Dumbbell Press" are one series.
+  const ex = resolveExerciseName(name);
+  if (ex.exercise_id == null) return null;
+  const exId = ex.exercise_id;
   const cutoff = String(beforeExclusive ?? "").slice(0, 10);
   const dated = /^\d{4}-\d{2}-\d{2}$/.test(cutoff);
   const dates = (
@@ -633,12 +654,12 @@ export function recentWorkingWeight(name: string, sessionsBack = 3, beforeExclus
           `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
             WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.weight != 0 AND s.date < ?
             ORDER BY s.date DESC LIMIT ?`
-        ).all(ex.id, cutoff, sessionsBack) as any[])
+        ).all(exId, cutoff, sessionsBack) as any[])
       : (db.prepare(
           `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
             WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.weight != 0
             ORDER BY s.date DESC LIMIT ?`
-        ).all(ex.id, sessionsBack) as any[])
+        ).all(exId, sessionsBack) as any[])
   ).map((r) => r.d);
   if (!dates.length) return null;
   let best: number | null = null;
@@ -646,7 +667,7 @@ export function recentWorkingWeight(name: string, sessionsBack = 3, beforeExclus
     const sets = db.prepare(
       `SELECT ls.weight AS weight, ls.reps AS reps FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
         WHERE ls.exercise_id = ? AND s.date = ? AND ls.weight IS NOT NULL AND ls.weight != 0`
-    ).all(ex.id, d) as any[];
+    ).all(exId, d) as any[];
     // The session's hardest working set. Loaded (w>0): heavier and more reps
     // ranks higher — the Epley-shaped `w * (1 + reps/30)` read. Assisted (w<0):
     // that same multiply ranked FEWER reps higher because the weight is negative,
@@ -672,8 +693,9 @@ export function recentWorkingWeight(name: string, sessionsBack = 3, beforeExclus
 // ignores because it only reads non-zero loaded sets. Empty history is false:
 // a lift that has never been logged is not "genuinely bodyweight".
 export function hasUnloadedWorkingHistory(name: string, sessionsBack = 3): boolean {
-  const ex = findExercise(name);
-  if (!ex) return false;
+  const ex = resolveExerciseName(name);
+  if (ex.exercise_id == null) return false;
+  const exId = ex.exercise_id;
   const dates = (
     db
       .prepare(
@@ -681,7 +703,7 @@ export function hasUnloadedWorkingHistory(name: string, sessionsBack = 3): boole
           WHERE ls.exercise_id = ?
           ORDER BY s.date DESC LIMIT ?`
       )
-      .all(ex.id, sessionsBack) as any[]
+      .all(exId, sessionsBack) as any[]
   ).map((r) => r.d);
   if (!dates.length) return false;
   for (const d of dates) {
@@ -690,7 +712,7 @@ export function hasUnloadedWorkingHistory(name: string, sessionsBack = 3): boole
         `SELECT ls.weight AS weight FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
           WHERE ls.exercise_id = ? AND s.date = ?`
       )
-      .all(ex.id, d) as any[];
+      .all(exId, d) as any[];
     if (!sets.length) return false;
     const sessionUnloaded = sets.every((s) => {
       if (s.weight == null || s.weight === "") return true;
@@ -708,8 +730,9 @@ export function hasUnloadedWorkingHistory(name: string, sessionsBack = 3): boole
 // family. The hardest completed hold across the last few sessions is the trustworthy
 // baseline used when an agent proposes a new timed prescription.
 export function recentWorkingSeconds(name: string, sessionsBack = 3, beforeExclusive?: string): number | null {
-  const ex = findExercise(name);
-  if (!ex) return null;
+  const ex = resolveExerciseName(name);
+  if (ex.exercise_id == null) return null;
+  const exId = ex.exercise_id;
   const cutoff = String(beforeExclusive ?? "").slice(0, 10);
   const dated = /^\d{4}-\d{2}-\d{2}$/.test(cutoff);
   const row = (
@@ -725,7 +748,7 @@ export function recentWorkingSeconds(name: string, sessionsBack = 3, beforeExclu
                 ORDER BY s.date DESC
                 LIMIT ?
              ) recent`
-        ).get(ex.id, cutoff, sessionsBack)
+        ).get(exId, cutoff, sessionsBack)
       : db.prepare(
           `SELECT MAX(recent.best_seconds) AS best_seconds
              FROM (
@@ -736,7 +759,7 @@ export function recentWorkingSeconds(name: string, sessionsBack = 3, beforeExclu
                 ORDER BY s.date DESC
                 LIMIT ?
              ) recent`
-        ).get(ex.id, sessionsBack)
+        ).get(exId, sessionsBack)
   ) as any;
   const value = Number(row?.best_seconds);
   return Number.isFinite(value) && value > 0 ? value : null;

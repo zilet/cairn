@@ -26,6 +26,7 @@ import {
   movementKey,
   normalizeExerciseName,
   normalizedExerciseKey,
+  resolveExerciseName,
 } from "./exercise-canon.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 
@@ -551,15 +552,11 @@ function hydrate(row: ExerciseGuideRow | undefined | null): ExerciseGuide | null
 export function getExerciseGuide(name: string): ExerciseGuide | null {
   const wanted = String(name ?? "").trim();
   if (!wanted) return null;
-  const row = db
-    .prepare(
-      `SELECT g.* FROM exercise_guides g
-         JOIN exercises e ON e.id = g.exercise_id
-        WHERE e.name = ? COLLATE NOCASE
-        LIMIT 1`
-    )
-    .get(wanted) as ExerciseGuideRow | undefined;
-  return hydrate(row);
+  // Alias-aware: the how-to for "incline db press" is the guide linked to the
+  // catalog row that spelling resolves to.
+  const exerciseId = resolveExerciseName(wanted).exercise_id;
+  if (exerciseId == null) return null;
+  return getExerciseGuideByExerciseId(exerciseId);
 }
 
 export function getExerciseGuideByExerciseId(exerciseId: number): ExerciseGuide | null {
@@ -586,10 +583,9 @@ export function attachGuide(exerciseName: string, guideId: string): { ok: boolea
   const wanted = String(exerciseName ?? "").trim();
   if (!wanted) return { ok: false, error: "exercise required" };
   if (!isValidGuideId(guideId)) return { ok: false, error: "unknown guide" };
-  const exercise = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(wanted) as
-    | { id: number }
-    | undefined;
-  if (!exercise) return { ok: false, error: `exercise "${wanted}" not found` };
+  const exerciseId = resolveExerciseName(wanted).exercise_id;
+  if (exerciseId == null) return { ok: false, error: `exercise "${wanted}" not found` };
+  const exercise = { id: exerciseId };
   const guide = db.prepare(`SELECT id FROM exercise_guides WHERE guide_id = ?`).get(guideId) as
     | { id: number }
     | undefined;

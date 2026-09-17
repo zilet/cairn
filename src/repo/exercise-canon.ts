@@ -508,6 +508,170 @@ export function listExerciseAliases(): Array<{ alias: string; canonical: string;
   return aliasStore.list();
 }
 
+// ---- THE name → stored exercise resolver ------------------------------------
+// Exercise names arrive from everywhere — a composed session item, an agent's
+// proposal, a chat message, a Garmin import — and the catalog stores exactly ONE
+// spelling per movement. Comparing raw `exercises.name` is what let a composed
+// "Incline DB Press" and the logged "Incline Dumbbell Press" read as two different
+// lifts on the same morning, even though an alias row already joined them: the
+// aliases were being WRITTEN and never READ. Every reader that compares a name
+// against the catalog goes through here instead of its own COLLATE NOCASE.
+//
+// The ladder, strongest tier first (it stops at the first hit):
+//   1. the exact stored name (COLLATE NOCASE) — the previous behavior, unchanged;
+//   2. ONE alias hop (`exercise_aliases`) onto a stored canonical;
+//   3. `normalizedExerciseKey` equality against the catalog — and when the hop in
+//      (2) landed on a canonical that no longer exists (a broken or misspelled
+//      alias row, which the live catalog has), the hop target is keyed too, so a
+//      dead alias still resolves instead of falling off the end;
+//   4. `expandedExerciseKey` equality ("DB" → "dumbbell"), UNIQUE hit only — an
+//      input whose expanded key also PREFIXES a longer name ("DB Bench Press" vs
+//      "DB Bench Press Incline") is ambiguous and deliberately resolves to nothing.
+// Ties inside tiers 3 and 4 go to the row with the most logged sets (then the
+// lowest id) — the same survivor rule planExerciseMerges uses, so a catalog that
+// still holds duplicates resolves to the row a merge would have kept.
+//
+// It never writes: resolving is a read. The write-side self-alignment (recording
+// the typed spelling as an alias) stays in findOrCreateExercise.
+export interface ResolvedExerciseName {
+  /** The stored `exercises.name` when the input resolves to a row; else the cleaned input. */
+  canonical: string;
+  /** The stored row's id, or null when nothing in the catalog matches. */
+  exercise_id: number | null;
+  /**
+   * The identity key two names can be compared on: `exercise:<id>` when the name
+   * resolves to a stored row, else `movement:<normalizedExerciseKey>`. That shape is
+   * the one `movement_key` has always been persisted in — never widen it, or stored
+   * outcome rows stop matching freshly computed ones.
+   */
+  key: string;
+}
+
+function exerciseCatalogWithCounts(): Array<{ id: number; name: string; sets: number }> {
+  try {
+    return (
+      db
+        .prepare(
+          `SELECT e.id AS id, e.name AS name, COUNT(ls.id) AS sets
+             FROM exercises e LEFT JOIN logged_sets ls ON ls.exercise_id = e.id
+            GROUP BY e.id`
+        )
+        .all() as any[]
+    ).map((r) => ({ id: Number(r.id), name: String(r.name), sets: Number(r.sets) || 0 }));
+  } catch {
+    return [];
+  }
+}
+
+function bestCatalogRow<T extends { id: number; sets: number }>(rows: T[]): T | null {
+  if (!rows.length) return null;
+  return [...rows].sort((a, b) => b.sets - a.sets || a.id - b.id)[0];
+}
+
+function storedExerciseRow(name: string): { id: number; name: string } | null {
+  try {
+    const row = db.prepare(`SELECT id, name FROM exercises WHERE name = ? COLLATE NOCASE LIMIT 1`).get(name) as any;
+    return row ? { id: Number(row.id), name: String(row.name) } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveExerciseName(name: string): ResolvedExerciseName {
+  const raw = String(name ?? "").trim();
+  const norm = normalizeExerciseName(raw);
+  if (!norm) return { canonical: "", exercise_id: null, key: "" };
+  const hit = (row: { id: number; name: string }): ResolvedExerciseName => ({
+    canonical: row.name,
+    exercise_id: row.id,
+    key: `exercise:${row.id}`,
+  });
+  const miss = (): ResolvedExerciseName => ({
+    canonical: cleanExerciseName(raw) || raw,
+    exercise_id: null,
+    key: `movement:${normalizedExerciseKey(raw) || norm}`,
+  });
+
+  // (1) exact stored name.
+  const exact = storedExerciseRow(raw);
+  if (exact) return hit(exact);
+
+  // (2) one alias hop. A hop onto a canonical that no longer exists is not a dead
+  //     end — the target becomes a second search text for the key tiers below.
+  const searchTexts = [raw];
+  const alias = getExerciseAlias(norm);
+  if (alias?.canonical) {
+    const canonical = String(alias.canonical).trim();
+    if (canonical) {
+      const aliased = storedExerciseRow(canonical);
+      if (aliased) return hit(aliased);
+      if (normalizeExerciseName(canonical) !== norm) searchTexts.push(canonical);
+    }
+  }
+
+  const catalog = exerciseCatalogWithCounts();
+  if (!catalog.length) return miss();
+
+  // (3) conservative key equality (plurals + "timed" folded, implements intact).
+  for (const text of searchTexts) {
+    const key = normalizedExerciseKey(text);
+    if (!key) continue;
+    const best = bestCatalogRow(catalog.filter((e) => normalizedExerciseKey(e.name) === key));
+    if (best) return hit(best);
+  }
+
+  // (4) abbreviation-aware equality, UNIQUE hit only.
+  for (const text of searchTexts) {
+    const expanded = expandedExerciseKey(text);
+    if (!expanded) continue;
+    const matches: Array<{ id: number; name: string; sets: number }> = [];
+    let ambiguous = false;
+    for (const row of catalog) {
+      const rowKey = expandedExerciseKey(row.name);
+      if (rowKey === expanded) matches.push(row);
+      else if (rowKey.startsWith(`${expanded} `)) ambiguous = true;
+    }
+    if (ambiguous) continue;
+    const best = bestCatalogRow(matches);
+    if (best) return hit(best);
+  }
+
+  return miss();
+}
+
+/** The stored exercise id a name resolves to, or null. Thin sugar over resolveExerciseName. */
+export function resolveExerciseId(name: string): number | null {
+  return resolveExerciseName(name).exercise_id;
+}
+
+/** The identity key two names can be compared on. Thin sugar over resolveExerciseName. */
+export function exerciseIdentityKey(name: string): string {
+  return resolveExerciseName(name).key;
+}
+
+// The LAST-RESORT WRITE key. On top of the abbreviation expansion it drops the
+// three STATION words that say where a movement is loaded rather than what it is —
+// "cable", "machine", "bar". A rope hammer curl IS a cable movement, so "Cable Rope
+// Hammer Curl" and "Rope Hammer Curl" are one lift the athlete typed twice; the
+// live catalog carried both.
+//
+// Used ONLY by findOrCreateExercise, only for EQUALITY, and only after every
+// stronger tier has missed — never for reads, merges or plan-slot matching. It is
+// deliberately narrower than movementKey, which also drops dumbbell/barbell/
+// kettlebell (those ARE different lifts). The cost is documented and accepted: a
+// station qualifier is the ONLY difference this tier forgives, so a newly typed
+// "<movement> machine" reuses an existing "<movement>" row rather than opening a
+// second series. It only ever affects a name being written for the FIRST time — it
+// never merges rows that already exist, and the athlete can still split them.
+const RELAXABLE_STATION_TOKENS = new Set(["cable", "machine", "bar"]);
+export function implementRelaxedExerciseKey(name: string): string {
+  const tokens = expandExerciseAbbreviations(name).split(" ").filter(Boolean);
+  const kept = tokens
+    .filter((t) => !RELAXABLE_STATION_TOKENS.has(t) && !NON_DISTINGUISHING.has(t))
+    .map(foldPluralToken);
+  return (kept.length ? kept : tokens.map(foldPluralToken)).join(" ");
+}
+
 // ---- agentic exercise understanding (messy input → canonical name + profile) -
 // When a user types a descriptive/messy exercise title ("incline db bench 3x10 lol")
 // it must normalize to a clean, reusable display name AND profile its muscle group +

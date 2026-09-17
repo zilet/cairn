@@ -16,8 +16,10 @@ import { activitySportWhere, canonicalEnduranceSport, RUN_SPORT_PATTERNS } from 
 import {
   canonicalGroup,
   classifyMuscleGroup,
+  exerciseIdentityKey,
   normalizeExerciseName,
   normalizedExerciseKey,
+  resolveExerciseName,
 } from "./exercise-canon.js";
 import { CARDIO_GRADE, HARD_EFFORT } from "./heavy-load.js";
 import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
@@ -143,6 +145,44 @@ function planDayContentTitle(planDayId: number): string | null {
   return contentTitle(bucketCounts(rows));
 }
 
+// The daily COMPOSITION bound to a session — the prescription the athlete actually
+// accepted for that day, which an `athlete_override` session ("Deadlift + upper-body
+// catch-up") carries INSTEAD of a plan day, not alongside one. Without it a chosen
+// session fell straight through to contentTitle and its done card read "Full Body".
+// Prefers the active row, then the newest version, so a superseded composition still
+// names the work it prescribed.
+function compositionForSession(sessionId: number): { title: string; items: string[] } | null {
+  try {
+    const row = db
+      .prepare(
+        `SELECT title, items_json FROM daily_session_compositions
+          WHERE session_id = ?
+          ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, version DESC
+          LIMIT 1`
+      )
+      .get(sessionId) as any;
+    const title = String(row?.title ?? "").trim();
+    if (!title) return null;
+    let items: string[] = [];
+    try {
+      const parsed = JSON.parse(String(row?.items_json ?? "[]"));
+      if (Array.isArray(parsed)) items = parsed.map((it: any) => String(it?.exercise ?? "").trim()).filter(Boolean);
+    } catch {
+      items = [];
+    }
+    return { title, items };
+  } catch {
+    return null;
+  }
+}
+
+function storedMuscleGroup(name: string): string | null {
+  const id = resolveExerciseName(name).exercise_id;
+  if (id == null) return null;
+  const row = db.prepare(`SELECT muscle_group FROM exercises WHERE id = ?`).get(id) as any;
+  return row?.muscle_group == null ? null : String(row.muscle_group);
+}
+
 // The display title for a logged session. Keeps the linked plan-day name while
 // the logged work still IS that day — either at least half its prescribed
 // movements are present (a substitution or two is fine), OR the logged work is
@@ -162,6 +202,23 @@ export function deriveSessionTitle(sessionId: number, planDayId?: number | null,
   if (!rows.length) return planDayName || "Session";
 
   const loggedTitle = contentTitle(bucketCounts(rows));
+  const identity = (name: unknown) => exerciseIdentityKey(String(name ?? "")) || String(name ?? "").toLowerCase();
+
+  // The session's OWN accepted prescription comes first — it names the day the
+  // athlete chose, and it is the only name a composition-only session has. Held to
+  // the SAME divergence test as the plan-day name below, so a composition whose work
+  // was swapped out wholesale still reads content-true.
+  const composition = compositionForSession(sessionId);
+  if (composition) {
+    if (!composition.items.length) return composition.title; // a rest / open composition
+    const prescribed = new Set(composition.items.map(identity));
+    const hits = rows.filter((r) => prescribed.has(identity(r.name))).length;
+    if (hits / rows.length >= 0.5) return composition.title;
+    const prescribedTitle = contentTitle(
+      bucketCounts(composition.items.map((name) => ({ name, mg: storedMuscleGroup(name) })))
+    );
+    if (loggedTitle && loggedTitle === prescribedTitle) return composition.title;
+  }
 
   if (planDayId && planDayName) {
     const planned = new Set(
@@ -171,10 +228,10 @@ export function deriveSessionTitle(sessionId: number, planDayId?: number | null,
             `SELECT e.name AS name FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id WHERE pi.plan_day_id = ?`
           )
           .all(planDayId) as any[]
-      ).map((r) => String(r.name).toLowerCase())
+      ).map((r) => identity(r.name))
     );
     if (planned.size) {
-      const hits = rows.filter((r) => planned.has(String(r.name).toLowerCase())).length;
+      const hits = rows.filter((r) => planned.has(identity(r.name))).length;
       if (hits / rows.length >= 0.5) return planDayName; // still that day (by name)
     }
     // Same character as the day prescribes → still that day (robust to renames).

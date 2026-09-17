@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { resolveExerciseName } from "./exercise-canon.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { requestDailyOutcomeReconciliation } from "./reconciliation-hooks.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
@@ -123,13 +124,15 @@ function resolveMovementIdentity(
     .trim()
     .slice(0, 120);
   const exerciseId = requestedExerciseId == null ? null : Number(requestedExerciseId);
+  // A typed movement name resolves through the shared ladder (exact → alias →
+  // key), so a symptom reported against "incline db press" lands on the same
+  // catalog row the athlete logs sets on.
+  const resolvedId = name ? resolveExerciseName(name).exercise_id : null;
   const exercise =
     exerciseId != null && Number.isInteger(exerciseId) && exerciseId > 0
       ? (db.prepare(`SELECT id, name, muscle_group FROM exercises WHERE id = ?`).get(exerciseId) as any)
-      : name
-        ? (db
-            .prepare(`SELECT id, name, muscle_group FROM exercises WHERE name = ? COLLATE NOCASE`)
-            .get(name) as any)
+      : resolvedId != null
+        ? (db.prepare(`SELECT id, name, muscle_group FROM exercises WHERE id = ?`).get(resolvedId) as any)
         : null;
   if (requestedExerciseId != null && !exercise) throw new Error("exercise_id not found");
   const canonicalName = exercise?.name ? String(exercise.name) : name;

@@ -229,3 +229,124 @@ test("reconcileExercises group policy: nightly (authoritativeGroups:false) fills
     "the user-initiated Tidy overrides the wrong group"
   );
 });
+
+// ---------------------------------------------------------------------------
+// ONE RESOLVER. Aliases were being written and never read: a composed "Incline DB
+// Press" and the logged "Incline Dumbbell Press" were two lifts on the same
+// morning. resolveExerciseName is the single ladder every reader now uses.
+// ---------------------------------------------------------------------------
+
+test("resolveExerciseName follows an alias, a dead alias, and a bare key to one stored row", () => {
+  const stored = repo.findOrCreateExercise("Incline Dumbbell Press", "chest");
+  repo.setExerciseAlias("incline db press", "Incline Dumbbell Press");
+
+  const viaAlias = repo.resolveExerciseName("Incline DB Press");
+  assert.equal(viaAlias.exercise_id, stored.id, "the persisted alias resolves");
+  assert.equal(viaAlias.canonical, "Incline Dumbbell Press");
+  assert.equal(viaAlias.key, `exercise:${stored.id}`);
+
+  // A BROKEN alias — its canonical names a row that does not exist. The live
+  // catalog carried exactly this ("Cable Overhead Tricep Extension"). It must still
+  // resolve, by keying the hop target instead of falling off the end.
+  const triceps = repo.findOrCreateExercise("Cable Overhead Triceps Extension", "triceps");
+  repo.setExerciseAlias("cable overhead triceps ext", "Cable Overhead Tricep Extension");
+  assert.equal(
+    repo.resolveExerciseName("Cable Overhead Triceps Ext").exercise_id,
+    triceps.id,
+    "a dead alias still lands on the row its canonical keys to"
+  );
+
+  // No alias at all — the conservative key (plurals folded) carries it.
+  const ext = repo.findOrCreateExercise("Leg Extension", "quads");
+  assert.equal(repo.resolveExerciseName("leg extensions").exercise_id, ext.id);
+
+  // An unknown movement resolves to nothing, and keeps the movement-key shape the
+  // outcome ledger has always persisted.
+  const miss = repo.resolveExerciseName("Copenhagen Plank Thing");
+  assert.equal(miss.exercise_id, null);
+  assert.match(miss.key, /^movement:/);
+});
+
+test("findOrCreateExercise reuses an abbreviation match and a station-word variant instead of inserting", () => {
+  const press = repo.findOrCreateExercise("Incline Dumbbell Press", "chest");
+  const before = db.prepare("SELECT COUNT(*) AS n FROM exercises").get().n;
+
+  const again = repo.findOrCreateExercise("incline DB press");
+  assert.equal(again.id, press.id, "the abbreviation resolves to the stored row");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM exercises").get().n, before, "no second row");
+  assert.equal(
+    repo.getExerciseAlias("incline db press").canonical,
+    "Incline Dumbbell Press",
+    "the typed spelling is recorded so it resolves directly next time"
+  );
+
+  // The station-word tier: a rope hammer curl IS a cable movement, so the "Cable"
+  // prefix is not a second lift. (The live catalog carried both.)
+  const rope = repo.findOrCreateExercise("Rope Hammer Curl", "biceps");
+  const cableRope = repo.findOrCreateExercise("Cable Rope Hammer Curl");
+  assert.equal(cableRope.id, rope.id, "the station word is forgiven after every stronger tier missed");
+
+  // But it never forgives a real variation: incline is not flat, and assisted is
+  // not strict, whatever the station words say.
+  const flat = repo.findOrCreateExercise("Machine Chest Press", "chest");
+  const incline = repo.findOrCreateExercise("Incline Chest Press");
+  assert.notEqual(incline.id, flat.id, "a variation token still opens its own lift");
+});
+
+test("dedupeExercises reports before it folds, preserves every logged set, and is idempotent", () => {
+  const survivor = repo.findOrCreateExercise("Dumbbell Bench Press", "chest");
+  // A second row for the same movement, created behind the chokepoint's back the
+  // way months of drift did.
+  const dupId = Number(
+    db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('DB Bench Press', 'chest', 'reps')").run()
+      .lastInsertRowid
+  );
+  const sess = repo.getOrCreateSession(TODAY);
+  const insertSet = db.prepare(
+    "INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?,?,?,100,8)"
+  );
+  insertSet.run(sess.id, survivor.id, 1);
+  insertSet.run(sess.id, survivor.id, 2);
+  insertSet.run(sess.id, dupId, 1);
+  const planDay = db.prepare("INSERT INTO plan_days (day_number, name) VALUES (4, 'Push')").run();
+  db.prepare("INSERT INTO plan_items (plan_day_id, position, exercise_id, sets) VALUES (?, 0, ?, 3)").run(
+    planDay.lastInsertRowid,
+    dupId
+  );
+  // A broken alias: its canonical names no stored exercise, but still KEYS to one.
+  // This is the live catalog's own bug — an alias pointing at "Cable Overhead
+  // Tricep Extension" while the real lift sits under "…Triceps Extension".
+  repo.findOrCreateExercise("Cable Overhead Triceps Extension", "triceps");
+  repo.setExerciseAlias("cable oh tri ext", "Cable Overhead Tricep Extension");
+
+  const dry = repo.dedupeExercises();
+  assert.equal(dry.dry_run, true);
+  assert.ok(
+    dry.merges.some((m) => m.from === "DB Bench Press" && m.into === "Dumbbell Bench Press"),
+    "the duplicate folds into the member with the most logged sets"
+  );
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM exercises WHERE id = ?").get(dupId).n, 1, "a dry run changes nothing");
+
+  const applied = repo.dedupeExercises({ dryRun: false });
+  assert.equal(applied.merged, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM exercises WHERE id = ?").get(dupId).n, 0, "the duplicate row is gone");
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS n FROM logged_sets WHERE exercise_id = ?").get(survivor.id).n,
+    3,
+    "every logged set survives on the survivor"
+  );
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS n FROM plan_items WHERE exercise_id NOT IN (SELECT id FROM exercises)").get().n,
+    0,
+    "no orphan plan items"
+  );
+  assert.equal(
+    repo.getExerciseAlias("cable oh tri ext").canonical,
+    "Cable Overhead Triceps Extension",
+    "the dead alias is repointed at the row its canonical keys to"
+  );
+
+  const second = repo.dedupeExercises({ dryRun: false });
+  assert.equal(second.merged, 0, "re-running finds nothing left to fold");
+  assert.equal(second.aliases_repaired, 0);
+});

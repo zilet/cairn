@@ -17,6 +17,7 @@
 // and test keeps importing it from where it has always been.
 // ============================================================================
 import { db } from "../db.js";
+import { resolveExerciseName } from "./exercise-canon.js";
 import { recoverySessionDose } from "./training-read.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
 
@@ -63,16 +64,18 @@ export function sessionCountsTowardLiftTrajectory(sessionId: number): boolean {
 // ACTUALLY trained since?" — where a compliant recovery week must not be
 // mistaken for exposure. One counter, one answer.
 export function comparableLiftDates(name: string, through: string): Set<string> {
+  // Alias-aware, so this counter and recentWorkingWeight read the SAME series.
+  const exerciseId = resolveExerciseName(name).exercise_id;
+  if (exerciseId == null) return new Set<string>();
   const rows = db
     .prepare(
       `SELECT DISTINCT s.id AS session_id, s.date AS date
        FROM logged_sets ls
        JOIN sessions s ON s.id = ls.session_id
-       JOIN exercises e ON e.id = ls.exercise_id
-      WHERE e.name = ? COLLATE NOCASE AND s.date <= ?
+      WHERE ls.exercise_id = ? AND s.date <= ?
       ORDER BY s.date, s.id`
     )
-    .all(name, through) as any[];
+    .all(exerciseId, through) as any[];
   return new Set(
     rows.filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id))).map((row) => String(row.date))
   );

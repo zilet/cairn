@@ -1038,3 +1038,143 @@ test("v96 leaves an auto-labeled block with derived/NULL intent untouched", () =
   );
   d.close();
 });
+
+// v103 repairs the exercise IDENTITY layer on an existing catalog: aliases that were
+// written and never read let the same movement accumulate under several names, each
+// with its own progress line and its own share of per-muscle volume. The repair must
+// preserve every logged set (a merge only moves which exercise a set belongs to),
+// leave no orphan plan item, and be a no-op on a second pass.
+test("v103 folds duplicate exercises into the survivor without losing a single logged set", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`
+    CREATE TABLE exercises (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      muscle_group TEXT,
+      mode TEXT,
+      garmin_category TEXT,
+      garmin_exercise TEXT,
+      garmin_map_status TEXT
+    );
+    CREATE TABLE logged_sets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER, exercise_id INTEGER, set_number INTEGER, weight REAL, reps INTEGER
+    );
+    CREATE TABLE plan_days (id INTEGER PRIMARY KEY AUTOINCREMENT, day_number INTEGER, name TEXT);
+    CREATE TABLE plan_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, plan_day_id INTEGER, position INTEGER, exercise_id INTEGER, sets INTEGER
+    );
+    CREATE TABLE exercise_aliases (
+      id INTEGER PRIMARY KEY, alias TEXT NOT NULL UNIQUE, canonical TEXT NOT NULL, source TEXT
+    );
+  `);
+  const addExercise = d.prepare(
+    `INSERT INTO exercises (name, muscle_group, mode, garmin_category) VALUES (?, ?, ?, ?)`
+  );
+  const id = (name, group = null, mode = "reps", garmin = null) =>
+    Number(addExercise.run(name, group, mode, garmin).lastInsertRowid);
+  // The live catalog's own shape: one chest-press station typed three ways, a rope
+  // hammer curl duplicated with a "Cable" prefix, a pull-up stored as TIMED, two
+  // muscle groups naming the wrong region, and a leg press on the wrong FIT category.
+  const benchMachine = id("Bench press machine", "chest");
+  const seatedMachine = id("Seated machine chest press", "chest");
+  const machineChest = id("Machine Chest Press", "chest");
+  const ropeHammer = id("Rope Hammer Curl", "biceps");
+  id("Cable Rope Hammer Curl", "biceps");
+  const dumbbellHammer = id("Hammer Curl", "biceps");
+  // A pure spelling duplicate the generic pass folds: "DB" spelled out.
+  const dbBench = id("DB Bench Press", "chest");
+  const dumbbellBench = id("Dumbbell Bench Press", "chest");
+  const pullUp = id("Pull Up", "back", "timed");
+  const chestSupportedRow = id("Chest-Supported Row", "chest");
+  const neutralPullUp = id("Neutral-Grip Pull-Up", "forearms");
+  const legPress = id("Seated leg press - machine", "quads", "reps", "SHOULDER_PRESS");
+  const legExtension = id("Leg Extension", "quads", "reps", "CRUNCH");
+
+  const addSet = d.prepare(
+    `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (1, ?, ?, 100, 8)`
+  );
+  const sets = { [benchMachine]: 6, [seatedMachine]: 6, [ropeHammer]: 10, [dumbbellHammer]: 49, [dumbbellBench]: 4, [dbBench]: 1 };
+  for (const [exId, count] of Object.entries(sets)) {
+    for (let i = 1; i <= count; i++) addSet.run(Number(exId), i);
+  }
+  const totalSets = Number(d.prepare("SELECT COUNT(*) AS n FROM logged_sets").get().n);
+
+  d.prepare(`INSERT INTO plan_days (day_number, name) VALUES (1, 'Push')`).run();
+  d.prepare(`INSERT INTO plan_items (plan_day_id, position, exercise_id, sets) VALUES (1, 0, ?, 3)`).run(benchMachine);
+  d.prepare(`INSERT INTO plan_items (plan_day_id, position, exercise_id, sets) VALUES (1, 1, ?, 3)`).run(dbBench);
+  // The broken alias: its canonical names a row that does not exist.
+  d.prepare(`INSERT INTO exercise_aliases (alias, canonical, source) VALUES (?, ?, 'agent')`).run(
+    "cable overhead triceps extension",
+    "Cable Overhead Tricep Extension"
+  );
+  const tricepsExt = id("Cable Overhead Triceps Extension", "triceps");
+
+  const v103 = MIGRATIONS.find((m) => m.version === 103);
+  v103.up(d);
+
+  const names = new Set(d.prepare("SELECT name FROM exercises").all().map((r) => r.name));
+  assert.ok(!names.has("Bench press machine"), "the chest-press duplicates folded");
+  assert.ok(!names.has("Seated machine chest press"));
+  assert.ok(names.has("Machine Chest Press"), "the survivor keeps the name the aliases already pointed at");
+  assert.ok(!names.has("Cable Rope Hammer Curl"), "the cable prefix folded onto the rope curl");
+  assert.ok(names.has("Hammer Curl"), "a dumbbell hammer curl is NOT a rope hammer curl");
+  assert.ok(!names.has("DB Bench Press"), "the generic pass folds a pure spelling duplicate");
+  assert.ok(names.has("Dumbbell Bench Press"));
+
+  assert.equal(
+    Number(d.prepare("SELECT COUNT(*) AS n FROM logged_sets").get().n),
+    totalSets,
+    "not one logged set is lost"
+  );
+  assert.equal(
+    Number(d.prepare("SELECT COUNT(*) AS n FROM logged_sets WHERE exercise_id = ?").get(machineChest).n),
+    12,
+    "both chest-press histories land on the survivor"
+  );
+  assert.equal(
+    Number(d.prepare("SELECT COUNT(*) AS n FROM logged_sets WHERE exercise_id = ?").get(dumbbellBench).n),
+    5,
+    "the spelling duplicate's set joins the survivor's series"
+  );
+  assert.equal(
+    Number(d.prepare("SELECT COUNT(*) AS n FROM logged_sets WHERE exercise_id = ?").get(ropeHammer).n),
+    10,
+    "the 0-set cable variant adds nothing and takes nothing"
+  );
+  assert.equal(
+    Number(
+      d.prepare("SELECT COUNT(*) AS n FROM plan_items WHERE exercise_id NOT IN (SELECT id FROM exercises)").get().n
+    ),
+    0,
+    "no orphan plan items"
+  );
+
+  const row = (exId) => d.prepare("SELECT * FROM exercises WHERE id = ?").get(exId);
+  assert.equal(row(pullUp).mode, "reps", "a pull-up is counted in reps, not held for time");
+  assert.equal(row(chestSupportedRow).muscle_group, "back", "a horizontal pull is back work");
+  assert.equal(row(neutralPullUp).muscle_group, "back", "a grip detail does not make a pull-up forearm work");
+  assert.equal(row(legPress).garmin_category, "SQUAT", "the FIT category comes from the catalog, never invented");
+  assert.equal(row(legPress).garmin_exercise, "LEG_PRESS");
+  assert.equal(row(legExtension).garmin_category, "CRUNCH", "the FIT profile really does file leg extensions there");
+  assert.equal(
+    d.prepare(`SELECT canonical FROM exercise_aliases WHERE alias = 'cable overhead triceps extension'`).get()
+      .canonical,
+    "Cable Overhead Triceps Extension",
+    "the dead alias is repointed at the row that exists"
+  );
+  assert.ok(row(tricepsExt), "the real triceps row is untouched");
+  assert.equal(
+    d.prepare(`SELECT canonical FROM exercise_aliases WHERE alias = 'bench press machine'`).get().canonical,
+    "Machine Chest Press",
+    "every retired name keeps resolving to the survivor"
+  );
+
+  // Idempotent: a second pass has nothing left to fold or correct.
+  const before = d.prepare("SELECT id, name, mode, muscle_group FROM exercises ORDER BY id").all();
+  const setsBefore = d.prepare("SELECT COUNT(*) AS n FROM logged_sets").get().n;
+  v103.up(d);
+  assert.deepEqual(d.prepare("SELECT id, name, mode, muscle_group FROM exercises ORDER BY id").all(), before);
+  assert.equal(d.prepare("SELECT COUNT(*) AS n FROM logged_sets").get().n, setsBefore);
+  d.close();
+});

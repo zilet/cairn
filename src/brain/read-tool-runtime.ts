@@ -6,7 +6,7 @@ import { currentMealPlan } from "../repo/nutrition.js";
 import { getPlanDay } from "../repo/plan.js";
 import { directivesForCoach } from "../repo/propagation.js";
 import { supplementsForCoach } from "../repo/supplements.js";
-import { normalizedExerciseKey, normalizeExerciseName } from "../repo/exercise-canon.js";
+import { resolveExerciseName } from "../repo/exercise-canon.js";
 import { canonicalMarker } from "../repo/marker-canon.js";
 import {
   COACH_READ_TOOL_CATALOG,
@@ -146,31 +146,16 @@ function finalize(tool: CoachReadToolName, raw: RawRead): CoachReadToolResult {
   return result;
 }
 
+// The coach read tools speak the athlete's spelling. One resolver for the whole
+// codebase (repo/exercise-canon.resolveExerciseName) — this used to carry its own
+// copy of the exact → alias → key ladder, which is exactly how the two drifted.
 function resolveExercise(name: string): MutableRow | null {
-  const exact = db
-    .prepare(`SELECT id, name, muscle_group, unit, constraint_note, mode FROM exercises WHERE name = ? COLLATE NOCASE`)
-    .get(name) as MutableRow | undefined;
-  if (exact) return exact;
-  const normalized = normalizeExerciseName(name);
-  const alias = normalized
-    ? (db.prepare(`SELECT canonical FROM exercise_aliases WHERE alias = ?`).get(normalized) as
-        | { canonical?: string }
-        | undefined)
-    : undefined;
-  if (alias?.canonical) {
-    const row = db
-      .prepare(
-        `SELECT id, name, muscle_group, unit, constraint_note, mode FROM exercises WHERE name = ? COLLATE NOCASE`
-      )
-      .get(alias.canonical) as MutableRow | undefined;
-    if (row) return row;
-  }
-  const key = normalizedExerciseKey(name);
-  if (!key) return null;
-  const rows = db
-    .prepare(`SELECT id, name, muscle_group, unit, constraint_note, mode FROM exercises LIMIT 500`)
-    .all() as MutableRow[];
-  return rows.find((row) => normalizedExerciseKey(String(row.name ?? "")) === key) ?? null;
+  const id = resolveExerciseName(name).exercise_id;
+  if (id == null) return null;
+  const row = db
+    .prepare(`SELECT id, name, muscle_group, unit, constraint_note, mode FROM exercises WHERE id = ?`)
+    .get(id) as MutableRow | undefined;
+  return row ?? null;
 }
 
 function readExerciseHistory(

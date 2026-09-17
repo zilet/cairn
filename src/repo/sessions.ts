@@ -12,7 +12,7 @@ import {
   listGarminSources,
 } from "./activities.js";
 import { activitySportWhere, canonicalEnduranceSport } from "./endurance-sports.js";
-import { MUSCLE_LANDMARKS } from "./exercise-canon.js";
+import { MUSCLE_LANDMARKS, resolveExerciseName } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import {
   findExercise,
@@ -874,17 +874,20 @@ export function updateSet(
 // Most recent logged set for an exercise across all sessions (for prefill).
 // Timed sets have reps NULL but a duration_sec — both count as a real set.
 export function getLastSet(exercise: string) {
+  // Alias-aware: the prefill for "Incline DB Press" is the last set logged on the
+  // catalog row that spelling resolves to.
+  const exerciseId = resolveExerciseName(exercise).exercise_id;
+  if (exerciseId == null) return null;
   const row = db
     .prepare(
       `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir, ls.duration_sec AS duration_sec, s.date AS date
        FROM logged_sets ls
-       JOIN exercises e ON e.id = ls.exercise_id
        JOIN sessions s ON s.id = ls.session_id
-       WHERE e.name = ? COLLATE NOCASE AND (ls.reps IS NOT NULL OR ls.duration_sec IS NOT NULL)
+       WHERE ls.exercise_id = ? AND (ls.reps IS NOT NULL OR ls.duration_sec IS NOT NULL)
        ORDER BY s.date DESC, ls.id DESC
        LIMIT 1`
     )
-    .get(exercise) as any;
+    .get(exerciseId) as any;
   return row ?? null;
 }
 

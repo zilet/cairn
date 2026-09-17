@@ -1,8 +1,14 @@
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { constraintLimitsLoad, movementKey, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
-import { findExercise, findOrCreateExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
+import {
+  constraintLimitsLoad,
+  movementKey,
+  normalizeExerciseName,
+  normalizedExerciseKey,
+  resolveExerciseName,
+} from "./exercise-canon.js";
+import { findOrCreateExercise, getExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { relatedLiftStart } from "./related-lift.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO, localDayOfStamp } from "./shared.js";
@@ -930,7 +936,10 @@ export function updateTarget(
 ) {
   const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
   if (!day) throw new Error(`No plan day ${dayNumber}`);
-  const ex = findExercise(exerciseName);
+  // Alias-aware: a proposal naming the lift the way the athlete types it must land
+  // on the plan slot the catalog stores, instead of throwing "No exercise".
+  const resolvedId = resolveExerciseName(exerciseName).exercise_id;
+  const ex = resolvedId != null ? getExercise(resolvedId) : null;
   if (!ex) throw new Error(`No exercise "${exerciseName}"`);
   const cur = db
     .prepare(`SELECT id, target_weight, target_seconds FROM plan_items WHERE plan_day_id = ? AND exercise_id = ?`)

@@ -28,7 +28,7 @@
 // is the deterministic detector the autonomy layer uses so a plan-wide volume cut
 // can never take the tier meant for one lift's load nudge.
 import { db } from "../db.js";
-import { normalizeExerciseName } from "./exercise-canon.js";
+import { normalizeExerciseName, resolveExerciseName } from "./exercise-canon.js";
 
 // WHY the volume came off, recorded at the moment of the cut. A restore trigger
 // speaks about the thing that cleared, so it may only act on the debt IT created:
@@ -71,16 +71,32 @@ function intOrNull(value: unknown): number | null {
 // The stored `sets` for one strength prescription, or null when the item is not on
 // that day at all (removed, rotated out, or the day itself is gone).
 function currentPlanSets(dayNumber: number, exercise: string): number | null {
-  const row = db
-    .prepare(
-      `SELECT pi.sets AS sets
-         FROM plan_items pi
-         JOIN plan_days pd ON pd.id = pi.plan_day_id
-         JOIN exercises e ON e.id = pi.exercise_id
-        WHERE pd.day_number = ? AND lower(e.name) = lower(?)
-          AND (pi.kind IS NULL OR pi.kind != 'cardio')`
-    )
-    .get(Number(dayNumber), String(exercise ?? "")) as any;
+  // Alias-aware: a change naming the lift the way the athlete types it must still
+  // find the slot the plan stores, or a genuine set cut reads as an ADD and slips
+  // past the volume guard.
+  const exerciseId = resolveExerciseName(String(exercise ?? "")).exercise_id;
+  const row = (
+    exerciseId != null
+      ? db
+          .prepare(
+            `SELECT pi.sets AS sets
+               FROM plan_items pi
+               JOIN plan_days pd ON pd.id = pi.plan_day_id
+              WHERE pd.day_number = ? AND pi.exercise_id = ?
+                AND (pi.kind IS NULL OR pi.kind != 'cardio')`
+          )
+          .get(Number(dayNumber), exerciseId)
+      : db
+          .prepare(
+            `SELECT pi.sets AS sets
+               FROM plan_items pi
+               JOIN plan_days pd ON pd.id = pi.plan_day_id
+               JOIN exercises e ON e.id = pi.exercise_id
+              WHERE pd.day_number = ? AND lower(e.name) = lower(?)
+                AND (pi.kind IS NULL OR pi.kind != 'cardio')`
+          )
+          .get(Number(dayNumber), String(exercise ?? ""))
+  ) as any;
   return row ? intOrNull(row.sets) : null;
 }
 

@@ -2,7 +2,14 @@ import { getActiveDailySessionForSession } from "./adaptive-session.js";
 import { getCardioForDate, type CardioEffort } from "./activities.js";
 import { db } from "../db.js";
 import { canonicalEnduranceSport } from "./endurance-sports.js";
-import { canonicalGroup, classifyMuscleGroup, type MuscleGroup, normalizedExerciseKey } from "./exercise-canon.js";
+import {
+  canonicalGroup,
+  classifyMuscleGroup,
+  exerciseIdentityKey,
+  type MuscleGroup,
+  normalizedExerciseKey,
+  resolveExerciseName,
+} from "./exercise-canon.js";
 import { recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { isLoadRelevantEnduranceImpact, recentEnduranceImpacts } from "./hybrid-load.js";
 import {
@@ -247,9 +254,12 @@ function confounders(session: any, date: string, otherActivity: boolean): string
   return out;
 }
 
+// The stable identity a dose is remembered by. ALIAS-AWARE: a composed "Incline DB
+// Press" and the logged "Incline Dumbbell Press" are one movement, so they must key
+// to one `exercise:<id>`. The emitted SHAPE is unchanged — stored movement_key rows
+// still match freshly computed ones.
 function movementIdentity(exercise: string): string {
-  const stored = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(exercise) as any;
-  return stored?.id != null ? `exercise:${Number(stored.id)}` : `movement:${normalizedExerciseKey(exercise)}`;
+  return exerciseIdentityKey(exercise);
 }
 
 function intentIdentity(item: any): string {
@@ -538,13 +548,27 @@ function planLoadFor(
   if (!name) return null;
   if (planDayId == null || !Number.isInteger(Number(planDayId)) || Number(planDayId) <= 0) return null;
   try {
-    const row = db
-      .prepare(
-        `SELECT pi.sets, pi.target_weight, pi.target_seconds, pi.rep_low
-           FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
-          WHERE pi.plan_day_id = ? AND e.name = ? COLLATE NOCASE LIMIT 1`
-      )
-      .get(Number(planDayId), name) as any;
+    // Resolve the name to its stored row FIRST, then join the plan by exercise_id:
+    // a raw name compare here is what stopped a logged "Incline Dumbbell Press" from
+    // being credited against the composed "Incline DB Press" slot.
+    const exerciseId = resolveExerciseName(name).exercise_id;
+    const row = (
+      exerciseId != null
+        ? db
+            .prepare(
+              `SELECT pi.sets, pi.target_weight, pi.target_seconds, pi.rep_low
+                 FROM plan_items pi
+                WHERE pi.plan_day_id = ? AND pi.exercise_id = ? LIMIT 1`
+            )
+            .get(Number(planDayId), exerciseId)
+        : db
+            .prepare(
+              `SELECT pi.sets, pi.target_weight, pi.target_seconds, pi.rep_low
+                 FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
+                WHERE pi.plan_day_id = ? AND e.name = ? COLLATE NOCASE LIMIT 1`
+            )
+            .get(Number(planDayId), name)
+    ) as any;
     if (!row) return null;
     return {
       sets: finite(row.sets),
@@ -732,7 +756,20 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   const endurance_evidence = enduranceMatch.evidence;
   const matchedEndurance = endurance_evidence.filter((entry) => entry.completion_verdict !== "unmatched");
   const suggestedExercises: string[] = items.map((it: any) => String(it.exercise));
-  const suggestedSet = new Set(suggestedExercises.map(lower));
+  // Suggested items and logged sets are matched on the RESOLVED identity, never on
+  // the raw spelling: the composition may say "Incline DB Press" while the athlete
+  // logged the catalog's "Incline Dumbbell Press", and an alias row already joins
+  // them. A logged set carries its exercise_id, so it keys directly.
+  const identityCache = new Map<string, string>();
+  const identityOf = (value: unknown): string => {
+    const text = String(value ?? "");
+    const cached = identityCache.get(text);
+    if (cached !== undefined) return cached;
+    const key = exerciseIdentityKey(text) || lower(text);
+    identityCache.set(text, key);
+    return key;
+  };
+  const suggestedSet = new Set(suggestedExercises.map(identityOf));
 
   const sets = loggedSetsFor(id);
   const skips = skipsFor(id);
@@ -755,7 +792,7 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   >();
   const loggedOrder: string[] = [];
   for (const s of sets) {
-    const key = lower(s.exercise);
+    const key = s.exercise_id != null ? `exercise:${Number(s.exercise_id)}` : identityOf(s.exercise);
     if (!achievedMap.has(key)) {
       achievedMap.set(key, {
         exercise: String(s.exercise),
@@ -789,15 +826,17 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   }
 
   const loggedExercises = [...achievedMap.values()].map((a) => a.exercise);
-  const completed = suggestedExercises.filter((ex) => achievedMap.has(lower(ex)));
-  const substituted = loggedExercises.filter((ex) => !suggestedSet.has(lower(ex)));
-  const skippedSuggested = suggestedExercises.filter((ex) => !achievedMap.has(lower(ex)));
-  const skipped = Array.from(new Set([...skippedSuggested, ...skips.filter((s) => suggestedSet.has(lower(s)))]));
+  const completed = suggestedExercises.filter((ex) => achievedMap.has(identityOf(ex)));
+  const substituted = [...achievedMap.entries()]
+    .filter(([key]) => !suggestedSet.has(key))
+    .map(([, value]) => value.exercise);
+  const skippedSuggested = suggestedExercises.filter((ex) => !achievedMap.has(identityOf(ex)));
+  const skipped = Array.from(new Set([...skippedSuggested, ...skips.filter((s) => suggestedSet.has(identityOf(s)))]));
 
   // Reordered: the order suggested-and-logged exercises were actually trained in
   // differs from the composition's prescribed order.
   const suggestedLoggedOrder = loggedOrder.filter((k) => suggestedSet.has(k));
-  const prescribedOrder = suggestedExercises.map(lower).filter((k) => achievedMap.has(k));
+  const prescribedOrder = suggestedExercises.map(identityOf).filter((k) => achievedMap.has(k));
   const reordered = suggestedLoggedOrder.join("|") !== prescribedOrder.join("|");
 
   // Full prescribed/achieved dose. Stable identity is independent of mutable
@@ -805,7 +844,7 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   // while composition_item_key anchors the exact historical item.
   type BaseDose = Omit<MovementDoseEvidence, "comparable" | "non_comparable_reasons">;
   const base_dose_evidence: BaseDose[] = items.map((it: any, index: number) => {
-    const agg = achievedMap.get(lower(it.exercise));
+    const agg = achievedMap.get(identityOf(it.exercise));
     const exercise = {
       name: String(it.exercise),
       muscle_group: agg?.muscle_group ?? null,
@@ -1048,7 +1087,7 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
         own_dose_shortfall: ownDoseShortfall(dose, skipped),
         endurance_overlap: enduranceOverlapsMovement(
           dose.exercise,
-          achievedMap.get(lower(dose.exercise))?.muscle_group ?? null,
+          achievedMap.get(identityOf(dose.exercise))?.muscle_group ?? null,
           enduranceGroups
         ),
         performed_at_full_load: dose.performed_at_full_load === true,

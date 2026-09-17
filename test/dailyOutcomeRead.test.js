@@ -205,20 +205,59 @@ test("recovery context suppresses progression language for completed cardio", ()
   assert.equal(read.athlete_read.next_exposure, null);
 });
 
-test("athlete override context suppresses progression language for completed cardio", () => {
+// THE ATHLETE'S OWN CHOICE IS NOT A CONFOUNDER. Training by choice on a day the read
+// suggested something else is the athlete driving, not evidence corruption — the
+// per-lift rule table has always said so. This read was the last place that still
+// treated `athlete_override` as a reason to say nothing was learned.
+test("an athlete's own choice is not a confounder for completed cardio", () => {
   const sessionId = acceptedCardio(SECOND, { source: "athlete_override" });
   const read = repo.dailyOutcomeRead({ session_id: sessionId });
   assert.equal(
     read.athlete_read.learning,
-    "Recovery or context shaped today’s endurance work, so we’ll treat it as context rather than push progression from it."
+    "You completed the planned endurance work. That gives us a useful, factual exposure to learn from."
   );
+  assert.doesNotMatch(read.athlete_read.learning, /Recovery or context shaped/);
   assert.equal(read.athlete_read.next_exposure, null);
 });
 
+test("a chosen strength session that met its loads reads as a clean exposure", () => {
+  const session = {
+    name: "Deadlift + upper-body catch-up",
+    focus: "The work he picked",
+    why: "He chose this one.",
+    est_minutes: 45,
+    items: [{ exercise: "Back Squat", sets: 2, rep_low: 5, rep_high: 5, target_weight: 225 }],
+  };
+  const prepared = repo.prepareDailySession({ date: FIRST, source: "athlete_override", session });
+  repo.logSetByName({ date: FIRST, exercise: "Back Squat", weight: 225, reps: 5, day_number: null });
+  repo.logSetByName({ date: FIRST, exercise: "Back Squat", weight: 225, reps: 5, day_number: null });
+  repo.finishSession(prepared.session_id, null);
+
+  const read = repo.dailyOutcomeRead({ session_id: prepared.session_id });
+  assert.equal(
+    read.athlete_read.learning,
+    "You met the planned work cleanly. That gives the next exposure useful evidence."
+  );
+  assert.equal(
+    read.facts.dose_context.non_comparable_reasons.includes("athlete_override"),
+    true,
+    "the session-wide telemetry still records that the athlete chose the day"
+  );
+  const dose = read.facts.dose_evidence.find((entry) => entry.exercise === "Back Squat");
+  assert.equal(dose.comparable, true, "the lift's own evidence was never blocked by the choice");
+});
+
 test("illness context suppresses progression language for completed cardio", () => {
-  repo.addContextEvent({ kind: "illness", title: "Illness", start_date: SECOND, end_date: SECOND });
+  // Inserted directly: addContextEvent() folds any unknown kind to "life_event", and
+  // the illness confounder gates on kind IN ('illness','sick'). This fixture used to
+  // call addContextEvent and pass only because athlete_override ALSO confounded the
+  // day — which is exactly the conflation this round removed.
+  db.prepare(
+    `INSERT INTO context_events (kind, title, start_date, end_date, archived) VALUES ('illness', 'Illness', ?, ?, 0)`
+  ).run(SECOND, SECOND);
   const sessionId = acceptedCardio(SECOND);
   const read = repo.dailyOutcomeRead({ session_id: sessionId });
+  assert.equal(read.facts.dose_context.illness, true, "the illness window is the reason, not the athlete's choice");
   assert.equal(
     read.athlete_read.learning,
     "Recovery or context shaped today’s endurance work, so we’ll treat it as context rather than push progression from it."

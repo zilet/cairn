@@ -2479,6 +2479,68 @@ file serves with the honest type under `nosniff`.
 
 ---
 
+## Exercise identity: one resolver (`resolveExerciseName`, `src/repo/exercise-canon.ts`)
+
+The catalog stores exactly ONE spelling per movement, but names arrive from everywhere — a composed
+session item, an agent's proposal, a chat message, a Garmin import. `exercise_aliases` existed to
+join those spellings, and for a long time it was **written and never read**: a morning where the
+composition said "Incline DB Press" and the athlete logged the catalog's "Incline Dumbbell Press"
+reconciled as one skipped lift plus one substitution, even though an alias row already said they were
+the same movement. Every split name is also its own progress line and its own share of per-muscle
+volume, so the coaching read was working from a divided history.
+
+`resolveExerciseName(name)` is now the ONE ladder, and every reader that compares a name against the
+catalog goes through it. It returns `{ canonical, exercise_id, key }` and stops at the first hit:
+
+| Tier | What matches | Notes |
+|---|---|---|
+| 1 | the exact stored name (`COLLATE NOCASE`) | the previous behavior, unchanged |
+| 2 | ONE `exercise_aliases` hop onto a stored canonical | |
+| 3 | `normalizedExerciseKey` equality | a hop in (2) that landed on a canonical with no row (a broken or misspelled alias) is keyed here too, so a dead alias still resolves |
+| 4 | `expandedExerciseKey` equality (`DB` → dumbbell) | UNIQUE hit only — an input that also PREFIXES a longer name is ambiguous and resolves to nothing |
+
+Ties inside tiers 3 and 4 go to the row with the most logged sets, then the lowest id — the same
+survivor rule `planExerciseMerges` uses, so a catalog that still holds duplicates resolves to the row
+a merge would have kept. `key` is the identity two names are compared on: `exercise:<id>` when the
+name resolves, else `movement:<normalizedExerciseKey>`. **Never widen that shape** — it is what
+`movement_key` has always been persisted as in `daily_session_outcomes` and
+`movement_tolerance_observations`, and a stored row must keep matching a freshly computed one.
+
+Callers: daily reconciliation (the plan-load lookup, the achieved map, and the completed / skipped /
+substituted / reordered sets), `planItemFor` and `nextPrescription` in progression (tiered — an EXACT
+spelling still beats a resolved one, mirroring `resolvePlanSwapSlot`), the volume guard's
+`currentPlanSets`, `recentWorkingWeight` / `recentWorkingSeconds` / `hasUnloadedWorkingHistory`,
+`getLastSet`, `comparableLiftDates`, the two lift graders in `program-state`, the movement identity in
+`training-response`, symptom movement resolution, `getExerciseGuide` / `attachGuide`, `updateTarget`,
+and the coach read tools (`resolveExercise` in `src/brain/read-tool-runtime.ts` now delegates rather
+than carrying its own copy of the ladder — carrying a copy is exactly how the two drifted).
+
+**The write chokepoint runs the same ladder.** `findOrCreateExercise` resolves before it inserts, and
+records the typed spelling as an alias (source `"auto"`) so it resolves directly next time. Below
+every stronger tier sits ONE last-resort key, `implementRelaxedExerciseKey`, which additionally drops
+the three STATION words that say where a movement is loaded rather than what it is — `cable`,
+`machine`, `bar`. A rope hammer curl IS a cable movement, so "Cable Rope Hammer Curl" and "Rope Hammer
+Curl" were one lift typed twice. It fires on a UNIQUE hit only — a row whose relaxed key EXTENDS the
+input's ("DB Bench Press Incline" over "db bench press") makes the read ambiguous and the tier
+refuses, exactly like the abbreviation tier above it — must also clear
+`validateExerciseMergePlan` (mode, `assisted`, variation tokens), and is used for EQUALITY ONLY —
+never for reads, merges or plan-slot matching. It is deliberately narrower than `movementKey`, which
+also drops dumbbell/barbell/kettlebell (those ARE different lifts). The accepted cost: a station
+qualifier is the only difference this tier forgives, so a newly typed "<movement> machine" reuses an
+existing "<movement>" row instead of opening a second series. It only ever affects a name written for
+the FIRST time; it never merges rows that already exist.
+
+**Repair is re-runnable.** `dedupeExercises({ dryRun })` (`src/repo/exercise-dedupe.ts`, exposed as
+`POST /api/exercises/dedupe`, a dry run unless `apply:true`) repoints aliases whose canonical names no
+stored exercise, then folds every cluster sharing one `expandedExerciseKey` into its highest-set-count
+survivor. Equal expanded keys mean identical tokens, so no variation/assisted asymmetry is possible
+and the only remaining guard is the logging mode. It is idempotent. Migration 103 ran that same repair
+once through a FROZEN snapshot (`src/migrations/frozen/v103-exercise-identity-repair.ts`) together
+with the one-time corrections that catalog needed — named clusters the generic fold cannot reach, a
+pull-up stored as a TIMED movement, two muscle groups naming the wrong region, and a leg press whose
+Garmin category said `SHOULDER_PRESS` (the catalog's own enum is `SQUAT`/`LEG_PRESS`; leg extensions
+really do live under `CRUNCH` and a dip under `TRICEPS_EXTENSION`, so those were left alone).
+
 ## Exercise guides (`src/repo/exercise-guide.ts`, `src/domain/training/exercise-guide-use-case.ts`)
 
 The optional instructional layer behind a movement: ordered step-by-step text, primary/secondary

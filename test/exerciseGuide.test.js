@@ -630,8 +630,11 @@ test("a merged-away exercise hands its guide to the survivor", () => {
   assert.equal(merged.ok, true);
   // The survivor had no guide, so the matched one follows the history across.
   assert.equal(getExerciseGuide("Bicep Curl").guide_id, "Barbell_Curl");
-  // And the vanished name reads as absent rather than crashing the lookup.
-  assert.equal(getExerciseGuide("Barbell Curl"), null);
+  // And the vanished name still reaches the survivor's guide: the merge recorded
+  // "barbell curl" as an alias, and getExerciseGuide resolves through the shared
+  // identity ladder, so the old spelling reads the how-to it was merged into rather
+  // than answering "no guide". The exercise ROW itself is genuinely gone.
+  assert.equal(getExerciseGuide("Barbell Curl").guide_id, "Barbell_Curl");
   assert.equal(getExerciseDetail("Barbell Curl").found, false);
   assert.equal(getExerciseDetail("Bicep Curl").guide.guide_id, "Barbell_Curl");
 });

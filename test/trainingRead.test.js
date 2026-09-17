@@ -38,6 +38,8 @@ beforeEach(() => {
     "checkins",
     "daily_metrics",
     "context_events",
+    "daily_session_compositions",
+    "daily_session_outcomes",
     "app_state"
   );
 });
@@ -115,6 +117,41 @@ test("a same-character session keeps its plan-day name even when exercise names 
   repo.logSetByName({ exercise: "Trap Bar Deadlift", weight: 225, reps: 5, date: DATE });
   repo.logSetByName({ exercise: "Leg Press", weight: 300, reps: 10, date: DATE });
   assert.equal(repo.getSessionByDate(DATE).title, "Lower B");
+});
+
+// The athlete’s own composition names the day. An `athlete_override` session
+// ("Deadlift + upper-body catch-up") carries no plan day at all, so before this the
+// done card fell through to the content title and called a session the athlete had
+// deliberately chosen "Full Body".
+test("a chosen session is named by its composition, not by its content bucket", () => {
+  const DATE = dayBefore(REF, 1);
+  const prepared = repo.prepareDailySession({
+    date: DATE,
+    source: "athlete_override",
+    session: {
+      name: "Deadlift + upper-body catch-up",
+      focus: "The work he picked",
+      why: "He chose this one.",
+      est_minutes: 45,
+      items: [
+        { exercise: "Deadlift", sets: 3, rep_low: 5, rep_high: 5, target_weight: 205 },
+        { exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 12 },
+      ],
+    },
+  });
+  repo.logSetByName({ exercise: "Deadlift", weight: 205, reps: 10, date: DATE });
+  repo.logSetByName({ exercise: "Seated Cable Row", weight: 120, reps: 10, date: DATE });
+
+  const sess = repo.getSessionByDate(DATE);
+  assert.equal(sess.id, prepared.session_id);
+  assert.equal(sess.title, "Deadlift + upper-body catch-up", "the card names the session he chose");
+  assert.notEqual(sess.title, "Full Body");
+
+  // But a composition whose work was swapped out wholesale still reads content-true.
+  db.prepare("DELETE FROM logged_sets").run();
+  repo.logSetByName({ exercise: "90/90 Hip Switch", reps: 8, date: DATE });
+  repo.logSetByName({ exercise: "Dead Bug", reps: 10, date: DATE });
+  assert.equal(repo.getSessionByDate(DATE).title, "Mobility & Core", "divergent content still wins");
 });
 
 // ---------- 2. intensity grading ----------

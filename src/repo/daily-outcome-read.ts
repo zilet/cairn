@@ -59,17 +59,33 @@ function enduranceLearning(outcome: DailySessionOutcome): string | null {
   return "You completed the planned endurance work. That gives us a useful, factual exposure to learn from.";
 }
 
+// THE ATHLETE'S OWN CHOICE IS NOT A CONFOUNDER. `athlete_override` means they
+// trained by choice on a day the read suggested something else — that is the athlete
+// driving, not evidence corruption, and the per-lift rule table has always said so
+// (`NEVER_BLOCKS_A_LIFT`, outcome-comparability.ts). Only this athlete-facing read
+// still consulted the session-wide flag, so a chosen session that pulled the
+// athlete's true working weight was answered with "Recovery or context shaped
+// today's work". Recovery, travel, illness, a relevant symptom and loaded endurance
+// keep their meaning untouched.
 function isContextConfounded(outcome: DailySessionOutcome): boolean {
   const context = outcome.facts?.dose_context;
   if (context?.comparable === true) return false;
-  return Boolean(
-    context?.recovery ||
-      context?.athlete_override ||
-      context?.travel ||
-      context?.illness ||
-      context?.symptom ||
-      context?.endurance
-  );
+  if (comparableExposure(outcome)) return false;
+  return Boolean(context?.recovery || context?.travel || context?.illness || context?.symptom || context?.endurance);
+}
+
+// Comparability read the way the progression engine reads it: PER LIFT. The
+// session-wide `dose_context.comparable` is telemetry — one flag for the whole day —
+// so a day carrying only reasons that never block a lift (an athlete_override, an
+// unobserved endurance quality) reads as non-comparable there while every dose on it
+// is perfectly usable evidence. True when the day itself is clean, or when every
+// lift the athlete actually attempted carries `comparable: true`.
+function comparableExposure(outcome: DailySessionOutcome): boolean {
+  if (outcome.facts?.dose_context?.comparable === true) return true;
+  const doses = Array.isArray(outcome.facts?.dose_evidence) ? outcome.facts.dose_evidence : [];
+  const attempted = doses.filter((dose) => Number(dose?.achieved?.sets) > 0);
+  if (!attempted.length) return false;
+  return attempted.every((dose) => dose?.comparable === true);
 }
 
 function learningFor(outcome: DailySessionOutcome): string {
@@ -81,7 +97,7 @@ function learningFor(outcome: DailySessionOutcome): string {
   if (isContextConfounded(outcome)) {
     return "Recovery or context shaped today’s work, so we won’t push progression from it.";
   }
-  if (outcome.facts?.dose_context?.comparable === true) {
+  if (comparableExposure(outcome)) {
     const evidence = Array.isArray(outcome.facts?.progression_evidence) ? outcome.facts.progression_evidence : [];
     const met = evidence.length > 0 && evidence.every((entry) => entry?.verdict === "met_or_exceeded");
     if (met) return "You met the planned work cleanly. That gives the next exposure useful evidence.";
@@ -104,11 +120,7 @@ function isNewestCompletedComparable(outcome: DailySessionOutcome): boolean {
 }
 
 function nextExposureFor(outcome: DailySessionOutcome): DailyOutcomeAthleteRead["next_exposure"] {
-  if (
-    !hasStrengthExposure(outcome) ||
-    outcome.facts?.dose_context?.comparable !== true ||
-    !isNewestCompletedComparable(outcome)
-  ) {
+  if (!hasStrengthExposure(outcome) || !comparableExposure(outcome) || !isNewestCompletedComparable(outcome)) {
     return null;
   }
   const planDay = db

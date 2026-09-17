@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { normalizedExerciseKey } from "./exercise-canon.js";
+import { exerciseIdentityKey } from "./exercise-canon.js";
 
 export type ChallengeVerdict = "not_attempted" | "under_prescribed" | "met" | "exceeded" | "no_target";
 
@@ -17,9 +17,10 @@ export interface RecentMovementResponse {
   latest_verdict: ChallengeVerdict | null;
 }
 
+// Alias-aware, and the SHAPE is unchanged so stored movement_key rows still match:
+// the same ladder daily-reconciliation writes doses with.
 function movementIdentity(exercise: string): string {
-  const stored = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(exercise) as any;
-  return stored?.id != null ? `exercise:${Number(stored.id)}` : `movement:${normalizedExerciseKey(exercise)}`;
+  return exerciseIdentityKey(exercise);
 }
 
 // A deliberately small learning seam for progression. It only recognizes a

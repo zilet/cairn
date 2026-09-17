@@ -753,3 +753,37 @@ test("newer matching contradictory outcomes supersede older positive movement ev
   assert.equal(response.comparable_outcomes, 2, "only the two newest matching exposures decide");
   assert.equal(response.considered_outcomes, 4, "older matching evidence remains inspectable");
 });
+
+// The live case, 2026-09-17: the composed session listed "Incline DB Press", the
+// athlete logged the catalog's "Incline Dumbbell Press", an alias row already
+// joined the two — and the outcome still counted the lift as skipped, because every
+// name compare in this file was raw. Reconciliation now keys on the RESOLVED
+// identity, so a spelling never splits one lift into a prescription and a substitute.
+test("a lift logged under its alias counts as the composed lift, not a substitution", () => {
+  repo.findOrCreateExercise("Incline Dumbbell Press", "chest");
+  repo.setExerciseAlias("incline db press", "Incline Dumbbell Press");
+  repo.savePlanDay(1, "Push", "Chest", [
+    { exercise: "Incline Dumbbell Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 50 },
+  ]);
+  const prepared = acceptComposition([
+    { exercise: "Incline DB Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 50 },
+  ]);
+  for (let i = 0; i < 3; i++) {
+    repo.logSetByName({ date: DATE, exercise: "Incline Dumbbell Press", weight: 50, reps: 10, day_number: null });
+  }
+  repo.finishSession(prepared.session_id, null);
+
+  const outcome = getDailySessionOutcome(DATE);
+  assert.deepEqual(outcome.facts.completed, ["Incline DB Press"], "the composed lift reads as completed");
+  assert.deepEqual(outcome.facts.skipped, [], "nothing was skipped");
+  assert.deepEqual(outcome.facts.substituted, [], "the same lift under another spelling is not a substitute");
+  const dose = outcome.facts.dose_evidence.find((entry) => entry.exercise === "Incline DB Press");
+  assert.equal(dose.achieved.sets, 3, "the logged sets attach to the composed item");
+  assert.equal(dose.full_load_reference.sets, 3, "the plan row is found through the alias");
+  assert.equal(dose.full_load_reference.target_weight, 50);
+
+  // And the progression engine finds the same plan slot from the aliased spelling.
+  const prescription = repo.nextPrescription("Incline DB Press");
+  assert.ok(prescription, "an aliased lift still has a prescription");
+  assert.equal(prescription.exercise, "Incline Dumbbell Press", "it is read as the stored lift");
+});
