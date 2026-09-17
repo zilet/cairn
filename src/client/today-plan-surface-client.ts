@@ -38,7 +38,12 @@ type TodayPlanSurfaceApi = {
     exTotal: number;
     hasSyncedCardioToday: boolean;
   }, deps: TodayPlanSurfaceDeps): string;
-  daySwitchHtml(plan: TodayPlanSurfaceDay[], activeDay: unknown, deps: Pick<TodayPlanSurfaceDeps, "escapeHtml">): string;
+  daySwitchHtml(
+    plan: TodayPlanSurfaceDay[],
+    activeDay: unknown,
+    deps: Pick<TodayPlanSurfaceDeps, "escapeHtml">,
+    recovery?: Record<number, { recovering_groups?: string[]; mostly_recovering?: boolean }> | null,
+  ): string;
   rxBannerHtml(rxByEx: Record<string, unknown>, day: unknown, deps: Pick<TodayPlanSurfaceDeps, "escapeAttr" | "escapeHtml" | "rxMoveCount" | "stagger">): string;
   addExerciseFormHtml(): string;
   finishHtml(session: TodayPlanSurfaceSession, options: { isToday: boolean; logDate: string }, deps: Pick<TodayPlanSurfaceDeps, "escapeAttr" | "setsTonnage">): string;
@@ -89,15 +94,35 @@ type TodayPlanSurfaceApi = {
         </div>`;
   }
 
+  // Lower-body groups read as one word to an athlete. "quads and hamstrings
+  // recovering" is an inventory; "legs recovering" is the thing they need to know
+  // before they tap the pill.
+  const LEG_GROUPS = ["quads", "hamstrings", "glutes", "calves"];
+
+  function recoveringCaption(groups: string[] | null | undefined): string {
+    const names = (Array.isArray(groups) ? groups : []).map((group) => String(group).toLowerCase()).filter(Boolean);
+    if (!names.length) return "";
+    if (names.every((group) => LEG_GROUPS.includes(group))) return "legs recovering";
+    const words = names.map((group) => (group === "rear delts" ? "rear shoulders" : group)).slice(0, 2);
+    return `${words.length === 2 ? `${words[0]} and ${words[1]}` : words[0]} recovering`;
+  }
+
+  // A hint, never a gate (VISION §2.1 — the wheel is always the athlete's). The
+  // pill stays fully tappable; it just says what it is offering, so a leg day the
+  // morning after a hard run does not have to be discovered by tapping it.
   function daySwitchHtml(
     plan: TodayPlanSurfaceDay[],
     activeDay: unknown,
     deps: Pick<TodayPlanSurfaceDeps, "escapeHtml">,
+    recovery?: Record<number, { recovering_groups?: string[]; mostly_recovering?: boolean }> | null,
   ): string {
     let html = `<div class="day-switch">`;
     for (const day of plan) {
       const dayNumber = Number(day.day_number);
-      html += `<button class="daybtn ${dayNumber === activeDay ? "active" : ""}" data-day="${dayNumber}">${dayNumber} · ${deps.escapeHtml(day.name || "")}</button>`;
+      const read = recovery ? recovery[dayNumber] : null;
+      const caption = read && read.mostly_recovering ? recoveringCaption(read.recovering_groups) : "";
+      const classes = `daybtn${dayNumber === activeDay ? " active" : ""}${caption ? " recovering" : ""}`;
+      html += `<button class="${classes}" data-day="${dayNumber}">${dayNumber} · ${deps.escapeHtml(day.name || "")}${caption ? `<span class="daybtn-cap">${deps.escapeHtml(caption)}</span>` : ""}</button>`;
     }
     return `${html}</div><div id="tableHint"></div>`;
   }

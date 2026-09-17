@@ -801,6 +801,15 @@ declare global {
     cachedApi?(path: string, options?: { key?: string; freshFor?: number }): Promise<unknown>;
   };
 
+  // What the day pills know about each programmed day before it is tapped: the
+  // areas still working through recent training, and whether that is most of what
+  // the day trains. Server-owned; the pill only reads it, and never disables.
+  type ClientTodayPlanDayRecovery = {
+    recovering_groups: string[];
+    mostly_recovering: boolean;
+  };
+  type ClientTodayPlanDayRecoveryMap = Record<number, ClientTodayPlanDayRecovery>;
+
   type ClientHealthPictureCache = {
     review?: Record<string, unknown> | null;
     docCount?: number;
@@ -3809,6 +3818,11 @@ declare global {
         isToday: boolean,
         deps: ClientTodayPlanSelectionDeps
       ): Promise<number>;
+      planDayRecoveryFromSelection(payload: unknown): ClientTodayPlanDayRecoveryMap;
+      loadPlanDayRecovery(
+        date: string,
+        deps: Pick<ClientTodayPlanSelectionDeps, "api">
+      ): Promise<ClientTodayPlanDayRecoveryMap>;
     };
 
     CairnTodayPlanSessionModel: {
@@ -4071,7 +4085,8 @@ declare global {
       daySwitchHtml(
         plan: Array<Record<string, unknown>>,
         activeDay: unknown,
-        deps: { escapeHtml(value: unknown): string }
+        deps: { escapeHtml(value: unknown): string },
+        recovery?: Record<number, { recovering_groups?: string[]; mostly_recovering?: boolean }> | null
       ): string;
       rxBannerHtml(
         rxByEx: Record<string, unknown>,
@@ -4126,6 +4141,7 @@ declare global {
           hasGarmin: boolean;
           isRunDay: boolean;
           preserveItemOrder?: boolean;
+          planDayRecovery?: Record<number, { recovering_groups?: string[]; mostly_recovering?: boolean }> | null;
           prefillFor(item: Record<string, unknown>): {
             weight?: unknown;
             reps?: unknown;

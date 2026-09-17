@@ -833,6 +833,12 @@ export interface ClientDailySessionItem extends ClientSessionSuggestionItem {
   position: number;
   warmup_sets?: number | null;
   superset_group?: number | null;
+  /**
+   * The template movement this slot used to hold, when the envelope moved the work
+   * off a still-recovering group and pointed the slot at other work from the
+   * athlete's own plan. Absent on an ordinary item.
+   */
+  substitution_for?: string | null;
   // Present on a reach top-set item (and on an assisted/bodyweight AMRAP host).
   // Athlete-facing `note` is authored on the server; the client only labels "Reach".
   reach?: ClientDailySessionReach | null;
@@ -1996,11 +2002,25 @@ export interface ClientTodaySideRead {
   mealplans: ClientMealPlanSummary[] | null;
 }
 
+// One programmed day as the Today pills read it. `recovering_groups` names the
+// areas of that day still working through recent training (the shared acute gate,
+// same answer the plan-day scorer uses); `mostly_recovering` is true once they are
+// half or more of what the day trains. A hint on the pill, never a disabled pill —
+// the athlete can still pick any day they want.
+export interface ClientPlanDayRecoveryCandidate {
+  day_number: number;
+  focus: string;
+  day_type: "training" | "rest";
+  recovering_groups: string[];
+  mostly_recovering: boolean;
+}
+
 export interface ClientTodayPlanDaySelection {
   day_number: number;
   focus: string | null;
   source: "existing-session" | "cached-day-read" | "adaptive";
   reason: string | null;
+  candidates?: ClientPlanDayRecoveryCandidate[];
 }
 
 export interface ClientWeightRow {

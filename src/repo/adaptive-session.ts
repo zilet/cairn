@@ -181,6 +181,11 @@ function trustedItemMetadata(
   if (!trusted) return {};
   const provenance = normalizeJsonValue(item.brain_change_reason_provenance);
   const reach = trustedReach(item.reach);
+  // Server-derived, like the brain metadata beside it: the movement this slot used
+  // to hold before the envelope moved the work off a still-recovering group. Kept
+  // omit-when-absent so an ordinary item's snapshot (and therefore its request
+  // fingerprint) is unchanged by the field existing at all.
+  const substitutionFor = boundedText(item.substitution_for, 120);
   return {
     brain_decision_id: boundedNumber(item.brain_decision_id, 1, Number.MAX_SAFE_INTEGER, true),
     brain_change_summary: durableSnapshotText(item.brain_change_summary, 500),
@@ -190,6 +195,7 @@ function trustedItemMetadata(
     brain_change_reversible:
       item.brain_change_reversible == null ? null : item.brain_change_reversible === true,
     ...(reach ? { reach } : {}),
+    ...(substitutionFor ? { substitution_for: substitutionFor } : {}),
   };
 }
 
@@ -1162,7 +1168,12 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
             est_minutes: manualPlan.payload.est_minutes,
             items: manualPlan.payload.items,
           },
-          decision.envelope
+          decision.envelope,
+          // The athlete picked a day of their OWN plan, so the saturated-group
+          // substitution law applies: a slot whose group is still recovering is
+          // re-pointed at other work from their own week rather than served
+          // lighter. The day they chose is still the day they get.
+          { substituteSaturated: true }
         ).session ??
         // Pass the live envelope so reconcile and persist share one object.
         deterministicComposedSession(

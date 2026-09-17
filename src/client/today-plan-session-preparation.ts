@@ -106,6 +106,8 @@ type TodayPlanSessionPrepResult = {
   hasSyncedCardioToday: boolean;
   isRunDay: boolean;
   expectingRun: boolean;
+  // Per-plan-day acute-recovery read for the day pills, keyed by day_number.
+  planDayRecovery: Record<number, { recovering_groups: string[]; mostly_recovering: boolean }>;
 };
 type TodayPlanSessionPreparationApi = {
   groupLoggedSets(
@@ -162,6 +164,12 @@ type TodayPlanSessionPrepModelApi = {
     loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>;
     isCardioItem(item: TodayPlanSessionPrepPlanItem): boolean;
   }): Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardAttribution>;
+};
+type TodayPlanSelectionRecoveryApi = {
+  loadPlanDayRecovery?(
+    date: string,
+    deps: { api(path: string): Promise<unknown> }
+  ): Promise<Record<number, { recovering_groups: string[]; mostly_recovering: boolean }>>;
 };
 type TodayPlanSessionPrepDataApi = {
   loadLastSets(
@@ -271,7 +279,12 @@ type TodayPlanSessionPrepDataApi = {
     });
     const pendingOffPlan = todayPlanSessionModel.prunePendingOffPlan(deps.state, early.planNames, loggedByEx);
 
-    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx, strengthJourney] =
+    // Read LAZILY, inside the function: the plan-selection module shares the Today
+    // bundle's one global scope, and a top-level reference across module files does
+    // not hoist (CLAUDE.md).
+    const planSelection = (globalThis as unknown as { CairnTodayPlanSelection?: TodayPlanSelectionRecoveryApi })
+      .CairnTodayPlanSelection;
+    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx, strengthJourney, planDayRecovery] =
       await Promise.all([
         todayPlanSessionData.loadCardioContext(items, deps.isToday, deps),
         todayPlanSessionData.loadLastSets(
@@ -290,6 +303,11 @@ type TodayPlanSessionPrepDataApi = {
               .api("/strength-journey")
               .then((value) => (value && typeof value === "object" ? (value as TodayPlanSessionPrepStrengthJourney) : null))
               .catch(() => null),
+        // Shares one request with the adaptive-day read above (api() dedupes the
+        // same path), and a failure is silence — a missing hint never blocks a pill.
+        planSelection?.loadPlanDayRecovery
+          ? planSelection.loadPlanDayRecovery(deps.state.logDate, deps).catch(() => ({}))
+          : Promise.resolve({}),
       ]);
 
     const matchedCardio = todayPlanSessionModel.matchCardioEfforts(allCardio, cardioEfforts, deps.cardioEffortMatches);
@@ -351,6 +369,7 @@ type TodayPlanSessionPrepDataApi = {
       hasSyncedCardioToday,
       isRunDay,
       expectingRun,
+      planDayRecovery,
     };
   }
 

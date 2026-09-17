@@ -9,7 +9,7 @@ import {
   todayAgenda,
 } from "../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../domain/health/index.js";
-import { selectedPlanDayForDate } from "../domain/training/index.js";
+import { planDayRecoveryCandidates, selectedPlanDayForDate } from "../domain/training/index.js";
 import { markTodayAgendaSeen, todayAggregate, todayDateParam } from "../domain/today/index.js";
 import { recordDismissal } from "../repo/surface-dismissals.js";
 
@@ -31,7 +31,8 @@ todayRouter.get("/today", (req, res) => {
 });
 
 export function publicTodayPlanDay(dateQuery?: unknown) {
-  const selected = selectedPlanDayForDate(todayDateParam(dateQuery));
+  const date = todayDateParam(dateQuery);
+  const selected = selectedPlanDayForDate(date);
   if (!selected) return null;
   const adaptiveReason = typeof selected.selection?.reason === "string"
     ? selected.selection.reason.trim().slice(0, 240)
@@ -41,6 +42,11 @@ export function publicTodayPlanDay(dateQuery?: unknown) {
     focus: selected.focus,
     source: selected.source,
     reason: adaptiveReason || (selected.source === "existing-session" ? "Continue the session already linked to this date." : null),
+    // Every programmed day, not just the chosen one: the athlete can tap any pill,
+    // and a pill that would hand them work their legs are still doing should say
+    // so before they tap it rather than after. Groups and a boolean only — the
+    // scores behind the pick stay on the server.
+    candidates: planDayRecoveryCandidates(date),
   };
 }
 

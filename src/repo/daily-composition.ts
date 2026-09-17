@@ -21,6 +21,7 @@ import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRu
 import { getPlanDay } from "./plan.js";
 import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
+import { type SaturatedSubstitution, substituteSaturatedPlanItems } from "./saturated-substitution.js";
 import { round5, finite } from "../lib/numbers.js";
 
 // Stage 3 of the adaptive daily training plan — bounded agent composition.
@@ -46,6 +47,21 @@ export interface CompositionValidation {
   novel_introduced: number;
   capped: boolean;
   reach_landed: boolean;
+  // Slots this composition re-pointed away from a still-recovering group, and the
+  // ones it could not (the athlete's own week held nothing for a fresh area, so
+  // that work stayed and was lightened as before). Absent on an ordinary day.
+  substitutions?: SaturatedSubstitution[];
+  substitutions_unavailable?: string[];
+}
+
+// Opt-in per call site, because the law is about the athlete's OWN template. A
+// plan-sourced composition (the adaptive pick, or the day the athlete tapped)
+// composes FROM the weekly plan, so re-pointing a slot inside it hands back more
+// of the athlete's own work. An agent-authored session is a different contract —
+// it was composed against this same envelope and already told which groups are
+// reduced — so nothing here rewrites its choices behind its back.
+export interface ComposeSessionOptions {
+  substituteSaturated?: boolean;
 }
 
 function volumeCap(envelope: DailyDecisionEnvelope): number {
@@ -762,12 +778,30 @@ function baselineNote(note: string | null): string {
 //   - item count and duration are clamped to the envelope caps.
 export function normalizeComposedSession(
   raw: unknown,
-  envelope: DailyDecisionEnvelope
+  envelope: DailyDecisionEnvelope,
+  opts: ComposeSessionOptions = {}
 ): { session: ComposedSession | null; validation: CompositionValidation } {
+  // The substitution law runs on the RAW payload, ahead of normalization, so a
+  // stand-in movement passes through exactly the same per-item gates (equipment,
+  // exclusions, load clamping, caps) as any other item on the card. Identity when
+  // nothing applies, so an ordinary morning composes byte-for-byte as before.
+  const substitutionApplies =
+    opts.substituteSaturated === true && !(envelope.kind === "rest" && envelope.request?.train_anyway !== true);
+  const substituted = substitutionApplies
+    ? substituteSaturatedPlanItems(raw, envelope)
+    : { raw, substitutions: [], unresolved: [], why: null, unresolved_note: null };
   // Fold is suggest-only. Two consecutive same-lift rows stay two rows here so
   // the per-item authorized-target clamp can hold every card to the envelope.
-  const base = normalizeSessionSuggestionResult(raw);
+  const base = normalizeSessionSuggestionResult(substituted.raw);
   const rejected: Array<{ exercise: string; reason: string }> = [];
+  const substitutionMeta = new Map<string, SaturatedSubstitution>(
+    substituted.substitutions.map((entry) => [normalizedExerciseKey(entry.exercise), entry])
+  );
+  const substitutionExtras = substituted.substitutions.length
+    ? { substitutions: substituted.substitutions, substitutions_unavailable: substituted.unresolved }
+    : substituted.unresolved.length
+      ? { substitutions: [], substitutions_unavailable: substituted.unresolved }
+      : {};
   if (!base) {
     return {
       session: null,
@@ -778,6 +812,7 @@ export function normalizeComposedSession(
         novel_introduced: 0,
         capped: false,
         reach_landed: false,
+        ...substitutionExtras,
       },
     };
   }
@@ -951,6 +986,7 @@ export function normalizeComposedSession(
         novel_introduced: novelCount,
         capped: false,
         reach_landed: false,
+        ...substitutionExtras,
       },
     };
   }
@@ -992,6 +1028,15 @@ export function normalizeComposedSession(
     if (applyAuthorizedTarget(next, candidate)) changed = true;
     if (applyRecoveryCycleTarget(next, envelope)) changed = true;
     Object.assign(next, trustedCandidateMetadata(candidate));
+    // After trustedCandidateMetadata, never before: a stand-in has no candidate of
+    // its own (it was never on today's template), and the blanket metadata assign
+    // would otherwise null the reason this card exists to carry.
+    const substitution = substitutionMeta.get(normalizedExerciseKey(String(next.exercise ?? "")));
+    if (substitution) {
+      next.substitution_for = substitution.replaced;
+      next.brain_change_reason = substitution.reason;
+      changed = true;
+    }
     const isReduced = reducedExercises.has(String(next.exercise ?? "").toLowerCase());
     const authorizedSets = Math.max(1, Number(next.sets) || requestedSets);
     const setCapForItem = isReduced ? Math.min(itemSetCap, REDUCED_ITEM_SET_CAP) : itemSetCap;
@@ -1017,7 +1062,13 @@ export function normalizeComposedSession(
     // A reduced area never gets a heavier target than the day already allows.
     if (isReduced) intensityFactor = Math.min(intensityFactor, REDUCED_INTENSITY_FACTOR);
     const hold = candidate?.action === "hold" || envelope.caps.intensity === "hold";
-    if (hold && clampHeldTarget(next, envelope)) changed = true;
+    // A stand-in is exempt from the hold clamp, and only from that. `clampHeldTarget`
+    // anchors on TODAY's template day, which by definition does not contain this
+    // movement — so the clamp would read "no anchor" and strip a load that is
+    // already the honest one. The substitution set this target from the movement's
+    // OWN logged working weight (or the athlete's own plan target for it), which
+    // is exactly what holding means: today is not the day it goes up.
+    if (hold && !substitution && clampHeldTarget(next, envelope)) changed = true;
     if (intensityFactor < 1) {
       if (next.mode === "timed" && next.target_seconds != null) {
         const seconds = Math.max(1, Math.round(Number(next.target_seconds) * intensityFactor));
@@ -1063,7 +1114,11 @@ export function normalizeComposedSession(
   let insertedTopSet = false;
   let topSetsInserted = 0;
   const topSetsAllowed = dayAllowsTopSet(envelope);
-  const reachOpen = reachChallengeOpen(envelope);
+  // A day that had to move work off a recovering group is not a day to reach on.
+  // The stand-in itself sits on an allowed group and would otherwise qualify as a
+  // host, but the reason it is on the card at all is that the body is still
+  // catching up somewhere else. `reconcileEnvelopeReach` below then says so.
+  const reachOpen = reachChallengeOpen(envelope) && !substituted.substitutions.length;
   let reachHostConsumed = false;
   let reachLanded = false;
   for (const item of capped) {
@@ -1141,11 +1196,22 @@ export function normalizeComposedSession(
     changed = true;
   }
   const fallbackWhy = envelope.rationale[0]?.text ?? "Keep today's work light and conversational.";
+  // The session's own sentence names the cause once a slot actually moved. The
+  // plan-pick phrasing ("Switched by you, not the usual order.") is still true of
+  // WHICH day this is, but it is no longer the interesting thing about the card —
+  // and it would leave the athlete to work out for themselves why their leg day
+  // came back with chest work on it. A day where nothing moved keeps its own why.
+  let composedWhy = substituted.why ?? base.why;
+  if (substituted.unresolved_note) {
+    composedWhy = composedWhy
+      ? `${String(composedWhy).replace(/\s+$/, "")} ${substituted.unresolved_note}`
+      : substituted.unresolved_note;
+  }
   return {
     session: {
       name: hasEasyCardio ? safeEasySessionText(base.name, "Easy session") : base.name,
       focus: hasEasyCardio ? safeEasySessionText(base.focus, "Easy movement") : base.focus,
-      why: hasEasyCardio ? safeEasySessionText(base.why, fallbackWhy) : base.why,
+      why: hasEasyCardio ? safeEasySessionText(composedWhy, fallbackWhy) : composedWhy,
       est_minutes: est,
       items: finalItems,
     },
@@ -1156,6 +1222,7 @@ export function normalizeComposedSession(
       novel_introduced: novelCount,
       capped: changed,
       reach_landed: reachLanded,
+      ...substitutionExtras,
     },
   };
 }
@@ -1320,7 +1387,9 @@ export function deterministicComposedSession(envelope: DailyDecisionEnvelope): C
     };
   }
   const raw = deterministicSessionRawFromEnvelope(envelope);
-  const { session } = normalizeComposedSession(raw, envelope);
+  // Plan-sourced by construction — every item above came off the athlete's own
+  // weekly template — so the saturated-group substitution law applies.
+  const { session } = normalizeComposedSession(raw, envelope, { substituteSaturated: true });
   // The raw payload is built from safe template/plan items, so it always
   // normalizes; this null-guard is defensive only.
   return (

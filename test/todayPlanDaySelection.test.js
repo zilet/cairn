@@ -71,8 +71,25 @@ test("public Today plan-day DTO never exposes adaptive scores or internal load a
   seedAdaptiveSplit();
   const selected = publicTodayPlanDay(REF);
   assert.ok(selected);
-  assert.deepEqual(Object.keys(selected).sort(), ["day_number", "focus", "reason", "source"]);
+  assert.deepEqual(Object.keys(selected).sort(), ["candidates", "day_number", "focus", "reason", "source"]);
   assert.doesNotMatch(JSON.stringify(selected), /\b(?:score|scores|recent_load|plan_day_id|selection)\b/i);
+  // The per-day recovery hint the Today pills read is bounded the same way: plain
+  // muscle words and a boolean, never the residual behind them.
+  for (const candidate of selected.candidates) {
+    assert.deepEqual(Object.keys(candidate).sort(), [
+      "day_number",
+      "day_type",
+      "focus",
+      "mostly_recovering",
+      "recovering_groups",
+    ]);
+    assert.ok(Array.isArray(candidate.recovering_groups));
+    assert.equal(typeof candidate.mostly_recovering, "boolean");
+  }
+  assert.deepEqual(
+    selected.candidates.map((candidate) => candidate.day_number),
+    [1, 2, 3]
+  );
 });
 
 test("canonical Today plan day reuses the persisted Brief selection and rejects deleted cached days", () => {

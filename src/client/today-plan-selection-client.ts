@@ -32,6 +32,16 @@ type TodayPlanSelectionDeps = {
   cachedApi?(path: string, options?: { key?: string; freshFor?: number }): Promise<unknown>;
 };
 
+// What the day pills need to know about a day they are offering: which of its
+// areas are still working through recent training, and whether that is most of
+// what the day trains. Server-owned (the shared acute gate); the pill only reads
+// it. A hint, never a lock — any pill is still tappable.
+type TodayPlanDayRecovery = {
+  recovering_groups: string[];
+  mostly_recovering: boolean;
+};
+type TodayPlanDayRecoveryMap = Record<number, TodayPlanDayRecovery>;
+
 (() => {
   type MovementBucket = "push" | "pull" | "lower" | "core" | "mobility" | "cardio" | "other";
 
@@ -123,10 +133,39 @@ type TodayPlanSelectionDeps = {
     }
   }
 
+  function planDayRecoveryFromSelection(payload: unknown): TodayPlanDayRecoveryMap {
+    const candidates = (payload as { candidates?: unknown } | null)?.candidates;
+    if (!Array.isArray(candidates)) return {};
+    const out: TodayPlanDayRecoveryMap = {};
+    for (const entry of candidates) {
+      const row = entry as { day_number?: unknown; recovering_groups?: unknown; mostly_recovering?: unknown } | null;
+      const dayNumber = Number(row?.day_number);
+      if (!Number.isFinite(dayNumber)) continue;
+      const groups = Array.isArray(row?.recovering_groups)
+        ? row.recovering_groups.map((group) => String(group)).filter(Boolean)
+        : [];
+      out[dayNumber] = { recovering_groups: groups, mostly_recovering: row?.mostly_recovering === true };
+    }
+    return out;
+  }
+
+  // Shares one request with suggestedPlanDayNumber: api() dedupes concurrent
+  // callers of the same path, so asking for the whole selection twice in a render
+  // is one network read. A failure is silence — a missing hint never blocks a pill.
+  async function loadPlanDayRecovery(date: string, deps: Pick<TodayPlanSelectionDeps, "api">): Promise<TodayPlanDayRecoveryMap> {
+    try {
+      return planDayRecoveryFromSelection(await deps.api(`/today-plan-day?date=${encodeURIComponent(date)}`));
+    } catch {
+      return {};
+    }
+  }
+
   const CAIRN_TODAY_PLAN_SELECTION = {
     nextPlanDayNumber,
     planDayNumberForSession,
     suggestedPlanDayNumber,
+    planDayRecoveryFromSelection,
+    loadPlanDayRecovery,
   };
 
   Object.assign(globalThis, { CairnTodayPlanSelection: CAIRN_TODAY_PLAN_SELECTION });

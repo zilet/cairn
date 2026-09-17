@@ -435,6 +435,14 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   transition:background .15s,color .15s,border-color .15s;
 }
 .daybtn.active{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+/* A day whose work is mostly still recovering says so before it is tapped. A hint,
+   never a lock: the pill keeps every affordance it had. */
+.daybtn.recovering{opacity:.7}
+.daybtn.recovering.active{opacity:1}
+.daybtn-cap{
+  display:block;margin-top:2px;font-size:.6rem;font-weight:500;
+  letter-spacing:.06em;text-transform:none;color:inherit;opacity:.75;
+}
 
 .logdate{display:flex;align-items:center;gap:9px;margin:0 0 12px}
 .logdate-lbl{flex:0 0 auto}

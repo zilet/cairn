@@ -102,3 +102,48 @@ test("sessionHeadHtml renders no purpose line when the program state couldn't gr
 
   assert.doesNotMatch(html, /session-purpose/);
 });
+
+// ---- daySwitchHtml: the pill that says what it is offering before it is tapped ----
+
+const PLAN = [
+  { day_number: 1, name: "Upper A" },
+  { day_number: 4, name: "Lower B" },
+];
+
+test("daySwitchHtml captions and dims a day whose work is mostly still recovering", () => {
+  const surface = loadTodayPlanSurface();
+
+  const html = surface.daySwitchHtml(PLAN, 1, { escapeHtml: escHtml }, {
+    4: { recovering_groups: ["quads", "hamstrings", "calves"], mostly_recovering: true },
+  });
+
+  assert.match(html, /class="daybtn recovering" data-day="4"/);
+  assert.match(html, /<span class="daybtn-cap">legs recovering<\/span>/);
+  // A hint, never a gate: the pill keeps every affordance it had.
+  assert.doesNotMatch(html, /disabled/);
+  // The day that is fine says nothing at all.
+  assert.match(html, /class="daybtn active" data-day="1">1 · Upper A<\/button>/);
+});
+
+test("daySwitchHtml names the areas when they are not all legs, and escapes them", () => {
+  const surface = loadTodayPlanSurface();
+
+  const html = surface.daySwitchHtml(PLAN, 4, { escapeHtml: escHtml }, {
+    4: { recovering_groups: ["chest", "<b>rear delts</b>"], mostly_recovering: true },
+  });
+
+  assert.match(html, /chest and &lt;b&gt;rear delts&lt;\/b&gt; recovering/);
+  assert.doesNotMatch(html, /<b>rear delts<\/b>/);
+});
+
+test("daySwitchHtml renders the plain pills when no recovery read is available", () => {
+  const surface = loadTodayPlanSurface();
+
+  const bare = surface.daySwitchHtml(PLAN, 1, { escapeHtml: escHtml });
+  const empty = surface.daySwitchHtml(PLAN, 1, { escapeHtml: escHtml }, {
+    4: { recovering_groups: ["quads"], mostly_recovering: false },
+  });
+
+  assert.equal(bare, empty);
+  assert.doesNotMatch(bare, /daybtn-cap|recovering/);
+});

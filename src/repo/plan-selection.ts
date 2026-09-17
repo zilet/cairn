@@ -220,6 +220,53 @@ function weekdayCandidate(candidates: PlanDayCandidate[], date: string): PlanDay
   return candidates[idx % candidates.length];
 }
 
+// The ONE derivation of "which of this day's groups are still recovering" — the
+// shared acuteGate, never a re-derived window (CLAUDE.md). Both the scorer and the
+// per-candidate read the pills render from go through here, so a dimmed pill and a
+// penalised score can never disagree about the same day.
+function recoveringGroupsForDay(
+  day: Pick<PlanDayCandidate, "groups">,
+  acute: Map<MuscleGroup, AcuteGateReading>
+): MuscleGroup[] {
+  return day.groups.filter((g) => acute.get(g)?.saturated === true);
+}
+
+// A candidate day as the Today pills read it. No scores cross this line — the
+// question a pill answers is "is this day's work still in my legs", and the answer
+// is the groups themselves plus whether they are most of what the day trains.
+export interface PlanDayRecoveryCandidate {
+  day_number: number;
+  focus: string;
+  day_type: "training" | "rest";
+  recovering_groups: MuscleGroup[];
+  mostly_recovering: boolean;
+}
+
+export function planDayRecoveryCandidates(date: string): PlanDayRecoveryCandidate[] {
+  const candidates = planDayCandidates();
+  if (!candidates.length) return [];
+  let acute: Map<MuscleGroup, AcuteGateReading>;
+  try {
+    acute = acuteGates(date);
+  } catch {
+    acute = new Map();
+  }
+  return candidates.map((day) => {
+    const recovering = recoveringGroupsForDay(day, acute);
+    return {
+      day_number: day.day_number,
+      focus: planDayFocus(day),
+      day_type: day.day_type,
+      recovering_groups: recovering,
+      // "Most of what this day trains is still coming back." Half is the line, so a
+      // two-group day with one recovering group already says so — that day IS half
+      // unavailable. A day with no groups at all (a rest day, an empty scaffold)
+      // never qualifies.
+      mostly_recovering: day.groups.length > 0 && recovering.length * 2 >= day.groups.length,
+    };
+  });
+}
+
 function scorePlanDay(params: {
   day: PlanDayCandidate;
   rotation: PlanDayCandidate;
@@ -242,7 +289,7 @@ function scorePlanDay(params: {
   // The shared acute gate — no days_ago cliff on top of it. `saturated` already
   // knows how long ago the work landed AND how fast this group forgets, so quads
   // after Sunday's long run still read recovering while rear delts do not.
-  const recovering = day.groups.filter((g) => acute.get(g)?.saturated === true);
+  const recovering = recoveringGroupsForDay(day, acute);
   const freshDue = dueGroups.filter((g) => !recovering.includes(g));
   const repeated = lastAge != null && lastAge <= 3 ? day.groups.filter((g) => lastGroups.has(g)) : [];
 

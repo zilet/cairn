@@ -60,6 +60,9 @@ type TodayPlanSurfaceRendererOptions = {
   hasGarmin: boolean;
   isRunDay: boolean;
   preserveItemOrder?: boolean;
+  // Per-plan-day acute-recovery read, keyed by day_number, for the day pills.
+  // Optional: a render without it simply shows no hint.
+  planDayRecovery?: Record<number, { recovering_groups?: string[]; mostly_recovering?: boolean }> | null;
   // The envelope's first rationale entry, when the caller already holds it. Optional:
   // the renderer also reads it off the composition on the session.
   capRationale?: unknown;
@@ -245,7 +248,12 @@ type TodayPlanSurfaceRendererApi = {
       }
     }
 
-    html += deps.planSurface.daySwitchHtml(options.plan, options.activeDay, surfaceDeps);
+    html += deps.planSurface.daySwitchHtml(
+      options.plan,
+      options.activeDay,
+      surfaceDeps,
+      options.planDayRecovery ?? null,
+    );
     html += deps.planSurface.rxBannerHtml(options.rxByEx, options.activeDay, surfaceDeps);
 
     const garmin = options.session && typeof options.session === "object" ? options.session.garmin : null;
