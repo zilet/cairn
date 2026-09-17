@@ -736,7 +736,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/settings` | Settings + agent metadata. route_tasks is server-owned UI metadata for the Settings routing controls, so frontend task labels cannot drift from the backend allowlist. |
+| GET | `/api/settings` |  |
 | PUT | `/api/settings` |  |
 
 ## `/since-last`
