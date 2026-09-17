@@ -1062,10 +1062,27 @@ test("v103 folds duplicate exercises into the survivor without losing a single l
     );
     CREATE TABLE plan_days (id INTEGER PRIMARY KEY AUTOINCREMENT, day_number INTEGER, name TEXT);
     CREATE TABLE plan_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, plan_day_id INTEGER, position INTEGER, exercise_id INTEGER, sets INTEGER
+      id INTEGER PRIMARY KEY AUTOINCREMENT, plan_day_id INTEGER, position INTEGER, exercise_id INTEGER,
+      sets INTEGER, target_weight REAL, target_seconds INTEGER
     );
     CREATE TABLE exercise_aliases (
       id INTEGER PRIMARY KEY, alias TEXT NOT NULL UNIQUE, canonical TEXT NOT NULL, source TEXT
+    );
+    CREATE TABLE movement_tolerance_observations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symptom_event_id INTEGER NOT NULL, session_id INTEGER, exercise_id INTEGER,
+      movement_key TEXT NOT NULL, movement_name TEXT NOT NULL, observed_on TEXT NOT NULL,
+      outcome TEXT NOT NULL, evidence TEXT NOT NULL DEFAULT 'stated',
+      relevant INTEGER NOT NULL, evidence_epoch INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE UNIQUE INDEX idx_movement_tolerance_unique_exposure
+      ON movement_tolerance_observations(
+        symptom_event_id, session_id, movement_key, observed_on, outcome, evidence_epoch
+      );
+    CREATE TABLE calibration_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, date TEXT NOT NULL,
+      target_key TEXT, result_json TEXT NOT NULL DEFAULT '{}',
+      source TEXT NOT NULL DEFAULT 'detected', ref_id INTEGER
     );
   `);
   const addExercise = d.prepare(
@@ -1090,6 +1107,11 @@ test("v103 folds duplicate exercises into the survivor without losing a single l
   const neutralPullUp = id("Neutral-Grip Pull-Up", "forearms");
   const legPress = id("Seated leg press - machine", "quads", "reps", "SHOULDER_PRESS");
   const legExtension = id("Leg Extension", "quads", "reps", "CRUNCH");
+  // Two names that share ONE expanded key ("DB" spelled out) but that the catalog
+  // itself files under different muscle groups. A merge deletes a row and cannot be
+  // undone, so the generic pass must refuse this pair rather than fold it.
+  id("DB Row", "chest");
+  id("Dumbbell Row", "back");
 
   const addSet = d.prepare(
     `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (1, ?, ?, 100, 8)`
@@ -1103,12 +1125,37 @@ test("v103 folds duplicate exercises into the survivor without losing a single l
   d.prepare(`INSERT INTO plan_days (day_number, name) VALUES (1, 'Push')`).run();
   d.prepare(`INSERT INTO plan_items (plan_day_id, position, exercise_id, sets) VALUES (1, 0, ?, 3)`).run(benchMachine);
   d.prepare(`INSERT INTO plan_items (plan_day_id, position, exercise_id, sets) VALUES (1, 1, ?, 3)`).run(dbBench);
+  // The same plan day ALREADY prescribes the survivor of that chest-press cluster, with
+  // no target weight of its own. plan_items has no unique index, so a blind re-point
+  // would leave the day holding one movement twice.
+  d.prepare(
+    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, target_weight) VALUES (1, 2, ?, 3, NULL)`
+  ).run(machineChest);
+  d.prepare(`UPDATE plan_items SET target_weight = 145 WHERE exercise_id = ?`).run(benchMachine);
   // The broken alias: its canonical names a row that does not exist.
   d.prepare(`INSERT INTO exercise_aliases (alias, canonical, source) VALUES (?, ?, 'agent')`).run(
     "cable overhead triceps extension",
     "Cable Overhead Tricep Extension"
   );
   const tricepsExt = id("Cable Overhead Triceps Extension", "triceps");
+
+  // The references that are NOT foreign keys, and the two that are declared ON DELETE
+  // SET NULL: a merge that forgets them does not crash, it silently stops answering.
+  // The pain traffic light reads movement_tolerance_observations by the SURVIVOR's id
+  // or name slug, and the calibration ledger reads an anchor by the lift's normalized
+  // name, so a stranded row is evidence that quietly stops existing.
+  const addObservation = d.prepare(
+    `INSERT INTO movement_tolerance_observations
+       (symptom_event_id, session_id, exercise_id, movement_key, movement_name, observed_on,
+        outcome, evidence, relevant, evidence_epoch)
+     VALUES (1, NULL, ?, ?, ?, '2026-09-01', 'pain_present', 'stated', 1, 1)`
+  );
+  addObservation.run(benchMachine, `exercise:${benchMachine}`, "Bench press machine");
+  addObservation.run(null, "movement:db-bench-press", "DB Bench Press");
+  d.prepare(
+    `INSERT INTO calibration_events (kind, date, target_key, result_json, source, ref_id)
+     VALUES ('strength_topset', '2026-09-01', 'bench press machine', '{"est_1rm":185}', 'detected', 7)`
+  ).run();
 
   const v103 = MIGRATIONS.find((m) => m.version === 103);
   v103.up(d);
@@ -1148,6 +1195,49 @@ test("v103 folds duplicate exercises into the survivor without losing a single l
     ),
     0,
     "no orphan plan items"
+  );
+
+  assert.ok(names.has("DB Row") && names.has("Dumbbell Row"), "a muscle-group disagreement vetoes the generic fold");
+
+  const chestPressItems = d
+    .prepare("SELECT * FROM plan_items WHERE plan_day_id = 1 AND exercise_id = ?")
+    .all(machineChest);
+  assert.equal(chestPressItems.length, 1, "one movement, one slot on the day \u2014 never the same lift twice");
+  assert.equal(
+    chestPressItems[0].target_weight,
+    145,
+    "the survivor's empty prescription takes the merged item's, and its own row is the one kept"
+  );
+
+  // Every reference followed the survivor, and nothing is left pointing at a row that
+  // no longer exists.
+  const observation = (key) =>
+    d.prepare("SELECT * FROM movement_tolerance_observations WHERE movement_name = ?").get(key);
+  assert.equal(observation("Machine Chest Press").movement_key, `exercise:${machineChest}`);
+  assert.equal(observation("Machine Chest Press").exercise_id, machineChest);
+  assert.equal(
+    observation("Dumbbell Bench Press").movement_key,
+    "movement:dumbbell-bench-press",
+    "a pre-resolution name slug follows the surviving name too"
+  );
+  assert.equal(
+    Number(
+      d
+        .prepare(
+          `SELECT COUNT(*) AS n FROM movement_tolerance_observations
+            WHERE (exercise_id IS NOT NULL AND exercise_id NOT IN (SELECT id FROM exercises))
+               OR (movement_key LIKE 'exercise:%'
+                   AND CAST(SUBSTR(movement_key, 10) AS INTEGER) NOT IN (SELECT id FROM exercises))`
+        )
+        .get().n
+    ),
+    0,
+    "no tolerance row points at a movement that no longer exists"
+  );
+  assert.equal(
+    d.prepare("SELECT target_key AS v FROM calibration_events WHERE kind = 'strength_topset'").get().v,
+    "machine chest press",
+    "the est-1RM anchor is still readable under the surviving lift"
   );
 
   const row = (exId) => d.prepare("SELECT * FROM exercises WHERE id = ?").get(exId);

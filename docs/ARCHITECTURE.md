@@ -2551,11 +2551,35 @@ qualifier is the only difference this tier forgives, so a newly typed "<movement
 existing "<movement>" row instead of opening a second series. It only ever affects a name written for
 the FIRST time; it never merges rows that already exist.
 
+**A merge moves EVERY reference before it deletes.** An exercise is referenced by foreign key
+(`logged_sets`, `plan_items`, `exercise_guides.exercise_id`, `movement_tolerance_observations.exercise_id`),
+by name (`strength_objectives.exercise`, `session_skips.exercise`, `exercise_aliases.canonical`,
+`exercise_guides.match_candidate`) and by a key DERIVED from a name
+(`strength_objectives.exercise_key`, `attention_schedule.signal_key`, `calibration_events.target_key`,
+and `movement_tolerance_observations.movement_key` in both its `exercise:<id>` and `movement:<slug>`
+spellings). Only the first group is a foreign key at all, and both of those are `ON DELETE SET NULL` —
+so a reference `mergeExercises` forgets never crashes, it goes QUIET: the tolerance rows that feed the
+pain traffic light (`src/repo/pain-band.ts`) and the swap-pool risk read (`src/repo/movement-risk.ts`)
+stayed in the table keyed to a deleted id while every reader asked for the survivor, and a movement
+the athlete had reported painful came back clear. Both the live merge and the frozen v103 snapshot
+re-point all of them inside the same transaction, folding a colliding tolerance exposure into the
+survivor's row (`stated` outranks `inferred`, `relevant=1` outranks `0`) rather than dropping it.
+`plan_items` has no unique index on `(plan_day_id, exercise_id)`, so the re-point folds first: where a
+day already prescribed the survivor, the SURVIVOR's item is kept with its position, superset pairing
+and note as programmed, the duplicate is dropped, and only a prescription the survivor was MISSING
+(`target_weight`/`target_seconds` where its own is NULL) carries across — never one movement twice on
+one day. The
+names inside `daily_session_outcomes.facts_json` and `brain_decisions.action_json` are deliberately
+NOT rewritten — a ledger says what was decided at the time.
+
 **Repair is re-runnable.** `dedupeExercises({ dryRun })` (`src/repo/exercise-dedupe.ts`, exposed as
 `POST /api/exercises/dedupe`, a dry run unless `apply:true`) repoints aliases whose canonical names no
 stored exercise, then folds every cluster sharing one `expandedExerciseKey` into its highest-set-count
-survivor. Equal expanded keys mean identical tokens, so no variation/assisted asymmetry is possible
-and the only remaining guard is the logging mode. It is idempotent. Migration 103 ran that same repair
+survivor. Equal expanded keys mean identical tokens, so no variation/assisted asymmetry is possible,
+but the catalog's OWN metadata still vetoes: a pair whose `mode` differs, or whose `muscle_group`
+differs and is stated on BOTH rows, is reported in `skipped[]` and never folded, because a merge
+deletes a row and cannot be undone (only a hand-curated named cluster crosses that line). It is
+idempotent. Migration 103 ran that same repair
 once through a FROZEN snapshot (`src/migrations/frozen/v103-exercise-identity-repair.ts`) together
 with the one-time corrections that catalog needed — named clusters the generic fold cannot reach, a
 pull-up stored as a TIMED movement, two muscle groups naming the wrong region, and a leg press whose

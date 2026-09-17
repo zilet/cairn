@@ -467,16 +467,177 @@ function strengthSignalKey(name: string): string {
   return `training:strength:${slug}`;
 }
 
+// A movement key in the exact shape movement_tolerance_observations persists it. The
+// symptom lifecycle (repo/training-symptoms.ts) writes `exercise:<id>` once a reported
+// movement resolves to a catalog row and `movement:<name-slug>` when it does not, and
+// BOTH spellings are read back — by the pain traffic light (repo/pain-band.ts) and by
+// the swap-pool risk read (repo/movement-risk.ts). Mirrored here so a merge can follow
+// the evidence; kept in lockstep with those three modules.
+function toleranceMovementSlug(name: string): string {
+  return `movement:${String(name).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+}
+
+interface MergeSide {
+  id: number;
+  name: string;
+}
+
+/**
+ * A merged lift and its survivor on the SAME plan day are one slot, not two.
+ *
+ * plan_items carries no unique index on (plan_day_id, exercise_id) — nothing stops one
+ * exercise appearing twice on a day — so re-pointing a day that already prescribed the
+ * survivor leaves the athlete two cards for one movement, indistinguishable in the Plan
+ * editor and counted twice by every volume read.
+ *
+ * THE SURVIVOR'S OWN ITEM IS KEPT: it is the row the day already reads from, so its
+ * position, superset pairing and note stay exactly as programmed, and the re-pointed
+ * duplicate is dropped. The only thing the duplicate hands over is a prescription the
+ * survivor is MISSING — `target_weight` and `target_seconds` are carried only where the
+ * survivor's is NULL, so a real prescription is never overwritten and never lost when
+ * the survivor had none. `sets` is NOT NULL in the schema, so it always holds a value
+ * and therefore never carries. Where the survivor holds several items on that day the
+ * earliest (lowest position) wins. Dropping a row leaves a gap in `position`, which is
+ * read ORDER BY only and never as a dense sequence.
+ */
+function foldPlanDayDuplicates(from: MergeSide, into: MergeSide): number {
+  const duplicates = db
+    .prepare(
+      `SELECT f.id AS from_id, f.target_weight AS from_weight, f.target_seconds AS from_seconds,
+              (SELECT s.id FROM plan_items s
+                WHERE s.plan_day_id = f.plan_day_id AND s.exercise_id = ?
+                ORDER BY s.position, s.id LIMIT 1) AS keep_id
+         FROM plan_items f
+        WHERE f.exercise_id = ?
+        ORDER BY f.id`
+    )
+    .all(into.id, from.id) as Array<{
+    from_id: number;
+    from_weight: number | null;
+    from_seconds: number | null;
+    keep_id: number | null;
+  }>;
+  let dropped = 0;
+  for (const row of duplicates) {
+    if (row.keep_id == null) continue; // that day only ever prescribed the merged lift
+    db.prepare(
+      `UPDATE plan_items
+          SET target_weight = COALESCE(target_weight, ?), target_seconds = COALESCE(target_seconds, ?)
+        WHERE id = ?`
+    ).run(row.from_weight, row.from_seconds, Number(row.keep_id));
+    db.prepare("DELETE FROM plan_items WHERE id = ?").run(Number(row.from_id));
+    dropped += 1;
+  }
+  return dropped;
+}
+
+/**
+ * Carry a symptom watch's movement evidence onto the survivor.
+ *
+ * movement_tolerance_observations names the lift THREE ways at once: the FK
+ * `exercise_id`, the `movement_key` it is actually READ by, and the display
+ * `movement_name`. None of them cascades — the FK is ON DELETE SET NULL — so deleting
+ * the merged row used to leave the observation holding `exercise:<a deleted id>` while
+ * every reader asks for the survivor's id or the survivor's name slug. The rows stayed
+ * in the table and went invisible: a movement the athlete had reported PAINFUL read
+ * clear on the traffic light and walked back into the swap pool.
+ *
+ * Both unique exposure indexes key on (event, session, movement_key, day, outcome,
+ * epoch), so a re-point can land on a row the survivor already owns. THE SURVIVOR'S ROW
+ * IS KEPT, and the loser's STRENGTH is folded into it first: `evidence='stated'`
+ * outranks `'inferred'` (the athlete said it, vs. we read it off a logged set) and
+ * `relevant=1` outranks 0 — in both directions the weaker value is the one that would
+ * quietly drop evidence. Only then is the duplicate deleted, so nothing the two rows
+ * disagreed about is lost.
+ *
+ * Deliberately NOT best-effort: an exposure that goes missing here is the merge
+ * silently un-reporting pain, so a failure must roll the whole merge back.
+ */
+function repointMovementToleranceOnMerge(from: MergeSide, into: MergeSide): { moved: number; folded: number } {
+  const fromExerciseKey = `exercise:${from.id}`;
+  const intoExerciseKey = `exercise:${into.id}`;
+  const fromSlug = toleranceMovementSlug(from.name);
+  const intoSlug = toleranceMovementSlug(into.name);
+  const rows = db
+    .prepare(
+      `SELECT id, symptom_event_id, session_id, movement_key, observed_on, outcome, evidence, relevant, evidence_epoch
+         FROM movement_tolerance_observations
+        WHERE movement_key IN (?, ?) OR exercise_id = ?
+        ORDER BY id`
+    )
+    .all(fromExerciseKey, fromSlug, from.id) as Array<{
+    id: number;
+    symptom_event_id: number;
+    session_id: number | null;
+    movement_key: string;
+    observed_on: string;
+    outcome: string;
+    evidence: string;
+    relevant: number;
+    evidence_epoch: number;
+  }>;
+  // The twin is looked up against LIVE state on every row, so two loser rows that
+  // collapse onto the same survivor key fold into each other correctly too.
+  const twin = db.prepare(
+    `SELECT id, evidence, relevant FROM movement_tolerance_observations
+      WHERE symptom_event_id = ? AND IFNULL(session_id, -1) = IFNULL(?, -1) AND movement_key = ?
+        AND observed_on = ? AND outcome = ? AND evidence_epoch = ? LIMIT 1`
+  );
+  let moved = 0;
+  let folded = 0;
+  for (const row of rows) {
+    const key = String(row.movement_key);
+    const target = key === fromExerciseKey ? intoExerciseKey : key === fromSlug ? intoSlug : null;
+    if (target == null || target === key) {
+      // A row this merge owns only through its FK, or one whose key spelling the merge
+      // does not rename (both names slug the same). Only the dangling id needs fixing.
+      db.prepare("UPDATE movement_tolerance_observations SET exercise_id = ? WHERE id = ?").run(into.id, Number(row.id));
+      continue;
+    }
+    const existing = twin.get(
+      Number(row.symptom_event_id),
+      row.session_id == null ? null : Number(row.session_id),
+      target,
+      String(row.observed_on),
+      String(row.outcome),
+      Number(row.evidence_epoch)
+    ) as { id: number; evidence: string; relevant: number } | undefined;
+    if (existing) {
+      const evidence = String(row.evidence) === "stated" || String(existing.evidence) === "stated" ? "stated" : "inferred";
+      const relevant = Number(row.relevant) === 1 || Number(existing.relevant) === 1 ? 1 : 0;
+      db.prepare(
+        "UPDATE movement_tolerance_observations SET exercise_id = ?, movement_name = ?, evidence = ?, relevant = ? WHERE id = ?"
+      ).run(into.id, into.name, evidence, relevant, Number(existing.id));
+      db.prepare("DELETE FROM movement_tolerance_observations WHERE id = ?").run(Number(row.id));
+      folded += 1;
+      continue;
+    }
+    db.prepare(
+      "UPDATE movement_tolerance_observations SET exercise_id = ?, movement_key = ?, movement_name = ? WHERE id = ?"
+    ).run(into.id, target, into.name, Number(row.id));
+    moved += 1;
+  }
+  return { moved, folded };
+}
+
 // Merge one exercise into another: the single write that de-duplicates a movement
 // logged under two names. Re-points logged_sets + plan_items, carries the anchor-lift
 // objective + learned aliases + one-session skips onto the survivor, records the
 // from-name as an alias so it resolves to the survivor forever, remaps the strength
-// re-test cadence, then deletes the now-empty `from` row. Savepoint-wrapped so a
-// mid-way failure leaves the split untouched. Guards: `into` must exist; `from` must
-// exist (idempotent — ok:true with 0 moves when already gone); refuses a timed↔reps
-// merge (incompatible logging shapes). NEVER touches logged numbers — only which
-// exercise a set/plan row belongs to. `objectives`/`aliases`/`session_skips` are the
-// non-FK references re-pointed; `moved_sets`/`moved_plan_items` the FK repoints.
+// re-test cadence, follows the instructional guide and its pending suggestion, moves
+// the strength calibration anchor and the pain/tolerance evidence, then deletes the
+// now-empty `from` row. Savepoint-wrapped so a mid-way failure leaves the split
+// untouched. Guards: `into` must exist; `from` must exist (idempotent — ok:true with 0
+// moves when already gone); refuses a timed↔reps merge (incompatible logging shapes).
+// NEVER touches logged numbers — only which exercise a set/plan row belongs to.
+// `objectives`/`aliases`/`session_skips`/`*_observations` are the non-FK references
+// re-pointed; `moved_sets`/`moved_plan_items` the FK repoints, and
+// `dropped_plan_items` the duplicate plan slots folded away.
+//
+// EVERY reference must move BEFORE the DELETE. Three of the tables below hold a NAME
+// or a derived key rather than a foreign key, and the two that do hold one are
+// ON DELETE SET NULL — so a reference left behind is not a crash, it is evidence that
+// quietly stops existing. See the reference map in docs/ARCHITECTURE.md.
 export function mergeExercises(
   fromName: string,
   intoName: string
@@ -484,12 +645,24 @@ export function mergeExercises(
   ok: boolean;
   moved_sets: number;
   moved_plan_items: number;
+  dropped_plan_items: number;
   objectives: number;
   aliases: number;
   session_skips: number;
+  moved_observations: number;
+  folded_observations: number;
   error?: string;
 } {
-  const empty = { moved_sets: 0, moved_plan_items: 0, objectives: 0, aliases: 0, session_skips: 0 };
+  const empty = {
+    moved_sets: 0,
+    moved_plan_items: 0,
+    dropped_plan_items: 0,
+    objectives: 0,
+    aliases: 0,
+    session_skips: 0,
+    moved_observations: 0,
+    folded_observations: 0,
+  };
   const into = findExercise(intoName);
   if (!into) return { ok: false, ...empty, error: `target exercise "${intoName}" not found` };
   const from = findExercise(fromName);
@@ -506,6 +679,9 @@ export function mergeExercises(
 
   return withSqliteSavepoint("merge_exercises", () => {
     const moved_sets = Number(db.prepare("UPDATE logged_sets SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes);
+    // Fold FIRST, re-point what is left: a day that already prescribes the survivor
+    // must not end up holding the same movement twice.
+    const dropped_plan_items = foldPlanDayDuplicates(from, into);
     const moved_plan_items = Number(db.prepare("UPDATE plan_items SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes);
 
     // strength_objectives references a lift by NAME + normalizedExerciseKey (resolved
@@ -569,9 +745,37 @@ export function mergeExercises(
     // rather than crash — quieter, and wrong. The survivor's own guide wins.
     try {
       repointGuidesOnMerge(from.id, into.id);
+      // An unlinked guide SUGGESTION names its candidate exercise in text
+      // (getGuideSuggestionForExercise matches on that name, not on an id), so the
+      // pending yes/no has to follow the survivor or it becomes unanswerable.
+      db.prepare(
+        "UPDATE exercise_guides SET match_candidate = ? WHERE exercise_id IS NULL AND match_candidate = ? COLLATE NOCASE"
+      ).run(into.name, from.name);
     } catch {
       /* an optional, re-importable guide never fails a merge */
     }
+
+    // The strength calibration anchor is keyed by normalizedExerciseKey — a NAME, not
+    // an FK — so repo/calibration.ts reads `strength_topset` under the lift's key and a
+    // merged-away name strands the est-1RM confirmation the lift was anchored on.
+    // UPDATE OR IGNORE because (kind, target_key, ref_id) is UNIQUE wherever ref_id is
+    // set: when the same session already anchored the survivor's key, the older row
+    // keeps its stale key instead of being deleted. An anchor is never destroyed to
+    // make a merge tidy.
+    try {
+      if (fromKey && intoKey && fromKey !== intoKey) {
+        db.prepare(
+          "UPDATE OR IGNORE calibration_events SET target_key = ? WHERE kind = 'strength_topset' AND target_key = ?"
+        ).run(intoKey, fromKey);
+      }
+    } catch {
+      /* the calibration ledger is a downstream consequence, not merge integrity */
+    }
+
+    // The pain/tolerance memory — three references, none of them cascading. This MUST
+    // run before the DELETE: the FK is ON DELETE SET NULL, so afterwards the row's link
+    // to the lift is gone and unrecoverable.
+    const tolerance = repointMovementToleranceOnMerge(from, into);
 
     // Remove the now-empty exercise row, then record the from-name → survivor alias so
     // a future log/plan of the old name self-aligns (findOrCreateExercise path (a)).
@@ -583,7 +787,17 @@ export function mergeExercises(
     const aliasRecorded = !priorAlias || priorAlias.canonical !== into.name ? 1 : 0;
 
     bumpTrainingDataVersion(); // the merged history re-grades lifts in program-state
-    return { ok: true, moved_sets, moved_plan_items, objectives, aliases: rewritten + aliasRecorded, session_skips };
+    return {
+      ok: true,
+      moved_sets,
+      moved_plan_items,
+      dropped_plan_items,
+      objectives,
+      aliases: rewritten + aliasRecorded,
+      session_skips,
+      moved_observations: tolerance.moved,
+      folded_observations: tolerance.folded,
+    };
   });
 }
 

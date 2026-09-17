@@ -69,9 +69,13 @@ export function expandedExerciseKey(name: string): string {
 // ---- the merge write (snapshot of repo/exercises.ts#mergeExercises) ---------
 // Re-points logged_sets + plan_items, carries the anchor-lift objective, learned
 // aliases and one-session skips onto the survivor, remaps the strength re-test
-// cadence and the instructional guide, records the from-name as an alias, then
-// deletes the now-empty `from` row. NEVER touches logged numbers. The migration
-// runner already wraps each entry in BEGIN/COMMIT, so there is no savepoint here.
+// cadence, the instructional guide and its pending suggestion, the strength
+// calibration anchor and the pain/tolerance evidence, records the from-name as an
+// alias, then deletes the now-empty `from` row. EVERY reference moves BEFORE the
+// DELETE: the two foreign keys are ON DELETE SET NULL and the rest are names or
+// derived keys, so a reference left behind is not a crash — it is evidence that
+// quietly stops existing. NEVER touches logged numbers. The migration runner already
+// wraps each entry in BEGIN/COMMIT, so there is no savepoint here.
 function strengthSignalKey(name: string): string {
   const slug = normalizedExerciseKey(name || "benchmark").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "benchmark";
   return `training:strength:${slug}`;
@@ -96,6 +100,118 @@ export function setFrozenExerciseAlias(db: DatabaseSync, alias: string, canonica
   }
 }
 
+function tableExists(db: DatabaseSync, name: string): boolean {
+  try {
+    return !!db.prepare(`SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(name);
+  } catch {
+    return false;
+  }
+}
+
+// The two movement-key spellings movement_tolerance_observations persists (snapshot of
+// the shape repo/training-symptoms.ts writes and repo/pain-band.ts + repo/movement-risk.ts
+// read back): `exercise:<id>` once a reported movement resolved to a catalog row, and
+// `movement:<name-slug>` when it did not.
+function toleranceMovementSlug(name: string): string {
+  return `movement:${String(name).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+}
+
+// A merged lift and its survivor on the SAME plan day are one slot, not two. plan_items
+// carries no unique index on (plan_day_id, exercise_id), so re-pointing a day that
+// already prescribed the survivor would leave the athlete two cards for one movement.
+// THE SURVIVOR'S OWN ITEM IS KEPT (its position, superset pairing and note stay as
+// programmed) and the re-pointed duplicate is dropped; the duplicate hands over only a
+// prescription the survivor is MISSING — target_weight/target_seconds where the
+// survivor's is NULL. `sets` is NOT NULL, so it always holds a value and never carries.
+function foldPlanDayDuplicatesFrozen(
+  db: DatabaseSync,
+  from: { id: number },
+  into: { id: number }
+): void {
+  const duplicates = db
+    .prepare(
+      `SELECT f.id AS from_id, f.target_weight AS from_weight, f.target_seconds AS from_seconds,
+              (SELECT s.id FROM plan_items s
+                WHERE s.plan_day_id = f.plan_day_id AND s.exercise_id = ?
+                ORDER BY s.position, s.id LIMIT 1) AS keep_id
+         FROM plan_items f
+        WHERE f.exercise_id = ?
+        ORDER BY f.id`
+    )
+    .all(into.id, from.id) as any[];
+  for (const row of duplicates) {
+    if (row.keep_id == null) continue;
+    db.prepare(
+      `UPDATE plan_items
+          SET target_weight = COALESCE(target_weight, ?), target_seconds = COALESCE(target_seconds, ?)
+        WHERE id = ?`
+    ).run(row.from_weight ?? null, row.from_seconds ?? null, Number(row.keep_id));
+    db.prepare(`DELETE FROM plan_items WHERE id = ?`).run(Number(row.from_id));
+  }
+}
+
+// Carry a symptom watch's movement evidence onto the survivor. The table names the
+// lift three ways — the FK `exercise_id` (ON DELETE SET NULL), the `movement_key` it is
+// READ by, and the display `movement_name` — and none of them cascades, so a row left
+// behind holds `exercise:<a deleted id>` while every reader asks for the survivor's id
+// or name slug: still stored, permanently invisible. Both unique exposure indexes key
+// on (event, session, movement_key, day, outcome, epoch), so a re-point can collide
+// with a row the survivor already owns; the SURVIVOR's row is kept and the loser's
+// strength folded into it first ('stated' outranks 'inferred', relevant=1 outranks 0)
+// before the duplicate is dropped.
+function repointMovementToleranceFrozen(
+  db: DatabaseSync,
+  from: { id: number; name: string },
+  into: { id: number; name: string }
+): void {
+  if (!tableExists(db, "movement_tolerance_observations")) return;
+  const fromExerciseKey = `exercise:${from.id}`;
+  const intoExerciseKey = `exercise:${into.id}`;
+  const fromSlug = toleranceMovementSlug(from.name);
+  const intoSlug = toleranceMovementSlug(into.name);
+  const rows = db
+    .prepare(
+      `SELECT id, symptom_event_id, session_id, movement_key, observed_on, outcome, evidence, relevant, evidence_epoch
+         FROM movement_tolerance_observations
+        WHERE movement_key IN (?, ?) OR exercise_id = ?
+        ORDER BY id`
+    )
+    .all(fromExerciseKey, fromSlug, from.id) as any[];
+  const twin = db.prepare(
+    `SELECT id, evidence, relevant FROM movement_tolerance_observations
+      WHERE symptom_event_id = ? AND IFNULL(session_id, -1) = IFNULL(?, -1) AND movement_key = ?
+        AND observed_on = ? AND outcome = ? AND evidence_epoch = ? LIMIT 1`
+  );
+  for (const row of rows) {
+    const key = String(row.movement_key);
+    const target = key === fromExerciseKey ? intoExerciseKey : key === fromSlug ? intoSlug : null;
+    if (target == null || target === key) {
+      db.prepare("UPDATE movement_tolerance_observations SET exercise_id = ? WHERE id = ?").run(into.id, Number(row.id));
+      continue;
+    }
+    const existing = twin.get(
+      Number(row.symptom_event_id),
+      row.session_id == null ? null : Number(row.session_id),
+      target,
+      String(row.observed_on),
+      String(row.outcome),
+      Number(row.evidence_epoch)
+    ) as any;
+    if (existing) {
+      const evidence = String(row.evidence) === "stated" || String(existing.evidence) === "stated" ? "stated" : "inferred";
+      const relevant = Number(row.relevant) === 1 || Number(existing.relevant) === 1 ? 1 : 0;
+      db.prepare(
+        "UPDATE movement_tolerance_observations SET exercise_id = ?, movement_name = ?, evidence = ?, relevant = ? WHERE id = ?"
+      ).run(into.id, into.name, evidence, relevant, Number(existing.id));
+      db.prepare("DELETE FROM movement_tolerance_observations WHERE id = ?").run(Number(row.id));
+      continue;
+    }
+    db.prepare(
+      "UPDATE movement_tolerance_observations SET exercise_id = ?, movement_key = ?, movement_name = ? WHERE id = ?"
+    ).run(into.id, target, into.name, Number(row.id));
+  }
+}
+
 export function mergeExercisesFrozen(
   db: DatabaseSync,
   fromName: string,
@@ -117,6 +233,13 @@ export function mergeExercisesFrozen(
   const moved_sets = Number(
     db.prepare("UPDATE logged_sets SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes
   );
+  // Fold FIRST, re-point what is left: a day that already prescribes the survivor must
+  // not end up holding the same movement twice.
+  try {
+    foldPlanDayDuplicatesFrozen(db, from, into);
+  } catch {
+    /* a fixture without target_seconds keeps the re-point; a duplicate slot is visible, not lost */
+  }
   const moved_plan_items = Number(
     db.prepare("UPDATE plan_items SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes
   );
@@ -183,9 +306,32 @@ export function mergeExercisesFrozen(
     } else {
       db.prepare(`UPDATE exercise_guides SET exercise_id = ? WHERE exercise_id = ?`).run(into.id, from.id);
     }
+    // An unlinked guide SUGGESTION names its candidate exercise in TEXT, so the pending
+    // yes/no follows the survivor rather than becoming unanswerable.
+    db.prepare(
+      `UPDATE exercise_guides SET match_candidate = ? WHERE exercise_id IS NULL AND match_candidate = ? COLLATE NOCASE`
+    ).run(into.name, from.name);
   } catch {
     /* an optional, re-importable guide never fails a merge */
   }
+
+  // The strength calibration anchor is keyed by normalizedExerciseKey — a NAME, not an
+  // FK — so a merged-away name strands the est-1RM confirmation the lift was anchored
+  // on. UPDATE OR IGNORE: (kind, target_key, ref_id) is UNIQUE wherever ref_id is set,
+  // and a colliding row keeps its stale key rather than being deleted.
+  try {
+    if (fromKey && intoKey && fromKey !== intoKey) {
+      db.prepare(
+        `UPDATE OR IGNORE calibration_events SET target_key = ? WHERE kind = 'strength_topset' AND target_key = ?`
+      ).run(intoKey, fromKey);
+    }
+  } catch {
+    /* the calibration ledger is a downstream consequence, not merge integrity */
+  }
+
+  // The pain/tolerance memory, BEFORE the delete: the FK is ON DELETE SET NULL, so
+  // afterwards the row's link to the lift is gone and unrecoverable.
+  repointMovementToleranceFrozen(db, from, into);
 
   db.prepare("DELETE FROM exercises WHERE id = ?").run(from.id);
   setFrozenExerciseAlias(db, from.name, into.name, "merge");
@@ -195,13 +341,44 @@ export function mergeExercisesFrozen(
 // ---- the generic duplicate fold (snapshot of repo/exercise-dedupe.ts) -------
 // Exercises sharing one expandedExerciseKey are one movement typed twice; they fold
 // into the member with the most logged sets (ties → the lowest id). Equal expanded
-// keys mean identical tokens, so no variation/assisted asymmetry is possible — the
-// only guard left is the logging mode, which mergeExercisesFrozen refuses to cross.
+// keys mean identical tokens, so no variation/assisted asymmetry is possible.
+//
+// STORED METADATA STILL VETOES. A merge deletes a row and cannot be undone, so the
+// generic pass refuses any pair the catalog itself says is two movements: a differing
+// `mode` (a timed hold and a reps lift never share one series — mergeExercisesFrozen
+// refuses it anyway) or a differing `muscle_group` where BOTH are non-null (one null
+// is missing metadata, not a disagreement). Only the hand-curated NAMED_MERGES below
+// may cross that line, because a person decided those pairs one at a time.
+function namedClusterPair(a: string, b: string): boolean {
+  const x = normalizeExerciseName(a);
+  const y = normalizeExerciseName(b);
+  return NAMED_MERGES.some((step) => {
+    const f = normalizeExerciseName(step.from);
+    const t = normalizeExerciseName(step.into);
+    return (f === x && t === y) || (f === y && t === x);
+  });
+}
+
+// Why a pair sharing one expanded key is still NOT folded, or null when it may be.
+export function duplicateFoldVeto(
+  a: { name: string; mode: string | null; muscle_group: string | null },
+  b: { name: string; mode: string | null; muscle_group: string | null }
+): string | null {
+  if (namedClusterPair(a.name, b.name)) return null;
+  if ((a.mode === "timed" ? "timed" : "reps") !== (b.mode === "timed" ? "timed" : "reps")) {
+    return "one is timed and one is reps — they never share a series";
+  }
+  if (a.muscle_group && b.muscle_group && a.muscle_group !== b.muscle_group) {
+    return `the catalog files them under different muscle groups (${a.muscle_group} / ${b.muscle_group})`;
+  }
+  return null;
+}
+
 export function foldDuplicateExerciseKeys(db: DatabaseSync): Array<{ from: string; into: string }> {
   const rows = (
     db
       .prepare(
-        `SELECT e.id AS id, e.name AS name, e.mode AS mode, COUNT(ls.id) AS sets
+        `SELECT e.id AS id, e.name AS name, e.mode AS mode, e.muscle_group AS muscle_group, COUNT(ls.id) AS sets
            FROM exercises e LEFT JOIN logged_sets ls ON ls.exercise_id = e.id
           GROUP BY e.id`
       )
@@ -210,6 +387,7 @@ export function foldDuplicateExerciseKeys(db: DatabaseSync): Array<{ from: strin
     id: Number(r.id),
     name: String(r.name),
     mode: r.mode == null ? null : String(r.mode),
+    muscle_group: r.muscle_group == null ? null : String(r.muscle_group),
     sets: Number(r.sets) || 0,
   }));
   const clusters = new Map<string, typeof rows>();
@@ -225,9 +403,8 @@ export function foldDuplicateExerciseKeys(db: DatabaseSync): Array<{ from: strin
     if (members.length < 2) continue;
     const ordered = [...members].sort((a, b) => b.sets - a.sets || a.id - b.id);
     const survivor = ordered[0];
-    const survivorMode = survivor.mode === "timed" ? "timed" : "reps";
     for (const member of ordered.slice(1)) {
-      if ((member.mode === "timed" ? "timed" : "reps") !== survivorMode) continue;
+      if (duplicateFoldVeto(member, survivor)) continue;
       const result = mergeExercisesFrozen(db, member.name, survivor.name);
       if (result.ok) done.push({ from: member.name, into: survivor.name });
     }
