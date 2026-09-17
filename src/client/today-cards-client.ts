@@ -215,8 +215,10 @@ function exerciseCardHtml(
   return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${headlineDose ? ` data-dose="headline"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         ${tile}
-        <button class="ex-name" data-guide="${encodeURIComponent(exercise)}">${escHtml(exercise)} <span class="guide-i">ⓘ</span></button>
-        ${target}
+        <div class="ex-top-main">
+          <button class="ex-name" data-guide="${encodeURIComponent(exercise)}">${escHtml(exercise)}&nbsp;<span class="guide-i">ⓘ</span></button>
+          ${target}
+        </div>
         ${skipButton}${removeButton}
       </div>
       <div class="ex-meta">${progress}</div>

@@ -179,12 +179,15 @@ type PrimerHydrateOpts = {
       const freshInfo = byName.get(name);
       if (freshInfo == null) continue;
       const { why, label } = freshInfo;
-      const top = card.querySelector(".ex-top");
-      if (!top || top.querySelector(".sess-fresh-chip")) continue;
+      // Lives in .ex-meta (beside the set-progress line), never .ex-top — a long
+      // exercise name already fills that header row on narrow phones, and the chip
+      // ran off the card's right edge when it sat there too.
+      const meta = card.querySelector(".ex-meta");
+      if (!meta || meta.querySelector(".sess-fresh-chip")) continue;
       const chipHtml = sessionFreshChipHtml(why, label);
       if (!chipHtml) continue;
-      top.insertAdjacentHTML("beforeend", chipHtml);
-      const chip = top.querySelector(".sess-fresh-chip");
+      meta.insertAdjacentHTML("beforeend", chipHtml);
+      const chip = meta.querySelector(".sess-fresh-chip");
       chip?.addEventListener("click", (event: Event) => {
         event.preventDefault();
         event.stopPropagation();

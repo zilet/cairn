@@ -623,14 +623,22 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
    08 · Exercise cards (Today)
    ------------------------------------------------------------------- */
 .ex{border-radius:var(--radius);padding:15px 16px;margin-bottom:13px;position:relative;overflow:hidden}
-.ex-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
-.ex-top .ex-name{flex:1;min-width:0}
+.ex-top{display:flex;align-items:center;gap:12px}
+/* .ex-top-main wraps the name + prescription so a long name never overlaps the
+   prescription: they share a wrapping flex row, and once the name takes more than
+   one line the prescription drops to its own (still right-aligned) line beneath it.
+   Short names keep today's look — name and prescription on one line — because the
+   row simply never needs to wrap. Only the reps/timed card uses this wrapper; the
+   cardio variants keep their own single-line ellipsizing name. */
+.ex-top-main{display:flex;flex:1;min-width:0;flex-wrap:wrap;align-items:baseline;gap:4px 12px}
+.ex-top-main .ex-name{flex:1 1 auto;min-width:150px}
+.ex-top-main .ex-sets{flex:0 0 auto;margin-left:auto}
 .ex-name{
-  font-family:var(--font-display);font-weight:540;font-size:1.15rem;line-height:1.2;
+  font-family:var(--font-display);font-weight:540;font-size:1.15rem;line-height:1.3;
   font-variation-settings:"opsz" 32;background:none;border:none;color:var(--ink);
-  padding:0;text-align:left;display:inline-flex;align-items:center;gap:6px;
+  padding:0;text-align:left;
 }
-.guide-i{color:var(--accent);font-size:.78rem;font-family:var(--font-ui)}
+.guide-i{color:var(--accent);font-size:.78rem;font-family:var(--font-ui);white-space:nowrap}
 .ex-sets{font-size:.72rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
   color:var(--muted);white-space:nowrap}
 .ex-target{
@@ -659,7 +667,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   border-radius:8px;background:var(--card-2);padding:8px 11px}
 
 /* set progress + completion */
-.ex-meta{display:flex;align-items:center;gap:9px;margin-top:5px}
+.ex-meta{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-top:5px}
 .ex-prog{font-family:var(--font-display);font-variation-settings:"opsz" 60;font-weight:600;
   font-size:.85rem;color:var(--muted);font-variant-numeric:lining-nums}
 .ex-prog span{font-family:var(--font-ui);font-weight:600;text-transform:uppercase;
@@ -6290,10 +6298,12 @@ body[data-tab="session"] .tabbar{display:none}
 .sess-primer-approach{color:var(--ink-2);font-size:.85rem;line-height:1.45;font-style:italic;
   border-top:1px solid var(--line);padding-top:11px}
 
-/* "new this week" chip on a fresh movement's card, and its tap-revealed rationale. */
+/* "new this week" chip — lives in .ex-meta beside the set-progress line (never
+   .ex-top, which overflowed the card on a long exercise name), and on the primer
+   card itself. */
 .sess-fresh-chip{flex:0 0 auto;font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
   color:var(--sage-text);background:var(--sage-bg);border:0;border-radius:99px;padding:3px 9px;cursor:pointer;
-  align-self:center;margin-left:6px}
+  align-self:center}
 .sess-fresh-why{color:var(--ink-2);font-size:.8rem;line-height:1.45;margin-top:6px}
 .feedback-prompt{margin-bottom:2px}
 /* The Session destination is deliberately still — no entrance stagger. Beyond
