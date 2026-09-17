@@ -82,6 +82,7 @@ import {
   hasExplicitStrengthObjectiveIntent,
   hasExplicitSymptomReportIntent,
   hasExplicitSymptomResolveIntent,
+  hasSelfContainedPlanEditIntent,
   isFoodOnlyTurn,
   isInstantFoodCaptureDecision,
   isLeadingQuestion,
@@ -120,10 +121,12 @@ export {
   hasExplicitStrengthObjectiveIntent,
   hasExplicitSymptomReportIntent,
   hasExplicitSymptomResolveIntent,
+  hasSelfContainedPlanEditIntent,
   isFoodOnlyTurn,
   isInstantFoodCaptureDecision,
   isLeadingQuestion,
   mentionsWhen,
+  readsAsSessionProposal,
   shouldCreatePhotoFoodPlaceholder,
 } from "./chat-intent.js";
 export {
@@ -2564,10 +2567,11 @@ export function applyChatActions(
   let appliedGoalPatch: Record<string, unknown> | null = null;
   const explicitStrengthObjectiveIntent = !foodOnly && hasExplicitStrengthObjectiveIntent(message);
   // ONE reading of this sentence for the whole turn. A message that names its own
-  // instruction never touches the chat log; a bare go-ahead ("ok", "apply it") reads
-  // the coach's previous message to find out what it is agreeing to.
+  // instruction ("apply it to my program for today") never touches the chat log; a bare
+  // go-ahead ("apply it", "go ahead") reads the coach's previous message to find out what
+  // it is agreeing to, and grants nothing unless that message PROPOSED a session.
   const explicitPlanEdit = ((): boolean => {
-    if (hasExplicitPlanEditIntent(message)) return true;
+    if (hasSelfContainedPlanEditIntent(message)) return true;
     if (!carriesPlanApplyAffirmation(message)) return false;
     const prior = ctx.priorAssistant ?? priorAssistantContext(ctx.userMessageId);
     return hasExplicitPlanEditIntentInContext(message, prior.message ?? "", prior.drafted === true);
