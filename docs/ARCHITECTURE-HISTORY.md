@@ -4,6 +4,65 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-17 — The athlete's "apply it" lands today, a run morning composes around the run, the week the athlete actually said
+
+Migrations **102** (`profile.strength_schedule_json`), **103** (exercise-identity repair, frozen
+`repairExerciseIdentity`), **104** (Garmin export fidelity repair + two `settings` columns for the
+last export outcome).
+
+- **Chat apply is the athlete's ask** (`src/chat-intent.ts`, `src/chatTurns.ts`,
+  `src/domain/brain/autonomy-service.ts`, `src/chat-reconcile.ts`). `hasExplicitPlanEditIntent`
+  learned the apply vocabulary; conversational verbs (use/put/set/load/make) bind only to a plan
+  noun in an imperative frame, reading is per clause, past tense never authorizes. A bare go-ahead
+  counts only with an apply phrase AND a previous coach message that `readsAsSessionProposal`. An
+  explicit request lands on the athlete's own boundary (today unless a set is logged —
+  `athleteRestructureLandingDate` now counts sets/finish, never a prepared row); a today-scoped ask
+  that cannot land today schedules NOTHING (`holdTodayScopedProposal`: draft superseded, observed row)
+  instead of rewriting tomorrow's template. Every landing path (chat, boundary pass, immediate quiet
+  apply) re-prepares today's unstarted composition (`refreshPreparedDayForPlanChange`; a finished or
+  started session is never reopened). The reconciler appends a scheduled / not-applied / lands-today
+  receipt and the chat chip shows it.
+- **A saturated group is substituted, not lightened** (`src/repo/saturated-substitution.ts`,
+  `src/repo/daily-composition.ts`). For plan-sourced compositions, an item on a saturated group is
+  replaced by a stand-in from the athlete's own plan for an allowed group, carrying its logged working
+  weight (`load_basis:"logged"`, exempt from the hold clamp) or plan target (clamped); `substitution_for`
+  + a variant-set reason ride on the item, reach is suppressed, the session `why` names the cause. A
+  thin pool falls back to lightening and says so. RULING: fires on any saturation source (acuteGate is
+  the one recovery question), not only run mornings. `/today-plan-day` candidates carry
+  `recovering_groups` so the day pills caption a colliding pick.
+- **Stated lifting weekdays** (`src/repo/profile.ts`, `src/repo/strength-schedule.ts`,
+  `src/repo/plan-selection.ts`, `src/domain/training/week-layout.ts`, prompts). `strength_schedule`
+  mirrors the endurance schedule, set from chat (`set_strength_schedule`), REST and MCP — no settings
+  form. With none stated, `strengthScheduleRead()` observes the weekdays a real strength session landed
+  on in 3 of the last 6 weeks (spoken as observed); an explicitly emptied schedule stays silent.
+  `weekdayPlanDayMap` lays strength days onto exactly the lift weekdays and endurance-only days onto run
+  weekdays, and `selectAdaptivePlanDay` consults it BEFORE the anchor rotation (`strengthStartForWeek`
+  phases the ring off the last logged session; surplus strength days rotate across weeks, fewer wrap).
+  `week_layout.lift_days/run_days` and the STATED/OBSERVED LIFTING DAYS prompt line let the agent check
+  itself; the evolution prompt keeps the heavy hinge off run weekdays.
+- **One exercise resolver** (`src/repo/exercise-canon.ts` `resolveExerciseName`, `findOrCreateExercise`,
+  `src/repo/daily-reconciliation.ts`, `progression.ts`, `training-read.ts`, `daily-outcome-read.ts`,
+  `POST /api/exercises/dedupe`). Every name comparison goes through the alias- and key-aware resolver
+  (the composed "Incline DB Press" now reconciles against the logged "Incline Dumbbell Press"); an
+  unambiguous abbreviation reuses the existing row and records the spelling as an alias. Migration 103
+  repoints the broken triceps alias, folds the chest-press / rope-hammer-curl / single-arm-row clusters
+  into their most-logged survivor, puts Pull Up on reps, corrects two muscle groups and a FIT category.
+  A merge re-points every exercise-keyed row (tolerance observations, symptom events, dose movement
+  keys, guides, objectives, skips) before deleting, never doubles a plan day, and the generic key pass
+  refuses mode/muscle-group mismatches. A session bound to a composition is titled by that composition,
+  and the athlete's own choice of session is no longer a progression confounder by itself.
+- **Garmin read back honestly** (`src/garmin.ts`, `src/repo/garmin-authorship.ts`,
+  `src/repo/garmin-export-telemetry.ts`, `src/garminExport.ts`, `src/repo/garmin-strength-export.ts`).
+  A Cairn-authored strength activity keeps elapsed duration on the way back (movingDuration was the sum
+  of Cairn's own 45 s slots) and never shortens the session; the auto-calculated 65.534 kcal on a Cairn
+  shell is absence; `hrv_status` stores only the documented values. Each export records
+  exported/skipped set counts and the unmapped movements, the session's Garmin card says so once, every
+  export attempt is a diagnostic event and the last outcome sits beside last-sync, the sync line notes
+  sleep the watch never sent (3 of 7 nights), the activity loop batches invalidation per date, and the
+  export fingerprint covers title + duration. Still unmapped by design: Dead hang, Unknown.
+- **Today card**: a long exercise name wraps instead of overlapping its prescription; the fresh chip
+  lives on the meta line.
+
 ## 2026-09-14 — Requests never lost, holds never doubled, one CLI lane at a time
 
 No schema migration (`user_version` stays where v101 left it).
