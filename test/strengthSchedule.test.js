@@ -310,6 +310,143 @@ test("the adaptive ring points an unanchored Saturday at rest, not at a lift", (
 });
 
 // ---------------------------------------------------------------------------
+// the weekday ring END TO END — the lifting week against the session anchor
+// ---------------------------------------------------------------------------
+//
+// The map above is pure, and passing it in isolation proved nothing about whether the
+// selector ever asked it. It did not: `recentSessionAnchors` reads the last 20 sessions
+// with logged sets and no date window, so for any athlete with history an anchor always
+// resolved and the rotation was decided positionally before the week was consulted.
+// These four cases drive `selectAdaptivePlanDay` / `selectedPlanDayForDate` themselves.
+
+const strengthDay = (day_number, name, exercise) => ({
+  day_number,
+  name,
+  items: [{ exercise, sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }],
+});
+const restDay = (day_number) => ({ day_number, name: "Rest", focus: null, day_type: "rest", items: [] });
+const longRunDay = (day_number) => ({
+  day_number,
+  name: "Long Run",
+  items: [{ kind: "cardio", exercise: "Long Run", target_minutes: 75 }],
+});
+
+// The athlete's live ring: five strength days, a rest day, an endurance-only day.
+const LIVE_PLAN = [
+  strengthDay(1, "Lower A", "Back Squat"),
+  strengthDay(2, "Push", "Barbell Bench Press"),
+  strengthDay(3, "Pull", "Barbell Row"),
+  strengthDay(4, "Lower B", "Romanian Deadlift"),
+  restDay(5),
+  strengthDay(6, "Full Body", "Goblet Squat"),
+  longRunDay(7),
+];
+// Easy Sunday, quality Tuesday/Thursday, long Saturday — Tue/Thu double up with lifting.
+const RUN_WEEK = {
+  days: [
+    { dow: 0, kind: "easy" },
+    { dow: 2, kind: "quality" },
+    { dow: 4, kind: "quality" },
+    { dow: 6, kind: "long" },
+  ],
+};
+
+// A fixed fortnight, Monday to Sunday twice over.
+const WEEK_1 = ["2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-25", "2026-04-26"];
+const WEEK_2 = ["2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01", "2026-05-02", "2026-05-03"];
+const picks = (dates) => dates.map((date) => repo.selectAdaptivePlanDay(date).day_number);
+
+test("the stated lifting week outranks the session anchor; the anchor only sets the ring's phase", () => {
+  repo.replacePlan(LIVE_PLAN);
+  repo.setProfile({ strength_schedule: WORKDAYS, endurance_schedule: RUN_WEEK });
+  // One logged set on Friday — the anchor every athlete with history carries. It used
+  // to decide the pick outright, and every day after it read "Lower B" whatever weekday
+  // it was.
+  repo.logSetByName({ date: "2026-04-24", exercise: "Romanian Deadlift", weight: 155, reps: 8 });
+
+  const saturday = repo.selectAdaptivePlanDay("2026-04-25");
+  assert.equal(saturday.day_number, 7, "Saturday is the stated long-run day, never a lift");
+  assert.equal(repo.selectAdaptivePlanDay("2026-04-26").day_type, "rest", "Sunday is neither -> the rest day");
+
+  // Monday is the next stated LIFTING weekday, and it takes the strength day that
+  // follows the one actually logged (day 4 -> day 6; day 5 is the programmed rest).
+  const monday = repo.selectAdaptivePlanDay("2026-04-27");
+  assert.equal(monday.selection.rotation.day_number, 6, "the ring's phase survives the weekend");
+  assert.equal(monday.day_number, 6);
+  assert.equal(monday.focus, "Full Body");
+  // The same answer through the canonical Today door, not just the selector.
+  assert.equal(repo.selectedPlanDayForDate("2026-04-27").day_number, 6);
+  // And the week rolls on, one strength day per stated lifting weekday.
+  assert.deepEqual(picks(WEEK_2.slice(1, 5)), [1, 2, 3, 4]);
+});
+
+test("more strength days than lifting weekdays: the surplus opens the NEXT week, never the weekend", () => {
+  // Six strength days against five stated lifting weekdays. The sixth is neither
+  // dropped nor smuggled onto Saturday.
+  repo.replacePlan([
+    strengthDay(1, "S1", "Back Squat"),
+    strengthDay(2, "S2", "Barbell Bench Press"),
+    strengthDay(3, "S3", "Barbell Row"),
+    strengthDay(4, "S4", "Romanian Deadlift"),
+    strengthDay(5, "S5", "Overhead Press"),
+    strengthDay(6, "S6", "Goblet Squat"),
+    restDay(7),
+    longRunDay(8),
+  ]);
+  repo.setProfile({ strength_schedule: WORKDAYS, endurance_schedule: { days: [{ dow: 6, kind: "long" }] } });
+
+  // An unanchored week deals the pool from its first day: S1..S5, and S6 waits.
+  assert.deepEqual(picks(WEEK_1.slice(0, 5)), [1, 2, 3, 4, 5]);
+  // The athlete lifts S5 on Friday, closing the week where the plan said it would.
+  repo.logSetByName({ date: "2026-04-24", exercise: "Overhead Press", weight: 95, reps: 8 });
+  assert.deepEqual(picks(WEEK_2.slice(0, 5)), [6, 1, 2, 3, 4], "S6 opens the following Monday");
+
+  // The law, over the whole fortnight: a weekend day is the rest day or the long run.
+  for (const weekend of [WEEK_1[5], WEEK_1[6], WEEK_2[5], WEEK_2[6]]) {
+    const picked = repo.selectAdaptivePlanDay(weekend);
+    assert.ok([7, 8].includes(picked.day_number), `${weekend} must never be handed a strength day`);
+  }
+});
+
+test("fewer strength days than lifting weekdays: the ring repeats so every one of them lifts", () => {
+  repo.replacePlan([
+    strengthDay(1, "S1", "Back Squat"),
+    strengthDay(2, "S2", "Barbell Bench Press"),
+    strengthDay(3, "S3", "Barbell Row"),
+    restDay(4),
+  ]);
+  repo.setProfile({ strength_schedule: WORKDAYS });
+  repo.logSetByName({ date: "2026-04-24", exercise: "Barbell Bench Press", weight: 100, reps: 8 });
+
+  // Three days over five weekdays: the pool wraps inside the week rather than going
+  // quiet on Thursday and Friday.
+  assert.deepEqual(picks(WEEK_1.slice(0, 5)), [1, 2, 3, 1, 2]);
+  // And the wrap is CONTINUOUS across the week boundary — Monday picks up after the S2
+  // the athlete logged on Friday rather than restarting at S1.
+  assert.deepEqual(picks(WEEK_2.slice(0, 5)), [3, 1, 2, 3, 1]);
+  for (const weekend of [WEEK_1[5], WEEK_1[6], WEEK_2[5], WEEK_2[6]]) {
+    assert.equal(repo.selectAdaptivePlanDay(weekend).day_type, "rest", `${weekend} has no lift to give`);
+  }
+});
+
+test("with nothing stated and nothing observed the ring stays positional and the anchor rules", () => {
+  repo.replacePlan(LIVE_PLAN);
+  // The athlete this ring was written for. A bare week reads straight down the
+  // day-number -> weekday line: Monday day 1, Sunday day 7.
+  assert.deepEqual(picks(WEEK_1), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(
+    WEEK_1.map((date) => repo.selectedPlanDayForDate(date).day_number),
+    [1, 2, 3, 4, 5, 6, 7]
+  );
+
+  // And one logged session re-anchors the rotation positionally, the weekday stopping
+  // mattering from there — the pre-existing behavior this fix deliberately leaves alone
+  // for an athlete who has told us nothing.
+  repo.logSetByName({ date: "2026-04-22", exercise: "Barbell Bench Press", weight: 135, reps: 8 });
+  assert.deepEqual(picks([...WEEK_1.slice(3), ...WEEK_2.slice(0, 3)]), [3, 3, 3, 3, 3, 3, 3]);
+});
+
+// ---------------------------------------------------------------------------
 // the prompt line
 // ---------------------------------------------------------------------------
 

@@ -248,7 +248,28 @@ the plan holds fewer days than they named, while the non-strength days are CONSU
 cycling a week that authored one long run would invent a second. An unstated weekday is never handed a
 strength day while the plan holds anything else to give it. With no schedule stated the map comes back
 empty and `weekdayCandidate` keeps the old Mon→slot-1 line, so nothing changes for an athlete who has
-said nothing. The prompts see the same fact twice: `renderStrengthSchedule()` (`src/prompt/shared.ts`)
+said nothing.
+
+**The map outranks the session anchor, which keeps only the ring's PHASE.** `selectAdaptivePlanDay`
+consults the lifting week FIRST and falls back to the anchor rotation (`nextCandidateAfter`) only when
+there is no week to consult. Order matters, and the other order is inert: `recentSessionAnchors` reads
+the last 20 sessions carrying logged sets with no date window, so for any athlete with history an
+anchor always resolves and a map consulted after it would never once be reached. What the anchor still
+decides is where in the strength pool the week STARTS — `strengthStartForWeek` solves "the next lifting
+weekday after the last logged session carries the strength day that follows it in ring order" and hands
+the map a `strengthStart` phase, so the pool is one continuous sequence dealt onto the lifting weekdays
+rather than a cycle that restarts each Monday. That is also what lets **plan-day count differ from
+lift-day count in both directions**: a plan with FEWER strength days than lifting weekdays repeats
+inside the week (three days over Mon–Fri gives Thu/Fri the first two again), and one with MORE rotates
+the surplus across weeks (a sixth strength day opens the next Monday, never Saturday). When the map
+names a rest or endurance-only day the selector returns it with no scoring pass at all — the same
+reasoning as the rest day, since the scorer answers "which STRENGTH day fits today best" and the
+athlete has already answered the question before it — and when it names a lifting day the scorer's
+recovery penalties adapt among strength days ALONE, so a swap can never land the week's squat session
+on the long-run weekday. `selection.weekday_schedule` records the lifting dows, the phase and the
+mapped day for the provenance trail.
+
+The prompts see the same fact twice: `renderStrengthSchedule()` (`src/prompt/shared.ts`)
 prints the STATED LIFTING DAYS line beside `renderRunPlan`'s "Stated run days", and `week_layout`
 carries `lift_days` / `run_days` as weekday names so a restructure can be checked against the real
 week rather than against a remembered rule. Those names are INJECTED into `weekLayoutRead` alongside

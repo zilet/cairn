@@ -238,12 +238,28 @@ export function nextTrainingCandidateAfter(candidates: PlanDayCandidate[], dayNu
 // a positional ring will still hand them a strength day on Sunday because Sunday is
 // slot seven, and no amount of scoring downstream can undo a premise that wrong.
 //
-// So when a strength schedule is STATED, the positional mapping runs over the stated
-// lifting weekdays only. The plan's strength days are laid, in ring order, onto the
-// stated lift weekdays in weekday order; endurance-only plan days go on stated run
-// weekdays that are not also lift days; every other weekday gets a rest day. An
-// unstated weekday never receives a strength day while the plan holds anything else to
-// give it. With no stated schedule, nothing changes.
+// So when a strength schedule is STATED (or, failing that, observed off the log), the
+// positional mapping runs over the lifting weekdays only. The plan's strength days are
+// laid, in ring order, onto the lift weekdays in weekday order; endurance-only plan days
+// go on stated run weekdays that are not also lift days; every other weekday gets a rest
+// day. An unstated weekday never receives a strength day while the plan holds anything
+// else to give it. With no schedule at all, nothing changes.
+//
+// PLAN-DAY COUNT NEED NOT EQUAL LIFT-DAY COUNT, and the two mismatches resolve in
+// opposite directions — both of them here rather than in the scorer, because both are
+// questions about the athlete's week rather than about their recovery:
+//
+//   FEWER strength days than lift weekdays: the pool repeats inside the week. Three
+//   strength days over Mon–Fri gives Mon/Tue/Wed the three and Thu/Fri the first two
+//   again. Every named lifting weekday carries a session, because that is the thing the
+//   athlete said.
+//
+//   MORE strength days than lift weekdays: the surplus rotates ACROSS weeks. Six
+//   strength days over Mon–Fri gives the sixth day to next Monday, not to Saturday —
+//   the pool is a continuous sequence dealt onto the lifting weekdays, phased by
+//   `strengthStart` so a week boundary never resets it. The phase is anchored on the
+//   last logged plan day (`strengthStartForWeek`), so the ring picks up where the
+//   athlete actually left it, and an unstated weekday still never becomes a lifting day.
 
 /** The shape the weekday mapping needs off a plan day. */
 export interface WeekdayMappablePlanDay {
@@ -302,11 +318,18 @@ function normalizeDows(dows: readonly number[] | null | undefined): number[] {
  *   "Rest" and two free weekdays gets the long run on one and the rest on the other —
  *   cycling there would invent a second long run out of a plan that authored one, and
  *   an invented session is a worse answer than a quiet rest day.
+ *
+ * `strengthStart` is the strength pool index the week's FIRST lifting weekday takes.
+ * It is what makes the cycle continuous across weeks rather than restarting every
+ * Monday, which is the only way a plan with MORE strength days than lifting weekdays
+ * ever reaches its surplus days. 0 — the default — deals the pool from its first day,
+ * which is the right answer for a week with no logged session to phase against.
  */
 export function weekdayPlanDayMap<T extends WeekdayMappablePlanDay>(
   planDays: readonly T[],
   strengthDows: readonly number[] | null | undefined,
-  enduranceDows: readonly number[] | null | undefined
+  enduranceDows: readonly number[] | null | undefined,
+  strengthStart = 0
 ): Map<number, T> {
   const map = new Map<number, T>();
   const lift = normalizeDows(strengthDows);
@@ -341,7 +364,12 @@ export function weekdayPlanDayMap<T extends WeekdayMappablePlanDay>(
 
   // A stated lifting weekday takes a STRENGTH day and nothing else — with no strength
   // day in the plan at all there is nothing honest to put there, so it stays unmapped.
-  if (strengthPool.length) lift.forEach((dow, i) => map.set(dow, strengthPool[i % strengthPool.length]));
+  if (strengthPool.length) {
+    const size = strengthPool.length;
+    const raw = Number.isFinite(strengthStart) ? Math.trunc(strengthStart) : 0;
+    const start = ((raw % size) + size) % size;
+    lift.forEach((dow, i) => map.set(dow, strengthPool[(start + i) % size]));
+  }
   // A stated run weekday that is not also a lifting day takes the endurance-only day;
   // once those run out, a rest day is the truthful stand-in (the run is not in the plan).
   for (const dow of run) {
@@ -356,19 +384,105 @@ export function weekdayPlanDayMap<T extends WeekdayMappablePlanDay>(
   return map;
 }
 
+/** The plain day-number→weekday convention: Monday takes day 1, Sunday day 7. */
 function weekdayCandidate(candidates: PlanDayCandidate[], date: string): PlanDayCandidate {
   const dow = new Date(date + "T00:00:00Z").getUTCDay();
-  // The athlete's lifting week — what they said, or failing that the 3-of-6-weeks
-  // pattern their own log already shows. `liftDows()` is empty when neither exists,
-  // which returns an empty map and falls through to the positional line below.
-  let stated: PlanDayCandidate | undefined;
-  try {
-    stated = weekdayPlanDayMap(candidates, liftDows(date), statedRunDows()).get(dow);
-  } catch {
-    stated = undefined; // a schedule we cannot read is a schedule we do not have
-  }
-  if (stated) return stated;
   return candidates[weekdayOrder(dow) % candidates.length];
+}
+
+/** 1970-01-01 was a Thursday, so day-index 0 carries dow 4. */
+const EPOCH_DOW = 4;
+
+/** Whole days from the epoch to `date` at UTC midnight, or null when unparseable. */
+function dayIndexOf(date: string): number | null {
+  const ms = Date.parse(`${String(date).slice(0, 10)}T00:00:00Z`);
+  return Number.isFinite(ms) ? Math.floor(ms / 86_400_000) : null;
+}
+
+/**
+ * How many lifting weekdays have come and gone from the epoch up to and INCLUDING
+ * `dayIndex`. One monotone counter over the whole calendar — that is what lets the
+ * strength pool keep its phase across a week boundary, because the pool is dealt onto
+ * THIS sequence rather than restarted each Monday.
+ */
+function liftOccurrencesThrough(dayIndex: number, lift: readonly number[]): number {
+  let count = 0;
+  for (const dow of lift) {
+    const first = (dow - EPOCH_DOW + 7) % 7;
+    if (dayIndex >= first) count += Math.floor((dayIndex - first) / 7) + 1;
+  }
+  return count;
+}
+
+/** The pool index of the first strength day AFTER `dayNumber` in ring order, wrapping. */
+function nextStrengthIndexAfter(pool: readonly PlanDayCandidate[], dayNumber: number): number {
+  const at = pool.findIndex((day) => day.day_number > dayNumber);
+  return at >= 0 ? at : 0;
+}
+
+/**
+ * Where in the strength pool this date's week starts — the ring's PHASE.
+ *
+ * The anchor (the last session that resolved to a plan day) still decides where the
+ * rotation has got to; it just no longer decides WHICH WEEKDAY gets a session. Given
+ * the anchor resolved to day D on date A, the next lifting weekday after A should carry
+ * the strength day that follows D in ring order, and every lifting weekday after that
+ * follows on. That is one equation, solved once here and handed to the map.
+ *
+ * No anchor means no phase to recover: start at the pool's first day.
+ */
+function strengthStartForWeek(
+  date: string,
+  lift: readonly number[],
+  pool: readonly PlanDayCandidate[],
+  anchor: SessionAnchor | null
+): number {
+  const size = pool.length;
+  if (!size || !lift.length || !anchor?.resolved) return 0;
+  const anchorIndex = dayIndexOf(anchor.date);
+  const dateIndex = dayIndexOf(date);
+  if (anchorIndex == null || dateIndex == null) return 0;
+  // The first lifting weekday of the week `date` falls in. `lift` arrives sorted
+  // Monday-first, so lift[0] is that week's opening lifting day.
+  const monday = dateIndex - ((dateIndex + EPOCH_DOW + 6) % 7);
+  const first = monday + weekdayOrder(lift[0]);
+  // Occurrence index (0-based) of that opening day, and of the next UNCONSUMED slot
+  // after the anchor — the anchor's own day counts as consumed when it was a lift day.
+  const firstOccurrence = liftOccurrencesThrough(first, lift) - 1;
+  const offset = nextStrengthIndexAfter(pool, anchor.resolved.day_number) - liftOccurrencesThrough(anchorIndex, lift);
+  return (((firstOccurrence + offset) % size) + size) % size;
+}
+
+/** What the athlete's lifting week says this date is, or null when they have no week. */
+interface ScheduledPlanDay {
+  day: PlanDayCandidate;
+  lift_dows: number[];
+  strength_start: number;
+}
+
+/**
+ * The lifting week's answer for `date` — AUTHORITATIVE over the anchor rotation.
+ *
+ * `liftDows()` is empty when the athlete has neither stated a week nor lived one, and
+ * an empty map means every caller falls back to the positional ring, which is exactly
+ * the old behavior.
+ */
+function scheduledPlanDay(
+  candidates: PlanDayCandidate[],
+  date: string,
+  anchor: SessionAnchor | null
+): ScheduledPlanDay | null {
+  const dow = new Date(date + "T00:00:00Z").getUTCDay();
+  try {
+    const lift = normalizeDows(liftDows(date));
+    if (!lift.length) return null;
+    const pool = candidates.filter((day) => planDayRole(day) === "strength");
+    const strength_start = strengthStartForWeek(date, lift, pool, anchor);
+    const day = weekdayPlanDayMap(candidates, lift, statedRunDows(), strength_start).get(dow);
+    return day ? { day, lift_dows: lift, strength_start } : null;
+  } catch {
+    return null; // a schedule we cannot read is a schedule we do not have
+  }
 }
 
 // The ONE derivation of "which of this day's groups are still recovering" — the
@@ -651,9 +765,34 @@ export function selectAdaptivePlanDay(date: string): {
   if (!candidates.length) return null;
   const anchors = recentSessionAnchors(date, candidates);
   const anchor = anchors.find((a) => a.resolved) ?? null;
-  const rotation = anchor?.resolved
-    ? nextCandidateAfter(candidates, anchor.resolved.day_number)
-    : weekdayCandidate(candidates, date);
+  // ---- the lifting week comes FIRST ----
+  // Ahead of the anchor rotation, not after it. A schedule is a statement about which
+  // weekdays carry which KIND of day, and a purely positional walk from the last logged
+  // session cannot honor one — for any athlete with history an anchor always resolves,
+  // so consulting the week only when no anchor exists leaves it permanently inert. The
+  // anchor still sets the ring's PHASE (strengthStartForWeek); it no longer overrides
+  // which weekday gets a session.
+  const scheduled = scheduledPlanDay(candidates, date, anchor);
+  const rotation =
+    scheduled?.day ??
+    (anchor?.resolved
+      ? nextCandidateAfter(candidates, anchor.resolved.day_number)
+      : weekdayCandidate(candidates, date));
+  const anchorBlob = anchor
+    ? {
+        date: anchor.date,
+        days_ago: anchor.days_ago,
+        groups: anchor.groups,
+        resolved_day_number: anchor.resolved?.day_number ?? null,
+        method: anchor.resolved?.method ?? null,
+      }
+    : null;
+  const lastSessionBlob = anchors[0]
+    ? { date: anchors[0].date, days_ago: anchors[0].days_ago, groups: anchors[0].groups }
+    : null;
+  const scheduleBlob = scheduled
+    ? { lift_days: scheduled.lift_dows, ring_start: scheduled.strength_start, day_number: scheduled.day.day_number }
+    : null;
 
   // ---- the rotation landed on the programmed REST day ----
   // Returned as-is, with no scoring pass at all. The scorer's whole job is "which of
@@ -674,18 +813,34 @@ export function selectAdaptivePlanDay(date: string): {
         adapted: false,
         reason: null,
         rest_day: true,
-        anchor: anchor
-          ? {
-              date: anchor.date,
-              days_ago: anchor.days_ago,
-              groups: anchor.groups,
-              resolved_day_number: anchor.resolved?.day_number ?? null,
-              method: anchor.resolved?.method ?? null,
-            }
-          : null,
-        last_session: anchors[0]
-          ? { date: anchors[0].date, days_ago: anchors[0].days_ago, groups: anchors[0].groups }
-          : null,
+        weekday_schedule: scheduleBlob,
+        anchor: anchorBlob,
+        last_session: lastSessionBlob,
+      },
+    };
+  }
+
+  // ---- the lifting week says today is not a lifting day ----
+  // An endurance-only plan day, or a leftover scaffold, on a weekday the athlete did not
+  // name for lifting. Returned whole, with no scoring pass, for the same reason the rest
+  // day above is: the scorer answers "which STRENGTH day fits today best", and the
+  // athlete has already answered the question before it. Letting the scorer run here
+  // would quietly put a squat session on the weekday they kept for the long run, which
+  // is the exact premise the schedule exists to fix. Still a SUGGESTION — train_anyway
+  // carries them onto the next training day from here as from any other quiet morning.
+  if (scheduled && planDayRole(rotation) !== "strength") {
+    return {
+      day_number: rotation.day_number,
+      focus: planDayFocus(rotation),
+      day_type: rotation.day_type,
+      selection: {
+        selected: { day_number: rotation.day_number, focus: planDayFocus(rotation), day_type: rotation.day_type },
+        rotation: { day_number: rotation.day_number, focus: planDayFocus(rotation) },
+        adapted: false,
+        reason: null,
+        weekday_schedule: scheduleBlob,
+        anchor: anchorBlob,
+        last_session: lastSessionBlob,
       },
     };
   }
@@ -711,7 +866,12 @@ export function selectAdaptivePlanDay(date: string): {
   // bottom" is not the same as "not a candidate", and the day the rotation is pointing
   // at is a training day here. The rest day is not an alternative to it; it is a
   // different question, already answered above.
-  const scorable = candidates.filter((day) => !isRestPlanDay(day));
+  //
+  // With a lifting week in play the map has ALREADY settled that today is a lifting day,
+  // so the only question left open is which strength day — the scorer chooses among
+  // those alone, and its recovery penalties stay the tie-breaker inside that set. Swapping
+  // out to the long-run day here would undo the week the athlete described.
+  const scorable = candidates.filter((day) => (scheduled ? planDayRole(day) === "strength" : !isRestPlanDay(day)));
   const scored = scorable.map((day) =>
     scorePlanDay({
       day,
@@ -743,18 +903,9 @@ export function selectAdaptivePlanDay(date: string): {
       rotation: { day_number: rotation.day_number, focus: planDayFocus(rotation) },
       adapted: !!materiallyBetter,
       reason,
-      anchor: anchor
-        ? {
-            date: anchor.date,
-            days_ago: anchor.days_ago,
-            groups: anchor.groups,
-            resolved_day_number: anchor.resolved?.day_number ?? null,
-            method: anchor.resolved?.method ?? null,
-          }
-        : null,
-      last_session: anchors[0]
-        ? { date: anchors[0].date, days_ago: anchors[0].days_ago, groups: anchors[0].groups }
-        : null,
+      weekday_schedule: scheduleBlob,
+      anchor: anchorBlob,
+      last_session: lastSessionBlob,
       due: [...due].slice(0, 8),
       over: [...over].slice(0, 8),
       recent_load: [...acute.values()]

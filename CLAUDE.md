@@ -258,7 +258,12 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   (`profile.strength_schedule_json`, `{days:[{dow}]}`, no `kind`): when set, `weekdayPlanDayMap`
   (`src/repo/plan-selection.ts`) lays the plan's strength days onto exactly those weekdays and an
   unstated weekday never gets one; `week_layout.lift_days`/`run_days` and the prompt's STATED
-  LIFTING DAYS line are how the agent checks itself. **Never said is not the end of it** —
+  LIFTING DAYS line are how the agent checks itself. **The map OUTRANKS the session anchor** —
+  `selectAdaptivePlanDay` consults it FIRST and the last logged session only sets the ring's phase
+  (consulted after, it is inert: an anchor always resolves for an athlete with history), and
+  **plan-day count need not equal lift-day count** — a short strength pool repeats inside the week
+  so every named weekday still lifts, a surplus rotates across weeks onto the named weekdays only,
+  and the scorer then adapts among strength days alone. **Never said is not the end of it** —
   `strengthScheduleRead()` (`src/repo/strength-schedule.ts`) falls back to the weekdays a real
   strength session landed on in 3 of the last 6 weeks (the race-build ride law), labelled
   `source:"observed"` everywhere it is spoken; an explicitly EMPTIED stated schedule stays silent
