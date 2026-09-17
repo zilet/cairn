@@ -1062,13 +1062,18 @@ export function normalizeComposedSession(
     // A reduced area never gets a heavier target than the day already allows.
     if (isReduced) intensityFactor = Math.min(intensityFactor, REDUCED_INTENSITY_FACTOR);
     const hold = candidate?.action === "hold" || envelope.caps.intensity === "hold";
-    // A stand-in is exempt from the hold clamp, and only from that. `clampHeldTarget`
-    // anchors on TODAY's template day, which by definition does not contain this
-    // movement — so the clamp would read "no anchor" and strip a load that is
-    // already the honest one. The substitution set this target from the movement's
-    // OWN logged working weight (or the athlete's own plan target for it), which
-    // is exactly what holding means: today is not the day it goes up.
-    if (hold && !substitution && clampHeldTarget(next, envelope)) changed = true;
+    // A stand-in is exempt from the hold clamp ONLY when its load is proven —
+    // `load_basis === "logged"`, the movement's own recent WORKING weight.
+    // `clampHeldTarget` anchors on TODAY's template day, which by definition does
+    // not contain this movement, so the clamp would otherwise read "no anchor"
+    // and strip a load that is already the honest one. But a substitution whose
+    // load fell back to the athlete's PLAN target (nobody has proven that number
+    // on this movement) carries no such proof, so it goes through the normal hold
+    // clamp like any other item — which, finding no anchor for a movement absent
+    // from today's template, correctly clears it rather than shipping an unproven
+    // number.
+    const substitutionProven = substitution?.load_basis === "logged";
+    if (hold && !substitutionProven && clampHeldTarget(next, envelope)) changed = true;
     if (intensityFactor < 1) {
       if (next.mode === "timed" && next.target_seconds != null) {
         const seconds = Math.max(1, Math.round(Number(next.target_seconds) * intensityFactor));

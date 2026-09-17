@@ -7,6 +7,7 @@ import {
   revertDecision,
 } from "../dist/domain/brain/autonomy-service.js";
 import { runUnderfuelingControlLoop } from "../dist/domain/brain/underfueling-service.js";
+import { prepareDailySessionUseCase } from "../dist/domain/training/adaptive-session-use-case.js";
 import { flushBrainEventsForTest, resetBrainEventsForTest } from "../dist/brainEvents.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "../dist/repo/sqlite-savepoint.js";
@@ -109,6 +110,39 @@ test("an immediate autonomous apply rolls back plan, proposal, and ledger when r
   } finally {
     db.exec("DROP TRIGGER IF EXISTS fail_atomic_rollback");
   }
+});
+
+test("an immediate quiet apply re-takes today's prepared session into the changed plan day", () => {
+  seedBench();
+  const today = localDateISO();
+  const prepared = prepareDailySessionUseCase({ date: today, source: "manual_plan", day_number: 1 });
+  const before = repo.getActiveDailySession(today);
+  assert.ok(
+    before.items.some((item) => item.exercise === "Atomic Bench Press" && item.target_weight === 115),
+    "today's snapshot starts on the stale target"
+  );
+
+  repo.setSettings({ lead_mode: "lead" });
+  const proposal = targetProposal(120);
+  const result = applyProposalWithAutonomy(proposal.id, { requested_tier: "quiet_apply" });
+  assert.equal(result.ok, true);
+  assert.equal(result.tier, "quiet_apply");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 120, "the plan write landed");
+
+  const after = repo.getActiveDailySession(today);
+  assert.notEqual(
+    Number(after.id),
+    Number(before.id),
+    "today's composition is re-taken, not left showing the replaced targets"
+  );
+  assert.equal(Number(after.session_id), Number(prepared.session.id), "the same workout session is carried forward");
+  const item = after.items.find((entry) => entry.exercise === "Atomic Bench Press");
+  assert.ok(item, "the item survives the refresh");
+  assert.equal(
+    item.target_weight,
+    120,
+    "the active composition carries the proposal's new target, not the one it superseded"
+  );
 });
 
 test("meal acceptance and its announcement stay unchanged when boundary rollback persistence fails", () => {

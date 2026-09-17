@@ -1378,6 +1378,7 @@ export type RefreshPreparedDayReason =
   | "plan_day_missing"
   | "day_not_changed"
   | "session_started"
+  | "session_finished"
   | "unchanged";
 
 export interface RefreshPreparedDayResult {
@@ -1416,8 +1417,19 @@ export function refreshPreparedDayForPlanChange(input: RefreshPreparedDayInput =
   if (wanted.length && !wanted.includes(dayNumber)) {
     return { refreshed: false, date, reason: "day_not_changed", day_number: dayNumber };
   }
-  if (sessionRowsForDate(date).some((session) => meaningfulSessionReasons(session).length > 0)) {
+  const sameDateSessions = sessionRowsForDate(date);
+  if (sameDateSessions.some((session) => meaningfulSessionReasons(session).length > 0)) {
     return { refreshed: false, date, reason: "session_started", day_number: dayNumber };
+  }
+  // `finished_at` alone carries no logged-set evidence, so `meaningfulSessionReasons`
+  // deliberately leaves it out — `prepareDailySession`'s own explicit replace path is
+  // allowed to clear it, because THAT caller is the athlete asking to redo a day they
+  // never lifted on. This caller is not the athlete; it is a plan edit landing
+  // underneath a day they already finished. A finish stamp is lived, full stop — the
+  // refresh must never reopen it (never clear skips or the finish stamp underneath an
+  // athlete who has already closed the day out).
+  if (sameDateSessions.some((session) => session?.finished_at != null)) {
+    return { refreshed: false, date, reason: "session_finished", day_number: dayNumber };
   }
   const constraints = normalizedRecord(parseJson(row.constraints_json));
   const provenance = normalizedRecord(parseJson(row.provenance_json));

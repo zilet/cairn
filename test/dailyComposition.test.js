@@ -364,6 +364,83 @@ test("hold candidates clamp positive, assisted, bodyweight, and timed targets to
   assert.equal(validation.capped, true);
 });
 
+test("a saturated-group stand-in's own logged working weight is exempt from the hold clamp", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Cable Row", muscle_group: "back", mode: "reps" });
+  repo.savePlanDay(2, "Pull", "Back", [
+    { exercise: "Cable Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 120 },
+  ]);
+  repo.logSetByName({ date: "2031-06-20", exercise: "Cable Row", weight: 135, reps: 10, day_number: null });
+
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 }]),
+    envelope({
+      caps: { volume: "normal", intensity: "hold", duration_min: 60 },
+      muscles: { required: [], allowed: ["back"], reduced: [], excluded: [], saturated: ["quads"] },
+    }),
+    { substituteSaturated: true }
+  );
+  assert.ok(session);
+  const item = session.items[0];
+  assert.equal(item.exercise, "Cable Row");
+  assert.equal(item.target_weight, 135, "the stand-in keeps its own logged working weight, unclamped");
+});
+
+test("a saturated-group stand-in that falls back to its plan target goes through the normal hold clamp", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Cable Row", muscle_group: "back", mode: "reps" });
+  repo.savePlanDay(2, "Pull", "Back", [
+    { exercise: "Cable Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 120 },
+  ]);
+  // No logged set for Cable Row anywhere — its load can only come from the plan
+  // target, which is a number nobody has proven on this movement.
+
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 }]),
+    envelope({
+      caps: { volume: "normal", intensity: "hold", duration_min: 60 },
+      muscles: { required: [], allowed: ["back"], reduced: [], excluded: [], saturated: ["quads"] },
+    }),
+    { substituteSaturated: true }
+  );
+  assert.ok(session);
+  const item = session.items[0];
+  assert.equal(item.exercise, "Cable Row");
+  assert.equal(
+    item.target_weight,
+    null,
+    "an unproven plan-target load is cleared by the ordinary hold clamp rather than shipped"
+  );
+});
+
+test("a group saturated by prior LIFTING (no run, no endurance conflict) still substitutes", () => {
+  // Ruling (CLAUDE.md / ARCHITECTURE.md): substitutionGroups reads muscles.saturated
+  // whatever put the work there. acuteGate is the one "is this muscle recovering"
+  // question, and it does not ask what loaded the muscle — so neither does this law.
+  repo.upsertExercise({ name: "Leg Press", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Face Pull", muscle_group: "shoulders", mode: "reps" });
+  repo.savePlanDay(2, "Shoulders", "Rear delts", [
+    { exercise: "Face Pull", sets: 3, rep_low: 12, rep_high: 15, target_weight: 40 },
+  ]);
+
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Leg Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 300 }]),
+    envelope({
+      // No endurance_lower_conflict in precedence/soft_preferences: the quads read
+      // saturated purely because a lifting session loaded them, not a run.
+      muscles: { required: [], allowed: ["shoulders"], reduced: [], excluded: [], saturated: ["quads"] },
+    }),
+    { substituteSaturated: true }
+  );
+  assert.ok(session);
+  assert.equal(
+    session.items[0].exercise,
+    "Face Pull",
+    "a lifting-caused saturation substitutes exactly like a run-caused one"
+  );
+  assert.equal(session.items[0].substitution_for, "Leg Press");
+});
+
 test("authoritative overload targets survive deterministic fallback and clamp agent output exactly", () => {
   repo.savePlanDay(1, "Authority", "Server-owned next targets", [
     { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },

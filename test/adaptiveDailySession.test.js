@@ -1220,6 +1220,32 @@ test("a session the athlete has already logged against is left exactly as it is"
   assert.equal(Number(repo.getActiveDailySession(DATE).id), Number(before.id), "the card never changes mid-session");
 });
 
+test("a plan change never reopens a day the athlete already finished, even with no logged sets", () => {
+  seedPlan();
+  const prepared = prepareDailySessionUseCase({ date: DATE, source: "manual_plan", day_number: 1 });
+  repo.skipExercise("Barbell Bench Press", DATE);
+  repo.finishSession(prepared.session.id, null);
+  const before = repo.getActiveDailySession(DATE);
+  assert.ok(db.prepare(`SELECT finished_at FROM sessions WHERE id = ?`).get(prepared.session.id).finished_at);
+
+  repo.savePlanDay(1, "Push + hinge", "Chest and posterior chain", [
+    { exercise: "Barbell Deadlift", sets: 3, rep_low: 3, rep_high: 5, target_weight: 315 },
+  ]);
+  const refreshed = repo.refreshPreparedDayForPlanChange({ date: DATE, day_numbers: [1] });
+  assert.equal(refreshed.refreshed, false);
+  assert.equal(refreshed.reason, "session_finished");
+  assert.equal(Number(repo.getActiveDailySession(DATE).id), Number(before.id), "the finished card never changes");
+  assert.ok(
+    db.prepare(`SELECT finished_at FROM sessions WHERE id = ?`).get(prepared.session.id).finished_at,
+    "the finish stamp survives — this caller is a plan edit, never the athlete asking to redo the day"
+  );
+  assert.equal(
+    db.prepare(`SELECT COUNT(*) AS n FROM session_skips WHERE session_id = ?`).get(prepared.session.id).n,
+    1,
+    "skips survive too — nothing about the finished day is cleared"
+  );
+});
+
 test("a plan change on a day this date does not hold leaves the prepared session alone", () => {
   seedPlan();
   prepareDailySessionUseCase({ date: DATE, source: "manual_plan", day_number: 1 });

@@ -1450,7 +1450,7 @@ export function applyProposalWithAutonomy(
 
   const rollback = rollbackSnapshot(shape);
   try {
-    return withSqliteSavepoint(`autonomy_apply_${proposalId}`, () => {
+    const applied = withSqliteSavepoint(`autonomy_apply_${proposalId}`, () => {
       const result = applyProposal(proposalId, {
         orphanSiblingCleanup: input.orphan_sibling_cleanup,
         normalizedApplyPayload: input.normalized_apply_payload,
@@ -1483,6 +1483,18 @@ export function applyProposalWithAutonomy(
       supersedePriorReviewHolds(proposalId);
       return { ...result, tier: "quiet_apply", decision: updated };
     });
+    // This is the IMMEDIATE apply path (Plan tab, MCP `apply_proposal`, the orphan
+    // sweep) — unlike the scheduled/announced path above, there is no later boundary
+    // to land at: the change lands right now, so "today" is unconditionally the
+    // landing date. Today's prepared session is a snapshot; without this it can keep
+    // showing a plan day this apply just replaced. Fail-soft and after the savepoint
+    // commits, same as the scheduled path: the plan write already succeeded and must
+    // never be undone by a refresh, and `refreshTodayAfterPlanLanding` itself already
+    // swallows its own failures.
+    if ((applied as any)?.ok && shape.domain === "training") {
+      refreshTodayAfterPlanLanding(proposal, localDateISO());
+    }
+    return applied;
   } catch (error) {
     return {
       ok: false,

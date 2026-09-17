@@ -108,12 +108,26 @@ export const PLAN_WRITE_UNVERIFIED_VARIANTS = [
 // the chip read a plain "✓ plan_update". The invariant across the rotation is the two
 // facts that were missing: WHEN it lands, and that today is unchanged until then.
 // `when` comes from describeLandingDay, so it reads "today" / "tomorrow" / "on 2026-09-18".
+// NEVER for `when === "today"` — that reading day is PLAN_SCHEDULED_LANDS_TODAY_VARIANTS
+// below, because "unchanged until then" is a lie when "then" already happened.
 export const PLAN_SCHEDULED_NOT_LIVE_VARIANTS: ReadonlyArray<(when: string) => string> = [
   (when) => `That lands ${when} — today's plan is unchanged until then, and one Undo before it keeps it that way.`,
   (when) => `Nothing has moved yet: the change takes effect ${when}, and your plan stays as it is until then.`,
   (when) =>
     `Your plan is unchanged for now — that change is queued to land ${when}, and an Undo before then cancels it.`,
   (when) => `Not live yet: it takes effect ${when}. Today's plan is unchanged, and you can Undo before it lands.`,
+] as const;
+
+// The athlete-requested restructure whose own landing day IS today. By the time this
+// reply reaches them the boundary pass has already been re-run for today's date (the
+// explicit-request build turns "built" into "landed" the same turn, never waiting for
+// tomorrow's tick) — so "today's plan is unchanged until then" would describe a moment
+// that has already passed. The change is in today's plan now.
+export const PLAN_SCHEDULED_LANDS_TODAY_VARIANTS: readonly string[] = [
+  "That's in today's plan now, with a one-tap Undo if you'd rather have it back the way it was.",
+  "Today's plan already carries that change — Undo is right there if you change your mind.",
+  "That change is live in today's plan. One tap on Undo puts it back if you need to.",
+  "It's already part of today's plan. Undo is available if you'd rather it stayed as it was.",
 ] as const;
 
 // The athlete asked for TODAY and it could not happen today. The one thing they must
@@ -376,13 +390,19 @@ export function reconcileChatPlanReply(
     );
     if (scheduled) {
       const landing = String(scheduled.effective_date ?? "");
+      const landsToday = landing !== "" && landing === today;
       const when =
         typeof scheduled.landing_label === "string" && scheduled.landing_label
           ? scheduled.landing_label
           : landing
             ? describeLandingDay(landing, today)
             : "at the next natural point in your week";
-      const receipt = pickDayVariant(PLAN_SCHEDULED_NOT_LIVE_VARIANTS, today, "chat-plan-scheduled")(when);
+      // `landing === today` means the boundary this decision was announced for has
+      // already been re-run for today's date (see PLAN_SCHEDULED_LANDS_TODAY_VARIANTS)
+      // — "unchanged until then" would describe a moment that has already passed.
+      const receipt = landsToday
+        ? pickDayVariant(PLAN_SCHEDULED_LANDS_TODAY_VARIANTS, today, "chat-plan-scheduled-today")
+        : pickDayVariant(PLAN_SCHEDULED_NOT_LIVE_VARIANTS, today, "chat-plan-scheduled")(when);
       return replyClaimsPlanSuccess(reply) ? receipt : appendReceipt(reply, receipt);
     }
   }

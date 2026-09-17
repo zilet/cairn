@@ -157,6 +157,19 @@ treats a precedence entry as a constraint). The session screen labels **Reach** 
 `item.reach` or `rx.top_set`, never by inferring a 1-set sibling card, and prefills the first
 unlogged row with the heavier look.
 
+**A saturated group never composes today, whatever loaded it.** `substituteSaturatedPlanItems()`
+(`src/repo/saturated-substitution.ts`) re-points a plan-sourced item that lands on `muscles.saturated`
+at the athlete's own programmed work for an allowed, fresher group — carrying that movement's own
+recent working weight or, absent one, its own plan target — never an invented number. It reads
+`muscles.saturated` exactly as the envelope produced it, so a group saturated by yesterday's LIFTING
+substitutes the same as one saturated by this morning's run (`endurance_lower_conflict` only ADDS the
+lower-body half of `reduced` on top, for the run-specific case). `acuteGate` is the one "is this
+muscle recovering" question in Cairn; this law never re-asks it by source. Each stand-in also records
+`load_basis: "logged" | "plan_target"` so the hold clamp can tell a proven number from a guess: only a
+`"logged"` stand-in is exempt from `clampHeldTarget` on a hold day (`daily-composition.ts`) — a
+`"plan_target"` one goes through the ordinary clamp, which finds no anchor for a movement absent from
+today's template and clears it rather than shipping an unproven load.
+
 **Only ONE challenge top set a session, whichever shape produces it.** An agent-authored nested
 `top_set` on a composed item now sets `reachHostConsumed` when it's inserted (`agentTopSetItemFor()`,
 `src/repo/daily-composition.ts`), so a later server-derived compound in the same list can no longer

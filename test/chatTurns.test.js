@@ -29,6 +29,7 @@ import {
   PLAN_NO_CHANGE_APPENDED_VARIANTS,
   PLAN_NOT_LIVE_VARIANTS,
   PLAN_NOT_SAVED_VARIANTS,
+  PLAN_SCHEDULED_LANDS_TODAY_VARIANTS,
   PLAN_SCHEDULED_NOT_LIVE_VARIANTS,
   PLAN_TODAY_SCOPED_NOT_APPLIED_VARIANTS,
   PLAN_UNTOUCHED_BY_QUESTION_VARIANTS,
@@ -2445,5 +2446,30 @@ test("a chat plan change that only lands later says so, and names the day it lan
     "the server receipt replaces a claim that the plan is already live"
   );
   assert.match(reply, /tomorrow/);
+  assert.doesNotMatch(reply, /I've updated/i);
+});
+
+test("a chat plan change whose landing day IS today says it's in today's plan now, never 'unchanged until then'", () => {
+  const today = localDateISO();
+  const message = "Update my Pull bench to 135.";
+  const applied = [
+    {
+      type: "plan_update",
+      result: {
+        ok: true,
+        applied: false,
+        scheduled: true,
+        effective_date: today,
+        landing_label: "today",
+      },
+    },
+  ];
+  const reply = reconcileChatPlanReply("I've updated your bench.", message, applied, [], true);
+  assert.equal(
+    reply,
+    pickDayVariant(PLAN_SCHEDULED_LANDS_TODAY_VARIANTS, today, "chat-plan-scheduled-today"),
+    "landing today reads as already in today's plan, never as a promise for a moment that already passed"
+  );
+  assert.doesNotMatch(reply, /unchanged until then/i);
   assert.doesNotMatch(reply, /I've updated/i);
 });

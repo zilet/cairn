@@ -88,6 +88,14 @@ export interface SaturatedSubstitution {
   muscle_group: MuscleGroup;
   /** The athlete-facing sentence, already rotated for this date. */
   reason: string;
+  /**
+   * Where the stand-in's load came from: `"logged"` when it carries the movement's
+   * own recent WORKING weight/seconds — proven, so a hold day may exempt it from
+   * the hold clamp — or `"plan_target"` when nothing has been logged and it fell
+   * back to the athlete's plan prescription, a number nobody has proven yet and
+   * which must still go through the normal hold clamp like any other item.
+   */
+  load_basis: "logged" | "plan_target";
 }
 
 export interface SaturatedSubstitutionOutcome {
@@ -167,6 +175,13 @@ function enduranceConflictFired(envelope: DailyDecisionEnvelope): boolean {
  *  - the lower-body half of `muscles.reduced` when `endurance_lower_conflict`
  *    fired — recent heavy cardio marks the legs REDUCED rather than saturated, and
  *    a run morning is exactly the case this whole module exists for.
+ *
+ * Deliberately not scoped to `endurance_lower_conflict` mornings: `muscles.saturated`
+ * is read whatever put the work there, so a group loaded by yesterday's LIFTING
+ * (no run in sight) substitutes exactly the same as one loaded by this morning's
+ * run. `acuteGate` (`hybrid-load.ts`) is the one "is this muscle recovering"
+ * question in Cairn — it does not ask what loaded the muscle, so neither does
+ * this law. Ruling, not an oversight.
  */
 function substitutionGroups(envelope: DailyDecisionEnvelope): Set<MuscleGroup> {
   const groups = new Set<MuscleGroup>(groupList(envelope.muscles?.saturated));
@@ -358,8 +373,15 @@ export function substituteSaturatedPlanItems(
     // carries the assist sign (negative = assisted), and the plan target carries
     // whatever sign the athlete stored — so neither path can flip an assisted
     // lift into a loaded one.
-    const weight = entry.mode === "timed" ? null : (recentWorkingWeight(entry.exercise) ?? entry.target_weight);
-    const seconds = entry.mode === "timed" ? (recentWorkingSeconds(entry.exercise) ?? entry.target_seconds) : null;
+    const loggedWeight = entry.mode === "timed" ? null : recentWorkingWeight(entry.exercise);
+    const loggedSeconds = entry.mode === "timed" ? recentWorkingSeconds(entry.exercise) : null;
+    const weight = entry.mode === "timed" ? null : (loggedWeight ?? entry.target_weight);
+    const seconds = entry.mode === "timed" ? (loggedSeconds ?? entry.target_seconds) : null;
+    // Only a LOGGED number is proven. A plan-target fallback is a number this
+    // module read off the athlete's own prescription for a movement they have
+    // never worked, which is exactly what the hold clamp exists to catch.
+    const loadBasis: SaturatedSubstitution["load_basis"] =
+      (entry.mode === "timed" ? loggedSeconds : loggedWeight) != null ? "logged" : "plan_target";
     nextItems[target.index] = {
       kind: "strength",
       exercise: entry.exercise,
@@ -379,6 +401,7 @@ export function substituteSaturatedPlanItems(
       exercise: entry.exercise,
       muscle_group: entry.group,
       reason,
+      load_basis: loadBasis,
     });
   }
 
