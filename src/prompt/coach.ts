@@ -28,6 +28,7 @@ import {
   renderReactionModel,
   renderRunCompliance,
   renderRunPlan,
+  renderStrengthSchedule,
   renderRunZones,
   renderSignalState,
   renderStrengthJourney,
@@ -160,7 +161,7 @@ ${buildEliteGuardrails(ctx)}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderStrengthSchedule(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date and for every reason_provenance.as_of_date.
 
@@ -308,6 +309,22 @@ HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
   reads clean:true, your restructure MUST leave it clean — moving a lower-body day next to one of those
   runs is a regression, not an evolution. If it already reports collisions, fixing the one it names is a
   legitimate reason for a "days" restructure on its own.
+- THE WEEK THE ATHLETE ACTUALLY LIVES (this OUTRANKS every placement preference above): when a
+  STATED or OBSERVED LIFTING DAYS block is present, those weekdays are the lifting week — not a hint,
+  not a default. DATA.week_layout.lift_days and DATA.week_layout.run_days name them and
+  lift_days_source says whether they SAID it ("stated") or you are reading it off their log
+  ("observed"), so check yourself against the data rather than by eye. A stated week is not yours to
+  argue with. An observed week you may move ONE day of, if the reason is real and you say it plainly
+  as your suggestion — never as something they asked for. The ring you propose MUST carry one strength day for EVERY
+  stated lifting weekday, plus an endurance-only day for each stated run weekday that is not also a
+  lifting day, plus a rest day for each weekday in neither. Never put a strength day on a weekday they
+  did not name, and never turn a stated lifting weekday into rest — an athlete who says they lift
+  Monday to Friday and keeps the weekend for the long run has told you the shape; a proposal that
+  hands them a Saturday lifting day or a Friday rest day contradicts them to their face. Where a
+  weekday is BOTH stated lifting and stated running, that day takes the upper-body or otherwise
+  non-leg session, and the week's heaviest squat/hinge day goes on a lifting weekday that carries no
+  run. If the stated days genuinely cannot hold the volume the block needs, say so in the rationale
+  and work inside them anyway — the calendar is theirs, not yours.
 
 NON-NEGOTIABLE GUARDRAILS (same as the coach):
 - Conservative loading: upper-body +5 lb/step max, lower-body +5-10 lb/step max. Only raise when
@@ -325,7 +342,7 @@ ${buildEliteGuardrails(ctx)}
 ${variationBlock}${equipBlock}${weakBlock}${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderStrengthSchedule(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date and for every reason_provenance.as_of_date.
 
@@ -452,7 +469,7 @@ ${buildEliteGuardrails(ctx)}
 ${equipBlock}${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderStrengthSchedule(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
 TASK: ${userInstruction?.trim() || "Compose their first training week — both lanes, placed so the week composes rather than collides, at a dose they can finish."}
 PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date.
 

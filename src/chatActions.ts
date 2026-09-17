@@ -7,7 +7,7 @@ import {
 import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocumentKind } from "./healthDocumentKinds.js";
 import { CONTEXT_TAG_VOCAB, isContextTagKey } from "./contextTags.js";
 import { localDateISO } from "./repo/shared.js";
-import { normalizeEnduranceSchedule } from "./repo/profile.js";
+import { normalizeEnduranceSchedule, normalizeStrengthSchedule } from "./repo/profile.js";
 import { MAX_REDRAW_REQUEST_CHARS } from "./domain/brain/structure-request.js";
 
 type ChatActionRecord = Record<string, unknown>;
@@ -30,6 +30,7 @@ export const CHAT_ACTION_TYPES = [
   "set_training_intent",
   "set_endurance_goal",
   "set_endurance_schedule",
+  "set_strength_schedule",
   "set_strength_objective",
   "add_memory",
   "update_memory",
@@ -102,6 +103,12 @@ export interface SetEnduranceGoalAction extends ChatActionBase {
 export interface SetEnduranceScheduleAction extends ChatActionBase {
   type: "set_endurance_schedule";
   days: Array<{ dow: number; kind: string }>;
+  note?: unknown;
+}
+
+export interface SetStrengthScheduleAction extends ChatActionBase {
+  type: "set_strength_schedule";
+  days: Array<{ dow: number }>;
   note?: unknown;
 }
 
@@ -339,6 +346,7 @@ export type ChatAction =
   | SetTrainingIntentAction
   | SetEnduranceGoalAction
   | SetEnduranceScheduleAction
+  | SetStrengthScheduleAction
   | SetStrengthObjectiveAction
   | AddMemoryAction
   | UpdateMemoryAction
@@ -451,6 +459,23 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "note": "<optional short restatement of their words>" }`,
     guidance: [
       `Emit set_endurance_schedule when the athlete states which days they run. Map named weekdays only; do not fill in a third day they did not mention. Duplicate weekdays keep the first kind.`,
+    ],
+  },
+  set_strength_schedule: {
+    type: "set_strength_schedule",
+    applyMode: "immediate",
+    shape: `// The athlete's LIFTING WEEKDAYS, in their own words. This is how the
+    // lifting week gets set — there is no settings form for it, so when they say it
+    // in chat, write it. dow: 0=Sunday … 6=Saturday. NO kind: which split lands on
+    // which day is the plan's business, not the schedule's. Pass days: [] to clear.
+    { "type": "set_strength_schedule",
+      "days": [{ "dow": 1 }, { "dow": 2 }, { "dow": 3 }, { "dow": 4 }, { "dow": 5 }],
+      "note": "<optional short restatement of their words>" }`,
+    guidance: [
+      `Emit set_strength_schedule whenever the athlete says which weekdays they lift, however casually — this is the ONLY way the lifting week gets set, so a plain sentence in passing is enough and you should not ask them to repeat it as a formal answer.`,
+      `Read the ordinary phrasings as what they are. "My strength trainings are on all workdays (mon-fri)", "I lift weekdays", "strength on all workdays", "gym Mon-Fri", "I train every workday" are all dows 1-5. "I lift Monday, Wednesday and Friday" / "MWF" is 1, 3, 5. "Tue/Thu/Sat" is 2, 4, 6. "every day" is 0-6. "three days a week" names no weekday and is NOT a schedule — ask which days.`,
+      `A sentence can carry both halves: "gym Mon-Fri, weekends are the long run and MTB" states the lifting days (1-5) AND, separately, run days for set_endurance_schedule (6 and 0). Emit both actions. But "weekends are for the long run and mountain biking" ALONE says nothing about which weekdays they lift — never infer lifting days from what they said about running, resting, or the weekend.`,
+      `Map only weekdays they actually named, and never fill in a day to round the week out. When they name a range ("Monday through Thursday"), every weekday in the range counts. When they revise ("actually I skip Wednesdays now"), send the full corrected list, not a delta. When they ask you to stop assuming, send days: [] to clear it.`,
     ],
   },
   set_strength_objective: {
@@ -812,6 +837,15 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       if (!schedule) return null;
       return {
         type: "set_endurance_schedule",
+        days: schedule.days,
+        note: schedule.note,
+      };
+    }
+    case "set_strength_schedule": {
+      const schedule = normalizeStrengthSchedule({ ...value, source: "chat" });
+      if (!schedule) return null;
+      return {
+        type: "set_strength_schedule",
         days: schedule.days,
         note: schedule.note,
       };

@@ -38,7 +38,16 @@ import { listFuelingFeedback } from "./fueling.js";
 import { fuelDemandWeek } from "./fuel-demand.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
-import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getEnduranceSchedule, getProfile, listWeight } from "./profile.js";
+import {
+  computeGoalCheck,
+  effectiveGoalMode,
+  getEnduranceGoal,
+  getEnduranceSchedule,
+  getProfile,
+  listWeight,
+  statedRunDows,
+} from "./profile.js";
+import { strengthScheduleRead } from "./strength-schedule.js";
 import { activeRecoveryWeek, recoveryWeekStatus } from "./recovery-week.js";
 import { bodyCompositionRead } from "./standing.js";
 import {
@@ -561,6 +570,7 @@ interface CoachContextSignals {
   strengthJourneyView: any;
   runZonesView: any;
   runPlanView: any;
+  strengthScheduleView: any;
   weekLayoutView: any;
   raceBuildView: any;
   flexibleTrainingAgendaView: any;
@@ -892,6 +902,7 @@ function buildRunningSlice(
   CoachContext,
   | "endurance_goal"
   | "endurance_schedule"
+  | "strength_schedule"
   | "endurance_capacity"
   | "run_compliance"
   | "run_zones"
@@ -908,6 +919,7 @@ function buildRunningSlice(
     enduranceCapacityView,
     runZonesView,
     runPlanView,
+    strengthScheduleView,
     weekLayoutView,
     raceBuildView,
     flexibleTrainingAgendaView,
@@ -925,6 +937,12 @@ function buildRunningSlice(
     // Stated run days (v101). When set, the run engine and rolling agenda honor
     // these weekdays and never propose a run off-schedule. Null when unset.
     endurance_schedule: getEnduranceSchedule(),
+    // The LIFTING WEEK (v102). The calendar half of the week's shape: the ring lays the
+    // plan's strength days onto exactly these weekdays and the restructure prompt may
+    // not put a strength session anywhere else. `source` says how we know — the
+    // athlete's own words, or a 3-of-6-weeks pattern read off their log when they never
+    // said. Null when neither, which is when the ring stays purely positional.
+    strength_schedule: strengthScheduleView,
     // Standing duration capability read from matching logged outings. Observational
     // only: it never mutates the plan and is null when endurance has no role/target.
     endurance_capacity: enduranceCapacityView,
@@ -1270,11 +1288,28 @@ function getCoachContextFromSnapshot(): CoachContext {
       return null;
     }
   });
+  // The lifting week — the athlete's stated weekdays, else the 3-of-6-weeks pattern
+  // their log already shows. Computed once here so the context key, the week-layout
+  // read and the ring can never disagree about which week they are holding.
+  const strengthScheduleView = brainSignal(`strength_schedule:${today}`, () => {
+    try {
+      const read = strengthScheduleRead(today);
+      return read.source ? read : null;
+    } catch {
+      return null;
+    }
+  });
   // Reads the STORED plan first and only falls back to these two, so it costs nothing
   // extra — both were already computed above.
   const weekLayoutView = brainSignal(`week_layout:${today}`, () => {
     try {
-      return weekLayoutRead(today, { runPlan: runPlanView, agenda: flexibleTrainingAgendaView });
+      return weekLayoutRead(today, {
+        runPlan: runPlanView,
+        agenda: flexibleTrainingAgendaView,
+        strengthDows: (strengthScheduleView?.days ?? []).map((d: any) => d.dow),
+        liftDaysSource: strengthScheduleView?.source ?? null,
+        enduranceDows: statedRunDows(),
+      });
     } catch {
       return null;
     }
@@ -1623,6 +1658,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     strengthJourneyView,
     runZonesView,
     runPlanView,
+    strengthScheduleView,
     weekLayoutView,
     raceBuildView,
     flexibleTrainingAgendaView,

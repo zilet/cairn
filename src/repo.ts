@@ -12,6 +12,7 @@ export * from "./repo/sessions.js";
 export * from "./repo/session-dose-log.js"; // a completed log outranks a felt low-performance rating
 export * from "./repo/adaptive-session.js";
 export * from "./repo/profile.js";
+export * from "./repo/strength-schedule.js"; // the lifting week: stated, else a 3-of-6-weeks pattern read off the log
 export * from "./repo/proposals.js"; // the draft→apply ledger, split out of profile.ts
 export * from "./repo/recovery-week.js"; // the recovery-week state machine, split out of profile.ts
 export * from "./repo/location-context.js";

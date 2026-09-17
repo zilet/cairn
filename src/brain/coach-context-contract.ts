@@ -48,6 +48,26 @@ export interface CoachEnduranceSchedule extends CoachRecord {
   updated_at?: string;
 }
 
+// The stated LIFTING weekdays (v102) — the strength counterpart to the run schedule
+// above. No `kind`: a lifting day is named by the plan's own rotation, not here.
+export interface CoachStrengthScheduleDay {
+  dow: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+}
+
+export interface CoachStrengthSchedule extends CoachRecord {
+  days: CoachStrengthScheduleDay[];
+  /**
+   * HOW WE KNOW, not who typed it: "stated" is the athlete's own words, "observed" is
+   * the 3-of-6-weeks pattern read off the log for an athlete who never said. The two
+   * carry different weight and every surface that speaks says which one it is holding.
+   */
+  source: "stated" | "observed";
+  /** Observed only: the weeks the THINNEST named weekday was seen in (0 when stated). */
+  weeks_seen?: number;
+  weeks_window?: number;
+  note?: string;
+}
+
 export interface CoachGoalCheck extends CoachRecord {
   goal_mode?: CoachGoalMode | null;
   tdee?: number | null;
@@ -268,6 +288,7 @@ export interface CoachContextEnvelope {
   endurance_capacity: EnduranceCapacityRead | null;
   endurance_goal: CoachEnduranceGoal | null;
   endurance_schedule: CoachEnduranceSchedule | null;
+  strength_schedule: CoachStrengthSchedule | null;
   goal: CoachGoalCheck | null;
   goal_mode: CoachGoalMode;
   journey: CoachRecord | null;

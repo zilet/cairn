@@ -60,8 +60,11 @@ const PERSON = [
 
 // What they actually LOGGED plus what's planned — the floor of any training read.
 const TRAINING_LOG = ["plan", "recent_sessions", "recent_activities", "training_signals", "progression"] as const;
-// + the deterministic program read (per-lift trend/stalls, mesocycle position).
-const TRAINING_CORE = [...TRAINING_LOG, "program_block", "program_state"] as const;
+// + the deterministic program read (per-lift trend/stalls, mesocycle position), and the
+// athlete's stated LIFTING weekdays — the calendar the plan's days are laid onto. That
+// last one rides at exactly the sites its run-day sibling rides at (the ENDURANCE bundle
+// below), because the two answer one question between them: which weekday carries what.
+const TRAINING_CORE = [...TRAINING_LOG, "program_block", "program_state", "strength_schedule"] as const;
 // + capacity, balance, adaptations due and the long arc — the full plan-shaping set.
 const TRAINING_FULL = [
   ...TRAINING_CORE,

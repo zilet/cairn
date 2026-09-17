@@ -2527,6 +2527,15 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.setProfile({ endurance_schedule: schedule }) });
           break;
         }
+        case "set_strength_schedule": {
+          const schedule = repo.normalizeStrengthSchedule({ days: a.days, note: a.note, source: "chat" });
+          if (!schedule) {
+            applied.push({ type: a.type, error: "invalid strength_schedule" });
+            break;
+          }
+          applied.push({ type: a.type, result: repo.setProfile({ strength_schedule: schedule }) });
+          break;
+        }
         case "set_strength_objective": {
           if (!explicitStrengthObjectiveIntent) break;
           const objective = repo.setStrengthObjective({

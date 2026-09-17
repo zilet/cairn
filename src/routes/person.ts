@@ -11,6 +11,7 @@ import {
   getCheckinByDate,
   getEnduranceCapacity,
   getEnduranceSchedule,
+  getStrengthSchedule,
   getProfile,
   getTrainingIntent,
   listCheckins,
@@ -31,6 +32,11 @@ personRouter.get("/profile", (_req, res) => res.json(getProfile()));
 // easy|quality|long|any}. The run engine and rolling agenda honor these weekdays.
 // null when unset. MCP: get_endurance_schedule.
 personRouter.get("/profile/endurance-schedule", (_req, res) => res.json(getEnduranceSchedule()));
+// The athlete's stated LIFTING weekdays. days[] is {dow: 0-6 (0=Sunday)} — no kind,
+// because which split lands on which day is the plan's business. The weekday ring lays
+// the plan's strength days onto exactly these weekdays. null when unset.
+// MCP: get_strength_schedule.
+personRouter.get("/profile/strength-schedule", (_req, res) => res.json(getStrengthSchedule()));
 // Partially update the athlete profile. Omitted fields stay unchanged; explicit
 // null/empty clears nullable fields such as home_location.
 personRouter.put("/profile", (req, res) => {
@@ -44,6 +50,7 @@ personRouter.put("/profile", (req, res) => {
     "goal_date" in body ||
     "endurance_goal" in body ||
     "endurance_schedule" in body ||
+    "strength_schedule" in body ||
     "training_intent" in body
   ) {
     try {

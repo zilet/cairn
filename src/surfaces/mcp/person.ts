@@ -126,6 +126,17 @@ export function registerPersonTools(server: McpToolRegistrar) {
         .describe(
           "stated run days the engine honors; only weekdays the athlete named. null clears. Never invent days they did not say"
         ),
+      strength_schedule: z
+        .object({
+          days: z.array(z.object({ dow: z.number().int().min(0).max(6).describe("0=Sunday … 6=Saturday") })),
+          note: z.string().optional(),
+          source: z.enum(["athlete", "chat"]).optional(),
+        })
+        .nullable()
+        .optional()
+        .describe(
+          "stated LIFTING weekdays the weekday ring lays the plan's strength days onto; only weekdays the athlete named, no kind. days: [] clears, null clears. Never invent days they did not say"
+        ),
       training_intent: z
         .object({
           priorities: z

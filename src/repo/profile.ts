@@ -141,6 +141,15 @@ export function setProfile(p: any) {
           ? null
           : (serializeEnduranceSchedule(p.endurance_schedule) ?? cur.endurance_schedule_json ?? null)
         : (cur.endurance_schedule_json ?? null),
+    // Stated LIFTING weekdays (v102). Identical contract to its run-day sibling above:
+    // undefined leaves intact, null clears, else it's normalized (dow 0-6) and
+    // re-serialized; an unusable non-null shape preserves the current schedule.
+    strength_schedule_json:
+      p.strength_schedule !== undefined
+        ? p.strength_schedule == null
+          ? null
+          : (serializeStrengthSchedule(p.strength_schedule) ?? cur.strength_schedule_json ?? null)
+        : (cur.strength_schedule_json ?? null),
     // Ordered durable athlete intent (v80). An explicit null clears back to the
     // backward-compatible derived view; malformed non-null input is
     // non-destructive so a bad client cannot erase an explicit hierarchy.
@@ -159,8 +168,8 @@ export function setProfile(p: any) {
     statin: p.statin !== undefined ? coerceFlag(p.statin) : (cur.statin ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, home_location, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, endurance_schedule_json, training_intent_json, smoking, bp_treated, statin, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, home_location, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, endurance_schedule_json, strength_schedule_json, training_intent_json, smoking, bp_treated, statin, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
        home_location=excluded.home_location,
@@ -170,7 +179,8 @@ export function setProfile(p: any) {
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
-       endurance_goal_json=excluded.endurance_goal_json, endurance_schedule_json=excluded.endurance_schedule_json, training_intent_json=excluded.training_intent_json,
+       endurance_goal_json=excluded.endurance_goal_json, endurance_schedule_json=excluded.endurance_schedule_json,
+       strength_schedule_json=excluded.strength_schedule_json, training_intent_json=excluded.training_intent_json,
        smoking=excluded.smoking, bp_treated=excluded.bp_treated, statin=excluded.statin, updated_at=datetime('now')`
   ).run(
     merged.name,
@@ -195,6 +205,7 @@ export function setProfile(p: any) {
     merged.endurance_sport,
     merged.endurance_goal_json,
     merged.endurance_schedule_json,
+    merged.strength_schedule_json,
     merged.training_intent_json,
     merged.smoking,
     merged.bp_treated,
@@ -214,6 +225,7 @@ export function setProfile(p: any) {
     "goal_mode",
     "endurance_goal_json",
     "endurance_schedule_json",
+    "strength_schedule_json",
     "training_intent_json",
     "start_weight_lb",
     "start_date",
@@ -233,7 +245,12 @@ export function setProfile(p: any) {
     "bp_treated",
     "statin",
   ]);
-  if (profileChanges.includes("home_location") || goalChanges.includes("endurance_schedule_json")) invalidateDayRead();
+  if (
+    profileChanges.includes("home_location") ||
+    goalChanges.includes("endurance_schedule_json") ||
+    goalChanges.includes("strength_schedule_json")
+  )
+    invalidateDayRead();
   if (goalChanges.length)
     emitBrainEvent({
       kind: "goal_changed",
@@ -563,6 +580,102 @@ export function nextScheduledRunWeekday(asOf: string, kind?: EnduranceScheduleKi
     if (pool.some((d) => d.dow === dow)) return WEEKDAY_NAMES[dow];
   }
   return WEEKDAY_NAMES[pool[0].dow];
+}
+
+// ---------- stated LIFTING weekdays (v102) ----------
+// The strength counterpart to the run schedule above, and it follows that parser's
+// rules exactly — one bad entry is DROPPED rather than voiding the siblings it was
+// typed beside, an explicit `days: []` is a real (empty) schedule the athlete asked
+// for, and anything that is not a schedule at all comes back null so callers leave
+// what is stored alone.
+//
+// It carries NO `kind`. A run day is named by what the run is for (easy / quality /
+// long); a lifting day is named by the plan's own rotation, and the athlete saying
+// "I lift Monday through Friday" is a statement about the CALENDAR, not about which
+// split lands where. Inventing a kind here would put the plan's shape in the
+// schedule, where nothing could keep the two honest with each other.
+export type StrengthScheduleSource = EnduranceScheduleSource;
+export type StrengthScheduleDay = {
+  dow: 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sunday
+};
+export type StrengthSchedule = {
+  days: StrengthScheduleDay[];
+  note?: string;
+  source: StrengthScheduleSource;
+  updated_at: string;
+};
+
+export function normalizeStrengthSchedule(
+  input: any,
+  opts?: { source?: StrengthScheduleSource }
+): StrengthSchedule | null {
+  let raw: any = input;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!raw || typeof raw !== "object") return null;
+  if (!Array.isArray(raw.days)) return null;
+  const explicitlyCleared = raw.days.length === 0;
+  const days: StrengthScheduleDay[] = [];
+  const seen = new Set<number>();
+  for (const entry of raw.days) {
+    // A bare number is accepted alongside {dow}: with no second field to carry, a
+    // day list is the one place a plain 1 is unambiguous.
+    const dow = Number(entry && typeof entry === "object" ? entry.dow : entry);
+    if (!Number.isInteger(dow) || dow < 0 || dow > 6) continue;
+    if (seen.has(dow)) continue;
+    seen.add(dow);
+    days.push({ dow: dow as StrengthScheduleDay["dow"] });
+  }
+  if (!explicitlyCleared && !days.length) return null; // nothing named was understood -> reject, not a clear
+  days.sort((a, b) => a.dow - b.dow);
+  const sourceRaw = String(raw.source ?? opts?.source ?? "athlete")
+    .trim()
+    .toLowerCase();
+  const source: StrengthScheduleSource = SCHEDULE_SOURCE_SET.has(sourceRaw)
+    ? (sourceRaw as StrengthScheduleSource)
+    : (opts?.source ?? "athlete");
+  const note = capStr(raw.note, 240);
+  const updatedRaw = typeof raw.updated_at === "string" ? raw.updated_at.trim().slice(0, 40) : "";
+  const updated_at = updatedRaw || new Date().toISOString();
+  return { days, ...(note ? { note } : {}), source, updated_at };
+}
+
+function serializeStrengthSchedule(input: any, sourceDefault: StrengthScheduleSource = "athlete"): string | null {
+  if (input == null) return null;
+  const g = normalizeStrengthSchedule(input, { source: sourceDefault });
+  return g ? JSON.stringify({ ...g, updated_at: new Date().toISOString() }) : null;
+}
+
+export function getStrengthSchedule(): StrengthSchedule | null {
+  const p = getProfile();
+  return normalizeStrengthSchedule(p?.strength_schedule_json);
+}
+
+/** null when no schedule is set; otherwise whether `dateISO`'s weekday is a stated lifting day. */
+export function isStatedLiftDay(dateISO: string): boolean | null {
+  const schedule = getStrengthSchedule();
+  if (!schedule?.days.length) return null;
+  const dow = isoDow(dateISO);
+  return schedule.days.some((d) => d.dow === dow);
+}
+
+/** The stated lifting weekdays as dow numbers, ascending. [] when unstated. */
+export function statedLiftDows(): number[] {
+  return getStrengthSchedule()?.days.map((d) => d.dow) ?? [];
+}
+
+/** The stated RUN weekdays as dow numbers, ascending. [] when unstated. */
+export function statedRunDows(): number[] {
+  return getEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
+}
+
+export function formatStrengthScheduleDays(schedule: StrengthSchedule): string {
+  return schedule.days.map((d) => WEEKDAY_NAMES[d.dow]).join(", ");
 }
 
 // ---------- bodyweight log ----------

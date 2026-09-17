@@ -37,7 +37,8 @@ import { weekLayoutRead, type WeekLayoutRead } from "../domain/training/week-lay
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { matchEnduranceModality } from "./heavy-load.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
-import { dowToDayNumber, getEnduranceGoal, isoDow } from "./profile.js";
+import { dowToDayNumber, getEnduranceGoal, isoDow, statedRunDows } from "./profile.js";
+import { strengthScheduleRead } from "./strength-schedule.js";
 import { raceRamp, type RaceRampGoal } from "./run-ramp.js";
 import { weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
 import { localDateISO } from "./shared.js";
@@ -711,7 +712,18 @@ export function raceBuild(
   }
 
   // ---- strength placement ----
-  const layout = opts?.weekLayout === undefined ? safe(() => weekLayoutRead(asOf, { runPlan: plan ?? null })) : opts.weekLayout;
+  const layout =
+    opts?.weekLayout === undefined
+      ? safe(() => {
+          const lifting = strengthScheduleRead(asOf);
+          return weekLayoutRead(asOf, {
+            runPlan: plan ?? null,
+            strengthDows: lifting.days.map((d) => d.dow),
+            liftDaysSource: lifting.source,
+            enduranceDows: statedRunDows(),
+          });
+        })
+      : opts.weekLayout;
   const strength: RaceBuild["strength"] = {
     heavy_lower_days: [...heavyLower].sort((a, b) => a - b).map(weekdayOfDayNumber),
     principle: weeksToRace <= 0 ? STRENGTH_HINT.race_week : STRENGTH_HINT[phase],

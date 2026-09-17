@@ -234,6 +234,46 @@ an active health hold argues for less; the weekly volume falls with that frequen
 remaining run stays capped by recent exposure instead of absorbing the missing session. A stretch
 time target alone never increases dose.
 
+**Stated strength schedule (and the observed one).** `strength_schedule` on `profile`
+(`strength_schedule_json`, v102) is the
+lifting counterpart to those run days: `{days:[{dow}], note?, source, updated_at}`, with NO `kind` —
+a run day is named by what the run is for, while which split lands on which lifting day is the plan's
+business, not the schedule's. When it is set, the weekday ring stops being purely positional.
+`weekdayPlanDayMap()` (`src/repo/plan-selection.ts`, pure and unit-testable) lays the plan's STRENGTH
+days, in ring order, onto the stated lifting weekdays in weekday order; endurance-only plan days (a
+day whose items are all cardio, e.g. "Long Run") go on stated run weekdays that are not also lifting
+days; every other weekday takes a rest day or a leftover scaffold. The two halves fill differently on
+purpose: the lifting pool CYCLES, so every stated lifting weekday carries a strength session even when
+the plan holds fewer days than they named, while the non-strength days are CONSUMED one each, because
+cycling a week that authored one long run would invent a second. An unstated weekday is never handed a
+strength day while the plan holds anything else to give it. With no schedule stated the map comes back
+empty and `weekdayCandidate` keeps the old Mon→slot-1 line, so nothing changes for an athlete who has
+said nothing. The prompts see the same fact twice: `renderStrengthSchedule()` (`src/prompt/shared.ts`)
+prints the STATED LIFTING DAYS line beside `renderRunPlan`'s "Stated run days", and `week_layout`
+carries `lift_days` / `run_days` as weekday names so a restructure can be checked against the real
+week rather than against a remembered rule. Those names are INJECTED into `weekLayoutRead` alongside
+`runPlan`/`agenda` — the read is a leaf on purpose and `repo/profile.ts` sits above it in the import
+graph. The athlete writes the schedule from chat (`set_strength_schedule`), REST (`PUT /api/profile`,
+read at `GET /api/profile/strength-schedule`) or MCP (`get_strength_schedule` / `set_strength_schedule`),
+and it is folded into the proposal-truth fingerprint, so a draft written against last week's stated
+days is detected as stale. There is deliberately NO settings form for it: chat is the door, and
+`set_strength_schedule`'s emit guidance is written for ordinary phrasings ("strength on all workdays",
+"gym Mon-Fri, weekends are the long run and MTB") rather than for a question-and-answer.
+
+An athlete who never says still has a lifting week, and `src/repo/strength-schedule.ts` reads it.
+`strengthScheduleRead(asOf)` returns `{days, source:"stated"|"observed"|null, weeks_seen,
+weeks_window}`: the stated schedule when there is one, otherwise the weekdays a REAL strength session
+(`kind='strength'`, plus a `finished_at` or at least one logged set) landed on in at least **3 of the
+last 6 calendar weeks** — the same habit law the weekly ride is read on in `race-build.ts`, counted
+per weekday rather than picking one winning day. `weeks_seen` is the THINNEST named weekday's count,
+so "3 of 6 weeks" is true of every day in the list. An explicitly emptied stated schedule reads as
+`source:null` and does NOT fall back to the log: "stop assuming my lifting days" is an instruction,
+not an opening. Every consumer takes its answer from this one read — the ring, `week_layout`
+(`lift_days` plus `lift_days_source`), the coach context key and the prompt line — so no two surfaces
+can hold different weeks. The prompt says which it is holding: "STATED LIFTING DAYS: …" for the
+athlete's own words, "OBSERVED LIFTING DAYS (from the log, N of the last 6 weeks …)" for the pattern,
+which the restructure prompt may move one day of and must never attribute to the athlete.
+
 `endurance-sports.ts` separates legacy sport families from terrain/modal subtypes. Trail/XC MTB,
 downhill/lift-served MTB, road, gravel, alpine skiing, Nordic skiing, touring, and generic skiing
 remain distinct evidence and load modes. Structured activity type is authoritative for the family;

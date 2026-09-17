@@ -253,7 +253,16 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Stated run days are structured and anchor the run engine** — `endurance_schedule`
   (`profile.endurance_schedule_json`) is the athlete's named weekdays for easy/quality/long runs;
   `weeklyRunPlan` and `flexibleTrainingAgenda` honor those dows and never spill a suggestion onto
-  an unscheduled day. A logged run on an unscheduled day still counts (the log is truth).
+  an unscheduled day. A logged run on an unscheduled day still counts (the log is truth). **Stated
+  LIFTING weekdays are the same fact for strength** — `strength_schedule`
+  (`profile.strength_schedule_json`, `{days:[{dow}]}`, no `kind`): when set, `weekdayPlanDayMap`
+  (`src/repo/plan-selection.ts`) lays the plan's strength days onto exactly those weekdays and an
+  unstated weekday never gets one; `week_layout.lift_days`/`run_days` and the prompt's STATED
+  LIFTING DAYS line are how the agent checks itself. **Never said is not the end of it** —
+  `strengthScheduleRead()` (`src/repo/strength-schedule.ts`) falls back to the weekdays a real
+  strength session landed on in 3 of the last 6 weeks (the race-build ride law), labelled
+  `source:"observed"` everywhere it is spoken; an explicitly EMPTIED stated schedule stays silent
+  rather than reopening the log. Chat is the only setter UI — there is no settings form, by design.
 - **The race build is a read OVER the run engine, never a second engine** — `raceBuild()`
   (`src/repo/race-build.ts`) walks `raceRamp()` Monday by Monday for the ladder, so a week's km is
   always the engine's own next step; its `kind` follows the engine's `ceil(days/7)` count (a

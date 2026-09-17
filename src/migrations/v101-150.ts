@@ -17,4 +17,13 @@ export const MIGRATIONS_101_150: Migration[] = [
     name: "profile-endurance-schedule",
     up: (db) => addColumn(db, "profile", "endurance_schedule_json TEXT"),
   },
+  {
+    // The athlete's stated LIFTING weekdays — the strength counterpart to v101's run
+    // days. {days:[{dow}], note?, source, updated_at}; no `kind`, because a lifting day
+    // is named by the plan's own rotation, not by the schedule. NULL keeps every
+    // existing DB on the purely positional ring it has today.
+    version: 102,
+    name: "profile-strength-schedule",
+    up: (db) => addColumn(db, "profile", "strength_schedule_json TEXT"),
+  },
 ];

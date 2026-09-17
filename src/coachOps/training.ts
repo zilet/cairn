@@ -279,6 +279,7 @@ export function coachingCacheFreshnessFingerprint(date = localDateISO()): string
           endurance_sport: p.endurance_sport ?? null,
           endurance_goal_json: p.endurance_goal_json ?? null,
           endurance_schedule_json: p.endurance_schedule_json ?? null,
+          strength_schedule_json: p.strength_schedule_json ?? null,
           training_intent_json: p.training_intent_json ?? null,
           goal_weight_lb: p.goal_weight_lb ?? null,
           goal_bodyfat_pct: p.goal_bodyfat_pct ?? null,
@@ -369,6 +370,7 @@ export function sessionSuggestCacheKey(opts: {
           endurance_sport: profile.endurance_sport ?? null,
           endurance_goal_json: profile.endurance_goal_json ?? null,
           endurance_schedule_json: profile.endurance_schedule_json ?? null,
+          strength_schedule_json: profile.strength_schedule_json ?? null,
           training_intent_json: profile.training_intent_json ?? null,
         }
       : null;

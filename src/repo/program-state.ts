@@ -25,7 +25,14 @@ import {
   normalizeExerciseName,
 } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
-import { effectiveGoalMode, getEnduranceGoal, getPrimaryDiscipline, getProfile } from "./profile.js";
+import {
+  effectiveGoalMode,
+  getEnduranceGoal,
+  getPrimaryDiscipline,
+  getProfile,
+  statedRunDows,
+} from "./profile.js";
+import { strengthScheduleRead } from "./strength-schedule.js";
 import { activeRecoveryWeek, type ActiveRecoveryWeek } from "./recovery-week.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 // The week-SHAPE read (does the lifting week compose with the running week). A leaf
@@ -1688,7 +1695,12 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   // collides, and it moves nothing — the athlete owns the shape of their week.
   const weekLayout = (() => {
     try {
-      return weekLayoutRead(d);
+      const lifting = strengthScheduleRead(d);
+      return weekLayoutRead(d, {
+        strengthDows: lifting.days.map((day) => day.dow),
+        liftDaysSource: lifting.source,
+        enduranceDows: statedRunDows(),
+      });
     } catch {
       return null;
     }

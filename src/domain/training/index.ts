@@ -12,6 +12,7 @@ export * from "../../repo/muscle-trajectory.js";
 export * from "../../repo/performance.js";
 export * from "../../repo/plan.js";
 export * from "../../repo/plan-selection.js";
+export * from "../../repo/strength-schedule.js";
 export * from "./plan-upcoming.js";
 export { getEnduranceGoal } from "../../repo/profile.js";
 // getExerciseDetail now lives in repo/exercises.js, already star-exported above.

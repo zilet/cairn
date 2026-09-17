@@ -64,8 +64,39 @@ export interface WeekLayoutRead {
   heavy_lower_days: number[];
   long_run_day: number | null;
   quality_run_day: number | null;
+  /**
+   * The athlete's lifting weekdays, as names in weekday order (Monday first). [] when
+   * nothing is known. Carried here so a restructure can check its proposed ring against
+   * the real week instead of remembering a prose rule.
+   */
+  lift_days: string[];
+  /**
+   * How `lift_days` is known: "stated" is the athlete's own words, "observed" is the
+   * 3-of-6-weeks pattern read off their log. null when the list is empty. A restructure
+   * may argue with an observed week; it may not argue with a stated one.
+   */
+  lift_days_source: "stated" | "observed" | null;
+  /** The athlete's STATED run weekdays, as names in weekday order. [] when unstated. */
+  run_days: string[];
   /** Where the run placement was read from. "none" = nothing to compose against. */
   source: "plan" | "run_plan" | "agenda" | "none";
+}
+
+/**
+ * dow (0 = Sunday) -> weekday NAMES in weekday order, Monday first. Invalid entries and
+ * duplicates are dropped silently, exactly as an off-ring day_number is above: this read
+ * is a quiet suggestion, not a place to raise an error over a malformed schedule.
+ */
+export function statedWeekdayNames(dows: readonly number[] | null | undefined): string[] {
+  const seen = new Set<number>();
+  for (const raw of dows ?? []) {
+    const dow = Number(raw);
+    if (!Number.isInteger(dow) || dow < 0 || dow > 6) continue;
+    seen.add(dow);
+  }
+  // (dow + 6) % 7 puts Monday at 0 and Sunday at 6 — the order the athlete says their
+  // week in, and the order the plan ring is laid onto.
+  return [...seen].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map((dow) => WEEKDAYS[(dow + 6) % 7]);
 }
 
 const CLEAN = (
@@ -73,7 +104,8 @@ const CLEAN = (
   heavy: number[],
   long: number | null,
   quality: number | null,
-  source: WeekLayoutRead["source"]
+  source: WeekLayoutRead["source"],
+  stated: { lift_days: string[]; lift_days_source: WeekLayoutRead["lift_days_source"]; run_days: string[] }
 ): WeekLayoutRead => ({
   clean: true,
   collisions: [],
@@ -83,6 +115,9 @@ const CLEAN = (
   heavy_lower_days: heavy,
   long_run_day: long,
   quality_run_day: quality,
+  lift_days: stated.lift_days,
+  lift_days_source: stated.lift_days_source,
+  run_days: stated.run_days,
   source,
 });
 
@@ -328,9 +363,29 @@ function clearingSlot(
  */
 export function weekLayoutRead(
   date?: string,
-  opts?: { runPlan?: WeeklyRunPlan | null; agenda?: FlexibleTrainingAgenda | null }
+  opts?: {
+    runPlan?: WeeklyRunPlan | null;
+    agenda?: FlexibleTrainingAgenda | null;
+    /**
+     * The athlete's stated lifting / run weekdays as dow numbers (0 = Sunday). INJECTED
+     * rather than read, for the same reason runPlan and agenda are: this module is a
+     * leaf on purpose, and `src/repo/profile.ts` sits above it in the import graph
+     * (profile -> intelligence -> day-read -> coach -> here), so reading them directly
+     * would close a cycle. Every caller already imports profile; absence is neutral.
+     */
+    strengthDows?: readonly number[] | null;
+    /** How `strengthDows` is known — the athlete's words, or their log. */
+    liftDaysSource?: "stated" | "observed" | null;
+    enduranceDows?: readonly number[] | null;
+  }
 ): WeekLayoutRead {
   const d = date || localDateISO();
+  const lift_days = statedWeekdayNames(opts?.strengthDows);
+  const stated = {
+    lift_days,
+    lift_days_source: lift_days.length ? (opts?.liftDaysSource ?? "stated") : null,
+    run_days: statedWeekdayNames(opts?.enduranceDows),
+  };
 
   let loads: HeavyLowerDayLoad[] = [];
   try {
@@ -366,10 +421,11 @@ export function weekLayoutRead(
     : [];
 
   const { long, quality, source } = runPlacement(opts);
-  if (!heavy.length || (long == null && quality == null)) return CLEAN(heaviest, heavy, long, quality, source);
+  if (!heavy.length || (long == null && quality == null))
+    return CLEAN(heaviest, heavy, long, quality, source, stated);
 
   const collisions = detectCollisions(heaviest, heavy, long, quality, loads);
-  if (!collisions.length) return CLEAN(heaviest, heavy, long, quality, source);
+  if (!collisions.length) return CLEAN(heaviest, heavy, long, quality, source, stated);
 
   // The lead: an adjacency collision names a concrete move, so it speaks ahead of the
   // stack (which is usually the same problem seen wider).
@@ -425,6 +481,9 @@ export function weekLayoutRead(
     heavy_lower_days: heavy,
     long_run_day: long,
     quality_run_day: quality,
+    lift_days: stated.lift_days,
+    lift_days_source: stated.lift_days_source,
+    run_days: stated.run_days,
     source,
   };
 }

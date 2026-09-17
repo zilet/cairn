@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**338 routes** across 116 groups.
+**339 routes** across 116 groups.
 
 ## `/activities`
 
@@ -587,6 +587,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | PUT | `/api/profile` | Partially update the athlete profile. Omitted fields stay unchanged; explicit null/empty clears nullable fields such as home_location. |
 | GET | `/api/profile/endurance-schedule` | The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind: easy\|quality\|long\|any}. The run engine and rolling agenda honor these weekdays. null when unset. MCP: get_endurance_schedule. |
 | POST | `/api/profile/grow-about-me` | Grow profile.about_me from typed memory + family + check-ins (augments, never overwrites blindly). changed:false is the calm, common answer. |
+| GET | `/api/profile/strength-schedule` | The athlete's stated LIFTING weekdays. days[] is {dow: 0-6 (0=Sunday)} — no kind, because which split lands on which day is the plan's business. The weekday ring lays the plan's strength days onto exactly these weekdays. null when unset. MCP: get_strength_schedule. |
 
 ## `/program`
 

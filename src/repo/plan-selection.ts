@@ -9,7 +9,9 @@ import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { canonicalGroup, classifyMuscleGroup, type MuscleGroup, plainGroupWords } from "./exercise-canon.js";
 import { type AcuteGateReading, acuteGates, SATURATED_RESIDUAL } from "./hybrid-load.js";
+import { statedRunDows } from "./profile.js";
 import { programBalance } from "./progression.js";
+import { liftDows } from "./strength-schedule.js";
 import { daysBetweenISO, joinList, localDateISO } from "./shared.js";
 
 export interface PlanDayCandidate {
@@ -24,6 +26,13 @@ export interface PlanDayCandidate {
   day_type: "training" | "rest";
   names: string[];
   groups: MuscleGroup[];
+  /**
+   * The day's CARDIO item names. `names`/`groups` deliberately exclude cardio (a run is
+   * not a muscle group), which left an endurance-only day — "Long Run", nothing else on
+   * it — indistinguishable from an empty training-day scaffold. The weekday mapping has
+   * to tell those two apart: one belongs on a stated run day, the other is filler.
+   */
+  cardio: string[];
 }
 
 export function isRestPlanDay(day: Pick<PlanDayCandidate, "day_type"> | null | undefined): boolean {
@@ -95,12 +104,17 @@ export function planDayCandidates(): PlanDayCandidate[] {
       day_type: String(r.day_type ?? "training").toLowerCase() === "rest" ? ("rest" as const) : ("training" as const),
       names: [],
       groups: [],
+      cardio: [],
     };
     const exercise = r.exercise == null ? "" : String(r.exercise).trim();
     if (exercise && r.kind !== "cardio") {
       if (!cur.names.includes(exercise)) cur.names.push(exercise);
       const group = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(exercise);
       if (group && group !== "mobility" && !cur.groups.includes(group)) cur.groups.push(group);
+    }
+    if (r.kind === "cardio") {
+      const label = exercise || "Cardio";
+      if (!cur.cardio.includes(label)) cur.cardio.push(label);
     }
     map.set(id, cur);
   }
@@ -215,9 +229,146 @@ export function nextTrainingCandidateAfter(candidates: PlanDayCandidate[], dayNu
   return null;
 }
 
+// ---------- the weekday ring ----------
+//
+// The ring used to be purely POSITIONAL: Monday took plan day 1, Tuesday day 2, and so
+// on down a Mon–Sun line. That is the right answer for an athlete who has told us
+// nothing, and the wrong one the moment they have. An athlete who says "I lift every
+// workday and keep the weekend for the long run and the bike" has named their week;
+// a positional ring will still hand them a strength day on Sunday because Sunday is
+// slot seven, and no amount of scoring downstream can undo a premise that wrong.
+//
+// So when a strength schedule is STATED, the positional mapping runs over the stated
+// lifting weekdays only. The plan's strength days are laid, in ring order, onto the
+// stated lift weekdays in weekday order; endurance-only plan days go on stated run
+// weekdays that are not also lift days; every other weekday gets a rest day. An
+// unstated weekday never receives a strength day while the plan holds anything else to
+// give it. With no stated schedule, nothing changes.
+
+/** The shape the weekday mapping needs off a plan day. */
+export interface WeekdayMappablePlanDay {
+  day_number: number;
+  day_type: "training" | "rest";
+  /** Non-cardio item names — a day with any of these is a STRENGTH day. */
+  names?: readonly string[];
+  /** Cardio item names — a training day with only these is an ENDURANCE-only day. */
+  cardio?: readonly string[];
+}
+
+type WeekdayPlanDayRole = "strength" | "endurance" | "rest" | "empty";
+
+function planDayRole(day: WeekdayMappablePlanDay): WeekdayPlanDayRole {
+  if (day.day_type === "rest") return "rest";
+  if ((day.names?.length ?? 0) > 0) return "strength";
+  if ((day.cardio?.length ?? 0) > 0) return "endurance";
+  // A training day with nothing on it is a scaffold, not a session (CLAUDE.md: an empty
+  // plan day is never startable). It is not strength, so it can fill an unstated weekday.
+  return "empty";
+}
+
+/** dow 0–6 (0 = Sunday) in the order the week is lived: Monday first, Sunday last. */
+const weekdayOrder = (dow: number): number => (dow + 6) % 7;
+
+function normalizeDows(dows: readonly number[] | null | undefined): number[] {
+  const seen = new Set<number>();
+  for (const raw of dows ?? []) {
+    const dow = Number(raw);
+    if (!Number.isInteger(dow) || dow < 0 || dow > 6) continue;
+    seen.add(dow);
+  }
+  return [...seen].sort((a, b) => weekdayOrder(a) - weekdayOrder(b));
+}
+
+/**
+ * Lay a plan's days onto the seven weekdays, honoring the athlete's stated schedules.
+ *
+ * Pure: no DB, no clock, no mutation. Returns `dow -> plan day`, and leaves a weekday
+ * OUT of the map when the plan holds nothing suitable for it (the caller then keeps its
+ * own fallback rather than being handed a day that contradicts the athlete).
+ *
+ * `strengthDows` empty means "unstated" — the map comes back empty and every caller
+ * falls back to the positional ring, which is exactly the old behavior.
+ *
+ * The two halves fill DIFFERENTLY, and the difference is the whole design:
+ *
+ *   The lifting days CYCLE. Five stated lifting weekdays against a plan with three
+ *   strength days gives Mon/Tue/Wed the three and Thu/Fri the first two again. Every
+ *   stated lifting weekday carries a strength session, because that is the thing the
+ *   athlete actually said; a repeat inside one week is a programming question the
+ *   scorer and the agent get to answer, not a reason to hand back rest on a day they
+ *   told us they lift.
+ *
+ *   Everything else is CONSUMED, one day each. A week with one "Long Run" and one
+ *   "Rest" and two free weekdays gets the long run on one and the rest on the other —
+ *   cycling there would invent a second long run out of a plan that authored one, and
+ *   an invented session is a worse answer than a quiet rest day.
+ */
+export function weekdayPlanDayMap<T extends WeekdayMappablePlanDay>(
+  planDays: readonly T[],
+  strengthDows: readonly number[] | null | undefined,
+  enduranceDows: readonly number[] | null | undefined
+): Map<number, T> {
+  const map = new Map<number, T>();
+  const lift = normalizeDows(strengthDows);
+  if (!lift.length || !planDays.length) return map;
+  const run = normalizeDows(enduranceDows).filter((dow) => !lift.includes(dow));
+  const free = [1, 2, 3, 4, 5, 6, 0].filter((dow) => !lift.includes(dow) && !run.includes(dow));
+
+  const ordered = [...planDays].sort((a, b) => a.day_number - b.day_number);
+  const byRole = (role: WeekdayPlanDayRole) => ordered.filter((d) => planDayRole(d) === role);
+  const strengthPool = byRole("strength");
+  // The three non-strength queues, drained in a preference order that differs per
+  // weekday kind. A day leaves its queue when it is placed, so no plan day lands twice
+  // while another sits unused.
+  const queues: Record<"endurance" | "rest" | "empty", T[]> = {
+    endurance: byRole("endurance"),
+    rest: byRole("rest"),
+    empty: byRole("empty"),
+  };
+  // The full non-strength set in ring order, kept for the last-resort wrap below.
+  const nonStrength = ordered.filter((d) => planDayRole(d) !== "strength");
+  let wrap = 0;
+  const take = (prefer: readonly ("endurance" | "rest" | "empty")[]): T | undefined => {
+    for (const role of prefer) {
+      const queue = queues[role];
+      if (queue.length) return queue.shift();
+    }
+    // Every non-strength day is already placed and there are still weekdays to fill.
+    // Wrap rather than hand back a strength day — an unstated weekday never becomes a
+    // lifting day, which is the entire point of having a stated schedule.
+    return nonStrength.length ? nonStrength[wrap++ % nonStrength.length] : undefined;
+  };
+
+  // A stated lifting weekday takes a STRENGTH day and nothing else — with no strength
+  // day in the plan at all there is nothing honest to put there, so it stays unmapped.
+  if (strengthPool.length) lift.forEach((dow, i) => map.set(dow, strengthPool[i % strengthPool.length]));
+  // A stated run weekday that is not also a lifting day takes the endurance-only day;
+  // once those run out, a rest day is the truthful stand-in (the run is not in the plan).
+  for (const dow of run) {
+    const day = take(["endurance", "rest", "empty"]);
+    if (day) map.set(dow, day);
+  }
+  // Everything else is a weekday they named for neither — rest, or a leftover scaffold.
+  for (const dow of free) {
+    const day = take(["rest", "empty", "endurance"]);
+    if (day) map.set(dow, day);
+  }
+  return map;
+}
+
 function weekdayCandidate(candidates: PlanDayCandidate[], date: string): PlanDayCandidate {
-  const idx = (new Date(date + "T00:00:00Z").getUTCDay() + 6) % 7; // Mon=0
-  return candidates[idx % candidates.length];
+  const dow = new Date(date + "T00:00:00Z").getUTCDay();
+  // The athlete's lifting week — what they said, or failing that the 3-of-6-weeks
+  // pattern their own log already shows. `liftDows()` is empty when neither exists,
+  // which returns an empty map and falls through to the positional line below.
+  let stated: PlanDayCandidate | undefined;
+  try {
+    stated = weekdayPlanDayMap(candidates, liftDows(date), statedRunDows()).get(dow);
+  } catch {
+    stated = undefined; // a schedule we cannot read is a schedule we do not have
+  }
+  if (stated) return stated;
+  return candidates[weekdayOrder(dow) % candidates.length];
 }
 
 // The ONE derivation of "which of this day's groups are still recovering" — the

@@ -415,6 +415,7 @@ CREATE TABLE IF NOT EXISTS profile (
   endurance_sport TEXT,                  -- optional free text: running | cycling | triathlon | rowing | … (v35)
   endurance_goal_json TEXT,              -- the endurance OBJECTIVE (race | standing), orthogonal to discipline (v37)
   endurance_schedule_json TEXT,          -- stated run days {days:[{dow,kind}], note?, source, updated_at}; NULL = unset (engine falls back to its own slots)
+  strength_schedule_json TEXT,           -- stated LIFTING weekdays {days:[{dow}], note?, source, updated_at} (v102); NULL = unset (the ring stays purely positional)
   training_intent_json TEXT,             -- ordered durable goals + endurance role/capability; NULL derives from legacy discipline + goal mode (v80)
   smoking INTEGER,                       -- 0/1, NULL = not captured (v57). Feeds AHA PREVENT; NULL assumes the lower-risk value and marks the read provisional
   bp_treated INTEGER,                    -- 0/1, NULL = not captured (v57). On antihypertensive medication — feeds AHA PREVENT the same way

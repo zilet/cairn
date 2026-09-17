@@ -1400,6 +1400,59 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
   return lines.length ? `\n${lines.join("\n")}\n` : "";
 }
 
+// renderStrengthSchedule: the athlete's stated LIFTING weekdays, rendered as the
+// calendar half of the week's shape — the strength counterpart to the "Stated run
+// days" line renderRunPlan emits just above, and printed right beside it so the two
+// halves of "which weekday carries what" are never separated in the prompt.
+//
+// Deliberately NOT folded into renderRunPlan: that block is gated on a live run plan,
+// and an athlete who lifts five days a week and never runs has stated days that the
+// model must still honor. Quiet ("") when no schedule is stated — the ring stays
+// positional and there is nothing to say.
+export function renderStrengthSchedule(ctx: PartialCoachContext): string {
+  const schedule = ctx?.strength_schedule as {
+    days?: Array<{ dow?: number }>;
+    source?: string;
+    weeks_seen?: number;
+    weeks_window?: number;
+  } | null;
+  const days = Array.isArray(schedule?.days) ? schedule.days : [];
+  if (!days.length) return "";
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  // Weekday order, Monday first — the order the athlete says them in and the order the
+  // ring lays days onto. dow 0 (Sunday) sorts last, not first.
+  const stated = days
+    .map((d) => Number(d.dow))
+    .filter((dow) => Number.isInteger(dow) && dow >= 0 && dow <= 6)
+    .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
+    .map((dow) => names[dow])
+    .join(", ");
+  if (!stated) return "";
+  const run = ctx?.endurance_schedule as { days?: Array<{ dow?: number }> } | null;
+  const runDows = new Set(
+    (Array.isArray(run?.days) ? run.days : []).map((d) => Number(d.dow)).filter((dow) => Number.isInteger(dow))
+  );
+  const both = days
+    .map((d) => Number(d.dow))
+    .filter((dow) => runDows.has(dow))
+    .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
+    .map((dow) => names[dow]);
+  const shared = both.length
+    ? ` ${both.join(", ")} ${both.length === 1 ? "is" : "are"} BOTH a lifting day and a run day: that day's strength session is upper-body or otherwise non-leg — never the week's heavy squat/hinge day.`
+    : " On a weekday that is BOTH a lifting day and a run day the strength session is upper-body or otherwise non-leg, never the week's heavy squat/hinge day.";
+  // An OBSERVED week is a weaker claim than a stated one, and the sentence says so
+  // rather than dressing a pattern up as a declaration. The athlete never typed these
+  // days; they lifted on them. So the model may propose moving one — and must not
+  // pretend the athlete asked for it.
+  if (schedule?.source === "observed") {
+    const seen = Number(schedule.weeks_seen);
+    const window = Number(schedule.weeks_window) || 6;
+    const evidence = Number.isFinite(seen) && seen > 0 ? `${seen} of the last ${window} weeks` : `the last ${window} weeks`;
+    return `\nOBSERVED LIFTING DAYS (from the log, ${evidence} — they have not said, this is what they DO): ${stated}. Treat these as the week's real shape: keep a strength session on each unless you have a reason, and say the reason. This is a pattern, not a declaration — never tell them they asked for it.${shared}\n`;
+  }
+  return `\nSTATED LIFTING DAYS: ${stated}. Every stated lifting weekday carries a strength session; never place a strength session on an unstated weekday.${shared}\n`;
+}
+
 // renderHybridSequencing: the runner+lifter interference/synergy note for the on-demand
 // session builder. A concurrent runner+lifter loads the SAME legs from two directions, so
 // today's session is SEQUENCED against yesterday's cardio, tomorrow's key run, and any run

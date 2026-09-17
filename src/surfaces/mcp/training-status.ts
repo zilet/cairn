@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { getEnduranceSchedule, normalizeEnduranceSchedule, setProfile } from "../../domain/person/index.js";
+import {
+  getEnduranceSchedule,
+  getStrengthSchedule,
+  normalizeEnduranceSchedule,
+  normalizeStrengthSchedule,
+  setProfile,
+} from "../../domain/person/index.js";
 import {
   getCardioForDate,
   getEnduranceGoal,
@@ -98,6 +104,37 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
         });
       }
       return asText(setProfile({ endurance_schedule: schedule }));
+    }
+  );
+
+  server.tool(
+    "get_strength_schedule",
+    "The athlete's stated LIFTING weekdays. days[] is {dow: 0-6 (0=Sunday)} — no kind, because which split lands on which day is the plan's business, not the schedule's. When set, the weekday ring lays the plan's strength days onto exactly these weekdays and never puts one on an unstated weekday. null when unset.",
+    {},
+    async () => asText(getStrengthSchedule())
+  );
+
+  server.tool(
+    "set_strength_schedule",
+    "Set or clear the athlete's stated lifting weekdays. Only weekdays they named — never invent a day. days is [{dow: 0-6 (0=Sunday)}]. Pass days: null (or omit) to clear the schedule; days: [] clears it too. A duplicate weekday is kept once.",
+    {
+      days: z
+        .array(z.object({ dow: z.number().int().min(0).max(6).describe("0=Sunday … 6=Saturday") }))
+        .nullable()
+        .optional()
+        .describe("omit or pass null to clear the whole schedule"),
+      note: z.string().optional(),
+    },
+    async (input) => {
+      if (input.days == null) return asText(setProfile({ strength_schedule: null }));
+      const schedule = normalizeStrengthSchedule({ days: input.days, note: input.note, source: "athlete" });
+      if (!schedule) {
+        return asText({
+          ok: false,
+          error: "strength_schedule requires days to be a list of {dow: 0-6} (an empty list clears it)",
+        });
+      }
+      return asText(setProfile({ strength_schedule: schedule }));
     }
   );
 }
