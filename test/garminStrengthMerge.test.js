@@ -131,6 +131,49 @@ test("an initially empty watch-only session imports detected sets and stays impo
   assert.equal(session.garmin.cairn_sets_authoritative, false, "re-reconcile preserves watch-only fallback policy");
 });
 
+test("a detected set the watch could not name is parked, never logged as 'Unknown'", async () => {
+  const activity = seedStrengthActivity("watch-unnamed", [
+    { category: "SQUAT", name: "Squat", reps: 10, weight_kg: 50 },
+    { category: "UNKNOWN", name: "Unknown", reps: 12, weight_kg: 26 },
+    { category: "UNKNOWN", name: "UNKNOWN", reps: 20, weight_kg: 0 },
+  ]);
+
+  repo.reconcileGarminStrength(activity.id);
+  await processGarminStrengthJob(activity.id);
+  let session = repo.getSessionByDate(TODAY);
+  assert.equal(session.garmin.cairn_sets_authoritative, false, "the named set still makes the day watch-owned");
+  assert.deepEqual(
+    session.sets.map((set) => set.exercise),
+    ["Squat"],
+    "only the movement the watch recognised is logged"
+  );
+  assert.equal(repo.findExercise("Unknown"), undefined, "no placeholder exercise row is minted");
+  assert.equal(session.garmin.unattributed_sets.length, 2, "the unnamed work is parked on the session");
+  assert.equal(session.garmin.unattributed_sets[0].reps, 12);
+  assert.equal(session.garmin.unattributed_sets[0].weight, 57.5, "parked load is the converted lb value");
+  assert.equal(session.garmin.unattributed_sets[1].weight, null, "0 kg parks as bodyweight");
+
+  await processGarminStrengthJob(activity.id);
+  session = repo.getSessionByDate(TODAY);
+  assert.equal(session.garmin.unattributed_sets.length, 2, "a rerun replaces this activity's parked sets, never doubles them");
+});
+
+test("unnamed detected sets on a hand-logged day are parked, and nothing is appended", async () => {
+  repo.logSetByName({ exercise: "Romanian Deadlift", weight: 185, reps: 10, date: TODAY });
+  const activity = seedStrengthActivity("echo-unnamed", [
+    { category: "DEADLIFT", name: "Barbell Deadlift", reps: 10, weight_kg: 61.2 },
+    { category: "UNKNOWN", name: "Unknown", reps: 10, weight_kg: 83.9 },
+  ]);
+
+  repo.reconcileGarminStrength(activity.id);
+  await processGarminStrengthJob(activity.id);
+  const session = repo.getSessionByDate(TODAY);
+  assert.equal(session.garmin.cairn_sets_authoritative, true);
+  assert.deepEqual(session.sets.map((set) => set.exercise), ["Romanian Deadlift"], "the athlete's log is the truth");
+  assert.equal(repo.findExercise("Barbell Deadlift"), undefined, "the watch's echo never becomes a row");
+  assert.equal(session.garmin.unattributed_sets.length, 1, "the unnamed set is still visible as parked work");
+});
+
 test("Cairn sets logged after reconcile win the pending-authority race", async () => {
   const activity = seedStrengthActivity("pending-race", [
     { category: "SQUAT", name: "Squat", reps: 10, weight_kg: 70.3 },

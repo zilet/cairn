@@ -12,7 +12,7 @@ import {
   listGarminSources,
 } from "./activities.js";
 import { activitySportWhere, canonicalEnduranceSport } from "./endurance-sports.js";
-import { MUSCLE_LANDMARKS, resolveExerciseName } from "./exercise-canon.js";
+import { isPlaceholderExerciseName, MUSCLE_LANDMARKS, resolveExerciseName } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import {
   findExercise,
@@ -213,9 +213,7 @@ export function finishSession(sessionId: number, notes?: string | null) {
   // may fail a finish. The export itself re-checks the toggle, credentials, set
   // authority and its own fingerprint before touching the network.
   try {
-    import("../enrich.js")
-      .then((m) => m.enqueueEnrich("garmin_export", sessionId))
-      .catch(() => {});
+    import("../enrich.js").then((m) => m.enqueueEnrich("garmin_export", sessionId)).catch(() => {});
   } catch {
     /* write-back is additive — it must never fail a finish */
   }
@@ -670,7 +668,22 @@ export interface GarminSetImportResult {
   authority: boolean | null;
   imported: number;
   already_imported: boolean;
+  // Detected sets the watch could not put a movement on ("UNKNOWN"). They are parked
+  // on the session's garmin blob for naming, never logged under a placeholder row.
+  unattributed: number;
 }
+
+// A parked Garmin set: real work with no movement attached. Lives in
+// `sessions.garmin_json.unattributed_sets`, keyed by the activity it came from so a
+// re-sync replaces rather than duplicates.
+export interface UnattributedGarminSet {
+  activity_key: string;
+  weight: number | null;
+  reps: number | null;
+  duration_sec: number | null;
+  exercise_mode: "reps" | "timed";
+}
+const MAX_UNATTRIBUTED_SETS = 32;
 
 // Atomically claim set authority for one Garmin activity, write its complete set
 // batch, and append its idempotency key to the session ledger. A pending session
@@ -685,13 +698,24 @@ export function importGarminActivitySets(input: {
   const sessionId = Number(input.session_id);
   const date = String(input.date || "").trim();
   const activityKey = String(input.activity_key || "").trim();
-  const sets = Array.isArray(input.sets) ? input.sets : [];
+  const allSets = Array.isArray(input.sets) ? input.sets : [];
+  // A placeholder name is not a movement: park the set, never mint an "Unknown" row.
+  const sets = allSets.filter((set) => !isPlaceholderExerciseName(set?.exercise));
+  const parked: UnattributedGarminSet[] = allSets
+    .filter((set) => isPlaceholderExerciseName(set?.exercise))
+    .map((set) => ({
+      activity_key: String(input.activity_key || "").trim(),
+      weight: typeof set.weight === "number" ? set.weight : null,
+      reps: typeof set.reps === "number" ? set.reps : null,
+      duration_sec: typeof set.duration_sec === "number" ? set.duration_sec : null,
+      exercise_mode: set.exercise_mode === "timed" ? "timed" : "reps",
+    }));
   if (!Number.isInteger(sessionId) || sessionId <= 0) throw new Error("valid session_id required");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("valid date required");
   if (!activityKey) throw new Error("activity_key required");
 
   const savepoint = "garmin_set_import";
-  let result: GarminSetImportResult = { authority: null, imported: 0, already_imported: false };
+  let result: GarminSetImportResult = { authority: null, imported: 0, already_imported: false, unattributed: 0 };
   let firstExercise: string | null = null;
   db.exec(`SAVEPOINT ${savepoint}`);
   try {
@@ -716,18 +740,38 @@ export function importGarminActivitySets(input: {
       (db.prepare(`SELECT COUNT(*) AS n FROM logged_sets WHERE session_id = ?`).get(sessionId) as any)?.n ?? 0
     );
 
+    // Park the unattributed sets whatever authority says: on a hand-logged day they
+    // are most likely echoes of sets the athlete already wrote, so they are never
+    // logged, but the athlete can still see the watch counted work it could not name.
+    // Keyed by activity so a re-sync replaces this activity's entries, never doubles.
+    const parkUnattributed = (): boolean => {
+      const prior: UnattributedGarminSet[] = Array.isArray(garmin.unattributed_sets)
+        ? garmin.unattributed_sets.filter((u: any) => u && String(u.activity_key ?? "") !== activityKey)
+        : [];
+      const next = [...prior, ...parked].slice(-MAX_UNATTRIBUTED_SETS);
+      if (!parked.length && !Array.isArray(garmin.unattributed_sets)) return false;
+      if (next.length) garmin.unattributed_sets = next;
+      else delete garmin.unattributed_sets;
+      return true;
+    };
+
     if (storedAuthority === true || (storedAuthority === null && setCount > 0)) {
-      if (storedAuthority !== true) {
+      const parkedNow = parkUnattributed();
+      if (storedAuthority !== true || parkedNow) {
         garmin.cairn_sets_authoritative = true;
         db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(garmin), sessionId);
       }
-      result = { authority: true, imported: 0, already_imported: alreadyImported };
+      result = { authority: true, imported: 0, already_imported: alreadyImported, unattributed: parked.length };
     } else if (alreadyImported) {
-      result = { authority: storedAuthority, imported: 0, already_imported: true };
+      result = { authority: storedAuthority, imported: 0, already_imported: true, unattributed: 0 };
     } else if (sets.length === 0) {
       // An empty or unusable Garmin payload is not evidence that Garmin owns sets.
-      // Keep a markerless session pending so a later Cairn log can still win.
-      result = { authority: storedAuthority, imported: 0, already_imported: false };
+      // Keep a markerless session pending so a later Cairn log can still win — but
+      // still park any unnamed work so it is not lost.
+      if (parkUnattributed()) {
+        db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(garmin), sessionId);
+      }
+      result = { authority: storedAuthority, imported: 0, already_imported: false, unattributed: parked.length };
     } else {
       for (const set of sets) {
         const logged = insertSetByName({ ...set, date }, false, false);
@@ -740,8 +784,10 @@ export function importGarminActivitySets(input: {
       garmin.cairn_sets_authoritative = false;
       garmin.extrapolated = true;
       garmin.imported_set_activity_ids = [...new Set([...importedIds, activityKey])].slice(-32);
+      parkUnattributed();
       db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(garmin), sessionId);
       result.authority = false;
+      result.unattributed = parked.length;
     }
     db.exec(`RELEASE ${savepoint}`);
   } catch (error) {

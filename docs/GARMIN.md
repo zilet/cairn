@@ -9,7 +9,10 @@ For a same-day strength session that already has Cairn-logged sets, reconciliati
 keeps those exact exercises and sets authoritative and adds only Garmin physiology
 (duration, heart rate/zones, calories, and training effect) plus an optional narrative.
 Garmin-detected sets are imported only when the session is still empty as its queued
-strength job begins. An empty session stays pending between reconciliation and that
+strength job begins. A detected set the watch could not put a movement on (Garmin's
+`UNKNOWN` category) is never logged under a placeholder exercise: it is parked on the
+session as an unattributed set and shown on the session card, so the work is visible
+and the athlete can log the real lift. An empty session stays pending between reconciliation and that
 job, so any Cairn sets logged in the interval become authoritative. Empty or unusable
 watch set data does not resolve that pending state: with enrichment unavailable, an
 agent failure, or no usable agent fallback, a later Cairn log can still win. A richer

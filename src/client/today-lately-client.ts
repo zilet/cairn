@@ -103,11 +103,16 @@ const TODAY_LATELY_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#
     const receipt = garminReceiptHtml(g);
     if (!tiles.length && !bar && !g.summary && !receipt) return "";
     const tag = g.extrapolated ? `<span class="garmin-tag">✦ logged from Garmin</span>` : "";
+    const unnamed = Array.isArray(g.unattributed_sets) ? g.unattributed_sets.length : 0;
+    const unnamedLine = unnamed
+      ? `<div class="garmin-sum">The watch counted ${unnamed} set${unnamed === 1 ? "" : "s"} it could not put a name on. Log the lift yourself if it was one you did not write down.</div>`
+      : "";
     return `<div class="garmin-card reveal" style="--i:2">
       <div class="garmin-card-h"><span class="lbl">Garmin · body's reaction</span>${tag}</div>
       ${tiles.length ? `<div class="garmin-tiles">${tiles.join("")}</div>` : ""}
       ${bar}
       ${g.summary ? `<div class="garmin-sum">${escHtml(g.summary)}</div>` : ""}
+      ${unnamedLine}
       ${receipt}
     </div>`;
   }

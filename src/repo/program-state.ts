@@ -19,6 +19,7 @@ import { currentTrainingDataVersion, registerTrainingCacheClear, trainingBacksto
 import {
   canonicalGroup,
   classifyMuscleGroup,
+  isPlaceholderExerciseName,
   movementKey,
   MUSCLE_LANDMARKS,
   type MuscleGroup,
@@ -122,13 +123,10 @@ export interface LiftState {
 // the split here means the graders never have to know how the read is grouped.
 type GradedLift = Omit<LiftState, "family_key" | "family_label" | "last_trained">;
 
-// Placeholder / junk exercise names a faithful importer sometimes writes (e.g. a
-// Garmin strength block with no detected movement lands as "Unknown"). The DATA
-// stays — the read just skips these rows so they never pollute the curated list.
-const JUNK_EXERCISE_NAMES = new Set(["unknown", "other", "misc", "exercise", "workout"]);
-function isJunkExerciseName(name: string): boolean {
-  return JUNK_EXERCISE_NAMES.has(normalizeExerciseName(name));
-}
+// Placeholder exercise names a legacy import once wrote (a Garmin strength set with
+// no detected movement landed as "Unknown"; today's importer parks such a set instead).
+// The DATA stays — the read just skips these rows so they never pollute the curated list.
+const isJunkExerciseName = isPlaceholderExerciseName;
 
 // Title-case a movementKey ("bench press" → "Bench Press") for the family header.
 // A bare "s" token straight after another word is a stranded possessive apostrophe

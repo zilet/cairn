@@ -176,6 +176,16 @@ export function normalizeExerciseName(raw: string): string {
     .trim();
 }
 
+// Placeholder names a faithful importer sometimes carries in place of a movement — a
+// Garmin strength set whose movement the watch could not classify arrives as
+// "UNKNOWN". There is nothing for the resolver to fold such a name onto, so the
+// importer parks the set for naming instead of minting a row, and every read that
+// still meets one (legacy rows) skips it.
+const PLACEHOLDER_EXERCISE_NAMES = new Set(["unknown", "other", "misc", "exercise", "workout"]);
+export function isPlaceholderExerciseName(name: string | null | undefined): boolean {
+  return PLACEHOLDER_EXERCISE_NAMES.has(normalizeExerciseName(String(name ?? "")));
+}
+
 // Fold a simple English plural to its singular for KEYING only (never for display).
 // Strip a single trailing "s" only when the token is long enough to be a real word
 // (>3 chars) and doesn't already end in "ss" — so "extensions" → "extension",

@@ -3250,6 +3250,13 @@ summary + memory.
 - Degrades gracefully end-to-end: disabled / no agent → `skipped` (written directly at insert, no
   queue churn); a failure or wrong-shape (e.g. coach-proposal) response → `failed`/no-op with the
   regex parse (or the as-uploaded doc) left intact.
+- `'garmin_strength'`'s set import goes through one repo chokepoint, `importGarminActivitySets`
+  (`src/repo/sessions.ts`): a day with Cairn-logged sets is Cairn-authoritative and never gets a
+  watch set appended, and a detected set carrying a placeholder name (`isPlaceholderExerciseName`,
+  `src/repo/exercise-canon.ts` — Garmin's `UNKNOWN` category) is never logged under a placeholder
+  row. It is parked on `sessions.garmin_json.unattributed_sets` (per activity key, so a re-sync
+  replaces rather than doubles) and the session card names the count, so the athlete can log the
+  real lift. Legacy `Unknown` rows are skipped by the program-state read, never renamed.
 - `'garmin_export'` is the one kind that is **not agentic**: it pushes a finished Cairn strength
   session back to Garmin (`exportSessionToGarmin`, `src/garminExport.ts`) as that day's exercise
   sets. Like `'garmin_strength'` it has no status column of its own (the status setters and
