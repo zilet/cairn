@@ -529,9 +529,10 @@ function insertSetByName(
   // the exercises screen — so the log path queues the same background enrichment the
   // user-facing upsert does (canonical name, group/equipment, guide, art, and the
   // agentic Garmin mapping for a name the deterministic catalog could not place).
-  // Only on a genuine INSERT, and only for a hand/chat/API log: a Garmin set import
-  // (emitEffects false) keeps the deterministic mapping and stays off the queue,
-  // exactly like seed and plan import.
+  // Only on a genuine INSERT, and only when the caller opts in (`opts.enrich`): a
+  // hand/chat/API log and a Garmin import do — the watch's category title ("Bar Cable
+  // Machine Triceps Extension Push Down") is exactly the kind of name that needs a
+  // librarian — while seed and plan import keep their curated names off the queue.
   const createdExercise = !!ex && Number(ex.id) > beforeMaxExercise;
   // An explicitly-passed mode also updates an existing exercise (e.g. converting
   // "Plank" to timed on the first timed log).
@@ -620,12 +621,11 @@ function insertSetByName(
   }
 
   if (emitEffects) reconcileDailySessionSafe(session.id);
-  // A name typed by a PERSON is the one that may still need cleaning up, so the
-  // background 'exercise' job is queued only for a surface-driven log (`opts.enrich`,
-  // exactly like POST /api/exercises' own opt-in) — never for a repo-internal or
-  // connector write. The deterministic FIT mapping already happened on the INSERT
+  // The background 'exercise' job is queued only where the caller opted in
+  // (`opts.enrich`, exactly like POST /api/exercises' own opt-in) — never for a
+  // repo-internal write. The deterministic FIT mapping already happened on the INSERT
   // inside findOrCreateExercise, so an unqueued movement is still mapped.
-  if (createdExercise && emitEffects && opts.enrich) queueExerciseEnrichment(Number(ex.id));
+  if (createdExercise && opts.enrich) queueExerciseEnrichment(Number(ex.id));
 
   return {
     id: info.lastInsertRowid,
@@ -774,7 +774,9 @@ export function importGarminActivitySets(input: {
       result = { authority: storedAuthority, imported: 0, already_imported: false, unattributed: parked.length };
     } else {
       for (const set of sets) {
-        const logged = insertSetByName({ ...set, date }, false, false);
+        // Effects stay off (no daily reconcile mid-import) but a genuinely NEW movement
+        // still buys the librarian pass: a watch category title is a name to be tidied.
+        const logged = insertSetByName({ ...set, date }, false, false, { enrich: true });
         if (Number(logged.session_id) !== sessionId) {
           throw new Error(`Garmin set landed in unexpected session ${logged.session_id}`);
         }

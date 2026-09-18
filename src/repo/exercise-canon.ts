@@ -958,6 +958,45 @@ export function planExerciseAliases(
   return out;
 }
 
+// PURE rename planner — the single-member half of the same reconciliation. A group
+// with exactly ONE verbatim member whose canonical is a genuinely different spelling
+// (not just casing) is the agent saying "this lift is called X". planExerciseAliases
+// deliberately refuses such a canonical as foreign, so for years it fell on the
+// floor; here it becomes a rename PROPOSAL, and repo.renameExercise's guards decide
+// whether it lands or waits for a person. Never a placeholder, never a self-rename,
+// first proposal per member wins.
+export function planExerciseRenames(
+  items: Array<{ name: string }>,
+  groups: Array<{ members: string[]; canonical: string }>
+): Array<{ from: string; into: string }> {
+  const byNorm = new Map<string, string>();
+  for (const i of Array.isArray(items) ? items : []) {
+    const display = String(i?.name ?? "").replace(/\s+/g, " ").trim();
+    const norm = normalizeExerciseName(display);
+    if (norm && !byNorm.has(norm)) byNorm.set(norm, display);
+  }
+  const out: Array<{ from: string; into: string }> = [];
+  const seen = new Set<string>();
+  for (const g of Array.isArray(groups) ? groups : []) {
+    const members = [
+      ...new Set(
+        (Array.isArray((g as any)?.members) ? (g as any).members : [])
+          .map((m: unknown) => byNorm.get(normalizeExerciseName(String(m ?? ""))))
+          .filter((m: unknown): m is string => typeof m === "string")
+      ),
+    ] as string[];
+    if (members.length !== 1) continue;
+    const from = members[0];
+    const into = cleanExerciseName(String((g as any)?.canonical ?? "").replace(/\s+/g, " ").trim());
+    if (!into || isPlaceholderExerciseName(into)) continue;
+    const fromNorm = normalizeExerciseName(from);
+    if (normalizeExerciseName(into) === fromNorm || seen.has(fromNorm)) continue;
+    seen.add(fromNorm);
+    out.push({ from, into });
+  }
+  return out;
+}
+
 // PURE merge planner: cluster the given exercise names by normalizedExerciseKey and,
 // for any cluster with ≥2 distinct names, propose merging the others INTO the
 // "primary" (the name with the most logged sets when counts are provided, else the

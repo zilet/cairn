@@ -9,7 +9,10 @@ For a same-day strength session that already has Cairn-logged sets, reconciliati
 keeps those exact exercises and sets authoritative and adds only Garmin physiology
 (duration, heart rate/zones, calories, and training effect) plus an optional narrative.
 Garmin-detected sets are imported only when the session is still empty as its queued
-strength job begins. A detected set the watch could not put a movement on (Garmin's
+strength job begins. A movement the import mints under the watch's own category title
+gets the same background naming pass a hand-logged one does, so a title like "Bar Cable
+Machine Triceps Extension Push Down" is tidied (or, when the cleaner name reads like a
+different movement, offered on the exercise sheet for a yes/no) rather than kept forever. A detected set the watch could not put a movement on (Garmin's
 `UNKNOWN` category) is never logged under a placeholder exercise: it is parked on the
 session as an unattributed set and shown on the session card, so the work is visible
 and the athlete can log the real lift. An empty session stays pending between reconciliation and that

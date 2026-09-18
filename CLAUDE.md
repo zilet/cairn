@@ -414,7 +414,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   compare raw `exercises.name`.** One ladder (exact → one alias hop → key → a unique expanded key),
   read by every consumer AND by the `findOrCreateExercise` write chokepoint, so a spelling can never
   split one lift into two histories. Its `key` is the persisted `movement_key` shape — never widen
-  it. Details in `docs/ARCHITECTURE.md` "Exercise identity: one resolver".
+  it. **A stored name is retitled only through `renameExercise`**: casing lands everywhere at once,
+  a same-lift respelling may land from an agent, a rewording is PARKED on `suggested_name` for a
+  person's yes/no (never dropped, never forced), and "keep" is remembered on `refused_name`.
+  Details in `docs/ARCHITECTURE.md` "Exercise identity: one resolver".
 - **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
   as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.
   Details in `docs/ARCHITECTURE.md`.

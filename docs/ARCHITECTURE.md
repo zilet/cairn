@@ -2564,6 +2564,37 @@ qualifier is the only difference this tier forgives, so a newly typed "<movement
 existing "<movement>" row instead of opening a second series. It only ever affects a name written for
 the FIRST time; it never merges rows that already exist.
 
+**A stored name can be RETITLED, through one chokepoint** — `renameExercise(id, proposed, {source})`
+(`src/repo/exercises.ts`). For a long time nothing retitled an existing row: `cleanExerciseName` ran
+on the INSERT only, the `'exercise'` enrichment job compared NORMALIZED names and so read a
+casing-only proposal ("Dead hang" → "Dead Hang") as no change, its identity guard refused every
+logged row whose tokens moved at all, and the Tidy pass (`reconcileExercises`) rejected an agent's
+cleaner canonical as "foreign" and wrote at most an alias. The live catalog kept "Seated Leg Press -
+Machine" through fifty enrichment passes. Three kinds of new name now have three laws:
+
+| The new name is… | Example | Law |
+|---|---|---|
+| casing / whitespace only | "Dead hang" → "Dead Hang" | display text — lands immediately, everywhere: at boot (`normalizeExerciseTitles`), on every `findOrCreateExercise` hit, inside `dedupeExercises` (`retitles`, reported on the dry run) and at the top of Tidy |
+| the same lift respelled | "Seated Leg Press - Machine" → "Seated Leg Press" | `sameExerciseIdentity` OR a station word only (`implementRelaxedExerciseKey` equality held to `validateExerciseMergePlan`) — an agent may land it on a logged row |
+| a rewording | "Abs Crunch Rope Pull Overhead" → "Cable Crunch" | maybe the same lift — an agent's proposal is PARKED on `exercises.suggested_name` for a one-tap yes/no; a person's rename always lands |
+
+A proposal that names a row that already exists folds this row into it (`mergeExercises`, its own
+guards). Every landed rename keeps the id and the logged numbers, repoints the by-name references
+(`strength_objectives.exercise`, `session_skips.exercise`, `exercise_aliases.canonical`), records the
+old spelling as an alias so it keeps resolving, and re-arms the FIT mapping (an agent caller applies
+its own shortlist pick first and re-scores afterwards). "Keep" (`PUT /api/exercises/:id
+{keep_name:true}`, MCP `update_exercise`) declines the parked suggestion AND remembers it on
+`refused_name`, so the next Tidy never re-asks; `{name}` is the person's rename. Surfaces: the
+exercise sheet (`data-exrename`) and the Tidy button's result cards (`rename_suggested`). The single-
+member half of the agent's reconciliation is `planExerciseRenames` (pure, `exercise-canon.ts`).
+
+**Every movement the athlete trains gets ONE librarian pass.** The `'exercise'` job is queued on a
+genuine INSERT from a hand/chat/API log, `POST /api/exercises` AND a Garmin set import (the watch's
+category title is exactly the kind of name that needs tidying); seed and plan import keep their
+curated names off the queue. `catchUpExerciseEnrichment()` at boot queues never-enriched rows that
+carry a logged set or a plan slot, once each (a queued row leaves the NULL state, so it never repeats);
+a disabled install is left NULL, not `'skipped'`, so enabling enrichment later still gets them a look.
+
 **A merge moves EVERY reference before it deletes.** An exercise is referenced by foreign key
 (`logged_sets`, `plan_items`, `exercise_guides.exercise_id`, `movement_tolerance_observations.exercise_id`),
 by name (`strength_objectives.exercise`, `session_skips.exercise`, `exercise_aliases.canonical`,

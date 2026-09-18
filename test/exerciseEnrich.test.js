@@ -202,8 +202,8 @@ test("a set logged through a surface queues its enrichment; an internal write an
   const quiet = repo.findExercise("Jefferson Curl");
   assert.equal(quiet.enrichment_status ?? null, null, "an internal write never queues an agent call");
 
-  // A Garmin set import creates rows too; those must stay off the queue, exactly like
-  // seed and plan import.
+  // A Garmin set import creates rows too — under the watch's own category title, which
+  // is exactly the kind of name that needs the librarian. It queues like a hand log.
   assert.equal(repo.findExercise("Seated Cable Row"), undefined);
   repo.importGarminActivitySets({
     session_id: repo.getOrCreateSession("2026-07-05").id,
@@ -213,9 +213,108 @@ test("a set logged through a surface queues its enrichment; an internal write an
   });
   const imported = repo.findExercise("Seated Cable Row");
   assert.ok(imported, "the movement exists");
-  assert.equal(imported.enrichment_status ?? null, null, "a Garmin import never queues an agent call");
-  assert.equal(imported.garmin_map_status, "mapped", "but it still gets the deterministic mapping");
+  assert.equal(imported.enrichment_status, "pending", "a Garmin-minted movement gets its librarian pass");
+  assert.equal(imported.garmin_map_status, "mapped", "and it still gets the deterministic mapping at insert");
 });
+
+test("a casing-only canonical lands on a logged row (it was skipped as 'no change' before)", () => {
+  // The live catalog carried "Dead hang" for a year: the agent kept proposing "Dead
+  // Hang", and the apply path compared normalized names, saw no difference, and did
+  // nothing. Casing is display text — it lands, with no identity question asked.
+  const id = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Dead hang', 'forearms', 'timed')").run().lastInsertRowid);
+  repo.logSetByName({ exercise: "Dead hang", duration_sec: 40, date: "2026-07-01" });
+  const r = repo.applyExerciseEnrichment(id, { canonical: "Dead Hang" });
+  assert.equal(r.id, id);
+  assert.equal(repo.getExercise(id).name, "Dead Hang");
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM logged_sets WHERE exercise_id = ?").get(id).c, 1);
+});
+
+test("a station-word respelling lands on a logged row; a rewording is PARKED, never dropped", () => {
+  // "Seated Leg Press - Machine" IS a "Seated Leg Press" — the one relaxation the write
+  // chokepoint already forgives, so the agent may land it on a logged row.
+  const press = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Seated Leg Press - Machine', 'quads', 'reps')").run().lastInsertRowid);
+  repo.logSetByName({ exercise: "Seated Leg Press - Machine", weight: 200, reps: 10, date: "2026-07-01" });
+  const landed = repo.applyExerciseEnrichment(press, { canonical: "Seated Leg Press" });
+  assert.equal(landed.name, "Seated Leg Press");
+  assert.equal(repo.getExercise(press).name, "Seated Leg Press");
+  assert.equal(repo.resolveExerciseName("Seated Leg Press - Machine").exercise_id, press, "the old spelling keeps resolving");
+
+  // "Abs Crunch Rope Pull Overhead" → "Cable Crunch" changes the words, so the guard
+  // cannot vouch for it. Before, that proposal vanished; now it waits on the row.
+  const crunch = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Abs Crunch Rope Pull Overhead', 'core', 'reps')").run().lastInsertRowid);
+  repo.logSetByName({ exercise: "Abs Crunch Rope Pull Overhead", weight: 60, reps: 12, date: "2026-07-01" });
+  const parked = repo.applyExerciseEnrichment(crunch, { canonical: "Cable Crunch" });
+  assert.equal(parked.name, "Abs Crunch Rope Pull Overhead", "the name the athlete uses stays");
+  assert.equal(repo.getExercise(crunch).suggested_name, "Cable Crunch", "the proposal is parked for a yes/no");
+  assert.equal(repo.findExercise("Cable Crunch"), undefined, "no row is minted for the proposal");
+
+  // "Keep" declines AND remembers: the same proposal is refused next pass, silently.
+  repo.updateExercise(crunch, { keep_name: true });
+  assert.equal(repo.getExercise(crunch).suggested_name ?? null, null);
+  assert.equal(repo.getExercise(crunch).refused_name, "Cable Crunch");
+  const again = repo.renameExercise(crunch, "cable crunch", { source: "agent" });
+  assert.equal(again.outcome, "refused");
+  assert.equal(repo.getExercise(crunch).suggested_name ?? null, null, "a declined proposal is never re-parked");
+
+  // A PERSON's word lands where an agent's would not.
+  const person = repo.updateExercise(crunch, { name: "Cable Crunch" });
+  assert.equal(person.name, "Cable Crunch");
+  assert.equal(person.id, crunch, "same row, same history");
+  assert.equal(repo.resolveExerciseName("Abs Crunch Rope Pull Overhead").exercise_id, crunch);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM logged_sets WHERE exercise_id = ?").get(crunch).c, 1);
+});
+
+test("a person's rename onto a name that already exists folds the two into one", () => {
+  const keep = repo.findOrCreateExercise("Barbell Bench Press", "chest");
+  const dup = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Bench Press Flat', 'chest', 'reps')").run().lastInsertRowid);
+  repo.logSetByName({ exercise: "Bench Press Flat", weight: 135, reps: 8, date: "2026-07-01" });
+  const r = repo.updateExercise(dup, { name: "Barbell Bench Press" });
+  assert.equal(r.id, keep.id, "the survivor is the row that already carried the name");
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM exercises WHERE id = ?").get(dup).c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM logged_sets WHERE exercise_id = ?").get(keep.id).c, 1, "the set moved with it");
+  assert.equal(repo.renameExercise(keep.id, "unknown", { source: "person" }).outcome, "rejected", "a placeholder is never a name");
+});
+
+test("casing is normalized immediately: at the write chokepoint, and by the whole-catalog pass", () => {
+  const legacy = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Dead hang', 'forearms', 'timed')").run().lastInsertRowid);
+  const shout = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('russian twist', 'core', 'reps')").run().lastInsertRowid);
+  db.prepare("INSERT INTO strength_objectives (exercise, exercise_key, target_kind, target_est_1rm, status) VALUES ('Dead hang', 'dead hang', 'explicit_est_1rm', 100, 'active')").run();
+  // A hit on the existing row lands its casing on the way out — the next log already reads clean.
+  const hit = repo.findOrCreateExercise("dead hang");
+  assert.equal(hit.id, legacy);
+  assert.equal(hit.name, "Dead Hang");
+  assert.equal(db.prepare("SELECT exercise FROM strength_objectives WHERE exercise_key = 'dead hang'").get().exercise, "Dead Hang", "the anchor lift reads the same name");
+  // The pass covers the rest of the catalog and is idempotent.
+  const pass = repo.normalizeExerciseTitles();
+  assert.deepEqual(pass.retitled.map((r) => [r.id, r.into]), [[shout, "Russian Twist"]]);
+  assert.deepEqual(repo.normalizeExerciseTitles().retitled, []);
+  // A deliberately cased name is left alone.
+  const mc = repo.findOrCreateExercise("McGill Curl-up");
+  assert.equal(repo.getExercise(mc.id).name, "McGill Curl-up");
+});
+
+test("the boot catch-up queues only never-enriched movements the athlete trains or plans", async () => {
+  const { catchUpExerciseEnrichment } = await import("../dist/enrich.js");
+  const trained = repo.findOrCreateExercise("Machine Chest Press", "chest"); // null status, one set
+  repo.logSetByName({ exercise: "Machine Chest Press", weight: 100, reps: 10, date: "2026-07-01" });
+  const idle = repo.findOrCreateExercise("Decline Bench Press", "chest"); // null status, never used
+  const done = repo.findOrCreateExercise("Hammer Curl", "biceps");
+  db.prepare("UPDATE exercises SET enrichment_status = 'done' WHERE id = ?").run(done.id);
+  repo.logSetByName({ exercise: "Hammer Curl", weight: 30, reps: 10, date: "2026-07-01" });
+
+  assert.equal(catchUpExerciseEnrichment(), 1);
+  assert.equal(repo.getExercise(trained.id).enrichment_status, "pending");
+  assert.equal(repo.getExercise(idle.id).enrichment_status ?? null, null, "an unused row is left alone");
+  assert.equal(repo.getExercise(done.id).enrichment_status, "done", "a row that had its pass is never re-run");
+  assert.equal(catchUpExerciseEnrichment(), 0, "one-time per movement");
+
+  repo.setSettings({ enrich_enabled: false });
+  const late = repo.findOrCreateExercise("Pec Deck", "chest");
+  repo.logSetByName({ exercise: "Pec Deck", weight: 80, reps: 12, date: "2026-07-02" });
+  assert.equal(catchUpExerciseEnrichment(), 0);
+  assert.equal(repo.getExercise(late.id).enrichment_status ?? null, null, "a disabled install leaves NULL, not 'skipped', so a later enable still gets it a look");
+});
+
 
 test("applyExerciseEnrichment merges into an existing canonical duplicate, repointing logged sets", () => {
   const canonical = repo.findOrCreateExercise("Move Alpha");

@@ -609,6 +609,68 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
 // enough to auto-apply (see shouldAutoApplyMerge server-side) — surfaced instead
 // as a one-tap suggestion.
 type ExerciseMergeSuggestion = { from: string; into: string; why: string; confidence: string };
+// A rename the librarian proposed that the identity guard would not land on its own
+// (it reads like a different movement). Parked on the row server-side; one tap lands
+// it, "Keep" declines it AND remembers the no, so the next Tidy never re-asks.
+type ExerciseRenameSuggestion = { id: number; from: string; into: string };
+
+function renameSuggestionCardHtml(pair: ExerciseRenameSuggestion, idx: number): string {
+  return `<div class="exmerge-card" data-exrename-card="${idx}">
+    <div class="exmerge-text">Call <b>${escHtml(pair.from)}</b> "<b>${escHtml(pair.into)}</b>"?</div>
+    <div class="exmerge-why">Same numbers, cleaner name. Keep remembers your answer.</div>
+    <div class="exmerge-actions">
+      <button class="ghostbtn" type="button" data-exrename-accept="${idx}">Rename</button>
+      <button class="ghostbtn" type="button" data-exrename-keep="${idx}">Keep</button>
+    </div>
+  </div>`;
+}
+
+async function answerRenameSuggestion(
+  btn: HTMLElement,
+  pairs: ExerciseRenameSuggestion[],
+  accept: boolean,
+  deps: ClientProgressProgramControllerDeps
+): Promise<void> {
+  const idx = Number(btn.getAttribute(accept ? "data-exrename-accept" : "data-exrename-keep"));
+  const pair = pairs[idx];
+  const card = btn.closest(".exmerge-card");
+  if (!pair || !card) return;
+  const restore = deps.busy(btn, accept ? "renaming…" : "keeping…");
+  let result: { name?: string; error?: string } | null = null;
+  try {
+    result = (await deps.api(`/exercises/${encodeURIComponent(String(pair.id))}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(accept ? { name: pair.into } : { keep_name: true }),
+    })) as { name?: string; error?: string } | null;
+  } catch {
+    result = null;
+  }
+  if (result && !result.error) {
+    deps.toast(accept ? `${pair.from} is now ${result.name || pair.into}` : `Keeping ${pair.from}`);
+    card.remove();
+    if (accept) {
+      deps.invalidate("progress:program");
+      if (deps.state.tab === "progress") deps.renderSelf();
+    }
+    return;
+  }
+  restore();
+  deps.toast(result?.error || (accept ? "Couldn't rename that — try again." : "Couldn't save that — try again."));
+}
+
+function wireRenameSuggestions(
+  slot: Element,
+  pairs: ExerciseRenameSuggestion[],
+  deps: ClientProgressProgramControllerDeps
+): void {
+  slot.querySelectorAll<HTMLElement>("[data-exrename-accept]").forEach((b) => {
+    b.addEventListener("click", () => void answerRenameSuggestion(b, pairs, true, deps));
+  });
+  slot.querySelectorAll<HTMLElement>("[data-exrename-keep]").forEach((b) => {
+    b.addEventListener("click", () => void answerRenameSuggestion(b, pairs, false, deps));
+  });
+}
 
 function mergeSuggestionCardHtml(pair: ExerciseMergeSuggestion, idx: number): string {
   const why = String(pair.why || "").trim();
@@ -622,10 +684,11 @@ function mergeSuggestionCardHtml(pair: ExerciseMergeSuggestion, idx: number): st
   </div>`;
 }
 
-function mergeSuggestionsInnerHtml(pairs: ExerciseMergeSuggestion[]): string {
+function mergeSuggestionsInnerHtml(pairs: ExerciseMergeSuggestion[], renames: ExerciseRenameSuggestion[] = []): string {
   return (
     `<div class="exmerge-head lbl">Cairn's not sure — take a look</div>` +
-    pairs.map((p, i) => mergeSuggestionCardHtml(p, i)).join("")
+    pairs.map((p, i) => mergeSuggestionCardHtml(p, i)).join("") +
+    renames.map((p, i) => renameSuggestionCardHtml(p, i)).join("")
   );
 }
 
@@ -708,11 +771,15 @@ async function tidyExerciseNames(btn: Element, deps: ClientProgressProgramContro
   // branch works standalone.
   const merged = Array.isArray(row.merged) ? row.merged.length : 0;
   const groupsFixed = Number(row.groups_fixed) || 0;
+  // A landed rename or casing retitle is a tidied name too — count it with the aliases.
+  const renamedCount =
+    (Array.isArray(row.renamed) ? row.renamed.length : 0) + (Array.isArray(row.retitled) ? row.retitled.length : 0);
+  const tidied = n + renamedCount;
   let msg =
-    n && merged
-      ? `Tidied ${n} name${n === 1 ? "" : "s"} · merged ${merged} duplicate${merged === 1 ? "" : "s"}`
-      : n
-        ? `Tidied ${n} exercise name${n === 1 ? "" : "s"}`
+    tidied && merged
+      ? `Tidied ${tidied} name${tidied === 1 ? "" : "s"} · merged ${merged} duplicate${merged === 1 ? "" : "s"}`
+      : tidied
+        ? `Tidied ${tidied} exercise name${tidied === 1 ? "" : "s"}`
         : merged
           ? `Merged ${merged} duplicate${merged === 1 ? "" : "s"}`
           : "";
@@ -729,13 +796,15 @@ async function tidyExerciseNames(btn: Element, deps: ClientProgressProgramContro
   // deterministic change also happened this run) will replace it like any other
   // slot, same as the rest of this screen's async cards.
   const suggested = Array.isArray(row.suggested) ? (row.suggested as ExerciseMergeSuggestion[]) : [];
+  const renames = Array.isArray(row.rename_suggested) ? (row.rename_suggested as ExerciseRenameSuggestion[]) : [];
   const suggestSlot = deps.view.querySelector("#progMergeSuggestSlot");
   if (suggestSlot) {
-    suggestSlot.innerHTML = suggested.length ? mergeSuggestionsInnerHtml(suggested) : "";
+    suggestSlot.innerHTML = suggested.length || renames.length ? mergeSuggestionsInnerHtml(suggested, renames) : "";
     if (suggested.length) wireMergeSuggestions(suggestSlot, suggested, deps);
+    if (renames.length) wireRenameSuggestions(suggestSlot, renames, deps);
   }
 
-  if (n || merged || groupsFixed) {
+  if (tidied || merged || groupsFixed) {
     deps.invalidate("progress:program");
     deps.renderSelf();
   }

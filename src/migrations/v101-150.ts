@@ -204,4 +204,18 @@ export const MIGRATIONS_101_150: Migration[] = [
       }
     },
   },
+  {
+    version: 105,
+    name: "exercise-rename-suggestions",
+    // A stored exercise name can now be RETITLED. Casing lands deterministically at
+    // boot and on every write; an agent's same-lift respelling lands through the
+    // rename chokepoint; a proposal the identity guard cannot vouch for is parked here
+    // for a human yes/no instead of being dropped on the floor (which is how the
+    // catalog kept "Seated Leg Press - Machine" through fifty enrichment passes). A
+    // declined suggestion is remembered so the next Tidy never re-asks it.
+    up: (db) => {
+      addColumn(db, "exercises", "suggested_name TEXT");
+      addColumn(db, "exercises", "refused_name TEXT");
+    },
+  },
 ];

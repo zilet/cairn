@@ -13,6 +13,9 @@ type ExerciseDetailRenderRow = ExerciseDetailRenderRecord & {
   // The parked low-confidence candidate, when there is no linked guide — the one
   // place a human can answer what the matcher would not guess at.
   guide_suggestion?: unknown;
+  // The cleaner title the librarian proposed and the rename guard would not apply
+  // on its own — the sheet is where a person says yes or keeps the name they use.
+  suggested_name?: string | null;
 };
 type ExerciseDetailRenderView = {
   timed: boolean;
@@ -60,6 +63,14 @@ function exerciseDetailModalHtml(
       ${explanationHtml}
       ${CairnExerciseGuide.sectionHtml(row.guide)}
       ${CairnExerciseGuide.suggestionHtml(row.guide_suggestion)}
+      ${row.suggested_name ? `<div class="detail-section" data-exrename>
+        <div class="lbl">Name</div>
+        <div class="detail-body">Cairn would file this as <b>${deps.escapeHtml(String(row.suggested_name))}</b>. Same numbers, cleaner name.</div>
+        <div class="manage-row">
+          <button class="pillbtn pill-sm" id="exRenameAccept">Call it that</button>
+          <button class="pillbtn pill-sm" id="exRenameKeep">Keep ${deps.escapeHtml(displayName)}</button>
+        </div>
+      </div>` : ""}
       ${row.cues ? `<div class="detail-section"><div class="lbl">Form cues</div><div class="detail-body">${deps.escapeHtml(row.cues)}</div></div>` : ""}
       ${view.appears ? `<div class="detail-section"><div class="lbl">In your plan</div><div class="detail-body">${view.appears}</div></div>` : ""}
       <div class="detail-section"><div class="lbl">Recent sets</div>

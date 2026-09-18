@@ -4,6 +4,23 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-17 — A stored exercise name can be retitled
+
+Migration **105** (`exercises.suggested_name` / `exercises.refused_name`).
+
+- **One rename chokepoint** (`renameExercise`, `src/repo/exercises.ts`). Casing lands deterministically
+  at boot, on every `findOrCreateExercise` hit, in `dedupeExercises` (`retitles`) and at the top of
+  Tidy; a same-lift respelling (Garmin identity, or a station word only under the merge guards) may
+  land from an agent on a logged row; a rewording is parked on `suggested_name` for a one-tap yes/no
+  on the exercise sheet or the Tidy result cards, and "keep" is remembered on `refused_name`. A
+  person's rename always lands (`PUT /api/exercises/:id {name}`, MCP `update_exercise`) or folds into
+  the row already carrying the name. The `'exercise'` job and `reconcileExercises` (`planExerciseRenames`)
+  both go through it. Before this, no path retitled a referenced row and the catalog kept
+  "Seated Leg Press - Machine" through every pass.
+- **Every trained movement gets its librarian pass**: a Garmin set import now queues the `'exercise'`
+  job on a genuine insert, and `catchUpExerciseEnrichment()` at boot queues never-enriched rows that
+  carry a set or a plan slot, once each.
+
 ## 2026-09-17 — The athlete's "apply it" lands today, a run morning composes around the run, the week the athlete actually said
 
 Migrations **102** (`profile.strength_schedule_json`), **103** (exercise-identity repair, frozen

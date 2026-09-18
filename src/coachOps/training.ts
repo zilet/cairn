@@ -11,8 +11,8 @@ import { decideDailySession } from "../repo/daily-decision.js";
 import { getDailySessionOutcome } from "../repo/daily-reconciliation.js";
 import { dayRead, weekAheadPlan } from "../repo/day-read.js";
 import { weekAheadRaceLine } from "../repo/day-read-prose.js";
-import { MUSCLE_GROUPS, authoritativeGroup, canonicalGroup, cleanExerciseName, normalizeExerciseName, normalizedExerciseKey, planExerciseAliases, setExerciseAlias, shouldAutoApplyMerge, validateExerciseMergePlan } from "../repo/exercise-canon.js";
-import { distinctExerciseNames, findExercise, getExerciseDetail, listExercises, mergeExercises, updateExercise } from "../repo/exercises.js";
+import { MUSCLE_GROUPS, authoritativeGroup, canonicalGroup, cleanExerciseName, normalizeExerciseName, normalizedExerciseKey, planExerciseAliases, planExerciseRenames, setExerciseAlias, shouldAutoApplyMerge, validateExerciseMergePlan } from "../repo/exercise-canon.js";
+import { distinctExerciseNames, findExercise, getExerciseDetail, listExercises, mergeExercises, normalizeExerciseTitles, renameExercise, updateExercise } from "../repo/exercises.js";
 import { listContextEvents } from "../repo/health.js";
 import { getLocationContext } from "../repo/location-context.js";
 import { recordSuggestion } from "../repo/memory.js";
@@ -1065,6 +1065,8 @@ export async function reconcileExercises(
   hooks?: OpHooks,
   opts: { authoritativeGroups?: boolean } = {}
 ) {
+  // ---- 0. DETERMINISTIC casing: "Dead hang" → "Dead Hang", no agent, no question ----
+  const retitled = normalizeExerciseTitles().retitled.map((r) => ({ from: r.from, into: r.into }));
   let items = distinctExerciseNames();
   if (items.length < 2) {
     return {
@@ -1074,6 +1076,9 @@ export async function reconcileExercises(
       candidates: items.length,
       aliased: 0,
       groups_fixed: 0,
+      retitled,
+      renamed: [] as Array<{ from: string; into: string }>,
+      rename_suggested: [] as Array<{ id: number; from: string; into: string }>,
       merged: [] as Array<{ from: string; into: string }>,
       suggested: [] as Array<{ from: string; into: string; why: string; confidence: string }>,
       skipped: [] as Array<{ from: string; into: string; reason: string }>,
@@ -1167,6 +1172,9 @@ export async function reconcileExercises(
       ok: false as const,
       error: "no usable reconciliation",
       candidates: items.length,
+      retitled,
+      renamed: [] as Array<{ from: string; into: string }>,
+      rename_suggested: [] as Array<{ id: number; from: string; into: string }>,
       merged,
       suggested,
       skipped,
@@ -1184,6 +1192,9 @@ export async function reconcileExercises(
       agent: chosen,
       tried,
       candidates: items.length,
+      retitled,
+      renamed: [] as Array<{ from: string; into: string }>,
+      rename_suggested: [] as Array<{ id: number; from: string; into: string }>,
       merged,
       suggested,
       skipped,
@@ -1198,6 +1209,25 @@ export async function reconcileExercises(
     p.groups
   );
   for (const a of aliases) setExerciseAlias(a.rawNorm, a.canonical, "agent");
+
+  // ---- AGENTIC renames — a single-member cluster whose canonical is a different
+  // spelling is the agent naming the lift ("Seated Leg Press - Machine" is a "Seated
+  // Leg Press"). repo.renameExercise's guards decide: a same-lift respelling lands
+  // (the old spelling keeps resolving as an alias); a rewording the guard cannot vouch
+  // for is PARKED on the row for a one-tap yes/no, never dropped, never forced. ----
+  const renamed: Array<{ from: string; into: string }> = [];
+  const rename_suggested: Array<{ id: number; from: string; into: string }> = [];
+  for (const r of planExerciseRenames(items.map((i) => ({ name: i.name })), p.groups)) {
+    const row: any = findExercise(r.from);
+    if (!row) continue;
+    try {
+      const res = renameExercise(Number(row.id), r.into, { source: "agent" });
+      if (res.ok && res.outcome !== "unchanged") renamed.push({ from: r.from, into: res.name });
+      else if (res.outcome === "suggested") rename_suggested.push({ id: Number(row.id), from: r.from, into: r.into });
+    } catch {
+      /* one bad row never stops the pass */
+    }
+  }
 
   // Conservatively IMPROVE a canonical movement's muscle group only when it's
   // currently null/"other" AND the agent supplied a confident group for the cluster.
@@ -1293,6 +1323,9 @@ export async function reconcileExercises(
     candidates: items.length,
     aliased: aliases.length,
     groups_fixed,
+    retitled,
+    renamed,
+    rename_suggested,
     merged,
     suggested,
     skipped,

@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS exercises (
   enrichment_status TEXT,                 -- pending|in_progress|done|failed|skipped|null (background 'exercise' enrichment)
   garmin_category TEXT,                   -- FIT exercise category for strength write-back (repo/garmin-exercise-map.ts)
   garmin_exercise TEXT,                   -- FIT sub-exercise; null means category-only (always legal on a Garmin PUT)
-  garmin_map_status TEXT                  -- mapped|unmapped|skipped|null
+  garmin_map_status TEXT,                 -- mapped|unmapped|skipped|null
+  suggested_name TEXT,                    -- an agent's cleaner title the rename guard would not apply on its own — waits for a human yes/no (repo/exercises.ts renameExercise)
+  refused_name TEXT                       -- the suggestion a person declined; the same proposal is never parked again
 );
 -- Imported instructional guides for a movement: step-by-step text, muscles worked,
 -- equipment and two demonstration photos, from the public-domain free-exercise-db

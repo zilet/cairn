@@ -9,7 +9,7 @@ import { applyCcdaHealthBackfill, backfillCcdaHealthDocument, dateUndatedPanels,
 import type { CcdaHealthExtraction } from "./repo/ccda.js";
 import { recordedClientTimeZone } from "./repo/client-tz.js";
 import { refreshDoctorLoopAttention } from "./repo/doctor-loop.js";
-import { applyExerciseEnrichment, ensureGarminMapping, getExercise, getExerciseDetail, setExerciseEnrichStatus } from "./repo/exercises.js";
+import { applyExerciseEnrichment, ensureGarminMapping, getExercise, getExerciseDetail, queueExerciseEnrichment, setExerciseEnrichStatus } from "./repo/exercises.js";
 import { recordGarminExportOutcome } from "./repo/garmin-export-telemetry.js";
 import { getSessionGarminExport } from "./repo/garmin-strength-export.js";
 import { MAX_MARKERS_PER_PANEL, addHealthReview, cleanClinicalFacts, estimateMarkerCandidates, getHealthDocumentRaw, plausibleMarkerValue, reconcileHealthDocumentContextEvents, replaceHealthPanels, setHealthDocEnrichStatus, updateHealthDocFields } from "./repo/health.js";
@@ -1278,6 +1278,27 @@ export async function processGarminExportJob(sessionId: number): Promise<void> {
     recordGarminExportOutcome(sessionId, { ok: false, error: message });
     log.warn(`[enrich] garmin_export#${sessionId} failed: ${message}`);
   }
+}
+
+// Movements the athlete actually trains (or plans) that never had their librarian
+// pass — rows minted before the log path queued one, or by a Garmin import while
+// imports stayed off the queue. Queued once each at boot; a row leaves the NULL state
+// the moment it is queued, so this is a one-time cost per movement, never a sweep
+// that repeats. A disabled install is left as it is (NULL, not 'skipped'), so
+// enabling enrichment later still gets these rows their look.
+export function catchUpExerciseEnrichment(): number {
+  if (!getSettings().enrich_enabled) return 0;
+  const rows = db
+    .prepare(
+      `SELECT e.id FROM exercises e
+        WHERE e.enrichment_status IS NULL
+          AND (EXISTS (SELECT 1 FROM logged_sets ls WHERE ls.exercise_id = e.id)
+            OR EXISTS (SELECT 1 FROM plan_items pi WHERE pi.exercise_id = e.id))
+        ORDER BY e.id`
+    )
+    .all() as Array<{ id: number }>;
+  for (const row of rows) queueExerciseEnrichment(Number(row.id));
+  return rows.length;
 }
 
 // ---- new off-plan exercise → canonical + classify + guide + art ----------------

@@ -36,7 +36,7 @@ import {
   resolveExerciseName,
   setExerciseAlias,
 } from "./exercise-canon.js";
-import { mergeExercises } from "./exercises.js";
+import { mergeExercises, normalizeExerciseTitles, planExerciseRetitles } from "./exercises.js";
 
 export interface ExerciseAliasRepair {
   alias: string;
@@ -68,6 +68,9 @@ export interface ExerciseMergeSkip {
 export interface ExerciseDedupeResult {
   ok: true;
   dry_run: boolean;
+  // Stored names whose casing the canon would change ("Dead hang" → "Dead Hang").
+  // Display text only, no identity question — applied with the fold, reported before.
+  retitles: Array<{ id: number; from: string; into: string }>;
   alias_repairs: ExerciseAliasRepair[];
   merges: ExerciseMergePlanRow[];
   skipped: ExerciseMergeSkip[];
@@ -210,6 +213,7 @@ export function planExerciseDedupe(): {
 
 export function dedupeExercises(opts: { dryRun?: boolean } = {}): ExerciseDedupeResult {
   const dryRun = opts.dryRun !== false;
+  const retitles = dryRun ? planExerciseRetitles() : normalizeExerciseTitles().retitled;
   const aliasRepairs = planExerciseAliasRepairs();
   const plan = planExerciseDedupe();
   const skipped = plan.skipped;
@@ -218,6 +222,7 @@ export function dedupeExercises(opts: { dryRun?: boolean } = {}): ExerciseDedupe
     return {
       ok: true,
       dry_run: true,
+      retitles,
       alias_repairs: aliasRepairs,
       merges,
       skipped,
@@ -248,6 +253,7 @@ export function dedupeExercises(opts: { dryRun?: boolean } = {}): ExerciseDedupe
   return {
     ok: true,
     dry_run: false,
+    retitles,
     alias_repairs: aliasRepairs,
     merges,
     skipped,

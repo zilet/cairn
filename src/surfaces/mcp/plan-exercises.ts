@@ -253,9 +253,11 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
 
   server.tool(
     "update_exercise",
-    "Update an existing exercise by name: mode (reps|timed), muscle_group, cues, constraint_note (any subset).",
+    "Update an existing exercise by name: mode (reps|timed), muscle_group, cues, constraint_note, or rename it with `name` (a person's rename always lands; if the new name already exists the two fold into one). `keep_name` declines a parked `suggested_name` and remembers the no. Logged numbers never move.",
     {
       exercise: z.string().describe("exact exercise name"),
+      name: z.string().optional().describe("the new display name (cleaned; the old spelling keeps resolving as an alias)"),
+      keep_name: z.boolean().optional().describe("true to decline the parked suggested_name and keep the current one"),
       mode: z.enum(["reps", "timed"]).optional(),
       muscle_group: z.string().nullable().optional(),
       cues: z.string().nullable().optional(),

@@ -179,8 +179,11 @@ planExercisesRouter.post("/exercises", (req, res) => {
 planExercisesRouter.put("/exercises/:id", (req, res) => {
   try {
     const b = req.body ?? {};
+    // `name` renames (a person's word lands, or folds into the row already carrying
+    // that name); `keep_name: true` declines the parked suggestion and remembers it.
     const updated = updateExercise(Number(req.params.id), {
       mode: b.mode, muscle_group: b.muscle_group, cues: b.cues, constraint_note: b.constraint_note,
+      name: b.name, keep_name: b.keep_name === true,
     });
     if (!updated) return res.status(404).json({ error: "not found" });
     res.json(updated);

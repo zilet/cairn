@@ -3,7 +3,9 @@
 
 type ExerciseDetailActionRecord = Record<string, unknown>;
 type ExerciseDetailActionRow = ExerciseDetailActionRecord & {
+  id?: number;
   name?: string;
+  suggested_name?: string | null;
 };
 type ExerciseDetailActionDeps = {
   state: { tab?: string; exModes?: Record<string, string> };
@@ -45,6 +47,48 @@ function wireExerciseDetailActions(
     } catch {
       typeBtn.disabled = false;
       deps.toast("Couldn't change type — try again");
+    }
+  });
+
+  // The parked rename: one tap lands it (PUT name — a person's word always lands),
+  // the other keeps the current name AND remembers the no, so Tidy never re-asks.
+  const renameSection = el.querySelector<HTMLElement>("[data-exrename]");
+  const acceptBtn = el.querySelector<HTMLButtonElement>("#exRenameAccept");
+  const keepBtn = el.querySelector<HTMLButtonElement>("#exRenameKeep");
+  const putExercise = (body: Record<string, unknown>) =>
+    deps.api("/exercises/" + encodeURIComponent(String(row.id ?? "")), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  if (acceptBtn && row.id != null && row.suggested_name) acceptBtn.addEventListener("click", async () => {
+    acceptBtn.disabled = true;
+    if (keepBtn) keepBtn.disabled = true;
+    const into = String(row.suggested_name);
+    try {
+      const updated = exerciseDetailActionRecord(await putExercise({ name: into }));
+      if (updated.error) throw new Error(String(updated.error));
+      const finalName = String(updated.name || into);
+      deps.toast(`${displayName} is now ${finalName}`);
+      deps.closeDetail(true);
+      if (deps.state.tab === "today") deps.renderToday();
+    } catch {
+      acceptBtn.disabled = false;
+      if (keepBtn) keepBtn.disabled = false;
+      deps.toast("Couldn't rename — try again");
+    }
+  });
+  if (keepBtn && row.id != null) keepBtn.addEventListener("click", async () => {
+    keepBtn.disabled = true;
+    if (acceptBtn) acceptBtn.disabled = true;
+    try {
+      await putExercise({ keep_name: true });
+      renameSection?.remove();
+      deps.toast(`Keeping ${displayName}`);
+    } catch {
+      keepBtn.disabled = false;
+      if (acceptBtn) acceptBtn.disabled = false;
+      deps.toast("Couldn't save that — try again");
     }
   });
 

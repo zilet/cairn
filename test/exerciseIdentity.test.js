@@ -350,3 +350,26 @@ test("dedupeExercises reports before it folds, preserves every logged set, and i
   assert.equal(second.merged, 0, "re-running finds nothing left to fold");
   assert.equal(second.aliases_repaired, 0);
 });
+
+test("dedupeExercises reports a casing retitle on the dry run and lands it on apply", () => {
+  const id = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Dead hang', 'forearms', 'timed')").run().lastInsertRowid);
+  const dry = repo.dedupeExercises();
+  assert.deepEqual(dry.retitles, [{ id, from: "Dead hang", into: "Dead Hang" }]);
+  assert.equal(repo.getExercise(id).name, "Dead hang", "a dry run changes nothing");
+  const applied = repo.dedupeExercises({ dryRun: false });
+  assert.deepEqual(applied.retitles, [{ id, from: "Dead hang", into: "Dead Hang" }]);
+  assert.equal(repo.getExercise(id).name, "Dead Hang");
+  assert.deepEqual(repo.dedupeExercises().retitles, []);
+});
+
+test("planExerciseRenames turns a single-member cluster's cleaner canonical into a rename proposal", () => {
+  const items = [{ name: "Seated Leg Press - Machine" }, { name: "Dead Hang" }, { name: "Bar Cable Machine Triceps Extension Push Down" }];
+  const out = repo.planExerciseRenames(items, [
+    { members: ["Seated Leg Press - Machine"], canonical: "seated leg press" },
+    { members: ["Dead Hang"], canonical: "DEAD HANG" }, // casing only — not a rename
+    { members: ["Bar Cable Machine Triceps Extension Push Down"], canonical: "Unknown" }, // a placeholder is never a name
+    { members: ["Seated Leg Press - Machine", "Dead Hang"], canonical: "Leg Press" }, // two members: a merge, not a rename
+    { members: ["Nope"], canonical: "Something" }, // not a verbatim input
+  ]);
+  assert.deepEqual(out, [{ from: "Seated Leg Press - Machine", into: "Seated Leg Press" }]);
+});

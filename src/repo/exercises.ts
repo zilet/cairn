@@ -8,6 +8,7 @@ import {
   detectExerciseMode,
   getExerciseAlias,
   implementRelaxedExerciseKey,
+  isPlaceholderExerciseName,
   normalizeExerciseName,
   normalizedExerciseKey,
   resolveExerciseName,
@@ -41,6 +42,8 @@ export interface ExerciseRow {
   garmin_category?: string | null;
   garmin_exercise?: string | null;
   garmin_map_status?: string | null;
+  suggested_name?: string | null; // an agent's cleaner title waiting for a yes/no (renameExercise)
+  refused_name?: string | null; // the suggestion a person declined — never parked again
 }
 
 function validMode(mode: any): string | undefined {
@@ -60,9 +63,9 @@ export function getExercise(id: number): any {
 }
 
 export function findOrCreateExercise(name: string, muscle_group?: string, constraint_note?: string, mode?: string): any {
-  // Exact name already exists — reuse it.
+  // Exact name already exists — reuse it (and land its casing while we are here).
   const existing = findExercise(name);
-  if (existing) return existing;
+  if (existing) return retitleCasing(existing);
 
   const norm = normalizeExerciseName(name);
   // Self-alignment writes are a DETERMINISTIC decision by this chokepoint, not an
@@ -71,7 +74,7 @@ export function findOrCreateExercise(name: string, muscle_group?: string, constr
     if (row && norm && normalizeExerciseName(String(row.name)) !== norm) {
       setExerciseAlias(norm, String(row.name), "auto");
     }
-    return row;
+    return retitleCasing(row);
   };
 
   // (a) THE resolver decides which stored row this spelling IS: a persisted alias,
@@ -269,6 +272,161 @@ function exerciseReferenceCount(id: number): { logs: number; plan: number } {
   return { logs, plan };
 }
 
+// ---------- retitling ----------
+// Three kinds of new name, three different laws:
+//   casing      "Dead hang" → "Dead Hang"           deterministic, lands everywhere, no question asked
+//   respelling  "Seated Leg Press - Machine" → "Seated Leg Press"   the same lift; an agent may land it
+//   rewording   "Abs Crunch Rope Pull Overhead" → "Cable Crunch"    maybe the same lift; a PERSON decides
+// A person's rename always lands (or folds into the row that already carries the
+// name). An agent's goes through the identity guard; what the guard cannot vouch
+// for is PARKED on `suggested_name` for a yes/no instead of being dropped. The
+// logged numbers never move and the id is stable; a rename is display text plus an
+// alias so the old spelling keeps resolving.
+
+// The casing the canon would give a stored name when that is the ONLY difference.
+function casingRetitleFor(name: string): string | null {
+  const clean = cleanExerciseName(name);
+  if (!clean || clean === name) return null;
+  return normalizeExerciseName(clean) === normalizeExerciseName(name) ? clean : null;
+}
+
+// The by-name references a retitle carries along. NOCASE lookups already match; this
+// keeps what the athlete READS consistent (an anchor lift, a skipped movement).
+function repointNameReferences(from: string, into: string): void {
+  db.prepare(`UPDATE strength_objectives SET exercise = ? WHERE exercise = ? COLLATE NOCASE`).run(into, from);
+  db.prepare(`UPDATE OR IGNORE session_skips SET exercise = ? WHERE exercise = ? COLLATE NOCASE`).run(into, from);
+  db.prepare(`UPDATE exercise_aliases SET canonical = ? WHERE canonical = ? COLLATE NOCASE`).run(into, from);
+}
+
+function retitleCasing(row: any): any {
+  if (!row) return row;
+  const from = String(row.name ?? "");
+  const into = casingRetitleFor(from);
+  if (!into) return row;
+  db.prepare(`UPDATE exercises SET name = ? WHERE id = ?`).run(into, row.id);
+  repointNameReferences(from, into);
+  return getExercise(Number(row.id));
+}
+
+// Every stored name whose casing the canon would change — read-only.
+export function planExerciseRetitles(): Array<{ id: number; from: string; into: string }> {
+  const out: Array<{ id: number; from: string; into: string }> = [];
+  for (const row of db.prepare(`SELECT id, name FROM exercises ORDER BY id`).all() as any[]) {
+    const into = casingRetitleFor(String(row.name));
+    if (into) out.push({ id: Number(row.id), from: String(row.name), into });
+  }
+  return out;
+}
+
+// Land every casing retitle. Runs at boot, inside the dedupe pass and at the top of
+// Tidy; idempotent and cheap, so a legacy "Dead hang" never sits until someone notices.
+export function normalizeExerciseTitles(): { retitled: Array<{ id: number; from: string; into: string }> } {
+  const retitled = planExerciseRetitles();
+  for (const r of retitled) {
+    db.prepare(`UPDATE exercises SET name = ? WHERE id = ?`).run(r.into, r.id);
+    repointNameReferences(r.from, r.into);
+  }
+  return { retitled };
+}
+
+// Is `into` the same lift as the stored row, spelled differently? The Garmin identity
+// test (same tokens, same implements, same variation words) OR a station word only —
+// the one relaxation the write chokepoint already forgives, held to the same merge
+// guards (mode, assisted, variation tokens) so incline can never fold onto flat.
+function sameLiftRespelling(row: any, into: string): boolean {
+  const name = String(row.name);
+  if (sameExerciseIdentity(name, into)) return true;
+  const relaxed = implementRelaxedExerciseKey(name);
+  if (!relaxed || relaxed !== implementRelaxedExerciseKey(into)) return false;
+  const side = (n: string) => ({ name: n, group: row.muscle_group ?? null, mode: row.mode ?? null });
+  return validateExerciseMergePlan(side(name), side(into)).ok;
+}
+
+export type ExerciseRenameSource = "agent" | "person";
+export interface ExerciseRenameResult {
+  ok: boolean;
+  // The row the name now lives on — a merge survivor's id when the proposal named an
+  // existing row — and its current display name.
+  id: number;
+  name: string;
+  outcome: "unchanged" | "retitled" | "renamed" | "merged" | "suggested" | "refused" | "rejected";
+  reason?: string;
+}
+
+export function renameExercise(
+  id: number,
+  proposed: string,
+  opts: { source: ExerciseRenameSource; remap?: boolean } = { source: "person" }
+): ExerciseRenameResult {
+  const cur = getExercise(id);
+  if (!cur) return { ok: false, id, name: "", outcome: "rejected", reason: "not found" };
+  const name = String(cur.name);
+  const into = cleanExerciseName(String(proposed ?? "").trim());
+  if (!into || isPlaceholderExerciseName(into)) {
+    return { ok: false, id, name, outcome: "rejected", reason: "That is not a movement name." };
+  }
+  if (into === name) return { ok: true, id, name, outcome: "unchanged" };
+  const fromNorm = normalizeExerciseName(name);
+  const intoNorm = normalizeExerciseName(into);
+  const byPerson = opts.source === "person";
+
+  // 1. Casing or whitespace only: display text, no identity question to ask.
+  if (intoNorm === fromNorm) {
+    db.prepare(`UPDATE exercises SET name = ?, suggested_name = NULL WHERE id = ?`).run(into, id);
+    repointNameReferences(name, into);
+    return { ok: true, id, name: into, outcome: "retitled" };
+  }
+
+  // 2. The proposal already names another stored row: fold this one into it. The
+  //    merge carries its own guards (a timed↔reps pair is refused) and moves every
+  //    reference before it deletes.
+  const resolved = resolveExerciseName(into);
+  const other = resolved.exercise_id != null && resolved.exercise_id !== id ? getExercise(resolved.exercise_id) : null;
+  if (other) {
+    const merged = mergeExercises(name, String(other.name));
+    if (!merged.ok) return { ok: false, id, name, outcome: "rejected", reason: merged.error ?? "merge refused" };
+    setExerciseAlias(fromNorm, String(other.name), byPerson ? "person" : "agent");
+    return { ok: true, id: Number(other.id), name: String(other.name), outcome: "merged" };
+  }
+
+  // 3. A genuinely new name. A person's word lands. An agent's must be the same lift
+  //    respelled, or the row must be unreferenced (a freshly-added movement nobody has
+  //    logged yet); anything else is parked for the person to answer, unless they
+  //    already said no to exactly this.
+  if (!byPerson) {
+    if (cur.refused_name && normalizeExerciseName(String(cur.refused_name)) === intoNorm) {
+      return { ok: false, id, name, outcome: "refused", reason: "declined before" };
+    }
+    const refs = exerciseReferenceCount(id);
+    const unreferenced = refs.logs === 0 && refs.plan === 0;
+    if (!unreferenced && !sameLiftRespelling(cur, into)) {
+      db.prepare(`UPDATE exercises SET suggested_name = ? WHERE id = ?`).run(into, id);
+      return { ok: false, id, name, outcome: "suggested", reason: "reads like a different movement — waiting for a yes" };
+    }
+  }
+  // The old name may have mapped to the wrong FIT enum; the clean one deserves a
+  // fresh look. An agent caller applies its own shortlist pick first and re-scores
+  // afterwards (remap:false); a person's rename re-scores here.
+  db.prepare(
+    `UPDATE exercises SET name = ?, suggested_name = NULL, refused_name = NULL,
+            garmin_category = NULL, garmin_exercise = NULL, garmin_map_status = NULL WHERE id = ?`
+  ).run(into, id);
+  repointNameReferences(name, into);
+  setExerciseAlias(fromNorm, into, byPerson ? "person" : "agent");
+  if (opts.remap !== false) ensureGarminMapping(id);
+  bumpTrainingDataVersion();
+  return { ok: true, id, name: into, outcome: "renamed" };
+}
+
+// "Keep the name I have." Clears the parked suggestion and remembers it, so the next
+// Tidy never asks the same question twice.
+export function refuseSuggestedName(id: number): any {
+  db.prepare(
+    `UPDATE exercises SET refused_name = COALESCE(suggested_name, refused_name), suggested_name = NULL WHERE id = ?`
+  ).run(id);
+  return getExercise(id);
+}
+
 // Apply the background enrichment agent's classification to ONE exercise, safely.
 // NEVER touches logged numbers. Returns the exercise's final id + name (which can
 // change if it merged into / renamed to a cleaner canonical) so the caller warms
@@ -308,32 +466,17 @@ export function applyExerciseEnrichment(
   let workingId = id;
   let name = String(cur.name);
 
-  const proposed = cleanExerciseName(String(fields.canonical ?? "").trim());
-  if (proposed && normalizeExerciseName(proposed) !== normalizeExerciseName(name)) {
-    const other = findExercise(proposed);
-    if (other && Number(other.id) !== id) {
-      const merged = mergeExercises(name, proposed);
-      if (merged.ok) {
-        setExerciseAlias(normalizeExerciseName(name), other.name);
-        workingId = Number(other.id);
-        name = String(other.name);
-      }
-    } else if (!other) {
-      // No collision — safe to rename by id when the row is still unreferenced (a
-      // freshly-added off-plan movement) OR when the canonical is the SAME lift
-      // spelled cleanly. Anything else keeps the name the athlete has been using.
-      const refs = exerciseReferenceCount(id);
-      if ((refs.logs === 0 && refs.plan === 0) || sameExerciseIdentity(name, proposed)) {
-        db.prepare(`UPDATE exercises SET name = ? WHERE id = ?`).run(proposed, id);
-        setExerciseAlias(normalizeExerciseName(name), proposed);
-        name = proposed;
-        // The old messy name may have mapped to the wrong FIT enum; the clean one
-        // deserves a fresh look. The floor runs after the agent's pick below so a
-        // valid shortlist choice wins, and a group fill can inform the retry.
-        db.prepare(
-          `UPDATE exercises SET garmin_category = NULL, garmin_exercise = NULL, garmin_map_status = NULL WHERE id = ?`
-        ).run(id);
-      }
+  // The ONE rename chokepoint decides: casing lands, a same-lift respelling lands,
+  // a proposal the identity guard cannot vouch for is PARKED as a suggestion (never
+  // silently dropped — that is how a Garmin-shaped title survived every pass). The
+  // FIT re-score is deferred to the end of this function so the agent's own
+  // shortlist pick, applied below, wins over the deterministic floor.
+  const proposed = String(fields.canonical ?? "").trim();
+  if (proposed) {
+    const renamed = renameExercise(id, proposed, { source: "agent", remap: false });
+    if (renamed.ok && renamed.outcome !== "unchanged") {
+      workingId = renamed.id;
+      name = renamed.name;
     }
   }
 
@@ -803,10 +946,27 @@ export function mergeExercises(
 
 export function updateExercise(
   id: number,
-  patch: { mode?: string | null; muscle_group?: string | null; cues?: string | null; constraint_note?: string | null }
+  patch: {
+    mode?: string | null;
+    muscle_group?: string | null;
+    cues?: string | null;
+    constraint_note?: string | null;
+    // A PERSON's rename: lands as typed (cleaned), or folds into the row that already
+    // carries that name. The identity guard is for an agent; a person's word is the law.
+    name?: string | null;
+    // "Keep the name I have": declines the parked suggestion and remembers the no.
+    keep_name?: boolean;
+  }
 ): any {
   const cur = getExercise(id);
   if (!cur) return null;
+  if (patch.keep_name) refuseSuggestedName(id);
+  const wanted = String(patch.name ?? "").trim();
+  if (wanted) {
+    const renamed = renameExercise(id, wanted, { source: "person" });
+    if (!renamed.ok) throw new Error(renamed.reason ?? "rename refused");
+    if (renamed.id !== id) return updateExercise(renamed.id, { ...patch, name: undefined, keep_name: undefined });
+  }
   const sets: string[] = [];
   const vals: any[] = [];
   if (patch.mode !== undefined && patch.mode !== null) {

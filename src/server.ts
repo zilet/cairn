@@ -6,7 +6,7 @@ import { api, apiErrorHandler } from "./api.js";
 import { handleMcpPost, methodNotAllowed } from "./mcp.js";
 import { seedIfEmpty } from "./seed.js";
 import { startScheduler } from "./scheduler.js";
-import { recoverPendingEnrich } from "./enrich.js";
+import { catchUpExerciseEnrichment, recoverPendingEnrich } from "./enrich.js";
 import { recoverChatTurns, abortAllTurns } from "./chatTurns.js";
 import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
 import { recoverDicomImports } from "./dicomImports.js";
@@ -215,8 +215,23 @@ const server = app.listen(PORT, HOST, () => {
   // asks for the rotation — which was the first Brief after every restart, and
   // paid several seconds of `--version` spawns for it. Staggered and best-effort.
   warmAgentProbes();
+  // A stored exercise name lands its casing the moment the app is up — a legacy
+  // "Dead hang" never waits for someone to notice — and every movement the athlete
+  // actually trains gets its one librarian pass if it never had one.
+  try {
+    const { retitled } = repo.normalizeExerciseTitles();
+    if (retitled.length) log.info("[boot] exercise titles normalized", { retitled });
+  } catch (err) {
+    log.error("[boot] normalizeExerciseTitles failed", { error: err });
+  }
   // Re-process any free-text entries left 'pending' by a prior restart.
   recoverPendingEnrich();
+  try {
+    const queued = catchUpExerciseEnrichment();
+    if (queued) log.info("[boot] exercise enrichment catch-up", { queued });
+  } catch (err) {
+    log.error("[boot] catchUpExerciseEnrichment failed", { error: err });
+  }
   // Re-drain queued chat turns and fail any interrupted mid-flight (their actions
   // may have partially applied — see recoverChatTurns) so the thread isn't stuck.
   recoverChatTurns();
