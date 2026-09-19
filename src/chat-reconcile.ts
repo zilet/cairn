@@ -137,7 +137,7 @@ export const PLAN_SCHEDULED_LANDS_TODAY_VARIANTS: readonly string[] = [
 export const PLAN_TODAY_SCOPED_NOT_APPLIED_VARIANTS = [
   "Today's plan is unchanged — you asked for today, so I didn't move that change onto another day instead.",
   "That one didn't land: today's plan is unchanged, and I left it there rather than pushing it onto a different day.",
-  "Nothing changed on today's plan. You asked for today, so I haven't rescheduled that change for another day.",
+  "Today's plan is unchanged. You asked for today, so I haven't rescheduled that change for another day.",
   "Today's plan is unchanged. That change was for today or not at all, so it isn't waiting on another day either.",
 ] as const;
 

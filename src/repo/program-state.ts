@@ -521,7 +521,15 @@ function gradeRepsLift(name: string, mg: string | null, through: string): Graded
   switch (status) {
     case "progressing":
       suggested_action = "overload";
-      why = `Climbing ~${trendWk} lb/wk — keep the progression going.`;
+      // The estimate climbs on reps as well as load. "Climbing ~7 lb/wk" beside "same
+      // top load 6 sessions running" read as a contradiction on one card; say what
+      // actually moved and what the next step is.
+      why =
+        staticCount >= STATIC_STALL_SESSIONS && grinding
+          ? "More reps at the same load, but the top sets are grinding — take the weight step, then leave a rep in reserve."
+          : staticCount >= STATIC_STALL_SESSIONS
+            ? `More reps at the same load (~${trendWk} lb/wk on the estimate) — the next clean session takes the weight step.`
+            : `Climbing ~${trendWk} lb/wk — keep the progression going.`;
       break;
     case "regressing":
       suggested_action = "deload";
@@ -1692,9 +1700,16 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   // The other week-shape question, beside "which lane yields": do the two lanes' big
   // days sit on top of each other? At most ONE line, only when the week genuinely
   // collides, and it moves nothing — the athlete owns the shape of their week.
+  // Template space only, and only for an athlete with NO lifting week: with a stated
+  // week the honest read is on the calendar, and the weekday map lives in
+  // plan-selection, which this module cannot import (plan-selection → progression →
+  // here). The coach context, the Plan strip and the race build all carry the
+  // calendar read for that athlete; this line stays quiet rather than say a ring
+  // sentence beside a calendar one.
   const weekLayout = (() => {
     try {
       const lifting = strengthScheduleRead(d);
+      if (lifting.days.length) return null;
       return weekLayoutRead(d, {
         strengthDows: lifting.days.map((day) => day.dow),
         liftDaysSource: lifting.source,

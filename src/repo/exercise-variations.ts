@@ -292,6 +292,31 @@ const EQUIPMENT_LOAD_RANK: Record<Equipment, number> = {
   bodyweight: 5,
 };
 
+/**
+ * Infer the loading tool for a named exercise. Exact curated-map hits win; then
+ * name tokens (BB/DB/cable/…); otherwise a neutral dumbbell so unknown peers
+ * don't leapfrog known barbell compounds when ordering for effect.
+ */
+export function inferEquipment(exerciseName: string): Equipment {
+  const raw = String(exerciseName ?? "").trim();
+  if (!raw) return "dumbbell";
+  const key = raw.toLowerCase();
+  for (const entries of Object.values(EXERCISE_MAP)) {
+    for (const entry of entries) {
+      if (entry.name.toLowerCase() === key) return entry.equipment;
+    }
+  }
+  for (const [eq, re] of EQUIPMENT_TOKENS) {
+    if (re.test(raw)) return eq;
+  }
+  return "dumbbell";
+}
+
+/** Lower = heavier progressive loading. Used by plan item effect-order. */
+export function equipmentLoadRank(equipment: Equipment): number {
+  return EQUIPMENT_LOAD_RANK[equipment] ?? EQUIPMENT_LOAD_RANK.dumbbell;
+}
+
 // ─── Why-string generators ───────────────────────────────────────────────────
 
 function buildVariationWhy(entry: ExerciseEntry, pattern: MovementPattern): string {

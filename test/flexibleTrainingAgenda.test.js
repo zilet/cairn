@@ -123,6 +123,48 @@ test("thirty sustained Z3 minutes in a forty-minute run close quality without a 
   assert.ok(agenda.intents[0].completion.signals.includes("30 min sustained in Z3"));
 });
 
+test("the watch's own easy verdict outranks Z3 drift — an aerobic-base run never closes quality", () => {
+  // A 31-minute conversational run one beat over the Z2 ceiling: 27 of 31 minutes in
+  // Z3, aerobic TE 3.2, and the watch labelled it AEROBIC_BASE. Read live it closed the
+  // week's quality intention. Zone drift on an easy run is not a workout.
+  const activity = repo.addActivity({ type: "run", date: MONDAY, duration_min: 31, distance_km: 4.9 });
+  addQualityEvidence(activity, { label: "AEROBIC_BASE", aerobicTe: 3.2 });
+  addZoneEvidence(activity, [
+    { zone: 2, secs: 4 * 60 },
+    { zone: 3, secs: 27 * 60 },
+  ]);
+  const qualityAgenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "quality", 5)]) });
+  assert.equal(qualityAgenda.intents[0].status, "open");
+  const easyAgenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "easy", 5)]) });
+  assert.equal(easyAgenda.intents[0].status, "completed");
+  assert.equal(easyAgenda.intents[0].completion.intensity, "easy");
+  assert.ok(
+    easyAgenda.intents[0].completion.signals.some((s) => /read as easy — the watch called it aerobic base/.test(s)),
+    JSON.stringify(easyAgenda.intents[0].completion.signals)
+  );
+  // Real Z4 time still overrides the easy label.
+  const surge = repo.addActivity({ type: "run", date: WEDNESDAY, duration_min: 31, distance_km: 4.9 });
+  addQualityEvidence(surge, { label: "AEROBIC_BASE", aerobicTe: 3.2 });
+  addZoneEvidence(surge, [
+    { zone: 3, secs: 20 * 60 },
+    { zone: 4, secs: 6 * 60 },
+  ]);
+  const hard = repo.flexibleTrainingAgenda(WEDNESDAY, { runPlan: plan([run(3, "quality", 5)]) });
+  assert.equal(hard.intents[0].status, "completed");
+  assert.equal(hard.intents[0].completion.date, WEDNESDAY);
+});
+
+test("aerobic training effect below 4 is an ordinary easy hour, not a quality signal", () => {
+  const activity = repo.addActivity({ type: "run", date: MONDAY, duration_min: 45, distance_km: 7 });
+  addQualityEvidence(activity, { label: "", aerobicTe: 3.4 });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "quality", 7)]) });
+  assert.equal(agenda.intents[0].status, "open");
+  const strong = repo.addActivity({ type: "run", date: WEDNESDAY, duration_min: 45, distance_km: 7 });
+  addQualityEvidence(strong, { label: "", aerobicTe: 4.2 });
+  const closed = repo.flexibleTrainingAgenda(WEDNESDAY, { runPlan: plan([run(2, "quality", 7)]) });
+  assert.equal(closed.intents[0].status, "completed");
+});
+
 test("brief Z3 drift remains easy evidence and cannot close quality", () => {
   const activity = repo.addActivity({ type: "run", date: MONDAY, duration_min: 40, distance_km: 7 });
   addZoneEvidence(activity, [

@@ -634,8 +634,78 @@ export interface ClientPlanDay {
   // tying the day to the active strength block/endurance goal. Absent — never
   // a fabricated fallback — whenever the program state can't ground one.
   purpose?: string | null;
+  // True when stored item order differs from effect order (compounds → accessories
+  // → finishers → cardio). The Plan gallery offers a quiet "Order for effect".
+  out_of_order?: boolean;
   items: ClientPlanItem[];
   [key: string]: unknown;
+}
+
+export type ClientPlanWeekStatus = "done" | "today" | "upcoming" | "rest" | "open";
+export type ClientPlanWeekRole = "strength" | "endurance" | "rest" | "empty";
+
+export interface ClientPlanWeekPlanDay {
+  day_number: number;
+  name: string;
+  focus: string | null;
+  purpose: string | null;
+  day_type: "training" | "rest";
+  role: ClientPlanWeekRole;
+  out_of_order: boolean;
+}
+
+export interface ClientPlanWeekSession {
+  id: number;
+  title: string;
+  date: ISODateString | string;
+}
+
+export interface ClientPlanWeekRun {
+  kind: string;
+  label: string;
+  status: "open" | "completed";
+  suggested_date: ISODateString | string | null;
+  completion_date: ISODateString | string | null;
+  // Prescribed distance, or the logged distance once completed.
+  km: number | null;
+}
+
+/** The week so far, in counts — the grounding for the strip's one spoken line. */
+export interface ClientPlanWeekProgress {
+  lift_days_done: number;
+  lift_days_planned: number | null;
+  runs_done: number;
+  run_km: number;
+  longest_run_km: number | null;
+  runs_open: { kind: string; label: string; suggested_date: ISODateString | string | null; weekday: string | null }[];
+  prs: number;
+  line: string | null;
+}
+
+export interface ClientPlanWeekDay {
+  date: ISODateString | string | null;
+  weekday: string | null;
+  dow: number | null;
+  status: ClientPlanWeekStatus;
+  plan_day: ClientPlanWeekPlanDay | null;
+  session: ClientPlanWeekSession | null;
+  run: ClientPlanWeekRun | null;
+  hard: boolean;
+}
+
+/** Connected Plan-tab week: calendar Mon–Sun when schedules map, else template order. */
+export interface ClientPlanWeek {
+  as_of: ISODateString | string;
+  week_start: ISODateString | string;
+  days: ClientPlanWeekDay[];
+  summary: string | null;
+  progress: ClientPlanWeekProgress;
+  layout: { clean: boolean; suggestion: string | null };
+  schedule: {
+    lift_days: string[];
+    lift_days_source: "stated" | "observed" | null;
+    run_days: string[];
+  };
 }
 
 export interface ClientExercise {
@@ -3292,6 +3362,8 @@ export interface ClientApiResponses {
   "/api/blood-pressure": ClientBloodPressureReading[];
   "/api/checkins": ClientCheckin[] | ClientCheckin | null;
   "/api/plan": ClientPlanDay[];
+  "/api/plan/week": ClientPlanWeek;
+  "/api/plan/:day/order-for-effect": ClientPlanDay | null;
   // POST asks for a redraw and answers with the receipt; GET reports what is standing.
   "/api/plan/redraw": ClientPlanRedrawReceipt | ClientPlanRedrawStatus;
   "/api/exercises": ClientExercise[];

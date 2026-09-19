@@ -37,6 +37,7 @@ import { weekLayoutRead, type WeekLayoutRead } from "../domain/training/week-lay
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { matchEnduranceModality } from "./heavy-load.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
+import { thisWeekPlanDayMap } from "./plan-selection.js";
 import { dowToDayNumber, getEnduranceGoal, isoDow, statedRunDows } from "./profile.js";
 import { strengthScheduleRead } from "./strength-schedule.js";
 import { raceRamp, type RaceRampGoal } from "./run-ramp.js";
@@ -332,11 +333,13 @@ export function projectRaceBuildWeeks(
   asOf: string,
   anchorKm: number,
   anchorLongKm: number,
-  thisWeek?: { km: number; long_km: number | null } | null
+  thisWeek?: { km: number; long_km: number | null } | null,
+  nextWeek?: { km: number; long_km: number | null } | null
 ): RaceBuildWeek[] {
   const out: RaceBuildWeek[] = [];
   const raceMonday = mondayOf(goal.date);
   const currentMonday = mondayOf(asOf);
+  const nextMonday = addDaysISO(currentMonday, 7);
   let monday = currentMonday;
   let anchor = anchorKm > 0 ? anchorKm : 6;
   let long = anchorLongKm > 0 ? anchorLongKm : Math.max(3, anchor * 0.3);
@@ -363,7 +366,13 @@ export function projectRaceBuildWeeks(
     // projected step forward seeded the very next Monday one full ramp high — the
     // patched first rung, then every week after it two steps above the ladder it
     // claims to walk. The rung the athlete is running is the rung the walk steps off.
-    const live = monday === currentMonday && thisWeek && thisWeek.km > 0 ? thisWeek : null;
+    // Same rule for next week: the engine's prescription, when it has one, is the rung.
+    const live =
+      monday === currentMonday && thisWeek && thisWeek.km > 0
+        ? thisWeek
+        : monday === nextMonday && nextWeek && nextWeek.km > 0
+          ? nextWeek
+          : null;
     const km = live ? live.km : r.required_km;
     const longKm = live ? (live.long_km ?? r.required_long_km) : r.required_long_km;
     out.push({
@@ -673,12 +682,21 @@ export function raceBuild(
   const rampGoal = { ...goal, date: goal.date, distance_km: distance };
   // The engine's own prescription is the truth for this week, and the rung the rest
   // of the ladder steps off (see projectRaceBuildWeeks).
+  // The engine already knows next week (an upcoming recovery week, a hold, a stated
+  // schedule change); handed to the ladder, the second rung is the engine's own number
+  // rather than a projection that disagrees with the run list one card down.
+  const nextMonday = addDaysISO(mondayOf(asOf), 7);
+  const nextPlan = nextMonday ? safe(() => weeklyRunPlan(nextMonday)) : null;
+  const nextRuns = nextPlan?.available ? nextPlan.runs : [];
+  const nextKm = round1(nextRuns.reduce((s, r) => s + (r.target_distance_km != null ? Number(r.target_distance_km) : 0), 0));
+  const nextLong = nextRuns.find((r) => r.kind_label === "long");
   const weeks = projectRaceBuildWeeks(
     rampGoal,
     asOf,
     anchorKm,
     anchorLong,
-    weekKm > 0 ? { km: weekKm, long_km: longKm } : null
+    weekKm > 0 ? { km: weekKm, long_km: longKm } : null,
+    nextKm > 0 ? { km: nextKm, long_km: nextLong?.target_distance_km != null ? Number(nextLong.target_distance_km) : null } : null
   );
 
   // ---- the ring: runs, strength, ride ----
@@ -696,10 +714,19 @@ export function raceBuild(
   const ride: RidePattern | null = rideBase
     ? { ...rideBase, placement: ridePlacement(rideBase, longDay, qualityDay, heavyLower, easyDays, asOf) }
     : null;
+  // The run engine's slots are weekday-numbered (Mon=1) once a schedule is stated,
+  // but the strength template's day_number is a ring index — the athlete's lifting
+  // week lays that ring onto weekdays (thisWeekPlanDayMap), the same map the Plan
+  // tab's week strip draws from. Read strength through it so the two agree; with no
+  // lifting week stated the plain Mon=Day1 convention is the only honest fallback.
+  const weekMap = safe(() => thisWeekPlanDayMap(asOf).map) ?? new Map<number, { day_number: number }>();
+  const weekdayMap = new Map([...weekMap].map(([dow, c]) => [dow, c.day_number]));
   const leg_map: LegMapDay[] = [];
   for (let d = 1; d <= 7; d++) {
     const run = runs.find((r) => r.day_number === d) ?? null;
-    const strength = strengthDays.get(d) ?? null;
+    const mapped = weekMap.size ? weekMap.get(d === 7 ? 0 : d) ?? null : null;
+    const strengthDayNumber = weekMap.size ? (mapped ? mapped.day_number : null) : d;
+    const strength = strengthDayNumber == null ? null : strengthDays.get(strengthDayNumber) ?? null;
     const isRide = ride?.day_number === d;
     leg_map.push({
       day_number: d,
@@ -721,11 +748,22 @@ export function raceBuild(
             strengthDows: lifting.days.map((d) => d.dow),
             liftDaysSource: lifting.source,
             enduranceDows: statedRunDows(),
+            weekdayMap,
           });
         })
       : opts.weekLayout;
   const strength: RaceBuild["strength"] = {
-    heavy_lower_days: [...heavyLower].sort((a, b) => a - b).map(weekdayOfDayNumber),
+    // Same map as the leg map: with a stated lifting week a template day's weekday is
+    // wherever the ring lands it, not its number. Unmapped (a day the week does not
+    // reach) is left out rather than given a weekday it will not be trained on.
+    heavy_lower_days: weekMap.size
+      ? [1, 2, 3, 4, 5, 6, 7]
+          .filter((d) => {
+            const m = weekMap.get(d === 7 ? 0 : d);
+            return !!m && heavyLower.has(m.day_number);
+          })
+          .map(weekdayOfDayNumber)
+      : [...heavyLower].sort((a, b) => a - b).map(weekdayOfDayNumber),
     principle: weeksToRace <= 0 ? STRENGTH_HINT.race_week : STRENGTH_HINT[phase],
     layout: layout && !layout.clean ? layout.suggestion : null,
     clean: layout ? layout.clean : true,

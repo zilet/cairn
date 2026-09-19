@@ -42,4 +42,6 @@ export { trainingLoadBand, trainingLoadBaselineRead } from "../../repo/baseline-
 export * from "../../repo/training-playbook.js";
 export * from "../../repo/training-read.js";
 export * from "./week-layout.js";
+export * from "./plan-item-order.js";
+export * from "./plan-week.js";
 export * from "../../repo/training-symptoms.js";

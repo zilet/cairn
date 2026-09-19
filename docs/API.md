@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**340 routes** across 116 groups.
+**342 routes** across 116 groups.
 
 ## `/activities`
 
@@ -573,12 +573,14 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | DELETE | `/api/plan/:day` |  |
 | GET | `/api/plan/:day` |  |
 | PUT | `/api/plan/:day` |  |
+| POST | `/api/plan/:day/order-for-effect` | Quiet "Order for effect" — rewrite one day's items into compounds → accessories → finishers → cardio. Returns the day (unchanged when already ordered). 200 + null when the day number is absent — same absence shape as other single-row lookups. |
 | PUT | `/api/plan/:day/target` |  |
 | GET | `/api/plan/quality` |  |
 | GET | `/api/plan/recovery-status` | The recovery-week story for the Plan surface: a waiting draft ('drafted'), the applied lighter week in flight ('applied', ~a week from the apply stamp), or null. The Plan tab's banner reads this so a reshaped week announces itself — heads-up + what changed — instead of arriving silently. |
 | GET | `/api/plan/redraw` | What is standing right now, so a reload repaints the in-flight state instead of losing it, and a build the coach could not do is visible rather than silent. |
 | POST | `/api/plan/redraw` | REDRAW MY WEEK — the Plan tab's own door to the structure hand-off. Chat's `flag_training_structure` used to be the only one, which meant the athlete had to know the magic words; this is the same function, so the same ask typed here or said there resolves to ONE standing flag and ONE built week. What comes back is the server's own readback of what is genuinely in flight, never a claim made at the door.  ok:false at HTTP 200 is the designed failure signal (the PWA's api() helper resolves to the body regardless of status), not an HTTP error. |
 | GET | `/api/plan/upcoming` | A calm forward look for the Plan surface: the training/recovery changes the brain will land soon (a recovery week landing Monday, a bounded target change), so a reshaped week announces itself instead of arriving silently. Deduped against the recovery banner's draft; null when nothing is waiting. |
+| GET | `/api/plan/week` | Connected week for the Plan tab (did / today / upcoming). Separate from GET /plan so the editor still receives the raw template ring for save. |
 
 ## `/profile`
 

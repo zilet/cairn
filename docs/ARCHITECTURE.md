@@ -263,6 +263,38 @@ strength day while the plan holds anything else to give it. With no schedule sta
 empty and `weekdayCandidate` keeps the old Mon→slot-1 line, so nothing changes for an athlete who has
 said nothing.
 
+**Plan tab week projection.** `GET /api/plan/week` (`planWeek()` in `src/domain/training/plan-week.ts`)
+assembles that same map into a connected week strip for Strength + Endurance: calendar Mon→Sun when
+schedules map, otherwise template `day_number` order with `weekday:null` (never invent Mon=Day1).
+Each cell carries status (done/today/upcoming/rest/open), the plan day, any logged session this week,
+and any flexible-agenda run intent. **The log owns a done cell**: a session's cell names the plan day
+the session resolved to (`resolveSessionPlanDay` — linked, else exercise overlap), never the ring's
+forecast, which read live was a day off on all five lifting days of one week. **The agenda owns a run
+cell**: a completion dated on the cell, or an open intent `suggested_date`d on it (an undated intent
+stays off the calendar); an open run outranks a mapped rest day. The strip speaks the plan day's NAME
+(the focus sentence lives on the gallery card). `progress` is the week so far in counts — lifting days
+done vs stated, runs and km logged, open intents, trailing-seven-day bests — and `progress.line` is
+composed from those counts, so a stable week never prints one literal. `weekLayoutRead` rides along as
+a quiet suggestion line. The race build's `leg_map` reads strength through the same
+`thisWeekPlanDayMap`, so the two week rows on the Endurance segment agree. **The layout read has two
+spaces** (`WeekLayoutRead.space`): handed `weekdayMap` (the strip, the race build and the coach context
+all pass it) it judges the CALENDAR — a heavy template day the ring lands on Friday is Friday's, and a
+strength day the ring reaches twice in a five-day lifting week is heavy on both weekdays; with no map
+(no lifting week known, or `program-state`, which cannot import plan-selection) it stays on the
+template ring. **Only a lift the day BEFORE a long/quality run collides.** Heavy legs the morning
+after is the stacking the race build's own strength hint prescribes, so the read no longer flags it
+(three hard days in a row is still a stack). The race ladder takes the engine's prescription for NEXT
+week as its second rung too (`projectRaceBuildWeeks(..., thisWeek, nextWeek)`), so an upcoming
+recovery week shows one number on the ladder and in the run list. The agenda's quality classifier
+lets the watch's own easy verdict (`AEROBIC_BASE`/`RECOVERY`) outrank Z3 drift and needs aerobic
+TE ≥ 4, not 3, to call a run hard; only Z4+ time or a hard label overrides the easy label. Exercise effect-order
+lives in `src/domain/training/plan-item-order.ts` — TIERS ONLY (prep → primary → secondary →
+isolation → core → cardio; a prep drill is named as one or its note says "mobility prep"), peers keep
+the athlete's order, and there is deliberately no equipment tie-break (name-inferred tools default to
+dumbbell and let a machine row overtake a dumbbell bench on a real plan). Agentic restructures persist
+that order; the gallery offers `POST /api/plan/:day/order-for-effect` when a TIER is out of place;
+editor ↑↓ is never silently rewritten on GET.
+
 **The map outranks the session anchor, which keeps only the ring's PHASE.** `selectAdaptivePlanDay`
 consults the lifting week FIRST and falls back to the anchor rotation (`nextCandidateAfter`) only when
 there is no week to consult. Order matters, and the other order is inert: `recentSessionAnchors` reads

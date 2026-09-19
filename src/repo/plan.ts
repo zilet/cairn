@@ -21,6 +21,7 @@ import {
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { type ReasonProvenance, normalizeHistoricalReason, validReasonProvenance } from "./proposal-truth.js";
+import { orderPlanItemsForEffect, planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
 
 export { PlanQualityError, pressSlotKey, validateTrainingPlan } from "./plan-quality.js";
 
@@ -1245,6 +1246,59 @@ function withAuthoritativeExerciseModes(items: PlanItemInput[] = []): PlanItemIn
 // Manual editor authority is explicit: invalid structure is reported before any
 // write, but a deliberate editor/MCP caller may pass quality_override:true. Quality
 // warnings are always returned so a human can distinguish "allowed" from "optimal".
+/** Convert a hydrated plan-day item row into a PlanItemInput for rewrite. */
+function planItemsToInput(items: any[]): PlanItemInput[] {
+  return (Array.isArray(items) ? items : []).map((it) => {
+    if (String(it?.kind ?? "").toLowerCase() === "cardio") {
+      return {
+        kind: "cardio" as const,
+        exercise: String(it.exercise || it.note || "").trim() || undefined,
+        note: it.note != null ? String(it.note) : null,
+        target_distance_km: it.target_distance_km ?? null,
+        target_duration_min: it.target_duration_min ?? null,
+        target_zone: it.target_zone ?? null,
+        interval: it.interval ?? null,
+        interval_json: it.interval_json ?? null,
+      };
+    }
+    return {
+      kind: "strength" as const,
+      exercise: String(it.exercise ?? "").trim(),
+      sets: it.sets,
+      rep_low: it.rep_low,
+      rep_high: it.rep_high,
+      target_weight: it.target_weight,
+      note: it.note ?? null,
+      warmup_sets: it.warmup_sets ?? null,
+      target_seconds: it.target_seconds ?? null,
+      mode: it.mode ?? null,
+      superset_group: it.superset_group ?? null,
+    };
+  });
+}
+
+/**
+ * Rewrite one day's items into effect order (compounds → accessories → finishers
+ * → cardio). No-op when already ordered. Used by the Plan gallery's quiet
+ * "Order for effect" — never silent on GET.
+ */
+export function orderPlanDayForEffect(day_number: number) {
+  const day = getPlanDay(day_number);
+  if (!day) return null;
+  const inputs = planItemsToInput(day.items ?? []);
+  if (!planItemsOutOfOrder(inputs)) {
+    return { ok: true as const, day, changed: false };
+  }
+  const result = savePlanDayChecked(
+    day_number,
+    String(day.name || `Day ${day_number}`),
+    day.focus ?? null,
+    orderPlanItemsForEffect(inputs),
+    { day_type: day.day_type ?? null }
+  );
+  return { ...result, changed: true };
+}
+
 export function savePlanDayChecked(
   day_number: number,
   name: string,

@@ -27,7 +27,16 @@ type PlanEditorDay = {
   focus?: unknown;
   // 'rest' is a real day in the week that carries no items (v99).
   day_type?: unknown;
+  purpose?: unknown;
+  out_of_order?: unknown;
   items?: PlanEditorItem[];
+};
+
+type ProgDayAnnotation = {
+  weekday?: string | null;
+  status?: string | null;
+  /** A whole chip the week strip already composed (e.g. "Sat · Easy run 6.3 km"). */
+  label?: string | null;
 };
 
 function isRestDay(day: PlanEditorDay | PlanEditorApiDay): boolean {
@@ -45,7 +54,10 @@ function blankCardio(): PlanEditorItem {
 
 function dayModelFromPlan(
   day: PlanEditorDay | PlanEditorApiDay
-): Required<Pick<PlanEditorDay, "day_number" | "name" | "focus" | "day_type" | "items">> {
+): Required<Pick<PlanEditorDay, "day_number" | "name" | "focus" | "day_type" | "items">> & {
+  purpose: string;
+  out_of_order: boolean;
+} {
   return {
     day_number: day.day_number,
     name: day.name,
@@ -53,6 +65,8 @@ function dayModelFromPlan(
     // Carried through the model because the editor saves the WHOLE week: a model
     // that dropped it would erase the rest day on the next save of any other day.
     day_type: isRestDay(day) ? "rest" : "training",
+    purpose: typeof (day as { purpose?: unknown }).purpose === "string" ? String((day as { purpose: string }).purpose) : "",
+    out_of_order: (day as { out_of_order?: unknown }).out_of_order === true,
     items: (Array.isArray(day.items) ? day.items : []).map((item) => ({
       kind: isCardioItem(item) ? "cardio" : "strength",
       exercise: item.exercise,
@@ -73,6 +87,21 @@ function dayModelFromPlan(
   };
 }
 
+function progDayStatusLabel(ann: ProgDayAnnotation | undefined, rest: boolean): string {
+  // No week annotation yet (first paint, or an unscheduled week): the caller's
+  // "Day N · Rest" fallback names the seam, so say nothing here.
+  if (!ann) return "";
+  if (ann.label) return String(ann.label);
+  const weekday = ann.weekday ? String(ann.weekday) : "";
+  const status = String(ann.status || "");
+  if (status === "done") return weekday ? `Done · ${weekday}` : "Done";
+  if (status === "today") return weekday ? `Today · ${weekday}` : "Today";
+  if (status === "upcoming") return weekday ? `${weekday} · Up next` : "Up next";
+  if (status === "rest" || rest) return weekday ? `${weekday} · Rest` : "Rest";
+  if (status === "open") return weekday || "";
+  return weekday;
+}
+
 function calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): string {
   return Array.isArray(plan) && plan.length
     ? `<div id="planCal" style="margin-top:16px;text-align:center;font-size:.82rem;color:var(--muted)">
@@ -82,9 +111,12 @@ function calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): stri
     : "";
 }
 
-function progDayHtml(day: PlanEditorDay, dayIndex: number): string {
+function progDayHtml(day: PlanEditorDay, dayIndex: number, ann?: ProgDayAnnotation): string {
   const items = Array.isArray(day.items) ? day.items : [];
   const rest = isRestDay(day);
+  const statusLabel = progDayStatusLabel(ann, rest);
+  const purpose = typeof day.purpose === "string" ? day.purpose.trim() : "";
+  const outOfOrder = day.out_of_order === true && !rest && items.length > 1;
   const strip = items.map((item) => {
     if (isCardioItem(item)) {
       const tile = artImg("activity", cardioArtPhrase(item), "artile-md strip-tile", art("activity", cardioArtPhrase(item)));
@@ -133,12 +165,14 @@ function progDayHtml(day: PlanEditorDay, dayIndex: number): string {
   return `<div class="prog-day reveal" style="${stagger(dayIndex)}" data-pd="${dayIndex}">
         <div class="prog-head">
           <div class="prog-head-main">
-            <div class="lbl">Day ${escHtml(day.day_number)}${rest ? " · Rest" : ""}</div>
+            <div class="lbl">${statusLabel ? escHtml(statusLabel) : `Day ${escHtml(day.day_number)}${rest ? " · Rest" : ""}`}</div>
             <div class="prog-name">${escHtml(day.name || `Day ${day.day_number}`)}</div>
             ${day.focus ? `<div class="prog-focus">${escHtml(day.focus)}</div>` : ""}
+            ${purpose ? `<div class="prog-purpose">${escHtml(purpose)}</div>` : ""}
           </div>
           <div class="prog-head-actions">
             ${rest || !items.length ? "" : `<button class="ghostbtn prog-train" data-trainday="${dayIndex}">Train</button>`}
+            ${outOfOrder ? `<button class="linkbtn prog-order" type="button" data-orderday="${dayIndex}">Order for effect</button>` : ""}
             <button class="ghostbtn prog-edit" data-editday="${dayIndex}">Edit day</button>
           </div>
         </div>

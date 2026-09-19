@@ -38,6 +38,7 @@ import {
   setWeeklyRuns,
 } from "./plan.js";
 import { PlanQualityError, type PlanQualityReport, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
+import { orderPlanDaysForEffect } from "../domain/training/plan-item-order.js";
 import { computeGoalCheck, KCAL_ABSOLUTE_FLOOR, KCAL_PER_LB, recompositionStageAt } from "./profile.js";
 import { mergeStoredRun, resolveRunIndex, runEditPatchFromPayload, storedRunsFromItems } from "./run-edit.js";
 import { volumeRestoreLedger } from "./volume-guard.js";
@@ -1374,17 +1375,21 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   }
   // Restructure proposal: full plan replacement (changed frequency / split).
   if (Array.isArray(parsed.days)) {
-    const quality = validateTrainingPlan(parsed.days);
+    // Agent-authored weeks land in effect order (compounds → accessories →
+    // finishers → cardio). The editor's manual ↑↓ path does not go through here,
+    // so athlete peer-order stays until the next compose or an explicit Order-for-effect.
+    const orderedDays = orderPlanDaysForEffect(parsed.days as Parameters<typeof replacePlan>[0]);
+    const quality = validateTrainingPlan(orderedDays);
     if (!quality.ok)
       throw new Error(`Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`);
     // A restructure rewrites every prescription at once. Snapshot first, diff after,
     // so the ledger can say what moved per movement instead of only "the plan changed".
     const prescriptionsBefore = planPrescriptionSnapshot();
-    replacePlan(parsed.days);
+    replacePlan(orderedDays);
     const itemChanges = planPrescriptionDiff(
       prescriptionsBefore,
       planPrescriptionSnapshot(),
-      planRestructureReasons(parsed.days)
+      planRestructureReasons(orderedDays)
     );
     cancelAnnouncementsForProposal(id, opts.decisionId, opts.requireDecisionLedger === true);
     setProposalStatus(id, "applied");

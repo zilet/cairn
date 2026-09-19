@@ -120,16 +120,27 @@ function runObservations(start: string, through: string): RunObservation[] {
       const z3Seconds = parseZoneSeconds(row.hr_zones_json, 3, 3);
       const durationMin = validNumber(row.duration_min);
       const sustainedZ3 = sustainedZ3Evidence(z3Seconds, durationMin);
-      const quality =
-        te >= 3 ||
-        /\b(?:TEMPO|THRESHOLD|VO2(?:MAX)?|ANAEROBIC|SPRINT|INTERVAL|LACTATE_THRESHOLD)\b/.test(label) ||
-        z4Seconds >= 240 ||
-        sustainedZ3;
+      const hardLabel = /\b(?:TEMPO|THRESHOLD|VO2(?:MAX)?|ANAEROBIC|SPRINT|INTERVAL|LACTATE_THRESHOLD)\b/.test(label);
+      // The watch's own EASY verdict is evidence too. A 31-minute conversational run
+      // whose HR sat one beat over the Z2 ceiling read as "27 min sustained in Z3" and
+      // closed the week's quality slot; the watch had called it AEROBIC BASE. Zone
+      // drift on an easy run is not a workout — only Z4+ time or a hard label
+      // overrides the watch's easy call. Aerobic TE 3.0–3.9 is "improving base", the
+      // ordinary result of an easy hour, so the TE bar sits at 4 (highly improving).
+      const easyLabel = /\b(?:RECOVERY|AEROBIC_BASE|EASY|BASE)\b/.test(label);
+      const teHard = te >= 4;
+      const quality = hardLabel || z4Seconds >= 240 || (!easyLabel && (teHard || sustainedZ3));
       const signals: string[] = [];
       if (label) signals.push(`watch effort: ${label.toLowerCase().replaceAll("_", " ")}`);
-      if (te >= 3) signals.push("training effect supports a quality effort");
+      if (teHard) signals.push("training effect supports a quality effort");
       if (z4Seconds >= 240) signals.push(`${Math.round(z4Seconds / 60)} min in Z4+`);
-      if (sustainedZ3) signals.push(`${Math.round(z3Seconds / 60)} min sustained in Z3`);
+      if (sustainedZ3) {
+        signals.push(
+          easyLabel && !quality
+            ? `${Math.round(z3Seconds / 60)} min in Z3, read as easy — the watch called it ${label.toLowerCase().replaceAll("_", " ")}`
+            : `${Math.round(z3Seconds / 60)} min sustained in Z3`
+        );
+      }
       if (!signals.length) signals.push("no hard-effort signal; treated as easy running");
       return {
         id: Number(row.id),
@@ -217,7 +228,18 @@ function matchCompletions(
   const completed = new Map<number, RunCompletionEvidence>();
   const remaining = new Set(prescriptions.map((_, index) => index));
 
-  for (const observation of observations) {
+  // Biggest dose first, not calendar order. Read against a live week, date order
+  // let a 4.9 km Tuesday jog close a long intention whose target a protective cut
+  // had shrunk to 4.9 km, while Thursday's 9.8 km — the week's actual long run —
+  // matched nothing. The long slot belongs to the longest run that meets it.
+  const byDose = [...observations].sort(
+    (a, b) =>
+      (b.distance_km ?? 0) - (a.distance_km ?? 0) ||
+      (b.duration_min ?? 0) - (a.duration_min ?? 0) ||
+      a.date.localeCompare(b.date) ||
+      a.id - b.id
+  );
+  for (const observation of byDose) {
     // Arbitrate quality-vs-long before consuming either slot. A quality-bearing
     // observation can also be a clearly long-shaped outing; in that dual-match
     // case it closes the long intention rather than producing duplicate long work.

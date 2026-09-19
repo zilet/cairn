@@ -91,7 +91,7 @@ const RACE_WEEK_KIND_WORD: Record<string, string> = {
   race: "Race week",
 };
 
-function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?: boolean }): string {
+function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean }): string {
   if (!build || build.available === false || !build.race) return "";
   const race = build.race;
   const p = build.prediction;
@@ -139,7 +139,11 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
     : "";
 
   // The leg map: one ring, seven cells.
-  const legMap = Array.isArray(build.leg_map) && build.leg_map.length
+  // The Plan tab's Endurance segment already shows the connected week strip (the
+  // log for done days, the agenda for runs); a second forecast ring under it would
+  // contradict the first on any week the athlete traded days. Callers with the strip
+  // pass legMap:false; Progress keeps the ring.
+  const legMap = opts?.legMap !== false && Array.isArray(build.leg_map) && build.leg_map.length
     ? `<div class="rbuild-map">${build.leg_map
         .map((d) => {
           const bits: string[] = [];

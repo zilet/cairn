@@ -1570,7 +1570,7 @@ declare global {
   declare function sessionCardHtml(session: unknown, index: number): string;
   declare function numOrNull(value: unknown): number | null;
   declare function weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
-  declare function raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean }): string;
+  declare function raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean }): string;
   declare function trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
   declare function enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
   declare function runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
@@ -1743,6 +1743,11 @@ declare global {
   declare function dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
   declare function renderPlanEditor(): unknown;
   declare function loadPlanUpcomingNote(token: number, slotSel?: string): void;
+  declare function loadPlanWeekStrip(
+    token: number,
+    slotSel?: string,
+    onWeek?: (week: import("./client-api.js").ClientPlanWeek) => void
+  ): void;
   declare function renderHistory(): unknown;
   declare function renderProgress(): unknown;
   declare function renderWeight(): unknown;
@@ -2821,7 +2826,7 @@ declare global {
       blankCardio(): Record<string, unknown>;
       dayModelFromPlan(day: Record<string, unknown>): Record<string, unknown>;
       calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): string;
-      progDayHtml(day: Record<string, unknown>, dayIndex: number): string;
+      progDayHtml(day: Record<string, unknown>, dayIndex: number, ann?: { weekday?: string | null; status?: string | null; label?: string | null }): string;
       pitemHtml(item: Record<string, unknown>, dayIndex: number, itemIndex: number, lastIndex: number): string;
       pdayHtml(day: Record<string, unknown>, dayIndex: number): string;
     };
@@ -3554,7 +3559,7 @@ declare global {
       runKindClass(kind: unknown): string;
       runKindLabel(kind: unknown): string;
       weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
-      raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean }): string;
+      raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean }): string;
       trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
       enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
       runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
@@ -4642,6 +4647,13 @@ declare global {
       cardHtml(read: unknown): string;
     };
 
+    CairnPlanWeek: {
+      stripHtml(week: unknown): string;
+      annotationsByDayNumber(week: unknown): Map<number, { weekday: string | null; status: import("./client-api.js").ClientPlanWeekStatus; label?: string | null }>;
+      days(week: unknown): import("./client-api.js").ClientPlanWeekDay[];
+      statusLine(day: import("./client-api.js").ClientPlanWeekDay): string;
+    };
+
     CairnTodayContext: {
       CONTEXT_ICONS: Record<string, string>;
       CONTEXT_NEAR_DAYS: number;
@@ -4884,6 +4896,7 @@ declare global {
   declare const CairnTodaySessionStatus: Window["CairnTodaySessionStatus"];
   declare const CairnTodayProgramAdjustments: Window["CairnTodayProgramAdjustments"];
   declare const CairnTodayWeekAhead: Window["CairnTodayWeekAhead"];
+  declare const CairnPlanWeek: Window["CairnPlanWeek"];
   declare const CairnTodayContext: Window["CairnTodayContext"];
   declare const CairnTodayCompass: Window["CairnTodayCompass"];
   declare const CairnTodayGarminReconciliation: Window["CairnTodayGarminReconciliation"];

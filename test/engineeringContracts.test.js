@@ -430,7 +430,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   // Stated lifting days: +2 (get_strength_schedule, set_strength_schedule) in
   // src/surfaces/mcp/training-status.ts — the MCP mirror of profile.strength_schedule,
   // beside its endurance_schedule sibling.
-  assert.equal(tools.length, 268, "tool count changes only for reviewed MCP additions");
+  assert.equal(tools.length, 270, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -5166,7 +5166,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(planEnduranceSource, /CairnPlanEndurance/);
   assert.match(planEditorSource, /type PlanEditorItem = \{/);
   assert.match(planEditorSource, /function dayModelFromPlan\(\s*day: PlanEditorDay \| PlanEditorApiDay\s*\)/);
-  assert.match(planEditorSource, /function progDayHtml\(day: PlanEditorDay, dayIndex: number\): string/);
+  assert.match(planEditorSource, /function progDayHtml\(day: PlanEditorDay, dayIndex: number, ann\?: ProgDayAnnotation\): string/);
   assert.match(
     planEditorSource,
     /function pitemHtml\(item: PlanEditorItem, dayIndex: number, itemIndex: number, lastIndex: number\): string/

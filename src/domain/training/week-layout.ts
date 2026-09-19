@@ -48,6 +48,13 @@ export interface WeekLayoutCollision {
 
 export interface WeekLayoutRead {
   clean: boolean;
+  /**
+   * Which axis every day number below is on. "template": plan day_numbers on the
+   * repeating Mon=Day1 ring (the only honest read when no lifting week is known).
+   * "calendar": weekday indexes 1=Mon…7=Sun, the week as the athlete's stated lifting
+   * week actually lays the ring onto it — the same map the Plan tab's strip draws from.
+   */
+  space: "template" | "calendar";
   collisions: WeekLayoutCollision[];
   /** ONE sentence naming the smallest move that clears it, or null on a clean week. */
   suggestion: string | null;
@@ -105,9 +112,11 @@ const CLEAN = (
   long: number | null,
   quality: number | null,
   source: WeekLayoutRead["source"],
-  stated: { lift_days: string[]; lift_days_source: WeekLayoutRead["lift_days_source"]; run_days: string[] }
+  stated: { lift_days: string[]; lift_days_source: WeekLayoutRead["lift_days_source"]; run_days: string[] },
+  space: WeekLayoutRead["space"] = "template"
 ): WeekLayoutRead => ({
   clean: true,
+  space,
   collisions: [],
   suggestion: null,
   suggested_move: null,
@@ -156,20 +165,44 @@ const onRing = (d: unknown): d is number => Number.isInteger(d) && (d as number)
 // What to call the strength day in a sentence. The plan day's own name is what the
 // athlete sees everywhere else, so use it when there is one.
 function strengthDayLabel(day: HeavyLowerDayLoad | undefined, dayNumber: number): string {
-  const raw = (day?.name || day?.focus || "").trim().toLowerCase();
+  // A stored NAME keeps its own casing ("Lower A", not "lower a"); only a focus
+  // sentence used as a stand-in is lowercased into the prose.
+  const name = (day?.name || "").trim();
+  const raw = name || (day?.focus || "").trim().toLowerCase();
   if (!raw) return `${weekday(dayNumber)}'s heavy lower-body day`;
-  return /\bday\b/.test(raw) ? `${weekday(dayNumber)}'s ${raw}` : `${weekday(dayNumber)}'s ${raw} day`;
+  return /\bday\b/i.test(raw) ? `${weekday(dayNumber)}'s ${raw}` : `${weekday(dayNumber)}'s ${raw} day`;
 }
 
 // ---- variant sets (never one literal — a stable week fires the same branch every
 // morning, and one sentence printed verbatim for a fortnight reads as a broken app) ----
 
+// Two sets, by which side the lift sits on. A lift the day BEFORE the run sends the
+// run out on worked legs; a lift the day AFTER asks worked legs to squat. Read live,
+// the before-set fired for Monday's squats after Sunday's long run — "so Sunday's long
+// run isn't running on worked legs" — a sentence that is backwards on the calendar.
 const MOVE_VARIANTS: ReadonlyArray<(lift: string, to: string, runDay: string, run: string) => string> = [
   (lift, to, runDay, run) => `Moving ${lift} to ${to} gives ${runDay}'s ${run} a clean runway.`,
   (lift, to, runDay, run) => `${cap(lift)} would sit better on ${to} — that way ${runDay}'s ${run} gets fresher legs.`,
   (lift, to, runDay, run) =>
     `Shifting ${lift} to ${to} is the one move that unstacks the legs before ${runDay}'s ${run}.`,
   (lift, to, runDay, run) => `Try ${lift} on ${to} instead, so ${runDay}'s ${run} isn't running on worked legs.`,
+];
+
+// Calendar space, where the target weekday already lifts: the move is a SWAP of two
+// strength days, and the sentence names both so the athlete knows what trades.
+const SWAP_VARIANTS: ReadonlyArray<(lift: string, other: string, to: string, runDay: string, run: string) => string> = [
+  (lift, other, to, runDay, run) => `Swap ${lift} with ${to}'s ${other}, so ${runDay}'s ${run} isn't running on worked legs.`,
+  (lift, other, to, runDay, run) =>
+    `${cap(lift)} and ${to}'s ${other} would trade places well — that way ${runDay}'s ${run} gets fresher legs.`,
+  (lift, other, to, runDay, run) =>
+    `Trading ${lift} for ${to}'s ${other} is the one move that unstacks the legs before ${runDay}'s ${run}.`,
+  (lift, other, to, runDay, run) => `Try ${lift} on ${to} and ${other} in its place; ${runDay}'s ${run} then starts on fresh legs.`,
+];
+
+const STACK_SWAP_VARIANTS: ReadonlyArray<(lift: string, other: string, to: string, span: string) => string> = [
+  (lift, other, to, span) => `The hard days run ${span} without a break — swapping ${lift} with ${to}'s ${other} opens a gap.`,
+  (lift, other, to, span) => `${cap(span)} are all hard as it stands; trading ${lift} for ${to}'s ${other} gives that stretch some air.`,
+  (lift, other, to, span) => `Swapping ${lift} with ${to}'s ${other} breaks up a hard stretch that currently runs ${span}.`,
 ];
 
 const STACK_MOVE_VARIANTS: ReadonlyArray<(lift: string, to: string, span: string) => string> = [
@@ -300,6 +333,14 @@ function detectCollisions(
       // both false and obviously nonsense to the person reading it.
       const wrapped = Math.abs(h - day) === 6;
       const liftIsBefore = wrapped ? h > day : h < day;
+      // ONLY the day BEFORE collides. Heavy legs the morning after a long or quality
+      // run is the hybrid stacking the race build's own strength hint prescribes
+      // ("squats land after the quality run or the day after the long run"): the two
+      // hard leg stresses sit together and the recovery that follows is whole. Read
+      // live, this read flagged exactly that layout while the hint beside it asked for
+      // it — two signals on one screen, disagreeing. Sending worked legs INTO a key run
+      // is the collision; the stack read below still catches three hard days in a row.
+      if (!liftIsBefore) continue;
       out.push({
         kind: kind === "long" ? "heavy_lower_adjacent_long_run" : "heavy_lower_adjacent_quality",
         days: [h, day].sort((a, b) => a - b),
@@ -377,6 +418,15 @@ export function weekLayoutRead(
     /** How `strengthDows` is known — the athlete's words, or their log. */
     liftDaysSource?: "stated" | "observed" | null;
     enduranceDows?: readonly number[] | null;
+    /**
+     * This week's weekday → plan day_number map (dow 0 = Sunday), from
+     * `thisWeekPlanDayMap` — injected for the same leaf reason as the schedules.
+     * Present and non-empty, the read judges the week on the CALENDAR: a plan whose
+     * strength pool cycles across five stated lifting weekdays puts template day 1
+     * on Friday some weeks, and "is the heavy day beside the long run" is a question
+     * about Friday and Saturday, not about day 1 and day 6.
+     */
+    weekdayMap?: ReadonlyMap<number, number> | null;
   }
 ): WeekLayoutRead {
   const d = date || localDateISO();
@@ -396,7 +446,6 @@ export function weekLayoutRead(
   // Filter the LOADS rather than the derived day list, so `heavy`, `heaviest` and the
   // label lookup all see the same week (see `onRing` above).
   loads = loads.filter((l) => onRing(l.day_number));
-  const heavy = loads.map((l) => l.day_number);
   let planDays: ReadonlySet<number> = new Set();
   try {
     planDays = new Set(
@@ -411,6 +460,52 @@ export function weekLayoutRead(
   } catch {
     planDays = new Set();
   }
+
+  const placement = runPlacement(opts);
+  let { long, quality } = placement;
+  const source = placement.source;
+
+  // ---- calendar space ----
+  // With a lifting week laid onto the weekdays, every template number becomes the
+  // weekday(s) it lands on this week. A strength day the ring reaches twice (a
+  // three-day pool across five lifting days) is heavy on BOTH weekdays; a template
+  // run day becomes the weekday the map gave it. The engine's own run slots and the
+  // agenda's provisional numbers are already weekday-numbered (Mon = 1) whenever a
+  // schedule is stated, so only the stored-plan placement needs translating.
+  const weekMap = opts?.weekdayMap && opts.weekdayMap.size ? opts.weekdayMap : null;
+  const space: WeekLayoutRead["space"] = weekMap ? "calendar" : "template";
+  // Calendar only: the strength day each weekday holds, by its stored name, so a move
+  // onto a weekday that already lifts can be spoken as the swap it is.
+  const strengthAt = new Map<number, string>();
+  if (weekMap) {
+    let groups: ReturnType<typeof planDayStrengthGroups> = [];
+    try {
+      groups = planDayStrengthGroups();
+    } catch {
+      groups = [];
+    }
+    const byNumber = new Map(groups.map((g) => [g.day_number, g]));
+    for (let w = 1; w <= 7; w++) {
+      const dn = weekMap.get(w === 7 ? 0 : w);
+      const g = dn == null ? undefined : byNumber.get(dn);
+      if (g && g.day_type !== "rest" && g.groups.length) strengthAt.set(w, (g.name || g.focus || "strength").trim());
+    }
+    const landings = new Map<number, number[]>();
+    for (let w = 1; w <= 7; w++) {
+      const dn = weekMap.get(w === 7 ? 0 : w);
+      if (dn == null) continue;
+      const list = landings.get(dn) ?? [];
+      list.push(w);
+      landings.set(dn, list);
+    }
+    loads = loads.flatMap((l) => (landings.get(l.day_number) ?? []).map((w) => ({ ...l, day_number: w })));
+    planDays = new Set([...planDays].flatMap((dn) => landings.get(dn) ?? []));
+    if (source === "plan") {
+      long = long == null ? null : (landings.get(long)?.[0] ?? null);
+      quality = quality == null ? null : (landings.get(quality)?.[0] ?? null);
+    }
+  }
+  const heavy = loads.map((l) => l.day_number);
   const top = loads[0];
   // Ties are kept whole: two lower days carrying identical work are genuinely both the
   // week's heaviest, and picking one by day number would hide a real collision on the other.
@@ -419,13 +514,11 @@ export function weekLayoutRead(
         .filter((l) => l.tonnage === top.tonnage && l.compound_sets === top.compound_sets && l.sets === top.sets)
         .map((l) => l.day_number)
     : [];
-
-  const { long, quality, source } = runPlacement(opts);
   if (!heavy.length || (long == null && quality == null))
-    return CLEAN(heaviest, heavy, long, quality, source, stated);
+    return CLEAN(heaviest, heavy, long, quality, source, stated, space);
 
   const collisions = detectCollisions(heaviest, heavy, long, quality, loads);
-  if (!collisions.length) return CLEAN(heaviest, heavy, long, quality, source, stated);
+  if (!collisions.length) return CLEAN(heaviest, heavy, long, quality, source, stated, space);
 
   // The lead: an adjacency collision names a concrete move, so it speaks ahead of the
   // stack (which is usually the same problem seen wider).
@@ -442,13 +535,21 @@ export function weekLayoutRead(
     const span = `${weekday(lead.days[0])} to ${weekday(lead.days[lead.days.length - 1])}`;
     const to = move == null ? null : clearingSlot(move, heaviest, heavy, long, quality, loads, planDays);
     if (move != null && to != null) suggested_move = { from: move, to };
+    const other = to == null ? null : (strengthAt.get(to) ?? null);
     suggestion =
       move != null && to != null
-        ? pickDayVariant(STACK_MOVE_VARIANTS, d, "week-layout:stack")(
-            strengthDayLabel(byDay.get(move), move),
-            weekday(to),
-            span
-          )
+        ? other
+          ? pickDayVariant(STACK_SWAP_VARIANTS, d, "week-layout:stack")(
+              strengthDayLabel(byDay.get(move), move),
+              other,
+              weekday(to),
+              span
+            )
+          : pickDayVariant(STACK_MOVE_VARIANTS, d, "week-layout:stack")(
+              strengthDayLabel(byDay.get(move), move),
+              weekday(to),
+              span
+            )
         : pickDayVariant(UNMOVABLE_STACK_VARIANTS, d, "week-layout:stack-held")(span);
   } else {
     const runDay = lead.kind === "heavy_lower_adjacent_long_run" ? long : quality;
@@ -457,8 +558,11 @@ export function weekLayoutRead(
     const lift = strengthDayLabel(byDay.get(move), move);
     const to = clearingSlot(move, heaviest, heavy, long, quality, loads, planDays);
     if (to != null) suggested_move = { from: move, to };
+    const other = to == null ? null : (strengthAt.get(to) ?? null);
     suggestion =
-      to != null
+      to != null && other
+        ? pickDayVariant(SWAP_VARIANTS, d, `week-layout:${lead.kind}`)(lift, other, weekday(to), weekday(runDay as number), runWord)
+        : to != null
         ? pickDayVariant(MOVE_VARIANTS, d, `week-layout:${lead.kind}`)(
             lift,
             weekday(to),
@@ -474,6 +578,7 @@ export function weekLayoutRead(
 
   return {
     clean: false,
+    space,
     collisions,
     suggestion,
     suggested_move,

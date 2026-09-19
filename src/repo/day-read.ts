@@ -40,6 +40,7 @@ import { LAST_NIGHT_MAX_AGE_DAYS, SENSOR_MAX_AGE_DAYS, isLastNight, sensorIsCurr
 import { getRecentSessions } from "./sessions.js";
 import { getSettings } from "./settings.js";
 import { getPlan } from "./plan.js";
+import { planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { activeRecoveryWeekLedger, RECOVERY_WEEK_ACTIVE_DAYS } from "./recovery-week-ledger.js";
 import {
@@ -3208,10 +3209,13 @@ export function planDayPurpose(planDayId: number, date = localDateISO()): string
 // GET /plan and the /today aggregate read, so the sentence never appears from
 // one endpoint and vanishes when the client's background /plan revalidation
 // lands (see today-data-loader.ts, which overwrites the cached "plan" key).
+// `out_of_order` flags a day whose stored item order differs from effect order
+// so the Plan gallery can offer a quiet "Order for effect" without a second fetch.
 export function getPlanWithPurpose(date = localDateISO()): Array<Record<string, unknown>> {
   return getPlan().map((day: any) => ({
     ...day,
     purpose: day?.id != null ? planDayPurpose(Number(day.id), date) : null,
+    out_of_order: planItemsOutOfOrder(Array.isArray(day?.items) ? day.items : []),
   }));
 }
 

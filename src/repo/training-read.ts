@@ -826,6 +826,8 @@ const HEAVY_LOWER_GROUPS: ReadonlySet<string> = new Set(["quads", "hamstrings", 
 
 export interface PlanDayGroups {
   day_number: number;
+  /** The day's stored name ("Push", "Lower A") — what the athlete sees on the card. */
+  name: string | null;
   focus: string | null;
   groups: string[]; // canonical strength muscle groups (cardio items ignored)
   heavy_lower: boolean;
@@ -844,7 +846,7 @@ export function planDayStrengthGroups(): PlanDayGroups[] {
   try {
     rows = db
       .prepare(
-        `SELECT pd.day_number AS day_number, pd.focus AS focus, pd.day_type AS day_type,
+        `SELECT pd.day_number AS day_number, pd.name AS name, pd.focus AS focus, pd.day_type AS day_type,
                 pi.kind AS kind, e.name AS exercise, e.muscle_group AS muscle_group
            FROM plan_days pd
            LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id
@@ -862,6 +864,7 @@ export function planDayStrengthGroups(): PlanDayGroups[] {
     const restDay = String(r.day_type ?? "training").toLowerCase() === "rest";
     const cur = map.get(dn) ?? {
       day_number: dn,
+      name: r.name == null ? null : String(r.name),
       focus: r.focus == null ? null : String(r.focus),
       groups: [],
       heavy_lower: false,
@@ -998,6 +1001,7 @@ export function planRunItems(): PlanRunItem[] {
     rows = db
       .prepare(
         `SELECT pd.day_number AS day_number, pi.note AS note,
+                pd.name AS day_name, pd.focus AS day_focus,
                 pi.target_distance_km AS km, pi.target_duration_min AS min,
                 pi.target_zone AS zone, pi.interval_json AS interval_json
            FROM plan_days pd JOIN plan_items pi ON pi.plan_day_id = pd.id
@@ -1010,10 +1014,14 @@ export function planRunItems(): PlanRunItem[] {
   const out: PlanRunItem[] = [];
   for (const r of rows) {
     const note = String(r.note ?? "");
-    if (canonicalEnduranceSport(note).key !== "run") continue;
+    // The day's own name/focus counts: a day called "Long Run" whose note only says
+    // "genuinely easy in Z2 (137–142 bpm)" names neither the sport nor the kind, yet it
+    // is the week's long run — and the layout read must see it to judge the week.
+    const dayWords = `${String(r.day_name ?? "")} ${String(r.day_focus ?? "")}`;
+    if (canonicalEnduranceSport(note).key !== "run" && canonicalEnduranceSport(`${note} ${dayWords}`).key !== "run") continue;
     const zone = String(r.zone ?? "");
     const hard = !!r.interval_json || /tempo|threshold|vo2|hill|interval|z[345]/i.test(`${note} ${zone}`);
-    const kind: PlanRunItem["kind"] = /\blong\b/i.test(note) ? "long" : hard ? "quality" : "easy";
+    const kind: PlanRunItem["kind"] = /\blong\b/i.test(`${note} ${dayWords}`) ? "long" : hard ? "quality" : "easy";
     out.push({
       day_number: Number(r.day_number),
       label: note.trim() || "Run",

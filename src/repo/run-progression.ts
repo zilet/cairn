@@ -1533,10 +1533,20 @@ export function weeklyRunPlan(
   if (supportingConstrained && prevLong > 0) longKm = round1(Math.min(longKm, prevLong * 1.1));
   if (taper) longKm = round1(Math.min(longKm, Math.max(6, prevLong * 0.6)));
 
-  const easyTotal = Math.max(easyCount * 3, round1(weeklyKm - longKm - qualityKm));
+  let easyTotal = Math.max(easyCount * 3, round1(weeklyKm - longKm - qualityKm));
   let easyEach = round1(easyTotal / easyCount);
   if (supportingConstrained && recentDose?.average_km != null) {
     easyEach = round1(Math.min(easyEach, Math.max(3, recentDose.average_km * 1.1)));
+  }
+  // The long run is the week's longest run — that is what the word means. A
+  // protective cut sizes the long run off the week's share (35% of 13 km is 4.6 km)
+  // and then hands the easy run everything left over (8.2 km), and the athlete reads
+  // a "long run" shorter than the "easy run". Same weekly total, same ceilings: the
+  // long run takes the larger dose and the easy run(s) the remainder.
+  if (easyCount > 0 && longKm < easyEach) {
+    longKm = round1(Math.min(easyEach, weeklyKm * 0.55));
+    easyTotal = Math.max(easyCount * 3, round1(weeklyKm - longKm - qualityKm));
+    easyEach = round1(Math.min(easyTotal / easyCount, longKm));
   }
 
   // --- slot assignment (day_number 1–7): quality mid-week, long late, easy spread —

@@ -16,7 +16,9 @@ import {
   listExercises,
   listGuideSuggestions,
   mergeExercises,
+  orderPlanDayForEffect,
   planUpcomingNote,
+  planWeek,
   reconcileExerciseGroups,
   replacePlanChecked,
   savePlanDayChecked,
@@ -76,6 +78,13 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     // Same payload as GET /api/plan — getPlanWithPurpose attaches the per-day
     // purpose line, so the two surfaces stay mirrors.
     async () => asText(getPlanWithPurpose())
+  );
+
+  server.tool(
+    "get_plan_week",
+    "The Plan tab's connected week: calendar Mon–Sun when lift/run schedules map weekdays, otherwise template day order with weekday null. Each cell carries status (done/today/upcoming/rest/open), the plan day, any logged session, and any run intent. Layout suggestion is a quiet collision note when the week stacks heavy lower next to a long/quality run.",
+    {},
+    async () => asText(planWeek())
   );
 
   server.tool(
@@ -183,6 +192,21 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       } catch (error) {
         // The refusal IS the contract: hand back the structured report so the caller can
         // enumerate the blocking errors instead of retrying quality_override blind.
+        if (error instanceof PlanQualityError) return asText({ ok: false, quality: error.report });
+        throw error;
+      }
+    }
+  );
+
+  server.tool(
+    "order_plan_day_for_effect",
+    "Rewrite one plan day's exercises into effect order: primary compounds first (barbell before machine), then secondary loaded work, isolation, core, then cardio. No-op when already ordered. Returns the day, or null when that day_number is absent.",
+    { day_number: z.number().int().describe("the day's number in the current plan; see get_plan") },
+    async ({ day_number }) => {
+      try {
+        const result = orderPlanDayForEffect(day_number);
+        return asText(result ? result.day : null);
+      } catch (error) {
         if (error instanceof PlanQualityError) return asText({ ok: false, quality: error.report });
         throw error;
       }

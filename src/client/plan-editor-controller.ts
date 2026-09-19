@@ -26,6 +26,8 @@ type PlanEditorControllerDay = {
   name?: unknown;
   focus?: unknown;
   day_type?: unknown;
+  purpose?: unknown;
+  out_of_order?: unknown;
   items?: PlanEditorControllerItem[];
 };
 
@@ -34,7 +36,15 @@ type PlanEditorControllerModelDay = {
   name: unknown;
   focus: unknown;
   day_type: unknown;
+  purpose?: unknown;
+  out_of_order?: unknown;
   items: PlanEditorControllerItem[];
+};
+
+type PlanEditorProgAnnotation = {
+  weekday?: string | null;
+  status?: string | null;
+  label?: string | null;
 };
 
 type PlanEditorControllerHelpers = {
@@ -42,7 +52,7 @@ type PlanEditorControllerHelpers = {
   blankCardio(): PlanEditorControllerItem;
   dayModelFromPlan(day: PlanEditorControllerDay | PlanEditorControllerApiDay): PlanEditorControllerModelDay;
   calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): string;
-  progDayHtml(day: PlanEditorControllerDay, dayIndex: number): string;
+  progDayHtml(day: PlanEditorControllerDay, dayIndex: number, ann?: PlanEditorProgAnnotation): string;
   pitemHtml(item: PlanEditorControllerItem, dayIndex: number, itemIndex: number, lastIndex: number): string;
   pdayHtml(day: PlanEditorControllerDay, dayIndex: number): string;
 };
@@ -191,6 +201,26 @@ function loadPlanUpcomingNote(token: number, slotSel = "#planUpcomingSlot"): voi
       const slot = $(slotSel);
       if (!slot) return;
       slot.innerHTML = planUpcomingNoteHtml(note as import("../contracts/client.js").ClientPlanUpcomingNote);
+    })
+    .catch(() => {});
+}
+
+/** Connected week strip for Strength + Endurance. Returns annotations for gallery chips. */
+function loadPlanWeekStrip(
+  token: number,
+  slotSel = "#planWeekSlot",
+  onWeek?: (week: import("../contracts/client.js").ClientPlanWeek) => void
+): void {
+  void api("/plan/week")
+    .then((week) => {
+      if (token !== pollToken || state.tab !== "plan") return;
+      const slot = view.querySelector(slotSel) || $(slotSel);
+      if (slot && typeof CairnPlanWeek !== "undefined") {
+        slot.innerHTML = CairnPlanWeek.stripHtml(week);
+      }
+      if (onWeek && week && typeof week === "object") {
+        onWeek(week as import("../contracts/client.js").ClientPlanWeek);
+      }
     })
     .catch(() => {});
 }
@@ -534,7 +564,7 @@ async function renderPlanEditor(): Promise<void> {
 
   const icsUrl = withToken("/api/plan.ics");
   const calFooter = helpers.calendarFooterHtml(plan, location.host, icsUrl);
-  view.innerHTML = segBar("edit", planSeg()) + `<div id="planRecoverySlot"></div><div id="planUpcomingSlot"></div><div id="planRedrawSlot"></div><div id="planedit"></div>
+  view.innerHTML = segBar("edit", planSeg()) + `<div id="planWeekSlot" class="card-stack-item"></div><div id="planRecoverySlot"></div><div id="planUpcomingSlot"></div><div id="planRedrawSlot"></div><div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
     <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}
     <datalist id="exerciseNames"></datalist>`;
@@ -546,6 +576,14 @@ async function renderPlanEditor(): Promise<void> {
   const model: PlanEditorControllerModelDay[] = (Array.isArray(plan) ? plan : []).map((day) => helpers.dayModelFromPlan(day));
   const editing = new Set<number>();
   let planBar: ClientSaveBar | null = null;
+  let weekAnn = new Map<number, PlanEditorProgAnnotation>();
+  loadPlanWeekStrip(token, "#planWeekSlot", (week) => {
+    if (typeof CairnPlanWeek === "undefined") return;
+    weekAnn = CairnPlanWeek.annotationsByDayNumber(week);
+    // Re-draw gallery cards with weekday/status once the week lands — skip if editing.
+    if (view.querySelector(".pday") || document.querySelector(".savebar.show")) return;
+    draw();
+  });
 
   function markDirty(): void {
     planBar?.markDirty();
@@ -595,7 +633,11 @@ async function renderPlanEditor(): Promise<void> {
     // reading, so the same quiet entry sits above the shells the athlete can fill in.
     root.innerHTML =
       (blank ? `<div class="plan-empty reveal">${composeWeekEntryHtml(true)}</div>` : "") +
-      model.map((day, dayIndex) => editing.has(dayIndex) ? helpers.pdayHtml(day, dayIndex) : helpers.progDayHtml(day, dayIndex)).join("");
+      model.map((day, dayIndex) => {
+        if (editing.has(dayIndex)) return helpers.pdayHtml(day, dayIndex);
+        const ann = weekAnn.get(form.dayNumber(day));
+        return helpers.progDayHtml(day, dayIndex, ann);
+      }).join("");
     if (blank) wireComposeWeek(root);
     wireGuides(root);
 
@@ -624,6 +666,30 @@ async function renderPlanEditor(): Promise<void> {
         trigger: button,
         provenance: { entry: "plan_day_train" },
       });
+    }));
+    // Quiet "Order for effect" — compounds → accessories → finishers → cardio.
+    view.querySelectorAll<HTMLElement>("[data-orderday]").forEach((button) => button.addEventListener("click", () => {
+      void (async () => {
+        sync();
+        const day = model[form.datasetNumber(button, "orderday")];
+        if (!day) return;
+        const dayNumber = form.dayNumber(day);
+        button.setAttribute("disabled", "true");
+        try {
+          const result = await api(`/plan/${dayNumber}/order-for-effect`, { method: "POST" });
+          if (result && typeof result === "object" && "error" in result && (result as { error?: unknown }).error) {
+            toast(String((result as { error: unknown }).error) || "Couldn't reorder that day.");
+            return;
+          }
+          state.plan = [];
+          swrInvalidate("plan");
+          void renderPlanEditor();
+        } catch {
+          toast("Couldn't reorder that day — try again in a bit.");
+        } finally {
+          button.removeAttribute("disabled");
+        }
+      })();
     }));
     view.querySelectorAll<HTMLElement>("[data-doneday]").forEach((button) => button.addEventListener("click", () => {
       sync();
@@ -720,7 +786,7 @@ async function renderPlanEditor(): Promise<void> {
   $("#addDay")?.addEventListener("click", () => {
     sync();
     const next = model.reduce((max, day) => Math.max(max, form.dayNumber(day)), 0) + 1;
-    model.push({ day_number: next, name: `Day ${next}`, focus: "", day_type: "training", items: [] });
+    model.push({ day_number: next, name: `Day ${next}`, focus: "", day_type: "training", purpose: "", out_of_order: false, items: [] });
     editing.add(model.length - 1);
     markDirty();
     draw();
@@ -771,11 +837,13 @@ Object.assign(globalThis, {
   CairnPlanEditorController: CAIRN_PLAN_EDITOR_CONTROLLER,
   renderPlanEditor,
   loadPlanUpcomingNote,
+  loadPlanWeekStrip,
 });
 
 if (typeof window !== "undefined") {
   window.CairnPlanEditorController = CAIRN_PLAN_EDITOR_CONTROLLER;
   window.renderPlanEditor = renderPlanEditor;
   window.loadPlanUpcomingNote = loadPlanUpcomingNote;
+  window.loadPlanWeekStrip = loadPlanWeekStrip;
 }
 })();

@@ -21,6 +21,7 @@ import { blockForCoach, getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 import { getStrengthJourney } from "./strength-objectives.js";
 import { performanceStanding } from "./performance.js";
+import { thisWeekPlanDayMap } from "./plan-selection.js";
 import { weekLayoutRead } from "../domain/training/week-layout.js";
 import { raceBuild } from "./race-build.js";
 import { enduranceTestsDue, runVarietyRead, runZones, weeklyRunPlan } from "./run-progression.js";
@@ -1303,12 +1304,14 @@ function getCoachContextFromSnapshot(): CoachContext {
   // extra — both were already computed above.
   const weekLayoutView = brainSignal(`week_layout:${today}`, () => {
     try {
+      const weekdayMap = new Map([...thisWeekPlanDayMap(today).map].map(([dow, c]) => [dow, c.day_number]));
       return weekLayoutRead(today, {
         runPlan: runPlanView,
         agenda: flexibleTrainingAgendaView,
         strengthDows: (strengthScheduleView?.days ?? []).map((d: any) => d.dow),
         liftDaysSource: strengthScheduleView?.source ?? null,
         enduranceDows: statedRunDows(),
+        weekdayMap,
       });
     } catch {
       return null;

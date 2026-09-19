@@ -104,16 +104,16 @@ test("the heaviest lower day the day BEFORE the long run collides", () => {
   assert.equal(read.source, "plan");
 });
 
-test("the heaviest lower day the day AFTER the long run collides too", () => {
+test("the heaviest lower day the day AFTER the long run is the intended stacking, not a collision", () => {
+  // The race build's strength hint asks for exactly this ("squats land … the day
+  // after the long run"): two hard leg stresses together, then whole recovery. The
+  // read must not flag what the hint beside it prescribes.
   heavyLowerDay(7);
   upperDay(2);
   runDay(6, "Long run", 18);
   const read = weekLayoutRead(REF);
-  assert.equal(read.clean, false);
-  const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
-  assert.ok(hit);
-  assert.deepEqual(hit.days, [6, 7]);
-  assert.match(hit.detail, /after/);
+  assert.equal(read.clean, true, JSON.stringify(read.collisions));
+  assert.equal(read.suggestion, null);
 });
 
 test("a quality run beside the heaviest lower day collides on its own kind", () => {
@@ -265,29 +265,17 @@ test("nothing in the read is a score", () => {
 // the athlete's actual life. Reading it as a line hid the 7↔1 collision — and hid it
 // permanently, since a repeating template never stops producing it.
 
-// The same adjacency the read uses, restated here so the assertions below can't drift
-// with the implementation.
-const ringAdjacent = (a, b) => Math.abs(a - b) === 1 || Math.abs(a - b) === 6;
-
-test("Sunday's long run and Monday's heavy lower day collide — the template repeats", () => {
+test("Sunday's long run into Monday's heavy lower day is read on the ring — and reads as the stack it is", () => {
+  // Monday FOLLOWS Sunday on the repeating template: the pair is adjacent every week,
+  // never a seam. Legs the morning after the long run is the prescribed stacking, so
+  // the ring sees the pair and calls it clean — a linear read would not even have
+  // looked. The mirror (legs BEFORE the long run across the seam) collides below.
   heavyLowerDay(1);
   upperDay(3);
   runDay(7, "Long run", 18);
   const read = weekLayoutRead(REF);
-  assert.equal(read.clean, false, "the Sunday/Monday seam is not a gap in the week");
-  const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
-  assert.ok(hit, `expected a long-run collision, got ${JSON.stringify(read.collisions)}`);
-  assert.deepEqual(hit.days, [1, 7]);
-  // Monday FOLLOWS Sunday on the ring. The sentence must not claim the reverse.
-  assert.match(hit.detail, /Monday'?s? .*sits right after Sunday's long run/i, hit.detail);
-  assert.doesNotMatch(hit.detail, /before Sunday/i, hit.detail);
-  assert.equal(violatesReadingGrammar(read.suggestion), null, read.suggestion);
-  assert.ok(read.suggested_move, "there is a free day in this week to clear it");
-  assert.equal(read.suggested_move.from, 1);
-  assert.ok(
-    !ringAdjacent(read.suggested_move.to, 7),
-    `moved the lift to day ${read.suggested_move.to}, still beside Sunday's long run on the ring`
-  );
+  assert.equal(read.clean, true, JSON.stringify(read.collisions));
+  assert.equal(read.long_run_day, 7);
 });
 
 test("the mirror case reads the other way round: Sunday's legs sit BEFORE Monday's long run", () => {
@@ -311,20 +299,81 @@ test("a wrap collision is a quality-run collision too", () => {
   assert.ok(read.collisions.some((c) => c.kind === "heavy_lower_adjacent_quality"));
 });
 
-test("the clearing move is judged on the RING — it never lands beside the run across the seam", () => {
-  // Saturday's heavy legs collide with Sunday's long run, and Friday's tempo boxes
-  // them in. The only free day in the plan is Monday — which on a repeating template
-  // is the day right AFTER Sunday's long run. A linear read called that a clean slot;
-  // it is the same collision moved one day round the ring, so nothing is proposed.
+test("the clearing move is judged on the RING — the day after Sunday's long run is Monday, and that is the slot", () => {
+  // Saturday's heavy legs sit the day BEFORE Sunday's long run: worked legs into the
+  // key run, the one shape this read exists to catch. The only free day in the plan
+  // is Monday — on a repeating template the morning after the long run, which is the
+  // intended stacking, so it is offered. A linear read would have seen Monday as a
+  // random free slot; the ring sees it as the right one.
   upperDay(1);
   heavyLowerDay(6, "Heavy legs");
   runDay(7, "Long run", 18);
   runDay(5, "Tempo run", 10);
   const read = weekLayoutRead(REF);
   assert.equal(read.clean, false);
-  assert.equal(read.suggested_move, null, "Monday is not a clean slot for a Saturday leg day here");
-  assert.ok(read.suggestion, "it still says something");
+  assert.equal(read.suggested_move?.from, 6);
+  assert.equal(read.suggested_move?.to, 1, "Monday, the day after the long run, clears it");
   assert.equal(violatesReadingGrammar(read.suggestion), null, read.suggestion);
+});
+
+// ── calendar space ──────────────────────────────────────────────────────────
+
+test("with a lifting week mapped, the read judges the CALENDAR, not the template ring", () => {
+  // A two-day strength pool cycles across five stated lifting weekdays: Mon Lower,
+  // Tue Upper, Wed Lower, Thu Upper, Fri Lower. Saturday carries the long run. On the
+  // template ring day 1 (Lower) and day 6 (the run slot) are three apart — clean. On
+  // the calendar the athlete lifts heavy legs on FRIDAY, the day before the run.
+  heavyLowerDay(1, "Lower");
+  upperDay(2, "Upper");
+  const weekdayMap = new Map([
+    [1, 1],
+    [2, 2],
+    [3, 1],
+    [4, 2],
+    [5, 1],
+  ]);
+  const runPlan = { available: true, runs: [{ day_number: 6, label: "Long run", kind_label: "long", target_distance_km: 16 }] };
+  const template = weekLayoutRead(REF, { runPlan });
+  assert.equal(template.space, "template");
+  assert.equal(template.clean, true, "on the ring nothing is adjacent");
+
+  const calendar = weekLayoutRead(REF, { runPlan, strengthDows: [1, 2, 3, 4, 5], enduranceDows: [6], weekdayMap });
+  assert.equal(calendar.space, "calendar");
+  assert.equal(calendar.clean, false, JSON.stringify(calendar.collisions));
+  const hit = calendar.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
+  assert.ok(hit, JSON.stringify(calendar.collisions));
+  assert.deepEqual(hit.days, [5, 6], "Friday's legs before Saturday's long run");
+  assert.match(hit.detail, /Friday's Lower day sits right before Saturday's long run/);
+  assert.deepEqual(calendar.heavy_lower_days, [1, 3, 5], "every weekday the ring lands the heavy day on");
+  // The move is a weekday too, one of the stated lifting days, never the run's own day
+  // and never beside it on the wrong side.
+  assert.ok(calendar.suggested_move, calendar.suggestion);
+  assert.equal(calendar.suggested_move.from, 5);
+  assert.ok([2, 4].includes(calendar.suggested_move.to), `moved to weekday ${calendar.suggested_move.to}`);
+  // That weekday already lifts, so the sentence is a SWAP naming both days.
+  assert.match(calendar.suggestion, /Friday's Lower day/);
+  assert.match(calendar.suggestion, /Upper/);
+  assert.match(calendar.suggestion, /Thursday|Tuesday/);
+  assert.equal(violatesReadingGrammar(calendar.suggestion), null, calendar.suggestion);
+});
+
+test("in calendar space a stored-plan run day is translated through the same map", () => {
+  // The plan's own "Long Run" day is template day 3; the athlete's week puts it on
+  // Sunday (dow 0). Monday's heavy legs are the morning after — clean; but Saturday
+  // is not in this week's map, so nothing invents a Saturday.
+  heavyLowerDay(1, "Lower");
+  upperDay(2, "Upper");
+  runDay(3, "Long run", 16);
+  const weekdayMap = new Map([
+    [1, 1],
+    [2, 2],
+    [0, 3],
+  ]);
+  const read = weekLayoutRead(REF, { strengthDows: [1, 2], enduranceDows: [0], weekdayMap });
+  assert.equal(read.space, "calendar");
+  assert.equal(read.source, "plan");
+  assert.equal(read.long_run_day, 7, "Sunday, as a weekday index");
+  assert.equal(read.clean, true, JSON.stringify(read.collisions));
 });
 
 test("a hard stretch that straddles Sunday reads as ONE stack, not two short ones", () => {
@@ -585,9 +634,13 @@ test("on a week that genuinely cannot be separated, the read still tells the tru
   const long = plan.runs.find((r) => r.kind_label === "long");
   assert.equal(long.day_number, 7, "no ring-clean slot exists, so the old fallback stands");
   const read = weekLayoutRead(REF, { runPlan: plan });
-  const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
-  assert.ok(hit, `the Sunday/Monday pair is real and must be reported: ${JSON.stringify(read.collisions)}`);
-  assert.deepEqual(hit.days, [1, 7]);
+  // Sunday's long run into Monday's legs is the intended stacking, not a collision —
+  // but Friday, Saturday, Sunday, Monday are four hard days in a row, and THAT is the
+  // truth this week still has to hear.
+  assert.equal(read.clean, false);
+  const stack = read.collisions.find((c) => c.kind === "double_day_stack");
+  assert.ok(stack, `the Friday-to-Monday stack is real and must be reported: ${JSON.stringify(read.collisions)}`);
+  assert.deepEqual(stack.days, [5, 6, 7, 1]);
   assert.ok(!violatesReadingGrammar(read.suggestion), read.suggestion);
 });
 

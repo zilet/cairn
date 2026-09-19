@@ -129,11 +129,22 @@ New/changed components (CSS must implement, the client JS must emit):
   set chips `.chip` are cream pills; completed card gets `.ex-complete` → sage left-edge stamp
   + a small sage "✓ done" mark, slight desaturation.
 - Plan tab (Program gallery): `.prog-day` card per plan day:
-  `.prog-head` (day number small caps + `.prog-name` display italic + `.prog-focus` muted line),
+  `.prog-head` (weekday/status small caps when the week projection knows one — else
+  `Day N` — + `.prog-name` display italic + `.prog-focus` muted line + optional
+  `.prog-purpose` italic why-this-session line),
   `.prog-strip` horizontal row of `.artile-md` art for the day's exercises (overlapping ~-10px,
   like a catalog contact strip), `.prog-list` of `.prog-row` (small art, name, `sets × reps`
-  numerals right-aligned). A `.prog-edit` ghost button flips that day into the existing editor
-  markup (`.pday`, `.pi-*` classes — keep them working, restyled as inset wells).
+  numerals right-aligned). A quiet `.prog-order` linkbtn ("Order for effect") appears when
+  stored item order differs from compounds→accessories→finishers→cardio. A `.prog-edit`
+  ghost button flips that day into the existing editor markup (`.pday`, `.pi-*` classes —
+  keep them working, restyled as inset wells).
+- Plan week strip (Strength + Endurance): `.pweek` card with `.pweek-map` (7 cells when
+  calendar-anchored, auto-fill template otherwise). Each `.pweek-day` carries weekday,
+  glyph (lift/run/mixed/rest), short label (the logged session's title on a done day, the
+  run's label + km on a run day, else the plan day's NAME — never the focus sentence), and a
+  status chip (Done / Today / Up next). `.is-today` / `.is-done` / `.is-hard` are status deltas
+  only — never a gate. `.pweek-progress` under the map is the one spoken week-so-far line
+  (counts, no scores); optional `.pweek-note` below it for a layout suggestion or a quiet summary.
 - Meal plans (Coach tab): `.mp-card`. Header `.mp-hero`: agent + status `.mp-badge` (draft/ok/off),
   daily kcal as `.numeral-xl` + `.lbl "per day"`, protein as `.numeral-lg`. Days `.mp-day`
   with `.mp-dayname` (display italic). Each meal `.meal-row`: `.meal-art` (`.artile-md` food art)

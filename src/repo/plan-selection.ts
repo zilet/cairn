@@ -271,9 +271,9 @@ export interface WeekdayMappablePlanDay {
   cardio?: readonly string[];
 }
 
-type WeekdayPlanDayRole = "strength" | "endurance" | "rest" | "empty";
+export type WeekdayPlanDayRole = "strength" | "endurance" | "rest" | "empty";
 
-function planDayRole(day: WeekdayMappablePlanDay): WeekdayPlanDayRole {
+export function planDayRole(day: WeekdayMappablePlanDay): WeekdayPlanDayRole {
   if (day.day_type === "rest") return "rest";
   if ((day.names?.length ?? 0) > 0) return "strength";
   if ((day.cardio?.length ?? 0) > 0) return "endurance";
@@ -382,6 +382,29 @@ export function weekdayPlanDayMap<T extends WeekdayMappablePlanDay>(
     if (day) map.set(dow, day);
   }
   return map;
+}
+
+/**
+ * This week's weekday → plan-day map with the real ring phase (anchor-aware).
+ * Empty `map` when no lift schedule is known — callers then fall back to template
+ * order rather than inventing Mon=Day1 weekdays.
+ */
+export function thisWeekPlanDayMap(date = localDateISO()): {
+  map: Map<number, PlanDayCandidate>;
+  lift_dows: number[];
+  strength_start: number;
+} {
+  const candidates = planDayCandidates();
+  const lift = normalizeDows(liftDows(date));
+  if (!lift.length || !candidates.length) {
+    return { map: new Map(), lift_dows: [], strength_start: 0 };
+  }
+  const anchors = recentSessionAnchors(date, candidates);
+  const anchor = anchors.find((a) => a.resolved) ?? null;
+  const pool = candidates.filter((day) => planDayRole(day) === "strength");
+  const strength_start = strengthStartForWeek(date, lift, pool, anchor);
+  const map = weekdayPlanDayMap(candidates, lift, statedRunDows(), strength_start);
+  return { map, lift_dows: lift, strength_start };
 }
 
 /** The plain day-number→weekday convention: Monday takes day 1, Sunday day 7. */

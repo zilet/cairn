@@ -189,7 +189,11 @@ test("plan endurance orchestration uses the rolling agenda and movable anchor la
   const source = readFileSync(join(root, "src/client/plan-endurance-client.ts"), "utf8");
   assert.match(source, /api\(`\/training-agenda\?date=/);
   assert.match(source, /trainingAgendaCard\(agenda\)/);
-  assert.match(source, /Suggested anchor/);
+  // Rows speak status first — "Done · <date>" / "Open · <date> · movable" — and,
+  // when the live intent matched, its name and distance rather than the template's.
+  assert.match(source, /Open · \$\{humanDate/);
+  assert.match(source, /Done · \$\{humanDate/);
+  assert.match(source, /intent\.completion\.distance_km/);
   assert.match(source, /movable weekly intentions/);
   assert.doesNotMatch(source, /each run lands on its day|>Day \$\{|tempo on Thursday/);
 });

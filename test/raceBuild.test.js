@@ -198,6 +198,15 @@ test("the live week is a rung, not a patch — the walk steps off it, never off 
   assert.equal(walked[0].current, true);
   const step = raceRamp(goal, walked[1].week_start, 30, 14);
   assert.equal(walked[1].km, step.required_km, "week two is one step off week one, never two");
+
+  // Handed the engine's NEXT week as well (a recovery week it already knows about),
+  // the ladder reports that rung too and steps off it — one engine, one number.
+  const known = projectRaceBuildWeeks(goal, TODAY, 28, 13, { km: 30, long_km: 14 }, { km: 21, long_km: 10 });
+  assert.equal(known[1].km, 21);
+  assert.equal(known[1].long_km, 10);
+  assert.equal(known[1].current, false);
+  const third = raceRamp(goal, known[2].week_start, 21, 10);
+  assert.equal(known[2].km, third.required_km, "week three steps off the engine's week two");
   assert.equal(walked[1].long_km, step.required_long_km);
   assert.ok(walked[1].km < projected[1].km, `${walked[1].km} should sit below the double-stepped ${projected[1].km}`);
   // And the rest of the ladder still walks itself, rung by rung.
@@ -302,9 +311,21 @@ test("the ladder walks on from the live engine's week, not from a step above it"
   assert.equal(out.weeks[0].km, out.this_week.km, "this week is the engine's own prescription");
   assert.equal(out.weeks[0].long_km, out.this_week.long_km);
   const goal = { is_race: true, date: RACE, distance_km: HALF, target: "sub-1:45" };
-  const next = raceRamp(goal, out.weeks[1].week_start, out.weeks[0].km, out.weeks[0].long_km);
-  assert.equal(out.weeks[1].km, next.required_km, "week two is one ramp step off the week the athlete is running");
-  assert.equal(out.weeks[1].long_km, next.required_long_km);
+  // Week two is the engine's OWN prescription for next week when it has one (a
+  // recovery week it already knows about lands on the ladder as the number the run
+  // list will show); week three then steps off that rung, never off a projection.
+  const nextPlan = repo.weeklyRunPlan(out.weeks[1].week_start);
+  const nextKm = nextPlan.available
+    ? Math.round(nextPlan.runs.reduce((s, r) => s + (Number(r.target_distance_km) || 0), 0) * 10) / 10
+    : 0;
+  if (nextKm > 0) {
+    assert.equal(out.weeks[1].km, nextKm, "week two is the engine's next-week prescription");
+  } else {
+    const next = raceRamp(goal, out.weeks[1].week_start, out.weeks[0].km, out.weeks[0].long_km);
+    assert.equal(out.weeks[1].km, next.required_km, "week two is one ramp step off the week the athlete is running");
+  }
+  const third = raceRamp(goal, out.weeks[2].week_start, out.weeks[1].km, out.weeks[1].long_km);
+  assert.equal(out.weeks[2].km, third.required_km, "week three is one ramp step off week two");
 });
 
 test("raceBuild falls back to a conservative Riegel off the best recent run when the watch has no predictor", () => {

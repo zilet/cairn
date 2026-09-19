@@ -5843,6 +5843,32 @@ button.prow-name:hover{color:var(--accent)}
 .rbuild-day.is-hard{border-top-color:var(--gold)}
 .rbuild-day-k{font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 .rbuild-day-v{font-size:.7rem;line-height:1.3;color:var(--ink-2);overflow-wrap:anywhere}
+
+/* ── Plan week strip (Strength + Endurance) — connected did/today/upcoming ── */
+.pweek{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:14px 15px;margin:2px 0 14px;border-left:3px solid var(--sage)}
+.pweek-h{margin-bottom:10px}
+.pweek-map{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.pweek-map-template{grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}
+.pweek-day{display:flex;flex-direction:column;gap:3px;padding:8px 6px;border-radius:var(--radius-sm);
+  background:var(--card-2);border-top:2px solid transparent;min-height:64px}
+.pweek-day.is-hard{border-top-color:var(--gold)}
+.pweek-day.is-today{box-shadow:inset 0 0 0 1px var(--sage)}
+.pweek-day.is-done{opacity:.82}
+.pweek-day-k{font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.pweek-glyph{font-size:.7rem;line-height:1;color:var(--muted)}
+.pweek-lift .pweek-glyph{color:var(--accent)}
+.pweek-run .pweek-glyph{color:var(--sage)}
+.pweek-mixed .pweek-glyph{color:var(--gold)}
+.pweek-rest .pweek-glyph{color:var(--line-2)}
+.pweek-day-v{font-size:.72rem;line-height:1.3;color:var(--ink-2);overflow-wrap:anywhere}
+.pweek-status{font-size:.58rem;letter-spacing:.06em;color:var(--muted);margin-top:2px}
+.end-run-row.is-quiet{opacity:.55}
+.pweek-progress{margin-top:10px;font-size:.88rem;line-height:1.5;color:var(--ink)}
+.pweek-note{margin-top:6px;font-size:.84rem;line-height:1.5;color:var(--ink-2)}
+.prog-purpose{margin-top:4px;font-size:.82rem;line-height:1.4;color:var(--ink-2);font-style:italic}
+.prog-order{font-size:.78rem;align-self:center}
+@media (max-width:560px){.pweek-map{grid-template-columns:repeat(4,1fr)}}
 .rbuild-more{margin-top:12px}
 .rbuild-more>summary{cursor:pointer;font-size:.84rem;color:var(--accent-deep);list-style:none}
 .rbuild-more>summary::-webkit-details-marker{display:none}

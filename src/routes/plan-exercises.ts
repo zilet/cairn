@@ -24,7 +24,9 @@ import {
   listExercises,
   listGuideSuggestions,
   mergeExercises,
+  orderPlanDayForEffect,
   planUpcomingNote,
+  planWeek,
   reconcileExerciseGroups,
   recoveryWeekStatus,
   replacePlanChecked,
@@ -48,6 +50,9 @@ export const planExercisesRouter = Router();
 // week-ahead cards read (repo/day-read.ts getPlanWithPurpose) — one source, so
 // the sentence is stable across whichever endpoint fills the client's cache.
 planExercisesRouter.get("/plan", (_req, res) => res.json(getPlanWithPurpose()));
+// Connected week for the Plan tab (did / today / upcoming). Separate from GET /plan
+// so the editor still receives the raw template ring for save.
+planExercisesRouter.get("/plan/week", (_req, res) => res.json(planWeek()));
 planExercisesRouter.get("/plan/quality", (_req, res) => res.json(getPlanQuality()));
 
 // The recovery-week story for the Plan surface: a waiting draft ('drafted'), the
@@ -152,6 +157,19 @@ planExercisesRouter.put("/plan/:day", (req, res) => {
   try {
     const b = req.body ?? {};
     const result = savePlanDayChecked(Number(req.params.day), b.name, b.focus ?? null, b.items ?? [], { quality_override: b.quality_override === true, day_type: b.day_type ?? null });
+    res.json(result.day);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message, ...(e?.report ? { quality: e.report, quality_override_available: true } : {}) });
+  }
+});
+
+// Quiet "Order for effect" — rewrite one day's items into compounds → accessories →
+// finishers → cardio. Returns the day (unchanged when already ordered). 200 + null
+// when the day number is absent — same absence shape as other single-row lookups.
+planExercisesRouter.post("/plan/:day/order-for-effect", (req, res) => {
+  try {
+    const result = orderPlanDayForEffect(Number(req.params.day));
+    if (!result) return res.json(null);
     res.json(result.day);
   } catch (e: any) {
     res.status(400).json({ error: e.message, ...(e?.report ? { quality: e.report, quality_override_available: true } : {}) });

@@ -4,6 +4,37 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-18 — The Plan tab's connected week, read off the log
+
+No schema change (`user_version` stays 105).
+
+- **`GET /api/plan/week` / MCP `get_plan_week`** (`planWeek()`, `src/domain/training/plan-week.ts`) — the
+  Strength + Endurance segments share one week strip. Calendar Mon→Sun when a lifting week maps the ring,
+  template order otherwise. **The log owns a done cell** (the session's resolved plan day, never the ring's
+  forecast); **the agenda owns a run cell** (a completion dated on it, or an open intent suggested for it);
+  a template run day whose run already landed elsewhere reads "Covered · done Thu". A `progress` block
+  (lifting days done vs stated, runs and km, open intents, trailing-week bests) feeds one composed
+  progress line. Gallery cards carry weekday/status chips from the same projection.
+- **Effect order** (`src/domain/training/plan-item-order.ts`) — prep → primary → secondary → isolation →
+  core → cardio, tiers only, peers keep the athlete's order. Agentic restructures persist it; the gallery's
+  "Order for effect" (`POST /api/plan/:day/order-for-effect`, MCP `order_plan_day_for_effect`) offers it
+  when a tier is out of place; the editor's ↑↓ is never rewritten on GET.
+- **Layout read in calendar space** (`WeekLayoutRead.space`): handed `weekdayMap`, `weekLayoutRead` judges
+  weekdays (a pool day the ring reaches twice is heavy on both), and a move onto a weekday that already
+  lifts is spoken as a swap naming both days. **Law change: only a lift the day BEFORE a long/quality run
+  collides** — the morning after is the stacking the race build's strength hint prescribes.
+- **Run engine and agenda**: the long run is never shorter than an easy run in the same week; completions
+  match longest-first so the long slot takes the week's longest qualifying run; the watch's easy verdict
+  (`AEROBIC_BASE`/`RECOVERY`) outranks Z3 drift and aerobic TE needs ≥ 4 to read hard; a plan day NAMED
+  "Long Run" is a long run even when its note never says "run".
+- **Race build**: the ladder's second rung is the engine's own next-week prescription; `leg_map` and
+  `heavy_lower_days` read strength through `thisWeekPlanDayMap`; the Endurance segment hides the duplicate
+  leg strip under the week strip, and its run rows speak the matched intent's label and logged distance.
+- **Program state**: a rising estimate on a static top load says "more reps at the same load — the next
+  clean session takes the weight step" instead of "climbing ~7 lb/wk" beside a stall signal.
+
+---
+
 ## 2026-09-17 — A stored exercise name can be retitled
 
 Migration **105** (`exercises.suggested_name` / `exercises.refused_name`).

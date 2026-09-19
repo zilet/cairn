@@ -68,7 +68,7 @@ function paintPlanEndurance(
        </div>`;
 
   const raceBuildHtml = raceBuild && raceBuild.available !== false && raceBuild.race && typeof raceBuildCard === "function"
-    ? raceBuildCard(raceBuild, { underGoal: true })
+    ? raceBuildCard(raceBuild, { underGoal: true, legMap: typeof loadPlanWeekStrip !== "function" })
     : "";
   // The race build's own week-by-week ladder supersedes the generic "typical
   // arc" ramp placeholder — show one or the other, never both.
@@ -86,19 +86,66 @@ function paintPlanEndurance(
   if (totalKm > 0 && goal && goal.weekly_km) volumeText += ` · target ~${goal.weekly_km} km/wk`;
   const volumeLine = runs.length ? `<div class="end-runs-total numeral">${escHtml(volumeText)}</div>` : "";
   const agendaIntents = agenda && Array.isArray(agenda.intents) ? agenda.intents : [];
-  const runRows = runs.map(({ it, day_number }, index) => {
+  // Calendar / suggested-date order — not plan-slot order — so the week reads as lived.
+  const runEntries = runs.map(({ it, day_number }) => {
     const intent = agendaIntents.find((entry) => Number(entry.provisional_day_number) === Number(day_number));
-    const anchor = intent?.provisional_date
-      ? `Suggested anchor · ${humanDate(String(intent.provisional_date))} · movable`
-      : `Suggested anchor · plan slot ${day_number} · movable`;
+    const sortDate =
+      (intent?.status === "completed" && intent.completion?.date
+        ? String(intent.completion.date)
+        : null) ||
+      (intent?.suggested_date ? String(intent.suggested_date) : null) ||
+      (intent?.provisional_date ? String(intent.provisional_date) : null) ||
+      "";
+    return { it, day_number, intent, sortDate };
+  }).sort((a, b) => {
+    if (a.sortDate && b.sortDate) return a.sortDate.localeCompare(b.sortDate);
+    if (a.sortDate) return -1;
+    if (b.sortDate) return 1;
+    return Number(a.day_number) - Number(b.day_number);
+  });
+  // When the engine has spoken for this week (any intent at all), a template run it
+  // did not carry — the quality slot on a recovery-down week — is not this week's
+  // work, and must not sit in the list as "open".
+  const engineSpoke = agendaIntents.length > 0;
+  const runRows = runEntries.map(({ it, day_number, intent }, index) => {
+    let anchor: string;
+    let quiet = false;
+    if (intent?.status === "completed" && intent.completion?.date) {
+      anchor = `Done · ${humanDate(String(intent.completion.date))}`;
+    } else if (intent?.suggested_date) {
+      anchor = `Open · ${humanDate(String(intent.suggested_date))} · movable`;
+    } else if (intent?.provisional_date) {
+      anchor = `Open · ${humanDate(String(intent.provisional_date))} · movable`;
+    } else if (!intent && engineSpoke) {
+      anchor = "Not this week";
+      quiet = true;
+    } else {
+      anchor = `Open · plan slot ${day_number} · movable`;
+    }
+    // The template item is a snapshot of an earlier week; the agenda intent is this
+    // week's live prescription (and, once completed, the logged dose). When the two
+    // are joined, the row speaks the intent's name and distance — never a stale
+    // "12.9 km easy run" over a 4.9 km log.
+    const live = intent
+      ? {
+          ...it,
+          note: intent.label ? String(intent.label) : it.note,
+          target_distance_km:
+            intent.status === "completed" && intent.completion?.distance_km != null
+              ? intent.completion.distance_km
+              : intent.target_distance_km ?? it.target_distance_km,
+          target_zone: intent.target_zone ?? it.target_zone,
+        }
+      : it;
+    const name = intent?.label ? String(intent.label) : cardioLabel(it);
     return `
-      <div class="end-run-row reveal" style="${stagger(index + 2)}">
+      <div class="end-run-row reveal${quiet ? " is-quiet" : ""}" style="${stagger(index + 2)}">
         <span class="run-pin" aria-hidden="true">▸</span>
         <div class="end-run-main">
-          <span class="end-run-name">${escHtml(cardioLabel(it))}</span>
+          <span class="end-run-name">${escHtml(name)}</span>
           <span class="end-run-day lbl">${escHtml(anchor)}</span>
         </div>
-        <span class="end-run-pres numeral">${escHtml(cardioPrescription(it) || "—")}</span>
+        <span class="end-run-pres numeral">${escHtml(cardioPrescription(live) || "—")}</span>
       </div>`;
   }).join("");
   const agendaHtml = trainingAgendaCard(agenda);
@@ -134,6 +181,7 @@ function paintPlanEndurance(
       : `<p class="end-lead">Your running plan — the build, this week's runs, and a quick way to shape them.</p>`
     : "";
   body.innerHTML =
+    `<div id="endWeekSlot" class="card-stack-item"></div>` +
     `<div id="endUpcomingSlot"></div>` +
     goalHtml +
     leadHtml +
@@ -144,6 +192,8 @@ function paintPlanEndurance(
     runsSection +
     composer;
 
+  // Same connected week strip Strength shows — one projection, both Plan segments.
+  if (typeof loadPlanWeekStrip === "function") loadPlanWeekStrip(pollToken, "#endWeekSlot");
   // The same calm forward look the Plan edit segment shows — a reshaped/lighter
   // week announces itself here too (running changes are ledgered under the
   // 'training' domain, so there's no separate 'running' filter to apply).

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**280 tools.**
+**282 tools.**
 
 | Tool | Description |
 |---|---|
@@ -136,6 +136,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_plan_quality` | Validate the current training week for structural errors and evidence-based quality warnings. |
 | `get_plan_redraw` | The redraw requests still standing: what the athlete asked for, whether a build is queued or running, whether it was built into a change that has not landed yet, and the coach's own sentence about when it lands (or that it is waiting to be confirmed). A failed build reports its calm reason and review_required. Newest first, at most three. Mirrors GET /api/plan/redraw. |
 | `get_plan_upcoming` | The calm forward look for the Plan surface: queued training/recovery changes the brain will land soon (e.g. a recovery week landing Monday, a bounded target change), each with its summary and effective_date. Deduped against the recovery-week draft; returns null when nothing is waiting. |
+| `get_plan_week` | The Plan tab's connected week: calendar Mon–Sun when lift/run schedules map weekdays, otherwise template day order with weekday null. Each cell carries status (done/today/upcoming/rest/open), the plan day, any logged session, and any run intent. Layout suggestion is a quiet collision note when the week stacks heavy lower next to a long/quality run. |
 | `get_priority_markers` | Markers re-ranked by impact: distance from the OPTIMAL zone (not just the lab's normal range), most-actionable first, flagged (low/high) markers always on top, and a marker HEADING out of optimal ranked above a stably-borderline one. Each marker carries optimal/distance/in_optimal/actionable, its health group (group/group_label), a least-squares trend ({dir: rising\|falling\|stable, change, span_days, n, slope_per_week, projection}) and a forecast ({direction: improving\|worsening\|stable, eta_text, crossing}) — eta_text is a PLAIN-LANGUAGE projection vs optimal ('trending toward optimal, roughly 6 weeks out'). The top-level `groups` lists the canonical-ordered groups present. The internal impact_score is an ordering signal only, never a user-facing grade. |
 | `get_profile` | Get the user's profile (age, height, weight, goal). |
 | `get_program_adjustments` | The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing core/grip/mobility gaps — as a plain-language digest. Most-actionable first. The user reviews these; nothing auto-applies. |
@@ -220,6 +221,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `merge_exercises` | Merge two exercises: repoints all logged_sets and plan_items from `from` into `into`, then removes the now-empty `from` exercise. ok:false when `into` does not exist (guard — nothing is changed). Use after reconcile_exercise_groups reveals duplicate names ('Dead hang' / 'Dead hang timed'). |
 | `nutrition_checkin` | Queue a quiet adaptive-nutrition check-in. Returns a job immediately; poll get_agent_job. Meaningful drift may schedule a bounded reversible target change at the next food-day boundary under Lead mode; review posture holds it. Thin logging lowers confidence and cannot itself cut the target. |
 | `onboard` | Queue frictionless first-run setup from one free-text intro. Returns a job immediately; poll get_agent_job. It understands profile, about-me, supplements, injuries, and memories without a questionnaire and degrades to a deterministic base. |
+| `order_plan_day_for_effect` | Rewrite one plan day's exercises into effect order: primary compounds first (barbell before machine), then secondary loaded work, isolation, core, then cardio. No-op when already ordered. Returns the day, or null when that day_number is absent. |
 | `prepare_daily_session` | Explicitly persist a daily session without changing the weekly plan. Pass expected_active_id alone to assert that a cached composition still owns the date without creating or replacing anything. adaptive_plan/manual_plan snapshot a plan day; agent_suggest requires its completed session-suggest agent_job_id; athlete_override accepts a user-authored session, including an empty open session. Exact retries reuse safely; a different replace is refused after the session starts. |
 | `preview_daily_session` | Preview the exact read-only adaptive session candidate Cairn would persist for this date and intent. Returns athlete-facing constraints and rationale plus an input fingerprint for compare-and-set prepare, or null when the date has no weekly template day to build one from. Never records a decision or creates a workout session. |
 | `recent_sessions` | List recent logged sessions, each with all its sets. |
