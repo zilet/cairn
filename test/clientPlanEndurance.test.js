@@ -12,8 +12,12 @@ function loadPlanEnduranceClient() {
     Array,
     Object,
     String,
+    Number,
+    Date,
+    Math,
     runTargetText: (run) => `${run.target_distance_km || 0} km @ ${run.target_zone || "easy"}`,
     stagger: (index) => `--i:${index}`,
+    isCardioItem: () => false,
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
@@ -58,6 +62,8 @@ function loadPlanEnduranceForPaint({ raceBuildCard } = {}) {
     Object,
     String,
     Number,
+    Date,
+    Math,
     view,
     stagger: (index) => `--i:${index}`,
     humanDate: (iso) => String(iso || ""),
@@ -68,6 +74,7 @@ function loadPlanEnduranceForPaint({ raceBuildCard } = {}) {
     trainingAgendaCard: () => "",
     runComplianceLine: () => "",
     cardioSyncLine: undefined,
+    isCardioItem: () => false,
     wireCardioSync: undefined,
     loadPlanUpcomingNote: undefined,
     ...(raceBuildCard !== undefined ? { raceBuildCard } : {}),
@@ -99,6 +106,7 @@ test("plan endurance paints the race build card and drops the generic ramp when 
   // The stub records opts born in the module's own realm, so compare by value.
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.underGoal, true);
+  assert.equal(calls[0]?.compact, true);
 });
 
 test("plan endurance keeps today's ramp when the race build is unavailable or the fetch failed", () => {
@@ -185,16 +193,16 @@ test("plan endurance draft card escapes runs and preserves apply controls", () =
   assert.doesNotMatch(html, /<coach>|<steady>|<run>|data-egapply="12" onclick|data-egdiscard="12" onclick/);
 });
 
-test("plan endurance orchestration uses the rolling agenda and movable anchor language", () => {
+test("plan endurance orchestration fetches the live run plan and faces next week when this one is banked", () => {
   const source = readFileSync(join(root, "src/client/plan-endurance-client.ts"), "utf8");
   assert.match(source, /api\(`\/training-agenda\?date=/);
-  assert.match(source, /trainingAgendaCard\(agenda\)/);
-  // Rows speak status first — "Done · <date>" / "Open · <date> · movable" — and,
-  // when the live intent matched, its name and distance rather than the template's.
-  assert.match(source, /Open · \$\{humanDate/);
-  assert.match(source, /Done · \$\{humanDate/);
-  assert.match(source, /intent\.completion\.distance_km/);
-  assert.match(source, /movable weekly intentions/);
+  assert.match(source, /api\("\/run-plan"\)/);
+  assert.match(source, /enduranceModel\(\)\.nextMonday\(today\)/);
+  assert.match(source, /enduranceModel\(\)\.buildBriefing/);
+  assert.match(source, /compact: true/);
+  assert.match(source, /end-shape-fold/);
+  assert.doesNotMatch(source, /trainingAgendaCard\(agenda\)/);
+  assert.doesNotMatch(source, /Your running plan — the build/);
   assert.doesNotMatch(source, /each run lands on its day|>Day \$\{|tempo on Thursday/);
 });
 
@@ -202,5 +210,133 @@ test("plan endurance fetches the race build alongside the rest of the segment's 
   const source = readFileSync(join(root, "src/client/plan-endurance-client.ts"), "utf8");
   assert.match(source, /api\("\/race-build"\)\.catch\(\(\) => null\)/);
   assert.match(source, /typeof raceBuildCard === "function"/);
-  assert.match(source, /the build to race day, this week's runs/);
+});
+
+test("plan endurance briefing faces the next open run and next week once this week is banked", () => {
+  const endurance = loadPlanEnduranceClient();
+  const today = "2026-09-16";
+  const open = endurance.buildBriefing({
+    today,
+    agenda: {
+      available: true,
+      intents: [
+        {
+          kind: "easy",
+          label: "Easy run",
+          status: "open",
+          provisional_day_number: 2,
+          suggested_date: "2026-09-15",
+          target_distance_km: 5,
+          target_zone: "Z2 (135–145 bpm)",
+          completion: null,
+        },
+        {
+          kind: "quality",
+          label: "Threshold intervals",
+          status: "open",
+          provisional_day_number: 5,
+          suggested_date: "2026-09-18",
+          target_distance_km: 8,
+          target_zone: "Z4",
+          completion: null,
+        },
+      ],
+    },
+    runPlan: {
+      available: true,
+      week_start: "2026-09-14",
+      why: "Build week — the threshold session is the one that matters.",
+      runs: [
+        {
+          day_number: 2,
+          kind_label: "easy",
+          label: "Easy run",
+          target_distance_km: 5,
+          target_zone: "Z2 (135–145 bpm)",
+          note: "Easy aerobic at Z2 — relaxed and conversational.",
+          interval: null,
+        },
+        {
+          day_number: 5,
+          kind_label: "quality",
+          label: "Threshold intervals",
+          target_distance_km: 8,
+          target_zone: "Z4",
+          note: "5 × 1km at Z4, 60s easy jog between, with warm-up + cool-down.",
+          interval: [{ reps: 5, on: "1km", off: "60s jog", zone: "Z4" }],
+        },
+      ],
+    },
+    raceBuild: {
+      available: true,
+      paces: { bands: [{ key: "easy", label: "Easy", text: "6:13–6:43 /km" }, { key: "threshold", label: "Threshold", text: "5:01–5:08 /km" }] },
+      leg_map: [
+        { day_number: 1, weekday: "Monday", run: null, strength: { name: "Lower A", heavy_lower: true }, ride: false, hard: true },
+        { day_number: 2, weekday: "Tuesday", run: { kind: "easy" }, strength: { name: "Push", heavy_lower: false }, ride: false, hard: false },
+        { day_number: 5, weekday: "Friday", run: { kind: "quality" }, strength: { name: "Chest, back", heavy_lower: false }, ride: false, hard: true },
+      ],
+    },
+  });
+
+  assert.equal(open.horizon, "this_week");
+  assert.equal(open.next?.label, "Easy run");
+  assert.match(open.next?.when || "", /Tuesday/);
+  assert.match(open.next?.prescription || "", /6:13–6:43/);
+  assert.match(open.next?.sitsBy || "", /Push/);
+  assert.equal(open.remaining.length, 1);
+  assert.equal(open.remaining[0].label, "Threshold intervals");
+  assert.match(open.remaining[0].setup, /5 × 1km/);
+
+  const html = endurance.briefingHtml(open);
+  assert.match(html, /data-end-next/);
+  assert.match(html, /Easy run/);
+  assert.match(html, /Setup/);
+  assert.match(html, /Sits by/);
+  assert.match(html, /Threshold intervals/);
+  assert.doesNotMatch(html, /<script>/);
+
+  const banked = endurance.buildBriefing({
+    today: "2026-09-20",
+    agenda: {
+      available: true,
+      intents: [
+        { kind: "easy", status: "completed", provisional_day_number: 2, completion: { date: "2026-09-15" } },
+        { kind: "long", status: "completed", provisional_day_number: 7, completion: { date: "2026-09-20" } },
+      ],
+    },
+    runPlan: { available: true, week_start: "2026-09-14", why: "This week is done.", runs: [{ kind_label: "long", day_number: 7 }] },
+    nextRunPlan: {
+      available: true,
+      week_start: "2026-09-21",
+      why: "Next week steps the long run.",
+      runs: [
+        {
+          day_number: 2,
+          kind_label: "easy",
+          label: "Easy run",
+          target_distance_km: 5,
+          note: "Easy aerobic — relaxed and conversational.",
+        },
+      ],
+    },
+  });
+  assert.equal(banked.horizon, "next_week");
+  assert.equal(banked.kicker, "Next week");
+  assert.equal(banked.headline, "Next week steps the long run.");
+  assert.equal(banked.next?.label, "Easy run");
+  assert.match(banked.next?.when || "", /Next Tuesday/);
+});
+
+test("plan endurance helper knows Monday arithmetic for the next-week fetch", () => {
+  const endurance = loadPlanEnduranceClient();
+  assert.equal(endurance.mondayOf("2026-09-20"), "2026-09-14");
+  assert.equal(endurance.nextMonday("2026-09-20"), "2026-09-21");
+  assert.equal(endurance.weekBanked({ available: true, intents: [] }), false);
+  assert.equal(
+    endurance.weekBanked({
+      available: true,
+      intents: [{ status: "completed" }, { status: "completed" }],
+    }),
+    true
+  );
 });

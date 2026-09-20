@@ -5217,6 +5217,38 @@ button.hmk-row:active{background:var(--card-2)}
 .end-ramp-note{margin:16px 0 4px;font-size:.88rem;color:var(--ink-2);line-height:1.5}
 /* one-line lead distinguishing the planning home from Progress→Endurance analytics */
 .end-lead{margin:8px 0 4px;font-size:.9rem;color:var(--ink-2);line-height:1.5}
+/* The Plan → Endurance briefing: one coach sentence, then the next run in
+   full (setup / expect / sits-by via the reading-grammar rows), then the rest
+   of the week as compact rows. The race clocks stay folded under .rbuild-more. */
+.end-brief{display:flex;flex-direction:column;gap:var(--space-card)}
+.end-brief-lead{margin:0;font-size:.95rem;line-height:1.45;color:var(--ink)}
+.end-brief-lead .lbl{display:block;margin-bottom:6px}
+.end-next{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:16px 18px}
+.end-next-kicker{display:block;margin-bottom:8px}
+.end-next-when{font-size:.86rem;color:var(--ink-2);margin-bottom:2px}
+.end-next-name{font-family:var(--font-display);font-variation-settings:"opsz" 72;font-weight:560;
+  font-size:1.34rem;line-height:1.15;color:var(--ink)}
+.end-next-pres{margin-top:6px;font-size:1.02rem;color:var(--accent);font-variant-numeric:lining-nums}
+.end-next .read-contribs{margin-top:14px}
+.end-then{padding:2px 2px 0}
+.end-then-rows{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.end-then-row{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  padding:10px 12px;background:var(--card-2);border-radius:var(--radius-sm);
+  border-left:3px solid var(--line-2)}
+.end-then-row.wrun-easy,.end-then-row.wrun-long{border-left-color:var(--sage)}
+.end-then-row.wrun-quality{border-left-color:var(--gold)}
+.end-then-when{flex:0 0 auto;font-size:.8rem;color:var(--muted)}
+.end-then-name{flex:1 1 auto;font-weight:500;color:var(--ink)}
+.end-then-pres{margin-left:auto;font-size:.92rem;color:var(--ink-2);font-variant-numeric:lining-nums}
+.end-shape-fold{margin:0;display:flex;flex-direction:column;gap:8px}
+.end-shape-fold>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.end-shape-fold>summary::-webkit-details-marker{display:none}
+.end-shape-fold>summary::before{content:"▸";font-size:.65rem;color:var(--muted);transition:transform .15s ease}
+.end-shape-fold[open]>summary::before{transform:rotate(90deg)}
+.end-shape-fold>summary:hover .lbl{color:var(--ink-2)}
+.end-shape-fold .end-shape{margin:0}
+
 /* weekly volume at a glance — plain words, never a score */
 .end-runs-total{margin:2px 0 6px;font-size:.92rem;color:var(--accent);font-variant-numeric:lining-nums}
 

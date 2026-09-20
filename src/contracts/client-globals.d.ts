@@ -1570,7 +1570,7 @@ declare global {
   declare function sessionCardHtml(session: unknown, index: number): string;
   declare function numOrNull(value: unknown): number | null;
   declare function weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
-  declare function raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean }): string;
+  declare function raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean; compact?: boolean }): string;
   declare function trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
   declare function enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
   declare function runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
@@ -1725,7 +1725,15 @@ declare global {
     compliance: ClientRunCompliance | null,
     agenda: ClientFlexibleTrainingAgenda | null,
     plan: unknown,
-    settings: Record<string, unknown> | null
+    settings: Record<string, unknown> | null,
+    raceBuild?: ClientRaceBuild | null,
+    extra?: {
+      runPlan?: ClientWeeklyRunPlan | null;
+      nextAgenda?: ClientFlexibleTrainingAgenda | null;
+      nextRunPlan?: ClientWeeklyRunPlan | null;
+      nextRaceBuild?: ClientRaceBuild | null;
+      today?: string;
+    } | null
   ): void;
   declare function gotoChatWith(text: string): void;
   declare function enduranceComposerLock(): void;
@@ -2817,6 +2825,47 @@ declare global {
       draftCardHtml(proposal: Record<string, unknown>): string;
       record(value: unknown): Record<string, unknown>;
       runs(plan: unknown): Array<{ it: Record<string, unknown>; day_number: unknown }>;
+      mondayOf(iso: string): string;
+      nextMonday(iso: string): string;
+      weekBanked(agenda: ClientFlexibleTrainingAgenda | null | undefined): boolean;
+      buildBriefing(input: {
+        today: string;
+        agenda?: ClientFlexibleTrainingAgenda | null;
+        runPlan?: ClientWeeklyRunPlan | null;
+        raceBuild?: ClientRaceBuild | null;
+        nextAgenda?: ClientFlexibleTrainingAgenda | null;
+        nextRunPlan?: ClientWeeklyRunPlan | null;
+        nextRaceBuild?: ClientRaceBuild | null;
+      }): {
+        horizon: "this_week" | "next_week";
+        kicker: string;
+        headline: string;
+        next: {
+          kind: ClientFlexibleRunKind;
+          label: string;
+          when: string;
+          date: string | null;
+          day_number: number | null;
+          prescription: string;
+          setup: string;
+          expect: string;
+          sitsBy: string;
+          status: "open" | "completed";
+        } | null;
+        remaining: Array<{
+          kind: ClientFlexibleRunKind;
+          label: string;
+          when: string;
+          date: string | null;
+          day_number: number | null;
+          prescription: string;
+          setup: string;
+          expect: string;
+          sitsBy: string;
+          status: "open" | "completed";
+        }>;
+      };
+      briefingHtml(briefing: unknown, start?: number): string;
     };
 
     CairnPlanEndurance: Window["CairnPlanEnduranceModel"];
@@ -3559,7 +3608,7 @@ declare global {
       runKindClass(kind: unknown): string;
       runKindLabel(kind: unknown): string;
       weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
-      raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean }): string;
+      raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean; compact?: boolean }): string;
       trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
       enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
       runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;

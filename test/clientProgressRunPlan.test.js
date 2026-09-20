@@ -321,6 +321,26 @@ test("race build card states the countdown once when placed directly under a goa
   assert.match(underGoal, /Race build/);
 });
 
+test("compact race build card folds clocks and paces behind the build disclosure", () => {
+  const runPlan = loadRunPlan();
+  const html = runPlan.raceBuildCard(
+    {
+      available: true,
+      race: { weeks_to_race: 6, phase: "build" },
+      prediction: { estimate_sec: 7156, estimate_pace_sec_per_km: 339, basis_detail: "watch predictor" },
+      paces: { bands: [{ key: "easy", label: "Easy", text: "6:13–6:43 /km" }] },
+    },
+    { underGoal: true, compact: true }
+  );
+
+  assert.match(html, /data-race-build/);
+  assert.match(html, /<details class="rbuild-more">/);
+  assert.match(html, />The build</);
+  assert.match(html, /6:13–6:43 \/km/);
+  assert.doesNotMatch(html, /6 weeks to go/);
+  assert.doesNotMatch(html, /The build, week by week/);
+});
+
 test("race build card head uses singular/race-week wording at the countdown's edges", () => {
   const runPlan = loadRunPlan();
 

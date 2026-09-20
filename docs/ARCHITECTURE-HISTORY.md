@@ -4,6 +4,16 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-20 — Plan → Endurance briefs the next run
+
+No schema change. Plan → Endurance now leads with a next-session plate (when, prescription, setup /
+expect / sits-by against the lift days) and the rest of the open week, composed from `/run-plan` +
+the rolling agenda. When this week's intents are banked the tab faces next week. Race clocks and
+pace bands fold behind "The build"; the composer is a quiet disclosure. Garmin stays input for
+runs — the plan is not pushed to the watch.
+
+---
+
 ## 2026-09-18 — The Plan tab's connected week, read off the log
 
 No schema change (`user_version` stays 105).

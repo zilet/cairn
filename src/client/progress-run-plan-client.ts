@@ -91,7 +91,7 @@ const RACE_WEEK_KIND_WORD: Record<string, string> = {
   race: "Race week",
 };
 
-function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean }): string {
+function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean; compact?: boolean }): string {
   if (!build || build.available === false || !build.race) return "";
   const race = build.race;
   const p = build.prediction;
@@ -191,18 +191,22 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
   const countHtml = opts?.underGoal
     ? ""
     : `<span class="wrun-mix">${escHtml(`${countdownWord}${phaseLabel ? ` · ${phaseLabel}` : ""}`)}</span>`;
+  const whyHtml = whyBits.length
+    ? `<div class="wrun-why"><span class="lbl">How it fits together</span>${whyBits.map((why) => `<p>${escHtml(why)}</p>`).join("")}</div>`
+    : "";
+  // Plan → Endurance already briefs the next session; the clocks, pace library,
+  // and ladder stay one tap away so the card orients without repeating the week.
+  const compactBody = opts?.compact
+    ? `${trend}${`${numbers}${quality}${paces}${legMap}${ladder}${whyHtml}`
+      ? `<details class="rbuild-more"><summary>The build</summary>${numbers}${quality}${paces}${legMap}${ladder}${whyHtml}</details>`
+      : ""}`
+    : `${numbers}${trend}${quality}${paces}${legMap}${ladder ? `<details class="rbuild-more"><summary>The build, week by week</summary>${ladder}</details>` : ""}${whyHtml}`;
   return `<div class="wrun-card rbuild reveal" style="${stagger(1)}" data-race-build>
       <div class="wrun-head">
         <span class="lbl">Race build</span>
         ${countHtml}
       </div>
-      ${numbers}
-      ${trend}
-      ${quality}
-      ${paces}
-      ${legMap}
-      ${ladder ? `<details class="rbuild-more"><summary>The build, week by week</summary>${ladder}</details>` : ""}
-      ${whyBits.length ? `<div class="wrun-why"><span class="lbl">How it fits together</span>${whyBits.map((why) => `<p>${escHtml(why)}</p>`).join("")}</div>` : ""}
+      ${compactBody}
     </div>`;
 }
 

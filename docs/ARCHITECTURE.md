@@ -3277,7 +3277,9 @@ new profile fields, and `{available:false, reason}` for everyone else. `raceBuil
   the clear-slot sentence rotates through `pickDayVariant` like every other athlete-facing line.
 
 Surfaces: `GET /api/race-build`, MCP `get_race_build`, the "Race build" card on Progress →
-Endurance (`raceBuildCard`, fetched into the endurance snapshot v4), and the `race_build` key in
+Endurance (`raceBuildCard`, fetched into the endurance snapshot v4), Plan → Endurance (the same
+card in `compact` form under a next-session briefing built from `/run-plan` + the rolling agenda —
+when this week's intents are banked the tab faces next week), and the `race_build` key in
 the ENDURANCE prompt bundle, rendered by `renderRunPlan` as a RACE BUILD block (estimate, target,
 pace bands, ladder, strength principle, ride placement) so every running prompt is shooting at the
 same numbers. `coach.ts` computes it once per context as `raceBuildView`, reusing `runPlanView` and

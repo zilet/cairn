@@ -5,6 +5,15 @@ type EnduranceGoalRow = import("../contracts/client-api.js").ClientEnduranceGoal
 type EnduranceComplianceRow = import("../contracts/client-api.js").ClientRunCompliance;
 type EnduranceAgenda = import("../contracts/client-api.js").ClientFlexibleTrainingAgenda;
 type EnduranceRaceBuild = import("../contracts/client-api.js").ClientRaceBuild;
+type EnduranceRunPlan = import("../contracts/client-api.js").ClientWeeklyRunPlan;
+
+type EndurancePaintExtra = {
+  runPlan?: EnduranceRunPlan | null;
+  nextAgenda?: EnduranceAgenda | null;
+  nextRunPlan?: EnduranceRunPlan | null;
+  nextRaceBuild?: EnduranceRaceBuild | null;
+  today?: string;
+};
 
 type EnduranceProposal = {
   id?: unknown;
@@ -26,24 +35,40 @@ async function renderPlanEndurance(): Promise<void> {
   view.innerHTML = segBar("endurance", planSeg()) + `<div id="endPlanBody">${loadingState("Reading your running…")}</div>`;
   wireSeg(PLAN_HANDLERS);
   const token = ++pollToken;
+  const today = localISO();
+  const nextMonday = enduranceModel().nextMonday(today);
   let goal: EnduranceGoalRow | null = null;
   let compliance: EnduranceComplianceRow | null = null;
   let agenda: EnduranceAgenda | null = null;
   let plan: unknown = [];
   let settings: Record<string, unknown> | null = null;
   let raceBuild: EnduranceRaceBuild | null = null;
+  let runPlan: EnduranceRunPlan | null = null;
+  let nextAgenda: EnduranceAgenda | null = null;
+  let nextRunPlan: EnduranceRunPlan | null = null;
+  let nextRaceBuild: EnduranceRaceBuild | null = null;
   try {
-    [goal, compliance, agenda, plan, settings, raceBuild] = await Promise.all([
+    [goal, compliance, agenda, plan, settings, raceBuild, runPlan, nextAgenda, nextRunPlan, nextRaceBuild] = await Promise.all([
       api("/endurance-goal").catch(() => null),
       api("/run-compliance").catch(() => null),
-      api(`/training-agenda?date=${encodeURIComponent(localISO())}`).catch(() => null),
+      api(`/training-agenda?date=${encodeURIComponent(today)}`).catch(() => null),
       api("/plan").catch(() => []),
       api("/settings").then((response) => (enduranceModel().record(response).settings as Record<string, unknown> | null) || null).catch(() => null),
       api("/race-build").catch(() => null),
+      api("/run-plan").catch(() => null),
+      nextMonday ? api(`/training-agenda?date=${encodeURIComponent(nextMonday)}`).catch(() => null) : Promise.resolve(null),
+      nextMonday ? api(`/run-plan?date=${encodeURIComponent(nextMonday)}`).catch(() => null) : Promise.resolve(null),
+      nextMonday ? api(`/race-build?date=${encodeURIComponent(nextMonday)}`).catch(() => null) : Promise.resolve(null),
     ]);
   } catch { /* paint with whatever resolved */ }
   if (token !== pollToken || !view.querySelector("#endPlanBody")) return;
-  paintPlanEndurance(goal, compliance, agenda, plan, settings, raceBuild);
+  paintPlanEndurance(goal, compliance, agenda, plan, settings, raceBuild, {
+    runPlan,
+    nextAgenda,
+    nextRunPlan,
+    nextRaceBuild,
+    today,
+  });
 }
 
 function paintPlanEndurance(
@@ -53,22 +78,35 @@ function paintPlanEndurance(
   plan: unknown,
   settings: Record<string, unknown> | null,
   raceBuild?: EnduranceRaceBuild | null,
+  extra?: EndurancePaintExtra | null,
 ): void {
   const body = view.querySelector("#endPlanBody");
   if (!body) return;
   _endDrafting = false;
 
   const goal = goalValue;
+  const today = extra?.today || (typeof localISO === "function" ? localISO() : "");
+  const briefing = enduranceModel().buildBriefing({
+    today,
+    agenda,
+    runPlan: extra?.runPlan,
+    raceBuild,
+    nextAgenda: extra?.nextAgenda,
+    nextRunPlan: extra?.nextRunPlan,
+    nextRaceBuild: extra?.nextRaceBuild,
+  });
+  const liveRaceBuild = briefing.horizon === "next_week" ? (extra?.nextRaceBuild || raceBuild) : raceBuild;
+  const briefingHtml = enduranceModel().briefingHtml(briefing, 0);
   const goalHtml = goal
-    ? enduranceGoalCard(goal)
-    : `<div class="end-goal reveal" style="${stagger(0)}">
+    ? `<div class="card-stack-item">${enduranceGoalCard(goal)}</div>`
+    : `<div class="end-goal card-stack-item reveal" style="${stagger(0)}">
          <div class="end-goal-head"><span class="lbl">Running goal</span></div>
          <div class="end-goal-name">No goal set yet</div>
          <div class="end-goal-sub">Set a race or a standing readiness target in <b>Settings → You → Profile</b> and the coach will periodize your running toward it.</div>
        </div>`;
 
-  const raceBuildHtml = raceBuild && raceBuild.available !== false && raceBuild.race && typeof raceBuildCard === "function"
-    ? raceBuildCard(raceBuild, { underGoal: true, legMap: typeof loadPlanWeekStrip !== "function" })
+  const raceBuildHtml = liveRaceBuild && liveRaceBuild.available !== false && liveRaceBuild.race && typeof raceBuildCard === "function"
+    ? raceBuildCard(liveRaceBuild, { underGoal: true, legMap: typeof loadPlanWeekStrip !== "function", compact: true })
     : "";
   // The race build's own week-by-week ladder supersedes the generic "typical
   // arc" ramp placeholder — show one or the other, never both.
@@ -77,120 +115,46 @@ function paintPlanEndurance(
     ? `<div class="end-ramp-note reveal" style="${stagger(1)}"><span class="lbl">Steady readiness</span> — no race to peak for, so the plan holds a sustainable rhythm rather than ramping.${goal.weekly_km ? ` Target around <b>${escHtml(goal.weekly_km)} km/wk</b>.` : ""}</div>`
     : "";
 
-  const runs = enduranceModel().runs(plan);
-  const totalKm = runs.reduce((sum, { it }) => sum + (Number(it.target_distance_km) || 0), 0);
-  const totalMin = runs.reduce((sum, { it }) => sum + (Number(it.target_duration_min) || 0), 0);
-  let volumeText = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
-  if (totalKm > 0) volumeText += ` · ${fmtKm(totalKm)} km planned`;
-  else if (totalMin > 0) volumeText += ` · ${Math.round(totalMin)} min planned`;
-  if (totalKm > 0 && goal && goal.weekly_km) volumeText += ` · target ~${goal.weekly_km} km/wk`;
-  const volumeLine = runs.length ? `<div class="end-runs-total numeral">${escHtml(volumeText)}</div>` : "";
-  const agendaIntents = agenda && Array.isArray(agenda.intents) ? agenda.intents : [];
-  // Calendar / suggested-date order — not plan-slot order — so the week reads as lived.
-  const runEntries = runs.map(({ it, day_number }) => {
-    const intent = agendaIntents.find((entry) => Number(entry.provisional_day_number) === Number(day_number));
-    const sortDate =
-      (intent?.status === "completed" && intent.completion?.date
-        ? String(intent.completion.date)
-        : null) ||
-      (intent?.suggested_date ? String(intent.suggested_date) : null) ||
-      (intent?.provisional_date ? String(intent.provisional_date) : null) ||
-      "";
-    return { it, day_number, intent, sortDate };
-  }).sort((a, b) => {
-    if (a.sortDate && b.sortDate) return a.sortDate.localeCompare(b.sortDate);
-    if (a.sortDate) return -1;
-    if (b.sortDate) return 1;
-    return Number(a.day_number) - Number(b.day_number);
-  });
-  // When the engine has spoken for this week (any intent at all), a template run it
-  // did not carry — the quality slot on a recovery-down week — is not this week's
-  // work, and must not sit in the list as "open".
-  const engineSpoke = agendaIntents.length > 0;
-  const runRows = runEntries.map(({ it, day_number, intent }, index) => {
-    let anchor: string;
-    let quiet = false;
-    if (intent?.status === "completed" && intent.completion?.date) {
-      anchor = `Done · ${humanDate(String(intent.completion.date))}`;
-    } else if (intent?.suggested_date) {
-      anchor = `Open · ${humanDate(String(intent.suggested_date))} · movable`;
-    } else if (intent?.provisional_date) {
-      anchor = `Open · ${humanDate(String(intent.provisional_date))} · movable`;
-    } else if (!intent && engineSpoke) {
-      anchor = "Not this week";
-      quiet = true;
-    } else {
-      anchor = `Open · plan slot ${day_number} · movable`;
-    }
-    // The template item is a snapshot of an earlier week; the agenda intent is this
-    // week's live prescription (and, once completed, the logged dose). When the two
-    // are joined, the row speaks the intent's name and distance — never a stale
-    // "12.9 km easy run" over a 4.9 km log.
-    const live = intent
-      ? {
-          ...it,
-          note: intent.label ? String(intent.label) : it.note,
-          target_distance_km:
-            intent.status === "completed" && intent.completion?.distance_km != null
-              ? intent.completion.distance_km
-              : intent.target_distance_km ?? it.target_distance_km,
-          target_zone: intent.target_zone ?? it.target_zone,
-        }
-      : it;
-    const name = intent?.label ? String(intent.label) : cardioLabel(it);
-    return `
-      <div class="end-run-row reveal${quiet ? " is-quiet" : ""}" style="${stagger(index + 2)}">
-        <span class="run-pin" aria-hidden="true">▸</span>
-        <div class="end-run-main">
-          <span class="end-run-name">${escHtml(name)}</span>
-          <span class="end-run-day lbl">${escHtml(anchor)}</span>
-        </div>
-        <span class="end-run-pres numeral">${escHtml(cardioPrescription(live) || "—")}</span>
-      </div>`;
-  }).join("");
-  const agendaHtml = trainingAgendaCard(agenda);
+  const templateRuns = enduranceModel().runs(plan);
+  const emptyHtml = !briefing.next && !briefing.remaining.length
+    ? `<div class="end-runs-empty card-stack-item reveal" style="${stagger(2)}">
+         <div class="lbl">Upcoming runs</div>
+         <p>${templateRuns.length
+           ? "No open run this week. The week strip above is the hybrid picture; shape the next week below, or edit the template in Training."
+           : "No runs waiting. The week strip above is the hybrid picture; ask below if you want the coach to shape the next week around your lifting."}</p>
+       </div>`
+    : "";
   const complianceHtml = typeof runComplianceLine === "function" ? runComplianceLine(compliance) : "";
   const syncHtml = typeof cardioSyncLine === "function" ? cardioSyncLine(settings, {}) : "";
-  const runsSection = runs.length
-    ? `<div class="end-runs reveal" style="${stagger(2)}">
-         <div class="end-runs-h"><span class="lbl">This week's runs</span>
-           <button class="linkbtn end-link" id="endEditRuns">Edit in Training →</button></div>
-         ${volumeLine}
-         ${runRows}
-       </div>${complianceHtml}${syncHtml}`
-    : `<div class="end-runs-empty reveal" style="${stagger(2)}">
-         <div class="lbl">This week's runs</div>
-         <p>No runs in your plan yet. Ask the coach below to shape movable weekly intentions around your lifting and the work you actually log.</p>
-       </div>${complianceHtml}${syncHtml}`;
 
   const presets = enduranceModel().presets(goal);
   const chips = presets.map((preset, index) => `<button class="end-chip" data-egi="${index}">${escHtml(preset.t)}</button>`).join("");
-  const composer = `<div class="end-shape reveal" style="${stagger(3)}">
-      <div class="end-shape-h"><span class="lbl">Shape your running</span></div>
-      <p class="end-shape-sub">Tell the coach what you want — it drafts run prescriptions you review and apply. Your lifting plan is never touched.</p>
-      <div class="end-chips">${chips}</div>
-      <textarea id="endInstr" class="form-textarea" rows="2" placeholder="e.g. ease my long run, my knee's cranky — or find a tempo opening later this week"></textarea>
-      <button id="endDraftBtn" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ASK THE COACH</button>
-      <div id="endDraftStatus" class="end-shape-status"></div>
-      <div id="endDraft"></div>
-    </div>`;
+  const composer = `<details class="end-shape-fold card-stack-item reveal" style="${stagger(4)}">
+      <summary><span class="lbl">Shape this week's runs</span></summary>
+      <div class="end-shape">
+        <p class="end-shape-sub">Tell the coach what you want — it drafts run prescriptions you review and apply. Your lifting plan is never touched. <button class="linkbtn end-link" id="endEditRuns">Edit in Training →</button></p>
+        <div class="end-chips">${chips}</div>
+        <textarea id="endInstr" class="form-textarea" rows="2" placeholder="e.g. ease my long run, my knee's cranky — or find a tempo opening later this week"></textarea>
+        <button id="endDraftBtn" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ASK THE COACH</button>
+        <div id="endDraftStatus" class="end-shape-status"></div>
+        <div id="endDraft"></div>
+      </div>
+    </details>`;
 
-  const leadHtml = goal
-    ? raceBuildHtml
-      ? `<p class="end-lead">Your running plan — the build to race day, this week's runs, and a quick way to shape them.</p>`
-      : `<p class="end-lead">Your running plan — the build, this week's runs, and a quick way to shape them.</p>`
-    : "";
   body.innerHTML =
+    `<div class="card-stack">` +
     `<div id="endWeekSlot" class="card-stack-item"></div>` +
-    `<div id="endUpcomingSlot"></div>` +
+    `<div id="endUpcomingSlot" class="card-stack-item"></div>` +
+    briefingHtml +
+    emptyHtml +
     goalHtml +
-    leadHtml +
-    raceBuildHtml +
-    rampHtml +
-    standingNote +
-    agendaHtml +
-    runsSection +
-    composer;
+    (raceBuildHtml ? `<div class="card-stack-item">${raceBuildHtml}</div>` : "") +
+    (rampHtml ? `<div class="card-stack-item">${rampHtml}</div>` : "") +
+    (standingNote ? `<div class="card-stack-item">${standingNote}</div>` : "") +
+    (complianceHtml ? `<div class="card-stack-item">${complianceHtml}</div>` : "") +
+    composer +
+    (syncHtml ? `<div class="card-stack-item">${syncHtml}</div>` : "") +
+    `</div>`;
 
   // Same connected week strip Strength shows — one projection, both Plan segments.
   if (typeof loadPlanWeekStrip === "function") loadPlanWeekStrip(pollToken, "#endWeekSlot");
