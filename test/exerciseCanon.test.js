@@ -133,6 +133,19 @@ test("expandedExerciseKey re-tokenizes multi-word abbreviations", () => {
 test("classifyMuscleGroup: mobility exercises", () => {
   const { classifyMuscleGroup } = repo;
   assert.equal(classifyMuscleGroup("90/90 Hip Switch"), "mobility");
+  assert.equal(classifyMuscleGroup("Ankle Rocker"), "mobility");
+  assert.equal(classifyMuscleGroup("World's Greatest Stretch"), "mobility");
+});
+
+test("isPrepMovement: stretching and activation are not lifts", () => {
+  const { isPrepMovement } = repo;
+  assert.equal(isPrepMovement("Ankle Rocker"), true);
+  assert.equal(isPrepMovement("90/90 Hip Switch"), true);
+  assert.equal(isPrepMovement("World's Greatest Stretch"), true);
+  assert.equal(isPrepMovement("Foam Roll"), true);
+  assert.equal(isPrepMovement("Romanian Deadlift"), false);
+  assert.equal(isPrepMovement("Standing Calf Raise"), false);
+  assert.equal(isPrepMovement("Back Squat"), false);
 });
 
 test("classifyMuscleGroup: returns null for unknown exercises", () => {

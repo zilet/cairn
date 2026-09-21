@@ -40,6 +40,31 @@ function todayCardsSetChip(set: unknown, index?: number): string {
 const TODAY_START_LIGHT_CUE = /\bstart\s+(?:light|easy|conservative)/i;
 // Spaced dashes only, so a hyphenated movement ("Push-up") is never a clause break.
 const TODAY_NOTE_CLAUSE_SPLIT = /\s+[—–-]\s+/;
+const TODAY_SESSION_LEVEL_REASON =
+  /you already lifted this|fueling can catch up|fueling catches up|the log is what moved this load|the work you logged earned this step|weekly split|days you actually train/i;
+const TODAY_WEEKDAY = /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi;
+
+// A card keeps only a cue unique to that movement. The week's split, a fueling
+// sentence that is true of the whole session, and the decision summary belong
+// above the cards once — matching src/domain/training/exercise-notes.ts.
+function todayCardsReasonIsItemSpecific(reason: string, summary: string): boolean {
+  if (!reason) return false;
+  if (summary && reason === summary) return false;
+  if (reason.length > 220) return false;
+  const days = reason.match(TODAY_WEEKDAY) ?? [];
+  if (new Set(days.map((day) => day.toLowerCase())).size >= 2) return false;
+  if (TODAY_SESSION_LEVEL_REASON.test(reason)) return false;
+  return true;
+}
+
+function todayCardsItemCue(item: TodayExerciseItem, note: string): string {
+  const reason = todayString(item.brain_change_reason).replace(/\s+/g, " ").trim();
+  const summary = todayString(item.brain_change_summary).replace(/\s+/g, " ").trim();
+  if (todayCardsReasonIsItemSpecific(reason, summary)) return reason;
+  const cleaned = note.replace(/\s+/g, " ").trim();
+  if (todayCardsReasonIsItemSpecific(cleaned, summary)) return cleaned;
+  return "";
+}
 
 // A stored "start light, find your working weight" instruction was true the day it
 // was written and is a contradiction once the card prints a real number. Drop it
@@ -209,9 +234,9 @@ function exerciseCardHtml(
   const reachNote = todayString(todayRecord(item.reach).note || todayRecord(todayRecord(rx).top_set).note).trim();
   const splitReachCard = item.fromSession === true && Number(item.sets) === 1 && keyed;
   const noteIsReach = !!(reachLine && note && ((reachNote && note === reachNote) || splitReachCard));
-  // A changed card carries only its OWN reason. `brain_change_summary` narrates the
-  // whole decision and is copied onto every changed exercise, so repeating it here
-  // printed the same paragraph once per card; the plan surface says it once above them.
+  const cue = todayCardsItemCue(item, note);
+  // Decision-level narration and Undo live once above the cards. A card keeps
+  // only a cue unique to this movement (swap, straps, start light).
   return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${headlineDose ? ` data-dose="headline"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         ${tile}
@@ -222,7 +247,7 @@ function exerciseCardHtml(
         ${skipButton}${removeButton}
       </div>
       <div class="ex-meta">${progress}</div>
-      ${item.brain_decision_id ? `<div class="ex-flag">${escHtml(item.brain_change_reason || note || "Your team adjusted this exercise.")}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : !noteIsReach && note ? `<div class="ex-note">${escHtml(note)}</div>` : ""}
+      ${!noteIsReach && cue ? `<div class="ex-note">${escHtml(cue)}</div>` : ""}
       ${item.constraint_note ? `<div class="ex-flag">${escHtml(item.constraint_note)}</div>` : ""}
       ${item.journey_line ? `<div class="ex-journey" data-journey-role="${escAttr(item.journey_role || "support")}">${escHtml(item.journey_line)}</div>` : ""}
       ${!complete ? CairnTodayTraining.exRxLineHtml(rx, { supporting: headlineDose }) : ""}

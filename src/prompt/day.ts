@@ -46,6 +46,7 @@ import {
   renderStreamingContract,
   renderJsonContract,
   MECHANICS_ENCODING,
+  MOVEMENT_NOTES_CONTRACT,
   dateScopedPromptContext,
   CAIRN_PERSONA,
 } from "./shared.js";
@@ -719,6 +720,7 @@ GUARDRAILS:
 - Conservative loading; respect every exercise constraint_note (e.g. injury limits)
   and any active injury in context_events — never program loaded movement through an injured area.
 ${MECHANICS_ENCODING}
+${MOVEMENT_NOTES_CONTRACT}
 - One item per exercise. A heavier top set / re-test before back-off work belongs in that item's \`top_set\`, never as a second item.
 - Carry over sensible working weights from the plan / recent logs where they fit. Thin data → start
   light with a "NEW — start light, log actual" note.
@@ -802,6 +804,7 @@ HARD RULES (the server enforces these; violating them just gets your item droppe
 - Honor the caps: an "easy"/"deload" intensity means submaximal loads; a "reduced"/"minimal"
   volume means fewer sets and movements.
 ${MECHANICS_ENCODING}
+${MOVEMENT_NOTES_CONTRACT}
 - SAFE EXERCISE INTRODUCTION: prefer movements the athlete already trains or a
   canonical same-pattern substitution. You may introduce AT MOST ONE genuinely new
   movement, only if equipment + injuries allow it; for a new movement give conservative

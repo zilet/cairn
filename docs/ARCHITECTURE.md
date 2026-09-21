@@ -168,7 +168,17 @@ muscle recovering" question in Cairn; this law never re-asks it by source. Each 
 `load_basis: "logged" | "plan_target"` so the hold clamp can tell a proven number from a guess: only a
 `"logged"` stand-in is exempt from `clampHeldTarget` on a hold day (`daily-composition.ts`) — a
 `"plan_target"` one goes through the ordinary clamp, which finds no anchor for a movement absent from
-today's template and clears it rather than shipping an unproven load.
+today's template and clears it rather than shipping an unproven load. **A stand-in may not occupy a
+press angle already on the card** (`pressSlotKey` / `occupiedPressSlots` in `plan-quality.ts`): two
+flat benches is piling, not complementary work, so the original slot stays and is lightened instead.
+`normalizeComposedSession` drops the same collision from agent output (`duplicate_press_angle`),
+keeping the template's movement.
+
+**When the rotated split day is still recovering, skip forward — don't shop the week.**
+`selectAdaptivePlanDay` still scores every strength day, but if the mapped/rotated day is
+`mostly_recovering` the winner among days that beat it must be the nearest *fresh* day in the
+split ring, not the highest-scoring day anywhere. That is how Monday's Lower B becomes Monday's
+Push after a Sunday long run, instead of Thursday's Upper mashed with Monday's bench.
 
 **Only ONE challenge top set a session, whichever shape produces it.** An agent-authored nested
 `top_set` on a composed item now sets `reachHostConsumed` when it's inserted (`agentTopSetItemFor()`,
@@ -293,11 +303,14 @@ recovery week shows one number on the ladder and in the run list. The agenda's q
 lets the watch's own easy verdict (`AEROBIC_BASE`/`RECOVERY`) outrank Z3 drift and needs aerobic
 TE ≥ 4, not 3, to call a run hard; only Z4+ time or a hard label overrides the easy label. Exercise effect-order
 lives in `src/domain/training/plan-item-order.ts` — TIERS ONLY (prep → primary → secondary →
-isolation → core → cardio; a prep drill is named as one or its note says "mobility prep"), peers keep
+isolation → core → cardio; a prep drill is named as one, filed as mobility, or its note says "mobility prep"), peers keep
 the athlete's order, and there is deliberately no equipment tie-break (name-inferred tools default to
-dumbbell and let a machine row overtake a dumbbell bench on a real plan). Agentic restructures persist
-that order; the gallery offers `POST /api/plan/:day/order-for-effect` when a TIER is out of place;
-editor ↑↓ is never silently rewritten on GET.
+dumbbell and let a machine row overtake a dumbbell bench on a real plan). Agentic restructures **and
+today's daily composition** persist that order; the gallery offers `POST /api/plan/:day/order-for-effect` when a TIER is out of place;
+editor ↑↓ is never silently rewritten on GET. Stretching / activation is not a loaded lift
+(`isPrepMovement` in `src/repo/exercise-canon.ts`): it does not pick up progressive overload, and
+decision-level rationale stays on the session (`brain_change_summary`) rather than repeating on every
+card (`src/domain/training/exercise-notes.ts`).
 
 **The map outranks the session anchor, which keeps only the ring's PHASE.** `selectAdaptivePlanDay`
 consults the lifting week FIRST and falls back to the anchor rotation (`nextCandidateAfter`) only when
@@ -424,10 +437,10 @@ diary confirms a shortfall, or the measured `weight_trend` channel (never waist 
 strain set — so a lone soft signal no longer trims training on its own; `runUnderfuelingControlLoop`'s
 volume-restore pass keys on the fuel read having actually SETTLED (`kind` in `hold`/`settle`/
 `collect_signal`), not merely on `action.training === 'proceed'`, since a waist-only `prescription_strain`
-still raises calories with `training:'proceed'` while volume should stay down. Card copy for an earned
-step landing under a soft hold, or a near-goal promotion, speaks in its own voice
-(`voice.LOG_EARNED_FUEL_PARK`/`LOG_EARNED_FUEL_PARK_SINGLE`) rather than reusing the fallthrough
-not-earned sentence; `voice.CUT_HOLDING_WIN` is now reserved for the case it actually describes — a
+still raises calories with `training:'proceed'` while volume should stay down. An earned step under a soft hold keeps the lift's own
+overload sentence; fueling is a day fact and belongs once above the cards. The
+exception is a parked near-maximal single (`voice.LOG_EARNED_FUEL_PARK_SINGLE`),
+which is that lift's protocol. `voice.CUT_HOLDING_WIN` is now reserved for the case it actually describes — a
 `reduce`/`sliding` HOLD, never a plan-behind catch-up or a phase hold, and never a `fast_loss` day
 (which has its own, separate reason for holding).
 

@@ -598,6 +598,77 @@ test("a 1-set sibling card with a note is not labeled Reach", () => {
   assert.match(html, /class="ex-note">Brace first/);
 });
 
+test("a card does not print the week's split or a copied fueling sentence", () => {
+  const cards = loadTodayCards();
+  const essay =
+    "Your weekly split is redrawn directly around the days you actually train: lifting Monday through Friday and reserving the weekend for endurance and recovery.";
+  const rdl = cards.exerciseCardHtml(
+    {
+      fromPlan: true,
+      exercise: "Romanian Deadlift",
+      sets: 2,
+      rep_low: 8,
+      rep_high: 10,
+      target_weight: 185,
+      brain_decision_id: 9,
+      brain_change_summary: "Redrawn the week around the days you train.",
+      brain_change_reason: essay,
+      brain_change_reversible: true,
+      constraint_note: "New lift — start light; add straps if grip is the limiter.",
+      note: "Straps from set 2 if grip/elbow flags.",
+    },
+    [],
+    { weight: 185, reps: 8 },
+    0,
+    null
+  );
+  assert.doesNotMatch(rdl, /weekly split is redrawn/i);
+  assert.doesNotMatch(rdl, /Monday through Friday/);
+  assert.doesNotMatch(rdl, /data-decision-undo/);
+  assert.doesNotMatch(rdl, /Your team adjusted this exercise/);
+  assert.match(rdl, /Straps from set 2/);
+  assert.match(rdl, /New lift — start light/);
+
+  const rocker = cards.exerciseCardHtml(
+    {
+      fromPlan: true,
+      exercise: "Ankle Rocker",
+      sets: 2,
+      rep_low: 10,
+      rep_high: 10,
+      brain_decision_id: 9,
+      brain_change_summary: "Loads moved up where the log earned them.",
+      brain_change_reason: "You already lifted this; the weight goes up because of that, and fueling can catch up around it.",
+      brain_change_reversible: true,
+    },
+    [],
+    {},
+    0,
+    null
+  );
+  assert.doesNotMatch(rocker, /already lifted this/i);
+  assert.doesNotMatch(rocker, /fueling can catch up/i);
+  assert.doesNotMatch(rocker, /data-decision-undo/);
+
+  const calf = cards.exerciseCardHtml(
+    {
+      fromPlan: true,
+      exercise: "Standing Calf Raise",
+      sets: 1,
+      rep_low: 15,
+      rep_high: 15,
+      target_weight: 77.5,
+      note: "You already lifted this; the weight goes up because of that, and fueling can catch up around it.",
+    },
+    [],
+    { weight: 90, reps: 12 },
+    0,
+    null
+  );
+  assert.doesNotMatch(calf, /already lifted this/i);
+  assert.doesNotMatch(calf, /fueling can catch up/i);
+});
+
 test("Reach line escapes athlete-authored note text", () => {
   const cards = loadTodayCards();
   const html = cards.exerciseCardHtml(

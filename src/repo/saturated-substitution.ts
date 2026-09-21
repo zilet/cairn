@@ -30,6 +30,7 @@ import { equipmentCompatibility, inferExerciseEquipment, parseEquipmentCapabilit
 import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { RUN_PRIME_GROUPS } from "./hybrid-load.js";
 import { getPlan } from "./plan.js";
+import { occupiedPressSlots, pressSlotKey } from "./plan-quality.js";
 import { finite } from "../lib/numbers.js";
 
 // Athlete-facing, and rotated like every other read sentence in Cairn: a stable
@@ -336,15 +337,27 @@ export function substituteSaturatedPlanItems(
 
   const usedGroups = new Set<MuscleGroup>();
   const usedExercises = new Set<string>();
+  const occupiedPresses = occupiedPressSlots(
+    items.map((item) => String((item as { exercise?: unknown })?.exercise ?? ""))
+  );
   const takeEntry = (): PoolEntry | null => {
-    const spread = pool.find((entry) => !usedExercises.has(entry.exercise) && !usedGroups.has(entry.group));
+    const usable = (entry: PoolEntry) => {
+      if (usedExercises.has(entry.exercise)) return false;
+      const slot = pressSlotKey(entry.exercise);
+      return !(slot && occupiedPresses.has(slot));
+    };
+    const spread = pool.find((entry) => usable(entry) && !usedGroups.has(entry.group));
     // Once every fresh group has one stand-in on the card, a second slot may
     // return to a group already used — the day is still the athlete's own work,
     // just re-pointed. Volume stays bounded by the envelope's caps downstream.
-    const entry = spread ?? pool.find((candidate) => !usedExercises.has(candidate.exercise)) ?? null;
+    // A same-angle press already on the card is never that second slot: two
+    // flat benches is piling, not complementary work.
+    const entry = spread ?? pool.find(usable) ?? null;
     if (!entry) return null;
     usedExercises.add(entry.exercise);
     usedGroups.add(entry.group);
+    const slot = pressSlotKey(entry.exercise);
+    if (slot) occupiedPresses.add(slot);
     return entry;
   };
 

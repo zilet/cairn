@@ -620,6 +620,38 @@ test("planDayProgression covers every strength item and skips cardio", () => {
   for (const r of rows) assert.ok(typeof r.plan_item_id === "number", "each row carries its plan_item_id for the apply path");
 });
 
+test("mobility prep holds as prep and never enters the load-progression apply path", () => {
+  makeExercise("Ankle Rocker", { muscle_group: "mobility" });
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  repo.savePlanDay(1, "Lower", "Lower", [
+    { exercise: "Ankle Rocker", sets: 2, rep_low: 10, rep_high: 10, target_weight: null },
+    { exercise: "Back Squat", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
+  ]);
+  logSet("Ankle Rocker", isoDaysAgo(7), { weight: null, reps: 10, setNum: 1 });
+  logSet("Ankle Rocker", isoDaysAgo(7), { weight: null, reps: 10, setNum: 2 });
+  logSet("Back Squat", isoDaysAgo(28), { weight: 175, reps: 8, rir: 2 });
+  logSet("Back Squat", isoDaysAgo(21), { weight: 180, reps: 8, rir: 2 });
+  logSet("Back Squat", isoDaysAgo(10), { weight: 185, reps: 8, rir: 2 });
+
+  const rocker = nextPrescription("Ankle Rocker");
+  assert.equal(rocker.action, "hold");
+  assert.equal(rocker.suggested.weight, null);
+  assert.equal(rocker.why, "");
+  assert.match(rocker.delta_text, /prep/i);
+  assert.doesNotMatch(rocker.why, /lifted this|fueling|weight goes up/i);
+
+  const unnamed = nextPrescription("World's Greatest Stretch");
+  assert.equal(unnamed, null, "prep with no plan and no log is still nothing to read");
+
+  const proposal = buildProgressionProposal(1);
+  if (proposal.ok) {
+    assert.ok(
+      !proposal.proposal.parsed.changes.some((c) => /rocker|stretch/i.test(String(c.exercise ?? ""))),
+      "prep never appears as a load change"
+    );
+  }
+});
+
 test("multi-channel execution strain holds an earned progression in the actual next-session prescription", () => {
   makeExercise("Barbell Bench Press", { muscle_group: "chest" });
   planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185, focus: "Push" });
@@ -2156,7 +2188,7 @@ test("an earned promotion under a soft fuel hold speaks the log-earned set", () 
   const p = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ hold: true }) });
   assert.equal(p.action, "overload");
   assert.doesNotMatch(p.why, /deficit counts as progress|holding this weight while|earn (a |one more )?clean/i);
-  assert.match(p.why, /logged|lifted|earned|fuel/i);
+  assert.doesNotMatch(p.why, /you already lifted this|fueling can catch up/i, "fueling is not restated on the lift");
   assert.equal(violatesReadingGrammar(p.why), null);
 });
 
@@ -2186,7 +2218,7 @@ test("an earned promotion under a soft fuel hold does not mention a single that 
   const p = nextPrescription("Dumbbell Curl", undefined, { cut: cutOf({ hold: true }) });
   assert.equal(p.action, "overload");
   assert.doesNotMatch(p.why, /\bsingle\b|top set/i);
-  assert.match(p.why, /logged|lifted|earned|fuel/i);
+  assert.doesNotMatch(p.why, /you already lifted this|fueling can catch up/i);
   assert.equal(violatesReadingGrammar(p.why), null);
 });
 

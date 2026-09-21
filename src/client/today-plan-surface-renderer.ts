@@ -158,13 +158,26 @@ type TodayPlanSurfaceRendererApi = {
   // Normally exactly one; a session touched by several decisions keeps every one of
   // them. A cap here silently dropped a change the athlete's session actually carries
   // — and the deduped set is small by construction, one line per decision.
-  function sessionBrainSummaries(items: TodayPlanSurfaceRendererItem[]): string[] {
-    const out: string[] = [];
+  // Undo lives here: one decision, one tap — not copied onto every lift.
+  function sessionBrainLines(items: TodayPlanSurfaceRendererItem[]): Array<{
+    summary: string;
+    decision_id: unknown;
+    reversible: boolean;
+  }> {
+    const out: Array<{ summary: string; decision_id: unknown; reversible: boolean }> = [];
     for (const item of items) {
       if (item.brain_decision_id == null) continue;
-      const summary = String(item.brain_change_summary ?? "").replace(/\s+/g, " ").trim();
-      if (!summary || out.includes(summary)) continue;
-      out.push(summary);
+      const summary = String(item.brain_change_summary ?? "").replace(/\s+/g, " ").trim() || "Cairn adjusted this session.";
+      const existing = out.find((row) => row.summary === summary);
+      if (existing) {
+        if (item.brain_change_reversible === true) existing.reversible = true;
+        continue;
+      }
+      out.push({
+        summary,
+        decision_id: item.brain_decision_id,
+        reversible: item.brain_change_reversible === true,
+      });
     }
     return out;
   }
@@ -270,10 +283,13 @@ type TodayPlanSurfaceRendererApi = {
 
     // Same rule for the brain's own narration. `brain_change_summary` describes the
     // DECISION, not the movement, and the server copies it onto every changed
-    // exercise — so it belongs above the cards, once, while each card keeps its
-    // per-exercise reason.
-    for (const summary of sessionBrainSummaries(surfaceItems)) {
-      html += `<div class="session-brain sess-line">${surfaceDeps.escapeHtml(summary)}</div>`;
+    // exercise — so it belongs above the cards, once, with one Undo.
+    for (const line of sessionBrainLines(surfaceItems)) {
+      const undo =
+        line.reversible && line.decision_id != null
+          ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${surfaceDeps.escapeHtml(String(line.decision_id))}">Undo</button>`
+          : "";
+      html += `<div class="session-brain sess-line">${surfaceDeps.escapeHtml(line.summary)}${undo}</div>`;
     }
 
     let cardIdx = 0;

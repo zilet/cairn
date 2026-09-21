@@ -87,6 +87,16 @@ export const MECHANICS_ENCODING = `- Assisted movements use NEGATIVE weight (tar
 - TIMED exercises (mode:'timed', e.g. plank, dead hang) log duration_sec and are prescribed via
   target_seconds — progression is in seconds (+5-15s/step), never load.`;
 
+// How movements and notes work. The server also enforces this (prep is not overloaded;
+// session stories stay off exercise cards; day's items are ordered for effect).
+export const MOVEMENT_NOTES_CONTRACT = `MOVEMENTS AND NOTES:
+- Mobility / stretching / activation (Ankle Rocker, 90/90, World's Greatest Stretch, foam roll) is PREP, not a lift. No load, no progressive overload, no "you already lifted this". It warms the compound that follows.
+- Assemble each day in effect order: prep → compounds → accessories/isolation → core → cardio. The server will also order this; still write it that way.
+- ONE loaded movement per press angle per session: flat barbell bench OR flat DB bench, not both. Flat + incline (or a horizontal + a vertical press) can still be deliberate. Never mash two plan days onto one card.
+- summary / rationale / notes = the WEEK or SESSION story (why the split looks like this, fueling, the day's read). Never copy that onto one exercise.
+- item.note and item.reason = only a cue unique to THAT movement (straps from set 2, start light on a new lift, a grip/elbow flag). If you have nothing specific, omit them.
+- Do not write defensive "if this feels heavy, go back" notes. The athlete will skip or undo; recent_sessions[].skips is that signal. A skipped lift means the dose or selection was wrong — solve it on the next pass.`;
+
 // The target FALLBACK, stated once per prompt instead of re-derived at every kcal /
 // protein reference. `effective_target` is the accepted or coordinated target the
 // adaptive-nutrition loop persisted; `recommended` is the re-derived formula. A site
@@ -1653,6 +1663,8 @@ export const ELITE_STRENGTH_GUARDRAILS = `ELITE PROGRAMMING GUARDRAILS (longevit
 - MOBILITY / ANKLE / calf / tibialis resilience matters: a few minutes of ankle + hip prep and direct calf/tibialis work protect the joints under running and lifting. Mobility is tracked but never counts as working volume.
 - MANAGE CUMULATIVE GRIP + ELBOW LOAD as a SHARED BUDGET across RDLs, heavy pulls/rows, and dead hangs. Don't stack a heavy pulling day, an RDL session and long hangs back-to-back; use straps on the heaviest pulls when grip is the limiter, and spread elbow-intensive work out.
 - BALANCE PUSHING vs PULLING and CHEST vs SHOULDERS: don't let lateral raises run ~2×/week while chest gets a single movement. Give horizontal pressing at least the volume the side delts get.
+- ONE PRIMARY PER SLOT: don't pile two same-angle presses, two competition-style hinges, or two heavy rows in one session. A complementary angle (flat + incline, horizontal + overhead) is the second press — never the same slot with a different implement.
+- Serve ONE programmed day, in effect order. If today's split day is still recovering, move to the next day in the split that is fresh — do not cherry-pick lifts off two days onto one card.
 - WEIGHT EARNED REST as a strong choice: when recovery is drifting or several loading days have stacked, lean toward a genuine rest/deload — frame it as the strong, earned choice, never as falling behind.`;
 
 // Derive THIS user's elite guardrails from context — injuries, endurance goal,

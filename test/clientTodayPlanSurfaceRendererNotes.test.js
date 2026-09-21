@@ -144,8 +144,29 @@ test("every decision narration reaches the surface, deduped but never capped", (
     { exercise: "Curl", brain_decision_id: 3, brain_change_summary: "Trimmed a set from the curl." },
   ]);
 
-  const lines = [...html.matchAll(/<div class="session-brain sess-line">([^<]*)</g)].map((m) => m[1]);
+  const lines = [...html.matchAll(/<div class="session-brain sess-line">([^<]*)/g)].map((m) => m[1]);
   assert.deepEqual(lines, ["Held the squat load.", "Rotated the row.", "Trimmed a set from the curl."]);
+});
+
+test("Undo for a reversible decision lives once on the session line", () => {
+  const { html } = render([
+    {
+      exercise: "Ankle Rocker",
+      brain_decision_id: 42,
+      brain_change_summary: "Updated 3 lifts from what you logged.",
+      brain_change_reason: "You already lifted this; the weight goes up because of that, and fueling can catch up around it.",
+      brain_change_reversible: true,
+    },
+    {
+      exercise: "Standing Calf Raise",
+      brain_decision_id: 42,
+      brain_change_summary: "Updated 3 lifts from what you logged.",
+      brain_change_reason: "You already lifted this; the weight goes up because of that, and fueling can catch up around it.",
+      brain_change_reversible: true,
+    },
+  ]);
+  assert.equal([...html.matchAll(/data-decision-undo="42"/g)].length, 1);
+  assert.match(html, /Updated 3 lifts from what you logged\./);
 });
 
 

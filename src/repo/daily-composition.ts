@@ -4,7 +4,7 @@ import { normalizeSessionSuggestionResult, safeAgentWeight } from "./adaptive-se
 // forgets this import still typechecks and then throws at runtime.
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { cardioPlanIdentity } from "./cardio-plan-identity.js";
-import { canonicalGroup, normalizedExerciseKey } from "./exercise-canon.js";
+import { canonicalGroup, isMobility, isPrepMovement, normalizedExerciseKey } from "./exercise-canon.js";
 import { cardioPainRelevance, REACH_NO_ROOM_WHY, type DailyDecisionEnvelope } from "./daily-decision.js";
 import {
   equipmentCompatibility,
@@ -19,10 +19,12 @@ import {
 } from "./exercises.js";
 import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
+import { pressSlotKey } from "./plan-quality.js";
 import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 import { type SaturatedSubstitution, substituteSaturatedPlanItems } from "./saturated-substitution.js";
 import { round5, finite } from "../lib/numbers.js";
+import { orderPlanItemsForEffect, planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
 
 // Stage 3 of the adaptive daily training plan — bounded agent composition.
 // The agent composes INSIDE the deterministic Stage 2 envelope; it never
@@ -161,6 +163,50 @@ export const HOLD_TARGET_NOTES: readonly [string, ...string[]] = [
   "Keep this one where it is today",
   "No change on the load today; hold what you've been using",
 ];
+
+function isPrepCompositionItem(item: { exercise?: unknown; muscle_group?: unknown }): boolean {
+  return isMobility(item.muscle_group == null ? null : String(item.muscle_group)) || isPrepMovement(String(item.exercise ?? ""));
+}
+
+function preferPressItem(a: any, b: any, candidateNames: Set<string>): any {
+  const aName = String(a?.exercise ?? "").toLowerCase();
+  const bName = String(b?.exercise ?? "").toLowerCase();
+  const aCand = candidateNames.has(aName);
+  const bCand = candidateNames.has(bName);
+  if (aCand !== bCand) return aCand ? a : b;
+  const aSets = finite(a?.sets) ?? 0;
+  const bSets = finite(b?.sets) ?? 0;
+  if (aSets !== bSets) return aSets > bSets ? a : b;
+  const aLoad = Math.abs(finite(a?.target_weight) ?? 0);
+  const bLoad = Math.abs(finite(b?.target_weight) ?? 0);
+  if (aLoad !== bLoad) return aLoad > bLoad ? a : b;
+  return a;
+}
+
+function dropDuplicatePressAngles(
+  items: any[],
+  candidateNames: Set<string>
+): { items: any[]; rejected: Array<{ exercise: string; reason: string }> } {
+  const rejected: Array<{ exercise: string; reason: string }> = [];
+  const keep = items.map(() => true);
+  const keeper = new Map<string, number>();
+  for (let i = 0; i < items.length; i++) {
+    const slot = pressSlotKey(String(items[i]?.exercise ?? ""));
+    if (!slot) continue;
+    const prev = keeper.get(slot);
+    if (prev == null) {
+      keeper.set(slot, i);
+      continue;
+    }
+    const winner = preferPressItem(items[prev], items[i], candidateNames) === items[i] ? i : prev;
+    const loser = winner === i ? prev : i;
+    keep[loser] = false;
+    keeper.set(slot, winner);
+    rejected.push({ exercise: String(items[loser]?.exercise ?? ""), reason: "duplicate_press_angle" });
+  }
+  if (!rejected.length) return { items, rejected };
+  return { items: items.filter((_, i) => keep[i]), rejected };
+}
 
 function compositionNoteFor(
   variants: readonly [string, ...string[]],
@@ -976,6 +1022,25 @@ export function normalizeComposedSession(
     }
     kept.push(item);
   }
+
+  // One loaded movement per press angle — the weekly plan already refuses this at
+  // write time, but a composed session can still pile two flats (agent output, or
+  // a saturated-group stand-in stealing the other day's bench). Drop the extra
+  // here so Today's card cannot serve Dumbbell Bench then Barbell Bench.
+  const pressCollapsed = dropDuplicatePressAngles(
+    kept,
+    new Set(
+      envelope.candidates
+        .map((candidate) => String(candidate.exercise ?? "").toLowerCase())
+        .filter(Boolean)
+    )
+  );
+  if (pressCollapsed.rejected.length) {
+    rejected.push(...pressCollapsed.rejected);
+    kept.length = 0;
+    kept.push(...pressCollapsed.items);
+  }
+
   if (!kept.length) {
     return {
       session: null,
@@ -1085,14 +1150,17 @@ export function normalizeComposedSession(
         next.target_weight = weight;
       }
       // Reduced-area and day-level easing say something the progression why does
-      // not (this area is still carrying work; today's cap came down). Always add.
-      next.note = adaptationNote(
-        next.note,
-        isReduced
-          ? compositionNoteFor(REDUCED_AREA_NOTES, envelope.date, "reduced", next.exercise)
-          : compositionNoteFor(EASED_TODAY_NOTES, envelope.date, "eased", next.exercise)
-      );
-    } else if (hold && !itemAlreadyHasProgressionHoldWhy(candidate)) {
+      // not (this area is still carrying work; today's cap came down). Always add
+      // on loaded work. Prep/mobility is not a lift — don't stamp a load story on it.
+      if (!isPrepCompositionItem(next)) {
+        next.note = adaptationNote(
+          next.note,
+          isReduced
+            ? compositionNoteFor(REDUCED_AREA_NOTES, envelope.date, "reduced", next.exercise)
+            : compositionNoteFor(EASED_TODAY_NOTES, envelope.date, "eased", next.exercise)
+        );
+      }
+    } else if (hold && !itemAlreadyHasProgressionHoldWhy(candidate) && !isPrepCompositionItem(next)) {
       next.note = adaptationNote(
         next.note,
         compositionNoteFor(HOLD_TARGET_NOTES, envelope.date, "hold", next.exercise)
@@ -1187,7 +1255,15 @@ export function normalizeComposedSession(
   // Positions are only rewritten when something was actually inserted, so an
   // ordinary day's items come out of here byte-for-byte as they always have.
   if (insertedTopSet) withTopSets.forEach((item, index) => (item.position = index));
-  const finalItems = insertedTopSet ? withTopSets : capped;
+  const assembled = insertedTopSet ? withTopSets : capped;
+  // Session order is a coaching fact: prep → compounds → accessories → core →
+  // cardio. Agentic restructures already persist this; today's composition must
+  // too, so the athlete is not asked to tap "Order for effect" before they train.
+  const finalItems = orderPlanItemsForEffect(assembled);
+  if (planItemsOutOfOrder(assembled)) {
+    finalItems.forEach((item, index) => (item.position = index));
+    changed = true;
+  }
   // A peak single on a reach-open day is still a top set on a card, and it says so
   // itself: every server-derived top set carries `reach`, and the loop above reads
   // that field. Nothing here may blanket-claim a landing for the one card shape

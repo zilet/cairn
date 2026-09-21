@@ -72,6 +72,7 @@ interface PlanSelectionScore {
   repeated: string[];
   over: string[];
   reasons: string[];
+  mostly_recovering: boolean;
 }
 
 export function planDayFocus(day: Pick<PlanDayCandidate, "name" | "focus" | "day_number">): string {
@@ -618,6 +619,7 @@ function scorePlanDay(params: {
     repeated,
     over: overGroups,
     reasons,
+    mostly_recovering: day.groups.length > 0 && recovering.length * 2 >= day.groups.length,
   };
 }
 
@@ -913,7 +915,29 @@ export function selectAdaptivePlanDay(date: string): {
   const best = sorted[0] ?? rotationScore;
   const materiallyBetter =
     best && rotationScore && best.day_number !== rotation.day_number && best.score >= rotationScore.score + 2.5;
-  const selectedScore = materiallyBetter ? best : rotationScore;
+  // When the rotated day is still carrying most of its work, skip FORWARD to the
+  // next fresh day in the split. Shopping the whole week for "most due" is how
+  // Monday's Lower B became Thursday's Upper mashed with Monday's bench.
+  let selectedScore = materiallyBetter ? best : rotationScore;
+  if (rotationScore?.mostly_recovering && materiallyBetter) {
+    const scorableIndexOf = (dayNumber: number) => scorable.findIndex((day) => day.day_number === dayNumber);
+    const rotationAt = scorableIndexOf(rotation.day_number);
+    const distance = (dayNumber: number) => {
+      const at = scorableIndexOf(dayNumber);
+      if (at < 0 || rotationAt < 0 || !scorable.length) return Number.POSITIVE_INFINITY;
+      return (at - rotationAt + scorable.length) % scorable.length;
+    };
+    const viable = scored.filter(
+      (entry) =>
+        !entry.mostly_recovering &&
+        entry.day_number !== rotation.day_number &&
+        entry.score >= rotationScore.score + 2.5
+    );
+    const nearest = [...viable].sort(
+      (a, b) => distance(a.day_number) - distance(b.day_number) || b.score - a.score
+    )[0];
+    if (nearest) selectedScore = nearest;
+  }
   const selected = candidates.find((d) => d.day_number === selectedScore.day_number) ?? rotation;
   const reason = materiallyBetter ? selectionReason(selectedScore, rotationScore, date) : null;
 

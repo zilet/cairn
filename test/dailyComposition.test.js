@@ -83,6 +83,28 @@ test("an item loading an excluded group is dropped", () => {
   assert.ok(validation.rejected.some((r) => r.exercise === "Back Squat" && r.reason === "excluded_group"));
 });
 
+test("a composed session is already in effect order", () => {
+  // Tiers only: prep → primary → isolation. Isolation peers keep the agent's
+  // relative order, so Cable Curl (listed first) stays ahead of Leg Extension.
+  repo.upsertExercise({ name: "Ankle Rocker", muscle_group: "mobility", mode: "reps" });
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Leg Extension", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Cable Curl", muscle_group: "biceps", mode: "reps" });
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Cable Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 30 },
+      { exercise: "Leg Extension", sets: 3, rep_low: 12, rep_high: 12, target_weight: 100 },
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+      { exercise: "Ankle Rocker", sets: 2, rep_low: 10, rep_high: 10 },
+    ]),
+    envelope()
+  );
+  assert.deepEqual(
+    session.items.map((item) => item.exercise),
+    ["Ankle Rocker", "Back Squat", "Cable Curl", "Leg Extension"]
+  );
+});
+
 test("at most one novel movement is admitted, with no precise load and a baseline label", () => {
   repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
   const { session, validation } = normalizeComposedSession(
@@ -439,6 +461,84 @@ test("a group saturated by prior LIFTING (no run, no endurance conflict) still s
     "a lifting-caused saturation substitutes exactly like a run-caused one"
   );
   assert.equal(session.items[0].substitution_for, "Leg Press");
+});
+
+test("composition drops a second same-angle press from an agent session", () => {
+  repo.upsertExercise({ name: "Dumbbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Dumbbell Bench Press", sets: 2, rep_low: 8, rep_high: 11, target_weight: 55 },
+      { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 12, target_weight: 125 },
+    ]),
+    envelope({
+      candidates: [{ exercise: "Barbell Bench Press", action: "hold" }],
+    })
+  );
+  assert.ok(session);
+  assert.deepEqual(
+    session.items.map((item) => item.exercise),
+    ["Barbell Bench Press"],
+    "the template's bench stays; the extra flat press does not"
+  );
+  assert.ok(validation.rejected.some((entry) => entry.reason === "duplicate_press_angle"));
+});
+
+test("flat plus incline still compose together", () => {
+  repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Incline Dumbbell Press", muscle_group: "chest", mode: "reps" });
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 12, target_weight: 125 },
+      { exercise: "Incline Dumbbell Press", sets: 2, rep_low: 8, rep_high: 10, target_weight: 50 },
+    ]),
+    envelope()
+  );
+  assert.ok(session);
+  assert.deepEqual(
+    session.items.map((item) => item.exercise),
+    ["Barbell Bench Press", "Incline Dumbbell Press"]
+  );
+});
+
+test("a saturated stand-in does not add a second flat bench already on the card", () => {
+  repo.upsertExercise({ name: "Dumbbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Chest-Supported Row", muscle_group: "back", mode: "reps" });
+  repo.savePlanDay(1, "Push", "Push", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 12, target_weight: 125 },
+  ]);
+  repo.savePlanDay(4, "Upper", "Chest and back", [
+    { exercise: "Dumbbell Bench Press", sets: 2, rep_low: 8, rep_high: 11, target_weight: 55 },
+    { exercise: "Chest-Supported Row", sets: 2, rep_low: 10, rep_high: 12, target_weight: 35 },
+  ]);
+
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Dumbbell Bench Press", sets: 2, rep_low: 8, rep_high: 11, target_weight: 55 },
+      { exercise: "Chest-Supported Row", sets: 2, rep_low: 10, rep_high: 12, target_weight: 35 },
+    ]),
+    envelope({
+      muscles: {
+        required: ["chest"],
+        allowed: ["chest"],
+        reduced: [],
+        excluded: [],
+        saturated: ["back"],
+      },
+    }),
+    { substituteSaturated: true }
+  );
+  assert.ok(session);
+  const names = session.items.map((item) => item.exercise);
+  assert.equal(
+    names.filter((name) => /bench press/i.test(name)).length,
+    1,
+    `one flat press, not a pile (got ${JSON.stringify(names)})`
+  );
+  assert.ok(names.includes("Dumbbell Bench Press"));
+  assert.ok(!names.includes("Barbell Bench Press"), "the other day's bench stays off this card");
+  assert.ok(names.includes("Chest-Supported Row"), "the row stays light rather than becoming a second bench");
 });
 
 test("authoritative overload targets survive deterministic fallback and clamp agent output exactly", () => {

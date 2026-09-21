@@ -429,6 +429,57 @@ test("fewer strength days than lifting weekdays: the ring repeats so every one o
   }
 });
 
+test("a recovering split day walks forward to the next fresh day, not a distant mash-up", () => {
+  // The live Monday: ring said Lower B after Friday's Upper, legs were still
+  // carrying Sunday's long run, and the scorer jumped to Thursday's Upper —
+  // then composition stole Monday's bench onto it. Elite skip is the NEXT
+  // fresh day in the split (Push), not the highest-scoring day anywhere.
+  resetTables("logged_sets", "sessions", "plan_items", "plan_days", "exercises", "activities", "profile");
+  repo.replacePlan([
+    {
+      day_number: 1,
+      name: "Push",
+      focus: "Shoulders, chest, triceps",
+      items: [
+        { exercise: "Barbell Overhead Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 75 },
+        { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 12, target_weight: 125 },
+      ],
+    },
+    strengthDay(2, "Pull", "Pendlay Row"),
+    strengthDay(3, "Lower A", "Back Squat"),
+    {
+      day_number: 4,
+      name: "Upper Body & Arms",
+      focus: "Chest, back, arms & forearms",
+      items: [
+        { exercise: "Dumbbell Bench Press", sets: 2, rep_low: 8, rep_high: 11, target_weight: 55 },
+        { exercise: "Chest-Supported Row", sets: 2, rep_low: 10, rep_high: 12, target_weight: 35 },
+        { exercise: "Barbell Curl", sets: 1, rep_low: 12, rep_high: 12, target_weight: 80 },
+      ],
+    },
+    strengthDay(5, "Lower B", "Barbell Deadlift"),
+    restDay(6),
+    longRunDay(7),
+  ]);
+  repo.setProfile({
+    strength_schedule: WORKDAYS,
+    endurance_schedule: { days: [{ dow: 0, kind: "long" }] },
+  });
+  repo.logSetByName({ date: "2026-04-24", exercise: "Chest-Supported Row", weight: 35, reps: 10 });
+  repo.addActivity({
+    type: "run",
+    duration_min: 90,
+    distance_km: 16,
+    date: "2026-04-26",
+    text: "Long run",
+  });
+
+  const monday = repo.selectAdaptivePlanDay("2026-04-27");
+  assert.equal(monday.selection.rotation.day_number, 5, "the ring still points at Lower B after Friday's Upper");
+  assert.equal(monday.day_number, 1, "the skip lands on Push, the next fresh day in the split");
+  assert.equal(monday.selection.adapted, true);
+});
+
 test("with nothing stated and nothing observed the ring stays positional and the anchor rules", () => {
   repo.replacePlan(LIVE_PLAN);
   // The athlete this ring was written for. A bare week reads straight down the

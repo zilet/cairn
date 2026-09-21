@@ -37,6 +37,7 @@ import {
   renderTrajectory,
   renderJsonContract,
   MECHANICS_ENCODING,
+  MOVEMENT_NOTES_CONTRACT,
   CAIRN_PERSONA,
 } from "./shared.js";
 
@@ -127,6 +128,7 @@ NON-NEGOTIABLE GUARDRAILS:
   context; runner/cyclist-first users make endurance progression central and keep lifting
   supportive.
 ${MECHANICS_ENCODING}
+${MOVEMENT_NOTES_CONTRACT}
 - Small steps. Thin/absent data -> do not change. Progress a timed exercise ONLY when recent durations
   comfortably meet the current target; never propose target_weight for one.
 
@@ -332,6 +334,7 @@ NON-NEGOTIABLE GUARDRAILS (same as the coach):
 - Respect every constraint_note and active injury — never load an injured area; swap to a pain-free
   alternative instead.
 ${MECHANICS_ENCODING}
+${MOVEMENT_NOTES_CONTRACT}
 - Read each recent session's soreness/performance/joint_pain: high soreness / low performance / a named
   joint → pull volume or load back there, don't progress through it. Autoregulation is a brake, not the driver.
 - Prefer 1-3 focused, well-justified changes over a sweeping rewrite. Restructure the split (a "days"
@@ -462,6 +465,7 @@ NON-NEGOTIABLE GUARDRAILS:
 - Conservative from the start. Nothing in a first week is heavy for its own sake, and no lift is
   prescribed at a load the data cannot support.
 ${MECHANICS_ENCODING}
+${MOVEMENT_NOTES_CONTRACT}
 - This is a suggestion the athlete can rewrite, never a verdict and never a gate. Plain words, no
   scores, no grades. Health findings are informational, not medical advice.
 

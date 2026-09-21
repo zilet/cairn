@@ -21,6 +21,7 @@ import {
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { type ReasonProvenance, normalizeHistoricalReason, validReasonProvenance } from "./proposal-truth.js";
+import { isItemSpecificChangeReason } from "../domain/training/exercise-notes.js";
 import { orderPlanItemsForEffect, planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
 
 export { PlanQualityError, pressSlotKey, validateTrainingPlan } from "./plan-quality.js";
@@ -270,10 +271,9 @@ function computeAccountablePlanChanges(): Map<string, AccountablePlanChange> {
               null,
               fallbackAsOf
             ),
-            rationale:
-              change?.reason != null || row.rationale != null
-                ? normalizeHistoricalReason(change?.reason ?? row.rationale, reasonProvenance, fallbackAsOf)
-                : null,
+            rationale: isItemSpecificChangeReason(change?.reason, row.summary)
+              ? normalizeHistoricalReason(change.reason, reasonProvenance, fallbackAsOf)
+              : null,
             reason_provenance: reasonProvenance,
             reversible: !!row.reversible,
             before:
@@ -375,8 +375,9 @@ function samePrescription(a: PlanPrescription, b: PlanPrescription): boolean {
 // Only what MOVED. A removed movement is deliberately absent: it is no longer on the
 // plan, so nothing on a plan surface could carry its note, and listing it would only
 // pad the ledger. Reasons come from the proposal's own per-item prose when it wrote
-// any; an item the agent changed silently still gets its before/after, and the
-// decision's own rationale remains the fallback the surface reads.
+// any; an item the agent changed silently still gets its before/after. The decision's
+// own rationale is the SESSION story and is never copied onto a card that has no
+// reason of its own.
 export function planPrescriptionDiff(
   before: Map<string, PlanPrescription>,
   after: Map<string, PlanPrescription>,

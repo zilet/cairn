@@ -141,8 +141,8 @@ test("July 16 evidence stays absolutely anchored through July 17 proposal, July 
 
   const rendered = repo.getPlanDay(1).items[0];
   assert.match(rendered.brain_change_summary, /July 16, 2026/);
-  assert.match(rendered.brain_change_reason, /July 16, 2026/);
-  assert.doesNotMatch(`${rendered.brain_change_summary} ${rendered.brain_change_reason}`, /yesterday/i);
+  assert.equal(rendered.brain_change_reason, null, "a change with no per-item reason does not inherit the week's rationale");
+  assert.doesNotMatch(`${rendered.brain_change_summary}`, /yesterday/i);
 });
 
 test("changed training evidence blocks autonomous apply with a review hold", () => {
@@ -696,18 +696,17 @@ test("a new-exercise baseline cue is persisted exactly once", () => {
 test("athlete-facing decision rationale and Undo identifiers remain escaped", () => {
   const source = readFileSync(new URL("../src/client/today-cards-client.ts", import.meta.url), "utf8");
   // `note` is item.note after the card retires a fossilized "start light" clause;
-  // the fallback itself and its escaping are unchanged.
+  // a card never prints the decision-level essay or a copied Undo.
   assert.match(source, /const note = todayCardsCleanNote\(item\.note,/);
-  assert.match(source, /escHtml\(item\.brain_change_reason \|\| note/);
-  assert.match(source, /escAttr\(item\.brain_decision_id\)/);
-  // The DECISION-level narration is copied onto every changed exercise, so a card
-  // that printed it repeated the same paragraph once per lift. It belongs to the
-  // session and is now said once above the cards — still escaped, just not here.
-  assert.doesNotMatch(source, /item\.brain_change_summary/);
+  assert.match(source, /todayCardsItemCue\(item, note\)/);
+  assert.doesNotMatch(source, /data-decision-undo/);
+  assert.doesNotMatch(source, /class="ex-flag"\$\{escHtml\(item\.brain_change/);
 
   const surface = readFileSync(new URL("../src/client/today-plan-surface-renderer.ts", import.meta.url), "utf8");
   assert.match(surface, /item\.brain_change_summary/);
-  assert.match(surface, /escapeHtml\(summary\)/);
+  assert.match(surface, /escapeHtml\(line\.summary\)/);
+  assert.match(surface, /data-decision-undo/);
+  assert.match(surface, /escapeHtml\(String\(line\.decision_id\)\)/);
 });
 
 // ---- accountable provenance: what the athlete can actually SEE about a change ----

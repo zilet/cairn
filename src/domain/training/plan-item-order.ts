@@ -15,6 +15,7 @@
 // chest-supported row leapfrogged a dumbbell bench and a Pendlay row overtook
 // pull-ups. Two primaries are peers; the athlete's order among peers stands.
 
+import { isMobility, isPrepMovement } from "../../repo/exercise-canon.js";
 import { classifyPattern, type MovementPattern } from "../../repo/exercise-variations.js";
 
 export type OrderablePlanItem = {
@@ -35,18 +36,21 @@ export const PLAN_ITEM_EFFECT_TIER = {
   cardio: 5,
 } as const;
 
-// A prep drill is named as one, or its note says so ("Mobility prep, not working
-// volume"). It is never a working set, so it is never demoted behind the compounds
-// it exists to warm up.
-const PREP_NAME =
-  /\b(?:rocker|mobility|activation|warm[- ]?up|stretch|prep|90\/90|hip switch|foam roll|pull[- ]?aparts?|openers?)\b/i;
+// A prep drill is named as one, filed as mobility, or its note says so
+// ("Mobility prep, not working volume"). It is never a working set, so it is
+// never demoted behind the compounds it exists to warm up.
 const PREP_NOTE =
   /\b(?:mobility|activation|warm[- ]?up)\s+(?:prep|drill|work|set)|\bnot working volume\b|\bprep,? not\b/i;
 
-function isPrep(item: OrderablePlanItem): boolean {
+export function isPrepPlanItem(item: OrderablePlanItem): boolean {
   if (isCardio(item)) return false;
-  if (PREP_NAME.test(String(item.exercise ?? ""))) return true;
+  if (isMobility(item.muscle_group)) return true;
+  if (isPrepMovement(itemName(item))) return true;
   return PREP_NOTE.test(String(item.note ?? ""));
+}
+
+function isPrep(item: OrderablePlanItem): boolean {
+  return isPrepPlanItem(item);
 }
 
 const PRIMARY = new Set<MovementPattern>([

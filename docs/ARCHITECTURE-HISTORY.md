@@ -4,6 +4,28 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-21 — One press angle per session; skip forward in the split
+
+No schema change. A composed session may no longer pile two same-angle presses
+(Dumbbell Bench + Barbell Bench). Saturated-group substitution skips a stand-in
+whose press slot is already on the card, and `normalizeComposedSession` drops the
+same collision from agent output. When the rotated split day is still recovering,
+the selector walks forward to the next fresh day in the split instead of shopping
+the week for "most due" and mashing two plan days onto one card.
+
+---
+
+## 2026-09-21 — Prep is not a lift; session stories stay off the cards
+
+No schema change. Stretching / activation (`isPrepMovement`) no longer picks up load
+progression or the "you already lifted this" fueling line. A restructure's weekly-split
+rationale stays on the session (with one Undo); exercise cards keep only a cue unique to
+that movement. Daily composition now persists effect order (prep → compounds → accessories
+→ core → cardio) instead of waiting for "Order for effect". A skipped lift remains the
+signal to the brain — not a defensive note on the card.
+
+---
+
 ## 2026-09-20 — Chat prompts that outgrow argv skip the kernel cap
 
 No schema change. A Pi 5 uses 16K pages, so Linux `MAX_ARG_STRLEN` is 512 KiB. Chat's DATA block

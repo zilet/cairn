@@ -90,8 +90,9 @@ test("a leg day picked on a run morning composes from the areas the run left alo
   // Every slot is still a slot — the day the athlete picked keeps its shape.
   assert.equal(composition.items.length, 3);
   assert.deepEqual(
-    composition.items.map((item) => item.substitution_for),
-    ["Barbell Deadlift", "Bulgarian Split Squat", "Seated Calf Raise"]
+    [...composition.items.map((item) => item.substitution_for)].sort(),
+    ["Barbell Deadlift", "Bulgarian Split Squat", "Seated Calf Raise"].sort(),
+    "each original slot still has a stand-in after effect-order"
   );
   // Each stand-in carries its OWN anchor — what the athlete last worked it at —
   // and nothing carries a number this code made up.

@@ -48,6 +48,16 @@ export function pressSlotKey(name: string): string | null {
   return `horizontal-press:${angle}`;
 }
 
+/** Press angles already occupied by a session — one loaded movement per slot. */
+export function occupiedPressSlots(names: readonly string[]): Set<string> {
+  const slots = new Set<string>();
+  for (const name of names) {
+    const slot = pressSlotKey(name);
+    if (slot) slots.add(slot);
+  }
+  return slots;
+}
+
 function issue(
   severity: PlanQualitySeverity,
   code: string,

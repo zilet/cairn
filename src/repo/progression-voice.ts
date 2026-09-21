@@ -448,14 +448,17 @@ export const PUSH_FUEL_VARIETY_KEEP: VoiceSet = [
 // did that was a lift already holding for its own unrelated reason — which is
 // exactly the register leak that put somebody else's explanation on a lift card.
 // Every item the fuel read actually changes now carries a whole fuel sentence of
-// its own: FUEL_HOLD_STEP when the step is held, LOG_EARNED_FUEL_PARK when the
-// log earned a step that stands (no single mentioned), LOG_EARNED_FUEL_PARK_SINGLE
-// when a top set actually came off, PUSH_FUEL_VARIETY_KEEP when a PUSH athlete's
-// rotation/introduce stands and only the single waits, AT_GOAL_FUEL_VARIETY_KEEP for
-// that same kept rotation when the athlete never asked to push and is simply at their
-// goal, AT_GOAL_FUEL_KEEP_VOLUME when the athlete is at
-// their goal weight and the plan keeps its full shape, FUEL_DELOAD_CLAUSE on work
-// already going down, FUEL_RECOVERY_DOSE when the read cuts the session itself.
+// its own: FUEL_HOLD_STEP when the step is held, LOG_EARNED_FUEL_PARK_SINGLE when
+// a top set actually came off (that is this lift's protocol). A standing earned
+// step keeps the lift's own overload sentence — fueling is a day fact, said once
+// above the cards, not restated on every lift. LOG_EARNED_FUEL_PARK stays in the
+// catalog as the no-single sibling of _SINGLE (grammar-guarded; not printed on a
+// card). PUSH_FUEL_VARIETY_KEEP when a PUSH athlete's rotation/introduce stands
+// and only the single waits, AT_GOAL_FUEL_VARIETY_KEEP for that same kept rotation
+// when the athlete never asked to push and is simply at their goal,
+// AT_GOAL_FUEL_KEEP_VOLUME when the athlete is at their goal weight and the plan
+// keeps its full shape, FUEL_DELOAD_CLAUSE on work already going down,
+// FUEL_RECOVERY_DOSE when the read cuts the session itself.
 
 // At (or a whisker from) goal weight, a protective fuel read no longer shrinks the
 // session — it keeps the sets and the load and only leaves the near-maximal single

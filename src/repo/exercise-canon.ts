@@ -166,6 +166,18 @@ export function isMobility(group: string | null | undefined): boolean {
   return canonicalGroup(group ?? null) === "mobility";
 }
 
+// Prep / activation / stretching is not a loaded lift. Name-first so an agent-minted
+// "Ankle Rocker" with no stored group still cannot pick up progressive overload.
+const PREP_MOVEMENT_NAME =
+  /\b(?:rocker|mobility|activation|warm[- ]?up|stretch|prep|90\/90|hip switch|foam roll|pull[- ]?aparts?|openers?)\b/i;
+
+export function isPrepMovement(name: string | null | undefined): boolean {
+  const raw = String(name ?? "").trim();
+  if (!raw) return false;
+  if (PREP_MOVEMENT_NAME.test(raw)) return true;
+  return classifyMuscleGroup(raw) === "mobility";
+}
+
 // ---- name normalization -----------------------------------------------------
 // Lowercase, fold non-alphanumerics to spaces, collapse + trim. Used for matching.
 export function normalizeExerciseName(raw: string): string {
@@ -421,7 +433,26 @@ export function canonicalGroup(rawGroup: string | null | undefined): MuscleGroup
 // returns null when nothing matches, and the caller leaves the group unset.
 const CLASSIFY_RULES: Array<[MuscleGroup, RegExp[]]> = [
   // --- mobility / activation (non-counting) — match before anything loaded ---
-  ["mobility", [/\b90 90\b/, /hip switch/, /\bstretch/, /mobility/, /cat cow/, /\bcars\b/, /world s greatest/, /\bopener\b/, /\bdrill\b/, /thoracic rotation/, /\bfoam roll/]],
+  [
+    "mobility",
+    [
+      /\b90 90\b/,
+      /hip switch/,
+      /\bstretch/,
+      /mobility/,
+      /cat cow/,
+      /\bcars\b/,
+      /world s greatest/,
+      /\bopener\b/,
+      /\bdrill\b/,
+      /thoracic rotation/,
+      /\bfoam roll/,
+      /\brocker\b/,
+      /\bwarm ?up\b/,
+      /\bactivation\b/,
+      /\bpull ?aparts?\b/,
+    ],
+  ],
   // --- core / trunk ---
   ["core", [/\bplank/, /\bcrunch/, /\bsit up/, /\bab\b/, /\babs\b/, /\bab /, /dead bug/, /hollow/, /\bpallof/, /\bl sit/, /hanging (leg|knee) raise/, /leg raise/, /knee raise/, /russian twist/, /\bwoodchop/, /\bcable rotation/, /\boblique/, /\bbird dog/, /\bbicycle\b/, /toe touch/, /\bv up/, /\brollout/, /ab wheel/, /\bsuitcase/]],
   // --- forearms / grip / carries ---

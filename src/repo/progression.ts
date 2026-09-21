@@ -21,6 +21,7 @@ import {
   classifyMuscleGroup,
   exerciseIdentityKey,
   isMobility,
+  isPrepMovement,
   movementKey,
   type MuscleGroup,
   MUSCLE_LANDMARKS,
@@ -716,6 +717,38 @@ function planItemFor(name: string): {
   return null;
 }
 
+function isPrepWork(name: string, group: string | null): boolean {
+  return isMobility(group) || isPrepMovement(name);
+}
+
+// Prep stays at the planned dose. No overload, no fuel-park story, no invented load.
+function prepWorkPrescription(
+  exerciseName: string,
+  mode: "reps" | "timed",
+  last: ReturnType<typeof latestTopSet>,
+  current: PrescriptionTarget | null
+): Prescription {
+  const suggested: PrescriptionTarget = current
+    ? { ...current }
+    : mode === "timed"
+      ? { sets: 1, seconds: last?.duration_sec ?? 30 }
+      : {
+          sets: 2,
+          rep_low: last?.reps ?? 8,
+          rep_high: last?.reps ?? 10,
+          weight: null,
+        };
+  return {
+    exercise: exerciseName,
+    mode,
+    action: "hold",
+    suggested,
+    current,
+    delta_text: "prep, not working volume",
+    why: "",
+  };
+}
+
 function currentTarget(plan: ReturnType<typeof planItemFor>, mode: "reps" | "timed"): PrescriptionTarget | null {
   if (!plan) return null;
   if (mode === "timed") {
@@ -1388,6 +1421,11 @@ export function nextPrescription(
   if (plan && plan.kind === "cardio") return null;
   const cur = currentTarget(plan, mode);
   const last = latestTopSet(exerciseName);
+  // Stretching / activation / mobility is prep, not a lift. It never picks up
+  // load, never earns "you already lifted this", and never enters the apply path.
+  if (isPrepWork(exerciseName, group) && (last || plan)) {
+    return prepWorkPrescription(exerciseName, mode, last, cur);
+  }
   const state = liftStateFor(exerciseName, states);
 
   // Nothing logged and nothing planned → genuinely nothing to read.
@@ -1970,16 +2008,15 @@ function repsPrescription(
   // Cut-pressure voice follows the consequence that actually landed.
   // CUT_HOLDING_WIN only speaks when the why is still the not-earned /
   // top-set-only fallthrough — never a plan-behind catch-up or a phase hold.
-  // An earned promotion that went through under a soft fuel hold gets its
-  // own sentence: the log moved the load; no single is mentioned unless one
-  // actually came off, which only applyFuelProtection can know.
+  // An earned promotion under a soft fuel hold keeps the lift's own overload
+  // sentence. Fueling is a property of the DAY and belongs once above the cards —
+  // repeating "you already lifted this" on every lift was noise. A parked single
+  // is the exception: that is this lift's protocol, and applyFuelProtection names it.
   //
   // A cut running FASTER THAN LEAN-SAFE takes nothing here: the near-maximal single
   // it would want parked is already the one piece applyFuelProtection strips, and
   // the peak protocol itself goes cautious under any cut pressure (see peakTopSetFor).
-  if (action === "overload" && !repStep && !topSet && cutPressure.hold && !cutVetoesPromotion(cutPressure, liftCut)) {
-    why = say(voice.LOG_EARNED_FUEL_PARK, "log_earned_fuel_park");
-  } else if (
+  if (
     action === "hold" &&
     fallthroughHold &&
     !planBehind &&
@@ -2055,15 +2092,12 @@ function repsPrescription(
     if (baseWeight == null) nextWeight = null;
     else if (baseWeight < 0) nextWeight = assistStepNext(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
     else nextWeight = clampedOverload(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
-    why =
-      cutPressure.hold && !cutVetoesPromotion(cutPressure, liftCut)
-        ? say(voice.LOG_EARNED_FUEL_PARK, "log_earned_fuel_park")
-        : hasRange
-          ? sayEffort(voice.EARNED_RANGE_OVERLOAD, voice.EARNED_RANGE_OVERLOAD_REPS, "earned_range_overload")(
-              repHigh as number,
-              repLow as number
-            )
-          : sayEffort(voice.EARNED_OPEN_OVERLOAD, voice.EARNED_OPEN_OVERLOAD_REPS, "earned_open_overload");
+    why = hasRange
+      ? sayEffort(voice.EARNED_RANGE_OVERLOAD, voice.EARNED_RANGE_OVERLOAD_REPS, "earned_range_overload")(
+          repHigh as number,
+          repLow as number
+        )
+      : sayEffort(voice.EARNED_OPEN_OVERLOAD, voice.EARNED_OPEN_OVERLOAD_REPS, "earned_open_overload");
   }
 
   // AUTOREGULATION GATE — one step toward safety on high soreness / low performance /
@@ -2483,6 +2517,8 @@ function applyFuelProtection(
 ): Prescription {
   const say = <T>(set: readonly T[], code: string): T => voice.liftVoice(set, date, code, prescription.exercise);
   if (read.action.training === "proceed") return prescription;
+  // Prep is not loaded work. A fuel read must not invent a load story for it.
+  if (isPrepMovement(prescription.exercise)) return prescription;
   if (read.action.training === "hold_aggression") {
     // The fuel read is a property of the DAY. It gets to speak on a lift card only
     // where it actually changed THAT lift — a lift already holding for its own
@@ -2509,7 +2545,7 @@ function applyFuelProtection(
             autoregulated: true,
             why: say(voice.LOG_EARNED_FUEL_PARK_SINGLE, "log_earned_fuel_park_single"),
           }
-        : prescription;
+        : prescription; // the step stands; the lift's own overload why already says so
     }
     if (drive === "push" && (prescription.action === "vary" || prescription.action === "introduce")) {
       return {
@@ -2569,10 +2605,9 @@ function applyFuelProtection(
       autoregulated: true,
       why:
         prescription.action === "overload"
-          ? say(
-              parkedSingle ? voice.LOG_EARNED_FUEL_PARK_SINGLE : voice.LOG_EARNED_FUEL_PARK,
-              parkedSingle ? "log_earned_fuel_park_single" : "log_earned_fuel_park"
-            )
+          ? parkedSingle
+            ? say(voice.LOG_EARNED_FUEL_PARK_SINGLE, "log_earned_fuel_park_single")
+            : prescription.why
           : prescription.action === "hold"
             ? say(voice.AT_GOAL_FUEL_KEEP_VOLUME, "at_goal_fuel_keep_volume")
             : // vary / introduce. WHY the rotation stands has to match why it was

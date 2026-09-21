@@ -87,6 +87,9 @@ test("mobility prep stays ahead of the compound it warms up", () => {
     PLAN_ITEM_EFFECT_TIER.prep
   );
   assert.equal(planItemEffectTier({ exercise: "Leg Press" }), PLAN_ITEM_EFFECT_TIER.primary);
+  // The name alone is enough — no note required.
+  assert.equal(planItemEffectTier({ exercise: "Ankle Rocker" }), PLAN_ITEM_EFFECT_TIER.prep);
+  assert.equal(planItemEffectTier({ exercise: "World's Greatest Stretch" }), PLAN_ITEM_EFFECT_TIER.prep);
 });
 
 test("hip thrust (secondary) sits between compounds and isolation", () => {
