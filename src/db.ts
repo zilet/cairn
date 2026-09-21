@@ -955,7 +955,8 @@ CREATE TABLE IF NOT EXISTS settings (
   training_drive TEXT DEFAULT 'steady',        -- steady | push — the athlete's standing posture toward accumulated-load rest
   garmin_export_strength INTEGER DEFAULT 1,    -- 1 = send finished Cairn strength sessions back to Garmin (see src/garminExport.ts)
   garmin_last_export_attempt_at TEXT DEFAULT '', -- when the last strength write-back was ATTEMPTED (UTC ISO) — landed or not
-  garmin_last_export_status TEXT DEFAULT ''    -- short result: "ok: 8 of 14 sets" | "failed: …"; a persistently failing PUT must be visible
+  garmin_last_export_status TEXT DEFAULT '',   -- short result: "ok: 8 of 14 sets" | "failed: …"; a persistently failing PUT must be visible
+  run_units TEXT DEFAULT 'km'                  -- km | mi — athlete-facing run distance and pace (engine stays km)
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each

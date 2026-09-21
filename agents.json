@@ -17,6 +17,7 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh", "max"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
+    "large_prompt": { "via": "stdin" },
     "structured_output": {
       "flag": ["--json-schema", "{schema}"],
       "arg": "inline",
@@ -46,6 +47,7 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh", "max"] },
     "reasoning_flag": ["-c", "model_reasoning_effort={reasoning}"],
     "file_access_args": ["--cd", "{data_dir}", "--add-dir", "{data_dir}"],
+    "large_prompt": { "via": "stdin_dash" },
     "image_args": ["--image", "{image}"],
     "structured_output": {
       "flag": ["--output-schema", "{schema_file}"],
@@ -75,6 +77,7 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
+    "large_prompt": { "via": "stdin_plain" },
     "structured_output": {
       "flag": ["--json-schema", "{schema}", "--output-format", "json"],
       "arg": "inline",
@@ -106,6 +109,7 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high"] },
     "reasoning_flag": ["--reasoning-effort", "{reasoning}"],
     "file_access_args": ["--cwd", "{data_dir}"],
+    "large_prompt": { "via": "file", "args": ["--prompt-file", "{prompt_file}"] },
     "structured_output": {
       "flag": ["--json-schema", "{schema}"],
       "arg": "inline",

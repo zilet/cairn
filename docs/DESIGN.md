@@ -145,11 +145,14 @@ New/changed components (CSS must implement, the client JS must emit):
   status chip (Done / Today / Up next). `.is-today` / `.is-done` / `.is-hard` are status deltas
   only — never a gate. `.pweek-progress` under the map is the one spoken week-so-far line
   (counts, no scores); optional `.pweek-note` below it for a layout suggestion or a quiet summary.
-- Plan Endurance briefing: `.end-brief` (coach sentence `.end-brief-lead` plus the next-run
-  plate `.end-next` — when, name, prescription, then `.read-contrib` rows for setup / expect /
-  sits-by) and `.end-then` (the rest of the week's open runs). Race clocks/paces live behind
-  `.rbuild-more` (`compact` race-build card). The composer is a collapsed `.end-shape-fold`
-  details, same quiet-strip posture as `.plan-redraw`.
+- Plan Endurance briefing: `.end-brief` (coach sentence `.end-brief-lead` plus a km/mi
+  toggle `.end-units` on `.end-brief-bar`, the next-run plate `.end-next` — when, name,
+  prescription, then `.read-contrib` rows for setup / expect / sits-by — then `.end-then`
+  for the next two, a three-run review). Later sessions sit behind `.end-later`. The
+  connected week map is a collapsed `.end-week-fold` below the briefing and loads on open.
+  Race clocks/paces live behind `.rbuild-more` (`compact` race-build card, summary "The
+  rest of the program"). The composer is a collapsed `.end-shape-fold` details, same
+  quiet-strip posture as `.plan-redraw`.
 - Meal plans (Coach tab): `.mp-card`. Header `.mp-hero`: agent + status `.mp-badge` (draft/ok/off),
   daily kcal as `.numeral-xl` + `.lbl "per day"`, protein as `.numeral-lg`. Days `.mp-day`
   with `.mp-dayname` (display italic). Each meal `.meal-row`: `.meal-art` (`.artile-md` food art)

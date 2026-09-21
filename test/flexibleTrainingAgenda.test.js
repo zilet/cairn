@@ -393,7 +393,7 @@ test("a lower-body-only date remains available for optional easy running", () =>
   assert.equal(agenda.today_guidance, "easy_only");
 });
 
-test("supporting endurance stays at three runs and falls to two when recovery is constrained", () => {
+test("supporting endurance stays at three runs and falls to two when recovery is constrained (no stated calendar)", () => {
   repo.setProfile({
     age: 44,
     primary_discipline: "strength",

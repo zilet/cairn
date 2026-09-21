@@ -30,6 +30,14 @@ test("client format helpers keep training, endurance, and macro display stable",
   assert.equal(utils.fmtPaceKm(4.999), "5:00");
   assert.equal(utils.fmtKm(10.04), "10");
   assert.equal(utils.fmtKm(10.06), "10.1");
+  assert.equal(utils.runUnits("mi"), "mi");
+  assert.equal(utils.runUnits("km"), "km");
+  assert.equal(utils.fmtDist(9.4, "km"), "9.4 km");
+  assert.equal(utils.fmtDist(9.656, "mi"), "6 mi");
+  assert.equal(utils.fmtPaceFromSecPerKm(373, "km"), "6:13");
+  assert.equal(utils.fmtPaceFromSecPerKm(373, "mi"), "10:00");
+  assert.equal(utils.fmtPaceBand({ fast_sec_per_km: 373, slow_sec_per_km: 403 }, "km"), "6:13–6:43 /km");
+  assert.equal(utils.fmtPaceBand({ fast_sec_per_km: 373, slow_sec_per_km: 403 }, "mi"), "10:00–10:49 /mi");
   assert.equal(utils.fmtSpeedKmh(32.04), "32");
   assert.equal(utils.prDistLabel(21.0975), "Half");
 

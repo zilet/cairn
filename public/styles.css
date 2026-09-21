@@ -5218,11 +5218,20 @@ button.hmk-row:active{background:var(--card-2)}
 /* one-line lead distinguishing the planning home from Progress→Endurance analytics */
 .end-lead{margin:8px 0 4px;font-size:.9rem;color:var(--ink-2);line-height:1.5}
 /* The Plan → Endurance briefing: one coach sentence, then the next run in
-   full (setup / expect / sits-by via the reading-grammar rows), then the rest
-   of the week as compact rows. The race clocks stay folded under .rbuild-more. */
+   full (setup / expect / sits-by via the reading-grammar rows), then the next
+   two as compact rows (a three-run review), then later sessions behind a fold.
+   Race clocks stay under .rbuild-more. Units toggle sits on .end-brief-bar. */
 .end-brief{display:flex;flex-direction:column;gap:var(--space-card)}
-.end-brief-lead{margin:0;font-size:.95rem;line-height:1.45;color:var(--ink)}
+.end-brief-bar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.end-brief-lead{margin:0;font-size:.95rem;line-height:1.45;color:var(--ink);min-width:0;flex:1}
 .end-brief-lead .lbl{display:block;margin-bottom:6px}
+.end-units{display:flex;gap:4px;flex:0 0 auto;padding-top:2px}
+.end-unit-btn{
+  font-family:var(--font-ui);font-size:.68rem;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;padding:3px 9px;border-radius:999px;border:1px solid var(--line);
+  background:transparent;color:var(--muted);cursor:pointer}
+.end-unit-btn.on{background:var(--ink);color:var(--card);border-color:var(--ink)}
+.end-unit-btn:hover:not(.on){color:var(--ink-2);border-color:var(--ink-2)}
 .end-next{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
   padding:16px 18px}
 .end-next-kicker{display:block;margin-bottom:8px}
@@ -5241,6 +5250,12 @@ button.hmk-row:active{background:var(--card-2)}
 .end-then-when{flex:0 0 auto;font-size:.8rem;color:var(--muted)}
 .end-then-name{flex:1 1 auto;font-weight:500;color:var(--ink)}
 .end-then-pres{margin-left:auto;font-size:.92rem;color:var(--ink-2);font-variant-numeric:lining-nums}
+.end-later,.end-week-fold{margin:0;display:flex;flex-direction:column;gap:8px}
+.end-later>summary,.end-week-fold>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.end-later>summary::-webkit-details-marker,.end-week-fold>summary::-webkit-details-marker{display:none}
+.end-later>summary::before,.end-week-fold>summary::before{content:"▸";font-size:.65rem;color:var(--muted);transition:transform .15s ease}
+.end-later[open]>summary::before,.end-week-fold[open]>summary::before{transform:rotate(90deg)}
+.end-later>summary:hover .lbl,.end-week-fold>summary:hover .lbl{color:var(--ink-2)}
 .end-shape-fold{margin:0;display:flex;flex-direction:column;gap:8px}
 .end-shape-fold>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
 .end-shape-fold>summary::-webkit-details-marker{display:none}

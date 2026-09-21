@@ -1279,6 +1279,14 @@ declare global {
   declare function fmtDur(sec: unknown): string;
   declare function fmtPaceKm(minPerKm: unknown): string;
   declare function fmtKm(km: unknown): string;
+  declare function runUnits(value: unknown): "km" | "mi";
+  declare function fmtRunUnitSuffix(units?: unknown): string;
+  declare function fmtDist(km: unknown, units?: unknown): string;
+  declare function fmtPaceFromSecPerKm(secPerKm: unknown, units?: unknown): string;
+  declare function fmtPaceBand(
+    band: { slow_sec_per_km?: unknown; fast_sec_per_km?: unknown; text?: unknown } | null | undefined,
+    units?: unknown
+  ): string;
   declare function sparklineSvg(vals: unknown, w?: number, h?: number): string;
   declare function fmtSpeedKmh(kmh: unknown): string;
   declare function prDistLabel(km: unknown): string;
@@ -1570,9 +1578,9 @@ declare global {
   declare function sessionCardHtml(session: unknown, index: number): string;
   declare function numOrNull(value: unknown): number | null;
   declare function weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
-  declare function raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean; compact?: boolean }): string;
+  declare function raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean; compact?: boolean; units?: unknown }): string;
   declare function trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
-  declare function enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
+  declare function enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined, opts?: { units?: unknown }): string;
   declare function runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
   declare function enduranceCoachLine(
     plan: ClientWeeklyRunPlan | null | undefined,
@@ -2830,16 +2838,21 @@ declare global {
       weekBanked(agenda: ClientFlexibleTrainingAgenda | null | undefined): boolean;
       buildBriefing(input: {
         today: string;
+        units?: unknown;
         agenda?: ClientFlexibleTrainingAgenda | null;
         runPlan?: ClientWeeklyRunPlan | null;
         raceBuild?: ClientRaceBuild | null;
         nextAgenda?: ClientFlexibleTrainingAgenda | null;
         nextRunPlan?: ClientWeeklyRunPlan | null;
         nextRaceBuild?: ClientRaceBuild | null;
+        laterAgenda?: ClientFlexibleTrainingAgenda | null;
+        laterRunPlan?: ClientWeeklyRunPlan | null;
+        laterRaceBuild?: ClientRaceBuild | null;
       }): {
-        horizon: "this_week" | "next_week";
+        horizon: "this_week" | "next_week" | "later";
         kicker: string;
         headline: string;
+        units: "km" | "mi";
         next: {
           kind: ClientFlexibleRunKind;
           label: string;
@@ -2853,6 +2866,18 @@ declare global {
           status: "open" | "completed";
         } | null;
         remaining: Array<{
+          kind: ClientFlexibleRunKind;
+          label: string;
+          when: string;
+          date: string | null;
+          day_number: number | null;
+          prescription: string;
+          setup: string;
+          expect: string;
+          sitsBy: string;
+          status: "open" | "completed";
+        }>;
+        later: Array<{
           kind: ClientFlexibleRunKind;
           label: string;
           when: string;
@@ -3608,9 +3633,9 @@ declare global {
       runKindClass(kind: unknown): string;
       runKindLabel(kind: unknown): string;
       weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
-      raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean; compact?: boolean }): string;
+      raceBuildCard(build: ClientRaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean; compact?: boolean; units?: unknown }): string;
       trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
-      enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
+      enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined, opts?: { units?: unknown }): string;
       runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
       enduranceCoachLine(
         plan: ClientWeeklyRunPlan | null | undefined,

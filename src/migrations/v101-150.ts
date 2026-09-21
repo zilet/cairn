@@ -218,4 +218,12 @@ export const MIGRATIONS_101_150: Migration[] = [
       addColumn(db, "exercises", "refused_name TEXT");
     },
   },
+  {
+    version: 106,
+    name: "run-display-units",
+    // Athlete-facing run distance and pace: km (min/km) or mi (min/mile). The
+    // engine stays in kilometres; only the PWA (and any surface that formats
+    // a prescription) converts. Default km so existing installs do not flip.
+    up: (db) => addColumn(db, "settings", "run_units TEXT DEFAULT 'km'"),
+  },
 ];

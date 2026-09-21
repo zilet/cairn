@@ -21,6 +21,7 @@ function loadPlanEnduranceClient() {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/format-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-endurance-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-endurance-client.js"), "utf8"), context);
   return context.CairnPlanEndurance;
@@ -70,6 +71,7 @@ function loadPlanEnduranceForPaint({ raceBuildCard } = {}) {
     cardioLabel: (item) => String(item?.label || "Run"),
     cardioPrescription: (item) => String(item?.target_distance_km ? `${item.target_distance_km} km` : ""),
     fmtKm: (km) => String(km),
+    fmtDist: (km, units) => (units === "mi" ? `${Number(km) / 1.609344} mi` : `${km} km`),
     enduranceGoalCard: (goal) => `<div class="end-goal">${String(goal?.event || "")}</div>`,
     trainingAgendaCard: () => "",
     runComplianceLine: () => "",
@@ -201,6 +203,9 @@ test("plan endurance orchestration fetches the live run plan and faces next week
   assert.match(source, /enduranceModel\(\)\.buildBriefing/);
   assert.match(source, /compact: true/);
   assert.match(source, /end-shape-fold/);
+  assert.match(source, /end-week-fold/);
+  assert.match(source, /laterMonday/);
+  assert.match(source, /run_units/);
   assert.doesNotMatch(source, /trainingAgendaCard\(agenda\)/);
   assert.doesNotMatch(source, /Your running plan — the build/);
   assert.doesNotMatch(source, /each run lands on its day|>Day \$\{|tempo on Thursday/);
@@ -269,7 +274,7 @@ test("plan endurance briefing faces the next open run and next week once this we
     },
     raceBuild: {
       available: true,
-      paces: { bands: [{ key: "easy", label: "Easy", text: "6:13–6:43 /km" }, { key: "threshold", label: "Threshold", text: "5:01–5:08 /km" }] },
+      paces: { bands: [{ key: "easy", label: "Easy", text: "6:13–6:43 /km", fast_sec_per_km: 373, slow_sec_per_km: 403 }, { key: "threshold", label: "Threshold", text: "5:01–5:08 /km", fast_sec_per_km: 301, slow_sec_per_km: 308 }] },
       leg_map: [
         { day_number: 1, weekday: "Monday", run: null, strength: { name: "Lower A", heavy_lower: true }, ride: false, hard: true },
         { day_number: 2, weekday: "Tuesday", run: { kind: "easy" }, strength: { name: "Push", heavy_lower: false }, ride: false, hard: false },
@@ -281,7 +286,7 @@ test("plan endurance briefing faces the next open run and next week once this we
   assert.equal(open.horizon, "this_week");
   assert.equal(open.next?.label, "Easy run");
   assert.match(open.next?.when || "", /Tuesday/);
-  assert.match(open.next?.prescription || "", /6:13–6:43/);
+  assert.match(open.next?.prescription || "", /6:13–6:43 \/km/);
   assert.match(open.next?.sitsBy || "", /Push/);
   assert.equal(open.remaining.length, 1);
   assert.equal(open.remaining[0].label, "Threshold intervals");
@@ -293,7 +298,28 @@ test("plan endurance briefing faces the next open run and next week once this we
   assert.match(html, /Setup/);
   assert.match(html, /Sits by/);
   assert.match(html, /Threshold intervals/);
+  assert.match(html, /data-run-units="km"/);
   assert.doesNotMatch(html, /<script>/);
+
+  const miles = endurance.buildBriefing({
+    today: "2026-09-14",
+    units: "mi",
+    runPlan: {
+      available: true,
+      week_start: "2026-09-14",
+      runs: [
+        { day_number: 2, kind_label: "easy", label: "Easy run", target_distance_km: 9.4 },
+        { day_number: 7, kind_label: "long", label: "Long run", target_distance_km: 9.4 },
+      ],
+    },
+    raceBuild: {
+      available: true,
+      paces: { bands: [{ key: "easy", label: "Easy", fast_sec_per_km: 373, slow_sec_per_km: 403 }] },
+    },
+  });
+  assert.match(miles.next?.prescription || "", /mi/);
+  assert.match(miles.next?.prescription || "", /\/mi/);
+  assert.match(endurance.briefingHtml(miles), /data-run-units="mi"/);
 
   const banked = endurance.buildBriefing({
     today: "2026-09-20",
@@ -317,6 +343,21 @@ test("plan endurance briefing faces the next open run and next week once this we
           target_distance_km: 5,
           note: "Easy aerobic — relaxed and conversational.",
         },
+        {
+          day_number: 7,
+          kind_label: "long",
+          label: "Long run",
+          target_distance_km: 10,
+        },
+      ],
+    },
+    laterRunPlan: {
+      available: true,
+      week_start: "2026-09-28",
+      why: "The week after keeps the same shape.",
+      runs: [
+        { day_number: 2, kind_label: "easy", label: "Easy run", target_distance_km: 5 },
+        { day_number: 7, kind_label: "long", label: "Long run", target_distance_km: 11 },
       ],
     },
   });
@@ -325,6 +366,12 @@ test("plan endurance briefing faces the next open run and next week once this we
   assert.equal(banked.headline, "Next week steps the long run.");
   assert.equal(banked.next?.label, "Easy run");
   assert.match(banked.next?.when || "", /Next Tuesday/);
+  assert.equal(banked.remaining.length, 2, "the review always shows the next two after the featured run");
+  assert.equal(banked.remaining[0].label, "Long run");
+  assert.equal(banked.later.length, 1);
+  assert.match(banked.later[0].when || "", /Oct 4|Sunday/);
+  const bankedHtml = endurance.briefingHtml(banked);
+  assert.match(bankedHtml, /Later in the build/);
 });
 
 test("plan endurance helper knows Monday arithmetic for the next-week fetch", () => {

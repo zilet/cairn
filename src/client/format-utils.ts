@@ -60,6 +60,46 @@ function fmtKm(km: unknown): string {
   return Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : (Math.round(v * 10) / 10).toFixed(1);
 }
 
+// Athlete-facing run units. The engine stores km; the PWA converts for display.
+const KM_PER_MILE = 1.609344;
+
+function runUnits(value: unknown): "km" | "mi" {
+  const s = String(value || "").trim().toLowerCase();
+  return s === "mi" || s === "mile" || s === "miles" ? "mi" : "km";
+}
+
+function fmtRunUnitSuffix(units: unknown): string {
+  return runUnits(units) === "mi" ? "/mi" : "/km";
+}
+
+function fmtDist(km: unknown, units?: unknown): string {
+  const v = Number(km);
+  if (!Number.isFinite(v)) return "—";
+  const n = runUnits(units) === "mi" ? v / KM_PER_MILE : v;
+  return runUnits(units) === "mi" ? `${fmtKm(n)} mi` : `${fmtKm(n)} km`;
+}
+
+function fmtPaceFromSecPerKm(secPerKm: unknown, units?: unknown): string {
+  const sec = Number(secPerKm);
+  if (!Number.isFinite(sec) || sec <= 0) return "—";
+  const adj = runUnits(units) === "mi" ? sec * KM_PER_MILE : sec;
+  const total = Math.round(adj);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function fmtPaceBand(band: { slow_sec_per_km?: unknown; fast_sec_per_km?: unknown; text?: unknown } | null | undefined, units?: unknown): string {
+  if (!band) return "";
+  const fast = fmtPaceFromSecPerKm(band.fast_sec_per_km, units);
+  const slow = fmtPaceFromSecPerKm(band.slow_sec_per_km, units);
+  if (fast === "—" && slow === "—") return String(band.text || "");
+  const suffix = fmtRunUnitSuffix(units);
+  if (fast === slow || slow === "—") return `${fast} ${suffix}`;
+  if (fast === "—") return `${slow} ${suffix}`;
+  return `${fast}–${slow} ${suffix}`;
+}
+
 // Speed in km/h (the metric riders read, the counterpart to a runner's min/km).
 // Null-safe, one decimal. Never a score.
 function fmtSpeedKmh(kmh: unknown): string {
@@ -93,6 +133,11 @@ Object.assign(globalThis, {
   fmtDur,
   fmtPaceKm,
   fmtKm,
+  runUnits,
+  fmtRunUnitSuffix,
+  fmtDist,
+  fmtPaceFromSecPerKm,
+  fmtPaceBand,
   fmtSpeedKmh,
   prDistLabel,
   joinList,

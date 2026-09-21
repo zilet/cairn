@@ -72,9 +72,21 @@ function raceClock(sec: unknown): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`;
 }
 
-function racePace(secPerKm: unknown): string {
+function racePace(secPerKm: unknown, units?: unknown): string {
+  if (typeof fmtPaceFromSecPerKm === "function") return fmtPaceFromSecPerKm(secPerKm, units);
   const s = Math.max(0, Math.round(Number(secPerKm) || 0));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function racePaceLine(secPerKm: unknown, units?: unknown): string {
+  const suffix = typeof fmtRunUnitSuffix === "function" ? fmtRunUnitSuffix(units) : "/km";
+  return `${racePace(secPerKm, units)} ${suffix}`;
+}
+
+function raceDist(km: unknown, units?: unknown): string {
+  if (typeof fmtDist === "function") return fmtDist(km, units);
+  if (typeof fmtKm === "function") return `${fmtKm(km)} km`;
+  return `${km} km`;
 }
 
 const RACE_FIT_WORD: Record<string, string> = {
@@ -91,8 +103,9 @@ const RACE_WEEK_KIND_WORD: Record<string, string> = {
   race: "Race week",
 };
 
-function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean; compact?: boolean }): string {
+function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?: boolean; legMap?: boolean; compact?: boolean; units?: unknown }): string {
   if (!build || build.available === false || !build.race) return "";
+  const units = opts?.units;
   const race = build.race;
   const p = build.prediction;
   const target = race.target;
@@ -101,10 +114,10 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
   let numbers = "";
   if (p || target) {
     const estimate = p
-      ? `<div class="rbuild-num"><span class="lbl">Reads like</span><span class="numeral rbuild-clock">${escHtml(raceClock(p.estimate_sec))}</span><span class="rbuild-pace">${escHtml(racePace(p.estimate_pace_sec_per_km))} /km</span></div>`
+      ? `<div class="rbuild-num"><span class="lbl">Reads like</span><span class="numeral rbuild-clock">${escHtml(raceClock(p.estimate_sec))}</span><span class="rbuild-pace">${escHtml(racePaceLine(p.estimate_pace_sec_per_km, units))}</span></div>`
       : "";
     const goal = target
-      ? `<div class="rbuild-num"><span class="lbl">Shooting for</span><span class="numeral rbuild-clock">${escHtml(raceClock(target.sec))}</span><span class="rbuild-pace">${escHtml(racePace(target.pace_sec_per_km))} /km</span></div>`
+      ? `<div class="rbuild-num"><span class="lbl">Shooting for</span><span class="numeral rbuild-clock">${escHtml(raceClock(target.sec))}</span><span class="rbuild-pace">${escHtml(racePaceLine(target.pace_sec_per_km, units))}</span></div>`
       : "";
     numbers = `<div class="rbuild-nums">${estimate}${goal}</div>`;
   }
@@ -127,14 +140,14 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
   // This week's quality session, with a pace on it.
   const q = build.this_week?.quality;
   const quality = q
-    ? `<div class="wrun-focus"><span class="lbl">This week's quality</span> ${escHtml(q.label)}${q.pace ? ` · <span class="numeral">${escHtml(q.pace.text)}</span>` : " · by effort"}</div>`
+    ? `<div class="wrun-focus"><span class="lbl">This week's quality</span> ${escHtml(q.label)}${q.pace ? ` · <span class="numeral">${escHtml(typeof fmtPaceBand === "function" ? fmtPaceBand(q.pace, units) : q.pace.text)}</span>` : " · by effort"}</div>`
     : "";
 
   // Pace bands.
   const bands = build.paces?.bands?.filter((b) => b.key !== "race") || [];
   const paces = bands.length
     ? `<div class="rbuild-paces">${bands
-        .map((b) => `<div class="rbuild-band"><span class="rbuild-band-k">${escHtml(b.label)}</span><span class="numeral rbuild-band-v">${escHtml(b.text)}</span></div>`)
+        .map((b) => `<div class="rbuild-band"><span class="rbuild-band-k">${escHtml(b.label)}</span><span class="numeral rbuild-band-v">${escHtml(typeof fmtPaceBand === "function" ? fmtPaceBand(b, units) : b.text)}</span></div>`)
         .join("")}</div>`
     : "";
 
@@ -147,7 +160,7 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
     ? `<div class="rbuild-map">${build.leg_map
         .map((d) => {
           const bits: string[] = [];
-          if (d.run) bits.push(`${runKindLabel(d.run.kind)} run${d.run.km != null ? ` ${fmtKm(d.run.km)}` : ""}`);
+          if (d.run) bits.push(`${runKindLabel(d.run.kind)} run${d.run.km != null ? ` ${raceDist(d.run.km, units)}` : ""}`);
           if (d.strength) bits.push(d.strength.heavy_lower ? `Heavy legs · ${d.strength.name}` : d.strength.name);
           if (d.ride) bits.push(build.ride ? build.ride.label : "ride");
           return `<div class="rbuild-day${d.hard ? " is-hard" : ""}"><span class="rbuild-day-k">${escHtml(d.weekday.slice(0, 3))}</span><span class="rbuild-day-v">${bits.length ? escHtml(bits.join(" · ")) : "—"}</span></div>`;
@@ -162,7 +175,7 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
             <div class="wrun-row-head">
               <span class="wrun-kind">${escHtml(w.weeks_to_race === 0 ? "Race week" : `${w.weeks_to_race} wk out`)}</span>
               <span class="wrun-label">${escHtml(RACE_WEEK_KIND_WORD[w.kind] || w.kind)}${w.current ? " · this week" : ""}</span>
-              <span class="numeral rbuild-week-km">${escHtml(`${fmtKm(w.km)} km · long ${fmtKm(w.long_km)}`)}</span>
+              <span class="numeral rbuild-week-km">${escHtml(`${raceDist(w.km, units)} · long ${raceDist(w.long_km, units)}`)}</span>
             </div>
             <div class="wrun-note">${escHtml(w.quality_hint)}</div>
           </div>`)
@@ -198,7 +211,7 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
   // and ladder stay one tap away so the card orients without repeating the week.
   const compactBody = opts?.compact
     ? `${trend}${`${numbers}${quality}${paces}${legMap}${ladder}${whyHtml}`
-      ? `<details class="rbuild-more"><summary>The build</summary>${numbers}${quality}${paces}${legMap}${ladder}${whyHtml}</details>`
+      ? `<details class="rbuild-more"><summary>The rest of the program</summary>${numbers}${quality}${paces}${legMap}${ladder}${whyHtml}</details>`
       : ""}`
     : `${numbers}${trend}${quality}${paces}${legMap}${ladder ? `<details class="rbuild-more"><summary>The build, week by week</summary>${ladder}</details>` : ""}${whyHtml}`;
   return `<div class="wrun-card rbuild reveal" style="${stagger(1)}" data-race-build>
@@ -287,8 +300,10 @@ function trainingAgendaCard(agenda: FlexibleTrainingAgenda | null | undefined): 
     </div>`;
 }
 
-function enduranceGoalCard(goal: EnduranceGoal | null | undefined): string {
+function enduranceGoalCard(goal: EnduranceGoal | null | undefined, opts?: { units?: unknown }): string {
   if (!goal || !goal.mode) return "";
+  const units = opts?.units;
+  const dist = goal.distance_km ? raceDist(goal.distance_km, units) : null;
   if (goal.mode === "race") {
     const days = typeof goal.days_to_race === "number" ? goal.days_to_race : null;
     const when =
@@ -309,7 +324,7 @@ function enduranceGoalCard(goal: EnduranceGoal | null | undefined): string {
       past: "Race done",
     };
     const phaseLabel = goal.phase ? phaseLabels[goal.phase] : "";
-    const sub = [goal.distance_km ? `${goal.distance_km} km` : null, goal.target ? `target ${goal.target}` : null, goal.date ? absDate(goal.date) : null].filter(Boolean).join(" · ");
+    const sub = [dist, goal.target ? `target ${goal.target}` : null, goal.date ? absDate(goal.date) : null].filter(Boolean).join(" · ");
     return `<div class="end-goal reveal" style="${stagger(0)}">
         <div class="end-goal-head"><span class="lbl">Race goal</span>${phaseLabel ? `<span class="end-goal-phase">${escHtml(phaseLabel)}</span>` : ""}</div>
         <div class="end-goal-name">${escHtml(goal.event || "Your race")}</div>
@@ -317,7 +332,7 @@ function enduranceGoalCard(goal: EnduranceGoal | null | undefined): string {
         ${when ? `<div class="end-goal-count numeral">${escHtml(when)}</div>` : ""}
       </div>`;
   }
-  const sub = [goal.distance_km ? `${goal.distance_km} km` : null, goal.weekly_km ? `~${goal.weekly_km} km/wk` : null].filter(Boolean).join(" · ");
+  const sub = [dist, goal.weekly_km ? `~${raceDist(goal.weekly_km, units)}/wk` : null].filter(Boolean).join(" · ");
   return `<div class="end-goal reveal" style="${stagger(0)}">
       <div class="end-goal-head"><span class="lbl">Standing goal</span></div>
       <div class="end-goal-name">Staying ${escHtml(goal.label || "race-ready")}</div>

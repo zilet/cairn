@@ -20,6 +20,7 @@ function loadRunPlan() {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/format-utils.js"), "utf8"), context);
   // The lead sentence and the calibration line rotate through the shared
   // pickDayVariant, so the real rotation has to be in scope. date-utils also
   // defines absDate/humanDate, which the assertions below want stubbed — restore
@@ -105,7 +106,7 @@ test("progress run plan renders goal, compliance, and coach lead", () => {
   assert.equal(runPlan.runComplianceLine({ in_words: "nothing", prescribed_sessions: 0, actual_sessions: 0 }), "");
 
   const coach = runPlan.enduranceCoachLine({ runs: [{ kind_label: "long", target_distance_km: 14 }] });
-  assert.match(coach, /14\.0 km long run is the one that matters/);
+  assert.match(coach, /14 km long run is the one that matters/);
   assert.equal(runPlan.runKindLabel("quality"), "Quality");
   assert.equal(runPlan.runKindClass("other"), "wrun-easy");
 });
@@ -335,7 +336,7 @@ test("compact race build card folds clocks and paces behind the build disclosure
 
   assert.match(html, /data-race-build/);
   assert.match(html, /<details class="rbuild-more">/);
-  assert.match(html, />The build</);
+  assert.match(html, />The rest of the program</);
   assert.match(html, /6:13–6:43 \/km/);
   assert.doesNotMatch(html, /6 weeks to go/);
   assert.doesNotMatch(html, /The build, week by week/);

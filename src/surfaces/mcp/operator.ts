@@ -118,6 +118,12 @@ export function registerOperatorTools(server: McpToolRegistrar) {
         .describe(
           "send finished Cairn strength sessions back to Garmin as that day's exercise sets (default ON). Garmin stays the input for runs/sleep/recovery either way, and a day Garmin logged itself is never overwritten."
         ),
+      run_units: z
+        .enum(["km", "mi"])
+        .optional()
+        .describe(
+          "athlete-facing run distance and pace: km (min/km) or mi (min/mile). The engine stays in kilometres either way."
+        ),
       clear_gemini_api_key: z.boolean().optional().describe("clear the saved Gemini key; env fallback still applies"),
       clear_garmin_password: z
         .boolean()

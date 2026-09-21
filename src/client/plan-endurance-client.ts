@@ -12,7 +12,11 @@ type EndurancePaintExtra = {
   nextAgenda?: EnduranceAgenda | null;
   nextRunPlan?: EnduranceRunPlan | null;
   nextRaceBuild?: EnduranceRaceBuild | null;
+  laterAgenda?: EnduranceAgenda | null;
+  laterRunPlan?: EnduranceRunPlan | null;
+  laterRaceBuild?: EnduranceRaceBuild | null;
   today?: string;
+  units?: "km" | "mi";
 };
 
 type EnduranceProposal = {
@@ -37,6 +41,7 @@ async function renderPlanEndurance(): Promise<void> {
   const token = ++pollToken;
   const today = localISO();
   const nextMonday = enduranceModel().nextMonday(today);
+  const laterMonday = nextMonday ? enduranceModel().nextMonday(nextMonday) : "";
   let goal: EnduranceGoalRow | null = null;
   let compliance: EnduranceComplianceRow | null = null;
   let agenda: EnduranceAgenda | null = null;
@@ -47,8 +52,11 @@ async function renderPlanEndurance(): Promise<void> {
   let nextAgenda: EnduranceAgenda | null = null;
   let nextRunPlan: EnduranceRunPlan | null = null;
   let nextRaceBuild: EnduranceRaceBuild | null = null;
+  let laterAgenda: EnduranceAgenda | null = null;
+  let laterRunPlan: EnduranceRunPlan | null = null;
+  let laterRaceBuild: EnduranceRaceBuild | null = null;
   try {
-    [goal, compliance, agenda, plan, settings, raceBuild, runPlan, nextAgenda, nextRunPlan, nextRaceBuild] = await Promise.all([
+    [goal, compliance, agenda, plan, settings, raceBuild, runPlan, nextAgenda, nextRunPlan, nextRaceBuild, laterAgenda, laterRunPlan, laterRaceBuild] = await Promise.all([
       api("/endurance-goal").catch(() => null),
       api("/run-compliance").catch(() => null),
       api(`/training-agenda?date=${encodeURIComponent(today)}`).catch(() => null),
@@ -59,15 +67,23 @@ async function renderPlanEndurance(): Promise<void> {
       nextMonday ? api(`/training-agenda?date=${encodeURIComponent(nextMonday)}`).catch(() => null) : Promise.resolve(null),
       nextMonday ? api(`/run-plan?date=${encodeURIComponent(nextMonday)}`).catch(() => null) : Promise.resolve(null),
       nextMonday ? api(`/race-build?date=${encodeURIComponent(nextMonday)}`).catch(() => null) : Promise.resolve(null),
+      laterMonday ? api(`/training-agenda?date=${encodeURIComponent(laterMonday)}`).catch(() => null) : Promise.resolve(null),
+      laterMonday ? api(`/run-plan?date=${encodeURIComponent(laterMonday)}`).catch(() => null) : Promise.resolve(null),
+      laterMonday ? api(`/race-build?date=${encodeURIComponent(laterMonday)}`).catch(() => null) : Promise.resolve(null),
     ]);
   } catch { /* paint with whatever resolved */ }
   if (token !== pollToken || !view.querySelector("#endPlanBody")) return;
+  const units = typeof runUnits === "function" ? runUnits(settings?.run_units) : (settings?.run_units === "mi" ? "mi" : "km");
   paintPlanEndurance(goal, compliance, agenda, plan, settings, raceBuild, {
     runPlan,
     nextAgenda,
     nextRunPlan,
     nextRaceBuild,
+    laterAgenda,
+    laterRunPlan,
+    laterRaceBuild,
     today,
+    units,
   });
 }
 
@@ -86,19 +102,24 @@ function paintPlanEndurance(
 
   const goal = goalValue;
   const today = extra?.today || (typeof localISO === "function" ? localISO() : "");
+  const units = extra?.units || (typeof runUnits === "function" ? runUnits(settings?.run_units) : "km");
   const briefing = enduranceModel().buildBriefing({
     today,
+    units,
     agenda,
     runPlan: extra?.runPlan,
     raceBuild,
     nextAgenda: extra?.nextAgenda,
     nextRunPlan: extra?.nextRunPlan,
     nextRaceBuild: extra?.nextRaceBuild,
+    laterAgenda: extra?.laterAgenda,
+    laterRunPlan: extra?.laterRunPlan,
+    laterRaceBuild: extra?.laterRaceBuild,
   });
-  const liveRaceBuild = briefing.horizon === "next_week" ? (extra?.nextRaceBuild || raceBuild) : raceBuild;
+  const liveRaceBuild = briefing.horizon === "this_week" ? raceBuild : (extra?.nextRaceBuild || extra?.laterRaceBuild || raceBuild);
   const briefingHtml = enduranceModel().briefingHtml(briefing, 0);
   const goalHtml = goal
-    ? `<div class="card-stack-item">${enduranceGoalCard(goal)}</div>`
+    ? `<div class="card-stack-item">${typeof enduranceGoalCard === "function" ? enduranceGoalCard(goal, { units }) : ""}</div>`
     : `<div class="end-goal card-stack-item reveal" style="${stagger(0)}">
          <div class="end-goal-head"><span class="lbl">Running goal</span></div>
          <div class="end-goal-name">No goal set yet</div>
@@ -106,22 +127,22 @@ function paintPlanEndurance(
        </div>`;
 
   const raceBuildHtml = liveRaceBuild && liveRaceBuild.available !== false && liveRaceBuild.race && typeof raceBuildCard === "function"
-    ? raceBuildCard(liveRaceBuild, { underGoal: true, legMap: typeof loadPlanWeekStrip !== "function", compact: true })
+    ? raceBuildCard(liveRaceBuild, { underGoal: true, legMap: typeof loadPlanWeekStrip !== "function", compact: true, units })
     : "";
   // The race build's own week-by-week ladder supersedes the generic "typical
   // arc" ramp placeholder — show one or the other, never both.
   const rampHtml = raceBuildHtml ? "" : rampHtmlForGoal(goal);
   const standingNote = goal && goal.mode === "standing"
-    ? `<div class="end-ramp-note reveal" style="${stagger(1)}"><span class="lbl">Steady readiness</span> — no race to peak for, so the plan holds a sustainable rhythm rather than ramping.${goal.weekly_km ? ` Target around <b>${escHtml(goal.weekly_km)} km/wk</b>.` : ""}</div>`
+    ? `<div class="end-ramp-note reveal" style="${stagger(1)}"><span class="lbl">Steady readiness</span> — no race to peak for, so the plan holds a sustainable rhythm rather than ramping.${goal.weekly_km ? ` Target around <b>${escHtml(typeof fmtDist === "function" ? fmtDist(goal.weekly_km, units) : `${goal.weekly_km} km`)}/wk</b>.` : ""}</div>`
     : "";
 
   const templateRuns = enduranceModel().runs(plan);
-  const emptyHtml = !briefing.next && !briefing.remaining.length
+  const emptyHtml = !briefing.next && !briefing.remaining.length && !briefing.later.length
     ? `<div class="end-runs-empty card-stack-item reveal" style="${stagger(2)}">
          <div class="lbl">Upcoming runs</div>
          <p>${templateRuns.length
-           ? "No open run this week. The week strip above is the hybrid picture; shape the next week below, or edit the template in Training."
-           : "No runs waiting. The week strip above is the hybrid picture; ask below if you want the coach to shape the next week around your lifting."}</p>
+           ? "No open run waiting. Open this week's map below for the hybrid picture, or shape the next week at the bottom."
+           : "No runs waiting. Open this week's map below for the hybrid picture, or ask at the bottom if you want the coach to shape the next week around your lifting."}</p>
        </div>`
     : "";
   const complianceHtml = typeof runComplianceLine === "function" ? runComplianceLine(compliance) : "";
@@ -143,10 +164,13 @@ function paintPlanEndurance(
 
   body.innerHTML =
     `<div class="card-stack">` +
-    `<div id="endWeekSlot" class="card-stack-item"></div>` +
-    `<div id="endUpcomingSlot" class="card-stack-item"></div>` +
     briefingHtml +
     emptyHtml +
+    `<details id="endWeekFold" class="end-week-fold card-stack-item reveal">
+       <summary><span class="lbl">This week's map</span></summary>
+       <div id="endWeekSlot"></div>
+     </details>` +
+    `<div id="endUpcomingSlot" class="card-stack-item"></div>` +
     goalHtml +
     (raceBuildHtml ? `<div class="card-stack-item">${raceBuildHtml}</div>` : "") +
     (rampHtml ? `<div class="card-stack-item">${rampHtml}</div>` : "") +
@@ -156,12 +180,29 @@ function paintPlanEndurance(
     (syncHtml ? `<div class="card-stack-item">${syncHtml}</div>` : "") +
     `</div>`;
 
-  // Same connected week strip Strength shows — one projection, both Plan segments.
-  if (typeof loadPlanWeekStrip === "function") loadPlanWeekStrip(pollToken, "#endWeekSlot");
-  // The same calm forward look the Plan edit segment shows — a reshaped/lighter
-  // week announces itself here too (running changes are ledgered under the
-  // 'training' domain, so there's no separate 'running' filter to apply).
+  // The connected week strip is useful as a hybrid map, but it is not the
+  // briefing. Collapsed and fetched only when opened.
+  const weekFold = body.querySelector("#endWeekFold");
+  if (weekFold && typeof loadPlanWeekStrip === "function") {
+    weekFold.addEventListener("toggle", () => {
+      if (!(weekFold instanceof HTMLDetailsElement) || !weekFold.open) return;
+      const slot = body.querySelector("#endWeekSlot");
+      if (slot && !slot.innerHTML) loadPlanWeekStrip(pollToken, "#endWeekSlot");
+    });
+  }
   if (typeof loadPlanUpcomingNote === "function") loadPlanUpcomingNote(pollToken, "#endUpcomingSlot");
+
+  body.querySelectorAll<HTMLElement>("[data-run-units]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = button.dataset.runUnits === "mi" ? "mi" : "km";
+      if (next === units) return;
+      void api("/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_units: next }),
+      }).catch(() => {}).finally(() => { renderPlanEndurance(); });
+    });
+  });
 
   body.querySelector("#endEditRuns")?.addEventListener("click", () => renderPlanEditor());
   if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderPlanEndurance());

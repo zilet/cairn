@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -133,6 +133,17 @@ export interface AgentDef {
   // Codex supports `--image <file>`, which is more reliable than asking it to
   // discover a JPEG through shell tools inside its own sandbox.
   image_args?: string[];
+  // How an oversized prompt is delivered so it never lands in argv. Linux
+  // MAX_ARG_STRLEN is 32 * PAGE_SIZE (512 KiB on a 16K-page Pi 5, 128 KiB on
+  // 4K-page hosts). Small prompts still inline at `{prompt}`.
+  //   stdin       — omit `{prompt}`, keep a boolean `-p`/`--print`, write stdin (claude)
+  //   stdin_plain — omit `{prompt}` and its value-taking `-p`, write stdin (agy)
+  //   stdin_dash  — replace `{prompt}` with `-`, write stdin (codex)
+  //   file        — omit `{prompt}` and its value-taking `-p`, pass `args` with `{prompt_file}` (grok)
+  large_prompt?: {
+    via: "stdin" | "stdin_plain" | "stdin_dash" | "file";
+    args?: string[];
+  };
   // Optional, server-owned lazy-install contract. The browser can select only an
   // agent name; package names, versions, URLs and checksums always come from this
   // bundled manifest. Installed files live under the persistent app HOME.
@@ -1175,23 +1186,60 @@ function extractPromptImagePaths(prompt: string, sourceEnv: NodeJS.ProcessEnv = 
   return out.slice(0, 8);
 }
 
+// Linux MAX_ARG_STRLEN is 32 * PAGE_SIZE. A 16K-page Pi 5 caps a single argv
+// entry at 512 KiB; 4K-page hosts cap it at 128 KiB. Stay under the 4K floor so
+// a chat DATA block can never E2BIG at spawn, on any host we ship.
+export const MAX_SAFE_AGENT_ARG_BYTES = 96 * 1024;
+
+export function promptExceedsArgvLimit(prompt: string, extraBytes = 0): boolean {
+  return Buffer.byteLength(prompt, "utf8") + extraBytes > MAX_SAFE_AGENT_ARG_BYTES;
+}
+
+const PROMPT_VALUE_FLAGS = new Set(["-p", "--print", "--prompt", "--single"]);
+
+function popPromptValueFlag(out: string[]): void {
+  const last = out[out.length - 1];
+  if (last && PROMPT_VALUE_FLAGS.has(last)) out.pop();
+}
+
+export type AgentPromptVia = "arg" | "stdin" | "stdin_plain" | "stdin_dash" | "file";
+
+export interface AgentLaunch {
+  args: string[];
+  stdin: string | null;
+  promptDir: string | null;
+  via: AgentPromptVia;
+}
+
+function inferLargePromptVia(def: AgentDef): Exclude<AgentPromptVia, "arg"> {
+  const declared = def.large_prompt?.via;
+  if (declared) return declared;
+  if (def.command === "agy") return "stdin_plain";
+  if (def.command === "grok") return "file";
+  if (def.command === "codex") return "stdin_dash";
+  if (def.input === "stdin") return "stdin";
+  return "stdin";
+}
+
 function expandAgentArgs(
   def: AgentDef,
   args: string[],
   prompt: string,
-  useStdin: boolean,
+  promptSlot: "inline" | "omit" | "dash",
   mcpConfigArgs: string[] = [],
   requestedProfile: Pick<RunOpts, "model" | "reasoning"> = {},
-  structuredArgs: string[] = []
+  structuredArgs: string[] = [],
+  extra: { dropPromptFlag?: boolean; promptFile?: string; extraArgs?: string[] } = {}
 ): string[] {
   const profile = resolveAgentExecutionProfile(def, requestedProfile).effective;
   const dataDir = path.resolve(agentDataDir(process.env));
   const needsFileAccess = promptReferencesDataDir(prompt);
   const images = needsFileAccess ? extractPromptImagePaths(prompt) : [];
-  const replaceCommon = (s: string, image?: string) => s
-    .replaceAll("{data_dir}", dataDir)
-    .replaceAll("{image}", image ?? "")
-    .replaceAll("{prompt}", useStdin ? "{prompt}" : prompt);
+  const replaceCommon = (s: string, image?: string) => {
+    let out = s.replaceAll("{data_dir}", dataDir).replaceAll("{image}", image ?? "");
+    if (promptSlot === "inline") out = out.replaceAll("{prompt}", prompt);
+    return out;
+  };
   const out: string[] = [];
   let expandedModel = false;
   let expandedReasoning = false;
@@ -1230,12 +1278,133 @@ function expandAgentArgs(
       }
       continue;
     }
+    if (arg === "{prompt}") {
+      if (promptSlot === "omit") {
+        if (extra.dropPromptFlag) popPromptValueFlag(out);
+        continue;
+      }
+      if (promptSlot === "dash") {
+        out.push("-");
+        continue;
+      }
+      out.push(prompt);
+      continue;
+    }
     const expanded = replaceCommon(arg);
     if (expanded !== "") out.push(expanded);
+  }
+  if (extra.promptFile) {
+    const fileArgs = Array.isArray(def.large_prompt?.args) && def.large_prompt.args.length
+      ? def.large_prompt.args
+      : ["--prompt-file", "{prompt_file}"];
+    out.push(...fileArgs.map((value) => value.replaceAll("{prompt_file}", extra.promptFile!)));
+  }
+  if (extra.extraArgs?.length) {
+    for (let i = 0; i < extra.extraArgs.length; ) {
+      const flag = extra.extraArgs[i];
+      const val = extra.extraArgs[i + 1];
+      if (val !== undefined && flag.startsWith("-")) {
+        const at = out.lastIndexOf(flag);
+        if (at >= 0 && at + 1 < out.length) out[at + 1] = val;
+        else out.push(flag, val);
+        i += 2;
+        continue;
+      }
+      out.push(flag);
+      i += 1;
+    }
   }
   if (profile.model && !expandedModel) throw new Error("Agent argv template has no {model_args} slot");
   if (profile.reasoning && !expandedReasoning) throw new Error("Agent argv template has no {reasoning_args} slot");
   return out;
+}
+
+export function buildAgentLaunch(
+  def: AgentDef,
+  templateArgs: string[],
+  prompt: string,
+  opts: {
+    mcpConfigArgs?: string[];
+    model?: string;
+    reasoning?: ReasoningLevel;
+    structuredArgs?: string[];
+    forceLarge?: boolean;
+  } = {}
+): AgentLaunch {
+  const profile = { model: opts.model, reasoning: opts.reasoning };
+  const configuredStdin = def.input === "stdin";
+  const oversized = opts.forceLarge || promptExceedsArgvLimit(prompt);
+  let via: AgentPromptVia = "arg";
+  if (configuredStdin) via = "stdin";
+  else if (oversized) via = inferLargePromptVia(def);
+
+  let promptDir: string | null = null;
+  let promptFile: string | undefined;
+  let stdin: string | null = null;
+  let promptSlot: "inline" | "omit" | "dash" = "inline";
+  let dropPromptFlag = false;
+  const extraArgs: string[] = [];
+
+  if (via === "file") {
+    promptDir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-prompt-"));
+    promptFile = path.join(promptDir, "prompt.txt");
+    fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
+    promptSlot = "omit";
+    dropPromptFlag = true;
+  } else if (via === "stdin" || via === "stdin_plain") {
+    stdin = prompt;
+    promptSlot = "omit";
+    dropPromptFlag = via === "stdin_plain";
+    if (via === "stdin_plain") extraArgs.push("--input-format", "text");
+  } else if (via === "stdin_dash") {
+    stdin = prompt;
+    promptSlot = "dash";
+  }
+
+  const args = expandAgentArgs(
+    def,
+    templateArgs,
+    prompt,
+    promptSlot,
+    opts.mcpConfigArgs,
+    profile,
+    opts.structuredArgs,
+    { dropPromptFlag, promptFile, extraArgs }
+  );
+  return { args, stdin, promptDir, via };
+}
+
+function removePromptDir(promptDir: string | null): void {
+  if (!promptDir) return;
+  try { fs.rmSync(promptDir, { recursive: true, force: true }); } catch { /* best effort */ }
+}
+
+function pipeAgentStdin(child: ChildProcessWithoutNullStreams, text: string | null): void {
+  child.stdin.on("error", () => { /* EPIPE after a fast CLI exit must not crash the host */ });
+  if (text == null) {
+    child.stdin.end();
+    return;
+  }
+  // A 500 KB chat prompt exceeds the Pi's pipe buffer (16 × 16K pages). Returning
+  // false means the kernel is full; wait for drain before closing or the CLI sees EOF
+  // on a truncated prompt and exits empty.
+  const ok = child.stdin.write(text);
+  if (ok) child.stdin.end();
+  else child.stdin.once("drain", () => child.stdin.end());
+}
+
+function spawnAgentChild(
+  command: string,
+  args: string[],
+  options: ReturnType<typeof buildAgentSpawnOptions>
+): ChildProcessWithoutNullStreams {
+  try {
+    return spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
+  } catch (e: any) {
+    const err = new Error(`failed to launch "${command}": ${e.message}`);
+    (err as any).code = e.code;
+    throw err;
+  }
 }
 
 // Interactive callers (day-read, session-suggest, chat) pass the short timeout so
@@ -2006,7 +2175,6 @@ async function runAgentImpl(
 
 function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<AgentResult> {
   const { name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema } = request;
-  const useStdin = def.input === "stdin";
   // Enforced structured output, when BOTH the caller supplied a schema and this agent
   // declares how to take one. Everything below is best-effort by design: an agent with
   // no declaration, an argv template with no {schema_args} slot, or a filesystem error
@@ -2042,7 +2210,11 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
       envelope = null;
     }
   }
-  const args = expandAgentArgs(def, def.args, prompt, useStdin, mcpConfigArgs, { model, reasoning }, structuredArgs);
+
+  const openLaunch = (forceLarge = false): AgentLaunch =>
+    buildAgentLaunch(def, def.args, prompt, { mcpConfigArgs, model, reasoning, structuredArgs, forceLarge });
+
+  let launch = openLaunch();
   // A provider whose schema flag rewrites stdout into an envelope needs unwrapping
   // BEFORE the operation's contract check; every other provider keeps the caller's
   // extractor byte-for-byte.
@@ -2056,26 +2228,52 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
   // host (e.g. the Pi), especially during a multi-job enrichment queue drain.
   const MAX_OUT = 4 * 1024 * 1024; // 4 MB — far beyond any real JSON proposal.
 
-  // Idempotent: the schema file outlives neither a clean close, a timeout kill, an
-  // abort, nor a failed launch.
-  const removeSchemaDir = () => {
-    if (!schemaDir) return;
-    const target = schemaDir;
-    schemaDir = null;
-    try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* best effort */ }
+  // Idempotent: the schema/prompt files outlive neither a clean close, a timeout kill,
+  // an abort, nor a failed launch.
+  const removeTemps = () => {
+    if (schemaDir) {
+      const target = schemaDir;
+      schemaDir = null;
+      try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+    if (launch.promptDir) {
+      const target = launch.promptDir;
+      launch = { ...launch, promptDir: null };
+      removePromptDir(target);
+    }
   };
 
   return new Promise((resolve, reject) => {
     // Already-aborted before launch (Stop landed while queued): don't spawn.
-    if (signal?.aborted) { removeSchemaDir(); reject(new Error(`agent "${name}" canceled`)); return; }
+    if (signal?.aborted) { removeTemps(); reject(new Error(`agent "${name}" canceled`)); return; }
     if (name === "antigravity") {
       try { ensureAntigravityHeadlessPermissions(); } catch { /* never block a spawn */ }
     }
-    const child = spawn(def.command, args, buildAgentSpawnOptions({
+    const spawnOpts = buildAgentSpawnOptions({
       kind: "agent",
       prompt,
       restoreEnvKeys: def.env_required || [],
-    }));
+    });
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawnAgentChild(def.command, launch.args, spawnOpts);
+    } catch (e: any) {
+      if (e?.code === "E2BIG" && launch.via === "arg") {
+        removePromptDir(launch.promptDir);
+        launch = openLaunch(true);
+        try {
+          child = spawnAgentChild(def.command, launch.args, spawnOpts);
+        } catch (retry: any) {
+          removeTemps();
+          reject(retry instanceof Error ? retry : new Error(String(retry)));
+          return;
+        }
+      } else {
+        removeTemps();
+        reject(e instanceof Error ? e : new Error(String(e)));
+        return;
+      }
+    }
     let out = "";
     let err = "";
     // stdout/stderr chunks are arbitrary byte boundaries. Decoding each Buffer
@@ -2098,7 +2296,7 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
     const cleanup = () => {
       clearTimeout(timer);
       if (signal) signal.removeEventListener("abort", onAbort);
-      removeSchemaDir();
+      removeTemps();
     };
 
     child.stdout.on("data", (d) => { if (out.length < MAX_OUT) out += outDecoder.write(d); });
@@ -2120,8 +2318,7 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
       resolve({ code, raw: out, stderr: err, parsed, usage });
     });
 
-    if (useStdin) child.stdin.write(prompt);
-    child.stdin.end();
+    pipeAgentStdin(child, launch.stdin);
   });
 }
 
@@ -2273,31 +2470,55 @@ function spawnAgentStream(
   const signal = opts.signal;
   const onDelta = opts.onDelta;
   const format = stream.format;
-  const useStdin = def.input === "stdin";
   // No structuredArgs, deliberately: `stream.args` declares no {schema_args} slot for
   // any provider. A streamed op is prose-first (reply marker, then optional actions),
   // which a JSON schema would destroy — and grok's --json-schema would override its own
   // --output-format streaming-json. RunOpts.schema is therefore inert while streaming.
-  const args = expandAgentArgs(
-    def,
-    stream.args,
-    prompt,
-    useStdin,
-    opts.mcpConfigArgs,
-    withResolvedProfile(name, opts)
-  );
+  const { model, reasoning } = withResolvedProfile(name, opts);
+  const openLaunch = (forceLarge = false): AgentLaunch =>
+    buildAgentLaunch(def, stream.args, prompt, {
+      mcpConfigArgs: opts.mcpConfigArgs,
+      model,
+      reasoning,
+      forceLarge,
+    });
+  let launch = openLaunch();
   const MAX_OUT = 4 * 1024 * 1024;
 
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) { reject(new Error(`agent "${name}" canceled`)); return; }
+    if (signal?.aborted) {
+      removePromptDir(launch.promptDir);
+      reject(new Error(`agent "${name}" canceled`));
+      return;
+    }
     if (name === "antigravity") {
       try { ensureAntigravityHeadlessPermissions(); } catch { /* never block a spawn */ }
     }
-    const child = spawn(def.command, args, buildAgentSpawnOptions({
+    const spawnOpts = buildAgentSpawnOptions({
       kind: "chat",
       prompt,
       restoreEnvKeys: def.env_required || [],
-    }));
+    });
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawnAgentChild(def.command, launch.args, spawnOpts);
+    } catch (e: any) {
+      if (e?.code === "E2BIG" && launch.via === "arg") {
+        removePromptDir(launch.promptDir);
+        launch = openLaunch(true);
+        try {
+          child = spawnAgentChild(def.command, launch.args, spawnOpts);
+        } catch (retry: any) {
+          removePromptDir(launch.promptDir);
+          reject(retry instanceof Error ? retry : new Error(String(retry)));
+          return;
+        }
+      } else {
+        removePromptDir(launch.promptDir);
+        reject(e instanceof Error ? e : new Error(String(e)));
+        return;
+      }
+    }
     let text = "";  // accumulated assistant text (the model's full output)
     let err = "";
     let buf = "";   // stdout line buffer (NDJSON)
@@ -2317,7 +2538,12 @@ function spawnAgentStream(
       reject(new Error(`agent "${name}" canceled`));
     };
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
-    const cleanup = () => { clearTimeout(timer); if (signal) signal.removeEventListener("abort", onAbort); };
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      removePromptDir(launch.promptDir);
+      launch = { ...launch, promptDir: null };
+    };
 
     const consume = (line: string) => {
       if (meta.length < MAX_OUT) meta += `${line}\n`;
@@ -2353,7 +2579,6 @@ function spawnAgentStream(
       resolve({ code, raw: text, stderr: err, parsed: extractJson(text), usage });
     });
 
-    if (useStdin) child.stdin.write(prompt);
-    child.stdin.end();
+    pipeAgentStdin(child, launch.stdin);
   });
 }

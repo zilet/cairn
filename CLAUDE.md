@@ -54,6 +54,12 @@ Every agent spawn goes through one process-wide semaphore (`CAIRN_MAX_AGENT_PROC
 a runner that catches this must defer-and-retry, never fail the row or rotate to the next agent.
 Details: `docs/ARCHITECTURE.md` "The process-wide agent spawn cap".
 
+**Chat's DATA block must not travel in argv.** Linux `MAX_ARG_STRLEN` is 32 × page size (512 KiB on
+a 16K-page Pi 5, 128 KiB on 4K-page hosts). A chat prompt that inlines there throws `E2BIG` at spawn
+in ~5 ms and every rotated agent "process failed". `buildAgentLaunch` keeps small prompts on `{prompt}`
+and delivers oversized ones via stdin / `--prompt-file`. Never raise the inline cap
+to "whatever fit last time".
+
 **Schema changes are two-step.** For a brand-new table, add a `CREATE TABLE IF NOT EXISTS` in
 `src/db.ts` and you're done. For a **column on an existing table** do BOTH: (1) add it to that table's
 create block in `db.ts` so fresh DBs get it, and (2) append an entry with the next integer `version`
@@ -253,7 +259,9 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Stated run days are structured and anchor the run engine** — `endurance_schedule`
   (`profile.endurance_schedule_json`) is the athlete's named weekdays for easy/quality/long runs;
   `weeklyRunPlan` and `flexibleTrainingAgenda` honor those dows and never spill a suggestion onto
-  an unscheduled day. A logged run on an unscheduled day still counts (the log is truth). **Stated
+  an unscheduled day. A named day still fires when the hard session sits out — it becomes easy; the
+  supporting-constrained drop to two runs applies only with no stated calendar. A logged run on an
+  unscheduled day still counts (the log is truth). **Stated
   LIFTING weekdays are the same fact for strength** — `strength_schedule`
   (`profile.strength_schedule_json`, `{days:[{dow}]}`, no `kind`): when set, `weekdayPlanDayMap`
   (`src/repo/plan-selection.ts`) lays the plan's strength days onto exactly those weekdays and an

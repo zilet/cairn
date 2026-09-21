@@ -43,7 +43,7 @@ type PlanEnduranceRunRow = {
   day_number: unknown;
 };
 
-type PlanEnduranceHorizon = "this_week" | "next_week";
+type PlanEnduranceHorizon = "this_week" | "next_week" | "later";
 
 type PlanEnduranceBriefingSession = {
   kind: PlanEnduranceRunKind;
@@ -62,19 +62,35 @@ type PlanEnduranceBriefing = {
   horizon: PlanEnduranceHorizon;
   kicker: string;
   headline: string;
+  units: "km" | "mi";
   next: PlanEnduranceBriefingSession | null;
   remaining: PlanEnduranceBriefingSession[];
+  later: PlanEnduranceBriefingSession[];
+};
+
+type PlanEnduranceBriefingWeek = {
+  agenda?: PlanEnduranceAgenda | null;
+  runPlan?: PlanEnduranceRunPlan | null;
+  raceBuild?: PlanEnduranceRaceBuild | null;
 };
 
 type PlanEnduranceBriefingInput = {
   today: string;
+  units?: unknown;
   agenda?: PlanEnduranceAgenda | null;
   runPlan?: PlanEnduranceRunPlan | null;
   raceBuild?: PlanEnduranceRaceBuild | null;
   nextAgenda?: PlanEnduranceAgenda | null;
   nextRunPlan?: PlanEnduranceRunPlan | null;
   nextRaceBuild?: PlanEnduranceRaceBuild | null;
+  laterAgenda?: PlanEnduranceAgenda | null;
+  laterRunPlan?: PlanEnduranceRunPlan | null;
+  laterRaceBuild?: PlanEnduranceRaceBuild | null;
+  weeks?: PlanEnduranceBriefingWeek[];
 };
+
+const PLAN_ENDURANCE_REVIEW_COUNT = 3;
+const PLAN_ENDURANCE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 
 const PLAN_ENDURANCE_PHASES = [
   { key: "base", label: "Base", when: "11+ weeks out", desc: "Build aerobic volume — easy, conversational running." },
@@ -210,10 +226,17 @@ function planEnduranceKindClass(kind: unknown): string {
   return "wrun-easy";
 }
 
-function planEnduranceKmText(km: unknown): string {
+function planEnduranceRunUnits(value: unknown): "km" | "mi" {
+  if (typeof runUnits === "function") return runUnits(value);
+  const s = String(value || "").trim().toLowerCase();
+  return s === "mi" || s === "mile" || s === "miles" ? "mi" : "km";
+}
+
+function planEnduranceKmText(km: unknown, units?: unknown): string {
   if (km == null || km === "") return "";
   const n = Number(km);
   if (!Number.isFinite(n) || n <= 0) return "";
+  if (typeof fmtDist === "function") return fmtDist(n, units);
   if (typeof fmtKm === "function") return `${fmtKm(n)} km`;
   return `${Number.isInteger(n) ? n : n.toFixed(1)} km`;
 }
@@ -307,17 +330,48 @@ function planEnduranceExpect(kind: PlanEnduranceRunKind, note: string, pace: Pla
   return "";
 }
 
-function planEnduranceWhen(
-  date: string | null,
-  today: string,
-  horizon: PlanEnduranceHorizon,
-  dayNumber: number | null
-): string {
+function planEndurancePaceText(pace: PlanEndurancePaceBand | null, units?: unknown): string {
+  if (!pace) return "";
+  if (typeof fmtPaceBand === "function" && (pace.fast_sec_per_km != null || pace.slow_sec_per_km != null)) {
+    return fmtPaceBand(pace, units);
+  }
+  return String(pace.text || "");
+}
+
+function planEnduranceShortDate(iso: string | null | undefined): string {
+  const key = planEnduranceDayKey(iso);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return "";
+  const d = new Date(`${key}T00:00:00Z`);
+  if (!Number.isFinite(d.getTime())) return "";
+  return `${PLAN_ENDURANCE_MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+}
+
+function planEnduranceHorizonOf(date: string | null | undefined, today: string): PlanEnduranceHorizon {
+  const dateMon = planEnduranceMondayOf(date || "");
+  const thisMon = planEnduranceMondayOf(today);
+  if (!dateMon || !thisMon || dateMon === thisMon) return "this_week";
+  if (dateMon === planEnduranceNextMonday(today)) return "next_week";
+  return "later";
+}
+
+function planEnduranceKicker(horizon: PlanEnduranceHorizon): string {
+  if (horizon === "next_week") return "Next week";
+  if (horizon === "later") return "Coming up";
+  return "This week";
+}
+
+function planEnduranceWhen(date: string | null, today: string, dayNumber: number | null): string {
   const weekday = planEnduranceWeekdayName(date, dayNumber);
   if (date && date === today) return weekday ? `Today · ${weekday}` : "Today";
   const tomorrow = planEnduranceAddDays(today, 1);
   if (date && date === tomorrow) return weekday ? `Tomorrow · ${weekday}` : "Tomorrow";
+  const horizon = planEnduranceHorizonOf(date, today);
   if (horizon === "next_week") return weekday ? `Next ${weekday}` : "Next week";
+  if (horizon === "later") {
+    const short = planEnduranceShortDate(date);
+    if (weekday && short) return `${weekday} · ${short}`;
+    return weekday || short || "Open";
+  }
   return weekday || "Open";
 }
 
@@ -326,15 +380,17 @@ function planEndurancePrescription(
   min: unknown,
   interval: unknown,
   zone: unknown,
-  pace: PlanEndurancePaceBand | null
+  pace: PlanEndurancePaceBand | null,
+  units?: unknown
 ): string {
   const parts: string[] = [];
-  const kmText = planEnduranceKmText(km);
+  const kmText = planEnduranceKmText(km, units);
   if (kmText) parts.push(kmText);
   else if (min != null && Number(min) > 0) parts.push(`${Math.round(Number(min))} min`);
   const structure = planEnduranceIntervalText(interval);
   if (structure) parts.push(structure);
-  if (pace?.text) parts.push(pace.text);
+  const paceText = planEndurancePaceText(pace, units);
+  if (paceText) parts.push(paceText);
   else if (!structure && zone) parts.push(String(zone));
   return parts.join(" · ");
 }
@@ -366,8 +422,8 @@ function planEnduranceSessionFromParts(
     note: string;
     status: "open" | "completed";
     today: string;
-    horizon: PlanEnduranceHorizon;
     raceBuild: PlanEnduranceRaceBuild | null | undefined;
+    units?: unknown;
   }
 ): PlanEnduranceBriefingSession {
   const pace = planEndurancePaceBand(opts.kind, opts.label, opts.raceBuild);
@@ -375,10 +431,10 @@ function planEnduranceSessionFromParts(
   return {
     kind: opts.kind,
     label: opts.label,
-    when: planEnduranceWhen(opts.date, opts.today, opts.horizon, opts.dayNumber),
+    when: planEnduranceWhen(opts.date, opts.today, opts.dayNumber),
     date: opts.date,
     day_number: opts.dayNumber,
-    prescription: planEndurancePrescription(opts.km, opts.min, opts.interval, opts.zone, pace),
+    prescription: planEndurancePrescription(opts.km, opts.min, opts.interval, opts.zone, pace, opts.units),
     setup,
     expect: planEnduranceExpect(opts.kind, opts.note, pace, setup),
     sitsBy: planEnduranceSitsBy(opts.dayNumber, opts.date, opts.raceBuild),
@@ -396,7 +452,7 @@ function planEnduranceSessionsFromAgenda(
   runPlan: PlanEnduranceRunPlan | null | undefined,
   raceBuild: PlanEnduranceRaceBuild | null | undefined,
   today: string,
-  horizon: PlanEnduranceHorizon
+  units?: unknown
 ): PlanEnduranceBriefingSession[] {
   return agenda.intents
     .filter((intent) => intent.status !== "completed")
@@ -421,8 +477,8 @@ function planEnduranceSessionsFromAgenda(
         note,
         status: "open",
         today,
-        horizon,
         raceBuild,
+        units,
       });
     })
     .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
@@ -432,7 +488,7 @@ function planEnduranceSessionsFromPlan(
   runPlan: PlanEnduranceRunPlan,
   raceBuild: PlanEnduranceRaceBuild | null | undefined,
   today: string,
-  horizon: PlanEnduranceHorizon
+  units?: unknown
 ): PlanEnduranceBriefingSession[] {
   const weekStart = planEnduranceDayKey(runPlan.week_start);
   return runPlan.runs
@@ -441,7 +497,7 @@ function planEnduranceSessionsFromPlan(
       const date = weekStart && Number.isFinite(dayNumber) && dayNumber >= 1
         ? planEnduranceAddDays(weekStart, dayNumber - 1)
         : null;
-      if (horizon === "this_week" && date && date < today) return null;
+      if (date && date < today) return null;
       const kind = (run.kind_label === "quality" || run.kind_label === "long" ? run.kind_label : "easy") as PlanEnduranceRunKind;
       const label = String(run.label || `${planEnduranceKindLabel(kind)} run`);
       return planEnduranceSessionFromParts({
@@ -456,35 +512,54 @@ function planEnduranceSessionsFromPlan(
         note: String(run.note || "").trim(),
         status: "open",
         today,
-        horizon,
         raceBuild,
+        units,
       });
     })
     .filter((session): session is PlanEnduranceBriefingSession => !!session)
     .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 }
 
+function planEnduranceCollectWeek(
+  week: PlanEnduranceBriefingWeek | null | undefined,
+  today: string,
+  units?: unknown
+): { sessions: PlanEnduranceBriefingSession[]; why: string } {
+  if (!week) return { sessions: [], why: "" };
+  let sessions: PlanEnduranceBriefingSession[] = [];
+  if (week.agenda && week.agenda.available !== false && Array.isArray(week.agenda.intents) && week.agenda.intents.length) {
+    sessions = planEnduranceSessionsFromAgenda(week.agenda, week.runPlan, week.raceBuild, today, units);
+  } else if (planEnduranceRunAvailable(week.runPlan)) {
+    sessions = planEnduranceSessionsFromPlan(week.runPlan, week.raceBuild, today, units);
+  }
+  const why = String(week.runPlan?.why || week.raceBuild?.this_week?.why || "").trim();
+  return { sessions, why };
+}
+
 function planEnduranceBuildBriefing(input: PlanEnduranceBriefingInput): PlanEnduranceBriefing {
   const today = planEnduranceDayKey(input.today);
-  const banked = planEnduranceWeekBanked(input.agenda);
-  const useNext = banked && (planEnduranceRunAvailable(input.nextRunPlan) || (input.nextAgenda && input.nextAgenda.available !== false && Array.isArray(input.nextAgenda.intents) && input.nextAgenda.intents.some((intent) => intent.status !== "completed")));
-  const horizon: PlanEnduranceHorizon = useNext ? "next_week" : "this_week";
-  const agenda = horizon === "next_week" ? input.nextAgenda : input.agenda;
-  const runPlan = horizon === "next_week" ? input.nextRunPlan : input.runPlan;
-  const raceBuild = horizon === "next_week" ? (input.nextRaceBuild || input.raceBuild) : input.raceBuild;
-  let sessions: PlanEnduranceBriefingSession[] = [];
-  if (agenda && agenda.available !== false && Array.isArray(agenda.intents) && agenda.intents.length) {
-    sessions = planEnduranceSessionsFromAgenda(agenda, runPlan, raceBuild, today, horizon);
-  } else if (planEnduranceRunAvailable(runPlan)) {
-    sessions = planEnduranceSessionsFromPlan(runPlan, raceBuild, today, horizon);
-  }
-  const headline = String(runPlan?.why || raceBuild?.this_week?.why || "").trim();
+  const units = planEnduranceRunUnits(input.units);
+  const weeks: PlanEnduranceBriefingWeek[] = Array.isArray(input.weeks) && input.weeks.length
+    ? input.weeks
+    : [
+        { agenda: input.agenda, runPlan: input.runPlan, raceBuild: input.raceBuild },
+        { agenda: input.nextAgenda, runPlan: input.nextRunPlan, raceBuild: input.nextRaceBuild },
+        { agenda: input.laterAgenda, runPlan: input.laterRunPlan, raceBuild: input.laterRaceBuild },
+      ];
+  const collected = weeks.map((week) => planEnduranceCollectWeek(week, today, units)).filter((row) => row.sessions.length);
+  const sessions = collected.flatMap((row) => row.sessions);
+  const next = sessions[0] || null;
+  const remaining = sessions.slice(1, PLAN_ENDURANCE_REVIEW_COUNT);
+  const later = sessions.slice(PLAN_ENDURANCE_REVIEW_COUNT);
+  const horizon = planEnduranceHorizonOf(next?.date, today);
   return {
     horizon,
-    kicker: horizon === "next_week" ? "Next week" : "This week",
-    headline,
-    next: sessions[0] || null,
-    remaining: sessions.slice(1),
+    kicker: planEnduranceKicker(horizon),
+    headline: collected[0]?.why || "",
+    units,
+    next,
+    remaining,
+    later,
   };
 }
 
@@ -494,6 +569,22 @@ function planEnduranceContrib(label: string, state: string, tone: "ok" | "watch"
   const labelHtml = label.trim() ? `<span class="read-contrib-label">${escHtml(label)}</span>` : "";
   const stateHtml = state.trim() ? `<span class="read-contrib-state">${escHtml(state)}</span>` : "";
   return `<div class="read-contrib"><span class="read-contrib-pip ${t}" aria-hidden="true"></span>${labelHtml}${stateHtml}</div>`;
+}
+
+function planEnduranceUnitsToggle(units: "km" | "mi"): string {
+  const btn = (value: "km" | "mi", label: string) =>
+    `<button type="button" class="end-unit-btn${units === value ? " on" : ""}" data-run-units="${value}" aria-pressed="${units === value}">${escHtml(label)}</button>`;
+  return `<div class="end-units" role="group" aria-label="Distance and pace units">${btn("km", "km")}${btn("mi", "mi")}</div>`;
+}
+
+function planEnduranceThenRows(sessions: PlanEnduranceBriefingSession[]): string {
+  return sessions.map((session) =>
+    `<div class="end-then-row ${planEnduranceKindClass(session.kind)}">
+        <span class="end-then-when">${escHtml(session.when)}</span>
+        <span class="end-then-name">${escHtml(session.label)}</span>
+        ${session.prescription ? `<span class="end-then-pres numeral">${escHtml(session.prescription)}</span>` : ""}
+      </div>`
+  ).join("");
 }
 
 function planEnduranceBriefingHtml(briefing: PlanEnduranceBriefing | null | undefined, start = 0): string {
@@ -517,21 +608,23 @@ function planEnduranceBriefingHtml(briefing: PlanEnduranceBriefing | null | unde
         </div>
       </div>`
     : "";
-  const remainingRows = briefing.remaining.map((session) =>
-    `<div class="end-then-row ${planEnduranceKindClass(session.kind)}">
-        <span class="end-then-when">${escHtml(session.when)}</span>
-        <span class="end-then-name">${escHtml(session.label)}</span>
-        ${session.prescription ? `<span class="end-then-pres numeral">${escHtml(session.prescription)}</span>` : ""}
-      </div>`
-  ).join("");
-  const remainingHtml = remainingRows
+  const remainingHtml = briefing.remaining.length
     ? `<div class="end-then reveal" style="${stagger(start + 2)}">
         <span class="lbl">Then</span>
-        <div class="end-then-rows">${remainingRows}</div>
+        <div class="end-then-rows">${planEnduranceThenRows(briefing.remaining)}</div>
       </div>`
     : "";
-  if (!lead && !nextHtml && !remainingHtml) return "";
-  return `<div class="end-brief card-stack-item">${lead}${nextHtml}${remainingHtml}</div>`;
+  const laterHtml = briefing.later.length
+    ? `<details class="end-later reveal" style="${stagger(start + 3)}">
+        <summary><span class="lbl">Later in the build</span></summary>
+        <div class="end-then-rows">${planEnduranceThenRows(briefing.later)}</div>
+      </details>`
+    : "";
+  if (!lead && !nextHtml && !remainingHtml && !laterHtml) return "";
+  return `<div class="end-brief card-stack-item">
+    <div class="end-brief-bar">${lead || `<p class="end-brief-lead"><span class="lbl">${escHtml(briefing.kicker)}</span></p>`}${planEnduranceUnitsToggle(briefing.units)}</div>
+    ${nextHtml}${remainingHtml}${laterHtml}
+  </div>`;
 }
 
 const CAIRN_PLAN_ENDURANCE_MODEL = {

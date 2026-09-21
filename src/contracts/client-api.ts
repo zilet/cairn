@@ -274,6 +274,8 @@ export interface ClientSettings {
   garmin_last_sync_at?: string | null;
   garmin_last_sync_status?: string | null;
   garmin_export_strength?: boolean;
+  /** Athlete-facing run distance and pace: km (min/km) or mi (min/mile). */
+  run_units?: "km" | "mi";
   /** Last strength write-back ATTEMPT (landed or not), and its one-line result. */
   garmin_last_export_attempt_at?: string | null;
   garmin_last_export_status?: string | null;

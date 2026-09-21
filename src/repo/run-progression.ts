@@ -1410,18 +1410,28 @@ export function weeklyRunPlan(
   // temporary easy + quality + long shape, but it cannot silently turn a
   // strength/muscle-first athlete into a high-frequency runner. The time target
   // itself never earns extra sessions. Recovery/deload/health-constrained weeks
-  // fall to two intentions rather than creating catch-up work.
+  // fall to two intentions rather than creating catch-up work — unless the
+  // athlete named the weekdays. A stated run day stays on the calendar and the
+  // hard session becomes easy; dropping it would erase a day they asked to keep.
   const supportingConstrained =
     trainingIntent.endurance_role === "supporting" && (recoveryDown || recoveryWeek || !!firmHold || !!softHold);
+  const namedRunCalendar = !!statedSchedule?.days.length;
   if (trainingIntent.endurance_role === "supporting") {
     const normalSupportingDays = Math.min(runDays, 3);
-    runDays = Math.min(runDays, supportingConstrained ? 2 : 3);
-    if (supportingConstrained && normalSupportingDays > runDays) {
-      weeklyKm = Math.max(6, round1(weeklyKm * (runDays / normalSupportingDays)));
+    runDays = Math.min(runDays, supportingConstrained && !namedRunCalendar ? 2 : 3);
+    // Named days stay, but the missing quality session must not restore its
+    // mileage. Ease volume as a two-run week whether or not Thursday remains.
+    const constrainedVolumeDays = supportingConstrained
+      ? Math.min(namedRunCalendar ? 2 : runDays, normalSupportingDays)
+      : runDays;
+    if (supportingConstrained && normalSupportingDays > constrainedVolumeDays) {
+      weeklyKm = Math.max(6, round1(weeklyKm * (constrainedVolumeDays / normalSupportingDays)));
     }
     rationale.push(
       supportingConstrained
-        ? "Running is supporting the higher durable priorities, so this constrained week stays at two useful runs with volume reduced too — nothing gets concentrated into catch-up mileage."
+        ? namedRunCalendar
+          ? "Running is supporting the higher durable priorities, so this constrained week keeps the days you named and eases them — the hard session sits out, nothing extra gets piled on."
+          : "Running is supporting the higher durable priorities, so this constrained week stays at two useful runs with volume reduced too — nothing gets concentrated into catch-up mileage."
         : "Running is supporting the higher durable priorities, so the race build stays at a minimum-effective three runs."
     );
     // Two of the athlete's own settings disagreeing, said out loud. A dated race with
@@ -1465,6 +1475,8 @@ export function weeklyRunPlan(
   }
 
   // --- distance distribution ---
+  // A lone easy day is recovery: 5–7 km, never a second long run.
+  const LONE_EASY_RECOVERY_CAP_KM = 7;
   const easyCount = Math.max(1, runDays - 1 - (qualityType ? 1 : 0));
   // Long run ~32–38% of weekly volume, but never a >10% jump on the recent longest.
   // Read at the anchor, not the plan date — the fourth member of the same family. Its
@@ -1547,6 +1559,15 @@ export function weeklyRunPlan(
     longKm = round1(Math.min(easyEach, weeklyKm * 0.55));
     easyTotal = Math.max(easyCount * 3, round1(weeklyKm - longKm - qualityKm));
     easyEach = round1(Math.min(easyTotal / easyCount, longKm));
+  }
+  // Easy days on a week with no quality session are recovery, not a second long.
+  // Remainder-filling a two-day week otherwise sizes it to match the long
+  // (~19 km → 9.4 + 9.4); keeping a named quality day as easy would do the same
+  // to both easies. Cap each in the 5–7 km recovery band (never above 70% of
+  // the long). Extra kilometres stay unspent rather than piling onto the long.
+  if (easyCount === 1 || (supportingConstrained && !qualityType)) {
+    const recoveryCap = round1(Math.min(LONE_EASY_RECOVERY_CAP_KM, Math.max(3, longKm * 0.7)));
+    if (easyEach > recoveryCap) easyEach = recoveryCap;
   }
 
   // --- slot assignment (day_number 1–7): quality mid-week, long late, easy spread —

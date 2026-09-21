@@ -222,7 +222,9 @@ prefers a fresher day and says why, in the athlete's own words.
 `training-intent.ts` owns the athlete's ordered durable priorities, explicit endurance role, and
 optional sport-duration capability. `endurance_goal_json` remains the separate dated-race or standing
 objective; a temporary race may shape the week without silently becoming the athlete's durable
-identity. `weeklyRunPlan()` creates a conservative weekly running dose, while
+identity. `weeklyRunPlan()` creates a conservative weekly running dose (easy days on a week with no
+quality session are recovery-sized — capped at 7 km / 70% of the long — not remainder-filled into a
+second long run; a named quality day that sits out becomes one of those easies), while
 `flexibleTrainingAgenda()` reconciles that dose with actual run logs and the lower-body/cardio work
 that really occurred. When the athlete has stated run days (`endurance_schedule` on `profile` —
 `{days:[{dow, kind: easy|quality|long|any}], note?, source, updated_at}`), those weekdays are the
@@ -243,8 +245,10 @@ Hard lower-body/cardio work moves a key run toward a cleaner opening, cross-trai
 but cannot falsely complete a run, and unfinished work disappears at the week boundary instead of
 becoming catch-up volume. Supporting
 endurance is capped at three useful runs in a normal week and two when recovery, a recovery cycle, or
-an active health hold argues for less; the weekly volume falls with that frequency reduction and each
-remaining run stays capped by recent exposure instead of absorbing the missing session. A stretch
+an active health hold argues for less — **unless the athlete named the weekdays**. A stated run day
+stays on the calendar; the hard session becomes easy rather than disappearing, and leftover volume is
+not piled onto the days that remain. With no stated calendar the frequency drop still applies, and
+each remaining run stays capped by recent exposure instead of absorbing the missing session. A stretch
 time target alone never increases dose.
 
 **Stated strength schedule (and the observed one).** `strength_schedule` on `profile`
@@ -2045,6 +2049,21 @@ what an exploring CLI reads first — keep it empty (a stray CLI core dump or `*
 fuel). And the `permission_denied` class is deliberately NOT a holding state: the CLI is healthy, that
 op was blocked, and the next prompt (now behind the preamble) is expected to succeed.
 
+## Oversized prompts never travel in argv (`src/agents.ts`)
+
+Linux `MAX_ARG_STRLEN` is `32 * PAGE_SIZE`. On a Raspberry Pi 5 (16K pages) that is **512 KiB for a
+single argument**; on 4K-page hosts it is 128 KiB. Chat's `DATA:` block is already hundreds of KB
+(`recent_sessions` alone can be ~240 KB), and `applyToolPolicy` prepends `NO_TOOLS_PREAMBLE` before
+the `{prompt}` slot. Crossing the cap makes Node `spawn()` throw `E2BIG` synchronously: every agent
+in the chat rotation fails in ~5 ms with `process_error` / "Agent process failed", while smaller ops
+(day-read, week-ahead) still work.
+
+`buildAgentLaunch` inlines `{prompt}` only under `MAX_SAFE_AGENT_ARG_BYTES` (96 KiB, under the 4K-page
+floor). Above that, `agents.json` `large_prompt.via` picks the CLI's own overflow path: Claude keeps
+boolean `-p` and reads stdin; Codex replaces `{prompt}` with `-` and reads stdin; Grok drops `-p` and
+passes `--prompt-file`; Antigravity drops value-taking `-p` and reads the prompt on stdin as
+`--input-format text`. A spawn that still throws `E2BIG` retries once on that overflow path.
+
 ## The process-wide agent spawn cap (`src/agents.ts`, `src/agent-busy.ts`)
 
 Six lanes spawn coaching CLIs — chat, the agent-job runner, the enrichment queue, the proactive pass,
@@ -3279,11 +3298,13 @@ new profile fields, and `{available:false, reason}` for everyone else. `raceBuil
 Surfaces: `GET /api/race-build`, MCP `get_race_build`, the "Race build" card on Progress →
 Endurance (`raceBuildCard`, fetched into the endurance snapshot v4), Plan → Endurance (the same
 card in `compact` form under a next-session briefing built from `/run-plan` + the rolling agenda —
-when this week's intents are banked the tab faces next week), and the `race_build` key in
-the ENDURANCE prompt bundle, rendered by `renderRunPlan` as a RACE BUILD block (estimate, target,
-pace bands, ladder, strength principle, ride placement) so every running prompt is shooting at the
-same numbers. `coach.ts` computes it once per context as `raceBuildView`, reusing `runPlanView` and
-`weekLayoutView`.
+the tab shows the next three open runs, with anything further behind "Later in the build"; pace
+and distance follow `settings.run_units` (`km` or `mi`); the connected week strip is a collapsed
+"This week's map" fetched only when opened; when this week's intents are banked the featured run
+is next week's), and the `race_build` key in the ENDURANCE prompt bundle, rendered by
+`renderRunPlan` as a RACE BUILD block (estimate, target, pace bands, ladder, strength principle,
+ride placement) so every running prompt is shooting at the same numbers. `coach.ts` computes it
+once per context as `raceBuildView`, reusing `runPlanView` and `weekLayoutView`.
 
 ## Background enrichment (`src/enrich.ts`)
 

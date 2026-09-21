@@ -4,6 +4,38 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-20 — Chat prompts that outgrow argv skip the kernel cap
+
+No schema change. A Pi 5 uses 16K pages, so Linux `MAX_ARG_STRLEN` is 512 KiB. Chat's DATA block
+plus the no-tools preamble sat on that cliff after the endurance-tab deploy: `spawn()` threw `E2BIG`
+in ~5 ms and every coaching CLI rotated as "Agent process failed" while day-read still worked.
+`buildAgentLaunch` now inlines only small prompts and delivers oversized ones via each CLI's stdin
+or `--prompt-file` path (`agents.json` `large_prompt`).
+
+---
+
+## 2026-09-20 — Named run days stay when quality is skipped
+
+No schema change. A supporting-constrained week still drops to two runs when the athlete has
+not named weekdays. With an `endurance_schedule`, those days stay on the calendar and the
+quality session becomes easy rather than disappearing (Thursday hills → Thursday easy).
+
+---
+
+## 2026-09-20 — Plan → Endurance: miles, a three-run review, recovery-sized easy
+
+Schema `user_version` 106: `settings.run_units` (`km` | `mi`, default `km`) — athlete-facing
+run distance and pace. The engine stays in kilometres; the PWA converts.
+
+- Plan → Endurance leads with the next three open runs (this week, then the next, then the
+  week after). Later sessions fold behind "Later in the build"; race clocks behind "The rest
+  of the program". A km/mi toggle on the briefing persists via settings.
+- The connected week strip is a collapsed "This week's map" and is fetched only when opened.
+- A lone easy day on a two-day week is recovery-sized (capped at 7 km / 70% of the long),
+  not remainder-filled to match the long run.
+
+---
+
 ## 2026-09-20 — Plan → Endurance briefs the next run
 
 No schema change. Plan → Endurance now leads with a next-session plate (when, prescription, setup /

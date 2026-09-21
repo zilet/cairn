@@ -156,6 +156,67 @@ test("weeklyRunPlan with a stated schedule lands day_numbers on those dows", () 
   assert.ok(!plan.runs.some((r) => r.day_number === 5), "Friday is not a run day");
 });
 
+test("a constrained supporting week keeps a named quality day as easy, not dropped", () => {
+  repo.setProfile({
+    age: 40,
+    sex: "male",
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    training_intent: {
+      priorities: ["longevity", "muscle", "strength", "leanness", "endurance"],
+      endurance_role: "supporting",
+    },
+    endurance_goal: {
+      mode: "race",
+      event: "Test Half Marathon",
+      date: "2026-07-20",
+      distance_km: 21.1,
+      weekly_sessions: 3,
+    },
+    endurance_schedule: {
+      days: [
+        { dow: 0, kind: "long" },
+        { dow: 2, kind: "easy" },
+        { dow: 4, kind: "quality" },
+        { dow: 6, kind: "long" },
+      ],
+      source: "athlete",
+    },
+  });
+  seedRunner({ weeks: 8, perWeek: 3, km: 8 });
+  const lowRecovery = {
+    quality: {
+      training_readiness: { freshness: "fresh" },
+      training_status: { freshness: "fresh" },
+    },
+    recovery: { readiness_band: "low", training_status: "PRODUCTIVE" },
+    delta: { hrv: null, rhr: null, sleep: null },
+  };
+  const plan = repo.weeklyRunPlan(MONDAY, { recovery: lowRecovery, block: { week_index: 1 } });
+  assert.equal(plan.available, true);
+  assert.equal(plan.quality_focus, null, "the hard session sits out");
+  const byDay = Object.fromEntries(plan.runs.map((r) => [r.day_number, r]));
+  assert.equal(byDay[2]?.kind_label, "easy", "Tuesday easy stays");
+  assert.equal(byDay[4]?.kind_label, "easy", "Thursday quality becomes easy rather than disappearing");
+  assert.equal(byDay[7]?.kind_label, "long", "Sunday keeps the long");
+  assert.equal(byDay[6], undefined, "the spare Saturday long is not invented as a fourth run");
+  assert.deepEqual(
+    plan.runs.map((r) => r.day_number).sort((a, b) => a - b),
+    [2, 4, 7]
+  );
+  assert.ok(
+    byDay[2].target_distance_km <= 7 && byDay[4].target_distance_km <= 7,
+    `named easies stay recovery-sized, got ${byDay[2].target_distance_km} / ${byDay[4].target_distance_km} km`
+  );
+  assert.ok(
+    byDay[2].target_distance_km < byDay[7].target_distance_km &&
+      byDay[4].target_distance_km < byDay[7].target_distance_km,
+    "eased days stay shorter than the long"
+  );
+  assert.match(plan.rationale.join(" "), /keeps the days you named and eases them/i);
+  assert.doesNotMatch(plan.rationale.join(" "), /two useful runs/i);
+});
+
 test("weeklyRunPlan without a schedule keeps the existing heuristic slots", () => {
   repo.setProfile({
     age: 40,

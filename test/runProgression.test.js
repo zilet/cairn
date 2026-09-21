@@ -1389,3 +1389,31 @@ test("each leg-load set is a variant SET, with no duplicate phrasings", () => {
     assert.equal(new Set(rendered).size, rendered.length, `${label}: no duplicate phrasings`);
   }
 });
+
+test("a two-day week keeps the lone easy run recovery-sized, not a second long", () => {
+  repo.setProfile({
+    age: 40,
+    sex: "male",
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    endurance_goal: {
+      mode: "race",
+      event: "Cambridge Half",
+      date: fwd(42),
+      distance_km: 21.1,
+      weekly_km: 19,
+      weekly_sessions: 2,
+    },
+    endurance_schedule: { days: [{ dow: 2, kind: "easy" }, { dow: 0, kind: "long" }], source: "athlete" },
+  });
+  seedRunner({ weeks: 8, perWeek: 2, km: 9 });
+
+  const plan = repo.weeklyRunPlan(REF);
+  assert.equal(plan.available, true);
+  const easy = plan.runs.filter((r) => r.kind_label === "easy");
+  const long = plan.runs.find((r) => r.kind_label === "long");
+  assert.equal(easy.length, 1, "exactly one easy day on a two-day week");
+  assert.ok(long, "a long run is still in the mix");
+  assert.ok(easy[0].target_distance_km >= 5 && easy[0].target_distance_km <= 7, `easy is recovery-sized, got ${easy[0].target_distance_km} km`);
+  assert.ok(long.target_distance_km > easy[0].target_distance_km, `long (${long.target_distance_km}) stays longer than easy (${easy[0].target_distance_km})`);
+});

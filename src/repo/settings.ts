@@ -42,6 +42,7 @@ export interface Settings {
   garmin_last_sync_at: string | null; // UTC ISO of the last completed sync (ok or failed)
   garmin_last_sync_status: string; // short result line: "ok: 12 activities · 14 daily" | "failed: …"
   garmin_export_strength: boolean; // send finished Cairn strength sessions back to Garmin (default ON; Garmin stays the input for runs/recovery)
+  run_units: "km" | "mi"; // athlete-facing run distance and pace; the engine stays in km
   garmin_last_export_attempt_at: string | null; // UTC ISO of the last write-back ATTEMPT (landed or not)
   garmin_last_export_status: string; // short result line: "ok: 8 of 14 sets" | "failed: …"
   gemini_api_key_configured: boolean;
@@ -321,6 +322,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["garmin_export_strength", "INTEGER DEFAULT 1"],
   ["garmin_last_export_attempt_at", "TEXT DEFAULT ''"],
   ["garmin_last_export_status", "TEXT DEFAULT ''"],
+  ["run_units", "TEXT DEFAULT 'km'"],
 ];
 let settingsSchemaChecked = false;
 
@@ -472,6 +474,7 @@ function defaultSettings(): Settings {
     garmin_last_sync_at: null,
     garmin_last_sync_status: "",
     garmin_export_strength: true, // a finished Cairn strength session goes back to the watch by default
+    run_units: "km", // prescriptions display in km / min/km until the athlete picks miles
     garmin_last_export_attempt_at: null,
     garmin_last_export_status: "",
     gemini_api_key_configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY),
@@ -558,6 +561,7 @@ function rowToSettings(row: any): Settings {
     garmin_last_sync_status: row.garmin_last_sync_status == null ? "" : String(row.garmin_last_sync_status),
     // NULL on old rows (column added by the settings column repair) defaults to ON.
     garmin_export_strength: row.garmin_export_strength == null ? true : !!row.garmin_export_strength,
+    run_units: String(row.run_units) === "mi" ? "mi" : "km",
     garmin_last_export_attempt_at: String(row.garmin_last_export_attempt_at ?? "").trim() || null,
     garmin_last_export_status:
       row.garmin_last_export_status == null ? "" : String(row.garmin_last_export_status),
@@ -670,6 +674,7 @@ export function setSettings(patch: any): Settings {
     garmin_last_sync_status: cur.garmin_last_sync_status,
     garmin_export_strength:
       patch.garmin_export_strength !== undefined ? !!patch.garmin_export_strength : cur.garmin_export_strength,
+    run_units: ["km", "mi"].includes(String(patch.run_units)) ? patch.run_units : cur.run_units,
     // Write-back status is read-only here too — recorded by setGarminExportStatus().
     garmin_last_export_attempt_at: cur.garmin_last_export_attempt_at,
     garmin_last_export_status: cur.garmin_last_export_status,
@@ -722,7 +727,7 @@ export function setSettings(patch: any): Settings {
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -751,7 +756,8 @@ export function setSettings(patch: any): Settings {
     merged.update_check_enabled ? 1 : 0,
     merged.lead_mode,
     merged.training_drive,
-    merged.garmin_export_strength ? 1 : 0
+    merged.garmin_export_strength ? 1 : 0,
+    merged.run_units
   );
   return getSettings();
 }

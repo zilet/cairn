@@ -1817,6 +1817,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function fmtWeight\(weight: unknown\): string/);
   assert.match(clientGlobals, /declare function formatFoodNum\(value: unknown\): string/);
   assert.match(clientGlobals, /declare function fmtKm\(km: unknown\): string/);
+  assert.match(clientGlobals, /declare function fmtDist\(km: unknown, units\?: unknown\): string/);
   assert.match(clientShellGlobals, /declare global \{/);
   assert.match(clientShellGlobals, /declare let pollToken: number/);
   assert.match(clientShellGlobals, /declare const PROGRESS_SEG: readonly ClientSegment\[\]/);
@@ -4680,7 +4681,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressHistorySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressHistorySource, /CairnProgressHistory/);
   assert.match(progressRunPlanSource, /function weeklyRunPlanCard\(plan: WeeklyRunPlan \| null \| undefined\): string/);
-  assert.match(progressRunPlanSource, /function enduranceGoalCard\(goal: EnduranceGoal \| null \| undefined\): string/);
+  assert.match(progressRunPlanSource, /function enduranceGoalCard\(goal: EnduranceGoal \| null \| undefined, opts\?: \{ units\?: unknown \}\): string/);
   assert.match(
     progressRunPlanSource,
     /function runComplianceLine\(compliance: RunCompliance \| null \| undefined\): string/
