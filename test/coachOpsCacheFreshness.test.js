@@ -132,7 +132,7 @@ test("logged training and active symptom state invalidate the week-ahead cache",
 test("persisted session and week-ahead caches survive a restart but not a home-location change", async () => {
   const date = localDateISO();
   const opts = { date, minutes: 30, focus: "cache freshness location" };
-  repo.setProfile({ home_location: "Boston, MA" });
+  repo.setProfile({ home_location: "Portland, ME" });
   // Model a process that has already restarted before creating the persisted
   // cache, then restart again before reading it: both processes begin with the
   // in-memory counter at zero and must agree from durable state alone.
@@ -154,7 +154,7 @@ test("persisted session and week-ahead caches survive a restart but not a home-l
 
 test("active-trip add, location edit, resolution, and end transitions change restart-stable identity", () => {
   const date = "2026-08-10";
-  repo.setProfile({ home_location: "Boston, MA" });
+  repo.setProfile({ home_location: "Portland, ME" });
   const atHome = restartEquivalentFingerprint(date);
 
   const trip = repo.addContextEvent({
@@ -184,7 +184,7 @@ test("active-trip add, location edit, resolution, and end transitions change res
 
 test("editing future and past trip locations does not make them effective after restart", () => {
   const date = "2026-08-10";
-  repo.setProfile({ home_location: "Boston, MA" });
+  repo.setProfile({ home_location: "Portland, ME" });
   const future = repo.addContextEvent({
     kind: "trip",
     title: "Future trip",
@@ -207,8 +207,8 @@ test("editing future and past trip locations does not make them effective after 
   repo.updateContextEvent(past.id, { meta: { location: "Porto" } });
   assert.equal(restartEquivalentFingerprint(date), homeIdentity);
   assert.deepEqual(repo.getLocationContext({ on: date }), {
-    home: "Boston, MA",
-    effective: "Boston, MA",
+    home: "Portland, ME",
+    effective: "Portland, ME",
     source: "home",
     trip_id: null,
     trip_title: null,

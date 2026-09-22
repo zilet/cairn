@@ -68,7 +68,7 @@ test("visit note reconciliation adds provenance to an already-resolved PCP event
 test("visit note reconciliation ignores unrelated life events", () => {
   const event = repo.addContextEvent({
     kind: "life_event",
-    title: "Cambridge Half Marathon",
+    title: "Riverside Half Marathon",
     start_date: "2026-07-07",
   });
   const doc = repo.addHealthDocument({

@@ -57,7 +57,7 @@ test("MCP keeps durable priorities and MTB capability separate from a temporary 
     endurance_sport: "running, MTB",
     endurance_goal: {
       mode: "race",
-      event: "Cambridge Half Marathon",
+      event: "Riverside Half Marathon",
       date: "2026-11-01",
       distance_km: 21.1,
     },
@@ -80,7 +80,7 @@ test("MCP keeps durable priorities and MTB capability separate from a temporary 
   assert.deepEqual(saved.intent.priorities, ["longevity", "muscle", "leanness", "endurance"]);
   assert.equal(saved.intent.endurance_role, "supporting");
   assert.equal(saved.endurance_capacity.status, "ready");
-  assert.equal(repo.getEnduranceGoal("2026-08-01").event, "Cambridge Half Marathon");
+  assert.equal(repo.getEnduranceGoal("2026-08-01").event, "Riverside Half Marathon");
 
   const read = await callTool("get_training_intent");
   assert.equal(read.intent.source, "explicit");
@@ -111,7 +111,7 @@ test("an impossible race date cannot erase the valid event already on file", () 
   repo.setProfile({
     endurance_goal: {
       mode: "race",
-      event: "Cambridge Half Marathon",
+      event: "Riverside Half Marathon",
       date: "2026-11-01",
     },
   });
@@ -123,7 +123,7 @@ test("an impossible race date cannot erase the valid event already on file", () 
     },
   });
   const goal = repo.getEnduranceGoal("2026-08-01");
-  assert.equal(goal.event, "Cambridge Half Marathon");
+  assert.equal(goal.event, "Riverside Half Marathon");
   assert.equal(goal.date, "2026-11-01");
 });
 

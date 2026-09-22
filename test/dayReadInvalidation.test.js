@@ -59,8 +59,8 @@ test("addContextEvent busts today's Brief", () => {
 });
 
 test("updateContextEvent busts today's Brief", () => {
-  const ev = repo.addContextEvent({ kind: "trip", title: "Boston" });
-  bustsCache(() => repo.updateContextEvent(ev.id, { title: "Boston work trip" }));
+  const ev = repo.addContextEvent({ kind: "trip", title: "Portland" });
+  bustsCache(() => repo.updateContextEvent(ev.id, { title: "Portland work trip" }));
 });
 
 test("resolveContextEvent busts today's Brief", () => {

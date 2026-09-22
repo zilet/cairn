@@ -61,7 +61,7 @@ export const LTHR_FIELD_TEST_MAX_AGE_DAYS = 120;
 // average is the threshold itself, and every minute past it pulls the sustainable
 // average down. So a longer steady run's average is a FLOOR under any anchored
 // threshold: without it, each 25-45 minute tempo re-anchored the model at its own
-// average and the threshold ratcheted down (157 after a 164 held for 73 minutes).
+// average and the threshold ratcheted down (example: 148 after a 155 held for 73 minutes).
 export const LTHR_LOWER_BOUND_MIN_MINUTES = 45;
 // Fewer HR-bearing outings than this and there is no distribution to read — the
 // model reports "insufficient" and every consumer falls back to neutral language.

@@ -111,7 +111,7 @@ export function hasExplicitGoalIntent(message: string | null | undefined): boole
     ) ||
     /\b(?:train(?:ing)?\s+for|signed?\s+up\s+for|keep\s+me\b.{0,40}\bready)\b/i.test(text) ||
     // A stated bodyweight DESTINATION is a goal even without the word "goal":
-    // "get down to 154 lb", "drop to 154 lbs by October". The unit is required so
+    // "get down to 170 lb", "drop to 170 lbs by October". The unit is required so
     // "drop down to 135" about a barbell load never reads as a bodyweight goal.
     /\b(?:get|drop|come|cut|slim|lean|bring\s+(?:it|me|this))\s+(?:back\s+)?(?:down\s+)?to\s+\d{2,3}(?:\.\d)?\s*(?:lb|lbs|pounds|kg)\b/i.test(
       text

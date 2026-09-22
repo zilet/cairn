@@ -44,7 +44,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 
 const SCOLIOSIS = {
-  items: [{ label: "Mild scoliosis", detail: "right thoracic curve, no pain", wants_addressed: true }],
+  items: [{ label: "Mild scoliosis", detail: "a mild lateral spinal curve, no pain", wants_addressed: true }],
 };
 
 beforeEach(() => {
@@ -144,7 +144,7 @@ test("a consideration never produces an injury exclusion, excluded groups, or a 
 test("control: the same sentence filed as an injury DOES gate — the reason this fact is separate", () => {
   repo.addContextEvent({
     kind: "injury",
-    title: "Mild scoliosis (right thoracic curve)",
+    title: "Mild scoliosis (lateral spinal curve)",
     meta: { area: "spine", severity: "mild" },
   });
   const { envelope } = decideDailySession(localDateISO());
@@ -184,7 +184,7 @@ test("every plan-shaping prompt carries the block and the DATA key when set, and
   for (const [site, build] of SITES) {
     const prompt = build();
     assert.match(prompt, /STATED MOVEMENT CONSIDERATIONS \(/, `${site} renders the block`);
-    assert.match(prompt, /- Mild scoliosis: right thoracic curve, no pain/, `${site} carries their words`);
+    assert.match(prompt, /- Mild scoliosis: a mild lateral spinal curve, no pain/, `${site} carries their words`);
     assert.match(prompt, /never exclude the main lifts/, `${site} says it is not a gate`);
     assert.match(prompt, /"movement_considerations":\{"items":\[\{"label":"Mild scoliosis"/, `${site} DATA carries it`);
     assert.match(prompt, /STATED CONDITIONS:/, `${site} guardrails name it`);

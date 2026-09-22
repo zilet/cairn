@@ -463,7 +463,7 @@ test("a refused draft re-opens when training evidence moves, not only when the h
 
 // ---- A DEAD PREMISE IS RETIRED, AND A HELD DRAFT IS ASKED ABOUT ONCE ----------
 //
-// Live rows 26419 + 26760 both held plan_proposal 111 — "swap Decline Bench Press for
+// Example rows 4211 + 4212 both held plan_proposal 30 — "swap Decline Bench Press for
 // Chest Dips" — long after the plan was restructured and Decline Bench Press had left it
 // entirely. Two failures in one: the sweep kept re-offering a draft whose subject was
 // gone, and each held pass whose refusal signature had MOVED (a clinical ceiling one
@@ -830,7 +830,7 @@ test("a later refusal folds into the buried hold instead of stacking a second as
 
 // ---- A QUESTION OUTLIVES THE DRAFT IT ASKED ABOUT BY ONE SWEEP ----------------
 //
-// Live row 25815: an announce-tier meal-plan decision parked at `review` by an apply
+// Example row 4088: an announce-tier meal-plan decision parked at `review` by an apply
 // error ("Mon totals 1800 kcal, outside the ±100 kcal rounding tolerance around the
 // coordinated 1950 kcal target"), pointing at meal_plans 20. Four weeks later the
 // athlete had accepted plan 30 and plan 20 was `superseded` — and the row was still in

@@ -18,7 +18,7 @@ import {
 } from "../dist/repo/race-build.js";
 import { raceRamp } from "../dist/repo/run-ramp.js";
 
-// Sunday 2026-09-13 is the as-of; Cambridge Half is Sunday 2026-11-01 (7 weeks out).
+// Sunday 2026-09-13 is the as-of; Riverside Half is Sunday 2026-11-01 (7 weeks out).
 const TODAY = "2026-09-13";
 const RACE = "2026-11-01";
 const HALF = 21.1;
@@ -64,7 +64,7 @@ function seedRaceProfile(target = "sub-1:45") {
     sex: "male",
     primary_discipline: "hybrid",
     endurance_sport: "running",
-    endurance_goal: { mode: "race", event: "Cambridge Half", date: RACE, distance_km: HALF, target },
+    endurance_goal: { mode: "race", event: "Riverside Half", date: RACE, distance_km: HALF, target },
   });
 }
 
@@ -250,7 +250,7 @@ test("raceBuild lays out the half: estimate from the watch, fit against the targ
 
   const out = raceBuild(TODAY);
   assert.equal(out.available, true, out.reason);
-  assert.equal(out.race.event, "Cambridge Half");
+  assert.equal(out.race.event, "Riverside Half");
   assert.equal(out.race.weeks_to_race, 7);
   assert.equal(out.race.phase, "build");
   assert.equal(out.race.target.sec, 6300);
@@ -301,7 +301,7 @@ test("raceBuild lays out the half: estimate from the watch, fit against the targ
   assert.equal(out.review.weeks.length, 4);
   assert.ok(out.review.weeks.every((w) => w.km > 0));
   assert.equal(out.review.longest_recent_km, 13);
-  assert.match(out.why, /Cambridge Half/);
+  assert.match(out.why, /Riverside Half/);
   assert.match(out.why, /1:45:00/);
   // No score, no verdict vocabulary anywhere the athlete reads.
   for (const s of [out.why, out.strength.principle, out.ride.placement]) {
@@ -441,7 +441,7 @@ test("the surfaces carry the read: REST route registered, MCP tool present, coac
   seedHybridRunner({ rideWeeks: [] });
   const build = raceBuild(TODAY);
   const text = renderRunPlan({ race_build: build, run_plan: null });
-  assert.match(text, /RACE BUILD \(Cambridge Half/);
+  assert.match(text, /RACE BUILD \(Riverside Half/);
   assert.match(text, /Target: 1:45:00/);
   assert.match(text, /Pace bands/);
   assert.match(text, /Ladder:/);

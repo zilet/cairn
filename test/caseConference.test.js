@@ -697,7 +697,7 @@ test("an act-now finding gates a revision that names its marker, even without a 
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
 });
 
-// Live shape (conference 27087): a lipid act-now finding clinician-gated a squat-load
+// Example shape (conference 4033): a lipid act-now finding clinician-gated a squat-load
 // hold it has nothing to say about. The floor is RELEVANCE, not co-occurrence.
 const lipidContext = () => ({
   ...healthyContext(),

@@ -89,7 +89,7 @@ function seedReadFixture() {
   ).run();
   db.prepare(
     `INSERT INTO context_events (kind, title, detail, start_date, end_date, meta_json)
-     VALUES ('trip', 'Work trip', 'Long flight and shifted meals', '2026-07-06', '2026-07-10', '{"location":"Boston"}')`
+     VALUES ('trip', 'Work trip', 'Long flight and shifted meals', '2026-07-06', '2026-07-10', '{"location":"Portland"}')`
   ).run();
 
   db.prepare(

@@ -485,8 +485,8 @@ type DoneRuntimeGlobals = typeof globalThis & {
     // "add a pain note" toggle and its `where? (e.g. left knee)` input were the last
     // pain mini-UI left standing after 2026-07-30 ("pain is reported in words, not
     // filled into widgets"), and asking for a PLACE is what squeezed a sentence into
-    // the 60-character area_text label in the first place — the live DB still holds
-    // "…right hand joint (probably" from exactly that. Pain now arrives through the
+    // the 60-character area_text label in the first place — a real row once held a
+    // truncated mid-sentence fragment from exactly that. Pain now arrives through the
     // session note or chat and the extraction lane derives the record from the
     // athlete's own words; the display-only lifecycle below shows what it found.
     // See docs/DESIGN.md: do not reintroduce a mini pain form.

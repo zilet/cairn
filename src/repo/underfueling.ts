@@ -167,7 +167,7 @@ function hasAthleteResponse(families: Set<CausalFamily>): boolean {
 }
 
 // TRAVEL CONFOUNDS THE RECOVERY RESPONSE. A subdued sleep-feel or a sore body on a
-// day inside a trip window is the tent, the drive and the strange bed talking, not
+// day inside a trip window is the travel, the drive and the strange bed talking, not
 // energy availability — read as a fuel response it flipped one settling read into
 // `persistent_strain` off a single check-in taken on the drive home. Every date a
 // trip covers is returned so both the 7-day recovery channel and the post-correction

@@ -259,7 +259,7 @@ export function setProfile(p: any) {
   ]);
   // The profile goal is the ONE source of the destination. An active journey phase
   // copied it at creation (createJourneyPhase), so a goal change moves the phase with
-  // it — otherwise the arc kept reading "toward 164 lb" after the goal became 154.
+  // it — otherwise the arc kept reading "toward 180 lb" after the goal became 170.
   if (goalChanges.includes("goal_weight_lb") || goalChanges.includes("goal_bodyfat_pct")) {
     try {
       db.prepare(

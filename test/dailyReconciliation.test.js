@@ -754,7 +754,7 @@ test("newer matching contradictory outcomes supersede older positive movement ev
   assert.equal(response.considered_outcomes, 4, "older matching evidence remains inspectable");
 });
 
-// The live case, 2026-09-17: the composed session listed "Incline DB Press", the
+// Example case: the composed session listed "Incline DB Press", the
 // athlete logged the catalog's "Incline Dumbbell Press", an alias row already
 // joined the two — and the outcome still counted the lift as skipped, because every
 // name compare in this file was raw. Reconciliation now keys on the RESOLVED

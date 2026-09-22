@@ -96,7 +96,7 @@ test("health document kind inference uses content when the agent says other", ()
   assert.equal(inferHealthDocumentKind({
     kind: "other",
     original_name: "1 of 1 - My Health Summary.PDF",
-    summary: "Cambridge Health Alliance record spanning Jan 2022 through Mar 2026.",
+    summary: "Riverside Health Alliance record spanning Jan 2022 through Mar 2026.",
     markers: [
       { name: "Systolic Blood Pressure", value: 144 },
       { name: "Pulse", value: 62 },

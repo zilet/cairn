@@ -56,7 +56,7 @@ test("home location normalizes, caps, persists, and clears explicitly", () => {
 });
 
 test("changing home location emits a material profile identity event", () => {
-  repo.setProfile({ home_location: "Boston, MA" });
+  repo.setProfile({ home_location: "Portland, ME" });
   const event = flushBrainEventsForTest().find(
     (candidate) => candidate.kind === "profile_changed" && candidate.subject_key === "profile:identity"
   );
@@ -66,7 +66,7 @@ test("changing home location emits a material profile identity event", () => {
 });
 
 test("only an active trip with meta.location overrides home", () => {
-  repo.setProfile({ home_location: "Boston, MA" });
+  repo.setProfile({ home_location: "Portland, ME" });
   repo.addContextEvent({
     kind: "trip",
     title: "Past trip",
@@ -106,7 +106,7 @@ test("only an active trip with meta.location overrides home", () => {
   });
 
   assert.deepEqual(repo.getLocationContext({ on: "2026-08-10" }), {
-    home: "Boston, MA",
+    home: "Portland, ME",
     effective: "Middlesex Fells, MA",
     source: "trip",
     trip_id: active.id,
@@ -114,13 +114,13 @@ test("only an active trip with meta.location overrides home", () => {
     weather_available: false,
     planning_role: "context_only",
   });
-  assert.equal(repo.getLocationContext({ on: "2026-05-01" }).effective, "Boston, MA");
-  assert.equal(repo.getLocationContext({ on: "2026-10-01" }).effective, "Boston, MA");
+  assert.equal(repo.getLocationContext({ on: "2026-05-01" }).effective, "Portland, ME");
+  assert.equal(repo.getLocationContext({ on: "2026-10-01" }).effective, "Portland, ME");
   assert.equal(repo.listContextEvents().length, 5, "past and upcoming trips remain durable context events");
 });
 
 test("coach context and every person-aware prompt receive the compact location block", () => {
-  repo.setProfile({ home_location: "Boston, MA" });
+  repo.setProfile({ home_location: "Portland, ME" });
   const trip = repo.addContextEvent({
     kind: "trip",
     title: "Active trip",
@@ -131,7 +131,7 @@ test("coach context and every person-aware prompt receive the compact location b
 
   const ctx = repo.getCoachContext();
   assert.deepEqual(ctx.location, {
-    home: "Boston, MA",
+    home: "Portland, ME",
     effective: "Burlington, VT",
     source: "trip",
     trip_id: trip.id,
@@ -150,12 +150,12 @@ test("MCP set_profile explicitly accepts bounded home_location and empty clears 
   const tool = personTools().get("set_profile");
   assert.ok(tool);
   assert.match(tool.description, /home_location.*durable home base/i);
-  assert.equal(tool.schema.home_location.safeParse("Boston, MA").success, true);
+  assert.equal(tool.schema.home_location.safeParse("Portland, ME").success, true);
   assert.equal(tool.schema.home_location.safeParse("").success, true);
   assert.equal(tool.schema.home_location.safeParse("x".repeat(161)).success, false);
 
-  const saved = JSON.parse((await tool.handler({ home_location: "Boston, MA" })).content[0].text);
-  assert.equal(saved.home_location, "Boston, MA");
+  const saved = JSON.parse((await tool.handler({ home_location: "Portland, ME" })).content[0].text);
+  assert.equal(saved.home_location, "Portland, ME");
   const cleared = JSON.parse((await tool.handler({ home_location: "" })).content[0].text);
   assert.equal(cleared.home_location, null);
 });
@@ -187,8 +187,8 @@ test("renderDiscipline emits PLACE from structured location without memory keywo
     {
       ...base,
       location: {
-        home: "Boston, MA",
-        effective: "Boston, MA",
+        home: "Portland, ME",
+        effective: "Portland, ME",
         source: "home",
         trip_id: null,
         trip_title: null,
@@ -198,7 +198,7 @@ test("renderDiscipline emits PLACE from structured location without memory keywo
     },
     "training"
   );
-  assert.match(homeOnly, /PLACE & WEATHER: effective place is Boston, MA \(home base\)/i);
+  assert.match(homeOnly, /PLACE & WEATHER: effective place is Portland, ME \(home base\)/i);
   assert.match(homeOnly, /planning_role is context_only/i);
   assert.match(homeOnly, /never a constraint or training gate/i);
   assert.match(homeOnly, /Weather is unavailable/i);
@@ -209,7 +209,7 @@ test("renderDiscipline emits PLACE from structured location without memory keywo
     {
       ...base,
       location: {
-        home: "Boston, MA",
+        home: "Portland, ME",
         effective: "Burlington, VT",
         source: "trip",
         trip_id: 7,
@@ -221,7 +221,7 @@ test("renderDiscipline emits PLACE from structured location without memory keywo
     "day"
   );
   assert.match(onTrip, /effective place is Burlington, VT \(active trip: Active trip\)/i);
-  assert.doesNotMatch(onTrip, /effective place is Boston, MA/i);
+  assert.doesNotMatch(onTrip, /effective place is Portland, ME/i);
   assert.match(onTrip, /planning_role is context_only/i);
   assert.match(onTrip, /Weather is unavailable/i);
 
@@ -247,12 +247,12 @@ test("renderDiscipline emits PLACE from structured location without memory keywo
 });
 
 test("coach context with home only still renders PLACE prose via renderDiscipline", () => {
-  repo.setProfile({ home_location: "Cambridge, MA" });
+  repo.setProfile({ home_location: "Portland, ME" });
   const ctx = repo.getCoachContext();
-  assert.equal(ctx.location.effective, "Cambridge, MA");
+  assert.equal(ctx.location.effective, "Portland, ME");
   assert.equal(ctx.location.source, "home");
   const rendered = renderDiscipline(ctx, "training");
-  assert.match(rendered, /PLACE & WEATHER: effective place is Cambridge, MA \(home base\)/i);
+  assert.match(rendered, /PLACE & WEATHER: effective place is Portland, ME \(home base\)/i);
   assert.match(rendered, /planning_role is context_only/i);
   assert.match(rendered, /Weather is unavailable/i);
 });
@@ -269,7 +269,7 @@ function promptData(prompt) {
 }
 
 test("dated prompt builders use the requested date's effective location", () => {
-  repo.setProfile({ home_location: "Boston, MA" });
+  repo.setProfile({ home_location: "Portland, ME" });
   repo.addContextEvent({
     kind: "trip",
     title: "Montreal week",
@@ -302,12 +302,12 @@ test("dated prompt builders use the requested date's effective location", () => 
     assert.equal(promptData(onTrip).location.source, "trip", `${name} DATA keeps the trip source`);
 
     const homeAgain = build("2026-04-23");
-    assert.equal(promptData(homeAgain).location.effective, "Boston, MA", `${name} DATA returns home after the trip`);
+    assert.equal(promptData(homeAgain).location.effective, "Portland, ME", `${name} DATA returns home after the trip`);
     assert.equal(promptData(homeAgain).location.source, "home", `${name} DATA keeps the home source`);
   }
 
   const onTrip = buildDayReadPrompt(undefined, { date: "2026-04-21" });
   assert.match(onTrip, /effective place is Montreal, QC \(active trip: Montreal week\)/i);
   const homeAgain = buildSessionPrompt(undefined, { date: "2026-04-23" });
-  assert.match(homeAgain, /effective place is Boston, MA \(home base\)/i);
+  assert.match(homeAgain, /effective place is Portland, ME \(home base\)/i);
 });

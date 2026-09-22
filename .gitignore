@@ -34,6 +34,9 @@ CLAUDE.local.md
 .claude/launch.json
 .claude/worktrees/
 
+# editor-specific project directory
+.cursor/
+
 # personal, local-only files — kept on disk, never published. One folder holds
 # everything you use privately, mirroring the repo layout:
 #   .local/scripts/   deploy-rpi.sh, rpi-bootstrap.sh, rpi-https.sh, rpi-backup.sh

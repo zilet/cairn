@@ -718,8 +718,8 @@ export interface MorningRead {
 // check-in. That first row is routinely superseded by the 08:xx recompute, and it is
 // the LATTER the athlete opened the Brief to.
 //
-// Live case, 2026-08-31: decision 26229 written 04:01 UTC read `rest` and was
-// superseded; decision 26231 written 08:16 UTC read `easy`; the session was created
+// Example case: decision 4102 written 04:01 UTC read `rest` and was
+// superseded; decision 4104 written 08:16 UTC read `easy`; the session was created
 // at 11:54 UTC. First-write-wins scored the day as a REST override, so it accrued to
 // the rest ladder's evidence instead of the easy ladder's — and the easy ladder,
 // the only thing allowed to open a stacked-days ceiling morning, stayed empty while
@@ -1123,9 +1123,9 @@ export interface HarmEvidence {
 // the athlete trains, the stored number is a POST-WORKOUT reading: it says what the
 // session cost, not what the morning offered.
 //
-// Live case: the 2026-08-30 row holds training_readiness 11, synced after that day's
-// 10.4 km run — and read as "the morning after 08-29" it marked a Full Body session
-// the athlete rated 5/5 as harmful.
+// Example case: a row holds training_readiness 11, synced after that day's
+// 10.4 km run — and read as "the morning after" the previous day it marked a Full
+// Body session the athlete rated 5/5 as harmful.
 //
 // So the morning value is taken from the LEDGER first: the day's own morning read
 // (chosen exactly as morningDecisionsByDate chooses it) recorded the readiness the
@@ -1377,19 +1377,19 @@ function nextMorningPhysiologyBrakeUncached(date: string, morning: string): Harm
 // and a stimulus is not by itself an injury: the whole point of a fit athlete is that
 // some hard days cost them nothing.
 //
-// Live case: 2026-09-01 was a Push session (13 sets, soreness 2) plus a 4.5 km run
-// carrying 13.6 minutes in Z4. The next morning readiness read 75-78, HRV sat 49 ms
-// above the athlete's own norm and resting HR came in at 53 against a seven-day 55 —
-// every available signal saying the body took it. Counted as harm anyway, it was one
-// of the three days keeping the easy ladder shut.
+// Example case: a Push session (13 sets, soreness 2) plus a 4.5 km run carrying
+// 13.6 minutes in Z4. The next morning readiness read 75-78, HRV sat 49 ms above the
+// athlete's own norm and resting HR came in at 53 against a seven-day 55 — every
+// available signal saying the body took it. Counted as harm anyway, it was one of
+// the three days keeping the easy ladder shut.
 //
 // So the day is retired ONLY on POSITIVE next-morning evidence, both halves required:
 // a morning readiness that is knowable, fresh and at or above SUPPORTIVE_READINESS,
 // AND no physiology brake firing for that morning at all. Absent or stale data is not
 // a vouch — silence never speaks for the body, in either direction, so an unknowable
 // morning leaves the day as harm exactly as before. That is what keeps the two
-// counter-cases counting: 08-27's 9.85 km at 164 bpm avg into a readiness of 26 the
-// next morning, and 08-30's 10.4 km into a 38.
+// counter-cases counting: one day's 9.85 km at 164 bpm avg into a readiness of 26 the
+// next morning, and another day's 10.4 km into a 38.
 //
 // The other arms are untouched and keep their precedence. A poorly rated session and
 // a novel longest run are both facts about the day itself, and no next morning can

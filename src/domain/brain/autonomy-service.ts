@@ -2058,7 +2058,7 @@ function retireDraftsWithDeadPremise(now = Date.now()): number {
 //
 // A review hold is a question about ONE stored draft: apply this meal-plan week, or land
 // this plan change. Retire that draft and the question has no subject left — answering it
-// either way does nothing. Live, brain_decisions 25815 asked about meal_plans 20 for four
+// either way does nothing. Example: brain_decisions 4088 asked about meal_plans 20 for four
 // weeks after `acceptMealPlan` had superseded it in favour of a newer week, because every
 // pass that walks review rows had a reason to leave it alone: the thaw skips a row
 // carrying a pending change (`carriesPendingChange`, so a parked apply_error is never

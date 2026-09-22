@@ -437,11 +437,11 @@ test("GOLDEN: wearable endurance markers carry no impact_score / 0-100 grade ove
 test("a race goal round-trips and derives weeks/days-to-race + a phase hint", () => {
   // Pick the race date relative to a fixed 'today' we pass into the reader so the
   // test is deterministic (getEnduranceGoal accepts an explicit today).
-  repo.setProfile({ endurance_goal: { mode: "race", event: "Cambridge Half", date: "2026-11-01", distance_km: 21.1, target: "sub-1:45", weekly_km: 40, weekly_sessions: 4 } });
+  repo.setProfile({ endurance_goal: { mode: "race", event: "Riverside Half", date: "2026-11-01", distance_km: 21.1, target: "sub-1:45", weekly_km: 40, weekly_sessions: 4 } });
   const g = repo.getEnduranceGoal("2026-09-06"); // ~8 weeks out
   assert.equal(g.mode, "race");
   assert.equal(g.is_race, true);
-  assert.equal(g.event, "Cambridge Half");
+  assert.equal(g.event, "Riverside Half");
   assert.equal(g.days_to_race, 56);
   assert.equal(g.weeks_to_race, 8);
   assert.equal(g.phase, "build", "8 weeks out reads as the build phase");

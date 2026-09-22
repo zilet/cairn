@@ -31,7 +31,7 @@ function seedFullPicture() {
     goal_date: ahead(60),
     endurance_goal: {
       mode: "race",
-      event: "Cambridge Half Marathon",
+      event: "Riverside Half Marathon",
       date: ahead(90),
       distance_km: 21.1,
       target: "Finish feeling strong",
@@ -106,7 +106,7 @@ test("dates are drawn from real data, never fabricated", () => {
   assert.equal(goal.when.date, ahead(60), "goal entry uses the declared goal date");
   const race = timeline.find((e) => e.id === "goal:endurance-race");
   assert.equal(race.when.date, ahead(90), "race entry uses the declared event date");
-  assert.equal(race.label, "Cambridge Half Marathon");
+  assert.equal(race.label, "Riverside Half Marathon");
   assert.match(race.detail, /21\.1 km.*Finish feeling strong/);
 
   const block = timeline.find((e) => e.kind === "block");

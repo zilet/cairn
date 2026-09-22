@@ -481,7 +481,7 @@ test("a threshold test the athlete NAMED is recorded at its length, even off the
   assert.equal(event.result.lthr, 164, "past 45 minutes the average is taken as-is");
   assert.equal(event.result.named, true);
   // An ordinary long run with no such name stays an ordinary run.
-  const plain = logRun({ date: back(2), minutes: 73, km: 12, avgHr: 164, maxHr: 178, aerobicTe: 5, name: "Seaport tour" });
+  const plain = logRun({ date: back(2), minutes: 73, km: 12, avgHr: 164, maxHr: 178, aerobicTe: 5, name: "Morning run" });
   assert.equal(detectRunCalibration(plain), null);
 });
 

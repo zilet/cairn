@@ -481,8 +481,8 @@ function poorSleepCheckin(delta) {
 test("a subdued sleep-feel check-in inside a trip window never proves post-correction persistence", () => {
   // The live shape: an upward correction eight days old, a materially low diary, a
   // fast scale trend and regressing lifts — and the ONLY athlete response after the
-  // correction is one check-in tapped on the drive home from three days of camping.
-  // Sleeping in a tent is not a fuel response. Read as one, it turned a settled read
+  // correction is one check-in tapped on the drive home from a multi-day trip.
+  // Poor sleep away from home is not a fuel response. Read as one, it turned a settled read
   // into `persistent_strain` and told a rested athlete to take it easy.
   resetTables("context_events");
   target(2050, -30);
@@ -528,7 +528,7 @@ test("a trip-day check-in is also left out of the seven-day recovery channel", (
   poorSleepCheckin(-2);
   const read = underfuelingRead(TODAY, { expenditure: fastExp, goal, restSpanDays: 0 });
   const recovery = read.channels.find((c) => c.key === "recovery");
-  assert.equal(recovery.direction, "unknown", "two subdued nights in a tent are not a recovery strain");
+  assert.equal(recovery.direction, "unknown", "two subdued nights away from home are not a recovery strain");
 });
 
 test("persistent strain after three or more untrained days keeps training's shape — the rest is already taken", () => {

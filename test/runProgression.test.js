@@ -1406,7 +1406,7 @@ test("a two-day week keeps the lone easy run recovery-sized, not a second long",
     endurance_sport: "running",
     endurance_goal: {
       mode: "race",
-      event: "Cambridge Half",
+      event: "Riverside Half",
       date: fwd(42),
       distance_km: 21.1,
       weekly_km: 19,

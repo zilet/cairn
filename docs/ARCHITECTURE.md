@@ -515,7 +515,7 @@ ignores drive entirely.
 
 **Travel confounds the recovery response, and rest already taken is the recovery dose.** The
 `persistent_strain` gate needs an athlete response dated strictly AFTER the upward correction; a
-subdued `sleep_feel` or high `soreness` on a day inside a `trip` context-event window is the tent
+subdued `sleep_feel` or high `soreness` on a day inside a `trip` context-event window is the travel
 and the drive talking, not energy availability, so `travelWindowDates()` (`src/repo/underfueling.ts`,
 the same window predicate `daily-reconciliation.ts`'s `travel_window` confounder uses) drops it from
 BOTH the seven-day `recovery` channel and `postCorrectionAthleteResponse()`. The exclusion is recorded
@@ -1283,8 +1283,8 @@ duplicate rows; see `dayReadSuggestionsByDate()` in `src/repo/memory.ts`).
 **The morning read is the LAST predictive decision written before the athlete trained**, not the
 first decision of the date. The scheduler recomputes at the midnight rollover (04:00 UTC for an
 eastern athlete), hours before the morning's wearable sync, and that row is routinely superseded by
-the 08:xx one the athlete actually opens the Brief to; first-write-wins therefore scored 2026-08-31
-as a REST override when the athlete had been given an EASY read, sending the evidence to the wrong
+the 08:xx one the athlete actually opens the Brief to; first-write-wins therefore scored an example
+date as a REST override when the athlete had been given an EASY read, sending the evidence to the wrong
 ladder. First training is the earliest `sessions.created_at` for the date (falling back to the
 earliest `logged_sets.created_at` beneath it); with no training at all, the last predictive decision
 of the date stands. `context_json` still comes off the chosen row, so `outcome_feedback.applied`
@@ -1309,10 +1309,10 @@ rated session, a novel longest run, an intensity-graded hard cardio day, or a br
 but the hard-cardio arm is now retired when the next morning positively VOUCHES: a knowable, fresh
 morning readiness at or above `SUPPORTIVE_READINESS` (60, `src/repo/readiness-bands.ts`, shared with
 day-read's `PUSH_DRIVE_READINESS_FLOOR`) AND no physiology brake firing for that morning at all.
-Intensity bars describe the stimulus, not the cost; 2026-09-01's Z4 run came back the next morning at
+Intensity bars describe the stimulus, not the cost; example: a Z4 run came back the next morning at
 readiness 75-78 with HRV above norm and resting HR below its seven-day average, and counting it as
 harm was one of three days holding the easy ladder shut. Absent or stale data is never a vouch, so
-08-27's 9.85 km into a readiness of 26 still counts. The rated-session and longest-run arms are facts
+another day's 9.85 km into a readiness of 26 still counts. The rated-session and longest-run arms are facts
 about the day itself and no morning can argue them away — EXCEPT the race build's own prescription
 (2026-09-22): a longest run on a stated long-run weekday (`endurance_schedule`), within the long run a
 dated race build climbs to (`peakLongKm`, `src/repo/run-ramp.ts`), and hard cardio on the stated
@@ -1322,8 +1322,8 @@ days trained against the read, 8 had been flagged by the build working as writte
 
 **"Morning readiness" is not the stored Garmin value on a training day.**
 `garmin_daily_metrics.training_readiness` holds the LAST value synced for the date and the watch
-recomputes it through the day, so on any date the athlete trained it is a post-workout number — the
-2026-08-30 row read 11, synced after that day's 10.4 km run, and marked the previous day's 5/5-rated
+recomputes it through the day, so on any date the athlete trained it is a post-workout number — example:
+a row read 11, synced after that day's 10.4 km run, and marked the previous day's 5/5-rated
 session as harmful. One helper answers the question for both the brake and the absorption test: the
 ledger's own morning snapshot first (`signals.fatigue.readiness` on that morning's chosen decision,
 used only when `current_date` matches and the read called it `fresh`), and the Garmin row only on a

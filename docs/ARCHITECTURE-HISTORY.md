@@ -435,11 +435,11 @@ check use it instead of hardcoding `docker`. The quickstart, deployment and shar
 
 ## 2026-09-08 — A trip is a confounder, and rest already taken is the recovery dose
 
-No schema migration, no `public/` change. Diagnosed live on the Pi: a three-day family camping trip
+No schema migration, no `public/` change. Diagnosed live: a multi-day trip
 (`trip` context event, nothing trained on its last three days) ended, and the first morning home read
 "Take it easy." The ledger showed why: the fuel engine's `persistent_strain` gate needs one athlete
 response dated after the last upward correction, and the only one it found was a morning check-in
-tapped on the drive home (`sleep_feel: 2` — tent sleep). That single row upgraded a settling read into
+tapped on the drive home (`sleep_feel: 2` — poor sleep away from home). That single row upgraded a settling read into
 `recovery_package` / `training: reduce`, signal-state turned it into an EASY posture, and the
 continuity voice counted the trip's quiet days as Cairn's ("this makes the third quiet day"). Three
 changes: `travelWindowDates()` drops recovery-response evidence (sleep-feel / soreness) dated inside a
@@ -624,11 +624,11 @@ coaching turn that contains an http(s) URL also raises `current_research`.
 NO schema change; server-only (no sw bump). Root cause found live: the athlete negotiated a new
 goal weight over several chat turns, the model emitted the goal fields, and the reply said "locking
 it in" — but `applyChatActions`' per-message `hasExplicitGoalIntent` gate read the final short
-confirmation ("154 by October 20th, then") as inexplicit and SILENTLY deleted the goal fields from
+confirmation ("170 by October 20th, then") as inexplicit and SILENTLY deleted the goal fields from
 the `set_profile` patch. The profile kept the old goal, so the underfueling brain later read "at
 goal" and proposed a fuel raise off a premise the athlete had renegotiated days earlier. Three
 fixes in `src/chatTurns.ts`: (1) the base detector now recognizes a stated bodyweight DESTINATION
-("get down to 154 lb", "locking in 154 lb by October 20") — unit required, so a barbell "drop down
+("get down to 170 lb", "locking in 170 lb by October 20") — unit required, so a barbell "drop down
 to 135" never reads as a goal — and its exploratory-question guard grew the matching "should I get
 down to…?" arm; (2) `hasExplicitGoalIntentInContext` lets a confirmation-shaped message (agreement
 word, or a bare number/date refinement, never a question) carry forward an explicit statement from
@@ -637,7 +637,7 @@ coach-suggested goal still cannot ride in on a bare "ok"; (3) the drop is never 
 `applyChatActions` returns `droppedGoalFields`/`appliedGoalPatch`, and a new
 `reconcileGoalIdentityReply` in the reply chain replaces a lock-claiming reply with an honest
 correction (variant set), appends a quiet for-the-record line otherwise, and appends an exact
-"Goal saved: 154 lb by 2026-10-20 (lose)." receipt when the write really landed.
+"Goal saved: 170 lb by 2026-10-20 (lose)." receipt when the write really landed.
 `set_training_intent`/`set_endurance_goal` drops are recorded the same way, and the `set_profile`
 action shape shown to the model now names the goal fields with explicit-statement guidance.
 

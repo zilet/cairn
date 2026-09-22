@@ -27,8 +27,8 @@ export const LOW_READINESS = 35;
 // training day and never to a run.
 //
 // Twenty rather than "some fraction of low": Garmin's own readiness scale bottoms
-// out in the single digits on a genuinely wrecked morning (the live case that
-// prompted this rule read 1/100 the morning after a longest-ever threshold run),
+// out in the single digits on a genuinely wrecked morning (an example case
+// read single digits the morning after a longest-ever threshold run),
 // and the band has to be far enough below the subdued one that an ordinary poor
 // night cannot reach it.
 export const REST_GRADE_READINESS = 20;

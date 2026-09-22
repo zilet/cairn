@@ -712,9 +712,9 @@ test("diagnostics carry the read-adherence model for the operator", () => {
 // The scheduler recomputes the day at the midnight rollover — 04:00 UTC for an
 // eastern athlete, hours before the morning's wearable sync — and that first row is
 // routinely superseded by the 08:xx recompute the athlete actually opens the Brief
-// to. Picking the FIRST ledger entry therefore scored 2026-08-31 as a rest override
-// (decision 26229, 04:01 UTC, superseded) when the athlete had been given an easy
-// read (decision 26231, 08:16 UTC) and trained at 11:54. The evidence landed on the
+// to. Picking the FIRST ledger entry therefore scored an example date as a rest
+// override (decision 4102, 04:01 UTC, superseded) when the athlete had been given an
+// easy read (decision 4104, 08:16 UTC) and trained at 11:54. The evidence landed on the
 // rest ladder instead of the easy one, and the easy ladder — the only thing allowed
 // to open a stacked-days ceiling morning — stayed empty.
 

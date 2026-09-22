@@ -78,18 +78,18 @@ test("isFoodOnlyTurn releases the turn to coaching when a training signal rides 
 
 test("hasExplicitGoalIntent reads a stated destination, never a question", () => {
   table(hasExplicitGoalIntent, [
-    ["Let's get down to 154 lbs by October 20.", true],
-    ["I'd like to drop to 154 lb before the trip", true],
-    ["Locking in 154 lb by October 20th", true],
-    ["My goal is 154 lb", true],
-    ["Should I get down to 154 lbs?", false],
-    ["154 by October 20th, then", false, "a refinement alone fails the per-message gate"],
+    ["Let's get down to 170 lbs by October 20.", true],
+    ["I'd like to drop to 170 lb before the trip", true],
+    ["Locking in 170 lb by October 20th", true],
+    ["My goal is 170 lb", true],
+    ["Should I get down to 170 lbs?", false],
+    ["170 by October 20th, then", false, "a refinement alone fails the per-message gate"],
   ]);
 });
 
 test("hasExplicitGoalIntentInContext carries the athlete's own earlier statement forward", () => {
-  const negotiated = ["I want to get down to 154 lbs by end of September.", "Fair — what timeline is safe?"];
-  assert.equal(hasExplicitGoalIntentInContext("154 by October 20th, then", negotiated), true);
+  const negotiated = ["I want to get down to 170 lbs by end of September.", "Fair — what timeline is safe?"];
+  assert.equal(hasExplicitGoalIntentInContext("170 by October 20th, then", negotiated), true);
   assert.equal(hasExplicitGoalIntentInContext("okay, let's lock that in", negotiated), true);
   assert.equal(hasExplicitGoalIntentInContext("ok sounds good", ["how was the run?"]), false);
   assert.equal(hasExplicitGoalIntentInContext("should I really change my goal?", negotiated), false);

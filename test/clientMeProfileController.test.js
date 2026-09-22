@@ -213,7 +213,7 @@ function profileHarness(overrides = {}) {
     training_intent_json: JSON.stringify({ priorities: ["longevity", "strength", "endurance"], endurance_role: "supporting", endurance_capacity: { sport: "mountain biking", target_duration_min: 180, context: "technical trails in the Fells" } }),
     endurance_goal_json: JSON.stringify({ mode: "standing", label: "10k-ready", distance_km: 10, weekly_km: 30 }),
     about_me: "Fast mornings <work>",
-    home_location: 'Cambridge <MA> "home"',
+    home_location: 'Portland <ME> "home"',
   };
   const goal = overrides.goal || {
     tdee: 2800,
@@ -301,9 +301,9 @@ test("Me Profile controller renders profile state and wires segmented controls",
   assert.equal(harness.wireCount, 1);
   assert.match(harness.rootEl.innerHTML, /Alex &lt;R&gt;/);
   assert.match(harness.rootEl.innerHTML, /Home location/);
-  assert.match(harness.rootEl.innerHTML, /Cambridge &lt;MA&gt; &quot;home&quot;/);
+  assert.match(harness.rootEl.innerHTML, /Portland &lt;ME&gt; &quot;home&quot;/);
   assert.match(harness.rootEl.innerHTML, /An active trip can temporarily override it for coaching/);
-  assert.equal(harness.rootEl.querySelector("#home_location").value, 'Cambridge <MA> "home"');
+  assert.equal(harness.rootEl.querySelector("#home_location").value, 'Portland <ME> "home"');
   assert.match(harness.rootEl.innerHTML, /Goal check/);
 
   harness.rootEl.querySelectorAll("[data-disc]").find((button) => button.dataset.disc === "strength").click();
@@ -353,7 +353,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   harness.rootEl.querySelector("#eg_distance").value = "10";
   harness.rootEl.querySelector("#eg_weekly_km").value = "35";
   harness.rootEl.querySelector("#about_me").value = "Train around family";
-  harness.rootEl.querySelector("#home_location").value = "Cambridge, MA";
+  harness.rootEl.querySelector("#home_location").value = "Portland, ME";
   harness.rootEl.querySelector("#allergies").value = "nuts";
   harness.rootEl.querySelector("#dietary_restrictions").value = "pescatarian";
   harness.rootEl.querySelectorAll("[data-disc]").find((button) => button.dataset.disc === "hybrid").click();
@@ -388,7 +388,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
     },
     endurance_goal: { mode: "standing", label: "10k-ready", distance_km: 10, weekly_km: 35 },
     about_me: "Train around family",
-    home_location: "Cambridge, MA",
+    home_location: "Portland, ME",
     allergies: "nuts",
     dietary_restrictions: "pescatarian",
   });

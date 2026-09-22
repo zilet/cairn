@@ -27,7 +27,7 @@ import {
 } from "../dist/repo/run-progression.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 
-// The athlete this round was built for: Cambridge Half, 2026-11-01, 1:50 target.
+// The athlete this round was built for: Riverside Half, 2026-11-01, 1:50 target.
 const REF = "2026-08-05"; // 88 days out → 13 weeks
 const RACE = "2026-11-01";
 const HALF_KM = 21.1;
@@ -35,7 +35,7 @@ const HALF_KM = 21.1;
 const raceGoal = (over = {}) => ({
   mode: "race",
   is_race: true,
-  event: "Cambridge Half",
+  event: "Riverside Half",
   date: RACE,
   distance_km: HALF_KM,
   target: "1:50",
@@ -446,7 +446,7 @@ test("weeklyRunPlan: the base phase can rotate a threshold session in", () => {
 
 test("a long race gets a longer build: 13 weeks out from a half is build, not base", () => {
   repo.setProfile({
-    endurance_goal: { mode: "race", event: "Cambridge Half", date: RACE, distance_km: HALF_KM, target: "1:50" },
+    endurance_goal: { mode: "race", event: "Riverside Half", date: RACE, distance_km: HALF_KM, target: "1:50" },
   });
   assert.equal(repo.getEnduranceGoal(REF).weeks_to_race, 13);
   assert.equal(repo.getEnduranceGoal(REF).phase, "build", "13 weeks out from 21.1 km is the heart of the build");
@@ -466,7 +466,7 @@ test("a SHORT race keeps the original, tighter phase windows", () => {
 test("a race with a time inside sixteen weeks opens an endurance block, not off-season strength", () => {
   resetTables("program_blocks");
   repo.setProfile({
-    endurance_goal: { mode: "race", event: "Cambridge Half", date: "2026-11-22", distance_km: HALF_KM, target: "1:50" },
+    endurance_goal: { mode: "race", event: "Riverside Half", date: "2026-11-22", distance_km: HALF_KM, target: "1:50" },
   });
   const block = repo.ensureActiveBlock();
   assert.equal(block.focus, "endurance-base", `${block.goal}`);

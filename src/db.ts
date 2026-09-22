@@ -244,7 +244,7 @@ CREATE TABLE IF NOT EXISTS training_symptom_events (
 -- The athlete's own words, stored VERBATIM and synchronously, before anything is
 -- derived from them. training_symptom_events.area_text is a SHORT display label
 -- (see src/repo/symptom-area.ts) — it always was, and squeezing a paragraph through
--- it is what once left the live DB holding "…right hand joint (probably" with the
+-- it is what once left a real row holding a truncated mid-sentence fragment with the
 -- rest of the sentence gone forever. This table is the record; the label, the
 -- movements and the scope are derived FROM it by the agentic extraction lane, and a
 -- failed extraction costs nothing because the words are already here.

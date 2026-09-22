@@ -155,8 +155,8 @@ test("journey progress names the profile goal, never a phase's stale copy of it"
   const context = loadJourneyClient();
   const html = context.CairnProgressJourney.journeyCardHtml(
     {
-      profile: { goal_mode: "lose", goal_weight_lb: 154 },
-      active_phase: { kind: "cut", start_date: "2026-06-01", target_weight_lb: 164 },
+      profile: { goal_mode: "lose", goal_weight_lb: 170 },
+      active_phase: { kind: "cut", start_date: "2026-06-01", target_weight_lb: 180 },
       transition_suggestion: null,
       proposed_phases: [],
       milestones: [],
@@ -164,8 +164,8 @@ test("journey progress names the profile goal, never a phase's stale copy of it"
     },
     [],
   );
-  assert.match(html, /154 lb/);
-  assert.doesNotMatch(html, /164 lb/);
+  assert.match(html, /170 lb/);
+  assert.doesNotMatch(html, /180 lb/);
 });
 
 test("journey progress keeps a missing goal out of zero-pound copy", () => {

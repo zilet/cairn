@@ -1862,13 +1862,13 @@ test("goal identity changes require an explicit athlete statement", () => {
   const race = applyChatActions(
     {
       actions: [
-        { type: "set_endurance_goal", mode: "race", event: "Cambridge Half", date: "2026-11-01", distance_km: 21.1 },
+        { type: "set_endurance_goal", mode: "race", event: "Riverside Half", date: "2026-11-01", distance_km: 21.1 },
       ],
     },
-    { agent: "stub", message: "I want to run the Cambridge Half on November 1." }
+    { agent: "stub", message: "I want to run the Riverside Half on November 1." }
   );
   assert.equal(race.applied.length, 1);
-  assert.equal(repo.getEnduranceGoal().event, "Cambridge Half");
+  assert.equal(repo.getEnduranceGoal().event, "Riverside Half");
 
   const hierarchy = applyChatActions(
     {
@@ -1904,22 +1904,22 @@ test("goal identity changes require an explicit athlete statement", () => {
 });
 
 test("a stated bodyweight destination is an explicit goal; a bare load number is not", () => {
-  assert.equal(hasExplicitGoalIntent("Let's get down to 154 lbs by October 20."), true);
-  assert.equal(hasExplicitGoalIntent("I'd like to drop to 154 lb before the trip"), true);
-  assert.equal(hasExplicitGoalIntent("Locking in 154 lb by October 20th"), true);
-  assert.equal(hasExplicitGoalIntent("My goal is 154 lb"), true);
+  assert.equal(hasExplicitGoalIntent("Let's get down to 170 lbs by October 20."), true);
+  assert.equal(hasExplicitGoalIntent("I'd like to drop to 170 lb before the trip"), true);
+  assert.equal(hasExplicitGoalIntent("Locking in 170 lb by October 20th"), true);
+  assert.equal(hasExplicitGoalIntent("My goal is 170 lb"), true);
   // No unit → could be a barbell load, a rep count, anything. Never a bodyweight goal.
   assert.equal(hasExplicitGoalIntent("drop down to 135 on the bench today"), false);
   // Exploratory questions still never write identity.
-  assert.equal(hasExplicitGoalIntent("Should I get down to 154 lbs?"), false);
+  assert.equal(hasExplicitGoalIntent("Should I get down to 170 lbs?"), false);
 });
 
 test("a goal negotiation carries the athlete's own explicit statement into a short confirmation", () => {
-  const negotiated = ["I want to get down to 154 lbs by end of September.", "Fair — what timeline is safe?"];
+  const negotiated = ["I want to get down to 170 lbs by end of September.", "Fair — what timeline is safe?"];
   // The final refinement message alone fails the per-message gate…
-  assert.equal(hasExplicitGoalIntent("154 by October 20th, then"), false);
+  assert.equal(hasExplicitGoalIntent("170 by October 20th, then"), false);
   // …but carries through the athlete's own earlier statement.
-  assert.equal(hasExplicitGoalIntentInContext("154 by October 20th, then", negotiated), true);
+  assert.equal(hasExplicitGoalIntentInContext("170 by October 20th, then", negotiated), true);
   assert.equal(hasExplicitGoalIntentInContext("okay, let's lock that in", negotiated), true);
   // A bare agreement with NO explicit athlete statement anywhere stays inexplicit —
   // a coach-suggested goal cannot ride in on an "ok".
@@ -1929,21 +1929,21 @@ test("a goal negotiation carries the athlete's own explicit statement into a sho
 });
 
 test("applyChatActions persists a negotiated goal and reports what applied; a silent drop is no longer silent", () => {
-  repo.setProfile({ goal_weight_lb: 164 });
+  repo.setProfile({ goal_weight_lb: 180 });
   const confirmed = applyChatActions(
-    { actions: [{ type: "set_profile", goal_weight_lb: 154, goal_date: "2026-10-20", goal_mode: "lose" }] },
+    { actions: [{ type: "set_profile", goal_weight_lb: 170, goal_date: "2026-10-20", goal_mode: "lose" }] },
     {
       agent: "stub",
-      message: "154 by October 20th, then",
-      recentAthleteMessages: ["I want to get down to 154 lbs by end of September."],
+      message: "170 by October 20th, then",
+      recentAthleteMessages: ["I want to get down to 170 lbs by end of September."],
     }
   );
   assert.equal(confirmed.applied.length, 1);
-  assert.equal(repo.getProfile().goal_weight_lb, 154);
+  assert.equal(repo.getProfile().goal_weight_lb, 170);
   assert.equal(repo.getProfile().goal_date, "2026-10-20");
   assert.deepEqual(confirmed.droppedGoalFields, []);
   assert.deepEqual(confirmed.appliedGoalPatch, {
-    goal_weight_lb: 154,
+    goal_weight_lb: 170,
     goal_date: "2026-10-20",
     goal_mode: "lose",
   });
@@ -1953,7 +1953,7 @@ test("applyChatActions persists a negotiated goal and reports what applied; a si
     { agent: "stub", message: "ok", recentAthleteMessages: ["how was the run?"] }
   );
   assert.deepEqual(dropped.applied, []);
-  assert.equal(repo.getProfile().goal_weight_lb, 154, "a coach-suggested goal cannot ride in on a bare ok");
+  assert.equal(repo.getProfile().goal_weight_lb, 170, "a coach-suggested goal cannot ride in on a bare ok");
   assert.deepEqual(dropped.droppedGoalFields, ["goal_weight_lb"]);
   assert.equal(dropped.appliedGoalPatch, null);
 });
@@ -1962,7 +1962,7 @@ test("reconcileGoalIdentityReply: a lock claim over a dropped write is replaced;
   const today = localDateISO();
   // Prose claimed the lock, nothing was written → the whole reply is replaced with the correction.
   const corrected = reconcileGoalIdentityReply(
-    "Locking in 154 lb by October 20th as the goal.",
+    "Locking in 170 lb by October 20th as the goal.",
     ["goal_weight_lb", "goal_date"],
     null
   );
@@ -1975,11 +1975,11 @@ test("reconcileGoalIdentityReply: a lock claim over a dropped write is replaced;
 
   // An applied goal gets an exact receipt under the model's prose.
   const receipt = reconcileGoalIdentityReply("Great — that's the plan.", [], {
-    goal_weight_lb: 154,
+    goal_weight_lb: 170,
     goal_date: "2026-10-20",
     goal_mode: "lose",
   });
-  assert.match(receipt, /Goal saved: 154 lb by 2026-10-20 \(lose\)\./);
+  assert.match(receipt, /Goal saved: 170 lb by 2026-10-20 \(lose\)\./);
 
   // Nothing goal-shaped happened → the reply passes through untouched.
   assert.equal(reconcileGoalIdentityReply("Logged your lunch.", [], null), "Logged your lunch.");
