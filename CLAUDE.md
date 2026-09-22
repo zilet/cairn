@@ -243,7 +243,9 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   WINDOW claims (`avg_sleep_min`, `sleep_trend`, the chronic-sleep watch and its "a recent night
   exists" anchor) keep `SENSOR_MAX_AGE_DAYS.sleep` = 2. A morning with no night of its own says
   nothing about sleep — never a night before last wearing last night's words. One READINESS reading
-  is the same law (`isReadDayReadiness`): a `d-1` row is yesterday's post-workout last sync.
+  is the same law (`isReadDayReadiness`): a `d-1` row is yesterday's post-workout last sync. HRV
+  and resting HR exist only on worn nights, so their caution BRAKES only when its reading is last
+  night's; an older one rides as context (`advice_only`, `signal-state.ts`).
 - **Logged intake is evidence only when the day reads complete** — `classifyIntakeDay`
   (`src/repo/intake-window.ts`) is the one credibility rule: a morning→evening span carrying at
   least `SPANNING_DAY_MIN_KCAL`, or, when NOTHING on the day could be placed in time, a whole day

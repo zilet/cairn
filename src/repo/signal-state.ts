@@ -6,6 +6,7 @@
 // arbitration index that emits plain-language posture/reasons (never a score).
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import {
+  isLastNight,
   LAST_NIGHT_MAX_AGE_DAYS,
   READINESS_MAX_AGE_DAYS,
   SENSOR_MAX_AGE_DAYS,
@@ -1996,6 +1997,16 @@ export function planningSignalState(input: {
   const provisionalAside = (provisional: boolean, what: string): string =>
     provisional ? ` The newest ${what} figure is provisional and is not being read as a change.` : "";
 
+  // HRV and resting HR exist only on nights the watch was worn, so the newest reading is
+  // often days old. A caution built from a reading that is NOT last night's stays on the
+  // board as context (watched, voiced) but never brakes today: a night before last cannot
+  // decide this morning, the same last-night law sleep follows. Absent data stays neutral.
+  const staleCautionAsContext = (direction: SignalDirection, claimDate: string | null, qualityField: string) =>
+    // The same date the observation itself carries (addRecovery's claimDate ?? latest).
+    direction === "caution" && !isLastNight(claimDate ?? quality[qualityField]?.latest_date ?? null, date)
+      ? ({ advisory_brake: true, advice_only: true } satisfies Partial<SignalObservation>)
+      : undefined;
+
   const hrvTrust = excursionRun(
     input.recovery?.verified?.hrv_ms,
     baselineHrv,
@@ -2074,7 +2085,9 @@ export function planningSignalState(input: {
               : "hrv_steady",
       SENSOR_MAX_AGE_DAYS.hrv,
       hrvTrust.claim_date,
-      saturation ? { advisory_brake: true } : undefined
+      saturation
+        ? { advisory_brake: true }
+        : staleCautionAsContext(excursion || trendDown ? "caution" : "neutral", hrvTrust.claim_date, "hrv_ms")
     );
   }
   if (input.recovery?.delta?.rhr != null) {
@@ -2101,7 +2114,8 @@ export function planningSignalState(input: {
             ? "resting_hr_unsettled"
             : "resting_hr_steady",
       SENSOR_MAX_AGE_DAYS.resting_hr,
-      rhrTrust.claim_date
+      rhrTrust.claim_date,
+      staleCautionAsContext(excursion || trendUp ? "caution" : "neutral", rhrTrust.claim_date, "resting_hr")
     );
   }
 
@@ -2418,7 +2432,7 @@ export function planningSignalState(input: {
   // Easy running executed at threshold. A caution rather than a constraint, and
   // deliberately NO `safety_override`: nothing about it is acute, so it can never be
   // a hard floor and never flips the posture off "train". It DOES ride the ordinary
-  // caution ladder — alone on an otherwise-clean board it reads the dimension "watch"
+  // caution ladder as an ADVISORY brake — alone on an otherwise-clean board it reads the dimension "watch"
   // and the planning directive counsels holding aggression, on lifting days included.
   // That is chosen, not incidental: a fortnight where every run finished near
   // threshold is systemic recovery debt, and a coach who knew it would not pick that
@@ -2448,6 +2462,10 @@ export function planningSignalState(input: {
           // A fortnight-shaped pattern, re-derived every morning from the same window.
           // Short enough that a scoped state built for an older date lets it expire.
           max_age_days: 3,
+          // Advisory: it holds the push/backed tier shut, but it is counsel about HOW to
+          // run easy, not evidence the body needs a day off — it never decides a day or
+          // corroborates a stacked-load rest on its own.
+          advisory_brake: true,
         }
       )
     );

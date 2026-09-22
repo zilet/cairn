@@ -1980,9 +1980,16 @@ function computeDayRead(
   const stackedLoadingRest = consec >= 3 && !recoveryWeek;
   const atHardCeiling = stackedLoadingRest && consec >= PUSH_DRIVE_CONSEC_CEILING;
   const recoveryCapacity = signalState.dimensions.recovery_capacity;
+  // The brake is a CURRENT caution, not a watch status beside some fresh support: a
+  // wearable caution kept only as context (a reading older than last night) never counts.
   const recoveryCapacityFreshBrake =
     (recoveryCapacity.status === "constrained" || recoveryCapacity.status === "watch") &&
-    recoveryCapacity.evidence.some((item) => item.freshness === "fresh" || item.freshness === "recent");
+    recoveryCapacity.evidence.some(
+      (item) =>
+        (item.freshness === "fresh" || item.freshness === "recent") &&
+        (item.direction === "caution" || item.direction === "constraint") &&
+        item.advice_only !== true
+    );
   const tomorrowClinical = holdsTomorrow.some((hold) => hold.clinical === true);
   const stackedLoadCorroborated =
     lowReadiness ||

@@ -1839,3 +1839,29 @@ test("energy 1 and sleep_feel 1 still own the rest rung", () => {
   assert.equal(repo.planningSignalState({ date, checkin: { energy: 1 } }).action.posture, "rest");
   assert.equal(repo.planningSignalState({ date, checkin: { sleep_feel: 2 } }).action.posture, "rest");
 });
+
+// HRV and resting HR only exist on nights the watch was worn. A caution whose reading is
+// older than last night is kept as context and never brakes today (the last-night law).
+test("an HRV caution from the night before last is context, never a deciding brake", () => {
+  const date = localDaysAgo(0);
+  const old = repo.planningSignalState({ date, recovery: hrvRecovery(localDaysAgo(2), -9) });
+  const oldHrv = old.dimensions.recovery_capacity.evidence.find((item) => item.field === "hrv");
+  assert.equal(oldHrv.direction, "caution");
+  assert.equal(oldHrv.advice_only, true, "an old reading rides as context");
+  assert.equal(repo.hasFreshDecidingBrake(old.dimensions), false);
+
+  const fresh = repo.planningSignalState({ date, recovery: hrvRecovery(date, -9) });
+  const freshHrv = fresh.dimensions.recovery_capacity.evidence.find((item) => item.field === "hrv");
+  assert.equal(freshHrv.advice_only, undefined, "last night's reading keeps its full standing");
+});
+
+test("easy runs above the easy ceiling are advisory counsel, not a deciding brake", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    runIntensity: { status: "compressed", z2_top: 142, window_days: 14, runs_classified: 6 },
+  });
+  const item = state.dimensions.training_load_tolerance.evidence.find((e) => e.field === "run_intensity_discipline");
+  assert.equal(item.advisory_brake, true);
+  assert.equal(repo.hasFreshDecidingBrake(state.dimensions), false);
+});
