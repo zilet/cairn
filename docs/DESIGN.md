@@ -298,6 +298,13 @@ reduced-motion discipline); where a consumer makes one tappable it layers the pr
   `.trend-lead-phrase` — `.toward` sage (moving toward optimal), `.away` terracotta (away and
   actionable), `.stable` muted. Renderer `trendLeadHtml({name, phrase, tone})` clamps tone to the
   allowlist (unknown → `stable`). The direction is words, never an arrow on a score.
+- **`.strength-line` — today's lift.** The server's one line (`GET /api/today-strength-line`, and the
+  same object on the Brief, the Today aggregate and the week projection) printed VERBATIM: an optional
+  `.lbl` `.strength-line-k` kicker, the `.strength-line-t` line ("Run in · Pull still open"), a quiet
+  `.strength-line-caveat` for a rest/easy read, and — on a reshaped day — a folded
+  `.strength-line-orig` `<details>` holding the plan's own list. `data-strength-state` carries the state
+  (a `logged` line reads sage). Renderer `strengthLineHtml(line, {kicker, compact})`; `compact` drops the
+  caveat and the fold where the surface already is the caveat (a rest/easy Brief).
 
 ## Hard rules
 

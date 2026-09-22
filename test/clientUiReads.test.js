@@ -51,8 +51,32 @@ test("ui-reads registers the CairnUiReads namespace on globalThis and window", (
     "baselineBandHtml",
     "contributorRowsHtml",
     "levelChipHtml",
+    "strengthLineHtml",
     "trendLeadHtml",
   ]);
+});
+
+test("strengthLineHtml prints the server line and caveat verbatim, escaped, with a reshaped day's list folded", () => {
+  const { reads } = loadUiReads();
+  const line = {
+    state: "not_started",
+    title: `Pull ${XSS}`,
+    text: `Run in · Pull ${XSS} still open`,
+    caveat: `The read suggests rest today ${XSS}`,
+    reshaped: true,
+    original: ["Pull-Up", XSS],
+  };
+  const html = reads.strengthLineHtml(line, { kicker: "Today's lift" });
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /data-strength-state="not_started"/);
+  assert.match(html, /Today&#39;s lift|Today's lift/);
+  assert.match(html, /Run in · Pull &lt;script&gt;/);
+  assert.match(html, /class="strength-line-caveat">The read suggests rest today/);
+  assert.match(html, /<details class="strength-line-orig"><summary>The plan's list<\/summary><span>Pull-Up · &lt;script&gt;/);
+  const compact = reads.strengthLineHtml(line, { compact: true });
+  assert.doesNotMatch(compact, /strength-line-caveat|strength-line-orig/, "compact carries the line alone");
+  assert.equal(reads.strengthLineHtml({ state: "none", text: "Nothing planned today" }), "");
+  assert.equal(reads.strengthLineHtml(null), "");
 });
 
 test("baselineBandHtml renders the range region, today dot, and phrase; hot retints the dot", () => {

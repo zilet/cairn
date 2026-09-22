@@ -293,7 +293,8 @@ type TodayAddExerciseDeps = {
     return {
       weight: lastSet?.weight ?? null,
       reps: lastSet?.reps ?? null,
-      rir: lastSet?.rir ?? null,
+      // RIR opens blank: optional, and a copied one is evidence nobody gave.
+      rir: null,
       duration_sec: lastSet?.duration_sec ?? null,
     };
   }
@@ -342,7 +343,7 @@ type TodayAddExerciseDeps = {
     }
     fillInput(logRow.querySelector<HTMLInputElement>(".in-w"), lastSet.weight);
     fillInput(logRow.querySelector<HTMLInputElement>(".in-r"), lastSet.reps);
-    fillInput(logRow.querySelector<HTMLInputElement>(".in-rir"), lastSet.rir);
+    // RIR opens blank: it is the athlete's read of the set they are about to do.
   }
 
   function lastSetLineText(lastSet: Record<string, unknown>, deps: TodayAddExerciseDeps): string {

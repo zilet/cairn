@@ -144,9 +144,11 @@ test("a done cell with a session speaks the session's title, with the run beside
     layout: { clean: true, suggestion: null },
     schedule: { lift_days: [], lift_days_source: null, run_days: [] },
   });
-  assert.match(html, /Lower A · Long run 9\.8 km/);
+  // The plan day's NAME leads (the resolved day), with the run beside it — never a focus sentence.
+  assert.match(html, /Push · run in/);
   assert.doesNotMatch(html, /Shoulders, chest/);
-  assert.match(html, /Done · Mon/);
+  // The cell header already says the weekday; the status line does not repeat it.
+  assert.match(html, /<span class="pweek-status lbl">Done<\/span>/);
 });
 
 test("a covered template run day says where the run landed", () => {
@@ -194,7 +196,7 @@ test("a covered template run day says where the run landed", () => {
     schedule: { lift_days: [], lift_days_source: null, run_days: [] },
   });
   assert.match(html, /Long run 9\.8 km · done Thu/);
-  assert.match(html, /Sat · Covered/);
+  assert.match(html, /<span class="pweek-status lbl">Covered<\/span>/);
   assert.doesNotMatch(html, /Up next/);
 });
 
@@ -245,4 +247,80 @@ test("layout suggestion surfaces when unclean", () => {
   });
   assert.match(html, /Move Legs off Saturday/);
   assert.match(html, /is-hard/);
+});
+
+function liftDay(date, weekday, dow, dayNumber, name, status, run = null) {
+  return {
+    date,
+    weekday,
+    dow,
+    status,
+    plan_day: {
+      day_number: dayNumber,
+      name,
+      focus: `${name} focus sentence`,
+      purpose: null,
+      day_type: "training",
+      role: "strength",
+      out_of_order: false,
+    },
+    session: null,
+    run,
+    hard: false,
+  };
+}
+
+test("a lift day that also holds a run names both; only the first upcoming day is 'Up next'", () => {
+  const week = loadPlanWeek();
+  const easy = {
+    kind: "easy",
+    label: "Easy run",
+    status: "open",
+    suggested_date: "2026-04-23",
+    completion_date: null,
+    km: 7.4,
+  };
+  const days = [
+    liftDay("2026-04-21", "Tue", 2, 2, "Pull", "today", {
+      kind: "logged",
+      label: "Run",
+      status: "completed",
+      suggested_date: null,
+      completion_date: "2026-04-21",
+      km: 4.1,
+    }),
+    liftDay("2026-04-22", "Wed", 3, 3, "Lower A", "upcoming"),
+    liftDay("2026-04-23", "Thu", 4, 4, "Upper Body & Arms", "upcoming", easy),
+  ];
+  const html = week.stripHtml({ days, progress: { line: null }, layout: { clean: true } });
+  // Today's run sits on today's cell, and the lift is still named.
+  assert.match(html, /Pull · run in/);
+  // The run never hides the lift it shares a day with.
+  assert.match(html, /Upper Body &amp; Arms \+ easy run/);
+  assert.equal((html.match(/Up next/g) || []).length, 1, "one 'Up next', on Wednesday");
+  const ann = week.annotationsByDayNumber({ days });
+  assert.equal(ann.get(3).status, "upcoming");
+  assert.equal(ann.get(4).status, "open", "a later day names its weekday, not 'Up next'");
+});
+
+test("the strip prints the server's today line through the shared reading primitive", () => {
+  const context = { Object, Array, String, Map, Number, escHtml, escAttr, stagger };
+  context.window = context;
+  const seen = [];
+  context.CairnUiReads = {
+    strengthLineHtml: (line, opts) => {
+      seen.push([line, opts]);
+      return `<div class="strength-line">${escHtml(line.text)}</div>`;
+    },
+  };
+  vm.runInNewContext(readFileSync(join(root, "public/js/plan-week-client.js"), "utf8"), context);
+  const line = { state: "not_started", title: "Pull", text: "Run in · Pull <still> open", caveat: null };
+  const html = context.CairnPlanWeek.stripHtml({
+    days: [liftDay("2026-04-21", "Tue", 2, 2, "Pull", "today")],
+    progress: { line: null },
+    layout: { clean: true },
+    strength_line: line,
+  });
+  assert.match(html, /<div class="pweek-today"><div class="strength-line">Run in · Pull &lt;still&gt; open<\/div><\/div>/);
+  assert.equal(seen[0][0], line, "the line object is handed over verbatim");
 });

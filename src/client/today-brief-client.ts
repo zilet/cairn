@@ -361,6 +361,18 @@ type TodayBriefHtmlOptions = {
     return /\bdays?\b/i.test(trimmed) ? trimmed : `${trimmed} day`;
   }
 
+  function todayBriefStrengthLineHtml(read: TodayBriefRead | null | undefined, kind: string): string {
+    // Guarded: the reading primitives live in the core bundle, absent under a partial boot.
+    const reads = (globalThis as { CairnUiReads?: { strengthLineHtml?: Window["CairnUiReads"]["strengthLineHtml"] } })
+      .CairnUiReads;
+    if (typeof reads?.strengthLineHtml !== "function") return "";
+    const html = reads.strengthLineHtml(read?.strength_line, {
+      kicker: "Today's lift",
+      compact: kind === "rest" || kind === "easy",
+    });
+    return html ? `<div class="brief-strength">${html}</div>` : "";
+  }
+
   function todayBriefHtml(read: TodayBriefRead | null | undefined, options: TodayBriefHtmlOptions = {}): string {
     const kind = todayBriefKind(read);
     const meta = todayBriefMeta(read);
@@ -382,6 +394,12 @@ type TodayBriefHtmlOptions = {
     // due-groups/forecast). Render both compactly: forward still leads, arc still
     // yields to periodization (a richer version of the same "plan's shape" idea).
     const arc = read?.arc && !periodization ? escHtml(read.arc) : "";
+    // Today's lift in the server's one line — the same words the Session header, the
+    // week strip and the Train overview print. On a rest/easy read the Brief itself
+    // is the caveat, so only the line rides here.
+    const strengthLine = todayBriefStrengthLineHtml(read, kind);
+    const line = read?.strength_line;
+    const liftOpen = !!line && (line.state === "not_started" || line.state === "in_progress") && !!line.title;
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
     const lookBack = todayBriefLookBackHtml(read, options.isToday !== false);
 
@@ -402,8 +420,16 @@ type TodayBriefHtmlOptions = {
       // with neither the finished-session card nor a revealed plan below —
       // stranding the athlete with no way to log training. Offer one quiet
       // way in only when nothing else already does.
+      // A run-only "done" day with the plan's lift still open names that lift.
       if (!options.showPlan && !options.showDone) {
-        actions.push(todayBriefRedirect("start-session", "Log training", false));
+        actions.push(
+          todayBriefRedirect(
+            "start-session",
+            liftOpen ? `${line!.state === "in_progress" ? "Continue" : "Start"} ${line!.title}` : "Log training",
+            // Never the loud button against a rest/easy suggestion.
+            liftOpen && !line!.suggestion
+          )
+        );
       }
     } else if (!options.showPlan) {
       actions.push(
@@ -467,6 +493,7 @@ type TodayBriefHtmlOptions = {
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
+      ${strengthLine}
       ${checkinSlot}
       ${weekWins}
       ${recovery}
@@ -513,6 +540,7 @@ type TodayBriefHtmlOptions = {
     // is a material difference. The primary SURFACE alone is compared — the rest of
     // the decision is ordering the Brief itself never draws.
     if (todayBriefYieldsLead(a) !== todayBriefYieldsLead(b)) return true;
+    if (todayBriefStrengthLineHtml(a, todayBriefKind(a)) !== todayBriefStrengthLineHtml(b, todayBriefKind(b))) return true;
     // Crossing the second overridden morning adds a button (and relabels another),
     // so the count is rendered content even though the rest of `signals` is not.
     if (todayBriefOverriddenMornings(a) !== todayBriefOverriddenMornings(b)) return true;

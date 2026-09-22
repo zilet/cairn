@@ -169,3 +169,28 @@ test("the editor carries a rest day through the model, the read view, and the ed
   assert.match(training, /Make this a rest day/);
   assert.match(training, /data-additem/);
 });
+
+test("a gallery card: units on loads, no Train on a day already done, a shared purpose said once", () => {
+  const editor = loadPlanEditor();
+  const day = {
+    day_number: 1,
+    name: "Push",
+    focus: "Chest",
+    purpose: "laying down the block's foundation",
+    items: [
+      { kind: "strength", exercise: "Bench", sets: 3, rep_low: 8, rep_high: 12, target_weight: 125 },
+      { kind: "strength", exercise: "Dip", sets: 3, rep_low: 8, rep_high: 10, target_weight: -30 },
+    ],
+  };
+  const open = editor.progDayHtml(day, 0, { weekday: "Wed", status: "upcoming" });
+  assert.match(open, /125 lb</);
+  assert.match(open, /30 lb assist</);
+  assert.match(open, /data-trainday="0"/);
+  assert.match(open, /laying down the block/);
+  const done = editor.progDayHtml(day, 0, { weekday: "Mon", status: "done" }, {
+    sharedPurpose: "laying down the block's foundation",
+  });
+  assert.doesNotMatch(done, /data-trainday/, "a trained day offers no Train");
+  assert.match(done, /data-editday="0"/);
+  assert.doesNotMatch(done, /laying down the block/, "the shared purpose is said once, above the cards");
+});

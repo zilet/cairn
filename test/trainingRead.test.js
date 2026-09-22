@@ -154,6 +154,21 @@ test("a chosen session is named by its composition, not by its content bucket", 
   assert.equal(repo.getSessionByDate(DATE).title, "Mobility & Core", "divergent content still wins");
 });
 
+// An empty composition (a rest read's "Rest day") holds no prescription; once the
+// athlete lifts anyway, the done card names the work, never "Rest day".
+test("a lifted session on an empty rest composition is named by what was lifted", () => {
+  const DATE = dayBefore(REF, 1);
+  const session = repo.getOrCreateSession(DATE, null);
+  db.prepare(
+    `INSERT INTO daily_session_compositions
+       (version, session_id, date, source, status, plan_day_id, title, focus, items_json, request_fingerprint)
+     VALUES (1, ?, ?, 'adaptive_plan', 'active', NULL, 'Rest day', 'Recovery', '[]', 'fp')`
+  ).run(Number(session.id), DATE);
+  repo.logSetByName({ exercise: "90/90 Hip Switch", reps: 8, date: DATE });
+  repo.logSetByName({ exercise: "Dead Bug", reps: 10, date: DATE });
+  assert.equal(repo.getSessionByDate(DATE).title, "Mobility & Core");
+});
+
 // ---------- 2. intensity grading ----------
 test("sessionLoad: a heavy session is 'hard'/'moderate', a recovery session is 'easy'", () => {
   const hard = dayBefore(REF, 1);

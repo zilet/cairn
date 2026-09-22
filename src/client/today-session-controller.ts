@@ -104,6 +104,20 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
     return encodeURIComponent(id);
   }
 
+  // Sets logged vs prescribed across today's cards, read off each card's own progress
+  // line ("1 / 3 sets"). Null unless something is logged and it is under half.
+  function partialLogCounts(root: ParentNode): { done: number; planned: number } | null {
+    let done = 0;
+    let planned = 0;
+    root.querySelectorAll<HTMLElement>(".ex [data-prog]").forEach((el) => {
+      const match = String(el.textContent || "").match(/(\d+)\s*\/\s*(\d+)/);
+      if (!match) return;
+      done += Math.min(Number(match[1]), Number(match[2]));
+      planned += Number(match[2]);
+    });
+    return planned > 0 && done > 0 && done * 2 < planned ? { done, planned } : null;
+  }
+
   function wireFinishControls(
     session: Record<string, unknown>,
     deps: TodaySessionDeps,
@@ -115,6 +129,20 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
       finishBtn.dataset.wired = "1";
       finishBtn.addEventListener("click", async () => {
         if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
+        // A partial log asks ONCE, softly — never a gate: the second tap finishes.
+        if (!finishBtn.dataset.confirmPartial) {
+          const partial = partialLogCounts(deps.root);
+          if (partial) {
+            finishBtn.dataset.confirmPartial = "1";
+            finishBtn.textContent = "Finish anyway";
+            const stat = deps.root.querySelector<HTMLElement>("[data-finishstat]");
+            if (stat) {
+              stat.setAttribute("role", "status");
+              stat.textContent = `Finish with ${partial.done} of ${partial.planned} sets in? Tap again to finish — it reopens any time today.`;
+            }
+            return;
+          }
+        }
         const actionDate = surfaceDate;
         const actionTab = surfaceTab;
         finishBtn.disabled = true;
@@ -312,7 +340,11 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
       });
     }
 
-    deps.root.querySelector("#toHistoryBtn")?.addEventListener("click", () => deps.activateTab("progress"));
+    // "In your history" lands on History itself, not the Train overview.
+    deps.root.querySelector("#toHistoryBtn")?.addEventListener("click", () => {
+      (deps.state as { progressSeg?: string }).progressSeg = "sessions";
+      deps.activateTab("progress");
+    });
   }
 
   function wireSessionSurface(options: TodaySessionSurfaceOptions, deps: TodaySessionDeps): void {

@@ -221,6 +221,12 @@ class FakeElement {
     return Object.hasOwn(this.dataset, key);
   }
 
+  setAttribute(name, value) {
+    if (!name.startsWith("data-")) return;
+    const key = name.slice(5).replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+    this.dataset[key] = String(value);
+  }
+
   removeAttribute(name) {
     if (!name.startsWith("data-")) return;
     const key = name.slice(5).replace(/-([a-z])/g, (_, char) => char.toUpperCase());
@@ -240,6 +246,9 @@ class FakeElement {
     if (selector.startsWith("#")) return this.id === selector.slice(1);
     if (selector === ".ex .logrow") return this.classList.contains("logrow") && this.parentElement?.classList.contains("ex");
     if (selector === ".ex[data-card]") return this.classList.contains("ex") && Object.hasOwn(this.dataset, "card");
+    if (selector === ".ex [data-prog]") {
+      return Object.hasOwn(this.dataset, "prog") && Boolean(this.parentElement?.classList.contains("ex"));
+    }
     if (selector === ".logrow input") return this.tag === "input" && Boolean(this.parentElement?.classList.contains("logrow"));
     if (selector === "input") return this.tag === "input";
     if (selector === "[data-logged] .chip") return this.classList.contains("chip") && Object.hasOwn(this.parentElement?.dataset || {}, "logged");
@@ -2515,4 +2524,32 @@ test("undoing a refused skip leaves the card restored", async () => {
 
   assert.equal(card.isConnected, true, "a refused skip's Undo does not collapse the card again");
   assert.equal(harness.requests.filter((request) => request.opts?.method === "DELETE").length, 0);
+});
+
+test("Finish on a partial log asks once, softly, and the second tap finishes", async () => {
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/88/finish" && opts?.method === "POST") {
+        return { id: 88, date: "2026-06-30", finished_at: "2026-06-30T15:00:00Z", sets: [], summary: { sets: 1 } };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  surface.appendChild(new FakeElement("textarea", { id: "sessNotes", value: "" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+  const { card } = addLoggingCard(harness.rootEl);
+  card.querySelector("[data-prog]").textContent = "1 / 11 sets";
+
+  harness.controller.wireSessionSurface({ session: { id: 88, date: "2026-06-30" }, hasLoggedSets: true }, harness.deps);
+  finish.click();
+  await flushAsync();
+  assert.deepEqual(harness.requests.map((request) => request.path), [], "the first tap only asks");
+  assert.equal(finish.textContent, "Finish anyway");
+  assert.match(harness.rootEl.querySelector("[data-finishstat]").textContent, /Finish with 1 of 11 sets in\?/);
+
+  finish.click();
+  await flushAsync();
+  assert.deepEqual(harness.requests.map((request) => request.path), ["/sessions/88/finish"], "never a gate");
 });

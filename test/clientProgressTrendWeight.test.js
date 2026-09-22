@@ -201,3 +201,17 @@ test("oneRmReadLine escapes an exercise name safely at the render site", () => {
   assert.doesNotMatch(html, /<Press>/);
   assert.match(html, /&lt;Press&gt;/);
 });
+
+test("the 1RM picker lists loaded lifts and opens on the one trained last", () => {
+  const { view, trendWeight } = loadTrendWeight();
+  trendWeight.paintProgressBody([
+    { name: "90/90 Hip Switch", muscle_group: "mobility", last_logged: "2026-09-21" },
+    { name: "Dead Bug", muscle_group: "core", last_logged: "2026-09-21" },
+    { name: "Plank", muscle_group: "core", mode: "timed", last_logged: null },
+    { name: "Back Squat", muscle_group: "quads", last_logged: "2026-09-18" },
+    { name: "Barbell Bench Press", muscle_group: "chest", last_logged: "2026-09-21" },
+  ]);
+  assert.doesNotMatch(view.html, /90\/90 Hip Switch|Dead Bug|Plank/);
+  assert.match(view.html, /<option selected>Barbell Bench Press<\/option>/);
+  assert.match(view.html, /<option >Back Squat<\/option>/);
+});

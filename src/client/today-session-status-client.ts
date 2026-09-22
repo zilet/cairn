@@ -336,7 +336,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
     scheduleDoneOutcomeHydration(sid, seq);
     return `<div class="sessiondone reveal" style="--i:2" id="doneCard-${idAttr}" data-done-seq="${seq}">
       <div class="done-mark" aria-hidden="true">✓</div>
-      <div class="done-kicker lbl">${options.isToday ? "Today · complete" : "Complete"}</div>
+      <div class="done-kicker lbl">${options.isToday ? "Today · logged" : "Logged"}</div>
       <h2 class="done-title">${escHtml(name)}</h2>
       <div class="done-chips" id="doneChips-${idAttr}">${doneChipSpans(row.duration_min, sets, highlights)}</div>
       <div id="feedbackSlot" class="feedback-slot done-feedback"></div>

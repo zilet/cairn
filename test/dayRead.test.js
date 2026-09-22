@@ -1099,7 +1099,16 @@ test("forwardLook points to the NEXT session's focus (the day-ahead heads-up)", 
   ).run(sess.id, ex.id);
   const fl = repo.forwardLook(REF);
   assert.equal(fl.next_focus, "Lower body");
-  assert.match(fl.text, /Lower body/);
+  assert.equal(fl.next_name, "Lower");
+  // Nothing lifted yet today, so the pick IS today's lift — the today strength line
+  // names it, and the forward line does not say it twice.
+  assert.doesNotMatch(String(fl.text ?? ""), /Next:/);
+  // Once today's Push is in, "Next" is the day after it, by NAME.
+  const today = repo.getOrCreateSession(REF, day1Id);
+  db.prepare(
+    `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, 135, 6, 2)`
+  ).run(today.id, ex.id);
+  assert.match(repo.forwardLook(REF).text, /^Next: Lower\b/);
 });
 
 test("forwardLook is null-safe with no plan (degrades, never throws)", () => {

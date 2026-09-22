@@ -71,7 +71,8 @@ test("Today session done card preserves calm completion selectors and escaping",
   }, { name: "Plan day" }, { isToday: true });
 
   assert.match(html, /class="sessiondone reveal"/);
-  assert.match(html, /Today · complete/);
+  // "Logged", not "Complete": a partial log is still a log, never a verdict.
+  assert.match(html, /Today · logged/);
   assert.match(html, /Pull &lt;heavy&gt;/);
   assert.match(html, /2 sets/);
   assert.match(html, /2 movements/);

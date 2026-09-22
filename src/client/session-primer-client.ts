@@ -3,8 +3,9 @@
 // destination this renders a calm editorial card from GET /api/session-primer: a
 // lead sentence (why today's session is what it is) plus three quiet sections —
 // what changed, what to watch, and what's deliberately fresh — and a one-line
-// approach. Once the session has logged sets it opens COLLAPSED to a one-line strip
-// (tap to expand). Movements new this week get a small "new this week" chip that
+// approach. It opens COLLAPSED to a one-line strip — today's shape, or the first
+// thing to watch — so the first lift is on screen; tap to expand. The session header
+// above already carries the provenance and the why, so the strip never repeats them. Movements new this week get a small "new this week" chip that
 // reveals its rationale on tap.
 //
 // Pure renderers + one guarded hydrate controller (mirrors the done-card highlights
@@ -123,19 +124,21 @@ type PrimerHydrateOpts = {
       ),
     ].join("");
 
-    const collapsed = !!opts.collapsed;
+    const collapsed = opts.collapsed !== false;
     const kicker = `<span class="lbl sess-primer-kicker">Before you start</span>`;
-    const provenanceHtml = provenanceLabel
-      ? `<span class="lbl sess-primer-provenance">${e.html(provenanceLabel)}</span>`
-      : "";
-    const whyHtml = why ? `<span class="sess-primer-why">${e.html(why)}</span>` : "";
+    // One line for the strip: the shape of today, else the first watch item, else the
+    // approach. The full why lives in the expanded body.
+    const firstWatch = watch.map((w) => str(w?.text)).find(Boolean) || "";
+    const summary = [kindLabel, ...bounds].filter(Boolean).join(" · ") || firstWatch || approach;
+    const summaryHtml = summary ? `<span class="sess-primer-why">${e.html(summary)}</span>` : "";
+    const whyHtml = why ? `<p class="sess-primer-lead">${e.html(why)}</p>` : "";
     const approachHtml = approach ? `<div class="sess-primer-approach">${e.html(approach)}</div>` : "";
     return `<div class="sess-primer reveal${collapsed ? " collapsed" : ""}" id="sessPrimer" data-primer>
       <button class="sess-primer-head" type="button" data-primer-toggle aria-expanded="${collapsed ? "false" : "true"}">
-        <span class="sess-primer-head-text">${kicker}${provenanceHtml}${whyHtml}</span>
+        <span class="sess-primer-head-text">${kicker}${summaryHtml}</span>
         <span class="sess-primer-chev" aria-hidden="true">▾</span>
       </button>
-      <div class="sess-primer-body">${sections}${approachHtml}</div>
+      <div class="sess-primer-body">${whyHtml}${sections}${approachHtml}</div>
     </div>`;
   }
 
@@ -231,7 +234,7 @@ type PrimerHydrateOpts = {
       slot.innerHTML = "";
       return;
     }
-    const html = sessionPrimerCardHtml(primer, { collapsed: !!opts.hasLoggedSets });
+    const html = sessionPrimerCardHtml(primer, { collapsed: true });
     slot.innerHTML = html;
     if (!html) return;
     wirePrimerToggle(slot);

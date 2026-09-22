@@ -265,6 +265,8 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
                       sage text), optional muted .level-chip-detail.
      .trend-lead      trend-first headline: serif name + directional phrase
                       (.toward sage / .away terracotta / .stable muted).
+     .strength-line   today's lift in the server's one line + optional caveat
+                      and folded original list (.strength-line-orig).
    ------------------------------------------------------------------- */
 .read-band{display:flex;flex-direction:column;gap:6px}
 .read-band-label{display:block}
@@ -310,6 +312,19 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .trend-lead-phrase.toward{color:var(--sage-text)}
 .trend-lead-phrase.away{color:var(--accent-deep)}
 .trend-lead-phrase.stable{color:var(--muted)}
+
+/* today's lift — the ONE server line (plan day name · state off the log) every
+   strength surface prints verbatim; a rest/easy read is a quiet caveat under it,
+   never a replacement title. A reshaped day folds the plan's own list away. */
+.strength-line{display:flex;flex-direction:column;gap:3px;min-width:0}
+.strength-line-k{display:block}
+.strength-line-t{font-weight:650;font-size:.9rem;color:var(--ink);line-height:1.35}
+.strength-line[data-strength-state="logged"] .strength-line-t{color:var(--sage-text)}
+.strength-line-caveat{font-size:.82rem;color:var(--ink-2);line-height:1.45}
+.strength-line-orig{font-size:.8rem;color:var(--muted);line-height:1.45}
+.strength-line-orig summary{cursor:pointer;color:var(--muted);width:max-content}
+.strength-line-orig summary:hover{color:var(--ink-2)}
+.strength-line-orig span{display:block;margin-top:3px;color:var(--ink-2)}
 
 /* -------------------------------------------------------------------
    04b · Loading & progress — full-area "working" state
@@ -710,6 +725,13 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 
 /* set logging row */
 .logrow{display:flex;gap:7px;margin-top:10px;align-items:center}
+/* persistent caps over the wells — a prefilled value hides the placeholder, and
+   three bare numbers do not say which is weight, reps or RIR */
+.logcaps{display:flex;gap:7px;margin-top:10px}
+.logcaps span{flex:1 1 0;min-width:0;text-align:center;font-family:var(--font-ui);font-size:.58rem;
+  font-weight:600;letter-spacing:.14em;color:var(--muted)}
+.logcaps i{flex:0 0 44px}
+.logcaps + .logrow{margin-top:4px}
 .logrow input{
   width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
   border-radius:10px;padding:10px 8px;text-align:center;
@@ -3000,6 +3022,7 @@ body.sheet-open{overflow:hidden}
   font-variation-settings:"opsz" 50;font-size:1.05rem;color:var(--accent);margin-top:5px;
 }
 .brief-why{font-size:.92rem;color:var(--ink-2);line-height:1.5;margin:11px 0 0;max-width:46ch}
+.brief-strength{margin-top:13px;padding-top:11px;border-top:1px solid var(--line);max-width:46ch}
 
 /* the week-wins reassurance on a rest/easy Brief — same sentence + rules as the
    done card's week footnote (.done-week), just repositioned here. */
@@ -5911,9 +5934,11 @@ button.prow-name:hover{color:var(--accent)}
 .pweek-day-v{font-size:.72rem;line-height:1.3;color:var(--ink-2);overflow-wrap:anywhere}
 .pweek-status{font-size:.58rem;letter-spacing:.06em;color:var(--muted);margin-top:2px}
 .end-run-row.is-quiet{opacity:.55}
+.pweek-today{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 .pweek-progress{margin-top:10px;font-size:.88rem;line-height:1.5;color:var(--ink)}
 .pweek-note{margin-top:6px;font-size:.84rem;line-height:1.5;color:var(--ink-2)}
 .prog-purpose{margin-top:4px;font-size:.82rem;line-height:1.4;color:var(--ink-2);font-style:italic}
+.prog-purpose-shared{margin:2px 4px 12px}
 .prog-order{font-size:.78rem;align-self:center}
 @media (max-width:560px){.pweek-map{grid-template-columns:repeat(4,1fr)}}
 .rbuild-more{margin-top:12px}
@@ -6370,6 +6395,8 @@ body[data-tab="session"] .tabbar{display:none}
    a lead sentence, three reading-grammar sections (.read-contribs), an approach
    footnote. Collapses to a one-line strip once the session has logged sets. */
 .sess-primer-slot:empty{display:none}
+.sess-orig{margin-top:4px}
+.sess-line-start{margin-top:8px}
 .sess-primer{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
   padding:14px 16px;margin-bottom:12px}
 .sess-primer-head{display:flex;align-items:baseline;gap:10px;width:100%;background:none;border:0;
@@ -6381,6 +6408,7 @@ body[data-tab="session"] .tabbar{display:none}
 .sess-primer.collapsed .sess-primer-chev{transform:rotate(-90deg)}
 .sess-primer.collapsed .sess-primer-why{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sess-primer-body{display:flex;flex-direction:column;gap:14px;margin-top:13px}
+.sess-primer-lead{margin:0;color:var(--ink-2);font-size:.88rem;line-height:1.45}
 .sess-primer.collapsed .sess-primer-body{display:none}
 .sess-primer-sec{display:flex;flex-direction:column;gap:7px}
 .sess-primer-sec-t{color:var(--muted)}
@@ -6615,3 +6643,6 @@ body[data-tab="session"] .tabbar{display:none}
 .prog-head-actions .ghostbtn{margin-top:0}
 /* Train overview: the calm "Start today's training" CTA under the week masthead. */
 .tov-start{margin:4px 0 12px}
+.tov-today{display:flex;flex-direction:column;align-items:flex-start;gap:10px;margin:4px 0 12px;
+  padding:14px 16px;background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow-sm)}
+.tov-today .tov-start{margin:0}

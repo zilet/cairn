@@ -1174,11 +1174,18 @@ function sessionLaunchCardHtml(opts: {
   read: { est_minutes?: unknown } | null | undefined;
   strengthJourney?: import("../contracts/client-api.js").ClientStrengthJourney | null;
 }): string {
+  // The plan day's NAME leads ("Pull"); a composition's stored title is its focus
+  // sentence. Only a session built off-plan (no plan day) keeps its own title.
+  const planName = opts.day && opts.day.name ? String(opts.day.name) : "";
+  const planLinked = !opts.dailySession || opts.dailySession.plan_day_id != null;
   const name =
+    (planLinked && planName) ||
     opts.dailySession?.title ||
     opts.preview?.title ||
-    (opts.day && opts.day.name ? String(opts.day.name) : opts.isRunDay ? "Today's run" : "Today's session");
-  const focus = opts.dailySession?.focus || opts.preview?.focus || (opts.day && opts.day.focus ? String(opts.day.focus) : "");
+    planName ||
+    (opts.isRunDay ? "Today's run" : "Today's session");
+  const focusText = opts.dailySession?.focus || opts.preview?.focus || (opts.day && opts.day.focus ? String(opts.day.focus) : "");
+  const focus = focusText && focusText !== name ? focusText : "";
   const started = opts.exDone > 0 || opts.hasLoggedSets;
   const previewCount = !started && !opts.dailySession ? opts.preview?.item_count : null;
   const sub = previewCount != null
@@ -1244,6 +1251,10 @@ function sessionShellHtml(
     estimate?: number | null;
     exDone: number;
     exTotal: number;
+    /** The plan day's own list when most of today's slots moved — one tap away. */
+    original?: string[];
+    /** Offer the plan day itself when the accepted session holds no lift for it. */
+    startDay?: { dayNumber: number; label: string } | null;
   }
 ): string {
   const capped = Math.min(meta.exTotal, 12);
@@ -1260,6 +1271,8 @@ function sessionShellHtml(
         <div class="sess-kicker lbl">${escHtml(meta.kicker)}</div>
         <div class="sess-dayname" role="heading" aria-level="1" tabindex="-1">${escHtml(meta.dayName)}${meta.dayFocus ? `<span class="sess-focus"> · ${escHtml(meta.dayFocus)}</span>` : ""}</div>
         ${meta.why || meta.estimate ? `<div class="sess-topbar-why">${meta.why ? escHtml(meta.why) : ""}${meta.estimate ? `${meta.why ? " · " : ""}${Math.round(meta.estimate)} min` : ""}</div>` : ""}
+        ${meta.original && meta.original.length ? `<details class="strength-line-orig sess-orig"><summary>The plan's list</summary><span>${escHtml(meta.original.join(" · "))}</span></details>` : ""}
+        ${meta.startDay ? `<button type="button" class="ghostbtn sess-line-start daybtn" data-day="${escAttr(meta.startDay.dayNumber)}">${escHtml(meta.startDay.label)}</button>` : ""}
       </div>
       <div class="sess-topbar-side">${prog}</div>
     </div>
@@ -1312,6 +1325,14 @@ async function renderSession(opts: any = {}): Promise<void> {
   sessionFreshNext = false;
   const prevY = typeof window !== "undefined" ? window.scrollY : 0;
 
+  // Today's lift, in the server's one line — requested beside the data load so the
+  // header names the plan day (never a rest suggestion as its title) on first paint.
+  const strengthLinePromise: Promise<import("../contracts/client-api.js").ClientTodayStrengthLine | null> =
+    todayState.logDate === localISO()
+      ? (todayApi(`/today-strength-line?date=${encodeURIComponent(todayState.logDate)}`) as Promise<
+          import("../contracts/client-api.js").ClientTodayStrengthLine | null
+        >).catch(() => null)
+      : Promise.resolve(null);
   const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
   const { isToday } = todayData;
   const session: any = todayData.session;
@@ -1378,9 +1399,32 @@ async function renderSession(opts: any = {}): Promise<void> {
     todayPlanSurfaceRendererDeps()
   );
 
-  const dayName =
-    dailySession?.title || (day && day.name ? String(day.name) : prep.isRunDay ? "Today's run" : "Session");
-  const dayFocus = dailySession?.focus || (day && day.focus ? String(day.focus) : "");
+  const strengthLine = await strengthLinePromise;
+  // The plan day's NAME is the title everywhere ("Pull"); its focus is the quiet
+  // second half. The server line owns today's title when it speaks for the day this
+  // session holds — or when the accepted session holds no lift at all (a rest/easy
+  // read's empty composition), because a rest suggestion is a caveat on the plan
+  // day, never its replacement.
+  const sessionItems = Array.isArray(dailySession?.items) ? dailySession!.items : [];
+  const sessionHoldsLift = sessionItems.some((item) => item && item.kind !== "cardio");
+  const linePlanDay = strengthLine && strengthLine.title && strengthLine.day_number != null ? strengthLine : null;
+  const lineOwnsTitle =
+    !!linePlanDay &&
+    (dailySession
+      ? !sessionHoldsLift ||
+        (dailySession.plan_day_id != null && !!day && Number(day.day_number) === linePlanDay.day_number)
+      : !day || Number(day.day_number) === linePlanDay.day_number);
+  const planDayName = dailySession && dailySession.plan_day_id == null ? "" : day && day.name ? String(day.name) : "";
+  const dayName = lineOwnsTitle
+    ? String(linePlanDay!.title)
+    : planDayName || dailySession?.title || (prep.isRunDay ? "Today's run" : "Session");
+  const dayFocus = lineOwnsTitle
+    ? String(linePlanDay!.focus || "")
+    : dailySession?.focus && dailySession.focus !== dayName
+      ? dailySession.focus
+      : day && day.focus
+        ? String(day.focus)
+        : "";
   const sourceLabel = dailySessionProvenanceLabel(dailySession) || (dailySession
     ? dailySession.source === "adaptive_plan" || dailySession.source === "manual_plan"
       ? `From plan${day && day.name ? ` · ${String(day.name)}` : ""}`
@@ -1403,10 +1447,15 @@ async function renderSession(opts: any = {}): Promise<void> {
     kicker,
     dayName,
     dayFocus,
-    why: dailySession?.why || "",
+    why: (lineOwnsTitle && linePlanDay!.caveat) || dailySession?.why || "",
     estimate: dailySession?.est_minutes || null,
     exDone: prep.exDone,
     exTotal: prep.exTotal,
+    original: lineOwnsTitle && linePlanDay!.reshaped ? linePlanDay!.original : [],
+    startDay:
+      lineOwnsTitle && dailySession && !sessionHoldsLift && linePlanDay!.role === "strength" && linePlanDay!.state === "not_started"
+        ? { dayNumber: Number(linePlanDay!.day_number), label: `Start ${linePlanDay!.title}` }
+        : null,
   });
 
   // Calm: no mid-workout "apply these targets to my plan" banner in the focused

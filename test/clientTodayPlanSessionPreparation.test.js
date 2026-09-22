@@ -74,10 +74,11 @@ test("Today plan/session model groups sets, matches cardio once, prunes pending 
   };
   assert.deepEqual(plain(model.prunePendingOffPlan(state, groups.planNames, loggedByEx)), [{ name: "Lateral raise" }]);
   assert.deepEqual(plain(state.pendingOffPlan["2026-06-30"]), [{ name: "Lateral raise" }]);
+  // The next set opens at the one just logged, but never at its RIR.
   assert.deepEqual(plain(model.prefillFor({ exercise: "Bench", target_weight: 180, rep_low: 5 }, loggedByEx, {})), {
     weight: 190,
     reps: 4,
-    rir: 1,
+    rir: null,
     duration_sec: null,
   });
   assert.deepEqual(plain(model.selectedPlanDay({ day: 9, plan: [{ day_number: 2, name: "Fallback" }] }, false)), {
@@ -131,6 +132,34 @@ test("Today prefill falls back to the server's grounded suggestion, never to an 
     ).weight,
     70
   );
+});
+
+// One tap logs what the card SHOWS: the prescription leads, last time only fills
+// what it leaves open, and RIR always opens blank (optional, never copied).
+test("Today prefill opens at the prescribed target, never at last time's load or RIR", () => {
+  const context = loadPreparation();
+  const model = context.CairnTodayPlanSessionModel;
+  const last = { Bench: { weight: 115, reps: 10, rir: 3 } };
+  assert.deepEqual(
+    plain(model.prefillFor({ exercise: "Bench", target_weight: 125, rep_low: 8 }, {}, last)),
+    { weight: 125, reps: 8, rir: null, duration_sec: null }
+  );
+  // A re-grounded target: the card leads with the server's number ("hold this load"),
+  // so that is the number one tap logs.
+  assert.equal(
+    model.prefillFor({ exercise: "Bench", target_weight: 100, rep_low: 10 }, {}, last, {
+      reground: true,
+      suggested: { weight: 115 },
+    }).weight,
+    115
+  );
+  // No prescription at all: last time is the honest start, still without its RIR.
+  assert.deepEqual(plain(model.prefillFor({ exercise: "Bench" }, {}, last)), {
+    weight: 115,
+    reps: 10,
+    rir: null,
+    duration_sec: null,
+  });
 });
 
 // The per-session symptom-relevance read is gone with the per-card movement check
@@ -271,7 +300,7 @@ test("Today plan/session preparation assembles cardio, pending off-plan, prescri
   assert.deepEqual(plain(result.prefillFor({ exercise: "Bench", rep_low: 5 })), {
     weight: 185,
     reps: 5,
-    rir: 1,
+    rir: null,
     duration_sec: null,
   });
   assert.equal(result.rxFor("Bench").action, "overload");
@@ -466,7 +495,7 @@ test("Peak-day cards claim their own logged sets and never prefill from a siblin
   // The card that DID log continues from what it logged.
   assert.deepEqual(
     plain(model.prefillFor(topSingle, loggedByEx, {}, null, attribution.get(topSingle))),
-    { weight: 315, reps: 1, rir: 0, duration_sec: null }
+    { weight: 315, reps: 1, rir: null, duration_sec: null }
   );
 
   // Later sets fill the back-off card in order; the top single keeps only its one.
@@ -508,12 +537,13 @@ test("A one-card-per-exercise day degenerates to the name-keyed behaviour", () =
   const withAttribution = plain(model.prefillFor(bench, loggedByEx, {}, null, attribution.get(bench)));
   const withoutAttribution = plain(model.prefillFor(bench, loggedByEx, {}, null));
   assert.deepEqual(withAttribution, withoutAttribution);
-  assert.deepEqual(withAttribution, { weight: 190, reps: 4, rir: 1, duration_sec: null });
-  // A single card still prefers real history over its stored target.
+  assert.deepEqual(withAttribution, { weight: 190, reps: 4, rir: null, duration_sec: null });
+  // A single card opens at its prescription; history fills only what the
+  // prescription leaves open (here the load), and never its RIR.
   const row = items[1];
   assert.deepEqual(
-    plain(model.prefillFor(row, {}, { Row: { weight: 135, reps: 8, rir: 2 } }, null, attribution.get(row))),
-    { weight: 135, reps: 8, rir: 2, duration_sec: null }
+    plain(model.prefillFor(row, {}, { Row: { weight: 135, reps: 10, rir: 2 } }, null, attribution.get(row))),
+    { weight: 135, reps: 8, rir: null, duration_sec: null }
   );
 });
 

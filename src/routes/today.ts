@@ -9,7 +9,7 @@ import {
   todayAgenda,
 } from "../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../domain/health/index.js";
-import { planDayRecoveryCandidates, selectedPlanDayForDate } from "../domain/training/index.js";
+import { planDayRecoveryCandidates, selectedPlanDayForDate, todayStrengthLine } from "../domain/training/index.js";
 import { markTodayAgendaSeen, todayAggregate, todayDateParam } from "../domain/today/index.js";
 import { recordDismissal } from "../repo/surface-dismissals.js";
 
@@ -56,6 +56,13 @@ export function publicTodayPlanDay(dateQuery?: unknown) {
 // the server.
 todayRouter.get("/today-plan-day", (req, res) => {
   res.json(publicTodayPlanDay(req.query.date));
+});
+
+// Today's lift in one line — plan day NAME, its state off the log, a rest/easy read
+// as a caveat, a run logged today beside it. Every strength surface renders this
+// verbatim; the Brief and the aggregate carry the same object.
+todayRouter.get("/today-strength-line", (req, res) => {
+  res.json(todayStrengthLine(todayDateParam(req.query.date)));
 });
 
 // The Today salience arbiter: ONE ranking + budget pass over the whole Today

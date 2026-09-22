@@ -87,6 +87,13 @@ function dayModelFromPlan(
   };
 }
 
+// A plan row's load with its unit: "125 lb", "30 lb assist". Negative = assisted.
+function fmtWeightLb(weight: unknown): string {
+  const n = Number(weight);
+  if (!Number.isFinite(n)) return fmtWeight(weight);
+  return n < 0 ? `${-n} lb assist` : `${n} lb`;
+}
+
 function progDayStatusLabel(ann: ProgDayAnnotation | undefined, rest: boolean): string {
   // No week annotation yet (first paint, or an unscheduled week): the caller's
   // "Day N · Rest" fallback names the seam, so say nothing here.
@@ -111,11 +118,21 @@ function calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): stri
     : "";
 }
 
-function progDayHtml(day: PlanEditorDay, dayIndex: number, ann?: ProgDayAnnotation): string {
+// `sharedPurpose`: a purpose line the gallery already says ONCE above the cards (every
+// card repeating "laying down the block's foundation" read as noise), so the card drops it.
+function progDayHtml(
+  day: PlanEditorDay,
+  dayIndex: number,
+  ann?: ProgDayAnnotation,
+  opts: { sharedPurpose?: string | null } = {}
+): string {
   const items = Array.isArray(day.items) ? day.items : [];
   const rest = isRestDay(day);
   const statusLabel = progDayStatusLabel(ann, rest);
-  const purpose = typeof day.purpose === "string" ? day.purpose.trim() : "";
+  const ownPurpose = typeof day.purpose === "string" ? day.purpose.trim() : "";
+  const purpose = opts.sharedPurpose && ownPurpose === opts.sharedPurpose ? "" : ownPurpose;
+  // A day already trained this week offers no "Train" — Edit stays.
+  const trainedThisWeek = ann?.status === "done";
   const outOfOrder = day.out_of_order === true && !rest && items.length > 1;
   const strip = items.map((item) => {
     if (isCardioItem(item)) {
@@ -158,7 +175,7 @@ function progDayHtml(day: PlanEditorDay, dayIndex: number, ann?: ProgDayAnnotati
           </div>
           <div class="prog-row-nums">
             <span class="numeral">${item.sets ?? "?"} × ${range}</span>
-            ${!timed && item.target_weight != null ? `<span class="numeral prog-row-wt">${fmtWeight(item.target_weight)}</span>` : ""}
+            ${!timed && item.target_weight != null ? `<span class="numeral prog-row-wt">${escHtml(fmtWeightLb(item.target_weight))}</span>` : ""}
           </div>
         </div>`;
   }).join("");
@@ -171,7 +188,7 @@ function progDayHtml(day: PlanEditorDay, dayIndex: number, ann?: ProgDayAnnotati
             ${purpose ? `<div class="prog-purpose">${escHtml(purpose)}</div>` : ""}
           </div>
           <div class="prog-head-actions">
-            ${rest || !items.length ? "" : `<button class="ghostbtn prog-train" data-trainday="${dayIndex}">Train</button>`}
+            ${rest || !items.length || trainedThisWeek ? "" : `<button class="ghostbtn prog-train" data-trainday="${dayIndex}">Train</button>`}
             ${outOfOrder ? `<button class="linkbtn prog-order" type="button" data-orderday="${dayIndex}">Order for effect</button>` : ""}
             <button class="ghostbtn prog-edit" data-editday="${dayIndex}">Edit day</button>
           </div>

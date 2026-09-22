@@ -637,7 +637,7 @@ test("Today add-exercise controller updates a stale peeked last-set once the net
   assert.ok(card.querySelector(".ex-lastset"), "a stale peek still paints a last-time line");
   assert.equal(logRow.querySelector(".in-w").value, "30");
   assert.equal(logRow.querySelector(".in-r").value, "10");
-  assert.equal(logRow.querySelector(".in-rir").value, "2");
+  assert.equal(logRow.querySelector(".in-rir").value, "", "RIR opens blank");
 
   resolveLastSet({ weight: 40, reps: 8, rir: 1, duration_sec: null });
   await flushAsync();
@@ -648,7 +648,7 @@ test("Today add-exercise controller updates a stale peeked last-set once the net
   assert.equal(line.dataset.wired, "1", "wireLastSetLine re-ran against the network row");
   assert.equal(logRow.querySelector(".in-w").value, "40");
   assert.equal(logRow.querySelector(".in-r").value, "8");
-  assert.equal(logRow.querySelector(".in-rir").value, "1");
+  assert.equal(logRow.querySelector(".in-rir").value, "", "a history RIR is never copied in");
 });
 
 test("Today add-exercise controller keeps a typed prefill when the network last-set arrives", async () => {
@@ -682,7 +682,7 @@ test("Today add-exercise controller keeps a typed prefill when the network last-
 
   assert.equal(reps.value, "12", "a typed value is not overwritten by the network last-set");
   assert.equal(logRow.querySelector(".in-w").value, "40", "untouched fields still take the network prefill");
-  assert.equal(logRow.querySelector(".in-rir").value, "1");
+  assert.equal(logRow.querySelector(".in-rir").value, "", "RIR stays the athlete's to give");
 });
 
 test("exerciseNameKey folds case, whitespace, and punctuation like the server", () => {

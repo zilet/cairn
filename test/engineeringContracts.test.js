@@ -5170,7 +5170,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(planEnduranceSource, /CairnPlanEndurance/);
   assert.match(planEditorSource, /type PlanEditorItem = \{/);
   assert.match(planEditorSource, /function dayModelFromPlan\(\s*day: PlanEditorDay \| PlanEditorApiDay\s*\)/);
-  assert.match(planEditorSource, /function progDayHtml\(day: PlanEditorDay, dayIndex: number, ann\?: ProgDayAnnotation\): string/);
+  assert.match(
+    planEditorSource,
+    /function progDayHtml\(\s*day: PlanEditorDay,\s*dayIndex: number,\s*ann\?: ProgDayAnnotation,\s*opts: \{ sharedPurpose\?: string \| null \} = \{\}\s*\): string/
+  );
   assert.match(
     planEditorSource,
     /function pitemHtml\(item: PlanEditorItem, dayIndex: number, itemIndex: number, lastIndex: number\): string/

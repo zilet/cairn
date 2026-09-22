@@ -43,6 +43,8 @@ export interface ExerciseRow {
   garmin_category?: string | null;
   garmin_exercise?: string | null;
   garmin_map_status?: string | null;
+  /** The last date this lift was logged — lets a picker open on what was trained last. */
+  last_logged?: string | null;
   suggested_name?: string | null; // an agent's cleaner title waiting for a yes/no (renameExercise)
   refused_name?: string | null; // the suggestion a person declined — never parked again
 }
@@ -52,7 +54,13 @@ function validMode(mode: any): string | undefined {
 }
 
 export function listExercises(): ExerciseRow[] {
-  return db.prepare(`SELECT * FROM exercises ORDER BY name`).all() as unknown as ExerciseRow[];
+  return db
+    .prepare(
+      `SELECT e.*, (SELECT MAX(s.date) FROM logged_sets l JOIN sessions s ON s.id = l.session_id
+                     WHERE l.exercise_id = e.id) AS last_logged
+         FROM exercises e ORDER BY e.name`
+    )
+    .all() as unknown as ExerciseRow[];
 }
 
 export function findExercise(name: string): any {

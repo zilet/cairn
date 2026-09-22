@@ -13,6 +13,8 @@ import {
   planDayProgression,
   selectedPlanDayForDate,
   strengthJourneyRead,
+  todayStrengthLine,
+  type TodayStrengthLine,
 } from "../training/index.js";
 import { getPlanWithPurpose } from "../../repo/day-read.js";
 import { localDateISO } from "../../repo/shared.js";
@@ -77,6 +79,7 @@ export type TodayAggregate = {
   strength_journey: unknown;
   agenda: unknown;
   coaching_focus: unknown;
+  strength_line: TodayStrengthLine;
 };
 
 export function todayAggregate(dateQuery?: unknown): TodayAggregate {
@@ -109,5 +112,6 @@ export function todayAggregate(dateQuery?: unknown): TodayAggregate {
     strength_journey: strengthJourneyRead(),
     agenda,
     coaching_focus: getCoachingFocus(),
+    strength_line: todayStrengthLine(date),
   };
 }

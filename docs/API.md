@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**343 routes** across 116 groups.
+**344 routes** across 117 groups.
 
 ## `/activities`
 
@@ -855,6 +855,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/today-side` | One trip for the Today screen's small independent side panels (context events, health synthesis, Garmin daily, recovery bands, meal plans) instead of one GET each. A PWA convenience: every individual route still exists and still owns its semantics, each key here is that route's own read, and a key whose read fails comes back `null` so one panel's failure never takes the others with it. The key set is exactly what the Today side loaders read — directives, insights and the team week are NOT fanned in, because nothing on this path renders them. |
+
+## `/today-strength-line`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/today-strength-line` | Today's lift in one line — plan day NAME, its state off the log, a rest/easy read as a caveat, a run logged today beside it. Every strength surface renders this verbatim; the Brief and the aggregate carry the same object. |
 
 ## `/training-agenda`
 

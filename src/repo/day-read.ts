@@ -53,6 +53,7 @@ import {
   nextCandidateAfter,
   planDayCandidates,
   planDayFocus,
+  planDayLabel,
   resolveSessionPlanDay,
   selectAdaptivePlanDay,
 } from "./plan-selection.js";
@@ -3001,6 +3002,7 @@ export const THIN_SIGNAL_COVERAGE_WHY: readonly string[] = [
 // warmly when available, this is the floor (and the structured truth the PWA renders).
 export interface ForwardLook {
   next_focus: string | null; // the next session's character ("Lower body")
+  next_name: string | null; // the next plan day's NAME ("Pull") — what the line says
   due: string[]; // groups under their productive range this week
   loaded_soon: { when: "tomorrow" | "soon"; run_kind: "quality" | "long" } | null;
   text: string | null; // a single plain-words line, or null when there's nothing to say
@@ -3023,6 +3025,9 @@ export const FORWARD_LOADED_SOON: ReadonlyArray<(runKind: string) => string> = [
 export function forwardLook(date?: string): ForwardLook {
   const d = date || localDateISO();
   let next_focus: string | null = null;
+  let next_name: string | null = null;
+  // True once today already holds logged lifting — only then is the pick the day AFTER.
+  let afterToday = false;
   try {
     const days = planDayCandidates();
     if (days.length) {
@@ -3043,11 +3048,13 @@ export function forwardLook(date?: string): ForwardLook {
             days
           )
         : null;
+      afterToday = !!todayResolved;
       const selected = todayResolved ? null : selectAdaptivePlanDay(d);
       const nd = todayResolved
         ? nextCandidateAfter(days, todayResolved.day_number)
         : days.find((day) => day.day_number === selected?.day_number);
       next_focus = nd ? planDayFocus(nd) : null;
+      next_name = nd ? planDayLabel(nd) : null;
     }
   } catch {
     /* no plan → no next focus */
@@ -3082,7 +3089,10 @@ export function forwardLook(date?: string): ForwardLook {
     /* no agenda → no forecast */
   }
   const parts: string[] = [];
-  if (next_focus) parts.push(`Next: ${next_focus}`);
+  // The plan day's NAME, the same label the week strip and the Session header use.
+  // Before anything is lifted the pick IS today's lift, which the today strength line
+  // already names — "Next: Pull" under "Pull still open" said it twice.
+  if (afterToday && (next_name || next_focus)) parts.push(`Next: ${next_name || next_focus}`);
   if (due.length) parts.push(`${plainGroupWords(due, 2) ?? due.join(" & ")} due this week`);
   if (loaded_soon) {
     const runWord = loaded_soon.run_kind === "long" ? "long" : "quality";
@@ -3092,7 +3102,7 @@ export function forwardLook(date?: string): ForwardLook {
         : pickDayVariant(FORWARD_LOADED_SOON, d, "forward_loaded_near_future:soon");
     parts.push(render(runWord));
   }
-  return { next_focus, due, loaded_soon, text: parts.length ? parts.join(" · ") : null };
+  return { next_focus, next_name, due, loaded_soon, text: parts.length ? parts.join(" · ") : null };
 }
 
 // ---------- the week ahead (deterministic floor) ----------

@@ -140,11 +140,45 @@ function trendLeadHtml(options: TrendLeadOptions = {}): string {
   return `<div class="trend-lead"><span class="trend-lead-name">${escHtml(name)}</span>${phraseHtml}</div>`;
 }
 
+// Today's lift in the server's one line (GET /api/today-strength-line and the same
+// object on the Brief, the Today aggregate and the week projection). Every strength
+// surface prints `text` and `caveat` VERBATIM — the renderer never re-derives a state,
+// so one morning reads as one answer. A reshaped day keeps the plan day's own list one
+// tap away. `kicker` is the surface's own label; "" when there's no line.
+type StrengthLineOptions = { kicker?: unknown; compact?: boolean };
+const STRENGTH_LINE_STATES: ReadonlySet<string> = new Set([
+  "not_started",
+  "in_progress",
+  "logged",
+  "rest_day",
+  "no_lift",
+  "none",
+]);
+function strengthLineHtml(line: unknown, options: StrengthLineOptions = {}): string {
+  const l = (line && typeof line === "object" ? line : null) as Record<string, unknown> | null;
+  const text = l && typeof l.text === "string" ? l.text.trim() : "";
+  if (!l || !text || l.state === "none") return "";
+  const state = typeof l.state === "string" && STRENGTH_LINE_STATES.has(l.state) ? l.state : "none";
+  const caveat = typeof l.caveat === "string" ? l.caveat.trim() : "";
+  const kicker = options.kicker == null ? "" : String(options.kicker).trim();
+  const original = Array.isArray(l.original) ? l.original.map((n) => String(n ?? "").trim()).filter(Boolean) : [];
+  const originalHtml =
+    l.reshaped === true && original.length && !options.compact
+      ? `<details class="strength-line-orig"><summary>The plan's list</summary><span>${escHtml(original.join(" · "))}</span></details>`
+      : "";
+  return `<div class="strength-line" data-strength-state="${escAttr(state)}">${
+    kicker ? `<span class="strength-line-k lbl">${escHtml(kicker)}</span>` : ""
+  }<span class="strength-line-t">${escHtml(text)}</span>${
+    caveat && !options.compact ? `<span class="strength-line-caveat">${escHtml(caveat)}</span>` : ""
+  }${originalHtml}</div>`;
+}
+
 const CAIRN_UI_READS = {
   baselineBandHtml,
   contributorRowsHtml,
   levelChipHtml,
   trendLeadHtml,
+  strengthLineHtml,
 };
 
 Object.assign(globalThis, { CairnUiReads: CAIRN_UI_READS });

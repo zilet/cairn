@@ -52,7 +52,12 @@ type PlanEditorControllerHelpers = {
   blankCardio(): PlanEditorControllerItem;
   dayModelFromPlan(day: PlanEditorControllerDay | PlanEditorControllerApiDay): PlanEditorControllerModelDay;
   calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): string;
-  progDayHtml(day: PlanEditorControllerDay, dayIndex: number, ann?: PlanEditorProgAnnotation): string;
+  progDayHtml(
+    day: PlanEditorControllerDay,
+    dayIndex: number,
+    ann?: PlanEditorProgAnnotation,
+    opts?: { sharedPurpose?: string | null }
+  ): string;
   pitemHtml(item: PlanEditorControllerItem, dayIndex: number, itemIndex: number, lastIndex: number): string;
   pdayHtml(day: PlanEditorControllerDay, dayIndex: number): string;
 };
@@ -577,9 +582,20 @@ async function renderPlanEditor(): Promise<void> {
   const editing = new Set<number>();
   let planBar: ClientSaveBar | null = null;
   let weekAnn = new Map<number, PlanEditorProgAnnotation>();
+  // day_number → its first cell in the week, so a calendar-anchored week lays the
+  // gallery out in weekday order (Saturday before Sunday), not template order.
+  let weekOrder = new Map<number, number>();
   loadPlanWeekStrip(token, "#planWeekSlot", (week) => {
     if (typeof CairnPlanWeek === "undefined") return;
     weekAnn = CairnPlanWeek.annotationsByDayNumber(week);
+    weekOrder = new Map();
+    const cells = CairnPlanWeek.days(week);
+    if (cells.some((cell) => cell.weekday)) {
+      cells.forEach((cell, index) => {
+        const n = Number(cell.plan_day?.day_number);
+        if (Number.isFinite(n) && !weekOrder.has(n)) weekOrder.set(n, index);
+      });
+    }
     // Re-draw gallery cards with weekday/status once the week lands — skip if editing.
     if (view.querySelector(".pday") || document.querySelector(".savebar.show")) return;
     draw();
@@ -603,9 +619,36 @@ async function renderPlanEditor(): Promise<void> {
     return !model.some((day) => (Array.isArray(day.items) ? day.items : []).length > 0);
   }
 
+  // Model indexes in the order the gallery shows them: the week's weekday order when
+  // the strip sits on the calendar, else template order. Indexes stay model indexes,
+  // so every data-* hook keeps pointing at the right day.
+  function galleryOrder(): number[] {
+    const at = (i: number) => weekOrder.get(form.dayNumber(model[i])) ?? Number.MAX_SAFE_INTEGER;
+    return model.map((_day, i) => i).sort((a, b) => at(a) - at(b) || a - b);
+  }
+
+  // A purpose line most training days share is said once, above the cards.
+  function sharedPurposeOf(): string | null {
+    const counts = new Map<string, number>();
+    for (const day of model) {
+      const purpose = typeof day.purpose === "string" ? day.purpose.trim() : "";
+      if (purpose) counts.set(purpose, (counts.get(purpose) ?? 0) + 1);
+    }
+    let best: string | null = null;
+    for (const [purpose, n] of counts) if (n >= 3 && (!best || n > (counts.get(best) ?? 0))) best = purpose;
+    return best;
+  }
+
+  function sharedPurposeHtml(purpose: string | null): string {
+    if (!purpose) return "";
+    const text = purpose[0].toUpperCase() + purpose.slice(1);
+    return `<p class="prog-purpose prog-purpose-shared reveal">${escHtml(/[.!?]$/.test(text) ? text : `${text}.`)}</p>`;
+  }
+
   function draw(): void {
     const root = planEditorRoot();
     if (!root) return;
+    const sharedPurpose = sharedPurposeOf();
     const blank = planIsBlank();
     // Empty plan: still offer the always-available "just start" entry alongside
     // "+ Add day" — mirrors the Train tab's start entry (dayPicked=false →
@@ -633,10 +676,12 @@ async function renderPlanEditor(): Promise<void> {
     // reading, so the same quiet entry sits above the shells the athlete can fill in.
     root.innerHTML =
       (blank ? `<div class="plan-empty reveal">${composeWeekEntryHtml(true)}</div>` : "") +
-      model.map((day, dayIndex) => {
+      sharedPurposeHtml(sharedPurpose) +
+      galleryOrder().map((dayIndex) => {
+        const day = model[dayIndex];
         if (editing.has(dayIndex)) return helpers.pdayHtml(day, dayIndex);
         const ann = weekAnn.get(form.dayNumber(day));
-        return helpers.progDayHtml(day, dayIndex, ann);
+        return helpers.progDayHtml(day, dayIndex, ann, { sharedPurpose });
       }).join("");
     if (blank) wireComposeWeek(root);
     wireGuides(root);

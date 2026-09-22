@@ -27,6 +27,7 @@ import { getPlanWithPurpose } from "../../repo/day-read.js";
 import { strengthScheduleRead } from "../../repo/strength-schedule.js";
 import { localDateISO } from "../../repo/shared.js";
 import { deriveSessionTitle, planDayStrengthGroups } from "../../repo/training-read.js";
+import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
 
 export type PlanWeekStatus = "done" | "today" | "upcoming" | "rest" | "open";
 
@@ -97,6 +98,8 @@ export interface PlanWeek {
     lift_days_source: "stated" | "observed" | null;
     run_days: string[];
   };
+  /** Today's lift in the one line the Brief, Session and Train overview also print. */
+  strength_line: TodayStrengthLine | null;
 }
 
 type TemplateDay = {
@@ -263,8 +266,11 @@ function statusForCell(opts: {
 }): PlanWeekStatus {
   const { date, asOf, planDay, session, run, todayDayNumber } = opts;
   if (session) return "done";
-  // A run logged on the day is work done, whether or not anything was lifted.
-  if (run?.status === "completed" && date && run.completion_date === date) return "done";
+  // A run logged on the day is that day's work done — unless the day also holds a
+  // lift, which a run does not do for it ("Run in · Pull still open").
+  if (run?.status === "completed" && date && run.completion_date === date && planDay?.role !== "strength") {
+    return "done";
+  }
   // An open run suggested for this date outranks the mapped rest day: the agenda is
   // the live truth for running, the template only lent the cell a name.
   if (run?.status === "open" && date && run.suggested_date === date) {
@@ -432,6 +438,10 @@ export function planWeek(date?: string): PlanWeek {
     !!(plan_day && heavyLower.has(plan_day.day_number)) || !!(run && (run.kind === "quality" || run.kind === "long"));
 
   const days: PlanWeekDay[] = [];
+  // The log is the truth for "did": a run logged on a day the agenda closed no intent
+  // for still happened, and belongs on that day's cell.
+  const through = asOf < weekEnd ? asOf : weekEnd;
+  const runLog = weekRunLog(weekStart, through);
 
   if (map.size > 0) {
     // Calendar mode — one cell per weekday Mon→Sun.
@@ -460,6 +470,20 @@ export function planWeek(date?: string): PlanWeek {
         intents.find((i) => i.status === "open" && i.suggested_date && String(i.suggested_date) === cellDate) ??
         null;
       let run = intent ? toPlanWeekRun(intent) : null;
+      if (!run) {
+        const logged = runLog.filter((r) => r.date === cellDate);
+        if (logged.length) {
+          const km = logged.reduce<number | null>((sum, r) => (r.km == null ? sum : (sum ?? 0) + r.km), null);
+          run = {
+            kind: "logged",
+            label: "Run",
+            status: "completed",
+            suggested_date: null,
+            completion_date: cellDate,
+            km: km == null ? null : Math.round(km * 10) / 10,
+          };
+        }
+      }
       // A template run day whose run already happened elsewhere this week (the long run
       // landed Thursday) must not read "Up next" on Saturday. Carry the completed intent
       // so the cell can say "done Thu", and hold the cell OPEN rather than upcoming.
@@ -511,8 +535,6 @@ export function planWeek(date?: string): PlanWeek {
   }
 
   // ---- the week so far, in counts ----
-  const through = asOf < weekEnd ? asOf : weekEnd;
-  const runLog = weekRunLog(weekStart, through);
   const runKm = runLog.reduce((sum, r) => sum + (r.km ?? 0), 0);
   const longest = runLog.reduce<number | null>(
     (best, r) => (r.km != null && (best == null || r.km > best) ? r.km : best),
@@ -563,5 +585,12 @@ export function planWeek(date?: string): PlanWeek {
       suggestion: layoutRead?.suggestion ?? null,
     },
     schedule,
+    strength_line: (() => {
+      try {
+        return todayStrengthLine(asOf);
+      } catch {
+        return null;
+      }
+    })(),
   };
 }

@@ -296,6 +296,18 @@ strength day while the plan holds anything else to give it. With no schedule sta
 empty and `weekdayCandidate` keeps the old Mon→slot-1 line, so nothing changes for an athlete who has
 said nothing.
 
+**The today strength line — one answer, four surfaces.** `todayStrengthLine(date)`
+(`src/repo/today-strength-line.ts`) is the only "what is today's lift, and where does it stand" read.
+The plan day is the one today resolves to (a session with logged sets owns it, else
+`selectedPlanDayForDate`), labelled by `planDayLabel` — the NAME, never the focus sentence. The state
+comes off the log (`not_started` / `in_progress` / `logged` / `rest_day` / `no_lift`); a rest/easy read
+(the cached day read, else the accepted composition's decision) is a `caveat` on that plan day, never a
+replacement title; a run logged today rides beside it ("Run in · Pull still open"); an accepted session
+whose slots are mostly `substitution_for` reads "Pull, reshaped" and carries the plan day's `original`
+list. It rides on every Brief response (`attachDayReadContext`), the Today aggregate, `planWeek()`, and
+`GET /api/today-strength-line` (Session header, Train overview), and every client prints `text`/`caveat`
+verbatim through `CairnUiReads.strengthLineHtml` — so never derive a today state in a renderer.
+
 **Plan tab week projection.** `GET /api/plan/week` (`planWeek()` in `src/domain/training/plan-week.ts`)
 assembles that same map into a connected week strip for Strength + Endurance: calendar Mon→Sun when
 schedules map, otherwise template `day_number` order with `weekday:null` (never invent Mon=Day1).
@@ -306,8 +318,11 @@ movement or a non-core muscle with what was logged, else exercise overlap: a res
 day's content under the same id, and a stale link anchored the ring off a day never done), never the ring's
 forecast, which read live was a day off on all five lifting days of one week. **The agenda owns a run
 cell**: a completion dated on the cell, or an open intent `suggested_date`d on it (an undated intent
-stays off the calendar); an open run outranks a mapped rest day. The strip speaks the plan day's NAME
-(the focus sentence lives on the gallery card). `progress` is the week so far in counts — lifting days
+stays off the calendar); an open run outranks a mapped rest day. A run the log holds on a day no
+intent closed still lands on that day's cell (`kind:"logged"`), and a run never marks a LIFT day done —
+a lifting cell is done only by its session. The strip speaks the plan day's NAME (the focus sentence
+lives on the gallery card); a lift day that also holds a run names both ("Upper Body & Arms + easy
+run", "Pull · run in"). `progress` is the week so far in counts — lifting days
 done vs stated, runs and km logged, open intents, trailing-seven-day bests — and `progress.line` is
 composed from those counts, so a stable week never prints one literal. `weekLayoutRead` rides along as
 a quiet suggestion line. The race build's `leg_map` reads strength through the same

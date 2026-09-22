@@ -50,17 +50,42 @@ function oneRmReadLine(name: string, pts: Array<{ date: string; v: number }>): s
     .replace("{sessions}", sessions);
 }
 
+// The 1RM picker lists loaded lifts: mobility drills, core work and timed holds have
+// no one-rep max to chart. It opens on the lift trained most recently, never on the
+// alphabet's first drill with "No data".
+function oneRmPickerExercises(exercises: ProgressExercise[]): ProgressExercise[] {
+  const loaded = exercises.filter((e) => {
+    const group = String(e.muscle_group ?? "").toLowerCase();
+    return group !== "mobility" && group !== "core" && String(e.mode ?? "reps") !== "timed";
+  });
+  return loaded.length ? loaded : exercises;
+}
+
+function lastTrainedExercise(exercises: ProgressExercise[]): string | undefined {
+  let best: ProgressExercise | undefined;
+  for (const e of exercises) {
+    const at = typeof e.last_logged === "string" ? e.last_logged : "";
+    if (at && (!best || at > String(best.last_logged))) best = e;
+  }
+  return best?.name ?? exercises[0]?.name;
+}
+
 function paintProgressBody(exercises: ProgressExercise[]): void {
-  const saved = state.progressEx || exercises[0]?.name;
+  const allExercises = exercises;
+  exercises = oneRmPickerExercises(allExercises);
+  const saved =
+    state.progressEx && allExercises.some((e) => e.name === state.progressEx)
+      ? state.progressEx
+      : lastTrainedExercise(exercises);
   view.innerHTML = segBar("trend", PROGRESS_SEG) + `<p id="trendLead" class="progress-read"></p>
     <div id="trendHero"></div>
     <div class="field"><label>Exercise</label>
-    <select id="exsel">${exercises.map((e) => `<option ${e.name === saved ? "selected" : ""}>${escHtml(e.name)}</option>`).join("")}</select></div>
+    <select id="exsel">${(exercises.some((e) => e.name === saved) ? exercises : [...exercises, ...allExercises.filter((e) => e.name === saved)]).map((e) => `<option ${e.name === saved ? "selected" : ""}>${escHtml(e.name)}</option>`).join("")}</select></div>
     <canvas id="chart"></canvas><div id="pstats"></div>`;
   wireSeg(PROGRESS_HANDLERS);
   const select = $<HTMLSelectElement>("#exsel");
   if (select) select.addEventListener("change", () => { state.progressEx = select.value; drawProgress(select.value); });
-  drawProgress(saved);
+  drawProgress(saved ?? "");
 }
 
 function paintWeightBody(rows: ProgressWeightRow[], profile: ProgressRecord): void {

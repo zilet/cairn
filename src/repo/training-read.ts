@@ -151,11 +151,13 @@ function planDayContentTitle(planDayId: number): string | null {
 // session fell straight through to contentTitle and its done card read "Full Body".
 // Prefers the active row, then the newest version, so a superseded composition still
 // names the work it prescribed.
-function compositionForSession(sessionId: number): { title: string; items: string[] } | null {
+function compositionForSession(
+  sessionId: number
+): { title: string; items: string[]; plan_day_id: number | null } | null {
   try {
     const row = db
       .prepare(
-        `SELECT title, items_json FROM daily_session_compositions
+        `SELECT title, items_json, plan_day_id FROM daily_session_compositions
           WHERE session_id = ?
           ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, version DESC
           LIMIT 1`
@@ -170,7 +172,7 @@ function compositionForSession(sessionId: number): { title: string; items: strin
     } catch {
       items = [];
     }
-    return { title, items };
+    return { title, items, plan_day_id: row?.plan_day_id == null ? null : Number(row.plan_day_id) };
   } catch {
     return null;
   }
@@ -209,15 +211,24 @@ export function deriveSessionTitle(sessionId: number, planDayId?: number | null,
   // the SAME divergence test as the plan-day name below, so a composition whose work
   // was swapped out wholesale still reads content-true.
   const composition = compositionForSession(sessionId);
-  if (composition) {
-    if (!composition.items.length) return composition.title; // a rest / open composition
+  // An EMPTY composition (a rest read's "Rest day", an open "choose as you go") holds
+  // no prescription to measure the log against — once sets are logged, the work that
+  // was done names the session, never "Rest day" over a lifted session.
+  if (composition && composition.items.length) {
+    // A composition built from the session's own plan day goes by that day's NAME —
+    // its stored title is the focus sentence, and the strip, the Brief and the
+    // Session header all say "Push", never "Shoulders, chest, triceps & core".
+    const named =
+      planDayName && planDayId != null && composition.plan_day_id === Number(planDayId)
+        ? planDayName
+        : composition.title;
     const prescribed = new Set(composition.items.map(identity));
     const hits = rows.filter((r) => prescribed.has(identity(r.name))).length;
-    if (hits / rows.length >= 0.5) return composition.title;
+    if (hits / rows.length >= 0.5) return named;
     const prescribedTitle = contentTitle(
       bucketCounts(composition.items.map((name) => ({ name, mg: storedMuscleGroup(name) })))
     );
-    if (loggedTitle && loggedTitle === prescribedTitle) return composition.title;
+    if (loggedTitle && loggedTitle === prescribedTitle) return named;
   }
 
   if (planDayId && planDayName) {

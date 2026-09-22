@@ -81,6 +81,14 @@ export function planDayFocus(day: Pick<PlanDayCandidate, "name" | "focus" | "day
     .trim();
 }
 
+// The label a plan day goes by everywhere a person reads it: its NAME ("Pull"). A
+// name the athlete never gave ("Day 3") says nothing, so the focus stands in.
+export function planDayLabel(day: Pick<PlanDayCandidate, "name" | "focus" | "day_number">): string {
+  const name = String(day.name || "").replace(/\s+/g, " ").trim();
+  if (name && !/^day\s*\d+$/i.test(name)) return name;
+  return planDayFocus(day);
+}
+
 export function planDayCandidates(): PlanDayCandidate[] {
   const rows = db
     .prepare(

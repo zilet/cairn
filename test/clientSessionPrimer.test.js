@@ -73,20 +73,31 @@ const FULL_PRIMER = {
 
 test("cardHtml renders the lead sentence, the three sections and the approach", () => {
   const primer = loadPrimer();
-  const html = primer.cardHtml(FULL_PRIMER);
+  const html = primer.cardHtml(FULL_PRIMER, { collapsed: false });
   assert.match(html, /recovered and due/, "the why_today lead sentence renders");
   assert.match(html, /What changed/);
   assert.match(html, /Keep an eye on/);
   assert.match(html, /Fresh today/);
-  assert.match(html, /Training by choice/, "the authoritative provenance label renders in the always-visible head");
+  // The session header above already carries the provenance label; the primer never repeats it.
+  assert.doesNotMatch(html, /Training by choice/);
   assert.match(html, /Training session/);
   assert.match(html, /Lower volume · Lighter loads · Up to 40 minutes/);
   assert.match(html, /Back Squat/);
   assert.match(html, /Bulgarian Split Squat/);
   assert.match(html, /earned a step up/, "the approach line renders");
   assert.match(html, /read-contrib/, "sections use the reading-grammar rows");
-  assert.match(html, /aria-expanded="true"/, "expanded by default");
-  assert.doesNotMatch(html, /class="[^"]*\bcollapsed\b/, "not collapsed by default");
+  assert.match(html, /aria-expanded="true"/, "expanded on request");
+  assert.doesNotMatch(html, /class="[^"]*\bcollapsed\b/);
+});
+
+test("cardHtml opens collapsed by default, its strip naming today's shape in one line", () => {
+  const primer = loadPrimer();
+  const html = primer.cardHtml(FULL_PRIMER);
+  assert.match(html, /class="sess-primer reveal collapsed"/, "the first lift stays on screen");
+  assert.match(
+    html,
+    /<span class="sess-primer-why">Training session · Lower volume · Lighter loads · Up to 40 minutes<\/span>/
+  );
 });
 
 test("cardHtml collapses to a strip when the session already has logged sets", () => {

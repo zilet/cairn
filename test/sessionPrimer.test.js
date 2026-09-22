@@ -361,3 +361,68 @@ test("an explicit day that isn't on the plan → null", () => {
   planDay(1, "Lower", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 }]);
   assert.equal(sessionPrimer(undefined, { dayNumber: 9 }), null, "day 9 doesn't exist → nothing to prime");
 });
+
+// A template-rebuild blurb stamped on every lift is one plan-level change, not news
+// about each lift; a long per-lift summary clips at a word, never mid-word; and the
+// approach line follows the accepted decision it is printed under.
+test("changed[] drops a summary shared by several lifts, clips at a word, and the approach follows a rest decision", () => {
+  makeExercise("Back Squat", "quads");
+  makeExercise("Bench Press", "chest");
+  makeExercise("Barbell Row", "back");
+  planDay(1, "Full body", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 },
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
+    { exercise: "Barbell Row", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+  ]);
+  const date = localDaysAgo(0);
+  const accepted = repo.prepareDailySession({ date, source: "adaptive_plan", train_anyway: true }).daily_session;
+  const row = db.prepare(`SELECT id, items_json, provenance_json FROM daily_session_compositions WHERE id = ?`).get(accepted.id);
+  const rebuild = "Rebuilt your weekly training template around your request to shift Monday to upper body";
+  const own = `${"Heavier top set because the last three sessions all capped the range ".repeat(3)}cleanly`;
+  const decision = recordDecision({
+    effective_date: date,
+    kind: "exercise_rotation",
+    domain: "training",
+    summary: rebuild,
+    rationale: null,
+    source: "exercise-swap",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "rebuild",
+    status: "applied",
+    autonomy_tier: "quiet_apply",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: {},
+    action: { proposal_id: 1 },
+    specialist: null,
+    applied_at: `${date}T12:00:00.000Z`,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+  const items = JSON.parse(row.items_json).map((item, i) => ({
+    ...item,
+    brain_decision_id: Number(decision.decision?.id ?? decision.id),
+    brain_change_summary: i === 0 ? own : rebuild,
+  }));
+  const provenance = JSON.parse(row.provenance_json);
+  provenance.daily_decision = { ...(provenance.daily_decision || {}), kind: "rest", train_anyway: false };
+  db.prepare(`UPDATE daily_session_compositions SET items_json = ?, provenance_json = ? WHERE id = ?`).run(
+    JSON.stringify(items),
+    JSON.stringify(provenance),
+    row.id
+  );
+
+  const primer = sessionPrimer(date);
+  assert.ok(primer);
+  const texts = primer.changed.map((c) => c.text);
+  assert.ok(!texts.some((t) => t.includes("Rebuilt your weekly")), JSON.stringify(texts));
+  const clipped = texts.find((t) => t.startsWith("Heavier top set"));
+  assert.ok(clipped, JSON.stringify(texts));
+  assert.ok(clipped.length <= 160);
+  assert.match(clipped, /[a-z]…$/);
+  assert.ok(own.includes(clipped.slice(0, -1)), "the cut lands on a word boundary");
+  assert.equal(own.charAt(clipped.length - 1), " ", "the next source character is a space, not the rest of a word");
+  assert.doesNotMatch(primer.approach, /Solid session ahead/);
+});

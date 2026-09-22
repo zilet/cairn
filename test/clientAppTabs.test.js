@@ -197,3 +197,18 @@ test("tab controller registers tabbar clicks and normalizes invalid tabs", async
   assert.equal(env.tabs.find((t) => t.dataset.tab === "settings").getAttribute("aria-current"), "page");
   assert.equal(env.tabs.find((t) => t.dataset.tab === "today").getAttribute("aria-current"), null);
 });
+
+test("the Plan tab from the tab bar opens on Training, never on a remembered Food visit", async () => {
+  const env = loadTabs({ planSeg: "food" });
+  env.context.registerTabBarHandlers();
+  env.tabs[1].click();
+  await flush();
+  assert.equal(env.context.state.tab, "plan");
+  assert.equal(env.context.state.planSeg, "edit");
+  // A jump someone asked for (a Food link) still lands where it was asked to.
+  const jumped = loadTabs({ planSeg: "edit", planJump: "food" });
+  jumped.context.registerTabBarHandlers();
+  jumped.tabs[1].click();
+  await flush();
+  assert.equal(jumped.context.state.planJump, "food");
+});

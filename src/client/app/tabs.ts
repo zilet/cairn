@@ -183,7 +183,12 @@ type TabSwitchOptions = {
 
   function registerTabBarHandlers(): void {
     document.querySelectorAll<HTMLElement>(".tab").forEach((tab) => {
-      tab.addEventListener("click", () => switchTab(tab.dataset.tab, { focusView: true }));
+      tab.addEventListener("click", () => {
+        // The Plan tab from the tab bar opens on Training. A Food/Meals visit is a
+        // jump someone else asked for (planJump), never a new default for the tab.
+        if (tab.dataset.tab === "plan" && state.tab !== "plan" && !state.planJump) state.planSeg = "edit";
+        switchTab(tab.dataset.tab, { focusView: true });
+      });
     });
   }
 

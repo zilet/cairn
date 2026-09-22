@@ -664,7 +664,7 @@ test("a pre-deploy cached read with no fuel signal is never churned by the fuel 
   assert.equal(second.computed_at, saved.computed_at, "live fuel does not churn the legacy row's timestamp");
 });
 
-test("a done read still carries the day-ahead forward line (the so-what after the work)", async () => {
+test("a run-only done read names the still-open lift through the today strength line", async () => {
   resetTables(
     "day_reads",
     "suggestions",
@@ -689,7 +689,10 @@ test("a done read still carries the day-ahead forward line (the so-what after th
 
   assert.equal(read.kind, "done");
   assert.equal(read.focus, null, "done never carries a same-day prescription");
-  assert.match(String(read.forward || ""), /Next: /, "the forward line names tomorrow's lean");
+  // The lift the run did not do is still today's, and the today strength line says so;
+  // the forward line no longer repeats it as "Next".
+  assert.match(String(read.strength_line?.text || ""), /^Run in · (Push|Pull) still open$/);
+  assert.doesNotMatch(String(read.forward || ""), /Next: /);
 });
 
 test("a curated Brief survives the first open instead of being overwritten by the floor", async () => {

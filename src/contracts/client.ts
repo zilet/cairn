@@ -74,6 +74,9 @@ export interface ClientDayRead {
   cached?: boolean;
   forward?: string | null;
   arc?: string | null;
+  // Today's lift in the one line every strength surface prints (see
+  // ClientTodayStrengthLine). Derived fresh per response, never persisted.
+  strength_line?: import("./client-api.js").ClientTodayStrengthLine | null;
   agent_status?: unknown;
   agent_issue?: "invalid_response" | "unreachable";
   decision?: {

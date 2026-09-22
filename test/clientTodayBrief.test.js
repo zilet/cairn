@@ -1002,3 +1002,39 @@ test("Today Brief drops the trade once the server has refused it, keeping the pl
   assert.match(html, /data-redirect="reveal-plan">Pull day · your plan</);
   assert.match(html, /data-redirect="ask-session"/);
 });
+
+// The Brief prints the server's today strength line — the same words the Session
+// header, the week strip and the Train overview print — and a run-only "done" day
+// with the plan's lift still open offers that lift by NAME, never as the loud button
+// against a rest suggestion.
+test("Today Brief carries the today strength line and names the open lift", () => {
+  const context = { Array, Math, Number, Object, String, Set, escHtml, escAttr };
+  context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-reads.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
+  const brief = context.CairnTodayBrief;
+  const line = {
+    state: "not_started",
+    title: "Pull",
+    text: "Run in · Pull still open",
+    caveat: "The read suggests rest today — Pull is still yours if you want it.",
+    suggestion: "rest",
+    reshaped: false,
+    original: [],
+  };
+  const done = brief.briefHtml(
+    { kind: "done", headline: "Solid run logged.", why: "Road miles in.", strength_line: line },
+    { isToday: true }
+  );
+  assert.match(done, /class="brief-strength"/);
+  assert.match(done, /Run in · Pull still open/);
+  assert.match(done, /suggests rest today/);
+  assert.match(done, /data-redirect="start-session">Start Pull</);
+  assert.doesNotMatch(done, /brief-redirect-primary" data-redirect="start-session"/);
+  // On a rest read the Brief IS the caveat: only the line rides along.
+  const rest = brief.briefHtml({ kind: "rest", headline: "Rest.", why: "Recover.", strength_line: line }, { isToday: true });
+  assert.match(rest, /Run in · Pull still open/);
+  assert.doesNotMatch(rest, /strength-line-caveat/);
+  // No line → nothing new rendered.
+  assert.doesNotMatch(brief.briefHtml({ kind: "train", headline: "x" }, { isToday: true }), /brief-strength/);
+});

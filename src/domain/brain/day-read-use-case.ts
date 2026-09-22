@@ -26,6 +26,7 @@ import { morningReview, type MorningReview } from "../../repo/brain/morning-revi
 import { recordSuggestion } from "../../repo/memory.js";
 import { buildRecoveryMenu, type RecoveryMenu } from "../../repo/recovery-menu.js";
 import { weekWins } from "../../repo/sessions.js";
+import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
 import { getTrajectory } from "../../repo/trajectory.js";
 import { decideTodayAttention, type TodayAttention } from "./today-attention.js";
 
@@ -70,6 +71,9 @@ export interface DayReadResult {
   // fresh, same precedent as forward/arc/week/recovery); absent entirely when
   // there's nothing to say — silence is the calm default, not a failure state.
   look_back?: MorningReview | null;
+  // The one "today's lift" line every strength surface prints verbatim (see
+  // repo/today-strength-line.ts). Derived fresh per response, never persisted.
+  strength_line?: TodayStrengthLine | null;
   periodization_context: DayReadPeriodizationContext;
   // Which Today surface earns the position of prominence (see today-attention.ts).
   // Optional by contract: absent on any non-live date and on any failure, and the
@@ -156,12 +160,11 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     arc = null;
   }
 
-  // The forward line rides on done days too: forwardLook() resolves "next"
-  // relative to today's logged work — the day AFTER a logged lifting session,
-  // or (for a cardio-only done day) the still-unstarted adaptive lifting pick.
-  // Either way it names the true next session: a prospective line, never a
-  // second recommendation for today (focus/est_minutes stay null on done;
-  // that contract is enforced upstream by enforceCompletionContract).
+  // The forward line rides on done days too: forwardLook() names "Next" only
+  // once today's lift is logged — the day AFTER it. On a cardio-only done day the
+  // still-unstarted lift is TODAY's, and the strength line below names it ("Run in
+  // · Pull still open"); focus/est_minutes stay null on done (that contract is
+  // enforced upstream by enforceCompletionContract).
   let forward: string | null = null;
   try {
     forward = forwardLook(readDate).text || null;
@@ -227,6 +230,15 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
 
   const asOf = evidenceAsOf(read);
 
+  // Today's lift, named by the plan day and read off the log — the Brief prints the
+  // same line the Session header, week strip and Train overview print.
+  let strengthLine: TodayStrengthLine | null = null;
+  try {
+    strengthLine = todayStrengthLine(readDate);
+  } catch {
+    strengthLine = null;
+  }
+
   return {
     ...read,
     forward,
@@ -237,6 +249,7 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     ...(recovery ? { recovery } : {}),
     ...(week ? { week } : {}),
     ...(lookBack ? { look_back: lookBack } : {}),
+    ...(strengthLine ? { strength_line: strengthLine } : {}),
   } as DayReadResult;
 }
 

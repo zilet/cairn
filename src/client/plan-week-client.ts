@@ -62,23 +62,34 @@ type PlanWeekRole = import("../contracts/client.js").ClientPlanWeekRole;
     return base;
   }
 
-  // What the cell SAYS, in priority order: the session that was logged (its content-
-  // true title), then a run dated on the cell, then the plan day's short NAME — the
-  // focus line is a sentence and belongs on the gallery card, not in a 7-up strip.
+  // A run beside a lift, short enough for a 7-up cell — the today line's own words:
+  // "Pull · run in" once it happened, "Upper Body & Arms + easy run" while it's ahead.
+  function withRun(lift: string, run: NonNullable<PlanWeekDay["run"]>): string {
+    if (run.status === "completed") return `${lift} · run in`;
+    return `${lift} + ${String(run.label || `${run.kind} run`).toLowerCase()}`;
+  }
+
+  // What the cell SAYS: the plan day's short NAME — the label everywhere; the focus
+  // line is a sentence and belongs on the gallery card, not in a 7-up strip. A logged
+  // session the plan cannot place keeps its own title. A lift day that also holds a
+  // run names BOTH ("Upper Body & Arms + easy run") — the run never hides the lift. A
+  // run on a run/rest day is the cell's work, so it leads there.
   function cellLabel(day: PlanWeekDay): string {
-    const session = day.session?.title ? String(day.session.title) : "";
-    const run = day.run ? runLabel(day.run, day.date) : "";
-    if (session && run) return `${session} · ${run}`;
-    if (session) return session;
-    if (run) return run;
-    if (day.plan_day?.name) return String(day.plan_day.name);
+    const liftDay = day.plan_day?.role === "strength";
+    const name = day.plan_day?.name ? String(day.plan_day.name) : "";
+    const lift = day.session ? name || String(day.session.title || "") : liftDay ? name : "";
+    if (lift && day.run) return withRun(lift, day.run);
+    if (lift) return lift;
+    if (day.run) return runLabel(day.run, day.date);
+    if (name) return name;
     if (day.status === "rest") return "Rest";
     return "—";
   }
 
-  function statusLine(day: PlanWeekDay): string {
+  // `withWeekday` false in the strip cell, whose header already says the weekday.
+  function statusLine(day: PlanWeekDay, withWeekday = true): string {
     const status = day.status;
-    const weekday = day.weekday ? String(day.weekday) : "";
+    const weekday = withWeekday && day.weekday ? String(day.weekday) : "";
     // The run this cell was for already happened elsewhere this week.
     if (
       status === "open" &&
@@ -96,11 +107,14 @@ type PlanWeekRole = import("../contracts/client.js").ClientPlanWeekRole;
     return weekday || STATUS_LABEL[status] || "";
   }
 
-  function cellHtml(day: PlanWeekDay, index: number): string {
+  // Only the FIRST upcoming cell is "Up next"; the rest of the week is simply later,
+  // and a strip of five "Up next" labels said nothing.
+  function cellHtml(day: PlanWeekDay, index: number, days: PlanWeekDay[]): string {
     const role = day.plan_day?.role ?? null;
     const kind = roleClass(role, day.run);
     const label = cellLabel(day);
-    const status = statusLine(day);
+    const firstUpcoming = days.findIndex((d) => d.status === "upcoming");
+    const status = day.status === "upcoming" && index !== firstUpcoming ? "" : statusLine(day, false);
     const dayNumber = day.plan_day?.day_number;
     return `<div class="pweek-day pweek-${escAttr(kind)}${day.hard ? " is-hard" : ""}${day.status === "today" ? " is-today" : ""}${day.status === "done" ? " is-done" : ""}" style="${stagger(index)}"${dayNumber != null ? ` data-pweek-day="${escAttr(dayNumber)}"` : ""}>
       <span class="pweek-day-k">${escHtml(day.weekday || (dayNumber != null ? `Day ${dayNumber}` : "·"))}</span>
@@ -125,9 +139,18 @@ type PlanWeekRole = import("../contracts/client.js").ClientPlanWeekRole;
       read.progress && typeof read.progress === "object" ? (read.progress as { line?: string | null }) : null;
     const progressLine = progress && typeof progress.line === "string" ? progress.line : "";
     const calendar = days.some((d) => d.weekday);
+    // Today's lift in the server's one line — the same words the Brief and the Session
+    // header print — so the strip and the day never disagree about today.
+    const reads = (globalThis as { CairnUiReads?: { strengthLineHtml?: (line: unknown, o?: unknown) => string } })
+      .CairnUiReads;
+    const todayLine =
+      calendar && typeof reads?.strengthLineHtml === "function"
+        ? reads.strengthLineHtml(read.strength_line, { kicker: "Today" })
+        : "";
     return `<div class="pweek reveal" style="${stagger(0)}" data-plan-week>
       <div class="pweek-h"><span class="lbl">${calendar ? "This week" : "Your week"}</span></div>
-      <div class="pweek-map${calendar ? "" : " pweek-map-template"}">${days.map(cellHtml).join("")}</div>
+      <div class="pweek-map${calendar ? "" : " pweek-map-template"}">${days.map((day, index) => cellHtml(day, index, days)).join("")}</div>
+      ${todayLine ? `<div class="pweek-today">${todayLine}</div>` : ""}
       ${progressLine ? `<div class="pweek-progress">${escHtml(progressLine)}</div>` : ""}
       ${note ? `<div class="pweek-note">${escHtml(note)}</div>` : ""}
     </div>`;
@@ -138,14 +161,17 @@ type PlanWeekRole = import("../contracts/client.js").ClientPlanWeekRole;
   /** day_number → { weekday, status, label? } from a week projection, for gallery annotations. */
   function annotationsByDayNumber(value: unknown): Map<number, PlanWeekAnnotation> {
     const map = new Map<number, PlanWeekAnnotation>();
-    for (const day of planWeekDays(value)) {
+    const days = planWeekDays(value);
+    const firstUpcoming = days.find((d) => d.status === "upcoming") ?? null;
+    for (const day of days) {
       const n = day.plan_day?.day_number;
       if (n == null || !Number.isFinite(Number(n))) continue;
       const key = Number(n);
       // A template run day whose calendar cell carries a run of another kind (the
       // engine's easy run on the "Long Run" day) says which run, not "Up next".
+      // Same for the rest day the long run landed on: its card says the run, not "Rest".
       const runInstead =
-        day.plan_day?.role === "endurance" && day.run && day.status !== "done"
+        (day.plan_day?.role === "endurance" || day.plan_day?.role === "rest") && day.run && day.status !== "done"
           ? `${day.weekday ? `${day.weekday} · ` : ""}${runLabel(day.run)}`
           : null;
       // A done cell is keyed by the plan day the SESSION resolved to, so the gallery's
@@ -153,7 +179,9 @@ type PlanWeekRole = import("../contracts/client.js").ClientPlanWeekRole;
       // cells when a day repeats in a cycle.
       const prev = map.get(key);
       if (!prev || day.status === "today" || day.status === "done") {
-        map.set(key, { weekday: day.weekday ?? null, status: day.status, label: runInstead });
+        // Only the week's first upcoming day is "Up next"; later ones just name the weekday.
+        const status = day.status === "upcoming" && day !== firstUpcoming ? "open" : day.status;
+        map.set(key, { weekday: day.weekday ?? null, status, label: runInstead });
       }
     }
     return map;

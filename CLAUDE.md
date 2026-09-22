@@ -284,6 +284,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   predictor (≤3 weeks old, Riegel-adjusted) over a Riegel off a training run, and every comparison
   is a `fits`/`stretch`/`beyond_horizon` FIT, never a grade. The weekly ride is a PATTERN read off
   the log (3 of 6 weeks) — no new field. Details in `docs/ARCHITECTURE.md`.
+- **Today's lift has ONE server line** — `todayStrengthLine()` (`src/repo/today-strength-line.ts`): plan
+  day NAME, state off the log, a rest/easy read as a caveat (never a replacement title). The Brief,
+  Session header, week strip and Train overview print it verbatim; never derive a today state in a
+  renderer. Details in `docs/ARCHITECTURE.md`.
 - **An empty plan day is never startable.** A restructure's undeclared empty day is stored as
   `rest` (`planDayTypeForRestructure`, `src/repo/plan.ts`); an explicit empty `training` day
   survives as a scaffold but neither Today's launch card nor the Plan editor's Train button offers

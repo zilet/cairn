@@ -165,19 +165,35 @@ function changedFromPrescriptions(prescriptions: Prescription[]): SessionPrimerC
   return out;
 }
 
+// Clip at a word boundary — a clause cut mid-word ("Wednesday c") reads as a bug.
+function clipWords(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:—–-]+$/, "")}…`;
+}
+
 function changedFromAcceptedItems(items: unknown): SessionPrimerChange[] {
   if (!Array.isArray(items)) return [];
   const out: SessionPrimerChange[] = [];
+  // A summary stamped on several lifts is one plan-level change (a template rebuild),
+  // not news about each lift — repeating it per row said nothing new, three times.
+  const summaryCount = new Map<string, number>();
+  for (const raw of items) {
+    const summary = String((raw as any)?.brain_change_summary ?? "").replace(/\s+/g, " ").trim();
+    if (summary) summaryCount.set(summary, (summaryCount.get(summary) ?? 0) + 1);
+  }
   for (const raw of items) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw) || (raw as any).kind === "cardio") continue;
     const item = raw as Record<string, unknown>;
     const exercise = String(item.exercise ?? "").replace(/\s+/g, " ").trim();
     if (!exercise) continue;
-    const summary = String(item.brain_change_summary ?? "").replace(/\s+/g, " ").trim();
+    const rawSummary = String(item.brain_change_summary ?? "").replace(/\s+/g, " ").trim();
+    const summary = (summaryCount.get(rawSummary) ?? 0) > 1 ? "" : rawSummary;
     const reason = String(item.brain_change_reason ?? "").replace(/\s+/g, " ").trim();
     const note = String(item.note ?? "").replace(/\s+/g, " ").trim();
     if (item.brain_decision_id != null && (summary || reason)) {
-      const joined = [summary, reason].filter(Boolean).join(" — ").slice(0, 160);
+      const joined = clipWords([summary, reason].filter(Boolean).join(" — "), 160);
       const kind: SessionPrimerChangeKind =
         /\b(?:swap|rotat)\w*\b/i.test(joined)
           ? "rotation"
@@ -475,12 +491,20 @@ function buildFresh(movements: string[], date: string): SessionPrimerFresh[] {
 function buildApproach(
   changed: SessionPrimerChange[],
   fresh: SessionPrimerFresh[],
-  read: any
+  read: any,
+  decisionKind?: string | null
 ): string {
   const signals = read?.signals ?? {};
   const recoveryWeek = !!signals?.recovery_week;
+  // The accepted decision printed above this line ("Rest-day movement") is as much
+  // today's word as the read — "Solid session ahead" beneath it contradicted it.
   const lowRecovery =
-    !!signals?.low_sleep || !!signals?.fatigue?.low_readiness || read?.kind === "rest" || read?.kind === "easy";
+    !!signals?.low_sleep ||
+    !!signals?.fatigue?.low_readiness ||
+    read?.kind === "rest" ||
+    read?.kind === "easy" ||
+    decisionKind === "rest" ||
+    decisionKind === "easy";
   if (recoveryWeek || lowRecovery) {
     return "Treat this as a quality day — smooth reps, plenty in reserve, and stop while it still feels good.";
   }
@@ -639,7 +663,7 @@ export function sessionPrimer(
   const approach =
     acceptedDecision?.train_anyway === true
       ? "You chose to train; keep the conservative bounds and let how it feels lead."
-      : buildApproach(changed, fresh, read);
+      : buildApproach(changed, fresh, read, acceptedDecision?.kind ?? null);
 
   return {
     date: d,

@@ -254,8 +254,10 @@ type TodayPlanSessionModelApi = {
           duration_sec: item.target_seconds ?? null,
         };
       }
+      // The next set opens at the one just logged — but never at its RIR. RIR is the
+      // athlete's own read of THIS set; a copied one is evidence nobody gave.
       const set = logged[logged.length - 1];
-      return { weight: set.weight, reps: set.reps, rir: set.rir, duration_sec: set.duration_sec ?? null };
+      return { weight: set.weight, reps: set.reps, rir: null, duration_sec: set.duration_sec ?? null };
     }
     // A card sharing its exercise name with another card today cannot trust a
     // name-keyed history row to describe ITS dose — one "last time" would open the
@@ -278,18 +280,24 @@ type TodayPlanSessionModelApi = {
         duration_sec: item.target_seconds ?? null,
       };
     }
-    const last = lastSets[exercise];
-    if (last) return { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null };
-    // Last resort: a rotated-in lift can arrive with target_weight NULL and no
-    // history under its own name. The server's own grounded suggestion is then the
-    // only honest number to start from — never invent one, and never overwrite a
-    // deliberate NULL weight (bodyweight) with anything the server didn't produce.
+    // One tap logs what the card SHOWS. The prescription is the card's headline dose
+    // (the server's grounded number when the stored target is being re-grounded, i.e.
+    // the "hold this load" line), so it leads; last time is the reference line under
+    // the card, and only fills what the prescription leaves open. RIR always opens
+    // blank: it is optional, and a copied one fabricates evidence.
     const suggested = rx && typeof rx.suggested === "object" && rx.suggested ? rx.suggested : null;
+    const regrounding = !!rx && (rx as { reground?: unknown }).reground === true;
+    const shownWeight = regrounding
+      ? (finiteOrNull(suggested?.weight) ?? item.target_weight ?? null)
+      : (item.target_weight ?? finiteOrNull(suggested?.weight));
+    const shownReps = item.rep_low ?? finiteOrNull(suggested?.rep_low);
+    const shownSeconds = item.target_seconds ?? finiteOrNull(suggested?.seconds);
+    const last = lastSets[exercise];
     return {
-      weight: item.target_weight ?? finiteOrNull(suggested?.weight),
-      reps: item.rep_low ?? finiteOrNull(suggested?.rep_low),
+      weight: shownWeight ?? (last ? last.weight : null) ?? null,
+      reps: shownReps ?? (last ? last.reps : null) ?? null,
       rir: null,
-      duration_sec: item.target_seconds ?? finiteOrNull(suggested?.seconds),
+      duration_sec: shownSeconds ?? (last ? (last.duration_sec ?? null) : null),
     };
   }
 

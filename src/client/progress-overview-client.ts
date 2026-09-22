@@ -32,6 +32,8 @@ type TovData = {
   journey: import("../contracts/client-api.js").ClientJourneyRead | null;
   journeyMilestones: import("../contracts/client-api.js").ClientJourneyMilestone[] | null;
   timeline: import("../contracts/client-api.js").ClientForwardTimelineEntry[] | null;
+  // Today's lift in the server's one line (the Brief and Session print the same).
+  strengthLine?: import("../contracts/client-api.js").ClientTodayStrengthLine | null;
 };
 
 // SVG paint attrs don't reliably resolve CSS var() — hardcoded Atelier hexes,
@@ -104,7 +106,7 @@ function tovLoadSnapshot(): TovData | null {
 
 async function tovFetch(): Promise<TovData> {
   const grab = (path: string) => api(path).catch(() => null);
-  const [stats, balance, trajectory, focus, load, loadBand, adjustments, sessions, journey, journeyMilestones, timeline] = await Promise.all([
+  const [stats, balance, trajectory, focus, load, loadBand, adjustments, sessions, journey, journeyMilestones, timeline, strengthLine] = await Promise.all([
     grab("/stats"),
     grab("/program/balance"),
     grab("/muscle-trajectory"),
@@ -116,6 +118,7 @@ async function tovFetch(): Promise<TovData> {
     grab("/journey"),
     grab("/journey/milestones"),
     grab("/journey/timeline"),
+    grab(`/today-strength-line?date=${encodeURIComponent(localISO())}`),
   ]);
   return {
     stats: CairnProgressData.record(stats),
@@ -129,6 +132,10 @@ async function tovFetch(): Promise<TovData> {
     journey: journey && typeof journey === "object" && !Array.isArray(journey) ? journey as import("../contracts/client-api.js").ClientJourneyRead : null,
     journeyMilestones: Array.isArray(journeyMilestones) ? journeyMilestones as import("../contracts/client-api.js").ClientJourneyMilestone[] : null,
     timeline: Array.isArray(timeline) ? timeline as import("../contracts/client-api.js").ClientForwardTimelineEntry[] : null,
+    strengthLine:
+      strengthLine && typeof strengthLine === "object" && !Array.isArray(strengthLine)
+        ? strengthLine as import("../contracts/client-api.js").ClientTodayStrengthLine
+        : null,
   };
 }
 
@@ -446,8 +453,24 @@ function tovCapitalize(value: string): string {
 // path the Today Brief uses — so there is no parallel start-session flow. dayPicked
 // is reset on the way in (see wireTovStart) so it lands on today's calm suggested
 // plan day, not a day left selected from elsewhere.
-function tovStartHtml(): string {
-  return `<button class="draftbtn tov-start reveal" type="button" id="tovStart" style="${stagger(1)}">Start today's training →</button>`;
+// Today's lift in the server's one line, with the one door into it. The door names
+// the plan day ("Start Pull →") and goes away once the day's lift is logged — the
+// line itself then says so.
+function tovStartHtml(data?: TovData): string {
+  const line = data?.strengthLine || null;
+  const lineHtml = line ? CairnUiReads.strengthLineHtml(line, { kicker: "Today" }) : "";
+  const open = !line || line.state === "not_started" || line.state === "in_progress" || line.state === "none";
+  const label =
+    line && line.title && line.state === "in_progress"
+      ? `Continue ${line.title} →`
+      : line && line.title && line.state === "not_started"
+        ? `Start ${line.title} →`
+        : "Start today's training →";
+  const button = open
+    ? `<button class="draftbtn tov-start" type="button" id="tovStart">${escHtml(label)}</button>`
+    : "";
+  if (!lineHtml) return button ? button.replace('class="draftbtn tov-start"', `class="draftbtn tov-start reveal" style="${stagger(1)}"`) : "";
+  return `<div class="tov-today reveal" style="${stagger(1)}">${lineHtml}${button}</div>`;
 }
 
 function wireTovStart(): void {
@@ -572,7 +595,7 @@ function paintTrainOverview(data: TovData): void {
   view.innerHTML = head +
     tovMastHtml(data, rows) +
     tovLoadBandHtml(data) +
-    tovStartHtml() +
+    tovStartHtml(data) +
     tovMapHtml(rows) +
     tovFocusHtml(data) +
     tovRowsHtml(rows) +

@@ -100,6 +100,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/today",
   "/today-side",
   "/today-plan-day",
+  "/today-strength-line",
   "/today-read",
   "/today-read/reshape",
   "/today-read/trade-rest",

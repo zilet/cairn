@@ -707,6 +707,29 @@ export interface ClientPlanWeekDay {
   hard: boolean;
 }
 
+/**
+ * Today's lift in one server-owned line (src/repo/today-strength-line.ts). The Brief,
+ * the Session header, the Plan week strip and the Train overview print `text` and
+ * `caveat` verbatim, so one morning reads as one answer everywhere.
+ */
+export interface ClientTodayStrengthLine {
+  date: ISODateString | string;
+  day_number: number | null;
+  /** The plan day's NAME ("Pull"), or "Pull, reshaped" when most slots moved. */
+  title: string | null;
+  focus: string | null;
+  role: ClientPlanWeekRole | null;
+  state: "not_started" | "in_progress" | "logged" | "rest_day" | "no_lift" | "none";
+  /** A rest/easy read, carried as a caveat on the plan day — never a replacement title. */
+  suggestion: "easy" | "rest" | null;
+  caveat: string | null;
+  run_in: { km: number | null } | null;
+  reshaped: boolean;
+  /** The plan day's own movements when reshaped — the original list, one tap away. */
+  original: string[];
+  text: string;
+}
+
 /** Connected Plan-tab week: calendar Mon–Sun when schedules map, else template order. */
 export interface ClientPlanWeek {
   as_of: ISODateString | string;
@@ -720,6 +743,7 @@ export interface ClientPlanWeek {
     lift_days_source: "stated" | "observed" | null;
     run_days: string[];
   };
+  strength_line?: ClientTodayStrengthLine | null;
 }
 
 export interface ClientExercise {
@@ -729,6 +753,8 @@ export interface ClientExercise {
   mode?: "reps" | "timed" | string | null;
   cues?: string | null;
   constraint_note?: string | null;
+  /** The last date this lift was logged, or null when it never was. */
+  last_logged?: string | null;
 }
 
 export interface ClientExerciseDetail extends ClientExercise {
@@ -2072,6 +2098,7 @@ export interface ClientTodayAggregate {
   stats: ClientWeeklyStats;
   profile: ClientProfile | null;
   exercises: ClientExercise[];
+  strength_line?: ClientTodayStrengthLine | null;
 }
 
 /**
@@ -3421,6 +3448,7 @@ export interface ClientApiResponses {
   "/api/today": ClientTodayAggregate;
   "/api/today-side": ClientTodaySideRead;
   "/api/today-plan-day": ClientTodayPlanDaySelection | null;
+  "/api/today-strength-line": ClientTodayStrengthLine;
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/today-read/trade-rest": ClientRestTradeResponse;

@@ -2482,6 +2482,7 @@ declare global {
       contributorRowsHtml(rows: unknown): string;
       levelChipHtml(options?: { label?: unknown; detail?: unknown }): string;
       trendLeadHtml(options?: { name?: unknown; phrase?: unknown; tone?: unknown }): string;
+      strengthLineHtml(line: unknown, options?: { kicker?: unknown; compact?: boolean }): string;
     };
 
     CairnUiFeedback: {
@@ -2901,7 +2902,12 @@ declare global {
       blankCardio(): Record<string, unknown>;
       dayModelFromPlan(day: Record<string, unknown>): Record<string, unknown>;
       calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): string;
-      progDayHtml(day: Record<string, unknown>, dayIndex: number, ann?: { weekday?: string | null; status?: string | null; label?: string | null }): string;
+      progDayHtml(
+        day: Record<string, unknown>,
+        dayIndex: number,
+        ann?: { weekday?: string | null; status?: string | null; label?: string | null },
+        opts?: { sharedPurpose?: string | null }
+      ): string;
       pitemHtml(item: Record<string, unknown>, dayIndex: number, itemIndex: number, lastIndex: number): string;
       pdayHtml(day: Record<string, unknown>, dayIndex: number): string;
     };
