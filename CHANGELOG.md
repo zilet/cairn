@@ -5,6 +5,53 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-09-22
+
+### Changed
+
+- **Recovery is read against your own normal.** Muscle fatigue is judged against your own habitual
+  load, so a hybrid athlete's regular running no longer reads as permanent leg fatigue. Lower days
+  keep their squats and hinges, and legs can come due again.
+- **A wearable reading only speaks for its own night.** HRV and resting heart rate hold a day back
+  only when the reading is last night's; an older one is shown as context. Readiness counts only
+  for its own date, and HRV is last night's value or nothing, never the weekly average.
+- **One line for today's lift.** Brief, Session, the week strip and Train print the same line. A run
+  on a lifting day reads "Run in · Pull still open", and a rest or easy suggestion rides as a caveat
+  under the plan day, never as its title.
+- **A coaching team.** Strength, endurance, nutrition, physio and an informational health seat each
+  name the next step toward your milestones in a weekly Sunday review, reconciled by the priority
+  order you set. It waits in the app and never notifies.
+- **Milestones steer the plan.** Strength objectives appear on the road ahead with honest fit words
+  (fits, stretch, beyond this block), never a percentage.
+- **A cut keeps a real deficit.** Your food log is judged against the cut's own floor, a hold keeps
+  the deficit instead of the calorie number, and carb ranges follow each day's training demand.
+- **The race build holds its shape mid-week.** A harder-than-asked run closes an easy slot, down
+  weeks win over a mileage spike, and training paces anchor on current fitness.
+
+### Added
+
+- **Movement considerations.** State a lasting, painless condition in onboarding or chat and plans
+  stay balanced and whole, with optional condition-appropriate supportive work. It never gates a
+  lift, and a physiotherapist can tailor it. Shown under Me → Life as "How you move".
+- **14 supportive exercises** with form cues in the starter catalog for new installs.
+
+### Fixed
+
+- The day after a push session no longer suggests the other chest day over the programmed pull day.
+- Tapping the Brief's "Next" line opens Plan on Training, not the last-used tab.
+- Logging opens at today's target, never last time's numbers, and RIR starts blank.
+- The Brief keeps its wording through meal logs and other saves, and opening Today never waits on
+  an agent.
+- A declined recovery week is not proposed again without a new safety reason.
+- A lab finding only gates changes in its own area; it no longer blocks every team decision.
+- Strength objectives resolve exercise names, so an objective named "Bench Press" finds its history.
+
+### Upgrade notes
+
+- Migrations v107–v109 run automatically on boot: a profile column for movement considerations, a
+  strength-objective name repair, and clearing HRV values that held Garmin's weekly average. Back up
+  first; migrations have no down path.
+
 ## [1.8.0] — 2026-09-01
 
 ### Added
@@ -1417,7 +1464,8 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/zilet/cairn/compare/v1.8.0...v1.8.1
 [0.7.0]: https://github.com/zilet/cairn/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/zilet/cairn/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/zilet/cairn/compare/v0.5.1...v0.6.0
