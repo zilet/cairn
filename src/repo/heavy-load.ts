@@ -24,6 +24,12 @@ export interface EnduranceModality {
   heavyMin: number;
   heavyKm: number;
   loadCharacter: "aerobic" | "mixed-terrain" | "technical-eccentric" | "eccentric" | "full-body-aerobic";
+  // How much of one session-equivalent each listed region actually takes (default
+  // 1). A region can be genuinely involved without being a prime mover: a run holds
+  // the trunk up but does not train it, and a trail ride grips and braces with the
+  // back and forearms far below a rowing session. Crediting them evenly read a
+  // two-hour ride as a full back day.
+  regionWeights?: Partial<Record<MuscleGroup, number>>;
 }
 
 // Conservative prime movers only, matched by keyword against the activity text.
@@ -45,6 +51,7 @@ export const ENDURANCE_MODALITIES: EnduranceModality[] = [
     heavyMin: 75,
     heavyKm: 20,
     loadCharacter: "mixed-terrain",
+    regionWeights: { hamstrings: 0.6, calves: 0.5, core: 0.4, back: 0.35, forearms: 0.35 },
   },
   {
     re: /\b(gravel|cyclocross)\b/,
@@ -54,6 +61,7 @@ export const ENDURANCE_MODALITIES: EnduranceModality[] = [
     heavyMin: 75,
     heavyKm: 30,
     loadCharacter: "aerobic",
+    regionWeights: { hamstrings: 0.6, calves: 0.6, core: 0.3 },
   },
   {
     re: /\b(road bik|road cycl|road rid)\b/,
@@ -63,6 +71,7 @@ export const ENDURANCE_MODALITIES: EnduranceModality[] = [
     heavyMin: 75,
     heavyKm: 30,
     loadCharacter: "aerobic",
+    regionWeights: { hamstrings: 0.6, calves: 0.6, core: 0.3 },
   },
   {
     re: /\b(ride|cycl|bik|spin|peloton)\b/,
@@ -72,6 +81,7 @@ export const ENDURANCE_MODALITIES: EnduranceModality[] = [
     heavyMin: 75,
     heavyKm: 30,
     loadCharacter: "aerobic",
+    regionWeights: { hamstrings: 0.6, calves: 0.6, core: 0.3 },
   },
   {
     re: /\b(run|jog|sprint|tempo|interval)\b/,
@@ -81,6 +91,7 @@ export const ENDURANCE_MODALITIES: EnduranceModality[] = [
     heavyMin: 55,
     heavyKm: 9,
     loadCharacter: "aerobic",
+    regionWeights: { core: 0.3 },
   },
   {
     re: /\b(hik|walk|ruck|trek|stair|stepper|elliptical)\b/,
@@ -146,6 +157,10 @@ export const ENDURANCE_MODALITIES: EnduranceModality[] = [
     loadCharacter: "mixed-terrain",
   },
 ];
+
+export function regionWeight(modality: Pick<EnduranceModality, "regionWeights">, group: MuscleGroup): number {
+  return modality.regionWeights?.[group] ?? 1;
+}
 
 export function normalizeActivityText(text: string): string {
   return String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();

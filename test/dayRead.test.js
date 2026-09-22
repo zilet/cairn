@@ -991,6 +991,33 @@ test("DONE (not EASY) when a real loading session is already logged today", () =
   assert.equal(r.signals.trained_today, true);
 });
 
+// A run is not the lifting. On a weekday the athlete lifts, endurance alone leaves the
+// plan day open — a 25-minute easy run used to close a stated Pull day as "today's work
+// is in". REF is a Sunday (dow 0).
+const REF_DOW = new Date(`${REF}T00:00:00Z`).getUTCDay();
+function hardRunToday() {
+  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'run', 60, 10)`).run(REF);
+}
+
+test("a run on a stated lifting day does not read DONE — the lifting is still open", () => {
+  repo.savePlanDay(1, "Pull", "Back and biceps", [{ exercise: "Barbell Row", sets: 3, rep_low: 8, rep_high: 10 }]);
+  repo.setProfile({ strength_schedule: { days: [{ dow: REF_DOW }] } });
+  hardRunToday();
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.notEqual(r.kind, "done");
+  assert.notEqual(r.decision.rule_code, "logged_loading_work_today");
+  assert.equal(r.signals.lift_day_open_after?.activity, "run");
+});
+
+test("the same run on a day that is not a lifting day still reads DONE", () => {
+  repo.savePlanDay(1, "Pull", "Back and biceps", [{ exercise: "Barbell Row", sets: 3, rep_low: 8, rep_high: 10 }]);
+  repo.setProfile({ strength_schedule: { days: [{ dow: (REF_DOW + 2) % 7 }] } });
+  hardRunToday();
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "done");
+  assert.equal(r.signals.lift_day_open_after, undefined);
+});
+
 test("DONE preempts REST: a hard session today wins over 3 prior hard days", () => {
   // The user's exact case — trained hard for days AND already trained again today. A
   // "Rest today" read would contradict the work already in (and the session sitting

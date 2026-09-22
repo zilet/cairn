@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { repo } from "./_seed.js";
+import { db, repo } from "./_seed.js";
 import {
   applyChatActions,
   hasExplicitStrengthObjectiveIntent,
@@ -11,6 +11,7 @@ import {
   STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
 } from "../dist/chatTurns.js";
 import { localDateISO } from "../dist/repo/shared.js";
+import { repairStrengthObjectiveIdentity } from "../dist/migrations/frozen/v108-strength-objective-identity.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const back = (n) => new Date(new Date(`${localDateISO()}T00:00:00Z`).getTime() - n * 864e5).toISOString().slice(0, 10);
@@ -34,6 +35,36 @@ test("return-to-best snaps the exact target and does not move it after a new bes
   assert.equal(stored.achieved_est_1rm, 239.2);
   assert.equal(repo.getActiveStrengthObjective(), null, "completion never creates a replacement goal");
   assert.equal(repo.getStrengthJourney().current.est_1rm, 239.2);
+});
+
+// The one-resolver law: an anchor typed "Bench Press" is the athlete's Barbell Bench
+// Press when the catalog says so (here, by alias), never a key no logged set carries.
+test("an objective named the way the athlete says it anchors on the lift the resolver finds", () => {
+  log("Barbell Bench Press", 135, 8, 10);
+  log("Dumbbell Bench Press", 60, 10, 10);
+  repo.setExerciseAlias("bench press", "Barbell Bench Press", "test");
+  const objective = repo.setStrengthObjective({ exercise: "Bench Press", target_kind: "explicit_est_1rm", target_est_1rm: 207 });
+  assert.equal(objective.exercise, "Barbell Bench Press");
+  assert.equal(objective.baseline_est_1rm, 171, "its history is the barbell lift's — and only the barbell's");
+  assert.ok(repo.getStrengthJourney().latest, "so the journey reads real exposure, not none");
+});
+
+test("v108 repair re-points a pre-resolver objective and snaps its missing baseline, once", () => {
+  log("Barbell Bench Press", 135, 8, 10);
+  repo.setExerciseAlias("bench press", "Barbell Bench Press", "test");
+  const id = Number(
+    db
+      .prepare(
+        `INSERT INTO strength_objectives (exercise, exercise_key, target_kind, target_est_1rm, source, status, created_at)
+         VALUES ('Bench Press', 'bench press', 'explicit_est_1rm', 207, 'user', 'active', ?)`
+      )
+      .run(`${back(1)} 12:00:00`).lastInsertRowid
+  );
+  assert.deepEqual(repairStrengthObjectiveIdentity(db), { renamed: 1, baselined: 1 });
+  const row = repo.getStrengthObjective(id);
+  assert.equal(row.exercise, "Barbell Bench Press");
+  assert.equal(row.baseline_est_1rm, 171);
+  assert.deepEqual(repairStrengthObjectiveIdentity(db), { renamed: 0, baselined: 0 }, "idempotent");
 });
 
 test("a new objective on a DIFFERENT lift runs in parallel; the same lift supersedes", () => {

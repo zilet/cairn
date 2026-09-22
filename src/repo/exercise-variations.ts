@@ -637,7 +637,9 @@ export function effectiveVolumeByGroup(sets: VolumeSet[]): Map<MuscleGroup, Grou
       const top = topByExDate.get(`${String(s.exercise).toLowerCase()}|${s.date}`) ?? 0;
       if (top > 0 && w < top * WARMUP_FRAC) continue; // ramp-up warmup — not working volume
     }
-    const effort = setEffortWeight(s.rir);
+    // Proximity to failure is not what limits a loaded carry — time and grip are —
+    // so an RIR typed on one is not reps in reserve and must not halve the set.
+    const effort = classifyPattern(s.exercise) === "carry" ? 1 : setEffortWeight(s.rir);
     const tonnage = s.weight != null && s.reps != null && Number(s.weight) > 0 && Number(s.reps) > 0
       ? Number(s.weight) * Number(s.reps)
       : 0;

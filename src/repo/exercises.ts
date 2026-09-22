@@ -23,6 +23,7 @@ import {
 } from "./exercise-guide.js";
 import { isValidGarminRef, mapExerciseToGarmin, sameExerciseIdentity } from "./garmin-exercise-map.js";
 import { getProgress } from "./sessions.js";
+import { addDaysISO } from "./shared.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
@@ -1060,6 +1061,30 @@ export function recentWorkingWeight(name: string, sessionsBack = 3, beforeExclus
     if (topW != null && (best == null || topW > best)) best = topW;
   }
   return best;
+}
+
+// The heaviest load the recent log supports for `repLow` reps: the best Epley
+// estimate over the last `weeks`, inverted at that rep floor and floored to the
+// 2.5 lb grid. Null when nothing loaded was logged in the window — no evidence is
+// no ceiling. A target above this cannot be met "on every set as written", so a
+// hold waiting for exactly that never clears.
+export function achievableWorkingWeight(name: string, repLow: number, date: string, weeks = 6): number | null {
+  if (!(repLow > 0)) return null;
+  const ex = resolveExerciseName(name);
+  if (ex.exercise_id == null) return null;
+  const since = addDaysISO(String(date).slice(0, 10), -weeks * 7);
+  if (!since) return null;
+  const row = db
+    .prepare(
+      `SELECT MAX(ls.weight * (1 + ls.reps / 30.0)) AS e1rm
+         FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.exercise_id = ? AND s.date >= ? AND s.date <= ? AND ls.weight > 0 AND ls.reps > 0`
+    )
+    .get(ex.exercise_id, since, String(date).slice(0, 10)) as { e1rm: number | null } | undefined;
+  const e1rm = Number(row?.e1rm);
+  if (!(e1rm > 0)) return null;
+  const load = Math.floor(e1rm / (1 + repLow / 30) / 2.5) * 2.5;
+  return load > 0 ? load : null;
 }
 
 // True when the last few sessions of this lift were assisted or bodyweight

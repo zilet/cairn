@@ -366,6 +366,13 @@ test("C6: a set far from failure (RIR 5) counts less than a hard set", () => {
   assert.ok(easy.sets < 1, `an RIR-5 set counts as less than a full set (got ${easy.sets})`);
 });
 
+test("C6: a loaded carry is a full set whatever RIR was typed — proximity to failure is not what limits it", () => {
+  // The live log: Farmer's Carry at 45 × 70 with "RIR 20". RIR weighting halved every
+  // carry, so grip read "due" nearly every morning of a month it was trained weekly.
+  const carry = effectiveVolumeByGroup([{ date: "2026-05-01", exercise: "Farmer's Carry", muscle_group: "forearms", weight: 45, reps: 70, rir: 20 }]).get("forearms");
+  assert.equal(carry.sets, 1);
+});
+
 test("C6: secondary muscles earn ~0.5 indirect credit", () => {
   // A bench press (chest) also loads triceps + shoulders indirectly.
   const map = effectiveVolumeByGroup([{ date: "2026-05-01", exercise: "Bench Press", muscle_group: "chest", weight: 185, reps: 5, rir: 2 }]);

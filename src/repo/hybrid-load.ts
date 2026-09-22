@@ -16,7 +16,9 @@ import {
   HARD_EFFORT,
   HEAVY_SETS,
   type EnduranceModality,
+  ENDURANCE_MODALITIES,
   matchEnduranceModality,
+  regionWeight,
 } from "./heavy-load.js";
 
 export interface RecentLoad {
@@ -114,13 +116,15 @@ function classifyImpactLoad(
     (ate != null && ate >= HARD_EFFORT.aerobicTe) ||
     zones45 >= HARD_EFFORT.z4Seconds;
   const long = (dur != null && dur >= region.heavyMin) || (km != null && km >= region.heavyKm);
-  const moderate =
-    hard ||
-    (dur != null && dur >= region.heavyMin * 0.7) ||
-    (km != null && km >= region.heavyKm * 0.7) ||
-    (ate != null && ate >= 2);
+  const substantial =
+    (dur != null && dur >= region.heavyMin * 0.7) || (km != null && km >= region.heavyKm * 0.7);
+  const moderate = hard || substantial || (ate != null && ate >= 2);
   const intensity: EnduranceImpact["intensity"] = hard ? "hard" : moderate ? "moderate" : "easy";
-  const load: EnduranceImpact["load"] = hard || long ? "heavy" : moderate ? "moderate" : "light";
+  // `load` is the MUSCULAR dose, `intensity` the metabolic one. Hard alone used to
+  // make any effort heavy, so a 25-minute run that drifted into Z4 read as a full leg
+  // session — and for an athlete who runs most days, legs never read fresh. Heavy now
+  // needs duration: long, or hard AND most of the way to the modality's long bar.
+  const load: EnduranceImpact["load"] = long || (hard && substantial) ? "heavy" : moderate ? "moderate" : "light";
   const whyParts: string[] = [];
   if (long && region.loadCharacter === "technical-eccentric") {
     whyParts.push("long enough for sustained braking, handling and trunk demand");
@@ -282,9 +286,9 @@ export const RESIDUAL_LOOKBACK_DAYS = 7; // ~3 half-lives of the slowest group; 
 export const SATURATED_RESIDUAL = 0.75;
 export const LOADED_RESIDUAL = 0.35; // still carrying real work; not a reason to hold load
 
-// An endurance effort's dose on each of the prime movers the modality loads.
-// ENDURANCE_MODALITIES lists conservative prime movers only, so the dose is
-// credited evenly across them rather than invented per-region. A "light" effort
+// An endurance effort's dose on each region the modality loads, scaled by the
+// modality's own regionWeights (heavy-load.ENDURANCE_MODALITIES) so a region the
+// sport only holds steady is not credited like a prime mover. A "light" effort
 // only counts when it clears isLoadRelevantEnduranceImpact — a casual walk is not
 // a dose on anything.
 const ENDURANCE_DOSE: Record<EnduranceImpact["load"], number> = { heavy: 1, moderate: 0.6, light: 0.25 };
@@ -326,6 +330,31 @@ export function residualBand(residual: number): AcuteBand {
   return "fresh";
 }
 
+// ---- saturation is relative to the athlete's own normal ----------------------
+// An absolute bar read a hybrid athlete's ORDINARY morning as saturated: someone
+// who runs most days carries a leg residual of well over one session every day, so
+// legs were "recovering" on nearly every lifting morning and lower days were
+// adapted away for weeks. The gate now asks "is this group carrying clearly MORE
+// than it usually does": saturated at HABITUAL_SATURATION_MULTIPLE × the group's
+// median morning residual over the last HABITUAL_WINDOW_DAYS, never below the
+// absolute SATURATED_RESIDUAL (a lifter with no endurance habit reads exactly as
+// before), and never above SATURATED_CEILING, so a baseline that creeps up with the
+// training cannot hide a genuine spike. LOADED stays absolute — it only softens.
+export const HABITUAL_WINDOW_DAYS = 28;
+export const HABITUAL_SATURATION_MULTIPLE = 1.35;
+export const SATURATED_CEILING = 2.0;
+
+export function saturationBar(habitual: number): number {
+  const scaled = HABITUAL_SATURATION_MULTIPLE * (Number.isFinite(habitual) ? habitual : 0);
+  return Math.min(SATURATED_CEILING, Math.max(SATURATED_RESIDUAL, scaled));
+}
+
+function relativeBand(residual: number, habitual: number): AcuteBand {
+  if (residual >= saturationBar(habitual)) return "saturated";
+  if (residual >= LOADED_RESIDUAL) return "loaded";
+  return "fresh";
+}
+
 // Decay one dose laid down `daysAgo` days back. Logged sets carry a date, not a
 // clock time, so a day is 24 h and today's work has not decayed at all.
 function decayFactor(daysAgo: number, halfLifeH: number): number {
@@ -333,8 +362,17 @@ function decayFactor(daysAgo: number, halfLifeH: number): number {
   return 0.5 ** (hours / Math.max(1, halfLifeH));
 }
 
+interface DatedDose {
+  group: MuscleGroup;
+  date: string;
+  dose: number;
+  half_life_h: number;
+}
+
 // The decaying residual per canonical group. Pure-ish (reads logged sets +
 // activities); null-safe — any read problem yields an empty map, never a throw.
+// One read covers the lookback AND the habitual window, so the athlete's baseline
+// costs no extra queries.
 export function muscleResidual(
   days = RESIDUAL_LOOKBACK_DAYS,
   date = localDateISO()
@@ -342,6 +380,7 @@ export function muscleResidual(
   const today = String(date).slice(0, 10);
   const lookback = Math.max(1, days);
   const since = addDaysISO(today, -(lookback - 1)) ?? today;
+  const readSince = addDaysISO(today, -(lookback + HABITUAL_WINDOW_DAYS - 1)) ?? since;
   const dAgo = (iso: string): number => Math.max(0, daysBetweenISO(today, String(iso).slice(0, 10)) ?? 0);
 
   const acc = new Map<
@@ -354,6 +393,7 @@ export function muscleResidual(
     acc.set(g, cur);
     return cur;
   };
+  const doses: DatedDose[] = [];
 
   // ---- strength: effective working volume per DAY, then decayed -------------
   try {
@@ -365,7 +405,7 @@ export function muscleResidual(
            JOIN sessions s ON s.id = ls.session_id
           WHERE s.date >= ? AND s.date <= ?`
       )
-      .all(since, today) as any[];
+      .all(readSince, today) as any[];
     const byDate = new Map<string, VolumeSet[]>();
     for (const r of rows) {
       const d = String(r.date).slice(0, 10);
@@ -374,7 +414,6 @@ export function muscleResidual(
       else byDate.set(d, [r as VolumeSet]);
     }
     for (const [day, sets] of byDate) {
-      const factorDays = dAgo(day);
       // ONE effective-volume truth, per day so each day's dose decays on its own.
       for (const [group, volume] of effectiveVolumeByGroup(sets)) {
         if (isMobility(group)) continue;
@@ -382,8 +421,9 @@ export function muscleResidual(
         if (halfLife == null) continue;
         const dose = volume.sets / HEAVY_SETS;
         if (!(dose > 0)) continue;
-        const cur = touch(group, day);
-        cur.strength += dose * decayFactor(factorDays, halfLife);
+        doses.push({ group, date: day, dose, half_life_h: halfLife });
+        if (day < since) continue;
+        touch(group, day).strength += dose * decayFactor(dAgo(day), halfLife);
       }
     }
   } catch {
@@ -391,13 +431,18 @@ export function muscleResidual(
   }
 
   // ---- endurance: regional contributions, same decay ------------------------
-  for (const impact of recentEnduranceImpacts(lookback, today)) {
-    const dose = enduranceDose(impact);
-    if (!(dose > 0)) continue;
+  for (const impact of recentEnduranceImpacts(lookback + HABITUAL_WINDOW_DAYS, today)) {
+    const base = enduranceDose(impact);
+    if (!(base > 0)) continue;
+    const modality = ENDURANCE_MODALITIES.find((m) => m.label === impact.label);
     for (const group of impact.regions) {
       if (isMobility(group)) continue;
       const halfLife = recoveryHalfLifeHours(group);
       if (halfLife == null) continue;
+      const dose = base * (modality ? regionWeight(modality, group) : 1);
+      if (!(dose > 0)) continue;
+      doses.push({ group, date: impact.date, dose, half_life_h: halfLife });
+      if (impact.date < since) continue;
       const cur = touch(group, impact.date);
       cur.endurance += dose * decayFactor(impact.days_ago, halfLife);
       // Name the endurance effort a consumer can blame — which is NOT simply the
@@ -413,6 +458,7 @@ export function muscleResidual(
     }
   }
 
+  const habitual = habitualMorningResidual(doses, today, lookback);
   const out = new Map<MuscleGroup, MuscleResidual>();
   for (const [group, v] of acc) {
     const residual = v.strength + v.endurance;
@@ -421,7 +467,7 @@ export function muscleResidual(
     out.set(group, {
       group,
       residual,
-      band: residualBand(residual),
+      band: relativeBand(residual, habitual.get(group) ?? 0),
       strength: v.strength,
       endurance: v.endurance,
       half_life_h: recoveryHalfLifeHours(group) ?? 0,
@@ -431,6 +477,36 @@ export function muscleResidual(
       activity: v.activity,
       detail: v.detail,
     });
+  }
+  return out;
+}
+
+// The median MORNING residual per group over the habitual window: for each of the
+// previous HABITUAL_WINDOW_DAYS mornings, the work dated before that morning within
+// the lookback, decayed to it. A morning with nothing on a group counts as zero, so
+// an occasional hard day does not become the athlete's "normal".
+function habitualMorningResidual(doses: DatedDose[], today: string, lookback: number): Map<MuscleGroup, number> {
+  const samples = new Map<MuscleGroup, number[]>();
+  for (let k = 1; k <= HABITUAL_WINDOW_DAYS; k++) {
+    const morning = addDaysISO(today, -k);
+    if (!morning) continue;
+    const perGroup = new Map<MuscleGroup, number>();
+    for (const d of doses) {
+      const ago = daysBetweenISO(morning, d.date);
+      if (ago == null || ago < 1 || ago > lookback) continue;
+      perGroup.set(d.group, (perGroup.get(d.group) ?? 0) + d.dose * decayFactor(ago, d.half_life_h));
+    }
+    for (const [group, value] of perGroup) {
+      const arr = samples.get(group) ?? [];
+      arr.push(value);
+      samples.set(group, arr);
+    }
+  }
+  const out = new Map<MuscleGroup, number>();
+  for (const [group, arr] of samples) {
+    while (arr.length < HABITUAL_WINDOW_DAYS) arr.push(0);
+    arr.sort((x, y) => x - y);
+    out.set(group, arr[Math.floor(HABITUAL_WINDOW_DAYS / 2)]);
   }
   return out;
 }

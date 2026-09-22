@@ -43,6 +43,24 @@ export const MUSCLE_GROUPS = [
 
 export type MuscleGroup = (typeof MUSCLE_GROUPS)[number];
 
+// Groups trained by single-joint work — the smaller plate jump in progression, and
+// the slot a stand-in must match when composition re-points an isolation exercise.
+export const ISOLATION_GROUPS: ReadonlySet<MuscleGroup> = new Set<MuscleGroup>([
+  "biceps",
+  "triceps",
+  "rear delts",
+  "calves",
+  "forearms",
+]);
+
+const LOWER_BODY: ReadonlySet<MuscleGroup> = new Set<MuscleGroup>(["quads", "hamstrings", "glutes", "calves"]);
+
+export function bodyRegion(group: MuscleGroup): "upper" | "lower" | "trunk" | "mobility" {
+  if (group === "core") return "trunk";
+  if (group === "mobility") return "mobility";
+  return LOWER_BODY.has(group) ? "lower" : "upper";
+}
+
 // Weekly working-set landmarks per group — the band thresholds (RP-style volume
 // landmarks, adapted). PLAIN-WORDS framing only: consumers report "low / productive
 // / high", NEVER the raw numbers as a score. mobility is non-counting (null).

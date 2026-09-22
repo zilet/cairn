@@ -1,8 +1,8 @@
 // Explicit anchor-lift objectives and their deterministic comeback reads.
 //
 // This is deliberately narrower than program-state: the athlete selects an exact
-// exercise, its target is snapped at selection time, and every trend/projection uses
-// normalizedExerciseKey (never movementKey). Barbell and dumbbell histories therefore
+// exercise (canonicalised through resolveExerciseName), its target is snapped at
+// selection time, and every trend/projection reads that exact exercise (never movementKey). Barbell and dumbbell histories therefore
 // remain separate even when they train the same movement pattern.
 //
 // SEVERAL ANCHORS MAY BE ACTIVE AT ONCE. Rebuilding six lifts in parallel is one
@@ -12,7 +12,7 @@
 // is the whole set, and every journey also carries `active_objectives`.
 import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
-import { classifyConstraint, normalizedExerciseKey } from "./exercise-canon.js";
+import { classifyConstraint, normalizedExerciseKey, resolveExerciseName } from "./exercise-canon.js";
 import { classifyPattern, type Equipment, type MovementPattern } from "./exercise-variations.js";
 import { injuryAffectsExercise, listContextEvents } from "./health.js";
 import { availableEquipment } from "./equipment.js";
@@ -187,12 +187,19 @@ function objectiveExerciseName(raw: unknown): { exercise: string; key: string; m
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
-  const key = normalizedExerciseKey(supplied);
-  if (!supplied || !key) throw new Error("exercise required");
-  const existing = (
-    db.prepare(`SELECT name, mode FROM exercises ORDER BY id`).all() as Array<{ name: string; mode: string | null }>
-  ).find((row) => normalizedExerciseKey(row.name) === key);
-  return { exercise: existing?.name ?? supplied, key, mode: existing?.mode ?? null };
+  if (!supplied || !normalizedExerciseKey(supplied)) throw new Error("exercise required");
+  // Through the ONE resolver, so "Bench Press" anchors on the athlete's Barbell Bench
+  // Press rather than a key no logged set carries. The resolver only takes a unique
+  // hit, so barbell and dumbbell histories still never merge.
+  const resolved = resolveExerciseName(supplied);
+  const existing =
+    resolved.exercise_id == null
+      ? null
+      : (db.prepare(`SELECT name, mode FROM exercises WHERE id = ?`).get(resolved.exercise_id) as
+          | { name: string; mode: string | null }
+          | undefined);
+  const exercise = existing?.name ?? supplied;
+  return { exercise, key: normalizedExerciseKey(exercise), mode: existing?.mode ?? null };
 }
 
 // Exact normalized-exercise history. This intentionally does NOT use movementKey:
@@ -200,9 +207,13 @@ function objectiveExerciseName(raw: unknown): { exercise: string; key: string; m
 export function strengthObjectiveHistory(exercise: string): StrengthExposure[] {
   const key = normalizedExerciseKey(exercise);
   if (!key) return [];
-  const ids = (db.prepare(`SELECT id, name FROM exercises`).all() as Array<{ id: number; name: string }>)
-    .filter((row) => normalizedExerciseKey(row.name) === key)
-    .map((row) => Number(row.id));
+  const resolvedId = resolveExerciseName(exercise).exercise_id;
+  const ids =
+    resolvedId != null
+      ? [Number(resolvedId)]
+      : (db.prepare(`SELECT id, name FROM exercises`).all() as Array<{ id: number; name: string }>)
+          .filter((row) => normalizedExerciseKey(row.name) === key)
+          .map((row) => Number(row.id));
   if (!ids.length) return [];
   const placeholders = ids.map(() => "?").join(",");
   const rows = db

@@ -194,29 +194,48 @@ test("the plan-day picker leans away from the day whose groups the run flattened
 // system kept telling a runner to go add squat volume to quads it had been
 // pounding daily.
 
-test("a heavy running week stops legs reading as due — while the pull day still does", () => {
-  seedSplit();
-  const bare = programBalance(2, REF);
-  assert.ok(bare.due.includes("quads"), "with no running, quads are due");
-
+// Running keeps the legs BUSY, not stronger: quads, hamstrings and glutes are what a
+// lifting day trains, so a runner's legs still read due when they are not lifted. The
+// exemption stays for the regions the endurance itself trains (calves, trunk).
+const runningFortnight = () => {
   for (let d = 0; d < 12; d++) longRun(new Date(new Date(`${REF}T00:00:00Z`).getTime() - d * 864e5).toISOString().slice(0, 10));
+};
+
+test("a heavy running week does not make un-lifted quads 'ok' — the pull day still reads due too", () => {
+  seedSplit();
+  runningFortnight();
   const loaded = programBalance(2, REF);
-  assert.ok(!loaded.due.includes("quads"), `quads are loaded, not neglected (${JSON.stringify(loaded.due)})`);
-  assert.ok(!loaded.due.includes("calves"), "so are calves");
+  assert.ok(loaded.due.includes("quads"), `running is not a squat stimulus (${JSON.stringify(loaded.due)})`);
+  assert.ok(loaded.due.includes("hamstrings"), "nor a hinge one");
   assert.ok(loaded.due.includes("back"), "the back is genuinely untrained and still says so");
 });
 
-test("endurance credit is kept OUT of the working-set count — landmarks are resistance-calibrated", () => {
+test("four runs a week plus a token quad set still reads quads due", () => {
   seedSplit();
-  for (let d = 0; d < 12; d++) longRun(new Date(new Date(`${REF}T00:00:00Z`).getTime() - d * 864e5).toISOString().slice(0, 10));
+  runningFortnight();
+  const ex = repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  const sess = repo.getOrCreateSession(REF, null);
+  for (let i = 1; i <= 3; i++)
+    db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, ?, 185, 8, 2)`).run(sess.id, ex.id, i);
+  const quads = programBalance(2, REF).groups.find((g) => g.group === "quads");
+  assert.equal(quads.status, "due");
+  assert.equal(quads.endurance_supported, false);
+});
+
+test("calves stay carried by the running — the stimulus the run itself trains", () => {
+  seedSplit();
+  repo.savePlanDay(3, "Calves", "Calves", [{ exercise: "Standing Calf Raise", sets: 3, rep_low: 12, rep_high: 15 }]);
+  runningFortnight();
   const bal = programBalance(2, REF);
-  const quads = bal.groups.find((g) => g.group === "quads");
-  assert.ok(quads);
-  assert.equal(quads.sets, 0, "a run is never counted as a working set");
-  assert.equal(quads.band, "low", "the resistance-volume band stays honest");
-  assert.ok(quads.endurance_sessions > 0, "the endurance load is carried in its own field");
-  assert.equal(quads.endurance_supported, true);
-  assert.equal(quads.status, "ok", "…and that is what keeps it off the due list");
+  const calves = bal.groups.find((g) => g.group === "calves");
+  assert.ok(calves);
+  assert.equal(calves.sets, 0, "a run is never counted as a working set");
+  assert.equal(calves.band, "low", "the resistance-volume band stays honest");
+  assert.ok(calves.endurance_sessions > 0, "the endurance load is carried in its own field");
+  assert.equal(calves.endurance_supported, true);
+  assert.equal(calves.status, "ok", "…and that is what keeps it off the due list");
+  if (!bal.broad_low) assert.match(bal.summary, /carrying your endurance work/i, bal.summary);
+  assert.doesNotMatch(bal.summary, /\bcalves\b.*\bdue\b/i, "and never calls a pounded region due");
 });
 
 test("a light week of running is not enough to suppress a due group", () => {
@@ -226,16 +245,6 @@ test("a light week of running is not enough to suppress a due group", () => {
   assert.ok(bal.due.includes("quads"), "one short stroll does not carry the quads");
   const quads = bal.groups.find((g) => g.group === "quads");
   assert.equal(quads.endurance_supported, false);
-});
-
-test("the balance summary says a carried region is light on lifting, not neglected", () => {
-  seedSplit();
-  for (let d = 0; d < 12; d++) longRun(new Date(new Date(`${REF}T00:00:00Z`).getTime() - d * 864e5).toISOString().slice(0, 10));
-  const bal = programBalance(2, REF);
-  if (bal.groups.some((g) => g.endurance_supported) && !bal.broad_low) {
-    assert.match(bal.summary, /carrying your endurance work/i, bal.summary);
-  }
-  assert.doesNotMatch(bal.summary, /\bquads\b.*\bdue\b/i, "and never calls a pounded region due");
 });
 
 // ── fatigue-aware plan-day preference ────────────────────────────────────────

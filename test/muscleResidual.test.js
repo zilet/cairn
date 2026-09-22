@@ -293,17 +293,79 @@ test("one definition of a hard effort — the per-muscle read and the day grade 
   assert.ok(!HARD_EFFORT.label.test("base"), "nor does base work");
 });
 
-test("a logged interval session reads hard to the per-muscle model too", () => {
-  repo.addActivity({ type: "run", duration_min: 30, date: REF });
-  const activity = db.prepare(`SELECT id FROM activities WHERE date = ? ORDER BY id DESC LIMIT 1`).get(REF);
+// A run with a Garmin label, so the hard-effort test fires without any other signal.
+function labelledRun(minutes, label, date = REF) {
+  repo.addActivity({ type: "run", duration_min: minutes, date });
+  const activity = db.prepare(`SELECT id FROM activities WHERE date = ? ORDER BY id DESC LIMIT 1`).get(date);
   // garmin_activities.source_id is NOT NULL — seed the source row it points at.
   const src = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin','test')`).run();
   db.prepare(
     `INSERT INTO garmin_activities (source_id, external_id, activity_id, date, type, name, te_label)
-     VALUES (?, 'iv1', ?, ?, 'running', 'Intervals', 'INTERVAL')`
-  ).run(src.lastInsertRowid, activity.id, REF);
+     VALUES (?, ?, ?, ?, 'running', 'Run', ?)`
+  ).run(src.lastInsertRowid, `ga-${activity.id}`, activity.id, date, label);
+}
+
+test("a logged interval session reads hard to the per-muscle model too", () => {
+  labelledRun(40, "INTERVAL");
   const impact = recentEnduranceImpacts(3, REF).find((i) => i.label === "run");
   assert.ok(impact);
   assert.equal(impact.intensity, "hard", "the label alone makes it a hard effort");
-  assert.equal(impact.load, "heavy");
+  assert.equal(impact.load, "heavy", "hard and most of the way to the long bar is a heavy muscular dose");
+});
+
+test("hard but short is metabolic intensity, not a heavy muscular dose", () => {
+  labelledRun(25, "THRESHOLD");
+  const impact = recentEnduranceImpacts(3, REF).find((i) => i.label === "run");
+  assert.equal(impact.intensity, "hard", "the day grade still sees a hard effort");
+  assert.equal(impact.load, "moderate", "…but a 25-minute run is not a leg session");
+});
+
+test("a short hard run leaves the legs no more than loaded the next morning", () => {
+  labelledRun(25, "TEMPO", back(1));
+  for (const group of ["quads", "hamstrings", "glutes"]) {
+    assert.notEqual(acuteGate(group, REF).band, "saturated", `${group} is not recovering from a 25-minute run`);
+  }
+});
+
+test("a run only steadies the trunk — core takes a fraction of the leg dose", () => {
+  repo.addActivity({ type: "run", duration_min: 70, date: REF });
+  const map = muscleResidual(7, REF);
+  const ratio = map.get("core").endurance / map.get("quads").endurance;
+  assert.ok(ratio < 0.35, `core dose should be a fraction of the quads' (${ratio})`);
+});
+
+test("a two-hour trail ride leaves the back carrying work, never saturated, the next morning", () => {
+  repo.addActivity({ type: "ride", duration_min: 120, notes: "mtb singletrack", date: back(1) });
+  const impact = recentEnduranceImpacts(7, REF).find((i) => i.label === "trail MTB");
+  assert.ok(impact, "the ride reads as trail MTB");
+  // Credited evenly, this ride laid 1.6 sessions on the back — a full back day.
+  assert.equal(acuteGate("back", REF).band, "loaded");
+  assert.equal(acuteGate("quads", REF).saturated, true, "the legs it pedalled with are a different story");
+});
+
+// ── saturation is relative to the athlete's own normal ──────────────────────
+
+// A month of near-daily moderate running: the athlete's ORDINARY morning carries a
+// leg residual well past the absolute bar.
+function runningHabit() {
+  for (let d = 1; d <= 30; d++) if (d % 7 !== 0) repo.addActivity({ type: "run", duration_min: 45, date: back(d) });
+}
+
+test("a hybrid athlete's ordinary morning is not saturated just because they run most days", () => {
+  runningHabit();
+  const gate = acuteGate("quads", REF);
+  assert.ok(gate.residual >= SATURATED_RESIDUAL, `the absolute bar alone would call this saturated (${gate.residual})`);
+  assert.notEqual(gate.band, "saturated", "measured against their own normal, it is not");
+});
+
+test("a spike above the athlete's normal still saturates — the long run after the habit", () => {
+  runningHabit();
+  repo.addActivity({ type: "run", duration_min: 130, distance_km: 22, date: back(1) });
+  assert.equal(acuteGate("quads", REF).saturated, true);
+});
+
+test("the relative bar is capped, so a rising baseline cannot hide a genuine spike", async () => {
+  const { saturationBar, SATURATED_CEILING } = await import("../dist/repo/hybrid-load.js");
+  assert.equal(saturationBar(0), SATURATED_RESIDUAL, "no habit reads exactly as the absolute bar");
+  assert.equal(saturationBar(10), SATURATED_CEILING, "a huge baseline stops at the ceiling");
 });

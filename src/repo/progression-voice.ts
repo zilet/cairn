@@ -280,6 +280,14 @@ export const PLAN_UNSET_HOLD: VoiceSet1 = [
     `This slot was blank — it now sits at ${load}, where you're actually lifting; earn a clean extra rep before adding.`,
 ];
 
+// The plan asks for a load the recent log does not support at its rep floor.
+export const PLAN_AHEAD_HOLD: VoiceSet1 = [
+  (load) =>
+    `The plan sat above what your recent sets support for this rep range — resetting to ${load} so every set is winnable.`,
+  (load) => `This target was out of reach for the reps asked — ${load} matches your recent work; own the range there first.`,
+  (load) => `Your recent sets point to ${load} for this range, not the plan's number — building from there.`,
+];
+
 export const MOVEMENT_RESPONSE_HOLD: VoiceSet = [
   "The last two runs at this weight came in short — hold it here and let the movement catch up.",
   "Both of the last two sessions landed under this load — keep it here and let the movement catch up.",

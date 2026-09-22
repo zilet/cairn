@@ -12,6 +12,7 @@
 import { log } from "../log.js";
 import { addColumn, type Migration } from "./helpers.js";
 import { repairExerciseIdentity } from "./frozen/v103-exercise-identity-repair.js";
+import { repairStrengthObjectiveIdentity } from "./frozen/v108-strength-objective-identity.js";
 import {
   GARMIN_HRV_STATUSES,
   elapsedMinutesFromRaw,
@@ -234,5 +235,29 @@ export const MIGRATIONS_101_150: Migration[] = [
     // {items:[{label, detail?, wants_addressed, source, stated_on}]}; it informs plan
     // selection and balance only. NULL keeps every existing profile exactly as it is.
     up: (db) => addColumn(db, "profile", "movement_considerations_json TEXT"),
+  },
+  {
+    version: 108,
+    name: "strength-objective-identity",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // Objective selection matched the typed name on an exact key and never asked the
+    // exercise resolver, so an anchor typed "Bench Press" found no history ("no
+    // exposure logged yet") while the athlete's Barbell Bench Press — which that name
+    // aliases to — carried forty sets; and a name that only resolved AFTER selection
+    // kept a null baseline. Selection now goes through the resolver; this re-points
+    // the active rows it would have resolved and snaps a missing baseline as of the
+    // day the objective was chosen. Idempotent: a resolved row with a baseline is
+    // left alone.
+    up: (db) => {
+      try {
+        const { renamed, baselined } = repairStrengthObjectiveIdentity(db);
+        if (renamed || baselined) {
+          log.info(`[migrate] v108: re-pointed ${renamed} strength objective(s), snapped ${baselined} baseline(s).`);
+        }
+      } catch {
+        /* a DB predating strength_objectives has nothing to repair */
+      }
+    },
   },
 ];

@@ -395,6 +395,33 @@ test("a load that ROSE is reaching, not grinding — RIR 0-1 at a new weight nev
   assert.equal(p.suggested.weight, 75, "the new working load is held while the range fills in");
 });
 
+// A target the log cannot reach at the plan's own rep floor never clears "hold until
+// every set is yours". The live squat sat at 3×8–10 @ 205 against a best estimate the
+// athlete's heaviest weeks put near 247 — it needs about 260.
+test("a plan target out of reach for its rep floor re-grounds down to what the log supports", () => {
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  planWith(3, { exercise: "Back Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 205, focus: "Lower" });
+  for (const d of [15, 8, 1])
+    for (let s = 1; s <= 3; s++) logSet("Back Squat", isoDaysAgo(d), { weight: 185, reps: 8, rir: 2, setNum: s });
+  const p = nextPrescription("Back Squat");
+  assert.equal(p.action, "hold", "mid-range, the re-ground is a hold — the plan number itself moves");
+  assert.match(p.why, /recent|reach|range/i);
+  assert.equal(p.reground, true, "it rides the same reground proposal as a catch-up");
+  assert.ok(p.suggested.weight < 205 && p.suggested.weight >= 185, `re-grounded to an achievable load (${p.suggested.weight})`);
+});
+
+test("a catch-up lands on what the reps support, not the heaviest top set", () => {
+  // A heavy set of 8 on a 15-rep calf raise used to catch the plan up to that load.
+  makeExercise("Standing Calf Raise", { muscle_group: "calves" });
+  planWith(3, { exercise: "Standing Calf Raise", sets: 1, rep_low: 15, rep_high: 15, target_weight: 60, focus: "Lower" });
+  logSet("Standing Calf Raise", isoDaysAgo(8), { weight: 60, reps: 15, rir: 2, setNum: 1 });
+  logSet("Standing Calf Raise", isoDaysAgo(1), { weight: 90, reps: 8, rir: 2, setNum: 1 });
+  const p = nextPrescription("Standing Calf Raise");
+  assert.equal(p.reground, true);
+  assert.ok(p.suggested.weight < 90, `not the 90 lb set of 8 (${p.suggested.weight})`);
+  assert.ok(p.suggested.weight > 60, "but still catching up to real work");
+});
+
 test("a genuine grind at ONE load still reads plateaued and still deloads", () => {
   // Four sessions at the same top weight with the reps bought at RIR 0-1: the load is
   // not moving and nothing is in reserve. That is the grind the rule is for.
@@ -931,11 +958,14 @@ function logRide(date, { type = "ride", duration_min = 180, distance_km = 40 } =
   ).run(date, type, `${type} ride`, duration_min, distance_km, "test");
 }
 
-test("recentMuscleLoad maps a long ride to the leg + core regions it torched (heavy)", () => {
+test("recentMuscleLoad maps a long ride to the leg regions it torched (heavy), and the trunk it only held", () => {
   // "ride" is exactly what normalizeGarminType folds cycling onto — the real sync path.
   logRide(isoDaysAgo(1)); // a 3 h ride yesterday
   const load = recentMuscleLoad(2);
-  for (const g of ["quads", "hamstrings", "glutes", "calves", "core"]) {
+  // The saddle holds the trunk; it does not train it (heavy-load regionWeights).
+  assert.ok(load.get("core"), "core is touched by the ride");
+  assert.equal(load.get("core").heavy, false, "…but a ride is not a core session");
+  for (const g of ["quads", "hamstrings", "glutes", "calves"]) {
     const rl = load.get(g);
     assert.ok(rl, `${g} is flagged as recently loaded by the ride`);
     assert.equal(rl.heavy, true, `${g} is HEAVY (a 3 h ride is a real dose)`);

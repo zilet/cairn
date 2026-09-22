@@ -463,6 +463,52 @@ test("a group saturated by prior LIFTING (no run, no endurance conflict) still s
   assert.equal(session.items[0].substitution_for, "Leg Press");
 });
 
+// "Allowed" is not "fresh". The morning after Push, chest is still carrying the
+// bench work, so a saturated-back Pull card must not reach for a chest press — the
+// live card opened with bench and carries the day after Push.
+test("the day after Push, a saturated-back Pull card never takes a chest press", () => {
+  repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Pendlay Row", muscle_group: "back", mode: "reps" });
+  repo.upsertExercise({ name: "Face Pull", muscle_group: "shoulders", mode: "reps" });
+  repo.savePlanDay(1, "Push", "Push", [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 12 }]);
+  repo.savePlanDay(2, "Pull", "Pull", [{ exercise: "Pendlay Row", sets: 3, rep_low: 8, rep_high: 10 }]);
+  repo.savePlanDay(3, "Shoulders", "Shoulders", [{ exercise: "Face Pull", sets: 3, rep_low: 12, rep_high: 15 }]);
+  for (let i = 0; i < 3; i++)
+    repo.logSetByName({ date: "2031-06-30", exercise: "Barbell Bench Press", weight: 115, reps: 10, day_number: null });
+
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Pendlay Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 145 }]),
+    envelope({
+      muscles: { required: [], allowed: ["chest", "shoulders"], reduced: [], excluded: [], saturated: ["back"] },
+    }),
+    { substituteSaturated: true }
+  );
+  assert.ok(session);
+  const names = session.items.map((item) => item.exercise);
+  assert.ok(!names.includes("Barbell Bench Press"), `yesterday's chest is not today's stand-in (${JSON.stringify(names)})`);
+  assert.equal(session.items[0].exercise, "Face Pull");
+});
+
+test("an isolation slot takes an upper isolation stand-in, never a squat", () => {
+  repo.upsertExercise({ name: "Cable Overhead Triceps Extension", muscle_group: "triceps", mode: "reps" });
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Rope Hammer Curl", muscle_group: "biceps", mode: "reps" });
+  repo.savePlanDay(1, "Lower", "Lower", [{ exercise: "Back Squat", sets: 3, rep_low: 8, rep_high: 10 }]);
+  repo.savePlanDay(2, "Arms", "Arms", [{ exercise: "Rope Hammer Curl", sets: 2, rep_low: 10, rep_high: 12 }]);
+
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Cable Overhead Triceps Extension", sets: 2, rep_low: 10, rep_high: 12, target_weight: 60 }]),
+    envelope({
+      // quads lead the allowed order (the old pick), biceps trail it.
+      muscles: { required: [], allowed: ["quads", "biceps"], reduced: [], excluded: [], saturated: ["triceps"] },
+    }),
+    { substituteSaturated: true }
+  );
+  assert.ok(session);
+  assert.equal(session.items[0].exercise, "Rope Hammer Curl");
+  assert.equal(session.items[0].substitution_for, "Cable Overhead Triceps Extension");
+});
+
 test("composition drops a second same-angle press from an agent session", () => {
   repo.upsertExercise({ name: "Dumbbell Bench Press", muscle_group: "chest", mode: "reps" });
   repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });

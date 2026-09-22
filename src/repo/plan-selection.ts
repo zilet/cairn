@@ -138,21 +138,18 @@ function sessionGroups(sessionId: number): MuscleGroup[] {
   return groups;
 }
 
+// Core never decides which day to train. It is loaded by nearly everything (every
+// run and ride credits it), recovers on its own clock, and rides along as an
+// accessory on most split days — the same law RUN_PRIME_GROUPS applies to the run
+// builder. Counting it let a 25-minute jog veto the programmed Pull day, and let any
+// session that did a plank claim any day.
+const NON_DECIDING_GROUPS: ReadonlySet<string> = new Set(["core"]);
+
 export function resolveSessionPlanDay(
   sessionId: number,
   planDayId: number | null,
   candidates: PlanDayCandidate[]
 ): ResolvedSessionPlanDay | null {
-  if (planDayId != null) {
-    const linked = candidates.find((d) => d.id === Number(planDayId));
-    // A REST day is never an anchor. Training anyway on the programmed rest day
-    // creates a session linked to it, and letting that link anchor the rotation
-    // would advance the ring off the seam — the athlete's one extra session would
-    // shift every following day by one for the rest of the block. Fall through to
-    // the content-based resolvers instead, which read what was actually lifted.
-    if (linked && !isRestPlanDay(linked)) return { day_number: linked.day_number, method: "linked" };
-  }
-
   const loggedNames = new Set(
     (
       db
@@ -164,6 +161,28 @@ export function resolveSessionPlanDay(
         .all(sessionId) as any[]
     ).map((r) => String(r.name))
   );
+  const groups = sessionGroups(sessionId);
+
+  if (planDayId != null) {
+    const linked = candidates.find((d) => d.id === Number(planDayId));
+    // A REST day is never an anchor. Training anyway on the programmed rest day
+    // creates a session linked to it, and letting that link anchor the rotation
+    // would advance the ring off the seam — the athlete's one extra session would
+    // shift every following day by one for the rest of the block. Fall through to
+    // the content-based resolvers instead, which read what was actually lifted.
+    //
+    // Nor is a link whose day has since been REWRITTEN: a restructure keeps the
+    // session's plan_day_id while the day's content changes, so a squat session
+    // stayed "Push" and the ring anchored off a day the athlete never did. The link
+    // stands while the day still shares a movement or a muscle with what was logged.
+    const stillMatches =
+      !!linked &&
+      (!linked.names.length ||
+        !loggedNames.size ||
+        linked.names.some((name) => loggedNames.has(name.toLowerCase())) ||
+        linked.groups.some((g) => !NON_DECIDING_GROUPS.has(g) && groups.includes(g)));
+    if (linked && !isRestPlanDay(linked) && stillMatches) return { day_number: linked.day_number, method: "linked" };
+  }
   let exact: { day_number: number; hits: number } | null = null;
   for (const day of candidates) {
     let hits = 0;
@@ -172,7 +191,6 @@ export function resolveSessionPlanDay(
   }
   if (exact) return { day_number: exact.day_number, method: "exercise-overlap" };
 
-  const groups = sessionGroups(sessionId);
   if (!groups.length) return null;
   const loggedGroups = new Set(groups);
   let best: { day_number: number; hits: number; ratio: number } | null = null;
@@ -513,12 +531,6 @@ function scheduledPlanDay(
 // shared acuteGate, never a re-derived window (CLAUDE.md). Both the scorer and the
 // per-candidate read the pills render from go through here, so a dimmed pill and a
 // penalised score can never disagree about the same day.
-// Core never decides which day to train. It is loaded by nearly everything (every
-// run and ride credits it), recovers on its own clock, and rides along as an
-// accessory on most split days — the same law RUN_PRIME_GROUPS applies to the run
-// builder. Counting it let a 25-minute jog veto the programmed Pull day.
-const NON_DECIDING_GROUPS: ReadonlySet<string> = new Set(["core"]);
-
 function recoveringGroupsForDay(
   day: Pick<PlanDayCandidate, "groups">,
   acute: Map<MuscleGroup, AcuteGateReading>

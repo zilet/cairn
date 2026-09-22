@@ -20,6 +20,7 @@ import {
   classifyConstraint,
   classifyMuscleGroup,
   exerciseIdentityKey,
+  ISOLATION_GROUPS,
   isMobility,
   isPrepMovement,
   movementKey,
@@ -37,7 +38,7 @@ import {
   suggestAlternatives,
   type VolumeSet,
 } from "./exercise-variations.js";
-import { findExercise, getExercise, recentWorkingWeight } from "./exercises.js";
+import { achievableWorkingWeight, findExercise, getExercise, recentWorkingWeight } from "./exercises.js";
 // The equipment profile and the learned like/dislike memories are leaf reads the
 // prescription consumes; they live in their own modules so this engine keeps to
 // prescription, autoregulation and the proposal builders.
@@ -182,8 +183,10 @@ const PEAK_HISTORY_DAYS = 400;
 // than waiting for a measured plateau. Tenure = weeks since the lift was first logged.
 const INTRODUCE_TENURE_WEEKS = 12;
 
-// Isolation groups get the smaller (2.5 lb) plate jump; compounds get 5 lb.
-const ISOLATION_GROUPS = new Set(["biceps", "triceps", "rear delts", "calves", "forearms"]);
+// How far a target may sit above the log's achievable load before it re-grounds:
+// Epley is an estimate, and a load the athlete just stepped up to sits a little past
+// it while the reps fill in — that is reaching, not out of reach.
+const REACHABLE_TOLERANCE = 1.05;
 
 export type ProgressionAction = "overload" | "hold" | "deload" | "vary" | "introduce";
 
@@ -203,7 +206,7 @@ export interface Prescription {
   current: PrescriptionTarget | null; // from the plan item, when planned
   delta_text: string; // plain words: "+5 lb", "hold 50", "−10%", "+5s"
   why: string;
-  reground?: boolean; // the plan target was behind logged reality — applying re-grounds it
+  reground?: boolean; // the plan target was behind (or out of reach of) logged reality — applying re-grounds it
   // The suggested load is a conservative idea taken from a RELATED lift, not this
   // movement's own history — true only while nothing has been logged for it. It is
   // deliberately never written to plan_items (see related-lift.ts): the first
@@ -511,6 +514,7 @@ function timedStep(seconds: number, modifier?: CoachPersonalModifier | null): nu
   );
 }
 
+// Isolation groups get the smaller (2.5 lb) plate jump; compounds get 5 lb.
 function isIsolationGroup(group: string | null): boolean {
   const g = canonicalGroup(group);
   return !!g && ISOLATION_GROUPS.has(g);
@@ -1497,8 +1501,18 @@ function repsPrescription(
   // back cleanly when one side is absent (off-plan → logged; nothing logged → plan).
   // Encoding preserved: assist is negative and the larger signed value is the harder/
   // realer load, so Math.max picks the right "from" in both regimes.
+  const repLow = plan?.rep_low ?? cur?.rep_low ?? undefined;
+  const repHigh = plan?.rep_high ?? cur?.rep_high ?? undefined;
   const planWeight = plan?.weight ?? null;
-  const recentWorking = recentWorkingWeight(name);
+  // What the log supports at the plan's own rep floor. The heaviest recent top set
+  // says nothing about reps — a calf raise done at 90 × 8 used to catch the plan up
+  // to 90 × 15 — and an agent restructure can write a squat target the athlete's
+  // best week never touched. Either way the hold waits for sets that cannot happen.
+  const achievable = repLow != null ? achievableWorkingWeight(name, repLow, date) : null;
+  const unreachable = (w: number | null): boolean =>
+    w != null && w > 0 && achievable != null && w > achievable * REACHABLE_TOLERANCE;
+  const loggedWorking = recentWorkingWeight(name);
+  const recentWorking = unreachable(loggedWorking) ? achievable : loggedWorking;
   // Sign is the encoding, not the name. A lift called "Assisted Pull-Up" with a
   // purely positive history is weighted work; the name must not freeze it as assist.
   const assistHistory = (planWeight != null && planWeight < 0) || (recentWorking != null && recentWorking < 0);
@@ -1537,9 +1551,11 @@ function repsPrescription(
       recentWorking != null &&
       !(planWeight < 0 && recentWorking > 0) &&
       recentWorking > planWeight + 0.1);
+  // …and the mirror: a plan target the log cannot reach re-grounds DOWN to the
+  // achievable load, through the same reground proposal as a catch-up.
+  const planAhead = !planBehind && unreachable(planWeight);
+  if (planAhead) baseWeight = achievable;
 
-  const repLow = plan?.rep_low ?? cur?.rep_low ?? undefined;
-  const repHigh = plan?.rep_high ?? cur?.rep_high ?? undefined;
   const sets = plan?.sets || 3;
 
   // The decision. Order matters: an injury constraint HOLDS load before anything
@@ -1937,7 +1953,7 @@ function repsPrescription(
     }
   }
 
-  // REGROUND does not consume the step. A plan sitting under the real working
+  // REGROUND does not consume the step (either direction). A plan sitting under the real working
   // weight used to rewrite the card as a catch-up HOLD ("earn a clean extra
   // rep") even when every working set had already capped the range — applying
   // then only moved the target to the logged number and the earned step was
@@ -1958,7 +1974,7 @@ function repsPrescription(
   };
   const mayPromoteLoad = strong && doseEligibility.eligible && !cutVetoesPromotion(cutPressure, liftCut);
   if (
-    planBehind &&
+    (planBehind || planAhead) &&
     baseWeight != null &&
     !loadConstrained &&
     !topSet &&
@@ -2003,6 +2019,8 @@ function repsPrescription(
       why = planUnset
         ? say(voice.PLAN_UNSET_HOLD, "plan_unset_hold")(lbl)
         : say(voice.PLAN_BEHIND_HOLD, "plan_behind_hold")(lbl);
+  } else if (planAhead && baseWeight != null && action === "hold" && !loadConstrained) {
+    why = say(voice.PLAN_AHEAD_HOLD, "plan_ahead_hold")(`${baseWeight} lb`);
   }
 
   // Cut-pressure voice follows the consequence that actually landed.
@@ -2244,7 +2262,7 @@ function repsPrescription(
   // The displayed "current" reflects REALITY when the plan was behind, so the card
   // reads "50 → 52.5", never "27 → …" off a number the athlete left behind weeks ago.
   const displayCurrent: PrescriptionTarget | null = cur
-    ? planBehind
+    ? planBehind || planAhead
       ? { ...cur, weight: baseWeight }
       : cur
     : baseWeight != null
@@ -2259,7 +2277,7 @@ function repsPrescription(
     current: displayCurrent,
     delta_text,
     why,
-    reground: planBehind || undefined,
+    reground: planBehind || planAhead || undefined,
     // Only claim the starting idea while the suggestion IS still that number — a
     // brake that resets the load back to the plan has taken the idea away with it.
     starting_idea: (startingIdea && nextWeight != null) || undefined,
@@ -2862,9 +2880,18 @@ export interface ProgramBalance {
 // THE RULE (see programBalance): a region carrying at least
 // ENDURANCE_SUPPORTED_PER_WEEK heavy-session equivalents is never called "due".
 // Its band stays honest (resistance volume really is low), but a 40-mile week
-// leaves legs loaded, not neglected, and telling that athlete to go add squat
-// volume because their quads look untrained is the connected read failing.
+// leaves calves and trunk loaded, not neglected.
+//
+// EXCEPT the legs' lifting prime movers. Quads, hamstrings and glutes are what a
+// squat or hinge day trains, and running keeps them busy, not stronger — exempting
+// them meant a runner's legs could never read "due", so the day picker drifted to
+// upper days for weeks.
 const ENDURANCE_SUPPORTED_PER_WEEK = 1.5;
+const LIFT_ONLY_GROUPS = new Set(["quads", "hamstrings", "glutes"]);
+
+function enduranceSupported(group: string, weeklySessions: number): boolean {
+  return !LIFT_ONLY_GROUPS.has(group) && weeklySessions >= ENDURANCE_SUPPORTED_PER_WEEK;
+}
 
 function enduranceByRegion(weeks: number, date: string): Map<string, number> {
   const out = new Map<string, number>();
@@ -2923,7 +2950,7 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
     const since7 = daysAgo(v.last_date);
     const stale = since7 != null && since7 > 7;
     const enduranceSessions = enduranceWeekly(group);
-    const supported = enduranceSessions >= ENDURANCE_SUPPORTED_PER_WEEK;
+    const supported = enduranceSupported(group, enduranceSessions);
     const wouldBeDue = band === "low" || stale;
     const status: GroupBalance["status"] =
       wouldBeDue && !supported ? "due" : band === "high" ? "high" : "ok";
@@ -2966,7 +2993,7 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
       // The same rule applies to a group with ZERO logged sets: a runner's calves
       // are programmed, untrained, and anything but idle.
       const enduranceSessions = enduranceWeekly(group);
-      const supported = enduranceSessions >= ENDURANCE_SUPPORTED_PER_WEEK;
+      const supported = enduranceSupported(group, enduranceSessions);
       groups.push({
         group,
         sets: 0,

@@ -56,6 +56,7 @@ import {
   resolveSessionPlanDay,
   selectAdaptivePlanDay,
 } from "./plan-selection.js";
+import { liftDows } from "./strength-schedule.js";
 import { getEnduranceGoal, getPrimaryDiscipline } from "./profile.js";
 import { activeRecoveryWeek } from "./recovery-week.js";
 import { getProgramState, weeklyKm, type MesocycleState } from "./program-state.js";
@@ -1685,6 +1686,14 @@ function computeDayRead(
 
   // Already trained today (a logged lifting session)? Then today reads as covered.
   const trainedToday = sessionDates.has(d);
+  // …but a run is not the lifting. On a weekday the athlete lifts (stated, or observed
+  // from the log), endurance alone leaves the plan day open, so it must not read as
+  // "today's work is in" — a 25-minute easy run closed a stated Pull day that way.
+  const liftDayStillOpen =
+    !trainedToday &&
+    !!bigActivity &&
+    signalInput(() => liftDows(d).includes(new Date(`${d}T00:00:00Z`).getUTCDay()), false);
+  if (liftDayStillOpen) (signals as any).lift_day_open_after = { activity: String(bigActivity.type || "activity") };
 
   // Pick a suggested plan day for the "train" case. This now starts with the
   // historical rotation but lets logged content, volume balance, and acute load
@@ -1948,7 +1957,8 @@ function computeDayRead(
   const rules: DayReadRule[] = [
     {
       resolve: () => {
-        if (!((trainedToday || bigActivity) && (todayLoad === "hard" || todayLoad === "moderate"))) return null;
+        if (!((trainedToday || (bigActivity && !liftDayStillOpen)) && (todayLoad === "hard" || todayLoad === "moderate")))
+          return null;
         // Name the work for the deterministic `why` (the floor when the agent's offline).
         // A logged lifting session reads as "session"; otherwise name the activity (run/
         // ride). When BOTH happened, "session" wins so the lift isn't erased by the run.

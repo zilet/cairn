@@ -25,10 +25,17 @@
 // through `normalizeComposedSession`'s exclusion, equipment and cap gates.
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import type { DailyDecisionEnvelope } from "./daily-decision.js";
-import { canonicalGroup, type MuscleGroup, normalizedExerciseKey, plainGroupWords } from "./exercise-canon.js";
+import {
+  bodyRegion,
+  canonicalGroup,
+  ISOLATION_GROUPS,
+  type MuscleGroup,
+  normalizedExerciseKey,
+  plainGroupWords,
+} from "./exercise-canon.js";
 import { equipmentCompatibility, inferExerciseEquipment, parseEquipmentCapability } from "./equipment-capability.js";
 import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
-import { RUN_PRIME_GROUPS } from "./hybrid-load.js";
+import { type AcuteGateReading, acuteGates, RUN_PRIME_GROUPS } from "./hybrid-load.js";
 import { getPlan } from "./plan.js";
 import { occupiedPressSlots, pressSlotKey } from "./plan-quality.js";
 import { finite } from "../lib/numbers.js";
@@ -194,6 +201,11 @@ function substitutionGroups(envelope: DailyDecisionEnvelope): Set<MuscleGroup> {
   return groups;
 }
 
+function rankBefore(a: number[], b: number[]): boolean {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+}
+
 function planItemMode(item: any, stored: any): "reps" | "timed" {
   return (stored?.mode ?? item?.mode) === "timed" ? "timed" : "reps";
 }
@@ -335,24 +347,53 @@ export function substituteSaturatedPlanItems(
       a.exercise.localeCompare(b.exercise)
   );
 
+  // "Allowed" is not "fresh": a group in the gate's LOADED band is still carrying
+  // work — the same correction the day picker makes. Such a stand-in is a last
+  // resort, which is what keeps a bench press off the Pull card the morning after Push.
+  let gates: Map<MuscleGroup, AcuteGateReading>;
+  try {
+    gates = acuteGates(envelope.date);
+  } catch {
+    gates = new Map();
+  }
+  const stillCarrying = (group: MuscleGroup): boolean => (gates.get(group)?.band ?? "fresh") !== "fresh";
+
   const usedGroups = new Set<MuscleGroup>();
   const usedExercises = new Set<string>();
   const occupiedPresses = occupiedPressSlots(
     items.map((item) => String((item as { exercise?: unknown })?.exercise ?? ""))
   );
-  const takeEntry = (): PoolEntry | null => {
+  const takeEntry = (targetGroup: MuscleGroup): PoolEntry | null => {
     const usable = (entry: PoolEntry) => {
       if (usedExercises.has(entry.exercise)) return false;
       const slot = pressSlotKey(entry.exercise);
       return !(slot && occupiedPresses.has(slot));
     };
-    const spread = pool.find((entry) => usable(entry) && !usedGroups.has(entry.group));
-    // Once every fresh group has one stand-in on the card, a second slot may
-    // return to a group already used — the day is still the athlete's own work,
-    // just re-pointed. Volume stays bounded by the envelope's caps downstream.
-    // A same-angle press already on the card is never that second slot: two
-    // flat benches is piling, not complementary work.
-    const entry = spread ?? pool.find(usable) ?? null;
+    // The stand-in fills the slot it replaces: fresh work first, then the same body
+    // region, then the same role (isolation for isolation, compound for compound).
+    // Without it a triceps extension became a back squat. Once every fresh group
+    // has one stand-in on the card, a second slot may return to a group already
+    // used — the day is still the athlete's own work, just re-pointed. Volume
+    // stays bounded by the envelope's caps downstream. A same-angle press already
+    // on the card is never that second slot: two flat benches is piling, not
+    // complementary work.
+    const rank = (entry: PoolEntry): number[] => [
+      Number(stillCarrying(entry.group)),
+      Number(bodyRegion(entry.group) !== bodyRegion(targetGroup)),
+      Number(ISOLATION_GROUPS.has(entry.group) !== ISOLATION_GROUPS.has(targetGroup)),
+      Number(usedGroups.has(entry.group)),
+    ];
+    // First best by rank; ties keep the pool's own deterministic order.
+    let entry: PoolEntry | null = null;
+    let best: number[] = [];
+    for (const candidate of pool) {
+      if (!usable(candidate)) continue;
+      const r = rank(candidate);
+      if (!entry || rankBefore(r, best)) {
+        entry = candidate;
+        best = r;
+      }
+    }
     if (!entry) return null;
     usedExercises.add(entry.exercise);
     usedGroups.add(entry.group);
@@ -367,7 +408,7 @@ export function substituteSaturatedPlanItems(
   const unresolved: string[] = [];
   let enduranceCause = false;
   for (const target of targets) {
-    const entry = takeEntry();
+    const entry = takeEntry(target.group);
     if (!entry) {
       unresolved.push(target.exercise);
       continue;

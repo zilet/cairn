@@ -219,12 +219,31 @@ test("soft-recheck injuries remain movement-specific holds and never become hard
   );
 });
 
-test("recent heavy lower-body endurance reduces conflicting leg volume", () => {
+// The conflict is the acute gate's question, not a second one: a hard effort whose
+// legs the gate reads fresh (a quality run on its day, a short tempo) leaves the
+// Lower card's squat where it is.
+test("a hard run the gate does not read as saturating the legs keeps the lower work", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      endurance: [
+        { type: "run", days_ago: 1, intensity: "hard", load: "moderate", regions: ["quads", "hamstrings", "calves"] },
+        { type: "run", days_ago: 2, intensity: "hard", load: "heavy", regions: ["quads", "hamstrings", "calves"] },
+      ],
+      muscle_load: [{ group: "quads", days_ago: 1, saturated: false, source: "endurance" }],
+    }),
+    { now: NOW }
+  );
+  assert.ok(!env.precedence.includes("endurance_lower_conflict"));
+  assert.ok(!env.muscles.reduced.includes("quads"));
+});
+
+test("recent heavy lower-body endurance reduces conflicting leg volume when the gate reads the legs saturated", () => {
   const env = buildDailySessionDecision(
     snapshot({
       endurance: [
         { type: "run", days_ago: 0, intensity: "hard", load: "heavy", regions: ["quads", "hamstrings", "calves"] },
       ],
+      muscle_load: [{ group: "quads", days_ago: 0, saturated: true, source: "endurance" }],
     }),
     { now: NOW }
   );

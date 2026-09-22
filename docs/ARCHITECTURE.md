@@ -168,7 +168,13 @@ muscle recovering" question in Cairn; this law never re-asks it by source. Each 
 `load_basis: "logged" | "plan_target"` so the hold clamp can tell a proven number from a guess: only a
 `"logged"` stand-in is exempt from `clampHeldTarget` on a hold day (`daily-composition.ts`) — a
 `"plan_target"` one goes through the ordinary clamp, which finds no anchor for a movement absent from
-today's template and clears it rather than shipping an unproven load. **A stand-in may not occupy a
+today's template and clears it rather than shipping an unproven load. **A stand-in fills the slot it
+replaces**: groups the gate reads fresh first (a LOADED group is allowed but still carrying work — the
+morning after Push, chest is not a Pull card's stand-in), then the same body region (`bodyRegion`,
+`exercise-canon.ts`), then the same role (`ISOLATION_GROUPS`: isolation for isolation) — a triceps
+extension never becomes a back squat. `endurance_lower_conflict` itself fires only on a heavy muscular
+dose whose leg region the gate reads saturated; a hard effort alone is not a second recovery question.
+**A stand-in may not occupy a
 press angle already on the card** (`pressSlotKey` / `occupiedPressSlots` in `plan-quality.ts`): two
 flat benches is piling, not complementary work, so the original slot stays and is lightened instead.
 `normalizeComposedSession` drops the same collision from agent output (`duplicate_press_angle`),
@@ -195,14 +201,25 @@ only ever lands a card the athlete's own numbers back.
 fresh at an arbitrary midnight. `src/repo/hybrid-load.ts`'s `muscleResidual()` replaces it with
 `residual(group) = Σ_days dose(day) × 0.5^(hours_since / half_life(group))`: strength dose reuses
 the shared effective-volume read (`effectiveVolumeByGroup` — warmups excluded, RIR-weighted,
-indirect credit at half) rather than re-counting rows, and endurance dose reuses the modality
-regions and finally scales past each modality's own heavy bar (`heavy_ratio`, capped at 2.5×) so a
-110-minute run stops reading as the same event as a 55-minute one. Half-life is per group
+indirect credit at half; a loaded carry always counts as a full set, since an RIR typed on one is
+not reps in reserve) rather than re-counting rows, and endurance dose reuses the modality regions,
+scaled by each modality's `regionWeights` (`heavy-load.ts`: a run steadies the trunk at 0.3, a trail
+ride braces back and forearms at ~0.35), and past each modality's own heavy bar (`heavy_ratio`, capped
+at 2.5×) so a 110-minute run stops reading as the same event as a 55-minute one. An effort's `load` is
+its MUSCULAR dose and `intensity` its metabolic one: heavy needs duration — long, or hard AND at least
+0.7× the modality's long bar — so a 25-minute run that drifts into Z4 stays a moderate leg dose while
+the day grade still reads it hard. Half-life is per group
 (`MUSCLE_RECOVERY_HALF_LIFE_H` in `exercise-canon.ts`, 24h rear delts to 66h hamstrings, 42h
 default), so a hamstring day still reads loaded Wednesday while rear delts do not. `SATURATED_RESIDUAL`
 (0.75) is calibrated to reproduce the old `sets >= HEAVY_SETS` bar at the boundary, so nothing
 shifts underfoot same-day even as yesterday's rear-delt work correctly stops gating and Monday's
-hamstrings correctly still do. The residual itself is internal — a float that never reaches an
+hamstrings correctly still do. **Saturation is relative to the athlete's own normal**: the bar is
+`saturationBar(habitual)` = max(`SATURATED_RESIDUAL`, 1.35 × the group's median morning residual over
+the last 28 days), capped at `SATURATED_CEILING` (2.0) so a baseline that creeps up with training
+cannot hide a spike. A hybrid athlete who runs most days carries a leg residual past 0.75 on an
+ordinary morning; the absolute bar read their legs saturated on 21 of 22 mornings. A lifter with no
+endurance habit reads exactly as before. The baseline comes from the same read (no extra queries).
+`strengthLegLoad` (the run builder's view) keeps the absolute band on the strength share only. The residual itself is internal — a float that never reaches an
 athlete surface, same standing as any other internal score.
 
 `acuteGate(group, date, residuals?)` / `acuteGates(date)` (same file) is the ONE acute-recovery
@@ -218,7 +235,9 @@ stops being able to say "quads & calves due" the morning after the long run that
 new consumer must call the gate, never re-derive its own window.
 
 Endurance credit rides in `programBalance`'s own `endurance_sessions`/`endurance_supported` fields,
-never folded into a group's set count — the landmarks (`MUSCLE_LANDMARKS`) are resistance-calibrated,
+and never exempts quads, hamstrings or glutes from "due" (`LIFT_ONLY_GROUPS`: running keeps them busy,
+not stronger — exempting them meant a runner's legs never read due and the picker drifted to upper
+days). It is never folded into a group's set count — the landmarks (`MUSCLE_LANDMARKS`) are resistance-calibrated,
 so mixing cardio volume into them would silently shift what "productive" means. `feedbackReaches()`
 (`progression.ts`) scopes soreness/performance autoregulation feedback to the muscle groups that
 session actually trained (`groupsTrainedOn`) instead of braking the whole body for three days off
@@ -282,7 +301,9 @@ assembles that same map into a connected week strip for Strength + Endurance: ca
 schedules map, otherwise template `day_number` order with `weekday:null` (never invent Mon=Day1).
 Each cell carries status (done/today/upcoming/rest/open), the plan day, any logged session this week,
 and any flexible-agenda run intent. **The log owns a done cell**: a session's cell names the plan day
-the session resolved to (`resolveSessionPlanDay` — linked, else exercise overlap), never the ring's
+the session resolved to (`resolveSessionPlanDay` — linked while the linked day still shares a
+movement or a non-core muscle with what was logged, else exercise overlap: a restructure rewrites a
+day's content under the same id, and a stale link anchored the ring off a day never done), never the ring's
 forecast, which read live was a day off on all five lifting days of one week. **The agenda owns a run
 cell**: a completion dated on the cell, or an open intent `suggested_date`d on it (an undated intent
 stays off the calendar); an open run outranks a mapped rest day. The strip speaks the plan day's NAME
@@ -348,6 +369,11 @@ and it is folded into the proposal-truth fingerprint, so a draft written against
 days is detected as stale. There is deliberately NO settings form for it: chat is the door, and
 `set_strength_schedule`'s emit guidance is written for ordinary phrasings ("strength on all workdays",
 "gym Mon-Fri, weekends are the long run and MTB") rather than for a question-and-answer.
+**A run does not close a lifting day.** The day read's `logged_loading_work_today` (kind `done`) fires
+on a logged lifting session, or on endurance alone only when today is NOT a lifting weekday
+(`liftDows`, stated or observed). On a lifting weekday a run leaves the plan day open: the read falls
+through to its ordinary rules and publishes `signals.lift_day_open_after` (`{activity}`) for the
+surfaces to say "run in, the lifting still open".
 
 An athlete who never says still has a lifting week, and `src/repo/strength-schedule.ts` reads it.
 `strengthScheduleRead(asOf)` returns `{days, source:"stated"|"observed"|null, weeks_seen,
@@ -449,6 +475,14 @@ exception is a parked near-maximal single (`voice.LOG_EARNED_FUEL_PARK_SINGLE`),
 which is that lift's protocol. `voice.CUT_HOLDING_WIN` is now reserved for the case it actually describes — a
 `reduce`/`sliding` HOLD, never a plan-behind catch-up or a phase hold, and never a `fast_loss` day
 (which has its own, separate reason for holding).
+
+**A target the log cannot reach re-grounds, in both directions.** `achievableWorkingWeight`
+(`exercises.ts`) inverts the best Epley estimate of the last six weeks at the plan's rep floor. A
+catch-up lands there, never on the heaviest top set whatever its reps (a calf raise at 90 × 8 used to
+become 90 × 15), and a plan target more than `REACHABLE_TOLERANCE` (5%) above it — an agent
+restructure's squat the athlete's best week never touched — re-grounds DOWN (`PLAN_AHEAD_HOLD`,
+`reground: true`) through the same propose→apply path as a catch-up. Within 5% is reaching, not out of
+reach: a load just stepped up to is held while the reps fill in. No history in the window is no ceiling.
 
 **Dose comparability is a per-lift question, not a per-session one.** Each `dose_evidence` entry
 carries its own `comparable` flag and reasons in `facts_json` — a shortfall blocks only the lift that

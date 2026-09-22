@@ -1675,11 +1675,17 @@ export function buildDailySessionDecision(
   // the legs. Role only changes narrative and whether an open quality-run
   // opening soft-protects legs (primary/co_primary) vs yielding to strength
   // (supporting). Role "none" never invents co-primary quality-run obligations.
+  // Physiologically, "loaded the legs" is the acute gate's question, not a second
+  // one: a heavy MUSCULAR dose whose leg region the gate still reads saturated. Any
+  // hard effort in three days used to fire this, which for an athlete who runs most
+  // days stripped every Lower card of its lower lifts.
   const enduranceReduced: string[] = [];
-  const heavyEndurance = snapshot.endurance.filter((e) => e.load === "heavy" || e.intensity === "hard");
+  const saturatedGroups = new Set(snapshot.muscle_load.filter((m) => m.saturated).map((m) => m.group));
+  const heavyEndurance = snapshot.endurance.filter((e) => e.load === "heavy");
   for (const e of heavyEndurance) {
     for (const region of e.regions) {
-      if (LOWER_BODY_GROUPS.has(region.toLowerCase())) enduranceReduced.push(region.toLowerCase());
+      const group = region.toLowerCase();
+      if (LOWER_BODY_GROUPS.has(group) && saturatedGroups.has(group)) enduranceReduced.push(group);
     }
   }
   // Soft key-run protect: primary/co_primary with an open quality cardio opening
