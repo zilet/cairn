@@ -516,6 +516,46 @@ test("the flexible agenda is the last resort, and completed intents don't count"
   assert.equal(read.clean, false);
 });
 
+test("with stated run days the engine's week outranks a stale template run item", () => {
+  // Live shape: stated Thursday quality, Lower A on Wednesday, and a leftover "Long
+  // run" cardio item on the template's Saturday. Read first, that item hid the quality
+  // run entirely and the week read clean.
+  heavyLowerDay(3, "Lower A");
+  runDay(6, "Long run", 16);
+  const runPlan = {
+    available: true,
+    runs: [
+      { day_number: 2, kind_label: "easy" },
+      { day_number: 4, kind_label: "quality" },
+      { day_number: 7, kind_label: "long" },
+    ],
+  };
+  const read = weekLayoutRead(REF, { runPlan, enduranceDows: [0, 2, 4] });
+  assert.equal(read.source, "run_plan");
+  assert.equal(read.quality_run_day, 4);
+  const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_quality");
+  assert.ok(hit, JSON.stringify(read.collisions));
+  assert.deepEqual(hit.days, [3, 4]);
+
+  // No stated run days: the stored plan still leads, exactly as before.
+  const unstated = weekLayoutRead(REF, { runPlan });
+  assert.equal(unstated.source, "plan");
+});
+
+test("a second compound lower day the day before the long run collides even when it isn't the heaviest", () => {
+  heavyLowerDay(3, "Lower A");
+  repo.savePlanDay(5, "Lower B", "Lower", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
+  ]);
+  runDay(6, "Long run", 16);
+  const read = weekLayoutRead(REF);
+  assert.deepEqual(read.heaviest_lower_days, [3], "Lower A is still the week's heaviest");
+  const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
+  assert.ok(hit, JSON.stringify(read.collisions));
+  assert.deepEqual(hit.days, [5, 6]);
+  assert.match(hit.detail, /Lower B/);
+});
+
 // ── the two halves of the composition, run end to end ───────────────────────
 // The run engine and this read judge the same week on the same ring. That does NOT
 // mean the read can never flag a live plan — it means the engine never hands it a

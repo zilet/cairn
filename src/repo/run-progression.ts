@@ -1179,78 +1179,6 @@ export function weeklyRunPlan(
   // a week that cannot change, it says the same thing every morning. Above it, the live
   // status is left to every other consumer and simply does not shrink this week.
   const detrainingSag = runState?.status === "detraining" && closedWeekKm < ENDURANCE_CHRONIC_FLOOR_KM;
-  const downWeek = ord % 4 === 0; // a reset week roughly every 4th
-  const taper = phase === "taper";
-
-  let factor = 1.1; // default ~10% build
-  // Whether this week's factor came from the ORDINARY build path. Every other branch
-  // below is a protective reduction (taper, deload, recovery-down, a mileage spike, a
-  // scheduled down week) or a deliberate hold while the base rebuilds, and a learned
-  // personal default must never be able to undo one of those. Only the plain build is
-  // eligible to be nudged upward.
-  let standardBuild = false;
-  if (taper) {
-    factor = 0.55;
-    rationale.push("Race week — tapering volume right down so you arrive fresh.");
-  } else if (recoveryWeek) {
-    factor = 0.8;
-    rationale.push("Recovery week is active — keeping the running rhythm with less volume and easy aerobic work.");
-  } else if (recoveryDown) {
-    factor = 0.9;
-    const bits: string[] = [];
-    if (hrvDown || rhrUp || sleepDown) bits.push("sleep / HRV / resting HR");
-    if (readinessLow) bits.push("this week's readiness is reading low");
-    if (statusStrained) bits.push(`your watch reads training as ${statusWord}`);
-    rationale.push(
-      `Recovery's down this week (${bits.join("; ")}) — easing volume and keeping it gentle. ` +
-        pickDayVariant(RUN_VOLUME_RECOVERY_UNLOCK, week_start, "run_volume:recovery_unlock")
-    );
-  } else if (spiking) {
-    // DELIBERATELY LIVE, and the one input allowed to move a week from inside it.
-    // `spiking` is a trailing-7-day acute read with no week boundary, so a big block
-    // run on Monday flips it on Tuesday and this week's ask shrinks. That is a safety
-    // brake reading the load as it is NOW, and it is downward-only by construction:
-    // 1.0 is the smallest build factor an unprotected week can take, so it can only
-    // ever hold the week where it is or hand off to a protective branch above.
-    // The volume anchor governs what the week is BUILT from; it does not govern
-    // whether a spike is happening. Do not fold this into the anchor. (Its opposite
-    // number, the detraining sag, IS anchored — see detrainingSag above. A spike is an
-    // event with its own evidence; an absence is only evidence once the week closes.)
-    factor = 1.0;
-    rationale.push("Mileage jumped recently — holding it here to let it absorb before adding more.");
-  } else if (downWeek) {
-    factor = 0.8;
-    rationale.push("Scheduled down week — a lighter reset before the next build.");
-  } else if (detrainingSag) {
-    factor = 1.0;
-    rationale.push("Rebuilding the base back gently — steady, not a jump.");
-  } else {
-    standardBuild = true;
-    rationale.push("Building conservatively — about a 10% step on last week.");
-  }
-
-  // --- the race, pulling ---
-  // Everything above is REACTIVE: it reads what happened and steps off it. That is
-  // the right floor and a poor ceiling — a dated race with a distance has a
-  // destination, and a 10% step off a thin week arrives at race day nowhere near it.
-  // The ramp offers the next reachable step; the blend below lets it PULL the factor
-  // up, and only that.
-  //
-  // Three hard rules, all about not turning a goal into a quota:
-  //   • only on an ordinary build week. Every other branch above is a protective
-  //     reduction or a deliberate hold, and a race on the calendar is never a reason
-  //     to undo one — safety states are final, exactly as they are for the learned
-  //     modifier below.
-  //   • the ask comes from the ramp's CONSTRAINED trajectory, so it is by
-  //     construction one safe step from what the athlete is already doing. The ideal
-  //     arrival curve never reaches the prescription; it only informs the sentence.
-  //   • never past the sustainable ceiling. Belt and braces — the constrained ask
-  //     already cannot exceed it.
-  // A dated race the athlete put a TIME on — the difference between "I'd like to do
-  // this event" and "I'd like to run it in 1:50". The time is what makes the mileage
-  // a requirement rather than a preference, so it is what unlocks the ramp's pull,
-  // the lower quality bar, and the honest word when the two disagree.
-  const raceTarget = !!(goal?.is_race && goal.phase !== "past" && String(goal.target ?? "").trim());
   // Deliberately the LIVE 28-day longest, not the anchored figure prevLong reads below,
   // and safe here because of where it can reach — not because it doesn't move.
   // raceRamp routes prevLongKm to exactly ONE output, required_long_km; the volume ask
@@ -1290,6 +1218,82 @@ export function weeklyRunPlan(
       return null;
     }
   })();
+  // A reset week roughly every 4th. With a dated race the ramp owns the cadence — it
+  // counts down to the start line, and the race ladder labels its weeks from the same
+  // count, so the plan never calls "build" the week the ladder calls "down". The
+  // lifting block's week index is the fallback only when there is no race to count to.
+  const downWeek = ramp ? ramp.down_week : ord % 4 === 0;
+  const taper = phase === "taper";
+
+  let factor = 1.1; // default ~10% build
+  // Whether this week's factor came from the ORDINARY build path. Every other branch
+  // below is a protective reduction (taper, deload, recovery-down, a mileage spike, a
+  // scheduled down week) or a deliberate hold while the base rebuilds, and a learned
+  // personal default must never be able to undo one of those. Only the plain build is
+  // eligible to be nudged upward.
+  let standardBuild = false;
+  if (taper) {
+    factor = 0.55;
+    rationale.push("Race week — tapering volume right down so you arrive fresh.");
+  } else if (recoveryWeek) {
+    factor = 0.8;
+    rationale.push("Recovery week is active — keeping the running rhythm with less volume and easy aerobic work.");
+  } else if (recoveryDown) {
+    factor = 0.9;
+    const bits: string[] = [];
+    if (hrvDown || rhrUp || sleepDown) bits.push("sleep / HRV / resting HR");
+    if (readinessLow) bits.push("this week's readiness is reading low");
+    if (statusStrained) bits.push(`your watch reads training as ${statusWord}`);
+    rationale.push(
+      `Recovery's down this week (${bits.join("; ")}) — easing volume and keeping it gentle. ` +
+        pickDayVariant(RUN_VOLUME_RECOVERY_UNLOCK, week_start, "run_volume:recovery_unlock")
+    );
+  } else if (downWeek) {
+    factor = 0.8;
+    rationale.push("Scheduled down week — a lighter reset before the next build.");
+  } else if (spiking) {
+    // DELIBERATELY LIVE, and the one input allowed to move a week from inside it.
+    // `spiking` is a trailing-7-day acute read with no week boundary, so a big block
+    // run on Monday flips it on Tuesday and this week's ask shrinks. That is a safety
+    // brake reading the load as it is NOW, and it is downward-only by construction:
+    // 1.0 is the smallest build factor an unprotected week can take, so it can only
+    // ever hold the week where it is or hand off to a protective branch above.
+    // The volume anchor governs what the week is BUILT from; it does not govern
+    // whether a spike is happening. Do not fold this into the anchor. (Its opposite
+    // number, the detraining sag, IS anchored — see detrainingSag above. A spike is an
+    // event with its own evidence; an absence is only evidence once the week closes.)
+    factor = 1.0;
+    rationale.push("Mileage jumped recently — holding it here to let it absorb before adding more.");
+  } else if (detrainingSag) {
+    factor = 1.0;
+    rationale.push("Rebuilding the base back gently — steady, not a jump.");
+  } else {
+    standardBuild = true;
+    rationale.push("Building conservatively — about a 10% step on last week.");
+  }
+
+  // --- the race, pulling ---
+  // Everything above is REACTIVE: it reads what happened and steps off it. That is
+  // the right floor and a poor ceiling — a dated race with a distance has a
+  // destination, and a 10% step off a thin week arrives at race day nowhere near it.
+  // The ramp offers the next reachable step; the blend below lets it PULL the factor
+  // up, and only that.
+  //
+  // Three hard rules, all about not turning a goal into a quota:
+  //   • only on an ordinary build week. Every other branch above is a protective
+  //     reduction or a deliberate hold, and a race on the calendar is never a reason
+  //     to undo one — safety states are final, exactly as they are for the learned
+  //     modifier below.
+  //   • the ask comes from the ramp's CONSTRAINED trajectory, so it is by
+  //     construction one safe step from what the athlete is already doing. The ideal
+  //     arrival curve never reaches the prescription; it only informs the sentence.
+  //   • never past the sustainable ceiling. Belt and braces — the constrained ask
+  //     already cannot exceed it.
+  // A dated race the athlete put a TIME on — the difference between "I'd like to do
+  // this event" and "I'd like to run it in 1:50". The time is what makes the mileage
+  // a requirement rather than a preference, so it is what unlocks the ramp's pull,
+  // the lower quality bar, and the honest word when the two disagree.
+  const raceTarget = !!(goal?.is_race && goal.phase !== "past" && String(goal.target ?? "").trim());
   // Safety states are final, exactly as for the learned modifier below: an
   // endurance-limiting health flag stands whether or not it is certain. firmHold is
   // caught by the 0.9 cap afterwards, but softHold caps nothing — without this an

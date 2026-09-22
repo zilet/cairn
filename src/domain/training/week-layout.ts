@@ -65,7 +65,7 @@ export interface WeekLayoutRead {
    * this; nothing applies it, and the athlete is free to ignore it.
    */
   suggested_move: { from: number; to: number } | null;
-  /** The heaviest lower day(s) — the axis adjacency is judged on. Ties are kept. */
+  /** The heaviest lower day(s) — they lead the adjacency read (keyLowerDays). Ties are kept. */
   heaviest_lower_days: number[];
   /** Every genuine heavy-lower (squat/hinge) day, the axis the 3-in-a-row read uses. */
   heavy_lower_days: number[];
@@ -239,7 +239,17 @@ interface RunPlacement {
 // and only speaks when the plan carries no runs yet. The flexible agenda is a rolling
 // reconciliation that moves day to day — a fine last resort, a poor basis for a line
 // that would otherwise flicker on and off through the week.
-function runPlacement(opts?: { runPlan?: WeeklyRunPlan | null; agenda?: FlexibleTrainingAgenda | null }): RunPlacement {
+//
+// Except once the athlete has NAMED their run days. The run engine and the agenda are
+// then laid on those weekdays, and the template's cardio items are a leftover the week
+// no longer follows: read first, a stale "Long Run" item put the long run on Saturday
+// and no quality run anywhere, so a stated Thursday quality run behind Wednesday's
+// heavy legs never collided. With a stated calendar the engine's week leads and the
+// template is only the fallback.
+function runPlacement(
+  opts?: { runPlan?: WeeklyRunPlan | null; agenda?: FlexibleTrainingAgenda | null },
+  statedRunDays = false
+): RunPlacement {
   let items: { day_number: number; kind: string }[] = [];
   try {
     items = planRunItems();
@@ -253,7 +263,8 @@ function runPlacement(opts?: { runPlan?: WeeklyRunPlan | null; agenda?: Flexible
     return hit ? hit.day_number : null;
   };
   const planned = { long: pick(items, "long"), quality: pick(items, "quality") };
-  if (planned.long != null || planned.quality != null) return { ...planned, source: "plan" };
+  const fromStoredPlan = planned.long != null || planned.quality != null;
+  if (fromStoredPlan && !statedRunDays) return { ...planned, source: "plan" };
 
   const runPlan = opts?.runPlan;
   if (runPlan?.available && Array.isArray(runPlan.runs) && runPlan.runs.length) {
@@ -271,6 +282,7 @@ function runPlacement(opts?: { runPlan?: WeeklyRunPlan | null; agenda?: Flexible
     if (fromAgenda.long != null || fromAgenda.quality != null) return { ...fromAgenda, source: "agenda" };
   }
 
+  if (fromStoredPlan) return { ...planned, source: "plan" };
   return { long: null, quality: null, source: "none" };
 }
 
@@ -310,8 +322,17 @@ function hardStacks(heavy: number[], long: number | null, quality: number | null
   return runs.filter((r) => r.length >= 3);
 }
 
+// The adjacency axis: the heaviest lower day plus every other lower day that carries
+// real squat/hinge work. Judged on the heaviest alone, Friday's Lower B before a
+// Saturday long run never collided because Wednesday's Lower A out-tonnaged it — and
+// Friday's squats still send the legs into Saturday worked. An accessory-only lower
+// day (a leg curl) still never collides. Heaviest first, so it leads when both do.
+function keyLowerDays(heaviest: number[], loads: HeavyLowerDayLoad[]): number[] {
+  return [...new Set([...heaviest, ...loads.filter((l) => l.compound_sets > 0).map((l) => l.day_number)])];
+}
+
 function detectCollisions(
-  heaviest: number[],
+  keyLower: number[],
   heavy: number[],
   long: number | null,
   quality: number | null,
@@ -320,7 +341,7 @@ function detectCollisions(
   const out: WeekLayoutCollision[] = [];
   const byDay = new Map(loads.map((l) => [l.day_number, l]));
   const runLabel = (kind: "long" | "quality") => (kind === "long" ? "long run" : "quality run");
-  for (const h of heaviest) {
+  for (const h of keyLower) {
     for (const [kind, day] of [
       ["long", long],
       ["quality", quality],
@@ -376,7 +397,7 @@ function detectCollisions(
 // a Monday lift.
 function clearingSlot(
   move: number,
-  heaviest: number[],
+  keyLower: number[],
   heavy: number[],
   long: number | null,
   quality: number | null,
@@ -388,7 +409,7 @@ function clearingSlot(
     .sort((a, b) => Math.abs(a - move) - Math.abs(b - move) || a - b);
   for (const to of candidates) {
     const swap = (days: number[]) => days.map((d) => (d === move ? to : d));
-    if (!detectCollisions(swap(heaviest), swap(heavy), long, quality, loads).length) return to;
+    if (!detectCollisions(swap(keyLower), swap(heavy), long, quality, loads).length) return to;
   }
   return null;
 }
@@ -461,7 +482,7 @@ export function weekLayoutRead(
     planDays = new Set();
   }
 
-  const placement = runPlacement(opts);
+  const placement = runPlacement(opts, stated.run_days.length > 0);
   let { long, quality } = placement;
   const source = placement.source;
 
@@ -517,7 +538,8 @@ export function weekLayoutRead(
   if (!heavy.length || (long == null && quality == null))
     return CLEAN(heaviest, heavy, long, quality, source, stated, space);
 
-  const collisions = detectCollisions(heaviest, heavy, long, quality, loads);
+  const keyLower = keyLowerDays(heaviest, loads);
+  const collisions = detectCollisions(keyLower, heavy, long, quality, loads);
   if (!collisions.length) return CLEAN(heaviest, heavy, long, quality, source, stated, space);
 
   // The lead: an adjacency collision names a concrete move, so it speaks ahead of the
@@ -533,7 +555,7 @@ export function weekLayoutRead(
     const inStack = lead.days.filter((day) => heavy.includes(day));
     const move = inStack.find((day) => heaviest.includes(day)) ?? inStack[inStack.length - 1];
     const span = `${weekday(lead.days[0])} to ${weekday(lead.days[lead.days.length - 1])}`;
-    const to = move == null ? null : clearingSlot(move, heaviest, heavy, long, quality, loads, planDays);
+    const to = move == null ? null : clearingSlot(move, keyLower, heavy, long, quality, loads, planDays);
     if (move != null && to != null) suggested_move = { from: move, to };
     const other = to == null ? null : (strengthAt.get(to) ?? null);
     suggestion =
@@ -556,7 +578,7 @@ export function weekLayoutRead(
     const runWord = lead.kind === "heavy_lower_adjacent_long_run" ? "long run" : "quality run";
     const move = lead.days.find((day) => day !== runDay) as number;
     const lift = strengthDayLabel(byDay.get(move), move);
-    const to = clearingSlot(move, heaviest, heavy, long, quality, loads, planDays);
+    const to = clearingSlot(move, keyLower, heavy, long, quality, loads, planDays);
     if (to != null) suggested_move = { from: move, to };
     const other = to == null ? null : (strengthAt.get(to) ?? null);
     suggestion =

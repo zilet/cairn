@@ -92,7 +92,7 @@ function raceDist(km: unknown, units?: unknown): string {
 const RACE_FIT_WORD: Record<string, string> = {
   fits: "inside the target",
   stretch: "a stretch the build can close",
-  beyond_horizon: "the distance itself is the honest goal this time",
+  beyond_horizon: "train from today's shape; the target stays the reach",
 };
 
 const RACE_WEEK_KIND_WORD: Record<string, string> = {

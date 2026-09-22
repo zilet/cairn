@@ -270,9 +270,19 @@ test("weeklyRunPlan: an UNCERTAIN health hold also stops the ramp pulling", () =
   );
 });
 
+// 2026-08-24 is ten weeks out from the race: the ramp's own reset week (eight steps
+// from peak, every fourth a reset). REF's week is not one.
+const RAMP_DOWN_DAY = "2026-08-26";
+const rampDownOpts = (over = {}) => ({ ...planOpts(over), volumeAnchorDate: "2026-08-23" });
+
 test("weeklyRunPlan: a scheduled down week and a mileage spike also outrank the ramp", () => {
-  const scheduled = repo.weeklyRunPlan(REF, { ...planOpts(), block: { week_index: 4 } });
-  assert.ok(totalKm(scheduled) < 17, `the every-fourth reset still resets (got ${totalKm(scheduled)} km)`);
+  const scheduled = repo.weeklyRunPlan(RAMP_DOWN_DAY, rampDownOpts());
+  assert.ok(totalKm(scheduled) < 17, `the race's reset week still resets (got ${totalKm(scheduled)} km)`);
+  assert.ok(scheduled.rationale.some((line) => /Scheduled down week/.test(line)));
+  // With a dated race the ramp owns the cadence, so the lifting block's fourth week is
+  // not a running reset on its own — the ladder and the plan count the same weeks.
+  const liftingFourth = repo.weeklyRunPlan(REF, { ...planOpts(), block: { week_index: 4 } });
+  assert.ok(!liftingFourth.rationale.some((line) => /Scheduled down week/.test(line)));
   const spiking = repo.weeklyRunPlan(
     REF,
     planOpts({
@@ -280,6 +290,16 @@ test("weeklyRunPlan: a scheduled down week and a mileage spike also outrank the 
     })
   );
   assert.ok(totalKm(spiking) <= 17.2, `a spiking athlete holds where they are (got ${totalKm(spiking)} km)`);
+});
+
+test("weeklyRunPlan: a spike landing on a scheduled down week takes the down week, not the hold", () => {
+  const spikeOnReset = repo.weeklyRunPlan(
+    RAMP_DOWN_DAY,
+    rampDownOpts({ programState: { endurance: { sport: "run", longest_km_4wk: 9.1, has_quality: true, status: "spiking" } } })
+  );
+  // 0.8 × the 17 km anchor, give or take the per-run rounding — never the 1.0 hold.
+  assert.ok(totalKm(spikeOnReset) <= 17 * 0.8 + 0.2, `a reset, not a hold (got ${totalKm(spikeOnReset)} km)`);
+  assert.ok(spikeOnReset.rationale.some((line) => /Scheduled down week/.test(line)));
 });
 
 test("weeklyRunPlan: a demonstrated long run is a floor, not just a ceiling", () => {

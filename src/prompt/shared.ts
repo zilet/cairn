@@ -1386,7 +1386,10 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
     }
     if (r.target) lines.push(`  Target: ${fmt(r.target.sec)} = ${fmt(r.target.pace_sec_per_km)} /km.`);
     if (build.paces?.bands?.length) {
-      lines.push(`  Pace bands (off the ${build.paces.anchored_on}): ${build.paces.bands.map((b: any) => `${b.label} ${b.text}`).join("; ")}. Prescribe quality work in these bands; hills by effort.`);
+      // Estimate-anchored bands train from current fitness; the Race pace band is still
+      // the target, so say what it is for or the model prescribes whole sessions at it.
+      const racePaceUse = build.paces.anchored_on === "estimate" && r.target ? " Race pace is the target — short race-pace touches only, not whole sessions." : "";
+      lines.push(`  Pace bands (off the ${build.paces.anchored_on}): ${build.paces.bands.map((b: any) => `${b.label} ${b.text}`).join("; ")}. Prescribe quality work in these bands; hills by effort.${racePaceUse}`);
     }
     if (Array.isArray(build.weeks) && build.weeks.length) {
       lines.push(

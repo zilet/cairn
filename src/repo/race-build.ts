@@ -538,7 +538,10 @@ function weeklyReview(asOf: string, runs: RunRow[]): RaceBuild["review"] {
 const RIDE_LABEL = /ride|mtb|cycling|gravel/i;
 
 function ridePattern(impacts: EnduranceImpact[]): Omit<RidePattern, "placement"> | null {
-  const rides = impacts.filter((i) => RIDE_LABEL.test(i.label) || RIDE_LABEL.test(i.type));
+  // Only rides that load the legs make a pattern worth placing runs around. Light
+  // spins (an e-bike commute) outnumbered the weekend trail rides and won the weekday,
+  // so the read placed a 38-minute commute and never saw the MTB before the long run.
+  const rides = impacts.filter((i) => (RIDE_LABEL.test(i.label) || RIDE_LABEL.test(i.type)) && i.load !== "light");
   if (!rides.length) return null;
   const weeksWindow = 6;
   const weeks = new Set(rides.map((r) => mondayOf(r.date)));
@@ -619,7 +622,7 @@ function estimateSentence(p: RacePrediction | null, t: RaceTarget | null): strin
       ? `— inside the ${fmtClock(t.sec)} target`
       : p.fit === "stretch"
         ? `— ${fmtClock(Math.abs(gap))} off the ${fmtClock(t.sec)} target, a stretch the build can close`
-        : `— ${fmtClock(Math.abs(gap))} off the ${fmtClock(t.sec)} target; the honest goal this time may be the distance itself`;
+        : `— ${fmtClock(Math.abs(gap))} off the ${fmtClock(t.sec)} target; the paces train from today's shape, and the target stays the reach`;
   return `${est}${trend} ${vs}.`;
 }
 
@@ -667,10 +670,24 @@ export function raceBuild(
   if (prediction && target) {
     prediction = { ...prediction, gap_sec: prediction.estimate_sec - target.sec, fit: raceFit(prediction.estimate_sec, target.sec) };
   }
+  // Training paces are anchored on CURRENT fitness, with the target as a ceiling: a
+  // threshold band built off a goal the body cannot yet hold asks for efforts faster
+  // than today's 10K, and every quality session turns into a race. So the bands come
+  // off the slower of estimate and target (a faster estimate never speeds training
+  // past the goal), and only the race band keeps the target — the race-pace touch.
   const racePace = target?.pace_sec_per_km ?? prediction?.estimate_pace_sec_per_km ?? null;
+  const estimatePace = prediction?.estimate_pace_sec_per_km ?? null;
+  const trainingPace = racePace != null && estimatePace != null ? Math.max(racePace, estimatePace) : racePace;
   const paces =
-    racePace != null
-      ? { anchored_on: (target ? "target" : "estimate") as "target" | "estimate", race_pace_sec_per_km: Math.round(racePace), bands: paceBandsFor(racePace, distance) }
+    racePace != null && trainingPace != null
+      ? {
+          anchored_on: (target && trainingPace === target.pace_sec_per_km ? "target" : "estimate") as "target" | "estimate",
+          race_pace_sec_per_km: Math.round(racePace),
+          bands: [
+            ...paceBandsFor(racePace, distance).filter((b) => b.key === "race"),
+            ...paceBandsFor(trainingPace, distance).filter((b) => b.key !== "race"),
+          ],
+        }
       : null;
   const qualityKey = paceKeyForQuality(qualityRun?.label ?? plan?.quality_focus);
   const qualityPace = paces && qualityKey ? paces.bands.find((b) => b.key === qualityKey) ?? null : null;
@@ -685,8 +702,17 @@ export function raceBuild(
   // The engine already knows next week (an upcoming recovery week, a hold, a stated
   // schedule change); handed to the ladder, the second rung is the engine's own number
   // rather than a projection that disagrees with the run list one card down.
-  const nextMonday = addDaysISO(mondayOf(asOf), 7);
-  const nextPlan = nextMonday ? safe(() => weeklyRunPlan(nextMonday)) : null;
+  //
+  // But only once THIS week's volume is in the bank. The engine sizes a week off the
+  // Mon–Sun before it, so asked about next Monday mid-week it anchors on the three or
+  // four kilometres logged so far and hands back a collapsed rung the ladder then
+  // walks from. Until the log has caught up with this week's prescription, next week
+  // steps off the prescription (the walk's own projection) instead.
+  const thisMonday = mondayOf(asOf);
+  const loggedThisWeek = logRuns.filter((r) => r.date >= thisMonday && r.date <= asOf).reduce((s, r) => s + r.km, 0);
+  const thisWeekBanked = weekKm > 0 && loggedThisWeek >= weekKm;
+  const nextMonday = addDaysISO(thisMonday, 7);
+  const nextPlan = nextMonday && thisWeekBanked ? safe(() => weeklyRunPlan(nextMonday)) : null;
   const nextRuns = nextPlan?.available ? nextPlan.runs : [];
   const nextKm = round1(nextRuns.reduce((s, r) => s + (r.target_distance_km != null ? Number(r.target_distance_km) : 0), 0));
   const nextLong = nextRuns.find((r) => r.kind_label === "long");

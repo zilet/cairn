@@ -683,6 +683,15 @@ test("covered territory reaches the prompt as a plain pair, not as a sentence to
   assert.match(prompt, /"connection"/, "the JSON contract asks for the connection object");
 });
 
+// Live: an insight read a fitter threshold as licence for easy runs to "drift a few
+// beats higher" while every easy run already sat above its own ceiling. The prompt
+// names what the compressed balance it is handed means.
+test("the insight prompt never lets a fitter threshold loosen the easy-run ceiling", () => {
+  const prompt = buildInsightPrompt(undefined, []);
+  assert.match(prompt, /intensity_balance reads "compressed"/);
+  assert.match(prompt, /never suggest that easy runs may drift higher/);
+});
+
 // The corpus is deliberately whole — the dedupe guards and the cache key need every
 // key in the 90-day window, up to a couple hundred rows. The PROMPT is not: pasting
 // all of it in is a payload the model reads as noise. buildInsightPrompt is the one

@@ -917,6 +917,11 @@ THE CONSTITUTION (binding):
   its internal fields (no "the health_review confirms…", "recent_sessions show…", "the goal object").
   No grocery-list of evidence; one plain reason is enough.
 - It is a suggestion, never pressure. Rest and a quiet week are healthy, not problems to solve.
+- The easy-run ceiling is the server's heart-rate model, not yours to loosen. When
+  DATA.run_variety.intensity_balance reads "compressed" (easy runs finishing above their own easy
+  ceiling), never suggest that easy runs may drift higher or that the easy zone could rise — a
+  fitter threshold is not a licence for harder easy days. Any connection there points toward easier
+  easy running.
 ${coveredBlock}${recentBlock}${likedBlock}
 NAME WHAT YOU CONNECTED. Alongside the prose, tag the two sides of the connection with facets from
 this closed list, and say which way each one moved ("up" / "down" — bigger/smaller, better/worse):

@@ -297,11 +297,17 @@ strength day the ring reaches twice in a five-day lifting week is heavy on both 
 (no lifting week known, or `program-state`, which cannot import plan-selection) it stays on the
 template ring. **Only a lift the day BEFORE a long/quality run collides.** Heavy legs the morning
 after is the stacking the race build's own strength hint prescribes, so the read no longer flags it
-(three hard days in a row is still a stack). The race ladder takes the engine's prescription for NEXT
-week as its second rung too (`projectRaceBuildWeeks(..., thisWeek, nextWeek)`), so an upcoming
-recovery week shows one number on the ladder and in the run list. The agenda's quality classifier
-lets the watch's own easy verdict (`AEROBIC_BASE`/`RECOVERY`) outrank Z3 drift and needs aerobic
-TE ≥ 4, not 3, to call a run hard; only Z4+ time or a hard label overrides the easy label. Exercise effect-order
+(three hard days in a row is still a stack). Adjacency is judged on the heaviest lower day AND every
+other lower day carrying squat/hinge work (an accessory-only leg day never collides). With stated run
+days the engine's week (then the agenda) outranks the template's cardio items, which become the
+fallback — a stale "Long Run" item hid a stated Thursday quality run. The race ladder takes the
+engine's prescription for NEXT week as its second rung once this week's log reaches its prescription
+(`projectRaceBuildWeeks(..., thisWeek, nextWeek)`), so an upcoming recovery week shows one number on
+the ladder and in the run list. The agenda's quality classifier lets the watch's own easy verdict
+(`AEROBIC_BASE`/`RECOVERY`) outrank Z3 drift and needs aerobic TE ≥ 4, not 3, to call a run hard;
+only Z4+ time or a hard label overrides the easy label. A quality-flagged run closes a quality slot
+while one is open and otherwise an easy one — harder than asked is still the run, and
+`completion.intensity` keeps the evidence. Exercise effect-order
 lives in `src/domain/training/plan-item-order.ts` — TIERS ONLY (prep → primary → secondary →
 isolation → core → cardio; a prep drill is named as one, filed as mobility, or its note says "mobility prep"), peers keep
 the athlete's order, and there is deliberately no equipment tie-break (name-inferred tools default to
@@ -3250,8 +3256,11 @@ Pure, database-free arithmetic behind `weeklyRunPlan`. `raceRamp()` computes TWO
 the **constrained** trajectory (the fastest safe path from today's real anchor — the only one that
 reaches a prescription, so the weekly ask is by construction one safe step from what the athlete is
 already doing). The blend is a PULL only, applied on ordinary build weeks; taper, deloads,
-recovery-down, spikes, scheduled down weeks, detraining and health holds always win outright, and
-learned easing still applies after. `goal_feasibility` (`fits`/`stretch`/`beyond_horizon`) reports
+recovery-down, scheduled down weeks, spikes, detraining and health holds always win outright (a
+spike landing on a down week takes the down week — the smaller factor), and learned easing still
+applies after. With a dated race the ramp's own countdown (`down_week`) is the reset cadence, so the
+plan and the race ladder label the same week; the lifting block's week index is the fallback only
+without a race. `goal_feasibility` (`fits`/`stretch`/`beyond_horizon`) reports
 the gap honestly through rotated fit prose that offers the athlete a choice, never a quota. A
 demonstrated long run is a floor as well as a ceiling — bounded by the race curve, a 1.15× step,
 0.55× of the week, and the room the week has left. Phases are distance-aware (a ≥15 km race gets a
@@ -3283,14 +3292,19 @@ new profile fields, and `{available:false, reason}` for everyone else. `raceBuil
   `fits` / `stretch` / `beyond_horizon`, the same vocabulary as `goal_feasibility`, never a grade.
 - **`paces`** — per-session bands (easy / long / tempo / threshold / VO2) as offsets from the race
   pace, distance-aware (`paceBandsFor`): on a half, tempo IS race pace and threshold/VO2 sit
-  faster; on a 5k the race is the hard pace, so tempo sits slower. Anchored on the target when
-  there is one, else the estimate. `this_week.quality.pace` puts a number on the engine's quality
+  faster; on a 5k the race is the hard pace, so tempo sits slower. Training bands anchor on
+  CURRENT fitness with the target as a ceiling — the slower of estimate and target — so a goal the
+  body cannot yet hold never prices threshold work faster than today's 10K. Only the `race` band
+  keeps the target (the race-pace touch). `this_week.quality.pace` puts a number on the engine's quality
   label (`paceKeyForQuality`; hills stay effort-based).
 - **`weeks`** — the ladder from this week to race week, `projectRaceBuildWeeks` walking
   `raceRamp()` one Monday at a time (each week the engine's own next safe step off the one before).
   The live `weeklyRunPlan` prescription is passed IN as the current rung the walk steps off, not
   patched onto the first rung after the walk — patching after seeded the next Monday's anchor one
-  full ramp high, since `raceRamp()` reads its anchor as the week BEFORE. Week `kind` follows the
+  full ramp high, since `raceRamp()` reads its anchor as the week BEFORE. The second rung is the
+  engine's own next-week prescription only once this week's log has reached its prescription;
+  before that the engine would anchor on the partial week (a Tuesday's 4 km) and the ladder
+  collapsed, so the walk projects off this week's prescription instead. Week `kind` follows the
   ENGINE's arithmetic, not the calendar: for a
   weekend race the peak is the week before race week and the taper is race week itself, so the
   ladder shows build → peak → race rather than inventing a taper week the engine will not
@@ -3302,7 +3316,8 @@ new profile fields, and `{available:false, reason}` for everyone else. `raceBuil
   heavy lower ~10 days out in the taper) plus `weekLayoutRead`'s ONE collision sentence when the
   lifting and running stack. The read never moves a plan day.
 - **`ride`** — the weekly ride as a PATTERN read off the log (`recentEnduranceImpacts(42)`, labels
-  matching ride/MTB/gravel; three of six weeks makes a habit, fewer is an outing): modal weekday,
+  matching ride/MTB/gravel, light-load rides excluded so commutes never outvote the weekend trail
+  ride; three of six weeks makes a habit, fewer is an outing): modal weekday,
   typical duration/load, and one sentence about where it sits — on the long-run day, the day before
   the long/quality run, on the heavy-lower day, the day after the long run (a loaded weekend: keep
   it the recovery spin), or clear of all of them. A ride in a clean slot is never asked to move;

@@ -264,9 +264,11 @@ test("raceBuild lays out the half: estimate from the watch, fit against the targ
   assert.equal(p.fit, "stretch");
   assert.ok(p.gap_sec > 200 && p.gap_sec < 260);
 
-  // paces anchored on the target, with this week's quality session given a number.
-  assert.equal(out.paces.anchored_on, "target");
+  // training paces anchored on current fitness (the estimate is slower than the
+  // target); the race band alone keeps the target, as the race-pace touch.
+  assert.equal(out.paces.anchored_on, "estimate");
   assert.equal(out.paces.race_pace_sec_per_km, Math.round(6300 / HALF));
+  assert.equal(out.paces.bands.find((b) => b.key === "race").fast_sec_per_km, Math.round(6300 / HALF));
   assert.ok(out.paces.bands.some((b) => b.key === "threshold"));
   assert.ok(out.this_week, "the live engine prescribed a week");
   assert.ok(out.this_week.km > 0);
@@ -311,21 +313,66 @@ test("the ladder walks on from the live engine's week, not from a step above it"
   assert.equal(out.weeks[0].km, out.this_week.km, "this week is the engine's own prescription");
   assert.equal(out.weeks[0].long_km, out.this_week.long_km);
   const goal = { is_race: true, date: RACE, distance_km: HALF, target: "sub-1:45" };
-  // Week two is the engine's OWN prescription for next week when it has one (a
-  // recovery week it already knows about lands on the ladder as the number the run
-  // list will show); week three then steps off that rung, never off a projection.
-  const nextPlan = repo.weeklyRunPlan(out.weeks[1].week_start);
-  const nextKm = nextPlan.available
-    ? Math.round(nextPlan.runs.reduce((s, r) => s + (Number(r.target_distance_km) || 0), 0) * 10) / 10
-    : 0;
-  if (nextKm > 0) {
-    assert.equal(out.weeks[1].km, nextKm, "week two is the engine's next-week prescription");
-  } else {
-    const next = raceRamp(goal, out.weeks[1].week_start, out.weeks[0].km, out.weeks[0].long_km);
-    assert.equal(out.weeks[1].km, next.required_km, "week two is one ramp step off the week the athlete is running");
-  }
+  // This week's log (28.5 km) sits short of its prescription, so the week is not yet
+  // in the bank: week two is one ramp step off the prescription, not the engine's
+  // next week (which would anchor on the partial log).
+  assert.ok(out.this_week.km > 28.5, `fixture assumption: prescription ${out.this_week.km} exceeds the log`);
+  const next = raceRamp(goal, out.weeks[1].week_start, out.weeks[0].km, out.weeks[0].long_km);
+  assert.equal(out.weeks[1].km, next.required_km, "week two is one ramp step off the week the athlete is running");
   const third = raceRamp(goal, out.weeks[2].week_start, out.weeks[1].km, out.weeks[1].long_km);
   assert.equal(out.weeks[2].km, third.required_km, "week three is one ramp step off week two");
+
+  // Once the log reaches the prescription the week is banked, and week two is the
+  // engine's OWN next-week prescription (a recovery week it already knows about lands
+  // on the ladder as the number the run list will show).
+  repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: TODAY });
+  const banked = raceBuild(TODAY);
+  const nextPlan = repo.weeklyRunPlan(banked.weeks[1].week_start);
+  const nextKm = Math.round(nextPlan.runs.reduce((s, r) => s + (Number(r.target_distance_km) || 0), 0) * 10) / 10;
+  assert.ok(nextKm > 0);
+  assert.equal(banked.weeks[1].km, nextKm, "week two is the engine's next-week prescription");
+});
+
+test("mid-week, the ladder never collapses to the partial log: Tuesday with one short run", () => {
+  // The engine sizes a week off the Mon–Sun before it, so asked about next Monday on
+  // a Tuesday it anchors on the one short run so far. The ladder used to walk from
+  // that rung (9 km after a 32 km week); it steps off this week's prescription.
+  seedRaceProfile("sub-1:45");
+  seedHybridRunner();
+  const tuesday = "2026-09-15";
+  repo.addActivity({ type: "run", duration_min: 25, distance_km: 4, date: tuesday });
+  const out = raceBuild(tuesday);
+  assert.equal(out.available, true, out.reason);
+  assert.ok(out.weeks[0].km > 20, `this week is the prescription, got ${out.weeks[0].km}`);
+  assert.ok(
+    // Next week may be the ramp's own down week (0.75×), rounded to one decimal.
+    out.weeks[1].km >= Math.floor(0.75 * out.weeks[0].km * 10) / 10,
+    `rung two ${out.weeks[1].km} collapsed below this week's ${out.weeks[0].km}`
+  );
+});
+
+test("training paces follow current fitness when the target is beyond it; the target stays the race band", () => {
+  seedRaceProfile("1:30"); // far beyond a ~1:49 estimate
+  seedHybridRunner({ rideWeeks: [] });
+  repo.upsertGarminDailyMetric({ date: daysBefore(TODAY, 2), race_predict_half_sec: 6540 });
+  const out = raceBuild(TODAY);
+  assert.equal(out.prediction.fit, "beyond_horizon");
+  assert.equal(out.paces.anchored_on, "estimate");
+  const fromEstimate = paceBandsFor(out.prediction.estimate_pace_sec_per_km, HALF);
+  const threshold = out.paces.bands.find((b) => b.key === "threshold");
+  assert.equal(threshold.text, fromEstimate.find((b) => b.key === "threshold").text);
+  assert.equal(out.paces.bands.find((b) => b.key === "race").fast_sec_per_km, Math.round(5400 / HALF));
+  assert.doesNotMatch(out.why, /distance itself/);
+
+  // An estimate already faster than the target never speeds training past the goal.
+  resetAll();
+  seedRaceProfile("2:10");
+  seedHybridRunner({ rideWeeks: [] });
+  repo.upsertGarminDailyMetric({ date: daysBefore(TODAY, 2), race_predict_half_sec: 6540 });
+  const easy = raceBuild(TODAY);
+  assert.equal(easy.paces.anchored_on, "target");
+  const fromTarget = paceBandsFor(easy.paces.race_pace_sec_per_km, HALF);
+  assert.equal(easy.paces.bands.find((b) => b.key === "threshold").text, fromTarget.find((b) => b.key === "threshold").text);
 });
 
 test("raceBuild falls back to a conservative Riegel off the best recent run when the watch has no predictor", () => {
@@ -348,6 +395,22 @@ test("a stale watch predictor is not a current one — the build reads off the r
   repo.upsertGarminDailyMetric({ date: daysBefore(TODAY, 40), race_predict_half_sec: 6000 });
   const out = raceBuild(TODAY);
   assert.equal(out.prediction.basis, "recent_run_riegel");
+});
+
+test("the ride pattern reads the rides that load the legs, not the light commutes", () => {
+  seedRaceProfile("sub-1:45");
+  seedHybridRunner({ rideWeeks: [] });
+  // Four short e-bike commutes on Wednesdays outnumber three Saturday trail rides.
+  for (const wk of [0, 1, 2, 3]) {
+    repo.addActivity({ type: "ride", raw_text: "e-bike commute", duration_min: 20, distance_km: 6, date: daysBefore(TODAY, wk * 7 + 4) });
+  }
+  for (const wk of [0, 1, 3]) {
+    repo.addActivity({ type: "ride", raw_text: "MTB trail ride", duration_min: 110, distance_km: 25, date: daysBefore(TODAY, wk * 7 + 1) });
+  }
+  const out = raceBuild(TODAY);
+  assert.ok(out.ride, "three trail rides in six weeks is a habit");
+  assert.equal(out.ride.weekday, "Saturday");
+  assert.notEqual(out.ride.typical_load, "light");
 });
 
 test("a ride the day before the long run gets the easy-spinning sentence", () => {

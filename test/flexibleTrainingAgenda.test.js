@@ -110,6 +110,23 @@ test("quality completion requires positive intensity evidence", () => {
   assert.equal(withEvidence.intents[0].completion.intensity, "quality");
 });
 
+test("a harder-than-asked run closes an easy intention when no quality slot is open, and keeps its intensity", () => {
+  // Live shape: a week with no quality slot, and the athlete's easy Tuesday came back
+  // watch-labelled TEMPO. It matched nothing, so the week asked for the run again.
+  const activity = repo.addActivity({ type: "run", date: TUESDAY, duration_min: 26, distance_km: 4 });
+  addQualityEvidence(activity);
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "easy", 6), run(4, "easy", 6), run(7, "long", 14)]) });
+  const closed = agenda.intents.filter((i) => i.status === "completed");
+  assert.equal(closed.length, 1, JSON.stringify(agenda.intents.map((i) => [i.kind, i.status])));
+  assert.equal(closed[0].kind, "easy");
+  assert.equal(closed[0].completion.intensity, "quality", "the intensity is kept as evidence");
+
+  // With a quality slot open, the same run belongs there instead.
+  const withQuality = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "easy", 6), run(4, "quality", 6)]) });
+  assert.equal(withQuality.intents.find((i) => i.kind === "quality").status, "completed");
+  assert.equal(withQuality.intents.find((i) => i.kind === "easy").status, "open");
+});
+
 test("thirty sustained Z3 minutes in a forty-minute run close quality without a label or training effect", () => {
   const activity = repo.addActivity({ type: "run", date: MONDAY, duration_min: 40, distance_km: 7 });
   addZoneEvidence(activity, [

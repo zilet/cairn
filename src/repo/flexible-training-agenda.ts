@@ -189,8 +189,13 @@ function longShapedDose(observation: RunObservation, prescription: RunPlanPrescr
   return false;
 }
 
-function easyDoseMet(observation: RunObservation, prescription: RunPlanPrescription): boolean {
-  return !observation.quality && targetDoseMet(observation, prescription, 0.5);
+// A run harder than asked is still the run. While a quality slot is open the hard run
+// belongs there, but with none left an easy slot takes it — otherwise a watch-labelled
+// TEMPO on an easy day closes nothing and the week asks for the run again. The
+// intensity is not lost: completionEvidence keeps it on the completion.
+function easyDoseMet(observation: RunObservation, prescription: RunPlanPrescription, qualityOpen: boolean): boolean {
+  if (observation.quality && qualityOpen) return false;
+  return targetDoseMet(observation, prescription, 0.5);
 }
 
 function completionEvidence(observation: RunObservation): RunCompletionEvidence {
@@ -261,7 +266,7 @@ function matchCompletions(
       continue;
     }
     const easy = prescriptions.findIndex(
-      (run, index) => remaining.has(index) && run.kind_label === "easy" && easyDoseMet(observation, run)
+      (run, index) => remaining.has(index) && run.kind_label === "easy" && easyDoseMet(observation, run, openQualityRemains(prescriptions, remaining))
     );
     if (easy >= 0) {
       completed.set(easy, completionEvidence(observation));
