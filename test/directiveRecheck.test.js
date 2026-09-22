@@ -67,6 +67,11 @@ test("no timeframe in the text → the per-marker-class default horizon", () => 
   const l = repo.addDirective({ marker: "ApoB", domain: "watch", directive: "Recheck ApoB", intent_key: "recheck" });
   repo.updateDirective(l.id, { status: "resolved", status_at: "2026-05-01" });
   assert.equal(daysBetween("2026-05-01", repo.getAttentionSchedule(repo.directiveRecheckSignalKey("ApoB")).next_due), 84);
+
+  // Lp(a) is genetic — a year, never the lipid-response window.
+  const lpa = repo.addDirective({ marker: "Lp(a)", domain: "watch", directive: "Recheck Lp(a)", intent_key: "recheck" });
+  repo.updateDirective(lpa.id, { status: "resolved", status_at: "2026-05-01" });
+  assert.equal(daysBetween("2026-05-01", repo.getAttentionSchedule(repo.directiveRecheckSignalKey("Lp(a)")).next_due), 365);
 });
 
 // ---- a dismiss is not a recheck; a lever directive is not a recheck ----

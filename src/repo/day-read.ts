@@ -36,7 +36,13 @@ import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { planningContextEvents } from "./health.js";
 import { plainGroupWords } from "./exercise-canon.js";
 import { suppressSaturatedDue } from "./hybrid-load.js";
-import { LAST_NIGHT_MAX_AGE_DAYS, SENSOR_MAX_AGE_DAYS, isLastNight, sensorIsCurrent } from "./sensor-freshness.js";
+import {
+  LAST_NIGHT_MAX_AGE_DAYS,
+  SENSOR_MAX_AGE_DAYS,
+  isLastNight,
+  isReadDayReadiness,
+  sensorIsCurrent,
+} from "./sensor-freshness.js";
 import { getRecentSessions } from "./sessions.js";
 import { getSettings } from "./settings.js";
 import { getPlan } from "./plan.js";
@@ -1499,14 +1505,15 @@ function computeDayRead(
   const acuteLoad = sensorIsCurrent("training_load", acuteLoadQuality?.latest_date ?? null, d)
     ? (rec?.recovery?.acute_load ?? null)
     : null;
-  // Readiness is a CURRENT decision signal only when its dated reading is today or
-  // yesterday relative to the day being read. The multi-day average remains useful
-  // context, but can never force a current recommendation (and a stale current value
-  // cannot either).
+  // Readiness is a CURRENT decision signal only when its reading is dated the day
+  // being read (isReadDayReadiness): a `d-1` row is that day's LAST sync — post-workout
+  // on a training day — so at 04:00 it would speak yesterday's session as "this
+  // morning". The multi-day average remains useful context, but can never force a
+  // current recommendation (and a reading not dated today cannot either).
   const readinessQuality = rec?.quality?.training_readiness ?? rec?.recovery?.quality?.training_readiness ?? null;
   const readinessCurrent = rec?.recovery?.training_readiness ?? null;
   const readinessDate = readinessQuality?.latest_date ?? null;
-  const readinessFresh = sensorIsCurrent("training_readiness", readinessDate, d);
+  const readinessFresh = isReadDayReadiness(readinessDate, d);
   const lowReadiness = readinessFresh && readsLowReadiness(readinessCurrent);
   // The deeper band (owner ruling, 2026-08-28). Same reading, same freshness gate,
   // a different answer: `lowReadiness` earns the protective EASY read the signal
@@ -1666,7 +1673,9 @@ function computeDayRead(
       readiness: {
         current: readinessCurrent,
         current_date: readinessDate,
-        freshness: readinessFresh ? "fresh" : (readinessQuality?.freshness ?? "missing"),
+        // Only a read-day reading is "fresh" here: read-adherence trusts this snapshot
+        // as the morning's readiness exactly when it says so.
+        freshness: readinessFresh ? "fresh" : readinessDate ? "stale" : "missing",
         window_average: readinessAverage,
         sample_count: readinessQuality?.sample_count ?? null,
         window_days: readinessQuality?.window_days ?? null,

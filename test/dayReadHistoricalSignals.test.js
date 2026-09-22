@@ -117,7 +117,7 @@ test("expenditure is anchored to the day being read, not to today", () => {
   assert.equal(unanchored.coverage.weigh_in_days, 0, "today's window cannot see months-old weigh-ins");
 });
 
-test("a past-dated read treats a wearable dated after it as absent and a reading dated the day before as present", () => {
+test("a past-dated read treats a wearable dated after it as absent, and one dated the day before as context only", () => {
   reset();
   resetTables("garmin_daily_metrics", "garmin_sources", "daily_metrics");
   const D = REF;
@@ -132,7 +132,13 @@ test("a past-dated read treats a wearable dated after it as absent and a reading
 
   repo.upsertGarminDailyMetric({ date: shift(D, -1), training_readiness: 22 });
   const withPrior = repo.dayRead(D);
-  assert.equal(withPrior.signals.fatigue.readiness.current, 22, "a reading dated D-1 is inside the freshness horizon");
-  assert.equal(withPrior.signals.fatigue.low_readiness, true);
-  assert.equal(withPrior.signals.fatigue.readiness.freshness, "fresh");
+  // D-1's row is that day's last sync, not D's morning: present as context, never a vote.
+  assert.equal(withPrior.signals.fatigue.readiness.current, 22, "the D-1 reading is still carried as context");
+  assert.equal(withPrior.signals.fatigue.low_readiness, false);
+  assert.equal(withPrior.signals.fatigue.readiness.freshness, "stale");
+
+  repo.upsertGarminDailyMetric({ date: D, training_readiness: 22 });
+  const own = repo.dayRead(D);
+  assert.equal(own.signals.fatigue.low_readiness, true, "a reading dated D itself speaks for D");
+  assert.equal(own.signals.fatigue.readiness.freshness, "fresh");
 });

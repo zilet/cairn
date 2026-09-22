@@ -11,7 +11,7 @@
 // input. Its absence, and its garbage, must be neutral — never a caution.
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { credibleSummaryRestingHr, foldDailySummary, foldSleep } from "../dist/garmin.js";
+import { credibleSummaryRestingHr, foldDailySummary, foldHrv, foldSleep } from "../dist/garmin.js";
 import { MIGRATIONS } from "../dist/migrate.js";
 import { db, localDaysAgo, repo, resetTables } from "./_seed.js";
 
@@ -20,6 +20,17 @@ beforeEach(() => {
 });
 
 // ---- ingest: precedence + credibility ----------------------------------------
+
+// A morning with no night of its own: Garmin still sends the WEEKLY average, which
+// must never be stored as that night's HRV.
+test("an HRV summary with only a weekly average stores no last-night HRV", () => {
+  const m = {};
+  foldHrv({ hrvSummary: { lastNightAvg: null, weeklyAvg: 60, status: "BALANCED" } }, m);
+  assert.equal(m.hrv_ms ?? null, null);
+  const night = {};
+  foldHrv({ hrvSummary: { lastNightAvg: 55, weeklyAvg: 60 } }, night);
+  assert.equal(night.hrv_ms, 55);
+});
 
 test("a sleep-derived resting HR always beats the daily summary's", () => {
   const m = { date: "2026-07-30" };

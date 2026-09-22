@@ -238,7 +238,10 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["free t4", "free thyroxine", "ft4"], unit: "ng/dL", optimal: [1.0, 1.5], dir: "band", actionable: false, label: "Free T4" },
   { keys: ["vitamin b12", "b12", "cobalamin"], unit: "pg/mL", optimal: [400, 900], dir: "low", actionable: true, label: "Vitamin B12" },
   { keys: ["folate", "folic acid"], unit: "ng/mL", optimal: [5, 20], dir: "low", actionable: true, label: "Folate" },
-  { keys: ["magnesium, rbc", "rbc magnesium", "magnesium"], unit: "mg/dL", optimal: [2.0, 2.6], dir: "low", actionable: true, label: "Magnesium" },
+  // SERUM magnesium only. RBC magnesium runs on a different, higher scale (roughly
+  // double), so a deficient RBC value would read as optimal against this band — the
+  // specimen guard below keeps it off (its lab flag still speaks).
+  { keys: ["magnesium"], unit: "mg/dL", optimal: [2.0, 2.6], dir: "low", actionable: true, label: "Magnesium" },
   // Serum total calcium — a tightly homeostatically-regulated value, so the "optimal"
   // band is the healthy mid-reference, either side worse. It is albumin-bound, so an
   // abnormal total calcium is often an albumin artifact — the mapped watch directive
@@ -296,7 +299,7 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
 // visible error). This mirrors report.ts's `optimalTrustworthy` name-based
 // suppression. Deliberately narrow: only the "glucose" key (the bare Fasting
 // glucose zone) is suppressed, and ONLY for an explicitly non-fasting context —
-// HbA1c, fasting glucose, and eAG / estimated-average-glucose are untouched.
+// HbA1c and fasting glucose are untouched (eAG has its own guard below).
 // Word-bounded so "pp" never matches inside another word (e.g. "supplement").
 const NON_FASTING_GLUCOSE = /\b(random|non[-\s]?fasting|post[-\s]?prandial|pp|2\s?-?\s?hr|2\s?-?\s?hour)\b/;
 function suppressFastingGlucoseZone(name: string, z: OptimalZone | null): boolean {
@@ -304,8 +307,32 @@ function suppressFastingGlucoseZone(name: string, z: OptimalZone | null): boolea
   const n = String(name ?? "").toLowerCase();
   if (!n.includes("glucose")) return false;          // only the bare-glucose match
   if (n.includes("fasting") && !n.includes("non")) return false; // genuinely fasting
-  if (n.includes("estimated average") || n.includes("eag")) return false; // eAG kept
   return NON_FASTING_GLUCOSE.test(n);
+}
+
+// Estimated Average Glucose is COMPUTED from HbA1c (a months-long average), not a
+// fasting draw, and runs well above a fasting value at the same health — held to the
+// fasting band it read off-optimal beside an in-optimal fasting glucose, and the two
+// contradicted each other in one prompt. HbA1c already carries this story, so eAG
+// gets no zone of its own.
+const ESTIMATED_AVERAGE_GLUCOSE = /\bestimated average glucose\b|\beag\b/;
+function suppressEstimatedAverageGlucoseZone(name: string, z: OptimalZone | null): boolean {
+  if (!z || z.label !== "Fasting glucose") return false;
+  return ESTIMATED_AVERAGE_GLUCOSE.test(String(name ?? "").toLowerCase());
+}
+
+// VLDL is not LDL: the "ldl" key is a substring of "vldl", so VLDL cholesterol was
+// held to the LDL-C band and, filed under the same signal, reset the LDL retest to
+// "clean now". VLDL has no band of its own here (triglycerides carry that story).
+function suppressVldlZone(name: string, z: OptimalZone | null): boolean {
+  if (!z || z.label !== "LDL-C") return false;
+  return /\bvldl\b/.test(String(name ?? "").toLowerCase());
+}
+
+// RBC magnesium is a red-cell measure on its own scale; the serum band is wrong for it.
+function suppressRbcMagnesiumZone(name: string, z: OptimalZone | null): boolean {
+  if (!z || z.label !== "Magnesium") return false;
+  return /\brbc\b|red (blood )?cell/.test(String(name ?? "").toLowerCase());
 }
 
 // The serum total-calcium band must not be claimed by a DIFFERENT "calcium" measure:
@@ -373,6 +400,9 @@ export function matchOptimalZone(name: string, profile?: ZoneProfile | null): Op
   // A non-fasting glucose substring-matched the FASTING band — don't hold it to a
   // fasting target it shouldn't be judged against (protects the physician report).
   if (suppressFastingGlucoseZone(n, best)) return null;
+  if (suppressEstimatedAverageGlucoseZone(n, best)) return null;
+  if (suppressVldlZone(n, best)) return null;
+  if (suppressRbcMagnesiumZone(n, best)) return null;
   // Likewise a non-serum "calcium" (ionized / CT calcium score / urine) or a
   // non-morning cortisol must not be held to their serum morning-draw bands.
   if (suppressCalciumZone(n, best)) return null;

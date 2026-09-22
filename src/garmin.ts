@@ -651,10 +651,15 @@ function foldWeight(weight: any, iso: string, m: GarminDailyMetricInput) {
   m.visceral_fat = asNum(sample.visceralFat);
 }
 
-function foldHrv(hrv: any, m: GarminDailyMetricInput) {
+export function foldHrv(hrv: any, m: GarminDailyMetricInput) {
   const sum = hrv?.hrvSummary;
   if (!sum) return;
-  m.hrv_ms = pickNum(sum, ["lastNightAvg", "weeklyAvg"]) ?? m.hrv_ms;
+  // `hrv_ms` is LAST NIGHT's value, and every consumer reads it as one night. On a
+  // morning with no night of its own Garmin still sends `weeklyAvg`; falling back to
+  // it stored a seven-day average under a one-night date, which the recovery deltas
+  // and the wearable directive then read as that night. No night says nothing — the
+  // weekly figure stays in `raw.hrv` for anyone who genuinely wants a week.
+  m.hrv_ms = pickNum(sum, ["lastNightAvg"]) ?? m.hrv_ms;
   m.hrv_status = normalizeGarminHrvStatus(pickStr(sum, ["status"])) ?? m.hrv_status;
 }
 

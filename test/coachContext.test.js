@@ -236,6 +236,16 @@ test("coach context carries bounded clinical facts from non-marker health record
   );
 });
 
+// Panels split out of an uploaded archive get NEW ids but their own old dates; ordered
+// by id they pushed the current draw out of the coach's five health slots.
+test("coach context orders health documents by draw date, not row id", () => {
+  repo.addHealthDocument({ kind: "bloodwork", doc_date: "2026-06-11", summary: "Current panel.", parsed_json: { markers: [] } });
+  for (let i = 0; i < 5; i++)
+    repo.addHealthDocument({ kind: "bloodwork", doc_date: `2021-0${i + 1}-15`, summary: `Old panel ${i}.`, parsed_json: { markers: [] } });
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.health[0].doc_date, "2026-06-11");
+});
+
 test("coach context does not leak conductor ranking internals", () => {
   const ctx = repo.getCoachContext();
   const conductor = JSON.stringify(ctx.coaching_focus);

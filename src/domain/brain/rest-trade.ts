@@ -28,7 +28,7 @@
 import { addContextEvent, listContextEvents } from "../../repo/health.js";
 import { REST_TRADE_META_KEY, dayRead, invalidateDayRead, getCachedDayRead } from "../../repo/intelligence.js";
 import { readsRestGradeReadiness } from "../../repo/readiness-bands.js";
-import { sensorIsCurrent } from "../../repo/sensor-freshness.js";
+import { isReadDayReadiness } from "../../repo/sensor-freshness.js";
 import { addDaysISO, localDateISO } from "../../repo/shared.js";
 import { listTrainingSymptoms } from "../../repo/training-symptoms.js";
 import { db } from "../../db.js";
@@ -86,7 +86,7 @@ function refuse(reason: RestTradeRefusal, error: string): RestTradeResult {
   return { ok: false, reason, error };
 }
 
-/** A fresh, rest-grade training-readiness reading for `date`, if there is one. */
+/** A rest-grade training-readiness reading dated `date` itself, if there is one. */
 function restGradeReadinessToday(date: string): boolean {
   try {
     const row = db
@@ -97,7 +97,7 @@ function restGradeReadinessToday(date: string): boolean {
       )
       .get(date) as { date?: string; training_readiness?: number } | undefined;
     if (!row) return false;
-    if (!sensorIsCurrent("training_readiness", row.date == null ? null : String(row.date), date)) return false;
+    if (!isReadDayReadiness(row.date == null ? null : String(row.date), date)) return false;
     return readsRestGradeReadiness(row.training_readiness);
   } catch {
     // An unreadable table is not evidence of a floor — but it is not evidence of

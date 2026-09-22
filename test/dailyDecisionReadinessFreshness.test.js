@@ -22,11 +22,13 @@ test("a reading dated today drives readiness", () => {
   assert.equal(snap.recovery.readiness, "high");
 });
 
-test("a reading dated yesterday (the freshness horizon) still drives readiness", () => {
+// Yesterday's row is yesterday's LAST sync — post-workout on a training day — so it
+// never speaks as the read day's readiness (sensor-freshness.ts, READINESS_MAX_AGE_DAYS).
+test("a reading dated yesterday is absent, never this morning's readiness", () => {
   const yesterday = addDaysISO(DATE, -1);
   repo.upsertGarminDailyMetric({ date: yesterday, training_readiness: 20, hrv: 55 });
   const snap = gatherDailyDecisionSnapshot(DATE);
-  assert.equal(snap.recovery.readiness, "low");
+  assert.equal(snap.recovery.readiness, null);
 });
 
 test("a reading older than the freshness horizon is treated as absent, not as a stale current value", () => {

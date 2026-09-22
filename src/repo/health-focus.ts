@@ -7,9 +7,11 @@ import { readingAgeDays, readingPastValidity } from "./marker-validity.js";
 import {
   ACUTE_DIRECTIVE_STALE_DAYS,
   annotateDirectiveFreshness,
+  bodyCompStaleness,
   isAcuteMarker,
   prioritizeMarkers,
 } from "./propagation.js";
+import { listWeight } from "./profile.js";
 import { localDateISO } from "./shared.js";
 
 // ============================================================================
@@ -27,6 +29,7 @@ export interface FocusReading {
   name: string;
   value: number | string | null;
   unit: string | null;
+  date: string | null; // the reading's own date — an undated value reads as current
   flag: string | null; // lab flag (low/high) or null
   optimal: [number, number] | null; // evidence-based optimal band
   in_optimal: boolean | null;
@@ -61,6 +64,27 @@ export function healthFocus(): HealthFocus {
   // with an aged one still leads on the current one.
   const markerPastValidity = (m: any): boolean =>
     readingPastValidity(m?.name, readingAgeDays(m?.latest?.date ?? null));
+  // A body-composition scan has its own, richer recency rule (bodyCompStaleness): past
+  // ~3 weeks it stops describing the athlete once bodyweight has moved since — during a
+  // cut that is weeks, not the months its validity class allows. Such a scan is aged
+  // evidence here exactly like a reading past its window. Weigh-ins read once, lazily.
+  let weights: any[] | null = null;
+  const scanStale = (m: any): boolean => {
+    const date = m?.latest?.date ?? null;
+    if (!date) return false;
+    if (weights == null) {
+      try {
+        weights = listWeight(120);
+      } catch {
+        weights = [];
+      }
+    }
+    // Every reading in the body-composition group came off a scan or a weigh-in, so it
+    // takes the scan rule even when its own name (an A/G ratio, a BMI) does not say so.
+    const bodyGroup = markerGroup(String(m?.name ?? "")).key === "body";
+    return bodyCompStaleness({ marker: bodyGroup ? "Body composition" : m?.name, trigger_date: date }, weights).stale;
+  };
+  const markerAged = (m: any): boolean => markerPastValidity(m) || scanStale(m);
   // Off-optimal markers, in priority order, bucketed by health group (preserving rank).
   // `currentRank` is the panel position of the group's best still-in-date marker — an aged
   // reading must not lend the group its place near the top of the priority order either.
@@ -78,7 +102,7 @@ export function healthFocus(): HealthFocus {
     if (!groups.has(label)) groups.set(label, { markers: [], rank: i, currentRank: Number.POSITIVE_INFINITY });
     const g = groups.get(label)!;
     g.markers.push(m);
-    if (!markerPastValidity(m) && i < g.currentRank) g.currentRank = i;
+    if (!markerAged(m) && i < g.currentRank) g.currentRank = i;
   });
 
   // The active directives, bucketed to the same groups, so each priority carries
@@ -114,7 +138,7 @@ export function healthFocus(): HealthFocus {
     // whether it's drifting, and the group's place in the panel order. An aged reading
     // cannot lend weight to a priority the connected-brain block on the same page says
     // not to act on. (`dirs` is already past-window-free, so its cluster check is too.)
-    const currentMs = ms.filter((m) => !markerPastValidity(m));
+    const currentMs = ms.filter((m) => !markerAged(m));
     // …but `flagged` stays FACTUAL: the lab did flag it, and the surfaces render that
     // truthfully alongside whatever tier the current evidence earns.
     const flagged = ms.some((m) => m?.latest?.flag === "low" || m?.latest?.flag === "high");
@@ -152,6 +176,7 @@ export function healthFocus(): HealthFocus {
     // the Brief can never headline "X is the priority right now" off evidence the
     // connected-brain block on the same page says not to act on.
     const allPastValidity = ms.length > 0 && currentMs.length === 0;
+    const allScansStale = allPastValidity && ms.every((m) => !markerPastValidity(m));
 
     // Tier score — flagged + compounding + how far out + worsening + near the top of the
     // panel's priority order. ≥3 ⇒ act now; else track. A lab flag is a STRONG floor (the
@@ -179,7 +204,9 @@ export function healthFocus(): HealthFocus {
     const named = currentMs.length ? currentMs : ms;
     const why = allAcuteStale
       ? `${ms[0]?.name} reads off, but it's a point-in-time marker from a while ago — worth a recheck before it shapes anything`
-      : allPastValidity
+      : allScansStale
+        ? `${ms[0]?.name} reads off, but the scan behind it predates how much your weight has moved since — worth a fresh scan to confirm before it shapes anything`
+        : allPastValidity
         ? `${ms[0]?.name} reads off, but the reading behind it is older than this kind of marker stays current for — worth a recheck before it shapes anything`
         : compounding
           ? `${named[0]?.name}${named[1] ? ` and ${named[1]?.name}` : ""} sit off together — they move as one picture, so the same change shifts several at once`
@@ -193,6 +220,7 @@ export function healthFocus(): HealthFocus {
       name: m.name,
       value: m?.latest?.value ?? null,
       unit: m.unit ?? null,
+      date: m?.latest?.date ?? null,
       flag: m?.latest?.flag ?? null,
       optimal: m.optimal ? [m.optimal.low, m.optimal.high] : null,
       in_optimal: m.in_optimal ?? null,

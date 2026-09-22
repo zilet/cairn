@@ -7,6 +7,7 @@
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import {
   LAST_NIGHT_MAX_AGE_DAYS,
+  READINESS_MAX_AGE_DAYS,
   SENSOR_MAX_AGE_DAYS,
   type SensorSignal,
   sensorIsCurrent,
@@ -1855,8 +1856,9 @@ export function planningSignalState(input: {
       // thinning too and can no longer claim to describe "recent" sleep.
       SENSOR_MAX_AGE_DAYS.sleep
     );
-  // Readiness rides a ONE-day window, matching day-read's own gate ("a stale current
-  // value cannot" force a recommendation, src/repo/day-read.ts). At the former 3 days a
+  // Readiness speaks only for a reading dated the read day, matching day-read's own
+  // gate (READINESS_MAX_AGE_DAYS): a `d-1` row is yesterday's post-workout last sync,
+  // and at a one-day window it was voiced as this morning's. At the former 3 days a
   // reading the deterministic Brief refused to act on still reached the athlete through
   // this layer: the protect rule leads off `action.posture` alone, so a three-day-old
   // subdued reading produced an easy read voiced as though it had come in that morning.
@@ -1875,7 +1877,7 @@ export function planningSignalState(input: {
         ? "The wearable readiness signal is subdued."
         : "The wearable readiness signal is supportive.",
       Number(current.training_readiness) < 50 ? "readiness_subdued" : "readiness_ok",
-      SENSOR_MAX_AGE_DAYS.training_readiness
+      READINESS_MAX_AGE_DAYS
     );
   // ---------- HRV and resting HR: verified, continuous, and only then a caution ----------
   //

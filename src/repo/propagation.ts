@@ -124,6 +124,51 @@ export * from "./health-focus.js";
 // marker objects shaped exactly like getMarkerHistory's (key/name/unit/group/
 // latest/prev/trend/forecast/points) so prioritizeMarkers can treat them uniformly.
 // Empty when there's no wearable data — never throws.
+// The athlete's OWN HRV band, when the watch supplies one. Garmin's HRV status is
+// judged against a personal "balanced" range it learns from weeks of that wearer's
+// nights, and that range can sit wholly below the population band — for such an
+// athlete a population floor makes the HRV directive permanent, re-born every morning
+// after each Done. Only a recent sync may lend its band (the fitness-marker bound), so
+// a band learned months ago never frames today. Null → the population zone stands.
+function garminHrvPersonalBand(asOf: string): [number, number] | null {
+  const floor = addDaysISO(asOf, -SENSOR_MAX_AGE_DAYS.fitness_marker);
+  if (!floor) return null;
+  try {
+    const rows = db
+      .prepare(
+        `SELECT raw_json FROM garmin_daily_metrics
+          WHERE date >= ? AND date <= ? AND raw_json LIKE '%balancedLow%'
+          ORDER BY date DESC, id DESC LIMIT 3`
+      )
+      .all(floor, asOf) as any[];
+    for (const row of rows) {
+      let base: any = null;
+      try {
+        base = JSON.parse(String(row.raw_json))?.hrv?.hrvSummary?.baseline;
+      } catch {
+        continue;
+      }
+      const lo = Number(base?.balancedLow);
+      const hi = Number(base?.balancedUpper);
+      if (Number.isFinite(lo) && Number.isFinite(hi) && lo > 0 && hi > lo) return [lo, hi];
+    }
+  } catch {
+    /* no Garmin table / raw → no personal band; the population zone stands */
+  }
+  return null;
+}
+
+// The optimal zone a marker is judged against. A wearable series that carries the
+// athlete's own band (`personal_optimal`) is read against THAT; everything else keeps
+// the sex/age-personalized population zone. One helper so the ranking, the directive
+// engine and the review contexts cannot judge the same reading against two bands.
+function markerZone(m: any, profile?: ZoneProfile | null): OptimalZone | null {
+  const z = matchOptimalZone(m?.name, profile);
+  const own = m?.personal_optimal;
+  if (!z || !Array.isArray(own) || own.length !== 2) return z;
+  return { ...z, optimal: [Number(own[0]), Number(own[1])] };
+}
+
 function wearableFitnessMarkers(days = 120): any[] {
   const since = localDateISO(new Date(Date.now() - Math.max(1, days - 1) * 864e5));
   const today = localDateISO();
@@ -183,7 +228,8 @@ function wearableFitnessMarkers(days = 120): any[] {
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     const last = points[points.length - 1];
     const before = points.length > 1 ? points[points.length - 2] : null;
-    const zone = matchOptimalZone(spec.label);
+    const personal = spec.label === "HRV" ? garminHrvPersonalBand(today) : null;
+    const zone = markerZone({ name: spec.label, personal_optimal: personal });
     const slope = lsqSlopePerDay(points);
     const n = points.length;
     // The watch is not a subscription to the truth — it comes off, and syncs stop.
@@ -251,6 +297,7 @@ function wearableFitnessMarkers(days = 120): any[] {
       group: grp.key,
       group_label: grp.label,
       source: "wearable", // provenance hint — these are device-derived, not a lab draw
+      ...(personal ? { personal_optimal: personal } : {}),
       latest: { value: last.value, flag: null, date: last.date, doc_id: null, kind: "wearable" },
       prev: before ? { value: before.value, date: before.date } : null,
       trend,
@@ -310,7 +357,7 @@ export function prioritizeMarkers() {
   const enriched = markers.map((m: any) => {
     const flagged = m?.latest?.flag === "low" || m?.latest?.flag === "high";
     if (flagged) flagged_count++;
-    const z = matchOptimalZone(m?.name, profile);
+    const z = markerZone(m, profile);
     // The one line a marker row shows when it's shaping training/meals/watch
     // right now: the directive's OWN athlete-facing text, never re-derived here.
     const directiveHit =
@@ -520,6 +567,11 @@ export function resurfaceWorseningDirectives(source: string, desired: DirectiveI
 function shouldSuppressDirective(feedback: any, ctx: MarkerContext): boolean {
   if (!feedback) return false;
   if (feedback.status === "dismissed") return !markerMateriallyWorse(feedback, ctx);
+  // A lab's Done holds until the NEXT DRAW — a new panel is news. A wearable series
+  // "draws" every morning, so that rule re-created the directive the same second the
+  // athlete marked it Done, and again each day after. For a wearable a Done holds like
+  // a dismissal: only a materially worse reading brings it back.
+  if (feedback.status === "resolved" && ctx.marker?.source === "wearable") return !markerMateriallyWorse(feedback, ctx);
   if (feedback.status === "resolved") {
     const oldDate = String(feedback.trigger_date || "");
     const newDate = String(ctx.marker?.latest?.date || "");
@@ -851,7 +903,7 @@ export function setDirectiveStatusByUser(id: number, status: string) {
 function buildOffMarkers(markers: any[], profile: ZoneProfile | null): Map<string, MarkerContext> {
   const offMarkers = new Map<string, MarkerContext>();
   for (const m of markers) {
-    const z = matchOptimalZone(m?.name, profile);
+    const z = markerZone(m, profile);
     if (!z) continue;
     const numericVal = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     if (!Number.isFinite(numericVal)) continue;
@@ -1461,7 +1513,7 @@ function buildReviewMarkerContexts(): Map<string, MarkerContext> {
   }
   const profile = zoneProfile();
   for (const m of markers) {
-    const z = matchOptimalZone(m?.name, profile);
+    const z = markerZone(m, profile);
     if (!z) continue;
     const value = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     if (!Number.isFinite(value)) continue;

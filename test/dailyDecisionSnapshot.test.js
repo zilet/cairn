@@ -173,7 +173,8 @@ test("a historical snapshot excludes later feedback and recovery facts", () => {
     `INSERT INTO sessions (date, soreness, performance, joint_pain)
      VALUES (?, 2, 4, 'left shoulder'), (?, 5, 1, 'future knee')`
   ).run(priorDate, futureDate);
-  repo.upsertGarminDailyMetric({ date: priorDate, training_readiness: 80, hrv: 62 });
+  // Readiness speaks only for its own date, so the historical day carries its own row.
+  repo.upsertGarminDailyMetric({ date: historicalDate, training_readiness: 80, hrv: 62 });
   repo.upsertGarminDailyMetric({ date: futureDate, training_readiness: 10, hrv: 20 });
 
   const snap = gatherDailyDecisionSnapshot(historicalDate);

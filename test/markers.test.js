@@ -241,18 +241,38 @@ test("Lp(a) mass units are not compared to nmol/L with a fake fixed conversion",
 // A random / post-prandial / non-fasting glucose must NOT be held to the FASTING
 // glucose optimal band (70–90) — that band only applies to a fasting draw. The
 // guard suppresses the fasting zone for an explicitly non-fasting name, while
-// fasting glucose, bare "Glucose", eAG and HbA1c stay matched as before.
+// fasting glucose, bare "Glucose" and HbA1c stay matched as before. eAG is derived
+// from HbA1c, so it is held to no glucose band at all (its own test below).
 test("matchOptimalZone: a non-fasting glucose is NOT held to the fasting band", () => {
   for (const n of ["Glucose (random)", "Glucose, random", "non-fasting glucose", "Glucose - PP", "2hr postprandial glucose"]) {
     assert.equal(repo.matchOptimalZone(n), null, `${n} must not match the fasting band`);
   }
-  // Untouched: genuinely fasting / bare / eAG keep their band; HbA1c keeps its own.
+  // Untouched: genuinely fasting / bare keep their band; HbA1c keeps its own.
   assert.equal(repo.matchOptimalZone("Glucose, Fasting")?.label, "Fasting glucose");
   assert.equal(repo.matchOptimalZone("Glucose")?.label, "Fasting glucose");
-  assert.equal(repo.matchOptimalZone("Estimated Average Glucose")?.label, "Fasting glucose");
   assert.equal(repo.matchOptimalZone("HbA1c")?.label, "HbA1c");
   // Word-boundary safety: "pp" inside a word must not trip the non-fasting guard.
   assert.equal(repo.matchOptimalZone("Supplemental glucose")?.label, "Fasting glucose");
+});
+
+test("matchOptimalZone: VLDL, eAG and RBC magnesium are not held to a neighbour's band", () => {
+  // "ldl" is a substring of "vldl"; eAG is derived from HbA1c, not a fasting draw; RBC
+  // magnesium runs on its own, higher scale than serum.
+  for (const n of ["VLDL Cholesterol", "VLDL-C", "Estimated Average Glucose", "eAG", "Magnesium, RBC", "RBC Magnesium"]) {
+    assert.equal(repo.matchOptimalZone(n), null, `${n} must have no borrowed zone`);
+  }
+  assert.equal(repo.matchOptimalZone("LDL Cholesterol")?.label, "LDL-C");
+  assert.equal(repo.matchOptimalZone("Magnesium")?.label, "Magnesium");
+});
+
+test("an eAG that maps to an in-optimal HbA1c never reads off-optimal", () => {
+  seedHealthDoc("2025-12-01", [
+    marker("Hemoglobin A1c", 5.2, { unit: "%" }),
+    marker("Estimated Average Glucose", 103, { unit: "mg/dL" }),
+  ]);
+  const eag = repo.prioritizeMarkers().markers.find((m) => /estimated average/i.test(m.name));
+  assert.ok(eag);
+  assert.notEqual(eag.in_optimal, false);
 });
 
 test("a random glucose does NOT prioritize as out-of-optimal against a fasting target", () => {

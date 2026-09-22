@@ -8,7 +8,7 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
-import { localDateISO } from "../dist/repo/shared.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import {
   LEG_LOAD_LONG_DEFER_VARIANTS,
@@ -270,7 +270,15 @@ function recoveryFixture({ band = "steady", readinessFresh = "fresh", status = n
       acute_load: null,
     },
     quality: {
-      training_readiness: { latest_value: tr, latest_date: REF, source: "garmin", sample_count: 5, window_days: 14, freshness: readinessFresh },
+      // Readiness speaks only when dated the plan day; a "stale" fixture is an older row.
+      training_readiness: {
+        latest_value: tr,
+        latest_date: readinessFresh === "stale" ? addDaysISO(REF, -5) : REF,
+        source: "garmin",
+        sample_count: 5,
+        window_days: 14,
+        freshness: readinessFresh,
+      },
       training_status: { latest_value: status, latest_date: REF, source: "garmin", sample_count: 5, window_days: 14, freshness: statusFresh },
     },
     delta: { hrv: null, rhr: null, sleep: null },

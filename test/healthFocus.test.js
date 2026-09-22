@@ -5,11 +5,11 @@
 // ARE the priority.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
+import { isoDaysAgo, repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
 import { buildMealPlanPrompt, buildCoachPrompt } from "../dist/prompt.js";
 
 beforeEach(() => {
-  resetTables("health_documents", "health_directives");
+  resetTables("health_documents", "health_directives", "bodyweight_log");
 });
 
 test("a compounding lipid panel + a single low vitamin D tier correctly, deduped to groups", () => {
@@ -100,4 +100,20 @@ test("plan-shaping prompts LEAD with the prioritized focus (not a flat directive
   assert.ok(cf?.available && cf.lead, "this seed produces a real conductor lead (sanity, not the fix under test)");
   assert.match(meal, /THIS BLOCK'S ONE FOCUS:/, "the meal prompt renders the conductor's brief lead");
   assert.match(meal, /Move your lipids/i, "and names the SAME lead the conductor chose");
+});
+
+// A DEXA older than ~3 weeks stops describing the athlete once bodyweight has moved since
+// (bodyCompStaleness) — during a cut that is weeks, not the months its class allows. It
+// reads as a quiet "worth a fresh scan", never act-now, and every reading carries its date.
+test("a stale DEXA after a weight change is never act-now, and readings are dated", () => {
+  const scan = isoDaysAgo(60);
+  seedHealthDoc(scan, [marker("Body Fat %", 30, { unit: "%", flag: "high" })], "dexa");
+  repo.logWeight(210, scan);
+  repo.logWeight(195, isoDaysAgo(1));
+  repo.deriveDirectives();
+  const body = repo.healthFocus().priorities.find((p) => p.markers.some((n) => /body fat/i.test(n)));
+  assert.ok(body, "body composition still surfaces");
+  assert.equal(body.tier, "track");
+  assert.match(body.why, /fresh scan/);
+  assert.equal(body.readings[0].date, scan);
 });

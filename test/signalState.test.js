@@ -363,7 +363,7 @@ test("the chronic sleep phrasings belong to an observation built from the window
 // days, and its protect rule leads off `action.posture` alone — so a three-day-old
 // reading produced an easy read the deterministic Brief had already refused to make,
 // voiced as though the watch had said it that morning.
-test("readiness decides on the same one-day window day-read gates on, and says nothing about this morning", () => {
+test("readiness decides only on a reading dated the read day, as day-read does, and says nothing about this morning", () => {
   const date = localDaysAgo(0);
   const readingFrom = (back) =>
     repo.planningSignalState({
@@ -374,19 +374,19 @@ test("readiness decides on the same one-day window day-read gates on, and says n
       },
     });
 
-  for (const back of [0, 1]) {
-    const state = readingFrom(back);
-    const evidence = state.dimensions.recovery_capacity.evidence[0];
-    assert.equal(evidence.freshness, "fresh", `a ${back}-day-old reading is a today-decision signal`);
-    assert.equal(state.action.posture, "easy");
-    assert.equal(state.action.voice.key, "readiness_subdued");
-  }
+  const state = readingFrom(0);
+  assert.equal(state.dimensions.recovery_capacity.evidence[0].freshness, "fresh", "the read day's own reading decides");
+  assert.equal(state.action.posture, "easy");
+  assert.equal(state.action.voice.key, "readiness_subdued");
 
-  const stale = readingFrom(2);
-  assert.equal(stale.dimensions.recovery_capacity.evidence[0].freshness, "stale");
-  assert.equal(stale.dimensions.recovery_capacity.status, "unknown", "older readings are context, never a gate");
-  assert.deepEqual(stale.dimensions.recovery_capacity.coverage.stale_fields, ["training_readiness"]);
-  assert.equal(stale.action.posture, "train");
+  // Yesterday's row is yesterday's last (post-workout) sync — context, never a gate.
+  for (const back of [1, 2]) {
+    const stale = readingFrom(back);
+    assert.equal(stale.dimensions.recovery_capacity.evidence[0].freshness, "stale");
+    assert.equal(stale.dimensions.recovery_capacity.status, "unknown", "older readings are context, never a gate");
+    assert.deepEqual(stale.dimensions.recovery_capacity.coverage.stale_fields, ["training_readiness"]);
+    assert.equal(stale.action.posture, "train");
+  }
 
   // Even one day old is yesterday, so neither direction may claim the morning.
   for (const key of ["readiness_subdued", "readiness_ok"]) {

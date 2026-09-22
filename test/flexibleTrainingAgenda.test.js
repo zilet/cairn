@@ -438,7 +438,7 @@ test("supporting endurance stays at three runs and falls to two when recovery is
   }
   const steadyRecovery = {
     quality: {
-      training_readiness: { freshness: "fresh" },
+      training_readiness: { freshness: "fresh", latest_date: MONDAY },
       training_status: { freshness: "fresh" },
     },
     recovery: { readiness_band: "steady", training_status: "PRODUCTIVE" },
@@ -504,7 +504,7 @@ test("a constrained two-run supporting week reduces total volume and caps each r
   }
   const steadyRecovery = {
     quality: {
-      training_readiness: { freshness: "fresh" },
+      training_readiness: { freshness: "fresh", latest_date: MONDAY },
       training_status: { freshness: "fresh" },
     },
     recovery: { readiness_band: "steady", training_status: "PRODUCTIVE" },

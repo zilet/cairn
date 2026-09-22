@@ -35,7 +35,7 @@ import {
 } from "../brain-decisions.js";
 import { activeRecoveryWeek } from "../recovery-week.js";
 import { readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
-import { SENSOR_MAX_AGE_DAYS, sensorIsCurrent } from "../sensor-freshness.js";
+import { SENSOR_MAX_AGE_DAYS, isReadDayReadiness, sensorIsCurrent } from "../sensor-freshness.js";
 import { addDaysISO, localDateISO } from "../shared.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear } from "../training-cache.js";
 import { getTrainingIntent } from "../training-intent.js";
@@ -1258,7 +1258,8 @@ function morningReadinessUncached(morning: string): number | null {
   const row = morningMetricsRow(morning);
   if (!row) return null;
   const readingDate = row.date == null ? null : String(row.date);
-  if (!sensorIsCurrent("training_readiness", readingDate, morning)) return null;
+  // Only the morning's OWN row: an earlier one is that day's post-workout last sync.
+  if (!isReadDayReadiness(readingDate, morning)) return null;
   return readingNumber(row.training_readiness);
 }
 

@@ -11,7 +11,7 @@
 // suggestion; the athlete still drives.
 //
 // FRESHNESS IS NOT HANDLED HERE. A reading may only speak for a day when
-// `sensorIsCurrent("training_readiness", …)` says so (src/repo/sensor-freshness.ts);
+// `isReadDayReadiness(…)` says so (src/repo/sensor-freshness.ts);
 // these predicates answer only "what does this NUMBER say", and a caller that
 // forgets the age gate is asking the wrong question, not getting a wrong answer.
 

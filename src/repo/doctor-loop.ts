@@ -90,6 +90,19 @@ const POLICY_SPECS: PolicySpec[] = [
     release: "Glucose/insulin markers are clean and stable with no active metabolic intervention; they can stay quiet until new data or a goal change.",
   },
   {
+    // Hormones had no cadence at all, so an off-optimal total testosterone was never
+    // scheduled for a recheck — and a long energy deficit is exactly what can lower it.
+    // Informational: a morning repeat to confirm, filed on the same pull-only schedule.
+    signalClass: "hormones",
+    labels: ["Testosterone"],
+    activeDays: 84,
+    confirmingDays: 84,
+    surveillanceInitialDays: 180,
+    surveillanceMaxDays: 365,
+    reason: "Testosterone is off optimal or under an active lever; confirm it with a morning repeat after a meaningful window — a long energy deficit or heavy training block can lower it.",
+    release: "Testosterone is cleanly optimal and stable; it can stay quiet until symptoms, a long deficit, or new labs bring it back.",
+  },
+  {
     signalClass: "iron",
     labels: ["Ferritin", "Iron", "Transferrin saturation", "Hemoglobin"],
     activeDays: 70,
@@ -377,6 +390,8 @@ export function directiveRecheckSignalKey(markerName: string | null | undefined)
 // no parseable timeframe. Ordered longest-match-wins by intent of the panel.
 function recheckHorizonClassDays(markerName: string): number {
   const n = lc(markerName);
+  // Lp(a) is genetic — its own cadence is a year, never the lipid-response window.
+  if (/lp\s?\(a\)|lipoprotein\s?\(a\)/.test(n)) return 365;
   if (/\b(apo\s?b|apolipoprotein|ldl|hdl|non-?hdl|cholesterol|triglyceride|lp\s?\(a\)|lipid)\b/.test(n)) return 84; // lipids ~12w
   if (/\b(vitamin d|25-?oh|25 hydroxy)\b/.test(n)) return 84; // vitamin D ~12w
   if (/\b(hs-?crp|c-?reactive)\b/.test(n)) return 35; // hs-CRP ~5w (acute-flavored, 4-6w)
@@ -690,12 +705,28 @@ export function recommendedPanel(): MissingWorkupItem[] {
   });
 }
 
+// ONE reading per attention signal: the newest comparable one. Several series can fold
+// onto one signal (LDL-C calculated and direct), and applyMarkerAttention PERSISTS each
+// observation — so without this pick the series processed last won the schedule, and an
+// older or different analyte could reset a live retest to "clean now".
+function newestMarkerPerSignal(markers: MarkerLike[]): MarkerLike[] {
+  const best = new Map<string, MarkerLike>();
+  const rank = (m: MarkerLike) => `${m.latest?.unit_mismatch ? 0 : 1}|${markerDate(m)}`;
+  for (const marker of markers) {
+    const key = markerSignalKey(marker);
+    if (!key) continue; // no recheck policy → applyMarkerAttention would file nothing
+    const cur = best.get(key);
+    if (!cur || rank(marker) > rank(cur)) best.set(key, marker);
+  }
+  return [...best.values()];
+}
+
 export function refreshDoctorLoopAttention(): AttentionScheduleEntry[] {
   const { markers } = getMarkerHistory() as { markers: MarkerLike[] };
   const activeMarkers = activeDirectiveMarkers();
   const out: AttentionScheduleEntry[] = [];
   const seen = new Set<string>();
-  for (const marker of markers) {
+  for (const marker of newestMarkerPerSignal(markers)) {
     const entry = applyMarkerAttention(marker, activeMarkers);
     if (!entry || seen.has(entry.signal_key)) continue;
     seen.add(entry.signal_key);

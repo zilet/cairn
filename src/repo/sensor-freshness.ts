@@ -37,8 +37,9 @@
 //    is also where reaction-model's data_gap pattern starts calling the signal
 //    quiet. signal-state used to inherit an unconsidered 3 from its helper's
 //    default, which let it voice a night the Brief had already dropped.
-//  • training_readiness — the watch recomputes it every morning, so yesterday's
-//    is the oldest that can speak to today. Matches day-read's own readiness gate.
+//  • training_readiness — the WINDOW bound (the readiness average in the coach
+//    prompt). A single reading voiced as the read day's is stricter still — see
+//    READINESS_MAX_AGE_DAYS below.
 //  • hrv / resting_hr — noisy day to day but read against a personal norm, so a
 //    couple of days of slack is honest.
 //  • training_load — Garmin's acute load and training-status phrase, recomputed
@@ -117,4 +118,29 @@ export function sensorIsCurrent(signal: SensorSignal, readingDate: string | null
 export function isLastNight(readingDate: string | null | undefined, asOf: string): boolean {
   const age = sensorAgeDays(readingDate, asOf);
   return age != null && age >= 0 && age <= LAST_NIGHT_MAX_AGE_DAYS;
+}
+
+// "THIS MORNING'S READINESS" IS A DATE TOO — the same law as last night.
+//
+// `garmin_daily_metrics.training_readiness` is the LAST value synced for its date,
+// and the watch keeps recomputing it through the day. So a row dated `d-1` is not
+// yesterday's morning — on any day the athlete trained it is the POST-WORKOUT
+// number, and it says what that session cost, not what today offers. Read at 04:00
+// on a morning whose own row has not synced yet, a one-day tolerance voiced that
+// number as "this morning's reading" and fired the rest-grade arm on a stated
+// training day.
+//
+// So every ONE-READING readiness claim — the low/rest-grade arms in day-read, the
+// daily-decision readiness, the signal-state readiness observation, the rest-trade
+// floor, the run plan's readiness brake, the harm test's morning — speaks only for a
+// reading dated the read day. Past it the value is absent, and absence is neutral.
+// The average keeps SENSOR_MAX_AGE_DAYS.training_readiness: a window claim.
+export const READINESS_MAX_AGE_DAYS = 0;
+
+// May this single readiness reading speak as the read day's? Same shape as
+// `isLastNight`: missing/unparseable/future/older → false, and the caller falls
+// through to whatever it does with no reading at all.
+export function isReadDayReadiness(readingDate: string | null | undefined, asOf: string): boolean {
+  const age = sensorAgeDays(readingDate, asOf);
+  return age != null && age >= 0 && age <= READINESS_MAX_AGE_DAYS;
 }

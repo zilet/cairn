@@ -186,7 +186,7 @@ test("a constrained supporting week keeps a named quality day as easy, not dropp
   seedRunner({ weeks: 8, perWeek: 3, km: 8 });
   const lowRecovery = {
     quality: {
-      training_readiness: { freshness: "fresh" },
+      training_readiness: { freshness: "fresh", latest_date: MONDAY },
       training_status: { freshness: "fresh" },
     },
     recovery: { readiness_band: "low", training_status: "PRODUCTIVE" },

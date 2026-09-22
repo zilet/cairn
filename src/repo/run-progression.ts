@@ -61,7 +61,7 @@ import {
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { classifyRunEffort, getHrModel, type HrModel, hrZoneLabel, type HrZoneKey, RUN_TYPE_SQL } from "./hr-model.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
-import { sensorIsCurrent } from "./sensor-freshness.js";
+import { isReadDayReadiness, sensorIsCurrent } from "./sensor-freshness.js";
 import { localDateISO } from "./shared.js";
 import { lowerBodyPlanDayNumbers } from "./training-read.js";
 import { getTrainingIntent, type ResolvedTrainingIntent } from "./training-intent.js";
@@ -1156,7 +1156,8 @@ export function weeklyRunPlan(
   // to plain words upstream (readiness_band); a strained/overreaching/unproductive
   // training status is a fatigue tell (detraining is undertraining, not fatigue, so it
   // is deliberately excluded). Both behave like the existing recoveryDown path.
-  const readinessFresh = ["fresh", "recent"].includes(String(recovery?.quality?.training_readiness?.freshness ?? ""));
+  // Readiness is one reading, so it must be dated the plan day (isReadDayReadiness).
+  const readinessFresh = isReadDayReadiness(recovery?.quality?.training_readiness?.latest_date ?? null, d);
   const readinessLow = readinessFresh && (recovery?.recovery?.readiness_band ?? null) === "low";
   const statusFresh = ["fresh", "recent"].includes(String(recovery?.quality?.training_status?.freshness ?? ""));
   const statusWord = String(recovery?.recovery?.training_status ?? "").toLowerCase();

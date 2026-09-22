@@ -28,7 +28,7 @@ import { personalResponseModifierFor } from "./reaction-model.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getSettings } from "./settings.js";
-import { LAST_NIGHT_MAX_AGE_DAYS, isLastNight, sensorIsCurrent } from "./sensor-freshness.js";
+import { LAST_NIGHT_MAX_AGE_DAYS, isLastNight, isReadDayReadiness } from "./sensor-freshness.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { weekWins } from "./sessions.js";
 import { addDaysISO, localDateISO } from "./shared.js";
@@ -531,15 +531,15 @@ function driftOf(value: unknown): "down" | "flat" | "up" | null {
   return "flat";
 }
 
-// Readiness is a CURRENT decision signal only when its dated reading is within
-// the sensor's freshness horizon of the day being read (see sensor-freshness.ts
-// — matches day-read.ts's own readiness gate). A stale reading behaves exactly
+// Readiness is a CURRENT decision signal only when its reading is dated the day
+// being read (isReadDayReadiness, sensor-freshness.ts — matches day-read.ts's own
+// readiness gate; a `d-1` row is yesterday's post-workout last sync). A stale reading behaves exactly
 // as absent: it must not silently fall through to the 14-day average, which
 // would let an old datum keep driving the volume clamp under a different name.
 function recoveryReadiness(recovery: any, asOf: string): "low" | "moderate" | "high" | null {
   const r = recovery?.recovery ?? recovery ?? {};
   const readinessDate = recovery?.quality?.training_readiness?.latest_date ?? null;
-  if (!sensorIsCurrent("training_readiness", readinessDate, asOf)) return null;
+  if (!isReadDayReadiness(readinessDate, asOf)) return null;
   const n = finite(r.training_readiness);
   if (n == null) return null;
   if (n >= 66) return "high";

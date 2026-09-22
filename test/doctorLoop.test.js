@@ -85,3 +85,24 @@ test("clean stable markers converge to released attention instead of fixed retes
   assert.equal(a1c.tier, "released");
   assert.equal(repo.doctorLoopRead({ asOf: "2027-01-01" }).due.length, 0);
 });
+
+// Two series fold onto one attention signal (an LDL-C calculated and a direct draw, and a
+// VLDL that must not fold at all). The schedule follows the NEWEST reading, never the
+// series that happened to be processed last.
+test("one attention observation per signal, from the newest reading", () => {
+  seedHealthDoc("2026-01-10", [marker("LDL Cholesterol Calc", 160, { unit: "mg/dL" })]);
+  seedHealthDoc("2026-02-20", [marker("LDL-C (Direct)", 170, { unit: "mg/dL" })]);
+  seedHealthDoc("2026-03-01", [marker("VLDL Cholesterol", 20, { unit: "mg/dL" })]);
+  const rows = repo.refreshDoctorLoopAttention().filter((r) => r.signal_key === "marker:ldl-c");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].last_checked, "2026-02-20");
+  assert.equal(repo.getAttentionSchedule("marker:ldl-c").last_checked, "2026-02-20");
+  assert.notEqual(rows[0].tier, "confirming", "an off-optimal LDL is never read as clean now");
+});
+
+test("an off-optimal total testosterone gets a recheck cadence", () => {
+  seedHealthDoc("2026-01-10", [marker("Testosterone, Total", 300, { unit: "ng/dL" })]);
+  const row = repo.refreshDoctorLoopAttention().find((r) => r.signal_key === "marker:testosterone");
+  assert.ok(row, "testosterone is on the schedule");
+  assert.equal(row.tier, "active");
+});

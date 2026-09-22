@@ -247,6 +247,28 @@ test("the reading has to be FRESH to earn the rest read", () => {
   assert.notEqual(read.decision?.rule_code, "rest_grade_readiness");
 });
 
+// The 04:00 floor on a morning whose own row has not synced yet: the newest reading is
+// YESTERDAY's last sync, taken after yesterday's session. It is not this morning's.
+test("yesterday's post-workout reading never speaks as this morning's rest-grade reading", () => {
+  seedRun(YESTERDAY, 7, 45);
+  repo.upsertGarminDailyMetric({ date: YESTERDAY, training_readiness: 1 });
+  const read = dayRead(REF);
+  assert.notEqual(read.decision?.rule_code, "rest_grade_readiness");
+  assert.notEqual(read.decision?.rule_code, "low_readiness_rest");
+  assert.equal(read.signals.fatigue.low_readiness, false);
+  assert.equal(read.signals.fatigue.readiness.freshness, "stale");
+  // The same value dated the read day still earns the rest read.
+  repo.upsertGarminDailyMetric({ date: REF, training_readiness: 1 });
+  assert.equal(dayRead(REF).decision?.rule_code, "rest_grade_readiness");
+});
+
+test("yesterday's own last sync cannot manufacture harm for yesterday", () => {
+  repo.upsertExercise({ name: "Test Row", muscle_group: "back" });
+  repo.logSetByName({ date: YESTERDAY, exercise: "Test Row", weight: 100, reps: 8 });
+  repo.upsertGarminDailyMetric({ date: YESTERDAY, training_readiness: 1 });
+  assert.equal(harmEvidenceOnDay(YESTERDAY), null);
+});
+
 test("a subdued-but-not-rest-grade reading keeps the behavior it always had", () => {
   repo.upsertGarminDailyMetric({ date: REF, training_readiness: 40 });
   const read = dayRead(REF);

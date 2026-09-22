@@ -737,6 +737,22 @@ the window anchor). Day-read keeps a separate `recentNight` at the window bound 
 On a morning with nothing dated `d` the read simply says nothing about sleep — which is what the
 midnight compute now does, with the on-open recompute picking the night up once the watch syncs.
 
+**One readiness reading is a DATE too.** `garmin_daily_metrics.training_readiness` is the day's LAST
+sync, so a row dated `d-1` is yesterday's post-workout number, not this morning's. At the former
+one-day tolerance the 04:00 floor on a no-night morning (whose own row never arrives before the
+athlete wakes) voiced it as "this morning's reading is at the very bottom of its range" and fired
+the rest-grade arm on a stated lifting day. Every ONE-READING readiness claim therefore gates on
+`READINESS_MAX_AGE_DAYS` = 0 / `isReadDayReadiness()`: day-read's low and rest-grade arms and its
+push-drive floor, `daily-decision.ts`'s readiness, the signal-state readiness observation, the
+rest-trade floor, `weeklyRunPlan`'s readiness brake, and the harm test's Garmin fallback. The
+day-read snapshot calls anything else `stale`, so read-adherence's ledger lookup never trusts it as a
+morning value. `SENSOR_MAX_AGE_DAYS.training_readiness` (1) now bounds only the window average.
+
+**`hrv_ms` is last night's HRV or nothing.** On a morning with no night of its own Garmin's HRV
+summary still carries `weeklyAvg`; `foldHrv` used to fall back to it, storing a seven-day average
+under a one-night date for the recovery deltas and the wearable HRV marker to read as that night. It
+now stores `lastNightAvg` only; the weekly figure stays in `raw_json.hrv`.
+
 **Personal-baseline recovery bands are SAMPLE-anchored, and the band outlives its dot.**
 `src/repo/baseline-bands.ts` reads today's HRV / resting HR / sleep against the athlete's own range
 (`GET /api/recovery/baseline` → the quiet band rows under the Today wearable card). A dimension's
@@ -1663,6 +1679,15 @@ diff-based per-`directive_key` resolve: an unchanged existing row is kept untouc
 updated in place, a row no longer desired is soft-resolved, and a new one is inserted — zero-churn
 instead of clear-all-then-reinsert. `directivesForCoach()` condenses the active set for the prompt.
 Plus `addDirective`/`getDirective`/`listActiveDirectives`/`listDirectives`/`updateDirective`.
+
+**Wearable markers are read against the athlete's own band, and a Done on one holds.** Garmin's HRV
+status judges each night against a personal "balanced" range (`raw_json.hrv.hrvSummary.baseline`),
+which can sit wholly below the population `HRV` zone; when a recent sync carries it,
+`wearableFitnessMarkers` stamps it as `personal_optimal` and `markerZone()` hands that band to the
+ranking, the directive engine and the review contexts alike. And a user Done on a lab directive
+holds until the next draw, but a wearable series "draws" every morning, so that rule re-created the
+HRV directive the same second it was marked Done. For `source: "wearable"` markers a Done now holds
+like a dismissal: only a materially worse reading brings it back (`shouldSuppressDirective`).
 
 Migration **v86** (`directive-soft-resolve-compaction`, no schema change) is historical cleanup, not
 evidence the engine above still churns — it has churned zero rows since the diff-based reconcile

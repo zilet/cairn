@@ -131,7 +131,12 @@ import { round1 } from "../lib/numbers.js";
 // Compact view of a health doc for coaching: kind, date, summary, key markers
 // (capped) — never the raw file or the full marker list.
 function healthForCoach() {
-  const docs = db.prepare(`SELECT * FROM health_documents ORDER BY id DESC LIMIT 5`).all() as any[];
+  // Newest DRAW first, not newest row: panels split out of an uploaded archive get
+  // fresh ids but their own (often years-old) dates, and ordered by id they pushed
+  // the current panels out of the five slots.
+  const docs = db
+    .prepare(`SELECT * FROM health_documents ORDER BY doc_date DESC, id DESC LIMIT 5`)
+    .all() as any[];
   return docs.map((d) => {
     const h = hydrateHealthDoc(d);
     // A modern panel lists 100+ markers; a flat slice(0,30) in parse order can drop
