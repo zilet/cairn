@@ -39,6 +39,9 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
       return;
     }
     if (action === "view-week") {
+      // The forward line is about training, so it opens the Training segment's week —
+      // never whichever Plan segment (Food, Meals) happened to be open last.
+      deps.state.planJump = "edit";
       deps.activateTab("plan");
       return;
     }

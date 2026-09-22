@@ -491,6 +491,7 @@ declare global {
       _briefMorph?: boolean;
       planReveal?: { date: string; on: boolean; blank?: boolean } | null;
       progressSeg?: string;
+      planJump?: string | null;
       dayPicked?: boolean;
     };
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;

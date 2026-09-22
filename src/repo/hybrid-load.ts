@@ -577,13 +577,17 @@ export function muscleLoadPayload(days = 2, date = localDateISO()): MuscleLoadPa
 // flattened by yesterday's long run — and telling the athlete to go train it in
 // that state is the connected read failing. Fail-soft: a read problem leaves the
 // list exactly as it was rather than silently emptying the surface.
-export function suppressSaturatedDue(due: string[], date = localDateISO()): string[] {
+// `alsoLoaded` additionally drops a group still in the LOADED band — for a surface
+// that reads as "train this next" (the Brief's forward line), where "chest due" the
+// morning after a bench session contradicts the next-day pick.
+export function suppressSaturatedDue(due: string[], date = localDateISO(), alsoLoaded = false): string[] {
   if (!Array.isArray(due) || !due.length) return [];
   try {
     const gates = acuteGates(date);
     const kept = due.filter((g) => {
       const canonical = canonicalGroup(g);
-      return !(canonical && gates.get(canonical)?.saturated);
+      const gate = canonical ? gates.get(canonical) : undefined;
+      return !(gate?.saturated || (alsoLoaded && gate?.band === "loaded"));
     });
     return kept;
   } catch {

@@ -3040,7 +3040,7 @@ export function forwardLook(date?: string): ForwardLook {
     // — the Brief must never say "quads & calves due" the morning after the long
     // run that flattened them. This surface never asked the acute question at
     // all; it does now, through the same gate every other consumer reads.
-    due = suppressSaturatedDue(Array.isArray(bal?.due) ? bal.due : [], d).slice(0, 2);
+    due = suppressSaturatedDue(Array.isArray(bal?.due) ? bal.due : [], d, true).slice(0, 2);
   } catch {
     /* no balance → no due groups */
   }

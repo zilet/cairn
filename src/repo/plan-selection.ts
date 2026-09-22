@@ -513,11 +513,17 @@ function scheduledPlanDay(
 // shared acuteGate, never a re-derived window (CLAUDE.md). Both the scorer and the
 // per-candidate read the pills render from go through here, so a dimmed pill and a
 // penalised score can never disagree about the same day.
+// Core never decides which day to train. It is loaded by nearly everything (every
+// run and ride credits it), recovers on its own clock, and rides along as an
+// accessory on most split days — the same law RUN_PRIME_GROUPS applies to the run
+// builder. Counting it let a 25-minute jog veto the programmed Pull day.
+const NON_DECIDING_GROUPS: ReadonlySet<string> = new Set(["core"]);
+
 function recoveringGroupsForDay(
   day: Pick<PlanDayCandidate, "groups">,
   acute: Map<MuscleGroup, AcuteGateReading>
 ): MuscleGroup[] {
-  return day.groups.filter((g) => acute.get(g)?.saturated === true);
+  return day.groups.filter((g) => !NON_DECIDING_GROUPS.has(g) && acute.get(g)?.saturated === true);
 }
 
 // A candidate day as the Today pills read it. No scores cross this line — the
@@ -579,13 +585,24 @@ function scorePlanDay(params: {
   // knows how long ago the work landed AND how fast this group forgets, so quads
   // after Sunday's long run still read recovering while rear delts do not.
   const recovering = recoveringGroupsForDay(day, acute);
-  const freshDue = dueGroups.filter((g) => !recovering.includes(g));
+  // "Fresh" means the gate's own FRESH band. A LOADED group (still carrying real
+  // work, under the saturation bar) is not fresh: the morning after a bench session
+  // chest reads loaded, and scoring it as fresh-and-due is how the day after Push
+  // picked the other chest day over the programmed Pull.
+  const isLoaded = (g: MuscleGroup) => acute.get(g)?.band === "loaded";
+  const freshDue = dueGroups.filter((g) => !recovering.includes(g) && !isLoaded(g));
   const repeated = lastAge != null && lastAge <= 3 ? day.groups.filter((g) => lastGroups.has(g)) : [];
 
   let score = day.day_number === rotation.day_number ? 2 : 0;
   score -= distance * 0.25;
   if (!day.groups.length) score -= 0.5;
-  score += dueGroups.length * (broadLow ? 1.2 : 3);
+  // Due credit follows the gate's contract ("do not call it due today"): a
+  // saturated group earns none, a loaded one half. Weekly volume can wait a day.
+  const dueWeight = broadLow ? 1.2 : 3;
+  for (const group of dueGroups) {
+    if (recovering.includes(group)) continue;
+    score += isLoaded(group) ? dueWeight / 2 : dueWeight;
+  }
   if (freshDue.length >= 2) score += 0.75;
   score -= overGroups.length * 2;
   for (const group of recovering) {
@@ -597,7 +614,7 @@ function scorePlanDay(params: {
   }
   for (const group of repeated) {
     // A saturated group already carries the stronger recovering penalty.
-    if (acute.get(group)?.saturated) continue;
+    if (acute.get(group)?.saturated || NON_DECIDING_GROUPS.has(group)) continue;
     score -= lastAge != null && lastAge <= 1 ? 2.5 : 1.5;
   }
   if (day.groups.length >= 3 && freshDue.length >= 2) score += 0.5; // full-body day that covers several fresh gaps
