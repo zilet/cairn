@@ -220,7 +220,11 @@ cannot hide a spike. A hybrid athlete who runs most days carries a leg residual 
 ordinary morning; the absolute bar read their legs saturated on 21 of 22 mornings. A lifter with no
 endurance habit reads exactly as before. The baseline comes from the same read (no extra queries).
 `strengthLegLoad` (the run builder's view) keeps the absolute band on the strength share only. The residual itself is internal — a float that never reaches an
-athlete surface, same standing as any other internal score.
+athlete surface, same standing as any other internal score. The plan-day picker's recovering-group
+penalty (`scorePlanDay`, `plan-selection.ts`) grades the SAME way: harder (-5) at 1.5× the group's own
+`bar`, softer (-3) below it — never 1.5× the absolute `SATURATED_RESIDUAL`, which a hybrid athlete's
+habitually-elevated legs would clear on nearly every recovering day, making the softer grade
+unreachable for them alone.
 
 `acuteGate(group, date, residuals?)` / `acuteGates(date)` (same file) is the ONE acute-recovery
 question every consumer now asks, replacing four different hand-rolled versions of it (`rl?.heavy`

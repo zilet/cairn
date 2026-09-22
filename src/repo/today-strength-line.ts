@@ -17,6 +17,7 @@
 //
 // Deterministic and cheap: it reads the persisted day read and never computes one.
 import { db } from "../db.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getCachedDayRead } from "./day-read-cache.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import {
@@ -136,10 +137,27 @@ function suggestionFor(date: string, decisionKind: string | null): "easy" | "res
   return decisionKind === "rest" || decisionKind === "easy" ? decisionKind : null;
 }
 
-const CAVEAT: Record<"easy" | "rest", (name: string) => string> = {
-  easy: (name) => `The read suggests easy today — ${name} is still there, held light.`,
-  rest: (name) => `The read suggests rest today — ${name} is still yours if you want it.`,
+// One wording per quiet morning would print the same sentence for weeks (the
+// reading-grammar variant law — see day-read-rules.ts). Rotate through a small set
+// keyed by date, same as every other athlete-facing string; each still carries a
+// caveat, never a gate ("still yours/there" — the athlete drives).
+const CAVEAT: Record<"easy" | "rest", ((name: string) => string)[]> = {
+  easy: [
+    (name) => `The read suggests easy today — ${name} is still there, held light.`,
+    (name) => `Today reads easy — ${name} is still yours, just take it light.`,
+    (name) => `The read leans easy today — ${name} is still there if lighter suits you.`,
+  ],
+  rest: [
+    (name) => `The read suggests rest today — ${name} is still yours if you want it.`,
+    (name) => `Today reads as rest — ${name} is still there whenever you want it.`,
+    (name) => `The read leans toward rest — ${name} is still yours to pick up.`,
+  ],
 };
+
+function caveatFor(suggestion: "easy" | "rest", name: string, date: string): string {
+  const variant = pickDayVariant(CAVEAT[suggestion], date, `strength_line_caveat:${suggestion}`);
+  return variant(name);
+}
 
 function lineText(title: string | null, state: TodayStrengthState, run: boolean, name: string | null): string {
   switch (state) {
@@ -217,7 +235,7 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
     role,
     state,
     suggestion,
-    caveat: suggestion && name ? CAVEAT[suggestion](name) : null,
+    caveat: suggestion && name ? caveatFor(suggestion, name, d) : null,
     run_in: run,
     reshaped,
     original: reshaped && day ? [...day.names] : [],

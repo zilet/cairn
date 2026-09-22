@@ -314,6 +314,7 @@ export interface MuscleResidual {
   group: MuscleGroup;
   residual: number; // INTERNAL — never rendered
   band: AcuteBand;
+  bar: number; // INTERNAL — this group's own saturation bar (saturationBar(habitual)), never rendered
   strength: number; // residual contributed by logged sets
   endurance: number; // residual contributed by endurance regions
   half_life_h: number;
@@ -468,6 +469,7 @@ export function muscleResidual(
       group,
       residual,
       band: relativeBand(residual, habitual.get(group) ?? 0),
+      bar: saturationBar(habitual.get(group) ?? 0),
       strength: v.strength,
       endurance: v.endurance,
       half_life_h: recoveryHalfLifeHours(group) ?? 0,
@@ -522,6 +524,7 @@ export interface AcuteGateReading {
   group: MuscleGroup;
   band: AcuteBand;
   residual: number; // INTERNAL — never rendered
+  bar: number; // INTERNAL — this group's own saturation bar, never rendered
   // The shared gate: this group carries close to a full session's worth of
   // undissipated work. Do not add load to it, and do not call it "due" today.
   saturated: boolean;
@@ -535,6 +538,7 @@ export interface AcuteGateReading {
 const FRESH_GATE: Omit<AcuteGateReading, "group"> = {
   band: "fresh",
   residual: 0,
+  bar: saturationBar(0),
   saturated: false,
   last_date: null,
   days_ago: null,
@@ -560,6 +564,7 @@ export function acuteGate(
     group: canonical,
     band: r.band,
     residual: r.residual,
+    bar: r.bar,
     saturated: r.band === "saturated",
     last_date: r.last_date,
     days_ago: r.days_ago,
@@ -578,13 +583,13 @@ export function acuteGates(date = localDateISO()): Map<MuscleGroup, AcuteGateRea
 }
 
 // The athlete-facing / prompt-facing gate: saturated groups only, with the INTERNAL
-// residual stripped. Callers that need the float read acuteGate() directly.
-export type AcuteGatePublic = Omit<AcuteGateReading, "residual">;
+// residual/bar stripped. Callers that need the float read acuteGate() directly.
+export type AcuteGatePublic = Omit<AcuteGateReading, "residual" | "bar">;
 
 export function saturatedGates(date = localDateISO()): AcuteGatePublic[] {
   return [...acuteGates(date).values()]
     .filter((g) => g.saturated)
-    .map(({ residual: _residual, ...rest }) => rest);
+    .map(({ residual: _residual, bar: _bar, ...rest }) => rest);
 }
 
 // What the Train overview (and MCP) consume: the recency window PLUS any group the

@@ -67,11 +67,30 @@ test("a rest/easy read is a caveat on the plan day, never a replacement title", 
   assert.ok(line.title === "Push" || line.title === "Pull", JSON.stringify(line));
   assert.equal(line.text, `${line.title} · not started`);
   assert.equal(line.suggestion, "rest");
-  assert.match(line.caveat, /suggests rest/);
+  // The caveat rotates through a small set (reading-grammar variant law) rather than
+  // printing one literal every quiet morning — assert the shared meaning, not one string.
+  assert.match(line.caveat, /\brest\b/i);
   assert.ok(line.caveat.includes(line.title));
+  assert.match(line.caveat, /still (yours|there)/);
   assert.doesNotMatch(line.caveat, /\bmust\b|\d+\s*\/\s*100/);
   repo.saveDayRead(today, read("train"));
   assert.equal(todayStrengthLine(today).caveat, null);
+});
+
+test("the rest/easy caveat rotates through a registered variant set, never one literal", () => {
+  const today = localDaysAgo(0);
+  repo.setProfile({
+    strength_schedule: { days: [0, 1, 2, 3, 4, 5, 6].map((dow) => ({ dow })), source: "athlete", updated_at: today },
+  });
+  repo.saveDayRead(today, read("rest"));
+  const restLine = todayStrengthLine(today);
+  assert.ok(restLine.caveat, "precondition: a rest read carries a caveat");
+  assert.ok(restLine.caveat.includes(restLine.title));
+
+  repo.saveDayRead(today, read("easy"));
+  const easyLine = todayStrengthLine(today);
+  assert.match(easyLine.caveat, /\beasy\b/i);
+  assert.doesNotMatch(easyLine.caveat, /\bmust\b|\byou must\b|\d+\s*\/\s*100/);
 });
 
 test("the state is read off the log: in progress, then logged", () => {

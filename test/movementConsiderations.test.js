@@ -191,18 +191,22 @@ test("every plan-shaping prompt carries the block and the DATA key when set, and
   }
 });
 
-test("the supportive block rides only when they want it addressed; no named clinical method, the physio line always", () => {
+test("the supportive block rides only when they want it addressed; generic per-condition, not a fixed list, physio line always", () => {
   const block = (wants) =>
     renderMovementConsiderations({
       movement_considerations: { items: [{ label: "Mild scoliosis", wants_addressed: wants }] },
     });
   const addressed = block(true);
   assert.match(addressed, /\[they want the program to help with this\]/);
-  assert.match(addressed, /side plank, suitcase carry, Pallof press, bird dog, dead bug/);
-  assert.match(addressed, /mobility\/breathing prep block/);
+  // Generic: named ONLY as one example, keyed to a lateral curve, never as the fixed
+  // prescription for any condition.
+  assert.match(addressed, /appropriate to the STATED CONDITION/);
+  assert.match(addressed, /e\.g\. for a lateral spinal curve:/);
+  assert.match(addressed, /a different condition calls for its own choices/);
+  assert.match(addressed, /prep, not working volume/);
   const informs = block(false);
-  assert.doesNotMatch(informs, /prep block \(/);
-  assert.doesNotMatch(informs, /Pallof/);
+  assert.doesNotMatch(informs, /appropriate to the STATED CONDITION/);
+  assert.doesNotMatch(informs, /e\.g\. for a lateral spinal curve/);
   assert.match(informs, /only informs balance/);
   for (const text of [addressed, informs]) {
     assert.match(text, /BALANCED program/);
@@ -211,6 +215,14 @@ test("the supportive block rides only when they want it addressed; no named clin
     assert.doesNotMatch(text, /schroth/i);
     assert.match(text, /PAIN, that is an injury/);
   }
+  // A DIFFERENT stated condition still gets the same generic, condition-appropriate
+  // framing rather than the lateral-curve example's specific movements being forced on it.
+  const otherAddressed = renderMovementConsiderations({
+    movement_considerations: { items: [{ label: "Hypermobile elbows", wants_addressed: true }] },
+  });
+  assert.match(otherAddressed, /appropriate to the STATED CONDITION/);
+  assert.match(otherAddressed, /a different condition calls for its own choices/);
+
   assert.equal(renderMovementConsiderations({}), "");
   assert.equal(renderMovementConsiderations({ movement_considerations: null }), "");
 });

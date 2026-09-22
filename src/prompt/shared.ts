@@ -1508,7 +1508,7 @@ export function renderMovementConsiderations(ctx: PartialCoachContext): string {
   if (!lines.length) return "";
   const addressed = items.some((item) => item?.wants_addressed === true);
   const support = addressed
-    ? `Because they asked for it to be addressed, also include: anti-rotation and anti-lateral-flexion core (side plank, suitcase carry, Pallof press, bird dog, dead bug) on most training days; hip abductor / glute medius work (side-lying hip abduction, clamshell, glute bridge) across the week; and a short mobility/breathing prep block (quadruped thoracic rotation, cat-cow, 90/90 breathing) at the start of sessions — prep, not working volume.`
+    ? `Because they asked for it to be addressed, also include supportive work appropriate to the STATED CONDITION above — balanced unilateral work, general trunk control, and hip / mobility or breathing prep chosen for that condition, not a fixed list (e.g. for a lateral spinal curve: anti-lateral-flexion core and glute medius work; a different condition calls for its own choices) — prep, not working volume.`
     : `They have not asked for it to be worked on, so it only informs balance: no extra prep block or corrective work unless they ask.`;
   return `\nSTATED MOVEMENT CONSIDERATIONS (the athlete's own words, DATA.movement_considerations — lasting, NOT an injury, NOT pain):
 ${lines.join("\n")}

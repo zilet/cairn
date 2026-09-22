@@ -439,6 +439,15 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
       if (recordOutcome) recordDayReadSuggestion(readDate, read, override);
       return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
     }
+    // The floor-first shortcut only pays off for TODAY: ensureDayReadRefresh is a
+    // no-op for any other date (dayread-refresh.ts), so a non-today floor would have
+    // no self-heal coming and would sit there pinned forever. A non-today miss
+    // computes inline instead, the same as the reset/override paths above.
+    if (readDate !== localToday()) {
+      const read = await computeCanonicalDayRead({ date, agent, priority: "interactive" });
+      if (recordOutcome) recordDayReadSuggestion(readDate, read, null);
+      return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
+    }
     // The canonical cache miss never waits on an agent. It used to await the
     // canonical lane inline, so an open landing between an invalidation and its
     // re-warm sat 5-15 s on a spinner. The deterministic floor is a real read: serve

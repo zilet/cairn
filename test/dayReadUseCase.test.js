@@ -37,6 +37,34 @@ test("readToday serves cached canonical Brief with context and records it once",
   assert.equal(countDayReads(date), 1);
 });
 
+// A cache MISS on a non-today date used to take the same floor-first shortcut as
+// today's open (writeAgentlessDayRead + ensureDayReadRefresh), but ensureDayReadRefresh
+// is a no-op for any date but today (dayread-refresh.ts), so that floor could never
+// self-heal — a past-date Brief opened once would print the deterministic floor
+// forever. A non-today miss must compute inline (the canonical lane) instead, the
+// same as the reset/override paths: it actually asks an agent rather than parking a
+// floor no scheduler will ever revisit.
+test("a non-today cache miss computes inline through the canonical lane, not the today-only floor shortcut", async () => {
+  resetTables("day_reads", "suggestions", "plan_days", "plan_items", "sessions", "logged_sets");
+  const today = localDaysAgo(0);
+  const pastDate = localDaysAgo(5);
+  configureDayReadRefresh({ today: () => today, setTimer: () => 0, clearTimer: () => {} });
+  assert.equal(repo.getCachedDayRead(pastDate), null, "precondition: a genuine cache miss");
+
+  const read = await readToday({ date: pastDate });
+
+  // writeAgentlessDayRead's fallback object carries neither field — only the full
+  // computeDayRead agent attempt (the canonical lane) stamps them, offline or not.
+  assert.equal(typeof read.agent, "string", "the inline canonical compute actually asked an agent");
+  assert.ok(Array.isArray(read.tried), "the canonical lane's attempted-agent list is present");
+  assert.notEqual(read.cached, true, "a first compute is not served from cache");
+
+  // The persisted row reflects the same canonical compute, not a bare floor stuck
+  // behind a re-warm that will never fire for a non-today date.
+  const persisted = repo.getCachedDayRead(pastDate);
+  assert.ok(persisted, "the canonical compute still persists the row like any other");
+});
+
 test("a legacy cached row self-heals once against the complete decision fingerprint", async () => {
   resetTables("day_reads", "suggestions", "plan_days", "plan_items", "sessions", "logged_sets", "program_blocks");
   const date = localDaysAgo(0);

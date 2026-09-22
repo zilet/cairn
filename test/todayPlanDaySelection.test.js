@@ -108,6 +108,35 @@ test("canonical Today plan day reuses the persisted Brief selection and rejects 
   assert.equal(afterDelete?.source, "adaptive");
 });
 
+test("a STALE cached-day-read row never pins the old plan day; the live selector re-picks", () => {
+  seedAdaptiveSplit();
+  const brief = repo.dayRead(REF, { has_data: false, recovery: {} });
+  repo.saveDayRead(REF, {
+    ...brief,
+    headline: "Warm read.",
+    why: "A sentence the athlete's coach actually wrote.",
+    source: "agent",
+    agent: "claude",
+    override: null,
+  });
+  const cached = repo.selectedPlanDayForDate(REF);
+  assert.equal(cached.source, "cached-day-read");
+
+  repo.invalidateDayRead(REF);
+  // Precondition: the row itself still exists (marked stale, not deleted) and still
+  // carries the old plan_selection blob a direct `SELECT ... FROM day_reads` would see.
+  assert.equal(repo.getCachedDayRead(REF), null, "stale row is hidden from current-truth readers");
+
+  const afterInvalidate = repo.selectedPlanDayForDate(REF);
+  assert.notEqual(
+    afterInvalidate?.source,
+    "cached-day-read",
+    "a stale row must not be read as the current Brief selection"
+  );
+  assert.equal(afterInvalidate?.source, "adaptive");
+  assert.equal(afterInvalidate?.day_number, repo.dayRead(REF, { has_data: false, recovery: {} }).signals.plan_selection.selected.day_number);
+});
+
 test("implicit session creation binds the canonical Today day while a manual day stays authoritative", () => {
   seedAdaptiveSplit();
   const selected = repo.selectedPlanDayForDate(REF);

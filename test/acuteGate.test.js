@@ -15,6 +15,7 @@ import {
   acuteGates,
   legLoadGroupsPhrase,
   muscleLoadPayload,
+  SATURATED_RESIDUAL,
   strengthLegLoad,
   suppressSaturatedDue,
 } from "../dist/repo/hybrid-load.js";
@@ -185,6 +186,70 @@ test("the plan-day picker leans away from the day whose groups the run flattened
   assert.ok(lower.recovering.length > 0, "the lower day's groups are recovering");
   assert.equal(pull.recovering.length, 0, "the pull day's are not");
   assert.ok(pull.score > lower.score, `the fresher day scores higher (${pull.score} vs ${lower.score})`);
+});
+
+// ── the recovering penalty is graded against the athlete's OWN bar ──────────
+// The plan-day picker used to grade a recovering group's penalty against an
+// ABSOLUTE floor (SATURATED_RESIDUAL * 1.5), but saturation itself is relative to
+// the athlete's own habitual load (saturationBar, hybrid-load.ts) — so for anyone
+// whose normal legs residual already sits well above the tiny absolute floor, the
+// harder -5 penalty fired on essentially every recovering day and the softer -3
+// grade was unreachable. The grade must compare against THIS group's own bar.
+test("the recovering-group grade compares against the athlete's own bar, not an absolute floor", () => {
+  const habitualQuadDay = (daysAgo) => {
+    const ex = repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+    const date = new Date(new Date(`${REF}T00:00:00Z`).getTime() - daysAgo * 864e5).toISOString().slice(0, 10);
+    const sess = repo.getOrCreateSession(date, null);
+    for (let i = 1; i <= 3; i++) {
+      db.prepare(
+        `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, ?, 225, 6, 1)`
+      ).run(sess.id, ex.id, i);
+    }
+  };
+  const bigQuadSession = () => {
+    const ex = repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+    const sess = repo.getOrCreateSession(
+      new Date(new Date(`${REF}T00:00:00Z`).getTime() - 864e5).toISOString().slice(0, 10),
+      null
+    );
+    for (let i = 1; i <= 6; i++) {
+      db.prepare(
+        `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, ?, 225, 6, 1)`
+      ).run(sess.id, ex.id, i);
+    }
+  };
+
+  // A: a lifter with no habitual quad load — the bar sits at the absolute floor,
+  // so the same session clears 1.5x it easily (the harder grade).
+  seedSplit();
+  bigQuadSession();
+  const gateA = acuteGate("quads", REF);
+  assert.equal(gateA.bar, SATURATED_RESIDUAL, "no habitual load — the bar is the absolute floor");
+  assert.ok(gateA.residual >= gateA.bar * 1.5, "well over 1.5x the floor — the harder grade applies");
+  const lowerA = selectAdaptivePlanDay(REF).selection.scores.find((s) => s.day_number === 1);
+
+  // B: the SAME session, but this athlete's own normal quad load is high (a
+  // squat habit every other day) — the bar scales up to match it, and the same
+  // absolute session no longer clears 1.5x their OWN (now higher) bar.
+  reset();
+  seedSplit();
+  for (let d = 35; d >= 2; d -= 2) habitualQuadDay(d);
+  bigQuadSession();
+  const gateB = acuteGate("quads", REF);
+  assert.ok(gateB.bar > gateA.bar, "a habitual quad load raises this group's own bar");
+  assert.equal(gateB.saturated, true, "still recovering by the relative gate");
+  assert.ok(gateB.residual < gateB.bar * 1.5, "but under 1.5x their OWN bar — the softer grade applies");
+  const lowerB = selectAdaptivePlanDay(REF).selection.scores.find((s) => s.day_number === 1);
+
+  // Only quads are recovering in either scenario (hamstrings are untouched), so
+  // the whole score difference is exactly the recovering-penalty grade: -5 vs -3.
+  assert.deepEqual(lowerA.recovering, ["quads"]);
+  assert.deepEqual(lowerB.recovering, ["quads"]);
+  assert.equal(
+    Math.round((lowerB.score - lowerA.score) * 10) / 10,
+    2,
+    `the softer grade must score exactly 2 points higher (A=${lowerA.score} B=${lowerB.score})`
+  );
 });
 
 // ── endurance credit in the WEEKLY balance read ──────────────────────────────

@@ -8,7 +8,7 @@
 import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { canonicalGroup, classifyMuscleGroup, type MuscleGroup, plainGroupWords } from "./exercise-canon.js";
-import { type AcuteGateReading, acuteGates, SATURATED_RESIDUAL } from "./hybrid-load.js";
+import { type AcuteGateReading, acuteGates } from "./hybrid-load.js";
 import { statedRunDows } from "./profile.js";
 import { programBalance } from "./progression.js";
 import { liftDows } from "./strength-schedule.js";
@@ -627,10 +627,13 @@ function scorePlanDay(params: {
   score -= overGroups.length * 2;
   for (const group of recovering) {
     // Graded by how DEEP the residual still is rather than by the calendar: a
-    // group carrying half again a session's worth is a harder no than one that
-    // has just crossed the line. (Internal magnitude — nothing here is rendered.)
+    // group carrying half again ITS OWN saturation bar is a harder no than one
+    // that has just crossed it. The bar is relative to the athlete's own habitual
+    // load (hybrid-load.ts's saturationBar), so a runner's legs need genuinely
+    // more than usual to earn the harder penalty, not just more than a lifter's
+    // absolute floor. (Internal magnitude — nothing here is rendered.)
     const gate = acute.get(group);
-    score -= gate && gate.residual >= SATURATED_RESIDUAL * 1.5 ? 5 : 3;
+    score -= gate && gate.residual >= gate.bar * 1.5 ? 5 : 3;
   }
   for (const group of repeated) {
     // A saturated group already carries the stronger recovering penalty.
@@ -1037,7 +1040,19 @@ export function selectedPlanDayForDate(date: string): SelectedPlanDay | null {
     };
   }
   try {
-    const row = db.prepare(`SELECT signals FROM day_reads WHERE date = ?`).get(date) as any;
+    // Exclude rows an invalidation marked STALE (day-read-cache.ts) — the same
+    // '$._day_read_meta.stale' flag getCachedDayRead hides from every consumer
+    // that treats this row as current truth. A stale row still carries yesterday's
+    // plan_selection blob; dayRead() has already re-picked, so pinning it here
+    // would put the Brief and this selector on different days.
+    const row = db
+      .prepare(
+        `SELECT signals FROM day_reads
+          WHERE date = ?
+            AND (json_extract(signals, '$._day_read_meta.stale') IS NULL
+                 OR json_extract(signals, '$._day_read_meta.stale') = 0)`
+      )
+      .get(date) as any;
     const signals = row?.signals ? JSON.parse(String(row.signals)) : null;
     const selection = signals?.plan_selection;
     const dayNumber = Number(selection?.selected?.day_number);
