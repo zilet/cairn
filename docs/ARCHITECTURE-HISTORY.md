@@ -4,6 +4,42 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-22 — Hybrid-athlete elite round: the coach reads the athlete's own normal
+
+Migrations **v107** (`profile-movement-considerations`: `profile.movement_considerations_json`),
+**v108** (`strength-objective-identity`: pure data repair — objectives re-pointed through
+`resolveExerciseName`, missing baselines snapped) and **v109** (`hrv-weekly-average-repair`: clears
+`garmin_daily_metrics.hrv_ms` rows that held Garmin's weekly average under a one-night date).
+
+Grounded in a live-data replay; parallel packages, one integration:
+- **Strength:** the acute gate saturates against the athlete's own 28-day median (hard ceiling),
+  heavy muscle dose needs duration, per-sport region weights; lower-body substitution needs a
+  saturated leg; runs no longer make legs never-due; unreachable targets re-grounded; a loaded
+  group is not fresh and core never decides the plan day; objectives resolve names.
+- **One today line** (`today-strength-line.ts`) printed by Brief, Session, week strip and Train;
+  a run on a lifting day reads "Run in · <day> still open"; plan-day names over focus sentences;
+  logging prefills the target, RIR blank.
+- **Brief cache:** invalidation marks agent rows stale (the prose pin keeps the wording);
+  `discardDayRead` is the real delete; a today cache-miss serves the floor and never awaits an agent.
+- **Cut:** the diary is judged against the cut's own floor; a hold keeps the deficit; plan pace
+  drives the goal date; carb ranges periodised to the day's work; the journey phase follows the goal.
+- **Wearables/labs:** readiness speaks only for its own date (morning snapshot after training);
+  HRV is last night or nothing, judged against the personal band; a wearable Done holds;
+  zone-matching guards (VLDL, eAG, RBC Mg); doctor-loop cadence for Lp(a)/testosterone.
+- **Endurance:** the race ladder holds mid-week; a harder-than-asked run closes an easy slot;
+  the layout read uses the engine's real week; training paces anchor on current fitness;
+  a down week outranks the spike hold.
+- **Team loop:** clinical floor by relevance; the athlete's own asks leave the surprise budget;
+  drafts stale only by training drift are rebased once; the recovery-week auto-draft honours a
+  refusal; planned long/quality dose is judged by the next morning; a mature
+  trains-anyway-without-harm learning may open non-floor quiet reads with a caveat; hybrid
+  fuel-protect is advice, not a deciding brake; `road_ahead` (block priority + strength objectives
+  with fit words) reaches the weekly read, week ahead, program evolution and conference;
+  specialist charters with an endurance seat and a weekly Sunday team review.
+- **Movement considerations:** a stated painless condition shapes the plan (balanced, unilateral,
+  an optional condition-appropriate prep block, the physio line) and never gates it; onboarding +
+  chat capture; 14 supportive seed exercises; Me → Life "How you move".
+
 ## 2026-09-21 — One press angle per session; skip forward in the split
 
 No schema change. A composed session may no longer pile two same-angle presses
