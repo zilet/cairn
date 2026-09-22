@@ -33,7 +33,9 @@ import {
   setBrainExpectationStatus,
   transitionBrainDecision,
 } from "../brain-decisions.js";
+import { getEnduranceGoal, getEnduranceSchedule, isoDow } from "../profile.js";
 import { activeRecoveryWeek } from "../recovery-week.js";
+import { peakLongKm } from "../run-ramp.js";
 import { readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
 import { SENSOR_MAX_AGE_DAYS, isReadDayReadiness, sensorIsCurrent } from "../sensor-freshness.js";
 import { addDaysISO, localDateISO } from "../shared.js";
@@ -923,7 +925,13 @@ export function morningReadForDate(date: string): MorningRead | null {
 // Counts only — no rate, no grade, no score. It exists so the disagreement between
 // what the Brief suggests and what the athlete does becomes measurable; it changes
 // no rule and no threshold on its own.
-export function readAdherenceModel(asOf: string = localDateISO(), windowDays = 42): ReadAdherenceModel {
+// `recentDays` bounds the per-day list the model hands back (the Brief and the prompt
+// read the last fortnight); the long loop asks for its whole window.
+export function readAdherenceModel(
+  asOf: string = localDateISO(),
+  windowDays = 42,
+  recentDays = 14
+): ReadAdherenceModel {
   const days = Math.max(1, Math.min(180, Math.trunc(Number(windowDays) || 42)));
   const lastClosed = addDaysISO(asOf, -1) ?? asOf;
   const from = addDaysISO(lastClosed, -(days - 1)) ?? lastClosed;
@@ -986,7 +994,7 @@ export function readAdherenceModel(asOf: string = localDateISO(), windowDays = 4
     window_days: days,
     days_observed: recent.length,
     by_read: READ_ORDER.map((read) => stats.get(read)!).filter((stat) => stat.days > 0),
-    recent: recent.slice(-14),
+    recent: recent.slice(-Math.max(1, Math.trunc(recentDays) || 14)),
   };
 }
 
@@ -1342,6 +1350,35 @@ function nextMorningAbsorbedIt(date: string): boolean {
   return nextMorningPhysiologyBrake(date) == null;
 }
 
+// ---------- THE BUILD'S OWN PRESCRIPTION IS NOT HARM ----------
+//
+// Of 19 days trained against the read (08-20..09-20), 8 were flagged by the race build's
+// own prescription: the Saturday/Sunday longest run a half-marathon build exists to
+// grow, and the stated quality day's hard effort. Counting those as cost kept the easy
+// ladder shut on the plan working as written. What the athlete stated
+// (`endurance_schedule`) says which weekday carries which dose; the race build's
+// long-run ceiling (`peakLongKm` — the longest run the build climbs to) bounds a planned
+// long run. Outside a dated race build there is no build ceiling, so the arm stands.
+function plannedDoseOn(date: string): { long: boolean; quality: boolean; long_ceiling_km: number | null } {
+  const none = { long: false, quality: false, long_ceiling_km: null };
+  try {
+    const days = getEnduranceSchedule()?.days ?? [];
+    if (!days.length) return none;
+    const dow = isoDow(date);
+    const kinds = new Set(days.filter((day) => day.dow === dow).map((day) => day.kind));
+    const goal = getEnduranceGoal(date);
+    const distance = Number(goal?.distance_km);
+    const building = goal?.is_race === true && goal.phase !== "past" && distance > 0;
+    return {
+      long: kinds.has("long"),
+      quality: kinds.has("quality"),
+      long_ceiling_km: building ? peakLongKm(distance) : null,
+    };
+  } catch {
+    return none;
+  }
+}
+
 // Did the work logged on `date` show any sign of having cost them, and if so which
 // evidence says so? Null means "nothing says it cost them" — which includes an
 // unrated lifting day, deliberately. Exported so the reads that consult it can carry
@@ -1365,8 +1402,14 @@ export function harmEvidenceOnDay(date: string): HarmEvidence | null {
     /* an unreadable sessions table is not evidence of harm */
   }
   try {
+    const planned = plannedDoseOn(date);
     const novelty = longestRunNovelty(date);
-    if (novelty) {
+    // A longest run the race build is climbing toward, on the athlete's own long-run
+    // day, is the build's DOSE, not news about the body: only the next morning below
+    // can say it cost them. A run past the build's ceiling, or on another day, stays.
+    const plannedLong =
+      planned.long && planned.long_ceiling_km != null && (novelty == null || novelty.distance_km <= planned.long_ceiling_km);
+    if (novelty && !plannedLong) {
       return {
         date,
         kind: "longest_run",
@@ -1381,7 +1424,9 @@ export function harmEvidenceOnDay(date: string): HarmEvidence | null {
     //
     // And a hard effort the body ABSORBED is not a cost either (see below): a
     // vouching next morning retires this arm, and only this arm.
-    if (hardCardioDayIntense(date) && !nextMorningAbsorbedIt(date))
+    // Hard on the stated QUALITY day is what that day is for, and a planned long run
+    // grades hard on load by being long — same rule, judged by the next morning only.
+    if (!planned.quality && !plannedLong && hardCardioDayIntense(date) && !nextMorningAbsorbedIt(date))
       return { date, kind: "hard_cardio", detail: "cardio graded hard on intensity" };
   } catch {
     /* same contract: a failed read finds no harm, it does not invent one */
@@ -1545,5 +1590,69 @@ export function easyOverrideSoftening(model: ReadAdherenceModel | null, asOf: st
     window_days: OUTCOME_SOFTENING_WINDOW_DAYS,
     overridden_and_fine: overriddenAndFine,
     last_honored_easy: lastHonoredEasy,
+  };
+}
+
+// ---------- the MATURE learning: "you train anyway, and it costs you nothing" ----------
+//
+// The two ladders above each move a read ONE rung on ten days of evidence. They are the
+// short loop. This is the long one (owner ruling, 2026-09-22): over six weeks the
+// athlete trained through 17 of 22 rest reads and 31 of 38 easy reads, and the learning
+// that said so was prose only — "never what it's allowed to say". When the pattern is
+// MATURE (at least ten quiet mornings in the window, two thirds of them trained through,
+// three in four of those at no cost, and the newest such divergence clean), a non-floor
+// quiet read may say "train, with the caveat". Which reads are non-floor is the
+// caller's question (day-read.ts keeps every health, safety, rest-grade, injury and
+// acute-gate floor out of it); this only answers whether the evidence is there.
+export const LEARNED_TRAIN_WINDOW_DAYS = 42;
+export const LEARNED_TRAIN_MIN_MORNINGS = 10;
+
+export interface TrainAnywayLearning {
+  mature: boolean;
+  window_days: number;
+  quiet_mornings: number;
+  trained_through: number;
+  trained_without_harm: string[];
+}
+
+const NO_TRAIN_ANYWAY: TrainAnywayLearning = Object.freeze({
+  mature: false,
+  window_days: LEARNED_TRAIN_WINDOW_DAYS,
+  quiet_mornings: 0,
+  trained_through: 0,
+  trained_without_harm: [],
+});
+
+// Diverged from the quiet read by the SAME test each ladder holds its own read to: a
+// rest read is diverged by any training, an easy read only by going above easy.
+function divergedFromQuietRead(day: ReadAdherenceDay): boolean {
+  return day.read === "rest" ? day.trained : wentAboveEasy(day);
+}
+
+export function trainsAnywayWithoutHarm(model: ReadAdherenceModel | null, asOf: string): TrainAnywayLearning {
+  if (!model || !Array.isArray(model.recent)) return NO_TRAIN_ANYWAY;
+  const lastClosed = addDaysISO(asOf, -1);
+  const from = addDaysISO(asOf, -LEARNED_TRAIN_WINDOW_DAYS);
+  if (!lastClosed || !from) return NO_TRAIN_ANYWAY;
+  const quiet = model.recent
+    .filter((day) => day.date >= from && day.date <= lastClosed && (day.read === "rest" || day.read === "easy"))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const diverged = quiet.filter(divergedFromQuietRead).map((day) => day.date);
+  const clean = diverged.filter(trainedWithoutHarm);
+  const newest = diverged.at(-1);
+  return {
+    // "You usually train anyway" is the same lopsided bar the Learned timeline's
+    // sentence uses (two thirds); "…without harm" asks three in four of those days to
+    // have cost nothing, and the newest to be clean.
+    mature:
+      quiet.length >= LEARNED_TRAIN_MIN_MORNINGS &&
+      diverged.length * 3 >= quiet.length * 2 &&
+      clean.length * 4 >= diverged.length * 3 &&
+      newest != null &&
+      clean.includes(newest),
+    window_days: LEARNED_TRAIN_WINDOW_DAYS,
+    quiet_mornings: quiet.length,
+    trained_through: diverged.length,
+    trained_without_harm: clean,
   };
 }

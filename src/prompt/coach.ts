@@ -33,6 +33,7 @@ import {
   renderRunZones,
   renderSignalState,
   renderStrengthJourney,
+  renderRoadAhead,
   renderTrainingConstraints,
   renderTrainingSignals,
   renderTrajectory,
@@ -346,7 +347,7 @@ ${buildEliteGuardrails(ctx)}
 ${variationBlock}${equipBlock}${weakBlock}${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderStrengthSchedule(ctx)}${renderMovementConsiderations(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderStrengthSchedule(ctx)}${renderMovementConsiderations(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderRoadAhead(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}${renderTrainingConstraints(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date and for every reason_provenance.as_of_date.
 

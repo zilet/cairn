@@ -225,3 +225,40 @@ test("an empty database yields an empty timeline", () => {
   );
   assert.deepEqual(repo.forwardTimeline(), []);
 });
+
+// ---- strength objectives as milestones, and the block's priority order (2026-09-22) ----
+
+test("strength objectives join the road ahead with a fit word, never a percent", () => {
+  repo.setStrengthObjective({ exercise: "Back Squat", target_kind: "explicit_est_1rm", target_est_1rm: 305 });
+  repo.setStrengthObjective({ exercise: "Barbell Bench Press", target_kind: "explicit_est_1rm", target_est_1rm: 260 });
+  const objectives = repo.forwardTimeline().filter((entry) => entry.kind === "objective");
+  assert.equal(objectives.length, 2);
+  const byLift = Object.fromEntries(objectives.map((entry) => [entry.label.split(" toward ")[0], entry]));
+  assert.ok(["fits", "stretch"].includes(byLift["Back Squat"].fit), "a rising squat 7 lb short is within reach");
+  assert.equal(byLift["Barbell Bench Press"].fit, "beyond_this_block", "a flat bench 45 lb short is not this block's");
+  for (const entry of objectives) {
+    assert.doesNotMatch(`${entry.label} ${entry.detail} ${entry.basis}`, /%|percent|score/i);
+    assert.deepEqual(entry.when, {}, "an objective is direction, never a date");
+  }
+});
+
+test("the block's priority order reads the athlete's own block and intent", () => {
+  // The fixture: a hypertrophy block, a dated race ahead, an affirmed cut.
+  const muscleFirst = repo.blockPriority();
+  assert.deepEqual(muscleFirst.order, ["muscle", "race", "cut"]);
+  assert.equal(muscleFirst.source, "block");
+
+  db.prepare(`UPDATE program_blocks SET focus = 'endurance-base', goal = 'Build toward the half' WHERE status = 'active'`).run();
+  assert.deepEqual(repo.blockPriority().order, ["race", "muscle", "cut"], "an endurance block leads with the race");
+
+  db.prepare(`UPDATE program_blocks SET status = 'abandoned'`).run();
+  repo.setProfile({ training_intent: { priorities: ["leanness", "muscle"], endurance_role: "supporting" } });
+  assert.deepEqual(repo.blockPriority().order, ["cut", "muscle", "race"], "leanness first makes the cut the lead");
+
+  const road = repo.roadAhead();
+  assert.deepEqual(
+    road.next_milestones.map((item) => item.track),
+    road.priority.order.filter((track) => road.next_milestones.some((item) => item.track === track)),
+    "next milestones follow the priority order"
+  );
+});

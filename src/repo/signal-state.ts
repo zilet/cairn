@@ -123,6 +123,12 @@ export interface SignalObservation {
   // "It may hold the reach back; it may not take the day away." Everything that decides
   // WHETHER TO ADVANCE reads it; nothing that decides WHAT TODAY IS may.
   advisory_brake?: boolean;
+  // ADVICE, NOT A BRAKE (2026-09-22). One rung softer than `advisory_brake`, and only
+  // meaningful on one: the item still speaks (its dimension reads `watch`, its voice is
+  // heard) but it holds nothing back — not the day, not the push, not the reach. The
+  // Brief carries it as a caveat instead. Fueling advice after a long run is the case:
+  // "eat around the session" is not evidence the body is failing to cope.
+  advice_only?: boolean;
 }
 
 export interface ResolvedSignalEvidence extends SignalObservation {
@@ -1390,8 +1396,11 @@ function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionS
   return {
     training: decided?.training ?? ("proceed" as const),
     training_source: decided?.source ?? null,
+    // Fuel ADVICE (advice_only) still tells the nutrition lane to protect fuel around
+    // the work — that is exactly what it is for; it just decides nothing about training.
     fueling:
-      energy === "constrained"
+      energy === "constrained" ||
+      dimensions.energy_fueling.evidence.some((item) => item.freshness !== "stale" && isAdviceOnly(item))
         ? ("protect" as const)
         : energy === "watch"
           ? ("settling" as const)
@@ -1540,6 +1549,17 @@ const isBrakeEvidence = (item: { direction: string }): boolean =>
 const isAdvisoryBrake = (item: { direction: string; advisory_brake?: boolean }): boolean =>
   item.advisory_brake === true && item.direction === "caution";
 
+// Advice that rides as a caveat (see `advice_only`). Guarded by isAdvisoryBrake so the
+// exemption can never reach a constraint.
+const isAdviceOnly = (item: { direction: string; advisory_brake?: boolean; advice_only?: boolean }): boolean =>
+  item.advice_only === true && isAdvisoryBrake(item);
+
+/** A dimension at `watch` whose every fresh brake is advice only: it speaks as a caveat. */
+export function dimensionIsAdviceOnly(dimension: SignalDimensionState): boolean {
+  const brakes = bearingEvidence(dimension.evidence.filter((item) => item.freshness !== "stale")).filter(isBrakeEvidence);
+  return brakes.length > 0 && brakes.every(isAdviceOnly);
+}
+
 // Every fresh, decision-bearing item on the board, across all dimensions. Both call
 // sites below need exactly this set, so it is derived once here rather than twice
 // slightly differently.
@@ -1555,14 +1575,16 @@ function freshBearingEvidence(dimensions: Record<SignalDimension, SignalDimensio
 // training-drive rule asks the same question of its wearable path. One predicate,
 // so the two can never come to disagree about what counts as a brake.
 export function hasFreshBrake(dimensions: Record<SignalDimension, SignalDimensionState>): boolean {
-  return freshBearingEvidence(dimensions).some(isBrakeEvidence);
+  return freshBearingEvidence(dimensions).some((item) => isBrakeEvidence(item) && !isAdviceOnly(item));
 }
 
 // The same question asked of the brakes that may DECIDE a day. Only the arbitration's
 // support clamp asks it: everything else that consults `hasFreshBrake` is deciding
 // whether to ADVANCE — the backed tier, the training-drive rule — and an advisory brake
 // is entitled to answer that one. See `advisory_brake` on SignalObservation.
-function hasFreshDecidingBrake(dimensions: Record<SignalDimension, SignalDimensionState>): boolean {
+// Exported for day-read's stacked-load corroboration: a REST is a decision, so only a
+// brake that may decide can corroborate one.
+export function hasFreshDecidingBrake(dimensions: Record<SignalDimension, SignalDimensionState>): boolean {
   return freshBearingEvidence(dimensions).some((item) => isBrakeEvidence(item) && !isAdvisoryBrake(item));
 }
 
@@ -1608,7 +1630,7 @@ function supportState(
 ): SignalSupport | null {
   if (action.posture !== "train" || action.readiness !== "ready") return null;
   const active = freshBearingEvidence(dimensions);
-  if (active.some(isBrakeEvidence)) return null;
+  if (active.some((item) => isBrakeEvidence(item) && !isAdviceOnly(item))) return null;
   const support = active.filter((item) => item.direction === "support");
   const earned = [...new Set(support.map((item) => item.field).filter((field) => SUPPORT_EARNED_FIELDS.has(field)))];
   if (!earned.length) return null;
@@ -2499,18 +2521,26 @@ export function planningSignalState(input: {
         }
       )
     );
-  if (input.programState?.hybrid?.status === "fuel-protect")
+  // "Fuel-protect" fires in a cut after ANY heavy or long endurance day — every weekly
+  // long run, half the week. That is fueling ADVICE: it decides nothing on its own and
+  // rides the Brief as a caveat. Only when the underfueling read itself shows strain is
+  // it corroborated evidence the body is short, and then it keeps its deciding weight.
+  if (input.programState?.hybrid?.status === "fuel-protect") {
+    const strained = ["prescription_strain", "persistent_strain"].includes(String(input.underfueling?.state));
     observations.push(
       observation(
         "energy_fueling",
         "hybrid_fuel",
         date,
         "cairn_hybrid_state",
-        "constraint",
+        strained ? "constraint" : "caution",
         input.programState.hybrid.headline || "Recent endurance work raises fueling needs around the planned training.",
-        { voice: { key: "hybrid_fuel" }, max_age_days: 2 }
+        strained
+          ? { voice: { key: "hybrid_fuel" }, max_age_days: 2 }
+          : { voice: { key: "hybrid_fuel" }, max_age_days: 2, advisory_brake: true, advice_only: true }
       )
     );
+  }
   else if (input.programState?.hybrid?.status && input.programState.hybrid.status !== "clear")
     observations.push(
       observation(

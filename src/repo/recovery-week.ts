@@ -12,6 +12,7 @@ import {
   RECOVERY_WEEK_ACTIVE_DAYS,
   RECOVERY_WEEK_INSTRUCTION_PREFIX,
 } from "./recovery-week-ledger.js";
+import { recoveryWeekMayBeAnnounced } from "./recovery-refusal.js";
 import { localDateISO } from "./shared.js";
 
 // Keep these public through recovery-week/repo without duplicating the ledger's
@@ -57,7 +58,10 @@ export function shouldAutoDraftRecoveryWeek(opts: {
     opts.status == null &&
     deloadDue;
   if (!requested) return false;
-  return recoveryCycleCooldown(localDateISO()).allowed;
+  const today = localDateISO();
+  // The athlete's "no" to a recovery week stands for the block unless something
+  // safety-grade has arrived since — the same one rule the announcement asks.
+  return recoveryCycleCooldown(today).allowed && recoveryWeekMayBeAnnounced(today).allowed;
 }
 
 export function pendingRecoveryDraft(): { id: number } | null {

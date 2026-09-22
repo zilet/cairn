@@ -1281,7 +1281,12 @@ Intensity bars describe the stimulus, not the cost; 2026-09-01's Z4 run came bac
 readiness 75-78 with HRV above norm and resting HR below its seven-day average, and counting it as
 harm was one of three days holding the easy ladder shut. Absent or stale data is never a vouch, so
 08-27's 9.85 km into a readiness of 26 still counts. The rated-session and longest-run arms are facts
-about the day itself and no morning can argue them away.
+about the day itself and no morning can argue them away — EXCEPT the race build's own prescription
+(2026-09-22): a longest run on a stated long-run weekday (`endurance_schedule`), within the long run a
+dated race build climbs to (`peakLongKm`, `src/repo/run-ramp.ts`), and hard cardio on the stated
+quality weekday are PLANNED DOSE — both the longest-run and hard-cardio arms stand aside and only the
+next-morning physiology arm (and a poorly rated session) can call them harm (`plannedDoseOn`). Of 19
+days trained against the read, 8 had been flagged by the build working as written.
 
 **"Morning readiness" is not the stored Garmin value on a training day.**
 `garmin_daily_metrics.training_readiness` holds the LAST value synced for the date and the watch
@@ -1323,6 +1328,28 @@ day that was actually due (`suggestedPlanDay()`), since these easy reads sit abo
 planned-training rule and would otherwise hand back a training day with nothing in it. The day-read
 prompt's "HOW YOUR READS HAVE ACTUALLY LANDED" block (`renderReadOutcomes`, `src/prompt/day.ts`)
 narrates BOTH ladders, so an agent handed an opened day is told why and told not to walk it back.
+
+**Fueling advice is not a brake (2026-09-22).** `fuel-protect` (program-state's hybrid read) fires
+in a cut after ANY heavy or long endurance day — every weekly long run — and was the only fresh brake
+turning a run of loading days into `accumulated_load_rest`. The `hybrid_fuel` observation is now a
+caution flagged `advisory_brake` + `advice_only` (`src/repo/signal-state.ts`) unless the underfueling
+read itself is in `prescription_strain`/`persistent_strain`, when it stays a deciding constraint. Advice
+only: it still reads `watch`, still sets `directives.fueling = protect` for the nutrition lane, and is
+spoken as a caveat (`FUEL_AROUND_TRAINING_CAVEAT`); it holds nothing back — `hasFreshBrake`, the backed
+tier and reach all read past it — and stacked-load rest is corroborated only by a DECIDING brake
+(`hasFreshDecidingBrake`).
+
+**The long loop: a MATURE learning says "train, with the caveat" (2026-09-22).** The two ladders
+above read ten days. `trainsAnywayWithoutHarm()` (`src/repo/brain/read-adherence.ts`) reads six
+weeks: at least `LEARNED_TRAIN_MIN_MORNINGS` (10) quiet (rest or easy) mornings, two thirds of them
+trained through, three in four of those `trainedWithoutHarm`, and the newest such divergence clean. Mature, it may move a
+NON-FLOOR quiet read straight to train (`learned_train_anyway`, `LEARNED_TRAIN_WHY` — every phrasing
+carries the history, how it turned out, AND the caveat). Only the accumulation codes in
+`LEARNED_TRAIN_CODES` qualify; never `rest_grade_readiness`, `acute_sleep_corroborated`,
+`recovery_dose_overrun`, `felt_run_down_rest`, a clinically driven day (health constraints, injury), a
+fresh `safety_override` constraint, a recovery week, a same-day statement, or a due plan day whose
+strength groups the acute gate reads saturated. It outranks both short ladders (one lever moves the
+day) and publishes `signals.learned_train_anyway` with `applied`.
 
 **A caveat is classified where it is raised; only SAFETY caveats veto the push.** The planned-training
 read's push and its caveat run used to be mutually exclusive (`!caveats.length`), so a backed day
@@ -3268,6 +3295,26 @@ producers keep their existing holds — and so do the asks that are genuinely th
 ONE regeneration per draft: the receipt is the durable lineage record
 (`regenerationReceiptForDraft()`), so a replacement that goes stale in its turn falls back to the
 ordinary hold and evidence churn can never loop.
+
+**…and a bounded agent draft is REBASED where it would otherwise be set aside (2026-09-22).** A daily
+trainer moves the `training` component every day, so a Sunday agent evolution was stale by Monday's
+thaw and three weekly evolutions died as "a held draft was set aside". At the BOUNDARY and in the
+THAW only (the first apply gate keeps its hold), an agent-authored draft that is non-structural
+(`changes[]`, no `days`, not a nutrition target) and stale ONLY by `training`/`context` drift is
+re-stamped once against current evidence (`rebaseProducer`, producer key `rebase:<agent>`) — the plan
+rows it edits have not moved — and earns its tier fresh through every floor. `plan` drift is the real
+premise change and still sets it aside. The receipt says "re-checked", never "a fresh read"
+(`regenerationRebaseRationale`). The athlete's own `no` to a recovery week binds the lead-mode
+auto-draft too: `shouldAutoDraftRecoveryWeek` asks `recoveryWeekMayBeAnnounced` (one rule, with its
+safety-grade reopen).
+
+**The road ahead (`road_ahead`, 2026-09-22).** `roadAhead()` (`src/repo/forward-timeline.ts`) puts the
+block's goal priority order (`blockPriority`, `src/repo/road-ahead.ts`) over the forward timeline and
+names, per goal in that order, the next milestone on its road. The athlete's strength objectives join
+the timeline as `objective` entries with a fit word — `fits` / `stretch` / `beyond_this_block` against
+the active block's end (six weeks without one), never a percent; a lift with no recent read claims no
+fit. It rides the `weekly_read` (whose `milestone_step` becomes the read's one suggestion when the week
+needs no fix), `week_ahead`, `program_evolution`, `case_conference` and `chat` promptData sites.
 
 **A dead premise is retired, never re-asked or re-held.** `adoptOrphanedDrafts()` now runs
 `retireDraftsWithDeadPremise()` ahead of the thaw and adoption loop: a held draft whose subject is a

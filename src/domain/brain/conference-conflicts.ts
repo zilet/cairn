@@ -1,4 +1,5 @@
 import type { SpecialistDomain, SpecialistOpinion } from "../../brain/specialist-contract.js";
+import { markerGroup } from "../../repo/propagation-data.js";
 
 // ============================================================================
 // CASE-CONFERENCE ARBITRATION — the deterministic conflict layer.
@@ -33,13 +34,21 @@ export type ConferenceConflictKey =
  * injury/load question. `clinical_autonomy` deliberately has NO parties: the
  * clinician floor is the server's, and no opinion may attest it away. */
 const CONFLICT_PARTIES: Readonly<Record<ConferenceConflictKey, readonly SpecialistDomain[]>> = {
-  injury_load: ["training", "recovery", "health"],
+  injury_load: ["training", "endurance", "recovery", "health"],
   deficit_recovery: ["nutrition", "recovery"],
   medication_supplement: ["health", "nutrition"],
   allergy_meal: ["nutrition", "health"],
-  race_strength: ["training", "recovery"],
+  race_strength: ["training", "endurance", "recovery"],
   clinical_autonomy: [],
 };
+
+/** What one act-now finding governs: a domain the brain changes itself, and the
+ * areas inside it the directive's own words name (empty = the whole domain). */
+export interface ClinicalLever {
+  domain: "training" | "nutrition";
+  marker: string | null;
+  areas: string[];
+}
 
 /** A tri-state answer: true / false / null when the context carries no evidence. */
 type Evidence = boolean | null;
@@ -61,8 +70,13 @@ export interface ConferenceConflictInputs {
   strengthEmphasis: Evidence;
   /** A lab/clinical priority the brain is being asked to act on now. */
   clinicalAttention: Evidence;
-  /** A health finding is being propagated into a domain the brain can change itself. */
+  /** An act-now finding is being propagated into a domain the brain can change itself. */
   clinicalLever: Evidence;
+  /** What those act-now findings GOVERN: one entry per settled training/nutrition
+   * directive of an act-now group, with the areas its own words name. */
+  clinicalLevers: ClinicalLever[];
+  /** The act-now markers by name — a revision that names one acts on the finding. */
+  clinicalMarkers: string[];
   /** Food is actually being planned (a live plan, or food logged today). */
   mealPlanning: Evidence;
   /** Verbatim names, empty when the context carries none. */
@@ -179,15 +193,63 @@ function readClinicalAttention(context: Record<string, unknown>): Evidence {
   return actNow == null && focus.lead === undefined ? null : false;
 }
 
+/** The act-now priorities: every `act_now` tier in the list, plus the lead. */
+function actNowPriorities(context: Record<string, unknown>): Record<string, unknown>[] {
+  const focus = record(context.health_focus);
+  if (!focus) return [];
+  const lead = record(focus.lead);
+  const all = [...list(focus.priorities), ...(lead ? [lead] : [])].map(record);
+  return all.filter((p): p is Record<string, unknown> => !!p && (p.tier === "act_now" || p.flagged === true));
+}
+
+// The areas a directive or a revision can be ABOUT. A clinical finding governs what
+// its directive names; a revision acts on what its changes touch. Matched on words,
+// never on key names, and a directive that names none governs its whole domain —
+// an unreadable scope is read wide, because this is a floor.
+const TRAINING_AREAS: ReadonlyArray<[string, RegExp]> = [
+  ["endurance", /aerobic|zone ?2|cardio|endurance|\brun|running|mileage|interval|conditioning|vo2|tempo|long run/i],
+  ["strength", /strength|resistance|\blift|lifting|weights?\b|squat|deadlift|bench|\bpress|hypertroph|\bload/i],
+];
+const NUTRITION_AREAS: ReadonlyArray<[string, RegExp]> = [
+  ["energy", /calori|kcal|deficit|surplus|energy|intake|under-?eat|\bfuel/i],
+  ["protein", /protein/i],
+  ["fat", /\bfats?\b|saturated|\boils?\b|omega|cholesterol/i],
+  ["carbohydrate", /carb|sugar|fib(?:er|re)|glyc|starch|grain/i],
+];
+const CARDIO_MOVEMENT = /\brun|jog|ride|bike|cycl|swim|rowing|\berg\b|walk|hike|cardio|zone|tempo|interval|elliptical|stair/i;
+
+function areasNamed(words: string, table: ReadonlyArray<[string, RegExp]>): string[] {
+  return table.filter(([, pattern]) => pattern.test(words)).map(([area]) => area);
+}
+
+function readClinicalLevers(context: Record<string, unknown>): ClinicalLever[] {
+  // Only a lever of an ACT-NOW finding, and only a settled one: an `uncertain`
+  // directive is a softer nudge (a trend read like HRV), and `watch` changes nothing.
+  const priorities = actNowPriorities(context);
+  const groups = new Set(priorities.map((p) => text(p.group)).filter(Boolean));
+  const markers = new Set(priorities.flatMap((p) => list(p.markers).map((m) => text(m).toLowerCase())));
+  const levers: ClinicalLever[] = [];
+  for (const raw of list(context.directives)) {
+    const directive = record(raw);
+    const domain = text(directive?.domain);
+    if (domain !== "training" && domain !== "nutrition") continue;
+    if (directive?.uncertain === true || directive?.uncertain === 1) continue;
+    const marker = text(directive?.marker) || null;
+    const governed = marker != null && (groups.has(markerGroup(marker).label) || markers.has(marker.toLowerCase()));
+    if (!governed) continue;
+    const words = text(directive?.directive);
+    levers.push({ domain, marker, areas: areasNamed(words, domain === "training" ? TRAINING_AREAS : NUTRITION_AREAS) });
+  }
+  return levers;
+}
+
 function readClinicalLever(context: Record<string, unknown>): Evidence {
-  // A directive is a health finding propagated INTO a domain the brain can change
-  // on its own. `watch` is an observation and changes nothing, so it is not a lever.
-  const directives = context.directives;
-  if (!Array.isArray(directives)) return null;
-  return directives.some((directive) => {
-    const domain = text(record(directive)?.domain);
-    return domain === "training" || domain === "nutrition";
-  });
+  if (!Array.isArray(context.directives)) return null;
+  return readClinicalLevers(context).length > 0;
+}
+
+function readClinicalMarkers(context: Record<string, unknown>): string[] {
+  return [...new Set(actNowPriorities(context).flatMap((p) => list(p.markers).map(text).filter(Boolean)))];
 }
 
 function readMealPlanning(context: Record<string, unknown>): Evidence {
@@ -282,6 +344,8 @@ export function conferenceConflictInputs(
     strengthEmphasis: readStrengthEmphasis(root),
     clinicalAttention: readClinicalAttention(root),
     clinicalLever: readClinicalLever(root),
+    clinicalLevers: readClinicalLevers(root),
+    clinicalMarkers: readClinicalMarkers(root),
     mealPlanning: readMealPlanning(root),
     activeMedications: readClinicalFactNames(root, "medication"),
     activeSupplements: readSupplements(root),
@@ -308,7 +372,9 @@ export const CONFERENCE_CONFLICT_RULES: ReadonlyArray<{
   { key: "allergy_meal", fires: (i) => i.knownAllergies.length > 0 && i.mealPlanning === true },
   // A dated race build competing with a strength/hypertrophy push.
   { key: "race_strength", fires: (i) => both(i.raceCommitment, i.strengthEmphasis) },
-  // A clinical finding being propagated into a domain the brain can change itself.
+  // An act-now finding being propagated into a domain the brain can change itself.
+  // Before the revision exists this is a heads-up to the specialists; what the SERVER
+  // enforces is clinicalAutonomyFromRevision, once there is a change to judge.
   { key: "clinical_autonomy", fires: (i) => both(i.clinicalAttention, i.clinicalLever) },
 ];
 
@@ -326,19 +392,70 @@ export function deterministicConferenceConflicts(
   return conflictsFromInputs(conferenceConflictInputs(context, evidence));
 }
 
+/** The domain and areas a conference revision acts on, read off what it changes. */
+function revisionScope(revision: unknown): { domain: "training" | "nutrition" | null; areas: Set<string> } {
+  const rev = record(revision);
+  const type = text(rev?.type);
+  const areas = new Set<string>();
+  if (type === "nutrition_target") {
+    // target_kcal and protein_g are required fields, so energy and protein always move.
+    const nutrition = record(rev?.nutrition);
+    areas.add("energy").add("protein");
+    if (finite(nutrition?.fat_g) != null) areas.add("fat");
+    if (finite(nutrition?.carbs_g) != null) areas.add("carbohydrate");
+    return { domain: "nutrition", areas };
+  }
+  const movements: Record<string, unknown>[] =
+    type === "plan_restructure"
+      ? list(rev?.days).flatMap((day) => list(record(day)?.items).map(record)).filter((i): i is Record<string, unknown> => !!i)
+      : list(rev?.changes).map(record).filter((c): c is Record<string, unknown> => !!c);
+  if (type !== "plan_update" && type !== "plan_restructure") return { domain: null, areas };
+  for (const item of movements) {
+    const swap = record(item.swap);
+    const name = [item.exercise, swap?.from, swap?.to].map(text).join(" ");
+    const cardio =
+      text(item.kind) === "cardio" || finite(item.target_distance_km) != null || CARDIO_MOVEMENT.test(name);
+    areas.add(cardio ? "endurance" : "strength");
+  }
+  return { domain: "training", areas };
+}
+
+function markerTerms(name: string): string[] {
+  const alias = /\(([^)]+)\)/.exec(name)?.[1] ?? "";
+  const bare = name.replace(/\([^)]*\)/g, "").trim();
+  return [bare, alias, bare.replace(/-c$/i, "")].map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 3);
+}
+
+function namesMarker(words: string, markers: readonly string[]): boolean {
+  return markers.some((marker) =>
+    markerTerms(marker).some((term) =>
+      new RegExp(`(^|[^a-z0-9])${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9])`).test(words)
+    )
+  );
+}
+
 /**
- * The SECOND arm of the clinical lever, which can only be asked once the decision
- * exists.
+ * The clinical floor the SERVER enforces, once the conference has produced a revision.
  *
- * `clinicalLever` above wants a directive already propagated into training or
- * nutrition, but deriveDirectives frequently emits only a `watch` row for a flagged
- * marker — and the tension the conflict models (an act-now clinical finding while
- * the brain is about to change something on its own) is fully present without that
- * row. So a conference that has ACTUALLY produced a revision is itself the lever.
- * Broadening, never narrowing: a clinical floor may only ever gain reasons to hold.
+ * RELEVANCE, not co-occurrence. An act-now finding gates only a revision that acts on
+ * what that finding governs: its revision domain matches a settled directive of the
+ * finding AND touches an area that directive names (a directive naming none governs
+ * its whole domain), or the revision names one of the act-now markers outright. A
+ * lipid finding therefore no longer clinician-gates a squat-load hold, while an anemia
+ * training directive still gates an endurance-volume change. Advice with no revision
+ * changes nothing and is never gated here. What a change SAYS stays covered on its
+ * own by clinicalActionText (a diagnosis, a medication, a dose), so a genuinely
+ * clinical change still always asks.
  */
-export function clinicalAutonomyFromRevision(inputs: ConferenceConflictInputs, hasRevision: boolean): boolean {
-  return hasRevision && inputs.clinicalAttention === true;
+export function clinicalAutonomyFromRevision(inputs: ConferenceConflictInputs, revision: unknown): boolean {
+  if (inputs.clinicalAttention !== true || record(revision) == null) return false;
+  if (namesMarker(JSON.stringify(revision).toLowerCase(), inputs.clinicalMarkers ?? [])) return true;
+  const scope = revisionScope(revision);
+  if (!scope.domain) return false;
+  return (inputs.clinicalLevers ?? []).some(
+    (lever) =>
+      lever.domain === scope.domain && (lever.areas.length === 0 || lever.areas.some((area) => scope.areas.has(area)))
+  );
 }
 
 /** Which specialist domains may close a conflict. */

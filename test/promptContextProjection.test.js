@@ -724,3 +724,22 @@ test("the low-energy-availability watch reaches every site that already sees fue
     "no measurement prose rides into a prompt"
   );
 });
+
+// The road ahead (owner ruling, 2026-09-22): the block's priority order and the next
+// milestone on each goal's road reach exactly the sites that plan forward, and the
+// conference's projected snapshot stays inside the 50-key bound it is normalized to.
+test("road_ahead reaches the forward-planning sites and the conference, and nothing else it was not given", () => {
+  seedDemo();
+  const ctx = repo.getCoachContext();
+  assert.ok(Object.hasOwn(ctx, "road_ahead"), "the context carries the key");
+  for (const site of ["weekly_read", "week_ahead", "program_evolution", "case_conference", "chat"]) {
+    assert.ok(Object.hasOwn(projectCoachContext(ctx, site), "road_ahead"), `${site} carries road_ahead`);
+  }
+  for (const site of ["coach", "day_read", "meal_plan"]) {
+    assert.ok(!Object.hasOwn(projectCoachContext(ctx, site), "road_ahead"), `${site} was not given road_ahead`);
+  }
+  assert.match(buildWeeklyReadPrompt(ctx), /"road_ahead":/, "the weekly read's DATA carries it");
+  const conference = Object.keys(projectCoachContext(ctx, "case_conference"));
+  assert.equal(conference[0], "road_ahead", "it leads the conference snapshot");
+  assert.ok(conference.length < 50, `the conference snapshot fits its 50-key bound (${conference.length})`);
+});

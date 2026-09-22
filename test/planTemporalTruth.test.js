@@ -585,7 +585,7 @@ test("presentation-only rows do not invalidate proposal evidence", () => {
   assert.equal(repo.verifyProposalEvidenceFreshness(proposal.parsed, localDateISO()).status, "current");
 });
 
-test("changed evidence also compare-and-set blocks an already announced boundary apply", () => {
+test("changed PLAN evidence compare-and-set blocks an already announced boundary apply", () => {
   seedPlan();
   const proposal = repo.createProposal("stub", "boundary freshness CAS", "", {
     summary: "A bounded target step.",
@@ -600,13 +600,10 @@ test("changed evidence also compare-and-set blocks an already announced boundary
   });
   const scheduled = applyProposalWithAutonomy(proposal.id, { requested_tier: "announce" });
   assert.equal(scheduled.announced, true);
-  repo.logSetByName({
-    exercise: "Temporal Bench Press",
-    weight: 100,
-    reps: 8,
-    rir: 2,
-    date: localDateISO(),
-  });
+  // The rows this draft edits moved under it — the real premise change.
+  repo.savePlanDay(1, "Push", "Chest", [
+    { exercise: "Temporal Bench Press", sets: 4, rep_low: 5, rep_high: 6, target_weight: 100 },
+  ]);
 
   const boundary = applyDueAnnouncedDecisions(scheduled.effective_date);
   assert.deepEqual(boundary.applied, []);
@@ -614,8 +611,32 @@ test("changed evidence also compare-and-set blocks an already announced boundary
   const held = repo.getBrainDecision(scheduled.decision.id);
   assert.equal(held.status, "review");
   assert.equal(held.context.review_reason_code, "stale_snapshot");
-  assert.deepEqual(held.context.proposal_freshness.changed_components, ["training"]);
+  assert.ok(held.context.proposal_freshness.changed_components.includes("plan"));
   assert.equal(repo.getProposal(proposal.id).status, "draft");
+});
+
+test("a bounded agent draft stale only by TRAINING drift is rebased once at the boundary, not set aside", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedPlan();
+  const proposal = createFreshnessProposal("weekly auto-evolution");
+  const scheduled = applyProposalWithAutonomy(proposal.id, { requested_tier: "announce" });
+  assert.equal(scheduled.announced, true);
+  // A daily trainer logs — the training component moves, the plan does not.
+  repo.logSetByName({ exercise: "Temporal Bench Press", weight: 100, reps: 8, rir: 2, date: localDateISO() });
+
+  applyDueAnnouncedDecisions(scheduled.effective_date);
+  assert.equal(repo.getProposal(proposal.id).status, "superseded", "the stale draft is retired");
+  const [receipt] = regenerationReceipts();
+  assert.ok(receipt, "a receipt names why");
+  assert.equal(receipt.context.producer_key, "rebase:stub");
+  assert.deepEqual(receipt.context.changed_components, ["training"]);
+  const replacementId = Number(receipt.action.regenerated_proposal_id);
+  const replacement = repo.getProposal(replacementId);
+  assert.ok(replacement, "the same change was re-stamped as a fresh draft");
+  assert.equal(replacement.parsed.changes[0].target_weight, 105);
+  assert.equal(repo.verifyProposalEvidenceFreshness(replacement.parsed, localDateISO()).status, "current");
+  assert.notEqual(repo.getBrainDecision(scheduled.decision.id).status, "review", "nothing is asked of the athlete");
+
 });
 
 test("legacy proposals remain explicitly applicable and report unverified freshness", () => {

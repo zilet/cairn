@@ -62,6 +62,7 @@ import {
   draftIsRegenerationProduct,
   regenerableProducer,
   regenerationEmptyRationale,
+  regenerationRebaseRationale,
   regenerationReceiptRationale,
 } from "./draft-regeneration.js";
 import { setAppStateStrict } from "../../repo/app-state.js";
@@ -668,7 +669,9 @@ export function domainIsDemoted(domain: BrainDomain): boolean {
 //
 // Ruling A: routine deterministic progressions (ROUTINE_CHANGE_SOURCES) are excluded — a
 // standing, guardrail-clamped nudge is not a material surprise, so it neither consumes the
-// budget nor counts against another change trying to land the same week.
+// budget nor counts against another change trying to land the same week. Neither is the
+// athlete's OWN ask (an explicit request, a restructure they asked for): it is not a
+// surprise to them, and counting it let two Sunday asks defer that week's evolution.
 function materialChangesThisWeek(
   domain: BrainDomain,
   statuses: readonly string[] = ["applied", "announced", "pending"],
@@ -688,6 +691,8 @@ function materialChangesThisWeek(
       `SELECT COUNT(*) AS n FROM brain_decisions
       WHERE domain = ? AND status IN (${placeholders}) AND autonomy_tier IN ('quiet_apply','announce')${kindClause}
         AND (source IS NULL OR source NOT IN (${routinePlaceholders}))
+        AND COALESCE(json_extract(context_json, '$.explicit_user_request'), 0) != 1
+        AND COALESCE(json_extract(context_json, '$.athlete_requested_restructure'), 0) != 1
         AND date(created_at) >= date('now','-6 days')`
     )
     .get(...params) as any;
@@ -935,6 +940,9 @@ function attemptStaleDraftRegeneration(
     user_locked?: boolean;
     asOf: string;
     parked?: { id?: number | null } | null;
+    // The boundary and the thaw — where a stale draft would otherwise be set aside — may
+    // also rebase a bounded agent draft. The first apply gate keeps its hold.
+    allowRebase?: boolean;
   }
 ): RegenerationAttempt {
   // The athlete's own asks are untouched: a clinical ceiling stays clinician-directed, a
@@ -944,7 +952,7 @@ function attemptStaleDraftRegeneration(
   if (getSettings().lead_mode === "review_everything") return { regenerated: false };
   const staleId = Number(proposal?.id);
   if (!(staleId > 0)) return { regenerated: false };
-  const producer = regenerableProducer(proposal);
+  const producer = regenerableProducer(proposal, input.allowRebase ? input.freshness : null);
   if (!producer) return { regenerated: false };
   if (draftIsRegenerationProduct(staleId)) return { regenerated: false };
   const changed = input.freshness?.changed_components ?? [];
@@ -978,7 +986,9 @@ function attemptStaleDraftRegeneration(
           ? "A stale draft was rewritten against your current picture."
           : "A stale draft was set aside; reading it again found nothing to change.",
         rationale: (replacement
-          ? regenerationReceiptRationale(changed, input.aged, input.asOf)
+          ? producer.rebase
+            ? regenerationRebaseRationale(changed, input.asOf)
+            : regenerationReceiptRationale(changed, input.aged, input.asOf)
           : regenerationEmptyRationale(changed, input.aged, input.asOf)
         ).slice(0, 1_500),
         source: proposal.agent || "autonomy",
@@ -2254,6 +2264,20 @@ export function thawParkedReviewDecisions(
       }
       const freshness = verifyProposalEvidenceFreshness(proposal.parsed, localDateISO());
       if (freshness.status === "changed" || freshness.status === "unverified") {
+        // A producer that can read it again (or a bounded draft only training/context
+        // drift made stale) is regenerated once rather than set aside.
+        const regenerated = attemptStaleDraftRegeneration(proposal, proposalShape(proposal), {
+          freshness,
+          aged: false,
+          clinical: serverClinicalProvenance(proposal.parsed?.clinical_provenance) !== null,
+          asOf: localDateISO(),
+          parked: stamped,
+          allowRebase: true,
+        });
+        if (regenerated.regenerated) {
+          thawed += 1;
+          continue;
+        }
         supersedeStaleDraftOnThaw(proposal, stamped, freshness);
         superseded += 1;
         continue;
@@ -3192,6 +3216,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
           user_locked: decisionIsTheAthletes(announced).user_locked,
           asOf,
           parked: announced,
+          allowRebase: true,
         });
         if (regenerated.regenerated) {
           regeneratedIds.push(announced.id!);

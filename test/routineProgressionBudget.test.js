@@ -150,6 +150,56 @@ test("the surprise budget still paces genuine agentic training changes", () => {
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 200, "the fourth change did not land yet");
 });
 
+test("the athlete's own asks do not spend the surprise budget for the week's evolution", () => {
+  seedEarnedOverload();
+  repo.setSettings({ lead_mode: "lead" });
+  // Live shape (2026-09-21): two athlete-asked restructures plus two agentic changes
+  // filled the week, and the weekly evolution was deferred behind the athlete's own words.
+  seedAppliedAgenticTraining(1);
+  seedAppliedAgenticTraining(2);
+  for (const [index, context] of [
+    { explicit_user_request: true, athlete_requested_restructure: true },
+    { explicit_user_request: true },
+  ].entries()) {
+    repo.recordDecision({
+      effective_date: null,
+      kind: "training_structure",
+      domain: "training",
+      summary: `The athlete asked for this restructure (${index})`,
+      rationale: null,
+      source: "stub",
+      source_ref_type: null,
+      source_ref_key: null,
+      status: "applied",
+      autonomy_tier: "announce",
+      risk_class: "moderate",
+      reversible: true,
+      context,
+      action: { asked: index },
+      specialist: null,
+      applied_at: null,
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: null,
+    });
+  }
+  const evolution = repo.createProposal("stub", "weekly auto-evolution", "", {
+    summary: "Bench steps up",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 190 }],
+  });
+  const result = applyProposalWithAutonomy(evolution.id, { requested_tier: "quiet_apply" });
+  assert.notEqual(result.budget_deferred, true, "two asks and two changes leave room for a third change");
+  assert.equal(result.applied.length, 1);
+
+  // …while a third genuine change does fill the week, so the cap still bites.
+  seedAppliedAgenticTraining(3);
+  const overrun = repo.createProposal("stub", "one more", "", {
+    summary: "Another bench change",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 195 }],
+  });
+  assert.equal(applyProposalWithAutonomy(overrun.id, { requested_tier: "quiet_apply" }).budget_deferred, true);
+});
+
 test("Ruling B: a budget-deferred change never interrupts Today and is not a review hold", () => {
   seedEarnedOverload();
   repo.setSettings({ lead_mode: "lead" });

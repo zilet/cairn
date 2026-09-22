@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RECOVERY_WEEK_INSTRUCTION, RECOVERY_WEEK_INSTRUCTION_PREFIX, shouldAutoDraftRecoveryWeek } from "../dist/repo/recovery-week.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
+import { db } from "./_seed.js";
 
 // The lead-mode recovery auto-draft (scheduler tick g) keys off the SAME conductor
 // read that renders "your coach sets this up automatically" — these are the guards
@@ -38,4 +40,17 @@ test("the canonical instruction is prefix-compatible with the recovery state mac
   // pendingRecoveryDraft / supersedeRecoveryWeekDrafts match on the PREFIX — the
   // auto-draft must be recognized as the same thing as the one-tap draft.
   assert.ok(RECOVERY_WEEK_INSTRUCTION.startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX));
+});
+
+test("the athlete's standing 'no' to a recovery week stops the auto-draft until a safety-grade signal", () => {
+  const asking = { lead_mode: "lead", focus_lead_domain: "recovery", recovery_active: false, status: null, deload_due: true };
+  const refusedOn = addDaysISO(localDateISO(), -3);
+  db.prepare(
+    `INSERT INTO brain_decisions (effective_date, kind, domain, summary, status, autonomy_tier, risk_class, context_json, created_at)
+     VALUES (?, 'training_structure', 'recovery', 'Recovery week', 'canceled', 'announce', 'structural', ?, ?)`
+  ).run(refusedOn, JSON.stringify({ held_by_user: true, held_by_user_on: refusedOn }), `${refusedOn} 08:00:00`);
+  assert.equal(shouldAutoDraftRecoveryWeek(asking), false, "deload-due alone does not argue with the refusal");
+
+  db.prepare(`INSERT INTO checkins (date, energy, sleep_feel) VALUES (?, 2, 3)`).run(addDaysISO(localDateISO(), -1));
+  assert.equal(shouldAutoDraftRecoveryWeek(asking), true, "a low check-in since is news the refusal did not answer");
 });

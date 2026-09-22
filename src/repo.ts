@@ -141,6 +141,7 @@ export * from "./repo/energy-deficiency-snapshot.js"; // its memoized read + the
 export * from "./repo/recomposition.js"; // phase-aware fat-loss + muscle/fuel protection synthesis
 export * from "./repo/cut-quality.js"; // is the weight-loss phase preserving muscle? (goal-aware complement to under-fueling)
 export * from "./repo/forward-timeline.js"; // the road ahead: one dated forward-looking timeline read
+export * from "./repo/road-ahead.js"; // the block's goal priority order + strength objectives as milestones
 // context-effect: explicit re-export — its local isAcuteMarker would clash with propagation's `export *`
 export {
   activeContextEffect,

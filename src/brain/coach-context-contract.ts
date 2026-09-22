@@ -427,6 +427,10 @@ export interface CoachContextEnvelope {
   recent_decisions: CoachRecord[];
   trajectory: CoachRecord | null;
   whole_person_trajectory: CoachRecord | null;
+  // The block's goal priority order plus, per goal, the next milestone on its road
+  // (strength objectives with fits/stretch/beyond-this-block words, never a percent).
+  // Optional so partial context builders and imported DBs never synthesize it.
+  road_ahead?: CoachRecord | null;
   context_today: CoachRecord | null;
   // What the NEXT day already holds — the context events whose `start_date` is
   // tomorrow, with the one judgement the look-ahead makes (`blocks_training`, by kind)

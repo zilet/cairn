@@ -772,6 +772,27 @@ export function renderTrainingSignals(ctx: any): string {
 // One explicit anchor-lift journey. It informs exercise selection and supporting
 // work, but the daily recovery/safety posture above it always wins. Projection is
 // already conservatively gated in the repo; prompts must not invent one when absent.
+// THE ROAD AHEAD — the block's goal priority order and the next milestone on each
+// goal's road (DATA.road_ahead, src/repo/forward-timeline.ts roadAhead). Rendered where
+// a prompt plans forward, so the evolution, the week-ahead sketch and the conference
+// all steer toward the same next step in the same order. "" when nothing is set.
+const TRACK_NAME: Record<string, string> = { muscle: "muscle & strength", race: "the race", cut: "the cut" };
+export function renderRoadAhead(ctx: any): string {
+  const road = ctx?.road_ahead;
+  const order: string[] = Array.isArray(road?.priority?.order) ? road.priority.order : [];
+  if (!order.length) return "";
+  const next = (Array.isArray(road?.next_milestones) ? road.next_milestones : [])
+    .map((item: any) => {
+      const entry = item?.entry ?? {};
+      const fit = entry.fit ? ` (${String(entry.fit).replace(/_/g, " ")})` : "";
+      return `  - ${TRACK_NAME[item?.track] ?? item?.track}: ${String(entry.label ?? "").trim()}${fit}`;
+    })
+    .join("\n");
+  return `\nTHE ROAD AHEAD (DATA.road_ahead): this block's goals in priority order — ${order
+    .map((track) => TRACK_NAME[track] ?? track)
+    .join(" > ")}. ${String(road?.priority?.why ?? "").trim()} When goals pull against each other, the earlier one wins and the later one is protected, not dropped. Each change should move the next milestone of a goal forward or protect it${next ? `:\n${next}` : "."}\nA strength objective's fit word (fits / stretch / beyond this block) is how you speak about it — never a percent, never a countdown.\n`;
+}
+
 export function renderStrengthJourney(ctx: any): string {
   const journey = ctx?.strength_journey;
   const objective = journey?.objective;

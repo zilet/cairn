@@ -948,7 +948,8 @@ const WEEKLY_READ_SCHEMA = `{
   "found": true,
   "text": "<how the week actually went, one or two warm plain sentences — a rest week reads as a rest week, not a failure; NO scores>",
   "rationale": "<OPTIONAL: ONE short sentence (≤240 chars) of plain reasoning for the suggestion below, in a friend's voice — never narrate internal data fields. Empty when the week needs no change>",
-  "next_step": "<OPTIONAL: the ONE change worth considering next week, ≤140 chars, or null — a suggestion to consider, never a directive>"
+  "next_step": "<OPTIONAL: the ONE change worth considering next week, ≤140 chars, or null — a suggestion to consider, never a directive>",
+  "milestone_step": "<OPTIONAL: {\"milestone\": \"<the nearest milestone from DATA.road_ahead.next_milestones, in its priority order, in plain words>\", \"step\": \"<the ONE move this week toward it, ≤140 chars — a suggestion>\"} or null>"
 }`;
 
 // A standing "here's how your week went + the one change I'd suggest" that WAITS
@@ -998,6 +999,11 @@ THE CONSTITUTION (binding):
   Speak TO the user in everyday words — NEVER narrate the data you were handed or name its internal
   fields. The one change, if any, goes in next_step.
 - Grounded in their ACTUAL recent data only (training, recovery, nutrition, life context below).
+- LOOK FORWARD ONCE. DATA.road_ahead orders this block's goals (priority.order) and names the next
+  milestone on each road. In milestone_step, name the nearest one — the first goal's, unless it has
+  nothing to take a step toward — and the ONE move this week that moves toward it. A strength objective
+  carries a fit word (fits / stretch / beyond this block): say it in those words, never as a percent or
+  a countdown. Leave it null when road_ahead names nothing.
 ${renderRunCompliance(context, "weekly")}
 ${renderTodayFuel(context)}
 ${renderStreamingContract(

@@ -18,6 +18,7 @@ import { createImmutableBrainSnapshot, type ImmutableBrainSnapshot } from "../..
 import {
   isSpecialistOpinion,
   normalizeSpecialistOpinion,
+  SPECIALIST_DOMAINS,
   type SpecialistDomain,
   type SpecialistOpinion,
 } from "../../brain/specialist-contract.js";
@@ -31,6 +32,7 @@ import {
   type ConferenceConflictKey,
 } from "./conference-conflicts.js";
 import { getCoachContext } from "../../repo/coach.js";
+import { projectCoachContext } from "../../prompt/context-projection.js";
 import { localDateISO } from "../../repo/shared.js";
 import { listTrainingSymptoms } from "../../repo/training-symptoms.js";
 import { getSettings } from "../../repo/settings.js";
@@ -40,6 +42,8 @@ import { createProposal } from "../../repo/proposals.js";
 import { changesReduceSets } from "../../repo/volume-guard.js";
 import { runChosen, runChosenWithCoachReads } from "../../runChosen.js";
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
+import { specialistCharter } from "./specialist-charters.js";
+import { blockPriority, type PriorityTrack } from "../../repo/road-ahead.js";
 
 // The conflict layer lives in its own module (typed predicates over context
 // VALUES, never over serialized key names). Re-exported here because this is
@@ -161,7 +165,7 @@ const SPECIALIST_PROMPT_SCHEMA = JSON.stringify({
     "autonomy_ceiling",
   ],
   properties: {
-    domain: { type: "string", enum: ["training", "nutrition", "health", "recovery", "lifestyle"] },
+    domain: { type: "string", enum: SPECIALIST_DOMAINS },
     recommendation: { type: "string" },
     rationale: { type: "string" },
     evidence_keys: { type: "array", minItems: 1, items: { type: "string" } },
@@ -339,14 +343,17 @@ function specialistPrompt(
   snapshot: ImmutableBrainSnapshot,
   conflicts: ConferenceConflictKey[]
 ): string {
-  return `You are Cairn's ${domain} specialist in a multidisciplinary case conference. Return ONLY a SpecialistOpinion JSON object; no hidden reasoning or transcript. The literal contract is ${SPECIALIST_PROMPT_SCHEMA}. domain MUST be exactly ${JSON.stringify(domain)}. Use evidence_keys for the facts that matter, name uncertainty, and never exceed clinical or safety boundaries. Snapshot id: ${snapshot.id}. Question: ${question}. Deterministic conflicts already detected: ${JSON.stringify(conflicts)}. Immutable bounded context: ${JSON.stringify(snapshot.context)}`;
+  return `You are Cairn's ${domain} specialist in a multidisciplinary case conference — ${specialistCharter(domain)} Return ONLY a SpecialistOpinion JSON object; no hidden reasoning or transcript. The literal contract is ${SPECIALIST_PROMPT_SCHEMA}. domain MUST be exactly ${JSON.stringify(domain)}. Use evidence_keys for the facts that matter, name uncertainty, and never exceed clinical or safety boundaries. Snapshot id: ${snapshot.id}. Question: ${question}. Deterministic conflicts already detected: ${JSON.stringify(conflicts)}. Immutable bounded context: ${JSON.stringify(snapshot.context)}`;
 }
+
+const TRACK_WORDS: Record<PriorityTrack, string> = { muscle: "muscle & strength", race: "the race", cut: "the cut" };
 
 function conductorPrompt(
   question: string,
   snapshot: ImmutableBrainSnapshot,
   opinions: SpecialistOpinion[],
-  conflicts: ConferenceConflictKey[]
+  conflicts: ConferenceConflictKey[],
+  priority: readonly PriorityTrack[]
 ): string {
   // Say honestly what makes a resolution VALID. The old line ("every conflict must
   // appear in resolved_conflicts or the server will demote") trained the model to
@@ -356,10 +363,14 @@ function conductorPrompt(
       const parties = conflictParties(conflict);
       return parties.length
         ? `${conflict} (closeable only by ${parties.join("/")})`
-        : `${conflict} (NOT closeable here — it stays clinician-directed whatever you write)`;
+        : `${conflict} (NOT closeable by citation — a revision that acts on what the act-now finding governs stays clinician-directed whatever you write)`;
     })
     .join("; ");
-  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object. The literal contract is ${CONFERENCE_PROMPT_SCHEMA}. kind MUST be "case_conference". A resolved_conflicts entry is only counted when its evidence_key is one of the evidence_keys of a specialist whose domain is a party to that conflict, and its resolution says in one line how that evidence settles it — naming a conflict without a real citation leaves it unresolved and the decision is safely demoted, so leave a conflict you cannot honestly close out of the array. ${conflicts.length ? `Conflicts open here: ${resolvable}.` : "No deterministic conflicts were detected, so resolved_conflicts should be empty."} revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":1200,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
+  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object. The literal contract is ${CONFERENCE_PROMPT_SCHEMA}. kind MUST be "case_conference". A resolved_conflicts entry is only counted when its evidence_key is one of the evidence_keys of a specialist whose domain is a party to that conflict, and its resolution says in one line how that evidence settles it — naming a conflict without a real citation leaves it unresolved and the decision is safely demoted, so leave a conflict you cannot honestly close out of the array. ${conflicts.length ? `Conflicts open here: ${resolvable}.` : "No deterministic conflicts were detected, so resolved_conflicts should be empty."} revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":1200,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. ${
+    priority.length
+      ? `RECONCILE BY THE BLOCK'S PRIORITY ORDER: ${priority.map((track) => TRACK_WORDS[track]).join(" > ")}. When two opinions pull against each other, the earlier goal's next step wins and the later goal's step is protected or deferred, never silently dropped; name the deferral in deferred. `
+      : ""
+  }Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
 }
 
 const TIER_ORDER = ["observe", "quiet_apply", "announce", "ask", "clinician"] as const;
@@ -404,13 +415,19 @@ function executionSummary(result: any): NonNullable<CaseConferenceResult["execut
   };
 }
 
+// The seat that speaks for each goal, so the advice-only fallback follows the block's
+// priority instead of always handing the day to recovery.
+const TRACK_SEAT: Record<PriorityTrack, SpecialistDomain> = { muscle: "training", race: "endurance", cut: "nutrition" };
+
 function fallbackConferenceDecision(
   opinions: SpecialistOpinion[],
   conflicts: ConferenceConflictKey[],
-  unavailable: SpecialistDomain[]
+  unavailable: SpecialistDomain[],
+  priority: readonly PriorityTrack[] = []
 ): CaseConferenceDecision {
   const preferred =
     opinions.find((opinion) => conflicts.includes("deficit_recovery") && opinion.domain === "nutrition") ??
+    priority.map((track) => opinions.find((opinion) => opinion.domain === TRACK_SEAT[track])).find(Boolean) ??
     opinions.find((opinion) => opinion.domain === "recovery") ??
     opinions[0];
   const autonomy = opinions.reduce<(typeof TIER_ORDER)[number]>(
@@ -420,7 +437,8 @@ function fallbackConferenceDecision(
   const expectations = opinions.flatMap((opinion) => opinion.expected_outcomes).slice(0, 10);
   return {
     kind: "case_conference",
-    domain: preferred.domain,
+    // The endurance seat files its decisions under training — a race build is training.
+    domain: preferred.domain === "endurance" ? "training" : preferred.domain,
     summary: preferred.recommendation.slice(0, 300),
     rationale: preferred.rationale.slice(0, 1_500),
     risk_class: conflicts.includes("clinical_autonomy") ? "clinical" : conflicts.length ? "moderate" : "low",
@@ -450,6 +468,9 @@ export async function runCaseConference(
     trajectory?: unknown;
     optimizes?: string[];
     parks?: string[];
+    // CLI calls each specialist may spend (its bounded read loop). The standing weekly
+    // team review passes 1 so the whole review stays ~6 spawns.
+    maxCallsPerSpecialist?: number;
   },
   deps: CaseConferenceDeps = {}
 ): Promise<CaseConferenceResult> {
@@ -461,8 +482,8 @@ export async function runCaseConference(
     .trim()
     .slice(0, 1_000);
   const domains = [...new Set(input.domains)]
-    .filter((domain) => ["training", "nutrition", "health", "recovery", "lifestyle"].includes(domain))
-    .slice(0, 5);
+    .filter((domain) => SPECIALIST_DOMAINS.includes(domain))
+    .slice(0, SPECIALIST_DOMAINS.length);
   const now = (deps.now ?? (() => new Date()))();
   const today = now.toISOString().slice(0, 10);
   const priorAttempts = Number(
@@ -498,8 +519,14 @@ export async function runCaseConference(
   // finding, a medication or an allergy on record, whatever the athlete's picture
   // actually was. Everything deterministic therefore reads `fullContext`; only the
   // prompts read `snapshot.context`.
-  const fullContext = conferenceContext((deps.context ?? getCoachContext)(), input);
-  const snapshot = createImmutableBrainSnapshot(fullContext, now);
+  const rawContext = (deps.context ?? getCoachContext)();
+  const fullContext = conferenceContext(rawContext, input);
+  // The agents' copy goes through the conference's own promptData site, so what they
+  // see is chosen (road_ahead first) rather than whatever the 50-key bound left over.
+  const snapshot = createImmutableBrainSnapshot(
+    conferenceContext(projectCoachContext((rawContext ?? {}) as any, "case_conference"), input),
+    now
+  );
   // The symptom lifecycle reaches the coach context only THROUGH a rated session's
   // autoregulation rollup, so pain reported in chat with nothing trained since is
   // invisible there. Read it directly, area-scoped only (a systemic report never
@@ -512,7 +539,22 @@ export async function runCaseConference(
   const activeSymptomAreas = (deps.symptomAreas ?? defaultActiveSymptomAreas)(localDateISO());
   const conflictInputs = conferenceConflictInputs(fullContext, { activeSymptomAreas });
   const conflicts = conflictsFromInputs(conflictInputs);
-  const perSpecialistCalls = Math.max(1, Math.floor(12 / Math.max(1, domains.length)));
+  const perSpecialistCalls = Math.max(
+    1,
+    Math.min(Math.floor(12 / Math.max(1, domains.length)), Math.trunc(Number(input.maxCallsPerSpecialist)) || 12)
+  );
+  // The block's goal order, which the conductor reconciles by: the agents' own
+  // road_ahead when the context carries it, the deterministic read otherwise.
+  const priority: PriorityTrack[] = (() => {
+    const fromContext = (fullContext as any)?.road_ahead?.priority?.order;
+    if (Array.isArray(fromContext))
+      return fromContext.filter((track: unknown): track is PriorityTrack => Object.hasOwn(TRACK_WORDS, String(track)));
+    try {
+      return blockPriority().order;
+    } catch {
+      return [];
+    }
+  })();
   const specialistRun =
     deps.specialistRun ??
     (async (chosen, prompt, domain, snap, maxCalls) => {
@@ -580,23 +622,22 @@ export async function runCaseConference(
         return null;
       }
     });
-  const rawDecision = await conductorRun(agent, conductorPrompt(question, snapshot, opinions, conflicts));
+  const rawDecision = await conductorRun(agent, conductorPrompt(question, snapshot, opinions, conflicts, priority));
   assertActive();
   const normalizedDecision = normalizeStrictCaseConferenceDecision(rawDecision);
   const degraded = normalizedDecision == null;
   // Valid specialist work must never disappear because the conductor emitted a
   // malformed envelope. Preserve one conservative, advice-only voice, leave all
   // conflicts unresolved, and hold it for review. No mutation is synthesized.
-  const decision = normalizedDecision ?? fallbackConferenceDecision(opinions, conflicts, unavailable);
-  // The clinical lever's second arm, which only exists once the decision does: an
-  // act-now clinical finding plus a conference that actually proposes a change is
-  // the tension, whether or not a directive row happened to be filed under
-  // training/nutrition (a flagged marker often yields only a `watch` row). The
-  // conflict list the SERVER enforces from here on therefore includes it.
-  const enforcedConflicts =
-    clinicalAutonomyFromRevision(conflictInputs, decision.revision != null) && !conflicts.includes("clinical_autonomy")
-      ? [...conflicts, "clinical_autonomy" as ConferenceConflictKey]
-      : conflicts;
+  const decision = normalizedDecision ?? fallbackConferenceDecision(opinions, conflicts, unavailable, priority);
+  // The clinical floor the server ENFORCES is judged against the revision itself: an
+  // act-now finding gates only a change that acts on what it governs (same domain and
+  // area, or the change names the marker). The pre-revision rule above was the
+  // specialists' heads-up; advice with no revision changes nothing and is not gated.
+  const withoutClinical = conflicts.filter((conflict) => conflict !== "clinical_autonomy");
+  const enforcedConflicts = clinicalAutonomyFromRevision(conflictInputs, decision.revision)
+    ? [...withoutClinical, "clinical_autonomy" as ConferenceConflictKey]
+    : withoutClinical;
   // A RESOLUTION MUST CITE. Membership of the key used to be the whole test, and
   // the prompt asked the model to list every conflict — so an echo of the server's
   // own list dissolved every conflict it had just detected. The claim now has to

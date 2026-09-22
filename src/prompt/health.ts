@@ -27,6 +27,7 @@ import {
   renderReactionModel,
   renderRunCompliance,
   renderRunPlan,
+  renderRoadAhead,
   renderStrengthSchedule,
   renderRunZones,
   renderStreamingContract,
@@ -687,7 +688,7 @@ HOW TO SHAPE IT:
 ${ELITE_STRENGTH_GUARDRAILS}
 ${renderCoachingFocus(context)}${COACHING_STANCE}
 
-${renderEnduranceGoal(context, "training")}${renderRunCompliance(context, "weekly")}${renderRunZones(context)}${renderRunPlan(context)}${renderStrengthSchedule(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}
+${renderEnduranceGoal(context, "training")}${renderRunCompliance(context, "weekly")}${renderRunZones(context)}${renderRunPlan(context)}${renderStrengthSchedule(context)}${renderRoadAhead(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}
 ${renderJsonContract(WEEK_AHEAD_SCHEMA)}
 
 DATA:

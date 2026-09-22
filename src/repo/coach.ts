@@ -101,6 +101,7 @@ import { learnedModelsForCoach } from "./learned-models.js";
 import { getTrajectory } from "./trajectory.js";
 import { wholePersonTrajectory } from "./whole-person-trajectory.js";
 import { journeyRead } from "./journey.js";
+import { roadAhead } from "./forward-timeline.js";
 import { activeContextEffect } from "./context-effect.js";
 import { getLocationContext } from "./location-context.js";
 import { nextBestStep } from "./next-step.js";
@@ -1076,6 +1077,7 @@ function buildBrainSlice(
   | "recent_decisions"
   | "whole_person_trajectory"
   | "tomorrow_holds"
+  | "road_ahead"
 > {
   const { today, coachingFocusView, signalStateView, dayReadView, wholePersonTrajectoryView } = signals;
   return {
@@ -1115,6 +1117,19 @@ function buildBrainSlice(
     // parked for this phase, and whether an unexplained regression requires a
     // revision. Weekly reads receive this directly instead of rediscovering it.
     whole_person_trajectory: wholePersonTrajectoryView,
+    // Where each goal's road goes next, in the block's own priority order — the
+    // forward half of the objective above (src/repo/forward-timeline.ts roadAhead).
+    road_ahead: brainSignal(`road_ahead:${today}`, () => {
+      try {
+        return roadAhead(today, {
+          profile: signals.profile,
+          programState: signals.fullProgramState,
+          recomposition: (signals.journeyView as any)?.recomposition ?? undefined,
+        }) as unknown as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    }),
     // The persisted read carries the agentic sentence AND the athlete's steer
     // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
     // actually looking at; the deterministic floor backs it when nothing's cached.

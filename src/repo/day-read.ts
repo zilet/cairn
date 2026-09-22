@@ -20,11 +20,13 @@ import {
   easyOverrideSoftening,
   type EasyOverrideSoftening,
   type FreshStatementField,
+  LEARNED_TRAIN_WINDOW_DAYS,
   OUTCOME_SOFTENING_WINDOW_DAYS,
   type OutcomeFeedbackSignal,
   readAdherenceModel,
   restOverrideSoftening,
   type RestOverrideSoftening,
+  trainsAnywayWithoutHarm,
 } from "./brain/read-adherence.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
 import { RECOVERY_SAMPLE_FLOOR, recoveryTrendBars } from "./recovery-trend.js";
@@ -35,7 +37,7 @@ import { estimateExpenditure } from "./expenditure.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { planningContextEvents } from "./health.js";
 import { plainGroupWords } from "./exercise-canon.js";
-import { suppressSaturatedDue } from "./hybrid-load.js";
+import { acuteGates, suppressSaturatedDue } from "./hybrid-load.js";
 import {
   LAST_NIGHT_MAX_AGE_DAYS,
   SENSOR_MAX_AGE_DAYS,
@@ -68,7 +70,9 @@ import { coachContextBackstopSignature, registerTrainingCacheClear } from "./tra
 import { getTrainingIntent, isStrengthLedIntent } from "./training-intent.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import {
+  dimensionIsAdviceOnly,
   hasFreshBrake,
+  hasFreshDecidingBrake,
   lifeCapacityIsCommitment,
   planningSignalState,
   signalVoice,
@@ -97,6 +101,7 @@ import {
   hybridDayContext,
   longestRunNovelty,
   planDayIsCardioOnly,
+  planDayStrengthGroups,
   recentCardioLoadMedian,
   recoverySessionDose,
 } from "./training-read.js";
@@ -123,10 +128,12 @@ import {
   DONE_WHY,
   DOSE_OVERRUN_WHY,
   EASE_AROUND_CAVEAT,
+  FUEL_AROUND_TRAINING_CAVEAT,
   HOLD_AGGRESSION_CAVEAT,
   INJURY_CAVEAT,
   JOINT_PAIN_CAVEAT,
   LAB_DRAW_WHY,
+  LEARNED_TRAIN_WHY,
   LIFE_PRESSURE_CAVEAT,
   LIGHT_WORK_WHY,
   LOOKAHEAD_RETIME_WHY,
@@ -1162,6 +1169,37 @@ function clinicallyDriven(signalState: UnifiedSignalState, healthWorkaround: unk
   );
 }
 
+// ---------- which quiet reads the LONG loop may open (owner ruling, 2026-09-22) ----------
+// Accumulation reads only — a readiness below the subdued band, stacked loading, a soft
+// board, a sleep trend, a mileage week. NEVER the floors: rest-grade readiness, a fresh
+// short night, a measured dose overrun, the athlete's own run-down word, and anything the
+// calendar or a clinician owns. health_constraints/injury (clinicallyDriven), a fresh
+// safety_override and acute-gate saturation are checked at the call site.
+const LEARNED_TRAIN_CODES: ReadonlySet<string> = new Set([
+  DAY_READ_OUTCOMES.accumulated_load_rest.code,
+  DAY_READ_OUTCOMES.low_readiness_rest.code,
+  DAY_READ_OUTCOMES.acute_signal_protection.code,
+  DAY_READ_OUTCOMES.chronic_sleep_watch.code,
+  DAY_READ_OUTCOMES.endurance_volume_spike.code,
+]);
+
+function freshSafetyOverride(signalState: UnifiedSignalState): boolean {
+  return Object.values(signalState.dimensions).some((dimension) =>
+    dimension.evidence.some(
+      (item) => item.safety_override === true && item.direction === "constraint" && item.freshness !== "stale"
+    )
+  );
+}
+
+// Is any strength group of this plan day still carrying a session's worth of work? The
+// one acute question, asked through acuteGates — never a re-derived window.
+function planDayAcutelySaturated(dayNumber: number, date: string): boolean {
+  const groups = planDayStrengthGroups().find((day) => day.day_number === dayNumber)?.groups ?? [];
+  if (!groups.length) return false;
+  const gates = acuteGates(date) as Map<string, { saturated: boolean }>;
+  return groups.some((group) => gates.get(group)?.saturated === true);
+}
+
 // ---------- the athlete's own morning outranks a fortnight of history ----------
 // `clinicallyDriven` above is the ONLY floor the outcome-softening ladders used to
 // consult, and it probes `health_constraints` — which is not where a morning check-in
@@ -1937,7 +1975,9 @@ function computeDayRead(
     !!runNoveltyYesterday ||
     lowSubjective ||
     yesterdayRecoveryOverdose ||
-    hasFreshBrake(signalState.dimensions) ||
+    // A rest is a DECISION, so only a brake that may decide corroborates one — fueling
+    // advice after a long run (an advisory brake) does not.
+    hasFreshDecidingBrake(signalState.dimensions) ||
     recoveryCapacityFreshBrake ||
     clinicallyDriven(signalState, healthWorkaround) ||
     tomorrowClinical;
@@ -2711,10 +2751,18 @@ function computeDayRead(
         // intensity drift, an HRV saturation read) is allowed to SPEAK here — leading
         // the day's why is exactly what a brake that cannot take the day is for. It
         // decides nothing on this path; the kind was already settled above.
+        // Advice-only watch (fueling around a long run) is not a caution to lead with:
+        // it rides the caveat run, so a push day keeps its reach and the advice is heard.
+        const fuelAdvice = dimensionIsAdviceOnly(signalState.dimensions.energy_fueling);
+        if (fuelAdvice) caveats.push(pickDayVariant(FUEL_AROUND_TRAINING_CAVEAT, d, "planned_training:fuel_around"));
         const notedWatch =
           holdAggression || pushVetoes.length
             ? null
-            : (HOLD_DIMENSIONS.find((dimension) => signalState.dimensions[dimension].status === "watch") ?? null);
+            : (HOLD_DIMENSIONS.find(
+                (dimension) =>
+                  signalState.dimensions[dimension].status === "watch" &&
+                  !dimensionIsAdviceOnly(signalState.dimensions[dimension])
+              ) ?? null);
         const notedVoice = notedWatch ? signalState.dimensions[notedWatch].voice : null;
         const notedLead = notedWatch ? spokenSignalVoice(notedVoice, d, "planned_training:noted") : "";
         const pushBias = signalState.action.support?.level === "backed" && !holdAggression && !pushVetoes.length;
@@ -2794,7 +2842,35 @@ function computeDayRead(
   // yesterday check and the Brief's reason all key on the softening rather than on the
   // rule it replaced — and tomorrow's model sees how THIS day went, so the loop is
   // self-correcting in both directions.
+  // ---- the long loop: a MATURE learning says "train, with the caveat" ----
+  // Asked only of a non-floor quiet read, and only the day's due session may open — the
+  // same run-stacking hold as the easy ladder below. It outranks both short ladders.
+  const learnedEligible =
+    (ruleRead.kind === "rest" || ruleRead.kind === "easy") &&
+    LEARNED_TRAIN_CODES.has(ruleOutcome.code) &&
+    !recoveryWeek &&
+    !clinicallyDriven(signalState, healthWorkaround) &&
+    !freshSafetyOverride(signalState);
+  const trainAnyway = learnedEligible
+    ? signalInput(
+        () =>
+          brainSignal(`train_anyway:${d}`, () =>
+            trainsAnywayWithoutHarm(
+              readAdherenceModel(d, LEARNED_TRAIN_WINDOW_DAYS + 2, LEARNED_TRAIN_WINDOW_DAYS + 2),
+              d
+            )
+          ),
+        null
+      )
+    : null;
+  const learnedDay = trainAnyway?.mature && !freshStatementHold(d, checkin) ? suggestedPlanDay() : null;
+  const learnedOpen =
+    learnedDay != null &&
+    !signalInput(() => planDayAcutelySaturated(learnedDay.day_number, d), true) &&
+    !((hardCardioYesterday || !!runNoveltyYesterday) && planDayIsCardioOnly(learnedDay.day_number));
+  if (trainAnyway) (signals as any).learned_train_anyway = { ...trainAnyway, applied: learnedOpen };
   const softenRest =
+    !learnedOpen &&
     outcomeFeedback?.active === true &&
     ruleRead.kind === "rest" &&
     SOFTENABLE_REST_CODES.has(ruleOutcome.code) &&
@@ -2825,6 +2901,7 @@ function computeDayRead(
   // on the mornings where the pattern was live and their own account is what kept the
   // day. See freshStatementHold() for the scope — same day, severe end, absence inert.
   const softenEasyEarned =
+    !learnedOpen &&
     !softenRest &&
     easyFeedback?.active === true &&
     ruleRead.kind === "easy" &&
@@ -2870,12 +2947,22 @@ function computeDayRead(
       ...(heldByStatement ? { held_by_statement: heldByStatement } : {}),
     } satisfies EasyOutcomeFeedbackSignal;
   }
-  const outcome = softenRest
-    ? DAY_READ_OUTCOMES.outcome_feedback_soften
-    : softenEasy
-      ? DAY_READ_OUTCOMES.outcome_feedback_open
-      : ruleOutcome;
-  const resolvedRead = softenRest
+  const outcome = learnedOpen
+    ? DAY_READ_OUTCOMES.learned_train_anyway
+    : softenRest
+      ? DAY_READ_OUTCOMES.outcome_feedback_soften
+      : softenEasy
+        ? DAY_READ_OUTCOMES.outcome_feedback_open
+        : ruleOutcome;
+  const resolvedRead = learnedOpen
+    ? {
+        ...ruleRead,
+        kind: "train" as const,
+        focus: learnedDay?.focus ?? null,
+        why: pickDayVariant(LEARNED_TRAIN_WHY, d, "learned_train_anyway"),
+        est_minutes: 60,
+      }
+    : softenRest
     ? {
         ...ruleRead,
         kind: "easy" as const,

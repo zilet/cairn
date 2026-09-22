@@ -337,6 +337,28 @@ test("the thaw supersedes a stale-evidence draft with a receipt instead of adopt
   assert.doesNotMatch(receipt.rationale, /must|you have to|required/i, "no gate language in athlete-facing prose");
 });
 
+test("the thaw rebases a bounded draft that only TRAINING drift made stale, instead of setting it aside", () => {
+  // A daily trainer moves the training component every day; the Sunday evolution was
+  // set aside at Monday's thaw for it (2026-09-22). The plan it edits had not moved.
+  repo.setSettings({ lead_mode: "lead" });
+  seedPlanDay();
+  const proposal = trainingDraft("A bench step held for review");
+  const held = heldReviewDecision(proposal.id);
+  assert.equal(held.decision.status, "review");
+  repo.logSetByName({ exercise: "ZHeadsUp Press", weight: 100, reps: 8, rir: 2, date: localDateISO() });
+
+  const result = thawParkedReviewDecisions();
+  assert.equal(result.superseded, 0, "not set aside");
+  assert.equal(result.thawed, 1);
+  assert.equal(repo.getProposal(Number(proposal.id)).status, "superseded", "the stale copy is retired");
+  const receipt = repo.listBrainDecisions({ limit: 50 }).find((d) => d.context?.regeneration_receipt === true);
+  assert.ok(receipt, "a receipt names the rebase");
+  assert.equal(receipt.context.producer_key, "rebase:stub");
+  assert.doesNotMatch(receipt.rationale, /must|you have to|required/i);
+  const replacement = repo.getProposal(Number(receipt.action.regenerated_proposal_id));
+  assert.equal(replacement.parsed.changes[0].target_weight, 105, "the same change, re-stamped");
+});
+
 test("the thaw does nothing at all under review_everything", () => {
   repo.setSettings({ lead_mode: "review_everything" });
   seedPlanDay();

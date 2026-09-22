@@ -25,9 +25,18 @@ import { strengthBenchmarkMilestones, type StrengthMilestoneInput } from "./trai
 import { followupLabel, markerSlugFromSignalKey } from "./attention-labels.js";
 import { dexaRescanWindow, latestDexaDate } from "./dexa-window.js";
 import { addDaysISO, clipText, daysBetweenISO, localDateISO } from "./shared.js";
+import { blockPriority, objectiveMilestones, type BlockPriority, type ObjectiveFit, type PriorityTrack } from "./road-ahead.js";
 import { round1 } from "../lib/numbers.js";
 
-export type ForwardTimelineKind = "goal" | "phase" | "recheck" | "retest" | "rescan" | "milestone" | "block";
+export type ForwardTimelineKind =
+  | "goal"
+  | "phase"
+  | "recheck"
+  | "retest"
+  | "rescan"
+  | "milestone"
+  | "objective"
+  | "block";
 
 export interface ForwardTimelineWhen {
   // An exact calendar date, when one is actually known (a declared goal date, a
@@ -46,6 +55,8 @@ export interface ForwardTimelineEntry {
   detail: string | null;
   // Confidence expressed in words, never a number — how firm the date/window is.
   basis: string;
+  // A strength objective only: does it fit this block, stretch it, or lie beyond it.
+  fit?: ObjectiveFit | null;
 }
 
 interface ForwardTimelineOpts {
@@ -190,6 +201,7 @@ const KIND_RANK: Record<ForwardTimelineKind, number> = {
   block: 3,
   phase: 4,
   goal: 5,
+  objective: 8,
   milestone: 9,
 };
 
@@ -403,12 +415,31 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
     });
   }
 
+  // ---- the athlete's own strength objectives (undated, with a fit word) -------
+  // Their targets, not a standards table, so they lead the horizon. Never a percent:
+  // where the lift stands, where it is headed, and whether this block holds the gap.
+  for (const objective of objectiveMilestones(today, { programState })) {
+    horizon.push({
+      id: `objective:${objective.objective_id}`,
+      kind: "objective",
+      when: {},
+      label: `${clip(objective.exercise, 60)} toward ${objective.target_est_1rm} lb`,
+      detail:
+        objective.current_est_1rm != null
+          ? `Around ${objective.current_est_1rm} lb estimated 1RM now.`
+          : "No recent read of this lift yet.",
+      basis: objective.basis,
+      fit: objective.fit,
+    });
+  }
+
   // ---- nearest strength standards (undated, direction of travel) -------------
   try {
     const capacities = currentLiftCapacities({ programState });
     const milestones = strengthBenchmarkMilestones(capacities as unknown as StrengthMilestoneInput[]);
+    let standards = 0;
     for (const milestone of milestones) {
-      if (horizon.length >= MAX_MILESTONES) break;
+      if (standards >= MAX_MILESTONES) break;
       const slug = milestone.exercise ? liftSlug(milestone.exercise) : "";
       if (slug && retestSlugs.has(slug)) continue; // already dated as a re-test
       horizon.push({
@@ -419,6 +450,7 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
         detail: clip(milestone.why, 200) || null,
         basis: "direction of travel, not a deadline",
       });
+      standards += 1;
     }
   } catch {
     /* capacities unavailable → no horizon milestones */
@@ -431,4 +463,33 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
   });
 
   return [...dated, ...horizon];
+}
+
+// ---------- the road ahead, oriented (coach context `road_ahead`) ----------
+//
+// The same timeline with the block's priority order on top and, per goal in that
+// order, the NEXT milestone on its road — so the weekly read, the week-ahead sketch,
+// the evolution and the conference all orient toward the same next step. Undated
+// objectives come after their goal's dated checkpoints; nothing here is a countdown.
+export interface RoadAhead {
+  priority: BlockPriority;
+  next_milestones: Array<{ track: PriorityTrack; entry: ForwardTimelineEntry }>;
+  timeline: ForwardTimelineEntry[];
+}
+
+function nextForTrack(track: PriorityTrack, timeline: ForwardTimelineEntry[]): ForwardTimelineEntry | null {
+  if (track === "race") return timeline.find((entry) => entry.id === "goal:endurance-race") ?? null;
+  if (track === "cut")
+    return timeline.find((entry) => entry.id === "phase:projection") ?? timeline.find((entry) => entry.id === "goal:weight") ?? null;
+  return timeline.find((entry) => entry.kind === "objective") ?? timeline.find((entry) => entry.kind === "milestone") ?? null;
+}
+
+export function roadAhead(today = localDateISO(), opts: ForwardTimelineOpts = {}): RoadAhead {
+  const profile = opts.profile ?? getProfile();
+  const priority = blockPriority(today, profile);
+  const timeline = forwardTimeline(today, { ...opts, profile });
+  const next_milestones = priority.order
+    .map((track) => ({ track, entry: nextForTrack(track, timeline) }))
+    .filter((item): item is { track: PriorityTrack; entry: ForwardTimelineEntry } => item.entry != null);
+  return { priority, next_milestones, timeline };
 }

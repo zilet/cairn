@@ -123,6 +123,62 @@ test("a hard run is harm even though nothing rated it", () => {
   assert.equal(trainedWithoutHarm(YESTERDAY), false);
 });
 
+// ---- the race build's own prescription is not harm (2026-09-22) ----
+// A Sunday long run the half-marathon build is climbing toward, on the athlete's
+// stated long-run day, and a hard effort on the stated quality day, are the plan's
+// dose: only the next morning's body says whether they cost anything.
+function statePlannedWeek({ longDow, qualityDow }) {
+  repo.setProfile({
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    endurance_goal: { mode: "race", event: "Half", distance_km: 21.1, date: addDaysISO(REF, 40) },
+    endurance_schedule: {
+      days: [
+        { dow: longDow, kind: "long" },
+        { dow: qualityDow, kind: "quality" },
+      ],
+      source: "athlete",
+    },
+  });
+}
+
+test("a planned longest run inside the build's ceiling is judged by the next morning only", () => {
+  const dow = new Date(`${YESTERDAY}T00:00:00Z`).getUTCDay();
+  statePlannedWeek({ longDow: dow, qualityDow: (dow + 3) % 7 });
+  seedRunHistory(REF, [10, 11, 12, 12.9]);
+  seedHardRun(YESTERDAY, 17.7, 110);
+  assert.ok(longestRunNovelty(YESTERDAY), "it is still the longest run on record");
+  assert.equal(harmEvidenceOnDay(YESTERDAY), null, "a clean morning after the planned long run is no harm");
+
+  repo.upsertGarminDailyMetric({ date: REF, training_readiness: 1 });
+  assert.equal(harmEvidenceOnDay(YESTERDAY)?.kind, "readiness_rest_grade", "the body can still say it cost them");
+});
+
+test("a longest run past the build's ceiling, or off the stated day, is still novelty", () => {
+  const dow = new Date(`${YESTERDAY}T00:00:00Z`).getUTCDay();
+  statePlannedWeek({ longDow: dow, qualityDow: (dow + 3) % 7 });
+  seedRunHistory(REF, [10, 11, 12, 12.9]);
+  seedRun(YESTERDAY, 24);
+  assert.equal(harmEvidenceOnDay(YESTERDAY)?.kind, "longest_run", "past the ceiling the build climbs to");
+
+  resetTables("activities");
+  statePlannedWeek({ longDow: (dow + 1) % 7, qualityDow: (dow + 3) % 7 });
+  seedRunHistory(REF, [10, 11, 12, 12.9]);
+  seedRun(YESTERDAY, 17.7);
+  assert.equal(harmEvidenceOnDay(YESTERDAY)?.kind, "longest_run", "not the athlete's long-run day");
+});
+
+test("a hard effort on the stated quality day is planned dose", () => {
+  const dow = new Date(`${YESTERDAY}T00:00:00Z`).getUTCDay();
+  statePlannedWeek({ longDow: (dow + 3) % 7, qualityDow: dow });
+  seedRunHistory(REF, [8, 8, 8, 8]);
+  seedHardRun(YESTERDAY, 7, 45);
+  assert.equal(harmEvidenceOnDay(YESTERDAY), null);
+
+  statePlannedWeek({ longDow: (dow + 3) % 7, qualityDow: (dow + 1) % 7 });
+  assert.equal(harmEvidenceOnDay(YESTERDAY)?.kind, "hard_cardio", "the same effort on another day still counts");
+});
+
 // ---- a duration-only "hard" grade is NOT harm (ruling, 2026-08-28) ----
 // hardCardioDay grades ANY run of 40+ minutes as hard on duration alone, which is
 // right for the streak and corroboration readers and wrong here: it would make an

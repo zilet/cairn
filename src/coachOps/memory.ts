@@ -142,7 +142,9 @@ export async function generateInsight(
     kind: k,
     text: verdict.text,
     rationale: p.rationale ?? null,
-    next_step: p.next_step ?? null,
+    // ONE suggestion per read: a change the week earned wins; otherwise the weekly read
+    // offers its step toward the nearest milestone in the same slot.
+    next_step: p.next_step || (k === "weekly_read" ? milestoneStepText(p.milestone_step) : null),
     status: "new",
     intent_key: verdict.key,
   });
@@ -167,6 +169,14 @@ export async function generateInsight(
     /* cache write never breaks the op */
   }
   return out;
+}
+
+function milestoneStepText(value: unknown): string | null {
+  const step = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  const milestone = String(step?.milestone ?? "").trim();
+  const move = String(step?.step ?? "").trim();
+  if (!move) return null;
+  return (milestone ? `Toward ${milestone}: ${move}` : move).slice(0, 200);
 }
 
 // Fingerprint an insight pass: the kind + a coarse hour bucket + the dedup floor —

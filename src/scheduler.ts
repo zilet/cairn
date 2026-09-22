@@ -107,6 +107,80 @@ export function brainRevisionSlotStamp(month: string, phaseSig: string, regressi
     .digest("hex");
 }
 
+// ---------- the weekly team review (owner ruling, 2026-09-22) ----------
+//
+// On the coach slot (Sunday evening by default) every specialist — strength coach,
+// endurance coach, dietitian, physio, and the physician in an informational seat —
+// names the next step toward its goal's milestone (road_ahead) and its trade-off; the
+// conductor reconciles them in the block's priority order. The result lands through the
+// ordinary conference → proposal → autonomy path (decideAutonomyTier, brain_decisions
+// with expectations and Undo), so a structural change waits for Monday's boundary and
+// nothing is pushed. One call per specialist plus the conductor keeps it to ~6 spawns a
+// week, and the durable job defers on a busy spawn permit (agentJobs), never fails.
+// It OWNS the weekly evolution slot: two plans for the same week would argue.
+export const TEAM_REVIEW_OPERATION = "team_review_conference";
+export const TEAM_REVIEW_DOMAINS = ["training", "endurance", "nutrition", "recovery", "health"] as const;
+// Only the review's own evening or the morning after: a server that slept through
+// Sunday does not hold last week's review on a Wednesday.
+const TEAM_REVIEW_GRACE_DAYS = 1;
+
+export function teamReviewSlotStamp(week: string): string {
+  return createHash("sha256").update(`team-review:${week}`).digest("hex");
+}
+
+export function enqueueTeamReviewIfDue(
+  now: Date,
+  settings: { proactive_enabled: boolean; coach_day: number; coach_hour: number },
+  enqueue: (id: number) => void = enqueueAgentJob
+): number | null {
+  if (!settings.proactive_enabled) return null;
+  const week = weeklySlotStamp(now, settings.coach_day, settings.coach_hour);
+  if (repo.getAppState("team_review_last_slot") === week) return null;
+  const today = nowContext(now).date;
+  const since = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${week}T00:00:00Z`)) / 864e5);
+  if (!(since >= 0 && since <= TEAM_REVIEW_GRACE_DAYS)) return null;
+  const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
+  if (!hasPlan) return null;
+  const slot = teamReviewSlotStamp(week);
+  if (!repo.schedulerOperationDue(TEAM_REVIEW_OPERATION, slot, now)) return null;
+  const { claim } = repo.claimSchedulerOperationWithStatus(TEAM_REVIEW_OPERATION, slot, {
+    now,
+    maxAttempts: 3,
+    leaseMs: 6 * 60 * 60_000,
+  });
+  if (!claim) return null;
+  const order = repo.blockPriority(today).order;
+  const job = repo.createAgentJob({
+    kind: "case_conference",
+    agent: null,
+    input: {
+      question:
+        `Weekly team review for the week starting tomorrow. Each specialist: the ONE next step toward your goal's milestone in DATA.road_ahead and its trade-off. ` +
+        `Conductor: reconcile them in the block's priority order (${order.join(" > ") || "as the data reads"}) into next week's plan — ` +
+        `prefer bounded plan_update changes that move the lead goal's milestone and protect the others; a plan_restructure must keep the athlete's stated lifting and run weekdays.`,
+      domains: [...TEAM_REVIEW_DOMAINS],
+      max_calls_per_specialist: 1,
+      scheduler_success: { team_review_last_slot: week },
+      scheduler_operation: {
+        operation: claim.operation,
+        slot_stamp: claim.slot_stamp,
+        claim_token: claim.claim_token,
+        attempts: claim.attempts,
+      },
+    },
+  }) as any;
+  enqueue(Number(job.id));
+  // The review has just addressed whatever the data currently says, so the reactive
+  // evolution trigger keeps its cooldown exactly as it does after a weekly draft.
+  try {
+    repo.setAppState("program_evolution_last_draft_date", today);
+    repo.setAppState("program_evolution_trigger_sig", repo.programEvolutionTrigger().signature);
+  } catch {
+    /* trigger read unavailable → leave stamps as-is */
+  }
+  return Number(job.id);
+}
+
 // True when the weekly slot's most recent occurrence has passed and durable
 // scheduler ownership says it can be claimed. Legacy app_state stamps remain a
 // compatibility read only; new work is acknowledged after success/no-op, never
@@ -971,6 +1045,13 @@ export function startScheduler() {
           if (!hasPlan) {
             log.debug(`[proactive] no plan to evolve yet (calm no-op).`);
             return { outcome: "no_op" };
+          } else if (
+            enqueueTeamReviewIfDue(now, s) != null ||
+            repo.getSchedulerOperation(TEAM_REVIEW_OPERATION, teamReviewSlotStamp(weeklySlot)) != null
+          ) {
+            // The weekly team review owns this slot's plan (see enqueueTeamReviewIfDue).
+            log.info(`[proactive] the weekly team review is drafting this week's plan.`);
+            return { outcome: "succeeded", value: { team_review: true } };
           } else {
             const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION);
             if (!r.ok)
@@ -1476,6 +1557,18 @@ export function startScheduler() {
   setInterval(inOwnerTimeZone(tick), 60_000); // check every minute
   setInterval(inOwnerTimeZone(boundaryApplyTick), 60_000);
   setInterval(inOwnerTimeZone(revisionTick), 60_000);
+  // The weekly team review's own poll, so a failed attempt retries on its backoff
+  // inside the review's grace window (the evolution slot enqueues the first one).
+  setInterval(
+    inOwnerTimeZone(() => {
+      try {
+        enqueueTeamReviewIfDue(new Date(), repo.getSettings());
+      } catch (e: any) {
+        recordSchedulerFailure("team_review_conference", e);
+      }
+    }),
+    60_000
+  );
   setInterval(inOwnerTimeZone(proactiveTick), 60_000);
   setInterval(inOwnerTimeZone(garminTick), 60_000);
   setInterval(inOwnerTimeZone(precomputeTick), 60_000);

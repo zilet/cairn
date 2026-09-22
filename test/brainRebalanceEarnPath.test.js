@@ -229,6 +229,68 @@ test("easy mornings taken above easy without cost open today's easy read to a tr
   assert.equal(r.signals.easy_outcome_feedback.last_honored_easy, null);
 });
 
+// ---- the LONG loop (owner ruling, 2026-09-22) ----
+// Six weeks of quiet mornings trained through at no cost is a mature learning, and it
+// may say "train, with the caveat" even where the ten-day ladder was just reset.
+const seedMatureWorld = ({ dueDay = "upper" } = {}) => {
+  // The same five-day run of overridden easy mornings the short ladder reads, on top of
+  // five more weeks of the same pattern — the history that makes it MATURE. The run of
+  // squat days leaves the legs acutely saturated, so the due session is an upper day
+  // unless a case asks for the saturated one.
+  seedOpenableWorld();
+  if (dueDay === "upper") {
+    repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
+    repo.savePlanDay(1, "Upper", "Upper body", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
+  }
+  for (let back = 7; back <= 25; back += 2) seedOverriddenEasy(dayBefore(REF, back));
+};
+
+test("a mature trains-anyway learning opens a non-floor quiet read to train, with the caveat", () => {
+  seedMatureWorld();
+  const r = repo.dayRead(REF, thinSleep());
+  assert.equal(r.kind, "train");
+  assert.equal(r.decision.rule_code, "learned_train_anyway");
+  assert.equal(r.focus, "Upper body", "it opens the session that was due");
+  assert.ok(DAY_READ_WHY_VARIANTS.learned_train_anyway.includes(r.why), `unexpected wording ${JSON.stringify(r.why)}`);
+  assert.match(r.why, DAY_READ_REQUIRED_CONCEPT.learned_train_anyway, "the caveat rides with the open");
+  assert.equal(violatesReadingGrammar(r.why), null);
+  assert.equal(r.signals.learned_train_anyway.mature, true);
+  assert.equal(r.signals.learned_train_anyway.applied, true);
+  assert.equal(r.signals.easy_outcome_feedback.applied, false, "one lever moves the day, never two");
+});
+
+test("five mornings is the short loop's evidence, not a mature learning", () => {
+  seedOpenableWorld();
+  const r = repo.dayRead(REF, thinSleep());
+  assert.equal(r.decision.rule_code, "outcome_feedback_open");
+  assert.equal(r.signals.learned_train_anyway.mature, false);
+});
+
+test("the long loop never opens a floor: acute saturation, rest-grade readiness and an injury hold", () => {
+  seedMatureWorld({ dueDay: "lower" });
+  const saturated = repo.dayRead(REF, thinSleep());
+  assert.notEqual(saturated.decision.rule_code, "learned_train_anyway", "the due day's legs are saturated");
+  assert.equal(saturated.signals.learned_train_anyway.applied, false);
+
+  db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(REF);
+  resetTables("plan_items", "plan_days");
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
+  repo.savePlanDay(1, "Upper", "Upper body", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.upsertGarminDailyMetric({ date: REF, training_readiness: 5 });
+  const restGrade = repo.dayRead(REF, thinSleep());
+  assert.notEqual(restGrade.decision.rule_code, "learned_train_anyway");
+  assert.notEqual(restGrade.kind, "train");
+
+  resetTables("garmin_daily_metrics");
+  db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(REF);
+  assert.equal(repo.dayRead(REF, thinSleep()).decision.rule_code, "learned_train_anyway", "the same world opens");
+  db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(REF);
+  repo.addContextEvent({ kind: "injury", title: "Achilles niggle", start_date: dayBefore(REF, 1) });
+  const injured = repo.dayRead(REF, thinSleep());
+  assert.notEqual(injured.decision.rule_code, "learned_train_anyway");
+  assert.notEqual(injured.kind, "train");
+});
+
 test("the opened day takes the session that was actually due", () => {
   seedOpenableWorld();
 

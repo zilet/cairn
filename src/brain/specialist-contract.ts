@@ -2,8 +2,15 @@ import { asRecord, cleanText, enumValue, hasOwnProperties, normalizeStringList }
 import { AUTONOMY_TIERS, BRAIN_DOMAINS, type AutonomyTier, type BrainDomain } from "./decision-contract.js";
 import { normalizeProposedExpectation, type ProposedExpectation } from "./expectation-contract.js";
 
-export type SpecialistDomain = Exclude<BrainDomain, "cross_domain">;
-export const SPECIALIST_DOMAINS = BRAIN_DOMAINS.filter((domain) => domain !== "cross_domain") as SpecialistDomain[];
+// The specialists are the brain's domains plus ONE voice that is not a ledger domain of
+// its own: the ENDURANCE coach. A race build is training, so its decisions stay filed
+// under `training`, but inside the conference the run build needs its own advocate —
+// a strength coach speaking for both sides of a hybrid week is no conference at all.
+export type SpecialistDomain = Exclude<BrainDomain, "cross_domain"> | "endurance";
+export const SPECIALIST_DOMAINS = [
+  ...BRAIN_DOMAINS.filter((domain) => domain !== "cross_domain"),
+  "endurance",
+] as SpecialistDomain[];
 
 export interface SpecialistOpinion {
   domain: SpecialistDomain;

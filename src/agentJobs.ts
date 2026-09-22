@@ -39,7 +39,7 @@ import {
   registerStructureBuildEnqueuer,
   settleStructureBuild,
 } from "./domain/brain/structure-request.js";
-import type { SpecialistDomain } from "./brain/specialist-contract.js";
+import { SPECIALIST_DOMAINS, type SpecialistDomain } from "./brain/specialist-contract.js";
 import { normalizeStrictCaseConferenceDecision } from "./brain/case-conference-contract.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import { addDaysISO, localDateISO } from "./repo/shared.js";
@@ -230,20 +230,23 @@ const CONFERENCE_SUCCESS_STATE_KEYS = new Set([
   "brain_revision_last_month",
   "brain_revision_phase_sig",
   "brain_revision_regression_sig",
+  "team_review_last_slot",
 ]);
-const CONFERENCE_SCHEDULER_OPERATION = "brain_revision_conference";
+// The standing revision conference and the Sunday team review share one job kind and
+// one claim/retry contract; each owns its own durable scheduler operation.
+const CONFERENCE_SCHEDULER_OPERATIONS = new Set(["brain_revision_conference", "team_review_conference"]);
 const CONFERENCE_RETRY_MAX_ATTEMPTS = 3;
 const CONFERENCE_RETRY_BACKOFF_MS = [12 * 60 * 60_000, 36 * 60 * 60_000];
 
 function conferenceSchedulerClaim(input: any): repo.SchedulerOperationClaim | null {
   const raw = input?.scheduler_operation;
-  if (!raw || raw.operation !== CONFERENCE_SCHEDULER_OPERATION) return null;
+  if (!raw || !CONFERENCE_SCHEDULER_OPERATIONS.has(String(raw.operation))) return null;
   const slot = String(raw.slot_stamp ?? "");
   const token = String(raw.claim_token ?? "");
   const attempts = Math.trunc(Number(raw.attempts));
   if (!/^[a-f0-9]{64}$/.test(slot) || !token || !Number.isInteger(attempts) || attempts < 1) return null;
   return {
-    operation: CONFERENCE_SCHEDULER_OPERATION,
+    operation: String(raw.operation),
     slot_stamp: slot,
     claim_token: token,
     attempts,
@@ -274,7 +277,7 @@ function conferenceIncompleteReason(input: any, result: any): string | null {
     ...new Set<string>(
       (Array.isArray(input.domains) ? input.domains : [])
         .map(String)
-        .filter((domain: string) => ["training", "nutrition", "health", "recovery", "lifestyle"].includes(domain))
+        .filter((domain: string) => (SPECIALIST_DOMAINS as readonly string[]).includes(domain))
     ),
   ];
   const delivered = new Set(
@@ -572,7 +575,7 @@ async function processAgentJob(id: number): Promise<void> {
           ? input.domains
               .map(String)
               .filter((domain: string): domain is SpecialistDomain =>
-                ["training", "nutrition", "health", "recovery", "lifestyle"].includes(domain)
+                (SPECIALIST_DOMAINS as readonly string[]).includes(domain)
               )
           : [];
         result = await runCaseConference(
@@ -583,6 +586,7 @@ async function processAgentJob(id: number): Promise<void> {
             trajectory: input.trajectory,
             optimizes: Array.isArray(input.optimizes) ? input.optimizes.map(String) : undefined,
             parks: Array.isArray(input.parks) ? input.parks.map(String) : undefined,
+            maxCallsPerSpecialist: Number(input.max_calls_per_specialist) || undefined,
           },
           { jobId: id, signal: controller.signal }
         );

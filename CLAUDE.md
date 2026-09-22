@@ -189,7 +189,10 @@ recorded in `brain_decisions` with falsifiable expectations and server-owned one
 clinician floor is deterministic IN BOTH DIRECTIONS — a conductor cannot self-attest it away, and
 cannot self-attest INTO it either (`clinicianFloorHolds`, `src/brain/autonomy.ts`: a specialist's
 `autonomy_ceiling:'clinician'` or a conductor's `risk_class:'clinical'` over a non-clinical change
-tightens to an ask at most). See `docs/ELITE-BRAIN-IMPLEMENTATION.md`.
+tightens to an ask at most). An act-now health finding gates only a revision that acts on what it
+governs — same domain and named area, or the revision names the marker (`clinicalAutonomyFromRevision`,
+`src/domain/brain/conference-conflicts.ts`) — so a lipid finding never clinician-gates a squat hold.
+See `docs/ELITE-BRAIN-IMPLEMENTATION.md`.
 
 **Agent selection.** Callers name an agent or pass `agent:"auto"` / omit it. Auto uses
 `repo.pickAgentOrder()` (strategy in `settings`: `round_robin` default / `random` / `priority`) and

@@ -249,6 +249,18 @@ export const DAY_READ_OUTCOMES = {
       "Easy mornings have been becoming real work for you recently, and coming out fine.",
     ],
   },
+  // The LONG loop (owner ruling, 2026-09-22): a MATURE "you train anyway, and it costs
+  // you nothing" pattern — six weeks, not ten days — may move a non-floor rest or easy
+  // read straight to "train, with the caveat". Every health, safety, rest-grade, injury
+  // and acute-gate floor stays out of its reach (see day-read.ts).
+  learned_train_anyway: {
+    code: "learned_train_anyway",
+    reasons: [
+      "You've trained through reads like this for weeks and it has held up — with the caveat that today's quieter signals still stand.",
+      "Weeks of mornings like this became training days and went fine; back off if today feels different.",
+      "Training through quiet reads has worked well for you for a while — one caveat: ease off if it doesn't feel right.",
+    ],
+  },
 } as const satisfies Record<string, DayReadRuleOutcome>;
 
 // The athlete-facing `why` for each deterministic read, in several calm phrasings
@@ -403,6 +415,14 @@ export const OUTCOME_FEEDBACK_OPEN_WHY: readonly string[] = [
   "The last handful of days like this turned into real training and held up — so today reads as a training day.",
   "You've been turning these into proper sessions lately and coming out fine, so today's open for one.",
   "Easy mornings have been becoming real work for you and it's been landing, so today can be a session rather than a stroll.",
+];
+// The long loop's sentence. It opens the day AND keeps the caveat in the same breath:
+// the quiet read's signals have not gone away, the athlete's weeks of evidence simply
+// outrank them — so the day is a suggestion to train that still says what to watch.
+export const LEARNED_TRAIN_WHY: readonly string[] = [
+  "You've trained through mornings like this for weeks and come out fine, so today reads as a training day — with the caveat that the quieter signals are still there, so ease off if it doesn't feel right.",
+  "Weeks of training through reads like this one have held up, so today's a session — one caveat: the signals asking for a quieter day haven't gone away, so back off if the warm-up feels flat.",
+  "Mornings like this have been training days for you for a while now, and they've gone well — so train, with the caveat that today's quieter signals are still on the board; keep an eye on how it lands.",
 ];
 // …and the sentence for the morning that pattern does NOT get to open. It is appended
 // to the winning rule's own `why` — the rule still says what today is about, and this
@@ -645,6 +665,13 @@ export const ANTICIPATE_DELOAD_CAVEAT: readonly string[] = [
   "recovery's running under where it usually sits, and a reset is probably only a few hard days away",
   "recovery's been trending a touch low, so a lighter week may be closer than it looks",
 ];
+// Fueling ADVICE after heavy endurance work in a cut (the advice-only hybrid_fuel
+// observation): it holds nothing back, it rides the caveat run.
+export const FUEL_AROUND_TRAINING_CAVEAT: readonly string[] = [
+  "the recent endurance work asks for fuel around the session, so get some carbs in before and after",
+  "with the running adding up, eat around today's session, carbs before and a proper meal after",
+  "fuel the work today: some carbs beforehand and a real meal after, given the endurance load",
+];
 export const VOLUME_SPIKE_CAVEAT: readonly string[] = [
   "your running's ramped this week, so keep today's miles easy and don't pile on hard intensity",
   "the running's climbed this week, so keep today's miles gentle rather than stacking more intensity on top",
@@ -723,6 +750,7 @@ export const DAY_READ_CAVEAT_VARIANTS: Readonly<Record<string, readonly string[]
   "planned_training:ease_around": EASE_AROUND_CAVEAT,
   "planned_training:anticipate_deload": ANTICIPATE_DELOAD_CAVEAT,
   "planned_training:volume_spike": VOLUME_SPIKE_CAVEAT,
+  "planned_training:fuel_around": FUEL_AROUND_TRAINING_CAVEAT,
   "planned_training:stacked_days": STACKED_DAYS_CAVEAT,
   "planned_training:low_sleep": LOW_SLEEP_CAVEAT,
   "planned_training:sleep_exposure": SLEEP_EXPOSURE_CAVEAT,
@@ -740,6 +768,7 @@ export const DAY_READ_CAVEAT_CONCEPT: Readonly<Record<string, RegExp>> = {
   "planned_training:ease_around": /\beas(?:e|ing) around\b/i,
   "planned_training:anticipate_deload": /\brecovery(?:'s)?\b/i,
   "planned_training:volume_spike": /\b(?:running|miles)\b/i,
+  "planned_training:fuel_around": /\b(?:fuel|eat|carbs)\b/i,
   // The idea is the RUN OF DAYS itself, so the probe names the ways a variant may say
   // it. A bare /\bdays\b/ would pass on almost any sentence in this file and register
   // nothing.
@@ -1078,6 +1107,7 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   chronic_sleep_watch: CHRONIC_SLEEP_WHY,
   outcome_feedback_soften: OUTCOME_FEEDBACK_SOFTEN_WHY,
   outcome_feedback_open: OUTCOME_FEEDBACK_OPEN_WHY,
+  learned_train_anyway: LEARNED_TRAIN_WHY,
   // Not rule codes — SENTENCES appended to whichever rule kept the day, exactly as the
   // signal-voice keys below are not rule codes either. Registered here so the
   // constitution guards (grammar, several phrasings, a declared meaning) hold over both
@@ -1158,6 +1188,11 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // own recent mornings AND how they turned out. A phrasing that keeps the history and
   // drops the outcome would be opening the day on a hunch.
   outcome_feedback_open: /\b(?:sessions?|training|work)\b(?=[\s\S]*\b(?:well|held up|landing|fine)\b)/i,
+  // Three parts: the history, how it turned out, AND the caveat. A phrasing that opens
+  // the day without saying what still stands is the long loop overruling a signal it
+  // was only allowed to outweigh.
+  learned_train_anyway:
+    /\b(?:trained|training)\b(?=[\s\S]*\b(?:fine|well|held up)\b)(?=[\s\S]*\b(?:caveat|ease off|back off)\b)/i,
   // The whole point of these sentences is WHOSE word held the day. A phrasing that stops
   // crediting the athlete's own account is an unexplained refusal to move. The symptom
   // arm additionally may not claim a check-in, which its own case pins.

@@ -153,6 +153,7 @@ const BRAIN = [
   "signal_state",
   "recent_decisions",
   "whole_person_trajectory",
+  "road_ahead",
   "insights",
   "day_read",
   "next_step",
@@ -237,7 +238,10 @@ export const PROMPT_CONTEXT_SITES = {
   // has lived in the prose bullet alone (HOW TO EVOLVE), which gave the model something
   // to remember and nothing to check itself against; this gives it the actual week.
   // Deliberately NOT on the coach site: that prompt nudges loads inside a fixed shape.
-  program_evolution: { ...PLAN_SITE, keys: [...PLAN_SITE.keys, "week_layout"] },
+  //
+  // …and `road_ahead`: an evolution is the place the next milestone per goal, in the
+  // block's own priority order, becomes next week's plan.
+  program_evolution: { ...PLAN_SITE, keys: [...PLAN_SITE.keys, "week_layout", "road_ahead"] },
 
   // The FIRST week, composed from nothing. Plan-shaping like its two siblings above,
   // but the thing it is shaping does not exist yet, so the read layer that exists to
@@ -482,6 +486,8 @@ export const PROMPT_CONTEXT_SITES = {
       ...RECOVERY,
       "recent_decisions",
       "whole_person_trajectory",
+      // The forward half: the prompt asks for one step toward the nearest milestone.
+      "road_ahead",
       "insights",
       "next_step",
     ],
@@ -540,8 +546,41 @@ export const PROMPT_CONTEXT_SITES = {
   // (no CONTEXT_GUARDRAILS here), fuel detail (it sketches training shape, not meals),
   // garmin, signal_state, day_read, recent_decisions, insights.
   week_ahead: {
-    keys: [...PERSON, ...TRAINING_FULL, ...ENDURANCE, ...HEALTH_CORE, ...RECOVERY, "coaching_focus"],
+    keys: [...PERSON, ...TRAINING_FULL, ...ENDURANCE, ...HEALTH_CORE, ...RECOVERY, "coaching_focus", "road_ahead"],
     sessions: SESSIONS_RECENT,
+  },
+
+  // The multidisciplinary case conference — the SPECIALISTS' and conductor's shared
+  // snapshot (createImmutableBrainSnapshot bounds it to 50 keys, which the whole
+  // ~75-key context silently overran, dropping signal_state, health_focus and the
+  // directives). `road_ahead` leads so every specialist names its next step toward the
+  // same milestones in the same priority order; the rest is the whole person in the
+  // condensed form: who they are, the training and endurance reads, fuel, the condensed
+  // health reads, recovery and the brain's own arbitration.
+  case_conference: {
+    keys: [
+      "road_ahead",
+      ...PERSON,
+      ...TRAINING_CORE,
+      "strength_journey",
+      "trajectory",
+      "endurance_goal",
+      "endurance_schedule",
+      "race_build",
+      "run_plan",
+      "day_intake",
+      "fueling",
+      "underfueling",
+      "cut_quality",
+      ...HEALTH_CORE,
+      ...RECOVERY,
+      "coaching_focus",
+      "signal_state",
+      "recent_decisions",
+      "whole_person_trajectory",
+    ],
+    // Full set rows: the strength coach proposes loads off the working sets.
+    sessions: SESSIONS_MINIMAL,
   },
 } as const satisfies Record<string, PromptSiteSpec>;
 

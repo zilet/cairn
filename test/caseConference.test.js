@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   citedConflictResolutions,
+  clinicalAutonomyFromRevision,
+  conferenceConflictInputs,
   deterministicConferenceConflicts,
   runCaseConference,
 } from "../dist/domain/brain/case-conference.js";
@@ -108,7 +110,7 @@ const clinicalContext = () => ({
   health_focus: {
     priorities: [],
     surfaced: [],
-    lead: { group: "Iron & Blood", tier: "act_now", flagged: true },
+    lead: { group: "Iron & Red Blood", tier: "act_now", flagged: true, markers: ["Ferritin"] },
     act_now: 1,
     track: 0,
   },
@@ -660,11 +662,11 @@ test("a symptom read that finds nothing is not the same as one that never looked
 
 // ---- the clinical lever's second arm ----------------------------------------
 
-test("an act-now clinical finding plus a proposed revision is a clinical conflict without a directive row", async () => {
+test("an act-now finding gates a revision that names its marker, even without a directive row", async () => {
   seedPlan();
   repo.setSettings({ lead_mode: "lead" });
   // A flagged marker whose propagation produced only a `watch` row — no
-  // training/nutrition directive exists, but the brain is about to change training.
+  // training/nutrition directive exists, but the change is ABOUT the finding.
   const watchOnly = () => ({
     ...clinicalContext(),
     directives: [{ domain: "watch", marker: "Ferritin", directive: "Recheck ferritin with your doctor." }],
@@ -682,17 +684,96 @@ test("an act-now clinical finding plus a proposed revision is a clinical conflic
           domain: "training",
           revision: {
             type: "plan_update",
-            summary: "Small bench step",
+            summary: "Hold bench while ferritin recovers",
             changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
           },
         }),
     }
   );
-  assert.ok(result.conflicts.includes("clinical_autonomy"), "the revision itself is the lever");
+  assert.ok(result.conflicts.includes("clinical_autonomy"), "a change that names the finding acts on it");
   assert.deepEqual(result.unresolved_conflicts, ["clinical_autonomy"]);
   assert.equal(result.decision.risk_class, "clinical");
   assert.equal(result.decision.autonomy_tier, "clinician");
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
+});
+
+// Live shape (conference 27087): a lipid act-now finding clinician-gated a squat-load
+// hold it has nothing to say about. The floor is RELEVANCE, not co-occurrence.
+const lipidContext = () => ({
+  ...healthyContext(),
+  health_focus: {
+    priorities: [{ group: "Lipids & Cardiovascular", tier: "act_now", markers: ["LDL-C", "Apolipoprotein B (ApoB)"] }],
+    surfaced: [],
+    lead: { group: "Lipids & Cardiovascular", tier: "act_now", flagged: true, markers: ["LDL-C"] },
+    act_now: 1,
+    track: 0,
+  },
+  directives: [
+    { domain: "nutrition", marker: "LDL-C", directive: "Swap saturated fat for unsaturated oils and add soluble fiber." },
+    { domain: "training", marker: "HRV", directive: "Favor easy aerobic work while HRV is low.", uncertain: 1 },
+  ],
+});
+
+test("a lipid act-now finding does not clinician-gate a training-load hold", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const result = await runCaseConference(
+    "stub",
+    { question: "Reconcile the next bounded revision.", domains: ["training"] },
+    {
+      context: lipidContext,
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "announce" }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          revision: {
+            type: "plan_update",
+            summary: "Hold bench load through the block",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 115, reason: "hold" }],
+          },
+        }),
+    }
+  );
+  assert.ok(!result.conflicts.includes("clinical_autonomy"), "a lipid finding governs no bench load");
+  assert.notEqual(result.decision.autonomy_tier, "clinician");
+  assert.notEqual(result.decision.risk_class, "clinical");
+  assert.equal(getBrainDecision(result.recorded_decision_id).context.deterministic_clinical, false);
+});
+
+test("an act-now finding still gates a revision that acts on what its directive governs", () => {
+  const anemia = {
+    ...clinicalContext(),
+    directives: [
+      { domain: "training", marker: "Ferritin", directive: "Keep endurance volume modest until iron recovers." },
+    ],
+  };
+  const inputs = conferenceConflictInputs(anemia);
+  const endurance = {
+    type: "plan_update",
+    summary: "Build the long run",
+    changes: [{ day_number: 6, exercise: "Long Run", target_distance_km: 18 }],
+  };
+  const lifting = {
+    type: "plan_update",
+    summary: "Small bench step",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
+  };
+  assert.equal(clinicalAutonomyFromRevision(inputs, endurance), true, "endurance volume is what it governs");
+  assert.equal(clinicalAutonomyFromRevision(inputs, lifting), false, "a bench step is not");
+  assert.equal(clinicalAutonomyFromRevision(inputs, null), false, "advice changes nothing");
+  // The lipid fixture's nutrition directive names fat and fiber: a fueling change that
+  // sets fat acts on it; the uncertain HRV row is never a lever.
+  const lipid = conferenceConflictInputs(lipidContext());
+  assert.equal(lipid.clinicalLevers.length, 1, "the uncertain HRV directive is not a lever");
+  const fueling = (fat) => ({
+    type: "nutrition_target",
+    summary: "Adjust fueling",
+    nutrition: { target_kcal: 2300, protein_g: 175, carbs_g: null, fat_g: fat, delta_kcal: 0 },
+    notes: null,
+  });
+  assert.equal(clinicalAutonomyFromRevision(lipid, fueling(60)), true);
+  assert.equal(clinicalAutonomyFromRevision(lipid, fueling(null)), false);
+  assert.equal(clinicalAutonomyFromRevision(lipid, { ...lifting, summary: "Hold bench while ApoB is rechecked" }), true);
 });
 
 test("an advice-only conference over the same finding is not forced to clinician", async () => {
@@ -799,7 +880,7 @@ test("a conductor cannot self-attest away the clinical floor", async () => {
           ],
           revision: {
             type: "plan_update",
-            summary: "Small bench change",
+            summary: "Small bench change while ferritin recovers",
             changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120, reason: "earned" }],
           },
         }),

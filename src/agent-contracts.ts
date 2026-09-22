@@ -427,6 +427,16 @@ export const INSIGHT_SCHEMA: JsonSchema = {
     text: { type: ["string", "null"] },
     rationale: { type: ["string", "null"] },
     next_step: { type: ["string", "null"] },
+    // The weekly read only: the nearest milestone and the one move this week toward
+    // it. generateInsight reads both fields, so both are named.
+    milestone_step: {
+      type: ["object", "null"],
+      additionalProperties: true,
+      properties: {
+        milestone: { type: "string" },
+        step: { type: "string" },
+      },
+    },
     connection: {
       type: ["object", "null"],
       additionalProperties: true,

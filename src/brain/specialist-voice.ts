@@ -15,6 +15,7 @@ import { clipText } from "../repo/shared.js";
 // SpecialistDomain so the label tracks whatever the conference actually stored.
 const SPECIALIST_VOICE: Record<SpecialistDomain, string> = {
   training: "Strength coach",
+  endurance: "Endurance coach",
   nutrition: "Nutrition lead",
   health: "Lab reader",
   recovery: "Recovery lead",
