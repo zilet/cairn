@@ -53,9 +53,9 @@ test("a non-today cache miss computes inline through the canonical lane, not the
 
   const read = await readToday({ date: pastDate });
 
-  // writeAgentlessDayRead's fallback object carries neither field — only the full
-  // computeDayRead agent attempt (the canonical lane) stamps them, offline or not.
-  assert.equal(typeof read.agent, "string", "the inline canonical compute actually asked an agent");
+  // writeAgentlessDayRead's fallback object never carries `tried` — only the full
+  // computeDayRead agent attempt (the canonical lane) stamps it, even when no agent is
+  // usable on this host (then `tried` is empty and `agent` is unset, as on a CI runner).
   assert.ok(Array.isArray(read.tried), "the canonical lane's attempted-agent list is present");
   assert.notEqual(read.cached, true, "a first compute is not served from cache");
 
