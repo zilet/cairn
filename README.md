@@ -35,6 +35,15 @@ on your own hardware, keeps your data in a SQLite file you own, and never scores
   a thin logging week lowers confidence instead of scolding. `change: false` is the common answer.
 - **Lifting and running plans that evolve.** Earned overloads, deloads where you stalled, a
   conservative ramp and taper toward a race — adapting to the work you actually did.
+- **It reads you against your own normal.** Recovery is judged against your own habitual load and
+  your own wearable baselines, and a reading only speaks for the night it came from — a hybrid
+  athlete's running is not mistaken for permanent fatigue, and a missing night says nothing.
+- **A coaching team, not a single voice.** Strength, endurance, nutrition, physio and an
+  informational health seat each name the next step toward your milestones, reconciled by the
+  priority order you set, in a quiet weekly team review you read when you want it.
+- **Conditions you live with shape the plan, never gate it.** Tell it about a painless structural
+  condition (a spinal curve, a stiff ankle) and plans stay balanced and whole, with optional
+  supportive work — informational, and a physiotherapist can tailor it.
 - **Your lifts show up on your watch.** Garmin sync is two-way: sleep, HRV and activities come in,
   and a finished strength session goes back out as that day's exercise sets — written onto the
   watch's own recording when there is one, in Garmin's own exercise vocabulary. Your whole history
@@ -148,6 +157,7 @@ one up.
 | Recovery view, deterministic TDEE / expenditure | Recipe generation, single-meal swaps |
 | Activities, food notes, memory, family, life context | Background enrichment of free-text logs |
 | Endurance stats, run compliance, race countdown, PRs | Agent-refined weekly run prescriptions |
+| Movement considerations, strength milestones and fit words | The weekly team review (one step per milestone) |
 
 A **coaching agent** means one of the supported CLIs — **Claude Code**, **Codex**,
 **Antigravity**, or **Grok** — installed into Cairn's persistent home volume **and logged in** with
