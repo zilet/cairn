@@ -53,10 +53,13 @@ test("a non-today cache miss computes inline through the canonical lane, not the
 
   const read = await readToday({ date: pastDate });
 
-  // writeAgentlessDayRead's fallback object never carries `tried` — only the full
-  // computeDayRead agent attempt (the canonical lane) stamps it, even when no agent is
-  // usable on this host (then `tried` is empty and `agent` is unset, as on a CI runner).
-  assert.ok(Array.isArray(read.tried), "the canonical lane's attempted-agent list is present");
+  // writeAgentlessDayRead's floor carries none of these — only the full computeDayRead
+  // agent attempt (the canonical lane) stamps one: `tried` when an agent was asked, or
+  // `error`/`agent_issue` when no agent is usable on this host (a CI runner has no CLI).
+  assert.ok(
+    Array.isArray(read.tried) || read.agent_issue != null || read.error != null,
+    "the canonical lane's agent attempt left its mark"
+  );
   assert.notEqual(read.cached, true, "a first compute is not served from cache");
 
   // The persisted row reflects the same canonical compute, not a bare floor stuck
