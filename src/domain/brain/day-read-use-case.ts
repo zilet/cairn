@@ -3,8 +3,10 @@ import { db } from "../../db.js";
 import {
   computeCanonicalDayRead,
   computeDayRead,
+  dayReadFactsMoved,
   dayReadProseConsistencyIssue,
   localToday,
+  writeAgentlessDayRead,
 } from "../../dayread.js";
 import { ensureDayReadRefresh, scheduleDayReadRefresh } from "../../dayread-refresh.js";
 import {
@@ -12,9 +14,9 @@ import {
   dayReadHeadline,
   dayReadPeriodizationContext,
   dayReadProseIdentity,
+  discardDayRead,
   forwardLook,
   getCachedDayRead,
-  invalidateDayRead,
   replaceStaleDayReadOverride,
   saveDayRead,
   type DayReadDecision,
@@ -277,7 +279,9 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
 
   try {
     if (reset) {
-      invalidateDayRead(readDate);
+      // A real delete, not the stale mark: the pin must not answer a new read with the
+      // sentence the athlete just asked to replace.
+      discardDayRead(readDate);
       // force: this is the athlete asking for a new read, so it must not be answered
       // with a run that started before their invalidation — but it still joins the
       // canonical lane, so opens arriving behind it share this one agent call.
@@ -290,8 +294,12 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
     }
 
     if (!override) {
-      const cached = getCachedDayRead(readDate);
-      if (cached) {
+      // Stale rows included: an invalidation marks the sentence rather than deleting
+      // it, and this is where it is reconciled — material truth retires it, the same
+      // call re-stamps it (see invalidateDayRead).
+      const row = getCachedDayRead(readDate, { includeStale: true });
+      if (row) {
+        const { stale, ...cached } = row;
         // A curated read is authored, not derived — its illustrative signals can
         // never match a live recompute, so every reconciliation below would fire
         // and replace the hand-written Brief with the deterministic floor on the
@@ -310,21 +318,6 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
         // Recheck only the deterministic temporal fact before serving the row so
         // a completed run can never show "Start session" from a stale morning read.
         const live = dayRead(readDate);
-        const liveLogged = live?.signals?.logged_today as { sets?: unknown; activities?: unknown[] } | undefined;
-        const cachedLogged = cached?.signals?.logged_today as { sets?: unknown; activities?: unknown[] } | undefined;
-        const liveHasWork =
-          Number(liveLogged?.sets ?? 0) > 0 ||
-          (Array.isArray(liveLogged?.activities) && liveLogged.activities.length > 0);
-        const cachedHasWork =
-          Number(cachedLogged?.sets ?? 0) > 0 ||
-          (Array.isArray(cachedLogged?.activities) && cachedLogged.activities.length > 0);
-        const liveLoad = String(live?.signals?.today_load ?? "");
-        const cachedLoad = String(cached?.signals?.today_load ?? "");
-        const loadClassificationChanged = !!liveLoad && !!cachedLoad && liveLoad !== cachedLoad;
-        const trainedFactChanged =
-          typeof cached?.signals?.trained_today === "boolean" &&
-          Boolean(live?.signals?.trained_today) !== Boolean(cached.signals.trained_today);
-        const completionChanged = (live.kind === "done") !== (cached.kind === "done");
         const proseContradiction = dayReadProseConsistencyIssue(cached, live?.signals);
         const fingerprintChanged =
           typeof cached.input_fingerprint !== "string" || cached.input_fingerprint !== live.input_fingerprint;
@@ -340,22 +333,11 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
           typeof cached.prose_identity === "string"
             ? cached.prose_identity !== dayReadProseIdentity(readDate, live)
             : String(cached.decision?.baseline_kind ?? cached.kind ?? "") !== String(live.kind ?? "");
-        // Fuel bucket flip (e.g. a lunch that moved protein from behind → on_pace
-        // after the morning read cached "protein's light so far"). Only a real flip
-        // between two PRESENT buckets counts — a cached row from before this signal
-        // existed (pre-deploy) has no fuel key, and must NOT churn the whole cache on
-        // deploy, so a missing side is treated as no-change.
-        const liveFuel = (live?.signals?.fuel as { bucket?: unknown } | undefined)?.bucket;
-        const cachedFuel = (cached?.signals?.fuel as { bucket?: unknown } | undefined)?.bucket;
-        const fuelBucketChanged = liveFuel != null && cachedFuel != null && liveFuel !== cachedFuel;
+        // Completion, work landing, the load grade, the trained flag, and a fuel bucket
+        // flip (a lunch that moved protein from behind → on_pace after the morning read
+        // cached "protein's light so far") — the list the prose pin checks too.
         const materialTruthChanged =
-          completionChanged ||
-          liveHasWork !== cachedHasWork ||
-          loadClassificationChanged ||
-          trainedFactChanged ||
-          fuelBucketChanged ||
-          proseContradiction != null ||
-          identityChanged;
+          dayReadFactsMoved(cached, live) || proseContradiction != null || identityChanged;
         if (materialTruthChanged) {
           const factual = {
             ...live,
@@ -394,8 +376,9 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
         // already reading and re-stamp the row against the fresher evidence — exactly
         // what computeDayRead's prose pin does, done inline because it needs no agent
         // and no timer. That is the whole change: this path used to write floor prose
-        // over the morning's wording and arm yet another agent run.
-        if (fingerprintChanged && !cached.override) {
+        // over the morning's wording and arm yet another agent run. A stale row whose
+        // inputs happen to match is re-stamped too, which is what clears the mark.
+        if ((fingerprintChanged || stale) && !cached.override) {
           const stampedAt = new Date().toISOString();
           const restamped = {
             ...cached,
@@ -436,14 +419,21 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
       }
     }
 
-    // The cache-miss path. Every invalidation leaves the cache cold, so a burst of
-    // opens against one cleared row used to spawn one agent run EACH (plus the
-    // background re-warm's). The canonical read now has one lane per date; a steered
-    // read is transient and never cached, so it keeps its own run.
-    const read = override
-      ? await computeDayRead({ date, override, agent, priority: "interactive" })
-      : await computeCanonicalDayRead({ date, agent, priority: "interactive" });
-    if (recordOutcome) recordDayReadSuggestion(readDate, read, override ?? null);
+    // A steered read is transient and never cached, so it keeps its own agent run —
+    // the athlete asked for it, and the PWA sends it as a background job anyway.
+    if (override) {
+      const read = await computeDayRead({ date, override, agent, priority: "interactive" });
+      if (recordOutcome) recordDayReadSuggestion(readDate, read, override);
+      return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
+    }
+    // The canonical cache miss never waits on an agent. It used to await the
+    // canonical lane inline, so an open landing between an invalidation and its
+    // re-warm sat 5-15 s on a spinner. The deterministic floor is a real read: serve
+    // it now, persisted like any floor, and let the self-heal re-warm (or a run already
+    // in flight) write the agent's sentence behind it.
+    const read = writeAgentlessDayRead(readDate);
+    ensureDayReadRefresh(readDate);
+    if (recordOutcome) recordDayReadSuggestion(readDate, read, null);
     return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
   } catch (e: any) {
     const fallback = dayRead(date);

@@ -233,6 +233,37 @@ export function dayReadProseConsistencyIssue(
   return null;
 }
 
+// ---------- the facts a cached sentence must still agree with ----------
+// The one list of day facts whose change retires a cached sentence even when the
+// deterministic call did not move: completion, work landing (or leaving), the day's
+// load grade, the trained flag, and a fuel bucket flip. readToday's material-truth
+// recheck and computeDayRead's prose pin both ask it, so a background re-warm can no
+// longer re-stamp a morning sentence over a change the next open would have caught.
+// A side missing a load grade or fuel bucket (a row from before the signal existed)
+// counts as no change, so a deploy never churns the whole cache.
+export function dayReadFactsMoved(
+  cached: { kind?: unknown; signals?: Record<string, any> | null },
+  live: { kind?: unknown; signals?: Record<string, any> | null }
+): boolean {
+  const hasWork = (signals: Record<string, any> | null | undefined) => {
+    const logged = signals?.logged_today as { sets?: unknown; activities?: unknown[] } | undefined;
+    return Number(logged?.sets ?? 0) > 0 || (Array.isArray(logged?.activities) && logged.activities.length > 0);
+  };
+  const c = cached?.signals ?? {};
+  const l = live?.signals ?? {};
+  const liveLoad = String(l.today_load ?? "");
+  const cachedLoad = String(c.today_load ?? "");
+  const liveFuel = (l.fuel as { bucket?: unknown } | undefined)?.bucket;
+  const cachedFuel = (c.fuel as { bucket?: unknown } | undefined)?.bucket;
+  return (
+    (live?.kind === "done") !== (cached?.kind === "done") ||
+    hasWork(l) !== hasWork(c) ||
+    (!!liveLoad && !!cachedLoad && liveLoad !== cachedLoad) ||
+    (typeof c.trained_today === "boolean" && Boolean(l.trained_today) !== c.trained_today) ||
+    (liveFuel != null && cachedFuel != null && liveFuel !== cachedFuel)
+  );
+}
+
 // Completion is a server-owned fact IN BOTH DIRECTIONS — the agent may voice a
 // DONE day warmly, but it can neither downgrade a completed day back into a
 // recommendation NOR claim "done" on a day the deterministic baseline says is
@@ -529,8 +560,11 @@ function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {
 // Returns null when the cached row cannot carry the day's wording, in which case the
 // caller runs the ordinary agentic compute.
 export function pinnedDayReadProse(date: string, baseline: any, identity: string, cachedRow?: any): any | null {
-  const cached = cachedRow === undefined ? getCachedDayRead(date) : cachedRow;
-  if (!cached || cached.curated) return null;
+  // A stale row is exactly what the pin exists for: an invalidation marks it rather
+  // than deleting it so the same call can keep its sentence here.
+  const row = cachedRow === undefined ? getCachedDayRead(date, { includeStale: true }) : cachedRow;
+  if (!row || row.curated) return null;
+  const { stale: _stale, ...cached } = row;
   // Floor prose is a transient outage artifact, not the day's wording: leave the
   // self-heal path (ensureDayReadRefresh) free to replace it with an agent sentence.
   if (cached.source !== "agent") return null;
@@ -540,6 +574,9 @@ export function pinnedDayReadProse(date: string, baseline: any, identity: string
   // Same call, but the sentence must still not contradict the fresher signals it is
   // about to be re-stamped against (a completed hard session described as easy).
   if (dayReadProseConsistencyIssue(cached, baseline?.signals)) return null;
+  // …nor may it outlive a fact readToday would have retired it for (work landed, the
+  // load grade or the fuel bucket moved) — the re-warm usually beats the next open.
+  if (dayReadFactsMoved(cached, baseline)) return null;
   const computedAt = decisionAt();
   return {
     ...cached,
@@ -582,7 +619,7 @@ export async function computeDayRead(
   let out: any;
   // The pin, above the agent call: a same-identity recompute re-stamps the wording
   // the athlete already read instead of paying for — and printing — a new sentence.
-  const cached = override?.trim() ? null : getCachedDayRead(resolvedDate);
+  const cached = override?.trim() ? null : getCachedDayRead(resolvedDate, { includeStale: true });
   const pinned = override?.trim() ? null : pinnedDayReadProse(resolvedDate, baseline, identity, cached);
   // The clamps still run over the pinned row (they are identity-preserving by
   // construction, and a safety floor must never be skipped because the wording is old).
@@ -801,13 +838,25 @@ export function sleepRowExistsFor(date: string): boolean {
 // morning open instant, and because it is floor prose the open's self-heal path
 // (ensureDayReadRefresh) asks the agent once the real evidence is in. Never throws.
 export function precomputeDayReadFloor(date?: string): void {
-  const resolvedDate = date || localToday();
   try {
-    const baseline = dayRead(resolvedDate);
-    finishDayRead(
-      { ...baseline, headline: dayReadHeadline(baseline, resolvedDate), source: "deterministic" },
-      baseline,
-      { date: resolvedDate, identity: dayReadProseIdentity(resolvedDate, baseline) }
-    );
+    writeAgentlessDayRead(date);
   } catch (err) { log.warn("[brief] deterministic floor warm failed", { error: err }); }
+}
+
+// The day's read with no agent asked, clamped and persisted exactly as a computed
+// read would be, and returned: the sentence already written for this call when the
+// pin holds (an invalidation leaves it behind as a stale row, and a floor warm must
+// not overwrite it — that is prose kept, not prose written blind), otherwise the
+// deterministic floor. The floor warm above uses it, and so does the Brief's
+// cache-miss open, which serves it at once while the re-warm asks the agent.
+export function writeAgentlessDayRead(date?: string): any {
+  const resolvedDate = date || localToday();
+  const baseline = dayRead(resolvedDate);
+  const identity = dayReadProseIdentity(resolvedDate, baseline);
+  const read = pinnedDayReadProse(resolvedDate, baseline, identity) ?? {
+    ...baseline,
+    headline: dayReadHeadline(baseline, resolvedDate),
+    source: "deterministic",
+  };
+  return finishDayRead(read, baseline, { date: resolvedDate, identity });
 }

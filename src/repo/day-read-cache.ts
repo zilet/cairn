@@ -24,7 +24,12 @@ import {
 // few events that materially change the read invalidate the affected day, and
 // the next open recomputes once and re-caches. See src/dayread.ts for the
 // agentic compute + write path that wraps the deterministic dayRead() above.
-export function getCachedDayRead(date: string): any | null {
+//
+// A row an invalidation marked STALE (see invalidateDayRead) is invisible by default,
+// so every consumer that treats the cache as current truth sees exactly what the old
+// delete gave it: nothing. Only the two paths that reconcile the row against a live
+// read before serving it — readToday and computeDayRead's prose pin — ask for it.
+export function getCachedDayRead(date: string, opts: { includeStale?: boolean } = {}): any | null {
   const row = db.prepare(`SELECT * FROM day_reads WHERE date = ?`).get(date) as any;
   if (!row) return null;
   let signals: any = {};
@@ -37,6 +42,8 @@ export function getCachedDayRead(date: string): any | null {
   if (signals && typeof signals === "object") delete signals._day_read_meta;
   const computedAt = String(row.computed_at ?? "").replace(" ", "T");
   const normalizedComputedAt = computedAt && !/[zZ]|[+-]\d\d:\d\d$/.test(computedAt) ? `${computedAt}Z` : computedAt;
+  const stale = meta.stale === true;
+  if (stale && !opts.includeStale) return null;
   const decision = meta.decision ?? undefined;
   return {
     kind: row.kind,
@@ -55,6 +62,7 @@ export function getCachedDayRead(date: string): any | null {
     // so such a row simply recomputes once and then carries one.
     prose_identity: typeof meta.prose_identity === "string" ? meta.prose_identity : undefined,
     curated: meta.curated === true,
+    ...(stale ? { stale: true } : {}),
     computed_at: decision?.computed_at ?? (normalizedComputedAt || undefined),
   };
 }
@@ -73,7 +81,7 @@ function writeDayRead(date: string, read: any, expectedStaleOverride?: CachedOve
   // illustrative, so no fingerprint the live DB produces will ever match it; left
   // to the ordinary rules it gets overwritten by the deterministic floor on the
   // first open. It is pinned instead: only an explicit invalidateDayRead() (which
-  // deletes the row outright) retires it.
+  // deletes a curated row outright) retires it.
   const curated = read.curated === true;
   const existing = getCachedDayRead(date);
   if (existing?.curated && !curated) return false;
@@ -207,7 +215,7 @@ function reopenJudgedDay(d: string): void {
 }
 
 // The same invalidation, but only when the write could actually have changed what
-// today should be. `invalidateDayRead` DELETES the row unconditionally, so a
+// today should be. `invalidateDayRead` used to DELETE the row unconditionally, so a
 // six-hourly watch sync (or a re-sync writing byte-identical numbers) destroyed the
 // warm agentic read before the narrowed decision fingerprint was ever consulted —
 // the serve-time comparison wave 1 built could not run on a row that no longer
@@ -275,11 +283,65 @@ export function invalidateDayReadIfDecisionChanged(date?: string): boolean {
   return true;
 }
 
+// ---------- invalidation keeps the wording, drops the authority ----------
+// An invalidation used to DELETE the row. That left ONE WORDING PER MORNING PER
+// IDENTITY nothing to hold on to: every meal log, feedback tap or plan edit threw the
+// agent's sentence away, the re-warm found no cached prose to pin, and the Brief was
+// re-authored by an agent 12-20 times a day about a day whose call had not changed.
+//
+// So a row carrying agent prose is marked STALE instead. getCachedDayRead hides it
+// from every consumer that reads the cache as current truth (they see what the delete
+// gave them), while the two reconciling paths still find the sentence: readToday
+// re-checks it against the live read (material truth → floor + re-warm, same call →
+// re-stamp), and computeDayRead's pin keeps it when the identity has not moved. Any
+// save rewrites the row's meta, which clears the mark.
+//
+// Rows with no wording worth keeping are still deleted: floor prose (the self-heal
+// path replaces it anyway), an athlete's steer (a material write has always cleared
+// it), and a curated read (an explicit invalidation is what retires it).
+function staleOrDeleteDayRead(d: string): void {
+  const cached = getCachedDayRead(d, { includeStale: true });
+  const keepsWording =
+    !!cached &&
+    cached.source === "agent" &&
+    !cached.override &&
+    !cached.curated &&
+    typeof cached.why === "string" &&
+    !!cached.why.trim();
+  if (keepsWording) {
+    try {
+      const marked = db
+        .prepare(
+          `UPDATE day_reads SET signals = json_set(signals, '$._day_read_meta.stale', json('true'))
+            WHERE date = ? AND signals IS NOT NULL`
+        )
+        .run(d);
+      if (Number(marked.changes) === 1) return;
+    } catch { /* unparseable signals cannot carry the mark — fall through to the delete */ }
+  }
+  db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(d);
+}
+
 export function invalidateDayRead(date?: string): void {
   const d = date || localDateISO();
   try {
-    db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(d);
+    staleOrDeleteDayRead(d);
   } catch { /* nothing cached for that date is the outcome invalidation wanted */ }
+  afterDayReadInvalidation(d);
+}
+
+// The athlete's explicit "new read" (readToday's reset). The one invalidation that
+// must NOT leave the sentence behind: a new read answered with the pinned old wording
+// is no new read at all.
+export function discardDayRead(date?: string): void {
+  const d = date || localDateISO();
+  try {
+    db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(d);
+  } catch { /* nothing cached for that date is the outcome a discard wanted */ }
+  afterDayReadInvalidation(d);
+}
+
+function afterDayReadInvalidation(d: string): void {
   // Fresh-wake: schedule a debounced, coalesced, fire-and-forget background
   // recompute so the athlete's next open serves a warm agentic read instead of
   // paying the ~90s agent run inline. Best-effort + off the write path — it only

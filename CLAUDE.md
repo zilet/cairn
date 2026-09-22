@@ -355,7 +355,11 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   identity change, the athlete's explicit new read, or floor prose (the self-heal path). A bare
   `input_fingerprint` move is NOT material truth in `readToday` — every sync moves it — and the 04:00
   precompute warms the floor only (`precomputeDayReadFloor`) until a sleep row is dated that day, so no
-  sentence is written about a night that has not synced. Details in `docs/ARCHITECTURE.md`.
+  sentence is written about a night that has not synced. **`invalidateDayRead` marks an agent row
+  STALE, it does not delete it** — `getCachedDayRead(date)` hides a stale row, only the reconciling
+  paths pass `{ includeStale: true }`; `discardDayRead` is the real delete (reset, a cleared
+  directive). A cache-miss open serves the floor and never awaits an agent. Details in
+  `docs/ARCHITECTURE.md`.
 - **Any surface a PERSON reads goes through `spokenSignalVoice`; `summary`/`reason` are the machine
   register.** `SignalObservation.summary` and every dimension `reason` (`src/repo/signal-state.ts`)
   are third-person evidence prose for `renderSignalState`, the coach context and the provenance

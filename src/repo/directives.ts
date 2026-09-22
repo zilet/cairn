@@ -9,7 +9,7 @@ import { dedupeActiveDirectives, directiveIdentityKey, hydrateDirective } from "
 // scheduleDirectiveRecheck is only called at runtime inside updateDirective, so
 // the hoisted binding is always resolved by call time.
 import { scheduleDirectiveRecheck } from "./doctor-loop.js";
-import { invalidateDayRead } from "./intelligence.js";
+import { discardDayRead } from "./intelligence.js";
 import { markerSide, matchOptimalZone, prioritizeMarkers } from "./propagation.js";
 import { classifyDirectiveIntent } from "./propagation-data.js";
 
@@ -304,8 +304,10 @@ export function updateDirective(id: number, fields: DirectiveInput) {
         // directives are not part of the deterministic decision (the fingerprint could
         // never move), yet the Brief's PROSE is written against the active training and
         // watch directives. A directive the athlete just cleared must stop being voiced,
-        // and this is a rare, explicit athlete action — not telemetry churn.
-        invalidateDayRead();
+        // and this is a rare, explicit athlete action — not telemetry churn. A DISCARD,
+        // not the stale mark: the prose pin keys on the deterministic call, which a
+        // directive never moves, so a kept sentence would go on voicing the cleared one.
+        discardDayRead();
       } catch {
         /* cache bust is best-effort */
       }

@@ -1093,8 +1093,12 @@ export function startScheduler() {
       garminBusy = true;
       garminDueAt = Date.now() + GARMIN_INTERVAL_MS;
       const r = await syncGarmin(); // records garmin_last_sync_at/status itself
-      if (r.ok) log.info(`[garmin] auto-sync ok: ${r.activities} activities, ${r.daily_metrics} daily metric days.`);
-      else {
+      if (r.ok) {
+        log.info(`[garmin] auto-sync ok: ${r.activities} activities, ${r.daily_metrics} daily metric days.`);
+        // A sync moves the coach context's key; rebuild it here rather than on the
+        // next Today open.
+        repo.prewarmCoachContext();
+      } else {
         recordSchedulerFailure("garmin_auto_sync", new Error(String(r.error || "sync failed")));
         log.error("[garmin] auto-sync failed", { error: new Error(String(r.error || "sync failed")) });
       }

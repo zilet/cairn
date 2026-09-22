@@ -20,7 +20,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { computeDayRead, precomputeDayReadFloor, sleepRowExistsFor } from "../dist/dayread.js";
 import { readToday } from "../dist/domain/brain/day-read-use-case.js";
-import { configureDayReadRefresh } from "../dist/dayread-refresh.js";
+import { configureDayReadRefresh, flushDayReadRefresh } from "../dist/dayread-refresh.js";
+import { setAgentRunSink } from "../dist/agents.js";
 import { db, localDaysAgo, repo, resetTables } from "./_seed.js";
 
 const TABLES = [
@@ -145,9 +146,11 @@ test("an athlete's explicit new read is never answered with yesterday's sentence
   const steered = await computeDayRead({ date, override: "rough night" });
   assert.notEqual(steered.why, MORNING);
 
-  repo.invalidateDayRead(date);
+  // The explicit new read DISCARDS the row; an ordinary invalidation only marks it.
+  seedMorningAgentRead(date, MORNING);
+  repo.discardDayRead(date);
   const asked = await computeDayRead({ date });
-  assert.notEqual(asked.why, MORNING, "an invalidated day starts from the floor again");
+  assert.notEqual(asked.why, MORNING, "a discarded day starts from the floor again");
 });
 
 test("readToday: a fingerprint drift serves the cached wording and writes no floor prose", async () => {
@@ -279,4 +282,85 @@ test("readToday's re-stamp refreshes the provenance the same way", async () => {
     "a fresh stamp must not sit over the morning's evidence"
   );
   assert.deepEqual(opened.decision.evidence, repo.dayRead(date).decision.evidence);
+});
+
+// ---------------------------------------------------------------------------
+// An invalidation keeps the wording. It used to DELETE the row, so every meal log
+// threw the agent's sentence away and the re-warm asked an agent for a new one — live,
+// 12-20 day_read runs a day about a day whose call never moved.
+// ---------------------------------------------------------------------------
+
+// One usable agent (the offline stub) and a sink counting every day_read spawn, so
+// "no agent was asked" is observed rather than inferred from agents being off.
+function countDayReadSpawns() {
+  repo.setSettings({ disabled_agents: ["claude", "codex", "antigravity", "grok"] });
+  const spawns = [];
+  setAgentRunSink((run) => {
+    if (run.op === "day_read") spawns.push(run);
+  });
+  return spawns;
+}
+
+test("a meal logged under a warm agent read asks no agent and keeps the sentence", async (t) => {
+  resetTables(...TABLES, "food_notes");
+  const spawns = countDayReadSpawns();
+  t.after(() => setAgentRunSink(null));
+  const date = localDaysAgo(0);
+  let fire = null;
+  configureDayReadRefresh({
+    today: () => date,
+    setTimer: (fn) => {
+      fire = fn;
+      return 1;
+    },
+    clearTimer: () => {},
+  });
+  seedPlan();
+  const baseline = seedMorningAgentRead(date, MORNING);
+
+  repo.addFoodNote("lunch", "", { summary: "Chicken bowl", kcal: 500, protein_g: 45 });
+
+  assert.equal(
+    repo.dayRead(date).signals?.fuel?.bucket,
+    baseline.signals?.fuel?.bucket,
+    "fixture check: this meal does not flip the fuel bucket"
+  );
+  assert.equal(repo.getCachedDayRead(date), null, "a consumer reading the cache as current truth sees it retired");
+  assert.equal(repo.getCachedDayRead(date, { includeStale: true })?.why, MORNING, "but the sentence is kept");
+
+  // The re-warm the invalidation armed, through the REAL recompute path.
+  assert.ok(fire, "the invalidation armed a background re-warm");
+  fire();
+  await flushDayReadRefresh();
+  const warmed = repo.getCachedDayRead(date);
+  assert.equal(warmed?.why, MORNING, "the re-warm re-stamped the same call's sentence");
+  assert.equal(warmed.source, "agent");
+
+  const opened = await readToday({ date });
+  assert.equal(opened.why, MORNING, "and the open reads the sentence the athlete already read");
+  assert.equal(spawns.length, 0, "no day_read agent was spawned anywhere along the way");
+});
+
+test("the pin gives way to a fuel bucket flip, as the open's material-truth check does", async () => {
+  resetTables(...TABLES, "food_notes", "profile", "bodyweight_log", "nutrition_targets");
+  offlineAgents();
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  seedPlan();
+  // A profile complete enough for a protein target to derive, so the fuel bucket exists.
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5, goal_mode: "maintain" });
+  const baseline = repo.dayRead(date);
+  const identity = repo.dayReadProseIdentity(date, baseline);
+  seedMorningAgentRead(date, MORNING, { signals: { ...baseline.signals, fuel: { bucket: "behind" } } });
+  // A protein-dense lunch: the live bucket is now 'met' while the call stays the same.
+  db.prepare(
+    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status) VALUES (?, 'lunch', '', ?, 'done')`
+  ).run(date, JSON.stringify({ summary: "chicken & rice", protein_g: 170, kcal: 700 }));
+  const live = repo.dayRead(date);
+  assert.equal(live.signals.fuel.bucket, "met", "fixture check: the bucket flipped");
+  assert.equal(repo.dayReadProseIdentity(date, live), identity, "fixture check: the call did not");
+
+  const again = await computeDayRead({ date });
+
+  assert.notEqual(again.why, MORNING, "a sentence about light protein does not outlive the lunch that fixed it");
 });

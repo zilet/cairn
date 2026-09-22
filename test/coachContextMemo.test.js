@@ -12,7 +12,7 @@
 // counts and high-water marks, in-place EDITS via a temp update odometer SQLite keeps
 // for us, plus the profile/settings rows by value, so no write path has to remember to
 // bump a counter — while bookkeeping traffic does NOT, the local date/hour cover the
-// time-of-day framing, and a short TTL is the last backstop under all of it.
+// time-of-day framing, and the hour rolling is the last backstop under all of it.
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { repo } from "./_seed.js";
@@ -117,21 +117,21 @@ test("bookkeeping writes do NOT invalidate it — the memo has to survive ordina
   assert.equal(getCoachContext(), first, "telemetry traffic must not rebuild the coach context");
 });
 
-test("the TTL rebuilds it even when nothing observable changed", () => {
+test("no clock beyond the key: shared for the rest of the hour, rebuilt when the hour rolls", () => {
   resetCoachContextMemo();
-  // Pinned mid-hour on purpose: the memo key carries the local HOUR, so a clock
-  // started at the ambient `Date.now()` crosses an hour boundary on ~1.7% of runs
-  // and the "still shared inside the window" assert fails for a reason that has
-  // nothing to do with the TTL under test.
+  // Pinned mid-hour on purpose: the memo key carries the local HOUR, so an ambient
+  // clock could start a minute before the boundary. The ticks below are sized off
+  // the pinned local minute, so they hold in any process zone.
   mock.timers.enable({ apis: ["Date"], now: MID_HOUR_INSTANT });
   try {
     const first = getCoachContext();
-    // Well past the minute the TTL used to be: an idle open must not pay for a rebuild
-    // the key says nothing has earned.
-    mock.timers.tick(5 * 60_000);
-    assert.equal(getCoachContext(), first, "still shared minutes later — the key invalidates, not the clock");
-    mock.timers.tick(11 * 60_000); // past the 15-minute backstop
-    assert.notEqual(getCoachContext(), first, "rebuilt once the backstop expires");
+    const minutesLeftInHour = 60 - new Date().getMinutes();
+    // Up to a minute before the boundary — in a whole-hour zone that is ~50 minutes,
+    // far past the 15-minute TTL the memo used to throw a valid build away at.
+    mock.timers.tick((minutesLeftInHour - 1) * 60_000);
+    assert.equal(getCoachContext(), first, "an idle open later in the hour reuses the build — the key decides");
+    mock.timers.tick(2 * 60_000);
+    assert.notEqual(getCoachContext(), first, "the hour rolling is the backstop that rebuilds it");
   } finally {
     mock.timers.reset();
   }

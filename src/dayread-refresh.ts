@@ -1,10 +1,11 @@
 // Recompute-on-invalidate — keep the morning Brief instant even right after a
-// brain signal lands. repo.invalidateDayRead() only DELETES the cached day-read;
-// the next GET /api/today-read would otherwise pay a synchronous ~90s agent run
-// inline on the request path. This schedules a DEBOUNCED, COALESCED,
-// fire-and-forget background recompute the moment TODAY's read is cleared, so the
-// athlete's next open serves a fresh agentic read that was warmed off the request
-// path (exactly like the nightly precompute + boot warm, but signal-driven).
+// brain signal lands. repo.invalidateDayRead() only marks the cached day-read stale
+// (or deletes a row with no agent wording to keep); the next GET /api/today-read
+// serves the floor or re-stamps the kept sentence, never an agent run. This
+// schedules a DEBOUNCED, COALESCED, fire-and-forget background recompute the moment
+// TODAY's read is invalidated, so the athlete's next open serves an agentic read
+// warmed off the request path (like the nightly precompute + boot warm, but
+// signal-driven) — and for an unchanged call that recompute is the prose pin, no agent.
 //
 // Contract (Track A / A1):
 //   - never throws, never blocks or slows the synchronous write path (setTimeout,
@@ -67,6 +68,10 @@ const DEFAULT_HOOKS: DayReadRefreshHooks = {
     // keeps the agent-running orchestration out of this module's static graph.
     const { precomputeDayRead, warmToday } = await import("./dayread.js");
     await precomputeDayRead(warmToday());
+    // The re-warm follows a write the athlete just made, and the open that follows
+    // it would otherwise rebuild the whole coach context inline.
+    const { prewarmCoachContext } = await import("./repo/coach.js");
+    prewarmCoachContext();
   },
   warmFloor: async () => {
     // Lazy import for the same reason as `recompute` above. No agent spawn.

@@ -18,6 +18,7 @@ import test from "node:test";
 import { readToday } from "../dist/domain/brain/day-read-use-case.js";
 import { computeCanonicalDayRead } from "../dist/dayread.js";
 import { configureDayReadRefresh, flushDayReadRefresh, scheduleDayReadRefresh } from "../dist/dayread-refresh.js";
+import { setAgentRunSink } from "../dist/agents.js";
 import { runWithBrainSnapshot } from "../dist/brain/snapshot.js";
 import { evaluateMatureExpectations } from "../dist/brainEvaluator.js";
 import { db, localDaysAgo, repo, resetTables } from "./_seed.js";
@@ -532,7 +533,7 @@ test("an explicit refresh runs its own recompute but still publishes the lane", 
   await Promise.all([background, forced, behind]);
 });
 
-test("a cache-miss open joins the recompute already in flight", async () => {
+test("a cache-miss open never waits on the recompute already in flight", async () => {
   resetTables(...TRAINING_TABLES);
   offlineAgents();
   const date = localDaysAgo(0);
@@ -542,16 +543,40 @@ test("a cache-miss open joins the recompute already in flight", async () => {
 
   // The background re-warm an invalidation arms starts against a blank day...
   const warming = computeCanonicalDayRead({ date });
-  // ...and before it lands, a full session goes in. A SECOND compute started now
-  // would read `done`, so the kind is a sharp discriminator for which one ran.
+  // ...and before it lands, a full session goes in.
   logHardSession(date);
-  assert.equal(repo.dayRead(date).kind, "done", "fixture check: a fresh compute would now disagree");
+  assert.equal(repo.dayRead(date).kind, "done", "fixture check: the day as it is now");
 
   const open = await readToday({ date });
-  const warmed = await warming;
 
-  assert.equal(open.kind, warmed.kind);
-  assert.equal(open.kind, "train", "the open joined the run in flight rather than paying for a second one");
+  // The open used to JOIN that run — an agent wait on the request path, 5-15 s live.
+  // It now serves the deterministic read of the day as it stands, at once.
+  assert.equal(open.kind, "done", "the open served the live floor rather than awaiting the run in flight");
+  assert.equal(open.source, "deterministic");
+  await warming;
+});
+
+test("a cache-miss open serves the floor without asking an agent, and arms the heal", async (t) => {
+  resetTables(...TRAINING_TABLES);
+  // One USABLE agent — the offline stub — so the old inline path would have spawned
+  // it; the sink counts every day_read spawn.
+  repo.setSettings({ disabled_agents: ["claude", "codex", "antigravity", "grok"] });
+  const spawns = [];
+  setAgentRunSink((run) => {
+    if (run.op === "day_read") spawns.push(run);
+  });
+  t.after(() => setAgentRunSink(null));
+  const date = localDaysAgo(0);
+  const timer = armCounter();
+  configureDayReadRefresh({ today: () => date, ...timer.hooks });
+  seedPlan();
+
+  const opened = await readToday({ date, recordOutcome: true });
+
+  assert.equal(opened.source, "deterministic", "a real read, the deterministic floor");
+  assert.equal(spawns.length, 0, "the open spawned no agent — none was awaited on the request path");
+  assert.equal(timer.state.armed, 1, "the background re-warm that asks the agent is armed");
+  assert.equal(repo.getCachedDayRead(date)?.source, "deterministic", "and the floor is cached for the next open");
 });
 
 // ---------------------------------------------------------------------------

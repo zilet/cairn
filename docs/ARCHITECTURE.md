@@ -903,7 +903,11 @@ persisted in the row's `_day_read_meta` and read back as `prose_identity`. Three
 cached agent row written for the same identity keeps its `headline`/`why`, and only `signals`,
 `input_fingerprint` and `computed_at` are refreshed — no spawn. The pin releases on an identity
 change, on the athlete's explicit "new read" (which deletes the row first), on a steered read,
-and on floor prose (`source:"deterministic"`), so the self-heal path stays open. The server-policy
+on floor prose (`source:"deterministic"`), so the self-heal path stays open, and on a fact change
+(`dayReadFactsMoved`: completion / work / load grade / trained / fuel bucket — the same list the
+open's material-truth check reads, so a background re-warm cannot re-stamp a sentence the next
+open would have retired). An invalidation MARKS an agent row stale rather than deleting it (see
+"Invalidation has a write-path half too"), which is what gives the pin something to keep. The server-policy
 clamps still run over a pinned row; they are identity-preserving by construction, and a safety
 floor must never be skipped because the wording is old. (2) `readToday`
 (`src/domain/brain/day-read-use-case.ts`) no longer treats a bare fingerprint move as material
@@ -911,7 +915,9 @@ truth — `identityChanged` replaced it, with a row written before the pin exist
 its stored `baseline_kind` rather than churning every cached read on deploy. A drift with the call
 unchanged re-stamps the row inline (same prose, live evidence) instead of writing floor prose and
 arming another agent run; completion / work / load / trained / fuel / prose-contradiction remain
-fact changes. (3) `precomputeDayReadFloor` + `sleepRowExistsFor` (`src/dayread.ts`): when the
+fact changes. A stale-marked row takes the same two branches, and a true miss (no row at all)
+serves the deterministic floor at once and arms the self-heal re-warm — the Brief GET never
+awaits an agent; only `?reset=1` and a steered read still compute inline. (3) `precomputeDayReadFloor` + `sleepRowExistsFor` (`src/dayread.ts`): when the
 small-hours precompute finds no sleep row dated that day it warms the deterministic floor only.
 The morning open is still instant, nothing is written about a night that has not synced, and the
 first agent run happens after the first sync or the first open, whichever lands first. When the
@@ -1056,10 +1062,18 @@ before the visible fuel signal existed. When the cached row carries an athlete o
 `replaceStaleDayReadOverride()` does a compare-and-replace instead of a blind `saveDayRead` so a
 steer cannot be silently clobbered.
 
-**Invalidation has a write-path half too.** `invalidateDayRead(date?)` deletes the cached row
-unconditionally, and that is still the right default: roughly 30 material-write sites across
-`plan.ts`, `sessions.ts`, `nutrition.ts`, `health.ts`, `profile.ts`, `fueling.ts` and elsewhere call it
-that way, for anything the athlete does deliberately or rarely (a logged set, a plan edit, a
+**Invalidation has a write-path half too.** `invalidateDayRead(date?)` retires the cached row
+unconditionally, and that is still the right default — but "retire" means MARK STALE when the row
+carries agent prose (`_day_read_meta.stale`), and delete only a row with no wording to keep (floor
+prose, an athlete steer, a curated read). A stale row is invisible to `getCachedDayRead(date)` — every
+consumer that reads the cache as current truth sees exactly what the delete gave it — while
+`readToday` and the prose pin ask for it with `{ includeStale: true }` and reconcile it: the same
+call keeps its sentence, a fact or identity change gets the floor and a re-warm. Deleting was what
+let every meal log re-author the Brief (12-20 agent runs a day live). `discardDayRead(date?)` is the
+real delete, for the two writes whose sentence must not survive a same-identity recompute: the
+athlete's explicit new read, and a directive cleared (below). Roughly 30 material-write sites across
+`plan.ts`, `sessions.ts`, `nutrition.ts`, `health.ts`, `profile.ts`, `fueling.ts` and elsewhere call the
+unconditional retire, for anything the athlete does deliberately or rarely (a meal, a plan edit, a
 check-in). `invalidateDayReadIfDecisionChanged(date?)` (`src/repo/day-read-cache.ts`, reached through the repo
 barrel and `intelligence.ts`) is the write-path
 counterpart to `readToday()`'s serve-time comparison above: it recomputes `dayRead()` and deletes the
@@ -1077,9 +1091,10 @@ destroyed the warm read before any fingerprint was ever consulted), `upsertGarmi
 directive status flip to resolved/dismissed stays unconditional even though it isn't a training write,
 because directives sit outside the fingerprint entirely (`dayReadInputFingerprint` never hashes them,
 so it could never move) while the Brief's prose is written against the active directive list — and
-clearing a directive is a rare, explicit athlete action, not telemetry churn, so the unconditional
-delete is correct there and switching it to the fingerprint-aware form would just leave a stale
-directive voiced in the Brief.
+clearing a directive is a rare, explicit athlete action, not telemetry churn, so it DISCARDS the row
+(`discardDayRead`) — neither the fingerprint-aware form nor the stale mark would do, since the pin
+keys on the deterministic call, which a directive never moves, and would keep voicing the cleared
+directive.
 
 **The read predicts something now, so it can be wrong.** `src/repo/brain/read-adherence.ts`
 attaches a falsifiable expectation to every morning read that actually makes one —
