@@ -8,6 +8,7 @@ import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocument
 import { CONTEXT_TAG_VOCAB, isContextTagKey } from "./contextTags.js";
 import { localDateISO } from "./repo/shared.js";
 import { normalizeEnduranceSchedule, normalizeStrengthSchedule } from "./repo/profile.js";
+import { parseMovementConsiderations, type MovementConsideration } from "./repo/movement-considerations.js";
 import { MAX_REDRAW_REQUEST_CHARS } from "./domain/brain/structure-request.js";
 
 type ChatActionRecord = Record<string, unknown>;
@@ -31,6 +32,7 @@ export const CHAT_ACTION_TYPES = [
   "set_endurance_goal",
   "set_endurance_schedule",
   "set_strength_schedule",
+  "set_movement_considerations",
   "set_strength_objective",
   "add_memory",
   "update_memory",
@@ -110,6 +112,11 @@ export interface SetStrengthScheduleAction extends ChatActionBase {
   type: "set_strength_schedule";
   days: Array<{ dow: number }>;
   note?: unknown;
+}
+
+export interface SetMovementConsiderationsAction extends ChatActionBase {
+  type: "set_movement_considerations";
+  items: MovementConsideration[];
 }
 
 export interface SetStrengthObjectiveAction extends ChatActionBase {
@@ -347,6 +354,7 @@ export type ChatAction =
   | SetEnduranceGoalAction
   | SetEnduranceScheduleAction
   | SetStrengthScheduleAction
+  | SetMovementConsiderationsAction
   | SetStrengthObjectiveAction
   | AddMemoryAction
   | UpdateMemoryAction
@@ -476,6 +484,21 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `Read the ordinary phrasings as what they are. "My strength trainings are on all workdays (mon-fri)", "I lift weekdays", "strength on all workdays", "gym Mon-Fri", "I train every workday" are all dows 1-5. "I lift Monday, Wednesday and Friday" / "MWF" is 1, 3, 5. "Tue/Thu/Sat" is 2, 4, 6. "every day" is 0-6. "three days a week" names no weekday and is NOT a schedule — ask which days.`,
       `A sentence can carry both halves: "gym Mon-Fri, weekends are the long run and MTB" states the lifting days (1-5) AND, separately, run days for set_endurance_schedule (6 and 0). Emit both actions. But "weekends are for the long run and mountain biking" ALONE says nothing about which weekdays they lift — never infer lifting days from what they said about running, resting, or the weekend.`,
       `Map only weekdays they actually named, and never fill in a day to round the week out. When they name a range ("Monday through Thursday"), every weekday in the range counts. When they revise ("actually I skip Wednesdays now"), send the full corrected list, not a delta. When they ask you to stop assuming, send days: [] to clear it.`,
+    ],
+  },
+  set_movement_considerations: {
+    type: "set_movement_considerations",
+    applyMode: "immediate",
+    shape: `// A LASTING, PAINLESS condition the athlete states about how their body moves
+    // (mild scoliosis, hypermobility, a leg-length difference, an old fused joint).
+    // Send the FULL list each time (it replaces what is stored); items: [] clears it.
+    // wants_addressed: true ONLY when they said they want the program to help with it.
+    { "type": "set_movement_considerations",
+      "items": [{ "label": "<a few words, e.g. mild scoliosis>", "detail": "<optional: what they said>", "wants_addressed": true }] }`,
+    guidance: [
+      `Emit set_movement_considerations when the athlete states a lasting condition that does NOT hurt. It is NOT an injury: it shapes exercise choice and balance and never takes a lift away. Keep the items already in DATA.movement_considerations when adding one. Only what they said — never infer a condition from their training, labs or about_me.`,
+      `If DATA.context_events holds an injury that reads like a lasting painless condition, you may OFFER once, in one line, to keep it as a consideration instead so it stops limiting their lifts. Only on their yes: emit set_movement_considerations AND resolve_context_event for that id. Never convert one on your own.`,
+      `If they report PAIN with it, that is an injury or symptom (add_context_event / report_training_symptom), not this.`,
     ],
   },
   set_strength_objective: {
@@ -612,6 +635,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "meta": { "area": "<injuries: knee / lower back>", "severity": "mild|moderate|severe", "location": "<trips>", "member": "<family_event: who>", "recurrence": "<family_event: e.g. Tue 17:00>" } }`,
     guidance: [
       `add_context_event records a trip, injury/niggle, major life event, or family commitment onto their timeline (Me → Life) so the plan adapts around it — ease off an injured area, plan travel-friendly weeks, dial volume back during a stressful stretch, keep family days shorter/more flexible.`,
+      `A lasting condition that does NOT hurt (scoliosis, hypermobility, a leg-length difference) is NOT an injury — use set_movement_considerations for it, never add_context_event.`,
       `Use "injury" for any pain/niggle they mention, "trip" for travel, "family_event" for a recurring family/kids commitment (meta {member, recurrence}, e.g. "Tue 17:00 soccer"), "life_event" otherwise.`,
       `Set start/end dates ONLY when the user actually gave them. NEVER guess or approximate a date (don't turn "in November" into a specific day) — leave start_date/end_date null when you don't know. If the exact date matters (e.g. a race they're training for), record the event with null dates and ask them once, in one brief line, for the real date rather than inventing a placeholder.`,
     ],
@@ -849,6 +873,10 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
         days: schedule.days,
         note: schedule.note,
       };
+    }
+    case "set_movement_considerations": {
+      const read = parseMovementConsiderations(value.items, { source: "chat" });
+      return read ? { type: "set_movement_considerations", items: read.items } : null;
     }
     case "set_strength_objective":
       return nonBlank(value.exercise) &&

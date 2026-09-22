@@ -3229,6 +3229,7 @@ declare global {
         index: number | undefined,
         impactsById?: Record<string, Record<string, unknown>>
       ): string;
+      movementConsiderationsHtml(read: unknown): string;
     };
 
     CairnLifeFormHelpers: {

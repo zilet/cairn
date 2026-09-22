@@ -17,6 +17,7 @@ import {
   listCheckins,
   listWeight,
   logWeight,
+  movementConsiderationsRead,
   normalizeTrainingIntent,
   reactivateGoalCheckin,
   setProfile,
@@ -37,6 +38,12 @@ personRouter.get("/profile/endurance-schedule", (_req, res) => res.json(getEndur
 // the plan's strength days onto exactly these weekdays. null when unset.
 // MCP: get_strength_schedule.
 personRouter.get("/profile/strength-schedule", (_req, res) => res.json(getStrengthSchedule()));
+// The athlete's stated movement considerations: lasting, painless conditions in their own
+// words ({items:[{label, detail?, wants_addressed, source, stated_on}]}). They shape plan
+// selection and balance and never gate a lift. Set through PUT /profile
+// (movement_considerations; null or items: [] clears). null when none are stated.
+// MCP: get_movement_considerations.
+personRouter.get("/profile/movement-considerations", (_req, res) => res.json(movementConsiderationsRead()));
 // Partially update the athlete profile. Omitted fields stay unchanged; explicit
 // null/empty clears nullable fields such as home_location.
 personRouter.put("/profile", (req, res) => {

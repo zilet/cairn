@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**282 tools.**
+**283 tools.**
 
 | Tool | Description |
 |---|---|
@@ -123,6 +123,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_learned_timeline` | A calm read of what Cairn has understood about you and the changes it's made — load-bearing memories, outcome learnings, connected-brain directives, and applied plan changes. Newest-first, bounded. |
 | `get_meal_plan` | Get one meal plan by id (hydrated: parsed days/meals/macros). |
 | `get_meal_recipe` | Get a cached recipe immediately, or queue a durable recipe-writing job when absent/forced. Poll get_agent_job for a queued result. |
+| `get_movement_considerations` | The athlete's stated movement considerations: lasting, painless conditions in their own words ({items:[{label, detail?, wants_addressed, source, stated_on}]}). They shape plan selection and balance and never gate a lift. null when none are stated. Set them with set_profile.movement_considerations. |
 | `get_muscle_load` | Acute per-muscle freshness over the last ~2 days — recent strength sets AND endurance sessions folded onto the regions they fatigue (a long ride loads the legs). heavy:true means a real dose (the muscle wants a day). |
 | `get_muscle_trajectory` | Per-canonical-muscle-group ADVANCING vs STALLING read (the user's own mental model) — folds each group's member-lift statuses + its volume band/trend into one plain verdict (advancing/stalling/building/maintaining), and for a stalling group names the lead stalled lift + a MENU of same-pattern variations to rotate in. {available:false} when nothing's logged. |
 | `get_next_checkup` | Next-checkup read: the athlete-facing view of the recheck-cadence engine. Returns { lede, due_now[], upcoming[], follow_through[], prep, has_content, frame }: rechecks whose window is open (due_now) or opening (upcoming) plus worth-adding workups, visible follow-through on active supplements & directives (each target marker's latest value, trend words, recheck state, and a plain status — moving your way / not yet / awaiting first recheck), and a deterministic prep list (ordered labs from your last visit/review, what to bring, what to ask). |

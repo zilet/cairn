@@ -30,7 +30,10 @@ export type MovementPattern =
   | "rear-delt"
   | "shrug"
   | "tibialis"
-  | "abduction";
+  | "abduction"
+  // Prep — never working volume (canon's `mobility` group is non-counting), but a
+  // cat-cow still has close relatives to swap to.
+  | "mobility";
 
 export interface ExerciseVariation {
   name: string;
@@ -144,6 +147,7 @@ const EXERCISE_MAP: Record<MovementPattern, ExerciseEntry[]> = {
     { name: "Russian Twist", equipment: "bodyweight" },
     { name: "Pallof Press", equipment: "cable" },
     { name: "Side Plank", equipment: "bodyweight" },
+    { name: "Bird Dog", equipment: "bodyweight" },
   ],
   carry: [
     { name: "Farmer's Walk", equipment: "dumbbell" },
@@ -203,6 +207,12 @@ const EXERCISE_MAP: Record<MovementPattern, ExerciseEntry[]> = {
     { name: "Banded Lateral Walk", equipment: "bodyweight" },
     { name: "Side-Lying Leg Raise", equipment: "bodyweight" },
     { name: "Seated Band Abduction", equipment: "bodyweight" },
+    { name: "Banded Side-Lying Clamshell", equipment: "bodyweight" },
+  ],
+  mobility: [
+    { name: "Cat-Cow", equipment: "bodyweight" },
+    { name: "Quadruped Thoracic Rotation", equipment: "bodyweight" },
+    { name: "90/90 Breathing", equipment: "bodyweight" },
   ],
 };
 
@@ -218,7 +228,8 @@ const PATTERN_RULES: Array<[MovementPattern, RegExp[]]> = [
   ["rear-delt", [/face pull/i, /rear delt/i, /reverse (pec|fly|flye|delt)/i, /rear (fly|flye)/i, /band pull.?apart/i, /prone (y|t)\b/i]],
   ["shrug", [/\bshrug/i]],
   ["tibialis", [/tibialis/i, /\btib raise/i, /dorsiflex/i]],
-  ["abduction", [/abduction/i, /abductor/i, /hip abduct/i, /lateral (band )?walk/i, /side.?lying leg raise/i]],
+  ["mobility", [/cat.?cow/i, /thoracic rotation/i, /90\/90 breathing/i]],
+  ["abduction", [/abduction/i, /abductor/i, /hip abduct/i, /lateral (band )?walk/i, /side.?lying leg raise/i, /clamshell/i]],
   ["hip-extension", [/hip thrust/i, /glute bridge/i, /cable kickback/i, /donkey kick/i, /nordic curl/i]],
   ["lunge", [/\blunge\b/i, /bulgarian split squat/i, /split squat/i, /step.?up/i, /lateral lunge/i]],
   ["calf", [/calf raise/i, /donkey calf/i, /calf/i]],
@@ -230,7 +241,7 @@ const PATTERN_RULES: Array<[MovementPattern, RegExp[]]> = [
   ["curl", [/\bcurl\b/i, /preacher/i]],
   ["triceps", [/tricep/i, /skull crusher/i, /\bdips?\b/i, /close.?grip bench/i, /pushdown/i, /kickback/i]],
   ["lateral-raise", [/lateral raise/i, /upright row/i, /front raise/i]],
-  ["core", [/\bplank\b/i, /dead bug/i, /ab wheel/i, /rollout/i, /cable crunch/i, /hanging leg raise/i, /russian twist/i, /pallof/i, /side plank/i, /\bcrunch\b/i, /leg raise/i]],
+  ["core", [/\bplank\b/i, /dead bug/i, /bird dog/i, /ab wheel/i, /rollout/i, /cable crunch/i, /hanging leg raise/i, /russian twist/i, /pallof/i, /side plank/i, /\bcrunch\b/i, /leg raise/i]],
   ["vertical-pull", [/pull.?up/i, /chin.?up/i, /lat pulldown/i, /pulldown/i, /cable pullover/i]],
   ["vertical-push", [/overhead press/i, /shoulder press/i, /arnold press/i, /pike push.?up/i, /landmine press/i, /overhead/i]],
   ["horizontal-pull", [/bent.?over row/i, /\brow\b/i, /t.?bar row/i, /chest.?supported row/i, /inverted row/i, /pendlay/i, /meadows row/i, /seated.*row/i]],

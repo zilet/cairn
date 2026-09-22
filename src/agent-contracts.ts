@@ -1195,6 +1195,18 @@ export const ONBOARD_SCHEMA: JsonSchema = {
         },
       },
     },
+    movement_considerations: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: true,
+        properties: {
+          label: { type: ["string", "null"] },
+          detail: { type: ["string", "null"] },
+          wants_addressed: { type: ["boolean", "null"] },
+        },
+      },
+    },
   },
 };
 

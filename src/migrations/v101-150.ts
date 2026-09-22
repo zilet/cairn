@@ -226,4 +226,13 @@ export const MIGRATIONS_101_150: Migration[] = [
     // a prescription) converts. Default km so existing installs do not flip.
     up: (db) => addColumn(db, "settings", "run_units TEXT DEFAULT 'km'"),
   },
+  {
+    version: 107,
+    name: "profile-movement-considerations",
+    // A lasting, painless condition the athlete states ("mild scoliosis") had no home
+    // but an injury event, which hard-gates the lifts it touches every day with no end.
+    // {items:[{label, detail?, wants_addressed, source, stated_on}]}; it informs plan
+    // selection and balance only. NULL keeps every existing profile exactly as it is.
+    up: (db) => addColumn(db, "profile", "movement_considerations_json TEXT"),
+  },
 ];

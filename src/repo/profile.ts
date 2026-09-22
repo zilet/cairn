@@ -11,6 +11,7 @@ import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweig
 import { classifyRecompositionStage } from "./recomposition-stage.js";
 import { serializeTrainingIntent } from "./training-intent.js";
 import { normalizeLocationText } from "./location-context.js";
+import { parseMovementConsiderations, serializeMovementConsiderations } from "./movement-considerations.js";
 
 // ---------- profile ----------
 export function getProfile(): any {
@@ -150,6 +151,15 @@ export function setProfile(p: any) {
           ? null
           : (serializeStrengthSchedule(p.strength_schedule) ?? cur.strength_schedule_json ?? null)
         : (cur.strength_schedule_json ?? null),
+    // Stated movement considerations (v107). Same contract: undefined leaves intact,
+    // null or an empty list clears, an unreadable shape preserves what is stored.
+    movement_considerations_json: (() => {
+      if (p.movement_considerations === undefined) return cur.movement_considerations_json ?? null;
+      const next = serializeMovementConsiderations(p.movement_considerations, {
+        previous: parseMovementConsiderations(cur.movement_considerations_json),
+      });
+      return next === undefined ? (cur.movement_considerations_json ?? null) : next;
+    })(),
     // Ordered durable athlete intent (v80). An explicit null clears back to the
     // backward-compatible derived view; malformed non-null input is
     // non-destructive so a bad client cannot erase an explicit hierarchy.
@@ -168,8 +178,8 @@ export function setProfile(p: any) {
     statin: p.statin !== undefined ? coerceFlag(p.statin) : (cur.statin ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, home_location, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, endurance_schedule_json, strength_schedule_json, training_intent_json, smoking, bp_treated, statin, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, home_location, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, endurance_schedule_json, strength_schedule_json, movement_considerations_json, training_intent_json, smoking, bp_treated, statin, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
        home_location=excluded.home_location,
@@ -180,7 +190,8 @@ export function setProfile(p: any) {
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
        endurance_goal_json=excluded.endurance_goal_json, endurance_schedule_json=excluded.endurance_schedule_json,
-       strength_schedule_json=excluded.strength_schedule_json, training_intent_json=excluded.training_intent_json,
+       strength_schedule_json=excluded.strength_schedule_json, movement_considerations_json=excluded.movement_considerations_json,
+       training_intent_json=excluded.training_intent_json,
        smoking=excluded.smoking, bp_treated=excluded.bp_treated, statin=excluded.statin, updated_at=datetime('now')`
   ).run(
     merged.name,
@@ -206,6 +217,7 @@ export function setProfile(p: any) {
     merged.endurance_goal_json,
     merged.endurance_schedule_json,
     merged.strength_schedule_json,
+    merged.movement_considerations_json,
     merged.training_intent_json,
     merged.smoking,
     merged.bp_treated,

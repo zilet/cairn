@@ -1,8 +1,8 @@
 import { db, todayISO } from "./db.js";
 import { installSeedArt } from "./art.js";
 
-// [name, muscle_group, constraint_note, form_cues]
-const exercises: [string, string, string | null, string][] = [
+// [name, muscle_group, constraint_note, form_cues, mode?]
+const exercises: [string, string, string | null, string, ("reps" | "timed")?][] = [
   ["Back Squat", "legs", null, "Brace on a big breath, sit between the hips, knees track over toes, drive the floor away. Hip crease below the knee."],
   ["Leg Extension", "quads", null, "Toes neutral, pause at lockout, control the negative, no swinging from the seat."],
   ["Leg Curl", "hamstrings", null, "Hips pinned down, curl with the hamstrings not the lower back, squeeze, slow eccentric."],
@@ -20,6 +20,24 @@ const exercises: [string, string, string | null, string][] = [
   ["Seated Cable Row", "back", "Neutral handle, straps from set 2, no chest pad.", "Neutral handle, tall chest, pull to the navel, no torso rock. Straps from set 2."],
   ["Bulgarian Split Squat", "legs", null, "Weight on the front foot, slight torso lean, knee tracks the toes, controlled depth. Per leg."],
   ["Seated Calf Raise", "calves", null, "Full stretch at the bottom, pause at the top, slow tempo, knees over toes."],
+  // A small, generic SUPPORTIVE set — trunk, one-side-at-a-time, hip and prep work — so a
+  // program that should be balanced (or an athlete with a stated movement consideration)
+  // has cued movements to draw on from day one. Seed-only: an existing catalog is never
+  // mutated; a draft that names one there creates it through findOrCreateExercise.
+  ["Side Plank", "core", null, "Elbow under the shoulder, hips stacked and lifted, body in one line. Per side.", "timed"],
+  ["Suitcase Carry", "core", null, "One weight at your side, stand tall, ribs down, don't lean toward or away from it. Per side.", "timed"],
+  ["Pallof Press", "core", null, "Side-on to the anchor, press straight out and hold, don't let the band turn you. Per side."],
+  ["Bird Dog", "core", null, "Hands under shoulders, reach opposite arm and leg long, hips level, slow. Alternate sides."],
+  ["Dead Bug", "core", null, "Low back gently down, ribs down, lower opposite arm and leg slowly, breathe out as you reach."],
+  ["Single-Arm DB Row", "back", null, "Brace on a bench, flat back, pull the elbow toward the hip, don't rotate the torso. Per side."],
+  ["Half-Kneeling Single-Arm Cable Chest Press", "chest", null, "Tall half-kneel, glute of the down knee squeezed, press straight out without twisting. Per side."],
+  ["Single-Arm DB Overhead Press", "shoulders", null, "Ribs down, glutes on, press straight up without leaning away from the weight. Per side."],
+  ["Banded Side-Lying Clamshell", "glutes", null, "Heels together, hips stacked, open the top knee without rolling the pelvis back. Per side."],
+  ["Side-Lying Hip Abduction", "glutes", null, "Hips stacked, top leg slightly behind you, lift from the side of the hip, toes forward. Per side."],
+  ["Glute Bridge", "glutes", null, "Feet flat, ribs down, drive through the heels, squeeze the glutes at the top, no low-back arch."],
+  ["Quadruped Thoracic Rotation", "mobility", null, "Hand behind the head, hips still over the knees, rotate through the upper back, breathe out. Per side."],
+  ["Cat-Cow", "mobility", null, "Slow, move one segment at a time, breathe in as you arch, out as you round."],
+  ["90/90 Breathing", "mobility", null, "On your back, feet on a wall at 90/90, slow nasal breath in, long full breath out, ribs down.", "timed"],
 ];
 
 type Item = [string, number, number | null, number | null, number | null, string | null];
@@ -60,7 +78,7 @@ const days: [number, string, string, Item[]][] = [
 
 export function seed(options: { blankProfile?: boolean } = {}) {
   const blankProfile = !!options.blankProfile;
-  const insertEx = db.prepare(`INSERT INTO exercises (name, muscle_group, constraint_note, cues) VALUES (?, ?, ?, ?)`);
+  const insertEx = db.prepare(`INSERT INTO exercises (name, muscle_group, constraint_note, cues, mode) VALUES (?, ?, ?, ?, ?)`);
   const exId: Record<string, number> = {};
   const dayIdByNumber: Record<number, number> = {};
   const insertDay = db.prepare(`INSERT INTO plan_days (day_number, name, focus) VALUES (?, ?, ?)`);
@@ -74,8 +92,8 @@ export function seed(options: { blankProfile?: boolean } = {}) {
   );
   db.exec("BEGIN");
   try {
-    for (const [name, mg, note, cues] of exercises) {
-      exId[name] = Number(insertEx.run(name, mg, blankProfile ? null : note, cues).lastInsertRowid);
+    for (const [name, mg, note, cues, mode] of exercises) {
+      exId[name] = Number(insertEx.run(name, mg, blankProfile ? null : note, cues, mode ?? "reps").lastInsertRowid);
     }
     if (!blankProfile) {
       for (const [num, name, focus, items] of days) {

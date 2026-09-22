@@ -2650,6 +2650,11 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.setProfile({ strength_schedule: schedule }) });
           break;
         }
+        case "set_movement_considerations": {
+          // The action is the full list the athlete now holds; [] clears it.
+          applied.push({ type: a.type, result: repo.setProfile({ movement_considerations: { items: a.items } }) });
+          break;
+        }
         case "set_strength_objective": {
           if (!explicitStrengthObjectiveIntent) break;
           const objective = repo.setStrengthObjective({

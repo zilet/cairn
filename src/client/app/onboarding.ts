@@ -68,7 +68,7 @@ type OnboardingSex = "female" | "male";
         </select></div>
       <div class="field"><label for="obIntro">Anything else <span class="ob-opt">— optional</span></label>
         <textarea id="obIntro" class="ob-intro" rows="3"
-          placeholder="injuries, how you eat, height &amp; weight, supplements you take… a sentence is plenty."></textarea></div>
+          placeholder="injuries or conditions (e.g. a back curve), how you eat, height &amp; weight, supplements you take… a sentence is plenty."></textarea></div>
       <button id="obStart" class="logbtn" style="width:100%;height:46px;margin-top:6px;letter-spacing:.05em">START</button>
       <button id="obSkip" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">Skip — just get me in</button>
       <div id="obStatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>

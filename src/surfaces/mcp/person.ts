@@ -18,6 +18,7 @@ import {
   listCheckins,
   listWeight,
   logWeight,
+  movementConsiderationsRead,
   setProfile,
 } from "../../domain/person/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
@@ -137,6 +138,25 @@ export function registerPersonTools(server: McpToolRegistrar) {
         .describe(
           "stated LIFTING weekdays the weekday ring lays the plan's strength days onto; only weekdays the athlete named, no kind. days: [] clears, null clears. Never invent days they did not say"
         ),
+      movement_considerations: z
+        .object({
+          items: z
+            .array(
+              z.object({
+                label: z.string().min(1).max(80).describe("the condition in a few words, e.g. 'mild scoliosis'"),
+                detail: z.string().max(400).optional(),
+                wants_addressed: z
+                  .boolean()
+                  .describe("true only when the athlete asked for the program to help with it"),
+              })
+            )
+            .max(6),
+        })
+        .nullable()
+        .optional()
+        .describe(
+          "lasting, PAINLESS conditions the athlete stated (scoliosis, hypermobility, a leg-length difference). NOT an injury: they shape exercise selection and balance and never exclude a lift. Send the full list; items: [] or null clears. Never invent one they did not state — pain is an injury/symptom instead"
+        ),
       training_intent: z
         .object({
           priorities: z
@@ -166,6 +186,13 @@ export function registerPersonTools(server: McpToolRegistrar) {
         ),
     },
     async (p) => asText(setProfile(p))
+  );
+
+  server.tool(
+    "get_movement_considerations",
+    "The athlete's stated movement considerations: lasting, painless conditions in their own words ({items:[{label, detail?, wants_addressed, source, stated_on}]}). They shape plan selection and balance and never gate a lift. null when none are stated. Set them with set_profile.movement_considerations.",
+    {},
+    async () => asText(movementConsiderationsRead())
   );
 
   server.tool(

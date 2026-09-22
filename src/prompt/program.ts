@@ -22,7 +22,8 @@ const ONBOARD_SCHEMA = `{
   "goal": "lose|maintain|gain|recomp|null",
   "supplements": [ { "name": "Creatine monohydrate", "dose": "5 g", "frequency": "daily", "category": "performance", "related_markers": ["eGFR"] } ],
   "memories": [ { "content": "<durable preference or fact, e.g. trains fasted in the mornings>", "kind": "preference|constraint|decision|goal|observation" } ],
-  "context_events": [ { "kind": "injury|trip|life_event", "title": "<short>", "detail": "<optional>", "meta": { "area": "<injury area>", "severity": "mild|moderate|severe" } } ]
+  "context_events": [ { "kind": "injury|trip|life_event", "title": "<short>", "detail": "<optional>", "meta": { "area": "<injury area>", "severity": "mild|moderate|severe" } } ],
+  "movement_considerations": [ { "label": "<their condition in a few words, e.g. mild scoliosis>", "detail": "<optional: what they said about it>", "wants_addressed": <true only if they asked for the program to help with it> } ]
 }`;
 
 export function buildOnboardPrompt(text: string): string {
@@ -32,8 +33,11 @@ You're meeting the user for the FIRST time. They wrote a short intro about thems
 Turn it into a calm, structured starting picture so the app is ready for them. DO NOT ask anything back —
 this is a one-shot setup. Fill ONLY what they actually said or clearly implied; leave everything else
 null/empty (Cairn learns the rest naturally over time). Approximate supplements sensibly (creatine →
-~5 g/day; "some D" → Vitamin D3; whey → counts toward protein). Capture injuries as context_events. No
-medical advice.
+~5 g/day; "some D" → Vitamin D3; whey → counts toward protein). Capture injuries as context_events —
+an injury is something that HURTS or is healing. A lasting structural/postural condition they mention
+(scoliosis, hypermobility, a leg-length difference, an old fused joint) that does not hurt goes in
+movement_considerations, NOT context_events; set wants_addressed only when they say they want it worked
+on. Never infer a condition they did not state. No medical advice.
 
 ${renderJsonContract(ONBOARD_SCHEMA)}
 

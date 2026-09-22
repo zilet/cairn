@@ -394,6 +394,11 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   are informational, not medical advice; `uncertain`/uncited ones are a softer nudge. The user flips
   `active|resolved|dismissed`.
 
+- **A painless structural condition is a movement consideration, never an injury.**
+  `profile.movement_considerations_json` shapes plan prompts only; filing "mild scoliosis" as an
+  `injury` event hard-gates the main lifts forever. Nothing protective may read it. Details in
+  `docs/ARCHITECTURE.md`.
+
 - **Pain is REPORTED IN WORDS; the mini-UIs are gone on purpose.** `training_symptom_events.area_text`
   is a short display LABEL (pain-relevance runs substring regexes over it, so a paragraph there loads
   every lift) — the athlete's actual sentence lives verbatim in **`symptom_reports.text`**, written

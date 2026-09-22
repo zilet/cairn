@@ -206,6 +206,29 @@ function lifeEventHtml(event: LifeEventRow, index: number | undefined, impactsBy
   return `<div class="sess life-ev${past ? " life-past" : ""}${reveal ? " reveal" : ""}" data-life="${escAttr(event.id)}"${reveal ? ` style="${stagger(index)}"` : ""}>${lifeEventInner(event, impact)}</div>`;
 }
 
+type MovementConsiderationRow = { label?: unknown; detail?: unknown; wants_addressed?: unknown };
+
+// What Cairn understood about a lasting, painless condition the athlete stated. Read-
+// only on purpose: chat is the one setter (like the lifting week), so the card offers
+// "change in chat" rather than a form. Nothing renders when nothing is stated.
+function movementConsiderationsHtml(read: unknown): string {
+  const raw = read && typeof read === "object" ? (read as { items?: unknown }).items : null;
+  const items = (Array.isArray(raw) ? raw as MovementConsiderationRow[] : [])
+    .filter((item) => typeof item?.label === "string" && item.label.trim());
+  if (!items.length) return "";
+  const rows = items.map((item) => `<div class="sess-line"><strong>${escHtml(item.label)}</strong>${
+    item.detail ? ` — ${escHtml(item.detail)}` : ""
+  }${
+    item.wants_addressed === true ? `<span style="color:var(--muted)"> · you asked for the program to help with this</span>` : ""
+  }</div>`).join("");
+  return `<h1 class="lbl" style="margin:20px 0 8px">How you move</h1>
+    <div class="sess">
+      ${rows}
+      <div class="sess-line" style="color:var(--muted);font-size:.82rem">Shapes exercise choice and balance — never takes a lift away. Not medical advice; a physiotherapist can tailor this.</div>
+      <div class="hdoc-ctl"><button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-lconsider-chat>Change in chat<span aria-hidden="true"> →</span></button></div>
+    </div>`;
+}
+
 const CAIRN_LIFE = {
   LIFE_KINDS,
   LIFE_ICONS,
@@ -220,6 +243,7 @@ const CAIRN_LIFE = {
   lifeImpactsHtml,
   lifeEventInner,
   lifeEventHtml,
+  movementConsiderationsHtml,
 };
 
 Object.assign(globalThis, { CairnLife: CAIRN_LIFE });

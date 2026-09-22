@@ -37,6 +37,7 @@ import {
   renderRunCompliance,
   renderRunPlan,
   renderStrengthSchedule,
+  renderMovementConsiderations,
   renderRunZones,
   renderSignalState,
   renderTodayFuel,
@@ -732,7 +733,7 @@ ${ELITE_STRENGTH_GUARDRAILS}
 ${CONTEXT_GUARDRAILS}
 ${renderCoachingFocus(context)}${COACHING_STANCE}
 
-${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderStrengthSchedule(context)}${renderHybridSequencing(hybrid, dateISO)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderStrengthSchedule(context)}${renderMovementConsiderations(context)}${renderHybridSequencing(hybrid, dateISO)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${
   wants.length
     ? `
 WHAT THE USER ASKED FOR:
@@ -817,7 +818,7 @@ ${MOVEMENT_NOTES_CONTRACT}
 
 ${ELITE_STRENGTH_GUARDRAILS}
 
-${CONTEXT_GUARDRAILS}${COACHING_STANCE}${renderTrainingConstraints(context)}
+${CONTEXT_GUARDRAILS}${COACHING_STANCE}${renderTrainingConstraints(context)}${renderMovementConsiderations(context)}
 
 ${renderStreamingContract(
   'write ONE or two plain sentences on why this session fits them today (the same thought that goes in the JSON\'s "why")',

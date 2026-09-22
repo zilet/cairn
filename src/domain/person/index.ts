@@ -19,6 +19,7 @@ export {
   updateContextEvent,
 } from "../../repo/health.js";
 export * from "../../repo/memory.js";
+export * from "../../repo/movement-considerations.js";
 export * from "../../repo/next-step.js";
 export * from "../../repo/profile.js";
 export * from "../../repo/proposals.js";

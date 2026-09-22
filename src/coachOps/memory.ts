@@ -9,6 +9,7 @@ import { insightIntentCorpus, isDuplicateInsightIntent, resolveInsightIntent } f
 import { addInsight, isDuplicateInsight, recentInsightTexts, stampWeeklyReadFreshness, upvotedInsightTexts } from "../repo/insights.js";
 import { addMemory, listMemory, supersedeMemory, updateMemory } from "../repo/memory.js";
 import { getProfile, setProfile } from "../repo/profile.js";
+import { movementConsiderationsRead } from "../repo/movement-considerations.js";
 import { reactionModelForCoach, setReactionNarrative } from "../repo/reaction-model.js";
 import { interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
 import { addSupplement, understandSupplements } from "../repo/supplements.js";
@@ -237,10 +238,17 @@ export async function onboardFromText(
 ): Promise<{
   ok: true;
   source: "agent" | "deterministic" | "empty";
-  applied: { about_me: boolean; profile: boolean; supplements: number; memories: number; context_events: number };
+  applied: {
+    about_me: boolean;
+    profile: boolean;
+    supplements: number;
+    memories: number;
+    context_events: number;
+    movement_considerations: number;
+  };
 }> {
   const raw = String(text ?? "").trim();
-  const applied = { about_me: false, profile: false, supplements: 0, memories: 0, context_events: 0 };
+  const applied = { about_me: false, profile: false, supplements: 0, memories: 0, context_events: 0, movement_considerations: 0 };
   if (!raw) {
     try {
       setSettings({ onboarded: true });
@@ -322,6 +330,15 @@ export async function onboardFromText(
             } catch (err) { log.debug("[onboard] skipped one context event", { error: err }); }
           }
         }
+      // A lasting, painless condition goes onto the profile — never a context event,
+      // because an injury event would hard-gate the very lifts they want kept.
+      if (Array.isArray(p.movement_considerations) && p.movement_considerations.length) {
+        try {
+          const items = p.movement_considerations.map((item: any) => ({ ...item, source: "onboard" }));
+          setProfile({ movement_considerations: { items } });
+          applied.movement_considerations = movementConsiderationsRead()?.items.length ?? 0;
+        } catch (err) { log.warn("[onboard] could not store the stated movement considerations", { error: err }); }
+      }
       // days_per_week stays a soft signal (remembered), not an auto plan rewrite —
       // the seeded plan is already there; the athlete adjusts it when they want to.
       if (pr.days_per_week != null && Number(pr.days_per_week) > 0) {

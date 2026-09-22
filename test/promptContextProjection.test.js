@@ -53,6 +53,7 @@ const SITES = [
     build: () => buildCoachPrompt(),
     kept: [
       "training_intent",
+      "movement_considerations",
       "endurance_capacity",
       "plan",
       "recent_sessions",

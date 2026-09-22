@@ -585,7 +585,8 @@ export function varietyRead(date: string): { note: string; suggestions: string[]
   >();
   for (const r of rows) {
     const pat = classifyPattern(r.name, r.mg ?? undefined);
-    if (!pat) continue;
+    // Prep is not a training stimulus, so repeating the same cat-cow is not staleness.
+    if (!pat || pat === "mobility") continue;
     const sess = Number(r.sessions) || 0;
     const cur = byPat.get(pat) ?? { sessions: 0, names: new Set<string>(), topName: r.name, topSessions: 0 };
     cur.sessions += sess;

@@ -436,6 +436,18 @@ export interface ClientArtStatsResponse {
   aliases: number;
 }
 
+// GET /api/profile/movement-considerations — lasting, painless conditions the athlete
+// stated; null when none. Read-only in the PWA (chat is the setter).
+export interface ClientMovementConsiderations {
+  items: Array<{
+    label: string;
+    detail?: string;
+    wants_addressed: boolean;
+    source: "athlete" | "chat" | "onboard";
+    stated_on: string;
+  }>;
+}
+
 export interface ClientProfile {
   id?: number;
   name?: string | null;
@@ -3356,6 +3368,7 @@ export interface ClientApiResponses {
   "/api/apple-health/connections/:id": ClientAppleHealthConnectionRevokeResponse;
   "/api/apple-health/pairings": ClientAppleHealthPairingResponse;
   "/api/profile": ClientProfile;
+  "/api/profile/movement-considerations": ClientMovementConsiderations | null;
   "/api/goal": ClientGoalCheck;
   "/api/training-intent": ClientTrainingIntentResponse;
   "/api/bodyweight": ClientWeightRow[];

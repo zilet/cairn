@@ -38,6 +38,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/apple-health/connections/:id",
   "/apple-health/pairings",
   "/profile",
+  "/profile/movement-considerations",
   "/goal",
   "/bodyweight",
   "/body-metrics",

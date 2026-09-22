@@ -149,6 +149,9 @@ export const CONTEXT_GUARDRAILS = `PERSONAL-CONTEXT GUARDRAILS (use the "context
   exercises for pain-free alternatives, and respect every exercise's existing constraint_note. The
   app already correlates each active injury with the planned exercises that load that area (and offers
   safe swaps) — honor that link: prefer an alternative that doesn't load the injured region.
+- STATED CONDITIONS: a lasting, painless condition the athlete stated (see STATED MOVEMENT
+  CONSIDERATIONS, DATA.movement_considerations) is NOT an injury — it shapes selection and balance,
+  never gates or excludes a lift. Pain is the injury rule above.
 - LIFE EVENTS: during flagged high-stress, poor-sleep, or illness windows, reduce volume and
   intensity — recovery comes first.
 - FAMILY: plan AROUND family commitments (kids' schedules / family_event entries) — keep sessions
@@ -1464,6 +1467,32 @@ export function renderStrengthSchedule(ctx: PartialCoachContext): string {
     return `\nOBSERVED LIFTING DAYS (from the log, ${evidence} — they have not said, this is what they DO): ${stated}. Treat these as the week's real shape: keep a strength session on each unless you have a reason, and say the reason. This is a pattern, not a declaration — never tell them they asked for it.${shared}\n`;
   }
   return `\nSTATED LIFTING DAYS: ${stated}. Every stated lifting weekday carries a strength session; never place a strength session on an unstated weekday.${shared}\n`;
+}
+
+// renderMovementConsiderations: a lasting, painless condition the athlete STATED (v107),
+// rendered for every prompt that shapes training. The injury machinery is protective by
+// design and must never see these, so this block is the whole of their influence: it
+// asks for a balanced program and — only when the athlete said they want the condition
+// addressed — a short prep block and supportive work. Generic movements only; no named
+// clinical method, no claim to fix anything, and the physiotherapist line rides along.
+// Quiet ("") when nothing is stated.
+export function renderMovementConsiderations(ctx: PartialCoachContext): string {
+  const items = Array.isArray(ctx?.movement_considerations?.items) ? ctx.movement_considerations.items : [];
+  const lines = items
+    .filter((item) => typeof item?.label === "string" && item.label.trim())
+    .map(
+      (item) =>
+        `- ${item.label}${item.detail ? `: ${item.detail}` : ""}${item.wants_addressed ? " [they want the program to help with this]" : ""}`
+    );
+  if (!lines.length) return "";
+  const addressed = items.some((item) => item?.wants_addressed === true);
+  const support = addressed
+    ? `Because they asked for it to be addressed, also include: anti-rotation and anti-lateral-flexion core (side plank, suitcase carry, Pallof press, bird dog, dead bug) on most training days; hip abductor / glute medius work (side-lying hip abduction, clamshell, glute bridge) across the week; and a short mobility/breathing prep block (quadruped thoracic rotation, cat-cow, 90/90 breathing) at the start of sessions — prep, not working volume.`
+    : `They have not asked for it to be worked on, so it only informs balance: no extra prep block or corrective work unless they ask.`;
+  return `\nSTATED MOVEMENT CONSIDERATIONS (the athlete's own words, DATA.movement_considerations — lasting, NOT an injury, NOT pain):
+${lines.join("\n")}
+Build a BALANCED program: some unilateral rows/presses and single-leg work each week, both sides worked evenly. ${support}
+These never exclude the main lifts on their own and never make a day "modify" or protective: squats, hinges, rows and presses stay, loaded conservatively with good form. Never prescribe a one-sided "correction", never name or imitate a clinician-prescribed method, and never claim the program fixes the condition. Informational, not medical advice — when you speak about it, say once, plainly, that a physiotherapist can tailor this. If they ever report PAIN, that is an injury/symptom and the injury rules apply instead.\n`;
 }
 
 // renderHybridSequencing: the runner+lifter interference/synergy note for the on-demand

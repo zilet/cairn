@@ -49,6 +49,7 @@ import {
   statedRunDows,
 } from "./profile.js";
 import { strengthScheduleRead } from "./strength-schedule.js";
+import { movementConsiderationsRead } from "./movement-considerations.js";
 import { activeRecoveryWeek, recoveryWeekStatus } from "./recovery-week.js";
 import { bodyCompositionRead } from "./standing.js";
 import {
@@ -610,6 +611,7 @@ function buildPersonSlice(
   CoachContext,
   | "now"
   | "profile"
+  | "movement_considerations"
   | "location"
   | "discipline"
   | "training_intent"
@@ -634,6 +636,9 @@ function buildPersonSlice(
     // chat/day-read prompts also surface it as an explicit "RIGHT NOW" line.
     now: nowContext(),
     profile,
+    // Lasting, painless conditions the athlete STATED (v107), parsed. Person-level, so
+    // it rides every prompt; it shapes selection and balance and never feeds a gate.
+    movement_considerations: movementConsiderationsRead(),
     // Compact, deterministic planning context only: home is the durable base;
     // an active dated trip may temporarily override effective. No weather is
     // fetched or inferred, and location never gates the athlete's choices.

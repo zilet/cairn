@@ -18,6 +18,7 @@
     <div class="sess"><div class="sess-line" style="color:var(--muted)">
       Trips, injuries, and life events. The coach factors these into the workout you see — easing off around travel or an injury.
     </div></div>
+    <div id="lConsider"></div>
     <h1 class="lbl" style="margin:20px 0 8px">Add to your timeline</h1>
     <div class="lifeadd">
       <div class="field" style="margin-bottom:9px"><label for="lKind">Kind</label>
@@ -39,6 +40,32 @@
     $<HTMLButtonElement>("#lAdd")?.addEventListener("click", () => lifeFormApi().submit(deps));
 
     lifeTimelineApi().load(deps);
+    loadConsiderations(deps);
+  }
+
+  // Stated movement considerations (read-only; chat is the setter). Best-effort: a
+  // failed read leaves the slot empty rather than blocking the timeline.
+  async function loadConsiderations(deps: ClientLifeControllerDeps): Promise<void> {
+    let read: unknown = null;
+    try {
+      read = await deps.api("/profile/movement-considerations");
+    } catch {
+      return;
+    }
+    const slot = $("#lConsider");
+    if (!slot || !slot.isConnected || deps.state.meSeg !== "life") return;
+    slot.innerHTML = CairnLife.movementConsiderationsHtml(read);
+    slot.querySelector("[data-lconsider-chat]")?.addEventListener("click", () => {
+      const g = globalThis as unknown as {
+        CairnHealthClient?: { askCoach?: (q: unknown) => void };
+        state?: { chatPrefill?: string | null };
+        activateTab?: (name: string) => unknown;
+      };
+      const question = "About how I move:";
+      if (g.CairnHealthClient?.askCoach) return g.CairnHealthClient.askCoach(question);
+      if (g.state) g.state.chatPrefill = question;
+      if (typeof g.activateTab === "function") g.activateTab("chat");
+    });
   }
 
   const CAIRN_LIFE_CONTROLLER = {

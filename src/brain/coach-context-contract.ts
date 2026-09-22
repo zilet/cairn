@@ -48,6 +48,20 @@ export interface CoachEnduranceSchedule extends CoachRecord {
   updated_at?: string;
 }
 
+// Stated movement considerations (v107): lasting, painless conditions in the athlete's
+// own words. Prompt context only — they shape selection and balance, never a gate.
+export interface CoachMovementConsideration {
+  label: string;
+  detail?: string;
+  wants_addressed: boolean;
+  source: "athlete" | "chat" | "onboard";
+  stated_on: string;
+}
+
+export interface CoachMovementConsiderations {
+  items: CoachMovementConsideration[];
+}
+
 // The stated LIFTING weekdays (v102) — the strength counterpart to the run schedule
 // above. No `kind`: a lifting day is named by the plan's own rotation, not here.
 export interface CoachStrengthScheduleDay {
@@ -289,6 +303,7 @@ export interface CoachContextEnvelope {
   endurance_goal: CoachEnduranceGoal | null;
   endurance_schedule: CoachEnduranceSchedule | null;
   strength_schedule: CoachStrengthSchedule | null;
+  movement_considerations: CoachMovementConsiderations | null;
   goal: CoachGoalCheck | null;
   goal_mode: CoachGoalMode;
   journey: CoachRecord | null;

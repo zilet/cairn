@@ -41,6 +41,9 @@ export type PromptContextKey = keyof CoachContextEnvelope;
 const PERSON = [
   "now",
   "profile",
+  // Stated lasting conditions — person-level and tiny; every site that sees the
+  // profile should see what the athlete said about how their body moves.
+  "movement_considerations",
   "location",
   "discipline",
   "training_intent",

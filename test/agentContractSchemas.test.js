@@ -755,6 +755,10 @@ const CONSUMER_READS = [
       "context_events[].start_date",
       "context_events[].end_date",
       "context_events[].meta",
+      "movement_considerations",
+      "movement_considerations[].label",
+      "movement_considerations[].detail",
+      "movement_considerations[].wants_addressed",
     ],
   },
   {

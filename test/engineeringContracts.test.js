@@ -430,7 +430,10 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   // Stated lifting days: +2 (get_strength_schedule, set_strength_schedule) in
   // src/surfaces/mcp/training-status.ts — the MCP mirror of profile.strength_schedule,
   // beside its endurance_schedule sibling.
-  assert.equal(tools.length, 270, "tool count changes only for reviewed MCP additions");
+  // Stated movement considerations: +1 (get_movement_considerations) in
+  // src/surfaces/mcp/person.ts — the MCP mirror of GET /api/profile/movement-considerations;
+  // writes ride set_profile.movement_considerations, as they ride PUT /api/profile.
+  assert.equal(tools.length, 271, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);

@@ -570,6 +570,26 @@ the lifting can wait a week); otherwise neither is deadline-bound → the RUN la
 (mileage is where a spike is paid for in bone and tendon, not a missed rep). Informational only — it
 shapes rationale, it gates nothing.
 
+**Stated movement considerations are not injuries.** A lasting, PAINLESS condition the athlete states
+("mild scoliosis", hypermobility, a leg-length difference) lives in `profile.movement_considerations_json`
+(`{items:[{label, detail?, wants_addressed, source, stated_on}]}`, `src/repo/movement-considerations.ts`),
+never in an `injury` context event: an injury is protective by design (hard exclusion, "modify" posture,
+no novel movements) and a structural fact has no healing window, so filed as one it would take the squat,
+row and hinge away every day for good. Nothing in the daily decision, the signal state or the injury
+machinery reads it. Its whole influence is the prompt: the `movement_considerations` context key rides
+the PERSON projection bundle, and `renderMovementConsiderations()` (`src/prompt/shared.ts`) prints it at
+the plan draft, program evolution, first-week compose, session, daily-composition and chat sites — asking
+for a balanced program, keeping the main lifts, and adding a prep/supportive block ONLY when
+`wants_addressed` is true. Generic movements only (no named clinical method), no claim to fix anything,
+and the "a physiotherapist can tailor this" line always rides along; pain is still an injury/symptom.
+It is stated, never inferred: onboarding extracts it (`ONBOARD_SCHEMA.movement_considerations`), chat
+writes it with `set_movement_considerations` (full list; `[]` clears; it may OFFER to move a
+structural-looking injury over, only on the athlete's yes), REST `PUT /api/profile` / `GET
+/api/profile/movement-considerations`, MCP `set_profile` / `get_movement_considerations`. Me → Life shows
+it read-only. The supportive movements it asks for (side plank, Pallof press, bird dog, single-arm
+rows/presses, clamshell, cat-cow, 90/90 breathing…) are in the SEED catalog of both seed modes; an
+existing catalog is never mutated — a draft that names one creates it through `findOrCreateExercise`.
+
 ### Body, nutrition, capture
 
 - Bodyweight log (`logWeight`/`listWeight`, syncs `profile.weight_lb`); the TDEE + lean-safe goal
