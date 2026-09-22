@@ -74,10 +74,18 @@ function jpHasRead(read: JourneyProgressRead | null | undefined, milestones?: un
   );
 }
 
+function jpPhaseTarget(read: JourneyProgressRead | null | undefined, phase: Record<string, unknown>): string {
+  return (
+    jpPounds(read?.profile?.goal_weight_lb || phase.target_weight_lb) ||
+    jpBodyFat(read?.profile?.goal_bodyfat_pct || phase.target_bodyfat_pct)
+  );
+}
+
 function jpArcSteps(read: JourneyProgressRead | null | undefined, transition: JourneyProgressTransition | null): string[] {
   const phase = jpRecord(read?.active_phase);
   const active = jpPhaseLabel(phase.kind || transition?.kind || read?.profile?.goal_mode || "journey");
-  const target = jpPounds(phase.target_weight_lb || read?.profile?.goal_weight_lb) || jpBodyFat(phase.target_bodyfat_pct || read?.profile?.goal_bodyfat_pct);
+  // The profile goal is the destination; a phase's own copy can only be older.
+  const target = jpPhaseTarget(read, phase);
   const next = transition ? `Possible ${jpPhaseLabel(transition.kind)}` : "Steady";
   return ["Started", active, target || "Target", next];
 }
@@ -88,7 +96,7 @@ function jpPhaseLine(read: JourneyProgressRead | null | undefined): string {
   if (phase.kind) {
     const bits = [jpText(strategy?.stage?.label) || jpPhaseLabel(phase.kind)];
     const started = jpDate(phase.start_date);
-    const target = jpPounds(phase.target_weight_lb) || jpBodyFat(phase.target_bodyfat_pct);
+    const target = jpPhaseTarget(read, phase);
     if (started) bits.push(`since ${started}`);
     if (target) bits.push(`toward ${target}`);
     return bits.join(" / ");

@@ -687,6 +687,17 @@ existing catalog is never mutated — a draft that names one creates it through 
   `CUT_DEFICIT_MAX_KCAL` — so a gap a raise alone created never votes as strain for the next raise or
   a recovery week; and its strain needs the low days to outnumber the on-reference days (a pattern,
   not three noisy days among nine ordinary ones).
+- **Carbohydrate is periodised to the day's work, inside the target** (`src/repo/fuel-demand.ts`).
+  With a carb basis (canonical bodyweight + the target in force, `dayIntakeTarget`), each demand day
+  carries `carbs {tier, g_per_kg, grams, basis}`: the ACSM/IOC g/kg bands (light 3–5, moderate 5–7,
+  high 6–10) keyed off the demand read's own inputs — high only for a long run, quality running or a
+  logged ride ≥ 90 min; a strength-only big day is moderate. With a target, protein stays fixed and fat
+  moves inside its 20–35%-of-energy band, so the tier takes its third of what the target holds (never
+  above the band). Surfaces: the Fuel card's one line (today only), the check-in / swap block and the
+  meal plan's `DATA.fuel_demand`. Informational: never a new target, never compared with what was eaten.
+- **The profile goal is the destination.** A goal change moves the ACTIVE journey phase's
+  `target_weight_lb`/`target_bodyfat_pct` with it (`setProfile`), and the journey card reads the
+  profile goal ahead of any phase copy.
 - **Measurement requests: the system asks for DATA, not for permission** (`src/repo/measurement-request.ts`).
   Pull-never-push was written about opinions; it was never a good answer to a derivation gone blind
   for want of one cheap measurement only the athlete can supply. So: ONE calm in-app request tied to a
@@ -796,6 +807,17 @@ push-drive floor, `daily-decision.ts`'s readiness, the signal-state readiness ob
 rest-trade floor, `weeklyRunPlan`'s readiness brake, and the harm test's Garmin fallback. The
 day-read snapshot calls anything else `stale`, so read-adherence's ledger lookup never trusts it as a
 morning value. `SENSOR_MAX_AGE_DAYS.training_readiness` (1) now bounds only the window average.
+The same row dated the read day turns post-workout once the athlete trains, so a recompute after
+logged WORK (a set or an activity — never a bare session row) reads the ledger's morning snapshot
+instead, or nothing (`withMorningReadiness`, `src/repo/brain/read-adherence.ts`, applied where
+day-read and `getCoachContext` fetch their recovery summary). And because the 04:00 floor now reads
+before today's readiness exists, the push drive's wearable path accepts last night's HRV in its place
+while — and only while — today's reading is pending: a night dated the read day, Garmin's own
+`balanced` status (or, without one, the value inside the athlete's norm band), beside last night's
+sleep and no fresh brake. A synced reading below the floor still says no; absence never vouches.
+
+**`hrv_ms` history was repaired by v109**: rows whose raw summary has no `lastNightAvg` and whose
+`hrv_ms` equals `weeklyAvg` were cleared (the raw blob keeps the weekly figure).
 
 **`hrv_ms` is last night's HRV or nothing.** On a morning with no night of its own Garmin's HRV
 summary still carries `weeklyAvg`; `foldHrv` used to fall back to it, storing a seven-day average
@@ -1116,6 +1138,12 @@ same `SIGNAL_VOICE_KEYS` (`protect`/`injury`/`fueling`/`schedule`) and the same
 notes about the same morning a tab apart. `SignalDimensionState.voice` sits alongside each
 dimension's `reason` for the conductor's parallel fueling/schedule cards, which speak to one
 dimension rather than the day's whole posture.
+
+**A voice follows its observation's DIRECTION.** HRV and resting HR pick their voice key in the
+same order their direction is decided: an excursion, then the TREND past the norm, and only then the
+lone-reading `*_unsettled` note — a neutral set whose phrasing says there is nothing to act on. Ordered
+the other way, one off reading on a trend already below the norm was a caution that eased the day
+while the Brief told the athlete there was nothing to act on.
 
 **The work-around caveat is chosen by CAUSE, never by posture.** `modify` is reached from unrelated
 causes — an active health constraint, an underfueling prescription, or the mixed-signal arbitration
@@ -3397,8 +3425,11 @@ Quality gates: `npm run brain:eval` (offline, `test/brain-scenarios/`) and `npm 
 A heart rate means what THIS athlete's own data says it means. `hr-model.ts` derives the personal
 model from logged work — an outlier-guarded observed max (a lone spike defers to the runner-up), a
 freshness-gated resting HR, and a lactate-threshold estimate on a three-rung evidence ladder: a
-detected **field test** anchors it (120-day life), else the best **sustained effort** (≥35 min)
-estimates it, else a plain **fraction of observed max**. Zone bands derive from LTHR; with under
+detected **field test** anchors it (120-day life) — floored by the best average held across any
+run ≥ 45 min in that window, since a longer run cannot average above threshold (short tempo "tests"
+used to ratchet it down) — else the best **sustained effort** (≥35 min)
+estimates it, else a plain **fraction of observed max**. A run the athlete NAMES as a threshold test
+("LT HR test", "time trial") is recorded at any length from 25 min, even on the fallback rung. Zone bands derive from LTHR; with under
 three HR-bearing outings the model reports `insufficient` and consumers fall back to neutral
 language — it never invents a band from an age formula. State persists in `hr_model_state`
 (re-derived on a daily scheduler slot and after every Garmin sync); `zoneTag()` in
@@ -3432,7 +3463,8 @@ plan and the race ladder label the same week; the lifting block's week index is 
 without a race. `goal_feasibility` (`fits`/`stretch`/`beyond_horizon`) reports
 the gap honestly through rotated fit prose that offers the athlete a choice, never a quota. A
 demonstrated long run is a floor as well as a ceiling — bounded by the race curve, a 1.15× step,
-0.55× of the week, and the room the week has left. Phases are distance-aware (a ≥15 km race gets a
+0.55× of the week, and the room the week has left; on a down or spike week it sits at most 0.85× the
+demonstrated longest, so a reset never repeats the new longest. Phases are distance-aware (a ≥15 km race gets a
 14-week build), the base quality pool includes threshold, and a timed race inside 16 weeks opens an
 endurance block instead of off-season strength. The Monday scheduler tick keeps the APPLIED week
 current through `buildRunPlanWithAutonomy` (policy untouched), but **only once the athlete has

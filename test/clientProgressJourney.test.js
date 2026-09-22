@@ -151,6 +151,23 @@ test("journey transition discussion prefills Coach without creating an approval 
   assert.doesNotMatch(context.state.chatPrefill, /do not apply it automatically/);
 });
 
+test("journey progress names the profile goal, never a phase's stale copy of it", () => {
+  const context = loadJourneyClient();
+  const html = context.CairnProgressJourney.journeyCardHtml(
+    {
+      profile: { goal_mode: "lose", goal_weight_lb: 154 },
+      active_phase: { kind: "cut", start_date: "2026-06-01", target_weight_lb: 164 },
+      transition_suggestion: null,
+      proposed_phases: [],
+      milestones: [],
+      recomposition: null,
+    },
+    [],
+  );
+  assert.match(html, /154 lb/);
+  assert.doesNotMatch(html, /164 lb/);
+});
+
 test("journey progress keeps a missing goal out of zero-pound copy", () => {
   const context = loadJourneyClient();
   const html = context.CairnProgressJourney.journeyCardHtml(

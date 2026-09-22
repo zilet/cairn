@@ -34,7 +34,8 @@ import type { FlexibleRunKind, FlexibleTrainingAgenda } from "./flexible-trainin
 import type { WeeklyRunPlan } from "./run-progression.js";
 import type { PlanDayGroups } from "./training-read.js";
 import { dayLoad, hybridDayContext, planDayStrengthGroups } from "./training-read.js";
-import { addDaysISO, localDateISO } from "./shared.js";
+import { LB_PER_KG, addDaysISO, localDateISO } from "./shared.js";
+import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { mondayOf } from "../lib/dates.js";
 
 export type FuelDemandLevel = "light" | "standard" | "big";
@@ -50,6 +51,34 @@ export interface DayFuelDemand {
   drivers: string[];
   /** Which inputs were actually present for this read (never a confidence score). */
   evidence: string[];
+  /**
+   * The day's carbohydrate RANGE for its work, present only when the caller supplied a
+   * carb basis (see `carbBasis`). Informational: never a target change, never graded
+   * against what was eaten.
+   */
+  carbs?: DayCarbRange | null;
+}
+
+export type CarbTier = "light" | "moderate" | "high";
+
+export interface DayCarbRange {
+  tier: CarbTier;
+  /** Grams per kg of canonical bodyweight, the unit the guidance is written in. */
+  g_per_kg: { low: number; high: number };
+  grams: { low: number; high: number };
+  /**
+   * `within_target`: the range is the day's share of what the accepted kcal target
+   * holds once protein is fixed and fat stays inside its band. `band`: no target to fit
+   * into, so the published band itself.
+   */
+  basis: "within_target" | "band";
+}
+
+/** What a carb range is computed against: canonical bodyweight and the target in force. */
+export interface CarbBasis {
+  weight_kg: number;
+  target_kcal: number | null;
+  protein_g: number | null;
 }
 
 export interface FuelDemandWeek {
@@ -78,6 +107,98 @@ export interface FuelDemandOpts {
    * behavior; this is a pure optimization and changes no output.
    */
   agenda?: FlexibleTrainingAgenda | null;
+  /**
+   * When present, every day also carries its carbohydrate range (`carbs`). Omitted,
+   * the read is exactly the demand read it always was — the caller that wants grams
+   * already holds the target it must fit inside.
+   */
+  carbBasis?: CarbBasis | null;
+}
+
+// ---------- carbohydrate periodised to the day's work ----------
+//
+// Daily carbohydrate bands by training load, in g/kg of body mass per day, from the
+// ACSM / Academy of Nutrition and Dietetics / Dietitians of Canada joint position
+// statement "Nutrition and Athletic Performance" (Thomas, Erdman & Burke, Med Sci
+// Sports Exerc 2016;48(3):543-568), which restates the IOC consensus bands (Burke et
+// al., J Sports Sci 2011;29 Suppl 1:S17-27):
+//   light     low-intensity or skill-based activity      3-5
+//   moderate  moderate exercise, ~1 h/day                 5-7
+//   high      endurance, 1-3 h/day moderate-high          6-10
+// The tier reads the demand read's OWN inputs, never a second classifier: a light day
+// is light, and the high band is for the endurance work it was written for — a long
+// run, quality running, a long ride. A big day made big only by strength (a heavy
+// lower day, a lift beside an easy run) is ~1 h of work, which is the moderate band,
+// as is an ordinary day.
+const CARB_BANDS: Readonly<Record<CarbTier, { low: number; high: number }>> = {
+  light: { low: 3, high: 5 },
+  moderate: { low: 5, high: 7 },
+  high: { low: 6, high: 10 },
+};
+export function carbTierFor(demand: FuelDemandLevel, enduranceDriven: boolean): CarbTier {
+  if (demand === "light") return "light";
+  return demand === "big" && enduranceDriven ? "high" : "moderate";
+}
+// The same statement's fat band, 20-35% of energy. With the kcal target held and
+// protein fixed, fat is the only other lever, so these two ends bound how far carbs
+// may flex inside the target: fat at its floor is the most carbohydrate the day can
+// hold, fat at its ceiling the least.
+const FAT_FLOOR_SHARE = 0.2;
+const FAT_CEILING_SHARE = 0.35;
+// Where each tier sits inside that in-target span: a big day takes the top third (fat
+// at its floor), a light day the bottom third, an ordinary one the middle.
+const TIER_SPAN: Readonly<Record<CarbTier, [number, number]>> = {
+  light: [0, 1 / 3],
+  moderate: [1 / 3, 2 / 3],
+  high: [2 / 3, 1],
+};
+
+/** The basis a caller passes to get carb ranges: canonical bodyweight + the target in force. */
+export function carbBasis(
+  target: { kcal?: unknown; protein_g?: unknown } | null | undefined,
+  profile?: unknown,
+  today = localDateISO()
+): CarbBasis | null {
+  const lb = Number(resolvedCurrentBodyweight(profile, today)?.weight_lb);
+  if (!Number.isFinite(lb) || lb <= 0) return null;
+  const kcal = Number(target?.kcal);
+  const protein = Number(target?.protein_g);
+  return {
+    weight_kg: lb / LB_PER_KG,
+    target_kcal: Number.isFinite(kcal) && kcal > 0 ? kcal : null,
+    protein_g: Number.isFinite(protein) && protein > 0 ? protein : null,
+  };
+}
+
+/**
+ * The carbohydrate range for a day of the given tier. With a kcal target and a
+ * protein target, the range is that tier's share of what the target holds (carbs
+ * flex, protein fixed, fat inside its band), never above the published band; without
+ * one, the published band itself. Null when there is no bodyweight to scale by.
+ */
+export function carbRangeForTier(tier: CarbTier, basis: CarbBasis | null | undefined): DayCarbRange | null {
+  const kg = Number(basis?.weight_kg);
+  if (!Number.isFinite(kg) || kg <= 0 || !CARB_BANDS[tier]) return null;
+  const band = CARB_BANDS[tier];
+  const bandHigh = band.high * kg;
+  let low = band.low * kg;
+  let high = bandHigh;
+  let basisKind: DayCarbRange["basis"] = "band";
+  const kcal = Number(basis?.target_kcal);
+  const protein = Number(basis?.protein_g);
+  if (Number.isFinite(kcal) && kcal > 0 && Number.isFinite(protein) && protein > 0) {
+    const most = (kcal * (1 - FAT_FLOOR_SHARE) - protein * 4) / 4;
+    const least = Math.max(0, (kcal * (1 - FAT_CEILING_SHARE) - protein * 4) / 4);
+    if (most > 0) {
+      const [from, to] = TIER_SPAN[tier];
+      high = Math.min(least + (most - least) * to, bandHigh);
+      low = Math.min(least + (most - least) * from, high);
+      basisKind = "within_target";
+    }
+  }
+  const grams = { low: Math.round(low / 5) * 5, high: Math.round(high / 5) * 5 };
+  const perKg = (g: number) => Math.round((g / kg) * 10) / 10;
+  return { tier, g_per_kg: { low: perKg(grams.low), high: perKg(grams.high) }, grams, basis: basisKind };
 }
 
 const NEUTRAL_EVIDENCE: string[] = [];
@@ -188,7 +309,10 @@ interface LoggedDay {
   strength: boolean;
   run: boolean;
   cardio: boolean;
+  cardioMinutes: number;
 }
+
+const LONG_NON_RUN_CARDIO_MIN = 90;
 
 // What is actually on the books for a date that has already started. A future date has
 // nothing logged by definition, so this is never asked about one.
@@ -196,6 +320,7 @@ function loggedWork(date: string): LoggedDay {
   let strength = false;
   let run = false;
   let cardio = false;
+  let cardioMinutes = 0;
   try {
     strength = dayLoad(date, { countsCardio: false }) !== "none";
   } catch {
@@ -205,11 +330,12 @@ function loggedWork(date: string): LoggedDay {
     const today = hybridDayContext(date).cardio_today;
     cardio = !!today;
     run = today?.sport === "run";
+    cardioMinutes = Number(today?.minutes) || 0;
   } catch {
     cardio = false;
     run = false;
   }
-  return { strength, run, cardio };
+  return { strength, run, cardio, cardioMinutes };
 }
 
 interface DemandInputs {
@@ -217,6 +343,11 @@ interface DemandInputs {
   planDays: readonly PlanDayGroups[];
   itemCounts: Map<number, PlanDayItemCount>;
   today: string;
+  carbBasis?: CarbBasis | null;
+}
+
+function withCarbs(day: DayFuelDemand, basis: CarbBasis | null | undefined, enduranceDriven = false): DayFuelDemand {
+  return basis ? { ...day, carbs: carbRangeForTier(carbTierFor(day.demand, enduranceDriven), basis) } : day;
 }
 
 function classify(date: string, inputs: DemandInputs): DayFuelDemand {
@@ -242,6 +373,12 @@ function classify(date: string, inputs: DemandInputs): DayFuelDemand {
   if (runKinds.has("quality")) drivers.push("quality run on this day");
   if (planDay?.heavy_lower) drivers.push("heavy lower-body strength day");
   if (strengthDay && runDay) drivers.push("strength and running on the same day");
+  // A long ride or other long non-run endurance session already logged — a 2-hour
+  // trail ride is endurance work in the high band, not an ordinary day. Duration only,
+  // at the band's own "1-3 h" floor-ish: the hard-cardio grade would also call a
+  // 45-minute commute hard. Logged only: a ride is a pattern, never a scheduled intent.
+  const longRide = !!logged?.cardio && !logged.run && logged.cardioMinutes >= LONG_NON_RUN_CARDIO_MIN;
+  if (longRide) drivers.push("long ride or endurance session on this day");
 
   const demand: FuelDemandLevel = drivers.length
     ? "big"
@@ -253,7 +390,8 @@ function classify(date: string, inputs: DemandInputs): DayFuelDemand {
       ? "light"
       : "standard";
 
-  return { date, demand, drivers, evidence };
+  const enduranceDriven = runKinds.has("long") || runKinds.has("quality") || longRide;
+  return withCarbs({ date, demand, drivers, evidence }, inputs.carbBasis, enduranceDriven);
 }
 
 /**
@@ -270,9 +408,10 @@ export function dayFuelDemand(date?: string, opts?: FuelDemandOpts): DayFuelDema
       planDays: planDayStrengthGroups(),
       itemCounts: planDayItemCounts(),
       today,
+      carbBasis: opts?.carbBasis,
     });
   } catch {
-    return neutralDay(d);
+    return withCarbs(neutralDay(d), opts?.carbBasis);
   }
 }
 
@@ -315,9 +454,9 @@ export function fuelDemandWeek(date?: string, days = 7, opts?: FuelDemandOpts): 
     return {
       as_of: start,
       through,
-      days: dates.map((d) => classify(d, { runs: runsFor(d), planDays, itemCounts, today })),
+      days: dates.map((d) => classify(d, { runs: runsFor(d), planDays, itemCounts, today, carbBasis: opts?.carbBasis })),
     };
   } catch {
-    return { as_of: start, through, days: dates.map(neutralDay) };
+    return { as_of: start, through, days: dates.map((d) => withCarbs(neutralDay(d), opts?.carbBasis)) };
   }
 }

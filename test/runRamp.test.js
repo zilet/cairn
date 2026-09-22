@@ -302,6 +302,19 @@ test("weeklyRunPlan: a spike landing on a scheduled down week takes the down wee
   assert.ok(spikeOnReset.rationale.some((line) => /Scheduled down week/.test(line)));
 });
 
+test("weeklyRunPlan: a down week or a spike week holds the long run a step under the new longest", () => {
+  const big = { compliance: { actual_km: 32, prescribed_km: 30 } };
+  const state = (status) => ({ endurance: { sport: "run", longest_km_4wk: 16, has_quality: true, status } });
+  const reset = repo.weeklyRunPlan(RAMP_DOWN_DAY, rampDownOpts({ ...big, programState: state("building") }));
+  assert.ok(reset.rationale.some((line) => /Scheduled down week/.test(line)));
+  assert.ok(longRun(reset).target_distance_km <= 16 * 0.85, `reset long run ${longRun(reset).target_distance_km}`);
+  const spike = repo.weeklyRunPlan(REF, planOpts({ ...big, programState: state("spiking") }));
+  assert.ok(longRun(spike).target_distance_km <= 16 * 0.85, `spike long run ${longRun(spike).target_distance_km}`);
+  // An ordinary build week may still reach the demonstrated longest.
+  const build = repo.weeklyRunPlan(REF, planOpts({ ...big, programState: state("building") }));
+  assert.ok(longRun(build).target_distance_km > 16 * 0.85, `build long run ${longRun(build).target_distance_km}`);
+});
+
 test("weeklyRunPlan: a demonstrated long run is a floor, not just a ceiling", () => {
   const plan = repo.weeklyRunPlan(REF, planOpts());
   const long = longRun(plan);

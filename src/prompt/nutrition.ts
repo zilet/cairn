@@ -273,10 +273,24 @@ function renderFuelingFeedback(context: any): string {
 const FUEL_DEMAND_RULE =
   "A bigger day is a reason to bias CARBOHYDRATE toward it and to protect fuel — never a reason to change the accepted daily target, never a reason to cut another day to pay for it, and never a retrospective judgement about a day that has already passed.";
 
+// The day's carb range (repo/fuel-demand.ts): published ACSM/IOC g/kg bands for the
+// day's work, fitted inside the accepted target with protein held. The same three
+// "never"s as the demand read apply, and the text says so because the model reads it.
+const CARB_RANGE_RULE =
+  "A carb range is the SHAPE of that day's carbohydrate inside the accepted target (protein stays fixed; fat gives way on a bigger day and comes back on a lighter one) — never a new target, and never a measure of what was or wasn't eaten.";
+
+function carbRangeClause(carbs: any): string {
+  const low = Number(carbs?.grams?.low);
+  const high = Number(carbs?.grams?.high);
+  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= 0) return "";
+  const perKg = carbs?.g_per_kg ? ` (${carbs.g_per_kg.low}–${carbs.g_per_kg.high} g/kg)` : "";
+  return `; carbs ${low}–${high} g${perKg}`;
+}
+
 function fuelDemandLine(day: any, label?: string): string {
   const when = label ? `${day?.date} (${label})` : String(day?.date ?? "");
   const drivers = Array.isArray(day?.drivers) && day.drivers.length ? ` — ${day.drivers.join("; ")}` : "";
-  return `- ${when}: ${day?.demand ?? "standard"}${drivers}`;
+  return `- ${when}: ${day?.demand ?? "standard"}${drivers}${carbRangeClause(day?.carbs)}`;
 }
 
 // `opts.days` takes the first N days (the check-in wants today + tomorrow); `opts.weekday`
@@ -308,11 +322,13 @@ function renderFuelDemand(ctx: any, opts: { days?: number; weekday?: string } = 
       label: index === 0 ? "today" : index === 1 ? "tomorrow" : undefined,
     }));
   }
-  // Nothing worth a block when every day in view is ordinary.
-  if (!picked.some((entry) => entry.day?.demand === "big")) return "";
+  // Nothing worth a block when every day in view is ordinary and carries no carb range.
+  const ranged = picked.some((entry) => carbRangeClause(entry.day?.carbs));
+  if (!ranged && !picked.some((entry) => entry.day?.demand === "big")) return "";
 
   const lines = picked.map((entry) => fuelDemandLine(entry.day, entry.label)).join("\n");
-  return `\nDAY-SPECIFIC FUEL DEMAND (deterministic, from the training plan and this week's run intentions):\n${lines}\n- ${FUEL_DEMAND_RULE}\n`;
+  const carbRule = ranged ? `\n- ${CARB_RANGE_RULE}` : "";
+  return `\nDAY-SPECIFIC FUEL DEMAND (deterministic, from the training plan and this week's run intentions):\n${lines}\n- ${FUEL_DEMAND_RULE}${carbRule}\n`;
 }
 
 function renderGoalMode(ctx: any): string {
@@ -643,8 +659,12 @@ HARD RULES:
 - Time more carbs around training days; keep it practical and repeatable, not 7 unique gourmet days.
   DATA.fuel_demand names WHICH days those are: each day carries a demand of big / standard / light and,
   on a big day, the drivers behind it (a long run, a quality session, a heavy lower-body day, a
-  strength+run double). Bias carbohydrate toward the big days and say so in that day's note.
+  strength+run double, a long ride). Bias carbohydrate toward the big days and say so in that day's note.
+  Each day's \`carbs\` (when present) is its carbohydrate range in grams and g/kg — ACSM/IOC bands for that
+  day's work fitted inside the accepted target — so a big day's meals land near its range and a light day's
+  lower, at the same daily kcal.
   ${FUEL_DEMAND_RULE}
+  ${CARB_RANGE_RULE}
 - Evaluate PRACTICALITY as part of adequacy: preparation time, household fit, ordinary cost/availability,
   and reuse of the user's frequent foods. A theoretically perfect plan they will not cook is not adequate.
 - Nutrition-pattern judgments are coarse and food-pattern based. Never invent precise sodium, potassium,

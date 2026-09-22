@@ -270,6 +270,11 @@ test("raceBuild lays out the half: estimate from the watch, fit against the targ
   assert.equal(out.paces.race_pace_sec_per_km, Math.round(6300 / HALF));
   assert.equal(out.paces.bands.find((b) => b.key === "race").fast_sec_per_km, Math.round(6300 / HALF));
   assert.ok(out.paces.bands.some((b) => b.key === "threshold"));
+  // Only easy and long carry an HR ceiling, and only as the model's own number or null.
+  for (const band of out.paces.bands) {
+    if (band.key === "easy" || band.key === "long") assert.ok("hr_ceiling_bpm" in band);
+    else assert.equal(band.hr_ceiling_bpm, undefined);
+  }
   assert.ok(out.this_week, "the live engine prescribed a week");
   assert.ok(out.this_week.km > 0);
 

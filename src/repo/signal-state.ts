@@ -2060,12 +2060,15 @@ export function planningSignalState(input: {
             : saturation
               ? `HRV is running above the athlete's own norm while the work itself is costing more (${performance.reasons.join("; ")}); a rising variability trend beside a declining performance channel is read as the performance channel, not as recovery.`
               : "HRV is steady against the athlete's norm.") + provisionalAside(hrvTrust.provisional, "HRV"),
+      // The voice follows the DIRECTION: a lone off-norm reading on a trend already
+      // below the norm is a caution, and its "nothing to act on" phrasing was the
+      // Brief easing the day while telling the athlete there was nothing to act on.
       excursion
         ? "hrv_excursion"
-        : unsettled
-          ? "hrv_unsettled"
-          : trendDown
-            ? "hrv_below"
+        : trendDown
+          ? "hrv_below"
+          : unsettled
+            ? "hrv_unsettled"
             : saturation
               ? "hrv_saturation"
               : "hrv_steady",
@@ -2092,10 +2095,10 @@ export function planningSignalState(input: {
         provisionalAside(rhrTrust.provisional, "resting heart rate"),
       excursion
         ? "resting_hr_excursion"
-        : unsettled
-          ? "resting_hr_unsettled"
-          : trendUp
-            ? "resting_hr_up"
+        : trendUp
+          ? "resting_hr_up"
+          : unsettled
+            ? "resting_hr_unsettled"
             : "resting_hr_steady",
       SENSOR_MAX_AGE_DAYS.resting_hr,
       rhrTrust.claim_date

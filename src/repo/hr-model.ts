@@ -57,6 +57,12 @@ const LTHR_CEILING_OF_MAX = 0.97;
 const FALLBACK_LTHR_OF_MAX = 0.92;
 // How long a field test may anchor the model before it stops speaking for today.
 export const LTHR_FIELD_TEST_MAX_AGE_DAYS = 120;
+// A run held this long cannot have averaged ABOVE threshold — a 30-minute test's
+// average is the threshold itself, and every minute past it pulls the sustainable
+// average down. So a longer steady run's average is a FLOOR under any anchored
+// threshold: without it, each 25-45 minute tempo re-anchored the model at its own
+// average and the threshold ratcheted down (157 after a 164 held for 73 minutes).
+export const LTHR_LOWER_BOUND_MIN_MINUTES = 45;
 // Fewer HR-bearing outings than this and there is no distribution to read — the
 // model reports "insufficient" and every consumer falls back to neutral language.
 const MIN_BASIS_RUNS = 3;
@@ -162,6 +168,24 @@ function bestSustainedAvgHr(asOf: string): number | null {
   return num(row?.best);
 }
 
+// The best average held across a run long enough to be a lower bound on threshold,
+// inside the same window a field test may anchor for.
+function longSteadyFloor(asOf: string): number | null {
+  const row = db
+    .prepare(
+      `SELECT MAX(avg_hr) AS best FROM garmin_activities
+       WHERE avg_hr IS NOT NULL AND avg_hr >= 100
+         AND COALESCE(moving_min, duration_min) >= ?
+         AND date >= ? AND date <= ?
+         AND ${RUN_TYPE_SQL}`
+    )
+    .get(LTHR_LOWER_BOUND_MIN_MINUTES, shiftISO(asOf, -LTHR_FIELD_TEST_MAX_AGE_DAYS), asOf) as
+    | { best: number | null }
+    | undefined;
+  const best = num(row?.best);
+  return best == null ? null : Math.round(best);
+}
+
 // ---------- the model ----------
 
 function computeHrModel(asOf: string): HrModel {
@@ -193,7 +217,7 @@ function computeHrModel(asOf: string): HrModel {
     // NOT capped against the observed max — the test measured the thing directly,
     // and an athlete who has never gone truly maximal can honestly hold a
     // threshold above 97% of the hardest pulse their watch has yet recorded.
-    lthr = anchored;
+    lthr = Math.max(anchored, longSteadyFloor(asOf) ?? 0);
     basis = "field_test";
     confidence = "anchored";
   } else {

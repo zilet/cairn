@@ -260,6 +260,46 @@ test("a fresh, solid readiness reading with a real night behind it earns the dri
   assert.equal(r.signals.training_drive_push.backed_by, "recovery_reading");
 });
 
+// The 04:00 floor: today's readiness has not synced, yesterday's (post-workout) row is
+// the newest, and last night's HRV is on the board.
+const overnight = ({ status = "balanced", hrvDate = DRIVE_REF, readinessValue = 72, readinessDate } = {}) => ({
+  has_data: true,
+  recovery: { training_readiness: readinessValue, avg_training_readiness: 70, hrv_ms: 58, hrv_status: status },
+  baseline: { hrv: 55 },
+  quality: {
+    training_readiness: { latest_date: readinessDate ?? localDaysAgo(1), source: "garmin", sample_count: 5 },
+    hrv_ms: { latest_date: hrvDate, source: "garmin", sample_count: 5 },
+    hrv_status: { latest_date: hrvDate, source: "garmin", sample_count: 5 },
+  },
+});
+
+test("while today's readiness is pending, last night's balanced HRV beside a real night earns the drive read", () => {
+  seedDriveMorning({ rated: false });
+  seedSleep(DRIVE_REF, 470);
+  repo.setSettings({ training_drive: "push" });
+
+  const r = repo.dayRead(DRIVE_REF, overnight());
+  assert.equal(r.decision.rule_code, "push_drive_targeted_training");
+  assert.equal(r.signals.training_drive_push.backed_by, "overnight_reading");
+});
+
+test("the pending-readiness path never vouches from silence, a stale night, an unbalanced status or a synced low reading", () => {
+  seedDriveMorning({ rated: false });
+  seedSleep(DRIVE_REF, 470);
+  repo.setSettings({ training_drive: "push" });
+  // Yesterday's HRV is the night before last: absent, not support.
+  assert.notEqual(repo.dayRead(DRIVE_REF, overnight({ hrvDate: localDaysAgo(1) })).decision.rule_code, "push_drive_targeted_training");
+  assert.notEqual(repo.dayRead(DRIVE_REF, overnight({ status: "unbalanced" })).decision.rule_code, "push_drive_targeted_training");
+  // Today's readiness HAS synced and sits below the floor: that reading answers, HRV does not override it.
+  assert.notEqual(
+    repo.dayRead(DRIVE_REF, overnight({ readinessValue: 50, readinessDate: DRIVE_REF })).decision.rule_code,
+    "push_drive_targeted_training"
+  );
+  // No sleep row dated the read day: the night is absent, so nothing vouches.
+  resetTables("daily_metrics", "garmin_daily_metrics");
+  assert.notEqual(repo.dayRead(DRIVE_REF, overnight()).decision.rule_code, "push_drive_targeted_training");
+});
+
 test("a middling readiness reading does NOT earn the drive read, even though it never triggered a rest", () => {
   seedDriveMorning({ rated: false });
   seedSleep(DRIVE_REF, 470);

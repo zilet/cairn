@@ -326,6 +326,12 @@ export interface ClientDayFuelDemand {
   demand: "light" | "standard" | "big";
   drivers: string[];
   evidence: string[];
+  carbs?: {
+    tier: "light" | "moderate" | "high";
+    g_per_kg: { low: number; high: number };
+    grams: { low: number; high: number };
+    basis: "within_target" | "band";
+  } | null;
 }
 
 export interface ClientDayIntake {

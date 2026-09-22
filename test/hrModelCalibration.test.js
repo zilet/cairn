@@ -75,15 +75,15 @@ function garminSource() {
 }
 
 let activitySeq = 0;
-function logRun({ date, minutes = 40, km = 8, avgHr = 145, maxHr = 165, aerobicTe = null, type = "running" }) {
+function logRun({ date, minutes = 40, km = 8, avgHr = 145, maxHr = 165, aerobicTe = null, type = "running", name = "Run" }) {
   activitySeq += 1;
   const info = db
     .prepare(
       `INSERT INTO garmin_activities
          (source_id, external_id, date, type, name, duration_min, moving_min, distance_km, avg_hr, max_hr, aerobic_te)
-       VALUES (?, ?, ?, ?, 'Run', ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(garminSource(), `hr-act-${activitySeq}`, date, type, minutes, minutes, km, avgHr, maxHr, aerobicTe);
+    .run(garminSource(), `hr-act-${activitySeq}`, date, type, name, minutes, minutes, km, avgHr, maxHr, aerobicTe);
   return Number(info.lastInsertRowid);
 }
 
@@ -446,6 +446,43 @@ test("on the fallback rung an ordinary tempo run is not mistaken for a field tes
   const after = deriveHrModel(REF);
   assert.equal(after.lthr_basis, "fallback");
   assert.equal(after.confidence, "estimated", "an ordinary run never buys 'anchored'");
+});
+
+test("a short tempo 'test' cannot ratchet the threshold below an average held for longer", () => {
+  seedThisAthlete(); // 54 minutes averaging 163, twenty days back
+  recordCalibrationEvent({
+    kind: "lthr_tt",
+    date: back(5),
+    target_key: "lthr",
+    result: { lthr: 157 },
+    source: "detected",
+  });
+  const model = deriveHrModel(REF);
+  assert.equal(model.lthr_basis, "field_test");
+  assert.equal(model.lthr, 163, "a 54-minute average is a floor under any threshold");
+});
+
+test("a threshold test the athlete NAMED is recorded at its length, even off the fallback rung", () => {
+  for (const days of [8, 20, 34, 48]) {
+    logRun({ date: back(days), minutes: 28, km: 5.5, avgHr: 150, maxHr: 182 });
+  }
+  assert.equal(deriveHrModel(REF).lthr_basis, "fallback");
+  const named = logRun({
+    date: back(3),
+    minutes: 73,
+    km: 12,
+    avgHr: 164,
+    maxHr: 178,
+    aerobicTe: 5,
+    name: "LT HR Test and sightseeing",
+  });
+  const event = detectRunCalibration(named);
+  assert.equal(event?.kind, "lthr_tt");
+  assert.equal(event.result.lthr, 164, "past 45 minutes the average is taken as-is");
+  assert.equal(event.result.named, true);
+  // An ordinary long run with no such name stays an ordinary run.
+  const plain = logRun({ date: back(2), minutes: 73, km: 12, avgHr: 164, maxHr: 178, aerobicTe: 5, name: "Seaport tour" });
+  assert.equal(detectRunCalibration(plain), null);
 });
 
 test("a mid-distance run held at the benchmark pulse anchors the easy-pace read", () => {

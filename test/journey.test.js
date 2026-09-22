@@ -79,6 +79,19 @@ test("journey phases are proposed first and activate only through explicit apply
   assert.equal(repo.activeJourneyPhase().id, phase.id);
 });
 
+test("a goal change moves the active phase's target with it; a proposed phase is left alone", () => {
+  seedProfile({ goal_bodyfat_pct: 15 });
+  const active = repo.activateJourneyPhase(repo.createJourneyPhase({ kind: "cut", source: "test" }).id);
+  const proposed = repo.createJourneyPhase({ kind: "maintenance", source: "test" });
+  assert.equal(active.target_weight_lb, 165);
+
+  repo.setProfile({ goal_weight_lb: 154, goal_bodyfat_pct: 12 });
+  const moved = repo.activeJourneyPhase();
+  assert.equal(moved.target_weight_lb, 154);
+  assert.equal(moved.target_bodyfat_pct, 12);
+  assert.equal(repo.getJourneyPhase(proposed.id).target_weight_lb, 165);
+});
+
 test("transition suggestion proposes maintenance after reaching the goal without writing a phase", () => {
   seedProfile({ weight_lb: 164.8, goal_weight_lb: 165, goal_bodyfat_pct: 15 });
   const before = repo.listJourneyPhases("all").length;

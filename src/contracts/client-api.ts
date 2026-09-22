@@ -1245,6 +1245,7 @@ export interface ClientRacePaceBand {
   slow_sec_per_km: number;
   fast_sec_per_km: number;
   text: string;
+  hr_ceiling_bpm?: number | null;
 }
 export interface ClientRaceBuildWeek {
   week_start: ISODateString | string;

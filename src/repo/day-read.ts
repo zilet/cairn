@@ -27,6 +27,7 @@ import {
   restOverrideSoftening,
   type RestOverrideSoftening,
   trainsAnywayWithoutHarm,
+  withMorningReadiness,
 } from "./brain/read-adherence.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
 import { RECOVERY_SAMPLE_FLOOR, recoveryTrendBars } from "./recovery-trend.js";
@@ -929,7 +930,9 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
     // Recovery is NOT memoized under getCoachContext's `recovery:14` key: that key
     // holds a summary built over an explicitly-passed Garmin window, and silently
     // seeding it from here would let a differently-scoped fetch win the race.
-    const recovery = provided.recovery ?? signalInput(() => getRecoverySummary(14, undefined, date), null);
+    const recovery =
+      provided.recovery ??
+      signalInput(() => withMorningReadiness(getRecoverySummary(14, undefined, date), date), null);
     // Today keeps the BARE memo keys below — they ARE getCoachContext's, and sharing
     // them is what keeps one Brief request from building these expensive producers
     // twice no matter which consumer asks first. A read of an EARLIER date gets its
@@ -1117,6 +1120,21 @@ const PUSH_DRIVE_CONSEC_CEILING = 5;
 // vouching question about the morning AFTER a hard day, and the two modules may not
 // import each other — a second literal is exactly how a band drifts.
 const PUSH_DRIVE_READINESS_FLOOR = SUPPORTIVE_READINESS;
+
+// Does LAST NIGHT's HRV positively support the day? Only a reading dated the read day
+// (isLastNight — sleep and HRV are wake-dated), then Garmin's own personal band when it
+// sent one for that night, else the value against the athlete's own median and the
+// same smallest-worthwhile-change bar recoveryDrift uses. No night, no norm → false.
+function lastNightHrvSupports(rec: any, d: string, hrvBar: number): boolean {
+  const hrv = Number(rec?.recovery?.hrv_ms);
+  if (!isLastNight(rec?.quality?.hrv_ms?.latest_date ?? null, d) || !Number.isFinite(hrv)) return false;
+  const status = rec?.recovery?.hrv_status;
+  if (status != null && isLastNight(rec?.quality?.hrv_status?.latest_date ?? null, d)) {
+    return String(status).toLowerCase() === "balanced";
+  }
+  const norm = Number(rec?.baseline?.hrv);
+  return Number.isFinite(norm) && norm > 0 && hrv >= norm - hrvBar;
+}
 
 // Shared corroboration path: recovery_capacity already supportive at high
 // confidence, with fresh HRV / resting HR / sleep on the board, last night
@@ -1478,7 +1496,8 @@ function computeDayRead(
   // not see wearables that arrived after it. A caller that already has the
   // matching summary (getCoachContext, for today) can pass it in to avoid a
   // redundant fetch.
-  const rec = recovery ?? getRecoverySummary(14, undefined, d);
+  // Once today has training on it, readiness is the MORNING's (withMorningReadiness).
+  const rec = recovery ?? withMorningReadiness(getRecoverySummary(14, undefined, d), d);
   const checkin = getCheckinByDate(d) as any;
   // "Last night" is the night that ENDED on `d`, and nothing else. Sleep is dated by
   // its WAKE day, so a row dated d-1 is the night BEFORE last: at the window's
@@ -2107,7 +2126,8 @@ function computeDayRead(
       //      softening uses,
       //   5. the evidence is positively green — the backed tier (earned from the
       //      athlete's own rated sessions), a fresh readiness reading at or above
-      //      PUSH_DRIVE_READINESS_FLOOR over last night's own sleep, OR recovery_capacity
+      //      PUSH_DRIVE_READINESS_FLOOR over last night's own sleep (or, while today's
+      //      readiness has not synced, last night's supportive HRV), OR recovery_capacity
       //      already `supportive` at `confidence: "high"` with fresh HRV, resting HR
       //      and sleep on the board. Absence of those three is absence; silence is
       //      never corroboration. Every path still requires nothing fresh pulling
@@ -2150,7 +2170,16 @@ function computeDayRead(
         // seven dimensions. Without this, a morning carrying a fresh routine disruption
         // AND fresh schedule pressure still handed out the training day. Same predicate
         // the tier uses, so the two answers cannot drift.
-        const wearablePath = solidReadiness && sleptEnough && !hasFreshBrake(signalState.dimensions);
+        // The 04:00 floor reads before the watch has synced THIS morning's readiness, and
+        // a `d-1` row is yesterday's post-workout number that never speaks for today
+        // (isReadDayReadiness). While today's reading is still pending — and only then;
+        // a synced reading below the floor still says no — last night's own HRV may
+        // stand in for it beside last night's sleep: a night dated the read day,
+        // Garmin's own status `balanced`, or no status and the value inside the
+        // athlete's norm band. Absent either, nothing vouches.
+        const overnightPath = !readinessFresh && lastNightHrvSupports(rec, d, trendBars.hrv);
+        const wearablePath =
+          (solidReadiness || overnightPath) && sleptEnough && !hasFreshBrake(signalState.dimensions);
         // Same helper the envelope's reach resolver uses, so a morning that
         // corroborates the drive read also backs a reach, and a morning that
         // does not cannot back one either. Last night still has to be present
@@ -2185,7 +2214,10 @@ function computeDayRead(
         // put "rear_delts" in the headline, the why and the focus at once.
         const groups = plainGroupWords(due, 2);
         if (!groups) return null;
-        (signals as any).training_drive_push = { due, backed_by: backed ? "logged_sessions" : "recovery_reading" };
+        (signals as any).training_drive_push = {
+          due,
+          backed_by: backed ? "logged_sessions" : !solidReadiness && overnightPath ? "overnight_reading" : "recovery_reading",
+        };
         return {
           outcome: DAY_READ_OUTCOMES.push_drive_targeted_training,
           read: {

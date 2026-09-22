@@ -13,7 +13,7 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { repo, resetTables, seedTrainingDay } from "./_seed.js";
-import { dayFuelDemand, fuelDemandWeek } from "../dist/repo/fuel-demand.js";
+import { carbRangeForTier, dayFuelDemand, fuelDemandWeek } from "../dist/repo/fuel-demand.js";
 import { PROMPT_CONTEXT_SITES, projectCoachContext } from "../dist/prompt/context-projection.js";
 import { buildMealPlanPrompt, buildMealSwapPrompt, buildNutritionCheckinPrompt } from "../dist/prompt.js";
 import { localDateISO } from "../dist/repo/shared.js";
@@ -256,4 +256,77 @@ test("the projection copies fuel_demand through untouched where it is allowed", 
   assert.deepEqual(projectCoachContext(ctx, "day_read").fuel_demand, week);
   assert.equal(projectCoachContext(ctx, "coach").fuel_demand, undefined);
   assert.equal(projectCoachContext(ctx, "insight").fuel_demand, undefined);
+});
+
+// ── carbohydrate periodised to the work ─────────────────────────────────────
+
+test("with no target to fit into, a day's carbs are the published ACSM/IOC band for its work", () => {
+  const basis = { weight_kg: 70, target_kcal: null, protein_g: null };
+  assert.deepEqual(carbRangeForTier("light", basis).grams, { low: 210, high: 350 });
+  assert.deepEqual(carbRangeForTier("moderate", basis).grams, { low: 350, high: 490 });
+  const big = carbRangeForTier("high", basis);
+  assert.deepEqual(big.grams, { low: 420, high: 700 });
+  assert.deepEqual(big.g_per_kg, { low: 6, high: 10 });
+  assert.equal(big.tier, "high");
+  assert.equal(big.basis, "band");
+  assert.equal(carbRangeForTier("high", null), null, "no bodyweight, no range");
+});
+
+test("inside a cut's target the ranges flex with the work, protein held and fat inside its band", () => {
+  const basis = { weight_kg: 73, target_kcal: 2400, protein_g: 175 };
+  const light = carbRangeForTier("light", basis);
+  const moderate = carbRangeForTier("moderate", basis);
+  const big = carbRangeForTier("high", basis);
+  for (const range of [light, moderate, big]) assert.equal(range.basis, "within_target");
+  // Ordered by the work, never overlapping upward.
+  assert.ok(light.grams.high <= moderate.grams.low + 5 && moderate.grams.high <= big.grams.low + 5);
+  // The big day holds at most what the target does with fat at its 20% floor…
+  assert.ok(big.grams.high <= (2400 * 0.8 - 175 * 4) / 4 + 2.5);
+  // …and the light day never asks fat past its 35% ceiling.
+  assert.ok(light.grams.low >= (2400 * 0.65 - 175 * 4) / 4 - 2.5);
+  // And no day is ever told more than its published band.
+  const surplus = carbRangeForTier("light", { weight_kg: 60, target_kcal: 4000, protein_g: 120 });
+  assert.ok(surplus.grams.high <= 5 * 60);
+});
+
+test("with a carb basis every day carries its range: endurance work earns the high band, strength the moderate", () => {
+  seedSplit();
+  repo.savePlanDay(3, "Rest", "Rest", []);
+  const basis = { weight_kg: 73, target_kcal: 2400, protein_g: 175 };
+  const opts = { today: MONDAY, runPlan: runWeek([run(4, "long", 18)]), carbBasis: basis };
+  // A heavy lower day is big for the demand line, but ~1 h of lifting is the moderate band.
+  const lower = dayFuelDemand(MONDAY, opts);
+  assert.equal(lower.demand, "big");
+  assert.equal(lower.carbs.tier, "moderate");
+  assert.equal(dayFuelDemand(WEDNESDAY, opts).carbs.tier, "light");
+  assert.equal(dayFuelDemand("2026-04-23", opts).carbs.tier, "high", "the long-run day");
+  assert.equal(dayFuelDemand(MONDAY, { today: MONDAY, runPlan: null }).carbs, undefined, "no basis, no grams");
+});
+
+test("a long ride already logged makes the day big; a short commute does not", () => {
+  repo.addActivity({ type: "cycling", date: TUESDAY, duration_min: 115, distance_km: 30 });
+  const long = dayFuelDemand(TUESDAY, { today: TUESDAY, runPlan: null });
+  assert.equal(long.demand, "big");
+  assert.ok(long.drivers.some((driver) => driver.includes("long ride")));
+  reset();
+  repo.addActivity({ type: "cycling", date: TUESDAY, duration_min: 38, distance_km: 12 });
+  assert.equal(dayFuelDemand(TUESDAY, { today: TUESDAY, runPlan: null }).demand, "standard");
+});
+
+test("the check-in names the day's carb range from the coach context, as shape and never a new target", () => {
+  seedBigToday();
+  repo.setProfile({
+    sex: "male",
+    age: 40,
+    height_in: 70,
+    weight_lb: 161,
+    goal_weight_lb: 154,
+    goal_mode: "lose",
+    activity_factor: 1.5,
+  });
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.fuel_demand.days[0].carbs?.basis, "within_target");
+  const prompt = buildNutritionCheckinPrompt();
+  assert.match(prompt, /carbs \d+–\d+ g \([\d.]+–[\d.]+ g\/kg\)/);
+  assert.match(prompt, /never a new target, and never a measure of what was or wasn't eaten/);
 });

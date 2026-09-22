@@ -141,6 +141,43 @@ test("a single verified outlier is watched, not concluded from", () => {
   assert.notEqual(state.dimensions.recovery_capacity.status, "watch");
 });
 
+test("one outlier on a trend already past the norm speaks the trend's caution, never the non-directive note", () => {
+  // The Brief eased the day on this caution and then said "nothing to act on unless it
+  // repeats" — the voice has to follow the direction the observation carries.
+  const date = localDaysAgo(0);
+  const one = (value, norm) => [
+    { date, value },
+    { date: localDaysAgo(1), value: norm },
+    { date: localDaysAgo(2), value: norm },
+  ];
+  const series = (readings) => ({
+    readings,
+    latest_date: date,
+    latest_value: readings[0].value,
+    latest_trust: "verified",
+    latest_trustworthy_date: date,
+  });
+  const state = repo.planningSignalState({
+    date,
+    recovery: {
+      recovery: {},
+      delta: { hrv: -12, rhr: 8 },
+      baseline: { hrv: 55, rhr: 54 },
+      verified: { hrv_ms: series(one(30, 55)), resting_hr: series(one(66, 54)) },
+      quality: {
+        hrv_ms: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 14 },
+        resting_hr: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 14 },
+      },
+    },
+  });
+  const hrv = state.dimensions.recovery_capacity.evidence.find((item) => item.field === "hrv");
+  assert.equal(hrv.direction, "caution");
+  assert.equal(hrv.voice.key, "hrv_below");
+  const resting = restingOf(state);
+  assert.equal(resting.direction, "caution");
+  assert.equal(resting.voice.key, "resting_hr_up");
+});
+
 test("two consecutive verified outliers are a caution", () => {
   const state = withSeries([
     { date: localDaysAgo(0), value: 66 },

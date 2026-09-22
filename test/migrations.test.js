@@ -1337,3 +1337,35 @@ test("v104 repairs the duration and calories Cairn's own Garmin shells reported"
   assert.equal(JSON.parse(d.prepare("SELECT garmin_json FROM sessions WHERE id = 1").get().garmin_json).duration_min, 34);
   d.close();
 });
+
+test("v109 clears only the HRV values that were Garmin's weekly average on a night-less morning", () => {
+  const v109 = MIGRATIONS.find((m) => m.version === 109);
+  const d = new DatabaseSync(":memory:");
+  // A household DB jumping from an old schema: no table at all is a no-op, not a throw.
+  v109.up(d);
+  d.exec(`CREATE TABLE garmin_daily_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, hrv_ms REAL, raw_json TEXT
+  );`);
+  const raw = (lastNightAvg, weeklyAvg) => JSON.stringify({ hrv: { hrvSummary: { lastNightAvg, weeklyAvg } } });
+  const insert = d.prepare("INSERT INTO garmin_daily_metrics (date, hrv_ms, raw_json) VALUES (?, ?, ?)");
+  insert.run("2026-09-22", 42, raw(null, 42)); // the fallback: weekly average under a one-night date
+  insert.run("2026-09-20", 37, raw(37, 44)); // a real night
+  insert.run("2026-09-19", 40, raw(null, 44)); // no night, but the value is not the weekly average
+  insert.run("2026-09-18", 45, "{not json"); // an unparseable blob is left exactly as stored
+  insert.run("2026-09-17", 45, null);
+
+  v109.up(d);
+  v109.up(d); // idempotent
+  const rows = Object.fromEntries(d.prepare("SELECT date, hrv_ms FROM garmin_daily_metrics").all().map((r) => [r.date, r.hrv_ms]));
+  assert.deepEqual(rows, {
+    "2026-09-22": null,
+    "2026-09-20": 37,
+    "2026-09-19": 40,
+    "2026-09-18": 45,
+    "2026-09-17": 45,
+  });
+  // The weekly figure itself survives in the raw blob.
+  const blob = JSON.parse(d.prepare("SELECT raw_json FROM garmin_daily_metrics WHERE date = '2026-09-22'").get().raw_json);
+  assert.equal(blob.hrv.hrvSummary.weeklyAvg, 42);
+  d.close();
+});

@@ -61,3 +61,15 @@ export function readsRestGradeReadiness(value: unknown): boolean {
   const n = numeric(value);
   return n != null && n <= REST_GRADE_READINESS;
 }
+
+// Garmin training_readiness is 0-100; the constitution forbids surfacing the number.
+// Band it into plain words for prompts + gating: low (<LOW_READINESS), primed (>=70),
+// else steady. null when there's no reading, so every consumer degrades quietly.
+export function readinessBand(value: unknown): "low" | "steady" | "primed" | null {
+  if (value == null || value === "") return null; // guard Number(null)===0 → never a false "low"
+  const n = numeric(value);
+  if (n == null) return null;
+  if (n < LOW_READINESS) return "low";
+  if (n >= 70) return "primed";
+  return "steady";
+}

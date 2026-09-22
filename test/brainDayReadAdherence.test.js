@@ -27,6 +27,7 @@ import {
   reopenDayReadAdherence,
   restOverrideSoftening,
   trainedWithoutHarm,
+  withMorningReadiness,
 } from "../dist/repo/brain/read-adherence.js";
 import { SUPPORTIVE_READINESS } from "../dist/repo/readiness-bands.js";
 import { addDaysISO } from "../dist/repo/shared.js";
@@ -848,6 +849,48 @@ test("a snapshot about the wrong date, or a stale one, does not speak", () => {
   ledgerMorningReadiness(morning, 76, { currentDate: addDaysISO(morning, -1) });
 
   assert.equal(harmEvidenceOnDay(day)?.kind, "readiness_rest_grade", "a snapshot for another date is absent");
+});
+
+// ============================== THE SAME-DAY RECOMPUTE READS THE MORNING TOO
+//
+// Once today has logged work, today's own row is the post-workout last sync; the
+// ~16:00 recompute must read the morning the ledger recorded, or nothing.
+function todaySummary(date, value) {
+  const quality = { training_readiness: { latest_date: date, latest_value: value, freshness: "fresh", sample_count: 5 } };
+  return { recovery: { training_readiness: value, readiness_band: "low", quality }, quality };
+}
+
+test("after a logged session, the recompute reads the morning snapshot, not the afternoon sync", () => {
+  reset();
+  const date = localDaysAgo(0);
+  ledgerMorningReadiness(date, 76);
+  trainedAtTime(date, "11:00:00");
+  const rec = withMorningReadiness(todaySummary(date, 22), date);
+  assert.equal(rec.recovery.training_readiness, 76);
+  assert.equal(rec.recovery.readiness_band, "primed");
+  assert.equal(rec.quality.training_readiness.latest_date, date);
+  assert.equal(repo.dayRead(date, rec).signals.fatigue.readiness.current, 76);
+});
+
+test("after a logged session with no morning snapshot, today's readiness is absent", () => {
+  reset();
+  const date = localDaysAgo(0);
+  trainedAtTime(date, "11:00:00");
+  const rec = withMorningReadiness(todaySummary(date, 22), date);
+  assert.equal(rec.recovery.training_readiness, null);
+  assert.equal(rec.quality.training_readiness.latest_date, null);
+  assert.notEqual(repo.dayRead(date, rec).signals.fatigue.readiness.freshness, "fresh");
+});
+
+test("before any work is logged, today's own reading stands — a bare session row is not work", () => {
+  reset();
+  const date = localDaysAgo(0);
+  ledgerMorningReadiness(date, 76);
+  const untouched = todaySummary(date, 64);
+  assert.equal(withMorningReadiness(untouched, date), untouched);
+  // Accepting the Brief's session creates the row before a single rep.
+  db.prepare(`INSERT INTO sessions (date) VALUES (?)`).run(date);
+  assert.equal(withMorningReadiness(untouched, date), untouched);
 });
 
 // ============================== A HARD EFFORT THE BODY ABSORBED IS NOT A COST

@@ -147,7 +147,12 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
   const bands = build.paces?.bands?.filter((b) => b.key !== "race") || [];
   const paces = bands.length
     ? `<div class="rbuild-paces">${bands
-        .map((b) => `<div class="rbuild-band"><span class="rbuild-band-k">${escHtml(b.label)}</span><span class="numeral rbuild-band-v">${escHtml(typeof fmtPaceBand === "function" ? fmtPaceBand(b, units) : b.text)}</span></div>`)
+        .map((b) => {
+          // Easy and long carry the HR ceiling beside the pace: the line that holds.
+          const ceiling = Number(b.hr_ceiling_bpm);
+          const under = Number.isFinite(ceiling) && ceiling > 0 ? ` · under ${Math.round(ceiling)} bpm` : "";
+          return `<div class="rbuild-band"><span class="rbuild-band-k">${escHtml(b.label)}</span><span class="numeral rbuild-band-v">${escHtml(typeof fmtPaceBand === "function" ? fmtPaceBand(b, units) : b.text)}${escHtml(under)}</span></div>`;
+        })
         .join("")}</div>`
     : "";
 

@@ -257,6 +257,19 @@ export function setProfile(p: any) {
     "bp_treated",
     "statin",
   ]);
+  // The profile goal is the ONE source of the destination. An active journey phase
+  // copied it at creation (createJourneyPhase), so a goal change moves the phase with
+  // it — otherwise the arc kept reading "toward 164 lb" after the goal became 154.
+  if (goalChanges.includes("goal_weight_lb") || goalChanges.includes("goal_bodyfat_pct")) {
+    try {
+      db.prepare(
+        `UPDATE journey_phases SET target_weight_lb = ?, target_bodyfat_pct = ?, updated_at = datetime('now')
+          WHERE status = 'active'`
+      ).run(merged.goal_weight_lb ?? null, merged.goal_bodyfat_pct ?? null);
+    } catch {
+      /* a DB without journey_phases has no phase to move */
+    }
+  }
   if (
     profileChanges.includes("home_location") ||
     goalChanges.includes("endurance_schedule_json") ||

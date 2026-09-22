@@ -1482,6 +1482,7 @@ export function weeklyRunPlan(
   // --- distance distribution ---
   // A lone easy day is recovery: 5–7 km, never a second long run.
   const LONE_EASY_RECOVERY_CAP_KM = 7;
+  const HOLD_WEEK_LONG_OF_LONGEST = 0.85;
   const easyCount = Math.max(1, runDays - 1 - (qualityType ? 1 : 0));
   // Long run ~32–38% of weekly volume, but never a >10% jump on the recent longest.
   // Read at the anchor, not the plan date — the fourth member of the same family. Its
@@ -1544,6 +1545,13 @@ export function weeklyRunPlan(
   // week keeps the tighter 1.1 it always had.
   if (prevLong > 0) {
     longKm = round1(Math.min(longKm, prevLong * (longSuppressed ? 1.1 : SUSTAINABLE_LONG_STEP_FACTOR)));
+  }
+  // A down week or a spike week is not the week to repeat the new longest: the reset
+  // (and the absorb-before-adding hold) held a 17.7 km long run at 17.7 km a week
+  // after it was first run. The long run sits a clear step under the demonstrated
+  // longest on those weeks, and comes back to it on the next build.
+  if ((downWeek || spiking) && !taper && prevLong > 0) {
+    longKm = round1(Math.min(longKm, prevLong * HOLD_WEEK_LONG_OF_LONGEST));
   }
   longKm = round1(Math.min(longKm, weeklyKm * 0.55));
   longKm = Math.max(longKm, round1(weeklyKm * 0.25));

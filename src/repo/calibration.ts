@@ -108,6 +108,8 @@ const TT_MAX_MINUTES = 45;
 const TT_MIN_FRACTION_OF_LTHR = 0.95;
 const TT_MIN_AEROBIC_TE = 3.5;
 const TT_AVG_TO_LTHR = 1.01;
+// The athlete's own label for a threshold test.
+const NAMED_THRESHOLD_TEST = /\b(?:lt\s*hr|lthr|lactate|threshold)\b[^\n]*\btest\b|\btime[\s-]?trial\b/i;
 const BENCHMARK_MIN_KM = 4;
 const BENCHMARK_MAX_KM = 8;
 const BENCHMARK_HR_TOLERANCE = 4;
@@ -855,11 +857,11 @@ export function detectRunCalibration(garminActivityId: number): CalibrationEvent
   if (!Number.isFinite(id) || id <= 0) return null;
   const row = db
     .prepare(
-      `SELECT id, date, type, avg_hr, distance_km, aerobic_te, COALESCE(moving_min, duration_min) AS minutes
+      `SELECT id, date, type, name, avg_hr, distance_km, aerobic_te, COALESCE(moving_min, duration_min) AS minutes
        FROM garmin_activities WHERE id = ?`
     )
     .get(id) as
-    | { id: number; date: string; type: string | null; avg_hr: number | null; distance_km: number | null; aerobic_te: number | null; minutes: number | null }
+    | { id: number; date: string; type: string | null; name: string | null; avg_hr: number | null; distance_km: number | null; aerobic_te: number | null; minutes: number | null }
     | undefined;
   if (!row) return null;
   if (!/run/i.test(String(row.type ?? ""))) return null;
@@ -869,6 +871,30 @@ export function detectRunCalibration(garminActivityId: number): CalibrationEvent
   if (avgHr == null || avgHr <= 0) return null;
 
   const model: HrModel = getHrModel(date);
+
+  // (0) A test the athlete NAMED as one ("LT HR test", "threshold test", "time
+  // trial"). Their word outranks the shape detector: it is recorded at any length
+  // from the test minimum up, and even on the fallback rung, because the athlete
+  // says what the run was for. A run past the classic 30-minute length already
+  // averages at or under threshold, so its average is taken as-is rather than scaled.
+  if (minutes != null && minutes >= TT_MIN_MINUTES && NAMED_THRESHOLD_TEST.test(String(row.name ?? ""))) {
+    return insertEvent(
+      {
+        kind: "lthr_tt",
+        date,
+        target_key: "lthr",
+        result: {
+          lthr: Math.round(minutes > TT_MAX_MINUTES ? avgHr : avgHr * TT_AVG_TO_LTHR),
+          avg_hr: Math.round(avgHr),
+          minutes: Math.round(minutes),
+          garmin_activity_id: row.id,
+          named: true,
+        },
+        source: "detected",
+      },
+      row.id
+    );
+  }
 
   // (1) A threshold time trial: the right length, held near the threshold the
   // model already believes in, and hard enough that the watch agrees it was a

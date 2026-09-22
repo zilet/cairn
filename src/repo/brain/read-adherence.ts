@@ -36,7 +36,7 @@ import {
 import { getEnduranceGoal, getEnduranceSchedule, isoDow } from "../profile.js";
 import { activeRecoveryWeek } from "../recovery-week.js";
 import { peakLongKm } from "../run-ramp.js";
-import { readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
+import { readinessBand, readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
 import { SENSOR_MAX_AGE_DAYS, isReadDayReadiness, sensorIsCurrent } from "../sensor-freshness.js";
 import { addDaysISO, localDateISO } from "../shared.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear } from "../training-cache.js";
@@ -1156,6 +1156,58 @@ function ledgerMorningReadiness(morning: string): number | null {
   if (String(readiness.current_date ?? "") !== morning) return null;
   if (String(readiness.freshness ?? "") !== "fresh") return null;
   return readingNumber(readiness.current);
+}
+
+// ---------- A RECOMPUTE AFTER TRAINING READS THE MORNING'S READINESS ----------
+//
+// The watch keeps recomputing readiness through the day and the row keeps the LAST
+// sync, so once the athlete has trained, today's row is the post-workout number: the
+// ~16:00 recompute read "readiness is low" off the session it was describing. The
+// morning is the ledger's own snapshot of it (ledgerMorningReadiness — the last
+// predictive read before the first logged set). So when `date` has training on it and
+// the summary's readiness is dated `date`, that snapshot replaces it; with no snapshot
+// the reading is ABSENT, never the afternoon value. Anything else passes through
+// untouched — a d-1 row is already refused by isReadDayReadiness downstream.
+// "Trained" is WORK logged — a set or an activity — never a bare session row, which
+// accepting the Brief's session creates before a single rep (see
+// firstTrainingInstantByDate) and which would hide a genuine 07:00 reading.
+export function withMorningReadiness<T>(rec: T, date: string): T {
+  const summary = rec as any;
+  const quality = summary?.quality?.training_readiness ?? summary?.recovery?.quality?.training_readiness;
+  if (!summary?.recovery || String(quality?.latest_date ?? "") !== date || !workLoggedOn(date)) return rec;
+  const morning = ledgerMorningReadiness(date);
+  const patchedQuality = {
+    ...quality,
+    latest_value: morning,
+    latest_date: morning == null ? null : date,
+    freshness: morning == null ? "missing" : quality.freshness,
+  };
+  const qualityMap = (map: any) => (map ? { ...map, training_readiness: patchedQuality } : map);
+  return {
+    ...summary,
+    quality: qualityMap(summary.quality),
+    recovery: {
+      ...summary.recovery,
+      training_readiness: morning,
+      readiness_band: readinessBand(morning),
+      quality: qualityMap(summary.recovery.quality),
+    },
+  } as T;
+}
+
+function workLoggedOn(date: string): boolean {
+  const exists = (sql: string): boolean => {
+    try {
+      return !!db.prepare(sql).get(date);
+    } catch {
+      return false;
+    }
+  };
+  return (
+    exists(`SELECT 1 FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id WHERE s.date = ? LIMIT 1`) ||
+    exists(`SELECT 1 FROM activities WHERE date = ? LIMIT 1`) ||
+    exists(`SELECT 1 FROM garmin_activities WHERE date = ? LIMIT 1`)
+  );
 }
 
 // Did the athlete train on this date at all — lifted, or logged any activity? The

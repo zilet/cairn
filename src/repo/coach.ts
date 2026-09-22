@@ -34,9 +34,9 @@ import { coachingFocus } from "./coaching-focus.js";
 import { type AcuteGateReading, acuteGates } from "./hybrid-load.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { memoryForCoach, recentLearnings } from "./memory.js";
-import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
+import { capStr, dayIntakeTarget, getDayIntake, mealPlanForCoach } from "./nutrition.js";
 import { listFuelingFeedback } from "./fueling.js";
-import { fuelDemandWeek } from "./fuel-demand.js";
+import { carbBasis, fuelDemandWeek } from "./fuel-demand.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import {
@@ -78,7 +78,8 @@ export {
 import { CADENCE_WINDOW_DAYS, classifyWearPattern, type WearPattern } from "./sensor-cadence.js";
 import { sensorAgeDays } from "./sensor-freshness.js";
 import { sampleSd, STRESS_WINDOW_DAYS, trainingConstraintsRead } from "./recovery-science.js";
-import { readAdherenceModel } from "./brain/read-adherence.js";
+import { readAdherenceModel, withMorningReadiness } from "./brain/read-adherence.js";
+import { readinessBand } from "./readiness-bands.js";
 import { getProgress, getRecentSessions, typicalTrainingHour, vouchedRunCompliance } from "./sessions.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { recordSymptomReport } from "./symptom-reports.js";
@@ -728,8 +729,9 @@ function buildNutritionSlice(
 > {
   const { profile, journeyView, expenditureView, underfuelingView, cutQualityView, today, runPlanView, flexibleTrainingAgendaView } =
     signals;
+  const goal = computeGoalCheck(profile, { expenditure: expenditureView }); // reuse profile + expenditure already fetched above
   return {
-    goal: computeGoalCheck(profile, { expenditure: expenditureView }), // reuse profile + expenditure already fetched above
+    goal,
     // The journey's SHAPE (v41) — lose | maintain | gain. Always present (even when
     // the profile is too thin for goal math), so every prompt and the PWA agree on
     // the framing: a deficit for 'lose', anchor-to-TDEE for 'maintain', a lean
@@ -777,7 +779,11 @@ function buildNutritionSlice(
     // that has already happened — and it never moves an accepted calorie target.
     fuel_demand: brainSignal(`fuel_demand:${today}`, () => {
       try {
-        return fuelDemandWeek(undefined, undefined, { runPlan: runPlanView, agenda: flexibleTrainingAgendaView });
+        return fuelDemandWeek(undefined, undefined, {
+          runPlan: runPlanView,
+          agenda: flexibleTrainingAgendaView,
+          carbBasis: carbBasis(dayIntakeTarget(goal), profile, today),
+        });
       } catch {
         return null;
       }
@@ -1253,7 +1259,9 @@ function getCoachContextFromSnapshot(): CoachContext {
   // them through the recovery + day_read keys so a single context build doesn't
   // fan out into getGarminCoachSummary three times.
   const garmin = brainSignal("garmin:coach:14", () => getGarminCoachSummary(14));
-  const recovery = brainSignal("recovery:14", () => getRecoverySummary(14, garmin));
+  // The same morning-readiness rule the Brief reads, so the prompt and the Brief
+  // never disagree about today's readiness once a session is logged.
+  const recovery = brainSignal("recovery:14", () => withMorningReadiness(getRecoverySummary(14, garmin), today));
   const recentSessions = brainSignal("recent_sessions:20", () => getRecentSessions(20));
   const profile = brainSignal("profile", () => getProfile() as any);
   const locationView = brainSignal(`location:${today}`, () => getLocationContext({ on: today, profile }));
@@ -2017,17 +2025,9 @@ export function getDailyMetrics(source?: string | null, days = 30) {
 // Quality-aware SOURCE-AGNOSTIC recovery: resolve each date and each field
 // independently, preferring Garmin only where it has an overlapping value. This
 // lets complementary Apple/Oura data survive without double-counting a date.
-// Garmin training_readiness is 0-100; the constitution forbids surfacing the number.
-// Band it into plain words for prompts + gating: low (<35), primed (>=70), else steady.
-// null when there's no reading, so every consumer degrades quietly.
-export function readinessBand(value: unknown): "low" | "steady" | "primed" | null {
-  if (value == null || value === "") return null; // guard Number(null)===0 → never a false "low"
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  if (n < 35) return "low";
-  if (n >= 70) return "primed";
-  return "steady";
-}
+// readinessBand lives in readiness-bands.ts (read-adherence needs it too, and may not
+// import this module); re-exported so existing importers keep their path.
+export { readinessBand };
 
 export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = localDateISO()) {
   const windowDays = recoveryWindowDays(days, 14);

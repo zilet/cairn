@@ -2329,6 +2329,30 @@ export function intakeLoggingMode(
   return density >= FULL_LOGGING_MIN_DENSITY ? "full" : "occasional";
 }
 
+export interface DayIntakeTarget {
+  kcal: number;
+  protein_g: number;
+  mode: string;
+  source: string;
+}
+
+// The day's target in force, off a goal check. Prefer the ACCEPTED target
+// (effective_target) — the persisted output of the adaptive-nutrition loop — over
+// the re-derived formula, so the fuel card shows the number the athlete actually
+// accepted. Falls back to the formula. One derivation for the fuel card and for
+// anything that has to fit inside the same number (the carb range, fuel-demand.ts).
+export function dayIntakeTarget(goal: any): DayIntakeTarget | null {
+  const eff = goal?.effective_target;
+  const tk = Number(eff?.target_kcal ?? goal?.recommended?.target_intake_kcal);
+  if (!goal?.ok || !Number.isFinite(tk)) return null;
+  return {
+    kcal: Math.round(tk),
+    protein_g: Math.round(Number(eff?.protein_g ?? goal.recommended?.protein_g) || 0),
+    mode: String(goal.goal_mode || "maintain"),
+    source: String(eff?.source ?? "formula"),
+  };
+}
+
 export function getDayIntake(date?: string) {
   const d = date || localDateISO();
   // Key by the stamped LOCAL day; COALESCE to the legacy UTC-date-of-created_at
@@ -2429,22 +2453,11 @@ export function getDayIntake(date?: string) {
 
   // Target framing: a gentle target/remaining ONLY when the profile is complete
   // enough to derive one. Incomplete profile → descriptive-only (target null).
-  let target: { kcal: number; protein_g: number; mode: string; source: string } | null = null;
+  let target: DayIntakeTarget | null = null;
   let remaining: { kcal: number; protein_g: number } | null = null;
   try {
-    const goal: any = computeGoalCheck();
-    // Prefer the ACCEPTED target (effective_target) — the persisted output of the
-    // adaptive-nutrition loop — over the re-derived formula, so the fuel card shows
-    // the number the athlete actually accepted. Falls back to the formula.
-    const eff = goal?.effective_target;
-    const tk = Number(eff?.target_kcal ?? goal?.recommended?.target_intake_kcal);
-    if (goal?.ok && Number.isFinite(tk)) {
-      target = {
-        kcal: Math.round(tk),
-        protein_g: Math.round(Number(eff?.protein_g ?? goal.recommended?.protein_g) || 0),
-        mode: String(goal.goal_mode || "maintain"),
-        source: String(eff?.source ?? "formula"),
-      };
+    target = dayIntakeTarget(computeGoalCheck());
+    if (target) {
       remaining = {
         kcal: target.kcal - totals.kcal,
         protein_g: target.protein_g - totals.protein_g,

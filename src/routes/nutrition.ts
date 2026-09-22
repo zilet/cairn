@@ -23,7 +23,7 @@ import {
 } from "../domain/nutrition/index.js";
 import { userSetNutritionTarget } from "../domain/brain/autonomy-service.js";
 import { goalPace } from "../repo/goal-pace.js";
-import { dayFuelDemand } from "../repo/fuel-demand.js";
+import { carbBasis, dayFuelDemand } from "../repo/fuel-demand.js";
 import { fuelingFollowThroughDue, listFuelingFeedback, setFuelingFeedback } from "../repo/fueling.js";
 import { ACCEPTED_MIME } from "../uploadMime.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
@@ -96,9 +96,11 @@ nutritionRouter.get("/nutrition/day", (req, res) => {
   // `fuel_demand` rides alongside the log rather than inside getDayIntake: the intake
   // read feeds the coach context, the Brief's fuel signal and the pace gauge, none of
   // which should start carrying a plan projection. The card is the one surface that
-  // wants it, and it only ever produces a quiet carb-bias line on a big day — the
-  // accepted target and the "remaining" arithmetic below are untouched by it.
-  res.json({ ...getDayIntake(date), fuel_demand: dayFuelDemand(date) });
+  // wants it: a quiet carb-bias line on a big day and the day's carb range, which is
+  // fitted INSIDE the target this same read reports — the accepted target and the
+  // "remaining" arithmetic are untouched by it.
+  const intake = getDayIntake(date);
+  res.json({ ...intake, fuel_demand: dayFuelDemand(date, { carbBasis: carbBasis(intake.target) }) });
 });
 
 // Meaning-first multi-week recorded-intake read. The domain clamps ?days= to

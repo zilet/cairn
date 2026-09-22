@@ -2937,6 +2937,7 @@ declare global {
       mealLabelHtml(meal: unknown): string;
       dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
       dayFuelDemandHtml(day: Record<string, unknown>): string;
+      dayFuelCarbsHtml(day: Record<string, unknown>): string;
     };
 
     CairnDayFuelController: {

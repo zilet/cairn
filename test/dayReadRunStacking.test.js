@@ -405,7 +405,9 @@ test("the hold leaves the strength half of a day alone", () => {
     { ...cardioEnvelope(), endurance_hold: { no_run: true, reasons: ["legs_saturated"] } }
   );
   const names = session.items.map((i) => i.exercise);
-  assert.deepEqual(names, ["Easy walk", "Bench Press"]);
+  // The lift survives untouched; the held run is the walk. Composition persists the
+  // tiers-only effect order (plan-item-order.ts), where cardio follows the lifts.
+  assert.deepEqual(names, ["Bench Press", "Easy walk"]);
 });
 
 // ---- the words have to match which evidence fired the hold ----

@@ -19,6 +19,11 @@ type DayFuelDemandData = {
   date?: unknown;
   demand?: unknown;
   drivers?: unknown;
+  carbs?: {
+    tier?: unknown;
+    grams?: { low?: unknown; high?: unknown } | null;
+    basis?: unknown;
+  } | null;
 };
 
 type DayFuelData = {
@@ -138,6 +143,31 @@ type DayFuelData = {
     return `<div class="dayfuel-demand">${escHtml(line)}</div>`;
   }
 
+  // ---------- the day's carb range ----------
+  // The server fits a sports-nutrition carb band for the day's work inside the day's
+  // target (repo/fuel-demand.ts). One calm line, TODAY ONLY for the same reason as the
+  // big-day line: on a past day a range reads as a grade on what was eaten. It is never
+  // set against the logged carbs — there is no "under" or "over" here.
+  const CARB_TIER_WORDS: Record<string, string> = {
+    light: "a lighter day",
+    moderate: "today's training",
+    high: "today's endurance work",
+  };
+
+  function dayFuelCarbsHtml(day: DayFuelData): string {
+    const demand = day.fuel_demand;
+    const carbs = demand?.carbs;
+    const date = String(demand?.date || day.date || "");
+    if (!carbs || !date || date !== localISO()) return "";
+    const low = macroValue(carbs.grams?.low);
+    const high = macroValue(carbs.grams?.high);
+    const words = CARB_TIER_WORDS[String(carbs.tier || "")];
+    if (low == null || high == null || high <= 0 || !words) return "";
+    const range = low === high ? `${high}` : `${low}&ndash;${high}`;
+    const fit = carbs.basis === "within_target" ? ", inside today's target" : "";
+    return `<div class="dayfuel-demand dayfuel-carbs">Carbs around <span class="numeral">${range}</span> g suit ${escHtml(words)}${fit}.</div>`;
+  }
+
   function macroValue(value: unknown): number | null {
     if (value == null || value === "") return null;
     const numeric = Number(value);
@@ -172,6 +202,7 @@ type DayFuelData = {
       return `<div class="dayfuel reveal" style="--i:0">${head}
           <div class="dayfuel-empty">Nothing logged yet today &mdash; log a meal in <button class="linkbtn linkbtn-plain" id="dayFuelAsk" type="button">Chat</button>; describe it in plain words and the macros are handled for you.</div>
           ${dayFuelDemandHtml(d)}
+          ${dayFuelCarbsHtml(d)}
         </div>`;
     }
 
@@ -217,6 +248,7 @@ type DayFuelData = {
         </div>
         ${remLine}
         ${dayFuelDemandHtml(d)}
+        ${dayFuelCarbsHtml(d)}
         <div class="dayfuel-list">${rows}</div>
         <div class="dayfuel-foot"><span class="lbl">Tap an item to fix it &middot; log more in Chat</span>
           <button class="linkbtn linkbtn-quiet linkbtn-sm" id="dayFuelProgress" type="button">See the multi-week intake read →</button></div>
@@ -228,6 +260,7 @@ type DayFuelData = {
     mealLabelHtml,
     dayFuelHtml,
     dayFuelDemandHtml,
+    dayFuelCarbsHtml,
   };
 
   Object.assign(globalThis, {

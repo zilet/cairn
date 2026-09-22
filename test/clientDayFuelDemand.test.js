@@ -141,3 +141,24 @@ test("the sentence follows the driver and rotates by date", () => {
   }
   assert.ok(lines.size > 1, "a stable input must not print the same sentence every morning");
 });
+
+// ── the day's carb range ──────────────────────────────────────────────────────
+const RANGED = {
+  ...BIG_LONG_RUN,
+  carbs: { tier: "high", g_per_kg: { low: 3.8, high: 4.2 }, grams: { low: 275, high: 305 }, basis: "within_target" },
+};
+
+test("today's card carries the day's carb range as one calm line inside the target", () => {
+  const fuel = loadDayFuel();
+  const html = fuel.dayFuelHtml(day({ fuel_demand: RANGED }));
+  assert.match(html, /dayfuel-carbs/);
+  assert.match(html, /275&ndash;305<\/span> g suit today's endurance work, inside today's target\./);
+  // Informational: never set against what was logged.
+  assert.doesNotMatch(fuel.dayFuelCarbsHtml(day({ fuel_demand: RANGED })), /\b(?:under|over|short|behind|left)\b/i);
+});
+
+test("a past day's card never carries a carb range", () => {
+  const fuel = loadDayFuel();
+  const past = { ...RANGED, date: "2026-04-24" };
+  assert.equal(fuel.dayFuelCarbsHtml(day({ date: "2026-04-24", fuel_demand: past })), "");
+});

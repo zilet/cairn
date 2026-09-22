@@ -36,6 +36,7 @@ import { round1 } from "../lib/numbers.js";
 import { weekLayoutRead, type WeekLayoutRead } from "../domain/training/week-layout.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { matchEnduranceModality } from "./heavy-load.js";
+import { getHrModel } from "./hr-model.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
 import { thisWeekPlanDayMap } from "./plan-selection.js";
 import { dowToDayNumber, getEnduranceGoal, isoDow, statedRunDows } from "./profile.js";
@@ -87,6 +88,11 @@ export interface PaceBand {
   fast_sec_per_km: number;
   /** "5:10–5:40 /km" */
   text: string;
+  /**
+   * Easy and long bands only: the personal HR model's easy ceiling (top of Z2), so
+   * the card carries the pull line beside the pace. Absent when the model can't say.
+   */
+  hr_ceiling_bpm?: number | null;
 }
 
 export interface RaceBuildWeek {
@@ -286,6 +292,18 @@ export function paceBandsFor(racePaceSecPerKm: number, distanceKm: number): Pace
     band("threshold", offsets.threshold[0], offsets.threshold[1]),
     band("vo2", offsets.vo2[0], offsets.vo2[1]),
   ];
+}
+
+// The easy ceiling the run intensity read and the prescriptions already hold easy
+// running to (the personal model's Z2 top). A pace band alone lets an easy run drift
+// into Z3 on a warm or hilly day at the right pace; the ceiling is the line that holds.
+function easyCeilingBpm(asOf: string): number | null {
+  try {
+    const top = Number(getHrModel(asOf)?.zones?.z2_top);
+    return Number.isFinite(top) && top > 0 ? Math.round(top) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Which pace band a quality-session label is asking for. Hills are effort, not pace. */
@@ -678,6 +696,7 @@ export function raceBuild(
   const racePace = target?.pace_sec_per_km ?? prediction?.estimate_pace_sec_per_km ?? null;
   const estimatePace = prediction?.estimate_pace_sec_per_km ?? null;
   const trainingPace = racePace != null && estimatePace != null ? Math.max(racePace, estimatePace) : racePace;
+  const hrCeiling = trainingPace != null ? easyCeilingBpm(asOf) : null;
   const paces =
     racePace != null && trainingPace != null
       ? {
@@ -685,7 +704,9 @@ export function raceBuild(
           race_pace_sec_per_km: Math.round(racePace),
           bands: [
             ...paceBandsFor(racePace, distance).filter((b) => b.key === "race"),
-            ...paceBandsFor(trainingPace, distance).filter((b) => b.key !== "race"),
+            ...paceBandsFor(trainingPace, distance)
+              .filter((b) => b.key !== "race")
+              .map((b) => (b.key === "easy" || b.key === "long" ? { ...b, hr_ceiling_bpm: hrCeiling } : b)),
           ],
         }
       : null;

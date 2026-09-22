@@ -260,4 +260,35 @@ export const MIGRATIONS_101_150: Migration[] = [
       }
     },
   },
+  {
+    version: 109,
+    name: "hrv-weekly-average-repair",
+    // foldHrv used to fall back to Garmin's `weeklyAvg` on a morning with no night of
+    // its own, storing a seven-day average under a one-night date. Ingestion now keeps
+    // `lastNightAvg` only; this clears the history it wrote, and ONLY the rows that
+    // provably came from that fallback: the raw summary says there was no last night
+    // AND the stored value is that summary's weekly average. The raw blob is untouched,
+    // so the weekly figure is still there. A DB without the table or column (a
+    // household instance jumping from an old schema) has nothing to repair.
+    up: (db) => {
+      const summary = (key: string) =>
+        `CASE WHEN json_valid(raw_json) THEN json_extract(raw_json, '$.hrv.hrvSummary.${key}') END`;
+      let cleared = 0;
+      try {
+        cleared = Number(
+          db
+            .prepare(
+              `UPDATE garmin_daily_metrics SET hrv_ms = NULL
+                WHERE hrv_ms IS NOT NULL
+                  AND ${summary("lastNightAvg")} IS NULL
+                  AND ${summary("weeklyAvg")} = hrv_ms`
+            )
+            .run().changes
+        );
+      } catch {
+        /* a DB predating garmin_daily_metrics.hrv_ms / raw_json has nothing to repair */
+      }
+      if (cleared) log.info(`[migrate] v109: cleared ${cleared} HRV value(s) that were Garmin's weekly average.`);
+    },
+  },
 ];

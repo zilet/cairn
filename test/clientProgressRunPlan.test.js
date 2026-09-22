@@ -342,6 +342,25 @@ test("compact race build card folds clocks and paces behind the build disclosure
   assert.doesNotMatch(html, /The build, week by week/);
 });
 
+test("the easy and long pace bands carry the personal easy ceiling beside the pace", () => {
+  const runPlan = loadRunPlan();
+  const html = runPlan.raceBuildCard(
+    {
+      available: true,
+      race: { weeks_to_race: 6, phase: "build" },
+      paces: {
+        bands: [
+          { key: "easy", label: "Easy", text: "6:13–6:43 /km", hr_ceiling_bpm: 146 },
+          { key: "threshold", label: "Threshold", text: "5:01–5:08 /km" },
+        ],
+      },
+    },
+    { underGoal: true, compact: true }
+  );
+  assert.match(html, /6:13–6:43 \/km · under 146 bpm/);
+  assert.doesNotMatch(html, /5:08 \/km · under/);
+});
+
 test("race build card head uses singular/race-week wording at the countdown's edges", () => {
   const runPlan = loadRunPlan();
 
