@@ -328,3 +328,17 @@ test("a +75 kcal target does not become Journey settling when the canonical read
   assert.equal(journey.recomposition.action.kcal_delta, canonical.action.kcal_delta);
   assert.equal(journey.recomposition.action.training_directive, canonical.action.training);
 });
+
+test("the likely arrival reads the cut's own plan pace, so it cannot contradict the cut target", () => {
+  seedOutcomeTrend({ weekly: -0.8 });
+  const today = localDaysAgo(0);
+  const fallback = repo.recompositionRead(today, { cutTarget: null });
+  const planned = repo.recompositionRead(today, { cutTarget: { pace_intended_lb_wk: fallback.progress.target_rate.high } });
+  assert.ok(fallback.progress.timeline && planned.progress.timeline);
+  // No plan: the lean-ideal rate, exactly as before.
+  const { remaining_lb, target_rate, timeline } = fallback.progress;
+  const stabilization = timeline.includes_stabilization ? 2 : 0;
+  assert.equal(timeline.likely_weeks, Math.max(1, Math.ceil(remaining_lb / target_rate.ideal) + stabilization));
+  // A plan running at the band's top arrives when the earliest edge says, plus settling.
+  assert.equal(planned.progress.timeline.likely_weeks, planned.progress.timeline.earliest_weeks + stabilization);
+});

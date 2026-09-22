@@ -214,6 +214,17 @@ test("a step DOWN is held while the anchor says the training week is a big one",
   assert.equal(out.delta_kcal, 0, "the deficit is unchanged, not cancelled — the step simply waits");
 });
 
+test("the hold keeps the DEFICIT: a number protection lifted near maintenance is not held there", () => {
+  // Maintenance 2400; the target in force (2300) is barely a cut. The anchor's held
+  // target keeps the minimum cut deficit (2150), so the step lands there — not back
+  // at the 2300 already in force, which would hold a 100 kcal "cut" all week.
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_000, delta_kcal: -300 }, goal(2_300), {
+    cutAnchor: anchor(2_150, { tdee_kcal: 2_400, deficit_kcal: 250, deepening_held: true }),
+  });
+  assert.equal(out.target_kcal, 2_150);
+  assert.equal(out.cut_anchor.deepening_held, true);
+});
+
 test("the hold binds DOWNWARD only — a raise is still protection's question", () => {
   const out = personalizeNutritionCheckinTarget({ target_kcal: 2_400 }, goal(2_250), {
     cutAnchor: anchor(2_350, { deepening_held: true }),

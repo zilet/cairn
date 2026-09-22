@@ -14,13 +14,23 @@
 // benign function-body-only cycle (day-read → fuel-state → nutrition → profile →
 // intelligence → day-read), never a load-time one.
 import { INTAKE_LOGGING_WINDOW_DAYS, dayIntakeCoverage, getDayIntake, intakeLoggingMode } from "./nutrition.js";
-import { localDateISO, localHourFraction, parseDbTime } from "./shared.js";
+import { approxTimeForMealLabel, localDateISO, localHourFraction, parseDbTime } from "./shared.js";
 
 // The eating window the pace model measures elapsed time against. Start is the
-// first logged meal's LOCAL time (else this floor); end is a plain "done eating
+// earliest meal's LOCAL eating hour (else this floor); end is a plain "done eating
 // for the day" o'clock. Both are local wall-clock hours (device zone).
 const DEFAULT_WINDOW_START_HOUR = 7; // 07:00 — before a meal is logged, assume the day starts here
 const WINDOW_END_HOUR = 21; // 21:00 — protein "should" be in by roughly here
+
+// Local fractional hour a logged entry was EATEN: stated time, else the meal label's
+// representative hour, else the time it was logged. Null when none is readable.
+function entryEatenHour(entry: any): number | null {
+  const hhmm = /^(\d{1,2}):(\d{2})/.exec(String(entry?.eaten_at ?? approxTimeForMealLabel(entry?.meal) ?? ""));
+  if (hhmm) return Number(hhmm[1]) + Number(hhmm[2]) / 60;
+  const at = entry?.created_at ? parseDbTime(entry.created_at) : null;
+  return at ? localHourFraction(at) : null;
+}
+
 // Grams of slack below the pace line before "behind" — a bucket boundary, not a nag.
 const ON_PACE_SLACK_G = 20;
 // Grams still owed at or under which the day is comfortably "met".
@@ -83,13 +93,13 @@ export function dayFuelState(date?: string, now: Date = new Date()): FuelState |
     if (d < today) {
       expected_by_now_g = target_g;
     } else {
-      // Window start = first logged meal's local time (else the 07:00 floor).
+      // Window start = the earliest meal's EATING hour (else the 07:00 floor). The
+      // hour a meal was eaten is its stated `eaten_at`, else its label's representative
+      // hour — used here at read time only, never stored — and only failing both the
+      // moment it was typed: a breakfast logged at 12:25 started the day at 12:25.
       let startHour = DEFAULT_WINDOW_START_HOUR;
-      const firstEntry = entries.length ? entries[0] : null;
-      if (firstEntry?.created_at) {
-        const firstAt = parseDbTime(firstEntry.created_at);
-        if (firstAt) startHour = localHourFraction(firstAt);
-      }
+      const eatenHours = entries.map(entryEatenHour).filter((h): h is number => h != null);
+      if (eatenHours.length) startHour = Math.min(...eatenHours);
       const nowHour = localHourFraction(now);
       const windowSpan = WINDOW_END_HOUR - startHour;
       const frac = windowSpan > 0 ? clamp01((nowHour - startHour) / windowSpan) : 1;

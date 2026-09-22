@@ -9,6 +9,7 @@ import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 // + the shared near-goal band), deliberately not the recomposition read, which
 // consumes this module.
 import { atOrNearGoal } from "./goal-proximity.js";
+import { cutIntakeFloorAt } from "./cut-target.js";
 import { finite } from "../lib/numbers.js";
 
 export type UnderfuelingState =
@@ -50,6 +51,9 @@ export interface UnderfuelingRead {
     near_target_days: number;
     average_gap_kcal: number | null;
     current_target_kcal: number | null;
+    // The cut's own floor each day was also read against (min of the two), when a
+    // cut with measured maintenance is running.
+    cut_floor_kcal: number | null;
     maintenance_estimate_kcal: number | null;
   };
   correction: {
@@ -86,6 +90,9 @@ export interface UnderfuelingOptions {
   // Consecutive calendar days ending yesterday with nothing trained (see
   // `untrainedSpanEndingYesterday`). Injectable for fixtures; computed otherwise.
   restSpanDays?: number;
+  // The cut's own intake floor (`cutIntakeFloorKcal`, cut-target.ts). Injectable for
+  // fixtures; computed otherwise. `null` states there is no cut floor.
+  cutIntakeFloorKcal?: number | null;
 }
 
 const MATERIAL_GAP_FRAC = 0.11;
@@ -240,6 +247,21 @@ export function untrainedSpanEndingYesterday(today: string, limit = 14): number 
   return span;
 }
 
+// ONE CHECK-IN PER DATE: the last one. The check-in sliders write a row per tap, so
+// a day can hold several rows and an intermediate tap (soreness 4 on the way to a
+// final 2) is not what the athlete said about that day. `lo`/`hi` bound the dates;
+// `loExclusive` makes the lower bound strict (the post-correction gate).
+function lastCheckinPerDate(lo: string, hi: string, loExclusive = false): any[] {
+  return db
+    .prepare(
+      `SELECT c.date, c.energy, c.sleep_feel, c.soreness FROM checkins c
+        WHERE c.date ${loExclusive ? ">" : ">="} ? AND c.date <= ?
+          AND c.id = (SELECT MAX(c2.id) FROM checkins c2 WHERE c2.date = c.date)
+        ORDER BY c.date`
+    )
+    .all(lo, hi) as any[];
+}
+
 // Persistence is a chronological claim: the athlete must have actually reported
 // or logged a low response on a strictly later calendar date than the upward
 // correction. Nutrition targets and these observations are date-only, so a row on
@@ -266,9 +288,7 @@ function postCorrectionAthleteResponse(
       evidence.add(`fueling_feedback:${String(row.date)}:post-correction-low`);
     }
   }
-  const checkins = db
-    .prepare(`SELECT date, energy, sleep_feel, soreness FROM checkins WHERE date > ? AND date <= ? ORDER BY date`)
-    .all(correctionDate, today) as any[];
+  const checkins = lastCheckinPerDate(correctionDate, today, true);
   for (const row of checkins) {
     const energy = finite(row.energy);
     const sleep = finite(row.sleep_feel);
@@ -337,27 +357,38 @@ function deadband(target: number): number {
   return Math.max(MATERIAL_GAP_MIN_KCAL, Math.round(target * MATERIAL_GAP_FRAC));
 }
 
-function intakeComparison(days: CompletedIntakeDay[]) {
+// A PROTECTIVE TARGET IS NOT AN ENERGY NEED. During a cut each day is read against
+// the lower of the target in force and the cut's own floor (measured maintenance
+// minus the largest allowed deficit). Read against the target alone, a target the
+// protective loop had lifted to maintenance turned ordinary cut eating into
+// "materially below" day after day, and that gap — created by the raise itself —
+// voted as independent strain for the next raise and then a recovery week. A plate
+// genuinely under the floor still reads as strain; nothing about the deadband, the
+// credibility rule or absent days changes.
+function intakeComparison(days: CompletedIntakeDay[], cutFloorKcal: number | null) {
   const compared = days
     .filter((day) => day.credible)
     .map((day) => {
       const target = targetForDate(day.date);
       const targetKcal = finite(target?.target_kcal);
       if (targetKcal == null || targetKcal <= 0) return null;
-      const uncertainty = deadband(targetKcal);
+      const referenceKcal = cutFloorKcal != null ? Math.min(targetKcal, cutFloorKcal) : targetKcal;
+      const uncertainty = deadband(referenceKcal);
       return {
         date: day.date,
         kcal: day.kcal,
         target_kcal: targetKcal,
-        gap_kcal: day.kcal - targetKcal,
-        materially_below: day.kcal < targetKcal - uncertainty,
-        near_target: Math.abs(day.kcal - targetKcal) <= uncertainty,
+        reference_kcal: referenceKcal,
+        gap_kcal: day.kcal - referenceKcal,
+        materially_below: day.kcal < referenceKcal - uncertainty,
+        near_target: Math.abs(day.kcal - referenceKcal) <= uncertainty,
       };
     })
     .filter(Boolean) as Array<{
     date: string;
     kcal: number;
     target_kcal: number;
+    reference_kcal: number;
     gap_kcal: number;
     materially_below: boolean;
     near_target: boolean;
@@ -427,9 +458,7 @@ function subjectiveChannels(
   const fuel = db
     .prepare(`SELECT date, energy, hunger FROM fueling_feedback WHERE date BETWEEN ? AND ? ORDER BY date`)
     .all(since, today) as any[];
-  const checkins = db
-    .prepare(`SELECT date, energy, sleep_feel, soreness FROM checkins WHERE date BETWEEN ? AND ? ORDER BY date`)
-    .all(since, today) as any[];
+  const checkins = lastCheckinPerDate(since, today);
   const sessions = db
     .prepare(`SELECT date, performance, soreness FROM sessions WHERE date BETWEEN ? AND ? ORDER BY date`)
     .all(since, today) as any[];
@@ -451,15 +480,24 @@ function subjectiveChannels(
       })
       .map((row) => String(row.date))
   );
-  const steadyFuelDays = new Set(
-    fuel
+  // A check-in energy of 4-5 is a support vote, exactly as it is everywhere else a
+  // check-in is read (<=2 brakes, 3 is neutral) — otherwise this channel could only
+  // ever vote strain from the check-in side.
+  const steadyFuelDays = new Set([
+    ...fuel
       .filter((row) => {
         const energy = finite(row.energy);
         const hunger = finite(row.hunger);
         return energy != null && energy >= 2 && (hunger == null || hunger <= 2);
       })
-      .map((row) => String(row.date))
-  );
+      .map((row) => String(row.date)),
+    ...checkins
+      .filter((row) => {
+        const energy = finite(row.energy);
+        return energy != null && energy >= 4;
+      })
+      .map((row) => String(row.date)),
+  ]);
   const energyLow = new Set([...lowFuelDays, ...lowEnergyDays]);
   const poorRecovery = new Set(
     [
@@ -486,7 +524,7 @@ function subjectiveChannels(
         energyLow.size >= 2
           ? "Fueling and check-in feedback repeatedly says energy availability feels low."
           : steadyFuelDays.size >= 2
-            ? "Recent fueling feedback is steady enough not to corroborate an urgent correction."
+            ? "Recent fueling and check-in feedback is steady enough not to corroborate an urgent correction."
             : "Subjective fueling feedback is still too thin for a directional call.",
       samples: fuel.length + checkins.length,
       evidence_keys: [
@@ -691,7 +729,9 @@ function workloadChannel(program: any): UnderfuelingChannel {
 export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptions = {}): UnderfuelingRead {
   const windowDays = Math.max(7, Math.min(28, Math.trunc(Number(opts.windowDays) || 14)));
   const intakeWindow = completedIntakeWindow(windowDays, today);
-  const compared = intakeComparison(intakeWindow.days);
+  const cutFloor = opts.cutIntakeFloorKcal !== undefined ? finite(opts.cutIntakeFloorKcal) : cutIntakeFloorAt(today);
+  const compared = intakeComparison(intakeWindow.days, cutFloor);
+  const judgedAgainstFloor = compared.some((day) => day.reference_kcal < day.target_kcal);
   const targets = currentAndPreviousTarget(today);
   const currentTarget = finite(targets.current?.target_kcal);
   const currentDeadband = currentTarget != null ? deadband(currentTarget) : null;
@@ -700,8 +740,11 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
     : null;
   const belowDays = compared.filter((day) => day.materially_below).length;
   const nearDays = compared.filter((day) => day.near_target).length;
+  // A PATTERN, not a tally: low days must also outnumber the days that sit on the
+  // reference. Three low days among nine ordinary ones is day-to-day variance, and
+  // reading it as a shortfall is inferring under-eating from noise.
   const logDirection: UnderfuelingChannelDirection =
-    compared.length >= MIN_CREDIBLE_DIARY_DAYS && belowDays >= 3
+    compared.length >= MIN_CREDIBLE_DIARY_DAYS && belowDays >= 3 && belowDays > nearDays
       ? "strain"
       : compared.length >= MIN_CREDIBLE_DIARY_DAYS && nearDays >= Math.ceil(compared.length * 0.6)
         ? "support"
@@ -711,9 +754,13 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
     direction: logDirection,
     summary:
       logDirection === "strain"
-        ? "Several credibly logged completed days sit materially below their effective targets; the execution pattern is unresolved, not explained."
+        ? judgedAgainstFloor
+          ? "Several credibly logged completed days sit materially below even the cut's own floor; the execution pattern is unresolved, not explained."
+          : "Several credibly logged completed days sit materially below their effective targets; the execution pattern is unresolved, not explained."
         : logDirection === "support"
-          ? "Credibly logged completed days are mostly inside the logging-error band around their targets."
+          ? judgedAgainstFloor
+            ? "Credibly logged completed days sit inside the logging-error band of an ordinary cut day; the protective target above it is not an energy need."
+            : "Credibly logged completed days are mostly inside the logging-error band around their targets."
           : "Food coverage is too sparse or mixed to infer a consistent execution pattern.",
     samples: compared.length,
     evidence_keys: compared.length
@@ -953,7 +1000,7 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
     window: { since: intakeWindow.since, through: intakeWindow.through, calendar_days: intakeWindow.calendar_days },
     uncertainty: {
       deadband_kcal: currentDeadband,
-      deadband_basis: "max(225 kcal, 11% of each day's effective target)",
+      deadband_basis: "max(225 kcal, 11% of each day's reference: the effective target, or the cut's own floor when lower)",
       missing_food_days: intakeWindow.missing_days,
       partial_food_days: intakeWindow.partial_days,
       note: "Food portions, labels, exercise load, scale readings, and tape measurements are estimates; missing food days are unknown, never zero.",
@@ -966,6 +1013,7 @@ export function underfuelingRead(today = localDateISO(), opts: UnderfuelingOptio
       near_target_days: nearDays,
       average_gap_kcal: averageGap,
       current_target_kcal: currentTarget,
+      cut_floor_kcal: cutFloor,
       maintenance_estimate_kcal:
         ["medium", "high"].includes(String(opts.expenditure?.confidence ?? "")) &&
         finite(opts.expenditure?.tdee) != null

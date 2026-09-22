@@ -6,6 +6,7 @@ import { daysBetweenISO, localDateISO } from "./shared.js";
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { wholePersonTrajectory, type WholePersonTrajectory } from "./whole-person-trajectory.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
+import { type CutTargetDerivation, deriveCutTarget } from "./cut-target.js";
 import type { UnderfuelingRead } from "./underfueling.js";
 import {
   classifyRecompositionStage,
@@ -113,6 +114,8 @@ export function recompositionRead(
     programState?: ProgramState;
     wholePerson?: WholePersonTrajectory;
     underfueling?: UnderfuelingRead;
+    // `null` states no cut plan; omitted authorizes the read to derive one.
+    cutTarget?: CutTargetDerivation | null;
   } = {}
 ): RecompositionRead {
   const profile = getProfile() as any;
@@ -167,13 +170,31 @@ export function recompositionRead(
           high: round2(rates.safe_max_rate_lb),
         }
       : null;
+  // The LIKELY arrival reads the cut's own plan pace — the pace its calorie target
+  // and its goal-date projection are built from — so this read and the cut target
+  // cannot give the athlete two different answers to "when do I get there". The
+  // lean-ideal rate is the fallback when no cut plan is derivable; the earliest /
+  // latest edges stay the lean-safe band either way.
+  let plannedRate: number | null = null;
+  if (targetRate) {
+    try {
+      const plan = opts.cutTarget === undefined ? deriveCutTarget(today) : opts.cutTarget;
+      const pace = finite(plan?.pace_intended_lb_wk);
+      if (pace != null && pace > 0) plannedRate = Math.min(targetRate.high, Math.max(targetRate.low, pace));
+    } catch {
+      plannedRate = null;
+    }
+  }
   const phaseAge = phase?.start_date ? daysBetweenISO(today, String(phase.start_date)) : null;
   const stabilizationWeeks = stage.kind === "leaning_out" || (phaseAge != null && phaseAge >= 56) ? 2 : 0;
   const timeline =
     remaining != null && remaining > 0 && targetRate
       ? {
           earliest_weeks: Math.max(1, Math.ceil(remaining / Math.max(0.1, targetRate.high))),
-          likely_weeks: Math.max(1, Math.ceil(remaining / Math.max(0.1, targetRate.ideal)) + stabilizationWeeks),
+          likely_weeks: Math.max(
+            1,
+            Math.ceil(remaining / Math.max(0.1, plannedRate ?? targetRate.ideal)) + stabilizationWeeks
+          ),
           latest_weeks: Math.max(1, Math.ceil(remaining / Math.max(0.1, targetRate.low)) + stabilizationWeeks),
           confidence:
             expenditureConfidence === "high"

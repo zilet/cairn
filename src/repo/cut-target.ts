@@ -94,9 +94,14 @@ export type CutTargetConfidence = "low" | "moderate" | "high";
 // sessions to have already happened — a correction after the cost, not before it.
 //
 // So the derivation now reads the week it is prescribing INTO. During a high-demand
-// week the deficit does not deepen: the target HOLDS at the number already in force
+// week the deficit does not deepen: the target HOLDS the DEFICIT already in force
 // and the next step happens at the next ordinary week. The deficit itself is never
 // cancelled — only its next increment waits.
+//
+// What is held is the deficit, never the kcal number. Once protection had lifted
+// the number in force to maintenance, "hold the number" meant a 0 kcal deficit and
+// a goal date nobody was tracking — rule 3 broken by the rule meant to keep it. So
+// the hold is ceilinged at `tdee - CUT_DEFICIT_MIN_KCAL`: a held week still cuts.
 //
 // `capProtectiveRaise` below stays the ONE authority on lifting a target, so the
 // hold is expressed by calling it rather than by a second ceiling of its own. Two
@@ -160,6 +165,11 @@ export interface CutTargetState {
   training_demand?: CutTrainingDemand | null;
 }
 
+// Whether the goal date is being tracked at all. `not_tracked` is the explicit
+// answer when the cut's own plan delivers no deficit (only possible when the kcal
+// floor binds), so a silent null projection can never read as "on track".
+export type CutGoalDateStatus = "on_track" | "moves_out" | "not_tracked";
+
 export interface CutGoalDateAdaptation {
   from: string;
   to: string;
@@ -177,6 +187,12 @@ export interface CutTargetDerivation {
   // What the target actually delivers, after every clamp above it.
   deficit_kcal: number;
   pace_lb_wk: number;
+  // The pace the cut's own plan is built from: the goal-required pace inside the
+  // lean-safe band, after the deficit bounds — BEFORE any rule-5 hold or protective
+  // raise. The projection, the date adaptation and every "is the scale outrunning
+  // the cut" read measure against this, so a hold or a raise can never shrink the
+  // yardstick it is itself judged by.
+  pace_intended_lb_wk: number;
   // True when the goal date wanted a faster pace than the law allows, so the
   // deficit ceiling bound the answer and the date is what moved.
   pace_capped: boolean;
@@ -186,6 +202,8 @@ export interface CutTargetDerivation {
   goal_date: string | null;
   projected_goal_date: string | null;
   goal_date_adaptation: CutGoalDateAdaptation | null;
+  // Null when no goal date is set.
+  goal_date_status: CutGoalDateStatus | null;
   coverage: CutTargetCoverage;
   // Carried through so the words a person reads (`cutTargetBody`) can tell a
   // record that is still filling in from one that is deliberately not being kept.
@@ -331,8 +349,12 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
     // The hold is a RAISE relative to the step this week wanted, so it goes through
     // the one function allowed to lift a target. Measured maintenance is therefore
     // the ceiling of the hold as well, and an unmeasured one refuses it outright.
-    const held = capProtectiveRaise(activeTarget, steppedTarget, tdee, tdeeBasis);
-    target = Math.round(held.target_kcal);
+    // What it holds is the deficit: never less than the minimum cut deficit, however
+    // high protection had already lifted the number in force (rounded DOWN so the
+    // rounding can never eat into that minimum).
+    const minimumCut = Math.floor((tdee - CUT_DEFICIT_MIN_KCAL) / TARGET_ROUNDING_KCAL) * TARGET_ROUNDING_KCAL;
+    const held = capProtectiveRaise(Math.min(activeTarget, minimumCut), steppedTarget, tdee, tdeeBasis);
+    target = Math.max(steppedTarget, Math.round(held.target_kcal));
     deepeningHeld = target > steppedTarget;
   }
   // Read the delivered deficit back off the target that survived every clamp, so
@@ -340,12 +362,16 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
   // for before the kcal floor had its say.
   const deliveredDeficit = Math.max(0, tdee - target);
   const paceDelivered = (deliveredDeficit * 7) / KCAL_PER_LB;
-  const paceCapped = paceWanted != null && paceWanted > paceDelivered + 0.01;
+  // The plan's own pace: the stepped target, before the hold. A hold is a week's
+  // pause on the next increment, not a new plan, so it never moves the date.
+  const plannedDeficit = Math.max(0, tdee - steppedTarget);
+  const paceIntended = (plannedDeficit * 7) / KCAL_PER_LB;
+  const paceCapped = paceWanted != null && paceWanted > paceIntended + 0.01;
 
   // ---- rule 4: the date that pace actually reaches --------------------------
   let projected: string | null = null;
-  if (paceDelivered > 0.01) {
-    const daysNeeded = Math.ceil((lbsToLose / paceDelivered) * 7);
+  if (paceIntended > 0.01) {
+    const daysNeeded = Math.ceil((lbsToLose / paceIntended) * 7);
     projected = addDaysISO(String(state.today).slice(0, 10), daysNeeded);
   }
   let adaptation: CutGoalDateAdaptation | null = null;
@@ -362,6 +388,8 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
       reason: `Reaching ${goalWeight} lb by ${goalDate} would need a faster weekly loss than the lean-safe ceiling allows, so the deficit stays at ${deficit} kcal and the arrival date moves out to ${projected}.`,
     };
   }
+  const goalDateStatus: CutGoalDateStatus | null =
+    goalDate == null ? null : projected == null ? "not_tracked" : adaptation ? "moves_out" : "on_track";
 
   // What the number actually stood on. When the plate has gone quiet, the estimate
   // is led by the scale and a metabolic prior BY DESIGN — describing it as a record
@@ -380,10 +408,14 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
   // the provenance trail is read for, and the hold is a second fact about the same
   // number, not a replacement for the first.
   const holdWords = deepeningHeld
-    ? ` The next step down is holding at the ${target} kcal already in force — this week is one of the block's bigger asks (${
+    ? ` The next step down is holding at ${target} kcal, a ${deliveredDeficit} kcal deficit — this week is one of the block's bigger asks (${
         demand?.basis?.length ? demand.basis.join(", ") : "high training demand"
       }) — and it comes at the next ordinary week.`
     : "";
+  const dateWords =
+    goalDateStatus === "not_tracked"
+      ? ` The cut's plan carries no deficit right now, so the ${goalDate} goal date is not being tracked.`
+      : "";
 
   return {
     target_kcal: target,
@@ -393,16 +425,18 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
     confidence,
     deficit_kcal: deliveredDeficit,
     pace_lb_wk: Math.round(paceDelivered * 100) / 100,
+    pace_intended_lb_wk: Math.round(paceIntended * 100) / 100,
     pace_capped: paceCapped,
     outlier_clamped: outlierClamped,
     goal_date: goalDate,
     projected_goal_date: projected,
     goal_date_adaptation: adaptation,
+    goal_date_status: goalDateStatus,
     coverage,
     intake_mode: intakeMode,
     training_demand: demand,
     deepening_held: deepeningHeld,
-    reason: `Maintenance estimated at ${tdee} kcal from ${basisWords}; the cut target holds a ${deliveredDeficit} kcal deficit, about ${(Math.round(paceDelivered * 100) / 100).toFixed(2)} lb a week.${holdWords}`,
+    reason: `Maintenance estimated at ${tdee} kcal from ${basisWords}; the cut target holds a ${deliveredDeficit} kcal deficit, about ${(Math.round(paceDelivered * 100) / 100).toFixed(2)} lb a week.${holdWords}${dateWords}`,
   };
 }
 
@@ -462,6 +496,28 @@ export function capProtectiveRaise(
   const ceiling = tdeeBasis === "logged_reality" ? Math.max(previous, tdee) : previous;
   if (target <= ceiling) return { target_kcal: target, capped: false };
   return { target_kcal: Math.round(ceiling), capped: true };
+}
+
+// ---- the cut's own floor: what a diary is judged against ---------------------
+
+/**
+ * The lowest daily intake the cut itself would ever prescribe: measured
+ * maintenance minus the largest allowed deficit (rule 3), never under the kcal
+ * floor. Eating at or above it is an ordinary cut, whatever number protection has
+ * since lifted the target to — so the under-fuelling diary channel reads a day
+ * against `min(target in force, this floor)` and a gap the raise alone created can
+ * never vote as independent strain.
+ *
+ * Null unless maintenance was MEASURED (`logged_reality`): a formula prior is not a
+ * number to judge anyone's plate against, here or at `capProtectiveRaise`.
+ *
+ * PURE.
+ */
+export function cutIntakeFloorKcal(derivation: CutTargetDerivation | null | undefined): number | null {
+  if (!derivation || derivation.tdee_basis !== "logged_reality") return null;
+  const tdee = finite(derivation.tdee_kcal);
+  if (tdee == null) return null;
+  return Math.max(KCAL_ABSOLUTE_FLOOR, roundTo(tdee - CUT_DEFICIT_MAX_KCAL, TARGET_ROUNDING_KCAL));
 }
 
 // ---- the words a person reads ------------------------------------------------
@@ -677,6 +733,19 @@ export function deriveCutTarget(
   opts: { expenditure?: ReturnType<typeof estimateExpenditure> | null } = {}
 ): CutTargetDerivation | null {
   return cutTargetDecision(cutTargetState(asOf, opts));
+}
+
+// The cut's intake floor as of a date, or null when no cut is running (not a
+// lose-mode goal, at/below goal) or maintenance is unmeasured. Fail-soft: an
+// unreadable derivation is no floor, which leaves the diary judged against the
+// target in force exactly as before this existed.
+export function cutIntakeFloorAt(asOf: string = localDateISO()): number | null {
+  try {
+    if (effectiveGoalMode(getProfile() as any) !== "lose") return null;
+    return cutIntakeFloorKcal(deriveCutTarget(asOf));
+  } catch {
+    return null;
+  }
 }
 
 // ---- is this cut the athlete's own, and still standing? ----------------------

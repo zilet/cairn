@@ -311,6 +311,67 @@ test("persistent multi-channel strain after settling calls for a coordinated rec
   assert.equal(read.action.training, "reduce");
 });
 
+// The live loop this closes: protection lifted the target to measured maintenance,
+// the athlete kept eating an ordinary cut (maintenance - 450), and the gap the raise
+// itself created voted as strain for a recovery week and a promotion veto.
+test("a gap created only by a protective raise to maintenance is never intake strain", () => {
+  target(2150, -30);
+  target(2600, -8); // the protective raise, up to measured maintenance
+  for (const delta of [-1, -2, -3, -4, -5]) intake(delta, 2150); // maintenance - 450
+  lowSession(-1);
+  lowSession(-2);
+  const opts = { expenditure: onPathExp, goal, programState: strainedProgram, wholePerson: strainedWhole };
+
+  const read = underfuelingRead(TODAY, { ...opts, cutIntakeFloorKcal: 2150 });
+  assert.notEqual(read.channels.find((c) => c.key === "logged_intake").direction, "strain");
+  assert.equal(read.intake.cut_floor_kcal, 2150);
+  assert.notEqual(read.state, "persistent_strain");
+  assert.notEqual(read.action.training, "reduce");
+
+  // The same record judged against the raised target alone is the bug.
+  const unfloored = underfuelingRead(TODAY, { ...opts, cutIntakeFloorKcal: null });
+  assert.equal(unfloored.channels.find((c) => c.key === "logged_intake").direction, "strain");
+  assert.equal(unfloored.action.training, "reduce");
+});
+
+test("a plate genuinely under the cut's own floor still reads as intake strain", () => {
+  target(2600, -30);
+  for (const delta of [-1, -2, -3, -4, -5]) intake(delta, 1600);
+  const read = underfuelingRead(TODAY, {
+    expenditure: onPathExp,
+    goal,
+    programState: null,
+    wholePerson: null,
+    cutIntakeFloorKcal: 2150,
+  });
+  assert.equal(read.channels.find((c) => c.key === "logged_intake").direction, "strain");
+  assert.match(read.channels.find((c) => c.key === "logged_intake").summary, /cut's own floor/);
+});
+
+test("three low days among mostly on-target days are variance, not an intake pattern", () => {
+  target(2200);
+  for (const delta of [-1, -2, -3, -4, -5, -6, -7, -8, -9]) intake(delta, 2175);
+  for (const delta of [-10, -11, -12]) intake(delta, 1700);
+  const read = underfuelingRead(TODAY, { expenditure: null, goal, programState: null, wholePerson: null });
+  assert.equal(read.intake.materially_below_days, 3);
+  assert.equal(read.channels.find((c) => c.key === "logged_intake").direction, "support");
+});
+
+test("only a date's last check-in speaks for it, and check-in energy 4+ is a support vote", () => {
+  target(2200);
+  for (const delta of [-1, -2, -3, -4, -5]) intake(delta, 2175);
+  const checkin = (delta, energy, soreness) =>
+    db.prepare(`INSERT INTO checkins (date, energy, soreness) VALUES (?, ?, ?)`).run(day(delta), energy, soreness);
+  // Slider taps: an intermediate soreness 4 on the way to a final 2.
+  checkin(-1, 3, 4);
+  checkin(-1, 4, 2);
+  checkin(-2, 3, 4);
+  checkin(-2, 4, 2);
+  const read = underfuelingRead(TODAY, { expenditure: null, goal, programState: null, wholePerson: null });
+  assert.notEqual(read.channels.find((c) => c.key === "recovery").direction, "strain");
+  assert.equal(read.channels.find((c) => c.key === "felt_energy").direction, "support");
+});
+
 test("pre-correction athlete strain plus aggregate corroboration cannot trigger another fuel escalation", () => {
   target(2050, -30);
   target(2200, -8);

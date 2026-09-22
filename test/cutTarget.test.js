@@ -26,6 +26,7 @@ import {
   cutReaffirmation,
   cutTargetBody,
   cutTargetDecision,
+  cutIntakeFloorKcal,
   cutTargetGrammarPool,
   mayProposeEaseFromCut,
 } from "../dist/repo/cut-target.js";
@@ -279,7 +280,7 @@ test("a scheduled deepening HOLDS during a high-demand week", () => {
   assert.equal(held.deepening_held, true);
   assert.equal(held.target_kcal, 2_500, "the target stays exactly where the athlete already had it");
   assert.ok(held.target_kcal > stepped.target_kcal, "the step this week wanted was deeper than the hold");
-  assert.match(held.reason, /holding at the 2500 kcal already in force/);
+  assert.match(held.reason, /holding at 2500 kcal, a 300 kcal deficit/);
   assert.equal(held.training_demand.basis[0], "block_phase");
 });
 
@@ -291,12 +292,58 @@ test("the hold defers the increment; it never cancels the deficit", () => {
 });
 
 test("the hold never carries the target past MEASURED maintenance", () => {
-  // A target already sitting above maintenance cannot be held there: the same
-  // ceiling capProtectiveRaise puts on protection binds this hold too.
+  // A target already sitting above maintenance cannot be held there. This used to
+  // cap AT maintenance — a "held" cut with a 0 kcal deficit. The hold keeps the
+  // DEFICIT, so the ceiling is maintenance minus the minimum cut deficit.
   const held = cutTargetDecision(highDemand({ active_target_kcal: 3_000 }));
   assert.ok(held);
-  assert.equal(held.target_kcal, 2_800, "capped at the measured maintenance the record produced");
+  assert.equal(held.target_kcal, 2_550, "maintenance 2800 less the minimum cut deficit");
+  assert.ok(held.deficit_kcal >= CUT_DEFICIT_MIN_KCAL);
   assert.equal(held.deepening_held, true);
+});
+
+test("a hold after protection lifted the target to maintenance still carries the minimum deficit", () => {
+  // The live shape: protective raises had carried the number in force up to measured
+  // maintenance, then a high-demand week arrived. Holding the kcal number would be a
+  // zero-deficit cut and a goal date nobody tracks.
+  const held = cutTargetDecision(highDemand({ active_target_kcal: 2_800, goal_date: addDaysISO(TODAY, 42) }));
+  assert.ok(held);
+  assert.equal(held.deepening_held, true);
+  assert.ok(held.deficit_kcal >= CUT_DEFICIT_MIN_KCAL, `held deficit ${held.deficit_kcal}`);
+  assert.ok(held.target_kcal < held.tdee_kcal);
+  // The date is judged by the plan's pace, not by the held week's.
+  const plan = cutTargetDecision(grounded({ goal_date: addDaysISO(TODAY, 42) }));
+  assert.equal(held.pace_intended_lb_wk, plan.pace_intended_lb_wk);
+  assert.ok(held.pace_lb_wk < held.pace_intended_lb_wk);
+  assert.equal(held.projected_goal_date, plan.projected_goal_date);
+  assert.notEqual(held.goal_date_status, "not_tracked");
+});
+
+test("a plan with no deficit says the goal date is not being tracked, never a silent null", () => {
+  // Only the absolute kcal floor can leave the plan with no deficit at all.
+  const out = cutTargetDecision(
+    grounded({
+      outcome_tdee: 1_500,
+      prior_tdee: 1_500,
+      plausible_tdee_min: 1_200,
+      plausible_tdee_max: 4_200,
+      goal_date: addDaysISO(TODAY, 42),
+    })
+  );
+  assert.ok(out);
+  assert.equal(out.deficit_kcal, 0);
+  assert.equal(out.projected_goal_date, null);
+  assert.equal(out.goal_date_status, "not_tracked");
+  assert.match(out.reason, /goal date is not being tracked/);
+  assert.equal(cutTargetDecision(grounded()).goal_date_status, null, "no goal date, no status");
+});
+
+test("the cut's intake floor is measured maintenance less the largest cut deficit", () => {
+  const grounded2800 = cutTargetDecision(grounded());
+  assert.equal(cutIntakeFloorKcal(grounded2800), 2_800 - CUT_DEFICIT_MAX_KCAL);
+  const thin = { window_days: 28, intake_days: 2, weigh_ins: 1, weigh_in_span_days: 0 };
+  assert.equal(cutIntakeFloorKcal(cutTargetDecision(grounded({ coverage: thin }))), null, "a prior is not a floor");
+  assert.equal(cutIntakeFloorKcal(null), null);
 });
 
 test("a formula_estimate anchor cannot buy the hold either", () => {

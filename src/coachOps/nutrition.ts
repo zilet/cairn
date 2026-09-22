@@ -121,12 +121,18 @@ export function personalizeNutritionCheckinTarget(
   // held its own number; the check-in must not step past that hold on the model's
   // judgement, or the derivation's answer would only bind the surfaces that read it
   // directly. The hold has teeth only DOWNWARD: a raise is the protective path
-  // above, and the deficit itself is untouched — the target stays exactly where the
-  // athlete already had it, and the step comes at the next normal week.
+  // above. What it holds is the DEFICIT: the floor is the anchor's own held target,
+  // which never sits above `tdee - CUT_DEFICIT_MIN_KCAL` — so a number protection had
+  // lifted to maintenance is not "held" as a zero-deficit cut. The step comes at the
+  // next normal week.
   let deepeningHeld = false;
   if (opts.cutAnchor?.deepening_held === true && Number.isFinite(previous) && target < previous) {
-    target = Math.round(previous);
-    deepeningHeld = true;
+    const heldAt = Number(opts.cutAnchor.target_kcal);
+    const floor = Number.isFinite(heldAt) ? Math.min(previous, heldAt) : previous;
+    if (target < floor) {
+      target = Math.round(floor);
+      deepeningHeld = true;
+    }
   }
   const bounded = clampNutritionFloors(
     {

@@ -605,6 +605,19 @@ shapes rationale, it gates nothing.
   waiting on the same date so a repeating cadence never re-announces. `cutReaffirmation()` decides
   whether this is a cut the athlete has affirmed; every branch except a live unanswered goal check-in
   reads as reaffirmed, because proposing maintenance to someone mid-cut is the costlier error.
+  **One plan pace, and a hold keeps the DEFICIT.** `pace_intended_lb_wk` is the plan's pace (the
+  goal-required pace inside the lean-safe band, after the deficit bounds, before any rule-5 hold or
+  protective raise); the projection, `goal_date_adaptation`, recomposition's `likely_weeks` and the
+  energy-deficiency watch's loss-pace arm all read it, so a hold or raise never shrinks the yardstick
+  it is itself judged by. A rule-5 hold is ceilinged at `tdee - CUT_DEFICIT_MIN_KCAL` (the check-in seam
+  holds at the anchor's held target, not the number in force) — holding the kcal number once
+  protection had lifted it to maintenance was a zero-deficit "cut". `goal_date_status` says
+  `not_tracked` explicitly when the plan carries no deficit, never a silent null.
+  **A protective target is not an energy need.** During a cut the under-fuelling diary channel reads
+  each credible day against `min(target in force, cutIntakeFloorKcal)` — measured maintenance less
+  `CUT_DEFICIT_MAX_KCAL` — so a gap a raise alone created never votes as strain for the next raise or
+  a recovery week; and its strain needs the low days to outnumber the on-reference days (a pattern,
+  not three noisy days among nine ordinary ones).
 - **Measurement requests: the system asks for DATA, not for permission** (`src/repo/measurement-request.ts`).
   Pull-never-push was written about opinions; it was never a good answer to a derivation gone blind
   for want of one cheap measurement only the athlete can supply. So: ONE calm in-app request tied to a

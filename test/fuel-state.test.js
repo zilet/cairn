@@ -212,3 +212,40 @@ test("on_pace is never withheld for coverage — it accuses nothing", () => {
     assert.equal(out.bucket, "on_pace");
   });
 });
+
+test("the eating window starts when the first meal was EATEN, not when it was typed", () => {
+  runWithTimeZone("UTC", () => {
+    const now = new Date("2026-07-13T13:34:00Z");
+    // Logged at 12:25 with nothing saying when: the typing time is all there is.
+    reset();
+    seedProfile();
+    seedFullLogging(TODAY);
+    meal(TODAY, "2026-07-13 12:25:00", 23, { label: "meal" });
+    const typed = dayFuelState(TODAY, now);
+    // The same entry labeled breakfast: the label's hour places it at read time.
+    reset();
+    seedProfile();
+    seedFullLogging(TODAY);
+    meal(TODAY, "2026-07-13 12:25:00", 23, { label: "breakfast" });
+    const labeled = dayFuelState(TODAY, now);
+    // A stated eating time wins over both.
+    reset();
+    seedProfile();
+    seedFullLogging(TODAY);
+    meal(TODAY, "2026-07-13 12:25:00", 23, { label: "snack" });
+    db.prepare(`UPDATE food_notes SET eaten_at = '07:00' WHERE date = ?`).run(TODAY);
+    const stated = dayFuelState(TODAY, now);
+    assert.ok(typed && labeled && stated);
+    assert.ok(labeled.expected_by_now_g > typed.expected_by_now_g, "breakfast opens the window before 12:25");
+    assert.equal(typed.bucket, "on_pace");
+    assert.equal(labeled.bucket, "behind", "23 g by mid-afternoon is behind a day that began at breakfast");
+    assert.equal(stated.expected_by_now_g, Math.round(TARGET_G * ((13 + 34 / 60 - 7) / (21 - 7))));
+    // Nothing was stored from the label: eaten_at stays unstated.
+    reset();
+    seedProfile();
+    seedFullLogging(TODAY);
+    meal(TODAY, "2026-07-13 12:25:00", 23, { label: "breakfast" });
+    dayFuelState(TODAY, now);
+    assert.equal(db.prepare(`SELECT eaten_at FROM food_notes WHERE date = '${TODAY}'`).get().eaten_at, null);
+  });
+});

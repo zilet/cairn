@@ -278,7 +278,10 @@ function recoveryAndPerformanceArm(asOf: string): EnergyDeficiencyArm {
  * Is the scale falling FASTER than the cut is asking for?
  *
  * Both halves come from reads that already exist: the intended pace is the cut
- * derivation's own `pace_lb_wk`, and the actual one is the robust expenditure trend.
+ * derivation's own PLAN pace (`pace_intended_lb_wk` — goal-required, inside the
+ * lean-safe band), and the actual one is the robust expenditure trend. Never the
+ * delivered pace: a hold or a protective raise shrinks that, and this arm is one of
+ * the triggers for a raise, so measuring against it made every raise its own proof.
  * A trend the expenditure read will not vouch for is ABSENT — reading a low-confidence
  * trend here would be inventing a loss rate from two weigh-ins.
  */
@@ -294,7 +297,7 @@ function lossPaceArm(asOf: string): EnergyDeficiencyArm {
   }
   let intended: number | null = null;
   try {
-    intended = finite(deriveCutTarget(asOf)?.pace_lb_wk);
+    intended = finite(deriveCutTarget(asOf)?.pace_intended_lb_wk);
   } catch {
     intended = null;
   }
