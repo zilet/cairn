@@ -5,6 +5,10 @@ type TabSwitchOptions = {
    *  change (a tap on the tab bar); boot and programmatic re-renders leave focus
    *  exactly where the athlete put it. */
   focusView?: boolean;
+  /** The tab change came from the keyboard (Enter/Space on a tab), so the moved
+   *  focus should show its ring. A pointer tap lands focus QUIETLY: the view or
+   *  heading it lands on is a reading position, not a control the athlete aimed at. */
+  focusRing?: boolean;
 };
 
 // @ts-check
@@ -72,7 +76,9 @@ type TabSwitchOptions = {
   }
 
   function primaryKeyFor(tab: ClientTabName): string | null {
-    if (tab === "today" || tab === "session") return "plan";
+    // Session awaits its own loads even when the plan is warm, so it always paints its skeleton.
+    if (tab === "session") return null;
+    if (tab === "today") return "plan";
     if (tab === "progress") return defaultProgressSeg() === "sessions" ? "history:sessions" : null;
     if (tab === "plan") {
       const activePlan = state.planJump || state.planSeg;
@@ -85,8 +91,13 @@ type TabSwitchOptions = {
   // on, and focus silently falls back to <body> — so the next Tab starts from the
   // top of the document and nothing announces where the athlete just landed.
   // Land focus on the new view's first heading (the destination's own name), or
-  // on #view itself carrying the tab's label. Programmatic focus does not match
-  // :focus-visible, so no ring appears; preventScroll keeps the page still.
+  // on #view itself carrying the tab's label. preventScroll keeps the page still.
+  // Browsers disagree on whether script focus after a TAP matches :focus-visible
+  // (iOS/WebKit and Chrome-after-keyboard both can), which painted a terracotta
+  // ring on the landed heading or along #view's top edge. So a pointer-driven
+  // switch marks the target data-focus-quiet (CSS drops the outline, the mark
+  // leaves with the focus) and asks for focusVisible:false where supported; a
+  // keyboard-driven switch keeps the ring.
   function tabDisplayName(tab: ClientTabName): string {
     const el = document.querySelector<HTMLElement>(`.tab[data-tab="${tab}"]`);
     const label = el?.getAttribute("aria-label") || el?.querySelector(".tab-lbl")?.textContent || "";
@@ -107,7 +118,7 @@ type TabSwitchOptions = {
     return heading;
   }
 
-  function focusViewStart(tab: ClientTabName): void {
+  function focusViewStart(tab: ClientTabName, ring: boolean): void {
     if (state.tab !== tab || !view) return;
     const heading = syncViewAriaLabel(tab);
     const target = heading || view;
@@ -117,28 +128,68 @@ type TabSwitchOptions = {
       // leaves so it never joins the Tab order.
       if (target !== view) target.addEventListener("blur", () => target.removeAttribute("tabindex"), { once: true });
     }
+    if (!ring) {
+      target.setAttribute("data-focus-quiet", "");
+      target.addEventListener("blur", () => target.removeAttribute("data-focus-quiet"), { once: true });
+    }
     try {
-      target.focus({ preventScroll: true });
+      // focusVisible is newer than the DOM lib typings; unsupported engines ignore it.
+      target.focus({ preventScroll: true, focusVisible: ring } as FocusOptions);
     } catch {
       target.focus();
     }
+  }
+
+  // The first-paint skeletons sit at the top level of #view; an async slot's own
+  // inline skeleton inside real content does not count.
+  function viewShowsSkeleton(): boolean {
+    return !!view.querySelector(":scope > .today-skel, :scope > .skel-region, :scope > .skel-card");
+  }
+
+  // Skeleton → content crossfade. Renderers write #view themselves at whatever
+  // await point their data lands, so the swap is watched rather than wrapped: the
+  // first childList change that leaves no top-level skeleton gets viewHydrate()
+  // (one short fade; the cards' own stagger is switched off so nothing
+  // double-animates). The observer callback is a microtask, so it runs before the
+  // content's first frame. Disarmed by the next tab switch or after 15 s.
+  let hydrateObserver: MutationObserver | null = null;
+  let hydrateTimer: ReturnType<typeof setTimeout> | null = null;
+  function disarmHydrate(): void {
+    hydrateObserver?.disconnect();
+    hydrateObserver = null;
+    if (hydrateTimer != null) clearTimeout(hydrateTimer);
+    hydrateTimer = null;
+  }
+  function armHydrate(): void {
+    disarmHydrate();
+    if (typeof MutationObserver !== "function" || reducedMotion() || !viewShowsSkeleton()) return;
+    hydrateObserver = new MutationObserver(() => {
+      if (viewShowsSkeleton()) return; // a renderer repainted its own skeleton — keep waiting
+      disarmHydrate();
+      viewHydrate();
+    });
+    hydrateObserver.observe(view, { childList: true });
+    hydrateTimer = setTimeout(disarmHydrate, 15000);
   }
 
   function paintTabSkeleton(tab: ClientTabName): void {
     const cacheKey = primaryKeyFor(tab);
     const warm = cacheKey ? !!peekCached(cacheKey) : false;
     const skel = warm ? "" : tabSkeleton(tab);
-    if (skel) {
-      view.innerHTML = skel;
-      viewEnter();
-    }
+    if (skel) view.innerHTML = skel;
   }
 
-  // Switch tabs by crossfading old content to a synchronous skeleton, then letting
-  // the async renderer hydrate outside the transition.
+  // Switch tabs inside ONE short fade (tabSwap: the View Transition root crossfade,
+  // or the view-enter keyframe where transitions are unavailable). The skeleton —
+  // or, for a warm tab, the renderer's synchronous cached paint — lands INSIDE the
+  // swap, so the fade goes straight to real content instead of fading to the old
+  // screen and hard-swapping after. The renderer's async remainder runs on outside
+  // the swap (the transition never waits on the network), and a skeleton it later
+  // replaces hydrates with its own crossfade (armHydrate).
   function switchTab(tab: unknown, opts: TabSwitchOptions = {}): void {
     const next = normalizeTabName(tab);
     const moveFocus = opts.focusView === true && state.tab !== next;
+    disarmHydrate();
     if (state.tab === "chat" && next !== "chat") chatTeardownMonitor();
     teardownJobs();
     closeDetail(true);
@@ -153,14 +204,37 @@ type TabSwitchOptions = {
     });
     state.tab = next;
     if (opts.syncRoute !== false) syncRouteFromState(opts.replace ? "replace" : "push");
-    Promise.resolve(withViewTransition(() => paintTabSkeleton(next))).finally(() => {
-      Promise.resolve(renderTab(next))
+    // Started exactly once — inside the swap when it runs, or after it if the swap
+    // itself failed before calling back.
+    let rendered: Promise<unknown> | null = null;
+    const startRender = (): Promise<unknown> => {
+      if (!rendered) {
+        try {
+          rendered = Promise.resolve(renderTab(next));
+        } catch (err) {
+          rendered = Promise.reject(err);
+        }
+      }
+      return rendered;
+    };
+    Promise.resolve(
+      tabSwap(() => {
+        if (state.tab !== next) return;
+        paintTabSkeleton(next);
+        armHydrate();
+        // Not returned: the swap must not wait on the renderer's network reads.
+        startRender().catch(() => {});
+      })
+    ).finally(() => {
+      // A newer switch owns the view now; its own render covers the paint.
+      if (state.tab !== next && !rendered) return;
+      startRender()
         .then(() => {
           // Focus and label bookkeeping runs after a successful paint; a fault
           // here is an a11y nit, never a render failure, so it must not drop the
           // freshly painted tab into the error state below.
           try {
-            if (moveFocus) focusViewStart(next);
+            if (moveFocus) focusViewStart(next, opts.focusRing === true);
             else syncViewAriaLabel(next);
           } catch (err) {
             console.warn("[cairn] view focus sync failed", err);
@@ -183,11 +257,12 @@ type TabSwitchOptions = {
 
   function registerTabBarHandlers(): void {
     document.querySelectorAll<HTMLElement>(".tab").forEach((tab) => {
-      tab.addEventListener("click", () => {
+      tab.addEventListener("click", (event?: MouseEvent) => {
         // The Plan tab from the tab bar opens on Training. A Food/Meals visit is a
         // jump someone else asked for (planJump), never a new default for the tab.
         if (tab.dataset.tab === "plan" && state.tab !== "plan" && !state.planJump) state.planSeg = "edit";
-        switchTab(tab.dataset.tab, { focusView: true });
+        // A keyboard-activated button click reports detail 0; a tap or mouse click ≥ 1.
+        switchTab(tab.dataset.tab, { focusView: true, focusRing: !!event && event.detail === 0 });
       });
     });
   }

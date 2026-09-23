@@ -672,6 +672,8 @@ export interface ClientPlanWeekSession {
   id: number;
   title: string;
   date: ISODateString | string;
+  /** Finish tapped. Today's open session rides a "today" cell, never a done one. */
+  finished?: boolean;
 }
 
 export interface ClientPlanWeekRun {
@@ -766,6 +768,10 @@ export interface ClientExerciseDetail extends ClientExercise {
   // The parked low-confidence candidate, present only while no guide is linked — the
   // detail sheet's quiet yes/no.
   guide_suggestion?: ClientExerciseGuideSuggestion | null;
+  // The cached generated how-to (setup/move/feel/avoid), null when none was ever
+  // written; `explanation_stale` asks the sheet to revalidate it in the background.
+  explanation?: { setup: string; move: string; feel: string; avoid?: string } | null;
+  explanation_stale?: boolean;
 }
 
 /** One imported instruction guide (free-exercise-db, public domain). */

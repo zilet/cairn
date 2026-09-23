@@ -290,3 +290,97 @@ test("exercise detail controller action buttons route through injected dependenc
   assert.equal(harness.requests.at(-1).opts.method, "DELETE");
   assert.match(harness.toasts.at(-1), /Deleted Push-up/);
 });
+
+function detailPayload(extra = {}) {
+  return { found: true, name: "Push-up", muscle_group: "chest", mode: "reps", recent: [], progress: { points: [] }, ...extra };
+}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test("exercise detail paints the cached explanation from the detail payload with no extra request", async () => {
+  const { context } = loadController();
+  const harness = exerciseDeps({
+    api: async (path) => {
+      if (path.endsWith("/explanation")) throw new Error("no explanation request expected");
+      return detailPayload({ explanation: { setup: "cached setup", move: "m", feel: "f" }, explanation_stale: false });
+    },
+  });
+
+  await context.CairnExerciseDetailController.openExerciseModal("Push-up", null, harness.deps);
+  await flush();
+
+  assert.match(harness.mounted.innerHTML, /cached setup/);
+  assert.doesNotMatch(harness.mounted.innerHTML, /loading/, "never the default template when one is cached");
+  assert.deepEqual(harness.requests.map((row) => row.path), ["/exercise/Push-up"]);
+});
+
+test("a stale explanation paints immediately and revalidates at most once per app session", async () => {
+  const { context } = loadController();
+  let posts = 0;
+  const harness = exerciseDeps({
+    api: async (path, opts) => {
+      if (path.endsWith("/explanation")) {
+        assert.equal(opts?.method, "POST");
+        posts += 1;
+        return { ok: true, explanation: { setup: "regenerated setup", move: "m", feel: "f" }, stale: false };
+      }
+      return detailPayload({ explanation: { setup: "old setup", move: "m", feel: "f" }, explanation_stale: true });
+    },
+  });
+
+  await context.CairnExerciseDetailController.openExerciseModal("Push-up", null, harness.deps);
+  await flush();
+  assert.match(harness.mounted.innerHTML, /old setup/);
+  assert.match(harness.mounted.querySelector("[data-exercise-explain]").innerHTML, /regenerated setup/);
+  assert.equal(posts, 1);
+
+  // Reopening (the payload still says stale) paints the session copy and never re-POSTs.
+  await context.CairnExerciseDetailController.openExerciseModal("Push-up", null, harness.deps);
+  await flush();
+  assert.match(harness.mounted.innerHTML, /regenerated setup/);
+  assert.equal(posts, 1);
+});
+
+test("a failed first-ever generation keeps the default and is not retried this session", async () => {
+  const { context } = loadController();
+  let posts = 0;
+  const harness = exerciseDeps({
+    api: async (path) => {
+      if (path.endsWith("/explanation")) {
+        posts += 1;
+        return { ok: false };
+      }
+      return detailPayload({ explanation: null, explanation_stale: false });
+    },
+  });
+
+  await context.CairnExerciseDetailController.openExerciseModal("Push-up", null, harness.deps);
+  await flush();
+  assert.match(harness.mounted.innerHTML, /loading/);
+  await context.CairnExerciseDetailController.openExerciseModal("Push-up", null, harness.deps);
+  await flush();
+  assert.equal(posts, 1);
+  assert.equal(harness.requests.filter((row) => row.path.endsWith("/explanation")).length, 1, "no GET: the payload already said none");
+});
+
+test("a payload without the explanation field falls back to GET, then serves reopenings from the session store", async () => {
+  const { context } = loadController();
+  const harness = exerciseDeps({
+    api: async (path, opts) => {
+      if (path.endsWith("/explanation")) {
+        if (opts?.method === "POST") throw new Error("fresh cache needs no POST");
+        return { ok: true, explanation: { setup: "server setup", move: "m", feel: "f" }, stale: false };
+      }
+      return detailPayload();
+    },
+  });
+
+  await context.CairnExerciseDetailController.openExerciseModal("Push-up", null, harness.deps);
+  await flush();
+  assert.match(harness.mounted.querySelector("[data-exercise-explain]").innerHTML, /server setup/);
+
+  await context.CairnExerciseDetailController.openExerciseModal("Push-up", null, harness.deps);
+  await flush();
+  assert.match(harness.mounted.innerHTML, /server setup/);
+  assert.equal(harness.requests.filter((row) => row.path.endsWith("/explanation")).length, 1);
+});

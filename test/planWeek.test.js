@@ -66,12 +66,45 @@ test("logged session marks the day done", () => {
   pushDay(1, "Push", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
   setStrengthSchedule([1, 3, 5]);
   repo.logSetByName({ date: REF, exercise: "Bench Press", weight: 135, reps: 5, day_number: 1 });
+  const sessionId = planWeek(REF).days.find((d) => d.date === REF).session.id;
+  repo.finishSession(sessionId, null);
   const week = planWeek(REF);
   const mon = week.days.find((d) => d.date === REF);
   assert.ok(mon);
   assert.equal(mon.status, "done");
   assert.ok(mon.session);
   assert.equal(mon.session.date, REF);
+  assert.equal(mon.session.finished, true);
+});
+
+// Regression: one set logged of five, finish not yet tapped. The strip read the cell
+// "Done" while the today line printed under it — and Today, and the Session header —
+// said "in progress". An open session on the as-of day is today's work, not done.
+test("an in-progress session today reads as today, never done, and agrees with the today line", () => {
+  pushDay(1, "Lower A", "Quad-dominant strength", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 6 },
+    { exercise: "Romanian Deadlift", sets: 3, rep_low: 6, rep_high: 8 },
+  ]);
+  setStrengthSchedule([1, 3, 5]);
+  repo.logSetByName({ date: REF, exercise: "Back Squat", weight: 225, reps: 5, day_number: 1 });
+  const week = planWeek(REF);
+  const mon = week.days.find((d) => d.date === REF);
+  assert.equal(mon.status, "today", JSON.stringify(mon));
+  assert.ok(mon.session, "the logged work still owns the cell");
+  assert.equal(mon.session.finished, false);
+  assert.equal(week.strength_line?.state, "in_progress");
+  assert.equal(week.progress.lift_days_done, 0, "an open session is not a lifting day in yet");
+
+  // Finishing it closes the cell, in the same words the line then uses.
+  repo.finishSession(mon.session.id, null);
+  const after = planWeek(REF);
+  assert.equal(after.days.find((d) => d.date === REF).status, "done");
+  assert.equal(after.strength_line?.state, "logged");
+
+  // A past day's unfinished session is done: the day is over and the log is the truth.
+  repo.logSetByName({ date: "2026-04-22", exercise: "Back Squat", weight: 225, reps: 5, day_number: 1 });
+  const later = planWeek("2026-04-23");
+  assert.equal(later.days.find((d) => d.date === "2026-04-22").status, "done");
 });
 
 test("rest day status is rest when no session", () => {
@@ -117,10 +150,15 @@ test("a done cell belongs to the session that was logged, not the projected ring
   assert.equal(mon.plan_day.day_number, 3, "Monday's cell names the Legs day that was trained");
   assert.equal(tue.plan_day.day_number, 1);
   assert.equal(tue.session.date, "2026-04-21");
-  // The progress line counts what was done and says nothing it cannot ground.
-  assert.equal(week.progress.lift_days_done, 2);
+  // The progress line counts what was done and says nothing it cannot ground. Today's
+  // session is still open, so only Monday is in until it is finished.
+  assert.equal(week.progress.lift_days_done, 1);
   assert.equal(week.progress.lift_days_planned, 5);
-  assert.match(String(week.progress.line), /Two of five lifting days in/);
+  assert.match(String(week.progress.line), /One of five lifting days in/);
+  repo.finishSession(tue.session.id, null);
+  const finished = planWeek("2026-04-21");
+  assert.equal(finished.progress.lift_days_done, 2);
+  assert.match(String(finished.progress.line), /Two of five lifting days in/);
   assert.equal(week.progress.runs_done, 0);
 });
 
@@ -154,4 +192,31 @@ test("a stated run day whose run already landed elsewhere reads covered, never u
   assert.notEqual(sat.status, "upcoming", JSON.stringify(sat));
   assert.equal(sat.run?.status, "completed");
   assert.equal(sat.run?.completion_date, "2026-04-21");
+});
+
+// Regression: template mode (no stated lift schedule) crowned two cells "today" —
+// the one whose own unfinished session was dated today, AND whichever day number
+// the ring's forecast (todayDayNumber) separately pointed at. The log outranks the
+// forecast everywhere else in this file; the "today" cell must be no exception.
+test("template mode: at most one cell reads today when an unfinished session disagrees with the ring's forecast", () => {
+  pushDay(1, "Push", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
+  pushDay(2, "Pull", "Pull", [{ exercise: "Barbell Row", sets: 3, rep_low: 6, rep_high: 8 }]);
+  // A finished session on day 1 a few days ago sets the ring's phase forward —
+  // its forecast for today lands on a different day number than what actually
+  // got logged today.
+  repo.logSetByName({ date: "2026-04-18", exercise: "Bench Press", weight: 135, reps: 5, day_number: 1 });
+  const priorWeek = planWeek("2026-04-18");
+  repo.finishSession(priorWeek.days.find((d) => d.plan_day?.day_number === 1).session.id, null);
+  // Today the athlete freestyles day 1 again instead of following the ring; the
+  // session is left unfinished (still training).
+  repo.logSetByName({ date: REF, exercise: "Bench Press", weight: 140, reps: 5, day_number: 1 });
+
+  const week = planWeek(REF);
+  const todayCells = week.days.filter((d) => d.status === "today");
+  assert.equal(todayCells.length, 1, JSON.stringify(week.days));
+  assert.equal(
+    todayCells[0].plan_day.day_number,
+    1,
+    "the cell tied to the actual logged session is the one that reads today"
+  );
 });

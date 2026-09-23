@@ -113,6 +113,23 @@ test("render dispatcher hides the rest bar off other tabs and restores it on ses
   assert.equal(rest.at(-1), "surface", "returning to session restores a still-fresh rest");
 });
 
+// A deep link to /app/session lands on an EMPTY #view, and renderSession paints only
+// after its loads settle — so the skeleton goes up first, and never over live content.
+test("session paints the today skeleton on an empty view, never over content", () => {
+  const env = loadRenderDispatch();
+  env.context.todaySkeleton = () => "<div class=\"skel\"></div>";
+  const empty = { firstElementChild: null, innerHTML: "" };
+  env.context.view = empty;
+  env.context.renderTab("session");
+  assert.equal(empty.innerHTML, "<div class=\"skel\"></div>");
+  assert.equal(env.calls.at(-1)[0], "renderSession");
+
+  const painted = { firstElementChild: {}, innerHTML: "<div class=\"sess-dest\"></div>" };
+  env.context.view = painted;
+  env.context.renderTab("session");
+  assert.equal(painted.innerHTML, "<div class=\"sess-dest\"></div>", "a re-render keeps what is on screen");
+});
+
 test("render dispatcher respects endurance visibility and progress fallback", () => {
   const endurance = loadRenderDispatch({ planJump: "endurance", showEnduranceTab: true });
   endurance.context.renderTab("plan");

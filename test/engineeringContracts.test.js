@@ -5769,7 +5769,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appTabsSource, /function switchTab\(tab: unknown, opts: TabSwitchOptions = \{\}\): void/);
   assert.match(appTabsSource, /function registerTabBarHandlers\(\): void/);
   assert.match(appTabsSource, /function activateTab\(name: unknown, opts: TabSwitchOptions = \{\}\): void/);
-  assert.match(appTabsSource, /Promise\.resolve\(withViewTransition\(\(\) => paintTabSkeleton\(next\)\)\)\.finally/);
+  assert.match(
+    appTabsSource,
+    /tabSwap\(\(\) => \{\s*if \(state\.tab !== next\) return;\s*paintTabSkeleton\(next\);\s*armHydrate\(\);/
+  );
   assert.match(appJobReconnectorsSource, /const APP_JOB_RECONNECTORS: AppJobReconnectEntry\[\] = \[/);
   assert.match(appJobReconnectorsSource, /factoryName: "reconnectSessionSuggest"/);
   assert.match(appJobReconnectorsSource, /function registerAppJobReconnectors\(\): void/);

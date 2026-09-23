@@ -107,6 +107,44 @@ type TodayRailDeps = {
     wireGenericAgendaCards(genericPending, deps);
   }
 
+  // The loader keys runAgendaRail / runFallbackRail will call, in the same order
+  // and with the same filtering — so the prefetch below starts exactly the reads
+  // those loaders are about to make, and nothing else.
+  function agendaLoaderKeys(agenda: Partial<TodayRailAgenda> | null | undefined, deps: TodayRailDeps): TodayRailLoaderKey[] {
+    const loaders = loaderMap(deps);
+    const keys: TodayRailLoaderKey[] = [];
+    const buckets = CairnTodayAgenda.renderableBuckets(agenda);
+    for (const candidate of [...buckets.primary, ...buckets.more]) {
+      const key = candidate.client_card as TodayRailLoaderKey | undefined;
+      if (!key || !loaders[key] || keys.includes(key)) continue;
+      keys.push(key);
+    }
+    return keys;
+  }
+
+  function fallbackLoaderKeys(isToday: boolean): TodayRailLoaderKey[] {
+    return isToday
+      ? ["lately", "weekly-read", "connection-insight", "garmin-reconcile", "week-ahead", "program-adjustments"]
+      : ["lately"];
+  }
+
+  // Start the rail's reads as soon as the agenda is known — before the first paint
+  // is written — so each loader takes a request already in flight when its slot
+  // mounts, instead of the rail waiting a full round trip behind the paint.
+  function prefetchRail(
+    agenda: Partial<TodayRailAgenda> | null | undefined,
+    isToday: boolean,
+    deps: TodayRailDeps
+  ): void {
+    const loaders = railLoaders() as Window["CairnTodayRailLoaders"] & {
+      prefetchRail?: (keys: readonly string[], deps: TodayRailDeps) => void;
+    };
+    if (typeof loaders?.prefetchRail !== "function") return;
+    try {
+      loaders.prefetchRail(agenda ? agendaLoaderKeys(agenda, deps) : fallbackLoaderKeys(isToday), deps);
+    } catch {}
+  }
+
   function runFallbackRail(isToday: boolean, deps: TodayRailDeps): void {
     railLoaders().loadRecentActivities(deps);
     if (!isToday) return;
@@ -332,6 +370,7 @@ type TodayRailDeps = {
     fallbackRailHtml,
     runAgendaRail,
     runFallbackRail,
+    prefetchRail,
     promoteAttentionLead,
     loadFuelToday: (date: string, deps: TodayRailDeps) => railLoaders().loadFuelToday(date, deps),
     loadWeekAhead: (deps: TodayRailDeps) => railLoaders().loadWeekAhead(deps),

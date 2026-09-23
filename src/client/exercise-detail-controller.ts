@@ -112,7 +112,9 @@ type ExerciseDetailControllerDeps = {
         name,
         svg,
         view,
-        exerciseExplanationHtml(row, null, deps),
+        // The real cues when this session or the detail payload already has them;
+        // the generic template only for an exercise that never had one written.
+        exerciseExplanationHtml(row, CairnExerciseDetailExplanation.initialExerciseExplanation(row, deps), deps),
         deps,
       ));
       deps.runCountUps(el);

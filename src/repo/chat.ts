@@ -877,6 +877,23 @@ export function getAiCache(kind: string, cacheKey: string): AiCacheHit | null {
   };
 }
 
+/**
+ * The newest cache row of `kind` that points at one persisted record, whatever its
+ * cache_key. For ops whose key shape can drift (an input moved, or the key itself was
+ * narrowed) while the result is still about the same record — the caller serves it as
+ * stale and revalidates rather than falling back to nothing.
+ */
+export function getLatestAiCacheByRef(kind: string, refTable: string, refId: number | null | undefined): AiCacheHit | null {
+  if (!kind || !refTable || refId == null || !Number.isFinite(Number(refId))) return null;
+  const row = db
+    .prepare(
+      `SELECT cache_key FROM ai_cache WHERE kind = ? AND ref_table = ? AND ref_id = ?
+        ORDER BY computed_at DESC, rowid DESC LIMIT 1`
+    )
+    .get(kind, refTable, Number(refId)) as any;
+  return row?.cache_key ? getAiCache(kind, String(row.cache_key)) : null;
+}
+
 export function saveAiCache(
   kind: string,
   cacheKey: string,
@@ -908,7 +925,14 @@ export function saveAiCache(
   );
   // Keep the cache bounded — old rows are never served past their staleness.
   try {
-    db.prepare(`DELETE FROM ai_cache WHERE computed_at < datetime('now','-30 days')`).run();
+    // An exercise's newest explanation is its only copy of the cues, so it is kept
+    // however old; only the rows it superseded age out.
+    db.prepare(
+      `DELETE FROM ai_cache WHERE computed_at < datetime('now','-30 days')
+         AND NOT (kind = 'exercise_explanation' AND ref_id IS NOT NULL AND computed_at = (
+           SELECT MAX(b.computed_at) FROM ai_cache b
+            WHERE b.kind = 'exercise_explanation' AND b.ref_table IS ai_cache.ref_table AND b.ref_id = ai_cache.ref_id))`
+    ).run();
   } catch { /* bounding the cache is housekeeping — never fail the write it rode in on */ }
 }
 

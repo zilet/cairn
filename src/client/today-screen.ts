@@ -206,6 +206,9 @@ function wireExerciseDecisionUndo(root: ParentNode, repaint: () => Promise<unkno
 }
 
 async function renderToday(opts: any = {}) {
+  // The data loader defaults an unset date too; doing it first lets the date-only
+  // reads below start before that load instead of after it.
+  if (!todayState.logDate) todayState.logDate = localISO();
   const enteredDate = todayState.logDate;
   // A soft (background stale-while-revalidate) repaint must feel silent: keep the
   // scroll position and suppress the `.reveal` entrance stagger so a "nothing
@@ -223,23 +226,121 @@ async function renderToday(opts: any = {}) {
     if (snap) todayView.innerHTML = snap;
   }
 
-  const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
-  const { soft, isToday } = todayData;
-  const session: any = todayData.session;
+  // ---- Request order: start everything independent at once, await late ----
+  // Today used to fetch in serial waves: the data load, then prep + Brief +
+  // preview, then (after the first paint) the run line / agenda / conductor and the
+  // side panels, then (after the agenda) the rail, then (after /insights) the week's
+  // wins. Each wave waited a full round trip for data it never read. Now the
+  // render STARTS each request the moment its own inputs are known and only AWAITS
+  // where the result is actually painted, so the order of what renders is exactly
+  // as before — only the network overlaps. The paint-critical reads go out first.
+  // Loaders that need a mounted slot take the in-flight request from the one-shot,
+  // render-scoped CairnTodayPrefetch rather than asking again.
+  const todayPrefetch = (globalThis as { CairnTodayPrefetch?: TodayPrefetchApi }).CairnTodayPrefetch;
+  todayPrefetch?.reset();
 
-  // The Brief's day-read has no data dependency on the plan/session preparation
-  // below (it only needs logDate + any active override, not the prepared plan
-  // day/prescriptions) — kicking off both waves together instead of serially
-  // saves one full round-trip on cold entry. (See the Brief comment further
-  // down for what `loadBrief`'s fast mode does.)
+  // The Brief's day-read and the session preview need only the date + any active
+  // override — not the data load or the prepared plan day — so they start first.
+  // (See the Brief comment further down for what `loadBrief`'s fast mode does.)
   const briefOverride =
     todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
   const previewTrainAnyway = /\btrain anyway\b/i.test(String(briefOverride || ""));
-  const [prep, read, sessionPreview] = await Promise.all([
-    todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday, todayData)),
-    loadBrief(todayState.logDate, briefOverride, { fast: true }),
-    loadAdaptiveSessionPreview(todayState.logDate, String(briefOverride || ""), previewTrainAnyway).catch(() => null),
-  ]);
+  const readPromise = loadBrief(todayState.logDate, briefOverride, { fast: true });
+  const previewPromise = loadAdaptiveSessionPreview(
+    todayState.logDate,
+    String(briefOverride || ""),
+    previewTrainAnyway
+  ).catch(() => null);
+  // Unhandled only if the load below throws; renderToday still rejects as before.
+  readPromise.catch(() => {});
+
+  const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
+  const { soft, isToday } = todayData;
+  const session: any = todayData.session;
+  const renderedDate = todayState.logDate;
+  const railToken = pollToken;
+
+  const prepPromise = todayPlanSessionPreparation.preparePlanSession(
+    todayDeps().planSession(session, isToday, todayData)
+  );
+
+  // ---- Today's run: OUTSIDE the lift list ----
+  // Runs left the strength plan: the lift card and the session hold lifts only, and
+  // the run lives on the rolling agenda (the same read Plan -> Endurance shows). So
+  // the run the agenda opened for today is one quiet line under the lift card, never
+  // a card inside it. Asked beside everything else and painted into its own slot when
+  // it lands, so first paint never waits on it; the last line for this date is
+  // reused on a soft repaint so the slot does not blink. The stale "this morning's
+  // run not synced yet?" nudge rides that line (see cardioSyncLine).
+  const runLinePromise: Promise<string> = isToday
+    ? Promise.all([
+        todayApi(`/training-agenda?date=${encodeURIComponent(todayState.logDate)}`).catch(() => null),
+        todayApi("/settings").catch(() => null),
+      ]).then(([runAgenda, settingsRead]) => {
+        const settings =
+          settingsRead && typeof settingsRead === "object"
+            ? ((settingsRead as unknown as { settings?: Record<string, unknown> | null }).settings ?? null)
+            : null;
+        const line = CairnTodayPlanSurface.runLineHtml(
+          runAgenda,
+          {
+            date: renderedDate,
+            units: runUnits(settings?.run_units),
+            syncLine: cardioSyncLine(settings, { expectingRun: true }),
+          },
+          { escapeHtml: escHtml, formatDistance: fmtDist }
+        );
+        todayRunLineCache = { date: renderedDate, html: line };
+        return line;
+      }).catch(() => "")
+    : Promise.resolve("");
+
+  // The CONDUCTOR (whole-picture focus, GET /api/coaching-focus) and the SALIENCE
+  // ARBITER (GET /api/today-agenda, which shapes the rail) are hydrated in phase two,
+  // after the first paint — but asked for NOW. Both ride along on the /today
+  // aggregate, but ONLY when it answered from the network in THIS render
+  // (todayData.aggregateFresh). The agenda reflects today's state at the moment it
+  // is asked, so a cached aggregate must never stand in for it: then, and on any
+  // older server that omits them, we fall back to the two standalone reads.
+  const primedAgenda: any =
+    todayData.aggregateFresh &&
+    todayData.agenda &&
+    typeof todayData.agenda === "object" &&
+    Array.isArray((todayData.agenda as any).primary) &&
+    Array.isArray((todayData.agenda as any).more)
+      ? todayData.agenda
+      : null;
+  const agendaPromise = primedAgenda
+    ? Promise.resolve(primedAgenda)
+    : CairnTodayRailController.fetchTodayAgenda(todayState.logDate, todayRailDeps());
+  const conductorPromise = primedAgenda
+    ? Promise.resolve(todayData.coachingFocus as any)
+    : todayApi("/coaching-focus").catch(() => null);
+  // The rail's own reads start the moment the agenda names its cards (or falls
+  // back), not after the first paint and the agenda await below.
+  void agendaPromise.then((agenda) => {
+    if (todayState.tab !== "today" || todayState.logDate !== renderedDate || pollToken !== railToken) return;
+    (
+      CairnTodayRailController as typeof CairnTodayRailController & {
+        prefetchRail?: (agenda: unknown, isToday: boolean, deps: ReturnType<typeof todayRailDeps>) => void;
+      }
+    ).prefetchRail?.(agenda, isToday, todayRailDeps());
+  });
+  // Phase-one side panels (post-render wiring) mount right after the paint; their
+  // reads need only the date, so they start now. A pending capture hands straight
+  // off to Chat before those loaders run, so it skips them.
+  if (todayPrefetch && todayState.tab === "today" && !String(todayState.capturePrefill || "").trim()) {
+    const sidePath = `/today-side?date=${encodeURIComponent(todayState.logDate)}`;
+    todayPrefetch.prefetch(sidePath, () => todayApi(sidePath));
+    if (isToday) {
+      // The tag-chip row (capture.ts loadTagChips) reads the wall-clock date.
+      const tagsPath = "/context-tags?date=" + localISO();
+      todayPrefetch.prefetch("/context-tags/vocab", () => todayApi("/context-tags/vocab"));
+      todayPrefetch.prefetch(tagsPath, () => todayApi(tagsPath));
+    }
+  }
+
+  const [prep, read, sessionPreview] = await Promise.all([prepPromise, readPromise, previewPromise]);
   const {
     day,
     loggedByEx,
@@ -302,37 +403,6 @@ async function renderToday(opts: any = {}) {
     isToday,
     planReveal: todayState.planReveal,
   });
-  // ---- Today's run: OUTSIDE the lift list ----
-  // Runs left the strength plan: the lift card and the session hold lifts only, and
-  // the run lives on the rolling agenda (the same read Plan -> Endurance shows). So
-  // the run the agenda opened for today is one quiet line under the lift card, never
-  // a card inside it. Asked beside everything else and painted into its own slot when
-  // it lands, so first paint never waits on it; the last line for this date is
-  // reused on a soft repaint so the slot does not blink. The stale "this morning's
-  // run not synced yet?" nudge rides that line (see cardioSyncLine).
-  const runLinePromise: Promise<string> = isToday
-    ? Promise.all([
-        todayApi(`/training-agenda?date=${encodeURIComponent(todayState.logDate)}`).catch(() => null),
-        todayApi("/settings").catch(() => null),
-      ]).then(([runAgenda, settingsRead]) => {
-        const settings =
-          settingsRead && typeof settingsRead === "object"
-            ? ((settingsRead as unknown as { settings?: Record<string, unknown> | null }).settings ?? null)
-            : null;
-        const line = CairnTodayPlanSurface.runLineHtml(
-          runAgenda,
-          {
-            date: todayState.logDate,
-            units: runUnits(settings?.run_units),
-            syncLine: cardioSyncLine(settings, { expectingRun: true }),
-          },
-          { escapeHtml: escHtml, formatDistance: fmtDist }
-        );
-        todayRunLineCache = { date: todayState.logDate, html: line };
-        return line;
-      }).catch(() => "")
-    : Promise.resolve("");
-
   // In focus mode the chrome (context banner, Brief, insight, capture) gives way to
   // the slim sticky focus header; otherwise the Brief leads as always.
   // Desktop two-column model (≥1100px): the Brief + capture + logging surface are
@@ -354,35 +424,8 @@ async function renderToday(opts: any = {}) {
   // through the agenda (which omits it when nothing's logged), so there is no path,
   // even on a 404/offline fallback, that can render the old "Nothing logged yet"
   // capture nudge. The other rail cards keep a fallback for graceful degradation.
-  // The CONDUCTOR (whole-picture focus, GET /api/coaching-focus) and the SALIENCE
-  // ARBITER (GET /api/today-agenda, which shapes the rail) are the two network reads
-  // that used to block the FIRST paint: renderToday awaited them before its single
-  // innerHTML write, so a cold open held a blank skeleton for their latency stacked on
-  // top of everything else. Now we kick them off, render the calm base IMMEDIATELY,
-  // and hydrate the conductor thread + the rail into their stable slots as they land
-  // (phase two, at the end of this function). Null/unavailable degrades exactly as
-  // before — the standalone goal/health lines simply return.
-  const renderedDate = todayState.logDate;
-  const railToken = pollToken;
-  // Both now ride along on the /today aggregate — but ONLY when it answered from
-  // the network in THIS render (todayData.aggregateFresh). The agenda reflects
-  // today's state at the moment it is asked, so a cached aggregate must never
-  // stand in for it: then, and on any older server that omits them, we fall back
-  // to the two standalone reads exactly as before.
-  const primedAgenda: any =
-    todayData.aggregateFresh &&
-    todayData.agenda &&
-    typeof todayData.agenda === "object" &&
-    Array.isArray((todayData.agenda as any).primary) &&
-    Array.isArray((todayData.agenda as any).more)
-      ? todayData.agenda
-      : null;
-  const agendaPromise = primedAgenda
-    ? Promise.resolve(primedAgenda)
-    : CairnTodayRailController.fetchTodayAgenda(todayState.logDate, todayRailDeps());
-  const conductorPromise = primedAgenda
-    ? Promise.resolve(todayData.coachingFocus as any)
-    : todayApi("/coaching-focus").catch(() => null);
+  // (The conductor + agenda reads were started before the prep await above and are
+  // folded in during phase two, at the end of this function.)
 
   // On Today, the plan area is a calm launch card into the isolated Session
   // destination (logging no longer lives inline here). The done card still shows
@@ -413,12 +456,29 @@ async function renderToday(opts: any = {}) {
     !isRunDay &&
     !dayHasItems &&
     previewHasItems !== true;
-  // Persisted on state (not just passed to this render's briefHtml call) so a
-  // LATER, DOM-only repaint — today-brief-controller.ts's upgradeBriefInPlace,
-  // invoked from outside this closure once an agentic read lands — can reuse the
-  // exact value this render computed instead of re-deriving an approximation of
-  // the same rule from markup.
-  todayState.nothingToStart = nothingToStart;
+  // ONE ACTION, ONE BUTTON. A train read's Brief already carries the start for
+  // today's session (today-brief-client.ts, gated by the same nothingToStart
+  // witness), so when the launch card below would open that SAME session it is not
+  // drawn: its facts — progress, minutes, guardrails, the anchor line — fold into
+  // the Brief as quiet lines beside the one button, and that button binds to the
+  // same reviewed preview the card would have. The card still stands wherever it is
+  // the only way in: a rest/easy read (whose Brief offers no start) with the plan
+  // revealed, a done read, or any read the Brief does not lead with a start.
+  const launchOpts: SessionLaunchOptions = {
+    day,
+    dailySession: prep.dailySession,
+    preview: sessionPreview,
+    exDone,
+    exTotal,
+    isToday,
+    hasLoggedSets,
+    isRunDay,
+    read,
+    strengthJourney,
+  };
+  const briefCarriesStart =
+    showPlan && !showDone && !nothingToStart && previewHasItems !== false && CairnTodayBrief.kind(read) === "train";
+  const folded = briefCarriesStart ? sessionLaunchFacts(launchOpts) : null;
 
   let html = todayMainShell.leadHtml(
     {
@@ -434,18 +494,9 @@ async function renderToday(opts: any = {}) {
     showPlan && !showDone && nothingToStart
       ? ""
       : showPlan && !showDone && previewHasItems !== false
-      ? sessionLaunchCardHtml({
-          day,
-          dailySession: prep.dailySession,
-          preview: sessionPreview,
-          exDone,
-          exTotal,
-          isToday,
-          hasLoggedSets,
-          isRunDay,
-          read,
-          strengthJourney,
-        })
+      ? briefCarriesStart
+        ? ""
+        : sessionLaunchCardHtml(launchOpts)
       : todayPlanSurfaceRenderer.buildHtml(
           {
             showDone,
@@ -499,6 +550,25 @@ async function renderToday(opts: any = {}) {
   // the user moved to. Instant-paint Stand exposed this: a later cold repaint no
   // longer papers over a stale write. (Phase two below re-checks the same way.)
   if (todayState.tab !== "today" || todayState.logDate !== enteredDate) return;
+  // Persisted on state (not just passed to this render's briefHtml call) so a
+  // LATER, DOM-only repaint — today-brief-controller.ts's upgradeBriefInPlace,
+  // invoked from outside this closure once an agentic read lands — can reuse the
+  // exact value this render computed instead of re-deriving an approximation of
+  // the same rule from markup. Assigned only after the bail above so a superseded
+  // render for another date/tab can never overwrite the current render's fold.
+  todayState.nothingToStart = nothingToStart;
+  // On state (like nothingToStart) so the Brief-only repaint in
+  // today-brief-controller.ts and the Brief's start action read the same fold.
+  todayState.briefSession = folded
+    ? {
+        date: todayState.logDate,
+        started: folded.started,
+        progress: folded.progress,
+        minutes: folded.minutes,
+        lines: [folded.guardrails, folded.journey].filter(Boolean),
+        preview: sessionPreview,
+      }
+    : null;
   // The class must be on an ancestor at the moment innerHTML mounts the cards,
   // since the CSS `rise` animation fires on insertion. toggle() also clears it on
   // the next hard render so real entrances still animate.
@@ -1200,11 +1270,7 @@ function wireTodayRunLine(slot: HTMLElement): void {
   if (typeof wireCardioSync === "function") wireCardioSync(slot, () => renderToday({ soft: true }));
 }
 
-// The Today "lead entry": instead of the full set-by-set logging surface living
-// inline on Today (where the brain's background re-renders used to yank it), the
-// plan area shows one calm tap-card that opens the isolated Session destination.
-// Suggestion, never a gate — the Brief still leads above it.
-function sessionLaunchCardHtml(opts: {
+type SessionLaunchOptions = {
   day: { name?: unknown; focus?: unknown; items?: Array<{ exercise?: unknown }> | null } | null | undefined;
   dailySession?: import("../contracts/client-api.js").ClientDailySessionComposition | null;
   preview?: DailySessionPreview | null;
@@ -1215,7 +1281,12 @@ function sessionLaunchCardHtml(opts: {
   isRunDay: boolean;
   read: { est_minutes?: unknown } | null | undefined;
   strengthJourney?: import("../contracts/client-api.js").ClientStrengthJourney | null;
-}): string {
+};
+
+// The launch card's facts as PLAIN text, shared by the card below and by the Brief
+// when the Brief itself carries the start (today-brief-client.ts's `session` fold):
+// one session, one set of words, whichever surface prints them.
+function sessionLaunchFacts(opts: SessionLaunchOptions) {
   // The plan day's NAME leads ("Pull"); a composition's stored title is its focus
   // sentence. Only a session built off-plan (no plan day) keeps its own title.
   const planName = opts.day && opts.day.name ? String(opts.day.name) : "";
@@ -1227,10 +1298,11 @@ function sessionLaunchCardHtml(opts: {
     planName ||
     (opts.isRunDay ? "Today's run" : "Today's session");
   const focusText = opts.dailySession?.focus || opts.preview?.focus || (opts.day && opts.day.focus ? String(opts.day.focus) : "");
-  const focus = focusText && focusText !== name ? focusText : "";
+  // Say each fact once: the focus rides the title only when it adds something.
+  const focus = CairnTodayBrief.distinctLine(focusText, name);
   const started = opts.exDone > 0 || opts.hasLoggedSets;
   const previewCount = !started && !opts.dailySession ? opts.preview?.item_count : null;
-  const sub = previewCount != null
+  const progress = previewCount != null
     ? `${previewCount} movement${previewCount === 1 ? "" : "s"}`
     : opts.exTotal
     ? started
@@ -1241,9 +1313,14 @@ function sessionLaunchCardHtml(opts: {
     opts.dailySession?.est_minutes ??
     opts.preview?.est_minutes ??
     (opts.read && opts.read.est_minutes ? Number(opts.read.est_minutes) : null);
-  const est = estimate ? `~${Number(estimate)} min` : "";
-  const meta = [sub, est].filter(Boolean).join("  ·  ");
-  const cta = started ? "Continue" : "Start";
+  const minutes = estimate ? Number(estimate) : null;
+  const why = CairnTodayBrief.distinctLine(
+    opts.dailySession?.why || opts.preview?.primary_rationale || "",
+    name,
+    focusText
+  );
+  const guardrails =
+    !opts.dailySession && opts.preview?.constraints?.length ? opts.preview.constraints.slice(0, 2).join(" · ") : "";
   const objective = opts.strengthJourney?.available ? opts.strengthJourney.objective : null;
   const hasAnchor =
     !!objective?.exercise &&
@@ -1253,13 +1330,27 @@ function sessionLaunchCardHtml(opts: {
           .trim()
           .toLowerCase() === String(objective.exercise).trim().toLowerCase()
     );
-  const journeyLine = hasAnchor
+  const journey = hasAnchor
     ? objective?.status === "completed"
       ? "Anchor milestone rebuilt · consolidate it calmly today."
       : opts.strengthJourney?.phase === "protecting"
         ? "Anchor day · hold or ease; the relevant safety signal leads."
-        : `Anchor day · ${escHtml(objective?.exercise)}${Number(opts.strengthJourney?.gap_lb) > 0 ? ` · ${Number(opts.strengthJourney?.gap_lb).toFixed(1)} lb estimated 1RM gap` : ""}`
+        : `Anchor day · ${String(objective?.exercise ?? "")}${Number(opts.strengthJourney?.gap_lb) > 0 ? ` · ${Number(opts.strengthJourney?.gap_lb).toFixed(1)} lb estimated 1RM gap` : ""}`
     : "";
+  return { name, focus, started, progress, minutes, why, guardrails, journey };
+}
+
+// The Today "lead entry": instead of the full set-by-set logging surface living
+// inline on Today (where the brain's background re-renders used to yank it), the
+// plan area shows one calm tap-card that opens the isolated Session destination.
+// Suggestion, never a gate — the Brief still leads above it. When the Brief already
+// carries the start for this same session, renderToday folds these facts into the
+// Brief instead and this card is not drawn (one action, one button).
+function sessionLaunchCardHtml(opts: SessionLaunchOptions): string {
+  const facts = sessionLaunchFacts(opts);
+  const est = facts.minutes ? `~${facts.minutes} min` : "";
+  const meta = [facts.progress, est].filter(Boolean).join("  ·  ");
+  const cta = facts.started ? "Continue" : "Start";
   const decisionLabel = dailySessionProvenanceLabel(opts.dailySession);
   const source = decisionLabel || (opts.dailySession
     ? opts.dailySession.source === "adaptive_plan" || opts.dailySession.source === "manual_plan"
@@ -1271,12 +1362,12 @@ function sessionLaunchCardHtml(opts: {
   return `<button class="sess-launch reveal" style="--i:2" type="button" id="sessLaunch">
       <div class="sess-launch-body">
         <div class="sess-launch-kicker lbl">${escHtml(source)}</div>
-        <div class="sess-launch-title">${escHtml(name)}${focus ? `<span class="sess-launch-focus"> · ${escHtml(focus)}</span>` : ""}</div>
+        <div class="sess-launch-title">${escHtml(facts.name)}${facts.focus ? `<span class="sess-launch-focus"> · ${escHtml(facts.focus)}</span>` : ""}</div>
         ${meta ? `<div class="sess-launch-meta">${escHtml(meta)}</div>` : ""}
-        ${opts.dailySession?.why || opts.preview?.primary_rationale ? `<div class="sess-launch-why">${escHtml(opts.dailySession?.why || opts.preview?.primary_rationale || "")}</div>` : ""}
-        ${!opts.dailySession && opts.preview?.constraints?.length ? `<div class="sess-launch-why">${escHtml(opts.preview.constraints.slice(0, 2).join(" · "))}</div>` : ""}
+        ${facts.why ? `<div class="sess-launch-why">${escHtml(facts.why)}</div>` : ""}
+        ${facts.guardrails ? `<div class="sess-launch-why">${escHtml(facts.guardrails)}</div>` : ""}
         <span class="sess-launch-status" role="status" aria-live="polite"></span>
-        ${journeyLine ? `<div class="sess-launch-journey">${journeyLine}</div>` : ""}
+        ${facts.journey ? `<div class="sess-launch-journey">${escHtml(facts.journey)}</div>` : ""}
       </div>
       <span class="sess-launch-cta">${cta} <span class="sess-launch-arrow" aria-hidden="true">→</span></span>
     </button>`;

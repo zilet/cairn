@@ -48,6 +48,8 @@ export interface PlanWeekSession {
   id: number;
   title: string;
   date: string;
+  /** Finished (finish tapped). An open session on the as-of day is in progress, not done. */
+  finished: boolean;
 }
 
 export interface PlanWeekRun {
@@ -122,6 +124,7 @@ type WeekSessionRow = {
   plan_day_id: number | null;
   day_number: number | null;
   day_name: string | null;
+  finished: boolean;
   /** The plan day this session actually WAS — linked, or resolved off what was lifted. */
   resolved_day_number: number | null;
 };
@@ -169,7 +172,8 @@ function weekSessions(weekStart: string, weekEnd: string): WeekSessionRow[] {
     const rows = db
       .prepare(
         `SELECT s.id AS id, s.date AS date, s.plan_day_id AS plan_day_id,
-                pd.day_number AS day_number, pd.name AS day_name
+                pd.day_number AS day_number, pd.name AS day_name,
+                s.finished_at AS finished_at
            FROM sessions s
            LEFT JOIN plan_days pd ON pd.id = s.plan_day_id
           WHERE s.date >= ? AND s.date <= ?
@@ -198,6 +202,7 @@ function weekSessions(weekStart: string, weekEnd: string): WeekSessionRow[] {
         plan_day_id,
         day_number: r.day_number == null ? null : Number(r.day_number),
         day_name: r.day_name == null ? null : String(r.day_name),
+        finished: !!r.finished_at,
         resolved_day_number,
       };
     });
@@ -241,6 +246,7 @@ function toPlanWeekSession(hit: WeekSessionRow): PlanWeekSession {
     id: hit.id,
     title: deriveSessionTitle(hit.id, hit.plan_day_id, hit.day_name),
     date: hit.date,
+    finished: hit.finished,
   };
 }
 
@@ -258,9 +264,19 @@ function statusForCell(opts: {
   todayDayNumber: number | null;
   /** A calendar rest day: a weekday the athlete neither lifts nor runs. */
   restDay?: boolean;
+  /** Template mode only: another cell in this same week already reads "today"
+   *  off an unfinished logged session. That cell is the actual today — the
+   *  todayDayNumber fallback below must defer to it rather than also claiming
+   *  "today" for whichever day number the ring points at, which would put two
+   *  "today" cells on screen at once. */
+  todayClaimedBySession?: boolean;
 }): PlanWeekStatus {
   const { date, asOf, planDay, session, run, todayDayNumber } = opts;
-  if (session) return "done";
+  // Work logged TODAY in a session not yet finished is in progress, never done — the
+  // same state todayStrengthLine reads off the log ("Lower A · in progress"), so the
+  // cell and the today line under it cannot disagree. A past day's logged session is
+  // done whether or not finish was ever tapped: the day is over, the log is the truth.
+  if (session) return session.date === asOf && !session.finished ? "today" : "done";
   // A run logged on the day is that day's work done — unless the day also holds a
   // lift, which a run does not do for it ("Run in · Pull still open").
   if (run?.status === "completed" && date && run.completion_date === date && planDay?.role !== "strength") {
@@ -278,7 +294,9 @@ function statusForCell(opts: {
     return "open";
   }
   // Template mode — no calendar claim. Rest already returned above.
-  if (planDay && todayDayNumber != null && planDay.day_number === todayDayNumber) return "today";
+  if (planDay && todayDayNumber != null && planDay.day_number === todayDayNumber && !opts.todayClaimedBySession) {
+    return "today";
+  }
   return "upcoming";
 }
 
@@ -521,7 +539,11 @@ export function planWeek(date?: string): PlanWeek {
       });
     }
   } else {
-    // Template mode — no invented weekdays.
+    // Template mode — no invented weekdays. A cell whose own unfinished session is
+    // dated today already reads "today" (statusForCell's session rule); the
+    // todayDayNumber fallback below must not also crown a second cell "today" for
+    // whichever day number the ring points at — the log outranks it.
+    const todayClaimedBySession = sessions.some((s) => s.date === asOf && !s.finished);
     for (const templateDay of template) {
       const plan_day = toPlanWeekPlanDay(templateDay);
       const session = sessionForPlanDay(sessions, plan_day.day_number);
@@ -531,7 +553,15 @@ export function planWeek(date?: string): PlanWeek {
         date: null,
         weekday: null,
         dow: null,
-        status: statusForCell({ date: null, asOf, planDay: plan_day, session, run, todayDayNumber }),
+        status: statusForCell({
+          date: null,
+          asOf,
+          planDay: plan_day,
+          session,
+          run,
+          todayDayNumber,
+          todayClaimedBySession,
+        }),
         plan_day,
         session,
         run,
@@ -554,7 +584,10 @@ export function planWeek(date?: string): PlanWeek {
   }
   const liftDows = lifting.days.map((d) => d.dow);
   const counts: Omit<PlanWeekProgress, "line"> = {
-    lift_days_done: new Set(sessions.map((s) => s.date)).size,
+    // A lifting day is "in" when its cell reads done: a finished session, or any
+    // logged session on a day already over. Today's open session is in progress —
+    // counting it here said "Two of five in" over a cell that says "In progress".
+    lift_days_done: new Set(sessions.filter((s) => s.finished || s.date !== asOf).map((s) => s.date)).size,
     lift_days_planned: liftDows.length ? liftDows.length : null,
     runs_done: runLog.length,
     run_km: Math.round(runKm * 10) / 10,

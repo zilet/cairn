@@ -35,6 +35,10 @@ type TodayBriefControllerState = {
   // upgradeBriefInPlace can reuse the exact launch-card witness on a same-kind
   // repaint instead of re-deriving it from the DOM.
   nothingToStart?: boolean;
+  // Set by renderToday when the Brief carries the start for today's session and the
+  // launch card's facts fold into it (one action, one button) — reused here so a
+  // Brief-only repaint keeps the same fold.
+  briefSession?: TodayBriefSessionFold | null;
 };
 
 type TodayBriefControllerRunOptions = ClientAgentOpHandlers & {
@@ -264,7 +268,11 @@ type TodayBriefControllerDeps = {
     // (.sess-launch), not the .plansurface branch — recognize both, or a same-kind
     // 'done' upgrade would think nothing below offers an entry and inject a
     // redundant "Log training" action above the live Continue card.
-    const showPlan = !!(deps.root.querySelector(".plansurface") || deps.root.querySelector(".sess-launch"));
+    // A launch card folded INTO the Brief (state.briefSession, one action one
+    // button) is the same showPlan state with no card in the DOM.
+    const showPlan =
+      !!(deps.root.querySelector(".plansurface") || deps.root.querySelector(".sess-launch")) ||
+      deps.state.briefSession?.date === deps.state.logDate;
     const showDone = !!deps.root.querySelector(".sessiondone");
     // Same witness the last full renderToday used for its own briefHtml call
     // (today-screen.ts persists it on state) — reused here rather than
@@ -348,6 +356,7 @@ type TodayBriefControllerDeps = {
       showDone: !!options.showDone,
       isToday: !!options.isToday,
       nothingToStart: !!options.nothingToStart,
+      session: deps.state.briefSession && deps.state.briefSession.date === deps.state.logDate ? deps.state.briefSession : null,
       activeOverride,
       planDayName: briefPlanDayName(read, deps),
       morph: !!deps.state._briefMorph,

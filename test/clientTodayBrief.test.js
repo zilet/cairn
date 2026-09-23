@@ -677,7 +677,12 @@ test("a Brief with no specific reason renders the freshness line and nothing els
 
   assert.match(html, /Updated /);
   assert.doesNotMatch(html, /cached_read_write|boundary|deterministic|posture/i);
-  assert.equal(html.match(/brief-updated">Updated [^<]*<\/div>/)?.length, 1, "the freshness line carries no reason");
+  assert.equal(
+    html.match(/data-brief-stamp hidden>Updated [^<]*<\/div>/)?.length,
+    1,
+    "the freshness line carries no reason"
+  );
+  assert.doesNotMatch(html, /brief-reason/, "and no reason line renders in the body either");
   assert.equal(brief.decisiveReason({ kind: "rest", decision: { reason: "" } }, "rest"), "");
   assert.equal(brief.decisiveReason({ kind: "rest" }, "rest"), "", "a decision-less read has no reason to show");
 });
@@ -924,6 +929,149 @@ test("Today Brief stamp falls back to the read's own time when the server sends 
 
   assert.match(html, /Updated /);
   assert.doesNotMatch(html, /As of |Read at /);
+});
+
+// ---- provenance behind the disclosure; the reason in the body ----
+
+test("the freshness stamp is provenance: hidden, muted, at the foot of the why disclosure", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    {
+      kind: "easy",
+      headline: "Keep it light",
+      why: "Load has been stacking.",
+      signals: { consecutive_training_days: 3 },
+      computed_at: "2026-03-15T12:39:00.000Z",
+      evidence_as_of: "2026-03-15T12:35:00.000Z",
+      decision: { reason: "The longer run needs a lighter follow-up.", computed_at: "2026-03-15T12:39:00.000Z" },
+    },
+    { isToday: true }
+  );
+  assert.match(html, /<div class="brief-updated lbl" data-brief-stamp hidden>/);
+  const stampAt = html.indexOf("data-brief-stamp");
+  assert.ok(stampAt > html.indexOf("brief-launch"), "the stamp sits below the actions");
+  assert.ok(stampAt < html.indexOf("data-briefwhy"), "right before the disclosure toggle that opens it");
+  // The decisive reason is coaching, not provenance: it prints in the body, once.
+  assert.match(html, /<p class="brief-reason">The longer run needs a lighter follow-up\.<\/p>/);
+  assert.equal(html.match(/lighter follow-up/g)?.length, 1);
+  assert.equal(
+    brief.updatedInnerHtml({ computed_at: "2026-03-15T12:39:00.000Z", decision: { reason: "x y z" } }, "easy").includes("x y z"),
+    false
+  );
+});
+
+// ---- say each fact once (distinctLine) ----
+
+test("distinctLine keeps a secondary line only when it adds something", () => {
+  const brief = loadTodayBrief();
+  const d = brief.distinctLine;
+  const focus = "Quad-dominant strength & ankle resilience";
+  // Equal (case / whitespace / punctuation-insensitive) or contained in a shown line.
+  assert.equal(d(focus, focus), "");
+  assert.equal(d("  quad-dominant STRENGTH and ankle resilience. ", "Quad-dominant strength and ankle resilience"), "");
+  assert.equal(d(focus, `${focus} · in progress`), "");
+  // A thin restatement ("Day 3 · <the same line>") is decoration, not a new fact.
+  assert.equal(d(`Day 3 · ${focus}`, focus), "");
+  // A sentence that merely MENTIONS a shown line still says something new.
+  const why = `Squats lead today because the block asks for ${focus.toLowerCase()} this week`;
+  assert.equal(d(why, focus), why);
+  // Whole words only: "Push" is not contained in "Push-ups".
+  assert.equal(d("Push", "Push-ups · in progress"), "Push");
+  assert.equal(d("Pull", "Pull · in progress"), "");
+  // Unrelated lines, empties and nulls.
+  assert.equal(d("Upper body", "Push day", null, ""), "Upper body");
+  assert.equal(d("", "Push day"), "");
+  assert.equal(d(null), "");
+  assert.equal(d("  Upper body  "), "Upper body");
+});
+
+// ---- one action, one button ----
+
+function loadBriefWithReads() {
+  const context = { Array, Math, Number, Object, String, Set, escHtml, escAttr };
+  context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-reads.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
+  return context.CairnTodayBrief;
+}
+
+test("a session with logged work says Continue, carries its progress, and names the focus once", () => {
+  const brief = loadBriefWithReads();
+  const focus = "Quad-dominant strength & ankle resilience";
+  const read = {
+    kind: "train",
+    headline: "Good to go",
+    focus,
+    why: "Legs are fresh and the week has room.",
+    est_minutes: 60,
+    signals: {},
+    strength_line: {
+      state: "in_progress",
+      title: focus,
+      text: `${focus} · in progress`,
+      caveat: null,
+      suggestion: null,
+      reshaped: false,
+      original: [],
+    },
+  };
+  const html = brief.briefHtml(read, {
+    isToday: true,
+    showPlan: true,
+    session: {
+      date: "2026-09-23",
+      started: true,
+      progress: "1 of 5 logged",
+      minutes: 60,
+      lines: ["Anchor day · Back Squat", focus],
+    },
+  });
+  assert.match(html, /data-redirect="start-session">Continue session</);
+  assert.doesNotMatch(html, /Start session/);
+  assert.equal(html.match(/data-redirect="start-session"/g)?.length, 1, "one action, one button");
+  // The card's progress rides as one quiet line beside the button; the kicker
+  // already says 60 min, so the minutes are not said twice.
+  assert.match(html, /<div class="brief-session-meta">1 of 5 logged<\/div>/);
+  assert.ok(html.indexOf("brief-session-meta") < html.indexOf("brief-launch"));
+  assert.match(html, /brief-session-line">Anchor day · Back Squat</);
+  // The focus sentence appears exactly once — in today's lift line.
+  assert.equal(html.match(/Quad-dominant strength &amp; ankle resilience/g)?.length, 1);
+  assert.doesNotMatch(html, /class="brief-focus"/);
+
+  // Different minutes than the kicker ARE a new fact.
+  const other = brief.briefHtml(read, {
+    isToday: true,
+    showPlan: true,
+    session: { date: "2026-09-23", started: true, progress: "1 of 5 logged", minutes: 45, lines: [] },
+  });
+  assert.match(other, /brief-session-meta">1 of 5 logged · ~45 min</);
+});
+
+test("the Brief's start follows the server lift line, and says Start before any work", () => {
+  const brief = loadBriefWithReads();
+  const line = (state) => ({ state, title: "Pull", text: `Pull · ${state.replace("_", " ")}`, reshaped: false, original: [] });
+  const base = { kind: "train", headline: "Good to go", why: "", signals: {} };
+  // The server line alone (no fold) is enough to say Continue.
+  assert.match(
+    brief.briefHtml({ ...base, strength_line: line("in_progress") }, { isToday: true }),
+    /data-redirect="start-session">Continue session</
+  );
+  const fresh = brief.briefHtml(
+    { ...base, strength_line: line("not_started") },
+    { isToday: true, showPlan: true, session: { date: "d", started: false, progress: "5 movements", minutes: null, lines: [] } }
+  );
+  assert.match(fresh, /data-redirect="start-session">Start session</);
+  assert.match(fresh, /brief-session-meta">5 movements</);
+  // No fold, no quiet line — nothing invented.
+  assert.doesNotMatch(brief.briefHtml(base, { isToday: true }), /brief-session/);
+  // The fold is inert on a read whose Brief carries no start.
+  assert.doesNotMatch(
+    brief.briefHtml(
+      { ...base, kind: "rest" },
+      { isToday: true, showPlan: true, session: { date: "d", started: true, progress: "1 of 5 logged", minutes: 60, lines: [] } }
+    ),
+    /brief-session|Continue session/
+  );
 });
 
 // ---- the earned default and the trade (Finding 10 + Finding 4's button) ----

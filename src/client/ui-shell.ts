@@ -177,6 +177,8 @@ const uiViewTransitions = CairnUiViewTransitions.create({ view, reducedMotion })
 function viewEnter(): void { uiViewTransitions.viewEnter(); }
 function withViewTransition(fn: () => unknown): Promise<unknown> { return uiViewTransitions.withViewTransition(fn); }
 function skelSwap(fn: () => unknown): Promise<unknown> { return uiViewTransitions.skelSwap(fn); }
+function tabSwap(fn: () => unknown): Promise<unknown> { return uiViewTransitions.tabSwap(fn); }
+function viewHydrate(): void { uiViewTransitions.viewHydrate(); }
 
 function setDiscipline(d: unknown): string {
   return uiSegmentsApi().setDiscipline(d);
@@ -331,6 +333,8 @@ const CAIRN_UI_SHELL_GLOBALS = {
   viewEnter,
   withViewTransition,
   skelSwap,
+  tabSwap,
+  viewHydrate,
   setDiscipline,
   isEndurance,
   isHybrid,

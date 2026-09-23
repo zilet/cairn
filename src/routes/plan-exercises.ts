@@ -3,6 +3,7 @@ import { type Response, Router } from "express";
 import {
   explainExercise,
   getCachedExerciseExplanation,
+  getExerciseDetailWithExplanation,
   reconcileExercises,
 } from "../coachOps.js";
 import {
@@ -15,7 +16,6 @@ import {
   detachGuide,
   ensureGuideImage,
   exerciseGuideStatus,
-  getExerciseDetail,
   getExerciseGuide,
   getPlanDay,
   getPlanQuality,
@@ -238,8 +238,10 @@ planExercisesRouter.post("/exercise/:name/explanation", async (req, res) => {
   }
 });
 
+// The cached how-to explanation rides along (`explanation`, `explanation_stale`) so
+// the sheet paints the real cues on open; generation stays on POST …/explanation.
 planExercisesRouter.get("/exercise/:name", (req, res) =>
-  res.json(getExerciseDetail(decodeURIComponent(req.params.name)))
+  res.json(getExerciseDetailWithExplanation(decodeURIComponent(req.params.name)))
 );
 
 // Reconcile exercise muscle groups using the deterministic canonicalizer. Useful

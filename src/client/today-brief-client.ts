@@ -30,6 +30,22 @@ type TodayBriefOverride = {
 // data). Rendered by CairnUiReads.contributorRowsHtml.
 type TodayBriefSignalRow = { label: string; state: string; tone: "ok" | "watch" | "quiet" };
 
+// The launch card's facts, folded into the Brief when the Brief itself carries the
+// start for today's session (renderToday suppresses the card then — one action,
+// one button). Plain text; the Brief escapes it.
+type TodayBriefSessionFold = {
+  date: string;
+  // Work is already logged on today's session ("Continue", not "Start").
+  started: boolean;
+  // "1 of 5 logged", "5 movements", "4 lifts" — the card's own progress words.
+  progress: string;
+  minutes: number | null;
+  // Guardrails and the anchor line, when the card would have printed them.
+  lines: string[];
+  // The exact preview the card would have bound its start to.
+  preview?: unknown;
+};
+
 type TodayBriefHtmlOptions = {
   showPlan?: boolean;
   // The programmed day today's read is pointing at ("Push", "Pull"), resolved by
@@ -56,6 +72,9 @@ type TodayBriefHtmlOptions = {
   // stays backward compatible until that plumbing lands. See the caller's report
   // for the exact change needed upstream.
   nothingToStart?: boolean;
+  // Set only when the Brief carries the start AND the launch card below was
+  // dropped for it; see TodayBriefSessionFold.
+  session?: TodayBriefSessionFold | null;
 };
 
 (() => {
@@ -96,6 +115,40 @@ type TodayBriefHtmlOptions = {
 
   function todayBriefRedirect(action: unknown, label: unknown, primary?: boolean): string {
     return `<button class="brief-redirect${primary ? " brief-redirect-primary" : ""}" data-redirect="${escAttr(action)}">${escHtml(label)}</button>`;
+  }
+
+  // SAY EACH FACT ONCE. A secondary line (a subtitle, a focus, a "why") renders only
+  // when it adds something to the lines already shown in the same card: never when
+  // it equals one of them or is contained in one, and never when it merely restates
+  // one with a scrap of decoration ("Day 3 · <the title>"). Comparison ignores case,
+  // punctuation and whitespace and matches whole words only, so "Push" is contained
+  // in "Push · in progress" but not in "Push-ups". Returns the candidate trimmed, or
+  // "" when it would repeat what is already on screen.
+  function todayBriefDistinctLine(candidate: unknown, ...shown: unknown[]): string {
+    const raw = candidate == null ? "" : String(candidate).trim();
+    // Letters, digits, and hyphens/apostrophes INSIDE a word ("push-ups",
+    // "quad-dominant") survive; every other mark is a word break.
+    const words = (value: unknown): string =>
+      String(value ?? "")
+        .toLocaleLowerCase()
+        .replace(/[^\p{L}\p{N}'’-]+/gu, " ")
+        .replace(/(^|\s)['’-]+|['’-]+(?=\s|$)/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    const own = words(raw);
+    if (!own) return "";
+    for (const line of shown) {
+      const other = words(line);
+      if (!other) continue;
+      if (` ${other} `.includes(` ${own} `)) return "";
+      if (` ${own} `.includes(` ${other} `)) {
+        // What is left once the repeated line is taken out: two words or fewer
+        // ("day 3") is decoration, not a new fact.
+        const rest = ` ${own} `.replace(` ${other} `, " ").trim();
+        if (rest.split(" ").filter(Boolean).length < 3) return "";
+      }
+    }
+    return raw;
   }
 
   function todayBriefVisibleOverrides(args: {
@@ -305,25 +358,65 @@ type TodayBriefHtmlOptions = {
   // the server sends both and they disagree, say both — "Updated 4:00 AM" over a
   // 7:39 row read as "your data is from 4 AM", which it never was. A server that
   // sends no `evidence_as_of` keeps exactly the old single line.
+  //
+  // Clock times only: the read's decisive reason is coaching, not provenance, and
+  // prints in the Brief's body (todayBriefReasonHtml). `kind` stays in the signature
+  // for the controller's existing call.
   function todayBriefUpdatedInnerHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
+    void kind;
     const readWhen = todayBriefStampWhen(read?.computed_at || read?.decision?.computed_at, isToday);
     const evidenceWhen = todayBriefStampWhen(
       (read as { evidence_as_of?: unknown } | null | undefined)?.evidence_as_of,
       isToday
     );
     if (!readWhen && !evidenceWhen) return "";
-    const decisive = todayBriefDecisiveReason(read, kind);
-    const tail = decisive ? ` <span aria-hidden="true">·</span> ${escHtml(decisive)}` : "";
     if (evidenceWhen && readWhen && evidenceWhen !== readWhen) {
-      return `<div class="brief-stamp-line">${escHtml(`As of ${evidenceWhen} sync`)}</div><div class="brief-stamp-line">${escHtml(`Read at ${readWhen}`)}${tail}</div>`;
+      return `<div class="brief-stamp-line">${escHtml(`As of ${evidenceWhen} sync`)}</div><div class="brief-stamp-line">${escHtml(`Read at ${readWhen}`)}</div>`;
     }
-    if (evidenceWhen) return `${escHtml(`As of ${evidenceWhen} sync`)}${tail}`;
-    return `${escHtml(`Updated ${readWhen}`)}${tail}`;
+    if (evidenceWhen) return escHtml(`As of ${evidenceWhen} sync`);
+    return escHtml(`Updated ${readWhen}`);
   }
 
+  // Provenance belongs behind "tap to see why", not on the face of the Brief: the
+  // stamp renders HIDDEN at the foot of that disclosure (today-brief-actions-client
+  // reveals it with the why panel), in the muted tracked label style.
   function todayBriefUpdatedHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
     const inner = todayBriefUpdatedInnerHtml(read, kind, isToday);
-    return inner ? `<div class="brief-updated">${inner}</div>` : "";
+    return inner ? `<div class="brief-updated lbl" data-brief-stamp hidden>${inner}</div>` : "";
+  }
+
+  // The specific reason behind a rest/easy read, as one quiet line in the Brief's
+  // body — it used to ride the clock stamp, which now lives behind the disclosure.
+  function todayBriefReasonHtml(read: TodayBriefRead | null | undefined, kind: string): string {
+    const reason = todayBriefDecisiveReason(read, kind);
+    return reason ? `<p class="brief-reason">${escHtml(reason)}</p>` : "";
+  }
+
+  // The launch card's facts, folded above the one start button when the Brief
+  // carries it: "1 of 5 logged · ~60 min", then guardrails / the anchor line. The
+  // minutes are dropped when the kicker already says the same number, and a line
+  // that repeats something the Brief already shows is dropped (say it once).
+  function todayBriefSessionFoldHtml(
+    fold: TodayBriefSessionFold | null | undefined,
+    shown: { estMinutes: number | null; lines: unknown[] }
+  ): string {
+    if (!fold || typeof fold !== "object") return "";
+    const minutes = fold.minutes != null && Number(fold.minutes) > 0 ? Math.round(Number(fold.minutes)) : null;
+    const meta = [
+      String(fold.progress || "").trim(),
+      minutes != null && minutes !== shown.estMinutes ? `~${minutes} min` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    const extra: string[] = [];
+    for (const line of Array.isArray(fold.lines) ? fold.lines : []) {
+      const text = todayBriefDistinctLine(line, ...shown.lines, meta, ...extra);
+      if (text) extra.push(text);
+    }
+    if (!meta && !extra.length) return "";
+    return `<div class="brief-session">${meta ? `<div class="brief-session-meta">${escHtml(meta)}</div>` : ""}${extra
+      .map((text) => `<div class="brief-session-line">${escHtml(text)}</div>`)
+      .join("")}</div>`;
   }
 
   // The morning check-in's mount point, and the ONLY place it is allowed to appear:
@@ -376,7 +469,6 @@ type TodayBriefHtmlOptions = {
   function todayBriefHtml(read: TodayBriefRead | null | undefined, options: TodayBriefHtmlOptions = {}): string {
     const kind = todayBriefKind(read);
     const meta = todayBriefMeta(read);
-    const focus = read?.focus ? escHtml(read.focus) : "";
     const estMinutes =
       read?.est_minutes != null && Number(read.est_minutes) > 0 ? Math.round(Number(read.est_minutes)) : null;
     const est = estMinutes != null ? `${estMinutes} min` : "";
@@ -400,7 +492,14 @@ type TodayBriefHtmlOptions = {
     const strengthLine = todayBriefStrengthLineHtml(read, kind);
     const line = read?.strength_line;
     const liftOpen = !!line && (line.state === "not_started" || line.state === "in_progress") && !!line.title;
+    // The italic subtitle says the day's focus only when the headline and today's
+    // lift line do not already say it (the lift line carries the plan day's label,
+    // which on an unnamed "Day N" plan IS the focus sentence).
+    const focus = escHtml(
+      todayBriefDistinctLine(read?.focus, read?.headline || meta.lead, strengthLine ? line?.text : "")
+    );
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
+    const reason = todayBriefReasonHtml(read, kind);
     const lookBack = todayBriefLookBackHtml(read, options.isToday !== false);
 
     const checkinSlot = todayBriefCheckinSlotHtml(kind, options.isToday !== false);
@@ -413,8 +512,17 @@ type TodayBriefHtmlOptions = {
     const planDay = leaning ? todayBriefPlanDayLabel(options.planDayName) : "";
 
     const actions: string[] = [];
+    let sessionFold = "";
     if (kind === "train" && !options.nothingToStart) {
-      actions.push(todayBriefRedirect("start-session", "Start session", true));
+      // ONE ACTION, ONE BUTTON: the server's lift line (todayStrengthLine) says
+      // whether today's session already holds logged work; the folded launch facts
+      // carry the same log-derived witness for a read that has no line yet.
+      const inProgress = line?.state === "in_progress" || options.session?.started === true;
+      actions.push(todayBriefRedirect("start-session", inProgress ? "Continue session" : "Start session", true));
+      sessionFold = todayBriefSessionFoldHtml(options.session, {
+        estMinutes,
+        lines: [read?.headline, read?.focus, read?.why, strengthLine ? line?.text : ""],
+      });
     } else if (kind === "done") {
       // A logged activity alone (no session row) can flip the read to "done"
       // with neither the finished-session card nor a revealed plan below —
@@ -493,6 +601,7 @@ type TodayBriefHtmlOptions = {
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
+      ${reason}
       ${strengthLine}
       ${checkinSlot}
       ${weekWins}
@@ -500,10 +609,11 @@ type TodayBriefHtmlOptions = {
       ${forward ? `<button class="brief-forward" data-redirect="view-week" title="See your week"><span class="brief-forward-arrow" aria-hidden="true">↗</span><span class="brief-forward-txt">${forward}</span></button>` : ""}
       ${periodization}
       ${arc ? `<button class="brief-forward brief-arc" data-redirect="view-program" title="See your plan's arc"><span class="brief-forward-arrow" aria-hidden="true">◷</span><span class="brief-forward-txt">${arc}</span></button>` : ""}
-      ${updated}
       <div id="briefProvenance" class="prov-slot"></div>
+      ${sessionFold}
       ${actions.length ? `<div class="brief-launch">${actions.join("")}</div>` : ""}
       ${steer}
+      ${updated}
       <button class="brief-why-more" data-briefwhy hidden>tap to see why</button>
     </section>`;
   }
@@ -540,7 +650,8 @@ type TodayBriefHtmlOptions = {
     // is a material difference. The primary SURFACE alone is compared — the rest of
     // the decision is ordering the Brief itself never draws.
     if (todayBriefYieldsLead(a) !== todayBriefYieldsLead(b)) return true;
-    if (todayBriefStrengthLineHtml(a, todayBriefKind(a)) !== todayBriefStrengthLineHtml(b, todayBriefKind(b))) return true;
+    if (todayBriefStrengthLineHtml(a, todayBriefKind(a)) !== todayBriefStrengthLineHtml(b, todayBriefKind(b)))
+      return true;
     // Crossing the second overridden morning adds a button (and relabels another),
     // so the count is rendered content even though the rest of `signals` is not.
     if (todayBriefOverriddenMornings(a) !== todayBriefOverriddenMornings(b)) return true;
@@ -676,6 +787,9 @@ type TodayBriefHtmlOptions = {
     periodizationHtml: todayBriefPeriodizationHtml,
     updatedHtml: todayBriefUpdatedHtml,
     updatedInnerHtml: todayBriefUpdatedInnerHtml,
+    reasonHtml: todayBriefReasonHtml,
+    sessionFoldHtml: todayBriefSessionFoldHtml,
+    distinctLine: todayBriefDistinctLine,
     checkinSlotHtml: todayBriefCheckinSlotHtml,
     overriddenMornings: todayBriefOverriddenMornings,
     planDayLabel: todayBriefPlanDayLabel,

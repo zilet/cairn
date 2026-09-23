@@ -725,9 +725,9 @@ test("athlete-facing decision rationale and Undo identifiers remain escaped", ()
 
   const surface = readFileSync(new URL("../src/client/today-plan-surface-renderer.ts", import.meta.url), "utf8");
   assert.match(surface, /item\.brain_change_summary/);
-  assert.match(surface, /escapeHtml\(line\.summary\)/);
+  assert.match(surface, /\besc\(line\.summary\)/);
   assert.match(surface, /data-decision-undo/);
-  assert.match(surface, /escapeHtml\(String\(line\.decision_id\)\)/);
+  assert.match(surface, /escAttr\(String\(line\.decision_id\)\)/);
 });
 
 // ---- accountable provenance: what the athlete can actually SEE about a change ----

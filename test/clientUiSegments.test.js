@@ -224,6 +224,12 @@ test("Progress nav groups the 8 views into 4 top groups with leaf sub-tabs", () 
   assert.match(fuelNav, /data-seg="intake"/);
   assert.match(fuelNav, /data-seg="energy"[^>]*aria-pressed="true"/);
 
+  // A single-view group (Performance → Program) renders the group bar ONLY — the
+  // leaf bar is sub-level chrome that exists only when there is a choice to make.
+  const perfNav = controller.segBar("program", PROGRESS_SEG);
+  assert.match(perfNav, /data-proggroup="performance"[^>]*aria-pressed="true"/);
+  assert.doesNotMatch(perfNav, /prog-subwrap|prog-subseg|data-seg=/);
+
   // A non-Progress seg-set is untouched (still the flat sliding bar).
   assert.equal(controller.segBar("trend", [["trend", "1RM"]]), `<seg data-active="trend" data-items="1"></seg>`);
 });

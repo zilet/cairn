@@ -22,7 +22,15 @@
     }
 
     if (tab === "today") return renderToday();
-    if (tab === "session") return renderSession();
+    if (tab === "session") {
+      // Session paints only after its loads settle, and switchTab skips the skeleton
+      // when the plan cache is warm. On a deep link #view starts EMPTY, so without
+      // this the page sat blank until every load returned — paint Today's skeleton
+      // (the same one a cold switch shows) whenever there is nothing on screen yet.
+      const host = typeof view !== "undefined" ? view : null;
+      if (host && !host.firstElementChild && typeof todaySkeleton === "function") host.innerHTML = todaySkeleton();
+      return renderSession();
+    }
     // Stand and Me live in the lazily-injected me-health bundle. Await it before
     // calling into it: switchTab already awaits this promise and routes a
     // rejection (a failed script fetch) to the tab's error state.

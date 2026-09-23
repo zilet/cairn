@@ -78,6 +78,18 @@ function captureReadRenderWeeklyInSlot(
   }
 }
 
+// The weekday a read was written on ("Mon"), for the stale line. Date part only,
+// read as a local calendar day like the week-range masthead; "" when unparseable.
+function captureReadWrittenWeekday(iso: unknown): string {
+  const [y, m, d] = String(iso || "")
+    .slice(0, 10)
+    .split("-")
+    .map(Number);
+  if (!y || !m || !d) return "";
+  const date = new Date(y, m - 1, d);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(undefined, { weekday: "short" });
+}
+
 function captureReadRenderWeeklyCard(
   target: HTMLElement,
   ins: CaptureInsight,
@@ -87,8 +99,8 @@ function captureReadRenderWeeklyCard(
 ): void {
   // Once acknowledged ("Got it"), the week's read persists as a COMPACT settled line
   // — never destroyed for the week — until the athlete pulls it back open for the day.
-  // A STALE read is the exception: it re-opens to the full card so its "Moved on" note
-  // + re-read tap stay reachable (the read no longer holds as a settled truth).
+  // A STALE read is the exception: it re-opens to the full card so its quiet stale
+  // line + re-read tap stay reachable (the read no longer holds as a settled truth).
   if (ins.feedback === "up" && !opts.expanded && ins.stale !== true) {
     captureReadRenderWeeklyAcked(target, ins, deps, team);
     return;
@@ -98,11 +110,12 @@ function captureReadRenderWeeklyCard(
   const why = String(ins.rationale || "").trim();
   const range = deps.weekRangeLabel(ins.created_at);
   // Staleness (pull-only): when the picture has moved past this read, the server
-  // nulls the "one change" and hands us a calm stale_note. We soften the card — a
-  // quiet "Moved on" chip + the note in place of the action, with a re-read tap —
-  // rather than keep asserting a stale change. Never a nag; a fresh read is untouched.
+  // nulls the "one change". The card says so in ONE quiet muted line under its
+  // masthead — when it was written, that things have moved since, and a re-read
+  // link — rather than keep asserting a stale change. No pill, no box, no alarm
+  // color: adherence-neutral, never a nag. A fresh read is untouched.
   const stale = ins.stale === true;
-  const staleNote = String(ins.stale_note || "").trim();
+  const written = captureReadWrittenWeekday(ins.created_at);
   // Reading grammar: the HERO carries the read + the one change (+ the wins strip,
   // injected by the caller), and the deterministic team-week detail sits one pull
   // away behind a native fold. The lead line is the agent's, so the team block omits
@@ -115,25 +128,20 @@ function captureReadRenderWeeklyCard(
         <div class="weekly-depth-body">${sections}</div>
       </details>`
     : "";
-  const staleBlock = stale
-    ? `<div class="weekly-stale well-accent-sm">
-          <span class="weekly-stale-lbl lbl">Moved on</span>
-          <p class="weekly-stale-text">${deps.escapeHtml(staleNote || "Your week has moved since this read.")}</p>
-          <button class="linkbtn-quiet weekly-reread" data-weekly-reread type="button">Re-read the week</button>
-        </div>`
+  const staleLine = stale
+    ? `<p class="weekly-stale">${deps.escapeHtml(written ? `Written ${written} · things have moved since` : "Things have moved since this read")}<span class="weekly-stale-sep" aria-hidden="true"> · </span><button class="linkbtn-quiet weekly-reread" data-weekly-reread type="button" aria-label="Re-read the week">Re-read</button></p>`
     : "";
   target.innerHTML = `<section class="weekly-card well-accent well-accent-sage settle-in${stale ? " weekly-card-stale" : ""}">
       <div class="weekly-head">
         <span class="weekly-kicker lbl">The week</span>
-        ${stale ? `<span class="weekly-stale-chip">Moved on</span>` : ""}
         ${range ? `<span class="weekly-range">${deps.escapeHtml(range)}</span>` : ""}
       </div>
+      ${staleLine}
       <p class="weekly-text">${text}</p>
       ${change ? `<div class="weekly-change well-accent-sm">
           <span class="weekly-change-lbl lbl">One change</span>
           <p class="weekly-change-text">${deps.escapeHtml(change)}</p>
         </div>` : ""}
-      ${staleBlock}
       ${depth}
       ${why ? `<p class="weekly-why" hidden>${deps.escapeHtml(why)}</p>` : ""}
       <div class="weekly-foot">

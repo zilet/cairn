@@ -4386,7 +4386,23 @@ Four details of the Brief are easy to get wrong from the markup alone:
   `computed_at` (when the sentence was written) render on two lines when they differ, one when they
   don't, and fall back to the old single `Updated …` line when the server sends no evidence stamp.
   A stamp move is still deliberately NOT a material difference (`todayBriefMateriallyDiffers`) — the
-  controller patches the `.brief-updated` node in place instead of rewriting the Brief.
+  controller patches the `.brief-updated` node in place instead of rewriting the Brief. The stamp is
+  provenance, so it renders hidden and opens with the "tap to see why" disclosure; a rest/easy
+  read's decisive reason (coaching, not provenance) prints in the body as `.brief-reason`.
+- **One action, one button; one wording per fact.** On a train read the Brief's own start is
+  "Continue session" whenever the server lift line says `in_progress` (or the log shows work), and
+  when the Session launch card would open that same session it is not drawn — its facts
+  (`sessionLaunchFacts`, `today-screen.ts`: progress, minutes, guardrails, anchor line) fold into
+  the Brief (`todayBriefSessionFoldHtml`, persisted as `state.briefSession`, which the Brief's start
+  also binds its reviewed preview from). The card stays wherever it is the only way in. Secondary
+  lines pass `CairnTodayBrief.distinctLine` — a line equal to, contained in, or a thin restatement of
+  one already shown in that card does not render.
+- **Today starts its reads early and awaits them late.** `renderToday` starts the Brief read and the
+  session preview before the data load, the run line / agenda / conductor before the prep await, the
+  rail's reads the moment the agenda names its cards (`CairnTodayRailController.prefetchRail`), and
+  the phase-one side reads (`/today-side`, context tags) before the paint. Slot loaders take the
+  in-flight promise from the one-shot, render-scoped `CairnTodayPrefetch`
+  (`today-data-loader.ts`) instead of asking twice; what renders, and in what order, is unchanged.
 - **The action labels follow the athlete's own pattern.** At two or more recent overridden quiet
   mornings (`signals.easy_outcome_feedback.overridden_and_fine`), the primary action is named for
   the plan day itself ("Pull day · your plan", resolved by the controller from

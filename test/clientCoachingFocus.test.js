@@ -548,3 +548,32 @@ test("the plan-coach route lands on the Plan tab's Coach section (the waiting dr
   assert.deepEqual(activated, ["plan"], "navigates to Plan");
   assert.equal(state.planJump, "coach", "jumps straight to the Coach/proposals section");
 });
+
+test("the block objective is said once: a card that renders the lead title drops it from the headline", () => {
+  const { focus } = loadCoachingFocus();
+  const payload = {
+    ...richFocus,
+    headline: "You're an intermediate lifter. This block: Break <plateau> — with nutrition handled alongside.",
+  };
+
+  const compact = focus.coachingFocusCompactHtml(payload);
+  // The lead row still carries the title (with its domain tag), exactly once.
+  assert.equal(compact.split("Break &lt;plateau&gt;").length - 1, 1);
+  assert.match(compact, /You're an intermediate lifter\. With nutrition handled alongside\./);
+  assert.doesNotMatch(compact, /This block:/);
+
+  const overview = focus.coachingFocusHtml(payload, { variant: "overview" });
+  assert.equal(overview.split("Break &lt;plateau&gt;").length - 1, 1);
+
+  // No tail and no where-line: the headline has nothing left to say and is omitted.
+  const bare = focus.coachingFocusCompactHtml({ ...richFocus, headline: "This block: Break <plateau>." });
+  assert.doesNotMatch(bare, /cfocus-headline/);
+
+  // A headline without the exact stem (clipped, reworded) is left untouched.
+  const other = focus.coachingFocusCompactHtml({ ...richFocus, headline: "Build <patiently>" });
+  assert.match(other, /Build &lt;patiently&gt;/);
+
+  // The degraded hero has no lead block, so it keeps the whole sentence.
+  const hero = focus.coachingFocusHtml({ ...payload, available: false }, { variant: "hero" });
+  assert.match(hero, /This block: Break &lt;plateau&gt;/);
+});

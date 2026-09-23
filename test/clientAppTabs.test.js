@@ -33,13 +33,14 @@ function tabElement(tab, calls) {
       return Object.hasOwn(this.attrs, name) ? this.attrs[name] : null;
     },
     click: () => listeners.get("click")?.(),
+    clickWith: (event) => listeners.get("click")?.(event),
   };
 }
 
 function loadTabs(options = {}) {
   const source = readFileSync(new URL("../public/js/app-tabs.js", import.meta.url), "utf8");
   const calls = [];
-  const view = { innerHTML: "" };
+  const view = options.view || { innerHTML: "" };
   const tabs = ["today", "plan", "progress", "chat", "me", "settings"].map((tab) => tabElement(tab, calls));
   const context = {
     MEALS_KEY: "meals:plans",
@@ -79,8 +80,8 @@ function loadTabs(options = {}) {
         ROUTE_TABS: ["today", "plan", "progress", "chat", "me", "settings"],
       },
     },
-    withViewTransition: (fn) => {
-      calls.push(["withViewTransition"]);
+    tabSwap: (fn) => {
+      calls.push(["tabSwap"]);
       fn();
     },
   };
@@ -110,9 +111,10 @@ test("tab controller switches tabs with skeleton-first paint and route sync", as
     ["toggle", "me", "active", false],
     ["toggle", "settings", "active", false],
     ["syncRouteFromState", "push"],
-    ["withViewTransition"],
+    // ONE swap carries the skeleton AND the renderer's synchronous paint; the
+    // swap itself is the fade, so no separate view-enter keyframe is played.
+    ["tabSwap"],
     ["peekCached", "plan"],
-    ["viewEnter", "seg:edit:5:3"],
     ["renderTab", "plan"],
   ]);
 });
@@ -136,7 +138,7 @@ test("tab controller skips warm skeletons and tears down chat when leaving", asy
     ["toggle", "me", "active", false],
     ["toggle", "settings", "active", false],
     ["syncRouteFromState", "replace"],
-    ["withViewTransition"],
+    ["tabSwap"],
   ]);
   assert.deepEqual(plain(env.calls.slice(12)), [
     ["peekCached", "history:sessions"],
@@ -211,4 +213,69 @@ test("the Plan tab from the tab bar opens on Training, never on a remembered Foo
   jumped.tabs[1].click();
   await flush();
   assert.equal(jumped.context.state.planJump, "food");
+});
+
+// A focus-moving tab switch lands on the new view's heading. A tap lands it
+// QUIETLY (no ring: data-focus-quiet + focusVisible:false); a keyboard-activated
+// click (detail 0) keeps the keyboard ring.
+function headingElement() {
+  const listeners = new Map();
+  return {
+    attrs: {},
+    focusCalls: [],
+    hasAttribute(name) {
+      return Object.hasOwn(this.attrs, name);
+    },
+    setAttribute(name, value) {
+      this.attrs[name] = String(value);
+    },
+    removeAttribute(name) {
+      delete this.attrs[name];
+    },
+    addEventListener(type, handler) {
+      listeners.set(type, handler);
+    },
+    blur() {
+      listeners.get("blur")?.();
+    },
+    focus(opts) {
+      this.focusCalls.push(opts);
+    },
+  };
+}
+
+function viewWithHeading(heading) {
+  return {
+    innerHTML: "",
+    querySelector: (selector) => (/h1/.test(selector) ? heading : null),
+    removeAttribute() {},
+    setAttribute() {},
+  };
+}
+
+test("a tapped tab lands focus on the heading without painting the keyboard ring", async () => {
+  const heading = headingElement();
+  const env = loadTabs({ view: viewWithHeading(heading) });
+  env.context.registerTabBarHandlers();
+  env.tabs[1].clickWith({ detail: 1 });
+  await flush();
+  await flush();
+
+  assert.equal(heading.attrs["data-focus-quiet"], "");
+  assert.equal(heading.attrs.tabindex, "-1");
+  assert.deepEqual(plain(heading.focusCalls), [{ preventScroll: true, focusVisible: false }]);
+  heading.blur();
+  assert.equal(heading.hasAttribute("data-focus-quiet"), false, "the quiet mark leaves with the focus");
+});
+
+test("a keyboard-activated tab keeps the focus ring on the landed heading", async () => {
+  const heading = headingElement();
+  const env = loadTabs({ view: viewWithHeading(heading) });
+  env.context.registerTabBarHandlers();
+  env.tabs[1].clickWith({ detail: 0 });
+  await flush();
+  await flush();
+
+  assert.equal(heading.hasAttribute("data-focus-quiet"), false);
+  assert.deepEqual(plain(heading.focusCalls), [{ preventScroll: true, focusVisible: true }]);
 });

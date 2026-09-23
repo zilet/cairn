@@ -107,22 +107,40 @@ test("the launch card gate keeps a null preview's calm door open and only a posi
   );
   assert.match(
     today,
-    /showPlan && !showDone && nothingToStart\s*\n\s*\? ""\s*\n\s*: showPlan && !showDone && previewHasItems !== false\s*\n\s*\? sessionLaunchCardHtml\(/,
+    /showPlan && !showDone && nothingToStart\s*\n\s*\? ""\s*\n\s*: showPlan && !showDone && previewHasItems !== false\s*\n\s*\? briefCarriesStart\s*\n\s*\? ""\s*\n\s*: sessionLaunchCardHtml\(launchOpts\)/,
+  );
+  // One action, one button: the card folds into the Brief only when the Brief
+  // itself carries the start for the same session (a train read).
+  assert.match(
+    today,
+    /const briefCarriesStart =\s*\n\s*showPlan && !showDone && !nothingToStart && previewHasItems !== false && CairnTodayBrief\.kind\(read\) === "train";/,
   );
 
   // A faithful reimplementation of that same formula (verified above to match
   // the source verbatim), exercised against the four witness combinations the
   // comment above `previewItemCount` calls out.
-  function planRegionFor({ previewItemCount, hasPlan, hasLoggedSets, dayHasItems }) {
+  function planRegionFor({ previewItemCount, hasPlan, hasLoggedSets, dayHasItems, kind = "rest" }) {
     const previewHasItems = previewItemCount == null ? null : previewItemCount > 0;
     const nothingToStart =
       hasPlan && !hasLoggedSets && !dayHasItems && previewHasItems !== true;
     const showPlan = true;
     const showDone = false;
+    const briefCarriesStart = showPlan && !showDone && !nothingToStart && previewHasItems !== false && kind === "train";
     if (showPlan && !showDone && nothingToStart) return "suppressed";
-    if (showPlan && !showDone && previewHasItems !== false) return "launch-card";
+    if (showPlan && !showDone && previewHasItems !== false) return briefCarriesStart ? "brief-start" : "launch-card";
     return "plan-surface";
   }
+
+  assert.equal(
+    planRegionFor({ previewItemCount: 5, hasPlan: true, hasLoggedSets: true, dayHasItems: true, kind: "train" }),
+    "brief-start",
+    "a train read's Brief carries the one start; the duplicate card is not drawn",
+  );
+  assert.equal(
+    planRegionFor({ previewItemCount: 5, hasPlan: true, hasLoggedSets: false, dayHasItems: true, kind: "easy" }),
+    "launch-card",
+    "an easy/rest read offers no start of its own, so the card stays the way in",
+  );
 
   assert.equal(
     planRegionFor({ previewItemCount: null, hasPlan: true, hasLoggedSets: false, dayHasItems: true }),

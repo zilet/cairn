@@ -9,9 +9,24 @@
 // is the natural partner of api() + the offline hairline, and because api-client
 // is already precached by the service worker.
 
+// Opt-in stale-while-revalidate for an idempotent GET (see `api()` below).
+// `true` takes the defaults; an object tunes the windows and receives the
+// background refresh when a stale body was served.
+type CairnApiSwrOptions = {
+  // How old a remembered body may be and still be served instantly (default 5 min).
+  maxStaleMs?: number;
+  // Younger than this, the remembered body is served WITHOUT a background refresh
+  // (default 10 s) — the "Today fetched it seconds ago" case.
+  freshMs?: number;
+  // Called synchronously, before api() resolves, whenever a remembered body was
+  // served and a background refresh started. The promise resolves to the fresh
+  // body, or to undefined when the refresh failed (the served body stands).
+  onStale?: (refresh: Promise<unknown>) => void;
+};
 type CairnApiOptions = RequestInit & {
   headers?: Record<string, string>;
   acceptErrorBody?: boolean;
+  swr?: boolean | CairnApiSwrOptions;
 };
 type CairnApiResponse<Path extends string> = import("../contracts/client.js").ClientApiResponse<Path>;
 
@@ -173,13 +188,25 @@ type ApiFetchOutcome = {
   invalidJson?: boolean;
   durationMs: number;
   requestId?: string;
+  writeGen?: number;
 };
 type ApiCoalesceEntry<T> = { data: T; expires: number };
+type ApiStaleEntry<T> = { data: T; ts: number };
 type ApiCoalescer = {
   isMicroCachePath(path: string): boolean;
   peekFresh<T = unknown>(path: string): T | undefined;
-  store<T = unknown>(path: string, data: T): void;
+  // `writeGen` is the generation a GET began under (see writeGeneration): a body
+  // that started before a write landed is never remembered as post-write truth.
+  store<T = unknown>(path: string, data: T, writeGen?: number): void;
   invalidateAll(): void;
+  // ---- opt-in stale-while-revalidate tier ----
+  // Paths a caller asked to read stale-while-revalidate; from then on every GET of
+  // that path (opted in or not) keeps the remembered body warm.
+  markStaleable(path: string): void;
+  // The remembered body and its age, or undefined when absent or older than maxAgeMs.
+  peekStale<T = unknown>(path: string, maxAgeMs: number): { data: T; age: number } | undefined;
+  writeGeneration(): number;
+  staleSize(): number;
   share<T>(path: string, start: () => Promise<T>): Promise<T>;
   inFlightCount(): number;
   cacheSize(): number;
@@ -193,6 +220,14 @@ const API_MICRO_TTL_MS = 1500;
 // 1.5 s, so neither can serve a stale plan into a surface the athlete just changed.
 const API_MICRO_CACHE_PATHS: readonly string[] = ["/settings", "/profile", "/stats", "/coaching-focus", "/exercises", "/plan"];
 const API_GET_TIMEOUT_MS = 20000;
+// Stale-while-revalidate windows for an opted-in GET: a remembered body up to five
+// minutes old paints immediately (a background refresh then upgrades it); one
+// younger than ten seconds is served with no refresh at all. Any write clears the
+// tier outright, so "stale" only ever means "older", never "from before a change".
+const API_SWR_MAX_STALE_MS = 5 * 60 * 1000;
+const API_SWR_FRESH_MS = 10000;
+// Bounded memory: the least-recently-stored remembered bodies drop first.
+const API_SWR_MAX_ENTRIES = 48;
 
 class CairnApiError extends Error {
   kind: CairnApiErrorKind;
@@ -324,13 +359,21 @@ function cloneJson<T>(value: T): T {
 
 // ---------- pure core: dedupe map + TTL cache over injected time ----------
 function createApiCoalescer(
-  opts: { now?: () => number; ttlMs?: number; ttlPaths?: readonly string[] } = {}
+  opts: { now?: () => number; ttlMs?: number; ttlPaths?: readonly string[]; maxStaleEntries?: number } = {}
 ): ApiCoalescer {
   const now = opts.now || (() => Date.now());
   const ttlMs = opts.ttlMs && opts.ttlMs > 0 ? opts.ttlMs : API_MICRO_TTL_MS;
   const ttlPaths = new Set(opts.ttlPaths || API_MICRO_CACHE_PATHS);
+  const maxStaleEntries = opts.maxStaleEntries && opts.maxStaleEntries > 0 ? opts.maxStaleEntries : API_SWR_MAX_ENTRIES;
   const inFlight = new Map<string, Promise<unknown>>();
   const ttlCache = new Map<string, ApiCoalesceEntry<unknown>>();
+  // The stale-while-revalidate tier. The micro-cache paths are always staleable
+  // (their bodies are already cloned on store, and they are the hot shared reads
+  // one surface fetches seconds before another); any other path joins the first
+  // time a caller opts it in.
+  const staleable = new Set<string>(ttlPaths);
+  const staleCache = new Map<string, ApiStaleEntry<unknown>>();
+  let writeGen = 0;
 
   function isMicroCachePath(path: string): boolean {
     return ttlPaths.has(path);
@@ -344,12 +387,48 @@ function createApiCoalescer(
     }
     return cloneJson(entry.data) as T;
   }
-  function store<T = unknown>(path: string, data: T): void {
-    if (!isMicroCachePath(path)) return;
-    ttlCache.set(path, { data: cloneJson(data), expires: now() + ttlMs });
+  function store<T = unknown>(path: string, data: T, startedGen?: number): void {
+    // A GET that began before a write landed carries pre-write truth: serving it
+    // afterwards (from either tier) would undo the write on screen.
+    if (startedGen != null && startedGen !== writeGen) return;
+    const micro = isMicroCachePath(path);
+    const stale = staleable.has(path);
+    if (!micro && !stale) return;
+    const copy = cloneJson(data);
+    if (micro) ttlCache.set(path, { data: copy, expires: now() + ttlMs });
+    if (stale) {
+      staleCache.delete(path); // re-insert so Map order is least-recently-stored first
+      staleCache.set(path, { data: copy, ts: now() });
+      while (staleCache.size > maxStaleEntries) {
+        const oldest = staleCache.keys().next().value;
+        if (oldest === undefined) break;
+        staleCache.delete(oldest);
+      }
+    }
   }
   function invalidateAll(): void {
+    writeGen++;
     ttlCache.clear();
+    staleCache.clear();
+  }
+  function markStaleable(path: string): void {
+    staleable.add(path);
+  }
+  function peekStale<T = unknown>(path: string, maxAgeMs: number): { data: T; age: number } | undefined {
+    const entry = staleCache.get(path);
+    if (!entry) return undefined;
+    const age = Math.max(0, now() - entry.ts);
+    if (age > maxAgeMs) {
+      staleCache.delete(path);
+      return undefined;
+    }
+    return { data: cloneJson(entry.data) as T, age };
+  }
+  function writeGeneration(): number {
+    return writeGen;
+  }
+  function staleSize(): number {
+    return staleCache.size;
   }
   // Concurrent callers for the SAME path share one in-flight promise. The map
   // entry is cleared when `started` itself settles (fulfills OR rejects) — NOT
@@ -377,7 +456,31 @@ function createApiCoalescer(
     return ttlCache.size;
   }
 
-  return { isMicroCachePath, peekFresh, store, invalidateAll, share, inFlightCount, cacheSize };
+  return {
+    isMicroCachePath,
+    peekFresh,
+    store,
+    invalidateAll,
+    markStaleable,
+    peekStale,
+    writeGeneration,
+    staleSize,
+    share,
+    inFlightCount,
+    cacheSize,
+  };
+}
+
+// Normalizes the `swr` api() option: absent/false → null (plain read), true → the
+// defaults, an object → the defaults overlaid with the caller's windows.
+function resolveApiSwr(
+  option: CairnApiOptions["swr"]
+): { maxStaleMs: number; freshMs: number; onStale?: (refresh: Promise<unknown>) => void } | null {
+  if (!option) return null;
+  const o = option === true ? {} : option;
+  const maxStaleMs = typeof o.maxStaleMs === "number" && o.maxStaleMs >= 0 ? o.maxStaleMs : API_SWR_MAX_STALE_MS;
+  const freshMs = typeof o.freshMs === "number" && o.freshMs >= 0 ? Math.min(o.freshMs, maxStaleMs) : API_SWR_FRESH_MS;
+  return { maxStaleMs, freshMs, onStale: typeof o.onStale === "function" ? o.onStale : undefined };
 }
 
 // ---------- pure decision helpers (no DOM) ----------
@@ -408,7 +511,7 @@ function buildFetchInit(
   opts: CairnApiOptions,
   headers: Record<string, string>
 ): { init: RequestInit; cleanup: () => void } {
-  const { acceptErrorBody: _acceptErrorBody, ...fetchOptions } = opts;
+  const { acceptErrorBody: _acceptErrorBody, swr: _swr, ...fetchOptions } = opts;
   let signal = opts.signal;
   let cleanup = () => {};
   if (shouldArmGetTimeout(method, opts) && typeof AbortController === "function") {
@@ -429,12 +532,22 @@ function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<
   const isGet = method === "GET";
   const bypass = shouldBypassApiCache(opts);
   const coalescer = apiCoalescer();
+  // Stale-while-revalidate is opt-in, GET-only, and yields to a caller that asked
+  // for real network control (signal/cache), exactly like the micro-cache.
+  const swr = isGet && !bypass ? resolveApiSwr(opts.swr) : null;
+  let staleHit: { data: CairnApiResponse<Path>; age: number } | undefined;
 
   if (!isGet) {
     coalescer.invalidateAll(); // any write may change anything — never serve a stale read after it
   } else if (!bypass) {
     const cached = coalescer.peekFresh<CairnApiResponse<Path>>(p);
     if (cached !== undefined) return Promise.resolve(cached);
+    if (swr) {
+      coalescer.markStaleable(p);
+      staleHit = coalescer.peekStale<CairnApiResponse<Path>>(p, swr.maxStaleMs);
+      // Remembered seconds ago (another surface just read it): serve it, no refetch.
+      if (staleHit && staleHit.age < swr.freshMs) return Promise.resolve(staleHit.data);
+    }
   }
 
   const t = authToken();
@@ -444,6 +557,9 @@ function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<
   if (tz) headers["X-Cairn-TZ"] = tz;
 
   const attempt = (): Promise<ApiFetchOutcome> => {
+    // The write generation this request began under — a body fetched across a
+    // write is returned to its caller but never remembered (see coalescer.store).
+    const writeGen = coalescer.writeGeneration();
     const { init, cleanup } = buildFetchInit(method, opts, headers);
     const started =
       typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
@@ -454,7 +570,7 @@ function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<
     };
     return fetch("/api" + p, init)
       .then(async (r) => {
-        const base = { status: r.status, durationMs: elapsed(), requestId: responseRequestId(r) };
+        const base = { status: r.status, durationMs: elapsed(), requestId: responseRequestId(r), writeGen };
         if (r.status === 401 || r.status === 204) return base;
         try {
           return { ...base, body: await r.json() };
@@ -488,55 +604,98 @@ function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<
       .finally(cleanup);
   };
 
-  const settled = isGet && !bypass ? coalescer.share(p, attempt) : attempt();
+  const run = (): Promise<CairnApiResponse<Path>> => {
+    const settled = isGet && !bypass ? coalescer.share(p, attempt) : attempt();
+    return finishApiResponse(settled);
+  };
 
-  return settled
-    .then((result) => {
-      if (result.status === 401) {
-        handleUnauthorized();
-        return new Promise<CairnApiResponse<Path>>(() => {});
-      }
-      setOffline(false); // a real response landed, Cairn is reachable
-      if (result.status < 200 || result.status >= 300) {
-        // Readiness uses 503 as meaningful operator truth (for example, a stale
-        // scheduler) and still returns a bounded JSON contract. Opt-in callers
-        // can consume that body without turning the expected signal into a
-        // recursive client diagnostic.
-        if (opts.acceptErrorBody && !result.invalidJson && result.body !== undefined) {
-          return result.body as CairnApiResponse<Path>;
+  if (swr && staleHit) {
+    // Serve the remembered body now; the network answer lands in both tiers in
+    // the background and is handed to the caller's onStale, which re-renders only
+    // if it differs. A failed refresh resolves undefined: the served body stands.
+    // The shared fetch can resolve AFTER a write lands and bumps the generation —
+    // exactly the window coalescer.store() already refuses to remember. A repaint
+    // from onStale must honor the same guard: a body that started before the write
+    // but is only handed back once the generation has moved on is pre-write truth,
+    // so it resolves undefined here too rather than painting over what the write
+    // just did.
+    const sharedOutcome = isGet && !bypass ? coalescer.share(p, attempt) : attempt();
+    const refresh: Promise<unknown> = sharedOutcome.then(
+      (result) => {
+        if (result.writeGen !== coalescer.writeGeneration()) return undefined;
+        return finishApiResponse(Promise.resolve(result));
+      },
+      () => undefined
+    );
+    try {
+      swr.onStale?.(refresh);
+    } catch {}
+    return Promise.resolve(staleHit.data);
+  }
+  const result = run();
+  if (!isGet) {
+    // A write invalidates the caches and bumps the generation at the START (see
+    // above) so nothing already in-flight is ever trusted once the write lands.
+    // Bumping again here, when the write SETTLES (success or failure), closes the
+    // other half of the window: a GET that began during the write but is answered
+    // — and would be stored — before the write's own response lands must not be
+    // kept as post-write truth once the write actually finishes.
+    result.then(
+      () => coalescer.invalidateAll(),
+      () => coalescer.invalidateAll()
+    );
+  }
+  return result;
+
+  function finishApiResponse(settled: Promise<ApiFetchOutcome>): Promise<CairnApiResponse<Path>> {
+    return settled
+      .then((result) => {
+        if (result.status === 401) {
+          handleUnauthorized();
+          return new Promise<CairnApiResponse<Path>>(() => {});
         }
-        const error = new CairnApiError({
-          kind: "http",
-          method,
-          route: p,
-          status: result.status,
-          durationMs: result.durationMs,
-          requestId: result.requestId,
-        });
-        reportApiError(error);
-        throw error;
-      }
-      if (result.invalidJson) {
-        const error = new CairnApiError({
-          kind: "invalid_json",
-          method,
-          route: p,
-          status: result.status,
-          durationMs: result.durationMs,
-          requestId: result.requestId,
-        });
-        reportApiError(error);
-        throw error;
-      }
-      if (isGet && !bypass) coalescer.store(p, result.body);
-      return result.body as CairnApiResponse<Path>;
-    })
-    .catch((err) => {
-      // A reachable HTTP/protocol failure must never claim Cairn is offline.
-      // Only fetch/abort/connectivity failures get the calm offline hairline.
-      if (err instanceof CairnApiError && (err.kind === "network" || err.kind === "timeout")) setOffline(true);
-      throw err;
-    });
+        setOffline(false); // a real response landed, Cairn is reachable
+        if (result.status < 200 || result.status >= 300) {
+          // Readiness uses 503 as meaningful operator truth (for example, a stale
+          // scheduler) and still returns a bounded JSON contract. Opt-in callers
+          // can consume that body without turning the expected signal into a
+          // recursive client diagnostic.
+          if (opts.acceptErrorBody && !result.invalidJson && result.body !== undefined) {
+            return result.body as CairnApiResponse<Path>;
+          }
+          const error = new CairnApiError({
+            kind: "http",
+            method,
+            route: p,
+            status: result.status,
+            durationMs: result.durationMs,
+            requestId: result.requestId,
+          });
+          reportApiError(error);
+          throw error;
+        }
+        if (result.invalidJson) {
+          const error = new CairnApiError({
+            kind: "invalid_json",
+            method,
+            route: p,
+            status: result.status,
+            durationMs: result.durationMs,
+            requestId: result.requestId,
+          });
+          reportApiError(error);
+          throw error;
+        }
+        if (isGet && !bypass) coalescer.store(p, result.body, result.writeGen);
+        return result.body as CairnApiResponse<Path>;
+      })
+      .catch((err) => {
+        // A reachable HTTP/protocol failure must never claim Cairn is offline.
+        // Only fetch/abort/connectivity failures get the calm offline hairline.
+        if (err instanceof CairnApiError && (err.kind === "network" || err.kind === "timeout")) setOffline(true);
+        throw err;
+      });
+  }
 }
 
 // Binary API reads share the normal token/time-zone headers but intentionally do

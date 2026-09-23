@@ -52,12 +52,19 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
     }
     if (action === "start-session" || action === "reveal-plan") {
       // Logging lives in the isolated Session destination now, not inline on Today.
+      // When the launch card was folded into the Brief (one action, one button),
+      // this start binds to the same reviewed preview the card would have.
+      const fold = (deps.state as { briefSession?: { date?: unknown; preview?: unknown } | null }).briefSession;
+      const folded = action === "start-session" && !!fold && fold.date === deps.state.logDate;
       void openSession(undefined, {
         source: "adaptive_plan",
         trigger,
         trainAnyway: action === "reveal-plan",
         replace: action === "reveal-plan",
         provenance: { entry: action === "reveal-plan" ? "train_anyway" : "brief_start" },
+        ...(folded
+          ? { preview: (fold!.preview ?? null) as import("../contracts/client-api.js").ClientDailySessionPreview | null }
+          : {}),
       });
       return;
     }
@@ -210,16 +217,28 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
       void resetBriefRead(brief, steerReset, deps);
     });
 
+    // "tap to see why" discloses the read's signals AND its provenance — the
+    // sync/read clock stamp (rendered hidden at the foot of the Brief) opens and
+    // closes with it, so engineering residue never sits on the Brief's face.
     const whyBtn = brief.querySelector<HTMLElement>("[data-briefwhy]");
-    if (whyBtn && read.signals && Object.keys(read.signals).length) {
+    const hasSignals = !!(read.signals && Object.keys(read.signals).length);
+    const stampEl = () => brief.querySelector<HTMLElement>("[data-brief-stamp]");
+    if (whyBtn && (hasSignals || stampEl())) {
       whyBtn.hidden = false;
       whyBtn.addEventListener("click", () => {
-        const open = brief.querySelector(".brief-why-panel");
-        if (open) {
-          open.remove();
+        const stamp = stampEl();
+        const isOpen = whyBtn.getAttribute("aria-expanded") === "true";
+        if (isOpen) {
+          brief.querySelector(".brief-why-panel")?.remove();
+          if (stamp) stamp.hidden = true;
           whyBtn.textContent = "tap to see why";
+          whyBtn.setAttribute("aria-expanded", "false");
           return;
         }
+        whyBtn.setAttribute("aria-expanded", "true");
+        whyBtn.textContent = "hide";
+        if (stamp) stamp.hidden = false;
+        if (!hasSignals) return;
         // Reading-grammar contributor rows (Amendment 2) when the primitive is
         // loaded and the read yields any; otherwise the calm prose summary — the
         // panel is never empty.
@@ -239,8 +258,7 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
           prose.textContent = CairnTodayBrief.signalsText(read);
           panel.appendChild(prose);
         }
-        whyBtn.before(panel);
-        whyBtn.textContent = "hide";
+        (stamp || whyBtn).before(panel);
       });
     }
   }

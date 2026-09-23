@@ -246,3 +246,72 @@ test("TTL cache: a custom ttlPaths/ttlMs override applies to the injected list o
   c.store("/custom", { v: 1 });
   assert.deepEqual(c.peekFresh("/custom"), { v: 1 });
 });
+
+// ---------- opt-in stale-while-revalidate tier ----------
+
+test("SWR tier: micro-cache paths are staleable by default; other paths only once opted in", () => {
+  const { createApiCoalescer } = loadApiCache();
+  let now = 0;
+  const c = createApiCoalescer({ now: () => now });
+  c.store("/coaching-focus", { v: 1 });
+  c.store("/journey", { v: 1 });
+  now = 60_000; // long past the micro TTL
+  assert.equal(c.peekFresh("/coaching-focus"), undefined, "the micro-cache itself expired");
+  const remembered = c.peekStale("/coaching-focus", 300_000);
+  assert.deepEqual(remembered?.data, { v: 1 });
+  assert.equal(remembered?.age, 60_000);
+  assert.equal(c.peekStale("/journey", 300_000), undefined, "an un-opted path is never remembered");
+
+  c.markStaleable("/journey");
+  c.store("/journey", { v: 2 });
+  assert.deepEqual(c.peekStale("/journey", 300_000)?.data, { v: 2 });
+  assert.equal(c.isMicroCachePath("/journey"), false, "opting in never widens the micro-cache");
+});
+
+test("SWR tier: entries older than maxAge are dropped, and served copies are isolated", () => {
+  const { createApiCoalescer } = loadApiCache();
+  let now = 0;
+  const c = createApiCoalescer({ now: () => now });
+  c.markStaleable("/journey");
+  c.store("/journey", { nested: { n: 1 } });
+  const served = c.peekStale("/journey", 1000);
+  served.data.nested.n = 99;
+  assert.equal(c.peekStale("/journey", 1000).data.nested.n, 1, "mutating a served body never poisons the tier");
+  now = 1001;
+  assert.equal(c.peekStale("/journey", 1000), undefined);
+  assert.equal(c.staleSize(), 0, "an expired entry is evicted on read");
+});
+
+test("SWR tier: any write clears it, and a body fetched across a write is never remembered", () => {
+  const { createApiCoalescer } = loadApiCache();
+  const c = createApiCoalescer({ now: () => 0 });
+  c.markStaleable("/journey");
+  c.store("/journey", { v: 1 });
+  const genBeforeWrite = c.writeGeneration();
+  c.invalidateAll();
+  assert.equal(c.peekStale("/journey", 1e9), undefined, "a write clears remembered bodies");
+  assert.equal(c.writeGeneration(), genBeforeWrite + 1);
+
+  // A GET that began before the write lands after it: returned to its caller, not stored.
+  c.store("/journey", { v: "pre-write" }, genBeforeWrite);
+  assert.equal(c.peekStale("/journey", 1e9), undefined);
+  c.store("/settings", { v: "pre-write" }, genBeforeWrite);
+  assert.equal(c.peekFresh("/settings"), undefined, "the micro-cache honors the same guard");
+
+  c.store("/journey", { v: "post-write" }, c.writeGeneration());
+  assert.deepEqual(c.peekStale("/journey", 1e9)?.data, { v: "post-write" });
+});
+
+test("SWR tier: bounded — the least-recently-stored entry drops first", () => {
+  const { createApiCoalescer } = loadApiCache();
+  const c = createApiCoalescer({ now: () => 0, ttlPaths: [], maxStaleEntries: 2 });
+  for (const p of ["/a", "/b", "/c"]) c.markStaleable(p);
+  c.store("/a", 1);
+  c.store("/b", 2);
+  c.store("/a", 11); // re-stored → most recent
+  c.store("/c", 3);
+  assert.equal(c.staleSize(), 2);
+  assert.equal(c.peekStale("/b", 1e9), undefined, "/b was the least recently stored");
+  assert.equal(c.peekStale("/a", 1e9)?.data, 11);
+  assert.equal(c.peekStale("/c", 1e9)?.data, 3);
+});

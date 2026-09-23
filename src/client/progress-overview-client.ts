@@ -104,22 +104,26 @@ function tovLoadSnapshot(): TovData | null {
   } catch { return null; }
 }
 
-async function tovFetch(): Promise<TovData> {
-  const grab = (path: string) => api(path).catch(() => null);
-  const [stats, balance, trajectory, focus, load, loadBand, adjustments, sessions, journey, journeyMilestones, timeline, strengthLine] = await Promise.all([
-    grab("/stats"),
-    grab("/program/balance"),
-    grab("/muscle-trajectory"),
-    grab("/coaching-focus"),
-    grab("/muscle-load"),
-    grab("/training-load"),
-    grab("/program/adjustments"),
-    grab("/sessions?limit=3"),
-    grab("/journey"),
-    grab("/journey/milestones"),
-    grab("/journey/timeline"),
-    grab(`/today-strength-line?date=${encodeURIComponent(localISO())}`),
-  ]);
+// The overview's reads, in the order tovCompose() folds them.
+function tovPaths(): string[] {
+  return [
+    "/stats",
+    "/program/balance",
+    "/muscle-trajectory",
+    "/coaching-focus",
+    "/muscle-load",
+    "/training-load",
+    "/program/adjustments",
+    "/sessions?limit=3",
+    "/journey",
+    "/journey/milestones",
+    "/journey/timeline",
+    `/today-strength-line?date=${encodeURIComponent(localISO())}`,
+  ];
+}
+
+function tovCompose(values: unknown[]): TovData {
+  const [stats, balance, trajectory, focus, load, loadBand, adjustments, sessions, journey, journeyMilestones, timeline, strengthLine] = values;
   return {
     stats: CairnProgressData.record(stats),
     balance: CairnProgressData.record(balance),
@@ -139,8 +143,40 @@ async function tovFetch(): Promise<TovData> {
   };
 }
 
+// Stale-while-revalidate read of the whole overview. Every read opts into api()'s
+// `swr`: a body another surface fetched moments ago (Today's /coaching-focus and
+// /stats) or this tab fetched on its last visit resolves at once, and only the
+// reads with nothing remembered wait on the network. `refresh` settles with the
+// network-fresh overview once every background refresh lands, or null when
+// nothing was served stale (the first answer already IS the network's).
+async function tovFetch(): Promise<{ data: TovData; refresh: Promise<TovData | null> }> {
+  const refreshes: Array<Promise<unknown> | undefined> = [];
+  const values: unknown[] = await Promise.all(
+    tovPaths().map((path, i) =>
+      api(path, {
+        swr: {
+          onStale: (refresh) => {
+            refreshes[i] = refresh;
+          },
+        },
+      }).catch(() => null)
+    )
+  );
+  const data = tovCompose(values);
+  if (!refreshes.some(Boolean)) return { data, refresh: Promise.resolve(null) };
+  const refresh = Promise.all(
+    values.map((value, i) => {
+      const pending = refreshes[i];
+      return pending ? pending.then((fresh) => (fresh === undefined ? value : fresh)) : value;
+    })
+  ).then(tovCompose);
+  return { data, refresh };
+}
+
 // SWR entry: paint the last-known read instantly, then revalidate. Guarded
-// against painting over a switched-away tab (the renderToday lesson).
+// against painting over a switched-away tab (the renderToday lesson). A repaint
+// happens only when the payload actually changed, so a quiet revalidate never
+// re-runs the entrance stagger.
 async function renderTrainOverview(): Promise<void> {
   headerTitle.textContent = "Train";
   state.progressSeg = "overview";
@@ -148,12 +184,18 @@ async function renderTrainOverview(): Promise<void> {
   if (!tovData) tovData = tovLoadSnapshot();
   if (tovData) paintTrainOverview(tovData);
   else view.innerHTML = segSkeleton("overview", PROGRESS_SEG, 3);
-  const fresh = await tovFetch();
-  if (token !== tovToken || state.tab !== "progress" || state.progressSeg !== "overview") return;
-  const changed = JSON.stringify(fresh) !== JSON.stringify(tovData);
-  tovData = fresh;
-  tovSaveSnapshot(fresh);
-  if (changed || !document.querySelector(".tov-mast, .tov-empty")) paintTrainOverview(fresh);
+  const current = (): boolean => token === tovToken && state.tab === "progress" && state.progressSeg === "overview";
+  const land = (fresh: TovData): void => {
+    const changed = JSON.stringify(fresh) !== JSON.stringify(tovData);
+    tovData = fresh;
+    tovSaveSnapshot(fresh);
+    if (changed || !document.querySelector(".tov-mast, .tov-empty")) paintTrainOverview(fresh);
+  };
+  const { data, refresh } = await tovFetch();
+  if (!current()) return;
+  land(data);
+  const upgraded = await refresh;
+  if (upgraded && current()) land(upgraded);
 }
 
 // ---- data folding -------------------------------------------------------------
@@ -363,20 +405,35 @@ function tovMastHtml(data: TovData, rows: TovRow[]): string {
 // "running hot" (terracotta) only when genuinely above typical. Absent until
 // there's enough history. The numbers stay on the masthead stats; the band is
 // words (VISION Amendment 2). The server envelope is { band }.
+// One aligned row — label · compact meter · one word — so the word sits where the
+// eye lands after the dot instead of wrapping under the track. The word is read off
+// the band the server already drew (dot above / below / inside the athlete's own
+// range, the same p25/p75 test behind its phrase); the full phrase stays as the
+// row's accessible name.
+function tovLoadBandWord(band: Record<string, unknown>): string {
+  const pos = Number(band.position);
+  const lo = Math.min(Number(band.range_start), Number(band.range_end));
+  const hi = Math.max(Number(band.range_start), Number(band.range_end));
+  if (band.hot === true || (Number.isFinite(pos) && Number.isFinite(hi) && pos > hi)) return "heavier";
+  if (Number.isFinite(pos) && Number.isFinite(lo) && pos < lo) return "lighter";
+  return "usual";
+}
+
 function tovLoadBandHtml(data: TovData): string {
   const band = CairnProgressData.record(CairnProgressData.record(data.loadBand).band);
   const phrase = CairnProgressData.string(band.phrase);
   if (!phrase) return "";
+  const label = CairnProgressData.string(band.label) || "Training load";
   const row = CairnUiReads.baselineBandHtml({
-    label: CairnProgressData.string(band.label) || "Training load",
+    label,
     position: band.position,
     rangeStart: band.range_start,
     rangeEnd: band.range_end,
-    phrase,
+    phrase: tovLoadBandWord(band),
     hot: band.hot === true,
   });
   if (!row) return "";
-  return `<div class="tov-loadband reveal" style="margin-top:12px;${stagger(1)}">${row}</div>`;
+  return `<div class="tov-loadband reveal" role="group" aria-label="${escAttr(`${label}: ${phrase}`)}" style="${stagger(1)}">${row}</div>`;
 }
 
 function tovVerdictChip(row: TovRow): string {

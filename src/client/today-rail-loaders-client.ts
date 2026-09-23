@@ -11,6 +11,7 @@ type TodayRailLoadersApi = {
   loadProgramAdjustmentsBanner(deps: ClientTodayRailControllerDeps): Promise<void>;
   loadRecentActivities(deps: ClientTodayRailControllerDeps): Promise<void>;
   loadGarminReconcile(deps: ClientTodayRailControllerDeps): Promise<void>;
+  prefetchRail(keys: readonly string[], deps: ClientTodayRailControllerDeps): void;
 };
 
 (() => {
@@ -18,11 +19,29 @@ type TodayRailLoadersApi = {
     return !deps.state.tab || deps.state.tab === "today";
   }
 
+  // A rail GET: the promise renderToday already started for this path the moment
+  // the agenda named the card (CairnTodayPrefetch, one-shot), else the loader's own.
+  function railGet(deps: ClientTodayRailControllerDeps, path: string): Promise<unknown> {
+    const prefetch = (globalThis as { CairnTodayPrefetch?: TodayPrefetchApi }).CairnTodayPrefetch;
+    return prefetch?.take(path) ?? deps.api(path);
+  }
+
+  // The exact GET path each loader asks for — the one map the render's prefetch
+  // and the loaders below share, so the two can never drift apart.
+  const RAIL_PATHS = {
+    fuel: (date: string) => `/nutrition/day?date=${encodeURIComponent(date)}`,
+    fuelingFollowup: "/nutrition/fueling-followup",
+    weekAhead: "/week-ahead",
+    programAdjustments: "/program/adjustments",
+    recentTraining: "/recent-training?limit=6",
+    garminUnreconciled: "/garmin/unreconciled",
+  } as const;
+
   async function loadFuelToday(date: string, deps: ClientTodayRailControllerDeps): Promise<void> {
     const slot = deps.root.querySelector<HTMLElement>("#fuelSlot");
     if (!slot) return;
     let day: unknown = null;
-    try { day = await deps.api(`/nutrition/day?date=${encodeURIComponent(date || deps.state.logDate)}`); } catch { return; }
+    try { day = await railGet(deps, RAIL_PATHS.fuel(date || deps.state.logDate)); } catch { return; }
     if (!isCurrentToday(deps) || !slot.isConnected) return;
     const count = day && typeof day === "object" ? Number((day as { count?: unknown }).count) : 0;
     if (!(count > 0)) { slot.innerHTML = ""; return; }
@@ -41,7 +60,7 @@ type TodayRailLoadersApi = {
     const slot = deps.root.querySelector<HTMLElement>("#fuelingSlot");
     if (!slot) return;
     let followup: unknown = null;
-    try { followup = await deps.api("/nutrition/fueling-followup"); } catch { return; }
+    try { followup = await railGet(deps, RAIL_PATHS.fuelingFollowup); } catch { return; }
     if (!isCurrentToday(deps) || !slot.isConnected) return;
     const due = followup && typeof followup === "object" && (followup as { due?: unknown }).due === true;
     if (!due) { slot.innerHTML = ""; return; }
@@ -81,7 +100,7 @@ type TodayRailLoadersApi = {
     const slot = deps.root.querySelector<HTMLElement>("#weekAheadSlot");
     if (!slot) return;
     let response: unknown = null;
-    try { response = await deps.api("/week-ahead"); } catch { return; }
+    try { response = await railGet(deps, RAIL_PATHS.weekAhead); } catch { return; }
     if (!isCurrentToday(deps) || !slot.isConnected) return;
     slot.innerHTML = CairnTodayWeekAhead.cardHtml(response);
   }
@@ -90,7 +109,7 @@ type TodayRailLoadersApi = {
     const slot = deps.root.querySelector<HTMLElement>("#adjustSlot");
     if (!slot) return;
     let rows: unknown = null;
-    try { rows = await deps.api("/program/adjustments"); } catch { rows = null; }
+    try { rows = await railGet(deps, RAIL_PATHS.programAdjustments); } catch { rows = null; }
     if (!isCurrentToday(deps) || !slot.isConnected) return;
     const list = Array.isArray(rows) ? rows : [];
     if (!list.length) { slot.innerHTML = ""; return; }
@@ -128,7 +147,7 @@ type TodayRailLoadersApi = {
     const wrap = deps.root.querySelector<HTMLElement>("#qlRecent");
     if (!wrap) return;
     let rows: TodayRailRecentTrainingFeedRow[] = [];
-    try { rows = await deps.api("/recent-training?limit=6") as TodayRailRecentTrainingFeedRow[]; } catch { rows = []; }
+    try { rows = await railGet(deps, RAIL_PATHS.recentTraining) as TodayRailRecentTrainingFeedRow[]; } catch { rows = []; }
     if (!isCurrentToday(deps) || !wrap.isConnected) return;
     if (!rows || !rows.length) { wrap.innerHTML = ""; return; }
     wrap.innerHTML =
@@ -161,7 +180,10 @@ type TodayRailLoadersApi = {
       root: deps.root,
       date: deps.state.logDate,
       isCurrentToday: () => isCurrentToday(deps),
-      api: deps.api,
+      // Only the unreconciled read may come from the prefetch; the reconcile POST
+      // (and anything else) goes straight to the network.
+      api: (path: string, opts?: RequestInit & { headers?: Record<string, string> }) =>
+        !opts && path === RAIL_PATHS.garminUnreconciled ? railGet(deps, path) : deps.api(path, opts),
       escapeHtml: deps.escapeHtml,
       toast: deps.toast,
       invalidate: deps.invalidate,
@@ -169,7 +191,31 @@ type TodayRailLoadersApi = {
     });
   }
 
+  // Start every GET the named rail cards are about to make, so the rail hydrates
+  // from requests already in flight once its slots mount. Only cards that WILL run
+  // are named by the caller (the agenda's own buckets, or the fallback set), so
+  // nothing is fetched that no loader will take.
+  function prefetchRail(keys: readonly string[], deps: ClientTodayRailControllerDeps): void {
+    const prefetch = (globalThis as { CairnTodayPrefetch?: TodayPrefetchApi }).CairnTodayPrefetch;
+    if (!prefetch) return;
+    const start = (path: string) => {
+      prefetch.prefetch(path, () => deps.api(path));
+    };
+    const want = new Set(keys);
+    if (want.has("fuel")) start(RAIL_PATHS.fuel(deps.state.logDate));
+    if (want.has("fueling-followup")) start(RAIL_PATHS.fuelingFollowup);
+    if (want.has("week-ahead")) start(RAIL_PATHS.weekAhead);
+    if (want.has("program-adjustments")) start(RAIL_PATHS.programAdjustments);
+    if (want.has("garmin-reconcile")) start(RAIL_PATHS.garminUnreconciled);
+    if (want.has("lately")) start(RAIL_PATHS.recentTraining);
+    const reads = (globalThis as { CairnCaptureReads?: CaptureReadsRuntime }).CairnCaptureReads;
+    reads?.prefetch?.({ weekly: want.has("weekly-read"), insight: want.has("connection-insight") }, (path) =>
+      deps.api(path)
+    );
+  }
+
   const CAIRN_TODAY_RAIL_LOADERS: TodayRailLoadersApi = {
+    prefetchRail,
     loadFuelToday,
     loadFuelingFollowup,
     loadGarminReconcile,

@@ -175,6 +175,68 @@ type TodayPlanSurfaceRendererApi = {
     return out;
   }
 
+  // A notice's own words, short enough to sit on one line above the cards: the
+  // first sentence, cut on a word boundary when even that runs long. The full
+  // summary stays one tap away in the expansion, never dropped.
+  const BRAIN_LABEL_MAX = 60;
+  function brainShortLabel(summary: string): string {
+    if (summary.length <= BRAIN_LABEL_MAX) return summary;
+    const sentence = summary.split(/(?<=[.!?])\s+/)[0] || summary;
+    if (sentence.length <= BRAIN_LABEL_MAX) return sentence.replace(/[.!?]+$/, "");
+    const cut = sentence.slice(0, BRAIN_LABEL_MAX - 1);
+    const space = cut.lastIndexOf(" ");
+    return `${(space > 24 ? cut.slice(0, space) : cut).replace(/[\s,;:·—–-]+$/, "")}…`;
+  }
+
+  // Which folds the athlete opened, keyed by the decisions they hold, so a soft
+  // re-render (a set logged, a background refresh) does not snap an open fold shut.
+  // `toggle` does not bubble, so it is caught on the capture phase.
+  const openBrainFolds = new Set<string>();
+  if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    document.addEventListener(
+      "toggle",
+      (event) => {
+        const el = event.target as Element | null;
+        const key = el && typeof el.getAttribute === "function" ? el.getAttribute("data-brain-fold") : null;
+        if (!el || !key) return;
+        if ((el as HTMLDetailsElement).open) openBrainFolds.add(key);
+        else openBrainFolds.delete(key);
+      },
+      true,
+    );
+  }
+
+  // The applied-change notices, folded into ONE compact line so the first lift
+  // stays above the fold. One change reads as its short label with its Undo right
+  // there (the full sentence folds under it when the label had to shorten); several
+  // read as "2 changes today · see", and each change keeps its own Undo one tap in.
+  // A native <details>, so the fold needs no wiring and every Undo button is still
+  // in the DOM for the surface's existing [data-decision-undo] wiring.
+  function brainNoticesHtml(
+    lines: Array<{ summary: string; decision_id: unknown; reversible: boolean }>,
+    isToday: boolean,
+    esc: (value: unknown) => string,
+    escAttr: (value: unknown) => string,
+  ): string {
+    if (!lines.length) return "";
+    const undo = (line: { decision_id: unknown; reversible: boolean }): string =>
+      line.reversible && line.decision_id != null
+        ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(String(line.decision_id))}">Undo</button>`
+        : "";
+    const key = lines.map((line) => String(line.decision_id ?? "")).join(",");
+    const foldAttrs = `data-brain-fold="${escAttr(key)}"${openBrainFolds.has(key) ? " open" : ""}`;
+    const toggle = `<span class="session-brain-see linkbtn-quiet"><span class="sb-closed">see</span><span class="sb-open">hide</span></span>`;
+    if (lines.length === 1) {
+      const line = lines[0];
+      const label = brainShortLabel(line.summary);
+      if (label === line.summary) return `<div class="session-brain sess-line">${esc(line.summary)}${undo(line)}</div>`;
+      return `<div class="session-brain session-brain-one sess-line"><details class="session-brain-fold" ${foldAttrs}><summary><span class="session-brain-label">${esc(label)}</span> · ${toggle}</summary><p class="session-brain-more">${esc(line.summary)}</p></details>${undo(line)}</div>`;
+    }
+    const count = `${lines.length} changes${isToday ? " today" : ""}`;
+    const rows = lines.map((line) => `<li>${esc(line.summary)}${undo(line)}</li>`).join("");
+    return `<details class="session-brain session-brain-fold sess-line" ${foldAttrs}><summary><span class="session-brain-label">${esc(count)}</span> · ${toggle}</summary><ul class="session-brain-more">${rows}</ul></details>`;
+  }
+
   function sameJourneyExercise(left: unknown, right: unknown): boolean {
     return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
   }
@@ -270,14 +332,9 @@ type TodayPlanSurfaceRendererApi = {
 
     // Same rule for the brain's own narration. `brain_change_summary` describes the
     // DECISION, not the movement, and the server copies it onto every changed
-    // exercise — so it belongs above the cards, once, with one Undo.
-    for (const line of sessionBrainLines(surfaceItems)) {
-      const undo =
-        line.reversible && line.decision_id != null
-          ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${surfaceDeps.escapeHtml(String(line.decision_id))}">Undo</button>`
-          : "";
-      html += `<div class="session-brain sess-line">${surfaceDeps.escapeHtml(line.summary)}${undo}</div>`;
-    }
+    // exercise — so it belongs above the cards, once, with one Undo — and several
+    // decisions fold into one line rather than stacking over the first lift.
+    html += brainNoticesHtml(sessionBrainLines(surfaceItems), options.isToday, surfaceDeps.escapeHtml, surfaceDeps.escapeAttr);
 
     let cardIdx = 0;
     for (const item of surfaceItems) {

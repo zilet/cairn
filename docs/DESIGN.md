@@ -145,6 +145,15 @@ New/changed components (CSS must implement, the client JS must emit):
   status chip (Done / Today / Up next). `.is-today` / `.is-done` / `.is-hard` are status deltas
   only — never a gate. `.pweek-progress` under the map is the one spoken week-so-far line
   (counts, no scores); optional `.pweek-note` below it for a layout suggestion or a quiet summary.
+  Every cell is a real `<button>` (`aria-pressed`, `data-pweek-day`). At ≥720px it is the
+  labeled grid above, with today's server line in `.pweek-today`. Below 720px the same buttons
+  become a dot strip: weekday over a 30px `.pweek-token` (done = sage fill + ✓ in
+  `--on-accent`; today = `--accent` ring; rest = dashed `--faint` "·"; run → gold outline;
+  lift ◆ / lift+run ✦; `.is-hard` = a small gold dot) with a 2px `.pweek-under` mark on the
+  selected day, then ONE `.pweek-detail` line for that day (small-caps kicker, the cell label in
+  the serif, its status; today's panel prints the server's strength line instead, so
+  `.pweek-today` is hidden there). Tap swaps the detail (`settlein`, `--dur-2`), the selected
+  token scales 1.1; tapping it again returns to today. All of it is still under reduced motion.
 - Plan Endurance briefing: `.end-brief` (coach sentence `.end-brief-lead` plus a km/mi
   toggle `.end-units` on `.end-brief-bar`, the next-run plate `.end-next` — when, name,
   prescription, then `.read-contrib` rows for setup / expect / sits-by — then `.end-then`
@@ -383,6 +392,23 @@ The motion vocabulary on top of the existing `.reveal` stagger:
   `document.startViewTransition` when available (instant fallback otherwise; disabled
   under reduced motion). Shared-element zooms use the `detail-art` view-transition-name
   (tapped tile ↔ overlay art) and `seg-thumb` for the segmented pill.
+- **Tab switch** — `tabSwap(fn)` carries a tab change in ONE fade: the View Transition
+  root crossfade, shortened to `--dur-1` while `<html data-vt="tab">` is set, or the
+  `view-in` keyframe where transitions are unavailable — never both. The skeleton (or a
+  warm tab's synchronous cached paint) lands inside the swap. The tab bar gets the
+  `tabbar` view-transition-name for tab switches only, so it renders live and its active
+  dot scales/fades in (`--dur-1`) instead of ghosting.
+- **Skeleton → content** — when content replaces a top-level skeleton, `viewHydrate()`
+  adds `#view.view-hydrate` (opacity .35 → 1 over `--dur-1`) and switches the swapped
+  cards' `.reveal`/`.settle-in` entrance off inline: one entrance, never a fade AND a rise.
+  Cards arriving later into async slots keep their own entrance.
+- **Programmatic focus is quiet** — a tab switch lands focus on `#view` or its first
+  heading (`tabindex="-1"`). A pointer-driven switch marks it `data-focus-quiet` (no
+  outline, removed on blur); `:focus:not(:focus-visible)` on `#view`/`[tabindex="-1"]`
+  drops the outline too. A keyboard-activated switch keeps the ring.
+- **Leaf sub-bar** — the Progress `.prog-subseg` leaf bar is text tabs (no pill container,
+  smaller caps) whose `.seg-thumb` becomes a 2px ink underline on a hairline rule; it
+  renders only when the active group has more than one leaf.
 - **Toast** slides up + settles (`translate(-50%,14px) scale(.97)` → identity).
 - **Tactile press** — every interactive surface compresses on `:active` using the
   `--press*` scale tokens above, never an ad-hoc literal. Pick by target size:

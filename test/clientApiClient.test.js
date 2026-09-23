@@ -310,6 +310,139 @@ test("api() only micro-caches the four allowlisted paths — a query-param'd or 
   assert.equal(fetchCount, 2, "a query-param'd path always re-fetches (no in-window overlap here)");
 });
 
+test("api() swr: serves a remembered body at once, refreshes in the background, and a write clears it", async () => {
+  const loaded = loadApiClient();
+  let fetchCount = 0;
+  const inits = [];
+  loaded.context.fetch = async (_url, init) => {
+    fetchCount++;
+    inits.push(init);
+    return { status: 200, json: async () => ({ n: fetchCount, method: init?.method || "GET" }) };
+  };
+  const api = loaded.context.api;
+
+  // Nothing remembered yet: an swr read is a plain network read (and is remembered).
+  const cold = await api("/journey", { swr: true });
+  assert.equal(cold.n, 1);
+  assert.equal(fetchCount, 1);
+
+  // Remembered but past the fresh window: served immediately, refreshed behind.
+  let refresh = null;
+  const stale = await api("/journey", { swr: { freshMs: 0, onStale: (p) => (refresh = p) } });
+  assert.equal(stale.n, 1, "the remembered body resolves without waiting on the network");
+  assert.ok(refresh, "the background refresh is handed to onStale");
+  assert.equal(fetchCount, 2, "the refresh actually went to the network");
+  const upgraded = await refresh;
+  assert.equal(upgraded.n, 2, "the refresh resolves to the network-fresh body");
+
+  // Remembered seconds ago (default 10 s fresh window): served with no refetch at all.
+  let calledAgain = false;
+  const recent = await api("/journey", { swr: { onStale: () => (calledAgain = true) } });
+  assert.equal(recent.n, 2);
+  assert.equal(fetchCount, 2, "no round trip inside the fresh window");
+  assert.equal(calledAgain, false, "nothing was refreshed, so onStale is not called");
+
+  // The swr option never leaks into the fetch init.
+  assert.equal(inits.length, 2);
+  assert.ok(inits.every((init) => !("swr" in init)));
+
+  // Any write clears the remembered bodies: the next swr read waits on the network.
+  await api("/sets", { method: "POST", body: "{}" });
+  let afterWriteRefresh = null;
+  const afterWrite = await api("/journey", { swr: { freshMs: 0, onStale: (p) => (afterWriteRefresh = p) } });
+  assert.equal(afterWrite.n, 4, "never a pre-write body after a write");
+  assert.equal(afterWriteRefresh, null);
+});
+
+test("api() swr: a plain read of an opted-in path keeps it warm; a failed refresh resolves undefined", async () => {
+  const loaded = loadApiClient();
+  let fetchCount = 0;
+  let fail = false;
+  loaded.context.fetch = async () => {
+    fetchCount++;
+    if (fail) throw new TypeError("network down");
+    return { status: 200, json: async () => ({ n: fetchCount }) };
+  };
+  const api = loaded.context.api;
+
+  await api("/journey/timeline", { swr: true }); // opt the path in
+  await api("/journey/timeline"); // a plain read refreshes what is remembered
+  assert.equal(fetchCount, 2);
+  let refresh = null;
+  fail = true;
+  const served = await api("/journey/timeline", { swr: { freshMs: 0, onStale: (p) => (refresh = p) } });
+  assert.equal(served.n, 2, "the plain read's body was the remembered one");
+  assert.equal(await refresh, undefined, "a failed refresh settles undefined; the served body stands");
+});
+
+test("api(): a write invalidates again when it SETTLES, so a GET answered mid-write-window is never kept as post-write truth", async () => {
+  const loaded = loadApiClient();
+  let fetchCount = 0;
+  let resolveWrite;
+  const writeGate = new Promise((resolve) => {
+    resolveWrite = resolve;
+  });
+  loaded.context.fetch = async (_url, init) => {
+    fetchCount++;
+    if (init?.method === "POST") {
+      await writeGate;
+      return { status: 200, json: async () => ({ ok: true }) };
+    }
+    return { status: 200, json: async () => ({ n: fetchCount }) };
+  };
+  const api = loaded.context.api;
+
+  const writePromise = api("/sets", { method: "POST", body: "{}" }); // invalidates at START
+
+  // A GET answered WHILE the write is still outstanding is still micro-cached in
+  // the moment — nothing has proven it stale yet.
+  const midWrite = await api("/settings");
+  assert.equal(midWrite.n, 2, "settings GET answered while the write is still in flight");
+
+  // The write now SETTLES. That must invalidate again, so the mid-write read does
+  // not survive as if it were the truth the write produced.
+  resolveWrite();
+  await writePromise;
+
+  const again = await api("/settings");
+  assert.equal(fetchCount, 3, "the mid-write GET was cleared when the write settled, so /settings re-fetched");
+  assert.equal(again.n, 3);
+});
+
+test("api() swr: a background refresh answered after a write settles resolves undefined instead of repainting pre-write data", async () => {
+  const loaded = loadApiClient();
+  let fetchCount = 0;
+  let resolveRefreshFetch;
+  loaded.context.fetch = async (_url, init) => {
+    fetchCount++;
+    if (init?.method === "POST") {
+      return { status: 200, json: async () => ({ ok: true }) };
+    }
+    if (fetchCount === 1) return { status: 200, json: async () => ({ n: fetchCount }) };
+    return new Promise((resolve) => {
+      resolveRefreshFetch = () => resolve({ status: 200, json: async () => ({ n: fetchCount }) });
+    });
+  };
+  const api = loaded.context.api;
+
+  await api("/journey", { swr: true }); // primes the remembered body (n=1)
+
+  let refresh = null;
+  const stale = await api("/journey", { swr: { freshMs: 0, onStale: (p) => (refresh = p) } });
+  assert.equal(stale.n, 1, "served the remembered body instantly");
+  assert.ok(refresh, "a background refresh started");
+
+  // A write lands and SETTLES while the refresh's own fetch is still pending.
+  await api("/sets", { method: "POST", body: "{}" });
+
+  // The refresh's fetch finally lands: it began before the write but is only
+  // answered after the write settled, so it must never repaint the view with
+  // what is now pre-write data.
+  resolveRefreshFetch();
+  const resolved = await refresh;
+  assert.equal(resolved, undefined, "a refresh answered after the write settled resolves undefined, never a stale body");
+});
+
 test("api() bypasses dedupe and the micro-cache for a caller-supplied signal or cache option", async () => {
   const loaded = loadApiClient();
   let fetchCount = 0;

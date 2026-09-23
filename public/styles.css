@@ -91,6 +91,13 @@ button,input,select,textarea,a{touch-action:manipulation}
 ::placeholder{color:#b3aa97;opacity:1}
 ::selection{background:var(--accent);color:var(--on-accent)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+/* Programmatic focus never paints the keyboard ring. A tab switch moves focus onto
+   #view or the new view's first heading (tabindex="-1" reading positions, not
+   controls); where an engine still matches :focus-visible after a TAP, the switch
+   marks the target data-focus-quiet (removed on blur). A keyboard-driven switch
+   leaves no mark, so the ring still shows for keyboard users. */
+#view:focus:not(:focus-visible),[tabindex="-1"]:focus:not(:focus-visible){outline:none}
+[data-focus-quiet]:focus{outline:none}
 
 /* iOS Safari auto-zooms the page when a focused control's font-size is under
    16px (chat input, quick-log, plan editor…). On touch devices pin every form
@@ -185,6 +192,16 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 
 /* view transitions: same easing family, no slow crossfades */
 ::view-transition-old(root),::view-transition-new(root){animation-duration:var(--dur-2)}
+/* a tab switch is one quick, quiet crossfade (tabSwap marks <html data-vt="tab">
+   for the transition's lifetime). The tab bar steps out of the root crossfade and
+   renders live, so its own dot/label transition carries the active-tab change
+   instead of a ghosted double of the old bar. Scoped to tab switches only: a named
+   element paints above overlays while any transition runs. */
+:root[data-vt="tab"]::view-transition-old(root),:root[data-vt="tab"]::view-transition-new(root){
+  animation-duration:var(--dur-1);animation-timing-function:var(--ease)}
+:root[data-vt="tab"] .tabbar{view-transition-name:tabbar}
+::view-transition-old(tabbar){display:none}
+::view-transition-new(tabbar){animation:none}
 ::view-transition-group(detail-art){animation-duration:var(--dur-3);animation-timing-function:var(--ease)}
 ::view-transition-group(seg-thumb),::view-transition-group(prog-subseg-thumb){animation-duration:var(--dur-2);animation-timing-function:var(--ease)}
 /* the Brief hero morphs (not crossfades) when an override chip reshapes the read */
@@ -688,6 +705,20 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
    register .session-eased sits in; .ex-flag keeps the red for a real per-lift flag. */
 .session-brain{margin:0 0 12px;color:var(--ink-2);border-left:3px solid var(--line-2);
   border-radius:8px;background:var(--card-2);padding:8px 11px}
+/* Several applied changes fold into ONE line ("2 changes today · see") and one long
+   change into its short label, so the first lift stays above the fold. The expansion
+   settles in with the house motion; every Undo stays one tap in. */
+.session-brain-one{display:flex;align-items:flex-start;gap:6px}
+.session-brain-one>.session-brain-fold{flex:1;min-width:0}
+.session-brain-fold>summary{list-style:none;cursor:pointer}
+.session-brain-fold>summary::-webkit-details-marker{display:none}
+.session-brain-fold>summary:hover .session-brain-see{color:var(--ink-2)}
+.session-brain-fold .sb-open,.session-brain-fold[open] .sb-closed{display:none}
+.session-brain-fold[open] .sb-open{display:inline}
+.session-brain-more{margin:6px 0 0;padding:0;list-style:none;color:var(--ink-2);line-height:1.45}
+.session-brain-more li+li{margin-top:5px}
+.session-brain-fold[open] .session-brain-more{animation:settlein var(--dur-2) var(--ease) both}
+@media (prefers-reduced-motion:reduce){.session-brain-fold[open] .session-brain-more{animation:none}}
 
 /* set progress + completion */
 .ex-meta{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-top:5px}
@@ -981,6 +1012,19 @@ body.resting{padding-bottom:calc(152px + max(env(safe-area-inset-bottom),6px) + 
 .prog-subwrap{margin-top:-6px;z-index:29}
 .segwrap:has(+ .prog-subwrap){position:static}
 .segwrap:has(+ .prog-subwrap) + .prog-subwrap{top:env(safe-area-inset-top,0px)}
+/* The leaf bar reads as a SUB-level of the group bar: quiet text tabs on the page
+   (no second pill container), smaller caps, and the same sliding thumb re-shaped
+   into a 2px ink underline riding a hairline rule. Scroll mode (fitSeg) hides the
+   thumb, so the active leaf carries its own inset underline there instead. */
+.prog-subseg{background:transparent;border:none;border-radius:0;padding:0;gap:2px;
+  box-shadow:inset 0 -1px 0 var(--line)}
+.prog-subseg .segbtn{font-size:.6rem;letter-spacing:.1em;padding:8px 4px 9px;border-radius:0}
+.prog-subseg .segbtn.active,.seg.seg-scroll.prog-subseg .segbtn.active{background:transparent;color:var(--ink)}
+.seg.seg-scroll.prog-subseg .segbtn.active{box-shadow:inset 0 -2px 0 var(--ink)}
+.prog-subseg .seg-thumb{top:auto;bottom:0;left:0;height:2px;border-radius:2px;
+  width:calc((100% - (var(--segn,2) - 1)*2px)/var(--segn,2));
+  transform:translateX(calc(var(--segi,0)*(100% + 2px)))}
+.prog-subseg .segbtn:focus-visible{border-radius:4px;outline-offset:-2px}
 
 /* -------------------------------------------------------------------
    11 · Program gallery (Plan tab)
@@ -2305,14 +2349,17 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
   flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:3px;background:transparent;border:none;color:var(--muted);
   font-family:var(--font-ui);font-weight:600;letter-spacing:.04em;
-  padding:8px 2px 4px;line-height:1;transition:color .15s;
+  padding:8px 2px 4px;line-height:1;transition:color var(--dur-1) var(--ease);
 }
 .tab-ico{width:22px;height:22px;display:block;flex:0 0 auto;stroke-width:1.8}
 .tab-lbl{font-size:.58rem;text-transform:uppercase;letter-spacing:.1em}
 .tab::after{content:"";width:4px;height:4px;border-radius:50%;background:transparent;
-  margin-top:2px;transition:background .15s}
+  margin-top:2px;transform:scale(0);
+  transition:background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
 .tab.active{color:var(--accent)}
-.tab.active::after{background:var(--accent)}
+/* the active dot grows in on the new tab as the old one shrinks away (a fade +
+   scale, never a jump); reduced motion snaps it via the global transition kill */
+.tab.active::after{background:var(--accent);transform:scale(1)}
 /* non-color active affordance: the dot appears AND the label bolds, so the live
    tab reads without relying on the terracotta tint alone (colour-blind safe). */
 .tab.active .tab-lbl{font-weight:700}
@@ -2326,6 +2373,7 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
   .daybtn.active:hover{color:var(--paper)}
   .segbtn:hover{color:var(--ink)}
   .segbtn.active:hover{color:var(--paper)}
+  .prog-subseg .segbtn.active:hover{color:var(--ink)}
   .rest-btn:hover{border-color:var(--ink);color:var(--ink)}
   .savebar-discard:hover{color:var(--on-accent)}
   .savebar-save:not(:disabled):hover{background:var(--accent-deep)}
@@ -2761,6 +2809,12 @@ body[data-tab="today"] header.condensed #header-title{font-size:1.5rem}
    ------------------------------------------------------------------- */
 @keyframes viewin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 #view.view-in{animation:viewin var(--dur-2) var(--ease)}
+/* Skeleton → content: the content lands at partial opacity and settles in one short
+   fade, so it reads as a crossfade out of the skeleton rather than a blank-then-rise.
+   viewHydrate() switches the swapped cards' .reveal stagger off inline — one entrance,
+   never a fade AND a rise. Reduced motion: never added (JS guard + global kill). */
+@keyframes viewhydrate{from{opacity:.35}to{opacity:1}}
+#view.view-hydrate{animation:viewhydrate var(--dur-1) var(--ease)}
 
 /* artwork tiles always reserve a square so photo arrival never shifts layout */
 .artile{aspect-ratio:1}
@@ -3022,6 +3076,8 @@ body.sheet-open{overflow:hidden}
   font-variation-settings:"opsz" 50;font-size:1.05rem;color:var(--accent);margin-top:5px;
 }
 .brief-why{font-size:.92rem;color:var(--ink-2);line-height:1.5;margin:11px 0 0;max-width:46ch}
+/* the rest/easy read's specific reason — a quieter second line under the why */
+.brief-reason{font-size:.82rem;color:var(--muted);line-height:1.45;margin:6px 0 0;max-width:46ch}
 .brief-strength{margin-top:13px;padding-top:11px;border-top:1px solid var(--line);max-width:46ch}
 
 /* the week-wins reassurance on a rest/easy Brief — same sentence + rules as the
@@ -3066,9 +3122,10 @@ body.sheet-open{overflow:hidden}
 }
 .brief-clock-row:hover{color:var(--ink-2)}
 .brief-clock-mark{color:var(--sage);font-size:.75rem}
-.brief-updated{
-  margin-top:9px;color:var(--muted-2);font-size:.67rem;line-height:1.4;
-}
+/* provenance (sync / read clock) lives inside the "tap to see why" disclosure,
+   in the tracked muted label (.lbl); hidden until that disclosure opens */
+.brief-updated{margin-top:10px;line-height:1.6}
+.brief-updated[hidden]{display:none}
 /* when evidence freshness and the read's own stamp disagree, they are two facts and
    get two lines — "As of 7:35 AM sync" over "Read at 7:39 AM" */
 .brief-stamp-line{display:block}
@@ -3142,6 +3199,12 @@ body.sheet-open{overflow:hidden}
 
 /* launchpad redirects — the heart of "you drive": always present, quiet */
 .brief-launch{display:flex;flex-wrap:wrap;gap:9px;margin-top:17px}
+/* the launch card's facts, folded above the Brief's one start button when the
+   Brief carries it ("1 of 5 logged · ~60 min") — quiet, never a second card */
+.brief-session{margin-top:15px;font-family:var(--font-ui);font-size:.78rem;line-height:1.45;color:var(--muted);max-width:46ch}
+.brief-session + .brief-launch{margin-top:9px}
+.brief-session-meta{color:var(--ink-2);font-weight:600;letter-spacing:.01em}
+.brief-session-line{margin-top:2px}
 .brief-redirect{
   background:transparent;border:1px solid var(--line-2);color:var(--ink-2);
   border-radius:999px;padding:9px 16px;font-family:var(--font-ui);font-weight:600;
@@ -3500,14 +3563,12 @@ body.swr-busy::after{
 .weekly-change{margin:14px 0 0;padding:11px 14px;background:var(--card-2);position:relative}
 .weekly-change-lbl{display:block;color:var(--accent);margin-bottom:3px}
 .weekly-change-text{margin:0;font-size:.92rem;line-height:1.45;color:var(--ink)}
-/* moved-on staleness (pull-only) — a calm "the week has shifted" note that replaces
-   the one change, plus a quiet re-read tap. Softens rather than nags. */
-.weekly-stale-chip{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;
-  color:var(--accent-deep);border:1px solid var(--accent);border-radius:999px;padding:1px 8px;align-self:center}
-.weekly-stale{margin:14px 0 0;padding:11px 14px;background:var(--card-2);position:relative}
-.weekly-stale-lbl{display:block;color:var(--accent);margin-bottom:3px}
-.weekly-stale-text{margin:0 0 6px;font-size:.9rem;line-height:1.45;color:var(--ink-2)}
-.weekly-reread{color:var(--accent-deep)}
+/* moved-on staleness (pull-only) — ONE quiet muted line under the masthead: when
+   the read was written, that things have moved since, and a quiet re-read link.
+   No pill, no box, no alarm color — softens rather than nags. */
+.weekly-stale{margin:-4px 0 10px;font-family:var(--font-ui);font-size:.74rem;line-height:1.45;
+  color:var(--muted);position:relative}
+.weekly-stale-sep{color:var(--line-2)}
 .weekly-why{font-size:.85rem;color:var(--ink-2);line-height:1.5;margin:12px 0 0;max-width:72ch;position:relative}
 .weekly-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:15px;position:relative}
 .weekly-wins{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
@@ -5872,29 +5933,72 @@ button.prow-name:hover{color:var(--accent)}
 .pweek{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
   padding:14px 15px;margin:2px 0 14px;border-left:3px solid var(--sage)}
 .pweek-h{margin-bottom:10px}
-.pweek-map{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
-.pweek-map-template{grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}
-.pweek-day{display:flex;flex-direction:column;gap:3px;padding:8px 6px;border-radius:var(--radius-sm);
-  background:var(--card-2);border-top:2px solid transparent;min-height:64px}
-.pweek-day.is-hard{border-top-color:var(--gold)}
-.pweek-day.is-today{box-shadow:inset 0 0 0 1px var(--sage)}
-.pweek-day.is-done{opacity:.82}
+/* Each day is one real <button>: the labeled grid cell on wide screens, a weekday
+   over a round token on narrow ones (the words move to the one .pweek-detail line). */
+.pweek-day{font:inherit;color:inherit;text-align:left;border:0;cursor:pointer;
+  -webkit-tap-highlight-color:transparent}
 .pweek-day-k{font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.pweek-glyph{font-size:.7rem;line-height:1;color:var(--muted)}
-.pweek-lift .pweek-glyph{color:var(--accent)}
-.pweek-run .pweek-glyph{color:var(--sage)}
-.pweek-mixed .pweek-glyph{color:var(--gold)}
-.pweek-rest .pweek-glyph{color:var(--line-2)}
-.pweek-day-v{font-size:.72rem;line-height:1.3;color:var(--ink-2);overflow-wrap:anywhere}
-.pweek-status{font-size:.58rem;letter-spacing:.06em;color:var(--muted);margin-top:2px}
+@media (min-width:720px){
+  .pweek-map{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+  .pweek-map-template{grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}
+  .pweek-day{display:flex;flex-direction:column;gap:3px;padding:8px 6px;border-radius:var(--radius-sm);
+    background:var(--card-2);border-top:2px solid transparent;min-height:64px}
+  .pweek-day.is-hard{border-top-color:var(--gold)}
+  .pweek-day.is-today{box-shadow:inset 0 0 0 1px var(--sage)}
+  .pweek-day.is-done{opacity:.82}
+  .pweek-glyph{font-size:.7rem;line-height:1;color:var(--muted)}
+  .pweek-lift .pweek-glyph{color:var(--accent)}
+  .pweek-run .pweek-glyph{color:var(--sage)}
+  .pweek-mixed .pweek-glyph{color:var(--gold)}
+  .pweek-rest .pweek-glyph{color:var(--line-2)}
+  .pweek-day-v{font-size:.72rem;line-height:1.3;color:var(--ink-2);overflow-wrap:anywhere}
+  .pweek-status{font-size:.58rem;letter-spacing:.06em;color:var(--muted);margin-top:2px}
+  .pweek-token,.pweek-under,.pweek-details{display:none}
+  .pweek-today{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+}
+/* Narrow: seven 44px+ day buttons in one row — weekday, a 30px token, a 2px mark
+   under the selected day — then ONE detail line for the selected day. */
+@media (max-width:719.98px){
+  .pweek-map{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+  .pweek-map-template{grid-template-columns:repeat(auto-fit,minmax(44px,1fr))}
+  .pweek-day{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:44px;min-height:64px;
+    padding:4px 0;background:none;border-radius:var(--radius-sm)}
+  .pweek-day-k{font-size:.62rem;letter-spacing:.08em}
+  .pweek-day.is-today .pweek-day-k{color:var(--accent)}
+  .pweek-glyph,.pweek-day-v,.pweek-status,.pweek-today{display:none}
+  .pweek-token{position:relative;width:30px;height:30px;border-radius:50%;box-sizing:border-box;
+    display:flex;align-items:center;justify-content:center;font-size:.72rem;line-height:1;
+    border:1.5px solid var(--muted);color:var(--ink-2);background:var(--card);
+    transition:transform var(--dur-2) var(--ease)}
+  .pweek-run .pweek-token{border-color:var(--gold)}
+  .pweek-rest .pweek-token,.pweek-empty .pweek-token{border:1px dashed var(--faint);color:var(--faint)}
+  .pweek-day.is-done .pweek-token{background:var(--sage);border-color:var(--sage);color:var(--on-accent)}
+  .pweek-day.is-today .pweek-token{border:2px solid var(--accent);color:var(--accent)}
+  .pweek-day.is-hard .pweek-token::after{content:"";position:absolute;top:-2px;right:-2px;width:6px;height:6px;
+    border-radius:50%;background:var(--gold);box-shadow:0 0 0 1.5px var(--card)}
+  .pweek-day.is-selected .pweek-token{transform:scale(1.1)}
+  .pweek-under{width:16px;height:2px;border-radius:1px;background:transparent;
+    transition:background var(--dur-2) var(--ease)}
+  .pweek-day.is-selected .pweek-under{background:var(--ink)}
+  .pweek-details{margin-top:10px;padding-top:12px;border-top:1px solid var(--line)}
+  .pweek-detail{display:flex;flex-direction:column;gap:3px;min-width:0}
+  .pweek-detail[hidden]{display:none}
+  .pweek-detail:not([hidden]){animation:settlein var(--dur-2) var(--ease) both}
+  .pweek-detail-name{font-family:var(--font-display);font-size:1.12rem;font-weight:600;line-height:1.3;color:var(--ink)}
+  .pweek-detail-status{font-size:.82rem;line-height:1.4;color:var(--ink-2)}
+  .pweek-detail .strength-line-t{font-family:var(--font-display);font-size:1.05rem}
+}
+@media (max-width:719.98px) and (prefers-reduced-motion:reduce){
+  .pweek-token,.pweek-under{transition:none}
+  .pweek-day.is-selected .pweek-token{transform:none}
+  .pweek-detail:not([hidden]){animation:none}
+}
 .end-run-row.is-quiet{opacity:.55}
-.pweek-today{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 .pweek-progress{margin-top:10px;font-size:.88rem;line-height:1.5;color:var(--ink)}
 .pweek-note{margin-top:6px;font-size:.84rem;line-height:1.5;color:var(--ink-2)}
 .prog-purpose{margin-top:4px;font-size:.82rem;line-height:1.4;color:var(--ink-2);font-style:italic}
 .prog-purpose-shared{margin:2px 4px 12px}
 .prog-order{font-size:.78rem;align-self:center}
-@media (max-width:560px){.pweek-map{grid-template-columns:repeat(4,1fr)}}
 .rbuild-more{margin-top:12px}
 .rbuild-more>summary{cursor:pointer;font-size:.84rem;color:var(--accent-deep);list-style:none}
 .rbuild-more>summary::-webkit-details-marker{display:none}
@@ -6420,6 +6524,17 @@ body[data-tab="session"] .tabbar{display:none}
   font-size:1.45rem;line-height:1.25;font-weight:600;color:var(--ink);
   margin:6px 0 12px;letter-spacing:-.01em;
 }
+/* Training-load band: ONE aligned row under the masthead — label · compact meter ·
+   one plain word (usual / lighter / heavier), never a number. Composes §04d
+   .read-band; the word takes terracotta only when the band is .hot. */
+.tov-loadband{margin:0 4px 14px}
+.tov-loadband .read-band{flex-direction:row;align-items:center;gap:12px}
+.tov-loadband .read-band-label{flex:0 0 auto}
+.tov-loadband .read-band-track{flex:1 1 auto;min-width:48px;height:6px}
+.tov-loadband .read-band-dot{width:10px;height:10px;border-width:2px}
+.tov-loadband .read-band-phrase{flex:0 0 auto;min-width:4.2em;text-align:right;
+  font-size:.8rem;font-weight:600;line-height:1;color:var(--ink-2)}
+.tov-loadband .read-band.hot .read-band-phrase{color:var(--accent-deep)}
 /* The muscle map: front + back silhouettes, tones = plain-word bands. */
 .tov-map{padding:16px 18px 14px}
 .tov-figs{display:flex;justify-content:center;gap:26px;margin:10px 0 4px}

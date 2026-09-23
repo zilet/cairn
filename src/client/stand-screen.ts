@@ -187,10 +187,12 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     </div>`;
   }
   function readHtml(): string {
-    // Stand is the whole-person surface. The live conductor (training, running,
-    // recovery, nutrition and health together) leads; the cached health story is
-    // supporting depth below it. An older but still-valid health synthesis must
-    // never hide today's actual cross-domain priority.
+    // Stand is the HEALTH tab, so the health read leads: "Your read" (labs,
+    // recovery, the connected picture) comes first and the live conductor card
+    // follows it as the cross-domain "where to focus" — still on the first screen,
+    // so today's priority is never hidden, it just no longer opens a health surface
+    // with a training headline. With no health read yet there is nothing to lead
+    // with, so the conductor keeps the top slot above the quiet invite.
     const wholePersonLead = focusHeroHtml();
     const syn = DATA?.synthesis;
     const headline = syn && typeof syn.headline === "string" ? syn.headline.trim() : "";
@@ -224,14 +226,14 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
           `<div class="stand-conn"><span class="stand-conn-i" aria-hidden="true">◇</span><span>${escHtml(String(c.text))}</span></div>`
       )
       .join("");
-    return `${wholePersonLead}<div class="stand-read reveal" id="standRead">
+    return `<div class="stand-read reveal" id="standRead">
       <span class="stand-read-top"><span class="stand-read-k lbl">Your read${age}</span>${readRefreshHtml()}</span>
       ${headline ? `<p class="stand-read-lede">${escHtml(headline)}</p>` : ""}
       ${zones ? `<div class="stand-zones">${zones}</div>` : ""}
       ${oc}
       ${conns ? `<div class="stand-conns"><div class="stand-conns-h lbl">Quiet connections</div>${conns}</div>` : ""}
       ${fullStoryHtml()}
-    </div>`;
+    </div>${wholePersonLead}`;
   }
   // Progressive disclosure of the depth the calm read holds back: the narrative
   // "story" paragraph, any priorities beyond the visible three, and a whole-picture

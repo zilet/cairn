@@ -1290,9 +1290,21 @@ declare global {
   declare function localISO(date?: Date): string;
   declare function dateLabel(iso: string): string;
   declare function pickDayVariant<T>(variants: readonly T[], date?: string, key?: string): T;
+  // `swr` opts an idempotent GET into stale-while-revalidate (api-client.ts): a
+  // remembered body (≤ maxStaleMs, no write since) resolves immediately and the
+  // background refresh is handed to `onStale`.
+  type ClientApiSwrOptions = {
+    maxStaleMs?: number;
+    freshMs?: number;
+    onStale?: (refresh: Promise<unknown>) => void;
+  };
   declare function api<Path extends string>(
     p: Path,
-    opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
+    opts?: RequestInit & {
+      headers?: Record<string, string>;
+      acceptErrorBody?: boolean;
+      swr?: boolean | ClientApiSwrOptions;
+    }
   ): Promise<ClientApiResponse<Path>>;
   declare function setOffline(on: unknown): void;
 
@@ -1814,6 +1826,8 @@ declare global {
   declare function segSkeleton(active: string, seg: readonly ClientSegment[], cards?: number): string;
   declare function skelLines(count?: number): string;
   declare function viewEnter(): void;
+  declare function viewHydrate(): void;
+  declare function tabSwap(fn: () => unknown): Promise<unknown>;
   declare function tabErrorState(tab: string): void;
   declare function chatTeardownMonitor(): void;
   declare function teardownJobs(pred?: unknown): void;
@@ -2311,6 +2325,10 @@ declare global {
         exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
         deps: ExerciseDetailControllerDeps
       ): Promise<void>;
+      initialExerciseExplanation(
+        exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
+        deps: ExerciseDetailControllerDeps
+      ): { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null;
       replaceExerciseExplanation(
         el: ParentNode,
         exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
@@ -2513,8 +2531,10 @@ declare global {
     CairnUiViewTransitions: {
       create(deps: { view: HTMLElement; reducedMotion(): boolean }): {
         viewEnter(): void;
-        withViewTransition(fn: () => unknown): Promise<unknown>;
+        withViewTransition(fn: () => unknown, options?: { kind?: string }): Promise<unknown>;
         skelSwap(fn: () => unknown): Promise<unknown>;
+        tabSwap(fn: () => unknown): Promise<unknown>;
+        viewHydrate(): void;
       };
       isViewTransitionAbort(error: unknown): boolean;
     };
@@ -4445,8 +4465,17 @@ declare global {
           offlineDismissed?: boolean;
           tradeRefused?: boolean;
           planDayName?: unknown;
+          session?: {
+            date: string;
+            started: boolean;
+            progress: string;
+            minutes: number | null;
+            lines: string[];
+            preview?: unknown;
+          } | null;
         }
       ): string;
+      distinctLine(candidate: unknown, ...shown: unknown[]): string;
       updatedHtml(read: Partial<ClientDayRead> | null | undefined, kind: string, isToday?: boolean): string;
       updatedInnerHtml(read: Partial<ClientDayRead> | null | undefined, kind: string, isToday?: boolean): string;
       checkinSlotHtml(kind: string, isToday: boolean): string;
@@ -4678,6 +4707,7 @@ declare global {
       annotationsByDayNumber(week: unknown): Map<number, { weekday: string | null; status: import("./client-api.js").ClientPlanWeekStatus; label?: string | null }>;
       days(week: unknown): import("./client-api.js").ClientPlanWeekDay[];
       statusLine(day: import("./client-api.js").ClientPlanWeekDay): string;
+      pickDay(root: Element, index: number): void;
     };
 
     CairnTodayContext: {

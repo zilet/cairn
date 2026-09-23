@@ -14,6 +14,10 @@ function escHtml(value) {
     .replaceAll(">", "&gt;");
 }
 
+function escAttr(value) {
+  return escHtml(value).replaceAll('"', "&quot;");
+}
+
 function loadRenderer() {
   const context = { Array, Date, Map, Number, Object, String, window: null, globalThis: null };
   context.window = context;
@@ -66,7 +70,7 @@ function render(items, { logDate = "2026-07-29", extra = {} } = {}) {
         addExerciseFormHtml: () => "",
         finishHtml: () => "",
       },
-      planSurfaceDeps: () => ({ escapeHtml: escHtml }),
+      planSurfaceDeps: () => ({ escapeHtml: escHtml, escapeAttr: escAttr }),
       isCardioItem: (item) => item.kind === "cardio",
       cardioLabel: () => "",
       cardioPlanCard: () => "",
@@ -144,8 +148,10 @@ test("every decision narration reaches the surface, deduped but never capped", (
     { exercise: "Curl", brain_decision_id: 3, brain_change_summary: "Trimmed a set from the curl." },
   ]);
 
-  const lines = [...html.matchAll(/<div class="session-brain sess-line">([^<]*)/g)].map((m) => m[1]);
+  // Folded into one line now, but every decision is still in it.
+  const lines = [...html.matchAll(/<li>([^<]*)/g)].map((m) => m[1]);
   assert.deepEqual(lines, ["Held the squat load.", "Rotated the row.", "Trimmed a set from the curl."]);
+  assert.match(html, /<span class="session-brain-label">3 changes today<\/span>/);
 });
 
 test("Undo for a reversible decision lives once on the session line", () => {
@@ -167,6 +173,85 @@ test("Undo for a reversible decision lives once on the session line", () => {
   ]);
   assert.equal([...html.matchAll(/data-decision-undo="42"/g)].length, 1);
   assert.match(html, /Updated 3 lifts from what you logged\./);
+});
+
+// ---- applied-change notices fold into one compact line ----
+
+test("several applied changes fold into one line, each Undo one tap in", () => {
+  const { html } = render([
+    {
+      exercise: "Back Squat",
+      brain_decision_id: 7,
+      brain_change_summary:
+        "Rebuilt your weekly training template around your request to keep the ankle work every lifting day. Two days moved.",
+      brain_change_reversible: true,
+    },
+    {
+      exercise: "Leg Press",
+      brain_decision_id: 8,
+      brain_change_summary: "Auto-progression for day 3 — 3 lifts",
+      brain_change_reversible: true,
+    },
+  ]);
+  assert.equal((html.match(/class="session-brain /g) || []).length, 1, "one notice line, not a stack");
+  assert.match(html, /<details class="session-brain session-brain-fold sess-line" data-brain-fold="7,8"><summary>/);
+  assert.match(html, /<span class="session-brain-label">2 changes today<\/span>/);
+  assert.match(html, /<span class="sb-closed">see<\/span>/);
+  // Every change keeps its full words and its own Undo inside the fold.
+  assert.match(html, /<li>Rebuilt your weekly training template[^<]*Two days moved\. <button[^>]*data-decision-undo="7"/);
+  assert.match(html, /<li>Auto-progression for day 3 — 3 lifts <button[^>]*data-decision-undo="8"/);
+  assert.equal([...html.matchAll(/data-decision-undo=/g)].length, 2);
+});
+
+test("an open change fold stays open across a soft re-render", () => {
+  const listeners = {};
+  const context = { Array, Date, Map, Number, Object, Set, String, window: null, globalThis: null };
+  context.document = { addEventListener: (type, fn) => (listeners[type] = fn) };
+  context.window = context;
+  context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-surface-renderer.js"), "utf8"), context);
+  const items = [
+    { exercise: "Back Squat", brain_decision_id: 7, brain_change_summary: "Held the squat load.", brain_change_reversible: true },
+    { exercise: "Leg Press", brain_decision_id: 8, brain_change_summary: "Rotated the press.", brain_change_reversible: true },
+  ];
+  const paint = () => {
+    const html = [];
+    const options = {
+      showDone: false, showPlan: true, focus: true, session: null,
+      day: { day_number: 1, name: "Full body", items }, isToday: true, plan: [], activeDay: 1,
+      logDate: "2026-07-29", strengthItems: items, activeItems: items, skippedItems: [],
+      loggedByEx: {}, offPlanEx: [], pendingOffPlan: [], lastSets: {}, rxByEx: {}, strengthJourney: null,
+      exDone: 0, exTotal: 2, hasSyncedCardioToday: false, hasLoggedSets: false, hasGarmin: false,
+      isRunDay: false, prefillFor: () => ({}), rxFor: () => null,
+    };
+    html.push(context.CairnTodayPlanSurfaceRenderer.buildHtml(options, {
+      planSurface: { daySwitchHtml: () => "", rxBannerHtml: () => "", sessionHeadHtml: () => "", addExerciseFormHtml: () => "", finishHtml: () => "" },
+      planSurfaceDeps: () => ({ escapeHtml: escHtml, escapeAttr: escAttr }),
+      exCard: () => "", garminSessionCard: () => "", sessionDoneCard: () => "", skipLineHtml: () => "",
+    }));
+    return html.join("");
+  };
+  assert.doesNotMatch(paint(), /data-brain-fold="7,8" open/);
+  const fold = { open: true, getAttribute: (name) => (name === "data-brain-fold" ? "7,8" : null) };
+  listeners.toggle({ target: fold });
+  assert.match(paint(), /data-brain-fold="7,8" open>/, "the re-render keeps it open");
+  fold.open = false;
+  listeners.toggle({ target: fold });
+  assert.doesNotMatch(paint(), /data-brain-fold="7,8" open/);
+});
+
+test("one long change shows its short label with Undo, the full sentence folded under it", () => {
+  const summary =
+    "Rebuilt your weekly training template around your request to keep the ankle work every lifting day. Two days moved.";
+  const { html } = render([
+    { exercise: "Back Squat", brain_decision_id: 7, brain_change_summary: summary, brain_change_reversible: true },
+  ]);
+  const label = /<span class="session-brain-label">([^<]*)<\/span>/.exec(html)?.[1] ?? "";
+  assert.ok(label.length > 0 && label.length <= 60, label);
+  assert.ok(summary.startsWith(label.replace(/…$/, "")), label);
+  assert.ok(html.includes(`<p class="session-brain-more">${summary}</p>`), "the full sentence is one tap away");
+  // Undo sits on the line itself, outside the fold — no expansion needed to put it back.
+  assert.match(html, /<\/details> <button class="linkbtn-quiet" type="button" data-decision-undo="7">Undo<\/button><\/div>/);
 });
 
 

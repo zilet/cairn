@@ -171,7 +171,7 @@ test("'Not useful' wiring PUTs down+dismissed and clears the card for the week",
   assert.equal(target.innerHTML, "");
 });
 
-// ---- staleness (pull-only "Moved on" affordance) ----
+// ---- staleness (pull-only: one quiet line + a re-read link) ----
 
 // A target that also serves the re-read control so we can assert its wiring.
 function makeStaleTarget(rereadBtn) {
@@ -188,7 +188,7 @@ function makeStaleTarget(rereadBtn) {
   };
 }
 
-test("stale weekly card shows the Moved-on note + re-read tap in place of the one change", () => {
+test("stale weekly card says so in one quiet line under the masthead, with a re-read link", () => {
   const ctx = loadCards();
   const target = makeStaleTarget(null);
   const stale = weeklyIns({
@@ -199,10 +199,15 @@ test("stale weekly card shows the Moved-on note + re-read tap in place of the on
   ctx.CairnCaptureReadCards.renderWeeklyInSlot(target, stale, baseDeps(ctx, []), teamFixture());
   const html = target.innerHTML;
   assert.match(html, /weekly-card-stale/);
-  assert.match(html, /weekly-stale-chip/);
-  assert.match(html, /Moved on/);
-  assert.match(html, /your training has moved since/);
-  assert.match(html, /data-weekly-reread/);
+  // One muted line: when it was written, that things moved, and the re-read link.
+  assert.match(html, /<p class="weekly-stale">Written \w+ · things have moved since/);
+  assert.match(html, /<button class="linkbtn-quiet weekly-reread" data-weekly-reread[^>]*>Re-read<\/button>/);
+  assert.equal(html.match(/weekly-stale"/g)?.length, 1, "one line, not a boxed note");
+  // It sits right under the masthead, above the read itself.
+  assert.ok(html.indexOf('class="weekly-stale"') > html.indexOf("weekly-head"));
+  assert.ok(html.indexOf('class="weekly-stale"') < html.indexOf("weekly-text"));
+  // No alarm: no pill, no "Moved on" label, no spined well.
+  assert.doesNotMatch(html, /weekly-stale-chip|Moved on|weekly-stale well-accent/);
   // The stale read no longer asserts a "One change" action.
   assert.doesNotMatch(html, /One change/);
 });
@@ -214,7 +219,7 @@ test("stale takes precedence over the acked-compact form (re-read stays reachabl
     target,
     weeklyIns({ feedback: "up", stale: true, stale_note: "Things moved.", next_step: null }),
     baseDeps(ctx, []),
-    teamFixture(),
+    teamFixture()
   );
   const html = target.innerHTML;
   assert.doesNotMatch(html, /weekly-acked/); // not the settled compact line
@@ -232,7 +237,7 @@ test("re-read tap invokes deps.rereadWeekly", () => {
     target,
     weeklyIns({ stale: true, stale_note: "Moved.", next_step: null }),
     deps,
-    teamFixture(),
+    teamFixture()
   );
   rereadBtn._click();
   assert.equal(rereadCalls, 1);

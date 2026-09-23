@@ -367,9 +367,13 @@ async function loadTagChips(): Promise<void> {
   let vocab: CaptureContextTagDef[] = [];
   let tagged: CaptureContextTag[] = [];
   try {
+    // Today's render starts both reads before its first paint (the one-shot
+    // CairnTodayPrefetch); take those requests when they are there.
+    const prefetch = (globalThis as { CairnTodayPrefetch?: TodayPrefetchApi }).CairnTodayPrefetch;
+    const get = (path: string) => prefetch?.take(path) ?? api(path);
     [vocab, tagged] = await Promise.all([
-      api("/context-tags/vocab") as Promise<CaptureContextTagDef[]>,
-      api("/context-tags?date=" + localISO()) as Promise<CaptureContextTag[]>,
+      get("/context-tags/vocab") as Promise<CaptureContextTagDef[]>,
+      get("/context-tags?date=" + localISO()) as Promise<CaptureContextTag[]>,
     ]);
   } catch { return; }
   if (state.tab !== "today" || !slot.isConnected) return;

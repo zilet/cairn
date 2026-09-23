@@ -48,6 +48,7 @@ type CaptureReadsController = {
 type CaptureReadsRuntime = {
   createController(deps: CaptureReadsDeps): CaptureReadsController;
   weekRangeLabel(iso: unknown): string;
+  prefetch?(slots: { weekly: boolean; insight: boolean }, api: (path: string) => Promise<unknown>): void;
 };
 type CaptureReadDateApi = {
   weekRangeLabel(iso: unknown): string;

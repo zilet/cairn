@@ -4,14 +4,15 @@
 // Split out of the former single-file src/coachOps.ts — behavior-preserving.
 
 import { getActiveDailySession } from "../repo/adaptive-session.js";
-import { fingerprint, getAiCache, saveAiCache } from "../repo/chat.js";
+import { fingerprint, getAiCache, getLatestAiCacheByRef, saveAiCache } from "../repo/chat.js";
+import type { AiCacheHit } from "../repo/chat.js";
 import { listCheckins } from "../repo/coach.js";
 import { deterministicComposedSession, normalizeComposedSession } from "../repo/daily-composition.js";
 import { decideDailySession } from "../repo/daily-decision.js";
 import { getDailySessionOutcome } from "../repo/daily-reconciliation.js";
 import { dayRead, weekAheadPlan } from "../repo/day-read.js";
 import { weekAheadRaceLine } from "../repo/day-read-prose.js";
-import { MUSCLE_GROUPS, authoritativeGroup, canonicalGroup, cleanExerciseName, normalizeExerciseName, normalizedExerciseKey, planExerciseAliases, planExerciseRenames, setExerciseAlias, shouldAutoApplyMerge, validateExerciseMergePlan } from "../repo/exercise-canon.js";
+import { MUSCLE_GROUPS, authoritativeGroup, canonicalGroup, cleanExerciseName, normalizeExerciseName, normalizedExerciseKey, planExerciseAliases, resolveExerciseName, planExerciseRenames, setExerciseAlias, shouldAutoApplyMerge, validateExerciseMergePlan } from "../repo/exercise-canon.js";
 import { distinctExerciseNames, findExercise, getExerciseDetail, listExercises, mergeExercises, normalizeExerciseTitles, renameExercise, updateExercise } from "../repo/exercises.js";
 import { listContextEvents } from "../repo/health.js";
 import { getLocationContext } from "../repo/location-context.js";
@@ -681,7 +682,7 @@ export interface ExerciseExplanation {
 }
 
 const EXERCISE_EXPLANATION_KIND = "exercise_explanation";
-const EXERCISE_EXPLANATION_FRESH_MS = 14 * 24 * 60 * 60 * 1000;
+const EXERCISE_EXPLANATION_FRESH_MS = 90 * 24 * 60 * 60 * 1000; // form cues barely move; a stale row is still served instantly
 
 function cleanExerciseExplanationField(v: any): string {
   const s = String(v ?? "")
@@ -719,47 +720,86 @@ export function exercisePoseFromExplanation(explanation: ExerciseExplanation | n
   return parts.length ? parts.join(". ") : null;
 }
 
+/**
+ * What the explanation is ABOUT: the exercise's resolved identity and the inputs that
+ * actually change form cues (the movement's name, mode, constraint note, stored cues).
+ * Plan appearances (sets, rep range, seconds, day notes) still reach the prompt as
+ * context but stay OUT of the key — every auto-progression or reshape moves them, and
+ * keying on them regenerated the same how-to after each plan change.
+ */
 export function exerciseExplanationCacheKey(detail: any): string {
+  const name = String(detail?.name ?? "").trim();
+  let identity = "";
+  try {
+    identity = name ? resolveExerciseName(name).key : "";
+  } catch {
+    identity = "";
+  }
+  if (!identity && Number(detail?.id)) identity = `exercise:${Number(detail.id)}`;
   return fingerprint({
-    name: String(detail?.name ?? "")
-      .trim()
-      .toLowerCase(),
-    muscle_group: String(detail?.muscle_group ?? "")
-      .trim()
-      .toLowerCase(),
+    v: 2,
+    identity,
+    name: normalizeExerciseName(name),
     mode: detail?.mode ?? "reps",
     constraint_note: String(detail?.constraint_note ?? "").trim(),
     cues: String(detail?.cues ?? "").trim(),
-    appears: (Array.isArray(detail?.appears) ? detail.appears : []).map((a: any) => ({
-      day: Number(a?.day_number) || null,
-      name: String(a?.day_name ?? ""),
-      sets: Number(a?.sets) || null,
-      rep_low: Number(a?.rep_low) || null,
-      rep_high: Number(a?.rep_high) || null,
-      target_seconds: Number(a?.target_seconds) || null,
-      note: String(a?.note ?? "").trim(),
-    })),
   });
+}
+
+/**
+ * The exact-key hit, else the newest explanation stored for this exercise row (an
+ * older key shape, or inputs that moved since) served as STALE so the caller
+ * revalidates in the background instead of dropping to the generic template.
+ */
+function lookupExerciseExplanation(detail: any): { cached: AiCacheHit; explanation: ExerciseExplanation; stale: boolean } | null {
+  const exact = getAiCache(EXERCISE_EXPLANATION_KIND, exerciseExplanationCacheKey(detail));
+  const exactExplanation = normalizeExerciseExplanation(exact?.result);
+  if (exact && exactExplanation) return { cached: exact, explanation: exactExplanation, stale: exact.stale };
+  const latest = getLatestAiCacheByRef(EXERCISE_EXPLANATION_KIND, "exercises", Number(detail?.id) || null);
+  const latestExplanation = normalizeExerciseExplanation(latest?.result);
+  if (latest && latestExplanation) return { cached: latest, explanation: latestExplanation, stale: true };
+  return null;
+}
+
+/** The cached explanation for an already-loaded detail row, for payloads that ride along. */
+export function cachedExplanationForDetail(detail: any): { explanation: ExerciseExplanation | null; explanation_stale: boolean } {
+  if (!detail?.found) return { explanation: null, explanation_stale: false };
+  const hit = lookupExerciseExplanation(detail);
+  return hit ? { explanation: hit.explanation, explanation_stale: hit.stale } : { explanation: null, explanation_stale: false };
+}
+
+/**
+ * The exercise detail the sheet opens on, with its cached explanation already on it,
+ * so the first paint shows the real cues (no generic-template flash, no second GET).
+ */
+export function getExerciseDetailWithExplanation(name: string) {
+  const detail: any = getExerciseDetail(name);
+  if (!detail?.found) return detail;
+  let cached = { explanation: null as ExerciseExplanation | null, explanation_stale: false };
+  try {
+    cached = cachedExplanationForDetail(detail);
+  } catch {
+    /* the detail never fails on its how-to cache */
+  }
+  return { ...detail, ...cached };
 }
 
 export function getCachedExerciseExplanation(name: string) {
   const detail: any = getExerciseDetail(name);
   if (!detail?.found) return { ok: false as const, found: false as const, exercise: name, error: "exercise not found" };
-  const cacheKey = exerciseExplanationCacheKey(detail);
-  const cached = getAiCache(EXERCISE_EXPLANATION_KIND, cacheKey);
-  const explanation = normalizeExerciseExplanation(cached?.result);
-  if (!cached || !explanation) {
+  const hit = lookupExerciseExplanation(detail);
+  if (!hit) {
     return { ok: true as const, found: true as const, exercise: detail.name, cached: false as const };
   }
   return {
     ok: true as const,
     found: true as const,
     exercise: detail.name,
-    explanation,
+    explanation: hit.explanation,
     cached: true as const,
-    stale: cached.stale,
-    agent: cached.chosen_agent,
-    computed_at: cached.computed_at,
+    stale: hit.stale,
+    agent: hit.cached.chosen_agent,
+    computed_at: hit.cached.computed_at,
   };
 }
 
@@ -767,19 +807,20 @@ export async function explainExercise(agent: string | undefined, name: string, h
   const detail: any = getExerciseDetail(name);
   if (!detail?.found) return { ok: false as const, found: false as const, exercise: name, error: "exercise not found" };
   const cacheKey = exerciseExplanationCacheKey(detail);
-  const cached = getAiCache(EXERCISE_EXPLANATION_KIND, cacheKey);
-  const cachedExplanation = normalizeExerciseExplanation(cached?.result);
-  if (cached && cachedExplanation && !cached.stale) {
+  const hit = lookupExerciseExplanation(detail);
+  const cached = hit?.cached ?? null;
+  const cachedExplanation = hit?.explanation ?? null;
+  if (hit && !hit.stale) {
     hooks?.onPhase?.("served from cache");
     return {
       ok: true as const,
       found: true as const,
       exercise: detail.name,
-      explanation: cachedExplanation,
+      explanation: hit.explanation,
       cached: true as const,
       stale: false as const,
-      agent: cached.chosen_agent,
-      computed_at: cached.computed_at,
+      agent: hit.cached.chosen_agent,
+      computed_at: hit.cached.computed_at,
     };
   }
 

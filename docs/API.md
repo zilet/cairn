@@ -262,7 +262,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/exercise/:name` |  |
+| GET | `/api/exercise/:name` | The cached how-to explanation rides along (`explanation`, `explanation_stale`) so the sheet paints the real cues on open; generation stays on POST …/explanation. |
 | GET | `/api/exercise/:name/explanation` |  |
 | POST | `/api/exercise/:name/explanation` |  |
 

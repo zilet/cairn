@@ -210,6 +210,29 @@ function cfocusText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+// Say the block objective ONCE. The server headline is "<where you are>. This block:
+// <lead title>[ — with X handled alongside]." and the variants that render a lead
+// block (route/flat) print that same title again right under it, so the card read
+// "…This block: Bring up your overhead press" over a TRAINING row saying "Bring up
+// your overhead press". Where the lead block carries the title, the headline keeps
+// only what the block does not say: the where-you-are line and the alongside tail.
+// A clipped or reworded headline that does not contain the exact stem is untouched.
+function cfocusHeadlineWithoutLead(headline: string, title: string): string {
+  if (!headline || !title) return headline;
+  const stem = `This block: ${title}`;
+  const at = headline.indexOf(stem);
+  if (at < 0) return headline;
+  const before = headline.slice(0, at).trim();
+  const tail = headline
+    .slice(at + stem.length)
+    .trim()
+    .replace(/^[—–-]\s*/, "")
+    .replace(/^\.$/, "")
+    .trim();
+  const after = tail ? tail.charAt(0).toUpperCase() + tail.slice(1) : "";
+  return [before, after].filter(Boolean).join(" ");
+}
+
 // The navigable lead block (full/compact). A RUNNING recovery week is a
 // confirmation, not a destination — it renders non-interactive (no route, no
 // arrow); every other lead keeps its route.
@@ -297,7 +320,11 @@ function coachingFocusHtml(
   if (!spec.allowUnavailable && (!focus.available || !lead)) return "";
   if (spec.requireTitle && !cfocusText(lead?.title)) return "";
 
-  const headline = cfocusText(focus.headline);
+  const rawHeadline = cfocusText(focus.headline);
+  const headline =
+    lead && (spec.lead === "route" || spec.lead === "flat")
+      ? cfocusHeadlineWithoutLead(rawHeadline, cfocusText(lead.title))
+      : rawHeadline;
   // The degraded hero speaks the lead's own line (or its why) as the one
   // sentence; it renders only when it actually has something to say.
   // `line` is not in the typed contract — it is a tolerated older payload shape the

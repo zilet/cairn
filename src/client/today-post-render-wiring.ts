@@ -72,7 +72,11 @@ type TodayPostRenderWiringApi = {
     const loaders = (globalThis as { CairnTodaySideLoaders?: { primeTodaySide?: (date: string, promise: unknown) => void } })
       .CairnTodaySideLoaders;
     if (typeof loaders?.primeTodaySide !== "function" || typeof api !== "function") return;
-    loaders.primeTodaySide(date, api(`/today-side?date=${encodeURIComponent(date)}`));
+    // renderToday usually started this exact GET before the paint (one-shot
+    // CairnTodayPrefetch); take that request rather than asking twice.
+    const path = `/today-side?date=${encodeURIComponent(date)}`;
+    const prefetch = (globalThis as { CairnTodayPrefetch?: TodayPrefetchApi }).CairnTodayPrefetch;
+    loaders.primeTodaySide(date, prefetch?.take(path) ?? api(path));
   }
 
   function applyPendingCapture(deps: TodayPostRenderWiringDeps): boolean {

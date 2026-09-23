@@ -42,15 +42,13 @@ function captureTitleCase(value: string): string {
 // empty category is simply skipped (never an empty-state placeholder).
 function captureWeekWinsItems(
   payload: CaptureWeekWins | null | undefined,
-  escapeHtml: (value: unknown) => string,
+  escapeHtml: (value: unknown) => string
 ): string[] {
   if (!payload) return [];
   const items: string[] = [];
 
   const prs = Array.isArray(payload.prs) ? payload.prs : [];
-  const prNames = prs
-    .map((pr) => String((pr && (pr.exercise ?? pr.label)) || "").trim())
-    .filter(Boolean);
+  const prNames = prs.map((pr) => String((pr && (pr.exercise ?? pr.label)) || "").trim()).filter(Boolean);
   if (prNames.length) {
     const shown = prNames.slice(0, 3).map((name) => escapeHtml(name));
     const extra = prNames.length - shown.length;
@@ -87,6 +85,38 @@ function captureWeekWinsHtml(items: string[]): string {
     </div>`;
 }
 
+// A reads GET: the promise Today's render already started for this path (the
+// one-shot CairnTodayPrefetch, see captureReadsPrefetch), else a fresh fetch.
+function captureReadsGet(api: CaptureReadsDeps["api"], path: string): Promise<unknown> {
+  const prefetch = (globalThis as { CairnTodayPrefetch?: TodayPrefetchApi }).CairnTodayPrefetch;
+  return prefetch?.take(path) ?? api(path);
+}
+
+// Start the reads the rail is about to ask for, the moment the agenda says which
+// read slots it will draw — the same paths loadTodayReads fetches. /week-wins is
+// chained on /insights: it is only ever asked for when a full weekly card (not
+// the acknowledged one-liner, unless stale) is going to render.
+function captureReadsPrefetch(
+  slots: { weekly: boolean; insight: boolean },
+  api: (path: string) => Promise<unknown>
+): void {
+  const prefetch = (globalThis as { CairnTodayPrefetch?: TodayPrefetchApi }).CairnTodayPrefetch;
+  if (!prefetch || (!slots.weekly && !slots.insight)) return;
+  const insights = prefetch.prefetch("/insights", () => api("/insights"));
+  if (!slots.weekly) return;
+  prefetch.prefetch("/team-week", () => api("/team-week"));
+  insights
+    .then((list) => {
+      const weekly = Array.isArray(list)
+        ? (list as CaptureInsight[]).find((item) => item && item.kind === "weekly_read")
+        : null;
+      if (weekly && (weekly.feedback !== "up" || weekly.stale === true)) {
+        prefetch.prefetch("/week-wins", () => api("/week-wins"));
+      }
+    })
+    .catch(() => {});
+}
+
 // Best-effort, null-safe: an absent/failed /week-wins fetch leaves the weekly
 // card exactly as the agent wrote it — no error, no placeholder. Re-checks
 // the card after the await in case the slot re-rendered (or the athlete left
@@ -95,7 +125,7 @@ async function captureRenderWeekWins(wSlot: HTMLElement, deps: CaptureReadsDeps)
   if (!wSlot.querySelector(".weekly-card")) return;
   let payload: CaptureWeekWins | null = null;
   try {
-    payload = (await deps.api("/week-wins")) as CaptureWeekWins;
+    payload = (await captureReadsGet(deps.api, "/week-wins")) as CaptureWeekWins;
   } catch {
     payload = null;
   }
@@ -155,8 +185,10 @@ function createCaptureReadsController(deps: CaptureReadsDeps): CaptureReadsContr
     let team: CaptureTeamWeek | null = null;
     try {
       const [insights, teamWeek] = await Promise.all([
-        deps.api("/insights") as Promise<CaptureInsight[]>,
-        wSlot ? (deps.api("/team-week") as Promise<CaptureTeamWeek>).catch(() => null) : Promise.resolve(null),
+        captureReadsGet(deps.api, "/insights") as Promise<CaptureInsight[]>,
+        wSlot
+          ? (captureReadsGet(deps.api, "/team-week") as Promise<CaptureTeamWeek>).catch(() => null)
+          : Promise.resolve(null),
       ]);
       list = insights;
       team = teamWeek;
@@ -202,6 +234,7 @@ const CAIRN_CAPTURE_READS = {
   weekRangeLabel: captureReadsWeekRangeLabel,
   weekWinsItems: captureWeekWinsItems,
   weekWinsHtml: captureWeekWinsHtml,
+  prefetch: captureReadsPrefetch,
 };
 
 Object.assign(globalThis, {

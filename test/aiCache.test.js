@@ -68,3 +68,17 @@ test("saveAiCache upserts in place (a re-save replaces the body + freshness)", (
   const rows = db.prepare(`SELECT COUNT(*) AS n FROM ai_cache WHERE kind='session_suggest' AND cache_key=?`).get(key);
   assert.equal(rows.n, 1, "PRIMARY KEY(kind, cache_key) keeps it a single row");
 });
+
+test("pruning keeps each exercise's newest explanation however old, and ages out the rest", () => {
+  const insert = db.prepare(
+    `INSERT INTO ai_cache (kind, cache_key, ref_table, ref_id, result_json, chosen_agent, computed_at, stale_after)
+     VALUES (?, ?, ?, ?, ?, 'stub', datetime('now', ?), NULL)`
+  );
+  insert.run("exercise_explanation", "old-key", "exercises", 7, JSON.stringify({ v: "superseded" }), "-60 days");
+  insert.run("exercise_explanation", "newest-key", "exercises", 7, JSON.stringify({ v: "only copy" }), "-45 days");
+  insert.run("insight", "old-insight", null, null, JSON.stringify({ v: "old" }), "-45 days");
+  // Any save runs the bounding pass.
+  repo.saveAiCache("insight", "fresh", { result: { v: "new" } });
+  const keys = db.prepare(`SELECT cache_key FROM ai_cache ORDER BY cache_key`).all().map((r) => r.cache_key);
+  assert.deepEqual(keys, ["fresh", "newest-key"]);
+});

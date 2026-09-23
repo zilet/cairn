@@ -2399,11 +2399,13 @@ export function buildDailySessionDecision(
   const intent: "template" | "custom" = kind === "rest" ? "custom" : planIntent;
   if (intent === "template") {
     fire(precedence, "template_rotation");
+    // With no selection reason the day's place in the rotation IS the why. The focus
+    // is not repeated here: every surface that prints this line (the Session header,
+    // the launch card, the cap line) already prints the day's name and focus right
+    // above it, so "Day 3 · <focus>" said the focus twice.
     rationale.push({
       code: "template_rotation",
-      text:
-        snapshot.plan.reason ??
-        `Day ${snapshot.plan.day_number}${snapshot.plan.focus ? ` · ${snapshot.plan.focus}` : ""}`,
+      text: snapshot.plan.reason ?? `Day ${snapshot.plan.day_number}`,
     });
   }
 
