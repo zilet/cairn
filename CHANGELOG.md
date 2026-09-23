@@ -5,6 +5,34 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-09-23
+
+### Changed
+
+- **The coach pushes when the evidence says you can.** Your own stated week stops capping
+  intensity, the extra-challenge set fires again, and earned lifts take their step.
+- **The day you planned is the day you get.** A lift day you already trained this week never
+  replaces one you haven't, and legs only just over their limit keep the leg day at held load.
+- **One real leg session every week**, unless a genuine safety signal says otherwise.
+- **Runs are decided on the morning.** A quality or long run reads your HRV, sleep, readiness,
+  legs and your own words ("feel good, hills today"). A down week trims distance before intensity.
+- **Protection reads your own normal.** HRV and resting heart rate judge your weekly average
+  against your own band, and one missed sync never collapses the week.
+- **Honest progress.** One slipping lift is not "worse", duplicate hand-logged runs count once,
+  and a lift back from a break re-baselines instead of jumping.
+
+### Changed — plan structure
+
+- **Runs leave the strength plan.** Plan days hold lifts only. Runs live in Plan → Endurance and
+  follow your stated run days; rest is simply a day you neither lift nor run. The coach stays fully
+  hybrid. Migration 110 moves existing run items out, and history is kept.
+
+### Fixed
+
+- A morning run no longer turns the day's lifting session into a rest day.
+- Race day is the race, with a proper half-marathon taper before it.
+- The run engine's weekly km now matches the race ladder it shows.
+
 ## [1.8.1] — 2026-09-22
 
 ### Changed
