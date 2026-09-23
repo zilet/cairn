@@ -461,6 +461,51 @@ export interface MarkerMapping {
   derive: (ctx: MarkerContext) => MappingDirective[];
 }
 
+// ---------- wearable recovery markers: a directive reads the WEEK, never a night ----------
+// HRV and resting HR from a watch are noisy night to night. A directive about them is a
+// standing card on the athlete's board and a line in every coach prompt, so it must be
+// about something that lasts: the average of the nights in the last WEEK, read against
+// the athlete's OWN band when the watch has learned one (Garmin's balanced HRV range —
+// `personal_optimal` on the marker), the population zone only as a softer fallback. A
+// single short night is the day read's job (the last-night brake, own baseline), never a
+// directive's. Too few nights in the week → no trend → no directive at all.
+export const WEARABLE_TREND_ZONES: ReadonlySet<string> = new Set(["HRV", "Resting HR"]);
+export const WEARABLE_TREND_WINDOW_DAYS = 7;
+export const WEARABLE_TREND_MIN_NIGHTS = 3;
+
+export interface WearableTrendWindow { value: number; nights: number; from: string; to: string; }
+
+// PURE: the mean of the dated readings inside the `days`-day window ending at `asOf`
+// (inclusive), or null when fewer than `minNights` readings land in it. `to` is the newest
+// reading used — the date a directive off this window is anchored on.
+export function wearableTrendWindow(
+  points: { date: string; value: number }[],
+  asOf: string,
+  days = WEARABLE_TREND_WINDOW_DAYS,
+  minNights = WEARABLE_TREND_MIN_NIGHTS
+): WearableTrendWindow | null {
+  const end = Date.parse(`${String(asOf).slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(end)) return null;
+  const from = new Date(end - (Math.max(1, days) - 1) * 864e5).toISOString().slice(0, 10);
+  const to = String(asOf).slice(0, 10);
+  const inWindow = (Array.isArray(points) ? points : []).filter(
+    (p) => p && Number.isFinite(Number(p.value)) && String(p.date) >= from && String(p.date) <= to
+  );
+  if (inWindow.length < Math.max(1, minNights)) return null;
+  const mean = inWindow.reduce((s, p) => s + Number(p.value), 0) / inWindow.length;
+  const newest = inWindow.map((p) => String(p.date)).sort().pop() as string;
+  return { value: Math.round(mean * 10) / 10, nights: inWindow.length, from, to: newest };
+}
+
+// What a recovery-marker context IS, so its wording can say so: a wearable week's trend
+// against the athlete's own band, the same trend against the population fallback, or a
+// single reading (a clinic pulse, a lab HRV) that no trend stands behind.
+export function recoveryReadingKind(ctx: MarkerContext): "own_trend" | "population_trend" | "single" {
+  const m = ctx?.marker;
+  if (m?.source !== "wearable" || !m?.trend_window) return "single";
+  return Array.isArray(m?.personal_optimal) && m.personal_optimal.length === 2 ? "own_trend" : "population_trend";
+}
+
 // Classify a directive's semantic intent from its text (deterministic, keyword-based),
 // unless an explicit intent is supplied (the mapped path prefers an explicit `intent`
 // on the MappingDirective; agent-emitted health_review text falls through to this).
@@ -872,13 +917,35 @@ export const MARKER_MAPPINGS: MarkerMapping[] = [
   { zone: "VO2max", derive: () => [
     { domain: "training", directive: "Your estimated VO2max is below optimal — keep a steady aerobic base and add ONE weekly higher-intensity session (intervals or a tempo effort) to nudge it up; cardiorespiratory fitness is one of the strongest longevity levers.", rationale: "VO2max responds to a polarized mix of easy volume plus targeted high-intensity work, and higher fitness tracks with lower all-cause mortality.", citation: "ACSM / AHA cardiorespiratory fitness consensus", uncertain: true },
   ] },
-  { zone: "Resting HR", derive: (ctx) => ctx.side === "high" ? [
-    { domain: "training", directive: "Your resting heart rate is running higher than optimal — build easy aerobic volume and protect recovery; a single high reading can also just mean a poor night or building fatigue, so read the trend, not one day.", rationale: "A lower resting HR generally reflects better aerobic fitness and parasympathetic tone; a persistently elevated one can flag accumulated fatigue.", citation: "Cardiorespiratory fitness literature", uncertain: true },
-    { domain: "watch", directive: "If resting HR stays elevated alongside poor sleep or stalled training, treat it as a fatigue signal (ease off) — and mention a sustained unexplained rise to your doctor.", rationale: "A sustained resting-HR rise that isn't training-explained is worth clinical context.", citation: null, uncertain: true },
-  ] : [] },
-  { zone: "HRV", derive: (ctx) => ctx.side === "low" ? [
-    { domain: "training", directive: "Your HRV is running below your optimal range — favor easy aerobic work, protect sleep, and don't stack hard days while it's suppressed; HRV is a recovery/readiness signal, read it as a trend, not a single night.", rationale: "Low HRV often reflects accumulated training or life stress and under-recovery; backing off intensity tends to restore it.", citation: "Heart-rate-variability training-readiness literature", uncertain: true },
-  ] : [] },
+  // HRV and resting HR from a watch arrive here as the WEEK's average (see
+  // wearableTrendWindow) — the wording names which read it is: a trend against the
+  // athlete's own band, a trend against the population fallback (worded softer — "read this
+  // loosely"), or one reading. All stay `uncertain`: a recovery reading is context for the
+  // day, never a settled lever. Stable `key`s so a change of wording updates the row in place.
+  { zone: "Resting HR", derive: (ctx) => {
+    if (ctx.side !== "high") return [];
+    const kind = recoveryReadingKind(ctx);
+    const training: MappingDirective = kind === "single"
+      ? { key: "rhr-level", domain: "training", directive: "One resting heart rate reading sits above the optimal range — a single reading can just mean a poor night, a stressful day or building fatigue, so it says little until the week's readings agree. Easy aerobic volume and good sleep are what bring a resting HR down over time.", rationale: "A lower resting HR generally reflects better aerobic fitness and parasympathetic tone; one elevated reading is a point, not a pattern.", citation: "Cardiorespiratory fitness literature", uncertain: true, intent: "lever" }
+      : { key: "rhr-level", domain: "training", directive: "Your resting heart rate has averaged above a broad population range across the last week — a trend over several mornings, not one. Many fit people sit comfortably near here, so read it against how you usually run: easy aerobic volume and good sleep are what bring it down over time.", rationale: "A lower resting HR generally reflects better aerobic fitness and parasympathetic tone; a persistently elevated one can flag accumulated fatigue. Judged against a population range, since the watch supplies no personal one.", citation: "Cardiorespiratory fitness literature", uncertain: true, intent: "lever" };
+    return [
+      training,
+      { key: "rhr-watch", domain: "watch", directive: "If resting HR stays elevated for more than a week alongside poor sleep or stalled training, that pattern is worth reading as fatigue — and a sustained unexplained rise is worth mentioning to your doctor.", rationale: "A sustained resting-HR rise that isn't training-explained is worth clinical context.", citation: null, uncertain: true, intent: "lever" },
+    ];
+  } },
+  { zone: "HRV", derive: (ctx) => {
+    if (ctx.side !== "low") return [];
+    const kind = recoveryReadingKind(ctx);
+    if (kind === "own_trend") return [
+      { key: "hrv-level", domain: "training", directive: "Your HRV has averaged below your own usual range across the last week — a trend over several nights, not one. That usually means recovery is trailing the load; good sleep and some space between the hardest sessions tend to bring it back.", rationale: "Judged against the balanced range your watch learned from your own nights. A sustained dip below it often reflects accumulated training or life stress; it is context for reading the day, not a verdict on it.", citation: "Heart-rate-variability training-readiness literature", uncertain: true, intent: "lever" },
+    ];
+    if (kind === "population_trend") return [
+      { key: "hrv-level", domain: "training", directive: "Your HRV has averaged under a broad population range across the last week. Your watch hasn't learned your own range yet, and many healthy athletes sit lower, so read this loosely — worth watching alongside sleep and how training feels.", rationale: "HRV is highly individual; without a personal baseline a population range is only an orienting read. A sustained dip can reflect accumulated training or life stress.", citation: "Heart-rate-variability training-readiness literature", uncertain: true, intent: "lever" },
+    ];
+    return [
+      { key: "hrv-level", domain: "training", directive: "One HRV reading sits under a broad population range — a single measurement says little on its own; what matters is how your readings run across a week against your own usual range.", rationale: "HRV is highly individual and varies night to night; a single reading is a point, not a pattern.", citation: "Heart-rate-variability training-readiness literature", uncertain: true, intent: "lever" },
+    ];
+  } },
   // ---- body composition: the connected lever that moves lipids, glucose, BP & hormones together ----
   { zone: "Body fat", derive: () => [
     { domain: "nutrition", directive: "Body fat is above optimal — the highest-leverage move is a modest, LEAN-SAFE deficit (~300-500 kcal) with high protein (~0.7-1 g/lb), not a crash diet; losing fat while holding lean improves lipids, glucose, BP and testosterone at once.", rationale: "Excess adiposity (especially visceral) raises hepatic VLDL, blood pressure, insulin resistance and aromatization — so fat loss is the single change that moves the most markers together.", citation: "AHA/ACC obesity & cardiovascular-risk literature" },

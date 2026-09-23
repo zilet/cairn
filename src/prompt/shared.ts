@@ -174,7 +174,9 @@ export const CONTEXT_GUARDRAILS = `PERSONAL-CONTEXT GUARDRAILS (use the "context
   the nutrition and training directives directly into the plans/meals you produce (e.g. raise soluble
   fiber and lean toward oily fish while ApoB is elevated; keep aerobic work in the week for blood
   pressure), and RESPECT every "watch" directive (surface the re-check, don't program around it).
-  A directive flagged "uncertain" or lacking a citation is a softer nudge, not a hard rule. This is
+  A directive flagged "uncertain" or lacking a citation is a softer nudge, not a hard rule. An entry
+  with role "recovery_context" (a wearable HRV / resting-HR trend, carried as "context_note") is
+  context for reading the day, never an instruction — signal_state already weighs recovery. This is
   informational, NOT medical advice — defer anything clinical to a clinician.`;
 
 // Discipline framing (v35), rendered into the plan-shaping prompts. The user's
@@ -468,7 +470,12 @@ function directiveAgeTag(d: any): string {
 export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "training" | "watch")[] } = {}): string {
   const directives = Array.isArray(ctx?.directives) ? ctx.directives : [];
   const wanted = opts.domains;
-  const relevant = directives.filter((d: any) => d && (!wanted || wanted.includes(d.domain)));
+  const inDomain = directives.filter((d: any) => d && (!wanted || wanted.includes(d.domain)));
+  // HRV / resting-HR directives (role "recovery_context", directivesForCoach) are a
+  // wearable's multi-night read — context for the day, never an order about it — so they
+  // never join the "honor these" list below.
+  const recoveryContext = inDomain.filter((d: any) => d.role === "recovery_context");
+  const relevant = inDomain.filter((d: any) => d.role !== "recovery_context");
   const lines: string[] = [];
 
   // LEAD with the prioritized focus (the elite-coach tiering), so the plan serves
@@ -550,6 +557,13 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
       for (const d of transient) {
         lines.push(`  - ${String(d.marker ?? "a marker").trim()}: ${String(d.directive ?? "").trim()}${d.transient_reason ? ` (${String(d.transient_reason).trim()})` : ""}`);
       }
+    }
+  }
+
+  if (recoveryContext.length) {
+    lines.push("RECOVERY-TREND CONTEXT (the wearable's read of the last week of nights — INFORMATIONAL, not an instruction: the signal state already weighs recovery for today against the athlete's own baseline; never ease or cap a day on this line alone):");
+    for (const d of recoveryContext) {
+      lines.push(`  - ${String(d.marker ?? "Recovery").trim()}: ${String(d.directive ?? "").trim()}${directiveAgeTag(d)}`);
     }
   }
 

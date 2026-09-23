@@ -22,7 +22,7 @@ import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import type { FlexibleTrainingAgenda } from "../../repo/flexible-training-agenda.js";
 import type { WeeklyRunPlan } from "../../repo/run-progression.js";
 import { localDateISO } from "../../repo/shared.js";
-import { heavyLowerDayLoads, planDayStrengthGroups, planRunItems, type HeavyLowerDayLoad } from "../../repo/training-read.js";
+import { heavyLowerDayLoads, planDayStrengthGroups, type HeavyLowerDayLoad } from "../../repo/training-read.js";
 
 // Type-only imports above on purpose: run-progression and flexible-training-agenda
 // both sit UNDER program-state, which is where this read is surfaced. Taking them as
@@ -85,8 +85,11 @@ export interface WeekLayoutRead {
   lift_days_source: "stated" | "observed" | null;
   /** The athlete's STATED run weekdays, as names in weekday order. [] when unstated. */
   run_days: string[];
-  /** Where the run placement was read from. "none" = nothing to compose against. */
-  source: "plan" | "run_plan" | "agenda" | "none";
+  /**
+   * Where the run placement was read from. "none" = nothing to compose against. Runs are
+   * never plan items (migration 110), so the engine's week leads and the agenda follows.
+   */
+  source: "run_plan" | "agenda" | "none";
 }
 
 /**
@@ -233,38 +236,18 @@ interface RunPlacement {
   source: WeekLayoutRead["source"];
 }
 
-// Where the week's demanding runs sit. Read in order of how STABLE the answer is, not
-// how fresh it is: the stored plan is the week the athlete actually has (and the week
-// an evolution proposal rewrites), so it leads. weeklyRunPlan is what Cairn WOULD run
-// and only speaks when the plan carries no runs yet. The flexible agenda is a rolling
-// reconciliation that moves day to day — a fine last resort, a poor basis for a line
-// that would otherwise flicker on and off through the week.
-//
-// Except once the athlete has NAMED their run days. The run engine and the agenda are
-// then laid on those weekdays, and the template's cardio items are a leftover the week
-// no longer follows: read first, a stale "Long Run" item put the long run on Saturday
-// and no quality run anywhere, so a stated Thursday quality run behind Wednesday's
-// heavy legs never collided. With a stated calendar the engine's week leads and the
-// template is only the fallback.
-function runPlacement(
-  opts?: { runPlan?: WeeklyRunPlan | null; agenda?: FlexibleTrainingAgenda | null },
-  statedRunDays = false
-): RunPlacement {
-  let items: { day_number: number; kind: string }[] = [];
-  try {
-    items = planRunItems();
-  } catch {
-    items = [];
-  }
+// Where the week's demanding runs sit. Runs are never plan items (migration 110): the
+// run engine's week (weeklyRunPlan, laid on the athlete's stated run days) is the
+// stable answer and leads; the flexible agenda is a rolling reconciliation that moves
+// day to day — a fine last resort, a poor basis for a line that would otherwise
+// flicker on and off through the week.
+function runPlacement(opts?: { runPlan?: WeeklyRunPlan | null; agenda?: FlexibleTrainingAgenda | null }): RunPlacement {
   const pick = (rows: { day_number: number; kind: string }[], kind: string): number | null => {
     const hit = rows
       .filter((r) => r.kind === kind && onRing(r.day_number))
       .sort((a, b) => a.day_number - b.day_number)[0];
     return hit ? hit.day_number : null;
   };
-  const planned = { long: pick(items, "long"), quality: pick(items, "quality") };
-  const fromStoredPlan = planned.long != null || planned.quality != null;
-  if (fromStoredPlan && !statedRunDays) return { ...planned, source: "plan" };
 
   const runPlan = opts?.runPlan;
   if (runPlan?.available && Array.isArray(runPlan.runs) && runPlan.runs.length) {
@@ -282,7 +265,6 @@ function runPlacement(
     if (fromAgenda.long != null || fromAgenda.quality != null) return { ...fromAgenda, source: "agenda" };
   }
 
-  if (fromStoredPlan) return { ...planned, source: "plan" };
   return { long: null, quality: null, source: "none" };
 }
 
@@ -471,10 +453,6 @@ export function weekLayoutRead(
   try {
     planDays = new Set(
       planDayStrengthGroups()
-        // The week's REST day is not a slot. It carries no items, so by groups alone it
-        // is indistinguishable from a thin training day — and "move your heavy squat
-        // day onto your rest day" is the one recommendation this read must never make.
-        .filter((d) => d.day_type !== "rest")
         .map((d) => d.day_number)
         .filter(onRing)
     );
@@ -482,17 +460,16 @@ export function weekLayoutRead(
     planDays = new Set();
   }
 
-  const placement = runPlacement(opts, stated.run_days.length > 0);
-  let { long, quality } = placement;
+  const placement = runPlacement(opts);
+  const { long, quality } = placement;
   const source = placement.source;
 
   // ---- calendar space ----
   // With a lifting week laid onto the weekdays, every template number becomes the
   // weekday(s) it lands on this week. A strength day the ring reaches twice (a
-  // three-day pool across five lifting days) is heavy on BOTH weekdays; a template
-  // run day becomes the weekday the map gave it. The engine's own run slots and the
-  // agenda's provisional numbers are already weekday-numbered (Mon = 1) whenever a
-  // schedule is stated, so only the stored-plan placement needs translating.
+  // three-day pool across five lifting days) is heavy on BOTH weekdays. The engine's
+  // run slots and the agenda's provisional numbers are already weekday-numbered
+  // (Mon = 1), so the runs need no translating.
   const weekMap = opts?.weekdayMap && opts.weekdayMap.size ? opts.weekdayMap : null;
   const space: WeekLayoutRead["space"] = weekMap ? "calendar" : "template";
   // Calendar only: the strength day each weekday holds, by its stored name, so a move
@@ -509,7 +486,7 @@ export function weekLayoutRead(
     for (let w = 1; w <= 7; w++) {
       const dn = weekMap.get(w === 7 ? 0 : w);
       const g = dn == null ? undefined : byNumber.get(dn);
-      if (g && g.day_type !== "rest" && g.groups.length) strengthAt.set(w, (g.name || g.focus || "strength").trim());
+      if (g && g.groups.length) strengthAt.set(w, (g.name || g.focus || "strength").trim());
     }
     const landings = new Map<number, number[]>();
     for (let w = 1; w <= 7; w++) {
@@ -521,10 +498,6 @@ export function weekLayoutRead(
     }
     loads = loads.flatMap((l) => (landings.get(l.day_number) ?? []).map((w) => ({ ...l, day_number: w })));
     planDays = new Set([...planDays].flatMap((dn) => landings.get(dn) ?? []));
-    if (source === "plan") {
-      long = long == null ? null : (landings.get(long)?.[0] ?? null);
-      quality = quality == null ? null : (landings.get(quality)?.[0] ?? null);
-    }
   }
   const heavy = loads.map((l) => l.day_number);
   const top = loads[0];

@@ -12,7 +12,7 @@
 // thin model would fire hardest on the athlete Cairn knows least.
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { db, resetTables } from "./_seed.js";
+import { db, repo, resetTables } from "./_seed.js";
 import { runIntensityDiscipline, runVarietyRead } from "../dist/repo/run-progression.js";
 import { getHrModel } from "../dist/repo/hr-model.js";
 import { dayPlanningSignalState, violatesReadingGrammar } from "../dist/repo/day-read.js";
@@ -94,15 +94,10 @@ function seedThresholdEasyRuns(anchor) {
   for (const days of [2, 5, 9, 12]) logRun({ date: at(days), minutes: 40, km: 8, avgHr: 158, maxHr: 172 });
 }
 
+// The athlete's week asks for easy running when they have STATED easy (or long) run
+// days — runs are not plan items (migration 110), so the stated calendar is the ask.
 function prescribeEasyRunning() {
-  const dayId = Number(
-    db.prepare(`INSERT INTO plan_days (day_number, name, focus) VALUES (1, 'Easy run', 'Endurance')`).run()
-      .lastInsertRowid
-  );
-  db.prepare(
-    `INSERT INTO plan_items (plan_day_id, position, kind, target_distance_km, target_zone, note)
-     VALUES (?, 1, 'cardio', 8, 'Z2', 'Easy aerobic run')`
-  ).run(dayId);
+  repo.setProfile({ endurance_schedule: { days: [{ dow: 2, kind: "easy" }, { dow: 6, kind: "long" }], source: "athlete" } });
 }
 
 function loadObservation(state) {

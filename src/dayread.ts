@@ -20,6 +20,7 @@ import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { DAY_READ_SCHEMA } from "./agent-contracts.js";
 import { matchesJsonSchema } from "./json-schema.js";
 import {
+  dayReadCitableBrakes,
   dayReadHeadline,
   dayReadPolicyReason,
   RECOVERY_WEEK_SOFTEN_WHY,
@@ -327,6 +328,54 @@ export function enforceDayReadSafetyPosture(out: any, baseline: any, hasOverride
   };
 }
 
+// ---------- the agent may not be quieter than the server without a NAMED, FRESH brake ----------
+// (2026-09-23.) The safety ladder above lets the agent move LEFT freely, and on the
+// live record it used that freedom as a habit rather than a judgement: sixteen straight
+// "easy" Briefs, and a 04:01 "easy" over a deterministic read whose signal state said
+// posture train and drive push. Nothing it could point to was firing; the caution came
+// from context the server had already weighed (a trend, a stale reading, an
+// informational note) and deliberately declined to brake on.
+//
+// So a train baseline read quieter must name the brake it acted on, in `brake`, and
+// that name must be one the baseline itself makes citable (repo dayReadCitableBrakes:
+// a fresh DECIDING brake on its own signal state, and none on a day the athlete's own
+// record opened). An advisory brake does not count: it is on the board precisely so it
+// can speak without walking the day down. The athlete's own steer (an override) is
+// exempt, exactly as it is from every other clamp here — "rough night" is a brake they
+// named themselves.
+export function agentCautionLacksBrake(
+  value: { kind?: unknown; brake?: unknown } | null | undefined,
+  baseline: { kind?: unknown; signals?: Record<string, any> } | null | undefined
+): boolean {
+  if (baseline?.kind !== "train") return false;
+  if (value?.kind !== "easy" && value?.kind !== "rest") return false;
+  const cited = typeof value.brake === "string" ? value.brake.trim() : "";
+  if (!cited) return true;
+  return !dayReadCitableBrakes(baseline as any).includes(cited);
+}
+
+// The same law as a clamp, for a row that reaches finishDayRead without passing the
+// predicate — a pinned sentence whose cited brake has since stopped firing, or a row
+// written before the law existed. The server's train read comes back whole (its own
+// rotated wording, no borrowed agent sentence); the decision reason stays empty, since
+// narrating the clamp would be Cairn's internals rather than something about the day.
+export function enforceNamedBrakeForCaution(out: any, baseline: any, hasOverride = false, date?: string): any {
+  if (hasOverride || out?.source !== "agent") return out;
+  const cited = out?.decision?.brake ?? out?.brake ?? null;
+  if (!agentCautionLacksBrake({ kind: out?.kind, brake: cited }, baseline)) return out;
+  const resolvedDate = date || localToday();
+  const decision = policyDecision(baseline, "agent_caution_without_brake", resolvedDate);
+  return {
+    ...baseline,
+    headline: dayReadHeadline(baseline, resolvedDate),
+    source: "deterministic",
+    agent: out.agent,
+    tried: out.tried,
+    decision,
+    computed_at: decision.computed_at,
+  };
+}
+
 // A recovery week is already the deterministic answer to accumulated load: seven
 // days of reduced volume, not seven consecutive days of rest. The prose layer may
 // make the day easier immediately after a real loading day, but cannot keep
@@ -496,7 +545,9 @@ export function isValidDayReadAgentResult(
   // The trainingSignals rollup, for a caller holding it directly. Omitted (every
   // production call site), the two flags are read off `baseline.signals.signal_state`,
   // which is the same evidence by another route — see feltStrongWithNoBrake.
-  trainingSignals?: Record<string, any> | null
+  trainingSignals?: Record<string, any> | null,
+  // The athlete's own steer exempts the named-brake rule (agentCautionLacksBrake).
+  opts: { override?: boolean } = {}
 ): boolean {
   if (!matchesJsonSchema(DAY_READ_SCHEMA, value, { coerce: true })) return false;
   const validShape = !!(
@@ -535,6 +586,9 @@ export function isValidDayReadAgentResult(
   // stops so the same agent can repair it or the next healthy agent can answer.
   if (baseline?.kind === "done") return value.kind === "done";
   if (baseline?.kind != null && value.kind === "done") return false;
+  // Quieter than a train baseline only on a NAMED, FRESH brake — rejected here, like
+  // the grammar, so acceptParsed can retry and the next agent can answer compliantly.
+  if (!opts.override && agentCautionLacksBrake(value, baseline)) return false;
   return true;
 }
 
@@ -613,6 +667,7 @@ export async function computeDayRead(
   opts: { date?: string; override?: string; agent?: string; priority?: AgentPriority; signal?: AbortSignal } = {}
 ): Promise<any> {
   const { date, override, agent, priority, signal } = opts;
+  const steered = !!override?.trim();
   const baseline = dayRead(date);
   const resolvedDate = date || localToday();
   const identity = dayReadProseIdentity(resolvedDate, baseline);
@@ -657,15 +712,17 @@ export async function computeDayRead(
       // of the spawn queue or SIGKILLs the live subprocess, so a hung CLI stops
       // holding a permit and the next attempt is a real attempt, not a re-join.
       signal,
-      acceptParsed: (parsed) => isValidDayReadAgentResult(decodeDayReadAgentProse(parsed), baseline),
+      acceptParsed: (parsed) =>
+        isValidDayReadAgentResult(decodeDayReadAgentProse(parsed), baseline, undefined, { override: steered }),
       schema: DAY_READ_SCHEMA,
     });
     // Decoded HERE, once, before both the predicate and the write — so what is
     // validated is exactly what is stored, and the athlete never reads an entity.
     const p = decodeDayReadAgentProse(result.parsed);
-    if (isValidDayReadAgentResult(p, baseline)) {
+    if (isValidDayReadAgentResult(p, baseline, undefined, { override: steered })) {
       const computedAt = decisionAt();
       const conservative = baseline.kind === "train" && (p.kind === "easy" || p.kind === "rest");
+      const brake = conservative && typeof p.brake === "string" && p.brake.trim() ? p.brake.trim() : null;
       out = {
         kind: p.kind,
         headline:
@@ -698,6 +755,9 @@ export async function computeDayRead(
           // rest/easy days, which is exactly the shape the Brief renders — precisely
           // because it was hand-written here instead of read from the map.
           reason: conservative ? dayReadPolicyReason("agent_conservative_adjustment", resolvedDate) : "",
+          // The fresh brake a quieter read named — kept so the clamp in finishDayRead
+          // can re-check it against the signals a pinned sentence is re-stamped with.
+          ...(brake ? { brake } : {}),
           evidence: Array.isArray(baseline.decision?.evidence) ? baseline.decision.evidence.slice(0, 5) : [],
           computed_at: computedAt,
         },
@@ -731,7 +791,8 @@ export async function computeDayRead(
 // steer, the prose identity this wording answers, then the canonical persist.
 function finishDayRead(read: any, baseline: any, opts: { override?: string; date: string; identity: string }): any {
   const { override, date: resolvedDate, identity } = opts;
-  let out = enforceDayReadSafetyPosture(read, baseline, !!override?.trim(), resolvedDate);
+  let out = enforceNamedBrakeForCaution(read, baseline, !!override?.trim(), resolvedDate);
+  out = enforceDayReadSafetyPosture(out, baseline, !!override?.trim(), resolvedDate);
   out = enforceRecoveryWeekCadence(out, baseline, !!override?.trim(), resolvedDate);
   out = enforceCompletionContract(out, baseline, resolvedDate);
   // The day-ahead `forward` line is NOT persisted here — it's attached fresh on every

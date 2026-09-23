@@ -120,8 +120,12 @@ test("a half 13 weeks out from a 14 km anchor: the ideal is out of reach, and th
   );
   assert.ok(ramp.required_long_km <= 9.1 * 1.15 + 0.05, "and the long run is one safe step too");
 
-  // The gap is reported rather than demanded.
-  assert.equal(ramp.fit, "beyond_horizon");
+  // The gap is reported rather than demanded. A STRETCH since resets stopped counting
+  // as lost ground: the two resets on the way pause the build instead of costing it
+  // 25% each, so the fastest safe build from 14 km reaches ~39 km — within ~15% of the
+  // 42 a half leans on. (The lost-ground model read the same runway as beyond the
+  // horizon.) The ideal curve is still out of reach — `feasible` is still false above.
+  assert.equal(ramp.fit, "stretch");
   assert.ok(
     ramp.constrained_peak_km > 14 && ramp.constrained_peak_km < ramp.ideal_peak_km,
     `the fastest safe build lands somewhere real (got ${ramp.constrained_peak_km} km/wk)`
@@ -179,7 +183,10 @@ test("a reset week every fourth, counting back from the peak", () => {
 test("the three fit bands describe the calendar, and never the athlete", () => {
   const fitOf = (anchor, weeks) => raceRamp(raceGoal({ weeks_to_race: weeks, date: null }), REF, anchor, 9.1).fit;
   assert.equal(fitOf(25, 20), "fits", "enough runway and enough base");
-  assert.equal(fitOf(14, 13), "beyond_horizon", "a thin base on a short runway lands somewhere else");
+  // 10 km, not 14: with a reset read as recovery rather than lost ground, 14 km at 13
+  // weeks now reaches the peak (ten safe steps, 14 × 1.12^10 ≈ 43 km). 10 km is the
+  // thin base that still lands somewhere else (~31 km).
+  assert.equal(fitOf(10, 13), "beyond_horizon", "a thin base on a short runway lands somewhere else");
   // Somewhere in between there is a band where the gap is small enough to leave open.
   const stretch = [];
   for (let anchor = 10; anchor <= 30; anchor += 0.5) if (fitOf(anchor, 13) === "stretch") stretch.push(anchor);
@@ -352,8 +359,10 @@ test("weeklyRunPlan: a thin week still gets its quality session when a race time
 test("weeklyRunPlan: the ASK stays reachable even when the ideal peak is not", () => {
   // The addendum's case, and the whole point of the constrained trajectory: an
   // out-of-reach destination must never turn into an out-of-reach weekly number.
-  const plan = repo.weeklyRunPlan(REF, planOpts({ compliance: { actual_km: 14 } }));
-  const ramp = raceRamp(raceGoal(), REF, 14, 9.1);
+  // A 12 km anchor (was 14): resets no longer count as lost ground, so 14 km thirteen
+  // weeks out reads as a stretch now; 12 km is still genuinely beyond the horizon.
+  const plan = repo.weeklyRunPlan(REF, planOpts({ compliance: { actual_km: 12 } }));
+  const ramp = raceRamp(raceGoal(), REF, 12, 9.1);
   assert.equal(ramp.fit, "beyond_horizon", "the ideal peak is not reachable from here");
   assert.ok(plan.goal_feasibility, "the plan carries where it sits against the race");
   assert.equal(plan.goal_feasibility.status, "beyond_horizon");
@@ -364,11 +373,11 @@ test("weeklyRunPlan: the ASK stays reachable even when the ideal peak is not", (
     "and this week's ask is the CONSTRAINED trajectory's value, not the ideal curve's"
   );
   assert.ok(
-    plan.goal_feasibility.week_km <= 14 * SUSTAINABLE_WEEKLY_BUILD_FACTOR + 0.05,
-    `one safe step from where they are (got ${plan.goal_feasibility.week_km} km off 14)`
+    plan.goal_feasibility.week_km <= 12 * SUSTAINABLE_WEEKLY_BUILD_FACTOR + 0.05,
+    `one safe step from where they are (got ${plan.goal_feasibility.week_km} km off 12)`
   );
   assert.ok(
-    plan.goal_feasibility.constrained_peak_km > 14 &&
+    plan.goal_feasibility.constrained_peak_km > 12 &&
       plan.goal_feasibility.constrained_peak_km < plan.goal_feasibility.ideal_peak_km,
     "the gap itself is reported, in both directions"
   );
@@ -377,7 +386,9 @@ test("weeklyRunPlan: the ASK stays reachable even when the ideal peak is not", (
 });
 
 test("weeklyRunPlan: the fit is offered as two options, never as a demand or a verdict", () => {
-  const plan = repo.weeklyRunPlan(REF, planOpts({ compliance: { actual_km: 14 } }));
+  // 12 km (was 14): the two-options sentence is the beyond-the-horizon set, and 14 km
+  // is a stretch once resets are recovery rather than lost ground.
+  const plan = repo.weeklyRunPlan(REF, planOpts({ compliance: { actual_km: 12 } }));
   const said = plan.rationale.find((line) => /race day/i.test(line));
   assert.ok(said, `the fit is said in plain words (rationale: ${plan.rationale.join(" | ")})`);
   assert.match(said, /your call|both are good options|rather than chasing|two honest paths/i, "and offers a choice");
@@ -516,8 +527,10 @@ test("no phrasing anywhere in the new vocabulary reads as a demand or a shortfal
 
 test("consecutive days never print the same fit sentence", () => {
   const said = [];
+  // 12 km (was 14) keeps this on the beyond-the-horizon set, every phrasing of which
+  // names race day; 14 km is a stretch now that a reset is not lost ground.
   for (const day of ["2026-08-05", "2026-08-06", "2026-08-07", "2026-08-08"]) {
-    const plan = repo.weeklyRunPlan(day, planOpts({ compliance: { actual_km: 14 } }));
+    const plan = repo.weeklyRunPlan(day, planOpts({ compliance: { actual_km: 12 } }));
     said.push(plan.rationale.find((line) => /race day/i.test(line)));
   }
   assert.ok(said.every(Boolean), "the sentence is there every day the fit is worth naming");
@@ -548,10 +561,11 @@ const rateLine = (plan) =>
 test("the same fit, two runways: the rate line separates what the fit sentence cannot", () => {
   // Both are "beyond_horizon" — the reachable peak lands well under what a half
   // usually leans on — so the destination sentence reads the same for each.
-  const far = repo.weeklyRunPlan(
-    REF,
-    planOpts({ goal: { date: "2027-03-01", weeks_to_race: 30 }, compliance: { actual_km: 12 } })
-  );
+  //
+  // The far runway is thirteen weeks from 10 km (was thirty from 12): with a reset read
+  // as recovery rather than lost ground, thirty weeks from 12 km is simply feasible —
+  // there is no rate story left there to tell.
+  const far = repo.weeklyRunPlan(REF, planOpts({ compliance: { actual_km: 10 } }));
   const near = repo.weeklyRunPlan(
     REF,
     planOpts({ goal: { date: "2026-09-14", weeks_to_race: 6 }, compliance: { actual_km: 10 } })
@@ -563,7 +577,7 @@ test("the same fit, two runways: the rate line separates what the fit sentence c
   assert.ok(nearLine, "and so does one that would need a far hotter build");
   assert.ok(
     RAMP_RATE_NEAR_VARIANTS.includes(farLine),
-    "thirty weeks out, the required step is only a little past sustainable"
+    "thirteen weeks out, the required step is only a little past sustainable"
   );
   assert.ok(
     RAMP_RATE_STEEP_VARIANTS.includes(nearLine),
@@ -572,13 +586,11 @@ test("the same fit, two runways: the rate line separates what the fit sentence c
 });
 
 test("a required step that IS the sustainable step stays quiet — the fit line already said it", () => {
-  // A stretch this far out needs a weekly step a fraction of a percent above the
-  // ceiling. There is no rate story there, and a second sentence saying so would
-  // be the fit sentence again in different words.
-  const plan = repo.weeklyRunPlan(
-    REF,
-    planOpts({ goal: { date: "2027-05-10", weeks_to_race: 40 }, compliance: { actual_km: 17 } })
-  );
+  // A stretch that needs a weekly step a fraction of a percent above the ceiling.
+  // There is no rate story there, and a second sentence saying so would be the fit
+  // sentence again in different words. (Thirteen weeks from 13.5 km; the old fixture,
+  // forty weeks from 17 km, simply arrives once a reset is not lost ground.)
+  const plan = repo.weeklyRunPlan(REF, planOpts({ compliance: { actual_km: 13.5 } }));
   assert.equal(rateLine(plan), null, "inside the margin the rate has nothing to add");
   assert.equal(plan.goal_feasibility.status, "stretch", "…while the destination gap is still named");
 });

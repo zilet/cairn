@@ -68,15 +68,12 @@ function loadPlanEnduranceForPaint({ raceBuildCard } = {}) {
     view,
     stagger: (index) => `--i:${index}`,
     humanDate: (iso) => String(iso || ""),
-    cardioLabel: (item) => String(item?.label || "Run"),
-    cardioPrescription: (item) => String(item?.target_distance_km ? `${item.target_distance_km} km` : ""),
     fmtKm: (km) => String(km),
     fmtDist: (km, units) => (units === "mi" ? `${Number(km) / 1.609344} mi` : `${km} km`),
     enduranceGoalCard: (goal) => `<div class="end-goal">${String(goal?.event || "")}</div>`,
     trainingAgendaCard: () => "",
     runComplianceLine: () => "",
     cardioSyncLine: undefined,
-    isCardioItem: () => false,
     wireCardioSync: undefined,
     loadPlanUpcomingNote: undefined,
     ...(raceBuildCard !== undefined ? { raceBuildCard } : {}),
@@ -99,7 +96,7 @@ test("plan endurance paints the race build card and drops the generic ramp when 
     },
   });
 
-  context.paintPlanEndurance(RACE_GOAL, null, null, [], {}, { available: true, race: { weeks_to_race: 4, phase: "build" } });
+  context.paintPlanEndurance(RACE_GOAL, null, null, {}, { available: true, race: { weeks_to_race: 4, phase: "build" } });
 
   assert.match(body.innerHTML, /data-race-build/);
   assert.doesNotMatch(body.innerHTML, /class="end-ramp reveal"/);
@@ -116,7 +113,7 @@ test("plan endurance keeps today's ramp when the race build is unavailable or th
     raceBuildCard: (build) => (build?.available !== false && build?.race ? '<div data-race-build></div>' : ""),
   });
 
-  context.paintPlanEndurance(RACE_GOAL, null, null, [], {}, { available: false });
+  context.paintPlanEndurance(RACE_GOAL, null, null, {}, { available: false });
 
   assert.doesNotMatch(body.innerHTML, /data-race-build/);
   assert.match(body.innerHTML, /class="end-ramp reveal"/);
@@ -127,7 +124,7 @@ test("plan endurance keeps today's ramp when the race-build fetch rejected (race
     raceBuildCard: (build) => (build?.available !== false && build?.race ? '<div data-race-build></div>' : ""),
   });
 
-  context.paintPlanEndurance(RACE_GOAL, null, null, [], {}, null);
+  context.paintPlanEndurance(RACE_GOAL, null, null, {}, null);
 
   assert.doesNotMatch(body.innerHTML, /data-race-build/);
   assert.match(body.innerHTML, /class="end-ramp reveal"/);
@@ -139,7 +136,7 @@ test("plan endurance never crashes when raceBuildCard is not yet loaded (a diffe
   // the global exists.
   const { context, body } = loadPlanEnduranceForPaint();
 
-  context.paintPlanEndurance(RACE_GOAL, null, null, [], {}, { available: true, race: { weeks_to_race: 4, phase: "build" } });
+  context.paintPlanEndurance(RACE_GOAL, null, null, {}, { available: true, race: { weeks_to_race: 4, phase: "build" } });
 
   assert.doesNotMatch(body.innerHTML, /data-race-build/);
   assert.match(body.innerHTML, /class="end-ramp reveal"/);
@@ -215,6 +212,10 @@ test("plan endurance fetches the race build alongside the rest of the segment's 
   const source = readFileSync(join(root, "src/client/plan-endurance-client.ts"), "utf8");
   assert.match(source, /api\("\/race-build"\)\.catch\(\(\) => null\)/);
   assert.match(source, /typeof raceBuildCard === "function"/);
+  // The one home for runs reads them only from the run endpoints: the lift plan
+  // is never fetched or scanned, and there is no "edit runs in Training" door.
+  assert.doesNotMatch(source, /api\("\/plan"\)/);
+  assert.doesNotMatch(source, /endEditRuns|Edit in Training|edit runs in Training/);
 });
 
 test("plan endurance briefing faces the next open run and next week once this week is banked", () => {

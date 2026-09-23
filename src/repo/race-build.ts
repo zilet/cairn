@@ -35,16 +35,25 @@ import { addDaysISO, daysBetweenISO, isoDaysAgo, mondayOf } from "../lib/dates.j
 import { round1 } from "../lib/numbers.js";
 import { weekLayoutRead, type WeekLayoutRead } from "../domain/training/week-layout.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { harmEvidenceOnDay } from "./brain/read-adherence.js";
 import { matchEnduranceModality } from "./heavy-load.js";
 import { getHrModel } from "./hr-model.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
-import { thisWeekPlanDayMap } from "./plan-selection.js";
+import { heavyLowerWeekdaySlots, thisWeekPlanDayMap } from "./plan-selection.js";
 import { dowToDayNumber, getEnduranceGoal, isoDow, statedRunDows } from "./profile.js";
 import { strengthScheduleRead } from "./strength-schedule.js";
-import { raceRamp, type RaceRampGoal } from "./run-ramp.js";
+import { ENDURANCE_CHRONIC_FLOOR_KM } from "./program-state.js";
+import {
+  acwrCeilingKm,
+  deliverableRunWeek,
+  raceRamp,
+  RESET_TAKEN_FRACTION,
+  type RaceRampCapacity,
+  type RaceRampGoal,
+} from "./run-ramp.js";
 import { weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
 import { localDateISO } from "./shared.js";
-import { lowerBodyPlanDayNumbers, planDayStrengthGroups } from "./training-read.js";
+import { planDayStrengthGroups } from "./training-read.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -345,6 +354,12 @@ const STRENGTH_HINT: Record<RacePhase | "race_week", string> = {
  * current rung has to BE the prescription and has to be what the next rung steps
  * off. Hand it in and the ladder walks from what the athlete is actually running;
  * leave it out and the walk projects the current week from the anchor like any other.
+ *
+ * `opts.priorWeekKm` is the closed week before this one, as logged — what a reset
+ * this week paused at. `opts.demonstratedLongKm` is the longest recent run the
+ * athlete took WELL (`demonstratedLongKm`): capacity already shown, which the long-run
+ * ladder never plans back up to. Both mirror weeklyRunPlan: the week after a reset
+ * steps off the level the reset paused, and a reset holds a well-taken long run.
  */
 export function projectRaceBuildWeeks(
   goal: RaceRampGoal & { date: string; distance_km: number },
@@ -352,32 +367,47 @@ export function projectRaceBuildWeeks(
   anchorKm: number,
   anchorLongKm: number,
   thisWeek?: { km: number; long_km: number | null } | null,
-  nextWeek?: { km: number; long_km: number | null } | null
+  nextWeek?: { km: number; long_km: number | null } | null,
+  opts?: {
+    priorWeekKm?: number | null;
+    demonstratedLongKm?: number | null;
+    capacity?: RaceRampCapacity | null;
+    closedWeeksKm?: readonly number[] | null;
+  }
 ): RaceBuildWeek[] {
   const out: RaceBuildWeek[] = [];
   const raceMonday = mondayOf(goal.date);
   const currentMonday = mondayOf(asOf);
   const nextMonday = addDaysISO(currentMonday, 7);
+  const demonstrated = Number(opts?.demonstratedLongKm) > 0 ? Number(opts?.demonstratedLongKm) : 0;
+  const capacity = opts?.capacity ?? null;
+  // The longest mid-week run the walk has on record — the engine's read to start, then
+  // grown by every projected week's own easy and quality runs, as running them would.
+  let shownMidweek = Number(capacity?.demonstratedMidweekKm) > 0 ? Number(capacity?.demonstratedMidweekKm) : 0;
+  // Every closed week before the walked rung, most recent last: the logged weeks
+  // before this one, then each rung as the walk lays it down.
+  const history: number[] = [...(opts?.closedWeeksKm ?? [])];
   let monday = currentMonday;
   let anchor = anchorKm > 0 ? anchorKm : 6;
-  let long = anchorLongKm > 0 ? anchorLongKm : Math.max(3, anchor * 0.3);
+  let long = Math.max(anchorLongKm > 0 ? anchorLongKm : Math.max(3, anchor * 0.3), demonstrated);
+  // The volume of the rung BEFORE the one being walked — for the current rung that is
+  // last week's logged volume, which the walk's own anchor (this week's prescription)
+  // is not.
+  let prevRungKm = Number(opts?.priorWeekKm) > 0 ? Number(opts?.priorWeekKm) : 0;
   let guard = 0;
   while (monday <= raceMonday && guard++ < 60) {
     const r = raceRamp(goal, monday, anchor, long);
     if (!r) break;
     // The ladder is read by CALENDAR week: the week that holds race day is race week,
-    // whatever weekday the start line falls on. raceRamp's own count is ceil(days/7)
-    // from the Monday, so a Sunday race reads "1 week out" from its own Monday — the
-    // right number for the engine's taper arithmetic, the wrong label for a ladder.
-    const w = Math.round((Date.parse(`${raceMonday}T00:00:00Z`) - Date.parse(`${monday}T00:00:00Z`)) / (7 * 864e5));
+    // whatever weekday the start line falls on — and so is the engine's taper now
+    // (`weeks_to_race_week`), so the label and the prescription are one count.
+    const w = r.weeks_to_race_week;
     const phase = phaseForWeeks(r.weeks_to_race, goal.distance_km);
-    // The KIND follows the engine's arithmetic, so the ladder never labels a week
-    // "peak" that the engine will prescribe as a taper: race week is the calendar
-    // week holding the race; the engine's 1 and 2 are its taper and peak weeks (for a
-    // weekend race the peak is the week before race week and the taper IS race week).
-    const e = r.weeks_to_race;
+    // The KIND follows the engine's arrival shape: race week, the final taper week
+    // before it, the peak week before that — so a weekend half peaks ~3 weeks before
+    // race day and TAPERS the week before race week, instead of peaking into it.
     const kind: RaceWeekKind =
-      w <= 0 ? "race" : e <= 1 ? "taper" : e === 2 ? "peak" : r.down_week ? "down" : "build";
+      w <= 0 ? "race" : w === 1 ? "taper" : w === 2 ? "peak" : r.down_week ? "down" : "build";
     // THIS week is not a projection when the engine has already prescribed it. And
     // the prescription cannot just be painted over the rung afterwards: raceRamp
     // takes the PRIOR week's volume as its anchor, so a walk that carried its own
@@ -391,8 +421,31 @@ export function projectRaceBuildWeeks(
         : monday === nextMonday && nextWeek && nextWeek.km > 0
           ? nextWeek
           : null;
-    const km = live ? live.km : r.required_km;
-    const longKm = live ? (live.long_km ?? r.required_long_km) : r.required_long_km;
+    // A projected reset HOLDS the long run where the walk has it (at or above what was
+    // already run well) — it neither steps under it nor past it; the week comes out of
+    // the easy days. raceRamp's long-run curve has no down weeks of its own.
+    let longKm = live
+      ? (live.long_km ?? r.required_long_km)
+      : kind === "down"
+        ? round1(Math.min(r.required_long_km, long))
+        : r.required_long_km;
+    // A projected rung is what the engine will PRESCRIBE, not the volume it is asked
+    // for: in the athlete's own run week (`capacity`, the engine's fixed run count)
+    // each run keeps its cap, and what the caps cannot carry is not on the card
+    // (deliverableRunWeek — the same arithmetic the engine distributes with). The
+    // next rung steps off what this one really holds, as the engine will.
+    let km = live ? live.km : r.required_km;
+    // And never a step the engine's own ACWR ceiling would trim (acwrCeilingKm, over
+    // the four weeks before this rung — logged, then the rungs themselves): never below
+    // the level the rung steps off, exactly as weeklyRunPlan applies it.
+    const acwrCeiling = live ? null : acwrCeilingKm(history, ENDURANCE_CHRONIC_FLOOR_KM);
+    if (acwrCeiling != null) km = round1(Math.min(km, Math.max(anchor, acwrCeiling)));
+    if (!live && capacity) {
+      const carried = deliverableRunWeek(km, longKm, capacity.shape, shownMidweek || null);
+      km = Math.min(km, carried.km);
+      longKm = carried.long_km;
+      shownMidweek = Math.max(shownMidweek, carried.easy_km, carried.quality_km);
+    }
     out.push({
       week_start: monday,
       weeks_to_race: w,
@@ -404,8 +457,15 @@ export function projectRaceBuildWeeks(
       strength_hint: kind === "race" ? STRENGTH_HINT.race_week : STRENGTH_HINT[phase],
       current: monday === currentMonday,
     });
-    anchor = km;
-    long = longKm;
+    history.push(km);
+    // The next rung steps off this one — except after a reset actually run as a
+    // lighter week, where it steps off the level the reset paused (weeklyRunPlan's
+    // RESET_TAKEN_FRACTION rule), and never plans the long run back UP to what has
+    // already been run well.
+    const resumes = kind === "down" && prevRungKm > km && km >= prevRungKm * RESET_TAKEN_FRACTION;
+    anchor = resumes ? prevRungKm : km;
+    long = kind === "race" || kind === "taper" ? longKm : Math.max(longKm, demonstrated, kind === "down" ? long : 0);
+    prevRungKm = km;
     const next = addDaysISO(monday, 7);
     if (!next) break;
     monday = next;
@@ -525,6 +585,29 @@ function runPrediction(distanceKm: number, runs: RunRow[]): RacePrediction | nul
     gap_sec: null,
     fit: null,
   };
+}
+
+/**
+ * The longest run of the last 28 days the athlete took WELL — `harmEvidenceOnDay`
+ * clears its day (no poor rating, not past the build's own ceiling, no bad next
+ * morning). That is capacity already demonstrated: the ladder holds it on a reset and
+ * steps off it on a build, and never plans a climb back up to it. A longest the body
+ * paid for is not counted; the next-longest that it took well is. Null when none.
+ */
+export function demonstratedLongKm(asOf: string, runs: { date: string; km: number }[]): number | null {
+  const recent = runs
+    .filter((r) => r.km > 0 && r.date <= asOf && (daysBetweenISO(asOf, r.date) ?? 99) <= 28)
+    .sort((a, b) => b.km - a.km);
+  for (const r of recent) {
+    let harmed = false;
+    try {
+      harmed = harmEvidenceOnDay(r.date) != null;
+    } catch {
+      harmed = false;
+    }
+    if (!harmed) return round1(r.km);
+  }
+  return null;
 }
 
 function weeklyReview(asOf: string, runs: RunRow[]): RaceBuild["review"] {
@@ -737,20 +820,37 @@ export function raceBuild(
   const nextRuns = nextPlan?.available ? nextPlan.runs : [];
   const nextKm = round1(nextRuns.reduce((s, r) => s + (r.target_distance_km != null ? Number(r.target_distance_km) : 0), 0));
   const nextLong = nextRuns.find((r) => r.kind_label === "long");
+  const priorWeekKm = review.weeks.find((w) => w.week_start === addDaysISO(thisMonday, -7))?.km ?? null;
   const weeks = projectRaceBuildWeeks(
     rampGoal,
     asOf,
     anchorKm,
     anchorLong,
     weekKm > 0 ? { km: weekKm, long_km: longKm } : null,
-    nextKm > 0 ? { km: nextKm, long_km: nextLong?.target_distance_km != null ? Number(nextLong.target_distance_km) : null } : null
+    nextKm > 0 ? { km: nextKm, long_km: nextLong?.target_distance_km != null ? Number(nextLong.target_distance_km) : null } : null,
+    {
+      priorWeekKm,
+      closedWeeksKm: review.weeks.map((w) => w.km),
+      demonstratedLongKm: demonstratedLongKm(asOf, logRuns),
+      // The engine's own run week, when its run count is fixed — so a projected rung is
+      // what the engine will prescribe in those runs, not a volume they cannot carry.
+      capacity: plan?.goal_feasibility?.capacity
+        ? {
+            shape: plan.goal_feasibility.capacity,
+            demonstratedMidweekKm: plan.goal_feasibility.capacity.demonstrated_midweek_km,
+          }
+        : null,
+    }
   );
 
   // ---- the ring: runs, strength, ride ----
-  const heavyLower = safe(() => lowerBodyPlanDayNumbers()) ?? new Set<number>();
+  // Runs are the engine's week (never plan rows); strength is the lifting week laid onto
+  // its weekdays. `heavyLower` is therefore WEEKDAY slots (Mon = 1), the same axis the
+  // runs and the ride sit on — never a plan day number.
+  const heavyLower = safe(() => heavyLowerWeekdaySlots(asOf)) ?? new Set<number>();
   const strengthDays = new Map<number, { name: string; heavy_lower: boolean }>();
   for (const g of safe(() => planDayStrengthGroups()) ?? []) {
-    if (g.day_type === "rest" || !g.groups.length) continue;
+    if (!g.groups.length) continue;
     strengthDays.set(g.day_number, { name: planDayName(g.day_number) ?? g.focus ?? "Strength", heavy_lower: g.heavy_lower });
   }
   const impacts = safe(() => recentEnduranceImpacts(42, asOf)) ?? [];
@@ -803,14 +903,7 @@ export function raceBuild(
     // Same map as the leg map: with a stated lifting week a template day's weekday is
     // wherever the ring lands it, not its number. Unmapped (a day the week does not
     // reach) is left out rather than given a weekday it will not be trained on.
-    heavy_lower_days: weekMap.size
-      ? [1, 2, 3, 4, 5, 6, 7]
-          .filter((d) => {
-            const m = weekMap.get(d === 7 ? 0 : d);
-            return !!m && heavyLower.has(m.day_number);
-          })
-          .map(weekdayOfDayNumber)
-      : [...heavyLower].sort((a, b) => a - b).map(weekdayOfDayNumber),
+    heavy_lower_days: [...heavyLower].sort((a, b) => a - b).map(weekdayOfDayNumber),
     principle: weeksToRace <= 0 ? STRENGTH_HINT.race_week : STRENGTH_HINT[phase],
     layout: layout && !layout.clean ? layout.suggestion : null,
     clean: layout ? layout.clean : true,

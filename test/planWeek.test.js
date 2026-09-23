@@ -75,13 +75,19 @@ test("logged session marks the day done", () => {
 });
 
 test("rest day status is rest when no session", () => {
+  // Rest is a calendar fact, not a plan row: a weekday neither lifted nor run on.
   pushDay(1, "Push", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
-  pushDay(2, "Rest", null, [], "rest");
+  assert.throws(() => pushDay(2, "Rest", null, [], "rest"), /Rest days aren't plan days/);
   setStrengthSchedule([1]); // only Monday lifts
   const week = planWeek(REF);
-  // Some free weekday should map to rest
-  const restCells = week.days.filter((d) => d.plan_day?.day_type === "rest" || d.status === "rest");
+  const restCells = week.days.filter((d) => d.status === "rest");
   assert.ok(restCells.length >= 1, "expected at least one rest cell");
+  for (const cell of restCells) {
+    assert.equal(cell.plan_day, null, "a rest cell borrows no plan row");
+    assert.equal(cell.run, null);
+    assert.notEqual(cell.dow, 1, "the lifting weekday is never rest");
+  }
+  assert.equal(week.days.find((d) => d.dow === 1)?.plan_day?.role, "strength");
 });
 
 test("out_of_order is true when curl precedes squat on the plan day", () => {
@@ -134,11 +140,9 @@ test("an empty week carries no progress line", () => {
   assert.equal(week.progress.lift_days_done, 0);
 });
 
-test("a template run day whose run already landed elsewhere reads covered, never up next", () => {
+test("a stated run day whose run already landed elsewhere reads covered, never up next", () => {
+  // The long run comes from the stated run days, never a plan row.
   pushDay(1, "Push", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
-  pushDay(2, "Long Run", "Aerobic endurance", [
-    { kind: "cardio", exercise: "Run", note: "Long run — genuinely easy in Z2", target_distance_km: 8 },
-  ]);
   setStrengthSchedule([1, 3, 5]);
   repo.setProfile({ endurance_schedule: { days: [{ dow: 6, kind: "long" }], source: "athlete", updated_at: REF } });
   // The long run happened Tuesday, not Saturday.
@@ -146,9 +150,8 @@ test("a template run day whose run already landed elsewhere reads covered, never
   const week = planWeek("2026-04-22");
   const sat = week.days.find((d) => d.date === "2026-04-25");
   assert.ok(sat);
-  if (sat.plan_day?.role === "endurance") {
-    assert.notEqual(sat.status, "upcoming", JSON.stringify(sat));
-    assert.equal(sat.run?.status, "completed");
-    assert.equal(sat.run?.completion_date, "2026-04-21");
-  }
+  assert.equal(sat.plan_day, null, "a stated run weekday carries no plan row");
+  assert.notEqual(sat.status, "upcoming", JSON.stringify(sat));
+  assert.equal(sat.run?.status, "completed");
+  assert.equal(sat.run?.completion_date, "2026-04-21");
 });

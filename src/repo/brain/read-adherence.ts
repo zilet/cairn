@@ -34,11 +34,15 @@ import {
   transitionBrainDecision,
 } from "../brain-decisions.js";
 import { getEnduranceGoal, getEnduranceSchedule, isoDow } from "../profile.js";
+import { withoutShadowActivities } from "../activity-shadow.js";
 import { activeRecoveryWeek } from "../recovery-week.js";
 import { peakLongKm } from "../run-ramp.js";
 import { readinessBand, readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
+import { RECOVERY_BASELINE_MIN_POINTS } from "../baseline-bands.js";
+import { sampleSd } from "../recovery-science.js";
+import { recoveryTrendBars } from "../recovery-trend.js";
 import { SENSOR_MAX_AGE_DAYS, isReadDayReadiness, sensorIsCurrent } from "../sensor-freshness.js";
-import { addDaysISO, localDateISO } from "../shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO } from "../shared.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear } from "../training-cache.js";
 import { getTrainingIntent } from "../training-intent.js";
 import {
@@ -213,9 +217,20 @@ export function dayTrainingTruth(date: string, opts: DayTrainingTruthOptions = {
   const setRow = db
     .prepare(`SELECT COUNT(*) AS n FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date = ?`)
     .get(date) as { n?: number } | undefined;
-  const activityRows = db
-    .prepare(`SELECT duration_min, distance_km FROM activities WHERE date = ? LIMIT 100`)
-    .all(date) as Array<{ duration_min: number | null; distance_km: number | null }>;
+  // A hand-logged shadow of a synced effort is one activity, not two, toward the
+  // day's activity count (compared against a stored fingerprint downstream).
+  const activityRows = withoutShadowActivities(
+    db
+      .prepare(`SELECT date, type, source, external_id, duration_min, distance_km FROM activities WHERE date = ? LIMIT 100`)
+      .all(date) as Array<{
+      date: string;
+      type: string | null;
+      source: string | null;
+      external_id: string | null;
+      duration_min: number | null;
+      distance_km: number | null;
+    }>
+  );
   const sets = Number(setRow?.n ?? 0);
   const realActivities = activityRows.filter(
     (row) => (row.duration_min != null && Number(row.duration_min) >= 20) || row.distance_km != null
@@ -689,6 +704,10 @@ export interface ReadAdherenceDay {
   // ladder's day, and counting it as an ordinary easy morning would chain the two into
   // a single rest → train step.
   easy_softened: boolean;
+  // Was this morning's read moved by the LONG loop (trainsAnywayWithoutHarm) — opened
+  // to train, or eased from rest to easy? Keeps that loop's own mornings in its
+  // evidence once it acts (see learnedQuietMorning). Optional: absent reads as false.
+  learned_opened?: boolean;
 }
 
 export interface ReadAdherenceModel {
@@ -705,6 +724,7 @@ export interface MorningRead {
   kind: PredictiveDayReadKind;
   softened: boolean;
   easySoftened: boolean;
+  learnedOpened: boolean;
 }
 
 // ---------- WHICH READ THE ATHLETE ACTUALLY OPENED TO ----------
@@ -892,6 +912,7 @@ function morningDecisionsByDate(from: string, to: string): Map<string, MorningDe
       kind: row.kind,
       softened: signals?.outcome_feedback?.applied === true,
       easySoftened: signals?.easy_outcome_feedback?.applied === true,
+      learnedOpened: signals?.learned_train_anyway?.applied === true,
       context,
     });
   }
@@ -901,7 +922,12 @@ function morningDecisionsByDate(from: string, to: string): Map<string, MorningDe
 function morningReadsByDate(from: string, to: string): Map<string, MorningRead> {
   const out = new Map<string, MorningRead>();
   for (const [date, decision] of morningDecisionsByDate(from, to)) {
-    out.set(date, { kind: decision.kind, softened: decision.softened, easySoftened: decision.easySoftened });
+    out.set(date, {
+      kind: decision.kind,
+      softened: decision.softened,
+      easySoftened: decision.easySoftened,
+      learnedOpened: decision.learnedOpened,
+    });
   }
   return out;
 }
@@ -986,6 +1012,7 @@ export function readAdherenceModel(
       trained: truth.trained,
       softened: morning.softened,
       easy_softened: morning.easySoftened,
+      learned_opened: morning.learnedOpened,
     });
   }
 
@@ -1082,22 +1109,44 @@ const NO_SOFTENING: RestOverrideSoftening = Object.freeze({
 //                      `hardCardioDay` duration bar is deliberately NOT harm here —
 //                      an ordinary 45-minute easy run is a loading day, not an injury.
 //   • A FIRST        — the longest run in months (`longestRunNovelty`). Novel stimulus.
-//   • THE NEXT MORNING — a FRESH rest-grade readiness reading, or fresh physiology
-//                      reading as a brake (Garmin's own low/poor HRV status, or a
-//                      resting HR clearly above its own seven-day average). This is
-//                      the body answering; it outranks the absence of a rating.
+//   • THE NEXT MORNING — a FRESH rest-grade readiness reading, or that night's HRV or
+//                      resting HR past the athlete's OWN band, charged once per
+//                      episode (see PERSONAL_BAND_DAYS below). This is the body
+//                      answering; it outranks the absence of a rating.
 //
 // What has NOT changed is the direction of absence. No rating, no wearable, no run
 // — no harm. Every arm here needs POSITIVE evidence, freshness included, and every
 // failure path returns "no harm found" rather than manufacturing one.
 
-// How far a resting HR must sit above its own recent average to read as a brake.
-// Garmin publishes the seven-day average on the same row, so this is a personal
-// comparison, never a population number. Five beats is the conventional "something
-// is going on" step and is well clear of night-to-night noise.
+// ---------- THE BODY'S ANSWER IS READ AGAINST THIS ATHLETE, ONCE PER EPISODE ----------
+// (2026-09-23.) The overnight arms used to read two stand-ins: Garmin's `hrv_status`
+// word, and resting HR five beats over the row's own `hr_7d_avg`. The status word is a
+// SEVEN-DAY verdict, so one dip read LOW three mornings running (live: 09-17..09-19)
+// and was charged as three separate harms to three different training days; and the
+// 7-day HR column is not even always a resting figure (it read 71-73 bpm against a
+// 54 bpm resting HR on the live record).
+//
+// So each overnight reading is now judged against the athlete's OWN nights: the
+// readings in the PERSONAL_BAND_DAYS before that morning, needing
+// RECOVERY_BASELINE_MIN_POINTS of them (the same floor their visible "usual range"
+// uses). One night is judged by one of THEIR standard deviations — never narrower than
+// recoveryTrendBars, the one answer to "is this drift meaningful for this person" —
+// because a single night is noisier than the medians those bars were written for. Only
+// the night dated the morning itself may speak for it — the one-night law isLastNight
+// states for sleep: the training day's own morning is not its answer.
+//
+// And a brake is charged only at its ONSET. When the reading before it (the training
+// day's own morning, or the newest one within the signal's age bound) already sat past
+// the same band, the dip was there before the work and the work did not cause it — the
+// episode is charged once, to the day it began after.
+//
+// With too few nights for a band, the watch's own personal-baseline verdicts stand in,
+// under the same onset rule: its status word, and resting HR over its 7-day figure.
+const PERSONAL_BAND_DAYS = 28;
+// Fallback only (no personal band yet). Five beats is the conventional "something is
+// going on" step and is well clear of night-to-night noise.
 const RESTING_HR_BRAKE_DELTA_BPM = 5;
-// The HRV verdicts the watch itself calls bad. Read as a WORD, not re-derived from
-// a baseline we would then have to keep in sync with baseline-bands.
+// Fallback only: the HRV verdicts the watch itself calls bad, read as a WORD.
 const HRV_BRAKE_STATUSES: ReadonlySet<string> = new Set(["low", "poor"]);
 
 export type HarmEvidenceKind =
@@ -1253,11 +1302,13 @@ function trainedOnDate(date: string): boolean {
 let readinessMemo = new Map<string, number | null>();
 let metricsRowMemo = new Map<string, any>();
 let brakeMemo = new Map<string, HarmEvidence | null>();
+let physiologyMemo = new Map<string, OvernightPhysiology>();
 let memoVersion = currentTrainingDataVersion();
 registerTrainingCacheClear(() => {
   readinessMemo = new Map();
   metricsRowMemo = new Map();
   brakeMemo = new Map();
+  physiologyMemo = new Map();
   memoVersion = currentTrainingDataVersion();
 });
 
@@ -1267,6 +1318,7 @@ function memoFor<T>(store: Map<string, T>, morning: string, compute: () => T): T
     readinessMemo = new Map();
     metricsRowMemo = new Map();
     brakeMemo = new Map();
+    physiologyMemo = new Map();
     memoVersion = version;
   }
   // Only closed mornings are cacheable — see above.
@@ -1347,27 +1399,158 @@ function nextMorningPhysiologyBrakeUncached(date: string, morning: string): Harm
       detail: `readiness ${readiness} on ${morning}`,
     };
   }
-  const row = morningMetricsRow(morning);
-  if (!row) return null;
-  const readingDate = row.date == null ? null : String(row.date);
-  if (sensorIsCurrent("hrv", readingDate, morning)) {
-    const status = String(row.hrv_status ?? "").toLowerCase();
-    if (status && HRV_BRAKE_STATUSES.has(status)) {
-      return { date, kind: "physiology_brake", detail: `hrv status ${status} on ${morning}` };
-    }
+  // The overnight arms charge only an ONSET (see PERSONAL_BAND_DAYS above).
+  const overnight = overnightPhysiology(morning);
+  const onset = overnight.hrv?.onset ? overnight.hrv : overnight.rhr?.onset ? overnight.rhr : null;
+  return onset ? { date, kind: "physiology_brake", detail: onset.detail } : null;
+}
+
+// ---------- the overnight arms, per morning ----------
+interface OvernightArm {
+  // Machine register provenance ("hrv 38 below own band 41 on …").
+  detail: string;
+  // False when the reading before it already sat past the same line: the episode
+  // started earlier, so this morning is its continuation, not news about yesterday.
+  onset: boolean;
+}
+
+interface OvernightPhysiology {
+  hrv: OvernightArm | null;
+  rhr: OvernightArm | null;
+}
+
+interface OvernightNight {
+  hrv_ms: number | null;
+  resting_hr: number | null;
+  hrv_status: string | null;
+  hr_7d_avg: number | null;
+}
+
+function overnightPhysiology(morning: string): OvernightPhysiology {
+  return memoFor(physiologyMemo, morning, () => overnightPhysiologyUncached(morning));
+}
+
+// The athlete's nights up to `morning`, Garmin preferred per field per date (the same
+// precedence getRecoveryBaselineRead uses), in ONE statement — this runs inside the
+// harm test every softening ladder asks per day, so it is kept to a single read.
+function overnightNights(from: string, to: string): Map<string, OvernightNight> {
+  const byDate = new Map<string, OvernightNight>();
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT 0 AS pref, date, hrv_ms, resting_hr, hrv_status, hr_7d_avg FROM garmin_daily_metrics
+          WHERE date >= ? AND date <= ?
+         UNION ALL
+         SELECT 1 AS pref, date, hrv_ms, resting_hr, NULL AS hrv_status, NULL AS hr_7d_avg FROM daily_metrics
+          WHERE date >= ? AND date <= ?
+         ORDER BY pref`
+      )
+      .all(from, to, from, to) as any[];
+  } catch {
+    return byDate;
   }
-  if (sensorIsCurrent("resting_hr", readingDate, morning)) {
-    const rhr = Number(row.resting_hr);
-    const avg = Number(row.hr_7d_avg);
-    if (Number.isFinite(rhr) && Number.isFinite(avg) && avg > 0 && rhr >= avg + RESTING_HR_BRAKE_DELTA_BPM) {
-      return {
-        date,
-        kind: "physiology_brake",
-        detail: `resting hr ${Math.round(rhr)} vs 7-day ${Math.round(avg)} on ${morning}`,
+  const positive = (value: unknown): number | null => {
+    const n = readingNumber(value);
+    return n != null && n > 0 ? n : null;
+  };
+  for (const row of rows) {
+    const date = String(row.date ?? "").slice(0, 10);
+    if (!date) continue;
+    const night = byDate.get(date) ?? { hrv_ms: null, resting_hr: null, hrv_status: null, hr_7d_avg: null };
+    night.hrv_ms ??= positive(row.hrv_ms);
+    night.resting_hr ??= positive(row.resting_hr);
+    night.hrv_status ??= row.hrv_status == null || row.hrv_status === "" ? null : String(row.hrv_status).toLowerCase();
+    night.hr_7d_avg ??= positive(row.hr_7d_avg);
+    byDate.set(date, night);
+  }
+  return byDate;
+}
+
+// The line one night has to cross to count, off the athlete's own nights before
+// `morning`: their mean, less (HRV) or plus (resting HR) one of their own standard
+// deviations, never narrower than recoveryTrendBars. Null below the band's floor.
+function personalLine(
+  nights: Map<string, OvernightNight>,
+  field: "hrv_ms" | "resting_hr",
+  morning: string
+): number | null {
+  const values: number[] = [];
+  for (const [date, night] of nights) {
+    const value = night[field];
+    if (date < morning && value != null) values.push(value);
+  }
+  if (values.length < RECOVERY_BASELINE_MIN_POINTS) return null;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const sd = sampleSd(values) ?? 0;
+  const bars = recoveryTrendBars({ hrv: mean, rhr: mean });
+  return field === "hrv_ms" ? mean - Math.max(bars.hrv, sd) : mean + Math.max(bars.rhr, sd);
+}
+
+function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
+  const none: OvernightPhysiology = { hrv: null, rhr: null };
+  const lookback = Math.max(SENSOR_MAX_AGE_DAYS.hrv, SENSOR_MAX_AGE_DAYS.resting_hr);
+  const from = addDaysISO(morning, -(PERSONAL_BAND_DAYS + lookback));
+  if (!from) return none;
+  const nights = overnightNights(from, morning);
+  // Only the night dated the morning itself answers for the day before it.
+  const tonight = nights.get(morning);
+  if (!tonight) return none;
+  // The newest earlier reading of a field that may still speak for `morning` — the
+  // other end of the episode test.
+  const before = (field: keyof OvernightNight, signal: "hrv" | "resting_hr"): OvernightNight | null => {
+    let found: { date: string; night: OvernightNight } | null = null;
+    for (const [date, night] of nights) {
+      if (date >= morning || night[field] == null || !sensorIsCurrent(signal, date, morning)) continue;
+      if (!found || date > found.date) found = { date, night };
+    }
+    return found?.night ?? null;
+  };
+
+  let hrv: OvernightArm | null = null;
+  const hrvLine = personalLine(nights, "hrv_ms", morning);
+  if (hrvLine != null) {
+    if (tonight.hrv_ms != null && tonight.hrv_ms < hrvLine) {
+      const prior = before("hrv_ms", "hrv")?.hrv_ms ?? null;
+      hrv = {
+        detail: `hrv ${Math.round(tonight.hrv_ms)} below own band ${hrvLine.toFixed(1)} on ${morning}`,
+        onset: !(prior != null && prior < hrvLine),
       };
     }
+  } else if (tonight.hrv_status && HRV_BRAKE_STATUSES.has(tonight.hrv_status)) {
+    const prior = before("hrv_status", "hrv")?.hrv_status ?? null;
+    hrv = {
+      detail: `hrv status ${tonight.hrv_status} on ${morning}`,
+      onset: !(prior != null && HRV_BRAKE_STATUSES.has(prior)),
+    };
   }
-  return null;
+
+  let rhr: OvernightArm | null = null;
+  const rhrLine = personalLine(nights, "resting_hr", morning);
+  if (rhrLine != null) {
+    if (tonight.resting_hr != null && tonight.resting_hr > rhrLine) {
+      const prior = before("resting_hr", "resting_hr")?.resting_hr ?? null;
+      rhr = {
+        detail: `resting hr ${Math.round(tonight.resting_hr)} above own band ${rhrLine.toFixed(1)} on ${morning}`,
+        onset: !(prior != null && prior > rhrLine),
+      };
+    }
+  } else if (
+    tonight.resting_hr != null &&
+    tonight.hr_7d_avg != null &&
+    tonight.resting_hr >= tonight.hr_7d_avg + RESTING_HR_BRAKE_DELTA_BPM
+  ) {
+    const earlier = before("resting_hr", "resting_hr");
+    const continuing =
+      earlier?.resting_hr != null &&
+      earlier.hr_7d_avg != null &&
+      earlier.resting_hr >= earlier.hr_7d_avg + RESTING_HR_BRAKE_DELTA_BPM;
+    rhr = {
+      detail: `resting hr ${Math.round(tonight.resting_hr)} vs 7-day ${Math.round(tonight.hr_7d_avg)} on ${morning}`,
+      onset: !continuing,
+    };
+  }
+  return { hrv, rhr };
 }
 
 // ---------- A HARD EFFORT THE BODY ABSORBED IS NOT A COST ----------
@@ -1399,7 +1582,10 @@ function nextMorningAbsorbedIt(date: string): boolean {
   if (!morning) return false;
   const readiness = morningReadiness(morning);
   if (readiness == null || readiness < SUPPORTIVE_READINESS) return false;
-  return nextMorningPhysiologyBrake(date) == null;
+  // "No brake at all" means the RAW overnight read, not the onset-only charge: a dip
+  // that began before the work is not news about the day, but it is not a vouch either.
+  const overnight = overnightPhysiology(morning);
+  return nextMorningPhysiologyBrake(date) == null && !overnight.hrv && !overnight.rhr;
 }
 
 // ---------- THE BUILD'S OWN PRESCRIPTION IS NOT HARM ----------
@@ -1514,8 +1700,10 @@ export function trainedWithoutHarm(date: string): boolean {
 // A plain, unsoftened easy morning is neither evidence nor a reset. It was never a
 // rest the read had to argue for, so training through it says nothing about whether
 // the athlete disagrees with the quiet reads, and taking it easy says nothing either.
+// (An easy morning the LONG loop eased from rest — `learned_opened` on an easy read —
+// is the same fact as a softened one and is counted the same way, here and below.)
 function softeningRelevant(day: ReadAdherenceDay): boolean {
-  return day.read === "rest" || (day.read === "easy" && day.softened);
+  return day.read === "rest" || (day.read === "easy" && (day.softened || day.learned_opened === true));
 }
 
 // The bounded softening signal for `asOf`, read off a model the caller already
@@ -1610,7 +1798,10 @@ const NO_EASY_SOFTENING: EasyOverrideSoftening = Object.freeze({
 // neither. It belongs to that ladder's evidence, and counting it here would compose the
 // two into a single rest → train step that neither rule is allowed to take.
 function easySofteningRelevant(day: ReadAdherenceDay): boolean {
-  return (day.read === "easy" && !day.softened) || (day.read === "train" && day.easy_softened);
+  return (
+    (day.read === "easy" && !day.softened && day.learned_opened !== true) ||
+    (day.read === "train" && day.easy_softened)
+  );
 }
 
 // Did the day go ABOVE easy? The same test readAdherenceOutcome holds an easy read to
@@ -1645,22 +1836,54 @@ export function easyOverrideSoftening(model: ReadAdherenceModel | null, asOf: st
   };
 }
 
-// ---------- the MATURE learning: "you train anyway, and it costs you nothing" ----------
+// ---------- the LONG learning: "you train anyway, and it costs you nothing" ----------
 //
 // The two ladders above each move a read ONE rung on ten days of evidence. They are the
 // short loop. This is the long one (owner ruling, 2026-09-22): over six weeks the
 // athlete trained through 17 of 22 rest reads and 31 of 38 easy reads, and the learning
-// that said so was prose only — "never what it's allowed to say". When the pattern is
-// MATURE (at least ten quiet mornings in the window, two thirds of them trained through,
-// three in four of those at no cost, and the newest such divergence clean), a non-floor
-// quiet read may say "train, with the caveat". Which reads are non-floor is the
-// caller's question (day-read.ts keeps every health, safety, rest-grade, injury and
-// acute-gate floor out of it); this only answers whether the evidence is there.
+// that said so was prose only — "never what it's allowed to say". Which reads are
+// non-floor is the caller's question (day-read.ts keeps every health, safety,
+// rest-grade, injury and acute-gate floor out of it); this only answers how much the
+// evidence weighs.
+//
+// ---- a WEIGHT, not a cliff (2026-09-23) ----
+// It shipped as one conjunction — two thirds trained through AND three in four clean
+// AND the newest clean — and missed on its first live morning by a single day (17 × 4
+// = 68 < 69): twenty-three overrides, seventeen of them at no cost, counted exactly as
+// much as none. So the evidence is now a continuous weight:
+//
+//     weight = (trained through ÷ (quiet mornings + PRIOR)) × (clean ÷ (trained through + PRIOR))
+//
+// every morning weighted by recency (half-life LEARNED_TRAIN_HALF_LIFE_DAYS, so last
+// week's cost counts about twice what a month-old one does — which is what the old
+// "newest clean" clause was reaching for, without the cliff). PRIOR is a pair of
+// imagined mornings the athlete honored, so a thin record is pulled toward zero rather
+// than read at face value. More harm-free overrides → a heavier weight → a quieter read
+// moves further (learnedQuietStep). Below the small-sample floor — fewer than
+// LEARNED_TRAIN_MIN_MORNINGS quiet mornings, or fewer than LEARNED_TRAIN_MIN_CLEAN
+// clean overrides — the weight is zero: two overrides can never move anything.
 export const LEARNED_TRAIN_WINDOW_DAYS = 42;
 export const LEARNED_TRAIN_MIN_MORNINGS = 10;
+// The short ladders' own "three is a pattern" bar, so neither loop can be moved by less.
+export const LEARNED_TRAIN_MIN_CLEAN = OUTCOME_SOFTENING_MIN_DIVERGENCES;
+export const LEARNED_TRAIN_HALF_LIFE_DAYS = 21;
+const LEARNED_TRAIN_PRIOR = 2;
+// How far a quiet read moves at a given weight. An easy read needs less evidence to
+// open than a rest read, and a rest read eases one rung (to easy) before it opens.
+// The rest → train bar sits inside the band the old conjunction's own floor spanned
+// once the prior is applied (⅔ trained through × ¾ clean reads 0.39–0.5 here,
+// depending on how many mornings carried it), so a record that used to open a rest
+// still does, and a record just short of it now moves one rung instead of none.
+export const LEARNED_EASE_REST_WEIGHT = 0.25;
+export const LEARNED_OPEN_EASY_WEIGHT = 0.35;
+export const LEARNED_OPEN_REST_WEIGHT = 0.45;
 
 export interface TrainAnywayLearning {
+  // The weight can open at least an easy read to train (weight ≥ LEARNED_OPEN_EASY_WEIGHT).
   mature: boolean;
+  // 0..1, two decimals. MACHINE register: a measure of the evidence about the READS,
+  // never a grade of the athlete, and never rendered as a number to them.
+  weight: number;
   window_days: number;
   quiet_mornings: number;
   trained_through: number;
@@ -1669,14 +1892,34 @@ export interface TrainAnywayLearning {
 
 const NO_TRAIN_ANYWAY: TrainAnywayLearning = Object.freeze({
   mature: false,
+  weight: 0,
   window_days: LEARNED_TRAIN_WINDOW_DAYS,
   quiet_mornings: 0,
   trained_through: 0,
   trained_without_harm: [],
 });
 
+// Which read the learning moves a quiet read to at `weight`, or null for "stays". One
+// function so the caller and the tests cannot disagree about the rungs.
+export function learnedQuietStep(kind: unknown, weight: number): "train" | "easy" | null {
+  if (!Number.isFinite(weight)) return null;
+  if (kind === "easy") return weight >= LEARNED_OPEN_EASY_WEIGHT ? "train" : null;
+  if (kind === "rest")
+    return weight >= LEARNED_OPEN_REST_WEIGHT ? "train" : weight >= LEARNED_EASE_REST_WEIGHT ? "easy" : null;
+  return null;
+}
+
+// A quiet morning for this learning: a rest or easy read — or a train read THIS loop
+// opened. Counting only the first two was self-extinguishing: once the learning opens
+// days, they stop reading quiet, the window empties and the read relapses on a cycle —
+// the defect the short ladders' `softened` flags were written to fix.
+function learnedQuietMorning(day: ReadAdherenceDay): boolean {
+  return day.read === "rest" || day.read === "easy" || (day.read === "train" && day.learned_opened === true);
+}
+
 // Diverged from the quiet read by the SAME test each ladder holds its own read to: a
-// rest read is diverged by any training, an easy read only by going above easy.
+// rest read is diverged by any training, an easy read (or one this loop opened) only
+// by going above easy.
 function divergedFromQuietRead(day: ReadAdherenceDay): boolean {
   return day.read === "rest" ? day.trained : wentAboveEasy(day);
 }
@@ -1687,21 +1930,25 @@ export function trainsAnywayWithoutHarm(model: ReadAdherenceModel | null, asOf: 
   const from = addDaysISO(asOf, -LEARNED_TRAIN_WINDOW_DAYS);
   if (!lastClosed || !from) return NO_TRAIN_ANYWAY;
   const quiet = model.recent
-    .filter((day) => day.date >= from && day.date <= lastClosed && (day.read === "rest" || day.read === "easy"))
+    .filter((day) => day.date >= from && day.date <= lastClosed && learnedQuietMorning(day))
     .sort((a, b) => a.date.localeCompare(b.date));
   const diverged = quiet.filter(divergedFromQuietRead).map((day) => day.date);
   const clean = diverged.filter(trainedWithoutHarm);
-  const newest = diverged.at(-1);
+  const recency = (date: string): number => {
+    const age = daysBetweenISO(asOf, date);
+    return age == null ? 0 : 0.5 ** (Math.max(0, age) / LEARNED_TRAIN_HALF_LIFE_DAYS);
+  };
+  const mass = (dates: string[]): number => dates.reduce((sum, date) => sum + recency(date), 0);
+  const floorMet = quiet.length >= LEARNED_TRAIN_MIN_MORNINGS && clean.length >= LEARNED_TRAIN_MIN_CLEAN;
+  const quietMass = mass(quiet.map((day) => day.date));
+  const divergedMass = mass(diverged);
+  const raw = floorMet
+    ? (divergedMass / (quietMass + LEARNED_TRAIN_PRIOR)) * (mass(clean) / (divergedMass + LEARNED_TRAIN_PRIOR))
+    : 0;
+  const weight = Math.round(Math.max(0, Math.min(1, raw)) * 100) / 100;
   return {
-    // "You usually train anyway" is the same lopsided bar the Learned timeline's
-    // sentence uses (two thirds); "…without harm" asks three in four of those days to
-    // have cost nothing, and the newest to be clean.
-    mature:
-      quiet.length >= LEARNED_TRAIN_MIN_MORNINGS &&
-      diverged.length * 3 >= quiet.length * 2 &&
-      clean.length * 4 >= diverged.length * 3 &&
-      newest != null &&
-      clean.includes(newest),
+    mature: weight >= LEARNED_OPEN_EASY_WEIGHT,
+    weight,
     window_days: LEARNED_TRAIN_WINDOW_DAYS,
     quiet_mornings: quiet.length,
     trained_through: diverged.length,

@@ -598,19 +598,18 @@ export const CHAT_ACTION_PROMPT_SPECS = {
   set_run: {
     type: "set_run",
     applyMode: "immediate",
-    shape: `// ONE run in the CURRENT week. This is the ONLY action that can write a run
-    // prescription — plan_update reaches loaded movements only, so a run sent through it
-    // silently becomes a lifting movement. Zone is a KEY; Cairn renders the athlete's own
-    // bpm band from their personal HR model.
-    { "type": "set_run", "day_number": <plan day from DATA.plan>, "kind": "easy|quality|long",
+    shape: `// RETIRED for writing. Runs are not plan items: each week's runs follow the
+    // athlete's stated run days and are sized by Cairn's run engine, so no single run's
+    // dose is stored. The server answers set_run with a calm refusal that points at the
+    // run days. Shape kept so an old reply still parses.
+    { "type": "set_run", "day_number": <1-7>, "kind": "easy|quality|long",
       "distance_km": <number|null>, "duration_min": <number|null>, "zone": "z1|z2|z3|z4|z5|null",
       "label": "<e.g. 'Easy run' — omit to keep the run's current label>",
       "match_label": "<which run, ONLY when that day already carries more than one>",
       "reason": "<one line: why>" }`,
     guidance: [
-      `set_run sets or adjusts exactly ONE run on ONE plan day of the current week ("make tomorrow's run 8k easy", "drop Thursday's tempo to 6k", "make the long run 75 minutes"). Use the day_number from DATA.plan — never invent one. It preserves that day's lifting and every other run on it. NEVER use plan_update or plan_restructure for a run: their changes[] can only reach loaded movements, so a run sent that way lands as a fake lifting exercise.`,
-      `Distance and duration are two ways to say the same ask, so naming ONE clears the other. Send both only when the athlete asked for both. Zone is a zone KEY ("z2") — never write bpm numbers yourself; Cairn fills in the athlete's own band.`,
-      `Changing the WHOLE week's run mix is not this action — there is no chat action for it. Say what you would change and point at the run plan, which proposes a full week for the athlete to accept.`,
+      `Do NOT emit set_run to change a run's distance, time or zone: runs are not stored on the plan, and Cairn sizes each week's runs from the athlete's run days and recent running (DATA.run_plan shows this week's). Explain the week's run in words instead.`,
+      `To change WHICH days they run, or the kind of run a day carries, emit set_endurance_schedule with their full stated run week. NEVER use plan_update or plan_restructure for a run either: plan days hold lifting only, and a run sent that way is refused.`,
     ],
   },
   log_health: {

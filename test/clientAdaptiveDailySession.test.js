@@ -86,7 +86,10 @@ test("prepared Session exposes durable source, rationale, and accessible stable 
 
 test("one-day custom prescriptions render as prescribed without becoming weekly-plan work", () => {
   assert.match(cards, /const offPlan = !item\.fromPlan && !item\.fromSession/);
-  assert.match(today, /preserveItemOrder: !!dailySession/);
+  // The composition's saved order is the card order by construction now: the old
+  // preserveItemOrder switch only existed to stop runs being floated above lifts,
+  // and a run is no longer a card in the lift list at all.
+  assert.doesNotMatch(today, /preserveItemOrder/);
   assert.match(suggestion, /source: "agent_suggest"/);
   assert.match(suggestion, /agentJobId: context\.agentJobId/);
 });
@@ -100,7 +103,7 @@ test("the launch card gate keeps a null preview's calm door open and only a posi
   assert.match(today, /const dayHasItems = !!\(day\?\.items \|\| \[\]\)\.length;/);
   assert.match(
     today,
-    /const nothingToStart =\s*\n\s*todayState\.plan\.length > 0 &&\s*\n\s*!hasLoggedSets &&\s*\n\s*exDone === 0 &&\s*\n\s*!isRunDay &&\s*\n\s*!cardioItems\.length &&\s*\n\s*!dayHasItems &&\s*\n\s*previewHasItems !== true;/,
+    /const nothingToStart =\s*\n\s*todayState\.plan\.length > 0 &&\s*\n\s*!hasLoggedSets &&\s*\n\s*exDone === 0 &&\s*\n\s*!isRunDay &&\s*\n\s*!dayHasItems &&\s*\n\s*previewHasItems !== true;/,
   );
   assert.match(
     today,
@@ -143,9 +146,11 @@ test("the launch card gate keeps a null preview's calm door open and only a posi
   );
 });
 
-test("focused cardio and legacy capture-prefill route to Chat without logging implicitly", () => {
-  assert.match(today, /\.sess-dest \[data-cardio-log\]/);
-  assert.match(today, /todayState\.chatPrefill = phrase;[\s\S]*activateTab\("chat"\)/);
+test("legacy capture-prefill routes to Chat without logging implicitly; the run card's log CTA is gone", () => {
+  // The focused Session's "Review & log this run" CTA lived on the run card inside
+  // the lift list. Runs left the strength plan, so neither the card nor its wiring
+  // remains; a run is logged by sync or in Chat, never implicitly.
+  assert.doesNotMatch(today, /data-cardio-log/);
   assert.doesNotMatch(today, /todayState\.capturePrefill = phrase/);
 
   const context = { window: null, globalThis: null, Object, String };

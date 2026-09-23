@@ -139,16 +139,24 @@ test("no plan, no run week and nothing logged reads standard — absence is neve
   assert.deepEqual(read.evidence, [], "nothing was present, and the read says so rather than implying a source");
 });
 
-test("a programmed rest day reads light, but a plan day with work never does", () => {
+// Rest is the CALENDAR's (migration 110): a weekday with no lifting and no run. A rest
+// plan row cannot be written any more, so the rest day is a weekday the stated lifting
+// week leaves open.
+test("a calendar rest day reads light, but a lifting day never does", () => {
   repo.savePlanDay(1, "Lower", "Lower", [{ exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 8 }]);
-  repo.savePlanDay(2, "Rest", "Rest", []);
+  repo.setProfile({ strength_schedule: { days: [{ dow: 1 }], source: "athlete" } });
   assert.equal(dayFuelDemand(TUESDAY, { today: MONDAY, runPlan: null }).demand, "light");
   assert.equal(dayFuelDemand(MONDAY, { today: MONDAY, runPlan: null }).demand, "big");
 });
 
-test("a rest plan day that a run intention lands on is not light", () => {
+test("with no lifting week known no day is ever called light — absence stays neutral", () => {
   repo.savePlanDay(1, "Lower", "Lower", [{ exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 8 }]);
-  repo.savePlanDay(2, "Rest", "Rest", []);
+  assert.notEqual(dayFuelDemand(TUESDAY, { today: MONDAY, runPlan: null }).demand, "light");
+});
+
+test("a calendar rest day that a run intention lands on is not light", () => {
+  repo.savePlanDay(1, "Lower", "Lower", [{ exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 8 }]);
+  repo.setProfile({ strength_schedule: { days: [{ dow: 1 }], source: "athlete" } });
   const read = dayFuelDemand(TUESDAY, { today: MONDAY, runPlan: runWeek([run(2, "easy", 6)]) });
   assert.notEqual(read.demand, "light");
 });
@@ -291,7 +299,8 @@ test("inside a cut's target the ranges flex with the work, protein held and fat 
 
 test("with a carb basis every day carries its range: endurance work earns the high band, strength the moderate", () => {
   seedSplit();
-  repo.savePlanDay(3, "Rest", "Rest", []);
+  // Lifting Monday and Tuesday: Wednesday is the calendar's rest day.
+  repo.setProfile({ strength_schedule: { days: [{ dow: 1 }, { dow: 2 }], source: "athlete" } });
   const basis = { weight_kg: 73, target_kcal: 2400, protein_g: 175 };
   const opts = { today: MONDAY, runPlan: runWeek([run(4, "long", 18)]), carbBasis: basis };
   // A heavy lower day is big for the demand line, but ~1 h of lifting is the moderate band.

@@ -61,8 +61,10 @@ function normalizedRevision(value: unknown): CaseConferenceRevision | null {
       .filter((item): item is JsonObject => {
         if (!item) return false;
         const day = Number(item.day_number);
+        // A run is not a plan change any more (plan days hold strength only), so a
+        // kind:"cardio" entry carries no subject here and is dropped.
         const hasSubject =
-          cleanText(item.exercise, 160) != null || item.kind === "cardio" || normalizeJsonObject(item.swap) != null;
+          item.kind !== "cardio" && (cleanText(item.exercise, 160) != null || normalizeJsonObject(item.swap) != null);
         return Number.isInteger(day) && day > 0 && day <= 14 && hasSubject;
       });
     return changes.length ? { type: "plan_update", summary, changes } : null;
@@ -184,20 +186,16 @@ const PLAN_ITEM_KEYS = [
   "superset_group",
   "mode",
   "kind",
-  "target_distance_km",
-  "target_duration_min",
-  "target_zone",
-  "interval",
-  "interval_json",
 ] as const;
 
 function strictPlanItem(value: unknown): boolean {
   const input = asRecord(value);
   if (!input || !ownKeysAllowed(input, PLAN_ITEM_KEYS)) return false;
+  // Strength only: plan days carry no runs (migration 110), so a kind:"cardio" item — and
+  // the run field family, which PLAN_ITEM_KEYS no longer admits — is refused.
   const kind = input.kind == null ? "strength" : input.kind;
-  if (kind !== "strength" && kind !== "cardio") return false;
-  if (!nullableString(input.exercise) || !nullableString(input.note) || !nullableString(input.target_zone))
-    return false;
+  if (kind !== "strength") return false;
+  if (!nullableString(input.exercise) || !nullableString(input.note)) return false;
   if (!nullableInteger(input.sets, 1, 20)) return false;
   if (!nullableInteger(input.rep_low, 1, 100) || !nullableInteger(input.rep_high, 1, 100)) return false;
   if (typeof input.rep_low === "number" && typeof input.rep_high === "number" && input.rep_low > input.rep_high)
@@ -207,22 +205,6 @@ function strictPlanItem(value: unknown): boolean {
   if (!nullableInteger(input.target_seconds, 1, 3_600)) return false;
   if (!nullableInteger(input.superset_group, 1, 100)) return false;
   if (input.mode != null && input.mode !== "reps" && input.mode !== "timed") return false;
-  if (!nullableBoundedFinite(input.target_distance_km, 0, 1_000)) return false;
-  if (!nullableBoundedFinite(input.target_duration_min, 0, 1_440)) return false;
-  if (input.interval != null && !asRecord(input.interval)) return false;
-  if (input.interval_json != null) {
-    if (typeof input.interval_json !== "string") return false;
-    try {
-      JSON.parse(input.interval_json);
-    } catch {
-      return false;
-    }
-  }
-  if (kind === "cardio") {
-    if (input.mode != null || input.target_weight != null || input.target_seconds != null) return false;
-    if (input.rep_low != null || input.rep_high != null || input.warmup_sets != null) return false;
-    return true;
-  }
   if (typeof input.exercise !== "string" || !input.exercise.trim()) return false;
   if (input.mode === "timed" && (input.target_weight != null || input.rep_low != null || input.rep_high != null))
     return false;

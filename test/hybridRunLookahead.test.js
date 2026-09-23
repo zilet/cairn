@@ -82,13 +82,25 @@ test("training-read.ts must not import flexible-training-agenda (cycle ban)", ()
   assert.doesNotMatch(src, /flexibleTrainingAgenda/);
 });
 
+// Runs are never plan items (migration 110): the fixed fallback hybridDayContext
+// projects is the next STATED run weekday (endurance_schedule), km unknown (null).
+function statedRunOn(dow, kind, more = []) {
+  repo.setProfile({ endurance_schedule: { days: [{ dow, kind }, ...more] } });
+}
+
 test("withFlexibleRunLookahead shifts planned_run_next when agenda moves quality after lower-body load", () => {
-  // Template: single plan day with a quality run → hybridDayContext projects it tomorrow.
-  repo.setWeeklyRuns([{ day_number: 1, label: "Tempo run", target_distance_km: 8, target_zone: "Z3" }]);
+  // Stated: a quality run on Wednesday → hybridDayContext projects it tomorrow. Thursday
+  // and Saturday are stated run days too — the agenda never spills a key run onto an
+  // unstated weekday, so Thursday has to be one of the athlete's run days to take it.
+  statedRunOn(3, "quality", [
+    { dow: 4, kind: "easy" },
+    { dow: 6, kind: "long" },
+  ]);
   const base = repo.hybridDayContext(TUESDAY);
-  assert.ok(base.planned_run_next, "template projects a next run");
-  assert.equal(base.planned_run_next.date, WEDNESDAY, "template places quality tomorrow");
+  assert.ok(base.planned_run_next, "the stated run week projects a next run");
+  assert.equal(base.planned_run_next.date, WEDNESDAY, "the stated quality day is tomorrow");
   assert.equal(base.planned_run_next.kind, "quality");
+  assert.equal(base.planned_run_next.km, null, "a stated weekday carries no distance of its own");
 
   // Flexible agenda: lower-body today blocks today+tomorrow for key runs → quality on Thursday.
   logLowerBody(TUESDAY);
@@ -110,9 +122,10 @@ test("withFlexibleRunLookahead shifts planned_run_next when agenda moves quality
 });
 
 test("withFlexibleRunLookahead keeps protect-shaped quality when agenda suggests it tomorrow", () => {
-  repo.setWeeklyRuns([{ day_number: 1, label: "Easy run", target_distance_km: 5, target_zone: "Z2" }]);
+  statedRunOn(3, "easy");
   const base = repo.hybridDayContext(TUESDAY);
-  // Template may show easy tomorrow; agenda has open quality suggested for Wednesday.
+  assert.equal(base.planned_run_next?.kind, "easy", "the stated week shows easy tomorrow");
+  // The stated week shows easy tomorrow; agenda has open quality suggested for Wednesday.
   const overridden = repo.withFlexibleRunLookahead(base, TUESDAY, {
     runPlan: plan([run(3, "quality", 7)]),
   });
@@ -123,7 +136,7 @@ test("withFlexibleRunLookahead keeps protect-shaped quality when agenda suggests
 });
 
 test("withFlexibleRunLookahead keeps template fields when agenda is unavailable", () => {
-  repo.setWeeklyRuns([{ day_number: 1, label: "Long run", target_distance_km: 15, target_zone: "Z2" }]);
+  statedRunOn(3, "long");
   const base = repo.hybridDayContext(TUESDAY);
   assert.ok(base.planned_run_next);
   assert.equal(base.planned_run_next.kind, "long");

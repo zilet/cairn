@@ -39,7 +39,7 @@ import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
 
 const planItemShape = z.object({
-  exercise: z.string().optional().describe("exercise name (required for a strength item; a label for a cardio item)"),
+  exercise: z.string().optional().describe("exercise name (required)"),
   sets: z.number().int().optional(),
   rep_low: z.number().int().nullable().optional(),
   rep_high: z.number().int().nullable().optional(),
@@ -57,23 +57,19 @@ const planItemShape = z.object({
     .nullable()
     .optional()
     .describe("exercise mode, applied when a new exercise is created"),
-  // First-class planned cardio (v35): a kind:'cardio' item carries an endurance
-  // prescription instead of a loaded exercise (no exercise_id is stored).
+  // Plan days hold STRENGTH work only (migration 110) — runs are the run engine's
+  // (get_run_plan / get_training_agenda), never a plan item.
   kind: z
-    .enum(["strength", "cardio"])
+    .enum(["strength"])
     .nullable()
     .optional()
-    .describe("'cardio' = an endurance prescription with no loaded exercise; default 'strength'"),
-  target_distance_km: z.number().nullable().optional().describe("planned distance in km (cardio)"),
-  target_duration_min: z.number().nullable().optional().describe("planned moving time in minutes (cardio)"),
-  target_zone: z.string().nullable().optional().describe("HR/effort zone, e.g. 'Z2' | 'tempo' | 'easy' (cardio)"),
-  interval: z.any().optional().describe("optional structured interval JSON (cardio)"),
+    .describe("always 'strength' — runs are not plan items; they follow the stated run days"),
 });
 
 export function registerPlanExerciseTools(server: McpToolRegistrar) {
   server.tool(
     "get_plan",
-    "Get the full weekly training plan: every day with its exercises, sets, rep ranges, target weights, injury notes, day_type, and the grounded 'purpose' line for that day. A day with day_type 'rest' is a deliberate rest day and carries an empty items array; the emptiness is the prescription, not missing data.",
+    "Get the full weekly training plan: every LIFTING day with its exercises, sets, rep ranges, target weights, injury notes, and the grounded 'purpose' line for that day. Plan days hold strength work only: the week's runs come from get_run_plan / get_training_agenda (built on the stated run days), and a rest day is a weekday the athlete neither lifts nor runs — neither is a plan day.",
     {},
     // Same payload as GET /api/plan — getPlanWithPurpose attaches the per-day
     // purpose line, so the two surfaces stay mirrors.
@@ -89,7 +85,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_plan_day",
-    "Read one day of the weekly training plan by its day number, with its prescribed exercises, set and rep targets, and any injury notes. Day numbers are whatever the current plan defines, commonly 1 through 7; call get_plan first when the numbering is unknown. A day with day_type 'rest' is a deliberate rest day and returns an empty items array. Returns null when no day carries that number.",
+    "Read one lifting day of the weekly training plan by its day number, with its prescribed exercises, set and rep targets, and any injury notes. Day numbers are whatever the current plan defines; call get_plan first when the numbering is unknown. Plan days hold strength only (runs and rest are the calendar's). Returns null when no day carries that number.",
     { day_number: z.number().int().describe("the day's number in the current plan; see get_plan") },
     async ({ day_number }) => asText(getPlanDay(day_number))
   );
@@ -178,7 +174,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       day_number: z.number().int(),
       name: z.string(),
       focus: z.string().nullable().optional(),
-      day_type: z.enum(["training", "rest"]).optional().describe("'rest' marks the week's rest day; a rest day carries an EMPTY items array. Omitted resolves from the items instead: any item makes the day 'training', an empty list keeps an existing day's stored type (and is 'training' for a new day)."),
+      day_type: z.enum(["training"]).optional().describe("always 'training' — a rest day is not a plan day (it is any weekday with no lifting and no run)."),
       items: z.array(planItemShape),
       quality_override: z.boolean().optional().describe("Set only after reading the quality report returned by a refused save ({ok:false, quality}); it allows a structurally invalid day the athlete deliberately wants. The zero-items invariant on a training day is never overridable."),
     },
@@ -200,7 +196,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
 
   server.tool(
     "order_plan_day_for_effect",
-    "Rewrite one plan day's exercises into effect order: primary compounds first (barbell before machine), then secondary loaded work, isolation, core, then cardio. No-op when already ordered. Returns the day, or null when that day_number is absent.",
+    "Rewrite one plan day's exercises into effect order: primary compounds first (barbell before machine), then secondary loaded work, isolation, then core. No-op when already ordered. Returns the day, or null when that day_number is absent.",
     { day_number: z.number().int().describe("the day's number in the current plan; see get_plan") },
     async ({ day_number }) => {
       try {
@@ -222,7 +218,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_plan",
-    "Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days), to add cardio days, or to name the week's rest day (day_type:'rest' with no items). Days not included are removed. Each item may be a strength exercise or a kind:'cardio' endurance prescription.",
+    "Replace the ENTIRE weekly lifting plan — use to change lifting frequency (e.g. 3/4/5 days). Days not included are removed. Every day carries strength work: a run item is stripped and a day left with nothing to lift is not stored (runs follow the stated run days; a rest day is a weekday with neither).",
     {
       quality_override: z.boolean().optional().describe("Set only after reading the quality report returned by a refused save ({ok:false, quality}); it allows a structurally invalid week the athlete deliberately wants. The zero-items invariant on a training day is never overridable."),
       days: z.array(
@@ -230,7 +226,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
           day_number: z.number().int().optional(),
           name: z.string(),
           focus: z.string().nullable().optional(),
-          day_type: z.enum(["training", "rest"]).optional().describe("'rest' marks a rest day; it carries an EMPTY items array. Defaults to 'training'."),
+          day_type: z.enum(["training"]).optional().describe("always 'training' — rest days aren't plan days."),
           items: z.array(planItemShape),
         })
       ),

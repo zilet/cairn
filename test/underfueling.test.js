@@ -644,50 +644,86 @@ test("a taper (dropped volume) is not misread as endurance strain even when pace
 
 // ── PART 4a fix round: the run-compliance drop is adherence-neutral — it needs ≥2 real
 // outings in EACH week, so a thin/busy fortnight never reads as strain.
+//
+// Runs are not plan items (migration 110): each week's prescription is the LIVE run
+// engine's week for that Monday (vouchedRunCompliance === runComplianceRead), shaped
+// from the running already in the bank. So the fixtures seed a runner with an
+// established ~38 km/week base, then the fortnight under test.
+function seedRunnerBase() {
+  repo.setProfile({ endurance_sport: "run" });
+  for (const [d, km, min] of [
+    [-11, 12, 65],
+    [-13, 10, 55],
+    [-15, 16, 90],
+    [-18, 12, 65],
+    [-20, 10, 55],
+    [-22, 16, 90],
+  ]) {
+    repo.addActivity({ type: "run", distance_km: km, duration_min: min, date: day(d) });
+  }
+}
+
 test("a thin run week (1 outing under plan, both weeks) does NOT read as endurance strain", () => {
   target(2200);
-  repo.savePlanDay(1, "Run", "Easy run", [{ exercise: "Easy run", kind: "cardio", target_distance_km: 20, target_duration_min: 100 }]);
-  // 1 short run this week + 1 last week, both well under plan — a thin week, not strain.
-  repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(-1) }); // this week (Mon 07-13..)
-  repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(-8) }); // last week
+  seedRunnerBase();
+  // 1 short run this week + 1 last week, both well under the engine's week — a thin
+  // week, not strain.
+  repo.addActivity({ type: "run", distance_km: 2, duration_min: 14, date: day(-1) }); // this week (Mon 07-13..)
+  repo.addActivity({ type: "run", distance_km: 2, duration_min: 14, date: day(-8) }); // last week
+  assert.ok(repo.vouchedRunCompliance(day(-1)).pct_km < 0.6, "the week IS well under the live prescription");
   const read = underfuelingRead(TODAY, { expenditure: onPathExp, goal, programState: stableProgram, wholePerson: stableWhole });
   assert.notEqual(perfChannel(read).direction, "strain", "a thin logging week lowers confidence, never signals");
 });
 
 test("a sustained 2-outings-each shortfall still fires the compliance-drop strain", () => {
   target(2200);
-  repo.savePlanDay(1, "Run", "Easy run", [{ exercise: "Easy run", kind: "cardio", target_distance_km: 40, target_duration_min: 200 }]);
-  // 2 short runs each week, both far under the 40 km plan (<60%) — a genuine shortfall.
-  for (const d of [-1, -2]) repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(d) }); // this week
-  for (const d of [-8, -9]) repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(d) }); // last week
+  seedRunnerBase();
+  // 2 short runs each week, both far under the live engine's week (<60%) — a genuine
+  // shortfall while still training.
+  for (const d of [-1, -2]) repo.addActivity({ type: "run", distance_km: 2, duration_min: 14, date: day(d) }); // this week
+  for (const d of [-8, -9]) repo.addActivity({ type: "run", distance_km: 2, duration_min: 14, date: day(d) }); // last week
+  const cur = repo.vouchedRunCompliance(day(-2));
+  const prev = repo.vouchedRunCompliance(day(-9));
+  assert.equal(cur.basis, "live_plan", "this week is judged against the live engine's week");
+  assert.equal(prev.basis, "live_plan", "and last week against its own Monday's");
+  assert.ok(cur.pct_km < 0.6 && prev.pct_km < 0.6, `both weeks well short (${prev.pct_km} → ${cur.pct_km})`);
+
   const read = underfuelingRead(TODAY, { expenditure: onPathExp, goal, programState: stableProgram, wholePerson: stableWhole });
   const perf = perfChannel(read);
   assert.equal(perf.direction, "strain");
   assert.ok(perf.evidence_keys.some((k) => /run_compliance_drop/.test(k)), "cites the compliance-drop evidence");
 });
 
-// The plan template carries no dates, so BOTH weeks are otherwise judged against
-// whatever is on the plan right now. A run plan the machine applied weeks ago is a
-// fossil: the athlete never agreed to it for either of these weeks, and quoting it
-// turns real training into a sustained shortfall and pushes a strain signal into
-// nutrition. A prescription that cannot vouch for the week it is judging reads as
-// absent, exactly as a stale sensor reading does.
-test("a fossilized applied run plan cannot fire the compliance-drop strain", () => {
+// The plan template carries no dates, so a run row on it used to judge BOTH weeks
+// against whatever it said right now — a 40 km row turned real training into a
+// sustained shortfall and pushed a strain signal into nutrition. Runs are not plan
+// items any more: a cardio row handed to the writer is stripped, and each week is
+// judged only against the engine's own week for it.
+test("a cardio row on the plan is never the prescription the shortfall is judged against", () => {
   target(2200);
-  repo.savePlanDay(1, "Run", "Easy run", [{ exercise: "Easy run", kind: "cardio", target_distance_km: 40, target_duration_min: 200 }]);
-  // The same shortfall shape that fires above...
+  repo.setProfile({ endurance_sport: "run" });
+  repo.savePlanDay(1, "Lower", "Legs", [
+    { exercise: "Back Squat", sets: 3, reps: "5", target_weight: 185 },
+    { exercise: "Easy run", kind: "cardio", target_distance_km: 40, target_duration_min: 200 },
+  ]);
+  // Against a 40 km row this shape was a sustained shortfall; against the engine's own
+  // week, shaped from this athlete's running, it is not.
   for (const d of [-1, -2]) repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(d) });
   for (const d of [-8, -9]) repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(d) });
-  // ...but the 40 km week was machine-applied a month before either week began.
-  const proposal = repo.createProposal("auto-run-plan", "run plan", "", { summary: "runs", cardio: [] });
-  repo.setProposalStatus(Number(proposal.id), "applied");
-  db.prepare(`UPDATE plan_proposals SET created_at = ? WHERE id = ?`).run(`${day(-30)} 06:00:00`, Number(proposal.id));
+  assert.equal(
+    repo
+      .getPlan()
+      .flatMap((d) => d.items || [])
+      .filter((it) => it.kind === "cardio").length,
+    0,
+    "the cardio row never landed"
+  );
 
   const read = underfuelingRead(TODAY, { expenditure: onPathExp, goal, programState: stableProgram, wholePerson: stableWhole });
   const perf = perfChannel(read);
   assert.ok(
     !perf.evidence_keys.some((k) => /run_compliance_drop/.test(k)),
-    "a fossil prescription never gets to say the athlete fell short"
+    "a stripped plan row never gets to say the athlete fell short"
   );
   assert.notEqual(perf.direction, "strain");
 });

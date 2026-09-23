@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import type { WeeklyRunPlan, RunPlanPrescription } from "./run-progression.js";
 import { weeklyRunPlan } from "./run-progression.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
+import { withoutShadowActivities } from "./activity-shadow.js";
 import { cardioEffort, sessionLoad } from "./training-read.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { mondayOf } from "../lib/dates.js";
@@ -96,9 +97,9 @@ function sustainedZ3Evidence(zoneSeconds: number, durationMin: number | null): b
 function runObservations(start: string, through: string): RunObservation[] {
   const sport = activitySportWhere("a", RUN_SPORT_PATTERNS);
   try {
-    const rows = db
+    const rawRows = db
       .prepare(
-        `SELECT a.id, a.date, a.duration_min, a.distance_km,
+        `SELECT a.id, a.date, a.source, a.external_id, a.duration_min, a.distance_km,
                 MAX(g.training_effect) AS training_effect,
                 MAX(g.aerobic_te) AS aerobic_te,
                 MAX(g.anaerobic_te) AS anaerobic_te,
@@ -111,6 +112,10 @@ function runObservations(start: string, through: string): RunObservation[] {
           ORDER BY a.date, a.id`
       )
       .all(start, through, ...sport.params) as any[];
+    // A hand-logged shadow of a synced run is one observation, not two — left
+    // unfiltered, matchCompletions() could close two different weekly slots
+    // (e.g. both "long" and "easy") off a single real run.
+    const rows = withoutShadowActivities(rawRows);
     return rows.map((row) => {
       const te = Math.max(Number(row.training_effect) || 0, Number(row.aerobic_te) || 0, Number(row.anaerobic_te) || 0);
       const label = String(row.te_label ?? "")

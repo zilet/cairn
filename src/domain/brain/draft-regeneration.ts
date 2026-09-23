@@ -2,7 +2,6 @@ import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import { regenerationReceiptForDraft } from "../../repo/brain-decisions.js";
 import { buildProgressionProposal, buildVolumeRestoreProposal } from "../../repo/progression.js";
 import { createProposal } from "../../repo/proposals.js";
-import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { VOLUME_RESTORE_AGENT, type VolumeCutCause } from "../../repo/volume-guard.js";
 
 // REGENERATE, DON'T ASK.
@@ -119,10 +118,8 @@ export function regenerableProducer(
     // whole point of regenerating is to read against the picture as it stands now.
     return { key: `auto-progression:day:${day}`, rerun: () => buildProgressionProposal(day) };
   }
-  if (agent === "auto-run-plan") {
-    // No date argument — the week the run plan is being read for is today's.
-    return { key: "auto-run-plan", rerun: () => buildRunPlanProposal() };
-  }
+  // An "auto-run-plan" draft has no producer any more: runs are never plan items
+  // (migration 110 supersedes any such draft), so there is nothing to re-run.
   if (agent === VOLUME_RESTORE_AGENT) {
     const cause = volumeRestoreCause(proposal);
     return {

@@ -12,6 +12,7 @@
 // used by both sessions/activities and intelligence (which import each other) without
 // a cycle.
 import { db } from "../db.js";
+import { withoutShadowActivities } from "./activity-shadow.js";
 import { activitySportWhere, canonicalEnduranceSport, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import {
   canonicalGroup,
@@ -587,9 +588,12 @@ export function dayLoad(
     bump(sessionLoad(r.id, { recoveryWeekActive: opts.recoveryWeekActive }));
   }
   if (opts.countsCardio) {
-    for (const a of db
+    // A hand-logged shadow of a synced effort is one cardio outing, not two grades
+    // to take the best of — filtered here even though bump() is a max, so a
+    // shadow can never contribute a grade of its own.
+    const rows = db
       .prepare(
-        `SELECT a.type, a.duration_min, a.distance_km,
+        `SELECT a.date, a.source, a.external_id, a.type, a.duration_min, a.distance_km,
               MAX(ga.training_effect) AS training_effect,
               MAX(ga.aerobic_te) AS aerobic_te,
               MAX(ga.anaerobic_te) AS anaerobic_te,
@@ -598,7 +602,8 @@ export function dayLoad(
         WHERE a.date = ?
         GROUP BY a.id`
       )
-      .all(date) as any[]) {
+      .all(date) as any[];
+    for (const a of withoutShadowActivities(rows)) {
       bump(cardioEffort(a));
     }
   }
@@ -683,7 +688,8 @@ function hardCardioDayCore(date: string, loadMedian: number | null | undefined, 
   try {
     rows = db
       .prepare(
-        `SELECT a.type AS type, a.duration_min AS dur, a.distance_km AS dist,
+        `SELECT a.date AS date, a.source AS source, a.external_id AS external_id,
+                a.type AS type, a.duration_min AS duration_min, a.distance_km AS distance_km,
                 g.aerobic_te AS aerobic_te, g.anaerobic_te AS anaerobic_te,
                 g.te_label AS te_label, g.training_load AS load, g.hr_zones_json AS zones
            FROM activities a LEFT JOIN garmin_activities g ON g.activity_id = a.id
@@ -693,6 +699,8 @@ function hardCardioDayCore(date: string, loadMedian: number | null | undefined, 
   } catch {
     return false;
   }
+  // A hand-logged shadow of a synced effort must not vote for "hard" alongside it.
+  rows = withoutShadowActivities(rows);
   if (!rows.length) return false;
   const median = loadMedian === undefined ? recentCardioLoadMedian(date) : loadMedian;
   for (const r of rows) {
@@ -715,7 +723,7 @@ function hardCardioDayCore(date: string, loadMedian: number | null | undefined, 
     // (d) SPORT-AWARE duration bar: a run/ride/swim/row loads at ≥ 40 min; a walk/hike
     // or unknown "other" type needs a much longer effort (~90 min) so an easy hike of
     // ~40 min never grades as a loading day. Distance is deliberately not a trigger.
-    const dur = r.dur != null ? Number(r.dur) : null;
+    const dur = r.duration_min != null ? Number(r.duration_min) : null;
     if (dur == null) continue;
     const sport = canonicalEnduranceSport(r.type).key;
     const isEnduranceSession = sport === "run" || sport === "ride" || sport === "swim" || sport === "row";
@@ -771,14 +779,18 @@ export function longestRunNovelty(date: string, lookbackDays = LONGEST_RUN_LOOKB
     const from = addDaysISO(date, -Math.max(1, lookbackDays));
     const to = addDaysISO(date, -1);
     if (!from || !to) return null;
-    const prior = db
-      .prepare(
-        `SELECT COUNT(*) AS n, MAX(distance_km) AS km FROM activities
-          WHERE date >= ? AND date <= ? AND distance_km IS NOT NULL AND distance_km > 0 AND (${runSport.sql})`
-      )
-      .get(from, to, ...runSport.params) as any;
-    const priorRuns = Number(prior?.n ?? 0);
-    const priorLongest = Number(prior?.km);
+    // A hand-logged shadow of a synced run is one prior run, not two — counted raw,
+    // it inflates `prior_runs` and can falsely clear LONGEST_RUN_MIN_PRIOR_RUNS.
+    const priorRows = withoutShadowActivities(
+      db
+        .prepare(
+          `SELECT date, type, source, external_id, distance_km, duration_min FROM activities
+            WHERE date >= ? AND date <= ? AND distance_km IS NOT NULL AND distance_km > 0 AND (${runSport.sql})`
+        )
+        .all(from, to, ...runSport.params) as any[]
+    );
+    const priorRuns = priorRows.length;
+    const priorLongest = priorRows.reduce((max, r) => Math.max(max, Number(r.distance_km) || 0), 0);
     if (!Number.isFinite(priorRuns) || priorRuns < LONGEST_RUN_MIN_PRIOR_RUNS) return null;
     if (!Number.isFinite(priorLongest) || priorLongest <= 0) return null;
     if (km < priorLongest - LONGEST_RUN_TOLERANCE_KM) return null;
@@ -842,9 +854,8 @@ export interface PlanDayGroups {
   focus: string | null;
   groups: string[]; // canonical strength muscle groups (cardio items ignored)
   heavy_lower: boolean;
-  // The week's programmed REST day (v99). An itemless day is indistinguishable from a
-  // rest day by groups alone, so anything choosing a destination for work has to read
-  // this rather than infer it from an empty list.
+  // Always 'training' now: plan days hold strength only and a rest day is a calendar
+  // weekday (migration 110). Kept so every reader of this shape still type-checks.
   day_type: "training" | "rest";
 }
 
@@ -857,11 +868,12 @@ export function planDayStrengthGroups(): PlanDayGroups[] {
   try {
     rows = db
       .prepare(
-        `SELECT pd.day_number AS day_number, pd.name AS name, pd.focus AS focus, pd.day_type AS day_type,
-                pi.kind AS kind, e.name AS exercise, e.muscle_group AS muscle_group
+        `SELECT pd.day_number AS day_number, pd.name AS name, pd.focus AS focus,
+                e.name AS exercise, e.muscle_group AS muscle_group
            FROM plan_days pd
-           LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id
+           LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id AND COALESCE(pi.kind, 'strength') != 'cardio'
            LEFT JOIN exercises e ON e.id = pi.exercise_id
+          WHERE COALESCE(pd.day_type, 'training') != 'rest'
           ORDER BY pd.day_number, pi.position`
       )
       .all() as any[];
@@ -872,17 +884,16 @@ export function planDayStrengthGroups(): PlanDayGroups[] {
   for (const r of rows) {
     const dn = Number(r.day_number);
     if (!Number.isFinite(dn)) continue;
-    const restDay = String(r.day_type ?? "training").toLowerCase() === "rest";
     const cur = map.get(dn) ?? {
       day_number: dn,
       name: r.name == null ? null : String(r.name),
       focus: r.focus == null ? null : String(r.focus),
       groups: [],
       heavy_lower: false,
-      day_type: (restDay ? "rest" : "training") as "training" | "rest",
+      day_type: "training" as const,
     };
     const exercise = r.exercise == null ? "" : String(r.exercise).trim();
-    if (exercise && r.kind !== "cardio") {
+    if (exercise) {
       const group = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(exercise);
       if (group && group !== "mobility" && !cur.groups.includes(group)) cur.groups.push(group);
     }
@@ -893,8 +904,9 @@ export function planDayStrengthGroups(): PlanDayGroups[] {
   return out;
 }
 
-// The plan day_numbers that are genuine heavy-lower (squat/hinge) days — the axis the
-// run-plan placement reads to keep a quality run off the day right after leg day.
+// The plan day_numbers that are genuine heavy-lower (squat/hinge) days. PLAN day
+// numbers, not weekdays — the run engine reads weekday slots instead
+// (plan-selection's heavyLowerWeekdaySlots, which lays these onto the lifting week).
 export function lowerBodyPlanDayNumbers(): Set<number> {
   const set = new Set<number>();
   for (const d of planDayStrengthGroups()) if (d.heavy_lower) set.add(d.day_number);
@@ -941,12 +953,13 @@ export function heavyLowerDayLoads(): HeavyLowerDayLoad[] {
     rows = db
       .prepare(
         `SELECT pd.day_number AS day_number, pd.name AS name, pd.focus AS focus,
-                pi.kind AS kind, pi.sets AS sets, pi.rep_low AS rep_low, pi.rep_high AS rep_high,
+                pi.sets AS sets, pi.rep_low AS rep_low, pi.rep_high AS rep_high,
                 pi.target_weight AS target_weight,
                 e.name AS exercise, e.muscle_group AS muscle_group
            FROM plan_days pd
-           LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id
+           LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id AND COALESCE(pi.kind, 'strength') != 'cardio'
            LEFT JOIN exercises e ON e.id = pi.exercise_id
+          WHERE COALESCE(pd.day_type, 'training') != 'rest'
           ORDER BY pd.day_number, pi.position`
       )
       .all() as any[];
@@ -969,7 +982,7 @@ export function heavyLowerDayLoads(): HeavyLowerDayLoad[] {
       } satisfies HeavyLowerDayLoad);
     map.set(dn, cur);
     const exercise = r.exercise == null ? "" : String(r.exercise).trim();
-    if (!exercise || r.kind === "cardio") continue;
+    if (!exercise) continue;
     const group = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(exercise);
     if (!group || !HEAVY_LOWER_GROUPS.has(group)) continue;
     const sets = Number(r.sets);
@@ -992,56 +1005,6 @@ export function heavyLowerDayLoads(): HeavyLowerDayLoad[] {
   return [...map.values()].sort(
     (a, b) => b.tonnage - a.tonnage || b.compound_sets - a.compound_sets || b.sets - a.sets || a.day_number - b.day_number
   );
-}
-
-export interface PlanRunItem {
-  day_number: number;
-  label: string;
-  kind: "easy" | "long" | "quality";
-  km: number | null;
-  min: number | null;
-}
-
-// Every RUN cardio item in the stored plan, keyed by day_number (a cardio item's label
-// rides in `note`, exercise_id NULL — see plan.savePlanDay). A ride/swim/hike is skipped:
-// it doesn't load the legs the way a run does. Kind is inferred from the note/zone/interval
-// structure (long > quality > easy). Deterministic; [] on no plan / no runs.
-export function planRunItems(): PlanRunItem[] {
-  let rows: any[] = [];
-  try {
-    rows = db
-      .prepare(
-        `SELECT pd.day_number AS day_number, pi.note AS note,
-                pd.name AS day_name, pd.focus AS day_focus,
-                pi.target_distance_km AS km, pi.target_duration_min AS min,
-                pi.target_zone AS zone, pi.interval_json AS interval_json
-           FROM plan_days pd JOIN plan_items pi ON pi.plan_day_id = pd.id
-          WHERE pi.kind = 'cardio'`
-      )
-      .all() as any[];
-  } catch {
-    return [];
-  }
-  const out: PlanRunItem[] = [];
-  for (const r of rows) {
-    const note = String(r.note ?? "");
-    // The day's own name/focus counts: a day called "Long Run" whose note only says
-    // "genuinely easy in Z2 (137–142 bpm)" names neither the sport nor the kind, yet it
-    // is the week's long run — and the layout read must see it to judge the week.
-    const dayWords = `${String(r.day_name ?? "")} ${String(r.day_focus ?? "")}`;
-    if (canonicalEnduranceSport(note).key !== "run" && canonicalEnduranceSport(`${note} ${dayWords}`).key !== "run") continue;
-    const zone = String(r.zone ?? "");
-    const hard = !!r.interval_json || /tempo|threshold|vo2|hill|interval|z[345]/i.test(`${note} ${zone}`);
-    const kind: PlanRunItem["kind"] = /\blong\b/i.test(`${note} ${dayWords}`) ? "long" : hard ? "quality" : "easy";
-    out.push({
-      day_number: Number(r.day_number),
-      label: note.trim() || "Run",
-      kind,
-      km: r.km != null ? Number(r.km) : null,
-      min: r.min != null ? Number(r.min) : null,
-    });
-  }
-  return out;
 }
 
 // The primary (longest) endurance outing logged on a date — the type + minutes for the
@@ -1069,28 +1032,34 @@ function primaryCardioOuting(date: string): { type: string; minutes: number | nu
   return null;
 }
 
-// Project the weekly plan template onto a future date using the SAME Monday-anchored
-// day-number→weekday convention as the rotation fallback (plan-selection.weekdayCandidate):
-// the plan days in day_number order fill Mon..Sun (wrapping for a <7-day plan). A best-effort
-// forward HEADS-UP over the template, never a committed calendar (the agent owns the real
-// day-by-day; the primary same-day signals never depend on this).
-function planDayForFutureDate(date: string, ordered: PlanDayGroups[]): PlanDayGroups | null {
-  if (!ordered.length) return null;
-  const wd = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7; // Mon=0
-  return ordered[wd % ordered.length] ?? null;
-}
-
 export interface HybridDayContext {
   // A genuinely hard run/hike/ride yesterday still loads today's legs — keep lower work moderate.
   hard_cardio_yesterday: { type: string; minutes: number | null; why: string } | null;
   // Cardio already logged today (the same-day-double signal). `hard` = it cleared hardCardioDay;
   // `sport` is the canonical bucket (run|ride|swim|row|walk|…) the session note tiers off.
   cardio_today: { type: string; minutes: number | null; hard: boolean; sport: string } | null;
-  // The next planned run over the coming days (projected from the stored plan). Protect the
-  // legs before a quality/long one landing tomorrow.
+  // The next planned run over the coming days. The rolling agenda owns this
+  // (withFlexibleRunLookahead overrides it whenever the agenda is available); on its own
+  // this read projects the athlete's STATED run weekdays — runs are never plan items.
+  // Protect the legs before a quality/long one landing tomorrow.
   planned_run_next: { date: string; kind: "easy" | "long" | "quality"; km: number | null } | null;
-  // The next heavy-lower (squat/hinge) plan day, projected forward — informational.
+  // The next heavy-lower (squat/hinge) strength day, projected forward through the lifting
+  // week's weekday map — informational.
   heavy_lower_next: { date: string; focus: string | null } | null;
+}
+
+// The forward half of the hybrid read (the next stated run, the next heavy-lower day)
+// needs the athlete's schedules and the lifting week's weekday map, which live above
+// this leaf module. plan-selection registers the projector when it loads — the same
+// registration shape training-cache uses — so importing it here would not close a cycle.
+// Unregistered (a bare unit import), both projections read null: absence is neutral.
+type HybridForwardProjection = (
+  date: string
+) => Pick<HybridDayContext, "planned_run_next" | "heavy_lower_next">;
+let hybridForwardProjection: HybridForwardProjection | null = null;
+
+export function registerHybridForwardProjection(fn: HybridForwardProjection): void {
+  hybridForwardProjection = fn;
 }
 
 // The deterministic hybrid-sequencing read for a date. Cheap + null-safe end to end: any
@@ -1131,32 +1100,17 @@ export function hybridDayContext(date?: string): HybridDayContext {
     cardio_today = null;
   }
 
-  // Forward projections over the weekly template (best-effort — see planDayForFutureDate).
+  // Forward projections — best-effort heads-ups, never a committed calendar. The run is
+  // the athlete's stated run weekday (the run engine lays its week on exactly those) and
+  // the heavy-lower day is wherever the lifting week's map lands a squat/hinge day; both
+  // are answered by plan-selection, which registers the projector (this module stays a
+  // leaf — see registerHybridForwardProjection).
   let planned_run_next: HybridDayContext["planned_run_next"] = null;
   let heavy_lower_next: HybridDayContext["heavy_lower_next"] = null;
   try {
-    const ordered = planDayStrengthGroups();
-    const runByDay = new Map<number, PlanRunItem[]>();
-    for (const r of planRunItems()) {
-      const arr = runByDay.get(r.day_number);
-      if (arr) arr.push(r);
-      else runByDay.set(r.day_number, [r]);
-    }
-    for (let ahead = 1; ahead <= 6 && (!planned_run_next || !heavy_lower_next); ahead++) {
-      const fd = addDaysISO(d, ahead);
-      if (!fd) break;
-      const pd = planDayForFutureDate(fd, ordered);
-      if (!pd) break;
-      if (!planned_run_next) {
-        const runs = runByDay.get(pd.day_number);
-        if (runs?.length) {
-          // Surface the hardest run on that day (quality > long > easy) for the heads-up.
-          const pick = runs.find((r) => r.kind === "quality") ?? runs.find((r) => r.kind === "long") ?? runs[0];
-          planned_run_next = { date: fd, kind: pick.kind, km: pick.km };
-        }
-      }
-      if (!heavy_lower_next && pd.heavy_lower) heavy_lower_next = { date: fd, focus: pd.focus };
-    }
+    const projected = hybridForwardProjection ? hybridForwardProjection(d) : null;
+    planned_run_next = projected?.planned_run_next ?? null;
+    heavy_lower_next = projected?.heavy_lower_next ?? null;
   } catch {
     planned_run_next = null;
     heavy_lower_next = null;

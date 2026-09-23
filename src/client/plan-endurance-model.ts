@@ -33,16 +33,6 @@ type PlanEndurancePreset = {
   i: string;
 };
 
-type PlanEndurancePlanDay = {
-  day_number?: unknown;
-  items?: Array<Record<string, unknown>>;
-};
-
-type PlanEnduranceRunRow = {
-  it: Record<string, unknown>;
-  day_number: unknown;
-};
-
 type PlanEnduranceHorizon = "this_week" | "next_week" | "later";
 
 type PlanEnduranceBriefingSession = {
@@ -153,21 +143,6 @@ function planEnduranceDraftCardHtml(proposal: PlanEnduranceProposal): string {
 
 function planEnduranceRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
-}
-
-function planEndurancePlanRows(value: unknown): PlanEndurancePlanDay[] {
-  return Array.isArray(value) ? value.filter((row): row is PlanEndurancePlanDay => !!row && typeof row === "object") : [];
-}
-
-function planEnduranceRuns(plan: unknown): PlanEnduranceRunRow[] {
-  const runs: PlanEnduranceRunRow[] = [];
-  for (const day of planEndurancePlanRows(plan)) {
-    const items = Array.isArray(day.items) ? day.items : [];
-    for (const item of items) {
-      if (typeof isCardioItem === "function" && isCardioItem(item)) runs.push({ it: item, day_number: day.day_number });
-    }
-  }
-  return runs;
 }
 
 function planEnduranceDayKey(iso: unknown): string {
@@ -633,7 +608,6 @@ const CAIRN_PLAN_ENDURANCE_MODEL = {
   presets: planEndurancePresets,
   draftCardHtml: planEnduranceDraftCardHtml,
   record: planEnduranceRecord,
-  runs: planEnduranceRuns,
   mondayOf: planEnduranceMondayOf,
   nextMonday: planEnduranceNextMonday,
   weekBanked: planEnduranceWeekBanked,

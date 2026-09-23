@@ -161,21 +161,25 @@ test("projectRaceBuildWeeks walks every Monday to race week: build → peak → 
   assert.equal(weeks.filter((w) => w.current).length, 1);
   assert.equal(weeks.at(-1).kind, "race");
   assert.equal(weeks.at(-1).weeks_to_race, 0);
-  // A Sunday race: the engine's peak is the week before race week and its taper IS
-  // race week (its count is ceil(days/7) from the Monday), so the ladder reads
-  // build … → peak → race, with no separate taper week to invent.
-  assert.equal(weeks.at(-2).kind, "peak");
+  // A Sunday race: the arrival is counted in calendar weeks to race week, so the peak
+  // lands two weeks before race week, the week before race week tapers, and race week
+  // is lighter still — never a peak week run straight into the race.
+  assert.equal(weeks.at(-2).kind, "taper");
   assert.equal(weeks.at(-2).weeks_to_race, 1);
-  assert.ok(weeks.slice(0, -2).every((w) => w.kind === "build" || w.kind === "down"));
+  assert.equal(weeks.at(-3).kind, "peak");
+  assert.equal(weeks.at(-3).weeks_to_race, 2);
+  assert.ok(weeks.slice(0, -3).every((w) => w.kind === "build" || w.kind === "down"));
   // Every week is the engine's own next safe step: the build never jumps more than
-  // the sustainable factor, and the peak is the ladder's high point.
+  // the sustainable factor off the level it builds from — the rung before, or after a
+  // reset the level that reset paused — and the peak is the ladder's high point.
   for (let i = 1; i < weeks.length; i++) {
-    assert.ok(weeks[i].km <= weeks[i - 1].km * 1.12 + 0.11, `week ${i} stepped too far`);
+    const from = weeks[i - 1].kind === "down" && i >= 2 ? Math.max(weeks[i - 1].km, weeks[i - 2].km) : weeks[i - 1].km;
+    assert.ok(weeks[i].km <= from * 1.12 + 0.11, `week ${i} stepped too far`);
   }
   const peak = weeks.find((w) => w.kind === "peak");
   assert.ok(weeks.every((w) => w.km <= peak.km + 1e-9));
   assert.ok(weeks.at(-1).km < peak.km, "race week steps down from the peak");
-  // A Monday race gets the full shape: peak, taper, then race week.
+  // A Monday race gets the same shape: peak, taper, then race week.
   const mondayRace = projectRaceBuildWeeks({ ...goal, date: "2026-11-02" }, TODAY, 28, 13);
   assert.deepEqual(mondayRace.slice(-3).map((w) => w.kind), ["peak", "taper", "race"]);
   assert.ok(weeks.every((w) => w.quality_hint && w.strength_hint));
@@ -209,9 +213,12 @@ test("the live week is a rung, not a patch — the walk steps off it, never off 
   assert.equal(known[2].km, third.required_km, "week three steps off the engine's week two");
   assert.equal(walked[1].long_km, step.required_long_km);
   assert.ok(walked[1].km < projected[1].km, `${walked[1].km} should sit below the double-stepped ${projected[1].km}`);
-  // And the rest of the ladder still walks itself, rung by rung.
+  // And the rest of the ladder still walks itself, rung by rung — off the rung before,
+  // or, after a reset, off the level the reset paused (a reset is not lost ground).
   for (let i = 2; i < walked.length; i++) {
-    const rung = raceRamp(goal, walked[i].week_start, walked[i - 1].km, walked[i - 1].long_km);
+    const prev = walked[i - 1];
+    const anchor = prev.kind === "down" && walked[i - 2].km > prev.km ? walked[i - 2].km : prev.km;
+    const rung = raceRamp(goal, walked[i].week_start, anchor, prev.long_km);
     assert.equal(walked[i].km, rung.required_km, `week ${i} is the engine's own next step`);
   }
 });
@@ -451,7 +458,9 @@ test("the surfaces carry the read: REST route registered, MCP tool present, coac
 // the empty "Easy" plan day
 // ---------------------------------------------------------------------------
 
-test("a restructure's undeclared empty day is stored as rest, never as a startable training day", () => {
+test("a restructure's empty day is never written as a plan day, so it can never be a startable training day", () => {
+  // Plan days hold STRENGTH work only (migration 110): rest is a calendar fact, so a
+  // restructure's empty day — declared or not — is dropped rather than stored.
   repo.replacePlan([
     {
       day_number: 1,
@@ -462,7 +471,16 @@ test("a restructure's undeclared empty day is stored as rest, never as a startab
     { day_number: 3, name: "Scaffold", day_type: "training", items: [] },
   ]);
   assert.equal(repo.getPlanDay(1).day_type, "training");
-  assert.equal(repo.getPlanDay(2).day_type, "rest", "an empty day nobody called training is a rest day");
-  assert.equal(repo.getPlanDay(2).items.length, 0);
-  assert.equal(repo.getPlanDay(3).day_type, "training", "an explicit training scaffold is left as the athlete said");
+  assert.equal(repo.getPlanDay(2), null, "an empty day is not a plan day at all — rest is the calendar's");
+  assert.equal(repo.getPlanDay(3), null, "a restructure with nothing to lift on a day does not write it");
+  assert.deepEqual(
+    repo.getPlan().map((d) => d.day_number),
+    [1],
+    "only the strength day survives the restructure"
+  );
+  assert.throws(
+    () => repo.replacePlan([{ day_number: 1, name: "Easy", items: [] }]),
+    "a restructure with no strength day at all is refused rather than wiping the plan"
+  );
+  assert.deepEqual(repo.getPlan().map((d) => d.day_number), [1], "and the refused restructure changed nothing");
 });

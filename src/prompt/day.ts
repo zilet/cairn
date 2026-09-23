@@ -2,7 +2,13 @@
 // cross-domain insight, and the standing weekly read.
 import { getCardioForDate } from "../repo/activities.js";
 import { getCoachContext } from "../repo/coach.js";
-import { dayRead, dayReadPeriodizationContext, forwardLook, recentDayReads } from "../repo/day-read.js";
+import {
+  dayRead,
+  dayReadCitableBrakes,
+  dayReadPeriodizationContext,
+  forwardLook,
+  recentDayReads,
+} from "../repo/day-read.js";
 import type { DayRead } from "../repo/day-read.js";
 import { suggestAlternatives } from "../repo/exercise-variations.js";
 import { feltSignalDayLines } from "../repo/felt-signals.js";
@@ -59,7 +65,8 @@ const DAY_READ_SCHEMA = `{
   "headline": "<2-5 word plain-language state. Prospective when train/easy/rest ('Long run today.'); past-tense acknowledgement when done ('Long run done.')>",
   "why": "<one warm, plain sentence — what you saw and why; NO numbers, NO scores>",
   "focus": "<train: the session character. For a LIFTING day this is the muscle focus ('Lower body'); for an ENDURANCE user it can be the run/ride character — 'Easy', 'Long', 'Tempo', 'Intervals', 'Recovery'. null on rest.>",
-  "est_minutes": <rough minutes for the suggestion, or null>
+  "est_minutes": <rough minutes for the suggestion, or null>,
+  "brake": "<ONLY when the baseline is train and you read today easy or rest: the field name of the fresh brake you acted on, exactly as listed under NAMED BRAKE RULE; otherwise null>"
 }`;
 
 // A compact, deterministic read of the training history so the agent grasps the
@@ -496,6 +503,17 @@ export function buildDayReadPrompt(
   } catch {
     todayHoldBlock = "";
   }
+  // The named-brake rule (src/dayread.ts agentCautionLacksBrake): a train baseline read
+  // quieter is REJECTED unless it cites one of these fields, so the agent is told the
+  // exact list the validator will hold it to. Not shown under an athlete steer (the
+  // steer is the brake) or on a baseline that is not train.
+  const namedBrakeBlock = (() => {
+    if (baseline.kind !== "train" || opts.override?.trim()) return "";
+    const fields = dayReadCitableBrakes(baseline as any);
+    return fields.length
+      ? `\nNAMED BRAKE RULE (the baseline is train): you may read today easy or rest ONLY for a brake that is firing right now, and you must name it in "brake" — one of: ${fields.join(", ")}. Anything else on the board (a trend, an older reading, an informational health note) was already weighed and did not brake the day: voice it as a caveat inside a training day, never as the reason to change the kind.\n`
+      : `\nNAMED BRAKE RULE (the baseline is train): nothing fresh is braking today that this read has not already weighed — including, on a day their own record of training through quieter reads opened, everything that argued for the quieter read — so keep it a training day ("brake": null). Anything cautious on the board (a trend, an older reading, an informational health note) is a caveat to voice inside the session, never the reason to read the day easy or rest.\n`;
+  })();
   const overrideBlock = opts.override?.trim()
     ? `\nUSER OVERRIDE (honor this — they're steering): "${opts.override.trim()}". Reshape the read accordingly (e.g. "rough night" → lean easy/rest; "short on time" → a compressed session; "I want to train anyway" → a train read even if the baseline leaned rest, kept appropriately light).\n`
     : "";
@@ -620,11 +638,11 @@ THE CONSTITUTION (binding):
 DETERMINISTIC SIGNALS already computed (use them, but you make the final nuanced call):
 ${JSON.stringify(baseline.signals)}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
-You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling.
+You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling${namedBrakeBlock ? " — but a train baseline is read quieter only under the NAMED BRAKE RULE below" : ""}.
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}${fuelDemandLine}
 ${CONTEXT_GUARDRAILS}
-${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderStrengthSchedule(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${currentWordingBlock}${overrideBlock}
+${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderStrengthSchedule(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${namedBrakeBlock}${currentWordingBlock}${overrideBlock}
 ${renderJsonContract(DAY_READ_SCHEMA)}
 
 DATA:

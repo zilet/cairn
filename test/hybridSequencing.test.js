@@ -2,7 +2,8 @@
 // deterministic seams are pinned here:
 //   (1) repo.hybridDayContext(date) — the same-day/day-adjacent sequencing reads
 //       (hard cardio yesterday, a double logged today, the next planned run, the
-//       next heavy-lower day), all objective (activities + the stored plan) and null-safe.
+//       next heavy-lower day), all objective (activities, the stated run days and the
+//       lifting week) and null-safe.
 //   (2) renderHybridSequencing(hc, today) — the compact session-prompt note, which
 //       must fire ONLY on a real signal and be "" otherwise (the quiet-by-default pattern).
 //   (3) weeklyRunPlan placement — the quality run avoids the day right after a leg day
@@ -74,31 +75,42 @@ test("hybridDayContext surfaces a same-day double (cardio already logged today)"
   assert.equal(hc.cardio_today.sport, "run", "the canonical sport bucket is carried for the note tiers");
 });
 
-test("hybridDayContext reads the next planned run from the stored plan", () => {
-  // A single plan day carrying a long run — the projection lands on it tomorrow.
-  repo.setWeeklyRuns([{ day_number: 1, label: "Long run", target_distance_km: 15, target_zone: "Z2" }]);
+test("hybridDayContext reads the next planned run from the athlete's stated run days", () => {
+  // Runs are never plan items (migration 110): the fallback is the next STATED run
+  // weekday. REF is a Friday; a stated Saturday long run lands tomorrow.
+  repo.setProfile({ endurance_schedule: { days: [{ dow: 6, kind: "long" }] } });
   const hc = repo.hybridDayContext(REF);
   assert.ok(hc.planned_run_next, "a planned run is surfaced");
   assert.equal(hc.planned_run_next.date, fwd(1));
   assert.equal(hc.planned_run_next.kind, "long");
-  assert.equal(hc.planned_run_next.km, 15);
+  assert.equal(hc.planned_run_next.km, null, "a stated weekday carries no distance of its own");
 });
 
 test("hybridDayContext projects a planned run across the Sun→Mon week boundary to the right date", () => {
-  // A 7-day plan (day_numbers 1..7 fill Mon..Sun by the rotation convention) with a run ONLY
-  // on day 1 (Monday). From a WEDNESDAY, the scan walks Thu→Sun and lands the run on the next
-  // Monday — 5 days out, crossing the Sunday→Monday wrap in the weekday projection.
+  // A full 7-day lifting plan, and a run stated ONLY on Monday. From a WEDNESDAY, the
+  // scan walks Thu→Sun and lands the run on the next Monday — 5 days out, crossing the
+  // Sunday→Monday wrap in the weekday projection. The lifting week never hides it.
   const WED = "2026-05-13"; // a Wednesday (getUTCDay === 3)
   const monday = new Date(new Date(`${WED}T00:00:00Z`).getTime() + 5 * 864e5).toISOString().slice(0, 10);
   for (let dn = 1; dn <= 7; dn++) {
     repo.savePlanDay(dn, `Day ${dn}`, "Upper body", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
   }
-  repo.setWeeklyRuns([{ day_number: 1, label: "Easy run", target_distance_km: 6, target_zone: "Z2" }]);
+  repo.setProfile({ endurance_schedule: { days: [{ dow: 1, kind: "easy" }] } });
   const hc = repo.hybridDayContext(WED);
   assert.ok(hc.planned_run_next, "the run is found across the week boundary");
-  assert.equal(hc.planned_run_next.date, monday, "resolves to next Monday (the run's projected day)");
+  assert.equal(hc.planned_run_next.date, monday, "resolves to next Monday (the stated run day)");
   assert.equal(hc.planned_run_next.kind, "easy");
-  assert.equal(hc.planned_run_next.km, 6);
+  assert.equal(hc.planned_run_next.km, null);
+});
+
+test("hybridDayContext never projects a run from a cardio item written into the plan", () => {
+  // The old source is gone: a cardio item is stripped at write, so with no stated run
+  // days there is no planned run to project.
+  repo.savePlanDay(1, "Run", "Endurance", [
+    { kind: "cardio", exercise: "Long run", target_distance_km: 15, target_zone: "Z2" },
+  ]);
+  const hc = repo.hybridDayContext(REF);
+  assert.equal(hc.planned_run_next, null);
 });
 
 test("hybridDayContext reads the next heavy-lower plan day", () => {

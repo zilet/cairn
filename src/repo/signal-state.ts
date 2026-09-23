@@ -1589,6 +1589,19 @@ export function hasFreshDecidingBrake(dimensions: Record<SignalDimension, Signal
   return freshBearingEvidence(dimensions).some((item) => isBrakeEvidence(item) && !isAdvisoryBrake(item));
 }
 
+// The same set, NAMED by field — what a caller has to cite to claim a deciding brake.
+// The day-read agent may read a deterministic train day quieter only by naming one of
+// these (src/dayread.ts); one predicate, so the prompt's list and the validator agree.
+export function freshDecidingBrakeFields(dimensions: Record<SignalDimension, SignalDimensionState>): string[] {
+  return [
+    ...new Set(
+      freshBearingEvidence(dimensions)
+        .filter((item) => isBrakeEvidence(item) && !isAdvisoryBrake(item))
+        .map((item) => item.field)
+    ),
+  ];
+}
+
 // Is this a THIN week for signals — is today's read leaning on visibly less evidence
 // than usual? Deterministic and code-derived from the SAME per-dimension coverage
 // this module already computes (`coverage.active_fields`, filled in dimensionState
@@ -2007,6 +2020,19 @@ export function planningSignalState(input: {
       ? ({ advisory_brake: true, advice_only: true } satisfies Partial<SignalObservation>)
       : undefined;
 
+  // A TREND caution whose own last night is already back at the athlete's norm is a
+  // recovering trend, not a brake: the one-night law (HRV/RHR brake only from LAST
+  // NIGHT's reading) reads the night itself, and a night at or past the norm cannot be
+  // the reading that slows today down. It rides as context, like a stale caution.
+  const lastNightBackAtNorm = (trust: any, norm: number, atNorm: (value: number, norm: number) => boolean) => {
+    const readings: Array<{ date: string; value: number }> = Array.isArray(trust?.readings) ? trust.readings : [];
+    const newest = readings[0] ?? null;
+    if (!newest || !Number.isFinite(norm) || norm <= 0 || !isLastNight(newest.date, date)) return false;
+    const value = Number(newest.value);
+    return Number.isFinite(value) && atNorm(value, norm);
+  };
+  const recoveringTrendAsContext = { advisory_brake: true, advice_only: true } satisfies Partial<SignalObservation>;
+
   const hrvTrust = excursionRun(
     input.recovery?.verified?.hrv_ms,
     baselineHrv,
@@ -2087,7 +2113,11 @@ export function planningSignalState(input: {
       hrvTrust.claim_date,
       saturation
         ? { advisory_brake: true }
-        : staleCautionAsContext(excursion || trendDown ? "caution" : "neutral", hrvTrust.claim_date, "hrv_ms")
+        : trendDown &&
+            !excursion &&
+            lastNightBackAtNorm(input.recovery?.verified?.hrv_ms, baselineHrv, (value, norm) => value >= norm)
+          ? recoveringTrendAsContext
+          : staleCautionAsContext(excursion || trendDown ? "caution" : "neutral", hrvTrust.claim_date, "hrv_ms")
     );
   }
   if (input.recovery?.delta?.rhr != null) {
@@ -2115,7 +2145,11 @@ export function planningSignalState(input: {
             : "resting_hr_steady",
       SENSOR_MAX_AGE_DAYS.resting_hr,
       rhrTrust.claim_date,
-      staleCautionAsContext(excursion || trendUp ? "caution" : "neutral", rhrTrust.claim_date, "resting_hr")
+      trendUp &&
+        !excursion &&
+        lastNightBackAtNorm(input.recovery?.verified?.resting_hr, baselineRhr, (value, norm) => value <= norm)
+        ? recoveringTrendAsContext
+        : staleCautionAsContext(excursion || trendUp ? "caution" : "neutral", rhrTrust.claim_date, "resting_hr")
     );
   }
 

@@ -419,6 +419,9 @@ function isReachHostItem(
   const group = itemMuscleGroup(item);
   // Unknown area is not "safe" — skip rather than host a reach we cannot certify.
   if (!group) return false;
+  // Mobility prep is a warm-up, never the day's challenge: the reach belongs on the
+  // first eligible COMPOUND, and a day with none reads "no room" honestly.
+  if (isMobility(group) || isPrepMovement(exercise)) return false;
   if (excludedGroups.has(group) || excludedGroups.has(String(group).toLowerCase())) return false;
   if (saturatedGroups.has(group) || saturatedGroups.has(String(group).toLowerCase())) return false;
   return reachHostLoad(exercise) != null;
@@ -644,8 +647,20 @@ const ENDURANCE_HOLD_RUN_REASONS: ReadonlySet<string> = new Set([
   "hard_endurance_yesterday",
 ]);
 
+// The lifting day reopened after its morning run (daily-decision's
+// `endurance_done_today`): nothing is being held — the day's endurance is simply in.
+const RUN_DONE_TODAY_NOTE: readonly string[] = [
+  "Today's endurance is already in — an easy walk is plenty on top of the lifting",
+  "You've already done today's cardio, so this stays an easy walk",
+  "Today's cardio is already logged; keep any extra movement to an easy walk",
+  "Cardio's covered for today — a walk is all this slot asks",
+];
+
 function runHeldNote(envelope: DailyDecisionEnvelope): string {
   const reasons = envelope.endurance_hold?.reasons ?? [];
+  if (reasons.includes("endurance_done_today") && !reasons.some((r) => ENDURANCE_HOLD_RUN_REASONS.has(String(r)))) {
+    return pickDayVariant(RUN_DONE_TODAY_NOTE, envelope.date, "daily_composition:run_held:done_today");
+  }
   const enduranceCaused = reasons.some((r) => ENDURANCE_HOLD_RUN_REASONS.has(String(r)));
   return enduranceCaused
     ? pickDayVariant(RUN_HELD_NOTE_ENDURANCE, envelope.date, "daily_composition:run_held:endurance")
@@ -898,30 +913,10 @@ export function normalizeComposedSession(
     : null;
   const candidates = new Map(envelope.candidates.map((candidate) => [candidate.exercise.toLowerCase(), candidate]));
   const equipmentCapability = parseEquipmentCapability(envelope.request.equipment);
-  // The athlete's stated run days anchor the SUGGESTION engines — weeklyRunPlan and
-  // flexibleTrainingAgenda never spill a run onto a weekday nobody named. The
-  // athlete's own PLAN is not a suggestion: a run written into today's template is
-  // structure they authored, and composition is not where their own week quietly
-  // loses a session. So the filter only ever drops a run this day's plan did not
-  // itself prescribe. Read lazily and once — an unscheduled weekday is the only
-  // morning that asks the question at all.
-  let planRunToday = false;
-  let planRunRead = false;
-  const planPrescribesRun = (): boolean => {
-    if (planRunRead) return planRunToday;
-    planRunRead = true;
-    const dayNumber = envelope.template.day_number;
-    if (dayNumber != null) {
-      try {
-        const day = getPlanDay(Number(dayNumber)) as any;
-        const items = Array.isArray(day?.items) ? day.items : [];
-        planRunToday = items.some((it: any) => it?.kind === "cardio" && cardioPlanIdentity(it).sport === "run");
-      } catch {
-        planRunToday = false;
-      }
-    }
-    return planRunToday;
-  };
+  // The athlete's stated run days anchor every run — weeklyRunPlan and
+  // flexibleTrainingAgenda never spill a run onto a weekday nobody named, and plan days
+  // carry no runs at all (migration 110). So a run a composed card carries on a weekday
+  // the athlete did not name for running is dropped here, whoever authored it.
   let novelCount = 0;
   const kept: any[] = [];
   for (const item of base.items) {
@@ -934,8 +929,7 @@ export function normalizeComposedSession(
     if (
       isCardio &&
       cardioPlanIdentity(item).sport === "run" &&
-      isStatedRunDay(envelope.date) === false &&
-      !planPrescribesRun()
+      isStatedRunDay(envelope.date) === false
     ) {
       rejected.push({ exercise, reason: "not_scheduled_run_day" });
       continue;
@@ -1139,6 +1133,23 @@ export function normalizeComposedSession(
     // number.
     const substitutionProven = substitution?.load_basis === "logged";
     if (hold && !substitutionProven && clampHeldTarget(next, envelope)) changed = true;
+    // A lift whose own log has earned past a shallow hold (`earned_floor`, the logged
+    // working weight) is never prescribed under it on a day that is not itself eased —
+    // an eased day (easy, deload, a deep or same-day reduced area) keeps its easing.
+    // The floor is a logged load, so it can only ever restore what the athlete already
+    // moves; it never invents a heavier one.
+    const earnedFloor = finite(candidate?.earned_floor);
+    if (
+      intensityFactor === 1 &&
+      earnedFloor != null &&
+      earnedFloor > 0 &&
+      next.mode !== "timed" &&
+      !substitution &&
+      (finite(next.target_weight) == null || (finite(next.target_weight) as number) < earnedFloor)
+    ) {
+      next.target_weight = earnedFloor;
+      changed = true;
+    }
     if (intensityFactor < 1) {
       if (next.mode === "timed" && next.target_seconds != null) {
         const seconds = Math.max(1, Math.round(Number(next.target_seconds) * intensityFactor));
@@ -1191,7 +1202,18 @@ export function normalizeComposedSession(
   // The stand-in itself sits on an allowed group and would otherwise qualify as a
   // host, but the reason it is on the card at all is that the body is still
   // catching up somewhere else. `reconcileEnvelopeReach` below then says so.
-  const reachOpen = reachChallengeOpen(envelope) && !substituted.substitutions.length;
+  // "Catching up" is a DEEP residual (owner ruling, 2026-09-23): a stabilizer the
+  // morning run brushed past its bar moves its slot, and that alone no longer parks
+  // the whole day's reach. An envelope without the `deep` list (historical rows) keeps
+  // the old reading — every substitution parks it.
+  const deepList = Array.isArray(envelope.muscles.deep) ? envelope.muscles.deep : null;
+  const deepGroups = new Set((deepList ?? []).map((g) => canonicalGroup(g) ?? String(g).toLowerCase()));
+  const substitutionParksReach = substituted.substitutions.some((entry) => {
+    if (deepList == null) return true;
+    const group = itemMuscleGroup({ exercise: entry.replaced });
+    return group == null || deepGroups.has(group);
+  });
+  const reachOpen = reachChallengeOpen(envelope) && !substitutionParksReach;
   let reachHostConsumed = false;
   let reachLanded = false;
   for (const item of capped) {
@@ -1451,6 +1473,22 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
 }
 
 export function deterministicComposedSession(envelope: DailyDecisionEnvelope): ComposedSession {
+  // ---- a stated run day carries no lifting card ----
+  // The run is the day's work and it lives on the Endurance plan (weeklyRunPlan /
+  // the agenda), never on a strength card. With no plan day to compose from, the
+  // honest card is an empty one that names the run day — not the generic 25-minute
+  // "Easy movement" filler. A rest read still reads as rest, below; train-anyway takes
+  // the strength day the week was about to give them (the envelope already swapped it
+  // in, so template.day_type is gone by then).
+  if (envelope.template.day_type === "run" && envelope.kind !== "rest" && envelope.request.train_anyway !== true) {
+    return {
+      name: "Run day",
+      focus: "Endurance",
+      why: pickDayVariant(RUN_DAY_CARD_NOTE, envelope.date, "daily_composition:run_day"),
+      est_minutes: null,
+      items: [],
+    };
+  }
   if (envelope.kind === "rest" && envelope.request.train_anyway !== true) {
     return {
       name: "Rest day",
@@ -1484,16 +1522,26 @@ export function deterministicComposedSession(envelope: DailyDecisionEnvelope): C
   );
 }
 
-// The programmed rest day's own card. Never a brake and never a gate — the athlete
-// wrote this day into their week, so it offers what a rest day is actually for. Its
-// own set, several phrasings, because it lands on the same weekday every week and one
-// literal would print verbatim for as long as the template stands.
+// The calendar rest day's own card — a weekday the athlete neither lifts nor runs.
+// Never a brake and never a gate — the athlete built this day into their week, so it
+// offers what a rest day is actually for. Its own set, several phrasings, because it
+// lands on the same weekday every week and one literal would print verbatim for as long
+// as the week stands.
 export const TEMPLATE_REST_DAY_NOTE: readonly string[] = [
   "Your week has a rest day here. An easy walk or a few minutes of mobility is plenty, and doing nothing counts too.",
-  "This is the rest day in your plan. Move gently if you feel like it — a walk, some stretching — or leave it alone.",
+  "This is the rest day in your week. Move gently if you feel like it — a walk, some stretching — or leave it alone.",
   "The week keeps today clear. Easy mobility or a walk fits it well; nothing at all fits it just as well.",
-  "Today is yours. Your plan puts a rest day here, so a gentle walk is the whole ask, and even that is optional.",
-  "Rest is what the week programmed for today. Some easy movement is welcome; a real day off is too.",
+  "Today is yours. Your week puts a rest day here, so a gentle walk is the whole ask, and even that is optional.",
+  "Rest is what the week holds for today. Some easy movement is welcome; a real day off is too.",
+];
+
+// The stated run day's card: no lifting on it, and the run itself is on the Endurance
+// plan. Several phrasings for the same weekly-repeat reason as the rest card above.
+export const RUN_DAY_CARD_NOTE: readonly string[] = [
+  "No lifting today — it's one of your run days. The run is on your Endurance plan.",
+  "Today belongs to the run; your Endurance plan has it. The lifting picks up on your next lift day.",
+  "A run day in your week, so there's nothing to lift. Find today's run on the Endurance plan.",
+  "Your week puts a run here and no lift. The run's distance and effort are on the Endurance plan.",
 ];
 
 // Keep the wire marker a literal here: adaptive-session imports this module to

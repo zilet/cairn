@@ -84,12 +84,10 @@ CREATE TABLE IF NOT EXISTS plan_days (
   day_number INTEGER NOT NULL UNIQUE,
   name TEXT NOT NULL,
   focus TEXT,
-  -- A first-class REST day in the week template (v99). 'training' (default) is
-  -- every day that carries work; 'rest' is the deliberate seam a hybrid week is
-  -- built around. A rest day carries ZERO plan_items — the emptiness is the
-  -- prescription, not a missing one — and plan quality stops reading it as a
-  -- broken training day. It still rides in the rotation ring so the seam lands
-  -- where the athlete programmed it.
+  -- Always 'training' since v110: plan days hold STRENGTH work only. A rest day is
+  -- a calendar weekday the athlete neither lifts nor runs, and runs come from the
+  -- stated run days + the run engine — neither is a plan row. (v99 briefly stored a
+  -- 'rest' row here; the column stays so historical reads keep their shape.)
   day_type TEXT NOT NULL DEFAULT 'training'
 );
 CREATE TABLE IF NOT EXISTS plan_items (
@@ -104,11 +102,10 @@ CREATE TABLE IF NOT EXISTS plan_items (
   note TEXT,
   warmup_sets INTEGER,
   target_seconds INTEGER,                -- prescribed hold/duration for timed exercises
-  -- First-class planned cardio (v35). kind='cardio' rows carry an endurance
-  -- prescription instead of a loaded exercise: distance, duration, an HR/effort
-  -- zone, and an optional interval structure (JSON). kind='strength' (default)
-  -- keeps the exercise_id-driven behavior exactly as before.
-  kind TEXT DEFAULT 'strength',          -- strength | cardio
+  -- kind='cardio' rows (v35) are RETIRED: plan days hold strength only and v110
+  -- removed every run item — the run engine computes each week's runs live. The
+  -- endurance columns below stay for historical reads; nothing writes them.
+  kind TEXT DEFAULT 'strength',          -- strength (legacy: cardio)
   target_distance_km REAL,               -- planned distance (cardio), e.g. 12
   target_duration_min REAL,              -- planned moving time in minutes (cardio)
   target_zone TEXT,                      -- HR/effort zone, free text, e.g. 'Z2' | 'tempo' | 'easy'

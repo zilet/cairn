@@ -66,12 +66,13 @@ test("one established regressing lift stays visible even while another lift adva
 
   const read = wholePersonTrajectory({ end: "2026-06-25", days: 56 });
   const strength = read.domains.find((domain) => domain.domain === "strength");
-  assert.equal(strength.verdict, "worse");
+  // One slide against one advance is not a domain decline (strengthDeclineIsMeaningful,
+  // test/eliteTrajectory.test.js) — but the slipping lift is still named.
+  assert.equal(strength.verdict, "holding");
   assert.match(strength.why, /Bench Press/);
-  assert.match(strength.why, /Lateral Raise/);
-  assert.match(strength.why, /other lift is still advancing/);
-  assert.ok(read.unexplained_worse.includes("strength"));
-  assert.equal(read.revision_needed, true);
+  assert.match(strength.why, /slipping/);
+  assert.deepEqual(strength.lift_counts, { improving: 1, declining: 1, steady: 0, prescribed_lower: 0, not_recent: 0 });
+  assert.ok(!read.unexplained_worse.includes("strength"));
 });
 
 // ---------------------------------------------------------------------------

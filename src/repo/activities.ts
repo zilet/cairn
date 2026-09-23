@@ -10,6 +10,20 @@ import { bumpTrainingDataVersion } from "./training-cache.js";
 import { deriveSessionTitle } from "./training-read.js";
 import { addDaysISO, localDateISO, chatHistoryTimeLabel } from "./shared.js";
 import { round1 } from "../lib/numbers.js";
+import {
+  duplicateMetricError,
+  isShadowActivity,
+  normalizeGarminType,
+  positiveNumber,
+  withoutShadowActivities,
+  type ShadowCheckActivity,
+} from "./activity-shadow.js";
+
+// Re-exported for existing callers (e.g. underfueling.ts) that import the shadow
+// helpers from here; the pure implementation lives in ./activity-shadow.js so a
+// leaf module like training-read.ts can use it without cycling back through
+// activities.ts -> training-read.ts (deriveSessionTitle).
+export { isShadowActivity, withoutShadowActivities, type ShadowCheckActivity };
 
 // ---------- activities ----------
 export function parseActivity(text: string) {
@@ -46,20 +60,6 @@ export function parseActivity(text: string) {
 interface ManualActivityDuplicateScore {
   id: number;
   error: number;
-}
-
-function positiveNumber(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function duplicateMetricError(a: unknown, b: unknown, absoluteTolerance: number, relativeTolerance: number) {
-  const left = positiveNumber(a);
-  const right = positiveNumber(b);
-  if (left == null || right == null) return null;
-  const tolerance = Math.max(absoluteTolerance, Math.max(left, right) * relativeTolerance);
-  const error = Math.abs(left - right) / tolerance;
-  return error <= 1 ? error : Number.POSITIVE_INFINITY;
 }
 
 // Resolve at most one explicit manual row that is sufficiently similar to an
@@ -104,6 +104,11 @@ function bestManualDuplicateId(input: {
   if (runnerUp && runnerUp.error - best.error < 0.2) return null;
   return best.id;
 }
+
+// SHADOW detection (a hand log duplicating an already-synced effort) now lives in
+// ./activity-shadow.js — a dependency-free leaf module — and is re-exported above
+// so existing imports of isShadowActivity/withoutShadowActivities from here keep
+// working. See that file's header comment for the definition of a shadow.
 
 /**
  * The per-date work a write owes the rest of the app: the training-cache bump, the
@@ -501,7 +506,7 @@ export function getCardioForDate(date: string): CardioEffort[] {
   const d = date || localDateISO();
   const rows = db
     .prepare(
-      `SELECT a.id, a.type, a.raw_text, a.distance_km, a.duration_min, a.pace, a.source,
+      `SELECT a.id, a.date, a.type, a.raw_text, a.distance_km, a.duration_min, a.pace, a.source, a.external_id,
             g.avg_hr AS g_avg_hr, g.start_time AS g_start, g.hr_zones_json AS g_zones
      FROM activities a
      LEFT JOIN garmin_activities g ON g.activity_id = a.id
@@ -511,7 +516,8 @@ export function getCardioForDate(date: string): CardioEffort[] {
     .all(d) as any[];
 
   const out: CardioEffort[] = [];
-  for (const a of rows) {
+  // A hand log shadowing the synced row of the same effort is one run, not two.
+  for (const a of withoutShadowActivities(rows)) {
     if (isStrengthGarminType(a.type)) continue; // never an endurance effort
     let zones: any = null;
     try {
@@ -710,25 +716,9 @@ function cleanGarminMode(mode: any): "unofficial" | "official" | "manual" {
   return ["unofficial", "official", "manual"].includes(mode) ? mode : "unofficial";
 }
 
-// Fold an activity type to a coarse modality (run/ride/swim/hike/other). Used both
-// for the Garmin sync (upsert + run-compliance) AND the manual↔Garmin soft-dedup in
-// addActivity. We match on a SEPARATOR-NORMALIZED copy (underscores/hyphens → spaces)
-// with a LEADING word-boundary: a closing `\b` wrongly failed on "cycling", and `\b`
-// never fires next to an underscore (it's a word char), so Garmin's real typeKeys
-// ("indoor_cycling", "lap_swimming", "treadmill_running", "walking") silently stayed
-// unfolded. Unknown types fall through to the lowercased original so they NEVER
-// cross-match. The strength/cardio→"other" line stays AFTER the endurance checks so a
-// strength activity never reads as a run/ride.
-function normalizeGarminType(t: any): string {
-  const s = String(t ?? "").toLowerCase();
-  const m = s.replace(/[_-]+/g, " "); // separators → spaces so \b anchors correctly
-  if (/\b(run|running|jog|trail running|treadmill|tempo|interval)/.test(m)) return "run";
-  if (/\b(cycl|bike|biking|biked|mountain|mtb|gravel|ride|rode|road biking)/.test(m)) return "ride";
-  if (/\b(swim|swimming|swam)/.test(m)) return "swim";
-  if (/\b(walk|walked|hike|hiked|hiking|ruck|fell)/.test(m)) return "hike";
-  if (/\b(strength|cardio|training|fitness equipment)/.test(m)) return "other";
-  return s || "other";
-}
+// normalizeGarminType (fold an activity type to a coarse run/ride/swim/hike/other
+// modality) now lives in ./activity-shadow.js, imported above; used both for the
+// Garmin sync (upsert + run-compliance) AND the manual↔Garmin soft-dedup below.
 
 // Garmin strength-style activities (strength_training, functional_strength_training,
 // indoor_cardio with weights, etc.) are modeled as Cairn *sessions*, not loose

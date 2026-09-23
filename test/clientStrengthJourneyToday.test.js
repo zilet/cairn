@@ -119,7 +119,10 @@ test("Today launch integration stays inside the existing card and checks exact a
   assert.doesNotMatch(source, /strength-journey-card|sjourney-card/);
 });
 
-test("durable mixed composition preserves saved order and current-session prescription semantics", () => {
+// A run is no longer a card in the lift list (runs live in Plan -> Endurance). An
+// older composition snapshot that still carries one keeps its lifts in saved order
+// and simply drops the run — it never reaches a card renderer.
+test("durable composition keeps saved lift order and drops a stale run item from the lift list", () => {
   const renderer = loadRenderer();
   const order = [];
   const items = [
@@ -137,12 +140,9 @@ test("durable mixed composition preserves saved order and current-session prescr
     plan: [],
     activeDay: null,
     logDate: "2026-07-20",
-    cardioItems: [items[1]],
     strengthItems: [items[0], items[2]],
     activeItems: items,
     skippedItems: [],
-    matchedCardio: new Map(),
-    syncedLine: "",
     loggedByEx: {},
     offPlanEx: [],
     pendingOffPlan: [],
@@ -155,7 +155,6 @@ test("durable mixed composition preserves saved order and current-session prescr
     hasLoggedSets: false,
     hasGarmin: false,
     isRunDay: false,
-    preserveItemOrder: true,
     prefillFor: () => ({}),
     rxFor: () => null,
   }, {
@@ -167,13 +166,10 @@ test("durable mixed composition preserves saved order and current-session prescr
       finishHtml: () => "",
     },
     planSurfaceDeps: () => ({}),
-    isCardioItem: (item) => item.kind === "cardio",
-    cardioLabel: (item) => item.exercise,
-    cardioPlanCard: (item) => { order.push(item.exercise); return ""; },
     exCard: (item) => { order.push(item.exercise); assert.equal(item.fromSession, true); return ""; },
     garminSessionCard: () => "",
     sessionDoneCard: () => "",
     skipLineHtml: () => "",
   });
-  assert.deepEqual(order, ["Deadlift", "Easy ride", "Pallof Press"]);
+  assert.deepEqual(order, ["Deadlift", "Pallof Press"]);
 });

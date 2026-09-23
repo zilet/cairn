@@ -1,5 +1,5 @@
 // @ts-check
-// Today post-render DOM wiring: quick capture, cardio/apply/date controls,
+// Today post-render DOM wiring: quick capture, sync/apply/date controls,
 // and side loader dispatch after the Today HTML swap.
 
 type TodayPostRenderState = {
@@ -89,13 +89,6 @@ type TodayPostRenderWiringApi = {
     deps.runCountUps(deps.root, { snap: deps.soft });
 
     if (applyPendingCapture(deps)) return;
-
-    deps.root.querySelectorAll<HTMLElement>("[data-cardio-log]").forEach((button) => button.addEventListener("click", () => {
-      const phrase = String(button.dataset.cardioLog || "").trim();
-      if (!phrase) return;
-      deps.state.chatPrefill = phrase;
-      deps.activateTab("chat");
-    }));
 
     deps.wireCardioSync(deps.root, () => deps.renderToday({ soft: true }));
 

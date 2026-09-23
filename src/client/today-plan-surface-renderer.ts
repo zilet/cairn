@@ -1,5 +1,5 @@
 // @ts-check
-// Today plan/logging surface renderer: done card, session surface, card ordering,
+// Today plan/logging surface renderer: done card, session surface (lifts only),
 // pending off-plan cards, finish affordance, and skipped line.
 
 type TodayPlanSurfaceRendererRecord = Record<string, unknown>;
@@ -41,12 +41,9 @@ type TodayPlanSurfaceRendererOptions = {
   plan: TodayPlanSurfaceRendererRecord[];
   activeDay: unknown;
   logDate: string;
-  cardioItems: TodayPlanSurfaceRendererItem[];
   strengthItems: TodayPlanSurfaceRendererItem[];
   activeItems: TodayPlanSurfaceRendererItem[];
   skippedItems: TodayPlanSurfaceRendererItem[];
-  matchedCardio: Map<TodayPlanSurfaceRendererItem, unknown>;
-  syncedLine: string;
   loggedByEx: Record<string, unknown[]>;
   offPlanEx: string[];
   pendingOffPlan: TodayPlanSurfaceRendererPendingOffPlan[];
@@ -59,7 +56,6 @@ type TodayPlanSurfaceRendererOptions = {
   hasLoggedSets: boolean;
   hasGarmin: boolean;
   isRunDay: boolean;
-  preserveItemOrder?: boolean;
   // Per-plan-day acute-recovery read, keyed by day_number, for the day pills.
   // Optional: a render without it simply shows no hint.
   planDayRecovery?: Record<number, { recovering_groups?: string[]; mostly_recovering?: boolean }> | null;
@@ -73,9 +69,6 @@ type TodayPlanSurfaceRendererOptions = {
 type TodayPlanSurfaceRendererDeps = {
   planSurface: Window["CairnTodayPlanSurface"];
   planSurfaceDeps(): Parameters<Window["CairnTodayPlanSurface"]["sessionHeadHtml"]>[1];
-  isCardioItem(item: TodayPlanSurfaceRendererItem): boolean;
-  cardioLabel(item: TodayPlanSurfaceRendererItem): string;
-  cardioPlanCard(item: TodayPlanSurfaceRendererItem, index: number, matched?: unknown, syncLine?: string): string;
   exCard(
     item: TodayPlanSurfaceRendererItem,
     logged: unknown[],
@@ -215,15 +208,11 @@ type TodayPlanSurfaceRendererApi = {
       : item;
   }
 
-  function orderedSurfaceItems(options: TodayPlanSurfaceRendererOptions, deps: TodayPlanSurfaceRendererDeps): TodayPlanSurfaceRendererItem[] {
-    if (options.preserveItemOrder) return options.activeItems;
-    if (options.isRunDay || options.cardioItems.length > 1 || (options.cardioItems.length && options.strengthItems.length)) {
-      return [
-        ...options.activeItems.filter(deps.isCardioItem),
-        ...options.activeItems.filter((item) => !deps.isCardioItem(item)),
-      ];
-    }
-    return options.activeItems;
+  // The lift list is lifts only. A run is never a card here (it lives on the
+  // agenda: Today's run line and Plan -> Endurance), and a cardio item an older
+  // payload still carries is dropped rather than drawn.
+  function surfaceItemsOf(options: TodayPlanSurfaceRendererOptions): TodayPlanSurfaceRendererItem[] {
+    return options.activeItems.filter((item) => item.kind !== "cardio");
   }
 
   function pendingPrefill(last: TodayPlanSurfaceRendererLastSet | null | undefined): TodayPlanSurfaceRendererPrefill {
@@ -249,7 +238,6 @@ type TodayPlanSurfaceRendererApi = {
       html += deps.planSurface.sessionHeadHtml({
         isRunDay: options.isRunDay,
         isToday: options.isToday,
-        cardioItems: options.cardioItems,
         day: options.day,
         exDone: options.exDone,
         exTotal: options.exTotal,
@@ -272,11 +260,10 @@ type TodayPlanSurfaceRendererApi = {
     const garmin = options.session && typeof options.session === "object" ? options.session.garmin : null;
     if (options.hasGarmin) html += deps.garminSessionCard(garmin);
 
-    const surfaceItems = orderedSurfaceItems(options, deps);
-    const easedItems = surfaceItems.filter((item) => !deps.isCardioItem(item));
+    const surfaceItems = surfaceItemsOf(options);
     // One card saying it is eased is its own fact; every card saying it is the
     // session's fact, and belongs above them once.
-    const easedSession = easedItems.length > 1 && easedItems.every(easedNote);
+    const easedSession = surfaceItems.length > 1 && surfaceItems.every(easedNote);
     if (easedSession) {
       html += `<div class="session-eased sess-line">${surfaceDeps.escapeHtml(sessionEasedLine(options.logDate))}</div>`;
     }
@@ -293,15 +280,7 @@ type TodayPlanSurfaceRendererApi = {
     }
 
     let cardIdx = 0;
-    let syncLineUsed = false;
     for (const item of surfaceItems) {
-      if (deps.isCardioItem(item)) {
-        const matched = options.matchedCardio.get(item) || null;
-        const line = (!matched && !syncLineUsed) ? options.syncedLine : "";
-        if (line) syncLineUsed = true;
-        html += deps.cardioPlanCard(item, cardIdx++, matched, line);
-        continue;
-      }
       const exerciseName = String(item.exercise || "");
       const carded = journeyItem(item, options.day, options.strengthJourney);
       // The card, not the exercise name, owns its sets: a peak day renders the same
@@ -363,9 +342,9 @@ type TodayPlanSurfaceRendererApi = {
       );
     }
 
-    html += deps.skipLineHtml(options.skippedItems.map((item) => (
-      deps.isCardioItem(item) ? deps.cardioLabel(item) : String(item.exercise || "")
-    )));
+    html += deps.skipLineHtml(
+      options.skippedItems.filter((item) => item.kind !== "cardio").map((item) => String(item.exercise || "")),
+    );
     html += `</div>`;
     return html;
   }

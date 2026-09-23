@@ -10,7 +10,6 @@ type TodayPlanSurfaceDay = {
   // the program state can't ground one — never a fallback literal.
   purpose?: unknown;
 };
-type TodayPlanSurfaceCardioItem = Record<string, unknown>;
 type TodayPlanSurfaceSession = {
   sets?: unknown[] | null;
   notes?: unknown;
@@ -19,8 +18,6 @@ type TodayPlanSurfaceDeps = {
   escapeHtml(value: unknown): string;
   escapeAttr(value: unknown): string;
   stagger(index?: number | null): string;
-  cardioLabel(item: TodayPlanSurfaceCardioItem): string;
-  cardioPrescription(item: TodayPlanSurfaceCardioItem): string;
   rxMoveCount(rxByEx: Record<string, unknown>): number;
   setsTonnage(sets: unknown): number;
   // Optional: formats a last-set API row into "Last time: …" text (today-session-set-model.ts's
@@ -32,7 +29,6 @@ type TodayPlanSurfaceApi = {
   sessionHeadHtml(options: {
     isRunDay: boolean;
     isToday: boolean;
-    cardioItems: TodayPlanSurfaceCardioItem[];
     day: TodayPlanSurfaceDay | null | undefined;
     exDone: number;
     exTotal: number;
@@ -48,6 +44,14 @@ type TodayPlanSurfaceApi = {
   addExerciseFormHtml(): string;
   finishHtml(session: TodayPlanSurfaceSession, options: { isToday: boolean; logDate: string }, deps: Pick<TodayPlanSurfaceDeps, "escapeAttr" | "setsTonnage">): string;
   lastSetLineHtml(lastSet: unknown, deps: Pick<TodayPlanSurfaceDeps, "escapeHtml" | "lastSetLineText">): string;
+  runLineHtml(
+    agenda: unknown,
+    options: { date: string; units?: "km" | "mi"; syncLine?: string },
+    deps: TodayRunLineDeps,
+  ): string;
+};
+type TodayRunLineDeps = Pick<TodayPlanSurfaceDeps, "escapeHtml"> & {
+  formatDistance?(km: unknown, units?: unknown): string;
 };
 
 (() => {
@@ -55,7 +59,6 @@ type TodayPlanSurfaceApi = {
     options: {
       isRunDay: boolean;
       isToday: boolean;
-      cardioItems: TodayPlanSurfaceCardioItem[];
       day: TodayPlanSurfaceDay | null | undefined;
       exDone: number;
       exTotal: number;
@@ -63,14 +66,14 @@ type TodayPlanSurfaceApi = {
     },
     deps: TodayPlanSurfaceDeps,
   ): string {
+    // A synced run already in on a day that holds no lift. The run itself is never
+    // a line item here — its prescription lives on the agenda and in Plan ->
+    // Endurance — so the head only names what the day already was.
     if (options.isRunDay) {
-      const lead = options.cardioItems[0] || null;
-      const runName = lead ? deps.cardioLabel(lead) : "Today's run";
-      const runPrescription = lead ? deps.cardioPrescription(lead) : "";
       return `<div class="session-head session-head-run">
           <div class="session-head-main">
             <div class="session-kicker lbl">${options.isToday ? "TODAY · A RUN" : "A RUN"}</div>
-            <h2 class="session-title">${deps.escapeHtml(runName)}${runPrescription ? `<span class="session-focus"> · ${deps.escapeHtml(runPrescription)}</span>` : ""}</h2>
+            <h2 class="session-title">${deps.escapeHtml("Today's run")}</h2>
           </div>
         </div>`;
     }
@@ -78,7 +81,9 @@ type TodayPlanSurfaceApi = {
     const sessionName = options.day?.name ? String(options.day.name) : "Today's session";
     const sessionFocus = options.day?.focus ? String(options.day.focus) : "";
     const sessionPurpose = options.day?.purpose ? String(options.day.purpose) : "";
-    const mixed = options.cardioItems.length > 0 || options.hasSyncedCardioToday;
+    // A run synced today beside the lift still reads as a hybrid day in the kicker
+    // (a cross-reference, not a card): the lift list below stays lifts only.
+    const mixed = options.hasSyncedCardioToday;
     const kicker = mixed
       ? (options.isToday ? "TODAY · LIFT + RUN" : "LIFT + RUN")
       : (options.isToday ? "TODAY'S SESSION" : "SESSION");
@@ -107,6 +112,16 @@ type TodayPlanSurfaceApi = {
     return `${words.length === 2 ? `${words[0]} and ${words[1]}` : words[0]} recovering`;
   }
 
+  // The day pills offer lift days only. A rest day or a run-only day an older plan
+  // payload still carries is not a session to switch into — runs live in Plan ->
+  // Endurance. An empty training day stays: it is the athlete's own scaffold.
+  function isLiftPill(day: TodayPlanSurfaceDay): boolean {
+    const row = day as TodayPlanSurfaceDay & { day_type?: unknown; items?: unknown };
+    if (String(row.day_type ?? "training") === "rest") return false;
+    const items: unknown[] = Array.isArray(row.items) ? row.items : [];
+    return !items.length || items.some((item) => !(item && typeof item === "object" && (item as { kind?: unknown }).kind === "cardio"));
+  }
+
   // A hint, never a gate (VISION §2.1 — the wheel is always the athlete's). The
   // pill stays fully tappable; it just says what it is offering, so a leg day the
   // morning after a hard run does not have to be discovered by tapping it.
@@ -117,7 +132,7 @@ type TodayPlanSurfaceApi = {
     recovery?: Record<number, { recovering_groups?: string[]; mostly_recovering?: boolean }> | null,
   ): string {
     let html = `<div class="day-switch">`;
-    for (const day of plan) {
+    for (const day of plan.filter(isLiftPill)) {
       const dayNumber = Number(day.day_number);
       const read = recovery ? recovery[dayNumber] : null;
       const caption = read && read.mostly_recovering ? recoveringCaption(read.recovering_groups) : "";
@@ -193,6 +208,49 @@ type TodayPlanSurfaceApi = {
     return `<div class="ex-lastset">${deps.escapeHtml(text)}</div>`;
   }
 
+  // Today's run, OUTSIDE the lift list. A run is never a plan item any more — the
+  // rolling agenda (GET /training-agenda, the same read Plan -> Endurance shows)
+  // owns it — so this is one quiet line under the lift card, and only for a run
+  // the agenda has actually opened for today. A run already done says itself in
+  // the Brief's strength line ("Run in · …"); a run suggested for another day
+  // stays in the week strip and in Endurance. Nothing to say renders nothing.
+  function runLineHtml(
+    agenda: unknown,
+    options: { date: string; units?: "km" | "mi"; syncLine?: string },
+    deps: TodayRunLineDeps,
+  ): string {
+    const read = agenda && typeof agenda === "object" ? (agenda as Record<string, unknown>) : null;
+    if (!read || read.available === false || !Array.isArray(read.intents)) return "";
+    const today = String(options.date || "").slice(0, 10);
+    const intent = (read.intents as Array<Record<string, unknown> | null>).find(
+      (row) => !!row && row.status === "open" && String(row.suggested_date || "").slice(0, 10) === today,
+    );
+    if (!intent) return "";
+    const kind = intent.kind === "quality" ? "quality" : intent.kind === "long" ? "long" : "easy";
+    const kindWord = kind === "quality" ? "Quality" : kind === "long" ? "Long" : "Easy";
+    const label = String(intent.label || "").trim() || `${kindWord} run`;
+    const dose: string[] = [];
+    const km = Number(intent.target_distance_km);
+    const min = Number(intent.target_duration_min);
+    if (intent.target_distance_km != null && Number.isFinite(km) && km > 0) {
+      dose.push(deps.formatDistance ? deps.formatDistance(km, options.units) : `${Number.isInteger(km) ? km : km.toFixed(1)} km`);
+    } else if (intent.target_duration_min != null && Number.isFinite(min) && min > 0) {
+      dose.push(`${Math.round(min)} min`);
+    }
+    if (intent.target_zone) dose.push(String(intent.target_zone));
+    return `<div class="today-run-line reveal" style="--i:3;margin-top:10px" data-today-run>
+        <div class="wrun-row wrun-${kind}">
+          <div class="wrun-row-head">
+            <span class="wrun-kind">${deps.escapeHtml(`Today · ${kindWord}`)}</span>
+            <span class="wrun-label">${deps.escapeHtml(label)}</span>
+          </div>
+          ${dose.length ? `<div class="wrun-pres">${deps.escapeHtml(dose.join(" · "))}</div>` : ""}
+          <div class="wrun-note"><button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-today-run-go>This week's runs, in Endurance →</button></div>
+        </div>
+        ${options.syncLine || ""}
+      </div>`;
+  }
+
   const CAIRN_TODAY_PLAN_SURFACE: TodayPlanSurfaceApi = {
     sessionHeadHtml,
     daySwitchHtml,
@@ -200,6 +258,7 @@ type TodayPlanSurfaceApi = {
     addExerciseFormHtml,
     finishHtml,
     lastSetLineHtml,
+    runLineHtml,
   };
 
   Object.assign(globalThis, { CairnTodayPlanSurface: CAIRN_TODAY_PLAN_SURFACE });

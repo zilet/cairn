@@ -1,14 +1,10 @@
 // @ts-check
 // Today plan/session data loading: cache-aware last sets, adaptive
-// prescriptions, and cardio context for the pure session preparer.
+// prescriptions, and today's synced-run check for the pure session preparer.
 
 type TodayPlanSessionDataCachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: { changed: boolean }) => void };
 type TodayPlanSessionDataSwrPeek<T> = { data: T; fresh: boolean };
-type TodayPlanSessionDataPlanItem = import("../contracts/client.js").ClientPlanItem & {
-  target_distance_km?: number | null;
-  target_duration_min?: number | null;
-  target_zone?: string | null;
-};
+type TodayPlanSessionDataPlanItem = import("../contracts/client.js").ClientPlanItem;
 type TodayPlanSessionDataLoggedSet = import("../contracts/client.js").ClientLoggedSet & {
   exercise: string;
   set_number?: number | null;
@@ -26,7 +22,6 @@ type TodayPlanSessionDataDeps = {
   // Present on the Today/Session deps; when absent the batch path is skipped and
   // each name falls back to its own cachedApi read.
   storeCached?(key: string, data: unknown): void;
-  isCardioItem(item: TodayPlanSessionDataPlanItem): boolean;
   // Primed by the /today aggregate earlier in THIS render (today-data-loader):
   // these SWR keys already hold this render's server truth, so asking for them
   // again would be one round trip per exercise for an answer we have.
@@ -34,9 +29,7 @@ type TodayPlanSessionDataDeps = {
   primedProgressionDay?: number | null;
 };
 type TodayPlanSessionCardioContext = {
-  allCardio: TodayPlanSessionDataPlanItem[];
   cardioEfforts: TodayPlanSessionDataCardioEffort[];
-  todaySettings: unknown;
 };
 type TodayPlanSessionDataApi = {
   loadLastSets(
@@ -173,24 +166,24 @@ type TodayPlanSessionDataApi = {
     return rxByEx;
   }
 
+  // A run is never a plan item, so nothing here is matched against the lift list:
+  // the only question is whether a synced run already landed today on a day that
+  // holds no lift, which is what lets the head read "A RUN" instead of an empty
+  // session. The planned run itself speaks from the agenda (Today's run line and
+  // Plan -> Endurance), never from this surface.
   async function loadCardioContext(
     dayItems: TodayPlanSessionDataPlanItem[],
     isToday: boolean,
     deps: TodayPlanSessionDataDeps,
   ): Promise<TodayPlanSessionCardioContext> {
-    const allCardio = dayItems.filter(deps.isCardioItem);
-    const strengthPlanned = dayItems.some((item) => !deps.isCardioItem(item) && item.exercise);
-    const couldHaveRun = allCardio.length > 0 || (isToday && !strengthPlanned);
-    let cardioEfforts: TodayPlanSessionDataCardioEffort[] = [];
-    let todaySettings: unknown = null;
-    if (couldHaveRun) {
-      [cardioEfforts, todaySettings] = await Promise.all([
-        deps.api("/cardio?date=" + deps.state.logDate).catch(() => []),
-        deps.api("/settings").then((result) => recordValue(result).settings || null).catch(() => null),
-      ]) as [TodayPlanSessionDataCardioEffort[], unknown];
-      cardioEfforts = Array.isArray(cardioEfforts) ? cardioEfforts : [];
-    }
-    return { allCardio, cardioEfforts, todaySettings };
+    const strengthPlanned = dayItems.some((item) => !isRunPlanItem(item) && item.exercise);
+    if (!isToday || strengthPlanned) return { cardioEfforts: [] };
+    const efforts = await deps.api("/cardio?date=" + deps.state.logDate).catch(() => []);
+    return { cardioEfforts: Array.isArray(efforts) ? efforts as TodayPlanSessionDataCardioEffort[] : [] };
+  }
+
+  function isRunPlanItem(item: unknown): boolean {
+    return !!item && typeof item === "object" && (item as { kind?: unknown }).kind === "cardio";
   }
 
   const CAIRN_TODAY_PLAN_SESSION_DATA: TodayPlanSessionDataApi = {

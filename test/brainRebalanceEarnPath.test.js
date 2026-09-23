@@ -238,6 +238,11 @@ const seedMatureWorld = ({ dueDay = "upper" } = {}) => {
   // squat days leaves the legs acutely saturated, so the due session is an upper day
   // unless a case asks for the saturated one.
   seedOpenableWorld();
+  // The history lifts on every weekday, and the read day (a Sunday) has to BE a lifting
+  // day for a session to be due at all: a weekday outside the lifting week is the
+  // calendar's rest day (migration 110 — no plan row stands for it). Say it, rather than
+  // lean on the observed 3-of-6 read, which the alternating seed leaves off Sunday.
+  repo.setProfile({ strength_schedule: { days: [0, 1, 2, 3, 4, 5, 6].map((dow) => ({ dow })), source: "athlete" } });
   if (dueDay === "upper") {
     repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
     repo.savePlanDay(1, "Upper", "Upper body", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
@@ -270,14 +275,26 @@ test("the long loop never opens a floor: acute saturation, rest-grade readiness 
   seedMatureWorld({ dueDay: "lower" });
   const saturated = repo.dayRead(REF, thinSleep());
   assert.notEqual(saturated.decision.rule_code, "learned_train_anyway", "the due day's legs are saturated");
-  assert.equal(saturated.signals.learned_train_anyway.applied, false);
+  assert.notEqual(saturated.kind, "train");
+  // A held open may still take the weighted one-rung ease (rest → easy movement), never
+  // the session on the saturated legs.
+  assert.notEqual(saturated.signals.learned_train_anyway.step, "train");
 
   db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(REF);
   resetTables("plan_items", "plan_days");
   repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
   repo.savePlanDay(1, "Upper", "Upper body", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
   repo.upsertGarminDailyMetric({ date: REF, training_readiness: 5 });
-  const restGrade = repo.dayRead(REF, thinSleep());
+  // The reading has to reach the read itself: `thinSleep()` scopes the recovery input,
+  // so it rides there too. (Passed only as a DB row, the read never saw it, and this
+  // case used to hold only because that row made the newest override "harmful" — the
+  // newest-clean clause the weighted learning retired.)
+  const sleepy = thinSleep();
+  const restGrade = repo.dayRead(REF, {
+    ...sleepy,
+    recovery: { ...sleepy.recovery, training_readiness: 5 },
+    quality: { ...sleepy.quality, training_readiness: { latest_date: REF, source: "garmin", sample_count: 5 } },
+  });
   assert.notEqual(restGrade.decision.rule_code, "learned_train_anyway");
   assert.notEqual(restGrade.kind, "train");
 

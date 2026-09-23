@@ -290,13 +290,11 @@ function plannedDays(): Array<{ id: number; day_number: number; name: string }> 
 }
 
 /**
- * Plan days that carry at least one strength item. Dedicated run days
- * (`plan_items.kind = 'cardio'`, typically the extra rows `setWeeklyRuns`
- * creates on top of a 5-day lift week) are real plan rows, but a run logged
- * as an activity rather than a session would otherwise count as a missed
- * strength day. Mixed lift+run days stay in — they have a strength item.
- * Returns null when the items table cannot be read, so the caller keeps every
- * planned day rather than silently emptying the denominator.
+ * Plan days that carry at least one strength item. Plan days hold strength only
+ * (migration 110), so this now only drops an empty editor scaffold — which would
+ * otherwise count as a missed strength day. Returns null when the items table
+ * cannot be read, so the caller keeps every planned day rather than silently
+ * emptying the denominator.
  */
 function dayIdsWithStrengthItem(): Set<number> | null {
   try {
@@ -343,7 +341,7 @@ function adherenceRead(date: string, windowDays: number): AdherenceRestructureRe
   const planned = plannedDays();
   const strengthIds = dayIdsWithStrengthItem();
   const strengthDays = strengthIds ? planned.filter((d) => strengthIds.has(d.id)) : planned;
-  // Dropping zero-item days is fine; a cardio-only plan has no strength days, so fall back to every planned day.
+  // Dropping zero-item days is fine; a plan of nothing but scaffolds falls back to every planned day.
   const days = strengthDays.length ? strengthDays : planned;
   if (!days.length) return null;
   const end = date;

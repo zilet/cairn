@@ -92,11 +92,13 @@ importing everything from `./repo.js` unchanged.
 - Plan/sessions/sets; plan editing (`savePlanDay`/`deletePlanDay`/`replacePlan`); session-by-date
   lookup (`getSessionByDate`) and last-set prefill (`getLastSet`); session finish + summary
   (`finishSession`/`sessionSummary`).
-- **Plan day types.** `plan_days.day_type` is `training` or `rest`, and a rest day carries no items.
-  The reverse is enforced at the write: `planDayTypeForRestructure(declared, itemCount)` stores an
-  UNDECLARED empty day as `rest`, so a restructure or an agent's `days[]` payload can never mint a
-  startable day with nothing on it. An explicitly declared empty `training` day survives as the Plan
-  editor's "Add day" scaffold — but it is not startable: Today's launch card and the editor's Train
+- **Plan days hold STRENGTH work only** (migration 110). A run is never a plan item and a rest day is
+  never a plan row: `savePlanDay` strips `kind:'cardio'` items and refuses a declared `day_type:'rest'`
+  (`REST_DAY_NOT_A_PLAN_DAY`); `replacePlan` (and every agent `days[]` restructure through it) also
+  DROPS a day left with nothing to lift (`strengthDaysOnly`), so a restructure can never mint a
+  startable day with nothing on it; plan reads SQL-filter both out. `day_type` stays on the row and
+  is always `training`. An empty day written through the single-day editor path survives as the Plan
+  editor's "Add day" scaffold — but it is not startable (Today's launch card and the editor's Train
   button both check for items first. No plan at all is a different state; that card is the
   deliberate "Open session" door. On Today, "nothing to start" requires EVERY witness to agree —
   the plan day's own items, the session preview's `item_count`, and logged sets — not just the
@@ -142,9 +144,10 @@ beside the five-value safety ladder — it is not a sixth posture or intensity. 
 `training_drive` is `push`, the unified signal state is `backed` **or** recovery_capacity corroborates
 the morning (the same `supportiveCapacityBacksDay` helper dayRead uses for the drive rule:
 supportive at high confidence, fresh HRV / resting HR / sleep, last night long enough, no fresh
-brake, directive `proceed`), nothing fresh is braking, training is `proceed` or `hold_aggression`
-(the backed path; the capacity path is proceed-only), the kind is `train`, and the day's main-lift
-group is not `saturated` per `acuteGate` (an early-out; composition re-checks the actual host).
+brake, directive `proceed`) **or** the rhythm license below backs it, no deciding brake is on the
+board, training is `proceed` or `hold_aggression` (the backed path; the capacity and log paths are
+proceed-only), the kind is `train`, and the day's main-lift group is not DEEP-saturated
+(`AcuteGateReading.deep`; an early-out — composition re-checks the actual host).
 `hold_aggression` keeps `level: "push"` and trims only the challenge item (`reach_trimmed_by_fueling`:
 fueling keeps today's reach to the working sets). Policy `daily_decision_v7`. On an open reach day, composition injects one challenge top set
 on the first *eligible* compound — never a reduced, excluded, saturated, or ungrouped item — at
@@ -156,6 +159,53 @@ not AMRAP'd. If no item lands, the persisted envelope keeps `level: "push"` and 
 treats a precedence entry as a constraint). The session screen labels **Reach** only from
 `item.reach` or `rx.top_set`, never by inferring a 1-set sibling card, and prefills the first
 unlogged row with the heavier look.
+
+**The envelope stops capping every day (2026-09-23).** Four refinements in `daily-decision.ts` /
+`daily-composition.ts`, all fed by omit-when-idle snapshot fields:
+- *The stack is the week.* `stated_rhythm` (gather: `strengthScheduleRead` + `isStatedRunDay`) marks a
+  day on the athlete's own lift/run week, whether the current streak was all on it, and whether
+  `harmEvidenceOnDay` is clean for the last three days. With both true and no DECIDING brake
+  (`signal_support.advisory_brake_only` marks a board whose only fresh brakes are advisory, e.g. the
+  run-intensity caution), `consecutive >= 2` is no longer double-day pressure and longevity-leading
+  ease never holds intensity (it may still ease volume against hard endurance + a hard lower day).
+- *Reach.* It is vetoed only by a deciding brake or a DEEP main-lift group (`muscles.deep`), and the
+  rhythm license backs it like a supportive wearable read (`backed_by: ["training_log"]`,
+  `REACH_LOG_BACKED_WHY`). Composition's "a substitution parks the reach" now counts only a slot moved
+  off a deep group (an envelope without `muscles.deep` keeps the old reading).
+- *Shallow holds, deep reduces.* `muscles.reduced` (2-set cap, ×0.9) is a deep residual, work done
+  today (the run-morning law — except the legs on a stated stack: a run day that is also a lift day),
+  volume-high groups and `plan.over`; `endurance_lower_conflict` keys on the same test. A shallow
+  saturation stays in `muscles.saturated`: its lifts HOLD at the logged working weight and never host
+  a reach.
+- *A morning run leaves the lifting due.* `lift_day_open` (dayRead's `lift_day_open_after`) reopens
+  a quiet read as `train` (`lift_still_due_after_endurance`, plan-day clock, held intensity unless the
+  rhythm license holds, `endurance_hold` reason `endurance_done_today`) unless the read stands on its
+  own (`rest_grade`: a rest posture, `rest_grade_readiness`, a corroborated short night, a claimed /
+  traded day, a felt run-down check-in, a recovery-week overrun, the week's rest seam) or an illness
+  window is open. Gather now hands dayRead the `withMorningReadiness` summary, so a post-run sync is
+  never read as the morning.
+- *Earned lifts.* A plan lift whose last three exposures include two at the top of the prescribed
+  range on every working set (loads within 10% of the day's top) with RIR ≥ 2 wherever logged gets
+  `progression[].earned.working_weight` (`recentWorkingWeight`); its candidate is not held by a
+  shallow residual and carries `earned_floor`, which composition enforces on any day not itself eased.
+  The floor rides only on the progression's own verdict — never on an injury recheck, recent
+  underperformance, a deload, or a group loaded THIS morning (which always holds). A morning-run
+  lifting day reopens only when the morning itself is not rest-grade (read off the morning's own
+  readiness, not the winning rule code, so a softened rest-grade read stays shut) and not a lab
+  draw, and keeps reduced volume on a 40-minute clock while a deciding brake stands.
+- *One genuinely loaded lower exposure a week* (the race build's "heavy lower once a week").
+  `weeklyLowerExposure()` (`plan-selection.ts`) reads the Monday-first week off the LOG and the
+  strength weekday map only: `fullLoadLowerSessionThisWeek` finds a main squat/hinge lift logged
+  before today with its un-reduced set count (the plan's, at most three) at or above its own
+  `recentWorkingWeight` (`loadAtOrAbove`); `later_lower_dates` are the lower days the map still lays
+  on this week. Gather stamps `weekly_lower {last_chance}` only on a lifting weekday whose plan day
+  carries squat/hinge work and whose week is unfulfilled. That day's leg items are never trimmed for
+  a key run (`keyRunProtect` stands down) and fire `weekly_lower_exposure` with a rotated rationale;
+  a deep residual and work done this morning still reduce. On the LAST chance a deep residual from an
+  EARLIER day holds instead (`muscles.week_held`: no reduced cap, held at logged load, no earned step,
+  and `substituteSaturatedPlanItems` leaves the slot in place). Any safety floor — a deciding brake,
+  low readiness, high soreness, illness, a lower injury/symptom/joint pain, deload, a recovery cycle
+  or week — stands the whole guarantee down.
 
 **A saturated group never composes today, whatever loaded it.** `substituteSaturatedPlanItems()`
 (`src/repo/saturated-substitution.ts`) re-points a plan-sourced item that lands on `muscles.saturated`
@@ -224,7 +274,12 @@ athlete surface, same standing as any other internal score. The plan-day picker'
 penalty (`scorePlanDay`, `plan-selection.ts`) grades the SAME way: harder (-5) at 1.5× the group's own
 `bar`, softer (-3) below it — never 1.5× the absolute `SATURATED_RESIDUAL`, which a hybrid athlete's
 habitually-elevated legs would clear on nearly every recovering day, making the softer grade
-unreachable for them alone.
+unreachable for them alone. **Shallow saturation HOLDS, only deep saturation MOVES.** The gate's `deep`
+flag is saturated AND ≥ `DEEP_SATURATION_MULTIPLE` (1.25) × the bar. A shallow group scores like a
+loaded one (half due credit, -1, never "mostly recovering"), so it cannot swap a plan day away, and
+`substituteSaturatedPlanItems` leaves its slot on the card at held load when the work was on an
+earlier day. Work done today still moves whatever its depth (the run-morning law). Before this, a
+quad residual 0.04 over its ceiling swapped a scheduled Lower A for a repeat of Monday's Push.
 
 `acuteGate(group, date, residuals?)` / `acuteGates(date)` (same file) is the ONE acute-recovery
 question every consumer now asks, replacing four different hand-rolled versions of it (`rl?.heavy`
@@ -289,16 +344,40 @@ time target alone never increases dose.
 lifting counterpart to those run days: `{days:[{dow}], note?, source, updated_at}`, with NO `kind` —
 a run day is named by what the run is for, while which split lands on which lifting day is the plan's
 business, not the schedule's. When it is set, the weekday ring stops being purely positional.
-`weekdayPlanDayMap()` (`src/repo/plan-selection.ts`, pure and unit-testable) lays the plan's STRENGTH
-days, in ring order, onto the stated lifting weekdays in weekday order; endurance-only plan days (a
-day whose items are all cardio, e.g. "Long Run") go on stated run weekdays that are not also lifting
-days; every other weekday takes a rest day or a leftover scaffold. The two halves fill differently on
-purpose: the lifting pool CYCLES, so every stated lifting weekday carries a strength session even when
-the plan holds fewer days than they named, while the non-strength days are CONSUMED one each, because
-cycling a week that authored one long run would invent a second. An unstated weekday is never handed a
-strength day while the plan holds anything else to give it. With no schedule stated the map comes back
+`weekdayPlanDayMap(planDays, strengthDows, strengthStart)` (`src/repo/plan-selection.ts`, pure and
+unit-testable) lays the plan's STRENGTH days, in ring order, onto the stated lifting weekdays in
+weekday order — and maps nothing else. The lifting pool CYCLES, so every stated lifting weekday carries
+a strength session even when the plan holds fewer days than they named. Every other weekday is a
+CALENDAR day with no plan row (`calendarDayRead`): a stated run weekday that is not also a lifting day
+is a run day (the run engine owns it), anything else is a rest day. An unstated weekday is never
+handed a strength day. With no schedule stated the map comes back
 empty and `weekdayCandidate` keeps the old Mon→slot-1 line, so nothing changes for an athlete who has
-said nothing.
+said nothing. **Week coverage:** with a lifting week in play, a strength day already trained earlier
+in the same Monday-first week (resolved off the session anchors) is not an alternative the scorer may
+pick while another strength day is still untrained that week. Once every day has had its turn, a short
+pool repeats as designed. **The week's last lower day is not swapped away**: when the rotation's day
+carries squat/hinge work, the map lays no later lower day this week and no genuinely loaded lower
+session has landed (`fullLoadLowerSessionThisWeek`), a scorer pick that is not itself a lower day is
+refused (`selection.lower_week.kept`) — unless every one of its leg groups was loaded this morning,
+where the run-morning law would empty it anyway.
+
+**Runs are not plan items — the calendar day (server).** Since migration 110 (which deleted every
+`kind:'cardio'` item and every rest / run-only plan day, nulling `sessions.plan_day_id` and
+`daily_session_compositions.plan_day_id` first), "what kind of day is today" is read off the calendar:
+`calendarDayRead(date)` → `lift` | `run` | `rest` (null with no lifting week known). The Brief reads a
+run day through its own rule, `stated_run_day` (kind `train`, `easy` for an easy run; focus the run's
+label), when the rolling agenda has an open run suggested for today (or, with no agenda, on a stated run
+weekday); a non-lifting weekday with no run on it reads `template_rest_day` (the code keeps its name
+for the ledger). The envelope carries `template.day_type:'run'|'rest'`, a run day gets no reach and a
+`stated_run_day` rationale, and the deterministic card is an empty "Run day" card — the run itself is
+on the Endurance plan. `GET /api/today-plan-day` answers a calendar day as
+`{day_number:null, source:"calendar", calendar:'run'|'rest', run_kind, …}`. The hybrid reads keep
+their inputs: acute gates / leg residual / `endurance_lower_conflict` / harm read the LOG
+(`activities`), key-run protection reads the agenda, `hybridDayContext`'s forward projection (the next
+stated run weekday, the next heavy-lower weekday) is registered by plan-selection so training-read stays
+a leaf, the run engine keeps its hard runs off `heavyLowerWeekdaySlots` (lower days as the lifting week
+lays them), fuel demand lays strength through the weekday map and calls a calendar rest day light, and
+the week-ahead floor lists the agenda's runs beside the lifting days.
 
 **The today strength line — one answer, four surfaces.** `todayStrengthLine(date)`
 (`src/repo/today-strength-line.ts`) is the only "what is today's lift, and where does it stand" read.
@@ -322,7 +401,9 @@ movement or a non-core muscle with what was logged, else exercise overlap: a res
 day's content under the same id, and a stale link anchored the ring off a day never done), never the ring's
 forecast, which read live was a day off on all five lifting days of one week. **The agenda owns a run
 cell**: a completion dated on the cell, or an open intent `suggested_date`d on it (an undated intent
-stays off the calendar); an open run outranks a mapped rest day. A run the log holds on a day no
+stays off the calendar). A cell with no mapped lift and no run, session or covered run is the
+calendar's rest day (status `rest`) — including a stated run weekday the week's run did not land on
+("Saturday or Sunday" long run placed on Sunday). A run the log holds on a day no
 intent closed still lands on that day's cell (`kind:"logged"`), and a run never marks a LIFT day done —
 a lifting cell is done only by its session. The strip speaks the plan day's NAME (the focus sentence
 lives on the gallery card); a lift day that also holds a run names both ("Upper Body & Arms + easy
@@ -338,9 +419,9 @@ strength day the ring reaches twice in a five-day lifting week is heavy on both 
 template ring. **Only a lift the day BEFORE a long/quality run collides.** Heavy legs the morning
 after is the stacking the race build's own strength hint prescribes, so the read no longer flags it
 (three hard days in a row is still a stack). Adjacency is judged on the heaviest lower day AND every
-other lower day carrying squat/hinge work (an accessory-only leg day never collides). With stated run
-days the engine's week (then the agenda) outranks the template's cardio items, which become the
-fallback — a stale "Long Run" item hid a stated Thursday quality run. The race ladder takes the
+other lower day carrying squat/hinge work (an accessory-only leg day never collides). The runs come
+from the engine's week (`source:"run_plan"`), then the agenda — never from the plan, which holds no
+runs. The race ladder takes the
 engine's prescription for NEXT week as its second rung once this week's log reaches its prescription
 (`projectRaceBuildWeeks(..., thisWeek, nextWeek)`), so an upcoming recovery week shows one number on
 the ladder and in the run list. The agenda's quality classifier lets the watch's own easy verdict
@@ -370,9 +451,12 @@ rather than a cycle that restarts each Monday. That is also what lets **plan-day
 lift-day count in both directions**: a plan with FEWER strength days than lifting weekdays repeats
 inside the week (three days over Mon–Fri gives Thu/Fri the first two again), and one with MORE rotates
 the surplus across weeks (a sixth strength day opens the next Monday, never Saturday). When the map
-names a rest or endurance-only day the selector returns it with no scoring pass at all — the same
-reasoning as the rest day, since the scorer answers "which STRENGTH day fits today best" and the
-athlete has already answered the question before it — and when it names a lifting day the scorer's
+has no plan day for today's weekday (a stated run day, or a weekday in neither) the selector returns
+the CALENDAR day with no scoring pass and no plan row — `{day_number:null, day_type:'run'|'rest',
+selection.calendar}` — since the scorer answers "which STRENGTH day fits today best" and the athlete
+has already answered the question before it; `selectedPlanDayForDate` is then null, and train-anyway
+takes `trainAnywayPlanDay` (the strength day the next lifting weekday carries). When it names a
+lifting day the scorer's
 recovery penalties adapt among strength days ALONE, so a swap can never land the week's squat session
 on the long-run weekday. `selection.weekday_schedule` records the lifting dows, the phase and the
 mapped day for the provenance trail.
@@ -513,6 +597,19 @@ earned overload/vary/introduce step under a fuel `hold`, and keeps its full set 
 finished dose, no vetoing cut pressure — `sliding`, or `reduce` off goal), and every safety floor
 ignores drive entirely.
 
+**Prescriptions follow what the log proves, in both directions** (`progression.ts`). A dose that was
+non-comparable ONLY for a handicap (`loaded_endurance`, `travel`, `recovery_dose`), finished every
+prescribed set, met/exceeded its card and landed at or above its own `full_load_reference` is a lower
+bound on capacity, so it counts toward an earned step (`dose_eligibility.reason:
+"full_load_through_confound"`, `fullLoadThroughConfound`) — never against one, and illness, a
+relevant symptom or a shortfall keep full authority. The converse: a load step is taken from the
+weight the latest session actually WORKED — a range capped at a lighter load than the card never
+steps past the card (`LIGHTER_SESSION_HOLD`). On an assisted ladder, bodyweight (null) is the zero of
+the signed scale: bodyweight sets beside an assisted finisher are the working sets
+(`latestWorkingSets`), and when ≥ 2 of the last 3 sessions carry ≥ 2 unassisted sets at the plan's rep
+floor (`unassistedProvenSessions`, `exercises.ts`) the assist target is retired to bodyweight through
+the ordinary re-ground proposal (`ASSIST_RETIRED_*`) — never past bodyweight in one step.
+
 **Travel confounds the recovery response, and rest already taken is the recovery dose.** The
 `persistent_strain` gate needs an athlete response dated strictly AFTER the upward correction; a
 subdued `sleep_feel` or high `soreness` on a day inside a `trip` context-event window is the travel
@@ -536,6 +633,44 @@ fact through the same predicate: `dayReadContinuity()` breaks the quiet streak o
 (`tripCoversDay`), so the first morning home never opens with "this makes the fourth quiet day" to an
 athlete the calendar, not Cairn, kept quiet. `trainingBackstopSignature` keys context events on
 archived/resolved/date aggregates too, so editing or closing one invalidates the cached fuel read.
+
+**Performance under strain must be like for like and current.** The under-fuelling read's
+performance channel reads run output through `runDeclineWhileVolumeHeld()` (`src/repo/underfueling.ts`):
+quality sessions leave the pool (the shared `HARD_EFFORT.label` over a separator-normalized Garmin
+`te_label` or the session name, plus hill/sprint/race words), climbing is credited as distance (~8 m
+flat per metre up), and with heart rate the comparison is grade-adjusted metres per heartbeat, not raw
+pace (a watchless pool falls back to grade-adjusted pace; a half-HR pool is too mixed to call). A watch
+fitness read that improved over the same window — VO2max, endurance score, race predictor, none moving
+the wrong way — vetoes the decline. On the lift side, a lift with no loaded session inside
+`LIFT_CURRENT_WINDOW_DAYS` = 28 (`liftTrainedRecently`, `src/repo/program-state.ts`, the same bar
+cut-quality holds its established lifts to) is not in the rotation: `liftStates` grades a stale slide
+as `new` (re-baselining, `hold`), never `regressing`, and the channel counts only current regressing
+lifts. A hand-logged activity that shadows the synced row of the same effort (same date and modality,
+every measurement it carries within the soft-dedup tolerances, `isShadowActivity`/
+`withoutShadowActivities` in `src/repo/activity-shadow.ts` — a dependency-free leaf module so
+`training-read.ts` can use it without cycling back through `src/repo/activities.ts`'s own import of
+`training-read.js`; re-exported from `activities.ts` for existing callers) is skipped by every read
+that counts or measures efforts — `getCardioForDate`/`getEndurancePRs`/`getRunCompliance`/
+`weeklyAerobicLoad`/weekly non-tonnage load, `recentEnduranceImpacts`'s per-muscle residual, day-grade/
+hard-cardio/`longestRunNovelty`, the flexible run agenda's slot matching, underfueling's intake/pace
+reads, and a handful of smaller counters — never deleted, since it holds the athlete's own words. A
+genuine second effort the same day (its own metrics, not a re-statement of the synced one) is never
+folded in.
+
+**A strength domain moves down only proportionately.** `wholePersonTrajectory()`'s strength read
+(`src/repo/whole-person-trajectory.ts`) grades only lifts trained inside `LIFT_CURRENT_WINDOW_DAYS`
+and reads "worse" only when `strengthDeclineIsMeaningful(lift_counts)` holds: more lifts sliding than
+advancing, and either at least `STRENGTH_DECLINE_MIN_LIFTS` = 2 of them or more than half the recent
+rotation (so one squat dip against fourteen advancing lifts is `better`, and the slipping lift is
+still named in `why`). A per-lift exposure where the day's card prescribed less than the stored prior
+load (`full_load_reference`), the athlete met or exceeded that card, and the top set stayed at or under
+the prior load is set aside like a compliant recovery session (`cardAskedForLess`); full-load work and
+a card the athlete fell short of stay evidence. The domain carries `lift_counts` (improving / declining /
+steady / prescribed_lower / not_recent) for consumers — never an athlete-facing number. The
+under-fuelling performance channel applies the SAME bar: when the trajectory carries its tally it is
+the authority for the lift arm, and only without it does program state answer, through
+`strengthDeclineIsMeaningful` as well. The endurance domain reads activities through
+`withoutShadowActivities`.
 
 **Work done is evidence — a prescription is a suggestion, the log is the truth.**
 `src/repo/outcome-comparability.ts` (schema 4 in `DailySessionOutcomeFacts.facts_json`, db-free; the
@@ -1320,6 +1455,16 @@ quality weekday are PLANNED DOSE — both the longest-run and hard-cardio arms s
 next-morning physiology arm (and a poorly rated session) can call them harm (`plannedDoseOn`). Of 19
 days trained against the read, 8 had been flagged by the build working as written.
 
+**The overnight arms read the athlete's OWN nights, once per episode (2026-09-23).** Only the night
+dated the morning itself answers for the day before it. Its HRV / resting HR is judged against that
+athlete's nights in the 28 days before it (`RECOVERY_BASELINE_MIN_POINTS` of them): mean ∓ one of
+their own SDs, never narrower than `recoveryTrendBars`. With too few nights the watch's own verdicts
+stand in (the `hrv_status` word; resting HR ≥ the row's `hr_7d_avg` + 5). Either way a brake is
+charged only at its ONSET: when the reading before it (within the signal's age bound) already sat past
+the same line, the dip predates the work and the day is not charged. A seven-day LOW verdict three
+mornings running (live: 09-17..09-19) used to be three harms. The vouch that clears a hard-cardio day
+still needs NO overnight brake at all, onset or not.
+
 **"Morning readiness" is not the stored Garmin value on a training day.**
 `garmin_daily_metrics.training_readiness` holds the LAST value synced for the date and the watch
 recomputes it through the day, so on any date the athlete trained it is a post-workout number — example:
@@ -1371,17 +1516,38 @@ spoken as a caveat (`FUEL_AROUND_TRAINING_CAVEAT`); it holds nothing back — `h
 tier and reach all read past it — and stacked-load rest is corroborated only by a DECIDING brake
 (`hasFreshDecidingBrake`).
 
-**The long loop: a MATURE learning says "train, with the caveat" (2026-09-22).** The two ladders
-above read ten days. `trainsAnywayWithoutHarm()` (`src/repo/brain/read-adherence.ts`) reads six
-weeks: at least `LEARNED_TRAIN_MIN_MORNINGS` (10) quiet (rest or easy) mornings, two thirds of them
-trained through, three in four of those `trainedWithoutHarm`, and the newest such divergence clean. Mature, it may move a
-NON-FLOOR quiet read straight to train (`learned_train_anyway`, `LEARNED_TRAIN_WHY` — every phrasing
+**The long loop: a WEIGHTED learning moves the quiet read in proportion (2026-09-22, weighted
+2026-09-23).** The two ladders above read ten days. `trainsAnywayWithoutHarm()`
+(`src/repo/brain/read-adherence.ts`) reads six weeks and returns a continuous `weight` — (trained
+through ÷ (quiet mornings + 2)) × (clean ÷ (trained through + 2)), every morning recency-weighted
+(half-life 21 days) — zero below the small-sample floor (`LEARNED_TRAIN_MIN_MORNINGS` 10 quiet
+mornings, `LEARNED_TRAIN_MIN_CLEAN` 3 clean overrides). It replaced a conjunction (⅔ trained through,
+¾ clean, newest clean) that missed its first live morning by one day. `learnedQuietStep` picks the
+rung: an easy read opens to train at `LEARNED_OPEN_EASY_WEIGHT`; a rest read eases to easy at
+`LEARNED_EASE_REST_WEIGHT` (spoken through the `outcome_feedback_soften` outcome) and opens to train at
+`LEARNED_OPEN_REST_WEIGHT`; a rest whose open is held (nothing due, saturated legs, a second run)
+still takes the ease. Mornings this loop moved stay in its own evidence (`learned_opened`, read off
+`signals.learned_train_anyway.applied`), so it cannot empty its window and relapse. An open moves a
+NON-FLOOR quiet read to train (`learned_train_anyway`, `LEARNED_TRAIN_WHY` — every phrasing
 carries the history, how it turned out, AND the caveat). Only the accumulation codes in
 `LEARNED_TRAIN_CODES` qualify; never `rest_grade_readiness`, `acute_sleep_corroborated`,
 `recovery_dose_overrun`, `felt_run_down_rest`, a clinically driven day (health constraints, injury), a
 fresh `safety_override` constraint, a recovery week, a same-day statement, or a due plan day whose
 strength groups the acute gate reads saturated. It outranks both short ladders (one lever moves the
-day) and publishes `signals.learned_train_anyway` with `applied`.
+day) and publishes `signals.learned_train_anyway` with `weight`, `applied` and `step`.
+
+**The day-read AGENT is quieter than a train baseline only on a NAMED, FRESH brake (2026-09-23).**
+`enforceDayReadSafetyPosture` lets the agent move left, and it did so as a habit (sixteen straight
+"easy" Briefs; an "easy" over posture train / drive push). Now a train baseline read easy or rest must
+cite `brake` (a `DAY_READ_SCHEMA` field) naming one of `dayReadCitableBrakes(baseline)`
+(`src/repo/day-read.ts`): the fresh DECIDING brakes on the baseline's own signal state
+(`freshDecidingBrakeFields`, `src/repo/signal-state.ts` — advisory/advice-only cautions never count),
+and none on a day the athlete's own record opened (`learned_train_anyway`, `outcome_feedback_open`).
+`isValidDayReadAgentResult` rejects a violation (so the fallback ladder retries) and
+`enforceNamedBrakeForCaution` (first in `finishDayRead`) clamps any row that still carries one —
+e.g. a pinned sentence whose cited brake (`decision.brake`) stopped firing — back to the server's own
+train read (`agent_caution_without_brake`, empty reason). The prompt's NAMED BRAKE RULE lists the same
+fields. An athlete override is exempt; the pin and prose identity are untouched.
 
 **A caveat is classified where it is raised; only SAFETY caveats veto the push.** The planned-training
 read's push and its caveat run used to be mutually exclusive (`!caveats.length`), so a backed day
@@ -1797,6 +1963,35 @@ holds until the next draw, but a wearable series "draws" every morning, so that 
 HRV directive the same second it was marked Done. For `source: "wearable"` markers a Done now holds
 like a dismissal: only a materially worse reading brings it back (`shouldSuppressDirective`).
 
+**A wearable recovery directive reads the WEEK, clears on the sync, and is context, not an order.**
+HRV and resting HR (`WEARABLE_TREND_ZONES`, `src/repo/propagation-data.ts`) are judged on
+`trend_window` — the mean of the readings in the last 7 days (`wearableTrendWindow`, ≥3 nights, else
+no directive at all) — never the latest night; a single short night is the day read's last-night
+brake, not a standing card. The value, trigger and "materially worse" test all use that average.
+The wording says which read it is (`recoveryReadingKind`): a week against the athlete's own band, a
+week against the population zone (fallback, worded "read this loosely"), or one reading (a clinic
+pulse). `deriveWearableDirectives()` is the same derivation scoped to the wearable zones
+(`reconcileDirectives(…, { inScope })` never resolves a lab row); the Garmin sync, the Apple Health
+ingest and the MCP `record_daily_metrics` tool call it, so a week back in band clears its card on
+the sync that shows it rather than at the next daily tick. `directivesForCoach()` stamps HRV / RHR
+rows `role: "recovery_context"`: the prompt projection ships their text as `context_note` (no
+`directive` key) and `renderConnectedBrain` lists them under RECOVERY-TREND CONTEXT, never "honor
+these" — `signal_state` already weighs recovery against the athlete's own baseline.
+
+**Display surfaces judge HRV / Resting HR on the same week the directive engine does.**
+`prioritizeMarkers()` folds in the wearable series and computes `trend_window`, but historically left
+`in_optimal`/`distance` keyed to `latest.value` — the single most-recent night — so `healthFocus()`
+and the `/markers/priority` catalog could disagree with an active directive reading the same marker.
+`wearableWeeklyMarkerRead()` (`src/repo/health-focus.ts`) re-derives `in_optimal`/`distance` from
+`trend_window.value` against the same band (`m.optimal`, already personalized) for the two
+`WEARABLE_TREND_ZONES` markers only; every other marker passes through untouched. Too few nights this
+week (`trend_window` null) yields `in_optimal: null` — no status is drawn from a single night, though
+`latest` still shows for reference — mirroring "too few nights → no directive at all" above. Both
+`healthFocus()` and the `GET /markers/priority` route apply it before the marker reaches a reader; the
+result carries `status_basis` (`"week"` | `"single"`) and a plain-words `status_note` (e.g. "this
+week's average (5 nights)"), which `health-markers-client.ts`'s row/panel renders inline — never a
+number-as-grade.
+
 Migration **v86** (`directive-soft-resolve-compaction`, no schema change) is historical cleanup, not
 evidence the engine above still churns — it has churned zero rows since the diff-based reconcile
 landed. Before that reconcile, every propagation pass soft-resolved and rewrote its own output, leaving
@@ -2068,34 +2263,18 @@ TEXT, not parseable JSON, so it deliberately does NOT reuse the JSON-centric `ru
 
 The raw reply is split by `parseChatReply` into `{reply, actions}`; safe actions apply via the lifted
 `applyChatActions({actions}, {agent, imagePath, message})` (`log_*`/`set_profile`/`*_memory`/
-`add_context_event` apply now; `plan_update`/`plan_restructure`/`set_run` route through
+`add_context_event` apply now; `plan_update`/`plan_restructure` route through
 `applyProposalWithAutonomy`, so server policy — not the model — decides whether they land, announce,
-or wait for review), then the assistant `chat_messages` row is written + linked.
+or wait for review; `set_run` is refused, see below), then the assistant `chat_messages` row is
+written + linked.
 
-**A run is `set_run`, never a `plan_update` change.** A change carrying `kind:'cardio'` has routed to
-`setWeeklyRuns` for some time — `applyProposalUnit` lifts it out of `changes[]` before
-`applyPlanChange` sees it. The hole was a change with NO `kind`: `applyPlanChange` reaches LOADED
-movements only, so an endurance prescription arriving as a plain `{exercise, target_distance_km}` was
-added as a fabricated lifting movement, which then read back intact and earned a "Saved and verified"
-receipt. `set_run` adjusts ONE run on one plan day through the same `cardio[]` → `setWeeklyRuns`
-writer the Monday tick and the run-plan proposal use, folding the edit onto that day's CURRENT cardio
-rows so the untouched runs (and their zones) survive; a whole week stays a proposal. Zones are stored
-as the personal HR model's band via `runZoneTag`, never a population formula's. An endurance-shaped
-`plan_update` change is re-routed to that same path rather than becoming a lift — except a cardio
-REMOVAL, which neither writer can express, and which is refused in words instead of becoming a
-verified no-op. A `set_run` naming a weekday slot that has already gone by is refused too: the
-day_number is a Monday-anchored slot, so rewriting a past one would change what compliance says the
-week prescribed. **Every run receipt is composed from a re-read** (`verifyRunReadback` over
-`getPlanDay`, the reader the Plan surface uses); `reconcileChatRunReply` states plainly when a run was
-refused, held, or failed to verify, and replaces model prose that claimed otherwise.
-
-**The `set_run` payload carries the EDIT, not a snapshot.** A proposal can be held or scheduled, and
-`setWeeklyRuns` replaces a day's cardio wholesale, so a build-time copy of the day would overwrite a
-sibling run edited in between. Chat marks its entries `cardio_edit:true` with the resolved edit
-attached; `applyProposalUnit` re-reads the day's cardio at apply time and re-folds the edit onto it.
-Unmarked `cardio[]` entries (the Monday tick, run-plan proposals, a restructure's week of runs) keep
-their wholesale meaning untouched. `src/repo/run-edit.ts` is the one merge both sides call, and is
-dependency-free so the repo layer can import it without a cycle.
+**Runs are not chat edits any more.** Runs are never plan items, and nothing stores one run's dose:
+each week's runs are built live by the run engine on the stated run days. So `set_run` and an
+endurance-shaped `plan_update` change (a `kind:'cardio'` change, or one carrying distance/duration/
+zone/interval) are REFUSED in words (`RUN_EDIT_REFUSAL_VARIANTS`, `CARDIO_REMOVAL_REFUSAL_VARIANTS`
+for a removal) and never written — left among the strength changes an un-kinded run would become a
+fabricated lifting movement. The strength half of a mixed turn still applies. Changing WHICH days
+they run is `set_endurance_schedule`; the chat catalog tells the model so.
 
 **A structure request is BUILT, not parked.** Chat has no action that rewrites the shape of a week;
 `flag_training_structure` is the hand-off, and it hands off for real (`src/domain/brain/structure-request.ts`).
@@ -2493,7 +2672,7 @@ declared beside its acceptance predicate in `src/agent-contracts.ts` (`PLAN_PROP
 contracts use (`type`, `enum`, `const`, string length, numeric bounds, array `items`/length, object
 `required`/`properties`/`additionalProperties: false`; an unrecognized keyword is ignored, never a
 failure) — runs that SAME object as the structural conjunct of the predicate. The predicate still
-carries whatever JSON Schema cannot state (a disjunction like "at least one of changes/cardio/days",
+carries whatever JSON Schema cannot state (a disjunction like "at least one of changes/days",
 non-blank-after-trim, cross-field agreement) as a residual check after the schema passes. Every
 object node declares `additionalProperties: true`: verified live against claude and grok, a CLOSED
 schema's constrained decoding silently DROPS any field the schema doesn't mention, and these
@@ -2799,6 +2978,15 @@ spelling still beats a resolved one, mirroring `resolvePlanSwapSlot`), the volum
 `training-response`, symptom movement resolution, `getExerciseGuide` / `attachGuide`, `updateTarget`,
 and the coach read tools (`resolveExercise` in `src/brain/read-tool-runtime.ts` now delegates rather
 than carrying its own copy of the ladder — carrying a copy is exactly how the two drifted).
+
+**A bodyweight LADDER is one progression series across rows** (`bodyweightLadderKey` /
+`progressionLineageIds`). On a pull-up / chin-up / push-up / dip pattern the load is a sign, so
+"Assisted Pull-Up", "Band-Assisted Pull-Up" and "Neutral-Grip Pull-Up" are rungs of one ladder; a
+plan swap that mints a new row must not reset the lift to `new`. The resolver stays strict (the rows
+stay separate); the lineage adds only the same-ladder rows a row REPLACED (their last set predates its
+first) — variants trained side by side keep their own series, and a loaded lift is only its own row.
+`getProgress`, `comparableLiftDates`, `recentWorkingWeight` and progression's latest-session reads use
+it, and on a ladder `getProgress` counts a null-weight set as the bodyweight rung.
 
 **The write chokepoint runs the same ladder.** `findOrCreateExercise` resolves before it inserts, and
 records the typed spelling as an alias (source `"auto"`) so it resolves directly next time. Below
@@ -3467,20 +3655,45 @@ plan and the race ladder label the same week; the lifting block's week index is 
 without a race. `goal_feasibility` (`fits`/`stretch`/`beyond_horizon`) reports
 the gap honestly through rotated fit prose that offers the athlete a choice, never a quota. A
 demonstrated long run is a floor as well as a ceiling — bounded by the race curve, a 1.15× step,
-0.55× of the week, and the room the week has left; on a down or spike week it sits at most 0.85× the
-demonstrated longest, so a reset never repeats the new longest. Phases are distance-aware (a ≥15 km race gets a
+0.55× of the week, and the room the week has left; on a spike week it sits at most 0.85× the
+demonstrated longest. A scheduled down week HOLDS that longest when it was taken well
+(`harmEvidenceOnDay` clears its day — the share cap yields only up to it and the room left) and
+steps to 0.85× only when the body paid for it. **A reset is recovery, not lost ground**: the week
+after the ramp's own reset week steps off the level the reset paused (the week before it), provided
+the reset was run as a lighter week (≥ `RESET_TAKEN_FRACTION` of that level — below it, it was an
+absence and the reactive anchor stands). **The arrival is counted in calendar weeks to race week**
+(`weeks_to_race_week`: race week 0, final taper 1, peak 2, long-run peak ≤3), not ceil(days/7) —
+which read a Sunday race's week as "1 out" and landed peak volume the week immediately before race
+week. The engine's taper is the ramp's `taper_week` (final taper ~0.7 of the peak week, race week
+~0.45 of the week before), owned by the WEEK, so the peak week's own Sunday no longer flips to a
+taper; the goal phase is the fallback only with no ramp. The reset cadence keeps the ceil count.
+**The fit read counts a reset as recovery too**: the constrained walk runs in calendar weeks from
+this week to the peak week and a reset week PAUSES it (no 0.75× the remaining weeks must re-climb);
+in the taper the peak is read back off the anchor, never walked forward from a taper week, and the
+fit sentence is silent there. **A week holds only what its runs carry**: a lone easy run beside a
+quality session is the aerobic volume day, capped by `easyRunCapKm` (≤ 35% of the week, ≤ 70% of
+the long run, one 1.15× step past the longest mid-week run of the anchored 28 days, never under the
+old 5–7 km recovery band, which still caps a lone easy run with no quality beside it); on an
+ordinary build week a long run taken well may rise to the race curve's next long run; in a race
+taper the long run is the curve's taper long run and the easy runs come down to meet it. When the
+run count is FIXED (supporting role, stated calendar, set sessions) `goal_feasibility.capacity`
+carries that ordinary week's shape and the fit walk holds each week to `deliverableRunWeek`, so
+"race day is shaping up around N km" names what three runs will really prescribe. And **no
+prescribed week trips the engine's own spike brake**: the week is trimmed (never below the level it
+steps off) to `acwrCeilingKm` — 1.4× the mean of the four closed weeks the next Monday's spike read
+divides by, under program-state's 1.5 bar. Phases are distance-aware (a ≥15 km race gets a
 14-week build), the base quality pool includes threshold, and a timed race inside 16 weeks opens an
-endurance block instead of off-season strength. The Monday scheduler tick keeps the APPLIED week
-current through `buildRunPlanWithAutonomy` (policy untouched), but **only once the athlete has
-applied one auto-built run plan themselves** (`lastAppliedRunPlanDate() !== null`) — until then the
-cardio rows are hand-authored and the tick is a calm no-op, so the default "lead" posture can never
-quiet-apply a machine week over the athlete's own. `runComplianceRead`
-(`src/domain/training/run-compliance-read.ts`) composes compliance with a `basis` field — falling
-back to the live weekly mix only when the applied rows prescribe no runs or belong to another week,
-and anchoring that live prescription at the week START so it cannot grow as the week is run. The
-consumers that judge SHORTFALL (coach context, Today, the team week, the underfueling read) instead
-take `vouchedRunCompliance()`, where a prescription that cannot speak for the judged week reads as
-absent rather than as current. A hand-authored endurance week is never overruled.
+endurance block instead of off-season strength. **The week is never applied anywhere**: runs are not
+plan items (migration 110), so there is no Monday apply tick, and `buildRunPlanProposal` /
+`buildRunPlanWithAutonomy` (REST `POST /api/program/run-plan/apply`, MCP `apply_run_plan`) answer the
+designed `{ok:false, error}`. **Race day is the week's long run**: with the race date inside the
+Mon–Sun week, the long slot moves to the race's own weekday, carries the race distance and the event's
+name, and is marked `race: true`; any other run that day steps off it and the rest of the week follows
+the taper. Compliance: `getRunCompliance` is the week's ACTUALS only (prescribed zero);
+`runComplianceRead` (`src/repo/run-compliance.ts`, re-exported by
+`src/domain/training/run-compliance-read.ts`) composes the prescription from the live `weeklyRunPlan`
+for that week, anchored at the week START so it cannot grow as the week is run (`basis:"live_plan"`);
+`vouchedRunCompliance` is the same read (a re-entrant call from inside the engine gets actuals only).
 
 ## The race build (`src/repo/race-build.ts`)
 
@@ -3510,10 +3723,16 @@ new profile fields, and `{available:false, reason}` for everyone else. `raceBuil
   engine's own next-week prescription only once this week's log has reached its prescription;
   before that the engine would anchor on the partial week (a Tuesday's 4 km) and the ladder
   collapsed, so the walk projects off this week's prescription instead. Week `kind` follows the
-  ENGINE's arithmetic, not the calendar: for a
-  weekend race the peak is the week before race week and the taper is race week itself, so the
-  ladder shows build → peak → race rather than inventing a taper week the engine will not
-  prescribe. `weeks_to_race` on each rung is the calendar count for the label.
+  engine's arrival count (`weeks_to_race_week`), which is the calendar: build … → peak → taper →
+  race, so a weekend half peaks ~3 weeks before race day and tapers the week before race week.
+  The walk mirrors the engine's reset laws: after a down rung it steps off the level the reset
+  paused (`priorWeekKm` for the live week), and the long run never plans back up to
+  `demonstratedLongKm` — the longest run of 28 days that `harmEvidenceOnDay` clears — which a
+  projected down rung holds rather than steps under. A projected rung is what the engine will
+  PRESCRIBE: in the engine's own run week (`goal_feasibility.capacity`) it is held to
+  `deliverableRunWeek`, and to `acwrCeilingKm` over the logged closed weeks and the rungs before it
+  — the engine's own per-run caps and spike headroom, so the ladder never promises a 41 km week
+  three runs fill to 31. `weeks_to_race` on each rung is the calendar count for the label.
 - **`leg_map`** — the seven-day ring (Mon–Sun plan template): the run per day, the strength day
   with `heavy_lower` from `lowerBodyPlanDayNumbers()`, and the habitual ride.
 - **`strength`** — the phase's heavy-lower principle (`STRENGTH_HINT`: heavy after the quality
@@ -4031,6 +4250,17 @@ What the build emits, and what a deploy ships:
   bundling, leaving `public/js` = seven bundles + `10-boot.js` + compressed siblings; the Dockerfile
   builder sets it. A local build keeps them, because the client test suite reads those per-module
   files directly.
+
+### Runs are not plan items (client)
+
+Plan days hold lifts only; every run lives in Plan → Endurance, which reads runs solely from
+`/run-plan`, `/training-agenda`, `/race-build` and `/run-compliance` (never by scanning `/plan`).
+Today's lift card and the Session draw lifts only — `CairnTodayPlanSessionModel.planItems` is the one
+item door and drops any `kind:'cardio'` row a cached or pre-migration payload still carries — and the
+run the agenda opened for today is one line OUTSIDE the lift card (`#todayRunSlot`,
+`CairnTodayPlanSurface.runLineHtml`, carrying the stale-sync nudge and a tap into Endurance). The Plan
+editor models `strengthPlanDays(plan)` (`cardio-plan-client.ts`: no rest row, no run-only day, no
+cardio item) and saves lift days alone; there is no run row, "+ cardio" or rest toggle to edit.
 
 ### Illustration libraries
 

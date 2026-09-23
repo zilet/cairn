@@ -19,7 +19,6 @@ type TodayScreenRuntimeTrainingSession = import("../contracts/client.js").Client
   plan_day_id?: number | null;
   skips?: unknown[];
 };
-type TodayScreenRuntimeCardioEffort = import("../contracts/client.js").ClientCardioEffort;
 type TodayScreenRuntimePrescription = import("../contracts/client.js").ClientPrescription;
 type TodayScreenRuntimePrescriptionByExercise = Record<string, TodayScreenRuntimePrescription | null | undefined>;
 type TodayScreenRuntimeSessionSuggestOptions = Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[0];
@@ -80,14 +79,7 @@ type TodayScreenRuntimeContext = {
     rx: TodayScreenRuntimePrescription | null | undefined,
     lastSet?: unknown,
   ): string;
-  cardioPlanCard(
-    item: TodayScreenRuntimePlanItem,
-    revealIdx: number | null | undefined,
-    done: TodayScreenRuntimeCardioEffort | null | undefined,
-    syncLine: string,
-  ): string;
-  cardioEffortMatches(item: TodayScreenRuntimePlanItem, effort: TodayScreenRuntimeCardioEffort | null | undefined): boolean;
-  suggestedPlanDayNumber(session: TodayScreenRuntimeTrainingSession | null | undefined, isToday: boolean): Promise<number>;
+  suggestedPlanDayNumber(session: TodayScreenRuntimeTrainingSession | null | undefined, isToday: boolean): Promise<number | null>;
   loadBrief(date: string, override: string, opts?: { fast?: boolean }): Promise<TodayScreenRuntimeDayRead>;
   upgradeBriefInPlace(date: string, isToday: boolean): Promise<void>;
   reshapeToday(): Promise<void>;
@@ -157,8 +149,6 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
         rxMoveCount,
         applyDayProgression,
         exerciseCard,
-        cardioPlanCard,
-        cardioEffortMatches,
         suggestedPlanDayNumber,
         upgradeBriefInPlace,
         postExerciseMode,
@@ -237,20 +227,7 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     }, lastSet);
   }
 
-  function cardioPlanCard(
-    item: TodayScreenRuntimePlanItem,
-    revealIdx: number | null | undefined,
-    done: TodayScreenRuntimeCardioEffort | null | undefined,
-    syncLine: string,
-  ) {
-    return CairnTodayCards.cardioPlanCardHtml(item, revealIdx, done as Record<string, unknown> | null | undefined, syncLine);
-  }
-
-  function cardioEffortMatches(item: TodayScreenRuntimePlanItem, effort: TodayScreenRuntimeCardioEffort | null | undefined) {
-    return CairnTodayCards.cardioEffortMatches(item, effort as Record<string, unknown> | null | undefined);
-  }
-
-  function suggestedPlanDayNumber(session: TodayScreenRuntimeTrainingSession | null | undefined, isToday: boolean): Promise<number> {
+  function suggestedPlanDayNumber(session: TodayScreenRuntimeTrainingSession | null | undefined, isToday: boolean): Promise<number | null> {
     return CairnTodayPlanSelection.suggestedPlanDayNumber(session, isToday, {
       state: input.state,
       api: todayScreenRuntimeApi,
@@ -319,8 +296,6 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     rxMoveCount,
     applyDayProgression,
     exerciseCard,
-    cardioPlanCard,
-    cardioEffortMatches,
     suggestedPlanDayNumber,
     loadBrief,
     upgradeBriefInPlace,

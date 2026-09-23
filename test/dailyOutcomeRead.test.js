@@ -42,22 +42,39 @@ function acceptedCardio(date, {
   duration = 40,
   targetDuration = 40,
   targetZone = null,
+  exercise = "Easy run",
+  interval = undefined,
+  trainAnyway = false,
+  logRun = true,
 } = {}) {
   const session = {
-    name: "Easy run",
+    name: exercise,
     focus: "Aerobic work",
     why: "A calm endurance exposure.",
     est_minutes: targetDuration,
-    items: [{ kind: "cardio", exercise: "Easy run", target_duration_min: targetDuration, target_zone: targetZone }],
+    items: [{ kind: "cardio", exercise, target_duration_min: targetDuration, target_zone: targetZone, interval }],
   };
   let prepared;
   if (source === "athlete_override") {
     prepared = repo.prepareDailySession({ date, source, session });
   } else {
-    repo.savePlanDay(1, session.name, session.focus, session.items);
-    prepared = repo.prepareDailySession({ date, source: "manual_plan", day_number: 1 });
+    // Plan days hold strength only, so the accepted cardio card is a composition
+    // accepted over a strength plan day (a training read keeps the prescription
+    // exactly as written), never a run pulled off the plan.
+    seedPlan();
+    // `trainAnyway` is the consent a rest read needs before it carries work — the
+    // same train_anyway a manual plan pull used to persist on a rest baseline.
+    const job = repo.createAgentJob({
+      kind: "session_compose",
+      input: trainAnyway ? { date, train_anyway: true } : { date },
+    });
+    repo.finishAgentJob(job.id, {
+      chosen_agent: "stub",
+      result: { ok: true, session, agent: "stub", tried: [{ agent: "stub" }] },
+    });
+    prepared = repo.prepareDailySession({ date, source: "agent_suggest", agent_job_id: job.id });
   }
-  repo.addActivity({ date, type: "run", duration_min: duration, distance_km: 6 });
+  if (logRun) repo.addActivity({ date, type: "run", duration_min: duration, distance_km: 6 });
   return prepared.session_id;
 }
 
@@ -149,16 +166,12 @@ test("a partial cardio-only outcome stays useful and does not moralize or progre
 });
 
 test("contradicted prescribed quality gets factual calm learning, not completed-as-planned language", () => {
-  repo.savePlanDay(1, "Intervals", "Quality", [
-    {
-      kind: "cardio",
-      exercise: "Run intervals",
-      target_duration_min: 40,
-      target_zone: "Z4",
-      interval: [{ reps: 5, on: "3 min", off: "2 min", zone: "Z4" }],
-    },
-  ]);
-  const prepared = repo.prepareDailySession({ date: SECOND, source: "manual_plan", day_number: 1 });
+  const sessionId = acceptedCardio(SECOND, {
+    exercise: "Run intervals",
+    targetZone: "Z4",
+    interval: [{ reps: 5, on: "3 min", off: "2 min", zone: "Z4" }],
+    logRun: false,
+  });
   repo.upsertGarminActivity({
     external_id: "outcome-easy-run",
     date: SECOND,
@@ -169,7 +182,7 @@ test("contradicted prescribed quality gets factual calm learning, not completed-
     hr_zones: [{ zone: 2, secs: 2_400 }],
   });
 
-  const read = repo.dailyOutcomeRead({ session_id: prepared.session_id });
+  const read = repo.dailyOutcomeRead({ session_id: sessionId });
   assert.equal(
     read.athlete_read.learning,
     "You completed the endurance dose, but the observed intensity did not match the planned quality. We’ll keep it as context rather than push progression from it."
@@ -255,7 +268,9 @@ test("illness context suppresses progression language for completed cardio", () 
   db.prepare(
     `INSERT INTO context_events (kind, title, start_date, end_date, archived) VALUES ('illness', 'Illness', ?, ?, 0)`
   ).run(SECOND, SECOND);
-  const sessionId = acceptedCardio(SECOND);
+  // Illness reads the day as rest, so carrying the run takes the athlete's explicit
+  // train-anyway — the choice is recorded, but the illness window is what shapes it.
+  const sessionId = acceptedCardio(SECOND, { trainAnyway: true });
   const read = repo.dailyOutcomeRead({ session_id: sessionId });
   assert.equal(read.facts.dose_context.illness, true, "the illness window is the reason, not the athlete's choice");
   assert.equal(

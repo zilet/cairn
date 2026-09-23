@@ -14,6 +14,7 @@
 // ============================================================================
 import { db } from "../db.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
+import { withoutShadowActivities } from "./activity-shadow.js";
 import { getRecoverySummary } from "./coach.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear, trainingBackstopSignature } from "./training-cache.js";
 import {
@@ -28,8 +29,10 @@ import {
 } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import {
+  dowToDayNumber,
   effectiveGoalMode,
   getEnduranceGoal,
+  getEnduranceSchedule,
   getPrimaryDiscipline,
   getProfile,
   statedRunDows,
@@ -637,9 +640,26 @@ function gradeTimedLift(name: string, mg: string | null, through: string): Grade
   };
 }
 
+// A lift is CURRENTLY trained when a loaded session of it falls inside this window
+// ending on the read day — the same four-week bar the cut-quality read already
+// holds its "established lifts" to. Past it the lift is not in the athlete's
+// rotation, so its last graded trend is history, not a present decline: a slide
+// that ended six weeks ago says nothing about how the body is coping now.
+export const LIFT_CURRENT_WINDOW_DAYS = 28;
+
+/** Was this lift trained inside the current window ending `asOf`? Absent date → no. */
+export function liftTrainedRecently(lift: { last_trained?: string | null } | null | undefined, asOf: string): boolean {
+  const last = typeof lift?.last_trained === "string" ? lift.last_trained : null;
+  if (!last) return false;
+  const age = daysBetweenISO(asOf, last);
+  return age != null && age <= LIFT_CURRENT_WINDOW_DAYS;
+}
+
 function liftStates(date: string): LiftState[] {
-  // Lifts with real logged history (a reps lift needs loaded sets; a timed lift
-  // needs duration). One row per exercise, newest activity first.
+  // Lifts with real logged history (a reps lift needs logged reps; a timed lift
+  // needs duration). One row per exercise, newest activity first. A bodyweight rep
+  // (weight NULL) counts: a pull-up ladder logged unassisted is still a trained lift,
+  // and gradeRepsLift drops any row with no gradable point on its own.
   const exs = db
     .prepare(
       `SELECT e.name AS name, e.muscle_group AS mg, e.mode AS mode,
@@ -648,7 +668,7 @@ function liftStates(date: string): LiftState[] {
        JOIN sessions s ON s.id = ls.session_id
       WHERE s.date <= ?
         AND ((e.mode = 'timed' AND ls.duration_sec IS NOT NULL)
-             OR (COALESCE(e.mode,'reps') != 'timed' AND ls.weight IS NOT NULL AND ls.reps IS NOT NULL))
+             OR (COALESCE(e.mode,'reps') != 'timed' AND ls.reps IS NOT NULL))
       GROUP BY e.id
       HAVING days >= 1
       ORDER BY last_date DESC`
@@ -662,11 +682,22 @@ function liftStates(date: string): LiftState[] {
     const graded = String(e.mode) === "timed" ? gradeTimedLift(name, e.mg, date) : gradeRepsLift(name, e.mg, date);
     if (!graded) continue;
     const family_key = movementKey(name) || normalizeExerciseName(name);
+    const last_trained = e.last_date ? String(e.last_date) : null;
+    // Not currently trained is never "regressing": the lift has no present trend,
+    // and it re-baselines when it comes back into the rotation.
+    const dormant = graded.status === "regressing" && !liftTrainedRecently({ last_trained }, date);
     out.push({
       ...graded,
+      ...(dormant
+        ? {
+            status: "new" as const,
+            suggested_action: "hold" as const,
+            why: "Not trained lately — no current trend to read; it re-baselines when it's back in the rotation.",
+          }
+        : {}),
       family_key,
       family_label: familyLabelFromKey(family_key),
-      last_trained: e.last_date ? String(e.last_date) : null,
+      last_trained,
     });
   }
   return out;
@@ -764,15 +795,23 @@ function weeklyNonTonnageLoad(
   try {
     const patterns = enduranceSportPatterns(getProfile()?.endurance_sport);
     const sport = activitySportWhere("activities", patterns);
-    const row = db
-      .prepare(
-        `SELECT COALESCE(SUM(duration_min), 0) AS min, COALESCE(SUM(distance_km), 0) AS km
+    // A hand-logged shadow of a synced effort is one outing, not two, toward the
+    // week's non-tonnage load (which feeds the loaded-week/deload-due classifier).
+    const enduranceRows = withoutShadowActivities(
+      db
+        .prepare(
+          `SELECT date, type, source, external_id, duration_min, distance_km
          FROM activities
         WHERE date >= ? AND date <= ? AND (${sport.sql})`
-      )
-      .get(start, end, ...sport.params) as any;
-    enduranceMinutes = Number(row?.min ?? 0) || 0;
-    enduranceKm = Number(row?.km ?? 0) || 0;
+        )
+        .all(start, end, ...sport.params) as any[]
+    );
+    for (const r of enduranceRows) {
+      const min = Number(r.duration_min);
+      const km = Number(r.distance_km);
+      if (Number.isFinite(min) && min > 0) enduranceMinutes += min;
+      if (Number.isFinite(km) && km > 0) enduranceKm += km;
+    }
   } catch {
     /* no endurance rows */
   }
@@ -1710,10 +1749,27 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
     try {
       const lifting = strengthScheduleRead(d);
       if (lifting.days.length) return null;
+      // Runs are never plan items (migration 110), so the read needs the week's runs
+      // handed in. The engine's own week cannot be asked from here — weeklyRunPlan reads
+      // getProgramState, which is this function — so the athlete's STATED run days stand
+      // in for it, as weekday slots (Mon = 1): the days the engine lays its long and
+      // quality runs on. With no run days stated there is nothing to collide with.
+      const stated = (getEnduranceSchedule()?.days ?? []).filter((day) => day.kind === "long" || day.kind === "quality");
       return weekLayoutRead(d, {
         strengthDows: lifting.days.map((day) => day.dow),
         liftDaysSource: lifting.source,
         enduranceDows: statedRunDows(),
+        runPlan: stated.length
+          ? ({
+              available: true,
+              week_start: d,
+              runs: stated.map((day) => ({ day_number: dowToDayNumber(day.dow), kind_label: day.kind, label: day.kind })),
+              rationale: [],
+              quality_focus: null,
+              mix_summary: "",
+              why: "",
+            } as any)
+          : null,
       });
     } catch {
       return null;

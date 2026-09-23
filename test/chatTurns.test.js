@@ -41,6 +41,7 @@ import {
   RESTRUCTURE_DRAFT_VARIANTS,
   RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS,
   RESTRUCTURE_NOT_SCHEDULED_VARIANTS,
+  RUN_EDIT_REFUSAL_VARIANTS,
   RUN_HELD_FOR_REVIEW_VARIANTS,
   RUN_NOT_LIVE_VARIANTS,
   RUN_NOT_SAVED_VARIANTS,
@@ -2315,7 +2316,16 @@ const REFUSAL_VARIANT_SITES = [
     name: "CARDIO_REMOVAL_REFUSAL",
     set: CARDIO_REMOVAL_REFUSAL_VARIANTS,
     key: "chat-cardio-removal",
-    invariant: /Plan screen/,
+    // Runs follow the stated run days (migration 110), so every phrasing points there.
+    invariant: /run days|days you run/,
+    forbid: /Plan screen/,
+  },
+  {
+    name: "RUN_EDIT_REFUSAL",
+    set: RUN_EDIT_REFUSAL_VARIANTS,
+    key: "chat-run-edit",
+    invariant: /run days|days you run/,
+    forbid: /Plan screen/,
   },
 ];
 

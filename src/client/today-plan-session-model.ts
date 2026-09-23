@@ -4,9 +4,6 @@
 
 type TodayPlanSessionModelPlanItem = import("../contracts/client.js").ClientPlanItem & {
   fromPlan?: boolean;
-  target_distance_km?: number | null;
-  target_duration_min?: number | null;
-  target_zone?: string | null;
   reach?: { weight?: unknown; reps?: unknown; note?: unknown; amrap?: unknown } | null;
 };
 type TodayPlanSessionModelPlanDay = {
@@ -26,13 +23,14 @@ type TodayPlanSessionModelSession = import("../contracts/client.js").ClientTrain
   skips?: unknown[];
   sets?: TodayPlanSessionModelLoggedSet[] | null;
 };
-type TodayPlanSessionModelCardioEffort = import("../contracts/client.js").ClientCardioEffort;
 type TodayPlanSessionModelPrescription = Partial<import("../contracts/client.js").ClientPrescription>;
 type TodayPlanSessionModelPendingOffPlan = { name: string; mode?: string | null };
 type TodayPlanSessionModelPrefill = { weight: unknown; reps: unknown; rir: unknown; duration_sec?: unknown };
 type TodayPlanSessionModelState = {
   logDate: string;
   day: number | null;
+  /** True when the server said today is a calendar run or rest day (no lift selected). */
+  calendarDay?: boolean;
   plan: TodayPlanSessionModelPlanDay[];
   pendingOffPlan?: Record<string, TodayPlanSessionModelPendingOffPlan[]>;
 };
@@ -40,7 +38,6 @@ type TodayPlanSessionItemGroups = {
   planNames: Set<string>;
   activeItems: TodayPlanSessionModelPlanItem[];
   skippedItems: TodayPlanSessionModelPlanItem[];
-  cardioItems: TodayPlanSessionModelPlanItem[];
   strengthItems: TodayPlanSessionModelPlanItem[];
   planEx: string[];
   offPlanEx: string[];
@@ -56,22 +53,13 @@ type TodayPlanSessionModelApi = {
   cardAttribution(params: {
     items: TodayPlanSessionModelPlanItem[];
     loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>;
-    isCardioItem(item: TodayPlanSessionModelPlanItem): boolean;
   }): Map<TodayPlanSessionModelPlanItem, TodayPlanSessionCardAttribution>;
   groupLoggedSets(session: TodayPlanSessionModelSession | null | undefined): Record<string, TodayPlanSessionModelLoggedSet[]>;
   selectedPlanDay(state: TodayPlanSessionModelState, revealBlank: boolean): TodayPlanSessionModelPlanDay;
-  matchCardioEfforts(
-    items: TodayPlanSessionModelPlanItem[],
-    efforts: TodayPlanSessionModelCardioEffort[],
-    matches: (item: TodayPlanSessionModelPlanItem, effort: TodayPlanSessionModelCardioEffort | null | undefined) => boolean,
-  ): Map<TodayPlanSessionModelPlanItem, TodayPlanSessionModelCardioEffort>;
   itemGroups(params: {
     items: TodayPlanSessionModelPlanItem[];
     loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>;
-    matchedCardio: Map<TodayPlanSessionModelPlanItem, TodayPlanSessionModelCardioEffort>;
     skips: unknown[];
-    isCardioItem(item: TodayPlanSessionModelPlanItem): boolean;
-    cardioLabel(item: TodayPlanSessionModelPlanItem): string;
   }): TodayPlanSessionItemGroups;
   prunePendingOffPlan(
     state: TodayPlanSessionModelState,
@@ -88,8 +76,17 @@ type TodayPlanSessionModelApi = {
 };
 
 (() => {
+  // A plan day holds lifts only; every run lives in Plan -> Endurance. The server
+  // no longer sends a cardio item, but a cached plan or an older composition
+  // snapshot still can, so the lift card and the session drop it HERE, the one
+  // door every Today/Session item list comes through. Inline rather than the
+  // shared isCardioItem: this model also loads on its own.
+  function isRunItem(item: unknown): boolean {
+    return !!item && typeof item === "object" && (item as { kind?: unknown }).kind === "cardio";
+  }
+
   function planItems(day: TodayPlanSessionModelPlanDay | null | undefined): TodayPlanSessionModelPlanItem[] {
-    return Array.isArray(day?.items) ? day.items : [];
+    return Array.isArray(day?.items) ? day.items.filter((item) => !isRunItem(item)) : [];
   }
 
   function groupLoggedSets(session: TodayPlanSessionModelSession | null | undefined): Record<string, TodayPlanSessionModelLoggedSet[]> {
@@ -117,12 +114,11 @@ type TodayPlanSessionModelApi = {
   function cardAttribution(params: {
     items: TodayPlanSessionModelPlanItem[];
     loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>;
-    isCardioItem(item: TodayPlanSessionModelPlanItem): boolean;
   }): Map<TodayPlanSessionModelPlanItem, TodayPlanSessionCardAttribution> {
     const attribution = new Map<TodayPlanSessionModelPlanItem, TodayPlanSessionCardAttribution>();
     const byExercise = new Map<string, { item: TodayPlanSessionModelPlanItem; position: number }[]>();
     params.items.forEach((item, position) => {
-      if (params.isCardioItem(item)) return;
+      if (isRunItem(item)) return;
       const exercise = String(item.exercise || "");
       if (!exercise) return;
       const cards = byExercise.get(exercise) || [];
@@ -151,46 +147,26 @@ type TodayPlanSessionModelApi = {
   }
 
   function selectedPlanDay(state: TodayPlanSessionModelState, revealBlank: boolean): TodayPlanSessionModelPlanDay {
-    if (revealBlank && state.day === null) return { day_number: 0, name: "", items: [] };
+    if ((revealBlank || state.calendarDay) && state.day === null) return { day_number: 0, name: "", items: [] };
     return state.plan.find((day) => day.day_number === state.day) || state.plan[0] || { day_number: 0, name: "", items: [] };
-  }
-
-  function matchCardioEfforts(
-    items: TodayPlanSessionModelPlanItem[],
-    efforts: TodayPlanSessionModelCardioEffort[],
-    matches: (item: TodayPlanSessionModelPlanItem, effort: TodayPlanSessionModelCardioEffort | null | undefined) => boolean,
-  ): Map<TodayPlanSessionModelPlanItem, TodayPlanSessionModelCardioEffort> {
-    const matched = new Map<TodayPlanSessionModelPlanItem, TodayPlanSessionModelCardioEffort>();
-    if (!items.length || !efforts.length) return matched;
-    const pool = [...efforts];
-    for (const item of items) {
-      const index = pool.findIndex((effort) => matches(item, effort));
-      if (index >= 0) matched.set(item, pool.splice(index, 1)[0]);
-    }
-    return matched;
   }
 
   function itemGroups(params: {
     items: TodayPlanSessionModelPlanItem[];
     loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>;
-    matchedCardio: Map<TodayPlanSessionModelPlanItem, TodayPlanSessionModelCardioEffort>;
     skips: unknown[];
-    isCardioItem(item: TodayPlanSessionModelPlanItem): boolean;
-    cardioLabel(item: TodayPlanSessionModelPlanItem): string;
   }): TodayPlanSessionItemGroups {
-    const planNames = new Set(params.items.filter((item) => !params.isCardioItem(item) && item.exercise).map((item) => String(item.exercise)));
+    const items = params.items.filter((item) => !isRunItem(item));
+    const planNames = new Set(items.filter((item) => item.exercise).map((item) => String(item.exercise)));
     const skippedSet = new Set((params.skips || []).map((name) => String(name).toLowerCase()));
     const isSkipped = (item: TodayPlanSessionModelPlanItem) =>
-      params.isCardioItem(item)
-        ? skippedSet.has(params.cardioLabel(item).toLowerCase()) && !params.matchedCardio.has(item)
-        : !!item.exercise && skippedSet.has(String(item.exercise).toLowerCase()) && !(params.loggedByEx[String(item.exercise)] || []).length;
-    const activeItems = params.items.filter((item) => !isSkipped(item));
-    const skippedItems = params.items.filter(isSkipped);
-    const cardioItems = activeItems.filter(params.isCardioItem);
-    const strengthItems = activeItems.filter((item) => !params.isCardioItem(item));
-    const planEx = activeItems.filter((item) => !params.isCardioItem(item) && item.exercise).map((item) => String(item.exercise));
+      !!item.exercise && skippedSet.has(String(item.exercise).toLowerCase()) && !(params.loggedByEx[String(item.exercise)] || []).length;
+    const activeItems = items.filter((item) => !isSkipped(item));
+    const skippedItems = items.filter(isSkipped);
+    const strengthItems = activeItems;
+    const planEx = activeItems.filter((item) => item.exercise).map((item) => String(item.exercise));
     const offPlanEx = Object.keys(params.loggedByEx).filter((name) => !planNames.has(name));
-    return { planNames, activeItems, skippedItems, cardioItems, strengthItems, planEx, offPlanEx };
+    return { planNames, activeItems, skippedItems, strengthItems, planEx, offPlanEx };
   }
 
   function prunePendingOffPlan(
@@ -306,7 +282,6 @@ type TodayPlanSessionModelApi = {
     groupLoggedSets,
     cardAttribution,
     selectedPlanDay,
-    matchCardioEfforts,
     itemGroups,
     prunePendingOffPlan,
     prefillFor,

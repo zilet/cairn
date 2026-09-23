@@ -1159,11 +1159,16 @@ test("forwardLook is null-safe with no plan (degrades, never throws)", () => {
 
 // The Brief reads the shape of coming days (W4.6): a quality/long run landing
 // TOMORROW is a loaded near-future, spoken as a forecast-shaped SUGGESTION — never
-// a red day, never gate language. A single weekly-run entry always projects onto
-// tomorrow (see test/hybridRunLookahead.test.js), so this needs no flexible-agenda
-// seeding — the same pure template lookahead the hybrid sequencing signal reads.
+// a red day, never gate language. Runs are the calendar's: tomorrow's run is the
+// athlete's stated run weekday (endurance_schedule), which the hybrid day context's
+// planned_run_next falls back to — the same lookahead the hybrid sequencing signal reads.
+function statedRunTomorrow(date, kind) {
+  const dow = (new Date(`${date}T00:00:00Z`).getUTCDay() + 1) % 7;
+  repo.setProfile({ endurance_schedule: { days: [{ dow, kind }] } });
+}
+
 test("forwardLook speaks a loaded-near-future forecast when a quality run lands tomorrow", () => {
-  repo.setWeeklyRuns([{ day_number: 1, label: "Tempo run", target_distance_km: 8, target_zone: "Z3" }]);
+  statedRunTomorrow(REF, "quality");
   const fl = repo.forwardLook(REF);
   assert.deepEqual(fl.loaded_soon, { when: "tomorrow", run_kind: "quality" });
   assert.match(fl.text, /quality/i);
@@ -1171,7 +1176,7 @@ test("forwardLook speaks a loaded-near-future forecast when a quality run lands 
 });
 
 test("forwardLook speaks a loaded-near-future forecast when a long run lands tomorrow", () => {
-  repo.setWeeklyRuns([{ day_number: 1, label: "Long run", target_distance_km: 16, target_zone: "Z2" }]);
+  statedRunTomorrow(REF, "long");
   const fl = repo.forwardLook(REF);
   assert.deepEqual(fl.loaded_soon, { when: "tomorrow", run_kind: "long" });
   assert.match(fl.text, /long/i);
@@ -1184,10 +1189,10 @@ test("forwardLook's loaded-near-future phrasing rotates and never breaks the rea
     assert.equal(violatesReadingGrammar(text), null, `"${text}" must read as a suggestion, not a gate`);
   }
   // Every day of a full week rotates a variant (never throws, never empty).
-  repo.setWeeklyRuns([{ day_number: 1, label: "Tempo run", target_distance_km: 8, target_zone: "Z3" }]);
   const seen = new Set();
   for (let i = 0; i < 7; i++) {
     const date = new Date(new Date(`${REF}T00:00:00Z`).getTime() + i * 864e5).toISOString().slice(0, 10);
+    statedRunTomorrow(date, "quality");
     const fl = repo.forwardLook(date);
     assert.ok(fl.loaded_soon, `day ${date} still sees tomorrow's run`);
     seen.add(fl.text);
@@ -2172,7 +2177,9 @@ test("the reading grammar also clears every sentence the live floor composes", (
 // the athlete reads on most mornings, and it went to the Brief unchecked.
 test("the agent's prose is held to the same constitution as the floor", async () => {
   const { isValidDayReadAgentResult } = await import("../dist/dayread.js");
-  const baseline = { kind: "train", signals: { today_load: "none", trained_today: false } };
+  // A REST baseline, so every case below is judged on its prose alone: a rest read over
+  // a train baseline is now also refused without a named brake (test/eliteQuietRead).
+  const baseline = { kind: "rest", signals: { today_load: "none", trained_today: false } };
 
   // The exact payload that used to validate and render verbatim as the Brief's
   // headline and `why`: a 0-100 score and a hard gate, both explicitly forbidden.

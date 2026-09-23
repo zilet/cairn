@@ -869,6 +869,24 @@ function compactReadAdherence(model: unknown): unknown {
   return out;
 }
 
+// The connected brain's directives, with the wearable recovery reads reframed. An HRV /
+// resting-HR directive (role "recovery_context", src/repo/propagation.ts directivesForCoach)
+// is a multi-night trend the day read ALREADY weighs night by night against the athlete's
+// own baseline (signal_state). Shipped under `directive`, a Brief agent read "favor easy
+// aerobic work" as an order and eased days the deterministic state only watched. So its
+// text rides as `context_note` — the same words, keyed as what they are — and every lab
+// directive passes through untouched. Structure, never string surgery.
+function compactDirectives(directives: unknown): unknown {
+  if (!Array.isArray(directives)) return directives;
+  return directives.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const row = item as Record<string, unknown>;
+    if (row.role !== "recovery_context") return row;
+    const { directive, ...rest } = row;
+    return { ...rest, context_note: directive ?? null };
+  });
+}
+
 // ---------- the helper every prompt uses ----------
 
 /**
@@ -898,7 +916,9 @@ export function projectCoachContext(ctx: PartialCoachContext, site: PromptSite):
               ? compactReadAdherence(value)
               : key === "signal_state"
                 ? compactSignalState(value)
-                : value;
+                : key === "directives"
+                  ? compactDirectives(value)
+                  : value;
   }
   return out as PartialCoachContext;
 }

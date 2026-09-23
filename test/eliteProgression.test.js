@@ -11,9 +11,11 @@ import assert from "node:assert/strict";
 import { db, repo, isoDaysAgo } from "./_seed.js";
 import { nextPrescription, buildProgressionProposal, movementTenureWeeks } from "../dist/repo/progression.js";
 import { getProgramState } from "../dist/repo/program-state.js";
+import { bodyweightLadderKey, progressionLineageIds } from "../dist/repo/exercise-canon.js";
+import { OUTCOME_FACTS_SCHEMA_VERSION } from "../dist/repo/daily-reconciliation.js";
 
 function reset() {
-  for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "plan_proposals", "profile"]) {
+  for (const t of ["daily_session_outcomes", "daily_session_compositions", "logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "plan_proposals", "profile"]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
 }
@@ -130,4 +132,184 @@ test("C5: a long-tenure STEADY lift reaches the 'introduce' action with same-pat
   const prop = buildProgressionProposal(1);
   assert.equal(prop.ok, true);
   assert.ok(prop.proposal.parsed.changes.some((c) => c.swap && /Back Squat/i.test(c.swap.from)), "introduce → a swap change");
+});
+
+// ── Prescriptions follow what the log proves ──────────────────────────────────
+// A swap that mints a new row on a bodyweight ladder keeps the lift's history; an
+// assist the log no longer needs comes off; a handicapped day that still cleared
+// full load counts toward the step; a lighter capped session never steps past the
+// card. Offline fixtures shaped like the live log.
+function logSession(name, daysAgo, sets) {
+  sets.forEach(([weight, reps, rir], i) =>
+    logSet(name, isoDaysAgo(daysAgo), { weight, reps, rir: rir ?? null, setNum: i + 1 })
+  );
+}
+
+function clearOutcomes() {
+  db.prepare(`DELETE FROM daily_session_outcomes`).run();
+  db.prepare(`DELETE FROM daily_session_compositions`).run();
+}
+
+function linkHandicappedDose(name, daysAgo, { reasons, top, relevantSymptom = false, reference = 205 }) {
+  const date = isoDaysAgo(daysAgo);
+  const ex = repo.findExercise(name);
+  const session = repo.getOrCreateSession(date, null);
+  db.prepare(`UPDATE sessions SET finished_at = datetime('now') WHERE id = ?`).run(session.id);
+  const composition = db
+    .prepare(
+      `INSERT INTO daily_session_compositions
+        (version, session_id, date, source, status, title, items_json, request_fingerprint)
+       VALUES (1, ?, ?, 'adaptive_plan', 'active', 'Handicap fixture', '[]', ?)`
+    )
+    .run(session.id, date, `handicap-${session.id}-${Math.random()}`);
+  const facts = {
+    schema_version: OUTCOME_FACTS_SCHEMA_VERSION,
+    skipped: [],
+    dose_context: { comparable: false, non_comparable_reasons: reasons },
+    dose_evidence: [
+      {
+        movement_key: `exercise:${ex.id}`,
+        exercise: name,
+        mode: "reps",
+        // The day's card was a reduced one — the athlete did more than it asked.
+        prescribed: { sets: 3, rep_low: 5, rep_high: 5, target_weight: 165 },
+        achieved: { sets: 3, top_weight: top, top_reps: 10 },
+        full_load_reference: {
+          sets: null, target_weight: null, target_seconds: null, rep_low: null,
+          recent_working_weight: reference, recent_working_seconds: null,
+        },
+        performed_at_full_load: false,
+        challenge_verdict: "exceeded",
+        relevant_symptom: relevantSymptom,
+        comparable: false,
+        non_comparable_reasons: reasons,
+      },
+    ],
+  };
+  db.prepare(
+    `INSERT INTO daily_session_outcomes (composition_id, session_id, date, status, facts_json)
+     VALUES (?, ?, ?, 'completed', ?)`
+  ).run(composition.lastInsertRowid, session.id, date, JSON.stringify(facts));
+}
+
+test("a swap onto a new bodyweight-ladder row keeps the lift's history — status reads, never 'new'", () => {
+  repo.setProfile({ weight_lb: 160 });
+  makeExercise("Assisted Pull-Up", { muscle_group: "back" });
+  makeExercise("Neutral-Grip Pull-Up", { muscle_group: "back" });
+  makeExercise("Wide-Grip Pull-Up", { muscle_group: "back" });
+  makeExercise("Lat Pulldown", { muscle_group: "back" });
+  for (const [d, w] of [[60, -35], [53, -30], [46, -30], [39, -25], [32, -25]]) logSession("Assisted Pull-Up", d, [[w, 10], [w, 10]]);
+  for (const d of [26, 19, 12]) logSession("Neutral-Grip Pull-Up", d, [[null, 10, 2], [null, 10, 2], [null, 9, 1]]);
+  // The live shape: bodyweight working sets with an assisted finisher on the last day.
+  logSession("Neutral-Grip Pull-Up", 5, [[null, 8, 1], [null, 8, 0], [-10, 10, 0]]);
+  // A variant trained ALONGSIDE the new row is its own series, not a predecessor.
+  logSession("Wide-Grip Pull-Up", 40, [[null, 6]]);
+  logSession("Wide-Grip Pull-Up", 3, [[null, 7]]);
+  logSession("Lat Pulldown", 20, [[120, 10]]);
+
+  assert.equal(bodyweightLadderKey("Band-Assisted Pull-Up"), "pull up");
+  assert.equal(bodyweightLadderKey("Neutral-Grip Pull-Up"), "pull up");
+  assert.equal(bodyweightLadderKey("Chin-Up"), "chin up", "a chin-up is its own ladder");
+  assert.equal(bodyweightLadderKey("Incline Push-Up"), null, "a named variation keeps its own history");
+  assert.equal(bodyweightLadderKey("Lat Pulldown"), null);
+
+  const assisted = repo.findExercise("Assisted Pull-Up").id;
+  const neutral = repo.findExercise("Neutral-Grip Pull-Up").id;
+  assert.deepEqual(
+    progressionLineageIds("Neutral-Grip Pull-Up"),
+    [neutral, assisted],
+    "own row first, then the row it replaced; the overlapping variant stays out"
+  );
+  assert.deepEqual(progressionLineageIds("Lat Pulldown"), [repo.findExercise("Lat Pulldown").id], "a loaded lift is only its own row");
+
+  const state = getProgramState().lifts.find((l) => l.exercise === "Neutral-Grip Pull-Up");
+  assert.notEqual(state.status, "new", "the assisted weeks are this lift's history");
+  assert.ok(state.sessions >= 9, `reads the full ladder, got ${state.sessions} sessions`);
+});
+
+test("bodyweight sets at the top of the range retire the assist — never more help than the log needs", () => {
+  repo.setProfile({ weight_lb: 160 });
+  makeExercise("Neutral-Grip Pull-Up", { muscle_group: "back" });
+  planWith(2, { exercise: "Neutral-Grip Pull-Up", sets: 3, rep_low: 6, rep_high: 8, target_weight: -10, focus: "Pull" });
+  logSession("Neutral-Grip Pull-Up", 12, [[null, 10, 2], [null, 10, 2], [null, 10, 0], [null, 6, 0]]);
+  logSession("Neutral-Grip Pull-Up", 5, [[null, 10, 2], [null, 10, 0], [null, 10, 0]]);
+  // The latest session's assisted finisher is a back-off, not the working rung.
+  logSession("Neutral-Grip Pull-Up", 1, [[null, 8, 1], [null, 8, 0], [-10, 10, 0]]);
+
+  const p = nextPrescription("Neutral-Grip Pull-Up", undefined, { autoreg: null, acute: null });
+  assert.equal(p.suggested.weight, null, "bodyweight, not the plan's 10 lb assist");
+  assert.equal(p.reground, true, "the assist target was behind the log");
+  assert.equal(p.current.weight, null);
+  assert.doesNotMatch(p.delta_text, /assist/);
+
+  const proposal = buildProgressionProposal(2, { forNextSession: true });
+  assert.equal(proposal.ok, true);
+  const change = proposal.proposal.parsed.changes.find((c) => c.exercise === "Neutral-Grip Pull-Up");
+  assert.ok(change, "the retired assist lands through propose→apply");
+  assert.equal(change.target_weight, null, "bodyweight is a null target");
+});
+
+test("one unassisted day is a good day, not the rung — the assist stays until two of three sessions show it", () => {
+  makeExercise("Assisted Pull-Up", { muscle_group: "back" });
+  planWith(2, { exercise: "Assisted Pull-Up", sets: 3, rep_low: 6, rep_high: 8, target_weight: -25, focus: "Pull" });
+  logSession("Assisted Pull-Up", 12, [[-25, 8, 2], [-25, 8, 2], [-25, 8, 2]]);
+  logSession("Assisted Pull-Up", 5, [[-25, 8, 2], [-25, 7, 1], [-25, 6, 1]]);
+  logSession("Assisted Pull-Up", 1, [[null, 6, 0], [null, 6, 0], [-25, 8, 1]]);
+  const p = nextPrescription("Assisted Pull-Up", undefined, { autoreg: null, acute: null });
+  assert.ok(p.suggested.weight != null && p.suggested.weight < 0, `still assisted, got ${p.suggested.weight}`);
+});
+
+test("a handicapped day that cleared full load counts toward the step; a light or symptomatic one does not", () => {
+  makeExercise("Barbell Deadlift", { muscle_group: "hamstrings" });
+  planWith(5, { exercise: "Barbell Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 205, focus: "Lower B" });
+  logSession("Barbell Deadlift", 20, [[205, 10, 3], [205, 10, 3]]);
+  logSession("Barbell Deadlift", 6, [[185, 10, 5], [205, 10, 2], [205, 10, 2]]);
+  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance"], top: 205 });
+
+  const earned = nextPrescription("Barbell Deadlift", undefined, { autoreg: null, acute: null });
+  assert.equal(earned.dose_eligibility.reason, "full_load_through_confound");
+  assert.equal(earned.action, "overload", "205 × 10 at RIR 2 after the run is a lower bound, not noise");
+  assert.ok(earned.suggested.weight > 205 && earned.suggested.weight <= 210, `a small step, got ${earned.suggested.weight}`);
+
+  // A movement-relevant symptom keeps full authority.
+  clearOutcomes();
+  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance"], top: 205, relevantSymptom: true });
+  const symptom = nextPrescription("Barbell Deadlift", undefined, { autoreg: null, acute: null });
+  assert.equal(symptom.dose_eligibility.reason, "non_comparable");
+  assert.equal(symptom.suggested.weight, 205);
+
+  // Illness is not a handicap this rule forgives.
+  clearOutcomes();
+  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance", "illness"], top: 205 });
+  assert.equal(
+    nextPrescription("Barbell Deadlift", undefined, { autoreg: null, acute: null }).dose_eligibility.reason,
+    "non_comparable"
+  );
+
+  // Under the lift's own recent working weight, the confound still explains it.
+  clearOutcomes();
+  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance"], top: 205, reference: 215 });
+  assert.equal(
+    nextPrescription("Barbell Deadlift", undefined, { autoreg: null, acute: null }).dose_eligibility.reason,
+    "non_comparable"
+  );
+});
+
+test("a range capped at a lighter load than the card proves the lighter load — no step past the card", () => {
+  makeExercise("Pendlay Row", { muscle_group: "back" });
+  planWith(2, { exercise: "Pendlay Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 150, focus: "Pull" });
+  logSession("Pendlay Row", 20, [[145, 10, 2], [145, 10, 2], [145, 10, 2]]);
+  logSession("Pendlay Row", 13, [[145, 10, 2], [145, 10, 2], [145, 10, 2]]);
+  logSession("Pendlay Row", 1, [[135, 10, 2], [135, 10, 2], [135, 10, 2]]);
+  const p = nextPrescription("Pendlay Row", undefined, { autoreg: null, acute: null });
+  assert.equal(p.suggested.weight, 150, "150 is the next load to own — 155 is a number nothing logged has touched");
+  assert.equal(p.action, "hold");
+
+  // The same capped session AT the card's load still earns the step.
+  db.prepare(`DELETE FROM logged_sets`).run();
+  logSession("Pendlay Row", 13, [[150, 10, 2], [150, 10, 2], [150, 10, 2]]);
+  logSession("Pendlay Row", 1, [[150, 10, 2], [150, 10, 2], [150, 10, 2]]);
+  const stepped = nextPrescription("Pendlay Row", undefined, { autoreg: null, acute: null });
+  assert.equal(stepped.action, "overload");
+  assert.ok(stepped.suggested.weight > 150);
 });

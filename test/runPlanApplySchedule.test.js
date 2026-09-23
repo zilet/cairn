@@ -1,27 +1,19 @@
-// THE MISSING CADENCE. The applied plan's cardio rows are the only endurance
-// prescription the Plan screen and run-compliance can see, and the only things
-// that ever wrote them were the manual Apply button and the apply_run_plan MCP
-// tool. So a run plan applied once kept prescribing that week's mileage forever.
+// THE MONDAY RUN-PLAN APPLY TICK IS RETIRED.
 //
-// This file proves the Monday op: it lands the week once, a second pass in the
-// same week is a calm no-op, bg-ops off means no cadence at all, an athlete the
-// deterministic engine won't prescribe runs for is never invented a week, and —
-// the gate that makes the cadence safe to run at all under the default "lead"
-// posture — it does not start leading run weeks until the athlete has applied one
-// auto-built plan themselves, so a hand-authored cardio week is never written over.
-// Offline and agent-free by construction — buildRunPlanWithAutonomy is the
-// deterministic run engine plus the existing autonomy policy, no CLI involved.
+// It existed because the applied plan's cardio rows were the only endurance
+// prescription the Plan screen and run-compliance could see, and nothing else ever
+// rebuilt them. Runs are no longer plan items (migration 110): each week's runs are
+// computed LIVE by weeklyRunPlan from the athlete's stated run days, so there is
+// nothing to keep current and nothing to apply. This file proves the retirement is
+// whole — the tick's exports are gone, the apply path answers its designed
+// {ok:false} without writing a proposal or a plan row, and a leftover
+// 'auto-run-plan' draft has no producer to re-run.
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables, isoDaysAgo } from "./_seed.js";
-import {
-  RUN_PLAN_APPLY_DAY,
-  RUN_PLAN_APPLY_STATE_KEY,
-  runPlanAppliedSince,
-  runPlanApplyDue,
-  weeklyRunPlanApplyTask,
-  weeklySlotStamp,
-} from "../dist/scheduler.js";
+import * as scheduler from "../dist/scheduler.js";
+import { buildRunPlanWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
+import { regenerableProducer } from "../dist/domain/brain/draft-regeneration.js";
 
 beforeEach(() => {
   resetTables(
@@ -36,112 +28,71 @@ beforeEach(() => {
     "brain_decisions",
     "brain_expectations"
   );
+  // A runner with history — exactly the athlete the old tick would have written a week for.
   repo.setProfile({ endurance_sport: "run" });
   repo.addActivity({ type: "run", distance_km: 9.1, duration_min: 52, date: isoDaysAgo(2) });
 });
 
-const monday = () => repo.runComplianceWeekStart();
+const proposalCount = () => db.prepare(`SELECT COUNT(*) AS n FROM plan_proposals`).get().n;
+const planItemCount = () => db.prepare(`SELECT COUNT(*) AS n FROM plan_items`).get().n;
 
-const appliedRunPlans = () =>
-  db
-    .prepare(`SELECT COUNT(*) AS n FROM plan_proposals WHERE agent = 'auto-run-plan' AND status = 'applied'`)
-    .get().n;
+test("the scheduler no longer exports a run-plan apply cadence", () => {
+  for (const name of [
+    "RUN_PLAN_APPLY_DAY",
+    "RUN_PLAN_APPLY_STATE_KEY",
+    "runPlanApplyDue",
+    "weeklyRunPlanApplyTask",
+    "runPlanAppliedSince",
+  ]) {
+    assert.equal(scheduler[name], undefined, `${name} is gone with the tick`);
+  }
+  for (const name of [
+    "setWeeklyRuns",
+    "lastAppliedRunPlanDate",
+    "appliedRunPlanNeedsRefresh",
+    "appliedRunPlanCoversWeek",
+  ]) {
+    assert.equal(repo[name], undefined, `repo.${name} is gone with the applied-plan model`);
+  }
+});
 
-// The athlete handing the run week over: one auto-built plan they applied
-// themselves, in an earlier week. Until this exists the cadence does not run at
-// all, so every test of what the cadence DOES starts from here.
-function handOverRunWeek(dateISO = isoDaysAgo(21)) {
-  const proposal = repo.createProposal("auto-run-plan", "run plan", "", { summary: "runs", cardio: [] });
-  repo.setProposalStatus(Number(proposal.id), "applied");
-  db.prepare(`UPDATE plan_proposals SET created_at = ? WHERE id = ?`).run(`${dateISO} 06:00:00`, Number(proposal.id));
-  return proposal;
-}
+test("building a run plan answers the designed ok:false and writes nothing", () => {
+  const built = repo.buildRunPlanProposal();
+  assert.deepEqual(built, { ok: false, error: repo.RUN_PLAN_IS_LIVE });
 
-test("the Monday op applies this week's run plan once and no-ops on a second pass", async () => {
-  handOverRunWeek();
-  const slot = monday();
-  const first = await repo.runSchedulerOperation(RUN_PLAN_APPLY_STATE_KEY, slot, () => weeklyRunPlanApplyTask(slot));
-  assert.equal(first.status, "succeeded");
-  assert.equal(first.value.ok, true);
-  assert.ok(appliedRunPlans() >= 1, "the run plan actually landed on the plan rows");
+  const routed = buildRunPlanWithAutonomy(repo.runComplianceWeekStart());
+  assert.equal(routed.ok, false);
+  assert.equal(routed.error, repo.RUN_PLAN_IS_LIVE);
+
+  assert.equal(proposalCount(), 0, "no run-plan proposal is minted");
+  assert.equal(planItemCount(), 0, "and nothing lands on the plan");
+  assert.equal(repo.getRunCompliance().prescribed_sessions, 0, "the raw read still carries no prescription");
   assert.ok(
-    repo.getRunCompliance(slot).prescribed_sessions > 0,
-    "the applied plan now prescribes this week's runs"
+    repo.vouchedRunCompliance().prescribed_sessions > 0,
+    "the week's runs come from the live engine instead"
   );
-
-  // The durable slot is acknowledged, so the cadence will not fire again this week.
-  assert.equal(repo.schedulerOperationDue(RUN_PLAN_APPLY_STATE_KEY, slot), false);
-
-  // And even if it were re-invoked, the ledger check makes it a calm no-op rather
-  // than a second volume step in the same week.
-  assert.equal(runPlanAppliedSince(slot), true);
-  const applied = appliedRunPlans();
-  const second = weeklyRunPlanApplyTask(slot);
-  assert.equal(second.outcome, "no_op");
-  assert.equal(appliedRunPlans(), applied, "no second plan is applied in the same week");
 });
 
-test("a run plan the athlete already applied this week is left alone", () => {
-  const slot = monday();
-  const proposal = repo.createProposal("auto-run-plan", "run plan", "", { summary: "runs", cardio: [] });
-  repo.setProposalStatus(Number(proposal.id), "applied");
-  assert.equal(runPlanAppliedSince(slot), true);
-  assert.equal(weeklyRunPlanApplyTask(slot).outcome, "no_op");
-});
-
-test("an applied plan from a previous week does not count as this week's", () => {
-  const proposal = repo.createProposal("auto-run-plan", "run plan", "", { summary: "runs", cardio: [] });
-  repo.setProposalStatus(Number(proposal.id), "applied");
-  db.prepare(`UPDATE plan_proposals SET created_at = ? WHERE id = ?`).run(`${isoDaysAgo(21)} 06:00:00`, Number(proposal.id));
-  assert.equal(runPlanAppliedSince(monday()), false);
-});
-
-test("an athlete the run engine declines to prescribe for is never invented a week", () => {
-  resetTables("activities", "plan_proposals", "profile");
+test("the designed ok:false is the same for an athlete the engine would decline", () => {
+  resetTables("activities", "profile");
   repo.setProfile({ endurance_sport: "cycling" });
-  handOverRunWeek(); // the cadence is live; it is the ENGINE that declines here
-  const before = appliedRunPlans();
-  const result = weeklyRunPlanApplyTask(monday());
-  assert.equal(result.outcome, "no_op");
-  assert.equal(appliedRunPlans(), before);
+  assert.deepEqual(buildRunPlanWithAutonomy(), { ok: false, error: repo.RUN_PLAN_IS_LIVE });
+  assert.equal(proposalCount(), 0);
 });
 
-// A hand-authored cardio week is exactly what the athlete asked for, and the
-// default lead_mode is "lead" — so without this gate the very first Monday tick on
-// a fresh install would quiet-apply a machine-built run week straight over it. The
-// machine starts leading run weeks only after the athlete has applied one auto plan
-// through the explicit propose/apply flow.
-test("a hand-authored cardio week survives the Monday tick when no auto plan was ever applied", () => {
-  resetTables("plan_days", "plan_items", "plan_proposals");
-  repo.savePlanDay(3, "Cardio", "Endurance", [
-    { exercise: "Easy run", kind: "cardio", target_distance_km: 6, target_duration_min: 35 },
-  ]);
-  const cardioRows = () => repo.getPlan().flatMap((day) => day.items || []).filter((it) => it.kind === "cardio");
-  assert.equal(cardioRows().length, 1, "the athlete's own cardio row is on the plan");
-  assert.equal(repo.lastAppliedRunPlanDate(), null, "and no auto run plan has ever landed");
-
-  assert.equal(weeklyRunPlanApplyTask(monday()).outcome, "no_op");
-  assert.equal(appliedRunPlans(), 0, "nothing was applied over the athlete's week");
-
-  const after = cardioRows();
-  assert.equal(after.length, 1, "the hand-authored cardio row is still the only one");
-  assert.equal(after[0].target_distance_km, 6, "and it still says what the athlete wrote");
+test("a leftover auto-run-plan draft has no producer to re-run", () => {
+  const draft = repo.createProposal("auto-run-plan", "run plan", "", { summary: "runs", cardio: [] });
+  const row = db.prepare(`SELECT * FROM plan_proposals WHERE id = ?`).get(Number(draft.id));
+  assert.equal(regenerableProducer({ ...row, parsed: { summary: "runs", cardio: [] } }), null);
 });
 
-test("the cadence rides the bg-ops gate and the Monday slot", () => {
-  // A Monday well past the configured hour: due, if bg ops are on.
-  const mondayNoon = new Date(`${monday()}T18:00:00Z`);
-  assert.equal(runPlanApplyDue(mondayNoon, { bg_ops_enabled: false, coach_hour: 6 }), false, "bg ops off ⇒ no cadence");
-  assert.equal(runPlanApplyDue(mondayNoon, { bg_ops_enabled: true, coach_hour: 6 }), true);
-
-  // The slot stamp is the Monday of the week, whichever day the process wakes on —
-  // that is what makes a missed Monday catch up instead of skipping the week.
+test("the weekly slot stamp the remaining weekly cadences ride is still the week's anchor day", () => {
+  // The helper outlived the tick (other weekly slots use it): the stamp is the most
+  // recent anchor day, whichever day the process wakes on — that is what makes a
+  // missed slot catch up instead of skipping the week.
+  const MONDAY = 1;
   const wednesday = new Date(`${isoDaysAgo(0)}T18:00:00Z`);
-  const stamp = weeklySlotStamp(wednesday, RUN_PLAN_APPLY_DAY, 6);
+  const stamp = scheduler.weeklySlotStamp(wednesday, MONDAY, 6);
   assert.match(stamp, /^\d{4}-\d{2}-\d{2}$/);
   assert.ok(stamp <= isoDaysAgo(0));
-
-  // Once the slot completes, the gate closes for the rest of the week.
-  repo.setAppState(RUN_PLAN_APPLY_STATE_KEY, weeklySlotStamp(mondayNoon, RUN_PLAN_APPLY_DAY, 6));
-  assert.equal(runPlanApplyDue(mondayNoon, { bg_ops_enabled: true, coach_hour: 6 }), false);
 });

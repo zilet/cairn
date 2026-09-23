@@ -3,7 +3,7 @@ import { emitBrainEvent } from "../brainEvents.js";
 import { detectStrengthCalibration } from "./calibration.js";
 import { reconcileDailySessionSafe } from "./daily-reconciliation.js";
 import { sessionNoteSuggestsFatigue } from "./training-fatigue.js";
-import { localDateISO, localDayOfStamp } from "./shared.js";
+import { localDateISO } from "./shared.js";
 import {
   isStrengthGarminType,
   listActivities,
@@ -11,8 +11,15 @@ import {
   listGarminDailyMetrics,
   listGarminSources,
 } from "./activities.js";
+import { withoutShadowActivities } from "./activity-shadow.js";
 import { activitySportWhere, canonicalEnduranceSport } from "./endurance-sports.js";
-import { isPlaceholderExerciseName, MUSCLE_LANDMARKS, resolveExerciseName } from "./exercise-canon.js";
+import {
+  bodyweightLadderKey,
+  isPlaceholderExerciseName,
+  MUSCLE_LANDMARKS,
+  progressionLineageIds,
+  resolveExerciseName,
+} from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import {
   findExercise,
@@ -26,6 +33,7 @@ import { invalidateDayRead, invalidateDayReadIfDecisionChanged } from "./intelli
 import { listMemory, listSuggestions } from "./memory.js";
 import { listFoodNotes, listMealPlans } from "./nutrition.js";
 import { getPlan } from "./plan.js";
+import { runComplianceRead } from "./run-compliance.js";
 import { effectiveGoalMode, getProfile, leanGainRate, listWeight } from "./profile.js";
 import { getSettings } from "./settings.js";
 import { normalizeSymptomArea } from "./symptom-area.js";
@@ -1035,22 +1043,24 @@ function computeSportBests(key: string, label: string, paced: boolean, rows: any
 
 export function getEndurancePRs(type?: string | null): EndurancePRs {
   const t = type != null && String(type).trim() ? String(type).trim().toLowerCase() : null;
-  const rows = (
+  const rawRows = (
     t
       ? db
           .prepare(
-            `SELECT date, type, distance_km, duration_min FROM activities
+            `SELECT date, type, source, external_id, distance_km, duration_min FROM activities
          WHERE lower(COALESCE(type,'')) = ? AND (distance_km IS NOT NULL OR duration_min IS NOT NULL)
          ORDER BY date`
           )
           .all(t)
       : db
           .prepare(
-            `SELECT date, type, distance_km, duration_min FROM activities
+            `SELECT date, type, source, external_id, distance_km, duration_min FROM activities
          WHERE (distance_km IS NOT NULL OR duration_min IS NOT NULL) ORDER BY date`
           )
           .all()
   ) as any[];
+  // A hand-logged shadow of a synced effort is one outing, not a second PR candidate.
+  const rows = withoutShadowActivities(rawRows);
 
   // Bucket every effort into its canonical sport, then compute that sport's own bests.
   const groups = new Map<string, { label: string; paced: boolean; rows: any[] }>();
@@ -1182,15 +1192,29 @@ function computeWeeklyStats(date?: string) {
       `SELECT COUNT(DISTINCT s.date) AS c FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date < ?`
     )
     .get(monday, nextMonday) as any;
-  // "Planned" means SESSIONS planned. The week's rest day is a real row in the
-  // template (v99) and deliberately not one of them — counting it would tell the
-  // athlete they are 2 of 6 through a week that only ever asked for five.
-  const weekPlanned = db.prepare(`SELECT COUNT(*) AS c FROM plan_days WHERE day_type != 'rest'`).get() as any;
+  // "Planned" means SESSIONS planned: the plan's lifting days. Plan days hold strength
+  // only (migration 110), and an empty editor scaffold is not a session either — so
+  // counting it would tell the athlete they are 2 of 6 through a week of five.
+  const weekPlanned = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM plan_days pd
+        WHERE COALESCE(pd.day_type, 'training') != 'rest'
+          AND EXISTS (SELECT 1 FROM plan_items pi
+                       WHERE pi.plan_day_id = pd.id AND COALESCE(pi.kind, 'strength') != 'cardio')`
+    )
+    .get() as any;
   // Cardio this week (activities table) — so the "This Week" summary speaks to
-  // BOTH modalities, not just lifting adherence. Count + total distance.
-  const weekCardio = db
-    .prepare(`SELECT COUNT(*) AS c, COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ? AND date < ?`)
-    .get(monday, nextMonday) as any;
+  // BOTH modalities, not just lifting adherence. Count + total distance. A
+  // hand-logged shadow of a synced effort is one outing, not two, toward either.
+  const weekCardioRows = withoutShadowActivities(
+    db
+      .prepare(`SELECT date, type, source, external_id, distance_km FROM activities WHERE date >= ? AND date < ?`)
+      .all(monday, nextMonday) as any[]
+  );
+  const weekCardio = {
+    c: weekCardioRows.length,
+    km: weekCardioRows.reduce((sum, r) => sum + (Number(r.distance_km) > 0 ? Number(r.distance_km) : 0), 0),
+  };
 
   // ---- endurance weekly read (v35, additive) ----
   // A runner/cyclist-first picture: mileage, moving time, the longest single
@@ -1358,9 +1382,15 @@ function computeEnduranceWeekly(mondayISO: string, nextMondayISO?: string): Endu
   // Activities are the source of truth for distance/session volume. Keep each
   // modality separate: 30 km of MTB is useful load evidence, but never 30 km of
   // running base.
-  const activityRows = db
-    .prepare(`SELECT date, type, distance_km, duration_min, source FROM activities WHERE date >= ? AND date < ?`)
-    .all(mondayISO, weekEnd) as any[];
+  // A hand-logged shadow of a synced effort is one session, not two, toward this
+  // week's per-sport sessions/distance/moving-min totals.
+  const activityRows = withoutShadowActivities(
+    db
+      .prepare(
+        `SELECT date, type, distance_km, duration_min, source, external_id FROM activities WHERE date >= ? AND date < ?`
+      )
+      .all(mondayISO, weekEnd) as any[]
+  );
   for (const activity of activityRows) {
     if (isStrengthGarminType(activity.type)) continue;
     const row = sportWeek(activity.type);
@@ -1458,13 +1488,21 @@ function computeEnduranceWeekly(mondayISO: string, nextMondayISO?: string): Endu
     return km > 0 ? Math.round((min / km) * 100) / 100 : null;
   };
   function end(startIso: string, endIso?: string): any[] {
-    return endIso
-      ? (db
-          .prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND date < ? AND (${sport.sql})`)
-          .all(startIso, endIso, ...sport.params) as any[])
-      : (db
-          .prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND (${sport.sql})`)
-          .all(startIso, ...sport.params) as any[]);
+    // A hand-logged shadow of a synced run must not double its distance/duration
+    // into the pace-trend average.
+    return withoutShadowActivities(
+      (endIso
+        ? (db
+            .prepare(
+              `SELECT date, type, source, external_id, distance_km, duration_min FROM activities WHERE date >= ? AND date < ? AND (${sport.sql})`
+            )
+            .all(startIso, endIso, ...sport.params) as any[])
+        : (db
+            .prepare(
+              `SELECT date, type, source, external_id, distance_km, duration_min FROM activities WHERE date >= ? AND (${sport.sql})`
+            )
+            .all(startIso, ...sport.params) as any[])) as any[]
+    );
   }
   const this_min_per_km = avgPace(mondayISO, weekEnd);
   const prev_min_per_km = avgPace(prevMonday, mondayISO);
@@ -1490,16 +1528,15 @@ function computeEnduranceWeekly(mondayISO: string, nextMondayISO?: string): Endu
 }
 
 // ---------- run compliance (closing the runner loop) ----------
-// Prescribed (from the CURRENT plan's cardio items) vs. actual (this week's logged
-// cardio efforts), in plain language. Deterministic + null-safe — no agent. This
-// is the endurance analogue of week_done/week_planned for lifting: did the runs
-// the plan asked for actually happen? Constitution: a RATIO in plain words
-// ("32 of 40 km this week") is fine; a 0-100 score is NOT — `pct_km` stays an
-// internal proportion the UI may render as a ratio/bar, never a grade.
+// Prescribed (the run engine's week — runComplianceRead) vs. actual (this week's
+// logged run efforts), in plain language. Deterministic + null-safe — no agent. This
+// is the endurance analogue of week_done/week_planned for lifting: did the runs the
+// week asked for actually happen? Constitution: a RATIO in plain words ("32 of 40 km
+// this week") is fine; a 0-100 score is NOT — `pct_km` stays an internal proportion
+// the UI may render as a ratio/bar, never a grade.
 //
-// Prescribed: every RUN cardio plan item (kind==='cardio' across getPlan() days) —
-// count = number of cardio items, km/min summed (nulls skipped). The plan is
-// weekly, so the full template IS this week's prescription.
+// Prescribed: weeklyRunPlan's runs for the week — count = runs, km/min summed (nulls
+// skipped). Runs are never plan items (migration 110).
 // Actual: this week (Monday-anchored, same as computeEnduranceWeekly, or an
 // explicit weekStartISO) from RUN activities only. Cross-training is reported in
 // endurance.by_sport, but a ride/swim/hike can never satisfy a run prescription.
@@ -1512,11 +1549,11 @@ export interface RunCompliance {
   actual_min: number;
   pct_km: number | null; // actual_km / prescribed_km when prescribed_km>0, else null — a proportion, never a 0-100 grade
   in_words: string;
-  // Where the PRESCRIPTION came from. 'applied' is the plan rows the athlete can
-  // see on Plan; 'live_plan' means those rows had nothing to say for this week and
-  // the live weekly run mix supplied the targets instead (composed one layer up —
-  // see runComplianceRead in src/domain/training). Additive provenance: the numbers
-  // and in_words format are identical either way.
+  // Where the PRESCRIPTION came from. 'live_plan' is the run engine's week (runs are
+  // never plan items — see runComplianceRead, src/repo/run-compliance.ts). 'applied'
+  // survives only as the raw actuals read (getRunCompliance), which carries no
+  // prescription at all. Additive provenance: the numbers and in_words format are
+  // identical either way.
   basis: RunComplianceBasis;
 }
 
@@ -1534,58 +1571,6 @@ function mondayOfISO(dateISO: string): string {
   if (Number.isNaN(d.getTime())) return String(dateISO).slice(0, 10);
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
   return d.toISOString().slice(0, 10);
-}
-
-const RECOGNIZED_ENDURANCE_SPORT_KEYS = new Set(["run", "ride", "swim", "row", "walk", "ski"]);
-
-// Which sport an APPLIED cardio plan row prescribes. The row itself is often
-// mute: savePlanDay folds a cardio item's label into `note` only when there is no
-// prose note, and the run engine always writes prose ("Easy aerobic at Z2 —
-// relaxed and conversational."), so "Easy run" / "Long run" is dropped and the
-// exercise column is NULL by design. Reading the item alone therefore classified
-// every machine-applied run as an unrecognized sport and counted ZERO prescribed
-// runs for a week the run engine had just written. The plan DAY still carries the
-// label, so it answers when the item cannot — but only then: an item that names a
-// ride is a ride, whatever day it sits on.
-// The sources are consulted in order of how directly they name a sport, and the
-// first one that names any recognized sport at all decides. `target_zone` is free
-// text ('Z2' | 'tempo' | 'easy'), and canonicalEnduranceSport reads "tempo" and
-// "interval" as running tokens — so folding it into one blob with the label made a
-// cycling item prescribed at "tempo" classify as a run. An effort word is the
-// weakest possible sport signal and must never outvote one, so it only speaks when
-// the item itself is completely mute about what it is.
-function planCardioIsRun(day: any, item: any): boolean {
-  for (const source of [
-    `${item.exercise || ""} ${item.note || ""}`,
-    String(item.target_zone || ""),
-    `${day?.name || ""} ${day?.focus || ""}`,
-  ]) {
-    const key = canonicalEnduranceSport(source).key;
-    if (key === "run") return true;
-    if (RECOGNIZED_ENDURANCE_SPORT_KEYS.has(key)) return false;
-  }
-  return false;
-}
-
-// The APPLIED plan's run-cardio prescription. The plan template is weekly and
-// carries no dates, so this is "whatever is in the plan right now" — which is
-// exactly why it can fossilize (see appliedRunPlanNeedsRefresh).
-export function appliedRunPrescription(): { sessions: number; km: number; min: number } {
-  let sessions = 0;
-  let km = 0;
-  let min = 0;
-  for (const day of getPlan() as any[]) {
-    for (const it of day.items || []) {
-      if (it.kind !== "cardio") continue;
-      if (!planCardioIsRun(day, it)) continue;
-      sessions++;
-      const itemKm = Number(it.target_distance_km);
-      const itemMin = Number(it.target_duration_min);
-      if (Number.isFinite(itemKm) && itemKm > 0) km += itemKm;
-      if (Number.isFinite(itemMin) && itemMin > 0) min += itemMin;
-    }
-  }
-  return { sessions, km: Math.round(km * 10) / 10, min: Math.round(min) };
 }
 
 // Plain-language summary — a ratio, never a grade. Prefer distance (the runner's
@@ -1606,94 +1591,35 @@ export function runComplianceInWords(parts: {
   return `${parts.actual_sessions} of ${parts.prescribed_sessions} run${parts.prescribed_sessions === 1 ? "" : "s"} this week`;
 }
 
-// The most recent date an auto-built run plan was actually APPLIED to the plan
-// rows, or null when no machine-built run plan has ever landed (a hand-authored
-// endurance week — never treated as stale, it is exactly what the athlete asked for).
-export function lastAppliedRunPlanDate(): string | null {
-  const row = db
-    .prepare(
-      `SELECT created_at FROM plan_proposals
-        WHERE agent = 'auto-run-plan' AND status = 'applied'
-        ORDER BY datetime(created_at) DESC, id DESC LIMIT 1`
-    )
-    .get() as any;
-  // The LOCAL day the plan landed on. `created_at` is UTC, and the answer is
-  // compared against a local week below — so an evening apply must not report as
-  // tomorrow (see localDayOfStamp).
-  return localDayOfStamp(row?.created_at);
-}
-
-// Can the applied plan honestly speak for the week starting `weekStartISO`?
-//
-// The freshness law that governs sensor readings governs prescriptions too (see
-// sensor-freshness.ts): a prescription a consumer cannot vouch for the week it is
-// judging behaves as ABSENT, never as current. A machine-built run plan speaks
-// for the week it landed in and no other — quoting a five-week-old applied 40 km
-// week against this week's real 20 km is a shortfall the athlete never agreed to.
-// A hand-authored plan (no applied auto-run-plan on file) is never stale: it is
-// exactly what the athlete asked for, and it stands for every week until changed.
-export function appliedRunPlanCoversWeek(weekStartISO?: string): boolean {
-  const monday = runComplianceWeekStart(weekStartISO);
-  if (appliedRunPrescription().sessions === 0) return false;
-  const applied = lastAppliedRunPlanDate();
-  if (!applied) return true;
-  // A plan that still somehow reads as landing AHEAD of today (a clock that ran
-  // backwards, an imported row) is clamped into the current week rather than
-  // called uncovered — the athlete has a plan either way.
-  const current = runComplianceWeekStart();
-  const appliedWeek = mondayOfISO(applied);
-  return (appliedWeek > current ? current : appliedWeek) === monday;
-}
-
-// True when the applied plan cannot honestly speak for THIS week's running:
-// either it prescribes no runs at all, or the machine-built run plan that put
-// those rows there landed in some other week and nothing has refreshed it since.
-export function appliedRunPlanNeedsRefresh(weekStartISO?: string): boolean {
-  return !appliedRunPlanCoversWeek(weekStartISO);
-}
-
-// getRunCompliance, but honest about freshness. This is what any consumer that
-// judges SHORTFALL must read: when the applied plan cannot vouch for the week
-// (appliedRunPlanCoversWeek), the prescription reads as absent rather than as
-// current, so the branch that would call the athlete short simply never fires and
-// the surface falls back to the quiet it had before a machine-applied run plan
-// became visible to appliedRunPrescription(). Actuals are logged fact and always
-// stand. A surface that wants a REAL target for a stale week wants the composed
-// read instead (runComplianceRead, src/domain/training) — that one substitutes the
-// live weekly mix; this one substitutes silence.
+// Run compliance with the RUN ENGINE's prescription for the week (runComplianceRead).
+// The name survives from when an applied plan row could fossilize and had to be
+// vouched for; runs are never plan items now (migration 110), so the live engine's
+// week is the only prescription there is, and it always speaks for its own week.
 export function vouchedRunCompliance(weekStartISO?: string): RunCompliance {
-  const monday = runComplianceWeekStart(weekStartISO);
-  const read = getRunCompliance(monday);
-  if (appliedRunPlanCoversWeek(monday)) return read;
-  return {
-    ...read,
-    prescribed_sessions: 0,
-    prescribed_km: 0,
-    prescribed_min: 0,
-    pct_km: null,
-    in_words: runComplianceInWords({
-      prescribed_sessions: 0,
-      prescribed_km: 0,
-      actual_sessions: read.actual_sessions,
-      actual_km: read.actual_km,
-    }),
-  };
+  return runComplianceRead(runComplianceWeekStart(weekStartISO));
 }
 
+// The week's logged RUN actuals. Carries NO prescription (prescribed_* are zero and
+// pct_km null): runs are not plan items, so the prescription is the run engine's —
+// composed by runComplianceRead, which every surface quoting "X of Y km" reads. This
+// raw read stays for the engine itself (weeklyRunPlan reads last week's actuals here).
 export function getRunCompliance(weekStartISO?: string): RunCompliance {
   const monday = runComplianceWeekStart(weekStartISO);
   const nextMonday = new Date(new Date(monday + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
 
-  // Prescribed: the current plan's cardio items.
-  const prescription = appliedRunPrescription();
-  const prescribed_sessions = prescription.sessions;
-  const prescribed_km = prescription.km;
-  const prescribed_min = prescription.min;
+  const prescribed_sessions = 0;
+  const prescribed_km = 0;
+  const prescribed_min = 0;
 
-  // Actual: this week's logged RUN efforts only.
-  const rows = db
-    .prepare(`SELECT type, distance_km, duration_min FROM activities WHERE date >= ? AND date < ?`)
-    .all(monday, nextMonday) as any[];
+  // Actual: this week's logged RUN efforts only. A hand-logged shadow of a synced
+  // run is one session, not two, toward actual_sessions/actual_km/actual_min.
+  const rows = withoutShadowActivities(
+    db
+      .prepare(
+        `SELECT date, type, source, external_id, distance_km, duration_min FROM activities WHERE date >= ? AND date < ?`
+      )
+      .all(monday, nextMonday) as any[]
+  );
   let actual_sessions = 0;
   let actual_km = 0;
   let actual_min = 0;
@@ -1754,9 +1680,13 @@ export function weeklyAerobicLoad(weekStartISO?: string): WeeklyAerobicLoad {
   const nextMonday = new Date(new Date(monday + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
   let rows: any[] = [];
   try {
-    rows = db
-      .prepare(`SELECT type, distance_km, duration_min FROM activities WHERE date >= ? AND date < ?`)
-      .all(monday, nextMonday) as any[];
+    rows = withoutShadowActivities(
+      db
+        .prepare(
+          `SELECT date, type, source, external_id, distance_km, duration_min FROM activities WHERE date >= ? AND date < ?`
+        )
+        .all(monday, nextMonday) as any[]
+    );
   } catch {
     /* activities table absent → zeros */
   }
@@ -1882,12 +1812,15 @@ export function getTrainingCalendar(days = 84) {
     )
     .all(cutoff) as any[];
   for (const r of sessionMinRows) minutesMap.set(r.date, (minutesMap.get(r.date) ?? 0) + (r.min ?? 0));
-  const actMinRows = db
+  // A hand-logged shadow of a synced effort is one entry's minutes, not two, toward
+  // a day's training-minutes total.
+  const actMinRawRows = db
     .prepare(
-      `SELECT date, SUM(duration_min) AS min FROM activities WHERE date >= ? AND duration_min IS NOT NULL GROUP BY date`
+      `SELECT date, type, source, external_id, duration_min FROM activities WHERE date >= ? AND duration_min IS NOT NULL`
     )
     .all(cutoff) as any[];
-  for (const r of actMinRows) minutesMap.set(r.date, (minutesMap.get(r.date) ?? 0) + (r.min ?? 0));
+  for (const r of withoutShadowActivities(actMinRawRows))
+    minutesMap.set(r.date, (minutesMap.get(r.date) ?? 0) + (Number(r.duration_min) || 0));
 
   // Activity days.
   const actRows = db.prepare(`SELECT DISTINCT date FROM activities WHERE date >= ?`).all(cutoff) as any[];
@@ -2123,21 +2056,30 @@ export function getProgress(exerciseName: string, opts: { through?: string } = {
   // pays this scan once per lift per data change, not on every read. Left unbounded.
   // `through` is the ONE exception, and it is a horizon, not a window: everything ever
   // logged up to that day, so the all-time max as of that day is still exact.
+  // On a bodyweight LADDER (pull-up / chin-up / push-up / dip) the series is the
+  // rung lineage — a row that replaced "Assisted Pull-Up" keeps that history — and a
+  // NULL weight is what bodyweight is (the encoding), so those sets count as the
+  // bodyweight rung below instead of vanishing. Every other lift reads exactly its
+  // own row with loaded sets only, as before: a null there is an unrecorded load.
+  const ladder = bodyweightLadderKey(String(ex.name)) != null;
+  const lineage = ladder ? progressionLineageIds(String(ex.name)) : [];
+  const ids: number[] = lineage.length ? lineage : [Number(ex.id)];
   const rows = db
     .prepare(
       `SELECT s.date AS date, ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
        FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-       WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.reps IS NOT NULL
+       WHERE ls.exercise_id IN (${ids.map(() => "?").join(",")})
+         ${ladder ? "" : "AND ls.weight IS NOT NULL"} AND ls.reps IS NOT NULL
        ${through ? "AND s.date <= ?" : ""}
        ORDER BY s.date`
     )
-    .all(...(through ? [ex.id, through] : [ex.id])) as any[];
+    .all(...ids, ...(through ? [through] : [])) as any[];
 
   // Per-date: track the best set by its effective 1RM (or by reps for assisted
   // sets where bodyweight is unknown). NEVER emit a negative best1rm.
   const byDate = new Map<string, { topWeight: number; topReps: number; best1rm: number | null }>();
   for (const r of rows) {
-    const w = Number(r.weight);
+    const w = r.weight == null ? 0 : Number(r.weight); // null reaches here only on a bodyweight ladder
     const reps = Number(r.reps);
     if (!Number.isFinite(w) || !Number.isFinite(reps) || reps <= 0) continue;
 

@@ -3,6 +3,7 @@ import { getAppState, setAppState } from "./app-state.js";
 import { recordedClientTimeZone } from "./client-tz.js";
 import { latestJourneyMilestoneSince } from "./journey.js";
 import { localDateISO } from "./shared.js";
+import { withoutShadowActivities } from "./activity-shadow.js";
 import type { TodayAgendaCandidate } from "./today-agenda.js";
 
 // ============================================================================
@@ -220,16 +221,15 @@ function trainingDoneChange(stampSql: string): Change | null {
           .get(today, stampSql) as any
       )?.n ?? 0
     );
-    const cardio = Number(
-      (
-        db
-          .prepare(
-            `SELECT COUNT(*) AS n FROM activities
+    // A hand-logged shadow of a synced effort is one session in the books, not two.
+    const cardio = withoutShadowActivities(
+      db
+        .prepare(
+          `SELECT date, type, source, external_id, duration_min, distance_km FROM activities
               WHERE created_at > ? AND date < ? AND type IN ('run','ride','swim','hike')`
-          )
-          .get(stampSql, today) as any
-      )?.n ?? 0
-    );
+        )
+        .all(stampSql, today) as any[]
+    ).length;
     const total = liftDays + cardio;
     if (total <= 0) return null;
     const word = total > 6 ? "A stack of" : COUNT_WORDS[total];

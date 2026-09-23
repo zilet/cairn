@@ -243,11 +243,8 @@ async function renderToday(opts: any = {}) {
   const {
     day,
     loggedByEx,
-    todaySettings,
-    matchedCardio,
     activeItems,
     skippedItems,
-    cardioItems,
     strengthItems,
     offPlanEx,
     pendingOffPlan,
@@ -260,7 +257,6 @@ async function renderToday(opts: any = {}) {
     exTotal,
     hasSyncedCardioToday,
     isRunDay,
-    expectingRun,
   } = prep;
 
   const [stats, profile, exercises]: any[] = [todayData.stats, todayData.profile, todayData.exercises];
@@ -306,20 +302,36 @@ async function renderToday(opts: any = {}) {
     isToday,
     planReveal: todayState.planReveal,
   });
-  // ---- Day-type-aware lead: read the day as run / lift / both / rest ----
-  // When the day is about running — cardio prescribed and/or a synced run, with NO
-  // strength logged today — the run is the HERO of the plan area, not buried under a
-  // strength shell. We don't rewrite Today; we just (a) lead the session head with the
-  // run's name + prescription, and (b) order the cardio card(s) FIRST in the surface.
-  // A mixed day (both lift + cardio) keeps the lift-led head but still floats cardio
-  // up so it's never lost at the bottom. Pure lifting is unchanged.
-  // Sync freshness: only when Garmin is configured. The stale "this morning's run not
-  // synced yet?" nudge fires when a run is prescribed today but no synced effort has
-  // landed AND the last sync is stale (see cardioSyncLine). One shared line under the
-  // run card (and on the Endurance view).
-  const syncline = cardioItems.length
-    ? cardioSyncLine(todaySettings as Record<string, unknown> | null | undefined, { expectingRun })
-    : "";
+  // ---- Today's run: OUTSIDE the lift list ----
+  // Runs left the strength plan: the lift card and the session hold lifts only, and
+  // the run lives on the rolling agenda (the same read Plan -> Endurance shows). So
+  // the run the agenda opened for today is one quiet line under the lift card, never
+  // a card inside it. Asked beside everything else and painted into its own slot when
+  // it lands, so first paint never waits on it; the last line for this date is
+  // reused on a soft repaint so the slot does not blink. The stale "this morning's
+  // run not synced yet?" nudge rides that line (see cardioSyncLine).
+  const runLinePromise: Promise<string> = isToday
+    ? Promise.all([
+        todayApi(`/training-agenda?date=${encodeURIComponent(todayState.logDate)}`).catch(() => null),
+        todayApi("/settings").catch(() => null),
+      ]).then(([runAgenda, settingsRead]) => {
+        const settings =
+          settingsRead && typeof settingsRead === "object"
+            ? ((settingsRead as unknown as { settings?: Record<string, unknown> | null }).settings ?? null)
+            : null;
+        const line = CairnTodayPlanSurface.runLineHtml(
+          runAgenda,
+          {
+            date: todayState.logDate,
+            units: runUnits(settings?.run_units),
+            syncLine: cardioSyncLine(settings, { expectingRun: true }),
+          },
+          { escapeHtml: escHtml, formatDistance: fmtDist }
+        );
+        todayRunLineCache = { date: todayState.logDate, html: line };
+        return line;
+      }).catch(() => "")
+    : Promise.resolve("");
 
   // In focus mode the chrome (context banner, Brief, insight, capture) gives way to
   // the slim sticky focus header; otherwise the Brief leads as always.
@@ -399,7 +411,6 @@ async function renderToday(opts: any = {}) {
     !hasLoggedSets &&
     exDone === 0 &&
     !isRunDay &&
-    !cardioItems.length &&
     !dayHasItems &&
     previewHasItems !== true;
   // Persisted on state (not just passed to this render's briefHtml call) so a
@@ -446,12 +457,9 @@ async function renderToday(opts: any = {}) {
             plan: todayState.plan,
             activeDay: todayState.day,
             logDate: todayState.logDate,
-            cardioItems,
             strengthItems,
             activeItems,
             skippedItems,
-            matchedCardio,
-            syncedLine: syncline,
             loggedByEx,
             offPlanEx,
             pendingOffPlan,
@@ -464,7 +472,6 @@ async function renderToday(opts: any = {}) {
             hasLoggedSets,
             hasGarmin,
             isRunDay,
-            preserveItemOrder: !!prep.dailySession,
             planDayRecovery: prep.planDayRecovery,
             prefillFor,
             attributionFor: prep.attributionFor,
@@ -472,6 +479,12 @@ async function renderToday(opts: any = {}) {
           },
           todayPlanSurfaceRendererDeps()
         );
+
+  // Today's run line slot (see runLinePromise): outside the lift card, below it.
+  if (isToday) {
+    const cachedRunLine = todayRunLineCache && todayRunLineCache.date === todayState.logDate ? todayRunLineCache.html : "";
+    html += `<div id="todayRunSlot">${cachedRunLine}</div>`;
+  }
 
   // ---- Trajectory tier (this week), quiet, below the fold ----
   html += todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps());
@@ -515,6 +528,17 @@ async function renderToday(opts: any = {}) {
       preview: sessionPreview,
     });
   });
+
+  // Today's run line lands on its own; a stale render never paints over a newer one.
+  void runLinePromise.then((line) => {
+    if (todayState.tab !== "today" || todayState.logDate !== renderedDate || pollToken !== railToken) return;
+    const slot = todayView.querySelector("#todayRunSlot") as HTMLElement | null;
+    if (!slot) return;
+    if (slot.innerHTML !== line) slot.innerHTML = line;
+    wireTodayRunLine(slot);
+  });
+  const paintedRunSlot = todayView.querySelector("#todayRunSlot") as HTMLElement | null;
+  if (paintedRunSlot) wireTodayRunLine(paintedRunSlot);
 
   // Calm, dismissible "add to home screen" coach — appended to the primary column AFTER
   // the wholesale innerHTML write above (mounting before it would be silently wiped).
@@ -1158,6 +1182,24 @@ function rerenderTraining(opts?: Record<string, unknown>): Promise<unknown> | un
   return todayState.tab === "session" ? renderSession(opts) : renderToday(opts);
 }
 
+// Today's run line: the run the agenda opened for today, painted outside the lift
+// card by renderToday. Kept per date so a soft repaint reuses it instead of blinking.
+let todayRunLineCache: { date: string; html: string } | null = null;
+
+// Its one tap goes where runs live — Plan -> Endurance — and its sync row (when
+// Garmin is set up) keeps the shared Sync-now behaviour.
+function wireTodayRunLine(slot: HTMLElement): void {
+  slot.querySelectorAll<HTMLElement>("[data-today-run-go]").forEach((button) => {
+    if (button.dataset.wired) return;
+    button.dataset.wired = "1";
+    button.addEventListener("click", () => {
+      todayState.planJump = "endurance";
+      activateTab("plan");
+    });
+  });
+  if (typeof wireCardioSync === "function") wireCardioSync(slot, () => renderToday({ soft: true }));
+}
+
 // The Today "lead entry": instead of the full set-by-set logging surface living
 // inline on Today (where the brain's background re-renders used to yank it), the
 // plan area shows one calm tap-card that opens the isolated Session destination.
@@ -1304,18 +1346,6 @@ function wireSessionDestination(): void {
       });
     });
   });
-  // Focus mode intentionally omits capture. Route the cardio CTA to Chat with the
-  // natural-language phrase ready for review; nothing is logged implicitly.
-  view.querySelectorAll<HTMLElement>(".sess-dest [data-cardio-log]").forEach((button) => {
-    if (button.dataset.wired) return;
-    button.dataset.wired = "1";
-    button.addEventListener("click", () => {
-      const phrase = String(button.dataset.cardioLog || "").trim();
-      if (!phrase) return;
-      todayState.chatPrefill = phrase;
-      activateTab("chat");
-    });
-  });
 }
 
 async function renderSession(opts: any = {}): Promise<void> {
@@ -1372,12 +1402,9 @@ async function renderSession(opts: any = {}): Promise<void> {
       plan: todayState.plan,
       activeDay: todayState.day,
       logDate: todayState.logDate,
-      cardioItems: prep.cardioItems,
       strengthItems: prep.strengthItems,
       activeItems: prep.activeItems,
       skippedItems: prep.skippedItems,
-      matchedCardio: prep.matchedCardio,
-      syncedLine: "",
       loggedByEx: prep.loggedByEx,
       offPlanEx: prep.offPlanEx,
       pendingOffPlan: prep.pendingOffPlan,
@@ -1390,7 +1417,6 @@ async function renderSession(opts: any = {}): Promise<void> {
       hasLoggedSets: true,
       hasGarmin,
       isRunDay: prep.isRunDay,
-      preserveItemOrder: !!dailySession,
       planDayRecovery: prep.planDayRecovery,
       prefillFor: prep.prefillFor,
       attributionFor: prep.attributionFor,

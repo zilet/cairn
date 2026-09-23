@@ -20,7 +20,7 @@
 //      than acceptance checks — `reason`, `notes`, `superset_group`, `interval`, the
 //      whole cardio field set. A closed schema would quietly amputate them.
 //   2. A schema constrains STRUCTURE only. Anything JSON Schema cannot state — "at
-//      least one of changes/cardio/days", non-blank after trimming, cross-field
+//      least one of changes/days", non-blank after trimming, cross-field
 //      agreement — stays in the predicate as a residual check after the schema.
 
 import { AUTONOMY_TIERS, BRAIN_DOMAINS, BRAIN_RISK_CLASSES } from "./brain/decision-contract.js";
@@ -98,9 +98,10 @@ const RUN_INTERVAL_SCHEMA: JsonSchema = {
   },
 };
 
-// The cardio prescription field set, shared by a `cardio[]` entry and a `changes[]`
-// entry carrying kind:"cardio" (which profile.ts routes through the SAME
-// toRunPrescription mapper, so it must offer the same slots).
+// The cardio prescription field set. A session SUGGESTION may still carry a cardio item
+// (SESSION_ITEM_SCHEMA below); the PLAN schemas no longer offer these slots at all —
+// plan days hold strength only (migration 110) and the week's runs come from the run
+// engine and the athlete's stated run days, never from a proposal.
 const RUN_PRESCRIPTION_PROPERTIES: Record<string, JsonSchema> = {
   label: { type: "string" },
   exercise: { type: "string" },
@@ -151,23 +152,6 @@ const PLAN_CHANGE_SCHEMA: JsonSchema = {
     reason: { type: "string" },
     reason_provenance: REASON_PROVENANCE_SCHEMA,
     note: { type: ["string", "null"] },
-    // kind:"cardio" reroutes this entry to the run prescription mapper.
-    kind: { type: "string" },
-    ...RUN_PRESCRIPTION_PROPERTIES,
-  },
-};
-
-const PLAN_CARDIO_SCHEMA: JsonSchema = {
-  type: "object",
-  additionalProperties: true,
-  required: ["day_number", "label"],
-  properties: {
-    day_number: { type: "integer", minimum: 1 },
-    reason: { type: "string" },
-    reason_provenance: REASON_PROVENANCE_SCHEMA,
-    note: { type: ["string", "null"] },
-    ...RUN_PRESCRIPTION_PROPERTIES,
-    label: { type: "string", minLength: 1 },
   },
 };
 
@@ -182,7 +166,6 @@ export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
     rationale_provenance: REASON_PROVENANCE_SCHEMA,
     as_of_date: { type: ["string", "null"] },
     changes: { type: "array", items: PLAN_CHANGE_SCHEMA },
-    cardio: { type: "array", items: PLAN_CARDIO_SCHEMA },
     days: {
       type: "array",
       minItems: 1,
@@ -194,39 +177,20 @@ export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
           day_number: { type: "integer", minimum: 1 },
           name: { type: "string", minLength: 1 },
           focus: { type: ["string", "null"] },
-          // These numeric bounds stay PERMISSIVE, for two reasons that compound.
-          // First, the plan applier has no equivalent of the session normalizer's
-          // cross-family guard: savePlanDay (src/repo/plan.ts) branches on
-          // kind:"cardio", reads only that family's slots, and clamps rather than
-          // throws (numOrNull / `it.sets ?? 3`), so a slot from the other family is
-          // ignored here, never fatal. Second and decisively, THIS schema is also an
-          // acceptance gate — isPlanProposalResult runs it through matchesJsonSchema —
-          // so a bound tightened here does not merely steer a decoder, it REJECTS a
-          // proposal the applier would have handled, and the rotation burns. The
-          // exclusiveMinimum discipline belongs to SESSION_ITEM_SCHEMA alone, whose
-          // consumer genuinely throws and whose schema is never read as a gate.
-          // A first-class rest day (v99). "rest" days carry NO items — the emptiness
-          // is the prescription — which is why `items` no longer requires one: a week
-          // that names its rest day is a better week than one that leaves a hole where
-          // the seam should be, and the server refuses a rest day that carries work.
-          // NO ENUM, deliberately. A nullable enum is the construct an enforcing
-          // backend is most likely to reject (see CONFIDENCE_SCHEMA), and this schema
-          // is ALSO an acceptance gate — matchesJsonSchema has no anyOf, so the enum
-          // would have to carry the null itself. The vocabulary is not lost: the
-          // applier owns it. planDayTypeForRestructure (src/repo/plan.ts) THROWS on
-          // anything but 'training' | 'rest', so an off-vocabulary string cannot
-          // persist however permissive the schema is.
+          // These numeric bounds stay PERMISSIVE: THIS schema is also an acceptance
+          // gate — isPlanProposalResult runs it through matchesJsonSchema — so a bound
+          // tightened here does not merely steer a decoder, it REJECTS a proposal the
+          // applier would have handled (it clamps, `it.sets ?? 3`), and the rotation
+          // burns. The exclusiveMinimum discipline belongs to SESSION_ITEM_SCHEMA alone,
+          // whose consumer genuinely throws and whose schema is never read as a gate.
           //
-          // The `description` is MODEL-VISIBLE and must say what `days` actually
-          // means, which is not what a single-day write means. A `days` payload is a
-          // RESTRUCTURE: it declares the whole week, so an omitted day_type is
-          // 'training', never "leave it as it was" — a week that never names its rest
-          // day has no rest day. Keep this wording in step with the prose twin in
-          // src/prompt/coach.ts; the schema suite asserts they agree.
-          day_type: {
-            type: ["string", "null"],
-            description: "training|rest; omitted or null means training — name 'rest' explicitly for the rest day",
-          },
+          // A `days` payload is a RESTRUCTURE of the LIFTING week: every day is a
+          // strength day. There is no `day_type` and no run item any more (migration
+          // 110) — a rest day is a weekday the athlete neither lifts nor runs, and runs
+          // come from the stated run days. The applier strips a run item and drops a day
+          // left with nothing to lift (strengthDaysOnly, src/repo/plan.ts), so a legacy
+          // payload is never refused for them; the prose twin in src/prompt/coach.ts
+          // simply stops asking. Keep the two in step; the schema suite asserts it.
           items: {
             type: "array",
             minItems: 0,
@@ -249,9 +213,6 @@ export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
                 mode: { type: ["string", "null"] },
                 // Read only by plan-quality's canonicalGroup — measured DROPPED when unnamed.
                 muscle_group: { type: ["string", "null"] },
-                interval_json: { type: ["string", "null"] },
-                // A days item may be strength OR kind:"cardio", which takes these.
-                ...RUN_PRESCRIPTION_PROPERTIES,
               },
             },
           },
@@ -268,10 +229,11 @@ export function isPlanProposalResult(value: unknown): boolean {
   // "At least one action array" and "a change names an exercise OR a swap" are
   // disjunctions JSON Schema cannot state without a top-level union — which the
   // enforcing CLIs reject (claude requires a top-level object `type`). They stay here.
+  // A run-only payload (a legacy `cardio[]` week) is not a plan proposal any more:
+  // runs are the run engine's, so a payload with nothing but runs has no action here.
   const hasChanges = Array.isArray(p.changes);
-  const hasCardio = Array.isArray(p.cardio);
   const hasDays = Array.isArray(p.days);
-  if (!hasChanges && !hasCardio && !hasDays) return false;
+  if (!hasChanges && !hasDays) return false;
 
   const changesOk = !hasChanges || p.changes.every((raw: unknown) => {
     const change = object(raw);
@@ -281,16 +243,6 @@ export function isPlanProposalResult(value: unknown): boolean {
       !reasonHasHistoricalReference(change.reason) || validReasonProvenance(change.reason_provenance);
     return reasonOk && (text(change.exercise) || !!(swap && text(swap.from) && text(swap.to)));
   });
-  const cardioOk =
-    !hasCardio ||
-    p.cardio.every((raw: unknown) => {
-      const cardio = object(raw);
-      return (
-        !!cardio &&
-        text(cardio.label) &&
-        (!reasonHasHistoricalReference(cardio.reason) || validReasonProvenance(cardio.reason_provenance))
-      );
-    });
   const daysOk =
     !hasDays ||
     p.days.every((raw: unknown) => {
@@ -310,12 +262,12 @@ export function isPlanProposalResult(value: unknown): boolean {
     });
   const rationaleOk =
     !reasonHasHistoricalReference(p.rationale) || validReasonProvenance(p.rationale_provenance);
-  return changesOk && cardioOk && daysOk && rationaleOk;
+  return changesOk && daysOk && rationaleOk;
 }
 
 export function hasPlanProposalActions(value: unknown): boolean {
   const p = object(value);
-  return !!p && [p.changes, p.cardio, p.days].some((items) => Array.isArray(items) && items.length > 0);
+  return !!p && [p.changes, p.days].some((items) => Array.isArray(items) && items.length > 0);
 }
 
 export function isExerciseExplanationResult(value: unknown): boolean {
@@ -408,6 +360,8 @@ export const DAY_READ_SCHEMA: JsonSchema = {
     why: { type: ["string", "null"] },
     focus: { type: ["string", "null"] },
     est_minutes: { type: ["number", "null"] },
+    // Read by dayread.ts: the fresh deciding brake a quieter-than-baseline read cites.
+    brake: { type: ["string", "null"] },
     ...COACH_READ_PROTOCOL_PROPERTIES,
   },
 };
@@ -1662,8 +1616,8 @@ export const SPECIALIST_OPINION_SCHEMA: JsonSchema = {
 // strictPlanItem / strictPlanDay ALLOWS: those run `ownKeysAllowed`, so an extra
 // named slot is not a harmless extra — a change that carries it is rejected whole.
 // That is why `day_type` is absent from the restructure day (strictPlanDay allows
-// day_number/name/focus/items only) and why the cardio family here is smaller than
-// the plan proposal's.
+// day_number/name/focus/items only) and why there is no run family at all: plan days
+// hold strength only (migration 110), and strictPlanItem refuses a kind:"cardio" item.
 const CONFERENCE_PLAN_CHANGE_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: true,
@@ -1707,14 +1661,7 @@ const CONFERENCE_PLAN_ITEM_SCHEMA: JsonSchema = {
     target_seconds: { type: ["integer", "null"], minimum: 1, maximum: 3_600 },
     superset_group: { type: ["integer", "null"], minimum: 1, maximum: 100 },
     mode: { type: ["string", "null"], description: "reps|timed" },
-    kind: { type: ["string", "null"], description: "strength|cardio" },
-    target_distance_km: { type: ["number", "null"], minimum: 0, maximum: 1_000 },
-    target_duration_min: { type: ["number", "null"], minimum: 0, maximum: 1_440 },
-    target_zone: { type: ["string", "null"] },
-    // An OBJECT here, not an array: strictPlanItem reads `interval` through asRecord,
-    // unlike RUN_INTERVAL_SCHEMA on the plan-proposal side. An array would be rejected.
-    interval: { type: ["object", "null"], additionalProperties: true },
-    interval_json: { type: ["string", "null"] },
+    kind: { type: ["string", "null"], description: "strength" },
   },
 };
 

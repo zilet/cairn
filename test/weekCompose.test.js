@@ -48,10 +48,13 @@ test("the first-week prompt states the ring, the placement rules, and a days-onl
   assert.match(prompt, /THE WEEK IS A RING/, "the template repeats — Sunday sits next to Monday");
   assert.match(prompt, /Day 7 sits right next to Day 1/, "spells the seam out rather than implying it");
   assert.match(prompt, /NO TWO HARD DAYS BACK TO BACK/, "carries the adjacency rule");
-  assert.match(prompt, /LONG RUN GOES LATE/, "long run late in the week");
-  assert.match(prompt, /QUALITY sits MID-WEEK/, "quality mid-week");
+  assert.match(prompt, /THE LONG RUN SITS LATE/, "long run late in the week");
+  assert.match(prompt, /QUALITY MID-WEEK/, "quality mid-week");
   assert.match(prompt, /"days"/, "emits the days restructure contract");
-  assert.match(prompt, /"kind": "cardio"/, "the week can carry endurance prescriptions");
+  // Runs and rest are the calendar's: the composer writes the LIFTING days alone.
+  assert.doesNotMatch(prompt, /"kind": "cardio"/, "the contract carries no run prescription item");
+  assert.match(prompt, /your "days" are the LIFTING days alone/, "the run engine builds the runs");
+  assert.match(prompt, /never write a rest day as a day of its own/, "rest is a calendar fact, not a day");
   assert.match(prompt, /Emit "days" only/, "a first week has nothing to edit, so no changes/cardio arrays");
   assert.ok(!/\b\d{1,3}\s*\/\s*100\b/.test(prompt), "no 0-100 score leaks into the prompt");
 });
@@ -59,7 +62,7 @@ test("the first-week prompt states the ring, the placement rules, and a days-onl
 test("with no endurance sport on record the prompt forbids inventing running", () => {
   assert.match(
     buildWeekComposePrompt(),
-    /do NOT\s*\n?\s*invent running/,
+    /NO endurance sport, no race and no runs, compose the lifting week alone/,
     "a strength-only athlete gets the lifting week alone"
   );
 });
@@ -162,9 +165,10 @@ test("the already-built sentence is a variant set: it rotates, and every phrasin
 
 test("a composed week routes as a STRUCTURAL change: it announces first, then lands at the boundary", () => {
   repo.setSettings({ lead_mode: "lead" });
-  // Exactly the payload composeWeek persists: a whole-week `days` restructure carrying
-  // BOTH lanes. Built here rather than through the agent so the tier assertion is about
-  // the autonomy layer, not about a CLI's reply (mirrors brainAutonomyPlanPaths).
+  // A whole-week `days` restructure, here in the LEGACY both-lanes shape an older agent
+  // reply could still carry. Built here rather than through the agent so the tier
+  // assertion is about the autonomy layer, not about a CLI's reply (mirrors
+  // brainAutonomyPlanPaths).
   const proposal = repo.createProposal("auto", "compose the first training week", "", {
     summary: "A first week: three lifting days with the long run late.",
     days: [
@@ -197,10 +201,13 @@ test("a composed week routes as a STRUCTURAL change: it announces first, then la
   const due = applyDueAnnouncedDecisions(out.effective_date);
   assert.deepEqual(due.applied, [out.decision.id]);
   const plan = repo.getPlan();
-  assert.equal(plan.length, 3, "the boundary pass wrote the composed week");
+  // Plan days hold strength only: the run-only day is dropped at apply — the week's
+  // runs come from the stated run days and the run engine, never a plan row.
+  assert.equal(plan.length, 2, "the boundary pass wrote the composed lifting week");
+  assert.deepEqual(plan.map((day) => day.day_number).sort(), [1, 3]);
   const items = plan.flatMap((day) => day.items ?? []);
   assert.ok(items.some((item) => String(item.kind ?? "strength") !== "cardio"), "the week carries strength work");
-  assert.ok(items.some((item) => String(item.kind) === "cardio"), "and endurance work, in the same week");
+  assert.ok(!items.some((item) => String(item.kind) === "cardio"), "and no run is stored as a plan item");
 });
 
 // ---------- routing ----------
@@ -226,15 +233,16 @@ test("compose_week shares the proposal task class with the coach draft and the e
 // to stdout ahead of our payload, so a sentinel anchors the parse.
 const RESULT_SENTINEL = "===CAIRN_TEST_RESULT===";
 
-test("blank slate + a week-shaped agent reply → a draft carrying BOTH lanes, and the compose itself changes no plan day", () => {
+test("blank slate + a week-shaped agent reply → a draft carrying the lifting week, and the compose itself changes no plan day", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-week-compose-"));
   try {
     const configPath = path.join(dataDir, "agents.json");
     // A canned agent that replies with a real WEEK. The built-in `stub` cannot stand in
     // here: its reply is a `changes` array, which is an edit to a plan that does not
-    // exist yet.
+    // exist yet. The reply is the lifting week alone (WEEK_COMPOSE_SCHEMA): the runs
+    // are the run engine's, on the stated run days.
     const reply = JSON.stringify({
-      summary: "A calm first week: two lifting days and an easy long run.",
+      summary: "A calm first week: two lifting days, clear of the weekend long run.",
       days: [
         {
           day_number: 1,
@@ -247,12 +255,6 @@ test("blank slate + a week-shaped agent reply → a draft carrying BOTH lanes, a
           name: "Upper",
           focus: "upper",
           items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: null }],
-        },
-        {
-          day_number: 6,
-          name: "Long run",
-          focus: "endurance",
-          items: [{ kind: "cardio", exercise: "Long run", target_distance_km: 8, target_zone: "Z2" }],
         },
       ],
     });
@@ -299,11 +301,11 @@ test("blank slate + a week-shaped agent reply → a draft carrying BOTH lanes, a
     const out = JSON.parse(res.stdout.slice(idx + RESULT_SENTINEL.length).trim());
 
     assert.equal(out.ok, true);
-    assert.equal(out.days, 3, "the draft carries the whole week");
+    assert.equal(out.days, 2, "the draft carries the whole lifting week");
     assert.equal(out.status, "draft", "a composed week is a DRAFT — the agent never applies its own change");
     const items = out.parsed.days.flatMap((day) => day.items ?? []);
     assert.ok(items.some((item) => String(item.kind ?? "strength") !== "cardio"), "a strength item is in the week");
-    assert.ok(items.some((item) => String(item.kind) === "cardio"), "and a cardio item is too");
+    assert.ok(!items.some((item) => String(item.kind) === "cardio"), "and no run item — runs are the engine's");
     assert.equal(out.planDays, 0, "composing changed no plan day — only the propose→apply seam can");
     assert.ok(
       out.instruction.startsWith(COMPOSE_WEEK_INSTRUCTION),

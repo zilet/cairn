@@ -85,19 +85,10 @@ function appliedProposal({ agent = "coach", createdAt, changes }) {
   ).run(agent, createdAt, JSON.stringify({ changes }));
 }
 
-test("lastAppliedRunPlanDate reports the LOCAL day an auto run plan landed on", () => {
-  appliedProposal({ agent: "auto-run-plan", createdAt: EVENING, changes: [] });
-  assert.equal(
-    runWithTimeZone(ET, () => repo.lastAppliedRunPlanDate()),
-    LOCAL_DAY,
-    "an evening apply belongs to the evening's day, not to tomorrow",
-  );
-  assert.notEqual(runWithTimeZone(ET, () => repo.lastAppliedRunPlanDate()), UTC_DAY);
-});
-
-test("a midday apply reads identically either way — the fix only moves the boundary", () => {
-  appliedProposal({ agent: "auto-run-plan", createdAt: "2026-06-23 15:00:00", changes: [] });
-  assert.equal(runWithTimeZone(ET, () => repo.lastAppliedRunPlanDate()), LOCAL_DAY);
+// lastAppliedRunPlanDate is retired with the plan's run rows (migration 110): runs are
+// computed live by the run engine, so no run plan is ever "applied" on a local day.
+test("the applied-run-plan day is retired with the plan's run rows", () => {
+  assert.equal(repo.lastAppliedRunPlanDate, undefined);
 });
 
 test("appliedProgressionDeloads counts an evening cut into its own local day", () => {

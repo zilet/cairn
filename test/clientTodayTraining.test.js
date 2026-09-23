@@ -33,7 +33,6 @@ function loadTodayTraining(overrides = {}) {
     },
     fmtWeight: (lb) => `${Number(lb)} lb`,
     fmtKm: (km) => Number(km).toFixed(1),
-    cardioLabel: (it) => it.label || it.note || it.exercise || "Cardio",
     ...overrides,
   };
   context.window = context;
@@ -125,50 +124,14 @@ test("Today training move count ignores holds", () => {
   );
 });
 
-test("Today cardio helpers classify efforts and build log phrases", () => {
+// The cardio verb / log-phrase / dominant-zone helpers served only the run card
+// inside Today's lift list. Runs left the strength plan (they live in Plan ->
+// Endurance), so that card and its helpers are gone.
+test("Today training helpers no longer carry the retired run-card helpers", () => {
   const today = loadTodayTraining();
-  assert.equal(
-    today.cardioDominantZone([
-      { zone: 2, secs: 1800 },
-      { zone: 4, secs: 600 },
-    ]),
-    "mostly Z2"
-  );
-  assert.equal(
-    today.cardioDominantZone([
-      { zone: 2, secs: 200 },
-      { zone: 4, secs: 180 },
-      { zone: 3, secs: 150 },
-    ]),
-    "Z2"
-  );
-  assert.equal(today.cardioDominantZone([]), "");
-
-  assert.equal(today.cardioVerb("long run"), "run");
-  assert.equal(today.cardioVerb("bike workout"), "ride");
-  assert.equal(today.cardioVerb("pool swim"), "swim");
-  assert.equal(today.cardioVerb("erg row"), "row");
-  assert.equal(today.cardioVerb("trail hike"), "hike");
-  assert.equal(today.cardioVerb("recovery walk"), "walk");
-  assert.equal(today.cardioVerb("conditioning"), "effort");
-
-  for (const [label, modality, phrase] of [
-    ["Long ride", "ride", "rode 30 min"],
-    ["Bike intervals", "ride", "rode 30 min"],
-    ["Long swim", "swim", "swam 30 min"],
-    ["Row intervals", "row", "rowed 30 min"],
-  ]) {
-    assert.equal(today.cardioVerb(label), modality);
-    assert.equal(today.cardioLogPhrase({ exercise: label, target_duration_min: 30 }), phrase);
-  }
-
-  assert.equal(
-    today.cardioLogPhrase({ label: "Long run", target_distance_km: 8.2, target_zone: "Z2" }),
-    "ran 8.2 km (Z2)"
-  );
-  assert.equal(today.cardioLogPhrase({ label: "Easy ride", target_duration_min: 45 }), "rode 45 min");
-  assert.equal(today.cardioLogPhrase({ exercise: "Trail hike", target_duration_min: 90 }), "hiked 90 min");
-  assert.equal(today.cardioLogPhrase({ exercise: "Recovery walk", target_duration_min: 30 }), "walked 30 min");
+  assert.equal(today.cardioDominantZone, undefined);
+  assert.equal(today.cardioVerb, undefined);
+  assert.equal(today.cardioLogPhrase, undefined);
 });
 
 // Supporting mode is what keeps a card to ONE authoritative number: the header

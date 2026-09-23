@@ -104,7 +104,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "compose_week",
-    "Compose the athlete's FIRST training week when they have NO plan at all — strength and endurance in one Mon–Sun template, placed so the week composes rather than collides (the template repeats, so Sunday is next to Monday: no two hard days back to back across that seam, long run late, quality mid-week). This is the only producer that can write a week from nothing; apply_progression, apply_run_plan and evolve_program all require an existing plan and no-op without one. Emits a DRAFT `days` restructure and routes it through the autonomy layer, which treats a whole-week restructure as structural — it announces first and lands at a natural boundary with one-tap Undo; under 'review_everything' it stays a DRAFT to review then apply_proposal. Never applies anything itself. Returns { ok:true, proposal, autonomy, days } or the designed { ok:false, error } at 200 — including when a week already exists, where the error points at evolve_program.",
+    "Compose the athlete's FIRST lifting week when they have NO plan at all — strength days only, placed around the runs the run engine builds on their stated run days so the week composes rather than collides (the template repeats, so Sunday is next to Monday: no two hard days back to back across that seam). This is the only producer that can write a week from nothing; apply_progression, apply_run_plan and evolve_program all require an existing plan and no-op without one. Emits a DRAFT `days` restructure and routes it through the autonomy layer, which treats a whole-week restructure as structural — it announces first and lands at a natural boundary with one-tap Undo; under 'review_everything' it stays a DRAFT to review then apply_proposal. Never applies anything itself. Returns { ok:true, proposal, autonomy, days } or the designed { ok:false, error } at 200 — including when a week already exists, where the error points at evolve_program.",
     {
       agent: z
         .string()
@@ -334,7 +334,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "apply_run_plan",
-    "Build this week's deterministic run mix (weeklyRunPlan) and route it through Cairn's autonomy policy. Lead mode lands the bounded update at a natural boundary with Undo; review posture keeps a draft. setWeeklyRuns preserves strength work and interval structure. Returns { ok:true, proposal, autonomy } or { ok:false, error }.",
+    "RETIRED: runs are not written onto the plan any more — this week's runs are computed live by the run engine on the athlete's stated run days (read them with get_run_plan / get_training_agenda). Always returns the designed { ok:false, error } explaining that; kept so older callers get a clear answer.",
     { date: z.string().optional() },
     async ({ date }) => asText(buildRunPlanWithAutonomy(date))
   );

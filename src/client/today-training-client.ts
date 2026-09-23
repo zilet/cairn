@@ -1,5 +1,5 @@
 // @ts-check
-// Pure Today training/cardio helpers for the vanilla PWA.
+// Pure Today training helpers for the vanilla PWA.
 
 type ClientPrescription = import("../contracts/client.js").ClientPrescription;
 type ClientProgressionAction = import("../contracts/client.js").ClientProgressionAction;
@@ -175,57 +175,6 @@ function rxMoveCount(rxByExercise: ClientPrescriptionRecord | null | undefined):
   return Object.values(rxByExercise || {}).filter((rx) => rx && rx.action && rx.action !== "hold").length;
 }
 
-function cardioDominantZone(zones: unknown): string {
-  const rows = (Array.isArray(zones) ? zones : [])
-    .map((z) => {
-      const row = z && typeof z === "object" ? (z as Record<string, unknown>) : {};
-      return {
-        zi: Math.min(5, Math.max(1, finiteNumber(row.zone) || 0)),
-        secs: finiteNumber(row.secs) || 0,
-      };
-    })
-    .filter((z) => z.zi >= 1 && z.secs > 0);
-  if (!rows.length) return "";
-  const total = rows.reduce((t, z) => t + z.secs, 0);
-  if (total <= 0) return "";
-  const top = rows.reduce((a, b) => (b.secs > a.secs ? b : a));
-  return top.secs / total >= 0.5 ? `mostly Z${top.zi}` : `Z${top.zi}`;
-}
-
-function cardioVerb(label: unknown): string {
-  const l = String(label || "").toLowerCase().replace(/[_-]+/g, " ");
-  // Explicit modality always outranks generic workout modifiers. Otherwise
-  // "Bike intervals" or "Long swim" silently becomes a run, corrupting both
-  // capture language and synced-effort matching.
-  if (/\b(ride|riding|bike|biking|cycle|cycling|cyclist|spin|spinning)\b/.test(l)) return "ride";
-  if (/\b(swim|swimming)\b/.test(l)) return "swim";
-  if (/\b(row|rowing|erg)\b/.test(l)) return "row";
-  if (/\b(hike|hiking)\b/.test(l)) return "hike";
-  if (/\b(walk|walking)\b/.test(l)) return "walk";
-  if (/\b(run|running|jog|jogging)\b/.test(l)) return "run";
-  if (/\b(tempo|intervals?|long)\b/.test(l)) return "run";
-  return "effort";
-}
-
-function cardioLogPhrase(item: Record<string, unknown>): string {
-  const label = item.label || item.note || item.exercise || "";
-  const verb = cardioVerb(label);
-  const pastTense: Record<string, string> = {
-    run: "ran",
-    ride: "rode",
-    swim: "swam",
-    row: "rowed",
-    hike: "hiked",
-    walk: "walked",
-  };
-  const v = pastTense[verb] || "did";
-  const bits = [];
-  if (item.target_distance_km != null) bits.push(`${fmtKm(item.target_distance_km)} km`);
-  else if (item.target_duration_min != null) bits.push(`${Math.round(Number(item.target_duration_min))} min`);
-  if (item.target_zone) bits.push(`(${item.target_zone})`);
-  return `${v} ${bits.join(" ")}`.trim() || `${v} my planned ${verb}`;
-}
-
 Object.assign(globalThis, {
   CairnTodayTraining: {
     RX_ACTION: TODAY_RX_ACTION,
@@ -233,9 +182,6 @@ Object.assign(globalThis, {
     exRxVaryMenuHtml,
     exRxLineHtml,
     rxMoveCount,
-    cardioDominantZone,
-    cardioVerb,
-    cardioLogPhrase,
     requestRxSwap,
     refreshWeeklyPlanAfterSwap,
   },

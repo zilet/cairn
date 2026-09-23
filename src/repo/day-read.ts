@@ -21,6 +21,7 @@ import {
   type EasyOverrideSoftening,
   type FreshStatementField,
   LEARNED_TRAIN_WINDOW_DAYS,
+  learnedQuietStep,
   OUTCOME_SOFTENING_WINDOW_DAYS,
   type OutcomeFeedbackSignal,
   readAdherenceModel,
@@ -59,9 +60,11 @@ import {
   planDayLabel,
   resolveSessionPlanDay,
   selectAdaptivePlanDay,
+  calendarDayRead,
 } from "./plan-selection.js";
 import { liftDows } from "./strength-schedule.js";
-import { getEnduranceGoal, getPrimaryDiscipline } from "./profile.js";
+import { getEnduranceGoal, getEnduranceSchedule, getPrimaryDiscipline, WEEKDAY_NAMES } from "./profile.js";
+import { RUN_KIND_LABELS } from "./run-edit.js";
 import { activeRecoveryWeek } from "./recovery-week.js";
 import { getProgramState, weeklyKm, type MesocycleState } from "./program-state.js";
 import { runIntensityDiscipline } from "./run-progression.js";
@@ -74,6 +77,7 @@ import {
   dimensionIsAdviceOnly,
   hasFreshBrake,
   hasFreshDecidingBrake,
+  freshDecidingBrakeFields,
   lifeCapacityIsCommitment,
   planningSignalState,
   signalVoice,
@@ -155,6 +159,7 @@ import {
   STACKED_DAYS_CAVEAT,
   STACKED_LOAD_CEILING_WHY,
   STACKED_LOAD_WHY,
+  STATED_RUN_DAY_WHY,
   TEMPLATE_REST_DAY_WHY,
   TRAIN_CAVEAT_LEAD,
   TRAIN_CLEAR_WHY,
@@ -1201,6 +1206,34 @@ const LEARNED_TRAIN_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.endurance_volume_spike.code,
 ]);
 
+// ---------- which brakes the day-read AGENT may cite to read a train day quieter ----------
+// (2026-09-23; enforced in src/dayread.ts, listed to the agent by src/prompt/day.ts.)
+// A fresh DECIDING brake on the day's own signal state (freshDecidingBrakeFields) — the
+// set the posture ladder itself treats as able to decide a day; advisory and advice-only
+// cautions never qualify. And none at all on a day the athlete's OWN RECORD opened
+// (the long loop, or the easy ladder): those loops run only with no floor, no clinical
+// constraint and no fresh safety override live, so every brake still on that board is
+// one the record has already outweighed — citing it would hand the agent back the
+// quiet read the calibration just retired.
+const RECORD_OPENED_CODES: ReadonlySet<string> = new Set([
+  DAY_READ_OUTCOMES.learned_train_anyway.code,
+  DAY_READ_OUTCOMES.outcome_feedback_open.code,
+]);
+
+export function dayReadCitableBrakes(
+  baseline: { kind?: unknown; decision?: { rule_code?: unknown } | null; signals?: Record<string, any> } | null | undefined
+): string[] {
+  if (baseline?.kind !== "train") return [];
+  if (RECORD_OPENED_CODES.has(String(baseline.decision?.rule_code ?? ""))) return [];
+  const dimensions = baseline.signals?.signal_state?.dimensions;
+  if (!dimensions || typeof dimensions !== "object") return [];
+  try {
+    return freshDecidingBrakeFields(dimensions);
+  } catch {
+    return [];
+  }
+}
+
 function freshSafetyOverride(signalState: UnifiedSignalState): boolean {
   return Object.values(signalState.dimensions).some((dimension) =>
     dimension.evidence.some(
@@ -1209,13 +1242,15 @@ function freshSafetyOverride(signalState: UnifiedSignalState): boolean {
   );
 }
 
-// Is any strength group of this plan day still carrying a session's worth of work? The
-// one acute question, asked through acuteGates — never a re-derived window.
+// Is any strength group of this plan day still DEEPLY carrying work? The one acute
+// question, asked through acuteGates — never a re-derived window. Only a deep residual
+// keeps a quiet read shut: a group just over its own bar holds its load on the card
+// (saturated-substitution / the envelope's shallow hold), it does not cancel the day.
 function planDayAcutelySaturated(dayNumber: number, date: string): boolean {
   const groups = planDayStrengthGroups().find((day) => day.day_number === dayNumber)?.groups ?? [];
   if (!groups.length) return false;
-  const gates = acuteGates(date) as Map<string, { saturated: boolean }>;
-  return groups.some((group) => gates.get(group)?.saturated === true);
+  const gates = acuteGates(date) as Map<string, { deep: boolean }>;
+  return groups.some((group) => gates.get(group)?.deep === true);
 }
 
 // ---------- the athlete's own morning outranks a fortnight of history ----------
@@ -1767,10 +1802,47 @@ function computeDayRead(
     return adaptivePick;
   }
 
-  // Is the day the rotation points at the week's programmed REST day? A pure QUESTION
-  // — asked by rules that only need to step aside, so it publishes nothing.
+  // Is today a RUN day with no lifting? Runs are never plan rows, so this is read off
+  // the calendar and the rolling agenda, never the plan. The AGENDA is the truth for
+  // which day actually carries the run: a stated "Saturday or Sunday" long run is
+  // placed on one of the two, and the other is simply free. So a non-lifting weekday is
+  // a run day when the agenda has an open run suggested for it (with no run days stated,
+  // that is the only way in), or — with no agenda to ask — when it is a stated run
+  // weekday. A pure question; memoized like the pick.
+  let runDayMemo: { kind: string; label: string } | null | undefined;
+  function calendarRunToday(): { kind: string; label: string } | null {
+    if (runDayMemo !== undefined) return runDayMemo;
+    runDayMemo = null;
+    const pick = adaptivePlanDay();
+    if (!pick || pick.day_number != null || pick.day_type === "training") return runDayMemo;
+    const agenda = signalInput(() => flexibleTrainingAgenda(d), null);
+    if (agenda?.available) {
+      const intent = agenda.intents.find((i) => i.status === "open" && i.suggested_date === d) ?? null;
+      if (intent) runDayMemo = { kind: intent.kind, label: intent.label || RUN_KIND_LABELS[intent.kind] || "Run" };
+      return runDayMemo;
+    }
+    if (pick.day_type === "run") {
+      const kind = String(pick.selection?.calendar?.run_kind ?? "any");
+      runDayMemo = { kind, label: RUN_KIND_LABELS[kind] ?? "Run" };
+    }
+    return runDayMemo;
+  }
+
+  // Is today the week's REST day — a weekday that carries neither a lift nor a run
+  // (plan days hold strength only, so the calendar and the agenda answer)? A pure
+  // QUESTION — asked by rules that only need to step aside, so it publishes nothing.
   function templateRestDay(): boolean {
-    return adaptivePlanDay()?.day_type === "rest";
+    const type = adaptivePlanDay()?.day_type;
+    return (type === "rest" || type === "run") && !calendarRunToday();
+  }
+
+  // On a non-lifting weekday, WHICH calendar day it is — published whatever rule ends up
+  // speaking, so the envelope's card and the today strength line agree with the agenda
+  // even on a morning a protective floor wins the read (a stated "Saturday or Sunday"
+  // long-run weekday the run did not land on is rest, not a run day). Asked only when the
+  // (cheap) calendar read says today is not a lifting day.
+  if (signalInput(() => calendarDayRead(d)?.kind ?? "lift", "lift") !== "lift") {
+    (signals as any).calendar_day = calendarRunToday() ? "run" : "rest";
   }
 
   // The plan day there is a SESSION on. A rest day is deliberately not one: every
@@ -1785,11 +1857,12 @@ function computeDayRead(
     selection?: Record<string, any>;
   } | null {
     const selected = adaptivePlanDay();
-    if (!selected || selected.day_type === "rest") return null;
+    // A calendar rest or run day has no plan day — nothing is due to lift.
+    if (!selected || selected.day_number == null || selected.day_type !== "training") return null;
     // Published HERE and only here: the provenance belongs on the reads that are
     // actually pointing at a session.
     if (selected.selection) (signals as any).plan_selection = selected.selection;
-    return selected;
+    return { day_number: selected.day_number, focus: selected.focus, selection: selected.selection };
   }
 
   // Already trained today is a FACT, not a suggestion — and it takes PRECEDENCE over
@@ -2515,6 +2588,7 @@ function computeDayRead(
         (signals as any).template_rest_day = {
           day_number: pick?.day_number ?? null,
           focus: pick?.focus ?? null,
+          calendar: true,
         };
         return {
           outcome: DAY_READ_OUTCOMES.template_rest_day,
@@ -2544,6 +2618,30 @@ function computeDayRead(
             focus: null,
             why: pickDayVariant(VOLUME_SPIKE_WHY, d, "endurance_volume_spike"),
             est_minutes: 25,
+            signals,
+          },
+        };
+      },
+    },
+    {
+      // ---- the week's own run day ----
+      // A stated run weekday with no lifting on it. Placed just above the planned-
+      // training rule for the same reason the rest day is: every floor with a reason of
+      // its own speaks first, and keeps its own words — a short night still reads as a
+      // short night. The run itself (distance, effort) is the Endurance plan's; the read
+      // names the day. An easy run day reads easy; a quality, long or unkinded one reads
+      // as the day's training. Still a suggestion — the athlete drives.
+      resolve: () => {
+        const runDay = calendarRunToday();
+        if (!runDay) return null;
+        (signals as any).stated_run_day = { run_kind: runDay.kind };
+        return {
+          outcome: DAY_READ_OUTCOMES.stated_run_day,
+          read: {
+            kind: (runDay.kind === "easy" ? "easy" : "train") as "easy" | "train",
+            focus: runDay.label,
+            why: pickDayVariant(STATED_RUN_DAY_WHY, d, "stated_run_day"),
+            est_minutes: null,
             signals,
           },
         };
@@ -2881,9 +2979,14 @@ function computeDayRead(
   // yesterday check and the Brief's reason all key on the softening rather than on the
   // rule it replaced — and tomorrow's model sees how THIS day went, so the loop is
   // self-correcting in both directions.
-  // ---- the long loop: a MATURE learning says "train, with the caveat" ----
+  // ---- the long loop: a WEIGHTED learning moves the quiet read in proportion ----
   // Asked only of a non-floor quiet read, and only the day's due session may open — the
   // same run-stacking hold as the easy ladder below. It outranks both short ladders.
+  // The weight picks the rung (learnedQuietStep): an easy read opens to "train, with
+  // the caveat"; a rest read eases to easy first and opens only on heavier evidence.
+  // A rest read whose open is held (nothing due, the due legs saturated, a second run)
+  // still takes the one-rung ease — the evidence is about the quiet read, and easy
+  // movement asks nothing of the held session.
   const learnedEligible =
     (ruleRead.kind === "rest" || ruleRead.kind === "easy") &&
     LEARNED_TRAIN_CODES.has(ruleOutcome.code) &&
@@ -2902,14 +3005,24 @@ function computeDayRead(
         null
       )
     : null;
-  const learnedDay = trainAnyway?.mature && !freshStatementHold(d, checkin) ? suggestedPlanDay() : null;
+  const learnedStep =
+    trainAnyway && !freshStatementHold(d, checkin) ? learnedQuietStep(ruleRead.kind, trainAnyway.weight) : null;
+  const learnedDay = learnedStep === "train" ? suggestedPlanDay() : null;
   const learnedOpen =
     learnedDay != null &&
     !signalInput(() => planDayAcutelySaturated(learnedDay.day_number, d), true) &&
     !((hardCardioYesterday || !!runNoveltyYesterday) && planDayIsCardioOnly(learnedDay.day_number));
-  if (trainAnyway) (signals as any).learned_train_anyway = { ...trainAnyway, applied: learnedOpen };
+  const learnedEase = !learnedOpen && learnedStep != null && ruleRead.kind === "rest";
+  if (trainAnyway) {
+    (signals as any).learned_train_anyway = {
+      ...trainAnyway,
+      applied: learnedOpen || learnedEase,
+      step: learnedOpen ? "train" : learnedEase ? "easy" : null,
+    };
+  }
   const softenRest =
     !learnedOpen &&
+    !learnedEase &&
     outcomeFeedback?.active === true &&
     ruleRead.kind === "rest" &&
     SOFTENABLE_REST_CODES.has(ruleOutcome.code) &&
@@ -2941,6 +3054,7 @@ function computeDayRead(
   // day. See freshStatementHold() for the scope — same day, severe end, absence inert.
   const softenEasyEarned =
     !learnedOpen &&
+    !learnedEase &&
     !softenRest &&
     easyFeedback?.active === true &&
     ruleRead.kind === "easy" &&
@@ -2986,9 +3100,13 @@ function computeDayRead(
       ...(heldByStatement ? { held_by_statement: heldByStatement } : {}),
     } satisfies EasyOutcomeFeedbackSignal;
   }
+  // The learned one-rung ease speaks through the short ladder's own soften outcome: the
+  // same move (rest → easy, no focus, the easy clock) on the same kind of evidence —
+  // they trained through reads like this and it went fine — so it takes the same
+  // registered reasons and wording rather than a second vocabulary for one sentence.
   const outcome = learnedOpen
     ? DAY_READ_OUTCOMES.learned_train_anyway
-    : softenRest
+    : softenRest || learnedEase
       ? DAY_READ_OUTCOMES.outcome_feedback_soften
       : softenEasy
         ? DAY_READ_OUTCOMES.outcome_feedback_open
@@ -3001,7 +3119,7 @@ function computeDayRead(
         why: pickDayVariant(LEARNED_TRAIN_WHY, d, "learned_train_anyway"),
         est_minutes: 60,
       }
-    : softenRest
+    : softenRest || learnedEase
     ? {
         ...ruleRead,
         kind: "easy" as const,
@@ -3245,25 +3363,50 @@ export interface WeekAheadDay {
 
 export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; summary: string } {
   const d = String(date).slice(0, 10);
+  // Plan days hold STRENGTH only (migration 110): every plan day is a lifting day. The
+  // runs come from the RUN ENGINE's week as the rolling agenda dates it (the same
+  // intents the Endurance tab and the week strip read), falling back to the athlete's
+  // stated run weekdays when the agenda has nothing to say — so a runner still sees
+  // their runs in the floor without any run living on the plan. A rest day is simply
+  // a weekday with neither.
   const planDays = db
-    .prepare(`SELECT id, day_number, name, focus, day_type FROM plan_days ORDER BY day_number`)
-    .all() as any[];
-  if (!planDays.length) return { days: [], summary: "" };
-  // Per-day modality from plan_items so the floor REFLECTS a runner's prescribed
-  // cardio instead of hardcoding every day to a lift — without this a runner sees
-  // zero runs in the Today week-ahead floor. cardio-only → run; cardio+strength →
-  // mixed; otherwise lift. (The agentic weekAheadRead still layers the real shape.)
-  const counts = new Map<number, { cardio: number; strength: number }>();
-  for (const r of db
     .prepare(
-      `SELECT plan_day_id AS id,
-            SUM(CASE WHEN kind='cardio' THEN 1 ELSE 0 END) AS cardio,
-            SUM(CASE WHEN kind='cardio' THEN 0 ELSE 1 END) AS strength
-       FROM plan_items GROUP BY plan_day_id`
+      `SELECT pd.id, pd.day_number, pd.name, pd.focus FROM plan_days pd
+        WHERE COALESCE(pd.day_type, 'training') != 'rest'
+          AND EXISTS (SELECT 1 FROM plan_items pi
+                       WHERE pi.plan_day_id = pd.id AND COALESCE(pi.kind, 'strength') != 'cardio')
+        ORDER BY pd.day_number`
     )
-    .all() as any[]) {
-    counts.set(Number(r.id), { cardio: Number(r.cardio) || 0, strength: Number(r.strength) || 0 });
+    .all() as any[];
+  let statedRuns: { dow: number; kind: string; label: string | null }[] = [];
+  try {
+    const agenda = flexibleTrainingAgenda(d);
+    if (agenda.available) {
+      statedRuns = agenda.intents
+        .map((intent) => {
+          const on = intent.completion?.date ?? intent.suggested_date;
+          return on
+            ? { dow: new Date(`${on}T00:00:00Z`).getUTCDay(), kind: String(intent.kind), label: intent.label || null }
+            : null;
+        })
+        .filter((run): run is { dow: number; kind: string; label: string | null } => !!run);
+    }
+  } catch {
+    statedRuns = [];
   }
+  if (!statedRuns.length) {
+    try {
+      statedRuns = (getEnduranceSchedule()?.days ?? []).map((day) => ({
+        dow: Number(day.dow),
+        kind: String(day.kind),
+        label: null,
+      }));
+    } catch {
+      statedRuns = [];
+    }
+  }
+  statedRuns.sort((a, b) => ((a.dow + 6) % 7) - ((b.dow + 6) % 7));
+  if (!planDays.length && !statedRuns.length) return { days: [], summary: "" };
   // Grounded once, defensively: a purpose-line failure must never break the
   // deterministic week-ahead floor (same posture as the `notes` block below).
   let meso: MesocycleState | null = null;
@@ -3278,29 +3421,27 @@ export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; su
   } catch {
     goal = null;
   }
-  const days: WeekAheadDay[] = planDays.map((pd) => {
-    const c = counts.get(Number(pd.id)) || { cardio: 0, strength: 0 };
-    // The week's REST day is a day_type, never an item count. Reading it from the
-    // counts alone made a 0/0 day read "lift" — a rest day handed a block-purpose
-    // note, in the floor AND in the agentic week-ahead this same list seeds.
-    const kind: WeekAheadDay["kind"] =
-      String(pd.day_type ?? "training").toLowerCase() === "rest"
-        ? "rest"
-        : c.cardio > 0
-          ? c.strength > 0
-            ? "mixed"
-            : "run"
-          : "lift";
-    return {
-      day: null,
-      kind,
-      label: String(pd.focus || pd.name || `Day ${pd.day_number}`)
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 60),
-      note: weekAheadDayNote(kind, d, meso, goal),
-    };
-  });
+  const days: WeekAheadDay[] = [
+    ...planDays.map(
+      (pd): WeekAheadDay => ({
+        day: null,
+        kind: "lift",
+        label: String(pd.focus || pd.name || `Day ${pd.day_number}`)
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 60),
+        note: weekAheadDayNote("lift", d, meso, goal),
+      })
+    ),
+    ...statedRuns.map(
+      (run): WeekAheadDay => ({
+        day: WEEKDAY_NAMES[run.dow] ?? null,
+        kind: "run",
+        label: String(run.label || RUN_KIND_LABELS[run.kind] || "Run").slice(0, 60),
+        note: weekAheadDayNote("run", d, meso, goal),
+      })
+    ),
+  ];
   // Reflect PROGRAM STATE in the floor's summary (plain words, never a fabricated
   // calendar): if a deload is about due, or muscle groups are DUE, or a lift needs
   // a deload, say so as a forward-looking note so the look-ahead is honest about
@@ -3341,17 +3482,12 @@ export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; su
 export function planDayPurpose(planDayId: number, date = localDateISO()): string | null {
   try {
     const d = String(date).slice(0, 10);
+    // Plan days hold strength only, so a day with items is a lifting day.
     const row = db
-      .prepare(
-        `SELECT SUM(CASE WHEN kind='cardio' THEN 1 ELSE 0 END) AS cardio,
-                SUM(CASE WHEN kind='cardio' THEN 0 ELSE 1 END) AS strength
-           FROM plan_items WHERE plan_day_id = ?`
-      )
+      .prepare(`SELECT COUNT(*) AS strength FROM plan_items WHERE plan_day_id = ? AND COALESCE(kind, 'strength') != 'cardio'`)
       .get(planDayId) as any;
-    const cardio = Number(row?.cardio) || 0;
-    const strength = Number(row?.strength) || 0;
-    if (cardio === 0 && strength === 0) return null;
-    const kind: WeekAheadDay["kind"] = cardio > 0 ? (strength > 0 ? "mixed" : "run") : "lift";
+    if (!(Number(row?.strength) > 0)) return null;
+    const kind: WeekAheadDay["kind"] = "lift";
     const meso = getProgramState(d)?.mesocycle ?? null;
     const goal = getEnduranceGoal(d);
     return weekAheadDayNote(kind, d, meso, goal);

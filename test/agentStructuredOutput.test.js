@@ -266,18 +266,23 @@ test("every field the prose contract solicits is NAMED in the schema", () => {
   // the mitigation — naming is. These lists mirror the prose twins in
   // src/prompt/coach.ts, src/prompt/health.ts and src/prompt/nutrition.ts.
   const props = (schema) => Object.keys(schema.properties ?? {});
+  // Plan days hold STRENGTH only (migration 110): the prose twin no longer solicits a
+  // run, so the plan schema names the strength slots and no run family at all.
   const daysItems = PLAN_PROPOSAL_SCHEMA.properties.days.items.properties.items.items;
-  for (const field of ["target_distance_km", "target_duration_min", "target_zone", "muscle_group", "superset_group"]) {
+  for (const field of ["exercise", "sets", "rep_low", "rep_high", "target_weight", "muscle_group", "superset_group"]) {
     assert.ok(props(daysItems).includes(field), `days[].items[] must name ${field}`);
   }
+  for (const field of ["target_distance_km", "target_duration_min", "target_zone", "interval"]) {
+    assert.ok(!props(daysItems).includes(field), `days[].items[] no longer names the run field ${field}`);
+  }
   const change = PLAN_PROPOSAL_SCHEMA.properties.changes.items;
+  for (const field of ["exercise", "swap", "remove", "sets", "rep_low", "rep_high", "target_weight", "target_seconds", "reason", "reason_provenance"]) {
+    assert.ok(props(change).includes(field), `changes[] must name ${field}`);
+  }
   for (const field of ["target_distance_km", "target_duration_min", "target_zone", "kind", "label"]) {
-    assert.ok(props(change).includes(field), `changes[] must name ${field} (a kind:"cardio" change takes them)`);
+    assert.ok(!props(change).includes(field), `changes[] no longer names the run field ${field}`);
   }
-  const cardio = PLAN_PROPOSAL_SCHEMA.properties.cardio.items;
-  for (const field of ["exercise", "day_name", "focus", "interval"]) {
-    assert.ok(props(cardio).includes(field), `cardio[] must name ${field}`);
-  }
+  assert.equal(PLAN_PROPOSAL_SCHEMA.properties.cardio, undefined, "no cardio[] week is solicited");
   const meal = MEAL_PLAN_STRUCTURE_SCHEMA.properties.days.items.properties.meals.items;
   for (const field of ["items", "carbs_g", "fat_g"]) {
     assert.ok(props(meal).includes(field), `a meal must name ${field}`);

@@ -529,21 +529,22 @@ test("the canonical recovery-week draft is stamped domain 'recovery' at write ti
 });
 
 // ---------------------------------------------------------------------------
-// (5) undoing a LEGACY rollback snapshot never eats the week's rest day
+// (5) undoing a LEGACY rollback snapshot restores the strength week, never a rest row
 // ---------------------------------------------------------------------------
 
-// A v1 (array-shaped) training-plan rollback payload predates `day_type` entirely, so
-// every day in it is silent about the field — and replacePlan reads an omitted
-// day_type as 'training'. Undoing an old decision would therefore have flattened a
-// rest day the athlete added afterwards: a deletion nobody asked for, hiding inside
-// an Undo. The v2 three-way path reverts day_type explicitly and is untouched.
-test("a legacy plan rollback restores the old week without deleting the rest day", () => {
+// A v1 (array-shaped) training-plan rollback payload predates `day_type` entirely and
+// may carry an empty "Rest" day. Rest is a CALENDAR fact now (a weekday neither lifted
+// nor run on), never a plan row: the Undo restores the old strength prescriptions and
+// the empty day is not resurrected as a plan day — the week's rest still reads from
+// the calendar.
+test("a legacy plan rollback restores the old week and resurrects no rest row", () => {
   repo.replacePlan([
     {
       day_number: 1,
       name: "Push",
       items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 }],
     },
+    // A rest day in a restructure is dropped — it is the calendar's, not a plan day.
     { day_number: 2, name: "Rest", focus: null, day_type: "rest", items: [] },
     {
       day_number: 3,
@@ -551,6 +552,7 @@ test("a legacy plan rollback restores the old week without deleting the rest day
       items: [{ exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 80 }],
     },
   ]);
+  assert.equal(repo.getPlanDay(2), null, "the restructure stored no rest row");
 
   // The snapshot as it would have been written before v99: no day_type anywhere.
   const legacy = [
@@ -583,7 +585,7 @@ test("a legacy plan rollback restores the old week without deleting the rest day
   const out = revertDecision(id, "put it back");
   assert.equal(out.ok, true, out.error);
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 175, "the old prescription came back");
-  assert.equal(repo.getPlanDay(2).day_type, "rest", "and the seam the athlete added since survived it");
-  assert.equal(repo.getPlanDay(2).items.length, 0);
+  assert.equal(repo.getPlanDay(2), null, "the snapshot's empty day is not resurrected as a plan row");
   assert.equal(repo.getPlanDay(3).day_type, "training");
+  assert.equal(repo.getPlanDay(3).items[0].target_weight, 80, "the untouched strength day survives the Undo");
 });

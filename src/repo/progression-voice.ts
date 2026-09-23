@@ -146,6 +146,29 @@ export const ASSIST_PEEL: VoiceSet = [
   "You owned the range — a little less assist next time; it's moving.",
 ];
 
+// The log has been doing this unassisted; the card still said assist. The assist
+// comes off and the range is worked at bodyweight — never more help than the
+// athlete has shown they no longer need.
+export const ASSIST_RETIRED_HOLD: VoiceSet = [
+  "Your recent sets have been at bodyweight — the assist comes off the card; own the range unassisted before anything is added.",
+  "You've been doing these without help — the card drops the assist and holds you at bodyweight while the reps settle.",
+  "The log says bodyweight, not assist — that's where the card sits now; keep the range clean at bodyweight.",
+];
+
+export const ASSIST_RETIRED_OVERLOAD: VoiceSet = [
+  "You've capped the range at bodyweight — the assist comes off for good; add a rep or a set next.",
+  "Bodyweight sets at the top of the range — no more assist on the card; the next step is another rep or set.",
+  "You're past needing the assist — the card moves to bodyweight, and the next win is a rep or a set.",
+];
+
+// The range was capped, but at a lighter load than the card's — that proves the
+// lighter load. The card's number is the next one to own.
+export const LIGHTER_SESSION_HOLD: VoiceSet1 = [
+  (load) => `Your last session capped the range at a lighter weight — ${load} is the next one to own before it moves.`,
+  (load) => `That clean run was lighter than the card — stay at ${load} and cap the range there first.`,
+  (load) => `The reps were there at a lighter load; ${load} is where they need to land next, then it moves.`,
+];
+
 export const EARNED_RANGE_OVERLOAD: VoiceSet2 = [
   (high, low) =>
     `Every set hit ${high} at RIR 2+ — take the earned step up, then reset to ${low} reps and build the range back up.`,
@@ -700,6 +723,8 @@ export function progressionVoicePhrases(): string[] {
     BODYWEIGHT_OVERLOAD,
     ASSIST_TO_BODYWEIGHT,
     ASSIST_PEEL,
+    ASSIST_RETIRED_HOLD,
+    ASSIST_RETIRED_OVERLOAD,
     EARNED_OPEN_OVERLOAD,
     DOSE_UNFINISHED_HOLD,
     DOSE_PARTIAL_HOLD,
@@ -756,6 +781,7 @@ export function progressionVoicePhrases(): string[] {
     [PUSH_TOP_SET_OVERLOAD_REPS, 12],
     [PLAN_BEHIND_OVERLOAD, "50 lb"],
     [PLAN_BEHIND_HOLD, "50 lb"],
+    [LIGHTER_SESSION_HOLD, "150 lb"],
     [PLAN_UNSET_OVERLOAD, "95 lb"],
     [PLAN_UNSET_HOLD, "95 lb"],
     [STRAIN_BRAKE_HOLD, "recent soreness is running high"],

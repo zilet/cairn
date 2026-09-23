@@ -15,6 +15,7 @@ const fwd = (n) => new Date(new Date(`${REF}T00:00:00Z`).getTime() + n * 864e5).
 
 function reset() {
   resetTables("logged_sets", "sessions", "activities", "plan_items", "plan_days", "app_state", "profile");
+  RUNS = [];
 }
 beforeEach(reset);
 
@@ -40,30 +41,24 @@ function upperDay(dayNumber, name = "Push") {
   ]);
 }
 
-// A run lands as a cardio plan item whose label rides in `note` (see savePlanDay).
+// Runs are never plan items (migration 110): the week's runs come from the run engine
+// (weeklyRunPlan), injected as `opts.runPlan`. runDay() records a run into THIS test's
+// engine week, and layout() hands that week to the read — the collision laws below are
+// unchanged; only the run SOURCE moved off the stored plan.
+let RUNS = [];
+const runKind = (label) => (/long/i.test(label) ? "long" : /tempo|interval|quality|threshold/i.test(label) ? "quality" : "easy");
 function runDay(dayNumber, label, km) {
-  const existing = repo.getPlanDay(dayNumber);
-  const strength = (existing?.items ?? [])
-    .filter((it) => it.kind !== "cardio")
-    .map((it) => ({
-      exercise: it.exercise,
-      sets: it.sets,
-      rep_low: it.rep_low,
-      rep_high: it.rep_high,
-      target_weight: it.target_weight,
-    }));
-  repo.savePlanDay(dayNumber, existing?.name ?? label, existing?.focus ?? "Endurance", [
-    ...strength,
-    { kind: "cardio", exercise: label, target_distance_km: km, target_zone: "Z2" },
-  ]);
+  RUNS.push({ day_number: dayNumber, label, kind_label: runKind(label), target_distance_km: km });
 }
+const runPlanOf = () => (RUNS.length ? { available: true, week_start: REF, runs: [...RUNS] } : null);
+const layout = (date, opts = {}) => weekLayoutRead(date, { runPlan: runPlanOf(), ...opts });
 
 // ── the heaviest-lower distinction ──────────────────────────────────────────
 
 test("the heaviest lower day is the loaded compound one, not whichever lower day comes first", () => {
   accessoryLowerDay(2);
   heavyLowerDay(5);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.deepEqual(read.heavy_lower_days.sort(), [2, 5], "both days read as lower work");
   assert.deepEqual(read.heaviest_lower_days, [5], "only the barbell day is the week's heaviest");
 });
@@ -72,7 +67,7 @@ test("an accessory lower day next to the long run is NOT a collision", () => {
   heavyLowerDay(2);
   accessoryLowerDay(5);
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, true, `expected clean, got ${JSON.stringify(read.collisions)}`);
   assert.equal(read.suggestion, null);
 });
@@ -83,7 +78,7 @@ test("calf work never makes a day a leg day at all", () => {
     { exercise: "Standing Calf Raise", sets: 4, rep_low: 10, rep_high: 15, target_weight: 90 },
   ]);
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.ok(!read.heavy_lower_days.includes(5), "a calf day is not a lower day");
   assert.equal(read.clean, true);
 });
@@ -94,14 +89,14 @@ test("the heaviest lower day the day BEFORE the long run collides", () => {
   heavyLowerDay(5);
   upperDay(2);
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, false);
   const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
   assert.ok(hit, `expected a long-run collision, got ${JSON.stringify(read.collisions)}`);
   assert.deepEqual(hit.days, [5, 6]);
   assert.match(hit.detail, /before/, "the detail says which side it sits on");
   assert.equal(read.long_run_day, 6);
-  assert.equal(read.source, "plan");
+  assert.equal(read.source, "run_plan");
 });
 
 test("the heaviest lower day the day AFTER the long run is the intended stacking, not a collision", () => {
@@ -111,7 +106,7 @@ test("the heaviest lower day the day AFTER the long run is the intended stacking
   heavyLowerDay(7);
   upperDay(2);
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, true, JSON.stringify(read.collisions));
   assert.equal(read.suggestion, null);
 });
@@ -119,7 +114,7 @@ test("the heaviest lower day the day AFTER the long run is the intended stacking
 test("a quality run beside the heaviest lower day collides on its own kind", () => {
   heavyLowerDay(3);
   runDay(4, "Tempo run", 10);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, false);
   assert.equal(read.quality_run_day, 4);
   assert.ok(read.collisions.some((c) => c.kind === "heavy_lower_adjacent_quality"));
@@ -131,7 +126,7 @@ test("three consecutive hard days read as a stack even when no single pair is ad
   heavyLowerDay(4);
   accessoryLowerDay(5); // lower, but not the heaviest — so no adjacency collision of its own
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, false);
   const stack = read.collisions.find((c) => c.kind === "double_day_stack");
   assert.ok(stack, `expected a stack, got ${JSON.stringify(read.collisions)}`);
@@ -143,15 +138,16 @@ test("three consecutive hard days read as a stack even when no single pair is ad
 });
 
 test("a 4-day plan never suggests moving a lift onto a day the plan doesn't have", () => {
-  // Only day_numbers 1-4 exist in this plan at all — days 5-7 are not real slots for
-  // this athlete. Every real day is already spoken for (two lower days, the heaviest
-  // lower day, and the long run), so the smallest clearing move must come back null
-  // rather than reach past the plan's own days for an empty-looking slot.
+  // Only days 1-4 are part of this athlete's week at all — days 5-7 are not real slots.
+  // Every real day is already spoken for (two lower days, the heaviest lower day on
+  // 1-3, and the engine's long run on 4 — runs are never plan days), so the smallest
+  // clearing move must come back null rather than reach past the plan's own days for
+  // an empty-looking slot.
   accessoryLowerDay(1, "Legs light A");
   accessoryLowerDay(2, "Legs light B");
   heavyLowerDay(3, "Heavy legs");
   runDay(4, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, false);
   if (read.suggested_move) {
     assert.ok(
@@ -167,7 +163,7 @@ test("two hard days back to back are not a stack", () => {
   accessoryLowerDay(5);
   heavyLowerDay(2);
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.ok(!read.collisions.some((c) => c.kind === "double_day_stack"));
 });
 
@@ -177,21 +173,21 @@ test("the suggested move actually clears the week", () => {
   heavyLowerDay(5);
   upperDay(2);
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.ok(read.suggested_move, "a week with room to move gets a concrete move");
   assert.equal(read.suggested_move.from, 5);
 
   // Apply exactly what it suggested and re-read: the week must come back clean.
   repo.deletePlanDay(read.suggested_move.from);
   heavyLowerDay(read.suggested_move.to);
-  const after = weekLayoutRead(REF);
+  const after = layout(REF);
   assert.equal(after.clean, true, `after the suggested move: ${JSON.stringify(after.collisions)}`);
 });
 
 test("the suggestion moves the STRENGTH day and never the run", () => {
   heavyLowerDay(5);
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.notEqual(read.suggested_move?.to, read.long_run_day, "never proposes the run's own day");
   assert.notEqual(read.suggested_move?.from, read.long_run_day, "the day being moved is the lifting day");
   assert.ok(!/move (the |your )?(long |quality )?run/i.test(read.suggestion), read.suggestion);
@@ -203,7 +199,7 @@ test("a week with nowhere clean to move says so instead of inventing a slot", ()
   heavyLowerDay(5, "Heavy legs");
   runDay(6, "Long run", 18);
   runDay(7, "Tempo run", 10);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, false);
   assert.equal(read.suggested_move, null, "no slot clears it");
   assert.ok(read.suggestion, "it still says something");
@@ -211,22 +207,30 @@ test("a week with nowhere clean to move says so instead of inventing a slot", ()
 });
 
 test("the week's rest day is never offered as the slot for a heavy lower day", () => {
-  // Day 4 is the seam the athlete wrote into their own week (v99). It carries no
-  // items, so by muscle groups alone it is indistinguishable from a thin training
-  // day — and it is also the NEAREST free slot to day 5, which is exactly how the
-  // clearing search used to land on it.
+  // Rest is a CALENDAR fact (migration 110): a weekday that is neither a lifting
+  // weekday nor a stated run weekday. Thursday is that seam here — the athlete lifts
+  // Mon/Tue/Wed/Fri and runs Saturday — and it is also the NEAREST weekday to Friday,
+  // which is exactly how the clearing search used to land on a rest day.
   upperDay(1);
   upperDay(2, "Pull");
   upperDay(3, "Push 2");
-  repo.savePlanDay(4, "Rest", null, [], { day_type: "rest" });
   heavyLowerDay(5);
   runDay(6, "Long run", 18);
+  const weekdayMap = new Map([
+    [1, 1],
+    [2, 2],
+    [3, 3],
+    [5, 5],
+  ]);
+  const planBefore = JSON.stringify(repo.getPlan());
 
-  const read = weekLayoutRead(REF);
+  const read = layout(REF, { strengthDows: [1, 2, 3, 5], enduranceDows: [6], weekdayMap });
+  assert.equal(read.space, "calendar");
   assert.equal(read.clean, false, "the heavy lower day still sits beside the long run");
-  assert.notEqual(read.suggested_move?.to, 4, "a rest day is not a slot");
+  assert.ok(read.suggested_move, read.suggestion);
+  assert.notEqual(read.suggested_move.to, 4, "a rest day is not a slot");
   assert.equal(/thursday/i.test(String(read.suggestion ?? "")), false, `day 4 named anyway: ${read.suggestion}`);
-  assert.equal(repo.getPlanDay(4).day_type, "rest", "and the read changed nothing");
+  assert.equal(JSON.stringify(repo.getPlan()), planBefore, "and the read changed nothing");
 });
 
 test("every athlete-facing sentence holds the reading grammar", () => {
@@ -234,7 +238,7 @@ test("every athlete-facing sentence holds the reading grammar", () => {
   runDay(6, "Long run", 18);
   runDay(3, "Tempo run", 10);
   for (let i = 0; i < 14; i++) {
-    const read = weekLayoutRead(fwd(i));
+    const read = layout(fwd(i));
     assert.equal(read.clean, false);
     assert.equal(violatesReadingGrammar(read.suggestion), null, read.suggestion);
     for (const c of read.collisions) assert.equal(violatesReadingGrammar(c.detail), null, c.detail);
@@ -246,16 +250,16 @@ test("the suggestion is a variant set, not one literal printed every morning", (
   upperDay(2);
   runDay(6, "Long run", 18);
   const said = new Set();
-  for (let i = 0; i < 10; i++) said.add(weekLayoutRead(fwd(i)).suggestion);
+  for (let i = 0; i < 10; i++) said.add(layout(fwd(i)).suggestion);
   assert.ok(said.size > 1, `a stable week must not print one sentence forever (got ${said.size})`);
   // …and the same morning always reads the same way.
-  assert.equal(weekLayoutRead(REF).suggestion, weekLayoutRead(REF).suggestion);
+  assert.equal(layout(REF).suggestion, layout(REF).suggestion);
 });
 
 test("nothing in the read is a score", () => {
   heavyLowerDay(5);
   runDay(6, "Long run", 18);
-  const json = JSON.stringify(weekLayoutRead(REF));
+  const json = JSON.stringify(layout(REF));
   assert.ok(!/\d{1,3}\s*\/\s*100/.test(json), "no 0-100 grade");
   assert.ok(!/"score"/.test(json), "no bare score field");
 });
@@ -273,7 +277,7 @@ test("Sunday's long run into Monday's heavy lower day is read on the ring — an
   heavyLowerDay(1);
   upperDay(3);
   runDay(7, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, true, JSON.stringify(read.collisions));
   assert.equal(read.long_run_day, 7);
 });
@@ -282,7 +286,7 @@ test("the mirror case reads the other way round: Sunday's legs sit BEFORE Monday
   heavyLowerDay(7);
   upperDay(3);
   runDay(1, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
   assert.ok(hit, `expected a long-run collision, got ${JSON.stringify(read.collisions)}`);
   assert.deepEqual(hit.days, [1, 7]);
@@ -294,7 +298,7 @@ test("a wrap collision is a quality-run collision too", () => {
   heavyLowerDay(7);
   upperDay(4);
   runDay(1, "Tempo run", 10);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.quality_run_day, 1);
   assert.ok(read.collisions.some((c) => c.kind === "heavy_lower_adjacent_quality"));
 });
@@ -309,7 +313,7 @@ test("the clearing move is judged on the RING — the day after Sunday's long ru
   heavyLowerDay(6, "Heavy legs");
   runDay(7, "Long run", 18);
   runDay(5, "Tempo run", 10);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, false);
   assert.equal(read.suggested_move?.from, 6);
   assert.equal(read.suggested_move?.to, 1, "Monday, the day after the long run, clears it");
@@ -333,11 +337,11 @@ test("with a lifting week mapped, the read judges the CALENDAR, not the template
     [5, 1],
   ]);
   const runPlan = { available: true, runs: [{ day_number: 6, label: "Long run", kind_label: "long", target_distance_km: 16 }] };
-  const template = weekLayoutRead(REF, { runPlan });
+  const template = layout(REF, { runPlan });
   assert.equal(template.space, "template");
   assert.equal(template.clean, true, "on the ring nothing is adjacent");
 
-  const calendar = weekLayoutRead(REF, { runPlan, strengthDows: [1, 2, 3, 4, 5], enduranceDows: [6], weekdayMap });
+  const calendar = layout(REF, { runPlan, strengthDows: [1, 2, 3, 4, 5], enduranceDows: [6], weekdayMap });
   assert.equal(calendar.space, "calendar");
   assert.equal(calendar.clean, false, JSON.stringify(calendar.collisions));
   const hit = calendar.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
@@ -357,22 +361,23 @@ test("with a lifting week mapped, the read judges the CALENDAR, not the template
   assert.equal(violatesReadingGrammar(calendar.suggestion), null, calendar.suggestion);
 });
 
-test("in calendar space a stored-plan run day is translated through the same map", () => {
-  // The plan's own "Long Run" day is template day 3; the athlete's week puts it on
-  // Sunday (dow 0). Monday's heavy legs are the morning after — clean; but Saturday
-  // is not in this week's map, so nothing invents a Saturday.
+test("in calendar space the engine's run slot is already a weekday and is read as-is", () => {
+  // Runs are never plan items, so there is no template run day to translate: the
+  // engine's slots are weekday-numbered (Mon = 1). The athlete lifts Mon/Tue and runs
+  // long on Sunday (dow 0 -> weekday 7). Monday's heavy legs are the morning after —
+  // clean; and Saturday is not in this week's map, so nothing invents a Saturday.
   heavyLowerDay(1, "Lower");
   upperDay(2, "Upper");
-  runDay(3, "Long run", 16);
+  runDay(7, "Long run", 16);
   const weekdayMap = new Map([
     [1, 1],
     [2, 2],
-    [0, 3],
   ]);
-  const read = weekLayoutRead(REF, { strengthDows: [1, 2], enduranceDows: [0], weekdayMap });
+  const read = layout(REF, { strengthDows: [1, 2], enduranceDows: [0], weekdayMap });
   assert.equal(read.space, "calendar");
-  assert.equal(read.source, "plan");
+  assert.equal(read.source, "run_plan");
   assert.equal(read.long_run_day, 7, "Sunday, as a weekday index");
+  assert.deepEqual(read.heavy_lower_days, [1], "the heavy day lands only on the weekday the map gives it");
   assert.equal(read.clean, true, JSON.stringify(read.collisions));
 });
 
@@ -384,7 +389,7 @@ test("a hard stretch that straddles Sunday reads as ONE stack, not two short one
   accessoryLowerDay(7, "Legs light B");
   accessoryLowerDay(1, "Legs light C");
   runDay(5, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   const stack = read.collisions.find((c) => c.kind === "double_day_stack");
   assert.ok(stack, `expected a stack, got ${JSON.stringify(read.collisions)}`);
   assert.deepEqual(stack.days, [5, 6, 7, 1], "the stretch is kept in template order across the seam");
@@ -397,7 +402,7 @@ test("REGRESSION: an ordinary mid-week adjacency still flags exactly as it did",
   heavyLowerDay(1);
   upperDay(4);
   runDay(2, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, false);
   const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
   assert.ok(hit, `expected a long-run collision, got ${JSON.stringify(read.collisions)}`);
@@ -410,7 +415,7 @@ test("a week that is genuinely clear stays clear on the ring", () => {
   heavyLowerDay(3);
   upperDay(1);
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, true, `expected clean, got ${JSON.stringify(read.collisions)}`);
 });
 
@@ -423,7 +428,7 @@ test("a week that is genuinely clear stays clear on the ring", () => {
 test("a plan day outside 1–7 is ignored rather than faking an adjacency", () => {
   heavyLowerDay(8, "Legs (out of range)");
   runDay(7, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, true, `expected clean, got ${JSON.stringify(read.collisions)}`);
   assert.deepEqual(read.heavy_lower_days, [], "day 8 is not on the ring");
   assert.deepEqual(read.heaviest_lower_days, []);
@@ -432,7 +437,7 @@ test("a plan day outside 1–7 is ignored rather than faking an adjacency", () =
 
 test("an off-ring run day is ignored too, and the real week still reads", () => {
   heavyLowerDay(3);
-  const read = weekLayoutRead(REF, {
+  const read = layout(REF, {
     runPlan: {
       available: true,
       runs: [
@@ -449,7 +454,7 @@ test("an off-ring run day is ignored too, and the real week still reads", () => 
 // ── absence is neutral ──────────────────────────────────────────────────────
 
 test("no plan at all reads clean", () => {
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, true);
   assert.equal(read.source, "none");
   assert.deepEqual(read.collisions, []);
@@ -460,7 +465,7 @@ test("a lifter with no running reads clean however the legs are placed", () => {
   heavyLowerDay(5);
   accessoryLowerDay(6);
   upperDay(7);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, true);
   assert.equal(read.long_run_day, null);
   assert.equal(read.source, "none");
@@ -469,7 +474,7 @@ test("a lifter with no running reads clean however the legs are placed", () => {
 test("a runner with no lifting reads clean", () => {
   runDay(6, "Long run", 18);
   runDay(3, "Tempo run", 10);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.equal(read.clean, true);
   assert.deepEqual(read.heavy_lower_days, []);
 });
@@ -485,17 +490,20 @@ test("with no runs in the plan, an injected run plan is what the week is compose
       { day_number: 2, kind_label: "quality" },
     ],
   };
-  const read = weekLayoutRead(REF, { runPlan });
+  const read = layout(REF, { runPlan });
   assert.equal(read.source, "run_plan");
   assert.equal(read.clean, false);
   assert.ok(read.collisions.some((c) => c.kind === "heavy_lower_adjacent_long_run"));
 });
 
-test("the stored plan outranks an injected run plan", () => {
+test("the engine's run plan outranks the agenda", () => {
   heavyLowerDay(5);
-  runDay(2, "Long run", 18); // the plan says Tuesday; the live builder says Saturday
-  const read = weekLayoutRead(REF, { runPlan: { available: true, runs: [{ day_number: 6, kind_label: "long" }] } });
-  assert.equal(read.source, "plan");
+  // The engine's week says Tuesday; today's rolling agenda has drifted to Saturday.
+  const read = weekLayoutRead(REF, {
+    runPlan: { available: true, runs: [{ day_number: 2, kind_label: "long" }] },
+    agenda: { available: true, intents: [{ kind: "long", status: "open", provisional_day_number: 6 }] },
+  });
+  assert.equal(read.source, "run_plan");
   assert.equal(read.long_run_day, 2);
   assert.equal(read.clean, true, "Tuesday's long run is nowhere near Friday's legs");
 });
@@ -509,19 +517,27 @@ test("the flexible agenda is the last resort, and completed intents don't count"
       { kind: "quality", status: "completed", provisional_day_number: 4 },
     ],
   };
-  const read = weekLayoutRead(REF, { agenda });
+  const read = layout(REF, { agenda });
   assert.equal(read.source, "agenda");
   assert.equal(read.long_run_day, 6);
   assert.equal(read.quality_run_day, null, "a completed intent is not a day to plan around");
   assert.equal(read.clean, false);
 });
 
-test("with stated run days the engine's week outranks a stale template run item", () => {
+test("a leftover template run item is stripped, so the engine's week is the run source", () => {
   // Live shape: stated Thursday quality, Lower A on Wednesday, and a leftover "Long
   // run" cardio item on the template's Saturday. Read first, that item hid the quality
-  // run entirely and the week read clean.
+  // run entirely and the week read clean. A cardio plan item is now stripped at write
+  // (migration 110), so it can never outrank the engine again.
   heavyLowerDay(3, "Lower A");
-  runDay(6, "Long run", 16);
+  repo.savePlanDay(6, "Long run", "Endurance", [
+    { kind: "cardio", exercise: "Long run", target_distance_km: 16, target_zone: "Z2" },
+  ]);
+  assert.equal(
+    (repo.getPlanDay(6)?.items ?? []).filter((it) => it.kind === "cardio").length,
+    0,
+    "the cardio item never lands in the plan"
+  );
   const runPlan = {
     available: true,
     runs: [
@@ -530,16 +546,17 @@ test("with stated run days the engine's week outranks a stale template run item"
       { day_number: 7, kind_label: "long" },
     ],
   };
-  const read = weekLayoutRead(REF, { runPlan, enduranceDows: [0, 2, 4] });
+  const read = layout(REF, { runPlan, enduranceDows: [0, 2, 4] });
   assert.equal(read.source, "run_plan");
   assert.equal(read.quality_run_day, 4);
   const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_quality");
   assert.ok(hit, JSON.stringify(read.collisions));
   assert.deepEqual(hit.days, [3, 4]);
 
-  // No stated run days: the stored plan still leads, exactly as before.
-  const unstated = weekLayoutRead(REF, { runPlan });
-  assert.equal(unstated.source, "plan");
+  // No stated run days: there is no stored-plan source to fall back to any more.
+  const unstated = layout(REF, { runPlan });
+  assert.equal(unstated.source, "run_plan");
+  assert.equal(unstated.quality_run_day, 4);
 });
 
 test("a second compound lower day the day before the long run collides even when it isn't the heaviest", () => {
@@ -548,7 +565,7 @@ test("a second compound lower day the day before the long run collides even when
     { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
   ]);
   runDay(6, "Long run", 16);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.deepEqual(read.heaviest_lower_days, [3], "Lower A is still the week's heaviest");
   const hit = read.collisions.find((c) => c.kind === "heavy_lower_adjacent_long_run");
   assert.ok(hit, JSON.stringify(read.collisions));
@@ -577,7 +594,7 @@ test("the run engine never hands this read a collision it could have placed arou
   const plan = repo.weeklyRunPlan(REF, { block: { week_index: 1 } });
   const long = plan.runs.find((r) => r.kind_label === "long");
   assert.equal(long.day_number, 4, "Thursday is the slot with air on both sides");
-  const read = weekLayoutRead(REF, { runPlan: plan });
+  const read = layout(REF, { runPlan: plan });
   assert.equal(read.source, "run_plan");
   assert.ok(
     !read.collisions.some((c) => c.kind === "heavy_lower_adjacent_long_run"),
@@ -605,7 +622,7 @@ test("the quality run never lands ON a heavy leg day — the ring pass looks pas
   // passed "not the day AFTER a leg day" and the hard run was prescribed onto the
   // squat day itself. Thursday is clear on both sides and two days off the long run.
   assert.equal(quality.day_number, 4, `the quality run must not sit on Tuesday's legs (got ${quality.day_number})`);
-  const read = weekLayoutRead(REF, { runPlan: plan });
+  const read = layout(REF, { runPlan: plan });
   assert.ok(
     !read.collisions.some((c) => c.kind === "heavy_lower_adjacent_quality"),
     `a week this open must read clean: ${JSON.stringify(read.collisions)}`
@@ -624,7 +641,7 @@ test("a mid-week leg day sends the quality run to Monday rather than the day bef
   // Monday is ring-clear and a full two days off Saturday — a slot the old candidate
   // list [2,3,4,5] could not reach at all, which is why this week used to collide.
   assert.equal(quality.day_number, 1, `Monday is the ring-clean slot (got ${quality.day_number})`);
-  const read = weekLayoutRead(REF, { runPlan: plan });
+  const read = layout(REF, { runPlan: plan });
   assert.ok(
     !read.collisions.some((c) => c.kind === "heavy_lower_adjacent_quality"),
     `the engine placed around this one: ${JSON.stringify(read.collisions)}`
@@ -673,7 +690,7 @@ test("on a week that genuinely cannot be separated, the read still tells the tru
   const plan = repo.weeklyRunPlan(REF, { block: { week_index: 1 } });
   const long = plan.runs.find((r) => r.kind_label === "long");
   assert.equal(long.day_number, 7, "no ring-clean slot exists, so the old fallback stands");
-  const read = weekLayoutRead(REF, { runPlan: plan });
+  const read = layout(REF, { runPlan: plan });
   // Sunday's long run into Monday's legs is the intended stacking, not a collision —
   // but Friday, Saturday, Sunday, Monday are four hard days in a row, and THAT is the
   // truth this week still has to hear.
@@ -687,27 +704,45 @@ test("on a week that genuinely cannot be separated, the read still tells the tru
 // ── the quiet surface ───────────────────────────────────────────────────────
 
 test("a colliding week says its one line through adaptations_due", () => {
-  repo.setProfile({ primary_discipline: "hybrid" });
+  // Runs come from the athlete's stated run days and the engine, never plan items:
+  // a stated Saturday long run (dow 6) with Friday's heavy legs the day before.
+  repo.setProfile({
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    endurance_schedule: {
+      days: [
+        { dow: 2, kind: "easy" },
+        { dow: 6, kind: "long" },
+      ],
+    },
+  });
+  seedRunner();
   heavyLowerDay(5);
   upperDay(2);
-  runDay(6, "Long run", 18);
-  const layout = weekLayoutRead(REF);
+  const runPlan = repo.weeklyRunPlan(REF);
+  assert.equal(runPlan.runs.find((r) => r.kind_label === "long")?.day_number, 6, "the stated Saturday long run");
+  const read = weekLayoutRead(REF, { runPlan, enduranceDows: [2, 6] });
+  assert.equal(read.clean, false, JSON.stringify(read.collisions));
   const state = repo.getProgramState(REF);
   assert.ok(
-    state.adaptations_due.includes(layout.suggestion),
+    state.adaptations_due.includes(read.suggestion),
     `expected the layout line in adaptations_due:\n${JSON.stringify(state.adaptations_due, null, 2)}`
   );
   assert.equal(
-    state.adaptations_due.filter((line) => line === layout.suggestion).length,
+    state.adaptations_due.filter((line) => line === read.suggestion).length,
     1,
     "at most one line, never a repeated one"
   );
 });
 
 test("a clean week adds nothing to adaptations_due", () => {
-  repo.setProfile({ primary_discipline: "hybrid" });
+  repo.setProfile({
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    endurance_schedule: { days: [{ dow: 6, kind: "long" }] },
+  });
+  seedRunner();
   heavyLowerDay(2);
-  runDay(6, "Long run", 18);
   const state = repo.getProgramState(REF);
   for (const line of state.adaptations_due) {
     assert.ok(!/runway|unstacks|hard days run/i.test(line), `no layout line on a clean week: ${line}`);
@@ -721,15 +756,19 @@ test("the read survives a plan whose loads were never filled in", () => {
   ]);
   repo.savePlanDay(2, "Legs light", "Accessory", [{ exercise: "Leg Curl", sets: 3, rep_low: 12, rep_high: 15 }]);
   runDay(6, "Long run", 18);
-  const read = weekLayoutRead(REF);
+  const read = layout(REF);
   assert.deepEqual(read.heaviest_lower_days, [5], "compound sets rank the week when nothing is loaded");
   assert.equal(read.clean, false);
 });
 
-test("the read is not thrown off by a plan with no plan_days table rows for a run day", () => {
+test("a cardio item written into the plan is not a run: with no run plan or agenda the week reads clean", () => {
   heavyLowerDay(5);
-  runDay(6, "Long run", 18);
-  db.prepare(`DELETE FROM plan_items WHERE kind = 'cardio'`).run();
+  repo.savePlanDay(6, "Long run", "Endurance", [
+    { kind: "cardio", exercise: "Long run", target_distance_km: 18, target_zone: "Z2" },
+  ]);
+  const cardioRows = db.prepare(`SELECT COUNT(*) AS n FROM plan_items WHERE kind = 'cardio'`).get().n;
+  assert.equal(cardioRows, 0, "the writer strips it");
   const read = weekLayoutRead(REF);
-  assert.equal(read.clean, true, "with the run gone there is nothing to stack against");
+  assert.equal(read.source, "none");
+  assert.equal(read.clean, true, "with no run anywhere there is nothing to stack against");
 });

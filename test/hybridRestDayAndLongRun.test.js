@@ -3,12 +3,15 @@
 // Two structural gaps, both visible in the live template (five lifting days, two
 // "Run" days, zero rest):
 //
-//   1. A rest day could only exist by being ABSENT from the plan, so a seven-day
-//      week had no seam anywhere in it and the day selector surfaced a training day
-//      on every calendar date of the year. `plan_days.day_type` (v99) names it.
+//   1. A week had no seam anywhere in it, so the day selector surfaced a training day
+//      on every calendar date of the year. v99 first named the rest day as a plan ROW;
+//      migration 110 moved it to the CALENDAR, where it now lives: a weekday the
+//      athlete neither lifts on (strength_schedule) nor runs on (endurance_schedule).
+//      A rest row is refused, and plan days hold strength work only.
 //   2. A long run was whatever number the template happened to hold, forever — an
 //      athlete whose longest run in ninety days is 9.85 km was handed a 12 km card
-//      every week. The prescription now ramps toward the template instead.
+//      every week. The prescription now ramps. The week's long run is the RUN
+//      ENGINE's long prescription on the stated run days, never a plan item.
 //
 // Plus the small one: day-read's private copy of the trailing-7-day running-volume
 // query, replaced by the canonical `weeklyKm`.
@@ -30,8 +33,10 @@ import {
   trailingLongestRunKm,
 } from "../dist/repo/long-run-ramp.js";
 import { selectAdaptivePlanDay, selectedPlanDayForDate } from "../dist/repo/plan-selection.js";
+import { REST_DAY_NOT_A_PLAN_DAY } from "../dist/repo/plan.js";
 import { validateTrainingPlan } from "../dist/repo/plan-quality.js";
 import { weeklyKm } from "../dist/repo/program-state.js";
+import { weeklyRunPlan } from "../dist/repo/run-progression.js";
 import { RUN_SPORT_PATTERNS } from "../dist/repo/endurance-sports.js";
 import { SUSTAINABLE_LONG_STEP_FACTOR, SUSTAINABLE_WEEKLY_BUILD_FACTOR } from "../dist/repo/run-ramp.js";
 import { addDaysISO } from "../dist/repo/shared.js";
@@ -53,7 +58,8 @@ beforeEach(() => {
     "plan_days",
     "exercises",
     "day_reads",
-    "brain_decisions"
+    "brain_decisions",
+    "profile"
   );
 });
 
@@ -70,25 +76,39 @@ const seedRun = (date, km, minutes = Math.round(km * 6)) =>
     km
   );
 
-// A three-day ring: lift, REST, lift. Small on purpose — the rotation is then
-// trivially readable, and the seam is exactly one day wide.
-function seedRingWithRest() {
+// Lift Tuesday and Thursday, nothing stated for running: REF (a Wednesday) is the
+// week's seam — a weekday with neither, so the CALENDAR's rest day. Small on purpose:
+// two strength days (numbered 1 and 3, the gap where the retired rest row used to sit)
+// and one rest weekday between them.
+const LIFT_TUE_THU = { days: [{ dow: 2 }, { dow: 4 }], source: "athlete" };
+
+function seedCalendarWithRest() {
   repo.replacePlan([
     {
       day_number: 1,
       name: "Push",
       items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }],
     },
-    { day_number: 2, name: "Rest", focus: null, day_type: "rest", items: [] },
     {
       day_number: 3,
       name: "Pull",
       items: [{ exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 80 }],
     },
   ]);
+  repo.setProfile({ strength_schedule: LIFT_TUE_THU });
 }
 
-// Anchor the rotation on day 1 so "tomorrow" is unambiguously the rest day.
+// A pre-migration-110 rest ROW, written straight to the table: no writer can create
+// one any more, so this is the only way to prove every reader steps around it.
+function insertLegacyRestRow(dayNumber = 2) {
+  return Number(
+    db
+      .prepare(`INSERT INTO plan_days (day_number, name, focus, day_type) VALUES (?, 'Rest', NULL, 'rest')`)
+      .run(dayNumber).lastInsertRowid
+  );
+}
+
+// Anchor the ring on the Push day (yesterday, a Tuesday lifting day).
 function anchorOnDayOne(date = YESTERDAY) {
   repo.logSetByName({ date, exercise: "Barbell Bench Press", weight: 100, reps: 8 });
 }
@@ -118,35 +138,68 @@ test("v99 adds day_type, is idempotent, and a fresh database already has it", ()
 });
 
 // ---------------------------------------------------------------------------
-// 2. the rest day, as a stored thing
+// 2. the rest day is NOT a stored thing
 // ---------------------------------------------------------------------------
 
-test("a rest day round-trips, and carrying work is refused", () => {
-  seedRingWithRest();
+test("a rest day is never a plan row: the write is refused, and a restructure drops it", () => {
+  // A restructure carrying a legacy rest day writes only the lifting days.
+  repo.replacePlan([
+    {
+      day_number: 1,
+      name: "Push",
+      items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }],
+    },
+    { day_number: 2, name: "Rest", focus: null, day_type: "rest", items: [] },
+    {
+      day_number: 3,
+      name: "Pull",
+      items: [{ exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 80 }],
+    },
+  ]);
   const plan = repo.getPlan();
-  const rest = plan.find((d) => d.day_number === 2);
-  assert.equal(rest.day_type, "rest");
-  assert.equal(rest.items.length, 0);
-  assert.equal(plan.find((d) => d.day_number === 1).day_type, "training");
+  assert.deepEqual(
+    plan.map((d) => d.day_number),
+    [1, 3],
+    "the rest day is the calendar's — no row is written for it"
+  );
+  assert.ok(plan.every((d) => d.day_type === "training"));
+  assert.equal(repo.getPlanDay(2), null);
 
+  // A direct write of a rest day is refused, empty or carrying work, in the words the
+  // editor renders verbatim.
+  assert.throws(
+    () => repo.savePlanDay(2, "Rest", null, [], { day_type: "rest" }),
+    (err) => {
+      assert.equal(err.message, REST_DAY_NOT_A_PLAN_DAY);
+      return true;
+    }
+  );
   assert.throws(
     () =>
       repo.savePlanDay(2, "Rest", null, [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 5 }], {
         day_type: "rest",
       }),
-    /rest day/i,
-    "a rest day may not carry exercises"
+    /Rest days aren't plan days/
   );
-  assert.throws(() => repo.savePlanDay(2, "Rest", null, [], { day_type: "sabbath" }), /training.*rest|rest.*training/i);
+  assert.equal(repo.getPlanDay(2), null, "and nothing landed");
+  assert.throws(() => repo.savePlanDay(2, "Rest", null, [], { day_type: "sabbath" }), /training day/i);
+
+  // A week that is nothing but rest has nothing to write at all.
+  assert.throws(() => repo.replacePlan([{ day_number: 1, name: "Rest", focus: null, day_type: "rest", items: [] }]));
 });
 
-test("an omitted day_type preserves an empty rest day but yields to incoming work", () => {
-  seedRingWithRest();
-  // A partial edit that says nothing about the type leaves the seam alone…
-  repo.savePlanDay(2, "Off", "recovery", []);
-  assert.equal(repo.getPlanDay(2).day_type, "rest");
+test("a plan-day write over a legacy rest row makes it a training day, never preserves the rest", () => {
+  seedCalendarWithRest();
+  insertLegacyRestRow(2);
+  assert.equal(repo.getPlanDay(2), null, "a legacy rest row is never read back as a plan day");
 
-  // …and a caller sending actual work plainly means a training day.
+  // A partial edit that says nothing about the type writes a training scaffold…
+  repo.savePlanDay(2, "Off", "recovery", []);
+  const scaffold = repo.getPlanDay(2);
+  assert.equal(scaffold.day_type, "training");
+  assert.equal(scaffold.items.length, 0);
+
+  // …and a caller sending actual work gets exactly that training day.
   repo.savePlanDay(2, "Extra", null, [{ exercise: "Goblet Squat", sets: 3, rep_low: 8, rep_high: 10 }]);
   const promoted = repo.getPlanDay(2);
   assert.equal(promoted.day_type, "training");
@@ -175,7 +228,7 @@ test("plan quality lets a rest day be empty and refuses a rest day with items", 
 });
 
 test("a restructure that never mentions rest declares a week of training days", () => {
-  seedRingWithRest();
+  seedCalendarWithRest();
   repo.replacePlan([
     { day_number: 1, name: "Push", items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 5 }] },
     { day_number: 2, name: "Pull", items: [{ exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 10 }] },
@@ -184,9 +237,10 @@ test("a restructure that never mentions rest declares a week of training days", 
 });
 
 test("the rest day is not a planned SESSION", () => {
-  seedRingWithRest();
-  // "2 of 6" through a week that only ever asked for five is the arithmetic a
-  // first-class rest day would otherwise quietly introduce.
+  seedCalendarWithRest();
+  // Even a legacy rest row left behind is not counted: "2 of 3" through a week that
+  // only ever asked for two is the arithmetic a rest row would quietly introduce.
+  insertLegacyRestRow(2);
   assert.equal(repo.getWeeklyStats().week_planned, 2);
 });
 
@@ -194,59 +248,63 @@ test("the rest day is not a planned SESSION", () => {
 // 3. selection
 // ---------------------------------------------------------------------------
 
-test("the rotation lands on the rest day and the selector returns it", () => {
-  seedRingWithRest();
+test("a calendar rest weekday: the selector answers rest with no plan day", () => {
+  seedCalendarWithRest();
   anchorOnDayOne();
   const picked = selectAdaptivePlanDay(REF);
-  assert.equal(picked.day_number, 2);
+  assert.equal(picked.day_number, null, "a rest weekday carries no plan day at all");
   assert.equal(picked.day_type, "rest");
   assert.equal(picked.selection.adapted, false);
   assert.equal(picked.selection.rest_day, true);
   assert.equal(picked.selection.reason, null);
+  assert.deepEqual(picked.selection.calendar, { kind: "rest", run_kind: null });
   // No scoring pass happened at all — the comparison is a different question.
   assert.equal(picked.selection.scores, undefined);
 
-  const resolved = selectedPlanDayForDate(REF);
-  assert.equal(resolved.day_number, 2);
-  assert.equal(resolved.day_type, "rest");
+  // The Today door has no plan day to hand on the rest weekday.
+  assert.equal(selectedPlanDayForDate(REF), null);
 });
 
 test("scoring never promotes a rest day, and never beats one into a training day", () => {
-  seedRingWithRest();
-  // Anchored on the REST day: the rotation therefore points at day 3, a training
-  // day, and the scorer runs. The rest day must not appear as a candidate at all.
-  anchorOnDayOne(addDaysISO(REF, -2));
-  repo.logSetByName({ date: YESTERDAY, exercise: "Seated Cable Row", weight: 80, reps: 10 });
-  const picked = selectAdaptivePlanDay(REF);
-  assert.notEqual(picked.day_type, "rest");
+  seedCalendarWithRest();
+  // A legacy rest row still sitting in the table must never be a candidate.
+  insertLegacyRestRow(2);
+  anchorOnDayOne();
+  const THURSDAY = addDaysISO(REF, 1);
+  const picked = selectAdaptivePlanDay(THURSDAY);
+  assert.equal(picked.day_type, "training", "Thursday is a lifting weekday");
+  assert.equal(picked.day_number, 3, "the ring's next strength day after Tuesday's Push");
   const scored = picked.selection.scores ?? [];
   assert.ok(scored.length, "a training rotation is scored");
   assert.equal(
     scored.some((s) => s.day_number === 2),
     false,
-    "the rest day is not an alternative to a training day"
+    "the rest row is not an alternative to a training day"
   );
 });
 
-test("training anyway on the rest day never anchors the rotation to it", () => {
-  seedRingWithRest();
-  // Yesterday was the programmed rest day and they lifted the Push day's work
-  // anyway. If that linked session anchored the ring, today would advance to day 3
-  // and every following day would be shifted by one for the rest of the block.
-  const restDayId = repo.getPlanDay(2).id;
-  repo.logSetByName({ date: YESTERDAY, exercise: "Barbell Bench Press", weight: 100, reps: 8 });
-  db.prepare(`UPDATE sessions SET plan_day_id = ? WHERE date = ?`).run(restDayId, YESTERDAY);
-  const picked = selectAdaptivePlanDay(REF);
-  assert.equal(picked.day_number, 2, "the content they lifted resolved to day 1, so today is the seam");
-  assert.equal(picked.day_type, "rest");
+test("training anyway on the rest day never moves the calendar", () => {
+  seedCalendarWithRest();
+  anchorOnDayOne();
+  // Wednesday is the week's rest day and they lifted the Push day's work anyway.
+  repo.logSetByName({ date: REF, exercise: "Barbell Bench Press", weight: 100, reps: 8 });
+  // The next lifting weekday still lifts, on the ring's next strength day after the
+  // Push they just did…
+  const thursday = selectAdaptivePlanDay(addDaysISO(REF, 1));
+  assert.equal(thursday.day_type, "training");
+  assert.equal(thursday.day_number, 3);
+  // …and next week's Wednesday is still the rest day: a session never re-seats the seam.
+  const nextWednesday = selectAdaptivePlanDay(addDaysISO(REF, 7));
+  assert.equal(nextWednesday.day_number, null);
+  assert.equal(nextWednesday.day_type, "rest");
 });
 
 // ---------------------------------------------------------------------------
 // 4. the read
 // ---------------------------------------------------------------------------
 
-test("a template rest day reads as rest, in the week's own words", () => {
-  seedRingWithRest();
+test("a calendar rest day reads as rest, in the week's own words", () => {
+  seedCalendarWithRest();
   anchorOnDayOne();
   const read = dayRead(REF);
   assert.equal(read.kind, "rest");
@@ -254,19 +312,17 @@ test("a template rest day reads as rest, in the week's own words", () => {
   assert.equal(read.est_minutes, null);
   assert.equal(read.decision.rule_code, DAY_READ_OUTCOMES.template_rest_day.code);
   assert.ok(leadPhrasing(read.why), `unregistered phrasing: ${read.why}`);
-  assert.equal(read.signals.template_rest_day.day_number, 2);
+  assert.deepEqual(read.signals.template_rest_day, { day_number: null, focus: null, calendar: true });
 });
 
 test("the rest read is a variant set, never one literal", () => {
-  seedRingWithRest();
-  anchorOnDayOne();
+  seedCalendarWithRest();
   const seen = new Set();
   for (let i = 0; i < 5; i++) {
+    // Every date here is a weekday with no lifting and no run (Wed, Sat, Fri, Mon…);
+    // a lifting Tuesday is skipped below.
     const date = addDaysISO(REF, i * 3);
-    resetTables("day_reads");
-    // Re-anchor relative to each date so the rotation keeps landing on the seam.
-    resetTables("logged_sets", "sessions");
-    anchorOnDayOne(addDaysISO(date, -1));
+    resetTables("day_reads", "logged_sets", "sessions");
     const read = dayRead(date);
     if (read.kind !== "rest" || read.decision.rule_code !== DAY_READ_OUTCOMES.template_rest_day.code) continue;
     const lead = leadPhrasing(read.why);
@@ -277,7 +333,7 @@ test("the rest read is a variant set, never one literal", () => {
 });
 
 test("the outcome-feedback ladder cannot open the week's rest day", () => {
-  seedRingWithRest();
+  seedCalendarWithRest();
   anchorOnDayOne();
   // The easy→train ladder only ever opens the day that is DUE, and it needs a real
   // plan day to open. On the seam there is none — the read stays the rest the
@@ -289,7 +345,7 @@ test("the outcome-feedback ladder cannot open the week's rest day", () => {
 });
 
 test("a push drive does not delete the week's rest day", () => {
-  seedRingWithRest();
+  seedCalendarWithRest();
   anchorOnDayOne();
   repo.setSettings({ training_drive: "push" });
   const read = dayRead(REF);
@@ -303,11 +359,12 @@ test("a push drive does not delete the week's rest day", () => {
 // ---------------------------------------------------------------------------
 
 test("the rest day composes an empty card that speaks as the athlete's own plan", () => {
-  seedRingWithRest();
+  seedCalendarWithRest();
   anchorOnDayOne();
   const { envelope } = decideDailySession(REF);
   assert.equal(envelope.kind, "rest");
   assert.equal(envelope.template.day_type, "rest");
+  assert.equal(envelope.template.day_number, null, "no plan row stands for the rest day");
   const session = deterministicComposedSession(envelope);
   assert.equal(session.items.length, 0);
   assert.equal(session.est_minutes, null);
@@ -316,12 +373,11 @@ test("the rest day composes an empty card that speaks as the athlete's own plan"
 });
 
 test("the rest card's note rotates by date", () => {
-  seedRingWithRest();
+  seedCalendarWithRest();
   const seen = new Set();
   for (let i = 0; i < 6; i++) {
     const date = addDaysISO(REF, i * 3);
     resetTables("day_reads", "logged_sets", "sessions", "daily_session_decisions");
-    anchorOnDayOne(addDaysISO(date, -1));
     const { envelope } = decideDailySession(date);
     if (envelope.template.day_type !== "rest") continue;
     seen.add(deterministicComposedSession(envelope).why);
@@ -394,58 +450,79 @@ test("the ramp explains itself in a rotating set, and names both distances", () 
   assert.ok(seen.size > 1, "one literal per rule is the bug");
 });
 
-test("the week's long run is the longest prescription in it, and history reads the trailing longest", () => {
-  repo.replacePlan([
-    {
-      day_number: 1,
-      name: "Easy",
-      items: [{ kind: "cardio", exercise: "Easy run", target_distance_km: 6, target_zone: "Z2" }],
-    },
-    {
-      day_number: 2,
-      name: "Long",
-      items: [{ kind: "cardio", exercise: "Long run", target_distance_km: 12, target_zone: "long" }],
-    },
-  ]);
-  assert.equal(templateLongRunKm(), 12);
+// A hybrid runner who lifts Tuesday/Thursday and has a stated LONG run on Wednesday
+// (REF) and an easy Saturday. The run engine lays the week's runs on those days;
+// nothing about them is a plan row. `extra` adds stated run days (a quality day, say).
+function seedRunWeek(extra = []) {
+  repo.setProfile({
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    strength_schedule: LIFT_TUE_THU,
+    endurance_schedule: { days: [{ dow: 3, kind: "long" }, { dow: 6, kind: "easy" }, ...extra] },
+  });
+}
 
+const engineLongRun = (date = REF) =>
+  weeklyRunPlan(date).runs.find((run) => run.kind_label === "long" && run.race !== true) ?? null;
+
+// A run-day envelope for REF, with the caps handed in. The decision is real (so the
+// run-day template it carries is not invented); only the fields these tests are
+// deliberately holding still are overridden.
+function runDayEnvelope(date, caps, over = {}) {
+  const base = decideDailySession(date).envelope;
+  return {
+    ...base,
+    kind: "train",
+    caps,
+    request: { override: null, train_anyway: false, equipment: null, minutes: null, goal: null },
+    muscles: { required: [], allowed: [], reduced: [], excluded: [], saturated: [] },
+    candidates: [],
+    endurance_hold: undefined,
+    ...over,
+  };
+}
+
+test("the week's long run is the run engine's long prescription, and history reads the trailing longest", () => {
+  seedRunWeek();
   seedRun(addDaysISO(REF, -10), 9.85);
   seedRun(addDaysISO(REF, -200), 21);
+  // A run written onto a plan day is stripped — it can never become the week's long run.
+  repo.savePlanDay(1, "Legacy", null, [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8 },
+    { kind: "cardio", exercise: "Long run", target_distance_km: 30, target_zone: "long" },
+  ]);
+  assert.equal(
+    repo.getPlanDay(1).items.some((item) => item.kind === "cardio"),
+    false,
+    "plan days hold strength only"
+  );
+
+  const long = engineLongRun();
+  assert.ok(long, "the engine builds a long run on the stated long day");
+  assert.equal(long.day_number, 3, "on the athlete's stated Wednesday");
+  assert.ok(long.target_distance_km > 0);
+  assert.equal(templateLongRunKm(REF), long.target_distance_km);
+  assert.notEqual(templateLongRunKm(REF), 30);
+
   assert.equal(trailingLongestRunKm(REF), 9.85, "a run outside the window is not what the legs have done");
 });
 
+test("with no run week there is no long run to shape", () => {
+  // No running configured, no history: the engine builds nothing, and a plan row
+  // cannot stand in for it.
+  repo.savePlanDay(1, "Long", null, [{ kind: "cardio", exercise: "Long run", target_distance_km: 12 }]);
+  assert.equal(templateLongRunKm(REF), null);
+});
+
 test("composition prescribes the ramped distance and keeps its own note", () => {
-  repo.replacePlan([
-    {
-      day_number: 1,
-      name: "Long run",
-      focus: "Endurance",
-      items: [
-        {
-          kind: "cardio",
-          exercise: "Long run",
-          target_distance_km: 12,
-          target_duration_min: 80,
-          target_zone: "long",
-          note: "Long run",
-        },
-      ],
-    },
-  ]);
+  seedRunWeek();
   // Their longest in the window is 9.85 km, and the recent weeks are quiet, so the
   // weekly build has nothing to say and the long-run step is the only shaper.
   seedRun(addDaysISO(REF, -10), 9.85);
   seedRun(addDaysISO(REF, -24), 6);
-  const envelope = {
-    ...decideDailySession(REF).envelope,
-    kind: "train",
-    caps: { volume: "normal", intensity: "normal", duration_min: 120 },
-    request: { override: null, train_anyway: false, equipment: null, minutes: null, goal: null },
-    template: { day_number: 1, plan_day_id: repo.getPlanDay(1).id, focus: "Endurance", intent: "template" },
-    muscles: { required: [], allowed: [], reduced: [], excluded: [], saturated: [] },
-    candidates: [],
-    endurance_hold: undefined,
-  };
+  const envelope = runDayEnvelope(REF, { volume: "normal", intensity: "normal", duration_min: 120 });
+  assert.equal(envelope.template.day_type, "run", "Wednesday is the stated long-run day");
+  assert.ok(templateLongRunKm(REF) <= 12, "a 12 km card is at least the week's long run");
   const { session } = normalizeComposedSession(
     {
       name: "Long run",
@@ -472,26 +549,13 @@ test("composition prescribes the ramped distance and keeps its own note", () => 
 });
 
 test("a held day still holds — the ramp only shapes a run being offered", () => {
-  repo.replacePlan([
-    {
-      day_number: 1,
-      name: "Long run",
-      focus: "Endurance",
-      items: [{ kind: "cardio", exercise: "Long run", target_distance_km: 12, target_zone: "long", note: "Long run" }],
-    },
-  ]);
+  seedRunWeek();
   for (let week = 1; week <= 6; week++) seedRun(addDaysISO(REF, -week * 7), 9.85 - week * 0.4);
-  const base = decideDailySession(REF).envelope;
-  const envelope = {
-    ...base,
-    kind: "easy",
-    caps: { volume: "reduced", intensity: "normal", duration_min: 60 },
-    request: { override: null, train_anyway: false, equipment: null, minutes: null, goal: null },
-    template: { day_number: 1, plan_day_id: repo.getPlanDay(1).id, focus: "Endurance", intent: "template" },
-    muscles: { required: [], allowed: [], reduced: [], excluded: [], saturated: [] },
-    candidates: [],
-    endurance_hold: { no_run: true, reasons: ["longest_run_yesterday"] },
-  };
+  const envelope = runDayEnvelope(
+    REF,
+    { volume: "reduced", intensity: "normal", duration_min: 60 },
+    { kind: "easy", endurance_hold: { no_run: true, reasons: ["longest_run_yesterday"] } }
+  );
   const { session } = normalizeComposedSession(
     {
       name: "Long run",
@@ -559,52 +623,20 @@ test("the spike classification the read publishes is unchanged by the swap", () 
 // 8. review fixes — detection and application ask the SAME question
 // ---------------------------------------------------------------------------
 
-// A cardio envelope for one plan day, with the caps handed in. The decision is real
-// (so nothing about the envelope is invented); only the fields these tests are
-// deliberately holding still are overridden.
-function cardioEnvelope(date, dayNumber, caps) {
-  return {
-    ...decideDailySession(date).envelope,
-    kind: "train",
-    caps,
-    request: { override: null, train_anyway: false, equipment: null, minutes: null, goal: null },
-    template: {
-      day_number: dayNumber,
-      plan_day_id: repo.getPlanDay(dayNumber).id,
-      focus: "Endurance",
-      intent: "template",
-    },
-    muscles: { required: [], allowed: [], reduced: [], excluded: [], saturated: [] },
-    candidates: [],
-    endurance_hold: undefined,
-  };
-}
-
 test("a 40 km ride is not the week's long run, and is never ramped", () => {
-  repo.replacePlan([
-    {
-      day_number: 1,
-      name: "Endurance",
-      focus: "Endurance",
-      items: [
-        { kind: "cardio", exercise: "Long ride", target_distance_km: 40, target_zone: "Z2" },
-        {
-          kind: "cardio",
-          exercise: "Long run",
-          target_distance_km: 12,
-          target_duration_min: 80,
-          target_zone: "long",
-        },
-      ],
-    },
-  ]);
-  // The bug: MAX(target_distance_km) over every cardio row made 40 the week's
-  // "long run", so the 12 km run never matched it and the ramp switched off entirely.
-  assert.equal(templateLongRunKm(), 12, "40 km on a bike is not the week's longest RUN");
-
+  seedRunWeek();
   seedRun(addDaysISO(REF, -10), 9.8);
   seedRun(addDaysISO(REF, -24), 6);
-  const envelope = cardioEnvelope(REF, 1, { volume: "normal", intensity: "normal", duration_min: 240 });
+  // The bug: MAX(target_distance_km) over every endurance prescription made a 40 km
+  // ride the week's "long run", so the 12 km run never matched it and the ramp
+  // switched off entirely. The long run is the run engine's, and a ride is not in it.
+  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'cycling', 120, 40)`).run(
+    addDaysISO(REF, -3)
+  );
+  assert.equal(templateLongRunKm(REF), engineLongRun().target_distance_km);
+  assert.notEqual(templateLongRunKm(REF), 40, "40 km on a bike is not the week's longest RUN");
+
+  const envelope = runDayEnvelope(REF, { volume: "normal", intensity: "normal", duration_min: 240 });
   const { session } = normalizeComposedSession(
     {
       name: "Endurance",
@@ -633,31 +665,28 @@ test("a 40 km ride is not the week's long run, and is never ramped", () => {
 });
 
 test("a quality session is never the long run, whatever its distance", () => {
-  // The reconciliation fixture that caught this live: a 7 km Z4 interval run with no
-  // run history behind it was ramped down to 6 km — but an interval session's
-  // distance is a property of its structure, and the ramp was never entitled to it.
-  repo.replacePlan([
-    {
-      day_number: 1,
-      name: "Quality",
-      focus: "Endurance",
-      items: [
-        {
-          kind: "cardio",
-          exercise: "Quality run",
-          target_distance_km: 7,
-          target_duration_min: 40,
-          target_zone: "Z4",
-          interval: [{ reps: 4, on: "1 km", off: "2 min", zone: "Z4" }],
-        },
-        { kind: "cardio", exercise: "Long run", target_distance_km: 6.5, target_zone: "Z2" },
-      ],
-    },
-  ]);
-  // Detection: the week's long run is the longest EASY run, not the biggest number.
-  assert.equal(templateLongRunKm(), 6.5, "the interval session does not own the week's long-run identity");
+  // The reconciliation fixture that caught this live: a Z4 interval run was ramped
+  // down like a long run — but an interval session's distance is a property of its
+  // structure, and the ramp was never entitled to it.
+  seedRunWeek([{ dow: 1, kind: "quality" }]);
+  seedRun(addDaysISO(REF, -10), 9.85);
+  seedRun(addDaysISO(REF, -24), 6);
+  // Detection: the week's long run is the engine's LONG run, never the quality session.
+  const plan = weeklyRunPlan(REF);
+  assert.ok(
+    plan.runs.some((run) => run.kind_label === "quality"),
+    "the stated quality day is in the week"
+  );
+  assert.equal(
+    templateLongRunKm(REF),
+    engineLongRun().target_distance_km,
+    "the interval session does not own the week's long-run identity"
+  );
 
-  const envelope = cardioEnvelope(REF, 1, { volume: "normal", intensity: "normal", duration_min: 240 });
+  // A 12 km interval card clears the week's long-run distance, so ONLY the quality
+  // predicate stands between it and the ramp's 11.5.
+  assert.ok(templateLongRunKm(REF) <= 12);
+  const envelope = runDayEnvelope(REF, { volume: "normal", intensity: "normal", duration_min: 240 });
   const { session } = normalizeComposedSession(
     {
       name: "Quality",
@@ -668,10 +697,10 @@ test("a quality session is never the long run, whatever its distance", () => {
         {
           kind: "cardio",
           exercise: "Quality run",
-          target_distance_km: 7,
-          target_duration_min: 40,
+          target_distance_km: 12,
+          target_duration_min: 60,
           target_zone: "Z4",
-          interval: [{ reps: 4, on: "1 km", off: "2 min", zone: "Z4" }],
+          interval: [{ reps: 6, on: "1 km", off: "2 min", zone: "Z4" }],
           note: "Quality run",
         },
       ],
@@ -680,8 +709,8 @@ test("a quality session is never the long run, whatever its distance", () => {
   );
   const quality = session.items.find((it) => /quality/i.test(String(it.note ?? it.exercise ?? "")));
   assert.ok(quality, JSON.stringify(session.items));
-  assert.equal(quality.target_distance_km, 7, "the interval prescription is left exactly as written");
-  assert.equal(quality.target_duration_min, 40, "and so is its clock");
+  assert.equal(quality.target_distance_km, 12, "the interval prescription is left exactly as written");
+  assert.equal(quality.target_duration_min, 60, "and so is its clock");
 });
 
 test("an athlete with no run history is never told a distance is past 'their longest'", () => {
@@ -702,26 +731,10 @@ test("an athlete with no run history is never told a distance is past 'their lon
 });
 
 test("the ramp explains the number without deleting the athlete's own instruction", () => {
-  repo.replacePlan([
-    {
-      day_number: 1,
-      name: "Long run",
-      focus: "Endurance",
-      items: [
-        {
-          kind: "cardio",
-          exercise: "Long run",
-          target_distance_km: 12,
-          target_duration_min: 80,
-          target_zone: "long",
-          note: "Negative split the back half",
-        },
-      ],
-    },
-  ]);
+  seedRunWeek();
   seedRun(addDaysISO(REF, -10), 9.85);
   seedRun(addDaysISO(REF, -24), 6);
-  const envelope = cardioEnvelope(REF, 1, { volume: "normal", intensity: "normal", duration_min: 120 });
+  const envelope = runDayEnvelope(REF, { volume: "normal", intensity: "normal", duration_min: 120 });
   const { session } = normalizeComposedSession(
     {
       name: "Long run",
@@ -751,29 +764,13 @@ test("the ramp explains the number without deleting the athlete's own instructio
 });
 
 test("a clamped long run's note names the distance actually on the card", () => {
-  repo.replacePlan([
-    {
-      day_number: 1,
-      name: "Long run",
-      focus: "Endurance",
-      items: [
-        {
-          kind: "cardio",
-          exercise: "Long run",
-          target_distance_km: 12,
-          target_duration_min: 80,
-          target_zone: "long",
-          note: "Long run",
-        },
-      ],
-    },
-  ]);
+  seedRunWeek();
   seedRun(addDaysISO(REF, -10), 9.85);
   seedRun(addDaysISO(REF, -24), 6);
   // A 40-minute ceiling on a run the ramp just prescribed at 11.5 km: the clamp
   // rescales the distance, and the note has to be re-said about the new number
   // rather than left promising 11.5 above a 5-and-a-bit km card.
-  const envelope = cardioEnvelope(REF, 1, { volume: "normal", intensity: "normal", duration_min: 40 });
+  const envelope = runDayEnvelope(REF, { volume: "normal", intensity: "normal", duration_min: 40 });
   const { session } = normalizeComposedSession(
     {
       name: "Long run",
@@ -803,19 +800,44 @@ test("a clamped long run's note names the distance actually on the card", () => 
   assert.equal(item.note.includes("11.5"), false, `and must not still promise the pre-clamp figure: ${item.note}`);
 });
 
-test("the week ahead calls the template's rest day a rest day", () => {
-  seedRingWithRest();
+test("the week ahead lists the lift days and the stated run days — rest is the weekdays with neither", () => {
+  seedCalendarWithRest();
+  repo.setProfile({ endurance_schedule: { days: [{ dow: 6, kind: "long" }] } });
+  // A legacy rest row is not a day of the week ahead either.
+  insertLegacyRestRow(2);
   const { days } = weekAheadPlan(REF);
   assert.equal(days.length, 3);
-  const rest = days[1];
-  assert.equal(rest.kind, "rest", "an itemless day is not a lift day");
-  assert.equal(rest.note ?? null, null, "and a rest day carries no block-purpose line");
-  assert.equal(days[0].kind, "lift");
-  assert.equal(days[2].kind, "lift");
+  assert.deepEqual(
+    days.map((day) => day.kind),
+    ["lift", "lift", "run"]
+  );
+  assert.equal(
+    days.some((day) => day.kind === "rest"),
+    false,
+    "no rest row is listed as a day"
+  );
+  const run = days[2];
+  assert.equal(run.day, "Saturday", "the run sits on the athlete's stated weekday");
+  assert.equal(run.label, "Long run");
 });
 
-test("training anyway on the rest day offers the next TRAINING day, not easy movement", () => {
-  seedRingWithRest();
+test("the run day composes an empty card that points at the Endurance plan", () => {
+  seedCalendarWithRest();
+  // Wednesday — a weekday with no lifting — is now the stated long-run day.
+  repo.setProfile({ endurance_schedule: { days: [{ dow: 3, kind: "long" }] } });
+  const picked = selectAdaptivePlanDay(REF);
+  assert.equal(picked.day_number, null);
+  assert.equal(picked.day_type, "run");
+  const { envelope } = decideDailySession(REF);
+  assert.equal(envelope.template.day_type, "run");
+  assert.equal(envelope.template.day_number, null, "no Long Run plan day stands for it");
+  const session = deterministicComposedSession(envelope);
+  assert.equal(session.name, "Run day");
+  assert.equal(session.items.length, 0, "a run day carries no lifting card");
+});
+
+test("training anyway on the rest day offers the next lifting weekday's strength day, not easy movement", () => {
+  seedCalendarWithRest();
   anchorOnDayOne();
   // Baseline: the untouched rest morning is unchanged by any of this.
   const quiet = decideDailySession(REF).envelope;
@@ -826,7 +848,11 @@ test("training anyway on the rest day offers the next TRAINING day, not easy mov
 
   const { envelope } = decideDailySession(REF, { train_anyway: true });
   assert.equal(envelope.kind, "train");
-  assert.equal(envelope.template.day_number, 3, "the ring's next TRAINING day, skipping the seam");
+  assert.equal(
+    envelope.template.day_number,
+    3,
+    "the strength day Thursday — the next lifting weekday — was about to carry"
+  );
   assert.equal(envelope.template.day_type, undefined, "the emitted template describes the day being composed");
   assert.equal(envelope.caps.intensity, "hold", "the train-anyway load rules still apply");
 
@@ -843,17 +869,25 @@ test("training anyway on the rest day offers the next TRAINING day, not easy mov
   );
 });
 
-test("a week that is nothing but rest keeps the old train-anyway fallback", () => {
-  repo.replacePlan([{ day_number: 1, name: "Rest", focus: null, day_type: "rest", items: [] }]);
+test("a week with no strength day to give keeps the old train-anyway fallback", () => {
+  // Lifting days are stated but the plan holds nothing to lift: the calendar still
+  // answers Wednesday as rest, and train-anyway has no strength day to take them to.
+  repo.setProfile({ strength_schedule: LIFT_TUE_THU });
+  assert.equal(selectAdaptivePlanDay(REF).day_type, "rest", "the calendar is answered even with an empty plan");
   const { envelope } = decideDailySession(REF, { train_anyway: true });
   assert.equal(envelope.kind, "train");
   const session = deterministicComposedSession(envelope);
   assert.ok(session.items.length, "the athlete still gets something");
 });
 
-test("an exercise can never be appended to the week's rest day", () => {
-  seedRingWithRest();
-  assert.throws(() => repo.addExerciseToPlanDay(2, "Goblet Squat", "rotate-in"), /rest day/i);
-  assert.equal(repo.getPlanDay(2).items.length, 0, "and nothing landed");
+test("an exercise can never be appended to a legacy rest row", () => {
+  seedCalendarWithRest();
+  const restId = insertLegacyRestRow(2);
+  assert.equal(repo.addExerciseToPlanDay(2, "Goblet Squat", "rotate-in"), null, "a rest row is no landing spot");
+  assert.equal(
+    db.prepare(`SELECT COUNT(*) AS n FROM plan_items WHERE plan_day_id = ?`).get(restId).n,
+    0,
+    "and nothing landed"
+  );
   assert.ok(repo.addExerciseToPlanDay(3, "Goblet Squat", "rotate-in"), "a training day still accepts it");
 });

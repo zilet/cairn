@@ -3,7 +3,7 @@
 
 type PlanEditorControllerApiDay = import("../contracts/client.js").ClientPlanDay;
 type PlanEditorControllerItem = {
-  kind?: "strength" | "cardio";
+  kind?: "strength";
   exercise?: unknown;
   sets?: unknown;
   rep_low?: unknown;
@@ -14,11 +14,6 @@ type PlanEditorControllerItem = {
   muscle_group?: unknown;
   target_seconds?: unknown;
   mode?: unknown;
-  target_distance_km?: unknown;
-  target_duration_min?: unknown;
-  target_zone?: unknown;
-  interval?: unknown;
-  interval_note?: unknown;
 };
 
 type PlanEditorControllerDay = {
@@ -49,7 +44,7 @@ type PlanEditorProgAnnotation = {
 
 type PlanEditorControllerHelpers = {
   blankStrength(): PlanEditorControllerItem;
-  blankCardio(): PlanEditorControllerItem;
+  runsElsewhereHtml(): string;
   dayModelFromPlan(day: PlanEditorControllerDay | PlanEditorControllerApiDay): PlanEditorControllerModelDay;
   calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): string;
   progDayHtml(
@@ -570,6 +565,7 @@ async function renderPlanEditor(): Promise<void> {
   const icsUrl = withToken("/api/plan.ics");
   const calFooter = helpers.calendarFooterHtml(plan, location.host, icsUrl);
   view.innerHTML = segBar("edit", planSeg()) + `<div id="planWeekSlot" class="card-stack-item"></div><div id="planRecoverySlot"></div><div id="planUpcomingSlot"></div><div id="planRedrawSlot"></div><div id="planedit"></div>
+    ${planSeg().some(([key]) => key === "endurance") ? `<div id="planRunsNote">${helpers.runsElsewhereHtml()}</div>` : ""}
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
     <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}
     <datalist id="exerciseNames"></datalist>`;
@@ -578,7 +574,15 @@ async function renderPlanEditor(): Promise<void> {
   loadPlanUpcomingNote(token);
   loadExerciseNameOptions(token);
 
-  const model: PlanEditorControllerModelDay[] = (Array.isArray(plan) ? plan : []).map((day) => helpers.dayModelFromPlan(day));
+  // Lift days only. A rest day or a run-only day an older payload still carries is
+  // not edited here (runs live in Endurance; rest is the calendar), and the next save
+  // writes the strength week alone.
+  const model: PlanEditorControllerModelDay[] = strengthPlanDays(Array.isArray(plan) ? plan : []).map((day) =>
+    helpers.dayModelFromPlan(day)
+  );
+  view.querySelector<HTMLElement>("[data-plan-runs]")?.addEventListener("click", () => {
+    void renderPlanEndurance();
+  });
   const editing = new Set<number>();
   let planBar: ClientSaveBar | null = null;
   let weekAnn = new Map<number, PlanEditorProgAnnotation>();
@@ -712,7 +716,7 @@ async function renderPlanEditor(): Promise<void> {
         provenance: { entry: "plan_day_train" },
       });
     }));
-    // Quiet "Order for effect" — compounds → accessories → finishers → cardio.
+    // Quiet "Order for effect" — compounds → accessories → finishers.
     view.querySelectorAll<HTMLElement>("[data-orderday]").forEach((button) => button.addEventListener("click", () => {
       void (async () => {
         sync();
@@ -766,43 +770,6 @@ async function renderPlanEditor(): Promise<void> {
       const day = model[form.datasetNumber(button, "additem")];
       if (!day) return;
       day.items.push(helpers.blankStrength());
-      markDirty();
-      draw();
-    }));
-    view.querySelectorAll<HTMLElement>("[data-addcardio]").forEach((button) => button.addEventListener("click", () => {
-      sync();
-      const day = model[form.datasetNumber(button, "addcardio")];
-      if (!day) return;
-      day.items.push(helpers.blankCardio());
-      markDirty();
-      draw();
-    }));
-    // Mark / unmark the week's rest day. Toggling ON clears the day's items, because a
-    // rest day carries none and the server refuses one that does — so the athlete sees
-    // the day empty at the moment they say it, rather than a save error afterwards.
-    view.querySelectorAll<HTMLElement>("[data-restday]").forEach((button) => button.addEventListener("click", () => {
-      sync();
-      const day = model[form.datasetNumber(button, "restday")];
-      if (!day) return;
-      const nowRest = String(day.day_type ?? "training") !== "rest";
-      day.day_type = nowRest ? "rest" : "training";
-      if (nowRest) day.items = [];
-      markDirty();
-      draw();
-    }));
-    view.querySelectorAll<HTMLElement>("[data-pikind]").forEach((button) => button.addEventListener("click", () => {
-      sync();
-      const [dayRaw, itemRaw, kindRaw] = String(button.dataset.pikind || "").split(":");
-      const dayIndex = Number(dayRaw);
-      const itemIndex = Number(itemRaw);
-      const kind = kindRaw === "cardio" ? "cardio" : "strength";
-      const item = model[dayIndex]?.items[itemIndex];
-      if (!item || item.kind === kind) return;
-      const label = item.kind === "cardio" ? (item.note || "") : (item.exercise || "");
-      const next = kind === "cardio" ? helpers.blankCardio() : helpers.blankStrength();
-      if (kind === "cardio") next.note = label;
-      else next.exercise = label;
-      model[dayIndex].items[itemIndex] = next;
       markDirty();
       draw();
     }));

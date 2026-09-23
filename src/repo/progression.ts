@@ -28,7 +28,9 @@ import {
   MUSCLE_LANDMARKS,
   normalizedExerciseKey,
   plainGroupWords,
+  progressionLineageIds,
   resolveExerciseName,
+  trainingRowsSignature,
 } from "./exercise-canon.js";
 import {
   type Equipment,
@@ -38,7 +40,13 @@ import {
   suggestAlternatives,
   type VolumeSet,
 } from "./exercise-variations.js";
-import { achievableWorkingWeight, findExercise, getExercise, recentWorkingWeight } from "./exercises.js";
+import {
+  achievableWorkingWeight,
+  findExercise,
+  getExercise,
+  recentWorkingWeight,
+  unassistedProvenSessions,
+} from "./exercises.js";
 // The equipment profile and the learned like/dislike memories are leaf reads the
 // prescription consumes; they live in their own modules so this engine keeps to
 // prescription, autoregulation and the proposal builders.
@@ -96,7 +104,7 @@ import {
   openVolumeRestoreDraftIds,
   volumeRestorePayload,
 } from "./volume-guard.js";
-import { type LiftState, getProgramState } from "./program-state.js";
+import { type LiftState, getProgramState, LIFT_CURRENT_WINDOW_DAYS } from "./program-state.js";
 import { coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
 import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
 import { supportWorkRead } from "./support-work.js";
@@ -118,6 +126,7 @@ import {
   enduranceOverlapsMovement,
   OUTCOME_FACTS_SCHEMA_VERSION,
 } from "./daily-reconciliation.js";
+import { harderLoad, loadAtOrAbove } from "./outcome-comparability.js";
 
 export {
   loadPhrase,
@@ -187,6 +196,10 @@ const INTRODUCE_TENURE_WEEKS = 12;
 // Epley is an estimate, and a load the athlete just stepped up to sits a little past
 // it while the reps fill in — that is reaching, not out of reach.
 const REACHABLE_TOLERANCE = 1.05;
+// How many of the last three sessions must show unassisted working sets (≥ 2 sets at
+// the plan's rep floor, bodyweight or loaded) before an assist target is retired.
+// Two of three: one good day is a good day; two is where the athlete is.
+const ASSIST_RETIRE_SESSIONS = 2;
 
 export type ProgressionAction = "overload" | "hold" | "deload" | "vary" | "introduce";
 
@@ -258,7 +271,8 @@ export interface Prescription {
       | "non_comparable"
       | "partial"
       | "under_prescribed"
-      | "full_comparable";
+      | "full_comparable"
+      | "full_load_through_confound";
   };
 }
 
@@ -778,27 +792,31 @@ function latestTopSet(
   date: string;
   session_id: number;
 } | null {
-  const ex = findExercise(name);
-  if (!ex) return null;
+  // The lift's own row, plus the bodyweight-ladder rows it replaced — a rotated-in
+  // "Neutral-Grip Pull-Up" reads the last "Assisted Pull-Up" session rather than
+  // starting over (progressionLineageIds; a loaded lift is only its own row).
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return null;
+  const inIds = ids.map(() => "?").join(",");
   // Most recent session that logged this lift; within it, the top set by est-1RM
   // (reps) or by duration (timed). RIR comes off that top set when present.
   const latestSession = (
     db
       .prepare(
         `SELECT s.id, s.date FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-         WHERE ls.exercise_id = ? AND (ls.reps IS NOT NULL OR ls.duration_sec IS NOT NULL)
+         WHERE ls.exercise_id IN (${inIds}) AND (ls.reps IS NOT NULL OR ls.duration_sec IS NOT NULL)
          ORDER BY s.date DESC, s.id DESC LIMIT 1`
       )
-      .get(ex.id) as any
+      .get(...ids) as any
   );
   if (!latestSession?.date || latestSession?.id == null) return null;
   const sets = db
     .prepare(
       `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir, ls.duration_sec AS duration_sec
        FROM logged_sets ls
-      WHERE ls.exercise_id = ? AND ls.session_id = ?`
+      WHERE ls.exercise_id IN (${inIds}) AND ls.session_id = ?`
     )
-    .all(ex.id, latestSession.id) as any[];
+    .all(...ids, latestSession.id) as any[];
   if (!sets.length) return null;
   // Top set: max (weight×(1+reps/30)) for reps; max duration for timed.
   let top = sets[0];
@@ -825,35 +843,55 @@ function latestTopSet(
 // hardest (top) weight, so warmups/backoffs don't dilute the double-progression read.
 // Bodyweight (null weight) sets are all "working". Empty when nothing's logged. This is
 // how the engine tells "every set capped the range" from "only the top set did".
+let latestSessionMemo: { key: string; date: string | null } | null = null;
+function latestLoggedSessionDate(through: string): string | null {
+  const key = `${through}|${trainingRowsSignature()}`;
+  if (latestSessionMemo?.key === key) return latestSessionMemo.date;
+  const row = db
+    .prepare(
+      `SELECT MAX(s.date) AS date FROM sessions s
+        WHERE s.date <= ? AND EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id)`
+    )
+    .get(through) as { date?: string | null } | undefined;
+  const date = row?.date ? String(row.date) : null;
+  latestSessionMemo = { key, date };
+  return date;
+}
+
 function latestWorkingSets(name: string): { weight: number | null; reps: number | null; rir: number | null }[] {
-  const ex = findExercise(name);
-  if (!ex) return [];
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return [];
+  const inIds = ids.map(() => "?").join(",");
   const latestSession = (
     db
       .prepare(
         `SELECT s.id, s.date FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-         WHERE ls.exercise_id = ? AND ls.reps IS NOT NULL
+         WHERE ls.exercise_id IN (${inIds}) AND ls.reps IS NOT NULL
          ORDER BY s.date DESC, s.id DESC LIMIT 1`
       )
-      .get(ex.id) as any
+      .get(...ids) as any
   );
   if (!latestSession?.date || latestSession?.id == null) return [];
   const rows = db
     .prepare(
       `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
        FROM logged_sets ls
-      WHERE ls.exercise_id = ? AND ls.session_id = ? AND ls.reps IS NOT NULL`
+      WHERE ls.exercise_id IN (${inIds}) AND ls.session_id = ? AND ls.reps IS NOT NULL`
     )
-    .all(ex.id, latestSession.id) as any[];
+    .all(...ids, latestSession.id) as any[];
   if (!rows.length) return [];
-  // The working weight is the hardest (largest signed) loaded weight in the session;
-  // sets at it are the working sets. If nothing carries a weight, it's a bodyweight
-  // movement and every logged set counts.
+  // The working weight is the hardest (largest signed) weight in the session; sets
+  // at it are the working sets. Bodyweight (null) is the zero of that signed scale:
+  // harder than any assist, easier than any added load — so bodyweight sets beside
+  // an assisted finisher ARE the working sets (the assisted set is the back-off),
+  // while bodyweight sets beside loaded ones are warm-ups. A session with nothing
+  // weighted is a bodyweight session and every logged set counts.
+  const signed = (r: any): number => (r.weight == null ? 0 : Number(r.weight));
   let topW: number | null = null;
   for (const r of rows) {
-    if (r.weight != null && (topW == null || Number(r.weight) > topW)) topW = Number(r.weight);
+    if (topW == null || signed(r) > topW) topW = signed(r);
   }
-  const working = topW == null ? rows.filter((r) => r.weight == null) : rows.filter((r) => Number(r.weight) === topW);
+  const working = rows.filter((r) => signed(r) === topW);
   return working.map((r) => ({
     weight: r.weight ?? null,
     reps: r.reps != null ? Number(r.reps) : null,
@@ -873,6 +911,35 @@ function metSnapshottedPrescription(dose: any): boolean {
   const top = dose.achieved?.top_weight;
   if (target == null || !Number.isFinite(Number(target))) return true;
   return top != null && Number.isFinite(Number(top)) && Number(top) + 0.1 >= Number(target);
+}
+
+// Confounders that only ever make a dose HARDER than a clean day would have been:
+// the legs already carried a run, the athlete was travelling, the day was a
+// prescribed recovery dose. They exist so a flat or short day is not read as a
+// regression. They are not a reason to ignore a day the athlete cleared anyway.
+// Illness, a movement-relevant symptom and a set shortfall are not in this set —
+// those keep full authority.
+const HANDICAP_CONFOUNDS = new Set(["loaded_endurance", "travel", "recovery_dose"]);
+
+// WORK DONE IS EVIDENCE, in the one direction a handicap allows. A dose that was
+// non-comparable ONLY because of a handicap, finished every prescribed set, met or
+// beat its own prescription, and landed at or above its full-load reference (the
+// lift's own recent working weight, the plan only as a no-history fallback) is a
+// LOWER bound on what the lift can do — so it may count toward an earned step. It
+// never counts against one: a missed handicapped day stays non-comparable. Loaded
+// work only; the stored reference, never a guess.
+function fullLoadThroughConfound(dose: any, reasons: readonly string[]): boolean {
+  if (!dose || typeof dose !== "object" || dose.relevant_symptom === true) return false;
+  if (!reasons.length || !reasons.every((r) => HANDICAP_CONFOUNDS.has(String(r)))) return false;
+  if (dose.challenge_verdict !== "met" && dose.challenge_verdict !== "exceeded") return false;
+  const prescribedSets = Number(dose.prescribed?.sets);
+  const achievedSets = Number(dose.achieved?.sets);
+  if (!(prescribedSets > 0) || !(achievedSets >= prescribedSets)) return false;
+  const ref = dose.full_load_reference ?? {};
+  const toNum = (v: unknown): number | null => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const reference = harderLoad(toNum(ref.target_weight), toNum(ref.recent_working_weight));
+  const top = toNum(dose.achieved?.top_weight);
+  return reference != null && reference > 0 && top != null && loadAtOrAbove(top, reference);
 }
 
 function linkedDoseEligibility(
@@ -941,7 +1008,12 @@ function linkedDoseEligibility(
   const currentSchema = Number(facts?.schema_version) >= OUTCOME_FACTS_SCHEMA_VERSION;
   const perDose =
     currentSchema && typeof dose.comparable === "boolean"
-      ? { comparable: dose.comparable === true }
+      ? {
+          comparable: dose.comparable === true,
+          non_comparable_reasons: Array.isArray(dose.non_comparable_reasons)
+            ? dose.non_comparable_reasons.map(String)
+            : ["non_comparable"],
+        }
       : doseComparability({
           session_reasons: sessionReasons,
           own_dose_shortfall: !provablyPrescribed && sessionReasons.includes("partial"),
@@ -958,6 +1030,9 @@ function linkedDoseEligibility(
           performed_at_full_load: dose.performed_at_full_load === true,
         });
   if (!perDose.comparable) {
+    if (fullLoadThroughConfound(dose, perDose.non_comparable_reasons)) {
+      return { linked_outcome: true, eligible: true, reason: "full_load_through_confound" };
+    }
     return { linked_outcome: true, eligible: false, reason: "non_comparable" };
   }
   if (dose.challenge_verdict !== "met" && dose.challenge_verdict !== "exceeded") {
@@ -966,7 +1041,9 @@ function linkedDoseEligibility(
     // completed that snapshot, a later target rewrite may make the stored verdict
     // look under_prescribed — catch that up as a full comparable exposure. The
     // carve-out does NOT run before comparability: an endurance overlap or a
-    // movement-relevant symptom still holds the lift out of the comparable set.
+    // movement-relevant symptom still holds the lift out of the comparable set
+    // (a handicapped dose that cleared full load counts only through
+    // fullLoadThroughConfound above, under its own reason).
     if (opts?.planBehind && metSnapshottedPrescription(dose)) {
       return { linked_outcome: true, eligible: true, reason: "full_comparable" };
     }
@@ -1544,9 +1621,25 @@ function repsPrescription(
   // null/zero loads, so a genuinely bodyweight lift never reads as behind.
   // A positive recent on an assisted plan is NOT behind — that number is the slip
   // the sign-integrity path exists to ignore, not a working weight to catch up to.
-  const planUnset = plan != null && planWeight == null && recentWorking != null && !(assistHistory && recentWorking > 0);
+  // ASSIST RETIRED. Assisted → bodyweight → loaded is ONE ladder, and the log is
+  // the truth about which rung the athlete is on. recentWorkingWeight reads only
+  // non-zero loads, so a lift done at bodyweight for sessions — with one assisted
+  // finisher — still read as "assist": the card kept asking for help the athlete
+  // had stopped needing. When the recent sessions show unassisted working sets at
+  // the plan's own rep floor, the base is bodyweight (null) and an assist target is
+  // BEHIND reality, re-grounded through the same proposal as any catch-up. Never
+  // past bodyweight in one step: added load is earned from there by the ladder.
+  const assistRetired =
+    baseWeight != null &&
+    baseWeight < 0 &&
+    repLow != null &&
+    unassistedProvenSessions(name, repLow) >= ASSIST_RETIRE_SESSIONS;
+  if (assistRetired) baseWeight = null;
+  const planUnset =
+    !assistRetired && plan != null && planWeight == null && recentWorking != null && !(assistHistory && recentWorking > 0);
   const planBehind =
     planUnset ||
+    (assistRetired && planWeight != null && planWeight < 0) ||
     (planWeight != null &&
       recentWorking != null &&
       !(planWeight < 0 && recentWorking > 0) &&
@@ -1630,7 +1723,17 @@ function repsPrescription(
   // (unless the trend independently reads progressing, which it always did), and
   // RIR ≥ 2 still counts even below the ceiling for the rep stage.
   const rirLogged = lastRir != null;
+  // A step is earned by CURRENT work. A lift that sat out of the rotation past
+  // LIFT_CURRENT_WINDOW_DAYS while the athlete kept training re-baselines at its last
+  // load when it comes back — a July top set does not buy a heavier card in September.
+  // Measured against the athlete's latest logged session on or before the read's date,
+  // not the wall clock: the question is "has this lift left the rotation", and a
+  // historical replay must read the calendar it is replaying.
+  const recencyRef = latestLoggedSessionDate(date) ?? date;
+  const lastAge = last?.date ? daysBetweenISO(recencyRef, last.date) : null;
+  const current = lastAge == null || lastAge <= LIFT_CURRENT_WINDOW_DAYS;
   const strong =
+    current &&
     doseEligibility.eligible &&
     (status === "progressing" || (rirLogged ? (lastRir as number) >= RIR_IN_RESERVE : true));
   // The card must not tell an athlete who never logs RIR to come back at "RIR 2+".
@@ -2005,7 +2108,12 @@ function repsPrescription(
   // Catch-up framing: when the plan target was BEHIND the real working weight, say so
   // plainly — the step is "from where you actually are", and even a hold re-grounds the
   // plan onto reality (the suggested weight = baseWeight, so applying lands it there).
-  if (planBehind && baseWeight != null) {
+  if (assistRetired && planBehind && !loadConstrained) {
+    // The catch-up here is the assist coming off, not a load to name.
+    if (action === "overload" && !repStep && !topSet)
+      why = say(voice.ASSIST_RETIRED_OVERLOAD, "assist_retired_overload");
+    else if (action === "hold") why = say(voice.ASSIST_RETIRED_HOLD, "assist_retired_hold");
+  } else if (planBehind && baseWeight != null) {
     const lbl = baseWeight < 0 ? `${Math.abs(baseWeight)} lb assist` : `${baseWeight} lb`;
     // "The plan said a lighter number" and "the plan said nothing at all" are
     // different facts, and the athlete can tell them apart on the card.
@@ -2116,6 +2224,38 @@ function repsPrescription(
           repLow as number
         )
       : sayEffort(voice.EARNED_OPEN_OVERLOAD, voice.EARNED_OPEN_OVERLOAD_REPS, "earned_open_overload");
+  }
+
+  // A LOAD STEP IS TAKEN FROM THE WEIGHT THAT WAS WORKED. When the latest session
+  // capped the range at a lighter load than the base (a reduced card, a lighter day),
+  // that session proves the lighter load, not the base — stepping past the base off
+  // it hands out a number nothing logged has touched. The step is re-taken from the
+  // worked load and never lands below the base; when it would not clear the base, the
+  // base IS the next target and the lift holds there until a session at it caps.
+  const workedTop = workingSets.reduce<number | null>(
+    (top, set) => (set.weight != null && (top == null || Number(set.weight) > top) ? Number(set.weight) : top),
+    null
+  );
+  if (
+    action === "overload" &&
+    !repStep &&
+    !topSet &&
+    baseWeight != null &&
+    baseWeight > 0 &&
+    nextWeight != null &&
+    nextWeight > baseWeight &&
+    workedTop != null &&
+    workedTop > 0 &&
+    workedTop < baseWeight - 0.1
+  ) {
+    const fromWorked = clampedOverload(workedTop, group, brakeCtx?.personalModifier, phaseStepScale);
+    if (fromWorked <= baseWeight + 0.1) {
+      action = "hold";
+      nextWeight = baseWeight;
+      why = say(voice.LIGHTER_SESSION_HOLD, "lighter_session_hold")(`${baseWeight} lb`);
+    } else {
+      nextWeight = Math.min(nextWeight, fromWorked);
+    }
   }
 
   // AUTOREGULATION GATE — one step toward safety on high soreness / low performance /
@@ -2258,7 +2398,9 @@ function repsPrescription(
     ? `top set ${topSet.weight} × ${topSet.reps}`
     : repStep
       ? "+1 rep"
-      : loadedDeltaText(baseWeight, nextWeight);
+      : // A retired assist moves the card off the plan's assist number, whatever the
+        // day then does with it — the delta says so rather than "hold bodyweight".
+        loadedDeltaText(assistRetired && planBehind ? planWeight : baseWeight, nextWeight);
   // The displayed "current" reflects REALITY when the plan was behind, so the card
   // reads "50 → 52.5", never "27 → …" off a number the athlete left behind weeks ago.
   const displayCurrent: PrescriptionTarget | null = cur
@@ -2747,12 +2889,15 @@ export function buildProgressionProposal(
     // other target nudge — bounded, reversible, ledgered, landing at a natural
     // boundary through applyProposalWithAutonomy — never a silent direct write.
     const planned = planTargets.get(p.exercise.toLowerCase());
+    // A retired assist re-grounds to bodyweight, which is a NULL target — still a
+    // real change against a stored negative one.
     const regroundOnly =
       p.action === "hold" &&
       p.reground === true &&
       p.mode === "reps" &&
-      p.suggested?.weight != null &&
-      (planned == null || Math.abs(Number(p.suggested.weight) - Number(planned)) > 0.1);
+      (p.suggested?.weight != null
+        ? planned == null || Math.abs(Number(p.suggested.weight) - Number(planned)) > 0.1
+        : p.suggested?.weight === null && planned != null && Number(planned) < 0);
     if (p.action === "hold" && !regroundOnly) continue;
     if (p.rep_step) continue; // a double-progression rep advance is no plan change — the range already covers it
     // A peak-week top set is a SESSION protocol, not a plan target. Writing a

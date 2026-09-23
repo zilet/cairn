@@ -52,13 +52,6 @@ const PLAN_SCHEMA = `{
     { "day_number": <1-7>, "exercise": "<exact current exercise>", "remove": true, "reason": "<why remove it; NEVER use sets:0>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|plan|null>", "source_ref_key": "<source ID/date|null>" } },
     { "day_number": <1-7>, "swap": { "from": "<exact current exercise>", "to": "<new same-pattern movement>" }, "sets": <number|null>, "rep_low": <number|null>, "rep_high": <number|null>, "target_weight": <number|null>, "reason": "<why rotate it in>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|plan|null>", "source_ref_key": "<source ID/date|null>" } }
   ],
-  "cardio": [
-    { "day_number": <1-7>, "label": "<e.g. Easy run / Long run / Tempo / Intervals>",
-      "target_distance_km": <number|null>, "target_duration_min": <number|null>,
-      "target_zone": "<Z2|easy|tempo|threshold|intervals|long|null>", "reason": "<why this run, this week>",
-      "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<activity|plan|null>", "source_ref_key": "<source ID/date|null>" },
-      "note": "<optional timeless pacing/structure>" }
-  ],
   "notes": "<optional coaching notes, may be empty>"
 }
 // "changes"  → atomically add/update/remove/swap strength prescriptions on existing
@@ -78,18 +71,17 @@ const PLAN_SCHEMA = `{
 //              as_of_date is the date this proposal was generated. Prefer absolute
 //              dates or timeless wording in reason itself — never write "yesterday"
 //              into enduring plan copy. Use a source reference/ID when DATA supplies one.
-// "cardio"   → prescribe THIS WEEK's runs (one entry per planned run). Applied
-//              surgically: each attaches to its day_number, REPLACING that day's
-//              cardio while leaving its strength work intact; a day_number with no
-//              plan day yet is created as a dedicated run day. This is the headline
-//              output for a runner/hybrid user with an endurance goal — use it
-//              alongside (or instead of) "changes". DON'T wrap runs in "days".
-// "days"     → ONLY for a real split/FREQUENCY rewrite (whole plan replaced). Each
-//              item may be strength OR { "kind":"cardio", … } as below:
+// RUNS ARE NOT PLAN ITEMS. Plan days are LIFTING days only. Every run — easy, quality,
+//              long — is built by Cairn's run engine each week on the athlete's stated
+//              run days (DATA.endurance_schedule, DATA.run_plan), and a rest day is
+//              simply a weekday they neither lift nor run. Never write a run, a
+//              run-only day or a rest day into "changes" or "days": it is not stored.
+//              If the running week itself should change (which days they run, adding
+//              quality), say so plainly in "notes" — the athlete sets run days in chat.
+// "days"     → ONLY for a real split/FREQUENCY rewrite of the LIFTING week (whole plan
+//              replaced). Every day carries strength work; each item is as below:
 //   "days": [ { "day_number": <n>, "name": "<day name>", "focus": "<focus>", "items": [
-//     { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <n|null>, "superset_group": <int|null — same value pairs two items as a superset> },
-//     { "kind": "cardio", "exercise": "<e.g. Long run>", "target_distance_km": <n|null>,
-//       "target_duration_min": <n|null>, "target_zone": "<Z2|tempo|easy|null>", "note": "<optional>" }
+//     { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <n|null>, "superset_group": <int|null — same value pairs two items as a superset> }
 //   ] } ]`;
 
 // The active periodization block (goal / phase / week N of M), so the coach
@@ -182,7 +174,7 @@ ${promptData(ctx, "coach")}`;
 // PROGRAM evolve? Progress what's working, deload/rotate what's stuck, break
 // plateaus with a close variation, introduce novelty before staleness sets in,
 // add quality to a one-pace endurance base, and periodize toward the goal. Output
-// is the SAME PLAN_SCHEMA (changes/cardio/days) → a DRAFT proposal for review;
+// is the SAME PLAN_SCHEMA (changes/days) → a DRAFT proposal for review;
 // nothing auto-applies. Constitution: a suggestion, never a gate; no scores.
 export function buildProgramEvolutionPrompt(userInstruction?: string, state?: any): string {
   const ctx = getCoachContext();
@@ -296,9 +288,10 @@ HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
   "NEW — start light, log actual" note and MUST respect constraint_notes / injuries.
 - PERIODIZE: respect the mesocycle position — if a deload is about due (phase "deload-due"), propose a
   lighter week rather than piling on. Don't ramp intensity and volume at once.
-- ENDURANCE: if the endurance read says "add-quality", introduce ONE structured quality session
-  (tempo or intervals) into an otherwise easy base via "cardio"/"days"; if "ease"/"spiking", hold
-  mileage; if "build", a conservative (~10%) step. Periodize toward any race goal.
+- ENDURANCE: the run engine builds each week's runs on the athlete's stated run days and already
+  reads the endurance state (add-quality / ease / build) and any race goal — runs are never part of
+  your proposal. Shape the LIFTING around them; if the running week itself needs a different shape
+  (a quality day added, a run day moved), say so in "notes" for the athlete to set in chat.
 - HYBRID PLACEMENT (a runner who lifts): the RUN PLAN block shows which day carries the long run and
   which carries the quality run. Never place the week's heaviest lower-body day (squat / hinge / heavy
   unilateral work) on the day BEFORE or the day AFTER either of them — the legs cannot give their best
@@ -319,12 +312,14 @@ HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
   lift_days_source says whether they SAID it ("stated") or you are reading it off their log
   ("observed"), so check yourself against the data rather than by eye. A stated week is not yours to
   argue with. An observed week you may move ONE day of, if the reason is real and you say it plainly
-  as your suggestion — never as something they asked for. The ring you propose MUST carry one strength day for EVERY
-  stated lifting weekday, plus an endurance-only day for each stated run weekday that is not also a
-  lifting day, plus a rest day for each weekday in neither. Never put a strength day on a weekday they
-  did not name, and never turn a stated lifting weekday into rest — an athlete who says they lift
-  Monday to Friday and keeps the weekend for the long run has told you the shape; a proposal that
-  hands them a Saturday lifting day or a Friday rest day contradicts them to their face. Where a
+  as your suggestion — never as something they asked for. The ring you propose is STRENGTH DAYS
+  ONLY, one for EVERY stated lifting weekday, laid onto those weekdays in order. Run days and rest
+  days are the calendar's, never plan days: a stated run weekday that is not a lifting day carries
+  the run the engine builds, and a weekday in neither is rest — so never emit a run-only or rest day.
+  Never put a strength day on a weekday they did not name, and never leave a stated lifting weekday
+  without one — an athlete who says they lift Monday to Friday and keeps the weekend for the long run
+  has told you the shape; a proposal that hands them a Saturday lifting day contradicts them to
+  their face. Where a
   weekday is BOTH stated lifting and stated running, that day takes the upper-body or otherwise
   non-leg session, and the week's heaviest squat/hinge day goes on a lifting weekday that carries no
   run. If the stated days genuinely cannot hold the volume the block needs, say so in the rationale
@@ -373,24 +368,19 @@ const WEEK_COMPOSE_SCHEMA = `{
   "as_of_date": "<YYYY-MM-DD date this week was composed>",
   "summary": "one or two sentences on the shape of this week and why it starts here",
   "days": [
-    { "day_number": <1-7>, "name": "<day name, e.g. Lower>", "focus": "<focus, e.g. lower>", "day_type": "training", "items": [
+    { "day_number": <1-7>, "name": "<day name, e.g. Lower>", "focus": "<focus, e.g. lower>", "items": [
       { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <number|null>, "superset_group": <int|null — same value pairs two items as a superset>, "note": "<optional cue, e.g. 'NEW — start light, log actual'>" },
-      { "exercise": "<name>", "sets": <n>, "target_seconds": <n>, "note": "<ONLY for a held/timed movement — omit reps and load>" },
-      { "kind": "cardio", "exercise": "<e.g. Long run>", "target_distance_km": <n|null>,
-        "target_duration_min": <n|null>, "target_zone": "<Z2|easy|tempo|threshold|intervals|long|null>", "note": "<optional timeless pacing/structure>" }
-    ] },
-    { "day_number": <1-7>, "name": "<e.g. Rest>", "focus": null, "day_type": "rest", "items": [] }
+      { "exercise": "<name>", "sets": <n>, "target_seconds": <n>, "note": "<ONLY for a held/timed movement — omit reps and load>" }
+    ] }
   ],
   "notes": "<optional coaching notes, may be empty>"
 }
-// "days"     → the WHOLE week, and the only output. One entry per DAY of the week the
-//              template covers, including the rest days. Each item is strength by
-//              default, or an endurance prescription with "kind":"cardio".
-// "day_type" → "training" (the default if you omit it) or "rest". A "rest" day carries
-//              an EMPTY "items" array — the emptiness is the prescription. Never put
-//              work on a rest day; it will be refused.
-// A first week has nothing to progress FROM, so it carries no "changes" and no
-// "cardio" array — both of those edit an existing plan. Emit "days" only.`;
+// "days"     → the LIFTING week, and the only output. One entry per LIFTING day, each
+//              carrying strength work. Runs and rest are NOT days: the run engine lays
+//              the week's runs on the athlete's stated run days, and a weekday with
+//              neither is rest. A run item or an empty day is not stored.
+// A first week has nothing to progress FROM, so it carries no "changes" — that edits
+// an existing plan. Emit "days" only.`;
 
 // Compose the athlete's FIRST training week — both lanes, one Mon–Sun template.
 // Deliberately NOT an evolution: there is no history to trend, no plateau to break
@@ -427,28 +417,25 @@ HOW TO COMPOSE IT:
   INTENT line), their endurance role, their goal and any race date decide what leads. A strength-
   first athlete gets lifting as the spine with running fitted around it; an endurance-first one
   gets the key runs protected and lifting kept supportive.
-- BOTH LANES, ONE WEEK. If they have an endurance sport, a race or real run history, this week
-  carries actual run prescriptions ("kind":"cardio" items) — easy aerobic work, one long run, and
-  at most one quality session. If the data shows NO endurance sport, no race and no runs, do NOT
-  invent running; compose the lifting week alone.
+- BOTH LANES, ONE WEEK — but only one of them is yours to write. The runs are built by Cairn's
+  run engine on the athlete's stated run days (DATA.endurance_schedule; DATA.run_plan shows the
+  week it would build), so your "days" are the LIFTING days alone, placed around those runs. If
+  they have an endurance sport or a race but have not named their run days, say in the summary
+  which weekdays you composed the lifting around, so they can tell Cairn the run days in chat. If
+  the data shows NO endurance sport, no race and no runs, compose the lifting week alone.
 - NO TWO HARD DAYS BACK TO BACK, on the ring. A heavy lower day, the long run and the quality run
   are the hard days. Never place the heaviest lower-body work (squat / hinge / heavy unilateral)
   the day BEFORE or the day AFTER the long run or the quality run — the legs cannot give their
   best to both. Never stack three hard days in a row, including across the Sunday→Monday seam.
-- THE LONG RUN GOES LATE in the week, where the days around it can be easy; QUALITY sits MID-WEEK,
-  well clear of it. Put the genuinely easy days and the rest days between them.
-- NAME THE REST DAY. A rest day is a day in the week with "day_type":"rest" and an empty "items"
-  array — not a gap in the numbering. It is the week's SEAM: the ring's recovery point, the thing
-  that stops the hard days from stacking across Sunday into Monday, and the day the athlete's
-  Brief can honestly say is theirs. A week whose day_numbers simply skip a day has no seam
-  anywhere in it, which is how a seven-day template ends up asking for training every single day.
+- THE LONG RUN SITS LATE in the week and QUALITY MID-WEEK (the run engine places them there when
+  the athlete has not named days) — keep the heaviest lifting days clear of both.
 - BUILD FOR THE DAYS THEY ACTUALLY TRAIN. Cairn stores training frequency as something they SAID,
   not as a field — read DATA.memory and the profile's about_me for it ("trains about 4 days a
   week"). When nothing says, build a sustainable 3-4 training days and note in the summary that
   the week can grow once they've run it. An honest week they finish beats an ideal one they drop.
-- LEAVE REAL REST. A week with no rest day is not a week they will run twice. Give it a day of its
-  own with "day_type":"rest" and no items, placed where the hard days need the break — and read
-  the no-two-hard-days rule around it, since a rest day IS the seam that separates them.
+- LEAVE REAL REST. A week with no rest day is not a week they will run twice. Rest is any weekday
+  with no lifting and no run — so compose FEWER lifting days than the week has room for, and
+  never write a rest day as a day of its own: it is not stored.
 - START LIGHT AND HONEST. With no logged history, prescribe conservative starting loads with a
   short "NEW — start light, log actual" note, or leave target_weight null and let the first
   session set the number — never invent a load they have never lifted. Where DATA does carry

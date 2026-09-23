@@ -2,7 +2,7 @@ import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { listActiveDirectives } from "./directives-read.js";
 import { newestHealthDocDate } from "./health.js";
-import { markerGroup } from "./propagation-data.js";
+import { markerGroup, optimalDistance, WEARABLE_TREND_ZONES } from "./propagation-data.js";
 import { readingAgeDays, readingPastValidity } from "./marker-validity.js";
 import {
   ACUTE_DIRECTIVE_STALE_DAYS,
@@ -35,6 +35,48 @@ export interface FocusReading {
   in_optimal: boolean | null;
   trend: string | null; // rising/falling/stable
   projection: string | null; // plain-language forecast vs optimal
+  // What the STATUS (in_optimal/flag-adjacent reading) above is judged against, for a
+  // wearable recovery marker (HRV / Resting HR) only — every other marker is 'single' by
+  // definition, since a lab draw IS the reading. 'week' = this week's own-band average
+  // (wearableWeeklyMarkerRead below); 'single' = one night, no status is drawn from it
+  // (the value above is shown for reference only, never as a verdict).
+  status_basis: "week" | "single";
+  status_note: string | null; // plain words, e.g. "this week's average (5 nights)" — never a number-as-grade
+}
+
+// ----------------------------------------------------------------------------
+// WEARABLE WEEKLY LAW — the ONE place a display surface judges HRV / Resting HR the
+// same way the directive engine does (propagation.ts, round 1): the mean of the last
+// WEARABLE_TREND_WINDOW_DAYS nights (>= WEARABLE_TREND_MIN_NIGHTS), against the
+// athlete's own band when the watch has learned one — never one night. prioritizeMarkers()
+// already computes `trend_window` for these two markers (wearableFitnessMarkers) but still
+// leaves `in_optimal`/`distance` keyed to `latest.value`, the single most-recent night — that
+// mismatch is what let the Health surface and the directive engine disagree. This function
+// re-derives in_optimal/distance from the SAME trend_window mean, against the SAME band
+// (m.optimal, already personalized), so the two can never read a different HRV again.
+// A marker with too few nights this week (trend_window null) gets no status at all — the
+// latest reading still shows, but it never earns a tier/verdict off a single night, mirroring
+// the directive engine's own "too few nights -> no trend -> no directive" rule.
+// Pure; never throws; markers outside WEARABLE_TREND_ZONES pass through unchanged.
+export function wearableWeeklyMarkerRead(m: any): any {
+  if (!m || m.source !== "wearable" || !WEARABLE_TREND_ZONES.has(String(m?.name ?? ""))) {
+    return { ...m, status_basis: "single" as const, status_note: null };
+  }
+  const win = m?.trend_window;
+  const nights = Number(win?.nights);
+  const weekValue = Number(win?.value);
+  if (!win || !Number.isFinite(weekValue) || !Number.isFinite(nights) || nights < 1) {
+    // No trend this week — never invent a status off one night. The latest reading
+    // stays on the row (m.latest is untouched); only the VERDICT is withheld.
+    return { ...m, in_optimal: null, distance: 0, status_basis: "single" as const, status_note: null };
+  }
+  const zone = m?.optimal; // {low, high, dir} — already the athlete's own band when learned
+  const note = `this week's average (${nights} night${nights === 1 ? "" : "s"})`;
+  if (!zone || !Number.isFinite(Number(zone.low)) || !Number.isFinite(Number(zone.high))) {
+    return { ...m, status_basis: "week" as const, status_note: note };
+  }
+  const distance = optimalDistance(weekValue, { optimal: [Number(zone.low), Number(zone.high)], dir: zone.dir } as any);
+  return { ...m, in_optimal: distance === 0, distance, status_basis: "week" as const, status_note: note };
 }
 export interface FocusPriority {
   group: string; // group label, e.g. "Lipids & Cardiovascular"
@@ -58,7 +100,10 @@ export interface HealthFocus {
 }
 
 export function healthFocus(): HealthFocus {
-  const { markers } = prioritizeMarkers(); // ordered: flagged-first then furthest-from-optimal
+  const { markers: rankedMarkers } = prioritizeMarkers(); // ordered: flagged-first then furthest-from-optimal
+  // Judge HRV / Resting HR on the SAME week the directive engine reads (wearableWeeklyMarkerRead
+  // above) — a single night never drives this surface's tier/status either.
+  const markers = rankedMarkers.map(wearableWeeklyMarkerRead);
   // Is this marker's own latest reading past the window its KIND of marker stays current
   // for (src/repo/marker-validity.ts)? Per-marker, so a group mixing a current finding
   // with an aged one still leads on the current one.
@@ -226,6 +271,8 @@ export function healthFocus(): HealthFocus {
       in_optimal: m.in_optimal ?? null,
       trend: m?.trend?.dir ?? null,
       projection: m?.forecast?.eta_text ?? m?.trend?.projection ?? null,
+      status_basis: m?.status_basis === "week" ? "week" : "single",
+      status_note: m?.status_note ?? null,
     }));
     priorities.push({
       group: label,

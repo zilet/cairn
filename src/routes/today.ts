@@ -9,7 +9,12 @@ import {
   todayAgenda,
 } from "../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../domain/health/index.js";
-import { planDayRecoveryCandidates, selectedPlanDayForDate, todayStrengthLine } from "../domain/training/index.js";
+import {
+  calendarDayRead,
+  planDayRecoveryCandidates,
+  selectedPlanDayForDate,
+  todayStrengthLine,
+} from "../domain/training/index.js";
 import { markTodayAgendaSeen, todayAggregate, todayDateParam } from "../domain/today/index.js";
 import { recordDismissal } from "../repo/surface-dismissals.js";
 
@@ -33,7 +38,29 @@ todayRouter.get("/today", (req, res) => {
 export function publicTodayPlanDay(dateQuery?: unknown) {
   const date = todayDateParam(dateQuery);
   const selected = selectedPlanDayForDate(date);
-  if (!selected) return null;
+  if (!selected) {
+    // No plan day today. Plan days hold strength only, so a weekday the athlete does
+    // not lift has no row: say which CALENDAR day it is — a stated run day or a rest
+    // day — rather than a bare null the client would read as "no plan at all". Still
+    // null when there is genuinely no plan and no lifting week to read.
+    const calendar = (() => {
+      try {
+        return calendarDayRead(date);
+      } catch {
+        return null;
+      }
+    })();
+    if (!calendar || calendar.kind === "lift") return null;
+    return {
+      day_number: null,
+      focus: null,
+      source: "calendar" as const,
+      calendar: calendar.kind,
+      run_kind: calendar.kind === "run" ? calendar.run_kind : null,
+      reason: null,
+      candidates: planDayRecoveryCandidates(date),
+    };
+  }
   const adaptiveReason = typeof selected.selection?.reason === "string"
     ? selected.selection.reason.trim().slice(0, 240)
     : null;

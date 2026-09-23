@@ -16,12 +16,6 @@ function loadPlanEditor() {
     Number,
     Math,
     encodeURIComponent,
-    isCardioItem: (item) => item && item.kind === "cardio",
-    cardioIntervalNote: (interval) => (interval && interval.note) || "",
-    cardioArtPhrase: (item) => item.note || "run",
-    cardioLabel: (item) => item.note || "Cardio",
-    cardioDescription: (item) => item.description || "",
-    cardioPrescription: (item) => item.prescription || "45 min · Z2",
     art: (kind, text) => `<svg data-kind="${kind}" data-text="${String(text)}"></svg>`,
     artImg: (kind, text, className) => `<span class="${className}" data-kind="${kind}">${escapeText(text)}</span>`,
     fmtDur: (seconds) => `${Math.round(Number(seconds) / 60)}m`,
@@ -30,6 +24,8 @@ function loadPlanEditor() {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  // The real strength-only filters (loaded ahead of the Plan bundle in the app).
+  vm.runInNewContext(readFileSync(join(root, "public/js/cardio-plan-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-client.js"), "utf8"), context);
   return context.CairnPlanEditor;
 }
@@ -37,6 +33,8 @@ function loadPlanEditor() {
 test("plan editor normalizes plan rows and exposes stable blank item defaults", () => {
   const editor = loadPlanEditor();
 
+  // Runs left the strength plan: a cardio item an older payload still carries is
+  // dropped from the model, never edited as a plan row.
   const day = editor.dayModelFromPlan({
     day_number: 2,
     name: "Tempo",
@@ -47,10 +45,9 @@ test("plan editor normalizes plan rows and exposes stable blank item defaults", 
   });
 
   assert.equal(day.focus, "");
+  assert.equal(day.items.length, 1);
   assert.equal(day.items[0].kind, "strength");
-  assert.equal(day.items[0].interval_note, "ignored");
-  assert.equal(day.items[1].kind, "cardio");
-  assert.equal(day.items[1].interval_note, "6x400m");
+  assert.equal(day.items[0].exercise, "Bench");
   const strength = editor.blankStrength();
   assert.equal(strength.kind, "strength");
   assert.equal(strength.exercise, "");
@@ -60,11 +57,7 @@ test("plan editor normalizes plan rows and exposes stable blank item defaults", 
   assert.equal(strength.target_weight, null);
   assert.equal(strength.note, "");
   assert.equal(strength.warmup_sets, null);
-  assert.equal(strength.target_distance_km, null);
-  assert.equal(strength.target_duration_min, null);
-  assert.equal(strength.target_zone, null);
-  assert.equal(strength.interval_note, "");
-  assert.equal(editor.blankCardio().kind, "cardio");
+  assert.equal(editor.blankCardio, undefined, "the editor no longer builds a run row");
 });
 
 test("plan editor calendar footer and read-only day cards escape dynamic content", () => {
@@ -81,7 +74,7 @@ test("plan editor calendar footer and read-only day cards escape dynamic content
     focus: "Chest & back",
     items: [
       { kind: "strength", exercise: "Bench <press>", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185, note: "pause <rep>", warmup_sets: 2 },
-      { kind: "cardio", note: "Easy ride", description: "keep it nasal <easy>", prescription: "45 min · Z2" },
+      { kind: "cardio", note: "Easy ride <easy>", target_duration_min: 45, target_zone: "Z2" },
     ],
   }, 0);
 
@@ -91,8 +84,8 @@ test("plan editor calendar footer and read-only day cards escape dynamic content
   assert.match(html, /2 warmup · pause &lt;rep&gt;/);
   assert.match(html, /3 × 5/);
   assert.match(html, /185 lb/);
-  assert.match(html, /Easy ride/);
-  assert.match(html, /keep it nasal &lt;easy&gt;/);
+  // A run on an old payload's day is not drawn on the strength card.
+  assert.doesNotMatch(html, /Easy ride|cardio/);
   assert.match(html, /data-guide="Bench%20%3Cpress%3E"/);
   assert.doesNotMatch(html, /<push>|<press>|<rep>|<easy>/);
   // Every plan day in the read view offers a "Train this day" entry into logging,
@@ -109,6 +102,7 @@ test("plan editor editable rows preserve selectors, ordering controls, and escap
     focus: "Build <base>",
     items: [
       { kind: "strength", exercise: `Deadlift "heavy"`, sets: 4, rep_low: 3, rep_high: 5, target_weight: 275, note: "smooth <pull>", warmup_sets: 2 },
+      { kind: "strength", exercise: "Row", sets: 3, rep_low: 8, rep_high: 10 },
       { kind: "cardio", note: "Long run", target_distance_km: 12.5, target_duration_min: 75, target_zone: "Z2", interval_note: "last 10m steady" },
     ],
   }, 2);
@@ -118,35 +112,29 @@ test("plan editor editable rows preserve selectors, ordering controls, and escap
   assert.match(dayHtml, /class="pday-focus" value="Build &lt;base&gt;"/);
   assert.match(dayHtml, /data-upitem="2:0" disabled/);
   assert.match(dayHtml, /data-downitem="2:1" disabled/);
-  assert.match(dayHtml, /data-pikind="2:0:strength"/);
-  assert.match(dayHtml, /data-pikind="2:1:cardio"/);
   assert.match(dayHtml, /value="Deadlift &quot;heavy&quot;"/);
   assert.match(dayHtml, /value="smooth &lt;pull&gt;"/);
-  assert.match(dayHtml, /class="pitem pitem-cardio" data-d="2" data-i="1" data-kind="cardio"/);
-  assert.match(dayHtml, /value="12.5" placeholder="km"/);
-  assert.match(dayHtml, /value="last 10m steady"/);
+  assert.match(dayHtml, /data-additem="2"/);
+  // Lifts only: no Lift/Cardio kind toggle, no run row, no "+ cardio", no rest toggle.
+  assert.doesNotMatch(dayHtml, /data-pikind|pitem-cardio|data-kind="cardio"|placeholder="km"|data-addcardio|data-restday/);
   assert.doesNotMatch(dayHtml, /<base>|<pull>|Deadlift "heavy"/);
 });
 
-// ---- the week's rest day, in the editor (v99) ----
-// The editor saves the WHOLE week through one PUT, so the day's type has to survive
-// the model round-trip or a rest day would be erased by editing any other day.
-test("the editor carries a rest day through the model, the read view, and the edit view", () => {
+// ---- rest is the calendar, not a plan row ----
+// Runs left the strength plan and a rest day is a weekday with neither a lift nor a
+// run, so the editor models lift days only: no rest toggle, no rest read view.
+test("the editor models lift days only — a day is a training day, an empty one still isn't startable", () => {
   const editor = loadPlanEditor();
-  const rest = editor.dayModelFromPlan({ day_number: 3, name: "Rest", focus: null, day_type: "rest", items: [] });
-  assert.equal(rest.day_type, "rest");
-  assert.deepEqual(rest.items, []);
+  assert.equal(
+    editor.dayModelFromPlan({ day_number: 3, name: "Rest", focus: null, day_type: "rest", items: [] }).day_type,
+    "training",
+    "the model never carries a rest row back to the server"
+  );
   assert.equal(
     editor.dayModelFromPlan({ day_number: 1, name: "Push", focus: "push", items: [] }).day_type,
     "training",
     "a day that says nothing is an ordinary day"
   );
-
-  const read = editor.progDayHtml(rest, 0);
-  assert.match(read, /Day 3 · Rest/, "the read view names the seam");
-  assert.match(read, /rest day/i);
-  assert.doesNotMatch(read, /No exercises yet/, "emptiness is the prescription, not a gap to fill");
-  assert.doesNotMatch(read, /prog-train/, "there is nothing to train on a rest day, so nothing offers to");
 
   // An EMPTY training day is not startable either: a Start button into an empty
   // session was the bug ("an Easy day I could actually start, with no exercises").
@@ -157,17 +145,17 @@ test("the editor carries a rest day through the model, the read view, and the ed
   assert.doesNotMatch(emptyTraining, /prog-train/);
   assert.match(emptyTraining, /data-editday="1"/, "it can still be edited into a day");
 
-  const edit = editor.pdayHtml(rest, 0);
-  assert.match(edit, /data-restday="0"/, "there is a way to unmark it");
-  assert.match(edit, /This is a rest day/);
-  assert.doesNotMatch(edit, /data-additem/, "a rest day offers no way to add work to it");
-
   const training = editor.pdayHtml(
     editor.dayModelFromPlan({ day_number: 1, name: "Push", focus: "push", items: [] }),
     0
   );
-  assert.match(training, /Make this a rest day/);
+  assert.doesNotMatch(training, /rest day|data-restday/);
   assert.match(training, /data-additem/);
+
+  // The one pointer to where runs live: calm, escaped, a button into Endurance.
+  const pointer = editor.runsElsewhereHtml();
+  assert.match(pointer, /your runs live in Endurance/);
+  assert.match(pointer, /data-plan-runs/);
 });
 
 test("a gallery card: units on loads, no Train on a day already done, a shared purpose said once", () => {

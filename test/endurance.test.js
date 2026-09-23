@@ -1,12 +1,13 @@
 // Endurance / runner-first + hybrid support (v35). These pin the deterministic
 // cores: primary_discipline round-trip, discipline-aware day-read rest behavior,
-// endurance weekly stats, a cardio plan item round-trip (save→get with a null
-// exercise_id), endurance PRs, and the connected-brain endurance markers
+// endurance weekly stats, runs never landing as plan items (migration 110: a cardio
+// item is stripped at write), endurance PRs, and the connected-brain endurance markers
 // (VO2max/RHR/HRV) — including the constitution invariant that they never leak a
 // 0-100 grade / impact_score. Offline + deterministic, like the rest of the suite.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, isoDaysAgo, localDaysAgo, repo, resetTables } from "./_seed.js";
+import { runComplianceRead } from "../dist/repo/run-compliance.js";
 
 // A reference date well clear of the recovery window (so an empty recovery fetch
 // can't flip the read) — mirrors dayRead.test.js.
@@ -172,59 +173,73 @@ test("endurance weekly time-in-zone rolls up from synced Garmin activities", () 
   assert.equal(e.time_in_zone.Z2, 3000, "Z2 secs summed across both activities");
 });
 
-// ---------- B cardio plan item round-trip ----------
-test("a cardio plan item round-trips (save → get) with a NULL exercise_id", () => {
+// ---------- B runs are never plan items (migration 110) ----------
+test("a cardio plan item is stripped at write; the strength item beside it survives", () => {
   repo.savePlanDay(1, "Endurance", "Long run", [
     { kind: "cardio", exercise: "Long run", target_distance_km: 16, target_zone: "Z2", note: "easy, conversational" },
     { exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }, // a strength item alongside it
   ]);
   const day = repo.getPlanDay(1);
-  assert.equal(day.items.length, 2, "LEFT JOIN keeps the cardio item (no exercise_id) AND the strength item");
-  const cardio = day.items.find((i) => i.kind === "cardio");
-  assert.ok(cardio, "cardio item returned");
-  assert.equal(cardio.target_distance_km, 16);
-  assert.equal(cardio.target_zone, "Z2");
-  // The stored row has a NULL exercise_id (no orphaned FK, no fabricated exercise).
-  const raw = db.prepare(`SELECT exercise_id FROM plan_items WHERE plan_day_id = ? AND kind = 'cardio'`).get(day.id);
-  assert.equal(raw.exercise_id, null, "cardio item stores no exercise_id");
-  // The strength item is unaffected.
+  assert.equal(day.items.length, 1, "only the strength item is stored");
+  assert.equal(day.items.find((i) => i.kind === "cardio"), undefined, "no cardio item comes back");
+  const raw = db.prepare(`SELECT COUNT(*) AS n FROM plan_items WHERE plan_day_id = ? AND kind = 'cardio'`).get(day.id);
+  assert.equal(raw.n, 0, "no cardio row is written at all");
+  assert.equal(day.day_type, "training");
   const strength = day.items.find((i) => i.kind === "strength");
   assert.equal(strength.exercise, "Squat");
 });
 
-test("a cardio plan item carries a parsed interval structure through getPlan", () => {
+test("a run-only plan day (even an interval session) leaves no run on the plan", () => {
   repo.savePlanDay(2, "Intervals", "Track", [
     { kind: "cardio", exercise: "Intervals", target_zone: "VO2", interval: [{ reps: 6, on: "400m", off: "90s" }] },
   ]);
-  const item = repo.getPlanDay(2).items[0];
-  assert.equal(item.kind, "cardio");
-  assert.ok(Array.isArray(item.interval), "interval JSON is parsed back to an array");
-  assert.equal(item.interval[0].reps, 6);
+  const day = repo.getPlanDay(2);
+  assert.deepEqual(day?.items ?? [], [], "the interval item is stripped — the run engine owns interval structure");
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM plan_items WHERE kind = 'cardio'`).get().n, 0);
+  assert.equal(
+    repo.getPlan().some((d) => (d.items ?? []).some((i) => i.kind === "cardio")),
+    false,
+    "getPlan never returns a run item"
+  );
 });
 
-test("the iCal export renders a cardio plan item as an endurance line", () => {
+test("the iCal export carries the lifting only — a stripped run never becomes an endurance line", () => {
   repo.savePlanDay(1, "Endurance", "Long run", [
     { kind: "cardio", exercise: "Long run", target_distance_km: 12, target_zone: "Z2" },
+    { exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 },
   ]);
   const ics = repo.buildPlanICS({ now: new Date("2026-03-16T08:00:00Z"), startWeekday: 1 });
-  assert.match(ics, /Long run.*12 km.*Z2/);
+  assert.match(ics, /Squat/, "the strength item is exported");
+  assert.doesNotMatch(ics, /12 km/, "no run prescription rides into the calendar export");
 });
 
-// ---------- B2 week-ahead floor reflects prescribed cardio ----------
+// ---------- B2 week-ahead floor: lifts from the plan, runs from the calendar ----------
 // Regression: the deterministic floor used to hardcode every day to kind:'lift', so a
-// runner saw zero runs in the Today week-ahead floor. It now reads plan_items.
-test("weekAheadPlan floor marks lift / run / mixed days from plan_items", () => {
+// runner saw zero runs in the Today week-ahead floor. Plan days hold strength only now,
+// so runs come from the agenda / the athlete's stated run weekdays instead.
+test("weekAheadPlan floor marks lift days from the plan and run days from the stated run week", () => {
+  repo.setProfile({ endurance_schedule: { days: [{ dow: 2, kind: "easy" }, { dow: 6, kind: "long" }] } });
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
   repo.savePlanDay(2, "Easy run", "Aerobic", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 8, target_zone: "Z2" }]);
   repo.savePlanDay(3, "Run + lift", "Mixed", [
     { kind: "cardio", exercise: "Tempo", target_distance_km: 6, target_zone: "Z3" },
     { exercise: "Bench", sets: 3, rep_low: 5, rep_high: 5 },
   ]);
-  const { days } = repo.weekAheadPlan();
-  assert.equal(days.length, 3);
-  assert.equal(days[0].kind, "lift", "strength-only day → lift");
-  assert.equal(days[1].kind, "run", "cardio-only day → run");
-  assert.equal(days[2].kind, "mixed", "cardio + strength day → mixed");
+  try {
+    const { days } = repo.weekAheadPlan();
+    const lifts = days.filter((d) => d.kind === "lift");
+    const runs = days.filter((d) => d.kind === "run");
+    assert.deepEqual(
+      lifts.map((d) => d.label),
+      ["Lower body", "Mixed"],
+      "every plan day with strength is a lift day; the run-only day is not a plan day at all"
+    );
+    assert.ok(runs.length > 0, "a runner still sees runs in the floor");
+    for (const run of runs) assert.ok(["Tuesday", "Saturday"].includes(run.day), `a run on a stated weekday, got ${run.day}`);
+    assert.equal(days.filter((d) => d.kind === "mixed").length, 0, "no plan day is 'mixed' any more");
+  } finally {
+    repo.setProfile({ endurance_schedule: null });
+  }
 });
 
 test("weekAheadPlan returns no days when there is no plan", () => {
@@ -487,8 +502,8 @@ const thisWeekMonday = () => {
   return iso(d);
 };
 
-test("getRunCompliance: prescribed plan cardio vs this week's logged runs, in plain words", () => {
-  // Plan day with one cardio item prescribing 16 km.
+test("getRunCompliance is ACTUALS only — a cardio item on the plan prescribes nothing", () => {
+  // Runs are never plan items (migration 110): the written cardio item is stripped.
   repo.savePlanDay(1, "Run", "Endurance", [
     { kind: "cardio", exercise: "Long run", target_distance_km: 16 },
   ]);
@@ -496,15 +511,36 @@ test("getRunCompliance: prescribed plan cardio vs this week's logged runs, in pl
   seedActivity(thisWeekMonday(), { type: "run", duration_min: 50, distance_km: 10 });
 
   const rc = repo.getRunCompliance();
-  assert.equal(rc.prescribed_sessions, 1, "one cardio item prescribed");
-  assert.equal(rc.prescribed_km, 16, "prescribed km summed from the cardio item");
+  assert.equal(rc.prescribed_sessions, 0, "the plan prescribes no runs");
+  assert.equal(rc.prescribed_km, 0);
   assert.equal(rc.actual_sessions, 1, "one cardio effort logged this week");
   assert.equal(rc.actual_km, 10, "actual km reflects the seeded run");
-  assert.equal(rc.pct_km, 0.63, "10 / 16 ≈ 0.63 (a proportion, not a 0-100 grade)");
-  assert.equal(typeof rc.in_words, "string");
-  assert.match(rc.in_words, /10 of 16 km/, "plain ratio in words");
+  assert.equal(rc.pct_km, null, "no prescription here → no proportion");
+  assert.equal(rc.basis, "applied");
+  assert.match(rc.in_words, /1 run this week, none prescribed/, "the actuals in plain words");
+});
+
+test("runComplianceRead: the live run week's prescription vs this week's logged runs, in plain words", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
+  const monday = thisWeekMonday();
+  // Eight weeks of history so the engine has a week to prescribe.
+  for (let wk = 1; wk <= 8; wk++) {
+    for (const off of [2, 4, 6]) seedActivity(dayBefore(monday, (wk - 1) * 7 + off), { type: "run", duration_min: 55, distance_km: 9 });
+  }
+  // This week: a 10 km run logged on Monday.
+  seedActivity(monday, { type: "run", duration_min: 50, distance_km: 10 });
+
+  const rc = runComplianceRead(monday);
+  assert.equal(rc.basis, "live_plan", "the prescription is the engine's live week");
+  assert.ok(rc.prescribed_sessions > 0, "the live week prescribes runs");
+  assert.ok(rc.prescribed_km > 0);
+  assert.equal(rc.actual_sessions, 1);
+  assert.equal(rc.actual_km, 10);
+  assert.equal(rc.pct_km, Math.round((10 / rc.prescribed_km) * 100) / 100, "a proportion, not a 0-100 grade");
+  assert.equal(rc.in_words, `10 of ${rc.prescribed_km} km this week`, "plain ratio in words");
   // Constitution: in_words is NOT a digit-only 0-100 score.
   assert.ok(!/^\s*\d{1,3}\s*$/.test(rc.in_words), "in_words is never a bare 0-100 number");
+  assert.deepEqual(repo.vouchedRunCompliance(monday), rc, "the vouched read IS the live read");
 });
 
 test("getRunCompliance: no plan cardio AND no runs → calm, null pct, no throw", () => {
@@ -518,7 +554,6 @@ test("getRunCompliance: no plan cardio AND no runs → calm, null pct, no throw"
 });
 
 test("getRunCompliance: a strength activity row does NOT count as a run", () => {
-  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 8 }]);
   // A real run plus a stray strength-typed activity row on the same week.
   seedActivity(thisWeekMonday(), { type: "run", duration_min: 40, distance_km: 8 });
   seedActivity(thisWeekMonday(), { type: "strength_training", duration_min: 60, distance_km: null });

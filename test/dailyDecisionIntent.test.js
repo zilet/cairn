@@ -165,21 +165,26 @@ test("hybrid primary_discipline with explicit role none still stamps none on the
       priorities: ["strength", "muscle", "longevity", "endurance"],
       endurance_role: "none",
     },
+    // A race goal gives the run engine's agenda a live quality opening — the key run
+    // a co_primary role would soft-protect. Runs are the calendar's, never plan rows.
+    endurance_goal: {
+      mode: "race",
+      event: "Autumn 10K",
+      date: "2031-10-15",
+      distance_km: 10,
+      weekly_km: 30,
+      weekly_sessions: 4,
+    },
   });
-  // Quality cardio on a lower template — co_primary would soft-protect; none must not.
+  // Hard lower template + an open quality run — co_primary would soft-protect; none must not.
   repo.savePlanDay(1, "Lower body", "Quads and hinge", [
     { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 7, target_weight: 225 },
-    {
-      exercise: "Tempo Run",
-      kind: "cardio",
-      target_duration_min: 35,
-      target_zone: "tempo",
-    },
   ]);
   const snap = gatherDailyDecisionSnapshot(DATE);
   assert.equal(snap.training_intent.endurance_role, "none");
   assert.equal(snap.training_intent.source, "explicit");
-  assert.ok(snap.plan_items.some((it) => it.kind === "cardio"));
+  assert.equal(snap.plan_items.some((it) => it.kind === "cardio"), false, "plan days carry no runs");
+  assert.equal(snap.open_key_run?.kind, "quality", "the key run a protective role would guard is live");
   // Derived hybrid would be co_primary — explicit none must win.
   const env = buildDailySessionDecision(snap, { now: NOW });
   assert.equal(env.training_intent.endurance_role, "none");
@@ -374,7 +379,9 @@ test("gathered snapshot stamps compact training_intent for fingerprint stability
   assert.deepEqual(a.training_intent, b.training_intent);
 });
 
-test("live gather includes cardio plan items so primary role can soft-protect a key run", () => {
+// Plan days hold strength only: the key run a primary role protects is the agenda's
+// open opening (the run engine), never a cardio row on the lifting day's template.
+test("live gather sees the agenda's key run so primary role can soft-protect it", () => {
   repo.setProfile({
     primary_discipline: "endurance",
     endurance_sport: "running",
@@ -411,9 +418,10 @@ test("live gather includes cardio plan items so primary role can soft-protect a 
   );
   const snap = gatherDailyDecisionSnapshot(DATE);
   assert.equal(snap.training_intent.endurance_role, "primary");
-  assert.ok(
-    snap.plan_items.some((it) => it.kind === "cardio" && /threshold/i.test(String(it.target_zone ?? ""))),
-    "cardio template rows must survive gather (label may live in note)"
+  assert.equal(
+    snap.plan_items.some((it) => it.kind === "cardio"),
+    false,
+    "the stored cardio row is stripped on save — the plan day carries the squat alone"
   );
   assert.equal(snap.open_key_run?.kind, "quality", "generated Z3/Z4 or interval quality shapes come through agenda kind");
   assert.ok(

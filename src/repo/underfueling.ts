@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { db } from "../db.js";
 import { canonicalEnduranceSport } from "./endurance-sports.js";
+import { withoutShadowActivities } from "./activities.js";
+import { HARD_EFFORT } from "./heavy-load.js";
+import { liftTrainedRecently } from "./program-state.js";
+import { strengthDeclineIsMeaningful } from "./whole-person-trajectory.js";
 import { completedIntakeWindow, type CompletedIntakeDay } from "./intake-window.js";
 import { vouchedRunCompliance } from "./sessions.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
@@ -555,45 +559,153 @@ function subjectiveChannels(
 // both signals need real, repeated running (a thin/skipped week never fires), and it
 // only ever pushes the protective (fuel-the-work) direction. null when nothing qualifies.
 function enduranceStrainSignal(today: string): { reason: string; evidence: string } | null {
-  return runPaceDeclineWhileVolumeHeld(today) ?? sustainedRunComplianceDrop(today);
+  return runDeclineWhileVolumeHeld(today) ?? sustainedRunComplianceDrop(today);
 }
 
-// Pace decline while volume held: the last ~14 days of RUN efforts vs the ~14 before.
-// Both halves need ≥2 runs with pace; recent mileage must be HELD (≥85% of prior, so a
-// taper/ease is excluded) AND recent average pace materially slower (≥5%).
-function runPaceDeclineWhileVolumeHeld(today: string): { reason: string; evidence: string } | null {
+// Endurance output decline while volume held: the last ~14 days of RUN efforts vs
+// the ~14 before. Recent mileage must be HELD (≥85% of prior, so a taper/ease is
+// excluded) — and the comparison must be LIKE FOR LIKE, because an unweighted mean
+// pace over a fortnight that mixes hill repeats, sprints and a long tempo with easy
+// miles measures the SESSION MIX, not the body:
+//   • quality sessions leave the pool — the shared HARD_EFFORT label (Garmin's
+//     te_label or the session's own name) plus the named hill/sprint/race words;
+//   • climbing is credited as distance (Scarf's equivalence, ~8 m flat per metre up),
+//     so a hilly route never reads as a slow one;
+//   • with heart rate, the read is EFFICIENCY — grade-adjusted metres per heartbeat —
+//     so a slower pace at a much lower heart rate is fitness, not strain. With no
+//     heart rate anywhere in the pool (a watchless log) it falls back to
+//     grade-adjusted pace; a pool where only SOME runs carry HR is too mixed to call;
+//   • a watch fitness read that improved across the same window (VO2max, endurance
+//     score, race predictor) vetoes the decline outright — the body is not failing
+//     to cope while its own aerobic markers climb.
+// Both halves still need ≥2 comparable runs; anything thinner is silence, never strain.
+const RUN_DECLINE_FRAC = 0.05;
+const CLIMB_FLAT_EQUIVALENT_M = 8;
+const QUALITY_RUN_WORDS = /\b(?:hills?|repeats?|sprints?|intervals?|fartlek|strides|race|time trial|fast|test)\b/i;
+
+function isQualityRun(r: any): boolean {
+  // Separator-normalized first: `\b` never fires beside an underscore, so Garmin's
+  // "LACTATE_THRESHOLD" would otherwise slip past a `\blactate\b` test.
+  const label = String(r.te_label ?? "").replace(/[_-]+/g, " ");
+  const text = `${r.g_name ?? ""} ${r.raw_text ?? ""} ${r.notes ?? ""}`.replace(/[_-]+/g, " ");
+  return HARD_EFFORT.label.test(label) || HARD_EFFORT.label.test(text) || QUALITY_RUN_WORDS.test(text);
+}
+
+type RunPoint = { km: number; gradeKm: number; min: number; hr: number | null; quality: boolean };
+
+function runDeclineWhileVolumeHeld(today: string): { reason: string; evidence: string } | null {
   const start = addDaysISO(today, -27) ?? today;
   const mid = addDaysISO(today, -13) ?? today; // last 14 days = "recent"
   let rows: any[] = [];
   try {
     rows = db
-      .prepare(`SELECT date, type, distance_km, duration_min FROM activities WHERE date BETWEEN ? AND ? ORDER BY date`)
+      .prepare(
+        `SELECT a.id, a.date, a.type, a.source, a.external_id, a.raw_text, a.notes, a.distance_km, a.duration_min,
+                g.avg_hr AS avg_hr, g.ascent_m AS ascent_m, g.te_label AS te_label, g.name AS g_name
+           FROM activities a LEFT JOIN garmin_activities g ON g.activity_id = a.id
+          WHERE a.date BETWEEN ? AND ? ORDER BY a.date, a.id`
+      )
       .all(start, today) as any[];
   } catch {
     return null;
   }
-  const recent: { km: number; pace: number }[] = [];
-  const prior: { km: number; pace: number }[] = [];
-  for (const r of rows) {
-    if (canonicalEnduranceSport(r.type).key !== "run") continue; // pace is a foot-sport read
+  const recent: RunPoint[] = [];
+  const prior: RunPoint[] = [];
+  // A hand log shadowing the synced row of the same run is one run, not two.
+  for (const r of withoutShadowActivities(rows)) {
+    if (canonicalEnduranceSport(r.type).key !== "run") continue; // a foot-sport read
     const km = Number(r.distance_km);
     const min = Number(r.duration_min);
     if (!(km > 0) || !(min > 0)) continue;
-    (String(r.date) >= mid ? recent : prior).push({ km, pace: min / km });
+    const ascent = Number(r.ascent_m);
+    const gradeKm = km + (ascent > 0 ? (ascent * CLIMB_FLAT_EQUIVALENT_M) / 1000 : 0);
+    const hr = Number(r.avg_hr) > 0 ? Number(r.avg_hr) : null;
+    (String(r.date) >= mid ? recent : prior).push({ km, gradeKm, min, hr, quality: isQualityRun(r) });
   }
   if (recent.length < 2 || prior.length < 2) return null;
-  const total = (xs: { km: number; pace: number }[], f: (x: { km: number; pace: number }) => number) =>
-    xs.reduce((a, b) => a + f(b), 0);
-  const recentKm = total(recent, (x) => x.km);
-  const priorKm = total(prior, (x) => x.km);
-  const recentPace = total(recent, (x) => x.pace) / recent.length;
-  const priorPace = total(prior, (x) => x.pace) / prior.length;
-  if (recentKm < priorKm * 0.85) return null; // volume dropped (a taper/ease) — not a strain read
-  if (recentPace < priorPace * 1.05) return null; // pace not materially slower
-  return {
-    reason: "Run pace has slipped while weekly mileage held — endurance output is under strain.",
-    evidence: `run_pace_decline:${Math.round(priorPace * 100) / 100}->${Math.round(recentPace * 100) / 100}min_per_km`,
+  const total = (xs: RunPoint[], f: (x: RunPoint) => number) => xs.reduce((a, b) => a + f(b), 0);
+  const mean = (xs: RunPoint[], f: (x: RunPoint) => number) => total(xs, f) / xs.length;
+  if (total(recent, (x) => x.km) < total(prior, (x) => x.km) * 0.85) return null; // a taper/ease — not strain
+  const recentPool = recent.filter((x) => !x.quality);
+  const priorPool = prior.filter((x) => !x.quality);
+  if (recentPool.length < 2 || priorPool.length < 2) return null; // no like-for-like runs to compare
+  const hrCount = (xs: RunPoint[]) => xs.filter((x) => x.hr != null).length;
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  let decline: { reason: string; evidence: string } | null = null;
+  if (hrCount(recentPool) === recentPool.length && hrCount(priorPool) === priorPool.length) {
+    // Grade-adjusted metres per heartbeat: lower = more heartbeats for the same ground.
+    const efficiency = (x: RunPoint) => (x.gradeKm * 1000) / x.min / (x.hr as number);
+    const recentEf = mean(recentPool, efficiency);
+    const priorEf = mean(priorPool, efficiency);
+    if (recentEf <= priorEf * (1 - RUN_DECLINE_FRAC)) {
+      decline = {
+        reason:
+          "Comparable runs are costing more heartbeats for the same ground while weekly mileage held — endurance output is under strain.",
+        evidence: `run_efficiency_decline:${round2(priorEf)}->${round2(recentEf)}m_per_beat`,
+      };
+    }
+  } else if (hrCount(recentPool) === 0 && hrCount(priorPool) === 0) {
+    const pace = (x: RunPoint) => x.min / x.gradeKm;
+    const recentPace = mean(recentPool, pace);
+    const priorPace = mean(priorPool, pace);
+    if (recentPace >= priorPace * (1 + RUN_DECLINE_FRAC)) {
+      decline = {
+        reason: "Comparable run pace has slipped while weekly mileage held — endurance output is under strain.",
+        evidence: `run_pace_decline:${round2(priorPace)}->${round2(recentPace)}min_per_km`,
+      };
+    }
+  }
+  if (!decline) return null;
+  return watchFitnessImproved(mid, today) ? null : decline;
+}
+
+// The watch's own aerobic read across the same window: the latest reading inside the
+// recent half against the latest one in the three weeks before it (an older baseline
+// says nothing about this fortnight). Improved when at least one marker moved
+// materially the right way and none moved materially the wrong way; an absent
+// reading never vouches either way.
+const WATCH_VO2_STEP = 0.5; // ml/kg/min
+const WATCH_REL_STEP = 0.01; // 1% on endurance score / race predictor
+function watchFitnessImproved(mid: string, today: string): boolean {
+  const floor = addDaysISO(mid, -21) ?? mid;
+  const before = addDaysISO(mid, -1) ?? mid;
+  const latest = (sql: string, lo: string, hi: string): number | null => {
+    try {
+      const row = db.prepare(sql).get(lo, hi) as any;
+      const n = Number(row?.v);
+      return row?.v != null && Number.isFinite(n) && n > 0 ? n : null;
+    } catch {
+      return null;
+    }
   };
+  const garmin = (col: string) =>
+    `SELECT ${col} AS v FROM garmin_daily_metrics WHERE date BETWEEN ? AND ? AND ${col} IS NOT NULL ORDER BY date DESC LIMIT 1`;
+  const vo2 = (lo: string, hi: string) =>
+    latest(garmin("vo2max"), lo, hi) ??
+    latest(
+      `SELECT vo2max AS v FROM daily_metrics WHERE date BETWEEN ? AND ? AND vo2max IS NOT NULL ORDER BY date DESC LIMIT 1`,
+      lo,
+      hi
+    );
+  const moves: number[] = []; // +1 improved, -1 worsened, 0 flat
+  const vNow = vo2(mid, today);
+  const vThen = vo2(floor, before);
+  if (vNow != null && vThen != null)
+    moves.push(vNow - vThen >= WATCH_VO2_STEP ? 1 : vThen - vNow >= WATCH_VO2_STEP ? -1 : 0);
+  const esNow = latest(garmin("endurance_score"), mid, today);
+  const esThen = latest(garmin("endurance_score"), floor, before);
+  if (esNow != null && esThen != null)
+    moves.push(esNow >= esThen * (1 + WATCH_REL_STEP) ? 1 : esNow <= esThen * (1 - WATCH_REL_STEP) ? -1 : 0);
+  // A race predictor is a TIME — faster (smaller) is the improvement. One distance,
+  // read on both sides: the half when both halves carry it, else the 10k.
+  for (const col of ["race_predict_half_sec", "race_predict_10k_sec"]) {
+    const pNow = latest(garmin(col), mid, today);
+    const pThen = latest(garmin(col), floor, before);
+    if (pNow == null || pThen == null) continue;
+    moves.push(pNow <= pThen * (1 - WATCH_REL_STEP) ? 1 : pNow >= pThen * (1 + WATCH_REL_STEP) ? -1 : 0);
+    break;
+  }
+  return moves.includes(1) && !moves.includes(-1);
 }
 
 // Sustained run-compliance drop: two consecutive weeks where the plan prescribed real
@@ -610,12 +722,10 @@ function sustainedRunComplianceDrop(today: string): { reason: string; evidence: 
   const lastMonday = addDaysISO(monday, -7);
   if (!lastMonday) return null;
   try {
-    // Each week is judged against a prescription that can actually vouch for THAT
-    // week. appliedRunPrescription takes no date — it is "whatever is in the plan
-    // right now" — so both legs would otherwise quote today's plan, and a run plan
-    // applied a month ago would read a real 20 km week as a sustained shortfall and
-    // push a strain signal into nutrition. vouchedRunCompliance makes the fossil
-    // read as absent (prescribed 0, pct null), which cannot fire this branch.
+    // Each week is judged against the run engine's prescription FOR THAT WEEK
+    // (vouchedRunCompliance === runComplianceRead, anchored at the week's start), so a
+    // past week is never measured against this week's mix. Runs are not plan items,
+    // so there is no applied row that could fossilize.
     const cur = vouchedRunCompliance(monday);
     const prev = vouchedRunCompliance(lastMonday);
     const short = (c: any) =>
@@ -646,15 +756,34 @@ function performanceChannel(since: string, today: string, program: any, whole: a
       )
       .map((row) => String(row.date))
   );
-  const regressing = (Array.isArray(program?.lifts) ? program.lifts : []).filter(
-    (lift: any) => lift?.status === "regressing"
-  );
-  const progressing = (Array.isArray(program?.lifts) ? program.lifts : []).filter(
-    (lift: any) => lift?.status === "progressing"
-  );
+  // Only a lift in the current rotation is evidence: one untrained for weeks has no
+  // present trend (program-state already reads it as re-baselining; the guard here
+  // holds for an injected program state too).
+  const lifts: any[] = Array.isArray(program?.lifts) ? program.lifts : [];
+  const regressing = lifts.filter((lift: any) => lift?.status === "regressing" && liftTrainedRecently(lift, today));
+  const progressing = lifts.filter((lift: any) => lift?.status === "progressing");
   const wholeStrength = (Array.isArray(whole?.domains) ? whole.domains : []).find((d: any) => d?.domain === "strength");
   const endurance = enduranceStrainSignal(today);
-  const strengthStrain = lowDays.size >= 2 || regressing.length >= 2 || wholeStrength?.verdict === "worse";
+  // ONE bar for "strength is under strain": the trajectory's proportionate read
+  // (strengthDeclineIsMeaningful over the recently trained lifts, with a dip the
+  // card asked for set aside). When that read carries its lift tally it is the
+  // authority, so the lift arm cannot re-derive a stricter call from program
+  // state (two slipping lifts against a dozen advancing is not strain). Only
+  // without it — no trajectory, an injected legacy shape, or too few comparable
+  // exposures — does program state answer, and through the same bar.
+  const wholeAuthoritative = wholeStrength?.lift_counts != null && wholeStrength?.verdict !== "unknown";
+  const programStrain =
+    !wholeAuthoritative &&
+    strengthDeclineIsMeaningful({
+      improving: lifts.filter((lift: any) => lift?.status === "progressing" && liftTrainedRecently(lift, today))
+        .length,
+      declining: regressing.length,
+      steady: lifts.filter(
+        (lift: any) =>
+          (lift?.status === "maintaining" || lift?.status === "plateaued") && liftTrainedRecently(lift, today)
+      ).length,
+    });
+  const strengthStrain = lowDays.size >= 2 || programStrain || wholeStrength?.verdict === "worse";
   const strain = strengthStrain || !!endurance;
   const support = !strain && (progressing.length >= 2 || wholeStrength?.verdict === "better");
   return {

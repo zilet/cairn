@@ -135,7 +135,7 @@ New/changed components (CSS must implement, the client JS must emit):
   `.prog-strip` horizontal row of `.artile-md` art for the day's exercises (overlapping ~-10px,
   like a catalog contact strip), `.prog-list` of `.prog-row` (small art, name, `sets × reps`
   numerals right-aligned). A quiet `.prog-order` linkbtn ("Order for effect") appears when
-  stored item order differs from compounds→accessories→finishers→cardio. A `.prog-edit`
+  stored item order differs from compounds→accessories→finishers. A `.prog-edit`
   ghost button flips that day into the existing editor markup (`.pday`, `.pi-*` classes —
   keep them working, restyled as inset wells).
 - Plan week strip (Strength + Endurance): `.pweek` card with `.pweek-map` (7 cells when

@@ -1,5 +1,5 @@
 // @ts-check
-// Exercise and cardio card renderers for the Today screen.
+// Exercise card renderers for the Today screen (lifts only; runs live in Endurance).
 
 type TodayExerciseCardOptions = {
   day?: unknown;
@@ -259,88 +259,9 @@ function exerciseCardHtml(
     </div>`;
 }
 
-function cardioDoneCardHtml(item: TodayExerciseItem, effort: Record<string, unknown>, revealIdx: unknown): string {
-  const label = cardioLabel(item);
-  const tile = artImg(
-    "activity",
-    cardioArtPhrase(item),
-    "artile-sm ex-art",
-    art("activity", effort.type || cardioArtPhrase(item))
-  );
-  const dist = todayFinite(effort.distance_km);
-  const duration = todayFinite(effort.duration_min);
-  const headBits: string[] = [];
-  if (dist != null && dist > 0) headBits.push(`${fmtKm(dist)} km`);
-  else if (duration != null && duration > 0) headBits.push(`${Math.round(duration)} min`);
-  const headline = `${label}${headBits.length ? ` — ${headBits.join(" · ")}` : ""}`;
-  const chips: string[] = [];
-  const zoneWord = CairnTodayTraining.cardioDominantZone(effort.zones);
-  if (zoneWord) chips.push(zoneWord);
-  if (effort.pace) chips.push(`${String(effort.pace)}/km`);
-  const avgHr = todayFinite(effort.avg_hr);
-  if (avgHr != null) chips.push(`${Math.round(avgHr)} avg hr`);
-  if (duration != null && duration > 0 && headBits[0] && !headBits[0].includes("min"))
-    chips.push(`${Math.round(duration)} min`);
-  const reveal = revealIdx != null ? Number(revealIdx) : null;
-  const chipHtml = chips.map((chip) => `<span class="done-chip">${escHtml(chip)}</span>`).join("");
-  return `<div class="ex ex-cardio ex-cardio-done${reveal != null ? " reveal" : ""}" data-cardio-card${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
-      <div class="ex-top">
-        ${tile}
-        <span class="ex-name ex-name-static cardio-done-head">
-          <span class="cardio-done-mark" aria-hidden="true">✓</span>${escHtml(headline)}
-        </span>
-        ${effort.source === "garmin" ? `<span class="garmin-tag">✦ synced from Garmin</span>` : ""}
-      </div>
-      ${chipHtml ? `<div class="cardio-done-chips">${chipHtml}</div>` : ""}
-    </div>`;
-}
-
-function cardioPlanCardHtml(
-  item: TodayExerciseItem,
-  revealIdx: unknown,
-  done: Record<string, unknown> | null | undefined,
-  syncLine: string
-): string {
-  if (done) return cardioDoneCardHtml(item, done, revealIdx);
-  const label = cardioLabel(item);
-  const tile = artImg("activity", cardioArtPhrase(item), "artile-sm ex-art", art("activity", cardioArtPhrase(item)));
-  const prescription = cardioPrescription(item);
-  const description = cardioDescription(item);
-  const verb = CairnTodayTraining.cardioVerb(label);
-  const reveal = revealIdx != null ? Number(revealIdx) : null;
-  const logPhrase = CairnTodayTraining.cardioLogPhrase({ ...item, label });
-  return `<div class="ex ex-cardio${reveal != null ? " reveal" : ""}" data-cardio-card${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
-      <div class="ex-top">
-        ${tile}
-        <span class="ex-name ex-name-static"><span class="cardio-name-txt">${escHtml(label)}</span> <span class="cardio-tag lbl">cardio</span></span>
-        ${prescription ? `<span class="ex-sets ex-cardio-pres">${escHtml(prescription)}</span>` : ""}
-        <button class="ex-skip" data-skip="${encodeURIComponent(label)}" title="Not today" aria-label="Skip ${escAttr(label)} today">✕</button>
-      </div>
-      ${description ? `<div class="ex-note">${escHtml(description)}</div>` : ""}
-      <div class="cardio-logrow">
-        <button class="ghostbtn cardio-log-btn" data-cardio-log="${escAttr(logPhrase)}">Review &amp; log this ${escHtml(verb)} →</button>
-      </div>
-      ${syncLine || ""}
-    </div>`;
-}
-
-function todayCardsCardioEffortMatches(
-  item: TodayExerciseItem,
-  effort: Record<string, unknown> | null | undefined
-): boolean {
-  if (!effort) return false;
-  const want = CairnTodayTraining.cardioVerb(item.exercise || item.note || cardioLabel(item));
-  const got = CairnTodayTraining.cardioVerb(effort.type || effort.name || "");
-  if (want === "effort" || got === "effort") return true;
-  return want === got;
-}
-
 const CAIRN_TODAY_CARDS = {
   exTimed: todayCardsExTimed,
   exerciseCardHtml,
-  cardioPlanCardHtml,
-  cardioDoneCardHtml,
-  cardioEffortMatches: todayCardsCardioEffortMatches,
 };
 
 Object.assign(globalThis, { CairnTodayCards: CAIRN_TODAY_CARDS });

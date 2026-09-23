@@ -17,6 +17,7 @@ import {
 import { completedIntakeRange } from "../repo/intake-window.js";
 import { mealPlanAdherence } from "../repo/nutrition.js";
 import { canonicalEnduranceSport } from "../repo/endurance-sports.js";
+import { withoutShadowActivities } from "../repo/activity-shadow.js";
 import { lsqSlopePerDay } from "../repo/health.js";
 import { addDaysISO } from "../repo/shared.js";
 import { robustWeightEvidence } from "../repo/weight-evidence.js";
@@ -607,17 +608,22 @@ function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservati
 function runVolumeAdherenceObservation(context: EvaluatorContext): MetricObservation {
   const { expectation } = context;
   const end = windowEnd(context);
-  const rows = db
+  const rawRows = db
     .prepare(
-      `SELECT id, date, type, distance_km FROM activities
+      `SELECT id, date, type, source, external_id, distance_km FROM activities
       WHERE date BETWEEN ? AND ? ORDER BY date, id LIMIT 500`
     )
     .all(expectation.window_start, end) as Array<{
     id: number;
     date: string;
     type: string;
+    source: string | null;
+    external_id: string | null;
     distance_km: number | null;
   }>;
+  // A hand-logged shadow of a synced run is one outing, not two, toward the week's
+  // measured mileage.
+  const rows = withoutShadowActivities(rawRows);
   const runRows = rows.filter((row) => canonicalEnduranceSport(row.type).key === "run");
   // Only distance-carrying outings can measure adherence; the rest are unmeasured.
   const measuredRows = runRows.filter((row) => {

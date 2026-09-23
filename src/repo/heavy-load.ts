@@ -193,8 +193,10 @@ export function matchEnduranceModality(structuredType: string, supportingText = 
 export const HARD_EFFORT = {
   /** Seconds at threshold and above (Z4/Z5) that make an effort genuinely hard. */
   z4Seconds: 240,
+  // Letter/digit lookarounds rather than \b: Garmin's labels are SNAKE_CASE, and \b never
+  // matches beside "_", so LACTATE_THRESHOLD and ANAEROBIC_CAPACITY read as easy.
   /** A session label that names a hard workout outright. */
-  label: /\b(?:vo2(?:[\s_-]*max)?|maximal|anaerobic|sprint|interval|threshold|tempo|lactate)\b/i,
+  label: /(?<![a-z0-9])(?:vo2(?:[\s_-]*max)?|maximal|anaerobic|sprint|interval|threshold|tempo|lactate)(?![a-z0-9])/i,
   /** Absolute Garmin training_load floor, for when there is no personal baseline. */
   trainingLoadFloor: 80,
   /** …and the multiple of the athlete's OWN recent cardio median when there is one. */

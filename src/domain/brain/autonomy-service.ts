@@ -1535,9 +1535,10 @@ export function buildProgressionWithAutonomy(
   return { ok: true, proposal: built.proposal, autonomy };
 }
 
-// Endurance is a first-class programmed modality. Its deterministic weekly run
-// mix follows the same lead/review policy as strength progression instead of
-// stopping at a separate draft-and-Apply ritual.
+// Retired with the plan's run rows (migration 110): the week's runs are computed live
+// by weeklyRunPlan from the stated run days, so there is no proposal to route.
+// buildRunPlanProposal answers the designed {ok:false}; the shape stays for the REST
+// route and MCP tool that still call it.
 export function buildRunPlanWithAutonomy(
   date?: string
 ): { ok: false; error: string } | { ok: true; proposal: any; autonomy: any } {

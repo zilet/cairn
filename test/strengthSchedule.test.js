@@ -209,60 +209,64 @@ test("chat CAN clear a stated schedule with an explicit empty days: []", () => {
 // the weekday ring
 // ---------------------------------------------------------------------------
 
-// The athlete's live week: five strength days, a rest day, and an endurance-only day.
+// The athlete's live week: five strength days (numbered 1,2,3,4,6) and an empty editor
+// scaffold. Plan days hold strength only — runs and rest are the calendar's, so the
+// weekend is not a plan row at all.
 const LIVE_RING = [
-  { day_number: 1, day_type: "training", names: ["Back Squat"], cardio: [] },
-  { day_number: 2, day_type: "training", names: ["Barbell Bench Press"], cardio: [] },
-  { day_number: 3, day_type: "training", names: ["Barbell Row"], cardio: [] },
-  { day_number: 4, day_type: "training", names: ["Romanian Deadlift"], cardio: [] },
-  { day_number: 5, day_type: "rest", names: [], cardio: [] },
-  { day_number: 6, day_type: "training", names: ["Goblet Squat"], cardio: [] },
-  { day_number: 7, day_type: "training", names: [], cardio: ["Long Run"] },
+  { day_number: 1, day_type: "training", names: ["Back Squat"] },
+  { day_number: 2, day_type: "training", names: ["Barbell Bench Press"] },
+  { day_number: 3, day_type: "training", names: ["Barbell Row"] },
+  { day_number: 4, day_type: "training", names: ["Romanian Deadlift"] },
+  { day_number: 5, day_type: "training", names: [] },
+  { day_number: 6, day_type: "training", names: ["Goblet Squat"] },
 ];
 
-test("weekdayPlanDayMap lays the stated week: Mon-Fri lift, Sat runs, Sun rests", () => {
-  const map = weekdayPlanDayMap(LIVE_RING, [1, 2, 3, 4, 5], [0, 2, 4, 6]);
+test("weekdayPlanDayMap lays the stated week: Mon-Fri lift, the weekend is the calendar's", () => {
+  const map = weekdayPlanDayMap(LIVE_RING, [1, 2, 3, 4, 5]);
   // The five strength days land on the five stated lifting weekdays, in ring order.
   assert.deepEqual(
     [1, 2, 3, 4, 5].map((dow) => map.get(dow).day_number),
     [1, 2, 3, 4, 6],
-    "Mon..Fri take the plan's strength days 1,2,3,4,6 in order — the rest day is skipped"
+    "Mon..Fri take the plan's strength days 1,2,3,4,6 in order — the empty scaffold is skipped"
   );
-  // Tue/Thu are BOTH lifting and running days, so lifting wins the slot (the run rides
-  // alongside); Saturday is the one run-only weekday and takes the Long Run.
-  assert.equal(map.get(6).day_number, 7, "Saturday takes the endurance-only day");
-  // Sunday is also a stated run day, but the plan authored ONE long run. It is consumed,
-  // not repeated, so Sunday falls through to the rest day rather than inventing a
-  // second long run out of a week that has one.
-  assert.equal(map.get(0).day_number, 5, "Sunday takes the rest day");
-  // The law: no unstated weekday is handed a strength day.
+  // The law: no unstated weekday is handed a plan day. Saturday's run and Sunday's rest
+  // are calendar facts (calendarDayRead), never a mapped row.
+  assert.equal(map.size, 5, "only the lifting weekdays are mapped");
   for (const dow of [0, 6]) {
-    assert.equal(map.get(dow).names.length, 0, `dow ${dow} is never a strength day`);
+    assert.equal(map.has(dow), false, `dow ${dow} is never handed a plan day`);
   }
 });
 
 test("weekdayPlanDayMap is inert with no stated schedule and cycles a short pool", () => {
-  assert.equal(weekdayPlanDayMap(LIVE_RING, [], [0, 6]).size, 0, "unstated -> empty map -> positional ring");
-  assert.equal(weekdayPlanDayMap(LIVE_RING, null, null).size, 0);
+  assert.equal(weekdayPlanDayMap(LIVE_RING, []).size, 0, "unstated -> empty map -> positional ring");
+  assert.equal(weekdayPlanDayMap(LIVE_RING, null).size, 0);
 
   // Three strength days against five stated lifting weekdays: every stated day still
   // carries a strength session, the pool wrapping rather than going quiet.
   const short = [
-    { day_number: 1, day_type: "training", names: ["Back Squat"], cardio: [] },
-    { day_number: 2, day_type: "training", names: ["Barbell Bench Press"], cardio: [] },
-    { day_number: 3, day_type: "training", names: ["Barbell Row"], cardio: [] },
-    { day_number: 4, day_type: "rest", names: [], cardio: [] },
+    { day_number: 1, day_type: "training", names: ["Back Squat"] },
+    { day_number: 2, day_type: "training", names: ["Barbell Bench Press"] },
+    { day_number: 3, day_type: "training", names: ["Barbell Row"] },
+    { day_number: 4, day_type: "training", names: [] },
   ];
-  const map = weekdayPlanDayMap(short, [1, 2, 3, 4, 5], [0, 6]);
+  const map = weekdayPlanDayMap(short, [1, 2, 3, 4, 5]);
   assert.deepEqual(
     [1, 2, 3, 4, 5].map((dow) => map.get(dow).day_number),
     [1, 2, 3, 1, 2]
   );
-  assert.equal(map.get(0).day_number, 4, "Sunday still gets the rest day");
-  assert.equal(map.get(6).day_number, 4, "Saturday has no endurance day authored -> rest, never a lift");
+  assert.equal(map.has(0), false, "Sunday is never a lift");
+  assert.equal(map.has(6), false, "Saturday is never a lift");
+  // The ring's phase: a strength start deals the pool from that offset.
+  const phased = weekdayPlanDayMap(short, [1, 2, 3, 4, 5], 1);
+  assert.deepEqual(
+    [1, 2, 3, 4, 5].map((dow) => phased.get(dow).day_number),
+    [2, 3, 1, 2, 3]
+  );
+  // A plan with no strength day has nothing honest to put on a lifting weekday.
+  assert.equal(weekdayPlanDayMap([{ day_number: 1, day_type: "training", names: [] }], [1, 3]).size, 0);
 });
 
-test("the adaptive ring points an unanchored Saturday at rest, not at a lift", () => {
+test("the adaptive ring points an unanchored weekend at the calendar's run and rest, never a lift", () => {
   repo.replacePlan([
     {
       day_number: 1,
@@ -289,19 +293,26 @@ test("the adaptive ring points an unanchored Saturday at rest, not at a lift", (
       name: "Full Body",
       items: [{ exercise: "Goblet Squat", sets: 3, rep_low: 8, rep_high: 12, target_weight: 50 }],
     },
-    { day_number: 6, name: "Rest", focus: null, day_type: "rest", items: [] },
-    { day_number: 7, name: "Long Run", items: [{ kind: "cardio", exercise: "Long Run", target_minutes: 75 }] },
   ]);
 
   const SATURDAY = "2026-04-25";
-  // Positional, with nothing stated: Saturday is slot 6 — the Rest day here.
+  const SUNDAY = "2026-04-26";
+  // Positional, with nothing stated: Saturday is just the ring's next slot.
   const before = repo.selectAdaptivePlanDay(SATURDAY);
   assert.ok(before);
 
   repo.setProfile({ strength_schedule: WORKDAYS, endurance_schedule: { days: [{ dow: 6, kind: "long" }] } });
   const after = repo.selectAdaptivePlanDay(SATURDAY);
   assert.ok(after);
-  assert.equal(after.day_number, 7, "Saturday is the stated long-run day -> the endurance-only plan day");
+  assert.equal(after.day_number, null, "Saturday is the stated long-run day -> no plan day at all");
+  assert.equal(after.day_type, "run");
+  assert.deepEqual(after.selection.calendar, { kind: "run", run_kind: "long" });
+  assert.equal(repo.selectedPlanDayForDate(SATURDAY), null, "the Today door hands no lift on the run day");
+
+  const sunday = repo.selectAdaptivePlanDay(SUNDAY);
+  assert.equal(sunday.day_number, null);
+  assert.equal(sunday.day_type, "rest", "Sunday is neither lifted nor run -> the calendar's rest day");
+  assert.equal(sunday.selection.rest_day, true);
 
   const MONDAY = "2026-04-20";
   const monday = repo.selectAdaptivePlanDay(MONDAY);
@@ -324,22 +335,15 @@ const strengthDay = (day_number, name, exercise) => ({
   name,
   items: [{ exercise, sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }],
 });
-const restDay = (day_number) => ({ day_number, name: "Rest", focus: null, day_type: "rest", items: [] });
-const longRunDay = (day_number) => ({
-  day_number,
-  name: "Long Run",
-  items: [{ kind: "cardio", exercise: "Long Run", target_minutes: 75 }],
-});
-
-// The athlete's live ring: five strength days, a rest day, an endurance-only day.
+// The athlete's live ring: five strength days. (Their rest day and long run are the
+// calendar's — a weekday neither lifted nor run on, and a stated run weekday — so they
+// are not plan rows; day 5 was the retired rest row, hence the gap.)
 const LIVE_PLAN = [
   strengthDay(1, "Lower A", "Back Squat"),
   strengthDay(2, "Push", "Barbell Bench Press"),
   strengthDay(3, "Pull", "Barbell Row"),
   strengthDay(4, "Lower B", "Romanian Deadlift"),
-  restDay(5),
   strengthDay(6, "Full Body", "Goblet Squat"),
-  longRunDay(7),
 ];
 // Easy Sunday, quality Tuesday/Thursday, long Saturday — Tue/Thu double up with lifting.
 const RUN_WEEK = {
@@ -365,11 +369,18 @@ test("the stated lifting week outranks the session anchor; the anchor only sets 
   repo.logSetByName({ date: "2026-04-24", exercise: "Romanian Deadlift", weight: 155, reps: 8 });
 
   const saturday = repo.selectAdaptivePlanDay("2026-04-25");
-  assert.equal(saturday.day_number, 7, "Saturday is the stated long-run day, never a lift");
-  assert.equal(repo.selectAdaptivePlanDay("2026-04-26").day_type, "rest", "Sunday is neither -> the rest day");
+  assert.equal(saturday.day_number, null, "Saturday is the stated long-run day, never a lift");
+  assert.equal(saturday.day_type, "run");
+  assert.equal(saturday.selection.calendar.run_kind, "long");
+  // Sunday is a stated EASY run day in this week, so it reads run too — rest is only a
+  // weekday with neither.
+  const sunday = repo.selectAdaptivePlanDay("2026-04-26");
+  assert.equal(sunday.day_number, null, "Sunday is never a lift");
+  assert.equal(sunday.day_type, "run");
+  assert.equal(sunday.selection.calendar.run_kind, "easy");
 
   // Monday is the next stated LIFTING weekday, and it takes the strength day that
-  // follows the one actually logged (day 4 -> day 6; day 5 is the programmed rest).
+  // follows the one actually logged (day 4 -> day 6, the next strength day).
   const monday = repo.selectAdaptivePlanDay("2026-04-27");
   assert.equal(monday.selection.rotation.day_number, 6, "the ring's phase survives the weekend");
   assert.equal(monday.day_number, 6);
@@ -390,8 +401,6 @@ test("more strength days than lifting weekdays: the surplus opens the NEXT week,
     strengthDay(4, "S4", "Romanian Deadlift"),
     strengthDay(5, "S5", "Overhead Press"),
     strengthDay(6, "S6", "Goblet Squat"),
-    restDay(7),
-    longRunDay(8),
   ]);
   repo.setProfile({ strength_schedule: WORKDAYS, endurance_schedule: { days: [{ dow: 6, kind: "long" }] } });
 
@@ -401,11 +410,14 @@ test("more strength days than lifting weekdays: the surplus opens the NEXT week,
   repo.logSetByName({ date: "2026-04-24", exercise: "Overhead Press", weight: 95, reps: 8 });
   assert.deepEqual(picks(WEEK_2.slice(0, 5)), [6, 1, 2, 3, 4], "S6 opens the following Monday");
 
-  // The law, over the whole fortnight: a weekend day is the rest day or the long run.
+  // The law, over the whole fortnight: a weekend day is the long run (Saturday) or the
+  // calendar's rest (Sunday) — never a plan day.
   for (const weekend of [WEEK_1[5], WEEK_1[6], WEEK_2[5], WEEK_2[6]]) {
     const picked = repo.selectAdaptivePlanDay(weekend);
-    assert.ok([7, 8].includes(picked.day_number), `${weekend} must never be handed a strength day`);
+    assert.equal(picked.day_number, null, `${weekend} must never be handed a strength day`);
   }
+  assert.equal(repo.selectAdaptivePlanDay(WEEK_1[5]).day_type, "run");
+  assert.equal(repo.selectAdaptivePlanDay(WEEK_1[6]).day_type, "rest");
 });
 
 test("fewer strength days than lifting weekdays: the ring repeats so every one of them lifts", () => {
@@ -413,7 +425,6 @@ test("fewer strength days than lifting weekdays: the ring repeats so every one o
     strengthDay(1, "S1", "Back Squat"),
     strengthDay(2, "S2", "Barbell Bench Press"),
     strengthDay(3, "S3", "Barbell Row"),
-    restDay(4),
   ]);
   repo.setProfile({ strength_schedule: WORKDAYS });
   repo.logSetByName({ date: "2026-04-24", exercise: "Barbell Bench Press", weight: 100, reps: 8 });
@@ -458,8 +469,6 @@ test("a recovering split day walks forward to the next fresh day, not a distant 
       ],
     },
     strengthDay(5, "Lower B", "Barbell Deadlift"),
-    restDay(6),
-    longRunDay(7),
   ]);
   repo.setProfile({
     strength_schedule: WORKDAYS,
@@ -480,14 +489,68 @@ test("a recovering split day walks forward to the next fresh day, not a distant 
   assert.equal(monday.selection.adapted, true);
 });
 
+// The live Wednesday (2026-09-23): Push Monday, Pull Tuesday with a run, Lower A
+// scheduled. Legs carried the week's running, the scorer only compared against
+// Tuesday's session, and Monday's Push — "not just trained" — replaced Lower A. A
+// week of two Push days and no legs is not an adaptation, it is a hole.
+const PPL = [
+  strengthDay(1, "Push", "Barbell Bench Press"),
+  strengthDay(2, "Pull", "Pendlay Row"),
+  strengthDay(3, "Lower A", "Back Squat"),
+];
+
+test("a strength day already trained this week never stands in for an untrained one", () => {
+  repo.replacePlan(PPL);
+  repo.setProfile({ strength_schedule: WORKDAYS });
+  repo.logSetByName({ date: "2026-04-20", exercise: "Barbell Bench Press", weight: 135, reps: 8 });
+  repo.logSetByName({ date: "2026-04-21", exercise: "Pendlay Row", weight: 135, reps: 8 });
+  // A deep leg dose: Lower A is genuinely mostly recovering, the case the swap exists for.
+  repo.addActivity({ type: "run", duration_min: 80, distance_km: 13, date: "2026-04-21", text: "Long run" });
+
+  const wednesday = repo.selectAdaptivePlanDay("2026-04-22");
+  assert.equal(wednesday.selection.rotation.day_number, 3, "the stated week puts Lower A on Wednesday");
+  assert.equal(wednesday.day_number, 3, "Monday's Push is not an alternative while Lower A is still open");
+  const push = wednesday.selection.scores.find((entry) => entry.day_number === 1);
+  assert.equal(push.done_this_week, true);
+
+  // Once every strength day has had its turn, the short pool repeats as designed.
+  repo.logSetByName({ date: "2026-04-22", exercise: "Back Squat", weight: 185, reps: 5 });
+  assert.equal(repo.selectAdaptivePlanDay("2026-04-23").day_number, 1, "Thursday wraps back to Push");
+});
+
+test("legs only just over their bar keep the scheduled lower day; only a deep dose swaps it", () => {
+  // Friday carries Lower B, so Wednesday is not the week's LAST lower day — the weekly
+  // lower guarantee (eliteLowerWeek.test.js) keeps a last one even under a deep dose.
+  repo.replacePlan([
+    ...PPL.slice(0, 3),
+    strengthDay(4, "Upper", "Overhead Press"),
+    strengthDay(5, "Lower B", "Romanian Deadlift"),
+  ]);
+  repo.setProfile({ strength_schedule: WORKDAYS });
+  repo.logSetByName({ date: "2026-04-20", exercise: "Barbell Bench Press", weight: 135, reps: 8 });
+  repo.logSetByName({ date: "2026-04-21", exercise: "Pendlay Row", weight: 135, reps: 8 });
+  repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: "2026-04-21", text: "Steady run" });
+
+  const shallow = repo.selectAdaptivePlanDay("2026-04-22");
+  assert.equal(shallow.day_number, 3, "an ordinary hybrid morning keeps Lower A");
+  assert.equal(shallow.selection.adapted, false);
+
+  resetTables("activities");
+  repo.addActivity({ type: "run", duration_min: 100, distance_km: 16, date: "2026-04-21", text: "Long run" });
+  const deep = repo.selectAdaptivePlanDay("2026-04-22");
+  assert.equal(deep.day_number, 4, "a deep leg dose walks forward to the untrained Upper day");
+  assert.equal(deep.selection.adapted, true);
+});
+
 test("with nothing stated and nothing observed the ring stays positional and the anchor rules", () => {
   repo.replacePlan(LIVE_PLAN);
-  // The athlete this ring was written for. A bare week reads straight down the
-  // day-number -> weekday line: Monday day 1, Sunday day 7.
-  assert.deepEqual(picks(WEEK_1), [1, 2, 3, 4, 5, 6, 7]);
+  // The athlete this ring was written for. A bare week deals the strength pool straight
+  // down the Mon -> Sun line (Monday the first strength day), wrapping when the pool
+  // runs out — with no calendar known there is no run or rest day to answer instead.
+  assert.deepEqual(picks(WEEK_1), [1, 2, 3, 4, 6, 1, 2]);
   assert.deepEqual(
     WEEK_1.map((date) => repo.selectedPlanDayForDate(date).day_number),
-    [1, 2, 3, 4, 5, 6, 7]
+    [1, 2, 3, 4, 6, 1, 2]
   );
 
   // And one logged session re-anchors the rotation positionally, the weekday stopping
@@ -652,7 +715,6 @@ test("the observed week drives the ring and week_layout, labelled as observed", 
       name: "Push",
       items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 }],
     },
-    { day_number: 3, name: "Rest", focus: null, day_type: "rest", items: [] },
   ]);
   for (let w = 0; w < 4; w++) {
     liftOn(back(w, 1));
@@ -667,18 +729,21 @@ test("the observed week drives the ring and week_layout, labelled as observed", 
 
   const map = weekdayPlanDayMap(
     [
-      { day_number: 1, day_type: "training", names: ["Back Squat"], cardio: [] },
-      { day_number: 2, day_type: "training", names: ["Barbell Bench Press"], cardio: [] },
-      { day_number: 3, day_type: "rest", names: [], cardio: [] },
+      { day_number: 1, day_type: "training", names: ["Back Squat"] },
+      { day_number: 2, day_type: "training", names: ["Barbell Bench Press"] },
     ],
-    [1, 2],
-    []
+    [1, 2]
   );
   assert.deepEqual(
     [1, 2].map((dow) => map.get(dow).day_number),
     [1, 2]
   );
-  assert.equal(map.get(0).day_number, 3, "an unobserved weekday gets the rest day, never a lift");
+  assert.equal(map.has(0), false, "an unobserved weekday gets no plan day, never a lift");
+
+  // And the ring itself reads the observed week: the unobserved Sunday is the calendar's rest.
+  const sunday = repo.selectAdaptivePlanDay(AS_OF);
+  assert.equal(sunday.day_number, null);
+  assert.equal(sunday.day_type, "rest");
 });
 
 test("renderStrengthSchedule says OBSERVED when it is reading the log, never STATED", () => {

@@ -24,18 +24,22 @@ beforeEach(() => {
   );
 });
 
+// A run the athlete writes onto a card (plan days hold strength only — a cardio row
+// is stripped on save, so the run never rides in on the plan).
+const EASY_RUN_ITEM = {
+  kind: "cardio",
+  exercise: "Easy run",
+  target_duration_min: 25,
+  target_distance_km: 4.5,
+  target_zone: "Z2",
+  interval: { finish: "4 strides" },
+};
+
 function seedPlan() {
   repo.savePlanDay(1, "Push + hinge", "Chest and posterior chain", [
     { exercise: "Barbell Bench Press", sets: 4, rep_low: 5, rep_high: 7, target_weight: 185, warmup_sets: 2 },
     { exercise: "Barbell Deadlift", sets: 3, rep_low: 3, rep_high: 5, target_weight: 315, note: "Brace first" },
-    {
-      kind: "cardio",
-      exercise: "Easy run",
-      target_duration_min: 25,
-      target_distance_km: 4.5,
-      target_zone: "Z2",
-      interval: { finish: "4 strides" },
-    },
+    EASY_RUN_ITEM,
   ]);
   repo.savePlanDay(2, "Pull", "Back and arms", [
     { exercise: "Lat Pulldown", sets: 3, rep_low: 8, rep_high: 12, target_weight: 120 },
@@ -166,7 +170,7 @@ test("accepted agent session reloads with the same session id and complete presc
   assert.deepEqual(repo.getPlan(), planBefore, "custom preparation never mutates the weekly template");
 });
 
-test("adaptive prepare snapshots the selected plan day, keeps cardio fields, and is idempotent", () => {
+test("adaptive prepare snapshots the selected plan day's strength work, a card keeps cardio fields, and prepare is idempotent", () => {
   seedPlan();
   const otherDay = repo.getPlanDay(2);
   db.prepare(`DELETE FROM plan_items WHERE plan_day_id = ?`).run(otherDay.id);
@@ -192,7 +196,23 @@ test("adaptive prepare snapshots the selected plan day, keeps cardio fields, and
     },
     { sets: 4, rep_low: 5, rep_high: 7, target_weight: 185, warmup_sets: 2 }
   );
-  const cardio = first.daily_session.items.find((item) => item.kind === "cardio");
+  assert.equal(
+    first.daily_session.items.some((item) => item.kind === "cardio"),
+    false,
+    "the plan-day snapshot carries no run — runs are the calendar's"
+  );
+  repo.logSetByName({ date: DATE, exercise: "Barbell Bench Press", weight: 185, reps: 5, day_number: 1 });
+  const replaceRetry = prepare({ date: DATE, source: "adaptive_plan", replace: true });
+  assert.equal(replaceRetry.reused, true);
+  assert.equal(replaceRetry.daily_session.id, first.daily_session.id);
+
+  // A run the athlete puts on a card keeps every prescription field it was written with.
+  const withRun = prepare({
+    date: "2031-04-15",
+    source: "athlete_override",
+    session: { name: "Easy run", why: "Aerobic work.", items: [EASY_RUN_ITEM] },
+  });
+  const cardio = withRun.daily_session.items.find((item) => item.kind === "cardio");
   assert.deepEqual(
     {
       exercise: cardio.exercise,
@@ -209,10 +229,6 @@ test("adaptive prepare snapshots the selected plan day, keeps cardio fields, and
       interval: { finish: "4 strides" },
     }
   );
-  repo.logSetByName({ date: DATE, exercise: "Barbell Bench Press", weight: 185, reps: 5, day_number: 1 });
-  const replaceRetry = prepare({ date: DATE, source: "adaptive_plan", replace: true });
-  assert.equal(replaceRetry.reused, true);
-  assert.equal(replaceRetry.daily_session.id, first.daily_session.id);
 });
 
 test("adaptive preview is read-only and prepare persists that exact accepted candidate", () => {

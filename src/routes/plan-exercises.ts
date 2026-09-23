@@ -144,7 +144,8 @@ planExercisesRouter.put("/plan/:day/target", (req, res) => {
 planExercisesRouter.put("/plan", (req, res) => {
   try {
     const body = req.body ?? {};
-    const result = replacePlanChecked(body.days, { quality_override: body.quality_override === true });
+    // The editor's own save: a day the athlete just added and has not filled survives.
+    const result = replacePlanChecked(body.days, { quality_override: body.quality_override === true, keepScaffolds: true });
     // Preserve the established REST success shape (the plan array). Quality is
     // available at GET /plan/quality; rejected writes include the report below.
     res.json(result.plan);

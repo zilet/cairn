@@ -2,8 +2,10 @@
 //
 // Assembles existing leaves into one athlete-facing week strip: weekday-anchored
 // when a lift/run schedule is known, honest template order otherwise (never invent
-// Mon=Day1). Done evidence comes from this week's logged sessions; runs come from
-// the flexible agenda; layout collision is the quiet weekLayoutRead sentence.
+// Mon=Day1). Strength cells come from the lifting week's weekday map (plan days hold
+// strength only), run cells from the flexible agenda dated per weekday, and a weekday
+// with neither is rest. Done evidence comes from this week's logged sessions; layout
+// collision is the quiet weekLayoutRead sentence.
 //
 // Changes nothing. Suggestion voice only — no scores, no gates.
 
@@ -12,7 +14,7 @@ import { addDaysISO, mondayOf } from "../../lib/dates.js";
 import { statedWeekdayNames, weekLayoutRead } from "./week-layout.js";
 import { planItemsOutOfOrder } from "./plan-item-order.js";
 import { flexibleTrainingAgenda } from "../../repo/flexible-training-agenda.js";
-import { statedRunDows, WEEKDAY_NAMES, isoDow } from "../../repo/profile.js";
+import { getEnduranceSchedule, statedRunDows, WEEKDAY_NAMES, isoDow } from "../../repo/profile.js";
 import {
   planDayCandidates,
   planDayRole,
@@ -22,6 +24,7 @@ import {
   type WeekdayPlanDayRole,
 } from "../../repo/plan-selection.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "../../repo/endurance-sports.js";
+import { withoutShadowActivities } from "../../repo/activity-shadow.js";
 import { weekWins } from "../../repo/sessions.js";
 import { getPlanWithPurpose } from "../../repo/day-read.js";
 import { strengthScheduleRead } from "../../repo/strength-schedule.js";
@@ -111,7 +114,6 @@ type TemplateDay = {
   day_type?: string | null;
   items?: unknown[];
   names?: string[];
-  cardio?: string[];
 };
 
 type WeekSessionRow = {
@@ -132,15 +134,9 @@ function shortWeekday(dow: number): string {
 function asTemplateDay(raw: Record<string, unknown>): TemplateDay {
   const items = Array.isArray(raw.items) ? (raw.items as any[]) : [];
   const names: string[] = [];
-  const cardio: string[] = [];
   for (const it of items) {
-    if (String(it?.kind ?? "").toLowerCase() === "cardio") {
-      const label = String(it.note || it.exercise || "Cardio").trim();
-      if (label && !cardio.includes(label)) cardio.push(label);
-    } else {
-      const name = String(it?.exercise ?? "").trim();
-      if (name && !names.includes(name)) names.push(name);
-    }
+    const name = String(it?.exercise ?? "").trim();
+    if (name && !names.includes(name)) names.push(name);
   }
   return {
     id: raw.id == null ? undefined : Number(raw.id),
@@ -151,18 +147,12 @@ function asTemplateDay(raw: Record<string, unknown>): TemplateDay {
     day_type: String(raw.day_type ?? "training").toLowerCase() === "rest" ? "rest" : "training",
     items,
     names,
-    cardio,
   };
 }
 
 function toPlanWeekPlanDay(day: TemplateDay): PlanWeekPlanDay {
   const day_type = day.day_type === "rest" ? "rest" : "training";
-  const role = planDayRole({
-    day_number: day.day_number,
-    day_type,
-    names: day.names ?? [],
-    cardio: day.cardio ?? [],
-  });
+  const role = planDayRole({ day_number: day.day_number, day_type, names: day.names ?? [] });
   return {
     day_number: day.day_number,
     name: String(day.name || `Day ${day.day_number}`),
@@ -222,14 +212,17 @@ type WeekRunLog = { date: string; km: number | null };
 function weekRunLog(weekStart: string, through: string): WeekRunLog[] {
   try {
     const sport = activitySportWhere("a", RUN_SPORT_PATTERNS);
-    const rows = db
+    const rawRows = db
       .prepare(
-        `SELECT a.date AS date, a.distance_km AS km
+        `SELECT a.date AS date, a.type AS type, a.source AS source, a.external_id AS external_id,
+                a.distance_km AS km, a.distance_km AS distance_km, a.duration_min AS duration_min
            FROM activities a
           WHERE a.date >= ? AND a.date <= ? AND (${sport.sql})
           ORDER BY a.date ASC, a.id ASC`
       )
       .all(weekStart, through, ...sport.params) as any[];
+    // A hand-logged shadow of a synced run is one cell entry, not a doubled km sum.
+    const rows = withoutShadowActivities(rawRows);
     return rows.map((r) => ({
       date: String(r.date),
       km: r.km == null || !Number.isFinite(Number(r.km)) ? null : Number(r.km),
@@ -263,6 +256,8 @@ function statusForCell(opts: {
   session: PlanWeekSession | null;
   run: PlanWeekRun | null;
   todayDayNumber: number | null;
+  /** A calendar rest day: a weekday the athlete neither lifts nor runs. */
+  restDay?: boolean;
 }): PlanWeekStatus {
   const { date, asOf, planDay, session, run, todayDayNumber } = opts;
   if (session) return "done";
@@ -271,12 +266,12 @@ function statusForCell(opts: {
   if (run?.status === "completed" && date && run.completion_date === date && planDay?.role !== "strength") {
     return "done";
   }
-  // An open run suggested for this date outranks the mapped rest day: the agenda is
-  // the live truth for running, the template only lent the cell a name.
+  // An open run suggested for this date outranks a calendar rest day: the agenda is
+  // the live truth for running.
   if (run?.status === "open" && date && run.suggested_date === date) {
     return date === asOf ? "today" : date > asOf ? "upcoming" : "open";
   }
-  if (planDay?.day_type === "rest") return "rest";
+  if (opts.restDay || planDay?.day_type === "rest") return "rest";
   if (date) {
     if (date === asOf) return "today";
     if (date > asOf) return "upcoming";
@@ -382,6 +377,15 @@ export function planWeek(date?: string): PlanWeek {
 
   const lifting = strengthScheduleRead(asOf);
   const runDows = statedRunDows();
+  const statedRunKinds = new Map<number, string>(
+    (() => {
+      try {
+        return (getEnduranceSchedule()?.days ?? []).map((day) => [day.dow, String(day.kind)] as [number, string]);
+      } catch {
+        return [];
+      }
+    })()
+  );
   const schedule = {
     lift_days: statedWeekdayNames(lifting.days.map((d) => d.dow)),
     lift_days_source: lifting.source,
@@ -484,16 +488,13 @@ export function planWeek(date?: string): PlanWeek {
           };
         }
       }
-      // A template run day whose run already happened elsewhere this week (the long run
-      // landed Thursday) must not read "Up next" on Saturday. Carry the completed intent
-      // so the cell can say "done Thu", and hold the cell OPEN rather than upcoming.
+      // A stated run weekday whose run already happened elsewhere this week (the long
+      // run landed Thursday) must not read "Up next" on Saturday. Carry the completed
+      // intent so the cell can say "done Thu", and hold the cell OPEN rather than upcoming.
+      const statedKind = map.has(dow) ? null : (statedRunKinds.get(dow) ?? null);
       let covered = false;
-      if (!run && !session && plan_day?.role === "endurance" && cellDate >= asOf) {
-        const kind = /\blong\b/i.test(`${plan_day.name} ${plan_day.focus ?? ""}`)
-          ? "long"
-          : /tempo|threshold|quality|hill|interval/i.test(`${plan_day.name} ${plan_day.focus ?? ""}`)
-            ? "quality"
-            : "easy";
+      if (!run && !session && statedKind && cellDate >= asOf) {
+        const kind = statedKind === "long" || statedKind === "quality" ? statedKind : "easy";
         const done = intents.find((i) => i.status === "completed" && String(i.kind) === kind);
         const stillOpen = intents.some((i) => i.status === "open" && String(i.kind) === kind);
         if (done && !stillOpen) {
@@ -501,13 +502,18 @@ export function planWeek(date?: string): PlanWeek {
           covered = true;
         }
       }
+      // No lift mapped here and no run dated here (nothing logged, nothing the agenda
+      // suggests, nothing covered): the calendar's rest day. No plan row stands for it —
+      // including a stated run weekday the week's run did not land on ("Saturday or
+      // Sunday" long run placed on Sunday).
+      const restDay = !plan_day && !session && !run && !map.has(dow);
       days.push({
         date: cellDate,
         weekday: shortWeekday(dow),
         dow,
         status: covered
           ? "open"
-          : statusForCell({ date: cellDate, asOf, planDay: plan_day, session, run, todayDayNumber }),
+          : statusForCell({ date: cellDate, asOf, planDay: plan_day, session, run, todayDayNumber, restDay }),
         plan_day,
         session,
         run,

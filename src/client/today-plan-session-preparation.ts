@@ -1,6 +1,7 @@
 // @ts-check
-// Today plan/session preparation: selected day, skips, cardio matches, last-set
-// prefill, pending off-plan cards, and adaptive prescriptions.
+// Today plan/session preparation: selected day, skips, last-set prefill, pending
+// off-plan cards, and adaptive prescriptions. Lifts only: runs live in Plan ->
+// Endurance and reach Today through the agenda, never as a plan item.
 
 type TodayPlanSessionPrepCachedApiOptions<T> = {
   key?: string;
@@ -11,9 +12,6 @@ type TodayPlanSessionPrepSwrPeek<T> = { data: T; fresh: boolean };
 type TodayPlanSessionPrepPlanItem = import("../contracts/client.js").ClientPlanItem & {
   fromPlan?: boolean;
   fromSession?: boolean;
-  target_distance_km?: number | null;
-  target_duration_min?: number | null;
-  target_zone?: string | null;
 };
 type TodayPlanSessionPrepPlanDay = {
   id?: number;
@@ -50,6 +48,8 @@ type TodayPlanSessionPrepCardAttribution = {
 type TodayPlanSessionPrepState = {
   logDate: string;
   day: number | null;
+  /** True when the server said today is a calendar run or rest day (no lift selected). */
+  calendarDay?: boolean;
   dayPicked?: boolean;
   dayPickedOn?: string | null;
   plan: TodayPlanSessionPrepPlanDay[];
@@ -64,13 +64,7 @@ type TodayPlanSessionPrepDeps = {
   cachedApi(path: string, opts?: TodayPlanSessionPrepCachedApiOptions<unknown>): Promise<unknown>;
   peekCached<T = unknown>(key: string, freshFor?: number): TodayPlanSessionPrepSwrPeek<T> | null;
   storeCached?(key: string, data: unknown): void;
-  suggestedPlanDayNumber(session: TodayPlanSessionPrepSession | null | undefined, isToday: boolean): Promise<number>;
-  isCardioItem(item: TodayPlanSessionPrepPlanItem): boolean;
-  cardioLabel(item: TodayPlanSessionPrepPlanItem): string;
-  cardioEffortMatches(
-    item: TodayPlanSessionPrepPlanItem,
-    effort: TodayPlanSessionPrepCardioEffort | null | undefined
-  ): boolean;
+  suggestedPlanDayNumber(session: TodayPlanSessionPrepSession | null | undefined, isToday: boolean): Promise<number | null>;
   // What the /today aggregate already answered for THIS render (see
   // today-data-loader): primed SWR keys plus the strength journey payload, so the
   // paint-blocking prep wave asks the network only for what is genuinely missing.
@@ -84,13 +78,9 @@ type TodayPlanSessionPrepResult = {
   dailySession: TodayPlanSessionPrepDailySession | null;
   loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>;
   planNames: Set<string>;
-  allCardio: TodayPlanSessionPrepPlanItem[];
   cardioEfforts: TodayPlanSessionPrepCardioEffort[];
-  todaySettings: unknown;
-  matchedCardio: Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardioEffort>;
   activeItems: TodayPlanSessionPrepPlanItem[];
   skippedItems: TodayPlanSessionPrepPlanItem[];
-  cardioItems: TodayPlanSessionPrepPlanItem[];
   strengthItems: TodayPlanSessionPrepPlanItem[];
   planEx: string[];
   offPlanEx: string[];
@@ -105,7 +95,6 @@ type TodayPlanSessionPrepResult = {
   exTotal: number;
   hasSyncedCardioToday: boolean;
   isRunDay: boolean;
-  expectingRun: boolean;
   // Per-plan-day acute-recovery read for the day pills, keyed by day_number.
   planDayRecovery: Record<number, { recovering_groups: string[]; mostly_recovering: boolean }>;
 };
@@ -113,11 +102,6 @@ type TodayPlanSessionPreparationApi = {
   groupLoggedSets(
     session: TodayPlanSessionPrepSession | null | undefined
   ): Record<string, TodayPlanSessionPrepLoggedSet[]>;
-  matchCardioEfforts(
-    items: TodayPlanSessionPrepPlanItem[],
-    efforts: TodayPlanSessionPrepCardioEffort[],
-    matches: TodayPlanSessionPrepDeps["cardioEffortMatches"]
-  ): Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardioEffort>;
   preparePlanSession(deps: TodayPlanSessionPrepDeps): Promise<TodayPlanSessionPrepResult>;
 };
 type TodayPlanSessionPrepModelApi = {
@@ -126,23 +110,14 @@ type TodayPlanSessionPrepModelApi = {
     session: TodayPlanSessionPrepSession | null | undefined
   ): Record<string, TodayPlanSessionPrepLoggedSet[]>;
   selectedPlanDay(state: TodayPlanSessionPrepState, revealBlank: boolean): TodayPlanSessionPrepPlanDay;
-  matchCardioEfforts(
-    items: TodayPlanSessionPrepPlanItem[],
-    efforts: TodayPlanSessionPrepCardioEffort[],
-    matches: TodayPlanSessionPrepDeps["cardioEffortMatches"]
-  ): Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardioEffort>;
   itemGroups(params: {
     items: TodayPlanSessionPrepPlanItem[];
     loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>;
-    matchedCardio: Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardioEffort>;
     skips: unknown[];
-    isCardioItem(item: TodayPlanSessionPrepPlanItem): boolean;
-    cardioLabel(item: TodayPlanSessionPrepPlanItem): string;
   }): {
     planNames: Set<string>;
     activeItems: TodayPlanSessionPrepPlanItem[];
     skippedItems: TodayPlanSessionPrepPlanItem[];
-    cardioItems: TodayPlanSessionPrepPlanItem[];
     strengthItems: TodayPlanSessionPrepPlanItem[];
     planEx: string[];
     offPlanEx: string[];
@@ -162,7 +137,6 @@ type TodayPlanSessionPrepModelApi = {
   cardAttribution(params: {
     items: TodayPlanSessionPrepPlanItem[];
     loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>;
-    isCardioItem(item: TodayPlanSessionPrepPlanItem): boolean;
   }): Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardAttribution>;
 };
 type TodayPlanSelectionRecoveryApi = {
@@ -187,9 +161,7 @@ type TodayPlanSessionPrepDataApi = {
     isToday: boolean,
     deps: TodayPlanSessionPrepDeps
   ): Promise<{
-    allCardio: TodayPlanSessionPrepPlanItem[];
     cardioEfforts: TodayPlanSessionPrepCardioEffort[];
-    todaySettings: unknown;
   }>;
 };
 
@@ -234,13 +206,15 @@ type TodayPlanSessionPrepDataApi = {
         deps.state.day = null;
       } else if (!deps.state.dayPicked || deps.state.day === null || !hasSelectedDay) {
         deps.state.day = await deps.suggestedPlanDayNumber(deps.session, deps.isToday);
+        // null = the calendar says run or rest today: no lift is selected by default.
+        deps.state.calendarDay = deps.state.day === null;
         deps.state.dayPicked = false;
         deps.state.dayPickedOn = null;
       }
     }
 
     const planSource = dailySession?.source === "adaptive_plan" || dailySession?.source === "manual_plan";
-    const day = dailySession
+    const selectedDay = dailySession
       ? (() => {
           const snapshotItems = [...dailySession.items]
             .sort((left, right) => Number(left.position) - Number(right.position))
@@ -252,47 +226,43 @@ type TodayPlanSessionPrepDataApi = {
             focus: dailySession.focus,
             // The accepted one-day composition is the complete prescription.
             // Later weekly-plan edits require an explicit prepare/replace and can
-            // never leak into this durable snapshot, including cardio items.
+            // never leak into this durable snapshot. A run an older snapshot still
+            // carries is dropped by planItems below — runs are not plan items.
             items: snapshotItems,
             daily_session: dailySession,
           };
         })()
       : todayPlanSessionModel.selectedPlanDay(deps.state, revealBlank);
-    const items = todayPlanSessionModel.planItems(day);
+    const items = todayPlanSessionModel.planItems(selectedDay);
+    // The day every surface reads carries the lift list alone, so a run an older
+    // payload still holds can never make a lift-less day look startable.
+    const day: TodayPlanSessionPrepPlanDay = { ...selectedDay, items };
     const skips = (deps.session && deps.session.skips) || [];
 
-    // planEx/planNames/pendingOffPlan never actually depend on cardio-effort
-    // matching: a STRENGTH item's skip status only reads loggedByEx/skips
-    // (matchedCardio only changes whether a CARDIO item counts as skipped, and
-    // planEx excludes cardio items either way). Fold them against an empty
-    // matchedCardio map so the cardio-context fetch (/cardio + /settings) can run
-    // in the SAME wave as the last-set + prescription fetches, instead of gating
-    // them serially.
-    const NO_CARDIO_MATCH = new Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardioEffort>();
-    const early = todayPlanSessionModel.itemGroups({
+    // Skip state reads only loggedByEx/skips, so the groups are known before any
+    // fetch and the synced-run check (/cardio) rides in the SAME wave as the
+    // last-set + prescription fetches instead of gating them serially.
+    const { planNames, activeItems, skippedItems, strengthItems, planEx, offPlanEx } = todayPlanSessionModel.itemGroups({
       items,
       loggedByEx,
-      matchedCardio: NO_CARDIO_MATCH,
       skips,
-      isCardioItem: deps.isCardioItem,
-      cardioLabel: deps.cardioLabel,
     });
-    const pendingOffPlan = todayPlanSessionModel.prunePendingOffPlan(deps.state, early.planNames, loggedByEx);
+    const pendingOffPlan = todayPlanSessionModel.prunePendingOffPlan(deps.state, planNames, loggedByEx);
 
     // Read LAZILY, inside the function: the plan-selection module shares the Today
     // bundle's one global scope, and a top-level reference across module files does
     // not hoist (CLAUDE.md).
     const planSelection = (globalThis as unknown as { CairnTodayPlanSelection?: TodayPlanSelectionRecoveryApi })
       .CairnTodayPlanSelection;
-    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx, strengthJourney, planDayRecovery] =
+    const [{ cardioEfforts }, lastSets, rxByEx, strengthJourney, planDayRecovery] =
       await Promise.all([
         todayPlanSessionData.loadCardioContext(items, deps.isToday, deps),
         todayPlanSessionData.loadLastSets(
-          [...early.planEx, ...pendingOffPlan.map((item) => item.name)],
+          [...planEx, ...pendingOffPlan.map((item) => item.name)],
           loggedByEx,
           deps
         ),
-        todayPlanSessionData.loadPrescriptions(dailySession && !planSource ? null : deps.state.day, early.planEx, deps),
+        todayPlanSessionData.loadPrescriptions(dailySession && !planSource ? null : deps.state.day, planEx, deps),
         deps.primedStrengthJourney !== undefined
           ? Promise.resolve(
               deps.primedStrengthJourney && typeof deps.primedStrengthJourney === "object"
@@ -310,25 +280,11 @@ type TodayPlanSessionPrepDataApi = {
           : Promise.resolve({}),
       ]);
 
-    const matchedCardio = todayPlanSessionModel.matchCardioEfforts(allCardio, cardioEfforts, deps.cardioEffortMatches);
-    const { planNames, activeItems, skippedItems, cardioItems, strengthItems, planEx, offPlanEx } =
-      todayPlanSessionModel.itemGroups({
-        items,
-        loggedByEx,
-        matchedCardio,
-        skips,
-        isCardioItem: deps.isCardioItem,
-        cardioLabel: deps.cardioLabel,
-      });
     const rxFor = (name: unknown) => (name ? rxByEx[String(name).toLowerCase()] || null : null);
     // Cards, not exercise names, are what the athlete logs into. On a peak day the
     // top single and its back-off block share one name, so every per-card question
     // — what to prefill, how many sets are done — asks the attribution, not the pile.
-    const attribution = todayPlanSessionModel.cardAttribution({
-      items,
-      loggedByEx,
-      isCardioItem: deps.isCardioItem,
-    });
+    const attribution = todayPlanSessionModel.cardAttribution({ items, loggedByEx });
     const attributionFor = (item: TodayPlanSessionPrepPlanItem) => attribution.get(item) || null;
     const prefillFor = (item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill =>
       todayPlanSessionModel.prefillFor(item, loggedByEx, lastSets, rxFor(item.exercise), attributionFor(item));
@@ -338,8 +294,7 @@ type TodayPlanSessionPrepDataApi = {
     }).length;
     const exTotal = strengthItems.length;
     const hasSyncedCardioToday = cardioEfforts.length > 0;
-    const isRunDay = (cardioItems.length > 0 || hasSyncedCardioToday) && exTotal === 0;
-    const expectingRun = deps.isToday && cardioItems.length > 0 && !cardioItems.some((item) => matchedCardio.has(item));
+    const isRunDay = hasSyncedCardioToday && exTotal === 0;
 
     return {
       revealBlank,
@@ -347,13 +302,9 @@ type TodayPlanSessionPrepDataApi = {
       dailySession,
       loggedByEx,
       planNames,
-      allCardio,
       cardioEfforts,
-      todaySettings,
-      matchedCardio,
       activeItems,
       skippedItems,
-      cardioItems,
       strengthItems,
       planEx,
       offPlanEx,
@@ -368,14 +319,12 @@ type TodayPlanSessionPrepDataApi = {
       exTotal,
       hasSyncedCardioToday,
       isRunDay,
-      expectingRun,
       planDayRecovery,
     };
   }
 
   const CAIRN_TODAY_PLAN_SESSION_PREPARATION: TodayPlanSessionPreparationApi = {
     groupLoggedSets: todayPlanSessionModel.groupLoggedSets,
-    matchCardioEfforts: todayPlanSessionModel.matchCardioEfforts,
     preparePlanSession,
   };
 

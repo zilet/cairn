@@ -1,9 +1,10 @@
 // @ts-check
-// Plan editor render/model helpers.
+// Plan editor render/model helpers. The plan holds lift days only: every run lives
+// in Plan -> Endurance, so nothing here draws, adds or edits a run or a rest day.
 
 type PlanEditorApiDay = import("../contracts/client.js").ClientPlanDay;
 type PlanEditorItem = {
-  kind?: "strength" | "cardio";
+  kind?: "strength";
   exercise?: unknown;
   sets?: unknown;
   rep_low?: unknown;
@@ -14,18 +15,12 @@ type PlanEditorItem = {
   muscle_group?: unknown;
   target_seconds?: unknown;
   mode?: unknown;
-  target_distance_km?: unknown;
-  target_duration_min?: unknown;
-  target_zone?: unknown;
-  interval?: unknown;
-  interval_note?: unknown;
 };
 
 type PlanEditorDay = {
   day_number?: unknown;
   name?: unknown;
   focus?: unknown;
-  // 'rest' is a real day in the week that carries no items (v99).
   day_type?: unknown;
   purpose?: unknown;
   out_of_order?: unknown;
@@ -39,17 +34,15 @@ type ProgDayAnnotation = {
   label?: string | null;
 };
 
-function isRestDay(day: PlanEditorDay | PlanEditorApiDay): boolean {
-  return String((day as { day_type?: unknown }).day_type ?? "training") === "rest";
-}
-
 (() => {
 function blankStrength(): PlanEditorItem {
-  return { kind: "strength", exercise: "", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, note: "", warmup_sets: null, target_distance_km: null, target_duration_min: null, target_zone: null, interval_note: "" };
+  return { kind: "strength", exercise: "", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, note: "", warmup_sets: null };
 }
 
-function blankCardio(): PlanEditorItem {
-  return { kind: "cardio", exercise: "", sets: 1, rep_low: null, rep_high: null, target_weight: null, note: "", warmup_sets: null, target_distance_km: null, target_duration_min: null, target_zone: null, interval_note: "" };
+// Where the editor points for runs. One quiet line, never a form: the athlete edits
+// runs in Endurance, where the run plan, the week's go-ahead and the projections live.
+function runsElsewhereHtml(): string {
+  return `<p class="plan-runs-note prog-purpose">${escHtml("Lift days only here — your runs live in Endurance.")} <button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-plan-runs>Open Endurance →</button></p>`;
 }
 
 function dayModelFromPlan(
@@ -62,13 +55,14 @@ function dayModelFromPlan(
     day_number: day.day_number,
     name: day.name,
     focus: day.focus || "",
-    // Carried through the model because the editor saves the WHOLE week: a model
-    // that dropped it would erase the rest day on the next save of any other day.
-    day_type: isRestDay(day) ? "rest" : "training",
+    // Every plan day is a lift day; a rest day is simply a weekday with no lift and
+    // no run on it (the calendar), never a row the editor carries.
+    day_type: "training",
     purpose: typeof (day as { purpose?: unknown }).purpose === "string" ? String((day as { purpose: string }).purpose) : "",
     out_of_order: (day as { out_of_order?: unknown }).out_of_order === true,
-    items: (Array.isArray(day.items) ? day.items : []).map((item) => ({
-      kind: isCardioItem(item) ? "cardio" : "strength",
+    // A cardio item an older payload still carries is dropped, never edited here.
+    items: strengthPlanItems((Array.isArray(day.items) ? day.items : []) as PlanEditorItem[]).map((item) => ({
+      kind: "strength" as const,
       exercise: item.exercise,
       sets: item.sets,
       rep_low: item.rep_low,
@@ -79,10 +73,6 @@ function dayModelFromPlan(
       muscle_group: item.muscle_group ?? null,
       target_seconds: item.target_seconds ?? null,
       mode: item.mode ?? null,
-      target_distance_km: item.target_distance_km ?? null,
-      target_duration_min: item.target_duration_min ?? null,
-      target_zone: item.target_zone ?? null,
-      interval_note: cardioIntervalNote(item.interval),
     })),
   };
 }
@@ -94,9 +84,9 @@ function fmtWeightLb(weight: unknown): string {
   return n < 0 ? `${-n} lb assist` : `${n} lb`;
 }
 
-function progDayStatusLabel(ann: ProgDayAnnotation | undefined, rest: boolean): string {
+function progDayStatusLabel(ann: ProgDayAnnotation | undefined): string {
   // No week annotation yet (first paint, or an unscheduled week): the caller's
-  // "Day N · Rest" fallback names the seam, so say nothing here.
+  // "Day N" fallback names the seam, so say nothing here.
   if (!ann) return "";
   if (ann.label) return String(ann.label);
   const weekday = ann.weekday ? String(ann.weekday) : "";
@@ -104,7 +94,7 @@ function progDayStatusLabel(ann: ProgDayAnnotation | undefined, rest: boolean): 
   if (status === "done") return weekday ? `Done · ${weekday}` : "Done";
   if (status === "today") return weekday ? `Today · ${weekday}` : "Today";
   if (status === "upcoming") return weekday ? `${weekday} · Up next` : "Up next";
-  if (status === "rest" || rest) return weekday ? `${weekday} · Rest` : "Rest";
+  if (status === "rest") return weekday ? `${weekday} · Rest` : "Rest";
   if (status === "open") return weekday || "";
   return weekday;
 }
@@ -126,37 +116,19 @@ function progDayHtml(
   ann?: ProgDayAnnotation,
   opts: { sharedPurpose?: string | null } = {}
 ): string {
-  const items = Array.isArray(day.items) ? day.items : [];
-  const rest = isRestDay(day);
-  const statusLabel = progDayStatusLabel(ann, rest);
+  const items = strengthPlanItems(Array.isArray(day.items) ? day.items : []);
+  const statusLabel = progDayStatusLabel(ann);
   const ownPurpose = typeof day.purpose === "string" ? day.purpose.trim() : "";
   const purpose = opts.sharedPurpose && ownPurpose === opts.sharedPurpose ? "" : ownPurpose;
   // A day already trained this week offers no "Train" — Edit stays.
   const trainedThisWeek = ann?.status === "done";
-  const outOfOrder = day.out_of_order === true && !rest && items.length > 1;
+  const outOfOrder = day.out_of_order === true && items.length > 1;
   const strip = items.map((item) => {
-    if (isCardioItem(item)) {
-      const tile = artImg("activity", cardioArtPhrase(item), "artile-md strip-tile", art("activity", cardioArtPhrase(item)));
-      return tile ? `<div>${tile}</div>` : "";
-    }
     const exercise = String(item.exercise || "");
     const tile = artImg("exercise", exercise, "artile-md strip-tile", art("exercise", exercise, item.muscle_group));
     return tile ? `<div data-guide="${encodeURIComponent(exercise)}" style="cursor:pointer">${tile}</div>` : "";
   }).join("");
   const rows = items.map((item) => {
-    if (isCardioItem(item)) {
-      const tile = artImg("activity", cardioArtPhrase(item), "artile-sm", art("activity", cardioArtPhrase(item)));
-      const prescription = cardioPrescription(item);
-      const description = cardioDescription(item);
-      return `<div class="prog-row prog-row-cardio">
-            ${tile}
-            <div class="prog-row-main">
-              <span class="prog-row-name prog-row-name-static">${escHtml(cardioLabel(item))}</span>
-              <div class="prog-row-hint"><span class="cardio-tag lbl">cardio</span>${description ? ` ${escHtml(description)}` : ""}</div>
-            </div>
-            <div class="prog-row-nums"><span class="numeral prog-row-cardio-pres">${escHtml(prescription || "—")}</span></div>
-          </div>`;
-    }
     const exercise = String(item.exercise || "");
     const tile = artImg("exercise", exercise, "artile-sm", art("exercise", exercise, item.muscle_group));
     const timed = item.mode === "timed" || item.target_seconds != null;
@@ -182,54 +154,32 @@ function progDayHtml(
   return `<div class="prog-day reveal" style="${stagger(dayIndex)}" data-pd="${dayIndex}">
         <div class="prog-head">
           <div class="prog-head-main">
-            <div class="lbl">${statusLabel ? escHtml(statusLabel) : `Day ${escHtml(day.day_number)}${rest ? " · Rest" : ""}`}</div>
+            <div class="lbl">${statusLabel ? escHtml(statusLabel) : `Day ${escHtml(day.day_number)}`}</div>
             <div class="prog-name">${escHtml(day.name || `Day ${day.day_number}`)}</div>
             ${day.focus ? `<div class="prog-focus">${escHtml(day.focus)}</div>` : ""}
             ${purpose ? `<div class="prog-purpose">${escHtml(purpose)}</div>` : ""}
           </div>
           <div class="prog-head-actions">
-            ${rest || !items.length || trainedThisWeek ? "" : `<button class="ghostbtn prog-train" data-trainday="${dayIndex}">Train</button>`}
+            ${!items.length || trainedThisWeek ? "" : `<button class="ghostbtn prog-train" data-trainday="${dayIndex}">Train</button>`}
             ${outOfOrder ? `<button class="linkbtn prog-order" type="button" data-orderday="${dayIndex}">Order for effect</button>` : ""}
             <button class="ghostbtn prog-edit" data-editday="${dayIndex}">Edit day</button>
           </div>
         </div>
         ${strip ? `<div class="prog-strip">${strip}</div>` : ""}
-        <div class="prog-list">${rows || `<div class="empty">${rest ? "A rest day — nothing planned, and nothing missing." : "No exercises yet — tap Edit day."}</div>`}</div>
+        <div class="prog-list">${rows || `<div class="empty">No exercises yet — tap Edit day.</div>`}</div>
       </div>`;
 }
 
 function pitemHtml(item: PlanEditorItem, dayIndex: number, itemIndex: number, lastIndex: number): string {
-  const cardio = isCardioItem(item);
   const ord = `<div class="pi-ord">
         <button class="ordbtn" data-upitem="${dayIndex}:${itemIndex}" ${itemIndex === 0 ? "disabled" : ""}>↑</button>
         <button class="ordbtn" data-downitem="${dayIndex}:${itemIndex}" ${itemIndex === lastIndex ? "disabled" : ""}>↓</button>
       </div>`;
-  const kindToggle = `<div class="pi-kind" role="group" aria-label="Item type">
-        <button type="button" class="pi-kindbtn${cardio ? "" : " active"}" data-pikind="${dayIndex}:${itemIndex}:strength">Lift</button>
-        <button type="button" class="pi-kindbtn${cardio ? " active" : ""}" data-pikind="${dayIndex}:${itemIndex}:cardio">Cardio</button>
-      </div>`;
-  if (cardio) {
-    return `<div class="pitem pitem-cardio" data-d="${dayIndex}" data-i="${itemIndex}" data-kind="cardio">
-          <div class="pi-row1">
-            <input class="pi-ex" value="${escAttr(item.note || "")}" placeholder="e.g. Long run, Tempo, Easy ride">
-            ${ord}
-          </div>
-          ${kindToggle}
-          <div class="pi-nums pi-nums-cardio">
-            <input class="pi-km" type="number" inputmode="decimal" step="0.1" value="${item.target_distance_km ?? ""}" placeholder="km">
-            <input class="pi-min" type="number" inputmode="numeric" value="${item.target_duration_min ?? ""}" placeholder="min">
-            <input class="pi-zone" type="text" value="${escAttr(item.target_zone || "")}" placeholder="zone (Z2)">
-            <button class="delbtn" data-delitem="${dayIndex}:${itemIndex}">✕</button>
-          </div>
-          <input class="pi-ivl" value="${escAttr(item.interval_note || "")}" placeholder="Interval note (optional, e.g. 6×400m @ Z4)">
-        </div>`;
-  }
   return `<div class="pitem" data-d="${dayIndex}" data-i="${itemIndex}" data-kind="strength">
         <div class="pi-row1">
           <input class="pi-ex" value="${escAttr(item.exercise)}" placeholder="Exercise" list="exerciseNames">
           ${ord}
         </div>
-        ${kindToggle}
         <div class="pi-nums">
           <input class="pi-sets" type="number" inputmode="numeric" value="${item.sets ?? ""}" placeholder="sets">
           <input class="pi-lo" type="number" inputmode="numeric" value="${item.rep_low ?? ""}" placeholder="lo">
@@ -243,10 +193,7 @@ function pitemHtml(item: PlanEditorItem, dayIndex: number, itemIndex: number, la
 }
 
 function pdayHtml(day: PlanEditorDay, dayIndex: number): string {
-  const items = Array.isArray(day.items) ? day.items : [];
-  const rest = isRestDay(day);
-  // A rest day shows no item rows and no add buttons: it carries none, and the
-  // server refuses one that does. The toggle is the whole affordance.
+  const items = strengthPlanItems(Array.isArray(day.items) ? day.items : []);
   return `<div class="pday" data-d="${dayIndex}">
         <div class="pday-head">
           <input class="pday-name" value="${escAttr(day.name)}" placeholder="Day name">
@@ -254,21 +201,16 @@ function pdayHtml(day: PlanEditorDay, dayIndex: number): string {
           <button class="delbtn" data-delday="${dayIndex}">✕</button>
         </div>
         <input class="pday-focus" value="${escAttr(day.focus)}" placeholder="Focus (optional)">
+        ${items.map((item, itemIndex) => pitemHtml(item, dayIndex, itemIndex, items.length - 1)).join("")}
         <div class="pday-add">
-          <button type="button" class="ghostbtn" data-restday="${dayIndex}" aria-pressed="${rest ? "true" : "false"}">${rest ? "This is a rest day" : "Make this a rest day"}</button>
-          ${rest ? `<span class="lbl" style="align-self:center">no exercises — that's the point</span>` : ""}
-        </div>
-        ${rest ? "" : items.map((item, itemIndex) => pitemHtml(item, dayIndex, itemIndex, items.length - 1)).join("")}
-        ${rest ? "" : `<div class="pday-add">
           <button class="ghostbtn" data-additem="${dayIndex}">+ exercise</button>
-          <button class="ghostbtn" data-addcardio="${dayIndex}">+ cardio</button>
-        </div>`}
+        </div>
       </div>`;
 }
 
 const CAIRN_PLAN_EDITOR = {
   blankStrength,
-  blankCardio,
+  runsElsewhereHtml,
   dayModelFromPlan,
   calendarFooterHtml,
   progDayHtml,

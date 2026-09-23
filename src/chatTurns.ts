@@ -22,16 +22,7 @@ import {
 } from "./brain/query-loop-contract.js";
 import type { CoachReadToolRequest, CoachReadToolResult } from "./brain/read-tools.js";
 import type { CoachReadToolExecutionContext } from "./brain/read-tool-runtime.js";
-import { addDaysISO, chatHistoryTimeLabel, localDateISO, nowContext, parseDbTime } from "./repo/shared.js";
-import {
-  mergeStoredRun,
-  resolveRunIndex,
-  runLabelKey,
-  runNumber,
-  storedRunsFromItems,
-  type RunEditPatch,
-  type StoredRun,
-} from "./repo/run-edit.js";
+import { chatHistoryTimeLabel, localDateISO, nowContext, parseDbTime } from "./repo/shared.js";
 import { runWithTimeZone } from "./tz.js";
 import {
   availabilityHolds,
@@ -54,12 +45,9 @@ import type { MemoryKind } from "./repo/memory.js";
 import {
   chatCheckinDate,
   normalizeChatActions,
-  normalizeRunZoneKey,
   type ChatAction,
   type ChatActionType,
   type LogFoodAction,
-  type RunPrescriptionKind,
-  type RunZoneKey,
   type SetRunAction,
 } from "./chatActions.js";
 import { normalizeFoodCaptureParsed } from "./foodCapture.js";
@@ -88,7 +76,6 @@ import {
   isLeadingQuestion,
 } from "./chat-intent.js";
 import {
-  describeRun,
   recordOrNull,
   reconcileChatPlanReply,
   reconcileChatRevertReply,
@@ -1073,32 +1060,18 @@ function verifyPlanUpdateReadback(changes: unknown[], result: any): any {
   };
 }
 
-// One verdict over both halves of a mixed plan_update: the strength readback and the
-// run readback. An edit that produced NEITHER a strength check nor a run check has
-// verified nothing and says so (this is the guard the old `checks.length > 0` gave).
+// One verdict over both halves of a mixed plan_update. Runs are never written, so the
+// run half contributes only its refusals: any refused run makes the turn not-verified,
+// and an edit that produced no strength check has verified nothing.
 function mergeRunVerification(
   strengthVerification: { ok: boolean; checks: unknown[]; days: any[] },
-  runs: RunEditPlan,
-  strengthBefore: Map<number, number>
-): { ok: boolean; checks: unknown[]; days: any[]; runs: RunReadbackCheck[]; errors?: string[] } {
-  const runChecks = runs.expected.map((entry) =>
-    verifyRunReadback(entry.day_number, entry.run, strengthBefore.get(entry.day_number) ?? null)
-  );
-  const days = [
-    ...strengthVerification.days,
-    ...runChecks
-      .filter((check) => !strengthVerification.days.some((day: any) => Number(day?.day_number) === check.day_number))
-      .map((check) => ({ day_number: check.day_number, runs: [check.run].filter(Boolean) })),
-  ];
+  runs: RunEditPlan
+): { ok: boolean; checks: unknown[]; days: any[]; runs: unknown[]; errors?: string[] } {
   return {
-    ok:
-      strengthVerification.ok &&
-      runs.errors.length === 0 &&
-      runChecks.every((check) => check.ok) &&
-      strengthVerification.checks.length + runChecks.length > 0,
+    ok: strengthVerification.ok && runs.errors.length === 0 && strengthVerification.checks.length > 0,
     checks: strengthVerification.checks,
-    days,
-    runs: runChecks,
+    days: strengthVerification.days,
+    runs: [],
     ...(runs.errors.length ? { errors: runs.errors } : {}),
   };
 }
@@ -1128,11 +1101,9 @@ function applyBackgroundPlanUpdate(
   const split = splitPlanChangesForRuns(changes);
   // Nothing left to write and a refusal to explain — say it here rather than build an
   // empty proposal for the apply path to reject in its own, less honest words.
-  // `cardio_edits` is one entry per SUCCESSFUL edit, where `cardio` is the whole day
-  // and is non-empty as soon as a day was read — even when every edit for it failed.
-  // Asking the edits is what keeps a wholly-refused turn from writing a no-op day over
-  // its own refusal.
-  if (split.runs.errors.length && !split.strength.length && !split.runs.cardio_edits.length) {
+  // Runs are never written (they follow the stated run days), so a turn that asked
+  // for nothing but runs ends here with the refusal, before any proposal exists.
+  if (split.runs.errors.length && !split.strength.length) {
     return {
       ok: false,
       background: !explicitUserRequest,
@@ -1144,21 +1115,9 @@ function applyBackgroundPlanUpdate(
       verification: { ok: false, checks: [], days: [], runs: [], errors: split.runs.errors },
     };
   }
-  const strengthBefore = new Map<number, number>();
-  for (const entry of split.runs.expected) {
-    if (!strengthBefore.has(entry.day_number))
-      strengthBefore.set(entry.day_number, strengthItemCount(entry.day_number));
-  }
   const proposal = repo.createProposal(agent, "background: chat signal", "", {
     summary: String(summary ?? "Plan adjusted from a new coaching signal.").slice(0, 500),
     changes: split.strength,
-    // The EDIT, not a snapshot of the day. Autonomy decides when this proposal lands —
-    // quiet_apply is only what it asks for, and announce/review modes leave it waiting —
-    // so the day it was built against may not be the day it is written to. Each marked
-    // entry is re-folded onto the day's rows as they stand at the write, so a run edited
-    // while this waited survives. Several changes in one turn travel as several marked
-    // entries; the apply path re-reads each day once and folds them in order.
-    ...(split.runs.cardio_edits.length ? { cardio: split.runs.cardio_edits } : {}),
     ...(clinicalProvenance ? { clinical_provenance: clinicalProvenance } : {}),
   });
   // Route every background adjustment through the ONE autonomy policy. Lead mode
@@ -1176,8 +1135,7 @@ function applyBackgroundPlanUpdate(
   const verification = persisted
     ? mergeRunVerification(
         split.strength.length ? verifyPlanUpdateReadback(split.strength, result) : { ok: true, checks: [], days: [] },
-        split.runs,
-        strengthBefore
+        split.runs
       )
     : { ok: false, proposal_status: stored?.status ?? null, checks: [], days: [], runs: [] };
   // The plan is the template; the composition is the session the athlete is HOLDING.
@@ -1249,317 +1207,67 @@ function routeChatPlanRestructure(
 }
 
 // ---------- run prescriptions ----------
-// The plan's cardio rows are the only endurance prescription Today, the Plan screen
-// and run-compliance can see, and applyProposal's `cardio[]` → setWeeklyRuns is their
-// ONE writer — the same one the Monday tick and the run-plan proposal go through.
-// Everything below BUILDS a payload for that writer and reads the result back; it
-// never touches plan_items itself.
-//
-// What used to go wrong is narrower than it sounds: a change carrying `kind:'cardio'`
-// has routed to setWeeklyRuns for some time (applyProposalUnit lifts it out of
-// changes[]). It was a change with NO kind — "make tomorrow's run 8k" arriving as
-// {exercise:"Easy run", target_distance_km:8} — that reached applyPlanChange, which
-// sees strength items only, and so added a 3×8–12 LIFTING movement called "Easy run"
-// beside the untouched 5 km cardio row, which then read back intact and reported
-// "Saved and verified".
+// Runs are NOT plan items (migration 110). Every run — easy, quality, long — comes
+// from the athlete's stated run days and is sized by the run engine each week
+// (weeklyRunPlan / the rolling agenda); nothing stores a single run's dose for chat to
+// edit. So a `set_run` action, or a plan_update change that is really a run, is
+// answered honestly here and never written anywhere: left among the strength changes
+// an un-kinded run would become a fabricated lifting movement ("Easy run", 3×8–12)
+// that then read back as saved. Changing WHICH days they run is `set_endurance_schedule`.
 
-// One requested change to ONE run. set_run carries exactly one; a plan_update whose
-// changes[] turn out to be endurance-shaped is translated into these.
-interface RunEdit {
-  day_number: number;
-  kind: RunPrescriptionKind | null;
-  label: string | null;
-  match_label: string | null;
-  distance_km: number | null;
-  duration_min: number | null;
-  zone: RunZoneKey | null;
-  reason?: unknown;
-}
+// A capability refusal an athlete can walk into every week, so it rotates like any
+// other repeating athlete-facing sentence (see CHAT_REFUSAL_VARIANTS below). Every
+// phrasing points at the thing they CAN change — which days they run.
+export const RUN_EDIT_REFUSAL_VARIANTS: readonly string[] = [
+  "runs aren't set one at a time any more — they follow the days you run and are sized from your week; tell me which days you run and I'll set those",
+  "a single run's distance isn't something I set now — your runs come from your run days and are sized from your week, so I can change which days you run instead",
+  "runs live on your run days and size themselves from your week, so I can't change one run on its own — say which days you run and I'll update them",
+  "I don't edit one run at a time any more; your week's runs follow your run days and are sized for you — tell me the days and I'll set them",
+] as const;
 
-function planDayItems(dayNumber: number): any[] {
-  const day = repo.getPlanDay(dayNumber) as any;
-  return Array.isArray(day?.items) ? day.items : [];
-}
-
-function storedRunsForDay(dayNumber: number): StoredRun[] {
-  return storedRunsFromItems(planDayItems(dayNumber));
-}
-
-function strengthItemCount(dayNumber: number): number {
-  return planDayItems(dayNumber).filter((item: any) => String(item?.kind ?? "") !== "cardio").length;
-}
-
-// The athlete's OWN band, from the personal HR model (hr-model.ts). When that model
-// has not seen enough running to speak, the prescription carries the bare zone key —
-// never the age/Karvonen population band, which would be a formula wearing a
-// personal label.
-export function runZoneTag(zone: RunZoneKey | null | undefined): string | null {
-  if (!zone) return null;
-  try {
-    const model = repo.getHrModel();
-    if (model?.zones && model.confidence !== "insufficient") return repo.hrZoneLabel(zone, model);
-  } catch {
-    /* no model → the bare key below */
-  }
-  return zone.toUpperCase();
-}
-
-// The edit, resolved to what would be STORED: the zone rendered to the athlete's own
-// band, the kind kept as the word that finds the run. This is the shape the apply path
-// re-folds, so nothing model-supplied is re-interpreted a second time.
-function runEditPatch(edit: RunEdit): RunEditPatch {
-  return {
-    kind: edit.kind,
-    label: edit.label,
-    match_label: edit.match_label,
-    distance_km: edit.distance_km,
-    duration_min: edit.duration_min,
-    zone_tag: runZoneTag(edit.zone),
-  };
-}
-
-// A day with several runs that the request didn't name is ambiguous, and an ambiguous
-// run edit is refused rather than guessed at.
-function resolveRunTarget(
-  runs: StoredRun[],
-  edit: RunEdit,
-  patch: RunEditPatch
-): { index: number } | { error: string } {
-  const index = resolveRunIndex(runs, patch);
-  if (index == null) {
-    return { error: `day ${edit.day_number} carries ${runs.length} runs and the request didn't say which one` };
-  }
-  return { index };
-}
-
-function cardioPayloadEntry(dayNumber: number, run: StoredRun, reason?: unknown): Record<string, unknown> {
-  return {
-    day_number: dayNumber,
-    kind: "cardio",
-    label: run.label,
-    target_distance_km: run.target_distance_km,
-    target_duration_min: run.target_duration_min,
-    target_zone: run.target_zone,
-    interval: run.interval ?? null,
-    day_name: run.label,
-    focus: "Endurance",
-    ...(typeof reason === "string" && reason.trim() ? { reason: reason.trim().slice(0, 500) } : {}),
-  };
-}
-
-// The same row, MARKED as an edit and carrying the edit that produced it. The merged
-// values stay on the entry so anything previewing the proposal reads what was asked
-// for; `cardio_edit` tells the apply path to re-fold `edit` onto the day's rows as they
-// stand THEN, instead of writing this copy over whatever arrived in the meantime.
-function cardioEditPayloadEntry(
-  dayNumber: number,
-  run: StoredRun,
-  patch: RunEditPatch,
-  reason?: unknown
-): Record<string, unknown> {
-  return {
-    ...cardioPayloadEntry(dayNumber, run, reason),
-    cardio_edit: true,
-    edit: { ...patch },
-  };
+function runEditRefusal(): string {
+  return pickDayVariant(RUN_EDIT_REFUSAL_VARIANTS, localDateISO(), "chat-run-edit");
 }
 
 export interface RunEditPlan {
+  // Kept for the receipt shape: runs are never written, so both stay empty and every
+  // requested run edit lands in `errors` as an honest refusal.
   cardio: Record<string, unknown>[];
-  // The same edits expressed as MARKED payload entries — one per edit, carrying the
-  // edit itself rather than a snapshot of the day. See `cardioEditPayloadEntry`.
   cardio_edits: Record<string, unknown>[];
-  // What each edit expects to find in the store afterwards — the input to the readback.
-  expected: { day_number: number; run: StoredRun }[];
+  expected: { day_number: number }[];
   errors: string[];
 }
 
-// Fold every run edit onto the day's CURRENT cardio rows and emit the full per-day
-// cardio list. setWeeklyRuns replaces a day's cardio wholesale, so the untouched runs
-// have to travel with the edited one or they'd be dropped — that is also how the zone
-// of an unrelated run survives a distance-only change.
-//
-// That wholesale list is a snapshot of the day AS IT IS NOW, which is only the truth if
-// the payload is written immediately. `cardio_edits` is the same work expressed as the
-// edit, for a proposal that may not land until a later boundary.
-export function planRunEdits(edits: RunEdit[]): RunEditPlan {
-  const byDay = new Map<number, StoredRun[]>();
-  // day → (row index → the edit's stated reason), so the ledger's provenance is
-  // attached to the row it actually explains.
-  const touched = new Map<number, Map<number, unknown>>();
-  const expected: { day_number: number; run: StoredRun }[] = [];
-  const cardioEdits: Record<string, unknown>[] = [];
-  const errors: string[] = [];
-  for (const edit of edits) {
-    const dayNumber = Math.trunc(Number(edit.day_number));
-    if (!Number.isFinite(dayNumber) || dayNumber < 1) {
-      errors.push("a run edit named no plan day");
-      continue;
-    }
-    // setWeeklyRuns would CREATE a missing day. Adding a training day is structural
-    // work, and a day number the model invented must never quietly become one — chat
-    // edits the week that exists.
-    if (!byDay.has(dayNumber) && !repo.getPlanDay(dayNumber)) {
-      errors.push(`there is no day ${dayNumber} in the plan to change`);
-      continue;
-    }
-    if (!byDay.has(dayNumber)) byDay.set(dayNumber, storedRunsForDay(dayNumber));
-    if (!touched.has(dayNumber)) touched.set(dayNumber, new Map());
-    const runs = byDay.get(dayNumber) as StoredRun[];
-    const patch = runEditPatch({ ...edit, day_number: dayNumber });
-    const target = resolveRunTarget(runs, { ...edit, day_number: dayNumber }, patch);
-    if ("error" in target) {
-      errors.push(target.error);
-      continue;
-    }
-    const merged = mergeStoredRun(target.index >= 0 ? runs[target.index] : null, patch);
-    const index = target.index >= 0 ? target.index : runs.length;
-    runs[index] = merged;
-    touched.get(dayNumber)?.set(index, edit.reason);
-    cardioEdits.push(cardioEditPayloadEntry(dayNumber, merged, patch, edit.reason));
-    // A later edit to the same row supersedes the earlier expectation.
-    const priorExpectation = expected.findIndex(
-      (entry) => entry.day_number === dayNumber && runLabelKey(entry.run.label) === runLabelKey(merged.label)
-    );
-    if (priorExpectation >= 0) expected.splice(priorExpectation, 1);
-    expected.push({ day_number: dayNumber, run: merged });
-  }
-  const cardio: Record<string, unknown>[] = [];
-  for (const [dayNumber, runs] of byDay) {
-    const edited = touched.get(dayNumber) ?? new Map<number, unknown>();
-    runs.forEach((run, index) => cardio.push(cardioPayloadEntry(dayNumber, run, edited.get(index))));
-  }
-  return { cardio, cardio_edits: cardioEdits, expected, errors };
+/** Every run edit is refused — there is no stored run to change (see above). */
+export function planRunEdits(edits: readonly unknown[]): RunEditPlan {
+  return { cardio: [], cardio_edits: [], expected: [], errors: edits.map(() => runEditRefusal()) };
 }
 
-export interface RunReadbackCheck {
-  ok: boolean;
-  day_number: number;
-  mismatches: string[];
-  run: StoredRun | null;
-  strength_items: number;
-}
-
-// The honest readback: re-read the stored day through the SAME reader the Today and
-// Plan surfaces use, and compare what is actually there against what was asked for.
-// A run that did not land, landed with a different dose, or cost the day its lifting
-// work reports a mismatch — the apply receipt is never the evidence.
-export function verifyRunReadback(
-  dayNumber: number,
-  expected: StoredRun,
-  strengthBefore: number | null = null
-): RunReadbackCheck {
-  const runs = storedRunsForDay(dayNumber);
-  const stored = runs.find((run) => runLabelKey(run.label) === runLabelKey(expected.label)) ?? null;
-  const mismatches: string[] = [];
-  if (!stored) mismatches.push("run");
-  else {
-    if (stored.target_distance_km !== expected.target_distance_km) mismatches.push("distance_km");
-    if (stored.target_duration_min !== expected.target_duration_min) mismatches.push("duration_min");
-    if ((stored.target_zone ?? null) !== (expected.target_zone ?? null)) mismatches.push("zone");
-  }
-  const strengthItems = strengthItemCount(dayNumber);
-  if (strengthBefore != null && strengthItems !== strengthBefore) mismatches.push("strength_work");
-  return { ok: mismatches.length === 0, day_number: dayNumber, mismatches, run: stored, strength_items: strengthItems };
-}
-
-function runEditFromAction(action: SetRunAction): RunEdit {
+// set_run: answered without a proposal. Nothing is persisted, so nothing verifies.
+function applyChatRunPrescription(_agent: string, action: SetRunAction, explicitUserRequest: boolean): unknown {
   return {
-    day_number: Number(action.day_number),
-    kind: action.kind ?? null,
-    label: typeof action.label === "string" && action.label.trim() ? action.label.trim() : null,
-    match_label: typeof action.match_label === "string" && action.match_label.trim() ? action.match_label.trim() : null,
-    distance_km: runNumber(action.distance_km),
-    duration_min: runNumber(action.duration_min),
-    zone: action.zone ?? null,
-    reason: action.reason,
-  };
-}
-
-function mondayOfISO(dateISO: string): string {
-  const d = new Date(`${dateISO}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-  return d.toISOString().slice(0, 10);
-}
-
-// A run's day_number is a Monday-anchored slot in THIS week (the same anchoring
-// weeklyRunPlan uses), so a slot whose date has already gone by is not a plan to edit —
-// it is the record of what the week prescribed, and what run-compliance reads back
-// against. Rewriting it would quietly change what the athlete was asked to do.
-// A slot past Sunday belongs to no week here and is left to the existence check.
-function pastWeekSlotRefusal(dayNumber: number): string | null {
-  if (!Number.isFinite(dayNumber) || dayNumber < 1 || dayNumber > 7) return null;
-  const today = localDateISO();
-  const date = addDaysISO(mondayOfISO(today), dayNumber - 1);
-  if (!date || date >= today) return null;
-  return `day ${dayNumber} already went by this week, and rewriting it would change what your plan says you were prescribed`;
-}
-
-// A single run the athlete asked for in chat is a bounded, reversible write, so it
-// goes through the ONE autonomy policy exactly as a bounded plan_update does: their
-// word is the authorization (explicit_user_request), and the policy still owns the
-// tier, the ledger row and the one-tap Undo. Restructuring a week never comes here.
-function applyChatRunPrescription(agent: string, action: SetRunAction, explicitUserRequest: boolean): unknown {
-  const dayNumber = Math.trunc(Number(action.day_number));
-  const refused = pastWeekSlotRefusal(dayNumber);
-  const built = refused ? null : planRunEdits([runEditFromAction(action)]);
-  if (!built || built.errors.length || !built.expected.length) {
-    return {
+    ok: false,
+    explicit_user_request: explicitUserRequest,
+    verified: false,
+    persisted: false,
+    committed: false,
+    error: runEditRefusal(),
+    verification: {
       ok: false,
-      verified: false,
-      persisted: false,
-      committed: false,
-      error: refused ?? built?.errors[0] ?? "that run edit named nothing to change",
-      verification: { ok: false, day_number: dayNumber, mismatches: ["not_applied"], run: null, strength_items: 0 },
-    };
-  }
-  const expected = built.expected[0];
-  const strengthBefore = strengthItemCount(dayNumber);
-  const proposal = repo.createProposal(agent, "chat: run prescription", "", {
-    summary: `Day ${expected.day_number} run — ${describeRun(expected.run)}`.slice(0, 500),
-    // The EDIT, not a snapshot of the day: this proposal may be held or scheduled, and
-    // the day's other runs must be read at the moment it actually lands.
-    cardio: built.cardio_edits,
-  });
-  const result = applyProposalWithAutonomy((proposal as any).id, {
-    requested_tier: "quiet_apply",
-    explicit_user_request: explicitUserRequest,
-  }) as any;
-  const stored = repo.getProposal((proposal as any).id) as any;
-  const persisted = stored?.status === "applied";
-  const status = String(result?.decision?.status ?? stored?.autonomy?.status ?? "");
-  const verification: RunReadbackCheck = persisted
-    ? verifyRunReadback(expected.day_number, expected.run, strengthBefore)
-    : {
-        ok: false,
-        day_number: expected.day_number,
-        mismatches: ["not_applied"],
-        run: null,
-        strength_items: strengthBefore,
-      };
-  return {
-    explicit_user_request: explicitUserRequest,
-    proposal_id: (proposal as any).id,
-    ...result,
-    persisted,
-    committed: persisted,
-    scheduled: status === "pending" || status === "announced",
-    review_required: status === "review" || result?.review_required === true,
-    verified: verification.ok,
-    verification,
+      day_number: Math.trunc(Number(action.day_number)) || null,
+      mismatches: ["not_applied"],
+      run: null,
+      strength_items: 0,
+    },
   };
 }
 
 // A plan_update change that carries an endurance prescription is a RUN, whatever the
-// model called it. Routing it to the run writer is what keeps the readback honest:
-// left in changes[] it becomes a fabricated lifting movement that then verifies.
+// model called it — split out so it is refused rather than written as a lifting move.
 function isEnduranceChange(change: Record<string, unknown>): boolean {
-  // Ask about a REMOVAL first. A cardio removal routed into the run writer became a
-  // merge — the run was rewritten with the fields the change happened to carry and
-  // then read back as verified, so "take the run off Thursday" reported success over
-  // an untouched run.
-  if (change.swap || change.remove === true) return false;
+  if (change.swap) return false;
   if (String(change.kind ?? "").toLowerCase() === "cardio") return true;
+  if (change.remove === true) return false;
   return (
     change.target_distance_km != null ||
     change.target_duration_min != null ||
@@ -1568,46 +1276,18 @@ function isEnduranceChange(change: Record<string, unknown>): boolean {
   );
 }
 
-function runEditFromPlanChange(change: Record<string, unknown>): RunEdit {
-  const label =
-    typeof change.label === "string" && change.label.trim()
-      ? change.label.trim()
-      : typeof change.exercise === "string" && change.exercise.trim()
-        ? change.exercise.trim()
-        : null;
-  return {
-    day_number: Number(change.day_number),
-    kind: null,
-    label,
-    match_label: label,
-    distance_km: runNumber(change.target_distance_km),
-    duration_min: runNumber(change.target_duration_min),
-    zone: normalizeRunZoneKey(change.target_zone),
-    reason: change.reason,
-  };
-}
-
 export interface SplitPlanChanges {
   strength: Record<string, unknown>[];
   runs: RunEditPlan;
 }
 
-// Taking a run OFF a day has no writer on either side of the split: setWeeklyRuns
-// composes a day's runs from the list it is handed (it can rewrite, not delete a named
-// one), and applyPlanChange's remove path deliberately reads loaded movements only. So
-// say that plainly rather than letting the request become a quiet no-op.
-function isCardioRemoval(change: Record<string, unknown>): boolean {
-  return change.remove === true && String(change.kind ?? "").toLowerCase() === "cardio";
-}
-
-// A capability refusal an athlete can walk into every week, so it rotates like any
-// other repeating athlete-facing sentence (see CHAT_REFUSAL_VARIANTS below). Every
-// phrasing names the Plan screen — that is the part the athlete has to act on.
+// Taking a run OFF the week is a change to the days they run, not to any plan row.
+// Rotates like every other repeating refusal; each phrasing names what they can do.
 export const CARDIO_REMOVAL_REFUSAL_VARIANTS: ReadonlyArray<(where: string) => string> = [
-  (where) => `taking a run${where} off the week isn't something chat can do yet; the Plan screen owns removing a run`,
-  (where) => `chat can't take a run${where} off the week yet — removing a run is the Plan screen's job`,
-  (where) => `removing a run${where} isn't something I can do from chat yet; the Plan screen is where a run comes off`,
-  (where) => `I can't lift a run${where} out of the week from here yet — use the Plan screen to remove a run`,
+  (where) => `taking a run${where} off the week means changing the days you run — tell me which days you run and I'll set that`,
+  (where) => `a run${where} comes off by changing your run days, not the plan — say which days you run and I'll update them`,
+  (where) => `your runs follow your run days, so removing a run${where} is a change to those days — tell me the days you run`,
+  (where) => `I can't lift one run${where} out on its own; your runs come from your run days, so tell me which days you run`,
 ] as const;
 
 function cardioRemovalRefusal(change: Record<string, unknown>): string {
@@ -1620,12 +1300,10 @@ export function splitPlanChangesForRuns(changes: unknown[]): SplitPlanChanges {
   const rows = changes.filter(
     (change): change is Record<string, unknown> => !!change && typeof change === "object" && !Array.isArray(change)
   );
-  const removals = rows.filter(isCardioRemoval);
-  const rest = rows.filter((change) => !isCardioRemoval(change));
-  const enduranceRows = rest.filter(isEnduranceChange);
-  const strength = rest.filter((change) => !isEnduranceChange(change));
-  const runs = planRunEdits(enduranceRows.map(runEditFromPlanChange));
-  for (const change of removals) runs.errors.push(cardioRemovalRefusal(change));
+  const enduranceRows = rows.filter(isEnduranceChange);
+  const strength = rows.filter((change) => !isEnduranceChange(change));
+  const runs = planRunEdits(enduranceRows.filter((change) => change.remove !== true));
+  for (const change of enduranceRows.filter((change) => change.remove === true)) runs.errors.push(cardioRemovalRefusal(change));
   return { strength, runs };
 }
 
@@ -2585,7 +2263,6 @@ export function applyChatActions(
     message,
   });
   const actions = normalizeChatActions(Array.isArray(parsed) ? parsed : parsed?.actions);
-  let runActionsApplied = 0;
   for (const a of actions) {
     try {
       switch (a.type) {
@@ -2975,22 +2652,8 @@ export function applyChatActions(
         case "set_run": {
           // Same food-turn boundary as plan_update: a meal log never edits training.
           if (foodOnly && !ctx.imagePath) break;
-          // ONE run per turn. A week of runs is a restructure — it belongs to the
-          // run-plan proposal the athlete accepts, not to a burst of chat writes.
-          if (runActionsApplied >= 1) {
-            applied.push({
-              type: a.type,
-              result: {
-                ok: false,
-                verified: false,
-                persisted: false,
-                committed: false,
-                error: "only one run is adjusted per turn; a whole week of runs goes through the run plan",
-              },
-            });
-            break;
-          }
-          runActionsApplied += 1;
+          // Every set_run is refused (runs are not plan items); each gets the same calm
+          // refusal, so a burst of them writes nothing and says one true thing.
           applied.push({
             type: a.type,
             result: applyChatRunPrescription(ctx.agent, a, hasExplicitRunEditIntent(message)),

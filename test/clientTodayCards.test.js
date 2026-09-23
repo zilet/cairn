@@ -36,10 +36,6 @@ function loadTodayCardsContext() {
     art: (kind, q) => `<svg data-art="${escAttr(`${kind}:${q}`)}"></svg>`,
     artImg: (kind, q, className, svg) =>
       `<span class="${escAttr(className)}" data-kind="${escAttr(kind)}" data-q="${escAttr(q)}">${svg || ""}</span>`,
-    cardioArtPhrase: (item) => item.note || item.exercise || "run",
-    cardioLabel: (item) => item.label || item.note || item.exercise || "Cardio",
-    cardioDescription: (item) => item.description || "",
-    cardioPrescription: (item) => item.prescription || "",
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
@@ -104,7 +100,6 @@ test("Today exercise card carries no per-movement pain widget", () => {
     cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, {}),
     cards.exerciseCardHtml({ ...base, fromSession: true }, [], {}, null, null, {}),
     cards.exerciseCardHtml({ ...base, fromPlan: false, fromSession: false }, [], {}, null, null, {}),
-    cards.cardioPlanCardHtml({ label: "Easy row" }, null, null, ""),
   ];
   for (const html of rendered) {
     assert.doesNotMatch(html, /data-movement-check|Movement check|data-tolerance|pain/i);
@@ -337,88 +332,14 @@ test("Today exercise card renders only server-provided anchor/support context", 
   assert.doesNotMatch(ordinary, /ex-journey|data-journey-role/);
 });
 
-test("Today cardio card helper renders planned and done states safely", () => {
+// Runs left the strength plan: a planned run is never a card inside Today's lift
+// list (it is a line on the agenda, and it lives in Plan -> Endurance), so the run
+// card, its done state and the plan-item/effort matcher are gone with it.
+test("Today's card renderers draw lifts only — the planned-run card is gone", () => {
   const cards = loadTodayCards();
-
-  const planned = cards.cardioPlanCardHtml(
-    {
-      note: "Long <run>",
-      label: "Long <run>",
-      description: "stay <easy>",
-      prescription: "8.0 km",
-      target_distance_km: 8,
-      target_zone: "Z2",
-    },
-    1,
-    null,
-    '<span class="sync">synced</span>'
-  );
-
-  assert.match(planned, /data-cardio-card/);
-  assert.match(planned, /Long &lt;run&gt;/);
-  assert.match(planned, /stay &lt;easy&gt;/);
-  assert.match(planned, /data-cardio-log="ran 8\.0 km \(Z2\)"/);
-  assert.match(planned, /class="sync"/);
-  assert.doesNotMatch(planned, /Long <run>|stay <easy>/);
-
-  const done = cards.cardioPlanCardHtml(
-    { note: "Easy run" },
-    0,
-    {
-      type: "run",
-      source: "garmin",
-      distance_km: 5.2,
-      duration_min: 31,
-      avg_hr: 142,
-      zones: [{ zone: 2, secs: 1200 }],
-    },
-    ""
-  );
-  assert.match(done, /ex-cardio-done/);
-  assert.match(done, /Easy run/);
-  assert.match(done, /5\.2 km/);
-  assert.match(done, /mostly Z2/);
-  assert.match(done, /synced from Garmin/);
-});
-
-test("Today cardio matching accepts compatible sports and generic efforts", () => {
-  const cards = loadTodayCards();
-
-  assert.equal(cards.cardioEffortMatches({ note: "tempo run" }, { type: "run" }), true);
-  assert.equal(cards.cardioEffortMatches({ note: "tempo run" }, { type: "ride" }), false);
-  assert.equal(cards.cardioEffortMatches({ note: "conditioning" }, { type: "walk" }), true);
-  assert.equal(cards.cardioEffortMatches({ note: "row workout" }, null), false);
-});
-
-test("Today cardio cards and matching honor exercise-only generated modalities", () => {
-  const cards = loadTodayCards();
-  const ride = { kind: "cardio", exercise: "Easy ride", target_duration_min: 40, target_zone: "Z2" };
-  const html = cards.cardioPlanCardHtml(ride, null, null, "");
-
-  assert.match(html, /cardio-name-txt">Easy ride</);
-  assert.match(html, /data-cardio-log="rode 40 min \(Z2\)"/);
-  assert.equal(cards.cardioEffortMatches(ride, { type: "ride" }), true);
-  assert.equal(cards.cardioEffortMatches(ride, { type: "run" }), false);
-  assert.equal(cards.cardioEffortMatches({ kind: "cardio", exercise: "Pool swim" }, { type: "ride" }), false);
-  assert.equal(cards.cardioEffortMatches({ kind: "cardio", exercise: "Erg row" }, { type: "row" }), true);
-  assert.equal(cards.cardioEffortMatches({ kind: "cardio", exercise: "Trail hike" }, { type: "hike" }), true);
-});
-
-test("specific modality outranks long and interval modifiers for capture and synced matching", () => {
-  const cards = loadTodayCards();
-  for (const [exercise, modality, capture] of [
-    ["Long ride", "ride", "rode 30 min"],
-    ["Bike intervals", "ride", "rode 30 min"],
-    ["Long swim", "swim", "swam 30 min"],
-    ["Row intervals", "row", "rowed 30 min"],
-  ]) {
-    const item = { kind: "cardio", exercise, target_duration_min: 30 };
-    const html = cards.cardioPlanCardHtml(item, null, null, "");
-    assert.match(html, new RegExp(`cardio-name-txt">${exercise}`));
-    assert.match(html, new RegExp(`data-cardio-log="${capture}"`));
-    assert.equal(cards.cardioEffortMatches(item, { type: modality }), true);
-    assert.equal(cards.cardioEffortMatches(item, { type: "run" }), false);
-  }
+  assert.equal(cards.cardioPlanCardHtml, undefined);
+  assert.equal(cards.cardioDoneCardHtml, undefined);
+  assert.equal(cards.cardioEffortMatches, undefined);
 });
 
 // On a peak day the same lift renders twice. The card key is what separates them

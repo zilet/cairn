@@ -241,14 +241,19 @@ test("the recovering-group grade compares against the athlete's own bar, not an 
   assert.ok(gateB.residual < gateB.bar * 1.5, "but under 1.5x their OWN bar — the softer grade applies");
   const lowerB = selectAdaptivePlanDay(REF).selection.scores.find((s) => s.day_number === 1);
 
-  // Only quads are recovering in either scenario (hamstrings are untouched), so
-  // the whole score difference is exactly the recovering-penalty grade: -5 vs -3.
+  // Only quads are recovering in either scenario (hamstrings are untouched), so the
+  // whole score difference is the recovering grade. B sits under DEEP_SATURATION_MULTIPLE
+  // × its own bar, so it is the softest grade — the slot holds, it does not move: a
+  // one-point penalty plus half the due credit, never "mostly recovering".
   assert.deepEqual(lowerA.recovering, ["quads"]);
   assert.deepEqual(lowerB.recovering, ["quads"]);
-  assert.equal(
-    Math.round((lowerB.score - lowerA.score) * 10) / 10,
-    2,
-    `the softer grade must score exactly 2 points higher (A=${lowerA.score} B=${lowerB.score})`
+  assert.equal(gateA.deep, true);
+  assert.equal(gateB.deep, false, "under 1.25x their own bar — held in place, not moved");
+  assert.equal(lowerA.mostly_recovering, true);
+  assert.equal(lowerB.mostly_recovering, false);
+  assert.ok(
+    lowerB.score - lowerA.score >= 4,
+    `the held grade must score well above the deep one (A=${lowerA.score} B=${lowerB.score})`
   );
 });
 

@@ -2,6 +2,7 @@
 // groups it actually loads. This is the shared floor for "do not squat heavy the
 // day after a long/hard run" style coaching. Plain words only, no scores.
 import { db } from "../db.js";
+import { withoutShadowActivities } from "./activities.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import {
   canonicalGroup,
@@ -176,6 +177,7 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
     const acts = db.prepare(
       `SELECT a.date AS date, a.type AS type, a.raw_text AS raw_text, a.notes AS notes,
               a.duration_min AS duration_min, a.distance_km AS distance_km,
+              a.source AS source, a.external_id AS external_id,
               ga.te_label AS te_label, ga.aerobic_te AS ate, ga.anaerobic_te AS anate,
               ga.training_load AS training_load,
               ga.hr_zones_json AS hr_zones_json,
@@ -186,7 +188,9 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
         WHERE a.date >= ? AND a.date <= ?
         ORDER BY a.date DESC, a.id DESC`
     ).all(since, today) as any[];
-    return acts
+    // A hand-logged shadow of a synced effort is one endurance dose, not two legs
+    // of residual for the same run.
+    return withoutShadowActivities(acts)
       .map((a): EnduranceImpact | null => {
         const region = matchEnduranceModality(
           String(a.type || ""),
@@ -344,6 +348,14 @@ export function residualBand(residual: number): AcuteBand {
 export const HABITUAL_WINDOW_DAYS = 28;
 export const HABITUAL_SATURATION_MULTIPLE = 1.35;
 export const SATURATED_CEILING = 2.0;
+
+// How far over its own bar a saturated group has to sit before the work should
+// MOVE rather than be held. Just over the bar is the athlete's ordinary hybrid week
+// with one more session on it: the day's lifts stay and hold load (composition's
+// `muscle_saturated` hold already does that). Only a deep residual swaps a plan day
+// or re-points a slot to another area — otherwise a 0.04 margin on a quad residual
+// turned a whole week's lower days into repeats of the upper ones.
+export const DEEP_SATURATION_MULTIPLE = 1.25;
 
 export function saturationBar(habitual: number): number {
   const scaled = HABITUAL_SATURATION_MULTIPLE * (Number.isFinite(habitual) ? habitual : 0);
@@ -528,6 +540,9 @@ export interface AcuteGateReading {
   // The shared gate: this group carries close to a full session's worth of
   // undissipated work. Do not add load to it, and do not call it "due" today.
   saturated: boolean;
+  // Saturated AND at least DEEP_SATURATION_MULTIPLE × its bar: the work should move,
+  // not merely hold. A saturated-but-not-deep group keeps its slot at held load.
+  deep: boolean;
   last_date: string | null;
   days_ago: number | null;
   source: MuscleResidual["source"];
@@ -540,6 +555,7 @@ const FRESH_GATE: Omit<AcuteGateReading, "group"> = {
   residual: 0,
   bar: saturationBar(0),
   saturated: false,
+  deep: false,
   last_date: null,
   days_ago: null,
   source: "none",
@@ -566,6 +582,7 @@ export function acuteGate(
     residual: r.residual,
     bar: r.bar,
     saturated: r.band === "saturated",
+    deep: r.band === "saturated" && r.residual >= r.bar * DEEP_SATURATION_MULTIPLE,
     last_date: r.last_date,
     days_ago: r.days_ago,
     source: r.source,
@@ -584,12 +601,12 @@ export function acuteGates(date = localDateISO()): Map<MuscleGroup, AcuteGateRea
 
 // The athlete-facing / prompt-facing gate: saturated groups only, with the INTERNAL
 // residual/bar stripped. Callers that need the float read acuteGate() directly.
-export type AcuteGatePublic = Omit<AcuteGateReading, "residual" | "bar">;
+export type AcuteGatePublic = Omit<AcuteGateReading, "residual" | "bar" | "deep">;
 
 export function saturatedGates(date = localDateISO()): AcuteGatePublic[] {
   return [...acuteGates(date).values()]
     .filter((g) => g.saturated)
-    .map(({ residual: _residual, bar: _bar, ...rest }) => rest);
+    .map(({ residual: _residual, bar: _bar, deep: _deep, ...rest }) => rest);
 }
 
 // What the Train overview (and MCP) consume: the recency window PLUS any group the

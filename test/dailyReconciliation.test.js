@@ -57,9 +57,16 @@ function acceptComposition(items, date = DATE) {
   return repo.prepareDailySession({ date, source: "agent_suggest", agent_job_id: job.id });
 }
 
-function acceptPlanComposition(items, date = DATE) {
-  repo.savePlanDay(1, "Outcome fixture", "Accepted work", items);
-  return repo.prepareDailySession({ date, source: "manual_plan", day_number: 1 });
+// Plan days hold strength only (runs are the calendar's), so a card that carries
+// planned endurance is an accepted composition, never a plan-day pull. A strength
+// plan day still makes the date a training read (with no plan at all the read is
+// easy and the composer clamps any prescribed quality down to an easy run), so the
+// accepted card's cardio prescription survives exactly as written.
+function acceptEnduranceComposition(items, date = DATE) {
+  const strength = items.filter((item) => item.kind !== "cardio");
+  if (strength.length) repo.savePlanDay(1, "Outcome fixture", "Accepted work", strength);
+  else seedPlan();
+  return acceptComposition(items, date);
 }
 
 test("a session with no daily-session composition reconciles to null", () => {
@@ -200,7 +207,7 @@ test("an unstarted accepted session records a not_started, low-confidence outcom
 });
 
 test("matching planned cardio becomes a completed outcome with exact endurance evidence", () => {
-  const prepared = acceptPlanComposition([
+  const prepared = acceptEnduranceComposition([
     {
       kind: "cardio",
       exercise: "Quality run",
@@ -269,7 +276,7 @@ test("matching planned cardio becomes a completed outcome with exact endurance e
 });
 
 test("a matched cardio duration or distance shortfall is factual partial evidence", () => {
-  acceptPlanComposition([
+  acceptEnduranceComposition([
     {
       kind: "cardio",
       exercise: "Long ride",
@@ -293,7 +300,7 @@ test("a matched cardio duration or distance shortfall is factual partial evidenc
 });
 
 test("same-duration easy zones contradict a prescribed Z4 interval without blocking cardio completion", () => {
-  acceptPlanComposition([
+  acceptEnduranceComposition([
     {
       kind: "cardio",
       exercise: "Run intervals",
@@ -323,7 +330,7 @@ test("same-duration easy zones contradict a prescribed Z4 interval without block
 });
 
 test("a prescribed zone with no observed zones remains quality-unverified", () => {
-  acceptPlanComposition([
+  acceptEnduranceComposition([
     { kind: "cardio", exercise: "Tempo run", target_duration_min: 35, target_zone: "Z3" },
   ]);
   repo.addActivity({ date: DATE, type: "run", duration_min: 35, distance_km: 6 });
@@ -338,7 +345,7 @@ test("a prescribed zone with no observed zones remains quality-unverified", () =
 });
 
 test("simple dose-only cardio can complete as suggested without invented quality evidence", () => {
-  acceptPlanComposition([
+  acceptEnduranceComposition([
     { kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_distance_km: 5 },
   ]);
   repo.addActivity({ date: DATE, type: "run", duration_min: 31, distance_km: 5.1 });
@@ -353,7 +360,7 @@ test("simple dose-only cardio can complete as suggested without invented quality
 });
 
 test("a non-interval target zone is observed only when it dominates the recorded effort", () => {
-  acceptPlanComposition([
+  acceptEnduranceComposition([
     { kind: "cardio", exercise: "Threshold run", target_duration_min: 30, target_zone: "Z4" },
   ]);
   repo.upsertGarminActivity({
@@ -377,7 +384,7 @@ test("a non-interval target zone is observed only when it dominates the recorded
 });
 
 test("wrong-modality and unmatched cardio do not falsely complete", () => {
-  acceptPlanComposition([
+  acceptEnduranceComposition([
     { kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_zone: "Z2" },
   ]);
   repo.addActivity({ date: DATE, type: "ride", duration_min: 30, distance_km: 10 });
@@ -391,7 +398,7 @@ test("wrong-modality and unmatched cardio do not falsely complete", () => {
 });
 
 test("one actual endurance effort can satisfy at most one accepted cardio item", () => {
-  acceptPlanComposition([
+  acceptEnduranceComposition([
     { kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_zone: "Z2" },
     { kind: "cardio", exercise: "Long run", target_duration_min: 60, target_zone: "Z2" },
   ]);
@@ -407,7 +414,7 @@ test("one actual endurance effort can satisfy at most one accepted cardio item",
 });
 
 test("generic planned cardio matches conservatively at lower confidence", () => {
-  acceptPlanComposition([
+  acceptEnduranceComposition([
     { kind: "cardio", exercise: "Easy cardio", target_duration_min: 25 },
   ]);
   repo.addActivity({ date: DATE, type: "row", duration_min: 25 });
@@ -420,7 +427,7 @@ test("generic planned cardio matches conservatively at lower confidence", () => 
 });
 
 test("mixed strength and cardio keeps finish semantics and carries planned endurance as context", () => {
-  const prepared = acceptPlanComposition([
+  const prepared = acceptEnduranceComposition([
     { exercise: "Back Squat", sets: 1, rep_low: 5, rep_high: 5, target_weight: 225 },
     { kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_zone: "Z2" },
   ]);

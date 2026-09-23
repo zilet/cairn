@@ -1,16 +1,21 @@
-// Run-plan APPLY earns falsifiable ledger expectations (src/repo/profile.ts
-// recordAppliedProposalDecision + applyProposalUnit). Before this round a run-plan
-// apply routed cardio through setWeeklyRuns → result.runs, which the decision
-// recorder never read, so run-plan decisions got only a generic plan-adherence
-// proxy. Now they emit (a) run_volume_adherence over the plan window and (b) a
-// recovery guard (recovery_rhr_delta) ONLY when the plan raises weekly km vs the
-// prior prescription. Both the explicit /apply and the autonomy path flow through
-// the same recorder, so this drives the shared spine.
-import { test } from "node:test";
+// Applying a proposal that carries RUNS. Runs are no longer plan items (migration
+// 110): the week's runs follow the stated run days and the live run engine, so a
+// legacy `cardio[]` week or a kind:'cardio' change has nothing to write. applyProposal
+// SETS THEM ASIDE — never written, never an error that rolls back the strength half
+// beside them — and a proposal that carries ONLY runs answers the designed
+// {ok:false, error: RUNS_ARE_NOT_PLAN_ITEMS} and stays a draft. The run-plan
+// expectation branch (run_volume_adherence / the volume-raise recovery guards) went
+// with the apply path: no run week is ever applied, so there is no raise to guard.
+import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { db, repo, resetTables } from "./_seed.js";
 
-// Metric keys (+ the run_volume_adherence target) on the applied proposal's decision.
+beforeEach(() => {
+  resetTables("plan_days", "plan_items", "plan_proposals", "profile", "brain_decisions", "brain_expectations");
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+});
+
+// Metric keys on the applied proposal's decision.
 function expectationsFor(proposalId) {
   const decision = db
     .prepare(
@@ -19,153 +24,98 @@ function expectationsFor(proposalId) {
        ORDER BY id DESC LIMIT 1`
     )
     .get(String(proposalId));
-  if (!decision) return { decisionId: null, keys: [], rows: [] };
+  if (!decision) return { decisionId: null, keys: [] };
   const rows = db
-    .prepare(`SELECT metric_key, target_json, baseline_json FROM brain_expectations WHERE decision_id = ? ORDER BY id`)
+    .prepare(`SELECT metric_key FROM brain_expectations WHERE decision_id = ? ORDER BY id`)
     .all(decision.id);
-  return { decisionId: decision.id, keys: rows.map((r) => r.metric_key), rows };
+  return { decisionId: decision.id, keys: rows.map((r) => r.metric_key) };
 }
 
-function cardioProposal(km2, km6) {
-  return repo.createProposal("auto-run-plan", "run plan", "", {
-    summary: "This week's runs",
-    cardio: [
-      {
-        day_number: 2,
-        label: "Easy run",
-        target_distance_km: km2,
-        target_zone: "Z2 (135-145 bpm)",
-        day_name: "Easy run",
-        focus: "Endurance",
-      },
-      {
-        day_number: 6,
-        label: "Long run",
-        target_distance_km: km6,
-        target_zone: "Z2 (135-145 bpm)",
-        day_name: "Long run",
-        focus: "Endurance · long",
-      },
-    ],
+const statusOf = (id) => db.prepare(`SELECT status FROM plan_proposals WHERE id = ?`).get(Number(id)).status;
+const cardioItemCount = () => db.prepare(`SELECT COUNT(*) AS n FROM plan_items WHERE kind = 'cardio'`).get().n;
+
+const EASY = {
+  day_number: 2,
+  label: "Easy run",
+  target_distance_km: 8,
+  target_zone: "Z2 (135-145 bpm)",
+  day_name: "Easy run",
+  focus: "Endurance",
+};
+const LONG = {
+  day_number: 6,
+  label: "Long run",
+  target_distance_km: 12,
+  target_zone: "Z2 (135-145 bpm)",
+  day_name: "Long run",
+  focus: "Endurance · long",
+};
+
+test("a run-only proposal lands nothing: designed ok:false, still a draft, no plan row, no decision", () => {
+  const runs = repo.createProposal("auto-run-plan", "run plan", "", { summary: "This week's runs", cardio: [EASY, LONG] });
+  const result = repo.applyProposal(runs.id);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, repo.RUNS_ARE_NOT_PLAN_ITEMS);
+  assert.equal(statusOf(runs.id), "draft", "the proposal is not flipped to applied");
+  assert.equal(cardioItemCount(), 0, "no cardio row is written");
+  assert.equal(repo.getPlan().length, 0, "and no plan day appears for the runs");
+  const { decisionId, keys } = expectationsFor(runs.id);
+  assert.equal(decisionId, null, "nothing applied, so nothing is recorded as applied");
+  assert.equal(keys.length, 0);
+});
+
+test("a proposal whose only changes are kind:'cardio' is the same refusal", () => {
+  repo.savePlanDay(1, "Full body", "Strength", [
+    { exercise: "Goblet Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 40 },
+  ]);
+  const runs = repo.createProposal("auto", "run tweak", "", {
+    summary: "a longer long run",
+    changes: [{ day_number: 1, kind: "cardio", label: "Long run", target_distance_km: 14 }],
   });
-}
-
-function asRunner() {
-  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
-}
-
-test("applying a run-plan proposal emits a run_volume_adherence expectation over the plan window", () => {
-  asRunner();
-  const first = cardioProposal(8, 12); // ~20 km/week — the plan's first run week
-  const result = repo.applyProposal(first.id);
-  assert.equal(result.ok, true);
-  const { keys, rows } = expectationsFor(first.id);
-  assert.ok(keys.includes("run_volume_adherence"), `run_volume_adherence emitted (got: ${keys.join(", ")})`);
-  // A first-ever run plan has no prior prescription to raise from → no recovery guard.
-  assert.ok(!keys.includes("recovery_rhr_delta"), "no recovery guard without a prior prescription");
-  // The window's expected km is the applied weekly km carried across the 4-week window.
-  const rva = rows.find((r) => r.metric_key === "run_volume_adherence");
-  const target = JSON.parse(rva.target_json);
-  assert.ok(Math.abs(target.expected_km - 80) < 1, `expected ~80 km over the window (got ${target.expected_km})`);
-  assert.equal(target.rate, 0.8);
+  const result = repo.applyProposal(runs.id);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, repo.RUNS_ARE_NOT_PLAN_ITEMS);
+  assert.equal(statusOf(runs.id), "draft");
+  assert.equal(cardioItemCount(), 0);
 });
 
-test("a run plan that RAISES weekly km vs the prior prescription adds a recovery guard", () => {
-  asRunner();
-  assert.equal(repo.applyProposal(cardioProposal(8, 12).id).ok, true); // prior ~20 km
-  const second = cardioProposal(13, 19); // ~32 km — a clear (>5%) raise
-  assert.equal(repo.applyProposal(second.id).ok, true);
-  const { keys, rows } = expectationsFor(second.id);
-  assert.ok(keys.includes("run_volume_adherence"), "volume-adherence still emitted");
-  assert.ok(keys.includes("recovery_rhr_delta"), `recovery guard emitted on the raise (got: ${keys.join(", ")})`);
-  // The guard is falsifiable: resting-HR delta expected to stay at or below +3 bpm.
-  const guard = rows.find((r) => r.metric_key === "recovery_rhr_delta");
-  assert.equal(JSON.parse(guard.target_json).max, 3);
-  const baseline = JSON.parse(guard.baseline_json);
-  assert.ok(baseline.new_weekly_km > baseline.prior_weekly_km, "the guard records the raise it is checking");
-});
-
-test("a run plan that holds or reduces weekly km emits no recovery guard", () => {
-  asRunner();
-  assert.equal(repo.applyProposal(cardioProposal(13, 19).id).ok, true); // prior ~32 km
-  const second = cardioProposal(12, 16); // ~28 km — a reduction
-  assert.equal(repo.applyProposal(second.id).ok, true);
-  const { keys } = expectationsFor(second.id);
-  assert.ok(keys.includes("run_volume_adherence"));
-  assert.ok(!keys.includes("recovery_rhr_delta"), "no recovery guard when volume is held or reduced");
-});
-
-test("a MIXED strength+run proposal earns BOTH the exercise and the run_volume_adherence expectations", () => {
-  asRunner();
-  // A plan day with a strength lift the proposal will retune, plus a run it prescribes.
+test("a MIXED strength+run proposal applies the strength half and reports the runs set aside", () => {
   repo.savePlanDay(1, "Full body", "Strength", [
     { exercise: "Goblet Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 40 },
   ]);
   const mixed = repo.createProposal("auto", "mixed strength + run", "", {
     summary: "one proposal, two domains",
     changes: [{ day_number: 1, exercise: "Goblet Squat", sets: 4, rep_low: 8, rep_high: 10, target_weight: 45 }],
-    cardio: [
-      {
-        day_number: 3,
-        label: "Easy run",
-        target_distance_km: 8,
-        target_zone: "Z2 (135-145 bpm)",
-        day_name: "Easy run",
-        focus: "Endurance",
-      },
+    cardio: [{ ...EASY, day_number: 3 }],
+  });
+  const result = repo.applyProposal(mixed.id);
+  assert.equal(result.ok, true, "the runs never roll back the strength half");
+  assert.equal(result.runs_set_aside, 1);
+  assert.equal(statusOf(mixed.id), "applied");
+  const squat = repo.getPlan().flatMap((d) => d.items || []).find((it) => it.exercise === "Goblet Squat");
+  assert.equal(squat.target_weight, 45, "the strength change landed");
+  assert.equal(cardioItemCount(), 0, "the run did not");
+
+  const { keys } = expectationsFor(mixed.id);
+  assert.ok(keys.includes("exercise_target_completion"), `exercise expectation emitted (got: ${keys.join(", ")})`);
+  assert.ok(!keys.includes("run_volume_adherence"), "no run expectation — no run week was applied");
+  assert.ok(!keys.includes("recovery_rhr_delta"), "and no volume-raise guard");
+});
+
+test("a kind:'cardio' change beside a strength change is set aside the same way", () => {
+  repo.savePlanDay(1, "Full body", "Strength", [
+    { exercise: "Goblet Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 40 },
+  ]);
+  const mixed = repo.createProposal("auto", "mixed changes", "", {
+    summary: "a heavier squat and a longer run",
+    changes: [
+      { day_number: 1, exercise: "Goblet Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 45 },
+      { day_number: 1, kind: "cardio", label: "Long run", target_distance_km: 14 },
     ],
   });
   const result = repo.applyProposal(mixed.id);
   assert.equal(result.ok, true);
-  const { keys } = expectationsFor(mixed.id);
-  assert.ok(keys.includes("exercise_target_completion"), `exercise expectation emitted (got: ${keys.join(", ")})`);
-  assert.ok(keys.includes("run_volume_adherence"), `run expectation emitted alongside it (got: ${keys.join(", ")})`);
-});
-
-test("a duration-only run plan (no prescribed km) falls back to plan_day_adherence, not run_volume_adherence", () => {
-  asRunner();
-  const plan = repo.createProposal("auto-run-plan", "run plan", "", {
-    summary: "duration-only runs",
-    cardio: [
-      { day_number: 2, label: "Easy run", target_duration_min: 40, day_name: "Easy run", focus: "Endurance" },
-      { day_number: 6, label: "Long run", target_duration_min: 70, day_name: "Long run", focus: "Endurance · long" },
-    ],
-  });
-  assert.equal(repo.applyProposal(plan.id).ok, true);
-  const { keys } = expectationsFor(plan.id);
-  assert.ok(!keys.includes("run_volume_adherence"), "no volume-adherence without a prescribed distance");
-  assert.ok(keys.includes("plan_day_adherence"), `falls back to the generic adherence proxy (got: ${keys.join(", ")})`);
-});
-
-// The sleep half of the same guard. `sleep_duration_delta` had a registered evaluator
-// and no creator anywhere in the app, so a whole declared lever sat inert. It rides the
-// volume RAISE alongside the resting-HR and HRV guards, under the flowing-data rule the
-// HRV guard already follows: a wearable is optional, and silence is never a miss.
-test("a volume raise adds the sleep guard when the watch has been reporting sleep", () => {
-  asRunner();
-  const insert = db.prepare(`INSERT INTO daily_metrics (date, sleep_min) VALUES (?, ?)`);
-  const today = new Date();
-  for (let daysAgo = 1; daysAgo <= 8; daysAgo++) {
-    insert.run(new Date(today.getTime() - daysAgo * 864e5).toISOString().slice(0, 10), 420);
-  }
-  assert.equal(repo.applyProposal(cardioProposal(8, 12).id).ok, true); // prior ~20 km
-  const second = cardioProposal(13, 19); // ~32 km — a clear raise
-  assert.equal(repo.applyProposal(second.id).ok, true);
-
-  const { keys, rows } = expectationsFor(second.id);
-  assert.ok(keys.includes("sleep_duration_delta"), `the sleep guard is emitted (got: ${keys.join(", ")})`);
-  const guard = rows.find((r) => r.metric_key === "sleep_duration_delta");
-  assert.equal(JSON.parse(guard.target_json).value, -63, "sized off the athlete's own average, not a constant");
-  assert.equal(JSON.parse(guard.baseline_json).sleep_avg_min, 420);
-});
-
-test("an athlete whose watch reports no sleep gets no sleep prediction", () => {
-  asRunner();
-  assert.equal(repo.applyProposal(cardioProposal(8, 12).id).ok, true);
-  const second = cardioProposal(13, 19);
-  assert.equal(repo.applyProposal(second.id).ok, true);
-  assert.ok(
-    !expectationsFor(second.id).keys.includes("sleep_duration_delta"),
-    "absence of a watch is neutral, never an expectation that could only mature as a miss"
-  );
+  assert.equal(result.runs_set_aside, 1);
+  assert.equal(result.skipped.length, 0, "a run is set aside, never a skipped (rolled-back) change");
+  assert.equal(cardioItemCount(), 0);
 });

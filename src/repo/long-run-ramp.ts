@@ -32,9 +32,9 @@
 // ============================================================================
 import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { cardioPlanIdentity } from "./cardio-plan-identity.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { weeklyKm } from "./program-state.js";
+import { weeklyRunPlan } from "./run-progression.js";
 import { SUSTAINABLE_LONG_STEP_FACTOR, SUSTAINABLE_WEEKLY_BUILD_FACTOR } from "./run-ramp.js";
 import { addDaysISO } from "./shared.js";
 import { coerceFinite as finite } from "../lib/numbers.js";
@@ -164,57 +164,23 @@ export function isQualityRunPrescription(item: { interval?: unknown; target_zone
   return zone != null && Number(zone[1]) >= 4;
 }
 
-/** A stored interval payload, read back the way the identity helper expects it. */
-function parseInterval(raw: unknown): unknown {
-  if (typeof raw !== "string" || !raw.trim()) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return raw;
-  }
-}
 
 /**
- * The longest RUN distance the WEEK TEMPLATE prescribes, across every plan day. This
+ * The week's LONG run distance, as the run engine prescribes it for `date`'s week. This
  * is what makes "the long run" a property of the week rather than of one card: a 6 km
- * midweek aerobic run and a 12 km Sunday run are both cardio rows, and only the
- * second is the one this module shapes. Null when the template prescribes no run
- * distance at all (a time-only or interval-only endurance week).
- *
- * The sport filter is not an optimization — it is the same question `applyLongRunRamp`
- * asks before it touches an item, and asking it in only one of the two places is what
- * let a 40 km "Long ride" row become the week's longest prescription and silently
- * disable the ramp for the run that actually needed it. Distance history is RUN
- * history; a ride is not a step on the same ladder in either direction.
+ * midweek aerobic run and a 12 km Sunday run can both reach a card, and only the second
+ * is the one this module shapes. Runs are never plan items (migration 110), so the
+ * week's long run is weeklyRunPlan's `long` prescription — never a plan row. Null when
+ * the engine prescribes no long-run distance (no run week, or a race-day week, whose
+ * long slot IS the race and is never ramped).
  */
-export function templateLongRunKm(): number | null {
+export function templateLongRunKm(date?: string): number | null {
   try {
-    const rows = db
-      .prepare(
-        `SELECT e.name AS exercise, pi.note AS note, pi.interval_json AS interval_json,
-                pi.target_zone AS target_zone, pi.target_distance_km AS target_distance_km
-           FROM plan_items pi
-           LEFT JOIN exercises e ON e.id = pi.exercise_id
-          WHERE pi.kind = 'cardio' AND pi.target_distance_km IS NOT NULL AND pi.target_distance_km > 0`
-      )
-      .all() as any[];
-    let best: number | null = null;
-    for (const row of rows) {
-      const km = Number(row?.target_distance_km);
-      if (!Number.isFinite(km) || km <= 0) continue;
-      const interval = parseInterval(row.interval_json);
-      const identity = cardioPlanIdentity({
-        exercise: row.exercise,
-        note: row.note,
-        interval,
-        target_zone: row.target_zone,
-        target_distance_km: km,
-      });
-      if (identity.sport !== "run") continue;
-      if (isQualityRunPrescription({ interval, target_zone: row.target_zone })) continue;
-      if (best == null || km > best) best = km;
-    }
-    return best;
+    const plan = weeklyRunPlan(date);
+    if (!plan.available) return null;
+    const long = plan.runs.find((run) => run.kind_label === "long" && run.race !== true);
+    const km = Number(long?.target_distance_km);
+    return Number.isFinite(km) && km > 0 ? km : null;
   } catch {
     return null;
   }
@@ -240,7 +206,7 @@ export function runVolumeContext(date: string): { lastWeekKm: number; chronicWee
 export function longRunPrescription(date: string, templateKm: unknown): LongRunRamp | null {
   const template = finite(templateKm);
   if (template == null || template < LONG_RUN_MIN_KM) return null;
-  const weekLongest = templateLongRunKm();
+  const weekLongest = templateLongRunKm(date);
   // Only the week's OWN longest prescription is the long run. A tolerance rather
   // than equality so a 12 and a 12.0 stored through different writers still match.
   if (weekLongest == null || template < weekLongest - 0.01) return null;

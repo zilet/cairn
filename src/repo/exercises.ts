@@ -11,6 +11,7 @@ import {
   isPlaceholderExerciseName,
   normalizeExerciseName,
   normalizedExerciseKey,
+  progressionLineageIds,
   resolveExerciseName,
   resolveGroup,
   setExerciseAlias,
@@ -1025,32 +1026,35 @@ export function deleteExercise(name: string) {
 // history. Encoding preserved: negative = assist (closer to 0 = harder), 0/bodyweight
 // is excluded (load progression doesn't apply). sessionsBack defaults to 3.
 export function recentWorkingWeight(name: string, sessionsBack = 3, beforeExclusive?: string): number | null {
-  // Alias-aware: "Incline DB Press" and "Incline Dumbbell Press" are one series.
-  const ex = resolveExerciseName(name);
-  if (ex.exercise_id == null) return null;
-  const exId = ex.exercise_id;
+  // Alias-aware: "Incline DB Press" and "Incline Dumbbell Press" are one series —
+  // and a bodyweight-ladder row that REPLACED another ("Assisted Pull-Up" rotated out
+  // for "Neutral-Grip Pull-Up") reads the rung history it inherited
+  // (progressionLineageIds; a loaded lift's lineage is only its own row).
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return null;
+  const inIds = ids.map(() => "?").join(",");
   const cutoff = String(beforeExclusive ?? "").slice(0, 10);
   const dated = /^\d{4}-\d{2}-\d{2}$/.test(cutoff);
   const dates = (
     dated
       ? (db.prepare(
           `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-            WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.weight != 0 AND s.date < ?
+            WHERE ls.exercise_id IN (${inIds}) AND ls.weight IS NOT NULL AND ls.weight != 0 AND s.date < ?
             ORDER BY s.date DESC LIMIT ?`
-        ).all(exId, cutoff, sessionsBack) as any[])
+        ).all(...ids, cutoff, sessionsBack) as any[])
       : (db.prepare(
           `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-            WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.weight != 0
+            WHERE ls.exercise_id IN (${inIds}) AND ls.weight IS NOT NULL AND ls.weight != 0
             ORDER BY s.date DESC LIMIT ?`
-        ).all(exId, sessionsBack) as any[])
+        ).all(...ids, sessionsBack) as any[])
   ).map((r) => r.d);
   if (!dates.length) return null;
   let best: number | null = null;
   for (const d of dates) {
     const sets = db.prepare(
       `SELECT ls.weight AS weight, ls.reps AS reps FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-        WHERE ls.exercise_id = ? AND s.date = ? AND ls.weight IS NOT NULL AND ls.weight != 0`
-    ).all(exId, d) as any[];
+        WHERE ls.exercise_id IN (${inIds}) AND s.date = ? AND ls.weight IS NOT NULL AND ls.weight != 0`
+    ).all(...ids, d) as any[];
     // The session's hardest working set. Loaded (w>0): heavier and more reps
     // ranks higher — the Epley-shaped `w * (1 + reps/30)` read. Assisted (w<0):
     // that same multiply ranked FEWER reps higher because the weight is negative,
@@ -1069,6 +1073,47 @@ export function recentWorkingWeight(name: string, sessionsBack = 3, beforeExclus
     if (topW != null && (best == null || topW > best)) best = topW;
   }
   return best;
+}
+
+// How many of the lift's last `sessionsBack` sessions carried at least `minSets`
+// UNASSISTED working sets — bodyweight (null/0 weight) or added load — at or above
+// `repFloor` reps. recentWorkingWeight cannot say this: it reads only non-zero loads,
+// so on an assisted-history lift a session of bodyweight tens is invisible to it and
+// the last assisted set wins. This is the evidence the assist is no longer needed.
+// Reads the same lineage recentWorkingWeight does. 0 when nothing is logged.
+export function unassistedProvenSessions(
+  name: string,
+  repFloor: number,
+  sessionsBack = 3,
+  minSets = 2
+): number {
+  if (!(repFloor > 0)) return 0;
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return 0;
+  const inIds = ids.map(() => "?").join(",");
+  try {
+    const sessions = db
+      .prepare(
+        `SELECT DISTINCT s.id AS id, s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+          WHERE ls.exercise_id IN (${inIds}) AND ls.reps IS NOT NULL
+          ORDER BY s.date DESC, s.id DESC LIMIT ?`
+      )
+      .all(...ids, sessionsBack) as any[];
+    let proven = 0;
+    for (const session of sessions) {
+      const row = db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM logged_sets ls
+            WHERE ls.exercise_id IN (${inIds}) AND ls.session_id = ?
+              AND (ls.weight IS NULL OR ls.weight >= 0) AND ls.reps >= ?`
+        )
+        .get(...ids, Number(session.id), repFloor) as any;
+      if (Number(row?.c) >= minSets) proven += 1;
+    }
+    return proven;
+  } catch {
+    return 0;
+  }
 }
 
 // The heaviest load the recent log supports for `repLow` reps: the best Epley

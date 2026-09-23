@@ -401,10 +401,21 @@ test("surfaced candidates carry the tier of their bucket (primary vs more)", () 
   assert.equal(a.total, a.primary.length + a.more.length);
 });
 
+// A runner with stated run days: the live run engine (weeklyRunPlan) prescribes their
+// week, which is what run-compliance reads (vouchedRunCompliance === runComplianceRead).
+function seedRunner() {
+  repo.setProfile({
+    endurance_sport: "run",
+    endurance_schedule: { days: [{ dow: 2, kind: "easy" }, { dow: 6, kind: "long" }] },
+  });
+}
+
 test("review posture renders agenda-only draft, health, and running candidates as generic cards", () => {
   repo.setSettings({ lead_mode: "review_everything" });
   repo.createProposal("stub", "auto: weekly review", "", { changes: [] });
-  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Long run", target_distance_km: 16 }]);
+  // Runs are not plan items (migration 110): a runner's week is prescribed live by the
+  // run engine off their stated run days.
+  seedRunner();
   seedHealthDoc("2025-12-01", [
     marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
     marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
@@ -916,7 +927,7 @@ test("dismiss route requires an id", () => {
 });
 
 test("rest or easy Brief suppresses plan-forward agenda cards", () => {
-  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 10 }]);
+  seedRunner();
   repo.savePlanDay(2, "Push", "Shoulders", [
     { exercise: "Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 20 },
   ]);
@@ -941,7 +952,10 @@ test("rest or easy Brief suppresses plan-forward agenda cards", () => {
 });
 
 test("cold same-day Brief cache does not speculate with plan-forward agenda cards", () => {
-  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 10 }]);
+  seedRunner();
+  repo.savePlanDay(2, "Push", "Shoulders", [
+    { exercise: "Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 20 },
+  ]);
   resetTables("day_reads");
 
   const agenda = repo.todayAgenda(localDaysAgo(0));
@@ -953,20 +967,27 @@ test("cold same-day Brief cache does not speculate with plan-forward agenda card
 });
 
 test("a routed Today date anchors weekly producers to that week", () => {
-  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 10 }]);
+  seedRunner();
   repo.addActivity({ type: "run", date: isoDaysAgo(0), duration_min: 50, distance_km: 10 });
 
   const pastAgenda = repo.todayAgenda("2026-01-07");
   const past = [...pastAgenda.primary, ...pastAgenda.more];
   const pastRun = past.find((c) => c.id === "run-compliance");
 
-  assert.equal(pastRun?.title, "0 of 10 km this week", "past Today links do not borrow the current week's run");
+  // Each week is told against the live engine's prescription FOR THAT WEEK.
+  assert.equal(
+    pastRun?.title,
+    repo.vouchedRunCompliance("2026-01-07").in_words,
+    "a past Today date reads that week's own compliance"
+  );
+  assert.match(pastRun?.title ?? "", /^0 of \d+(\.\d)? km this week$/, "past Today links do not borrow the current week's run");
   assert.ok(!past.some((c) => c.id === "lately"), "past Today links do not surface current-week activity as lately");
 
   repo.saveDayRead(localDaysAgo(0), { kind: "train", headline: "Train", why: "normal plan day" });
   const liveAgenda = repo.todayAgenda(isoDaysAgo(0));
   const liveRun = [...liveAgenda.primary, ...liveAgenda.more].find((c) => c.id === "run-compliance");
-  assert.equal(liveRun?.title, "10 of 10 km this week", "the live week still reads the current run");
+  assert.equal(liveRun?.title, repo.vouchedRunCompliance(isoDaysAgo(0)).in_words);
+  assert.match(liveRun?.title ?? "", /^10 of \d+(\.\d)? km this week$/, "the live week still reads the current run");
 });
 
 // ---- one producer throwing never breaks the agenda (each read is isolated) ----

@@ -1,5 +1,6 @@
 // @ts-check
-// Shared planned-cardio helpers for Today, Progress, and Plan surfaces.
+// Shared run-prescription helpers, plus the one filter that keeps runs out of the
+// strength plan's surfaces.
 
 type CardioIntervalSegment = {
   reps?: unknown;
@@ -25,6 +26,30 @@ function cardioRecord(value: unknown): Record<string, unknown> {
 
 function isCardioItem(item: unknown): boolean {
   return !!item && typeof item === "object" && (item as { kind?: unknown }).kind === "cardio";
+}
+
+// Runs left the strength plan: a plan day holds lifts only, and every run lives in
+// Plan -> Endurance (the run engine and the rolling agenda). A payload from before
+// that migration can still carry a cardio item, a rest day or a run-only day, so a
+// strength surface filters them here rather than drawing a run as a line item.
+function strengthPlanItems<T>(items: readonly T[] | null | undefined): T[] {
+  return (Array.isArray(items) ? items : []).filter((item) => !isCardioItem(item));
+}
+
+// A rest day, or a day that carried only runs, is not a strength day. An empty
+// training day still is one: the explicit scaffold an athlete is filling in.
+function isStrengthPlanDay(day: unknown): boolean {
+  if (!day || typeof day !== "object") return false;
+  const row = day as { day_type?: unknown; items?: unknown };
+  if (String(row.day_type ?? "training") === "rest") return false;
+  const items: unknown[] = Array.isArray(row.items) ? row.items : [];
+  return !items.length || items.some((item) => !isCardioItem(item));
+}
+
+function strengthPlanDays<T extends { items?: unknown }>(plan: readonly T[] | null | undefined): T[] {
+  return (Array.isArray(plan) ? plan : [])
+    .filter(isStrengthPlanDay)
+    .map((day) => ({ ...day, items: strengthPlanItems(Array.isArray(day.items) ? (day.items as unknown[]) : []) }));
 }
 
 function cardioIntervalNote(interval: unknown): string {
@@ -70,66 +95,6 @@ function cardioIntervalStructure(interval: unknown, targetZone: unknown): string
   return segments.join("; ");
 }
 
-function cardioArtPhrase(item: CardioPlanItem | null | undefined): string {
-  const row = cardioRecord(item);
-  const label = String(row.note || row.exercise || "").trim();
-  return label || "run";
-}
-
-function cardioNoteIsDescriptive(note: unknown): boolean {
-  const text = String(note || "").trim();
-  if (!text) return false;
-  return text.length > 38 || text.split(/\s+/).length > 7 || /[.!?]\s/.test(text);
-}
-
-function cardioSport(item: CardioPlanItem | null | undefined): string {
-  const row = cardioRecord(item);
-  const text =
-    `${row.exercise || ""} ${row.note || ""} ${cardioIntervalNote(row.interval) || row.interval_note || ""}`.toLowerCase();
-  // Keep these token-bounded cues aligned with the server's safety identity:
-  // ordinary running prose such as "relaxed strides" must not become a ride.
-  if (/\b(?:ride|riding|bike|biking|cycle|cycling|spin|spinning)\b/.test(text)) return "ride";
-  if (/\b(?:swim|swimming)\b/.test(text)) return "swim";
-  if (/\b(?:row|rowing|erg)\b/.test(text)) return "row";
-  if (/\b(?:hike|hiking)\b/.test(text)) return "hike";
-  return "run";
-}
-
-function derivedCardioLabel(item: CardioPlanItem | null | undefined): string {
-  const row = cardioRecord(item);
-  const sport = cardioSport(row);
-  const cap = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
-  const interval = String(cardioIntervalNote(row.interval) || row.interval_note || "").toLowerCase();
-  const zone = String(row.target_zone || "").toLowerCase();
-  const blob = `${row.exercise || ""} ${row.note || ""} ${zone}`.toLowerCase();
-  if (/interval|fartlek|\d\s*[×x]\s*\d/.test(`${interval} ${blob}`)) return `${cap(sport)} intervals`;
-  const km = row.target_distance_km != null ? Number(row.target_distance_km) : null;
-  let mood = "";
-  if (/tempo|threshold|z3|z4|z5/.test(zone)) mood = "Tempo";
-  else if (/easy|recovery|z1|z2/.test(zone)) mood = "Easy";
-  else if (/tempo|threshold|hard|fast/.test(blob)) mood = "Tempo";
-  else if (/easy|relaxed|nasal|recovery|shakeout/.test(blob)) mood = "Easy";
-  else if (km != null && km >= 12) mood = "Long";
-  return mood ? `${mood} ${sport}` : cap(sport);
-}
-
-function cardioLabel(item: CardioPlanItem | null | undefined): string {
-  const row = cardioRecord(item);
-  const note = String(row.note || "").trim();
-  if (note && !cardioNoteIsDescriptive(note)) return note;
-  if (note) return derivedCardioLabel(row);
-  const exercise = String(row.exercise || "").trim();
-  if (exercise) return exercise;
-  if (row.target_distance_km != null && Number(row.target_distance_km) >= 12) return "Long run";
-  return "Cardio";
-}
-
-function cardioDescription(item: CardioPlanItem | null | undefined): string {
-  const row = cardioRecord(item);
-  const note = String(row.note || "").trim();
-  return cardioNoteIsDescriptive(note) ? note : "";
-}
-
 function cardioPrescription(item: CardioPlanItem | null | undefined): string {
   const row = cardioRecord(item);
   const bits: string[] = [];
@@ -148,28 +113,22 @@ function cardioPrescription(item: CardioPlanItem | null | undefined): string {
 
 const CAIRN_CARDIO_PLAN = {
   isCardioItem,
+  strengthPlanItems,
+  isStrengthPlanDay,
+  strengthPlanDays,
   cardioIntervalNote,
   cardioIntervalStructure,
-  cardioArtPhrase,
-  cardioNoteIsDescriptive,
-  cardioSport,
-  derivedCardioLabel,
-  cardioLabel,
-  cardioDescription,
   cardioPrescription,
 };
 
 Object.assign(globalThis, {
   CairnCardioPlan: CAIRN_CARDIO_PLAN,
   isCardioItem,
+  strengthPlanItems,
+  isStrengthPlanDay,
+  strengthPlanDays,
   cardioIntervalNote,
   cardioIntervalStructure,
-  cardioArtPhrase,
-  cardioNoteIsDescriptive,
-  cardioSport,
-  derivedCardioLabel,
-  cardioLabel,
-  cardioDescription,
   cardioPrescription,
 });
 
@@ -177,14 +136,11 @@ if (typeof window !== "undefined") {
   Object.assign(window, {
     CairnCardioPlan: CAIRN_CARDIO_PLAN,
     isCardioItem,
+    strengthPlanItems,
+    isStrengthPlanDay,
+    strengthPlanDays,
     cardioIntervalNote,
     cardioIntervalStructure,
-    cardioArtPhrase,
-    cardioNoteIsDescriptive,
-    cardioSport,
-    derivedCardioLabel,
-    cardioLabel,
-    cardioDescription,
     cardioPrescription,
   });
 }

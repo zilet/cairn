@@ -592,11 +592,6 @@ declare global {
     escapeAttr(value: unknown): string;
     stagger(index?: number | null): string;
     micGlyph: string | (() => string);
-    cardioLabel(item: Record<string, unknown> | null | undefined): string;
-    cardioPrescription(item: Record<string, unknown> | null | undefined): string;
-    isCardioItem(item: unknown): boolean;
-    cardioPlanCard(item: any, index: any, matched?: any, syncLine?: string): string;
-    cardioEffortMatches(item: any, effort: any): boolean;
     exCard(item: any, logged: any[], prefill: Record<string, unknown>, index: any, rx: any): string;
     garminSessionCard(value: unknown): string;
     sessionDoneCard(session: unknown, day: unknown, options: { isToday: boolean }): string;
@@ -615,7 +610,7 @@ declare global {
     setTodayHeaderTitle(): void;
     nextPollToken(): number;
     isCurrentPoll(token: number): boolean;
-    suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
+    suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number | null>;
     updateHeaderCondense(): void;
     wireCardioSync(root: ParentNode, onSync: () => unknown): unknown;
     applyDayProgression(button: Element | null | undefined, day: number | null | undefined): unknown;
@@ -724,9 +719,7 @@ declare global {
     rxMoveCount(rxByEx: Record<string, Partial<ClientPrescription> | null | undefined>): number;
     applyDayProgression(button: Element | null | undefined, day: number | null | undefined): Promise<void>;
     exerciseCard(item: any, logged: any[], prefill: Record<string, unknown>, index: any, rx: any): string;
-    cardioPlanCard(item: any, index: any, matched?: any, syncLine?: string): string;
-    cardioEffortMatches(item: any, effort: any): boolean;
-    suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
+    suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number | null>;
     loadBrief(
       date: string,
       override: string,
@@ -764,9 +757,7 @@ declare global {
       rxMoveCount(rxByEx: Record<string, Partial<ClientPrescription> | null | undefined>): number;
       applyDayProgression(button: Element | null | undefined, day: number | null | undefined): Promise<void>;
       exerciseCard(item: any, logged: any[], prefill: Record<string, unknown>, index: any, rx: any): string;
-      cardioPlanCard(item: any, index: any, matched?: any, syncLine?: string): string;
-      cardioEffortMatches(item: any, effort: any): boolean;
-      suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
+      suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number | null>;
       upgradeBriefInPlace(date: string, isToday: boolean): Promise<void>;
       revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
       postExerciseMode(name: string, mode: string): Promise<unknown>;
@@ -1676,14 +1667,11 @@ declare global {
     routes: Record<string, string>
   ): string;
   declare function isCardioItem(item: unknown): boolean;
+  declare function strengthPlanItems<T>(items: readonly T[] | null | undefined): T[];
+  declare function isStrengthPlanDay(day: unknown): boolean;
+  declare function strengthPlanDays<T extends { items?: unknown }>(plan: readonly T[] | null | undefined): T[];
   declare function cardioIntervalNote(interval: unknown): string;
   declare function cardioIntervalStructure(interval: unknown, targetZone: unknown): string;
-  declare function cardioArtPhrase(item: Record<string, unknown> | null | undefined): string;
-  declare function cardioNoteIsDescriptive(note: unknown): boolean;
-  declare function cardioSport(item: Record<string, unknown> | null | undefined): string;
-  declare function derivedCardioLabel(item: Record<string, unknown> | null | undefined): string;
-  declare function cardioLabel(item: Record<string, unknown> | null | undefined): string;
-  declare function cardioDescription(item: Record<string, unknown> | null | undefined): string;
   declare function cardioPrescription(item: Record<string, unknown> | null | undefined): string;
   declare function garminConfigured(settings: Record<string, unknown> | null | undefined): boolean;
   declare function cardioSyncLine(
@@ -1733,7 +1721,6 @@ declare global {
     goalValue: ClientEnduranceGoal | null,
     compliance: ClientRunCompliance | null,
     agenda: ClientFlexibleTrainingAgenda | null,
-    plan: unknown,
     settings: Record<string, unknown> | null,
     raceBuild?: ClientRaceBuild | null,
     extra?: {
@@ -2834,7 +2821,6 @@ declare global {
       presets(goal: ClientEnduranceGoal | null | undefined): Array<{ t: string; i: string }>;
       draftCardHtml(proposal: Record<string, unknown>): string;
       record(value: unknown): Record<string, unknown>;
-      runs(plan: unknown): Array<{ it: Record<string, unknown>; day_number: unknown }>;
       mondayOf(iso: string): string;
       nextMonday(iso: string): string;
       weekBanked(agenda: ClientFlexibleTrainingAgenda | null | undefined): boolean;
@@ -2899,7 +2885,7 @@ declare global {
 
     CairnPlanEditor: {
       blankStrength(): Record<string, unknown>;
-      blankCardio(): Record<string, unknown>;
+      runsElsewhereHtml(): string;
       dayModelFromPlan(day: Record<string, unknown>): Record<string, unknown>;
       calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): string;
       progDayHtml(
@@ -3790,14 +3776,11 @@ declare global {
 
     CairnCardioPlan: {
       isCardioItem(item: unknown): boolean;
+      strengthPlanItems<T>(items: readonly T[] | null | undefined): T[];
+      isStrengthPlanDay(day: unknown): boolean;
+      strengthPlanDays<T extends { items?: unknown }>(plan: readonly T[] | null | undefined): T[];
       cardioIntervalNote(interval: unknown): string;
       cardioIntervalStructure(interval: unknown, targetZone: unknown): string;
-      cardioArtPhrase(item: Record<string, unknown> | null | undefined): string;
-      cardioNoteIsDescriptive(note: unknown): boolean;
-      cardioSport(item: Record<string, unknown> | null | undefined): string;
-      derivedCardioLabel(item: Record<string, unknown> | null | undefined): string;
-      cardioLabel(item: Record<string, unknown> | null | undefined): string;
-      cardioDescription(item: Record<string, unknown> | null | undefined): string;
       cardioPrescription(item: Record<string, unknown> | null | undefined): string;
     };
 
@@ -3906,7 +3889,7 @@ declare global {
         session: ClientTodayPlanSelectionSession | null | undefined,
         isToday: boolean,
         deps: ClientTodayPlanSelectionDeps
-      ): Promise<number>;
+      ): Promise<number | null>;
       planDayRecoveryFromSelection(payload: unknown): ClientTodayPlanDayRecoveryMap;
       loadPlanDayRecovery(
         date: string,
@@ -3931,23 +3914,14 @@ declare global {
         },
         revealBlank: boolean
       ): Record<string, unknown> & { day_number: number; items?: Array<Record<string, unknown>> | null };
-      matchCardioEfforts(
-        items: Array<Record<string, unknown>>,
-        efforts: Array<Record<string, unknown>>,
-        matches: (item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined) => boolean
-      ): Map<Record<string, unknown>, Record<string, unknown>>;
       itemGroups(params: {
         items: Array<Record<string, unknown>>;
         loggedByEx: Record<string, Array<Record<string, unknown>>>;
-        matchedCardio: Map<Record<string, unknown>, Record<string, unknown>>;
         skips: unknown[];
-        isCardioItem(item: Record<string, unknown>): boolean;
-        cardioLabel(item: Record<string, unknown>): string;
       }): {
         planNames: Set<string>;
         activeItems: Array<Record<string, unknown>>;
         skippedItems: Array<Record<string, unknown>>;
-        cardioItems: Array<Record<string, unknown>>;
         strengthItems: Array<Record<string, unknown>>;
         planEx: string[];
         offPlanEx: string[];
@@ -3963,7 +3937,6 @@ declare global {
       cardAttribution(params: {
         items: Array<Record<string, unknown>>;
         loggedByEx: Record<string, Array<Record<string, unknown>>>;
-        isCardioItem(item: Record<string, unknown>): boolean;
       }): Map<
         Record<string, unknown>,
         { key: string; exercise: string; sets: Array<Record<string, unknown>>; siblings: number }
@@ -4003,12 +3976,9 @@ declare global {
         deps: {
           state: { logDate: string };
           api(path: string): Promise<unknown>;
-          isCardioItem(item: Record<string, unknown>): boolean;
         }
       ): Promise<{
-        allCardio: Array<Record<string, unknown>>;
         cardioEfforts: Array<Record<string, unknown>>;
-        todaySettings: unknown;
       }>;
     };
 
@@ -4019,11 +3989,6 @@ declare global {
           | null
           | undefined
       ): Record<string, Array<Record<string, unknown>>>;
-      matchCardioEfforts(
-        items: Array<Record<string, unknown>>,
-        efforts: Array<Record<string, unknown>>,
-        matches: (item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined) => boolean
-      ): Map<Record<string, unknown>, Record<string, unknown>>;
       preparePlanSession(deps: {
         state: {
           logDate: string;
@@ -4039,19 +4004,14 @@ declare global {
         api(path: string): Promise<unknown>;
         cachedApi<T = unknown>(path: string, options?: { key?: string; freshFor?: number }): Promise<T>;
         peekCached<T = unknown>(key: string, freshFor?: number): { data: T; fresh: boolean } | null;
-        suggestedPlanDayNumber(session: Record<string, unknown> | null | undefined, isToday: boolean): Promise<number>;
-        isCardioItem(item: Record<string, unknown>): boolean;
-        cardioLabel(item: Record<string, unknown>): string;
-        cardioEffortMatches(item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined): boolean;
+        suggestedPlanDayNumber(session: Record<string, unknown> | null | undefined, isToday: boolean): Promise<number | null>;
       }): Promise<
         Record<string, unknown> & {
           day: Record<string, unknown>;
           loggedByEx: Record<string, Array<Record<string, unknown>>>;
           cardioEfforts: Array<Record<string, unknown>>;
-          matchedCardio: Map<Record<string, unknown>, Record<string, unknown>>;
           activeItems: Array<Record<string, unknown>>;
           skippedItems: Array<Record<string, unknown>>;
-          cardioItems: Array<Record<string, unknown>>;
           strengthItems: Array<Record<string, unknown>>;
           planEx: string[];
           offPlanEx: string[];
@@ -4071,7 +4031,6 @@ declare global {
           exTotal: number;
           hasSyncedCardioToday: boolean;
           isRunDay: boolean;
-          expectingRun: boolean;
         }
       >;
     };
@@ -4154,7 +4113,6 @@ declare global {
         options: {
           isRunDay: boolean;
           isToday: boolean;
-          cardioItems: Array<Record<string, unknown>>;
           day: Record<string, unknown> | null | undefined;
           exDone: number;
           exTotal: number;
@@ -4164,8 +4122,6 @@ declare global {
           escapeHtml(value: unknown): string;
           escapeAttr(value: unknown): string;
           stagger(index?: number | null): string;
-          cardioLabel(item: Record<string, unknown>): string;
-          cardioPrescription(item: Record<string, unknown>): string;
           rxMoveCount(rxByEx: Record<string, unknown>): number;
           setsTonnage(sets: unknown): number;
           lastSetLineText?(lastSet: unknown): string;
@@ -4197,6 +4153,11 @@ declare global {
         lastSet: unknown,
         deps: { escapeHtml(value: unknown): string; lastSetLineText?(lastSet: unknown): string }
       ): string;
+      runLineHtml(
+        agenda: unknown,
+        options: { date: string; units?: "km" | "mi"; syncLine?: string },
+        deps: { escapeHtml(value: unknown): string; formatDistance?(km: unknown, units?: unknown): string }
+      ): string;
     };
 
     CairnTodayPlanSurfaceRenderer: {
@@ -4211,12 +4172,9 @@ declare global {
           plan: Array<Record<string, unknown>>;
           activeDay: unknown;
           logDate: string;
-          cardioItems: Array<Record<string, unknown>>;
           strengthItems: Array<Record<string, unknown>>;
           activeItems: Array<Record<string, unknown>>;
           skippedItems: Array<Record<string, unknown>>;
-          matchedCardio: Map<Record<string, unknown>, unknown>;
-          syncedLine: string;
           loggedByEx: Record<string, unknown[]>;
           offPlanEx: string[];
           pendingOffPlan: Array<{ name: string; mode?: string | null }>;
@@ -4229,7 +4187,6 @@ declare global {
           hasLoggedSets: boolean;
           hasGarmin: boolean;
           isRunDay: boolean;
-          preserveItemOrder?: boolean;
           planDayRecovery?: Record<number, { recovering_groups?: string[]; mostly_recovering?: boolean }> | null;
           prefillFor(item: Record<string, unknown>): {
             weight?: unknown;
@@ -4248,9 +4205,6 @@ declare global {
         deps: {
           planSurface: Window["CairnTodayPlanSurface"];
           planSurfaceDeps(): Parameters<Window["CairnTodayPlanSurface"]["sessionHeadHtml"]>[1];
-          isCardioItem(item: Record<string, unknown>): boolean;
-          cardioLabel(item: Record<string, unknown>): string;
-          cardioPlanCard(item: Record<string, unknown>, index: number, matched?: unknown, syncLine?: string): string;
           exCard(
             item: Record<string, unknown>,
             logged: unknown[],
@@ -4328,9 +4282,6 @@ declare global {
       rxMoveCount(
         rxByExercise: Record<string, Partial<ClientPrescription> | null | undefined> | null | undefined
       ): number;
-      cardioDominantZone(zones: unknown): string;
-      cardioVerb(label: unknown): string;
-      cardioLogPhrase(item: Record<string, unknown>): string;
     };
 
     CairnTodayProgressionController: {
@@ -4447,14 +4398,6 @@ declare global {
         },
         lastSet?: unknown
       ): string;
-      cardioPlanCardHtml(
-        item: Record<string, unknown>,
-        revealIdx: unknown,
-        done: Record<string, unknown> | null | undefined,
-        syncLine: string
-      ): string;
-      cardioDoneCardHtml(item: Record<string, unknown>, effort: Record<string, unknown>, revealIdx: unknown): string;
-      cardioEffortMatches(item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined): boolean;
     };
 
     CairnTodayLately: {

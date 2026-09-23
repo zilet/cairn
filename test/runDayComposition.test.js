@@ -13,6 +13,7 @@ import {
   ENDURANCE_SUBSTITUTED_SESSION_WHY,
   SUBSTITUTION_UNAVAILABLE_NOTES,
 } from "../dist/repo/saturated-substitution.js";
+import { acuteGate } from "../dist/repo/hybrid-load.js";
 import { publicTodayPlanDay } from "../dist/routes/today.js";
 import { db, repo, resetTables } from "./_seed.js";
 
@@ -194,4 +195,42 @@ test("the plan-day pills are told which days are still recovering", () => {
   assert.equal(byDay[2].mostly_recovering, false);
   // The pick itself is unchanged — this is a hint riding alongside it, not a gate.
   assert.equal(typeof selection.day_number, "number");
+});
+
+// The day AFTER the run is a different morning. Legs only just over their own bar
+// from yesterday's hour are the ordinary hybrid week: the lower day keeps its lower
+// lifts at held load. Only a DEEP residual still moves the slots.
+test("the morning after an ordinary run, a leg day keeps its leg lifts at held load", () => {
+  seedWeek();
+  repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: "2031-09-17", text: "Steady run" });
+  logHistory();
+  const quads = acuteGate("quads", DATE);
+  assert.equal(quads.saturated, true, "the fixture must read saturated");
+  assert.equal(quads.deep, false, "…but only just over the bar");
+
+  const { daily_session: composition } = pickLowerDay();
+  const names = composition.items.map((item) => item.exercise);
+  assert.ok(
+    names.includes("Barbell Deadlift") && names.includes("Bulgarian Split Squat"),
+    `the leg work stays on the leg day (got ${JSON.stringify(names)})`
+  );
+  assert.ok(
+    composition.items.every((item) => item.substitution_for == null),
+    "nothing was re-pointed"
+  );
+  const deadlift = composition.items.find((item) => item.exercise === "Barbell Deadlift");
+  assert.ok(deadlift.target_weight == null || deadlift.target_weight <= 185, "a held lift never advances");
+});
+
+test("the morning after a deep leg dose, the slots still move", () => {
+  seedWeek();
+  repo.addActivity({ type: "run", duration_min: 80, distance_km: 13, date: "2031-09-17", text: "Long run" });
+  logHistory();
+  assert.equal(acuteGate("quads", DATE).deep, true, "the fixture must read deep");
+
+  const { daily_session: composition } = pickLowerDay();
+  assert.ok(
+    composition.items.some((item) => item.substitution_for != null),
+    `a deep residual still re-points the leg slots (got ${JSON.stringify(composition.items.map((i) => i.exercise))})`
+  );
 });

@@ -578,8 +578,8 @@ function trainingWeekExists(): boolean {
 }
 
 /**
- * Compose the athlete's FIRST training week — strength and endurance in one Mon-Sun
- * template — for someone who has no plan at all.
+ * Compose the athlete's FIRST lifting week — strength days placed around the runs the
+ * run engine builds on their stated run days — for someone who has no plan at all.
  *
  * This is the blank-slate counterpart to evolveProgram, and the ONLY producer that can
  * write a week from nothing: buildProgressionProposal, buildRunPlanProposal and the
@@ -648,9 +648,9 @@ export async function composeWeek(agent: string | undefined, instruction: string
     result.raw,
     result.parsed
   );
-  // Only a `days` payload is a WEEK. A first-week reply that came back as `changes` or
-  // `cardio` is an edit to a plan that does not exist — there is nothing for it to land
-  // on, so it stays a plain reviewable draft rather than being pushed at an empty plan.
+  // Only a `days` payload is a WEEK. A first-week reply that came back as `changes` is an
+  // edit to a plan that does not exist — there is nothing for it to land on, so it stays
+  // a plain reviewable draft rather than being pushed at an empty plan.
   const composedDays = Array.isArray((result.parsed as any)?.days) ? (result.parsed as any).days.length : 0;
   let autonomy: any = null;
   if (proposal?.id != null && composedDays > 0 && hasPlanProposalActions(result.parsed)) {

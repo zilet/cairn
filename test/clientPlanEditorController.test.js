@@ -216,12 +216,6 @@ function loadPlanEditorController(plan) {
     wireSeg: () => {},
     withToken: (path) => path,
     wireGuides: () => {},
-    isCardioItem: (item) => item && item.kind === "cardio",
-    cardioIntervalNote: (interval) => (interval && interval.note) || "",
-    cardioArtPhrase: (item) => item.note || "run",
-    cardioLabel: (item) => item.note || "Cardio",
-    cardioDescription: (item) => item.description || "",
-    cardioPrescription: (item) => item.prescription || "45 min Z2",
     art: () => "<svg></svg>",
     artImg: () => "",
     fmtDur: (seconds) => `${Math.round(Number(seconds) / 60)}m`,
@@ -247,6 +241,9 @@ function loadPlanEditorController(plan) {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  // The shared strength-only filters (isCardioItem / strengthPlanItems / strengthPlanDays)
+  // load ahead of the Plan bundle in the app; load the real module rather than a stub.
+  vm.runInNewContext(readFileSync(join(root, "public/js/cardio-plan-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-form-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-controller.js"), "utf8"), context);
@@ -344,8 +341,10 @@ test("plan editor's exercise field gets a datalist fed from the exercise catalog
   assert.deepEqual(exerciseFetches, ["/exercises"]);
 });
 
-test("plan editor controller serializes cardio and filters blank rows", () => {
+test("plan editor controller saves lifts only: blank rows and any run a stale model carries never travel", () => {
   const harness = loadPlanEditorController([]);
+  // Runs left the strength plan (they live in Plan -> Endurance). A model built from
+  // a payload that predates that still holding a cardio row must not write it back.
   const days = harness.context.CairnPlanEditorController.serializeDays([
     {
       day_number: 8,
@@ -354,7 +353,6 @@ test("plan editor controller serializes cardio and filters blank rows", () => {
       items: [
         { kind: "strength", exercise: "  " },
         { kind: "strength", exercise: " Row ", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, note: " controlled ", warmup_sets: null },
-        { kind: "cardio", note: "  ", target_zone: " ", target_distance_km: null, target_duration_min: null, interval_note: "ignored" },
         { kind: "cardio", note: "Tempo", target_zone: "Z3", target_distance_km: 6, target_duration_min: 35, interval_note: "4 x 3 min" },
       ],
     },
@@ -368,43 +366,34 @@ test("plan editor controller serializes cardio and filters blank rows", () => {
       day_type: "training",
       items: [
         { kind: "strength", exercise: "Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, note: "controlled", warmup_sets: null, target_seconds: null },
-        { kind: "cardio", note: "Tempo", target_distance_km: 6, target_duration_min: 35, target_zone: "Z3", interval: { note: "4 x 3 min" } },
       ],
     },
   ]);
 });
 
-test("a rest day holding an empty placeholder row still saves as a rest day", () => {
-  const harness = loadPlanEditorController([]);
-  // Marking a day as rest does not remove the blank row the editor renders, so the
-  // model still carries one all-empty item. Deciding rest-vs-training off the
-  // UNFILTERED list read that placeholder as work and silently promoted the seam
-  // back to a training day on save.
-  const days = harness.context.CairnPlanEditorController.serializeDays([
-    {
-      day_number: 3,
-      name: "Rest",
-      focus: "",
-      day_type: "rest",
-      items: [{ kind: "strength", exercise: "   ", sets: 3, rep_low: 8, rep_high: 10 }],
-    },
+test("an old plan's rest day and run-only day never reach the strength editor, and a save writes lift days alone", async () => {
+  // Rest is the calendar and runs live in Endurance, so the editor models lift days
+  // only. A payload from before the separation (a rest row, a "Long Run" day) is
+  // filtered on load rather than drawn, edited or written back.
+  const harness = loadPlanEditorController([
+    { day_number: 1, name: "Pull", focus: "", items: [{ kind: "strength", exercise: "Row", sets: 3, rep_low: 8, rep_high: 10 }, { kind: "cardio", note: "Easy run", target_distance_km: 5 }] },
+    { day_number: 2, name: "Rest", focus: "", day_type: "rest", items: [] },
+    { day_number: 3, name: "Long Run", focus: "", items: [{ kind: "cardio", note: "Long run", target_distance_km: 16 }] },
   ]);
-  assert.equal(days[0].day_type, "rest", "a blank row is not work");
-  assert.deepEqual(days[0].items, []);
+  await harness.context.renderPlanEditor();
+  const html = harness.view.querySelector("#planedit").innerHTML;
+  assert.match(html, /Pull/);
+  assert.doesNotMatch(html, /Long Run|Easy run|Rest|cardio|data-restday|data-addcardio|data-pikind/);
 
-  // And a rest day that genuinely carries work is still saved as the training day
-  // it plainly is, rather than sent to the server to be refused.
-  const withWork = harness.context.CairnPlanEditorController.serializeDays([
-    {
-      day_number: 3,
-      name: "Rest",
-      focus: "",
-      day_type: "rest",
-      items: [{ kind: "strength", exercise: " Squat ", sets: 3, rep_low: 5, rep_high: 5 }],
-    },
-  ]);
-  assert.equal(withWork[0].day_type, "training");
-  assert.equal(withWork[0].items.length, 1);
+  harness.view.querySelector("[data-editday]").click();
+  const editing = harness.view.querySelector("#planedit").innerHTML;
+  assert.doesNotMatch(editing, /\+ cardio|rest day|pi-kind|data-kind="cardio"/, "the edit view offers lifts only");
+  assert.equal(await harness.saveOptions.onSave(), true);
+  const put = harness.requests.find((request) => request.path === "/plan");
+  const body = JSON.parse(put.opts.body);
+  assert.deepEqual(body.days.map((day) => day.name), ["Pull"]);
+  assert.deepEqual(body.days[0].items.map((item) => item.kind), ["strength"]);
+  assert.equal(body.days[0].day_type, "training");
 });
 
 test("the Plan recovery banner announces a reshaped week — drafted asks, applied informs, null stays silent", () => {

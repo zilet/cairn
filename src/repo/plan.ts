@@ -27,10 +27,9 @@ import { orderPlanItemsForEffect, planItemsOutOfOrder } from "../domain/training
 export { PlanQualityError, pressSlotKey, validateTrainingPlan } from "./plan-quality.js";
 
 // ---------- plan ----------
-// LEFT JOIN on exercises (v35): a cardio plan item (kind='cardio') has no
-// exercise_id, so an INNER JOIN would silently drop it. A cardio row's `exercise`
-// is its own label (planned in the note/name) and its endurance fields carry the
-// prescription. hydratePlanItem coerces the row so the surface shape is stable.
+// LEFT JOIN on exercises (v35). The endurance columns stay on the row shape so the
+// surface is stable, but plan reads filter run items out (PLAN_DAY_ITEMS_SQL): a plan
+// day carries strength work only (migration 110). hydratePlanItem coerces the row.
 const PLAN_ITEM_COLS = `pi.id, pi.plan_day_id, pi.position, pi.sets, pi.rep_low, pi.rep_high,
                 pi.target_weight, pi.note, pi.warmup_sets, pi.target_seconds,
                 pi.kind, pi.target_distance_km, pi.target_duration_min, pi.target_zone, pi.interval_json,
@@ -539,9 +538,8 @@ function decorateAccountablePlan(days: any[]): any[] {
 }
 
 // MEMOIZED (repo/training-cache.ts), the same shape as getProgramState: the whole plan
-// is read ~124 times per Today open — once per lift inside planItemFor, once per
-// run-compliance call inside appliedRunPrescription, once per plan day inside
-// planDayProgression — and each read is one query per plan day plus the accountability
+// is read ~124 times per Today open — once per lift inside planItemFor, once per plan
+// day inside planDayProgression — and each read is one query per plan day plus the accountability
 // decoration. Keyed on the training backstop (which watches plan_days / plan_items /
 // exercises and folds in the training write counter every plan writer bumps) plus the
 // ledger signature above, so any write that can change a prescription or its "why"
@@ -565,13 +563,19 @@ export function getPlan() {
   return structuredClone(value);
 }
 
-function computePlan() {
-  const days = db.prepare(`SELECT * FROM plan_days ORDER BY day_number`).all() as any[];
-  const stmt = db.prepare(
-    `SELECT ${PLAN_ITEM_COLS}
+// Plan days hold STRENGTH work only (migration 110): runs are the run engine's
+// (weeklyRunPlan / flexibleTrainingAgenda) and a rest day is a calendar weekday the
+// athlete neither lifts nor runs. The filters below are belt-and-braces for a
+// database that has not migrated yet — no plan read ever hands out a run item or a
+// rest row.
+const PLAN_DAYS_SQL = `SELECT * FROM plan_days WHERE COALESCE(day_type, 'training') != 'rest'`;
+const PLAN_DAY_ITEMS_SQL = `SELECT ${PLAN_ITEM_COLS}
        FROM plan_items pi LEFT JOIN exercises e ON e.id = pi.exercise_id
-       WHERE pi.plan_day_id = ? ORDER BY pi.position`
-  );
+       WHERE pi.plan_day_id = ? AND COALESCE(pi.kind, 'strength') != 'cardio' ORDER BY pi.position`;
+
+function computePlan() {
+  const days = db.prepare(`${PLAN_DAYS_SQL} ORDER BY day_number`).all() as any[];
+  const stmt = db.prepare(PLAN_DAY_ITEMS_SQL);
   return decorateAccountablePlan(
     days.map((d) => ({
       ...d,
@@ -581,20 +585,12 @@ function computePlan() {
 }
 
 export function getPlanDay(dayNumber: number) {
-  const d = db.prepare(`SELECT * FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
+  const d = db.prepare(`${PLAN_DAYS_SQL} AND day_number = ?`).get(dayNumber) as any;
   if (!d) return null;
   return decorateAccountablePlan([
     {
       ...d,
-      items: (
-        db
-          .prepare(
-            `SELECT ${PLAN_ITEM_COLS}
-         FROM plan_items pi LEFT JOIN exercises e ON e.id = pi.exercise_id
-         WHERE pi.plan_day_id = ? ORDER BY pi.position`
-          )
-          .all(d.id) as any[]
-      ).map(hydratePlanItem),
+      items: (db.prepare(PLAN_DAY_ITEMS_SQL).all(d.id) as any[]).map(hydratePlanItem),
     },
   ])[0];
 }
@@ -640,15 +636,6 @@ export function buildPlanICS(opts: { now?: Date; startWeekday?: number } = {}): 
     return out.join("\r\n");
   };
   const fmtItem = (it: any) => {
-    // A cardio item renders its endurance prescription ("Long run — 12 km, Z2").
-    if (it.kind === "cardio") {
-      const label = String(it.note || it.exercise || "Cardio").trim();
-      const bits: string[] = [];
-      if (it.target_distance_km != null) bits.push(`${it.target_distance_km} km`);
-      if (it.target_duration_min != null) bits.push(`${Math.round(it.target_duration_min)} min`);
-      if (it.target_zone) bits.push(String(it.target_zone));
-      return bits.length ? `${label} — ${bits.join(", ")}` : label;
-    }
     const name = it.exercise || "exercise";
     if (it.mode === "timed" && it.target_seconds) return `${name} ${it.sets || 1}×${it.target_seconds}s`;
     const lo = it.rep_low,
@@ -1033,8 +1020,8 @@ export function updateTarget(
   };
 }
 
-// The ONE place that knows the plan_items column shape. Every insert — savePlanDay's
-// cardio + strength branches and applyPlanChange's ADD — goes through it, so a schema
+// The ONE place that knows the plan_items column shape. Every insert — savePlanDay
+// and applyPlanChange's ADD — goes through it, so a schema
 // column change is a single edit instead of three parallel 15-column statements.
 // Omitted columns default to NULL (kind defaults to 'strength').
 function insertPlanItem(row: {
@@ -1228,8 +1215,7 @@ function planModeQualityError(
 function withAuthoritativeExerciseModes(items: PlanItemInput[] = []): PlanItemInput[] {
   const existing = db.prepare(`SELECT name, mode FROM exercises`).all() as Array<{ name: string; mode: string | null }>;
   const byKey = new Map(existing.map((row) => [normalizedExerciseKey(row.name), row.mode]));
-  return items.map((item) => {
-    if (String(item?.kind ?? "strength").toLowerCase() === "cardio") return item;
+  return strengthItemsOnly(items).map((item) => {
     const exercise = String(item?.exercise ?? "").trim();
     const storedMode = exercise ? byKey.get(normalizedExerciseKey(exercise)) : null;
     const declaredMode = item.mode === "timed" || item.mode === "reps" ? item.mode : null;
@@ -1249,19 +1235,7 @@ function withAuthoritativeExerciseModes(items: PlanItemInput[] = []): PlanItemIn
 // warnings are always returned so a human can distinguish "allowed" from "optimal".
 /** Convert a hydrated plan-day item row into a PlanItemInput for rewrite. */
 function planItemsToInput(items: any[]): PlanItemInput[] {
-  return (Array.isArray(items) ? items : []).map((it) => {
-    if (String(it?.kind ?? "").toLowerCase() === "cardio") {
-      return {
-        kind: "cardio" as const,
-        exercise: String(it.exercise || it.note || "").trim() || undefined,
-        note: it.note != null ? String(it.note) : null,
-        target_distance_km: it.target_distance_km ?? null,
-        target_duration_min: it.target_duration_min ?? null,
-        target_zone: it.target_zone ?? null,
-        interval: it.interval ?? null,
-        interval_json: it.interval_json ?? null,
-      };
-    }
+  return strengthItemsOnly(Array.isArray(items) ? items : []).map((it: any) => {
     return {
       kind: "strength" as const,
       exercise: String(it.exercise ?? "").trim(),
@@ -1279,8 +1253,8 @@ function planItemsToInput(items: any[]): PlanItemInput[] {
 }
 
 /**
- * Rewrite one day's items into effect order (compounds → accessories → finishers
- * → cardio). No-op when already ordered. Used by the Plan gallery's quiet
+ * Rewrite one day's items into effect order (compounds → accessories → finishers).
+ * No-op when already ordered. Used by the Plan gallery's quiet
  * "Order for effect" — never silent on GET.
  */
 export function orderPlanDayForEffect(day_number: number) {
@@ -1294,8 +1268,7 @@ export function orderPlanDayForEffect(day_number: number) {
     day_number,
     String(day.name || `Day ${day_number}`),
     day.focus ?? null,
-    orderPlanItemsForEffect(inputs),
-    { day_type: day.day_type ?? null }
+    orderPlanItemsForEffect(inputs)
   );
   return { ...result, changed: true };
 }
@@ -1308,11 +1281,10 @@ export function savePlanDayChecked(
   opts: { quality_override?: boolean; day_type?: string | null } = {}
 ) {
   const before = validateTrainingPlan(getPlan());
+  // A rest day is refused BEFORE anything is read or validated: it is not a plan row
+  // any more, and the athlete's words for it belong on the calendar.
+  const dayType = resolvePlanDayType(opts.day_type);
   const normalizedItems = withAuthoritativeExerciseModes(items);
-  // Resolved BEFORE validation so the report describes the day that would actually
-  // be written — a rest day arriving with items has to fail as a structured quality
-  // error the editor can render, not as a bare throw from the writer underneath.
-  const dayType = resolvePlanDayType(day_number, opts.day_type, normalizedItems.length);
   const candidate = getPlan().filter((day: any) => Number(day.day_number) !== Number(day_number));
   candidate.push({ day_number, name, focus, day_type: dayType, items: normalizedItems });
   candidate.sort((a: any, b: any) => Number(a.day_number) - Number(b.day_number));
@@ -1324,10 +1296,7 @@ export function savePlanDayChecked(
   if (blocking.length && !opts.quality_override) {
     throw new PlanQualityError({ ok: false, errors: blocking, warnings: quality.warnings });
   }
-  // The zero-items invariant is structural, never overridable: quality_override is
-  // for a week a human judged unusual, not for a day that cannot exist.
-  assertPlanDayTypeCoherent(day_number, dayType, normalizedItems.length);
-  const day = savePlanDay(day_number, name, focus, normalizedItems, { day_type: dayType });
+  const day = savePlanDay(day_number, name, focus, normalizedItems);
   return { ok: true, day, quality, quality_override: blocking.length > 0 };
 }
 
@@ -1339,21 +1308,15 @@ export function replacePlanChecked(
     day_type?: string | null;
     items?: PlanItemInput[];
   }[],
-  opts: { quality_override?: boolean } = {}
+  opts: { quality_override?: boolean; keepScaffolds?: boolean } = {}
 ) {
-  const normalized = days.map((day, index) => ({
+  const normalized = strengthDaysOnly(days, { keepScaffolds: opts.keepScaffolds }).map((day) => ({
     ...day,
-    day_number: day.day_number ?? index + 1,
-    // A full restructure DECLARES the whole week, so an omitted day_type here means
-    // 'training' rather than "leave it as it was" — the alternative would let a week
-    // that never mentions rest inherit yesterday's seam in a day now full of work.
-    day_type: planDayTypeForRestructure(day.day_type, (day.items ?? []).length),
-    items: withAuthoritativeExerciseModes(day.items ?? []),
+    items: withAuthoritativeExerciseModes(day.items),
   }));
   const quality = validateTrainingPlan(normalized);
   if (!quality.ok && !opts.quality_override) throw new PlanQualityError(quality);
-  for (const day of normalized) assertPlanDayTypeCoherent(day.day_number, day.day_type, day.items.length);
-  const plan = replacePlan(normalized);
+  const plan = replacePlan(normalized, { keepScaffolds: opts.keepScaffolds });
   return { ok: true, plan, quality, quality_override: !quality.ok };
 }
 
@@ -1905,13 +1868,11 @@ export function addExerciseToPlanDay(
   name: string,
   lead?: string | null
 ): { day: number; exercise: string } | null {
-  const day = db.prepare(`SELECT id, day_type FROM plan_days WHERE day_number = ?`).get(Number(dayNumber)) as any;
+  // A legacy rest row is not a plan day (migration 110), so it is never a landing spot.
+  const day = db
+    .prepare(`SELECT id FROM plan_days WHERE day_number = ? AND COALESCE(day_type, 'training') != 'rest'`)
+    .get(Number(dayNumber)) as any;
   if (!day) return null;
-  // This path writes through insertPlanItem rather than savePlanDay, so it bypasses
-  // the resolve/assert pair every other writer goes through. A rest day carries zero
-  // items; an append that lands one on it would leave the plan in exactly the state
-  // the invariant exists to forbid. Same refusal, same words.
-  assertPlanDayTypeCoherent(Number(dayNumber), normalizePlanDayType(day.day_type) ?? "training", 1);
   const dayItems = db
     .prepare(
       `SELECT e.name AS ex_name
@@ -1957,14 +1918,18 @@ export function addExerciseToPlanDay(
 }
 
 // ---------- plan editing (manual + restructure) ----------
-// ---------- the week's REST day, as a first-class template value (v99) ----------
-// A rest day used to exist only by NOT being in the template, which meant a
-// seven-day week had nowhere to put one: every plan_days row was a day with work
-// in it, and the day selector surfaced a training day on every calendar date. A
-// `day_type` of 'rest' names the seam instead, and the emptiness IS the
-// prescription — a rest day carries zero items, and anything trying to write one
-// with items is rejected rather than quietly stored as a half-day.
+// ---------- plan days hold STRENGTH work only (migration 110) ----------
+// A plan day used to carry runs (kind='cardio' items) and the week used to carry a
+// first-class REST row (day_type='rest', v99). Both moved out: every run comes from the
+// stated run days and the run engine (weeklyRunPlan / flexibleTrainingAgenda), and a
+// rest day is a CALENDAR fact — a weekday the athlete neither lifts nor runs
+// (plan-selection's calendarDayRead). The `day_type` column stays so historical reads
+// keep their shape, and every day written from here on is 'training'.
 export type PlanDayType = "training" | "rest";
+
+// The words a refused rest day comes back with. The editor renders this verbatim.
+export const REST_DAY_NOT_A_PLAN_DAY =
+  "Rest days aren't plan days any more — a rest day is any weekday you neither lift nor run. Set your lifting and run days instead.";
 
 /** 'training' | 'rest' from any caller-supplied value; null when it is neither. */
 export function normalizePlanDayType(value: unknown): PlanDayType | null {
@@ -1976,62 +1941,57 @@ export function normalizePlanDayType(value: unknown): PlanDayType | null {
   return null;
 }
 
-// What a write MEANS when it does not declare a day_type, resolved in ONE place so
-// the checked wrapper validates exactly the day the writer will persist:
-//   • declared                      → that value (an unknown value is an error).
-//   • new day                       → 'training'. A day being created with no word
-//                                     about it is the ordinary day.
-//   • existing day, items incoming  → 'training'. Items and rest are incompatible,
-//                                     and a caller sending work plainly means work;
-//                                     failing them on a field they never heard of
-//                                     would be the wrong answer.
-//   • existing day, no items        → UNCHANGED. Clearing a training day's items
-//                                     leaves it a training day; re-saving a rest
-//                                     day's name leaves it a rest day.
-export function resolvePlanDayType(day_number: number, declared: unknown, itemCount: number): PlanDayType {
-  if (declared != null && String(declared).trim() !== "") {
-    const normalized = normalizePlanDayType(declared);
-    if (!normalized) throw new Error(`Unknown plan day type "${String(declared)}" — a plan day is 'training' or 'rest'.`);
-    return normalized;
-  }
-  if (itemCount > 0) return "training";
-  const existing = db.prepare(`SELECT day_type FROM plan_days WHERE day_number = ?`).get(day_number) as any;
-  if (!existing) return "training";
-  return normalizePlanDayType(existing.day_type) ?? "training";
-}
-
-// A restructure DECLARES the whole week, so an omitted day_type is 'training' rather
-// than "leave it as it was": the alternative would let a week that never mentions rest
-// inherit yesterday's seam into a day now full of work. Every snapshot this repo takes
-// of a plan therefore has to carry day_type through (trainingPlanSnapshot does), or an
-// Undo would quietly erase the rest day it is meant to restore.
-//
-// The one exception is a day the restructure left EMPTY without saying what it is: a
-// week that hands over `{ name: "Easy", items: [] }` and no day_type has described a
-// rest day in everything but the word. Storing it as training produced a startable
-// "session" with nothing in it — a Start button into an empty room. Emptiness is the
-// rest day's prescription (see plan_days in db.ts), so an undeclared empty day IS one.
-// A day that explicitly says `training` with no items is left alone: the editor's
-// "Add day" scaffold means it, and the surfaces no longer offer to start it anyway.
-function planDayTypeForRestructure(declared: unknown, itemCount?: number): PlanDayType {
+// What a write's declared day_type means now: omitted or 'training' is a training day;
+// 'rest' is refused (see REST_DAY_NOT_A_PLAN_DAY); anything else is an error.
+export function resolvePlanDayType(declared: unknown): "training" {
+  if (declared == null || String(declared).trim() === "") return "training";
   const normalized = normalizePlanDayType(declared);
-  if (normalized) return normalized;
-  if (declared != null && String(declared).trim() !== "")
-    throw new Error(`Unknown plan day type "${String(declared)}" — a plan day is 'training' or 'rest'.`);
-  return itemCount === 0 ? "rest" : "training";
+  if (normalized === "rest") throw new Error(REST_DAY_NOT_A_PLAN_DAY);
+  if (!normalized) throw new Error(`Unknown plan day type "${String(declared)}" — a plan day is a training day.`);
+  return "training";
 }
 
-/** The one place the zero-items invariant is stated. Throws with the athlete's own words. */
-export function assertPlanDayTypeCoherent(day_number: number, day_type: PlanDayType, itemCount: number): void {
-  if (day_type === "rest" && itemCount > 0) {
-    throw new Error(
-      `Day ${day_number} is a rest day, so it carries no exercises. Clear its items, or mark the day as training first.`
-    );
+/** Drop run items: a plan day carries loaded (or timed) strength work only. */
+export function strengthItemsOnly<T extends { kind?: unknown }>(items: readonly T[] | null | undefined): T[] {
+  return (Array.isArray(items) ? items : []).filter(
+    (item) => !!item && String((item as any).kind ?? "strength").toLowerCase() !== "cardio"
+  );
+}
+
+/**
+ * A restructure's week, as strength days only: run items stripped, and a day left with
+ * nothing to lift — a rest day, a run day, an undeclared empty day — dropped rather
+ * than written. The restructure DECLARES the whole week, and a day without lifting in it
+ * is a calendar day, not a plan row. Day numbers are kept as given (nothing needs them
+ * contiguous). Throws when no strength day is left: a week of nothing is not a plan.
+ */
+export function strengthDaysOnly<
+  T extends { day_number?: number | null; day_type?: string | null; items?: PlanItemInput[] | null },
+>(
+  days: readonly T[],
+  opts: { keepScaffolds?: boolean } = {}
+): Array<Omit<T, "day_number" | "items" | "day_type"> & { day_number: number; items: PlanItemInput[] }> {
+  const out: Array<Omit<T, "day_number" | "items" | "day_type"> & { day_number: number; items: PlanItemInput[] }> = [];
+  (Array.isArray(days) ? days : []).forEach((day, index) => {
+    const raw = Array.isArray(day?.items) ? day.items : [];
+    const items = strengthItemsOnly<PlanItemInput>(raw).filter((item) => String(item?.exercise ?? "").trim());
+    // A day that carried only runs, or a rest row, is the calendar's — dropped. A day
+    // that carried NOTHING is kept only when the athlete's own editor save asks
+    // (`keepScaffolds`): a day they just added and have not filled yet. An agent
+    // restructure's or a rollback's empty day is never written.
+    const scaffold = !!opts.keepScaffolds && !raw.length && day?.day_type !== "rest";
+    if (!items.length && !scaffold) return;
+    const { day_type: _dayType, ...rest } = day as any;
+    out.push({ ...rest, day_number: Number(day?.day_number ?? index + 1), items });
+  });
+  if (!out.some((day) => day.items.length)) {
+    throw new Error("A plan needs at least one day with lifting in it — runs and rest days live on your calendar.");
   }
+  return out;
 }
 
 export interface PlanItemInput {
-  exercise?: string; // optional for a cardio item (its label can live in `note`)
+  exercise?: string;
   sets?: number;
   rep_low?: number | null;
   rep_high?: number | null;
@@ -2041,14 +2001,10 @@ export interface PlanItemInput {
   target_seconds?: number | null;
   superset_group?: number | null; // pair items on a day into a superset (v56); NULL = standalone
   mode?: string | null; // applied when the exercise is created (reps | timed)
-  // First-class planned cardio (v35). kind:'cardio' carries an endurance
-  // prescription with NO loaded exercise; kind:'strength' (default) is unchanged.
-  kind?: string | null; // strength | cardio
-  target_distance_km?: number | null;
-  target_duration_min?: number | null;
-  target_zone?: string | null;
-  interval?: any; // structured interval JSON (any shape)
-  interval_json?: string | null; // raw JSON string accepted too
+  // Accepted on input so a legacy caller's payload still parses, and STRIPPED: a
+  // kind:'cardio' item is never written (strengthItemsOnly). Runs belong to the run
+  // engine and the stated run days, not to a plan day.
+  kind?: string | null;
 }
 
 const numOrNull = (v: any): number | null => {
@@ -2056,30 +2012,11 @@ const numOrNull = (v: any): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
-function intervalJson(it: PlanItemInput): string | null {
-  if (it.interval_json != null) {
-    const s = String(it.interval_json).trim();
-    if (!s) return null;
-    try {
-      JSON.parse(s);
-      return s.slice(0, 4000);
-    } catch {
-      return null;
-    }
-  }
-  if (it.interval != null) {
-    try {
-      return JSON.stringify(it.interval).slice(0, 4000);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
 // Upsert one day and replace its full exercise list. Unknown exercises are created.
-// A cardio item (kind:'cardio') is written with a NULL exercise_id and its endurance
-// prescription columns — strength items keep their exercise-id behavior unchanged.
+// STRENGTH ONLY: a kind:'cardio' item is stripped (strengthItemsOnly), and a day is
+// always written as a training day — a declared rest day is refused (resolvePlanDayType).
+// An empty day is allowed here, and only here: it is the editor's scaffold while the
+// athlete fills it in, and it is never startable and never takes a lifting weekday.
 export function savePlanDay(
   day_number: number,
   name: string,
@@ -2088,15 +2025,12 @@ export function savePlanDay(
   opts: {
     deferTrainingVersionBump?: boolean;
     deferDayReadInvalidation?: boolean;
-    // 'training' | 'rest'. Omitted means "whatever this day already is" (see
-    // resolvePlanDayType) so a caller that has never heard of the field cannot
-    // silently flip a rest day back into a training one.
+    // Accepted for old callers; only an omitted value or 'training' is valid.
     day_type?: string | null;
   } = {}
 ) {
-  const list = items || [];
-  const dayType = resolvePlanDayType(day_number, opts.day_type, list.length);
-  assertPlanDayTypeCoherent(day_number, dayType, list.length);
+  const dayType = resolvePlanDayType(opts.day_type);
+  const list = strengthItemsOnly(items);
   const existing = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(day_number) as any;
   let dayId: number;
   if (existing) {
@@ -2116,27 +2050,6 @@ export function savePlanDay(
     );
   }
   list.forEach((it, i) => {
-    const isCardio = String(it.kind ?? "").toLowerCase() === "cardio";
-    if (isCardio) {
-      // A cardio item needs no exercise; its label rides in `note` (or `exercise`,
-      // folded into the note so the column stays NULL). Endurance prescription only.
-      const label = String(it.exercise ?? "").trim();
-      const note = it.note != null && String(it.note).trim() ? String(it.note).trim() : label || null;
-      insertPlanItem({
-        plan_day_id: dayId,
-        position: i,
-        exercise_id: null,
-        sets: it.sets ?? 1,
-        note: note ? note.slice(0, 500) : null,
-        kind: "cardio",
-        target_distance_km: numOrNull(it.target_distance_km),
-        target_duration_min: numOrNull(it.target_duration_min),
-        target_zone:
-          it.target_zone != null && String(it.target_zone).trim() ? String(it.target_zone).trim().slice(0, 40) : null,
-        interval_json: intervalJson(it),
-      });
-      return;
-    }
     if (!it.exercise || !String(it.exercise).trim()) return;
     const ex = findOrCreateExercise(String(it.exercise), undefined, undefined, it.mode ?? undefined);
     insertPlanItem({
@@ -2158,7 +2071,7 @@ export function savePlanDay(
   // the cached Brief so an applied edit isn't read against the old day from any surface.
   if (!opts.deferDayReadInvalidation) invalidateDayRead();
   // plan_days count feeds getWeeklyStats.week_planned; bump covers a same-count in-place
-  // day rewrite too (setWeeklyRuns + replacePlan reach here, so they're covered as well).
+  // day rewrite too (replacePlan reaches here, so it is covered as well).
   if (!opts.deferTrainingVersionBump) afterSqliteCommit(bumpTrainingDataVersion);
   afterSqliteCommit(() =>
     emitBrainEvent({
@@ -2172,8 +2085,10 @@ export function savePlanDay(
   return getPlanDay(day_number);
 }
 
-// A single run prescription the coach can hand back for THIS week, applyable without
-// a full plan restructure (the heavy `days` path). Each maps onto a plan day.
+// A single run prescription as the RUN ENGINE shapes it (weeklyRunPlan's `runs[]`).
+// `day_number` is the Monday-anchored weekday slot of the week it belongs to (1 = Mon …
+// 7 = Sun), never a plan day: runs are computed live from the stated run days and are
+// not stored on the plan (migration 110 retired the old setWeeklyRuns writer).
 export interface RunPrescription {
   day_number: number;
   label?: string | null; // e.g. "Easy run", "Long run", "Tempo"
@@ -2181,63 +2096,9 @@ export interface RunPrescription {
   target_duration_min?: number | null;
   target_zone?: string | null; // Z2 | easy | tempo | threshold | intervals | long
   note?: string | null;
-  day_name?: string | null; // used only when CREATING a new day for this run
+  day_name?: string | null;
   focus?: string | null;
-  interval?: any; // structured interval reps (e.g. [{reps,on,off,zone}]) — persisted as interval_json
-}
-
-// Apply a week of run prescriptions onto the plan WITHOUT touching strength work: for
-// each day, keep its strength items and replace its cardio items with the given runs.
-// A day_number with no plan day yet is created as a dedicated run day. This is the
-// surgical counterpart to a full `replacePlan` restructure — used by the apply path so
-// a runner/hybrid athlete can accept "this week's runs" while lifting stays intact.
-export function setWeeklyRuns(
-  runs: RunPrescription[],
-  opts: { deferTrainingVersionBump?: boolean; deferDayReadInvalidation?: boolean } = {}
-) {
-  const byDay = new Map<number, RunPrescription[]>();
-  for (const r of runs || []) {
-    const dn = Math.trunc(Number(r?.day_number));
-    if (!Number.isFinite(dn) || dn < 1) continue;
-    if (!byDay.has(dn)) byDay.set(dn, []);
-    byDay.get(dn)?.push(r);
-  }
-  const applied: { day_number: number; runs: number; created: boolean }[] = [];
-  for (const [dn, dayRuns] of byDay) {
-    const existing = getPlanDay(dn);
-    const strength: PlanItemInput[] = existing
-      ? existing.items
-          .filter((it: any) => it.kind !== "cardio")
-          .map((it: any) => ({
-            exercise: it.exercise,
-            sets: it.sets,
-            rep_low: it.rep_low,
-            rep_high: it.rep_high,
-            target_weight: it.target_weight,
-            note: it.note,
-            warmup_sets: it.warmup_sets,
-            target_seconds: it.target_seconds,
-            mode: it.mode,
-            superset_group: it.superset_group,
-          }))
-      : [];
-    const cardio: PlanItemInput[] = dayRuns.map((r) => ({
-      kind: "cardio",
-      exercise: (r.label ?? "Run") || "Run",
-      target_distance_km: numOrNull(r.target_distance_km),
-      target_duration_min: numOrNull(r.target_duration_min),
-      target_zone: r.target_zone ?? null,
-      note: r.note ?? null,
-      // Persist interval STRUCTURE for an interval/quality session (the column
-      // already exists; intervalJson() coerces it to a bounded JSON string).
-      interval_json: r.interval != null ? JSON.stringify(r.interval) : null,
-    }));
-    const name = existing?.name ?? (dayRuns[0]?.day_name || "Run");
-    const focus = existing?.focus ?? (dayRuns[0]?.focus || "Endurance");
-    savePlanDay(dn, name, focus, [...strength, ...cardio], opts);
-    applied.push({ day_number: dn, runs: cardio.length, created: !existing });
-  }
-  return { applied };
+  interval?: any; // structured interval reps (e.g. [{reps,on,off,zone}])
 }
 
 export function deletePlanDay(
@@ -2271,11 +2132,15 @@ export function replacePlan(
     focus?: string | null;
     day_type?: string | null;
     items?: PlanItemInput[];
-  }[]
+  }[],
+  opts: { keepScaffolds?: boolean } = {}
 ) {
   if (!Array.isArray(days) || !days.length) throw new Error("replacePlan needs a non-empty days array");
+  // Strength days only: run items are stripped and a day left with nothing to lift (a
+  // rest day, a run day, an empty scaffold) is not written — see strengthDaysOnly.
+  const strengthDays = strengthDaysOnly(days, { keepScaffolds: opts.keepScaffolds });
   const result = withSqliteSavepoint("replace_plan", () => {
-    const normalized = days.map((d, i) => ({ ...d, day_number: Number(d.day_number ?? i + 1) }));
+    const normalized = strengthDays;
     const keep = new Set(normalized.map((d) => d.day_number));
     const existing = db.prepare(`SELECT day_number FROM plan_days`).all() as any[];
     for (const e of existing) {
@@ -2284,10 +2149,9 @@ export function replacePlan(
       }
     }
     normalized.forEach((d, i) =>
-      savePlanDay(d.day_number, d.name || `Day ${i + 1}`, d.focus ?? null, d.items || [], {
+      savePlanDay(d.day_number, d.name || `Day ${i + 1}`, d.focus ?? null, d.items, {
         deferTrainingVersionBump: true,
         deferDayReadInvalidation: true,
-        day_type: planDayTypeForRestructure(d.day_type, (d.items || []).length),
       })
     );
     return getPlan();

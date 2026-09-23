@@ -690,14 +690,21 @@ test("teamWeekRead adds an endurance line only when there was aerobic activity t
 });
 
 test("teamWeekRead frames the endurance line as plan compliance when a run plan exists", () => {
-  // A plan prescribing a run + some logged mileage → the line reads as compliance.
-  repo.savePlanDay(1, "Run day", "Easy run", [
-    { exercise: "Easy run", kind: "cardio", target_distance_km: 10, target_duration_min: 55 },
-  ]);
+  // Runs are not plan items (migration 110): the week's prescription is the live run
+  // engine's, laid on a runner's stated run days. A runner + some logged mileage → the
+  // line reads as compliance against that live week.
+  repo.setProfile({
+    endurance_sport: "run",
+    endurance_schedule: { days: [{ dow: 2, kind: "easy" }, { dow: 4, kind: "quality" }, { dow: 6, kind: "long" }] },
+  });
   repo.addActivity({ type: "run", distance_km: 6, duration_min: 34, date: ASOF });
+  const comp = repo.vouchedRunCompliance(ASOF);
+  assert.equal(comp.basis, "live_plan", "the prescription is the live engine's week");
+  assert.ok(comp.prescribed_sessions > 0);
   const read = repo.teamWeekRead({ asOf: ASOF });
   assert.ok(read.endurance);
   assert.match(read.endurance.text, /of .* km this week/i, "compliance framing (actual of prescribed)");
+  assert.equal(read.endurance.text, `${comp.in_words.charAt(0).toUpperCase()}${comp.in_words.slice(1)}.`);
 });
 
 test('"What we did" excludes observed facts — a block that opened on its own is not team work', () => {

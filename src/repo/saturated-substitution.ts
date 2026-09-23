@@ -191,11 +191,28 @@ function enduranceConflictFired(envelope: DailyDecisionEnvelope): boolean {
  * question in Cairn — it does not ask what loaded the muscle, so neither does
  * this law. Ruling, not an oversight.
  */
-function substitutionGroups(envelope: DailyDecisionEnvelope): Set<MuscleGroup> {
-  const groups = new Set<MuscleGroup>(groupList(envelope.muscles?.saturated));
+function substitutionGroups(
+  envelope: DailyDecisionEnvelope,
+  gates: Map<MuscleGroup, AcuteGateReading>
+): Set<MuscleGroup> {
+  // A group the gate reads saturated but NOT deep, from work on an EARLIER day, is only
+  // just over its own bar: its slot stays on the card and holds load (the envelope's
+  // `muscle_saturated` hold) rather than moving to another area. Moving it emptied a
+  // lower day of every lower lift on the ordinary hybrid morning after a weekend of
+  // running. Work done TODAY still moves whatever its depth — the run-morning law.
+  // The week's last lower day, still without a full leg session, holds its leg slots
+  // even over a DEEP earlier-day residual (`muscles.week_held`, the weekly lower
+  // guarantee): moving them would leave the week with no leg session at all.
+  const weekHeld = new Set<MuscleGroup>(groupList(envelope.muscles?.week_held));
+  const holdsInPlace = (group: MuscleGroup) => {
+    const gate = gates.get(group);
+    if (gate?.saturated !== true || (gate.days_ago ?? 0) < 1) return false;
+    return !gate.deep || weekHeld.has(group);
+  };
+  const groups = new Set<MuscleGroup>(groupList(envelope.muscles?.saturated).filter((g) => !holdsInPlace(g)));
   if (enduranceConflictFired(envelope)) {
     for (const group of groupList(envelope.muscles?.reduced)) {
-      if ((RUN_PRIME_GROUPS as readonly string[]).includes(group)) groups.add(group);
+      if ((RUN_PRIME_GROUPS as readonly string[]).includes(group) && !holdsInPlace(group)) groups.add(group);
     }
   }
   return groups;
@@ -234,7 +251,16 @@ export function substituteSaturatedPlanItems(
 
   const allowed = groupList(envelope.muscles?.allowed);
   if (!allowed.length) return { raw, ...NONE };
-  const saturated = substitutionGroups(envelope);
+  // "Allowed" is not "fresh": a group in the gate's LOADED band is still carrying
+  // work — the same correction the day picker makes. Such a stand-in is a last
+  // resort, which is what keeps a bench press off the Pull card the morning after Push.
+  let gates: Map<MuscleGroup, AcuteGateReading>;
+  try {
+    gates = acuteGates(envelope.date);
+  } catch {
+    gates = new Map();
+  }
+  const saturated = substitutionGroups(envelope, gates);
   if (!saturated.size) return { raw, ...NONE };
   // An allowed group is never also a group we are moving work away from. The
   // envelope already guarantees this (`allowed` subtracts `reduced`, which
@@ -347,15 +373,6 @@ export function substituteSaturatedPlanItems(
       a.exercise.localeCompare(b.exercise)
   );
 
-  // "Allowed" is not "fresh": a group in the gate's LOADED band is still carrying
-  // work — the same correction the day picker makes. Such a stand-in is a last
-  // resort, which is what keeps a bench press off the Pull card the morning after Push.
-  let gates: Map<MuscleGroup, AcuteGateReading>;
-  try {
-    gates = acuteGates(envelope.date);
-  } catch {
-    gates = new Map();
-  }
   const stillCarrying = (group: MuscleGroup): boolean => (gates.get(group)?.band ?? "fresh") !== "fresh";
 
   const usedGroups = new Set<MuscleGroup>();

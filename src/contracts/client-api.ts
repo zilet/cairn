@@ -2144,6 +2144,21 @@ export interface ClientTodayPlanDaySelection {
   candidates?: ClientPlanDayRecoveryCandidate[];
 }
 
+/**
+ * GET /api/today-plan-day on a weekday the athlete does not lift: plan days hold strength
+ * only, so there is no plan-day row. `calendar` says which kind of day it is — a stated
+ * run day (`run_kind` from the endurance schedule) or a rest day (neither lift nor run).
+ */
+export interface ClientTodayCalendarDay {
+  day_number: null;
+  focus: null;
+  source: "calendar";
+  calendar: "run" | "rest";
+  run_kind: "easy" | "quality" | "long" | "any" | null;
+  reason: null;
+  candidates?: ClientPlanDayRecoveryCandidate[];
+}
+
 export interface ClientWeightRow {
   id: number;
   date?: ISODateString;
@@ -3448,7 +3463,7 @@ export interface ClientApiResponses {
   "/api/week-wins": ClientWeekWinsResponse;
   "/api/today": ClientTodayAggregate;
   "/api/today-side": ClientTodaySideRead;
-  "/api/today-plan-day": ClientTodayPlanDaySelection | null;
+  "/api/today-plan-day": ClientTodayPlanDaySelection | ClientTodayCalendarDay | null;
   "/api/today-strength-line": ClientTodayStrengthLine;
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };

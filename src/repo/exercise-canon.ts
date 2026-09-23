@@ -708,6 +708,108 @@ export function exerciseIdentityKey(name: string): string {
   return resolveExerciseName(name).key;
 }
 
+// ---- the bodyweight LADDER: one progression across assist / bodyweight / load ----
+// On a bodyweight pattern the load is a SIGN (negative = assist, null = bodyweight,
+// positive = added load), so "Assisted Pull-Up", "Band-Assisted Pull-Up",
+// "Neutral-Grip Pull-Up" and "Weighted Pull-Up" are rungs of ONE ladder, not four
+// lifts. The name is never the sign — only the history is. The catalog still keeps
+// them as separate rows (the resolver above is deliberately strict, and a merge is
+// the athlete's call); this key only lets PROGRESSION read the ladder as one series.
+//
+// Deliberately tight: after the assist/load/grip qualifiers come off, what remains
+// must be EXACTLY one bare bodyweight pattern. "Incline Push-Up" or "Ring Dip" keep
+// their own history; a chin-up (supinated) is its own ladder, never a pull-up's.
+const LADDER_QUALIFIERS = new Set([
+  "assisted", "assist", "weighted", "band", "banded", "machine", "bodyweight", "bw",
+  "neutral", "wide", "close", "narrow", "grip",
+]);
+// ("ups" is too short for foldPluralToken, so the spaced plurals are listed.)
+const LADDER_PATTERNS: Record<string, string> = {
+  "pull up": "pull up",
+  "pull ups": "pull up",
+  pullup: "pull up",
+  "chin up": "chin up",
+  "chin ups": "chin up",
+  chinup: "chin up",
+  "push up": "push up",
+  "push ups": "push up",
+  pushup: "push up",
+  dip: "dip",
+};
+export function bodyweightLadderKey(name: string): string | null {
+  const tokens = normalizeExerciseName(name)
+    .split(" ")
+    .filter(Boolean)
+    .map(foldPluralToken)
+    .filter((t) => !LADDER_QUALIFIERS.has(t));
+  return LADDER_PATTERNS[tokens.join(" ")] ?? null;
+}
+
+// The stored rows whose logged history is THIS lift's progression series: its own
+// resolved row, plus — on a bodyweight ladder only — the rows it REPLACED. A
+// predecessor is a same-ladder row whose last logged set predates this row's first
+// one (a swap that minted a new row: "Assisted Pull-Up" rotated out, "Neutral-Grip
+// Pull-Up" rotated in). Variants trained side by side overlap in time and keep their
+// own series. A row with nothing logged yet inherits every same-ladder row with
+// history. Own row first; empty when the name resolves to nothing.
+// A light change key over exactly what the lineage read touches — logged sets,
+// sessions and exercise rows (a name checksum, since a rename edits in place) — so the
+// per-row history aggregate is read once per data change, not once per call. Every
+// prescription, working-weight and progress read of a ladder lift lands here.
+export function trainingRowsSignature(): string {
+  try {
+    const r = db
+      .prepare(
+        `SELECT (SELECT COUNT(*) || ':' || COALESCE(MAX(id),0) FROM logged_sets) AS ls,
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(id),0) FROM sessions) AS s,
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(id),0) || ':' || COALESCE(SUM(LENGTH(name) * id),0) FROM exercises) AS e`
+      )
+      .get() as { ls?: string; s?: string; e?: string } | undefined;
+    return `${r?.ls}|${r?.s}|${r?.e}`;
+  } catch {
+    return `nocache:${Math.random()}`;
+  }
+}
+
+type LineageRow = { id: number; name: string; first_date: string | null; last_date: string | null };
+let lineageRowsMemo: { key: string; rows: LineageRow[] } | null = null;
+
+function lineageRows(): LineageRow[] {
+  const key = trainingRowsSignature();
+  if (lineageRowsMemo?.key === key) return lineageRowsMemo.rows;
+  const rows = db
+    .prepare(
+      `SELECT e.id AS id, e.name AS name, MIN(s.date) AS first_date, MAX(s.date) AS last_date
+         FROM exercises e
+         LEFT JOIN logged_sets ls ON ls.exercise_id = e.id
+         LEFT JOIN sessions s ON s.id = ls.session_id
+        GROUP BY e.id`
+    )
+    .all() as LineageRow[];
+  lineageRowsMemo = { key, rows };
+  return rows;
+}
+
+export function progressionLineageIds(name: string): number[] {
+  const own = resolveExerciseName(name);
+  if (own.exercise_id == null) return [];
+  const ownId = own.exercise_id;
+  const ladder = bodyweightLadderKey(own.canonical);
+  if (!ladder) return [ownId];
+  try {
+    const rows = lineageRows();
+    const ownFirst = rows.find((r) => Number(r.id) === ownId)?.first_date ?? null;
+    const predecessors = rows
+      .filter((r) => Number(r.id) !== ownId && r.last_date != null)
+      .filter((r) => bodyweightLadderKey(String(r.name)) === ladder)
+      .filter((r) => ownFirst == null || String(r.last_date) < String(ownFirst))
+      .map((r) => Number(r.id));
+    return [ownId, ...predecessors];
+  } catch {
+    return [ownId];
+  }
+}
+
 // The LAST-RESORT WRITE key. On top of the abbreviation expansion it drops the
 // three STATION words that say where a movement is loaded rather than what it is —
 // "cable", "machine", "bar". A rope hammer curl IS a cable movement, so "Cable Rope

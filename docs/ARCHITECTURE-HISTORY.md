@@ -4,6 +4,41 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-23 — Elite coaching round: the brain challenges on evidence, and runs leave the strength plan
+
+Migration **v110** (`plan-days-strength-only`: pure data repair — deletes cardio `plan_items` and plan
+days that carry no strength work, after nulling `sessions.plan_day_id` /
+`daily_session_compositions.plan_day_id` that point at them; every remaining day is `training`).
+
+Triggered by a live morning where Today served a repeat of Monday's Push over the scheduled Lower A.
+Grounded in a live-data diagnosis (the envelope was capped at hold on 33 of 35 days and reach never
+fired); built as parallel packages in three waves, reviewed independently, integrated once:
+- **Plan day:** week coverage (a day already trained this week never stands in for an untrained one);
+  `AcuteGateReading.deep` — shallow saturation holds load in place, only a deep residual swaps a day
+  or moves a slot; a weekly full-load lower exposure is guaranteed unless a safety floor fires.
+- **Envelope:** the athlete's own stated week, clean for three days, stops a stack of days from holding
+  intensity; reach opens under push drive (mobility prep never hosts it); a morning run leaves the
+  lifting day due (bounded under a deciding brake, never on a rest-grade or lab-draw morning); an
+  earned lift keeps its step and a logged-load floor only on the progression's own verdict.
+- **Brief:** trains-anyway calibration is a recency-weighted weight, harm is judged against the
+  athlete's own nights and charged once per episode; the agent may read a train baseline quieter only
+  by naming a fresh deciding brake; a dipping HRV/RHR trend whose last night is back at the norm is
+  context, not a brake.
+- **Progression:** bodyweight-ladder lineage (a swapped pull-up row keeps its history), assist retires
+  to bodyweight, a handicapped dose that cleared full load counts toward the step, a lift out of the
+  rotation >28 days re-baselines.
+- **Wearables:** HRV/RHR directives and the Health surface read the 7-day mean against the own band,
+  re-derive on sync, and reach prompts as context.
+- **Truthful reads:** strain/performance is like-for-like and proportionate (one slipping lift is not
+  "worse"); a hand-logged shadow of a synced effort counts once everywhere; the Garmin snake-case
+  training labels read as hard efforts.
+- **Run engine:** the weekly runs deliver the race ladder (easy runs scale, ACWR headroom), a reset is
+  recovery not lost ground, the half tapers properly and race day is the race.
+- **Runs leave the strength plan:** plan days hold strength only; rest and run days come from the
+  calendar (`calendarDayRead`); runs come only from the stated run days + the run engine / agenda and
+  live in Plan → Endurance; the Today card shows one run line outside the lift card; run writers
+  (run-plan apply, chat `set_run`) are retired.
+
 ## 2026-09-22 — Hybrid-athlete elite round: the coach reads the athlete's own normal
 
 Migrations **v107** (`profile-movement-considerations`: `profile.movement_considerations_json`),

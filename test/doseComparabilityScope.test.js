@@ -382,8 +382,22 @@ test("full-load work drops recovery_dose and travel, and never illness or a rele
 
 function finishDay(items, date = DATE) {
   repo.savePlanDay(1, "Mixed", "Mixed", items);
-  const prepared = repo.prepareDailySession({ date, source: "manual_plan", day_number: 1 });
-  return prepared;
+  if (!items.some((item) => item.kind === "cardio")) {
+    return repo.prepareDailySession({ date, source: "manual_plan", day_number: 1 });
+  }
+  // Plan days hold strength only (a cardio row is stripped on save), so a card that
+  // carries a prescribed run is an accepted composition over the strength plan day.
+  const job = repo.createAgentJob({ kind: "session_compose", input: { date } });
+  repo.finishAgentJob(job.id, {
+    chosen_agent: "stub",
+    result: {
+      ok: true,
+      session: { name: "Mixed", focus: "Mixed", why: "Planned work.", est_minutes: 60, items },
+      agent: "stub",
+      tried: [{ agent: "stub" }],
+    },
+  });
+  return repo.prepareDailySession({ date, source: "agent_suggest", agent_job_id: job.id });
 }
 
 test("one lift's shortfall does not hold the lift that completed its own dose", () => {
@@ -600,6 +614,10 @@ test("a completed light shakeout raises no endurance reason at all", () => {
     { exercise: "Back Squat", sets: 2, rep_low: 5, rep_high: 5, target_weight: 225 },
     { exercise: "Overhead Press", sets: 2, rep_low: 5, rep_high: 5, target_weight: 95 },
   ]);
+  assert.ok(
+    prepared.daily_session.items.some((item) => item.kind === "cardio"),
+    "the accepted card carries the prescribed shakeout"
+  );
   repo.addActivity({ date: DATE, type: "run", duration_min: 22, distance_km: 3 });
   for (let s = 1; s <= 2; s++) {
     repo.logSetByName({ date: DATE, exercise: "Back Squat", weight: 225, reps: 5, day_number: null });
@@ -742,8 +760,12 @@ test("a plan-behind re-ground does not launder an endurance-overlap dose into co
 
   const p = nextPrescription("Back Squat");
   assert.equal(p.reground, true, "the rewritten plan sits under the logged 50");
-  assert.equal(p.dose_eligibility.eligible, false, "endurance overlap is not laundered into full comparable");
-  assert.equal(p.dose_eligibility.reason, "non_comparable");
+  // The re-ground carve-out still launders nothing: the dose never reads as
+  // `full_comparable`. It counts toward the step for a different, narrower reason —
+  // it cleared its own full-load reference (50) with the run already in the legs,
+  // which is a lower bound on capacity (see fullLoadThroughConfound in progression.ts).
+  assert.notEqual(p.dose_eligibility.reason, "full_comparable", "endurance overlap is not laundered into full comparable");
+  assert.equal(p.dose_eligibility.reason, "full_load_through_confound");
 });
 
 test("an old row whose own dose came in short is still held", () => {

@@ -9,17 +9,22 @@ import {
   inferExerciseEquipment,
   parseEquipmentCapability,
 } from "./equipment-capability.js";
-import { findExercise } from "./exercises.js";
+import { harmEvidenceOnDay, withMorningReadiness } from "./brain/read-adherence.js";
+import { canonicalGroup, classifyMuscleGroup, resolveExerciseName } from "./exercise-canon.js";
+import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { getInjuryImpacts, listContextEvents } from "./health.js";
 import { type AcuteGateReading, RUN_PRIME_GROUPS, acuteGates, recentEnduranceImpacts } from "./hybrid-load.js";
 import { getPlanDay } from "./plan.js";
+import { isStatedRunDay, isoDow } from "./profile.js";
+import { strengthScheduleRead } from "./strength-schedule.js";
 import {
-  nextTrainingCandidateAfter,
-  planDayCandidates,
+  HEAVY_LOWER_GROUPS,
   planDayFocus,
   selectAdaptivePlanDay,
   selectedPlanDayForDate,
+  trainAnywayPlanDay,
+  weeklyLowerExposure,
 } from "./plan-selection.js";
 import { getProgramState } from "./program-state.js";
 import { muscleGroupsForPainArea, painAreaLoadsExercise } from "./pain-relevance.js";
@@ -28,11 +33,17 @@ import { personalResponseModifierFor } from "./reaction-model.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getSettings } from "./settings.js";
+import { readsRestGradeReadiness } from "./readiness-bands.js";
 import { LAST_NIGHT_MAX_AGE_DAYS, isLastNight, isReadDayReadiness } from "./sensor-freshness.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { weekWins } from "./sessions.js";
 import { addDaysISO, localDateISO } from "./shared.js";
-import { hasFreshBrake, type SignalConfidence, type SignalDimensionState } from "./signal-state.js";
+import {
+  hasFreshBrake,
+  hasFreshDecidingBrake,
+  type SignalConfidence,
+  type SignalDimensionState,
+} from "./signal-state.js";
 import {
   getTrainingIntent,
   type EnduranceRole,
@@ -112,7 +123,30 @@ export const DAILY_DECISION_REASONS = [
   // A completed log outranks a soft brake when the athlete chooses to train through
   // a quiet morning: the session gets its own clock back (owner ruling, 2026-09-02).
   "log_backs_open_day",
+  // Consecutive days that ARE the athlete's stated week, with nothing in the last three
+  // days saying the work cost them and no deciding brake: the stack is a caveat, never
+  // an intensity cap of its own.
+  "stated_rhythm_clean",
+  // A morning run on a lifting weekday: the endurance is in, the lifting is still due.
+  "lift_still_due_after_endurance",
+  // No genuinely loaded lower session has landed yet this week, and today is the week's
+  // next lower day: its leg work keeps its sets and its logged load (owner ruling,
+  // 2026-09-23 — "heavy lower once a week").
+  "weekly_lower_exposure",
+  // A stated run weekday that is not a lifting weekday: the run is the day's work and it
+  // lives on the Endurance plan, so the card carries no lifting (plan days hold strength
+  // only). Never a brake — the athlete's own week.
+  "stated_run_day",
 ] as const;
+
+// The run day's headline line on the envelope. Rotates like every repeating
+// athlete-facing sentence — the same weekday lands here every week.
+const STATED_RUN_DAY_RATIONALE: readonly string[] = [
+  "Today is one of your run days — no lifting on it; the run is on your Endurance plan.",
+  "A run day in your week, so there's nothing to lift today.",
+  "Your week puts a run here and no lift.",
+  "Today belongs to your run; the lifting picks back up on your next lift day.",
+];
 
 export type DailyDecisionReason = (typeof DAILY_DECISION_REASONS)[number];
 
@@ -131,11 +165,13 @@ export interface DailyDecisionSnapshot {
     day_number: number | null;
     focus: string | null;
     plan_day_id: number | null;
-    // 'rest' when the week template itself puts a rest day here (v99). Carried on the
-    // snapshot so the envelope can say WHY today is quiet — "your week has a rest day
-    // here" is a different sentence from "your readiness is low", and the composition
-    // has to be able to tell them apart.
-    day_type: "training" | "rest";
+    // 'rest' / 'run' when the CALENDAR puts no lifting here: a weekday the athlete
+    // neither lifts nor runs, or a stated run weekday that is not a lifting weekday
+    // (plan days hold strength only — no plan row stands for either). Carried on the
+    // snapshot so the envelope can say WHY today carries no session — "your week has a
+    // rest day here" is a different sentence from "your readiness is low", and the
+    // composition has to be able to tell them apart.
+    day_type: "training" | "rest" | "run";
     source: string | null;
     reason: string | null;
     due: string[];
@@ -182,8 +218,10 @@ export interface DailyDecisionSnapshot {
   // (hybrid-load.acuteGates) so the decision is a pure function of the snapshot.
   // `saturated` IS the gate — it already accounts for how long ago the work was
   // done and how fast that group forgets, so no consumer re-applies a days_ago
-  // cliff on top of it.
-  muscle_load: Array<{ group: string; days_ago: number; saturated: boolean; source: string }>;
+  // cliff on top of it. `deep` (saturated AND well over its own bar,
+  // AcuteGateReading.deep) is spread omit-when-false: a SHALLOW saturation holds the
+  // area's load in place, only a deep one (or work done today) REDUCES it.
+  muscle_load: Array<{ group: string; days_ago: number; saturated: boolean; source: string; deep?: true }>;
   endurance: Array<{ type: string; days_ago: number; intensity: string; load: string; regions: string[] }>;
   checkin: { soreness: number | null; energy: number | null; sleep_feel: number | null } | null;
   feedback: {
@@ -225,6 +263,11 @@ export interface DailyDecisionSnapshot {
     // on personal_response — stableJson walks Object.keys).
     top_set?: DailyDecisionTopSet;
     evidence?: DailyDecisionProgressionEvidence | null;
+    // The LOG says this lift has outgrown a shallow hold: two of its last three
+    // exposures met the top of the prescribed range with reps in reserve (RIR >= 2, or
+    // every working set at the top with no RIR logged). `working_weight` is the lift's
+    // own logged working weight — the floor composition keeps it at. Omit-when-idle.
+    earned?: { working_weight: number };
   }>;
   plan_items: Array<{
     exercise: string;
@@ -291,6 +334,32 @@ export interface DailyDecisionSnapshot {
     // New bests on a lift in the trailing seven days.
     prs_7d: number;
   };
+  // The athlete's OWN week, read against today. Stamped only when a lifting week
+  // (stated, or observed — strengthScheduleRead) or a stated run week exists AND
+  // today sits on it, so an athlete with no rhythm serializes exactly as before.
+  // `streak_on_rhythm`: every day of the current consecutive streak (last seven at
+  // most) was a stated lift or run day — the stack is the plan, not an accident.
+  // `recent_harm_free`: nothing in the last three days says the work cost them
+  // (harmEvidenceOnDay). Together, with no deciding brake, they are the license that
+  // stops a stack of days from holding intensity by itself.
+  stated_rhythm?: {
+    source: "stated" | "observed" | "run_only";
+    lift_day: boolean;
+    run_day: boolean;
+    streak_on_rhythm: boolean;
+    recent_harm_free: boolean;
+  };
+  // Today is a lifting weekday, endurance is already logged, and the lifting is still
+  // undone (dayRead's `lift_day_open_after`). `rest_grade` marks a morning whose quiet
+  // read stands on its own: a rest-grade MORNING readiness, a rest posture, or a rule
+  // that is the athlete's own word (a claimed or traded day) — see
+  // REST_GRADE_READ_RULES. An illness window is read off `constraints`. Omit-when-idle.
+  lift_day_open?: { after: string; rest_grade?: true };
+  // Today is a lifting weekday whose plan day carries squat/hinge work, and no genuinely
+  // loaded lower session has been logged yet in this Monday-first week
+  // (plan-selection's `weeklyLowerExposure`). `last_chance`: the lifting week lays no
+  // further lower day after today. Omit-when-idle — absent on every other morning.
+  weekly_lower?: { last_chance: boolean };
 }
 
 export interface DailyDecisionSignalSupport {
@@ -307,6 +376,10 @@ export interface DailyDecisionSignalSupport {
   // been hard" from "a health finding is holding today", which is the difference
   // between a brake the athlete's own log may answer and a floor it may not.
   soft_brake_only?: true;
+  // Every fresh brake is an ADVISORY one (hasFreshDecidingBrake is false) — the run-
+  // intensity caution is the live case: a finding about runs that may inform a lift
+  // day but may not decide it. Omit-when-idle, like soft_brake_only.
+  advisory_brake_only?: true;
 }
 
 export interface DailyDecisionTarget {
@@ -369,6 +442,10 @@ export interface DailyDecisionCandidate {
   // or a deload has withdrawn the peak protocol along with the load, and a
   // near-maximal single must never outlive the decision that authorized it.
   top_set?: DailyDecisionTopSet;
+  // The lift's own logged working weight, when its log has earned past a shallow hold
+  // (snapshot progression `earned`). Composition never prescribes it below this on a
+  // day that is not itself eased. Omit-when-idle.
+  earned_floor?: number;
   progression_evidence?: DailyDecisionProgressionEvidence | null;
   brain_decision_id?: number | null;
   brain_change_summary?: string | null;
@@ -396,10 +473,11 @@ export interface DailyDecisionEnvelope {
     plan_day_id: number | null;
     focus: string | null;
     intent: "template" | "custom";
-    // Present only when the week template programmed a REST day here. Optional and
+    // Present only when the CALENDAR puts no lifting here: 'rest' (a weekday the
+    // athlete neither lifts nor runs) or 'run' (a stated run weekday). Optional and
     // omit-when-training so an ordinary envelope_json row serializes byte-identically
     // to the ones already stored, and every historical row reads as a training day.
-    day_type?: "rest";
+    day_type?: "rest" | "run";
   };
   muscles: {
     required: string[];
@@ -409,6 +487,14 @@ export interface DailyDecisionEnvelope {
     // Groups the acute gate (or volume-high) marked saturated. Optional so
     // historical envelope_json remains readable; composition treats missing as [].
     saturated?: string[];
+    // The saturated groups that are DEEP (AcuteGateReading.deep). Optional for the same
+    // reason; composition reads a missing list conservatively (as the old law did).
+    deep?: string[];
+    // Lower groups the weekly lower guarantee holds ON the card at logged load although
+    // a deep residual from an EARLIER day would otherwise reduce or move them — the
+    // week's last lower day, still unfulfilled. Substitution leaves these slots in place
+    // unless the work landed today. Omit-when-empty.
+    week_held?: string[];
   };
   caps: {
     volume: "minimal" | "reduced" | "normal";
@@ -645,46 +731,56 @@ export function gatherDailyDecisionSnapshot(
   // source=existing-session.
   if (selected?.source === "existing-session" && hasUnstartedAdaptiveComposition(d)) {
     const adaptive = safe(() => selectAdaptivePlanDay(d), null);
-    const adaptiveDay = adaptive?.day_number != null ? safe(() => getPlanDay(adaptive.day_number), null) : null;
-    if (adaptive && adaptiveDay) {
+    const adaptiveNumber = adaptive?.day_number ?? null;
+    const adaptiveDay = adaptiveNumber != null ? safe(() => getPlanDay(adaptiveNumber), null) : null;
+    if (adaptive && adaptiveNumber != null && adaptiveDay) {
       selected = {
         date: d,
         plan_day_id: Number(adaptiveDay.id),
-        day_number: adaptive.day_number,
+        day_number: adaptiveNumber,
         focus: adaptive.focus,
-        day_type: adaptive.day_type,
+        day_type: "training",
         selection: adaptive.selection,
         source: "adaptive" as const,
       };
     }
   }
+  // ---- no plan day today: the CALENDAR says why ----
+  // Plan days hold strength only, so a weekday the athlete does not lift resolves to no
+  // plan day at all. The selector names which kind of day it is — a stated run day or a
+  // rest day — and that is carried below so the envelope and the card can say so.
+  const calendarPick = selected ? null : safe(() => selectAdaptivePlanDay(d), null);
+  const calendarDay: "rest" | "run" | null =
+    calendarPick && calendarPick.day_number == null && calendarPick.day_type !== "training"
+      ? calendarPick.day_type
+      : null;
   const selectedDayNumber = selected?.day_number ?? null;
   let basePlanDay = selectedDayNumber != null ? safe(() => getPlanDay(selectedDayNumber), null) : null;
 
-  // ---- train-anyway from the week's programmed REST day ----
-  // The rest day is the one plan day with nothing on it, so composing FROM it produced
-  // a generic 25-minute "Easy movement" card — which is not the athlete's plan, and not
-  // what "train anyway" asked for. The envelope falls through to the next TRAINING day
-  // on the same rotation ring plan-selection walks (so today hands them the session
-  // their own week was about to), skipping any further rest days. The train-anyway load
-  // rules are unchanged and still apply on top: `baseKind` is read from the day-read,
-  // which sees the rest day independently, so the session still lands at held intensity
-  // on a bounded clock. A week that is nothing but rest keeps the old fallback.
+  // ---- train-anyway from a calendar REST or RUN morning ----
+  // There is no plan day to compose FROM, and a generic 25-minute "Easy movement" card
+  // is not the athlete's plan, nor what "train anyway" asked for. The envelope takes
+  // the strength day their own week was about to hand them on its next lifting weekday
+  // (trainAnywayPlanDay). The train-anyway load rules are unchanged and still apply on
+  // top: `baseKind` is read from the day-read, which sees the quiet day independently,
+  // so the session still lands at held intensity on a bounded clock. A plan with no
+  // strength day at all keeps the old fallback.
   const overrideText = prose(opts.override, 200);
   const trainAnywayRequested = opts.train_anyway === true || isTrainIntentOverride(overrideText);
-  let planDayType: "training" | "rest" =
-    selected?.day_type === "rest" || String(basePlanDay?.day_type ?? "") === "rest" ? "rest" : "training";
-  if (planDayType === "rest" && trainAnywayRequested && selected) {
-    const restDayNumber = selected.day_number;
-    const fallthrough = safe(() => nextTrainingCandidateAfter(planDayCandidates(), restDayNumber), null);
+  let planDayType: "training" | "rest" | "run" =
+    calendarDay ?? (selected?.day_type === "rest" || String(basePlanDay?.day_type ?? "") === "rest" ? "rest" : "training");
+  if (planDayType !== "training" && trainAnywayRequested) {
+    const fallthrough = safe(() => trainAnywayPlanDay(d), null);
     const fallthroughDay = fallthrough ? safe(() => getPlanDay(fallthrough.day_number), null) : null;
-    if (fallthrough && fallthroughDay && selected) {
+    if (fallthrough && fallthroughDay) {
       selected = {
-        ...selected,
+        date: d,
         plan_day_id: Number(fallthroughDay.id),
         day_number: fallthrough.day_number,
         focus: planDayFocus(fallthrough),
         day_type: "training",
+        selection: (calendarPick?.selection ?? selected?.selection ?? {}) as Record<string, any>,
+        source: "adaptive",
       };
       basePlanDay = fallthroughDay;
       planDayType = "training";
@@ -700,12 +796,42 @@ export function gatherDailyDecisionSnapshot(
       : null;
   const planDay =
     basePlanDay && activeCycle ? adaptBasePlanDayForRecovery(basePlanDay, activeCycle.overlay) : basePlanDay;
-  const selection = (selected?.selection ?? {}) as Record<string, any>;
+  const selection = (selected?.selection ?? calendarPick?.selection ?? {}) as Record<string, any>;
 
-  const recoverySummary = safe(() => getRecoverySummary(14, undefined, d), null);
+  // Once today has work on it, readiness is the MORNING's (withMorningReadiness) — the
+  // same summary the Brief's own dayRead builds for itself. Handing dayRead the raw
+  // summary here bypassed that law: a run at 07:00 synced a post-run readiness of 1,
+  // and the envelope read it as a rest-grade morning on a day the lifting was still due.
+  const recoverySummary = safe(() => withMorningReadiness(getRecoverySummary(14, undefined, d), d), null);
   const supportSlice = compactSignalSupport(d, recoverySummary);
   const read = safe(() => dayRead(d, recoverySummary), null);
   const signals = (read?.signals ?? {}) as Record<string, any>;
+  // A stated run weekday the week's runs did not land on (a "Saturday or Sunday" long
+  // run placed on Sunday) is the calendar's rest day — the read says which (its
+  // `calendar_day` signal, published whatever rule spoke), so the card agrees with it.
+  if (planDayType === "run" && signals.calendar_day === "rest") planDayType = "rest";
+  const statedRhythm = statedRhythmRead(d, finite(signals?.consecutive_training_days));
+  const liftDayOpen: DailyDecisionSnapshot["lift_day_open"] = (() => {
+    const open = signals?.lift_day_open_after;
+    if (!open || typeof open !== "object") return undefined;
+    const ruleCode = String(read?.decision?.rule_code ?? "");
+    // Rest-grade is a fact about the MORNING, not about which rule won: the outcome
+    // ladder can soften a rest-grade-readiness read to easy (new rule code), and that
+    // softened read must still never be reopened into a full lifting day.
+    const morningReadiness = (() => {
+      const r = (recoverySummary as any)?.recovery ?? recoverySummary ?? {};
+      const date = (recoverySummary as any)?.quality?.training_readiness?.latest_date ?? null;
+      return isReadDayReadiness(date, d) ? r.training_readiness : null;
+    })();
+    const restGrade =
+      supportSlice.posture_rest ||
+      readsRestGradeReadiness(morningReadiness) ||
+      REST_GRADE_READ_RULES.has(ruleCode);
+    return {
+      after: text((open as { activity?: unknown }).activity, 40) ?? "activity",
+      ...(restGrade ? { rest_grade: true as const } : {}),
+    };
+  })();
 
   const injuryImpacts = safe(() => getInjuryImpacts(d), { injuries: [], count: 0 }) as any;
   const contextEvents = safe(() => listContextEvents({ activeOnly: true, on: d }), []) as any[];
@@ -756,6 +882,24 @@ export function gatherDailyDecisionSnapshot(
   const programState = safe(() => getProgramState(d, recoverySummary), null) as any;
   const progression =
     selected?.day_number != null ? (safe(() => planDayProgression(selected.day_number), []) as any[]) : [];
+  const earned = safe(() => earnedLifts(d, Array.isArray(planDay?.items) ? planDay.items : [], progression), new Map());
+  // The week's lower-body question, asked only on a morning whose plan day carries
+  // squat/hinge work — every other morning serializes exactly as before. Strength items
+  // only: a cardio row never makes a day a lower day.
+  const weeklyLower: DailyDecisionSnapshot["weekly_lower"] = (() => {
+    const items = Array.isArray(planDay?.items) ? planDay.items : [];
+    const lowerDay =
+      planDayType === "training" &&
+      items.some((it: any) => {
+        if (String(it?.kind ?? "").toLowerCase() === "cardio") return false;
+        const group = canonicalGroup(it?.muscle_group ?? null) ?? classifyMuscleGroup(String(it?.exercise ?? ""));
+        return group != null && HEAVY_LOWER_GROUPS.has(group);
+      });
+    if (!lowerDay) return undefined;
+    const week = safe(() => weeklyLowerExposure(d), null);
+    if (!week || !week.lift_day || week.fulfilled_on != null) return undefined;
+    return { last_chance: week.later_lower_dates.length === 0 };
+  })();
 
   // One intent read for the whole snapshot — fingerprint-stable role + priorities.
   const resolvedIntent = safe(() => getTrainingIntent(), {
@@ -877,6 +1021,7 @@ export function gatherDailyDecisionSnapshot(
         days_ago: finite(rl?.days_ago) ?? 0,
         saturated: rl?.saturated === true,
         source: text(rl?.source, 20) ?? "strength",
+        ...(rl?.saturated === true && rl?.deep === true ? { deep: true as const } : {}),
       }))
       .filter((rl) => rl.group)
       .sort((a, b) => a.group.localeCompare(b.group)),
@@ -956,6 +1101,9 @@ export function gatherDailyDecisionSnapshot(
                 }
               : null,
         },
+        ...(earned.has(String(p?.exercise ?? "").toLowerCase())
+          ? { earned: earned.get(String(p?.exercise ?? "").toLowerCase()) as { working_weight: number } }
+          : {}),
       }))
       .filter((p) => p.exercise)
       .slice(0, 24),
@@ -1012,7 +1160,132 @@ export function gatherDailyDecisionSnapshot(
     ...(supportSlice.signal_support ? { signal_support: supportSlice.signal_support } : {}),
     ...(supportSlice.recovery_capacity ? { recovery_capacity: supportSlice.recovery_capacity } : {}),
     ...(quietOverrideEvidence ? { quiet_override_evidence: quietOverrideEvidence } : {}),
+    ...(statedRhythm ? { stated_rhythm: statedRhythm } : {}),
+    ...(liftDayOpen ? { lift_day_open: liftDayOpen } : {}),
+    ...(weeklyLower ? { weekly_lower: weeklyLower } : {}),
   };
+}
+
+// The quiet reads that stand on their own even on a lifting weekday whose run is
+// already in: a rest-grade MORNING reading (the summary is morning-patched, so a post-
+// run sync can no longer reach this rule), a corroborated short night, the athlete's
+// own word (a claimed or traded day, a felt run-down check-in), the recovery week's
+// dose, and the week's own rest seam. Every other quiet read on such a morning was
+// about the run itself or the stack of days, and the lifting is still due.
+const REST_GRADE_READ_RULES: ReadonlySet<string> = new Set([
+  "rest_grade_readiness",
+  "acute_sleep_corroborated",
+  "day_claimed_rest",
+  "day_traded_rest",
+  "felt_run_down_rest",
+  "recovery_dose_overrun",
+  "template_rest_day",
+  // A lab draw is a hold on the work itself (CK, AST, creatinine), not a quiet read.
+  "lab_draw_morning",
+]);
+
+// How far back "the work has not cost them" reads. Fresh means the last few days, not
+// the whole streak: a physiology brake a week ago is not news about this morning.
+const RHYTHM_HARM_WINDOW_DAYS = 3;
+const RHYTHM_STREAK_LOOKBACK_DAYS = 7;
+
+function statedRhythmRead(date: string, consecutive: number | null): DailyDecisionSnapshot["stated_rhythm"] | undefined {
+  const lift = safe(() => strengthScheduleRead(date), null);
+  const liftDows = new Set((lift?.days ?? []).map((day) => Number(day.dow)));
+  const runWeek = safe(() => isStatedRunDay(date) != null, false);
+  if (!liftDows.size && !runWeek) return undefined;
+  const runDay = (iso: string) => safe(() => isStatedRunDay(iso) === true, false);
+  const liftDay = (iso: string) => liftDows.has(isoDow(iso));
+  const onRhythm = (iso: string) => liftDay(iso) || runDay(iso);
+  if (!onRhythm(date)) return undefined;
+  const streak = Math.min(Math.max(0, Math.floor(consecutive ?? 0)), RHYTHM_STREAK_LOOKBACK_DAYS);
+  let streakOnRhythm = true;
+  for (let i = 1; i <= streak; i++) {
+    const iso = addDaysISO(date, -i);
+    if (!iso || !onRhythm(iso)) {
+      streakOnRhythm = false;
+      break;
+    }
+  }
+  let recentHarmFree = true;
+  for (let i = 1; i <= RHYTHM_HARM_WINDOW_DAYS; i++) {
+    const iso = addDaysISO(date, -i);
+    if (!iso) continue;
+    // Fail closed: an unreadable day is not evidence that the work was free.
+    if (safe(() => harmEvidenceOnDay(iso) != null, true)) {
+      recentHarmFree = false;
+      break;
+    }
+  }
+  return {
+    source: liftDows.size ? (lift?.source === "observed" ? "observed" : "stated") : "run_only",
+    lift_day: liftDay(date),
+    run_day: runDay(date),
+    streak_on_rhythm: streakOnRhythm,
+    recent_harm_free: recentHarmFree,
+  };
+}
+
+// ---- a lift that has outgrown a shallow hold (owner ruling, 2026-09-23) ----
+// Two of its last three exposures met the TOP of the prescribed rep range on every
+// working set, with reps in reserve wherever RIR was logged (>= 2) — "RIR is optional,
+// and its absence is not weakness", so an unlogged RIR at the top of the range counts.
+// Working sets are the session's loads within 10% of its heaviest; loaded work only
+// (assisted and timed lifts progress by other rules). The floor is the lift's own
+// logged working weight, never a plan target.
+const EARNED_EXPOSURES = 3;
+const EARNED_MIN_QUALIFYING = 2;
+const EARNED_MIN_RIR = 2;
+const WORKING_SET_FRACTION = 0.9;
+
+function earnedLifts(date: string, planItems: any[], progression: any[]): Map<string, { working_weight: number }> {
+  const out = new Map<string, { working_weight: number }>();
+  const progressionByName = new Map(
+    progression.map((p: any) => [String(p?.exercise ?? "").toLowerCase(), p] as const)
+  );
+  for (const item of planItems) {
+    if (String(item?.kind ?? "").toLowerCase() === "cardio" || item?.mode === "timed") continue;
+    const name = String(item?.exercise ?? "").trim();
+    if (!name) continue;
+    const prog = progressionByName.get(name.toLowerCase());
+    const repHigh = finite(item?.rep_high) ?? finite(prog?.current?.rep_high);
+    if (repHigh == null || repHigh <= 0) continue;
+    const resolved = resolveExerciseName(name);
+    if (resolved.exercise_id == null) continue;
+    const dates = (
+      db
+        .prepare(
+          `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+            WHERE ls.exercise_id = ? AND ls.weight > 0 AND ls.reps IS NOT NULL AND s.date < ?
+            ORDER BY s.date DESC LIMIT ?`
+        )
+        .all(resolved.exercise_id, date, EARNED_EXPOSURES) as Array<{ d: string }>
+    ).map((row) => String(row.d));
+    if (dates.length < EARNED_MIN_QUALIFYING) continue;
+    let qualifying = 0;
+    for (const day of dates) {
+      const sets = db
+        .prepare(
+          `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir FROM logged_sets ls
+             JOIN sessions s ON s.id = ls.session_id
+            WHERE ls.exercise_id = ? AND s.date = ? AND ls.weight > 0 AND ls.reps IS NOT NULL`
+        )
+        .all(resolved.exercise_id, day) as Array<{ weight: number; reps: number; rir: number | null }>;
+      const top = Math.max(...sets.map((set) => Number(set.weight)));
+      const working = sets.filter((set) => Number(set.weight) >= top * WORKING_SET_FRACTION);
+      const met =
+        working.length > 0 &&
+        working.every(
+          (set) => Number(set.reps) >= repHigh && (set.rir == null || Number(set.rir) >= EARNED_MIN_RIR)
+        );
+      if (met) qualifying++;
+    }
+    if (qualifying < EARNED_MIN_QUALIFYING) continue;
+    const workingWeight = recentWorkingWeight(name, EARNED_EXPOSURES, date);
+    if (workingWeight == null || workingWeight <= 0) continue;
+    out.set(name.toLowerCase(), { working_weight: workingWeight });
+  }
+  return out;
 }
 
 // Same one-night question day-read's push-drive path asks, so the fingerprint and
@@ -1051,16 +1324,20 @@ function compactSignalSupport(
 ): {
   signal_support?: DailyDecisionSignalSupport;
   recovery_capacity?: DailyDecisionSnapshot["recovery_capacity"];
+  // Not a snapshot field — gather folds it into `lift_day_open.rest_grade`.
+  posture_rest: boolean;
 } {
   const drive = safe(() => (getSettings().training_drive === "push" ? "push" : "steady"), "steady") as
     | "push"
     | "steady";
   const state = safe(() => dayPlanningSignalState(date, { recovery }), null);
   const recovery_capacity = compactRecoveryCapacity(state, date) ?? undefined;
+  const posture_rest = state?.action?.posture === "rest";
   if (!state) {
-    if (drive === "steady") return { recovery_capacity };
+    if (drive === "steady") return { recovery_capacity, posture_rest };
     return {
       recovery_capacity,
+      posture_rest,
       // The state BUILD failed — that is unknown, not benign. Fail closed: a
       // stamped fresh_brake keeps the caps conservative and the reach shut until
       // the signal state can actually be read again.
@@ -1087,10 +1364,12 @@ function compactSignalSupport(
       : "proceed";
   const fresh_brake = hasFreshBrake(state.dimensions);
   if (drive === "steady" && !backed && training_directive === "proceed" && !fresh_brake) {
-    return { recovery_capacity };
+    return { recovery_capacity, posture_rest };
   }
+  const advisoryOnly = fresh_brake && !safe(() => hasFreshDecidingBrake(state.dimensions), true);
   return {
     recovery_capacity,
+    posture_rest,
     signal_support: {
       training_drive: drive,
       backed,
@@ -1098,8 +1377,17 @@ function compactSignalSupport(
       training_directive,
       fresh_brake,
       ...(fresh_brake && freshBrakesAreSoft(state) ? { soft_brake_only: true as const } : {}),
+      ...(advisoryOnly ? { advisory_brake_only: true as const } : {}),
     },
   };
+}
+
+// A fresh brake that may DECIDE a lifting day. An advisory-only board (the run-
+// intensity caution) informs, never decides: it neither holds intensity through the
+// rhythm license nor parks a reach. Missing support is no brake at all.
+function decidingBrake(snapshot: DailyDecisionSnapshot): boolean {
+  const support = snapshot.signal_support;
+  return support?.fresh_brake === true && support.advisory_brake_only !== true;
 }
 
 // Is every fresh brake on the board one the athlete's own log may answer?
@@ -1297,6 +1585,33 @@ export const LOG_BACKS_OPEN_DAY_RATIONALE: readonly string[] = [
   "Nothing in your recent sessions asks for a shorter day, so today keeps the plan's length; the weights stay where they were.",
 ];
 
+// A lifting weekday whose morning run is already in. Names what is done and what is
+// still due — never a verdict on the run, never a gate on the lifting.
+export const LIFT_STILL_DUE_RATIONALE: readonly string[] = [
+  "This morning's endurance is in; the lifting on today's plan is still yours to do.",
+  "The endurance part of today is done — the strength session is still on the plan.",
+  "The cardio is logged. Today's lifting is still waiting whenever you get to it.",
+  "One half of the day is in — the lifting is still due.",
+];
+
+// The weekly lower exposure (owner ruling, 2026-09-23). The race build's own strength
+// law is "heavy lower once a week"; these name the week, never a verdict on a morning.
+export const WEEKLY_LOWER_EXPOSURE_RATIONALE: readonly [string, ...string[]] = [
+  "Your legs haven't had a full session yet this week, so today's lower work keeps its sets and your usual weights.",
+  "Heavy lower once a week is the plan, and this is the week's leg day — the squats and hinges stay whole.",
+  "No full leg session has landed yet this week; today's lower lifts keep every set at the weights you've been using.",
+  "This is where the week's heavy leg work lives, so the lower lifts stay on the card in full.",
+];
+
+// The week's LAST lower day, holding legs that are still carrying an earlier day's work
+// at the weights they already move rather than dropping or moving them.
+export const WEEKLY_LOWER_HELD_RATIONALE: readonly [string, ...string[]] = [
+  "The legs are still carrying some earlier work, but this is the week's last leg day — keep every set, hold your usual weights.",
+  "It's the only lower day left this week, so the leg work stays on the card: full sets, no heavier than you've been lifting.",
+  "Legs are a little tired, and the week has no other leg day — the lifts hold at your working weights instead of dropping away.",
+  "Last leg session of the week: hold the weights you know and keep the sets, rather than skipping the legs altogether.",
+];
+
 // Athlete-facing reach lines. A backed push morning is a reason to go after a
 // little more inside the session, never a gate and never a score. Rotated so a
 // stable input does not print one sentence for weeks.
@@ -1311,6 +1626,15 @@ export const REACH_TRIMMED_WHY: readonly [string, ...string[]] = [
   "Eat a bit more and the heavier look can wait — the working sets still stand",
   "Today's reach stays with the working sets while fueling catches up",
   "The working sets are the reach today — fueling is still settling",
+];
+
+// A reach the athlete's own log backs (the rhythm license) rather than a wearable
+// read. Worded about the sessions, never about a recovery the watch did not vouch for.
+export const REACH_LOG_BACKED_WHY: readonly [string, ...string[]] = [
+  "Your recent sessions have come back clean — today's a good day to reach a little",
+  "The week's been landing well — a heavier look fits today",
+  "You've been handling this rhythm — take the top set if the bar moves fast",
+  "The last few days went in clean, so there's room to reach today",
 ];
 
 // Composition could not seat a distinct top set (the day is already at its
@@ -1351,15 +1675,23 @@ function mainLiftGroup(snapshot: DailyDecisionSnapshot): string | null {
   return null;
 }
 
+// `deep` is the deeply saturated groups only. A SHALLOW saturation on the main lift's
+// group does not park the whole day's reach: that lift holds, and composition seats
+// the challenge on the first eligible compound that is not carrying work. `logBacked`
+// is the rhythm license — the athlete's own week, clean for three days, no deciding
+// brake — which backs a reach the way a supportive wearable read does.
 function resolveReach(
   snapshot: DailyDecisionSnapshot,
   kind: DailyDecisionKind,
-  saturated: string[]
+  deep: ReadonlySet<string>,
+  logBacked: boolean
 ): { reach: DailyDecisionReach; trimmed: boolean } {
   const support = snapshot.signal_support;
   if (!support || kind !== "train") return { reach: EMPTY_REACH, trimmed: false };
   if (support.training_drive !== "push") return { reach: EMPTY_REACH, trimmed: false };
-  if (support.fresh_brake) return { reach: EMPTY_REACH, trimmed: false };
+  // An advisory-only board (a finding about RUNS) informs a lifting day; it does not
+  // park its reach. A deciding brake still does.
+  if (decidingBrake(snapshot)) return { reach: EMPTY_REACH, trimmed: false };
   const capacity = snapshot.recovery_capacity;
   const capacityBacked = supportiveCapacityBacksDay({
     status: capacity?.status,
@@ -1371,7 +1703,7 @@ function resolveReach(
     freshBrake: support.fresh_brake,
     trainingDirective: support.training_directive,
   });
-  if (!support.backed && !capacityBacked) return { reach: EMPTY_REACH, trimmed: false };
+  if (!support.backed && !capacityBacked && !logBacked) return { reach: EMPTY_REACH, trimmed: false };
   const directive = support.training_directive;
   if (support.backed) {
     if (directive !== "proceed" && directive !== "hold_aggression") return { reach: EMPTY_REACH, trimmed: false };
@@ -1379,12 +1711,15 @@ function resolveReach(
     return { reach: EMPTY_REACH, trimmed: false };
   }
   const mainGroup = mainLiftGroup(snapshot);
-  if (mainGroup && saturated.includes(mainGroup)) return { reach: EMPTY_REACH, trimmed: false };
+  if (mainGroup && deep.has(mainGroup)) return { reach: EMPTY_REACH, trimmed: false };
+  const byLog = !support.backed && !capacityBacked;
   const backed_by = support.backed
     ? Array.isArray(support.backed_by)
       ? support.backed_by.filter((field) => typeof field === "string" && field.trim()).slice(0, 8)
       : []
-    : ["recovery_capacity"];
+    : byLog
+      ? ["training_log"]
+      : ["recovery_capacity"];
   const trimmed = support.backed && directive === "hold_aggression";
   return {
     reach: {
@@ -1392,7 +1727,9 @@ function resolveReach(
       backed_by,
       why: trimmed
         ? pickDayVariant(REACH_TRIMMED_WHY, snapshot.date, "daily_decision:reach_trimmed")
-        : pickDayVariant(REACH_PUSH_WHY, snapshot.date, "daily_decision:reach"),
+        : byLog
+          ? pickDayVariant(REACH_LOG_BACKED_WHY, snapshot.date, "daily_decision:reach_log")
+          : pickDayVariant(REACH_PUSH_WHY, snapshot.date, "daily_decision:reach"),
     },
     trimmed,
   };
@@ -1484,13 +1821,34 @@ export function buildDailySessionDecision(
   // ---- Precedence 3: recovery / soreness / illness / travel / consecutive ----
   // KIND itself comes from the already-tested dayRead; here we record WHY and set
   // caps. An explicit "train anyway" override still wins the kind below.
+  //
+  // ONE exception (owner ruling, 2026-09-23): a morning run on a lifting weekday. The
+  // endurance is in and the lifting is still undone, so the quiet read that followed
+  // the run — "something's already on the board", the stack of days — is about the
+  // run, and the plan day is still due. Only a read that stands on its own (a rest-
+  // grade morning, a rest posture, the athlete's own word; `lift_day_open.rest_grade`)
+  // or an illness window keeps the day quiet. The reopened day is still bounded: its
+  // intensity holds unless the rhythm license below opens it.
+  const liftStillDue =
+    snapshot.lift_day_open != null &&
+    snapshot.lift_day_open.rest_grade !== true &&
+    !snapshot.constraints.illness &&
+    snapshot.day_read.kind !== "train";
   const baseKind: DailyDecisionKind = (() => {
+    if (liftStillDue) return "train";
     const k = snapshot.day_read.kind;
     if (k === "rest") return "rest";
     if (k === "easy") return "easy";
     if (k === "done") return "rest";
     return "train";
   })();
+  if (liftStillDue) {
+    fire(precedence, "lift_still_due_after_endurance");
+    soft.push({
+      code: "lift_still_due_after_endurance",
+      detail: `Today's ${snapshot.lift_day_open?.after ?? "endurance"} is in — the lifting is still due`,
+    });
+  }
   const highSoreness =
     (snapshot.feedback?.soreness != null && snapshot.feedback.soreness >= 4) ||
     (snapshot.checkin?.soreness != null && snapshot.checkin.soreness >= 4);
@@ -1546,6 +1904,23 @@ export function buildDailySessionDecision(
   if (consecutive >= 3) {
     fire(precedence, "consecutive_training_days");
     soft.push({ code: "consecutive_training_days", detail: `${consecutive} training days in a row` });
+  }
+  // ---- the stack IS the week (owner ruling, 2026-09-23) ----
+  // An athlete who lifts Monday to Friday and runs the weekend is "consecutive" every
+  // single morning, so a count of days in a row held intensity on almost every day of
+  // their plan. When the stack is their own stated (or observed) week, nothing in the
+  // last three days says it cost them, and no deciding brake is on the board, the count
+  // stays a caveat. It never opens anything a genuine signal holds — readiness, soreness,
+  // an underpowered session, a deload, a recovery cycle each keep their own cap below.
+  const rhythm = snapshot.stated_rhythm;
+  const rhythmLicensed =
+    rhythm != null && rhythm.streak_on_rhythm === true && rhythm.recent_harm_free === true && !decidingBrake(snapshot);
+  if (rhythmLicensed && consecutive >= 2) {
+    fire(precedence, "stated_rhythm_clean");
+    soft.push({
+      code: "stated_rhythm_clean",
+      detail: "These days in a row are your own week, and they've come back clean",
+    });
   }
 
   // ---- THE LOG ANSWERS A SOFT BRAKE (owner ruling, 2026-09-02) ----
@@ -1670,6 +2045,61 @@ export function buildDailySessionDecision(
       LOWER_BODY_GROUPS.has(String(it.muscle_group).toLowerCase())
   );
 
+  // ---- one genuinely loaded lower exposure a week (owner ruling, 2026-09-23) ----
+  // "Heavy lower once a week" (the race build's strength law). A hybrid week lands every
+  // lower day the morning after a run, and each morning alone had a reason to lighten
+  // or move the legs, so a whole week could pass with no full leg session. On the week's
+  // next lower day, while none has landed (`weekly_lower`), the leg items are not reduced
+  // and not moved for an EARLIER day's shallow residual or a key-run conflict. What still
+  // applies is everything that is news about the body: a deep residual (except on the
+  // last chance, below), work done THIS morning, and — standing the guarantee down
+  // entirely — a deciding fresh brake, low or rest-grade readiness, high soreness,
+  // illness, a lower-body injury, symptom or joint pain, a deload or recovery cycle.
+  //
+  // On the week's LAST lower day the guarantee also covers a deep residual from an
+  // earlier day: those groups HOLD (logged load, full sets) instead of being reduced or
+  // moved (`muscles.week_held`), because the alternative is a week with no legs at all.
+  const heavyLowerOnPlan = snapshot.plan_items.some(
+    (it) =>
+      String(it.kind ?? "").toLowerCase() !== "cardio" &&
+      !!it.muscle_group &&
+      HEAVY_LOWER_GROUPS.has(String(it.muscle_group).toLowerCase())
+  );
+  const lowerPlanItems = snapshot.plan_items.filter(
+    (it) =>
+      String(it.kind ?? "").toLowerCase() !== "cardio" &&
+      !!it.muscle_group &&
+      LOWER_BODY_GROUPS.has(String(it.muscle_group).toLowerCase())
+  );
+  const lowerHurts =
+    [...injuryGroups, ...jointGroups].some((g) => LOWER_BODY_GROUPS.has(String(g).toLowerCase())) ||
+    snapshot.constraints.injuries.some((injury) =>
+      injury.exercises.some((exercise) =>
+        lowerPlanItems.some((it) => it.exercise.toLowerCase() === String(exercise).toLowerCase())
+      )
+    );
+  const lowerSafetyFloor =
+    decidingBrake(snapshot) ||
+    readiness === "low" ||
+    snapshot.recovery.readiness === "low" ||
+    highSoreness ||
+    snapshot.constraints.illness ||
+    lowerHurts ||
+    snapshot.recovery_cycle != null ||
+    snapshot.day_read.recovery_week ||
+    snapshot.program.mesocycle_phase === "deload" ||
+    snapshot.program.mesocycle_phase === "recovery";
+  const lowerWeekHolds = snapshot.weekly_lower != null && kind === "train" && heavyLowerOnPlan && !lowerSafetyFloor;
+  const loadedTodayGroup = (group: string) =>
+    snapshot.muscle_load.some((m) => m.group === group && m.saturated && m.days_ago === 0);
+  // The groups held rather than reduced on the last chance: the day's lower groups,
+  // never one loaded this morning (the run-morning law keeps its authority).
+  const weekHeldGroups = new Set<string>(
+    lowerWeekHolds && snapshot.weekly_lower?.last_chance === true
+      ? lowerPlanItems.map((it) => String(it.muscle_group).toLowerCase()).filter((g) => !loadedTodayGroup(g))
+      : []
+  );
+
   // ---- Precedence 4: recent endurance load vs conflicting lower-body work ----
   // Physiological soft reduction always applies when recent heavy cardio loaded
   // the legs. Role only changes narrative and whether an open quality-run
@@ -1679,19 +2109,32 @@ export function buildDailySessionDecision(
   // one: a heavy MUSCULAR dose whose leg region the gate still reads saturated. Any
   // hard effort in three days used to fire this, which for an athlete who runs most
   // days stripped every Lower card of its lower lifts.
+  //
+  // And "loaded" means DEEP (owner ruling, 2026-09-23): a leg group just over its own
+  // bar from an earlier day's run is the ordinary hybrid week, and it holds load in
+  // place rather than losing sets. Two shapes still reduce: a deep residual, and heavy
+  // endurance done THIS morning (the run-morning law) — unless today is the athlete's
+  // own stated stack (a run day AND a lift day of their week), where the legs hold at
+  // load instead.
   const enduranceReduced: string[] = [];
   const saturatedGroups = new Set(snapshot.muscle_load.filter((m) => m.saturated).map((m) => m.group));
+  const deepGroups = new Set(snapshot.muscle_load.filter((m) => m.saturated && m.deep === true).map((m) => m.group));
+  const statedStack = rhythm?.run_day === true && rhythm?.lift_day === true;
   const heavyEndurance = snapshot.endurance.filter((e) => e.load === "heavy");
   for (const e of heavyEndurance) {
     for (const region of e.regions) {
       const group = region.toLowerCase();
-      if (LOWER_BODY_GROUPS.has(group) && saturatedGroups.has(group)) enduranceReduced.push(group);
+      if (!LOWER_BODY_GROUPS.has(group) || !saturatedGroups.has(group)) continue;
+      if (weekHeldGroups.has(group)) continue;
+      if (deepGroups.has(group) || (e.days_ago === 0 && !statedStack)) enduranceReduced.push(group);
     }
   }
   // Soft key-run protect: primary/co_primary with an open quality cardio opening
   // and hard lower on the same template — prefer protecting the key-run slot.
+  // Never on the week's protected lower day: a run that has not happened yet does not
+  // take the week's only full leg session from it.
   let keyRunProtect = false;
-  if (enduranceLeads && hasRelevantOpenKeyRun && hardLowerOnPlan && kind !== "rest") {
+  if (enduranceLeads && hasRelevantOpenKeyRun && hardLowerOnPlan && kind !== "rest" && !lowerWeekHolds) {
     keyRunProtect = true;
     for (const it of snapshot.plan_items) {
       const group = it.muscle_group ? String(it.muscle_group).toLowerCase() : "";
@@ -1794,6 +2237,9 @@ export function buildDailySessionDecision(
     if (hardEnduranceYesterday) enduranceHoldReasons.push("hard_endurance_yesterday");
     if (legsSaturated) enduranceHoldReasons.push("legs_saturated");
   }
+  // A lifting day reopened after its morning run: the run it would otherwise offer
+  // is already on the board. Composition words this one as done, not as held.
+  if (liftStillDue) enduranceHoldReasons.push("endurance_done_today");
   // `reasons` is not telemetry — composition reads it to pick WHICH note the held
   // cardio item carries (running language only when endurance evidence is what fired
   // the hold; `legs_saturated` alone can come from a pure squat day). Keep the codes
@@ -1859,13 +2305,50 @@ export function buildDailySessionDecision(
       .flatMap((injury) => injury.exercises)
       .map((exercise) => exercise.toLowerCase())
   );
-  const reduced = dedupe([...enduranceReduced, ...saturated, ...snapshot.plan.over]).filter(
-    (g) => !excluded.includes(g)
-  );
+  // REDUCED (fewer sets, an eased target in composition) is the deep residual, work
+  // done today (the same-day law — except the legs on a stated stack), weekly volume
+  // running high, and the plan's own over list. A SHALLOW saturation from an earlier
+  // day is not here: that area stays `saturated`, its lifts HOLD at the logged working
+  // weight below, and it is neither reduced nor a reach host. It is also still never
+  // `allowed` — a group carrying work is not a stand-in target.
+  const acuteReduced = snapshot.muscle_load
+    .filter(
+      (m) =>
+        m.saturated &&
+        !weekHeldGroups.has(m.group) &&
+        (m.deep === true || (m.days_ago === 0 && !(statedStack && LOWER_BODY_GROUPS.has(m.group))))
+    )
+    .map((m) => m.group);
+  const reduced = dedupe([
+    ...enduranceReduced,
+    ...acuteReduced,
+    ...snapshot.program.volume_high_groups,
+    ...snapshot.plan.over,
+  ]).filter((g) => !excluded.includes(g));
   const required = dedupe(snapshot.plan_items.map((it) => it.muscle_group).filter((g): g is string => !!g)).filter(
     (g) => !excluded.includes(g)
   );
-  const allowed = dedupe([...required, ...due]).filter((g) => !excluded.includes(g) && !reduced.includes(g));
+  const allowed = dedupe([...required, ...due]).filter(
+    (g) => !excluded.includes(g) && !reduced.includes(g) && !saturated.includes(g)
+  );
+  // Only the groups the guarantee actually held back from a reduce are named on the
+  // envelope; a fresh or shallow group was never going to move.
+  const weekHeld = [...weekHeldGroups].filter((g) => deepGroups.has(g) && !excluded.includes(g)).sort();
+  if (lowerWeekHolds) {
+    fire(precedence, "weekly_lower_exposure");
+    soft.push({
+      code: "weekly_lower_exposure",
+      detail: weekHeld.length
+        ? `The week's last lower day, still without a full leg session — ${weekHeld.join(", ")} hold at logged load`
+        : "No full leg session yet this week — today's lower work keeps its sets and load",
+    });
+    intentRationale.push({
+      code: "weekly_lower_exposure",
+      text: weekHeld.length
+        ? pickDayVariant(WEEKLY_LOWER_HELD_RATIONALE, snapshot.date, "daily_decision:weekly_lower_held")
+        : pickDayVariant(WEEKLY_LOWER_EXPOSURE_RATIONALE, snapshot.date, "daily_decision:weekly_lower"),
+    });
+  }
 
   // ---- Precedence 6: progression only where recent performance supports it ----
   const progByExercise = new Map<
@@ -1878,6 +2361,7 @@ export function buildDailySessionDecision(
       suggested_target: DailyDecisionTarget | null;
       top_set: DailyDecisionTopSet | null;
       evidence: DailyDecisionProgressionEvidence | null;
+      earned: { working_weight: number } | null;
     }
   >();
   for (const p of snapshot.progression) {
@@ -1893,6 +2377,12 @@ export function buildDailySessionDecision(
       // or nothing.
       top_set: topSetOf(p.top_set),
       evidence: p.evidence ?? null,
+      // Same re-normalization as the top set: a hand-built or replayed snapshot must
+      // not smuggle a floor in that is not a real, positive logged load.
+      earned:
+        p.earned && Number.isFinite(p.earned.working_weight) && p.earned.working_weight > 0
+          ? { working_weight: p.earned.working_weight }
+          : null,
     });
   }
 
@@ -1922,14 +2412,19 @@ export function buildDailySessionDecision(
     snapshot.program.mesocycle_phase === "deload" || snapshot.program.mesocycle_phase === "recovery";
   // Longevity-leading soft ease under double-day pressure — never forces rest
   // when dayRead already says train; only prefers reduced volume / hold intensity.
+  // A licensed stack (see `rhythmLicensed`) is not double-day pressure by its count
+  // alone; hard endurance against a hard lower day still is, and eases VOLUME. The
+  // intensity half of the ease needs a genuine signal, which the license has just
+  // said is absent.
   const doubleDayPressure =
     kind === "train" &&
     ((heavyEndurance.length > 0 && hardLowerOnPlan) ||
       keyRunProtect ||
       (enduranceReduced.length > 0 && hardLowerOnPlan) ||
       (hasRelevantOpenKeyRun && hardLowerOnPlan) ||
-      consecutive >= 2);
+      (consecutive >= 2 && !rhythmLicensed));
   const longevityEase = longevityLeads && doubleDayPressure && kind === "train";
+  const longevityHoldsIntensity = longevityEase && !rhythmLicensed;
   if (longevityEase) {
     fire(precedence, "training_intent");
     soft.push({
@@ -1962,7 +2457,10 @@ export function buildDailySessionDecision(
     trainAnywayKeepsReduced ||
     snapshot.day_read.recovery_week ||
     longevityEase ||
-    planComplexityEase;
+    planComplexityEase ||
+    // A lifting day reopened after its morning run is bounded while a genuine fresh
+    // brake stands: the run is in, the brake still speaks, so the sets stay trimmed.
+    (liftStillDue && decidingBrake(snapshot));
   // The evidence arm keeps the sets: every input that would have softened them here
   // is already excluded by `quietDayOpensOnEvidence` except the two soft preferences
   // (longevity, learned plan complexity), and those are preferences the athlete's own
@@ -1978,7 +2476,10 @@ export function buildDailySessionDecision(
             readiness === "low" ||
             sorenessSoftensDay ||
             lowPerformance ||
-            longevityEase ||
+            longevityHoldsIntensity ||
+            // A lifting day reopened after its morning run holds its load unless the
+            // same rhythm license that stops a stack from capping the day backs it.
+            (liftStillDue && !rhythmLicensed) ||
             // The clock opens; the LOAD does not. A brake the log answered still holds
             // aggression for the day it was answered on.
             quietDayOpened
@@ -1997,6 +2498,11 @@ export function buildDailySessionDecision(
     // the athlete's own log has answered it (`quietDayOpened`).
     const opensToPlanClock = baseKind !== "rest" && (capsMayOpen || quietDayOpened);
     duration = Math.round(opensToPlanClock ? lifted : Math.min(lifted, 40));
+  } else if (liftStillDue) {
+    // The quiet read's clock was written for the run, not for the lifting still due —
+    // bounded to 40 minutes while a genuine fresh brake stands.
+    const planned = requestMinutes ?? planDayDurationEstimate(snapshot);
+    duration = Math.round(decidingBrake(snapshot) ? Math.min(planned, 40) : planned);
   } else {
     duration = requestMinutes ?? snapshot.day_read.est_minutes ?? null;
     if (duration != null) {
@@ -2058,10 +2564,30 @@ export function buildDailySessionDecision(
         action = "hold";
         reason = "injury_recheck";
       }
-      // A saturated/reduced group holds load rather than advancing today.
-      if (group && reduced.includes(group) && (action === "overload" || action === "carry")) {
+      // A saturated/reduced group holds load rather than advancing today. A SHALLOW
+      // saturation (saturated, not reduced) holds too — except on a lift whose own log
+      // has earned past it (`earned`): that lift keeps its progression's step, and
+      // composition keeps it at or above its logged working weight.
+      // …but never past work done TODAY: the run-morning law holds a group loaded this
+      // morning whatever the lift has earned.
+      const loadedToday =
+        !!group && snapshot.muscle_load.some((m) => m.group === group && m.saturated && m.days_ago === 0);
+      // A deep residual the weekly guarantee holds on the card is a HOLD, full stop — an
+      // earned step does not ride past it.
+      const weekHeldDeep = !!group && weekHeldGroups.has(group) && deepGroups.has(group);
+      const earned = loadedToday || weekHeldDeep ? undefined : prog?.earned;
+      const shallowHold = !!group && saturated.includes(group) && !reduced.includes(group) && !earned;
+      if (
+        group &&
+        (reduced.includes(group) || shallowHold) &&
+        (action === "overload" || action === "carry")
+      ) {
         action = "hold";
-        reason = saturated.includes(group) ? "muscle_saturated" : "endurance_lower_conflict";
+        reason = weekHeldDeep
+          ? "weekly_lower_exposure"
+          : saturated.includes(group)
+            ? "muscle_saturated"
+            : "endurance_lower_conflict";
       }
       if (lowPerformance && !repeatedUnder && (action === "overload" || action === "carry")) {
         action = "hold";
@@ -2095,6 +2621,13 @@ export function buildDailySessionDecision(
         // week, a deload day — has stepped the day back on purpose, and a
         // near-maximal single is the last thing that should survive that.
         ...(!substitution && prog && action === prog.action && prog.top_set ? { top_set: prog.top_set } : {}),
+        // The floor rides ONLY on the progression's own verdict. Every protective hold
+        // above — an injury recheck, recent underperformance, a deload, a saturated or
+        // today-loaded group — stepped the lift back on purpose, and the floor must not
+        // lift it back up to the logged working weight.
+        ...(!substitution && earned && prog && action === prog.action && (action === "overload" || action === "hold" || action === "carry")
+          ? { earned_floor: earned.working_weight }
+          : {}),
         progression_evidence: prog?.evidence ?? null,
         brain_decision_id: it.brain_decision_id ?? null,
         brain_change_summary: it.brain_change_summary ?? null,
@@ -2132,9 +2665,12 @@ export function buildDailySessionDecision(
   // licensing more inside it. (`resolveReach` already refuses on `fresh_brake`; this
   // covers the directive-only shape, where nothing fresh brakes but aggression is
   // being held.)
-  const { reach, trimmed: reachTrimmed } = quietDayOpened
-    ? { reach: EMPTY_REACH, trimmed: false }
-    : resolveReach(snapshot, kind, saturated);
+  // A stated run day has no lifting card for a reach to land on.
+  const runDay = snapshot.plan.day_type === "run" && !trainAnyway;
+  const { reach, trimmed: reachTrimmed } =
+    quietDayOpened || runDay
+      ? { reach: EMPTY_REACH, trimmed: false }
+      : resolveReach(snapshot, kind, deepGroups, rhythmLicensed);
   if (reach.level === "push") {
     const reachCode: DailyDecisionReason = reachTrimmed ? "reach_trimmed_by_fueling" : "backed_day_reach";
     fire(precedence, reachCode);
@@ -2142,6 +2678,13 @@ export function buildDailySessionDecision(
   }
 
   // ---- Render-safe rationale ----
+  if (runDay && kind !== "rest") {
+    fire(precedence, "stated_run_day");
+    rationale.push({
+      code: "stated_run_day",
+      text: pickDayVariant(STATED_RUN_DAY_RATIONALE, snapshot.date, "daily_decision:stated_run_day"),
+    });
+  }
   rationale.push({
     code:
       kind === "rest"
@@ -2158,6 +2701,12 @@ export function buildDailySessionDecision(
           ? "Today reads as an easy day — keep it light and short."
           : `Today reads as a training day${snapshot.plan.focus ? ` · ${snapshot.plan.focus}` : ""}.`,
   });
+  if (liftStillDue) {
+    rationale.push({
+      code: "lift_still_due_after_endurance",
+      text: pickDayVariant(LIFT_STILL_DUE_RATIONALE, snapshot.date, "daily_decision:lift_still_due"),
+    });
+  }
   // Soft intent lines trail the kind/template headline so primary_rationale stays calm.
   for (const line of intentRationale) rationale.push(line);
   if (reach.level === "push") {
@@ -2183,9 +2732,19 @@ export function buildDailySessionDecision(
       // Survives the rest-day nulling above on purpose: the day_number is cleared
       // because there is no session to compose FROM, and this field is the reason
       // there isn't one.
-      ...(snapshot.plan.day_type === "rest" ? { day_type: "rest" as const } : {}),
+      ...(snapshot.plan.day_type === "rest" || snapshot.plan.day_type === "run"
+        ? { day_type: snapshot.plan.day_type }
+        : {}),
     },
-    muscles: { required, allowed, reduced, excluded, saturated },
+    muscles: {
+      required,
+      allowed,
+      reduced,
+      excluded,
+      saturated,
+      deep: [...deepGroups],
+      ...(weekHeld.length ? { week_held: weekHeld } : {}),
+    },
     caps: { volume, intensity, duration_min: duration },
     recovery_cycle: snapshot.recovery_cycle,
     candidates,

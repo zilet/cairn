@@ -26,9 +26,7 @@ type TodayScreenRuntimeDepsInput = {
   rxMoveCount(rxByEx: Record<string, Partial<ClientPrescription> | null | undefined>): number;
   applyDayProgression(button: Element | null | undefined, day: number | null | undefined): Promise<void>;
   exerciseCard(item: any, logged: any[], prefill: Record<string, unknown>, revealIdx: any, rx: any): string;
-  cardioPlanCard(item: any, revealIdx: any, done: any, syncLine: string): string;
-  cardioEffortMatches(item: any, effort: any): boolean;
-  suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
+  suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number | null>;
   upgradeBriefInPlace(date: string, isToday: boolean): Promise<void>;
   revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
   postExerciseMode(name: string, mode: string): Promise<unknown>;
@@ -61,11 +59,6 @@ function createTodayScreenRuntimeDependencies(input: TodayScreenRuntimeDepsInput
     escapeAttr: escAttr,
     stagger,
     micGlyph: input.micGlyph,
-    cardioLabel,
-    cardioPrescription,
-    isCardioItem,
-    cardioPlanCard: input.cardioPlanCard,
-    cardioEffortMatches: input.cardioEffortMatches,
     exCard: input.exerciseCard,
     garminSessionCard: (value) => bridge().garminSessionCard(value),
     sessionDoneCard: (session, day, options) => bridge().sessionDoneCard(session, day, options),

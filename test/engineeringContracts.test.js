@@ -4464,13 +4464,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     todayPlanSessionModelSource,
     /function groupLoggedSets\(session: TodayPlanSessionModelSession \| null \| undefined\)/
   );
-  assert.match(todayPlanSessionModelSource, /function matchCardioEfforts\(/);
+  // Runs left the strength plan: nothing matches a synced effort to a plan run item.
+  assert.doesNotMatch(todayPlanSessionModelSource, /function matchCardioEfforts\(/);
   assert.match(todayPlanSessionModelSource, /function itemGroups\(params: \{/);
   assert.match(todayPlanSessionModelSource, /function prefillFor\(/);
   assert.match(todayPlanSessionModelSource, /CairnTodayPlanSessionModel/);
   assert.match(todayPlanSessionPreparationSource, /type TodayPlanSessionPrepDeps = \{/);
   assert.match(todayPlanSessionPreparationSource, /todayPlanSessionModel\.groupLoggedSets/);
-  assert.match(todayPlanSessionPreparationSource, /todayPlanSessionModel\.matchCardioEfforts/);
+  assert.doesNotMatch(todayPlanSessionPreparationSource, /todayPlanSessionModel\.matchCardioEfforts/);
   assert.match(
     todayPlanSessionPreparationSource,
     /async function preparePlanSession\(deps: TodayPlanSessionPrepDeps\): Promise<TodayPlanSessionPrepResult>/
@@ -4500,7 +4501,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayPlanSurfaceRendererSource, /type TodayPlanSurfaceRendererOptions = \{/);
   assert.match(
     todayPlanSurfaceRendererSource,
-    /function orderedSurfaceItems\(options: TodayPlanSurfaceRendererOptions/
+    /function surfaceItemsOf\(options: TodayPlanSurfaceRendererOptions/
   );
   assert.match(
     todayPlanSurfaceRendererSource,
@@ -5151,7 +5152,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     planEnduranceModelSource,
     /function planEnduranceDraftCardHtml\(proposal: PlanEnduranceProposal\): string/
   );
-  assert.match(planEnduranceModelSource, /function planEnduranceRuns\(plan: unknown\): PlanEnduranceRunRow\[\]/);
+  // Endurance reads runs only from the run endpoints — never by scanning the lift plan.
+  assert.doesNotMatch(planEnduranceModelSource, /function planEnduranceRuns\(/);
   assert.match(planEnduranceModelSource, /CairnPlanEnduranceModel/);
   assert.match(
     planEnduranceSource,
@@ -6088,7 +6090,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayPlanSurfaceClient, /addExerciseFormHtml/);
   assert.match(todayPlanSurfaceRendererClient, /CairnTodayPlanSurfaceRenderer: CAIRN_TODAY_PLAN_SURFACE_RENDERER/);
   assert.match(todayPlanSurfaceRendererClient, /buildHtml/);
-  assert.match(todayPlanSurfaceRendererClient, /orderedSurfaceItems/);
+  assert.match(todayPlanSurfaceRendererClient, /surfaceItemsOf/);
   assert.match(todayRenderStateClient, /CairnTodayRenderState: CAIRN_TODAY_RENDER_STATE/);
   assert.match(todayRenderStateClient, /derive/);
   assert.match(todayPostRenderWiringClient, /CairnTodayPostRenderWiring: CAIRN_TODAY_POST_RENDER_WIRING/);
@@ -6627,10 +6629,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsSourcesAutomationController, /renderSources: renderSettingsSources/);
   assert.match(settingsSourcesAutomationController, /renderAutomation: renderSettingsAutomation/);
   assert.match(todayCardsSource, /function exerciseCardHtml/);
-  assert.match(todayCardsSource, /function cardioPlanCardHtml/);
+  // The planned-run card left Today's lift list with the runs themselves.
+  assert.doesNotMatch(todayCardsSource, /function cardioPlanCardHtml/);
   assert.match(todayCardsClient, /CairnTodayCards/);
   assert.match(todayScreenRuntimeSource, /CairnTodayCards\.exerciseCardHtml/);
-  assert.match(todayScreenRuntimeSource, /CairnTodayCards\.cardioPlanCardHtml/);
+  assert.doesNotMatch(todayScreenRuntimeSource, /CairnTodayCards\.cardioPlanCardHtml/);
   assert.doesNotMatch(today, /const\s+offPlan\s*=\s*!it\.fromPlan|class="ex ex-cardio-done/);
   assert.match(read("src/client/settings-screen.ts"), /\/\/ @ts-check/);
   assert.match(settingsScreen, /Object\.assign\(globalThis, \{/);
@@ -7006,7 +7009,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     chat,
     /\bfunction\s+histWhen\b|\bfunction\s+histSessionRow\b|\bfunction\s+histHitRow\b|\bfunction\s+openChatHistory\b/
   );
-  assert.match(planEnduranceClient, /CairnUi\.jobCaptionHtml\(\)/);
+  // Runs are not plan items (migration 110): the Endurance composer hands the request
+  // to chat (which can move the stated run days) instead of running a plan-proposal job.
+  assert.match(planEnduranceClient, /chatPrefill/);
+  assert.doesNotMatch(planEnduranceClient, /runOp\("proposal"/);
   assert.match(
     chatSource,
     /Plan editor orchestration lives in \/js\/plan-editor-controller\.js; Plan Endurance lives in \/js\/plan-endurance-client\.js/

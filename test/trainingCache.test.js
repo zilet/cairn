@@ -101,7 +101,11 @@ test("mixed cardio + strength proposals defer versioning until commit", () => {
   const beforeFailure = currentTrainingDataVersion();
   const failed = repo.applyProposal(failing.id);
   assert.equal(failed.ok, false);
-  assert.equal(repo.getPlanDay(1).items.some((item) => item.kind === "cardio"), false, "cardio write rolled back");
+  assert.equal(
+    repo.getPlanDay(1).items.some((item) => item.kind === "cardio"),
+    false,
+    "no run written"
+  );
   assert.equal(currentTrainingDataVersion(), beforeFailure, "rolled-back mixed proposal does not bump version");
 
   const succeeding = repo.createProposal("stub", "mixed success", "", {
@@ -111,7 +115,13 @@ test("mixed cardio + strength proposals defer versioning until commit", () => {
   const beforeSuccess = currentTrainingDataVersion();
   const applied = repo.applyProposal(succeeding.id);
   assert.equal(applied.ok, true);
-  assert.equal(repo.getPlanDay(1).items.some((item) => item.kind === "cardio"), true);
+  // Runs are not plan items: the cardio half is set aside, the strength half lands.
+  assert.equal(applied.runs_set_aside, 1);
+  assert.equal(
+    repo.getPlanDay(1).items.some((item) => item.kind === "cardio"),
+    false
+  );
+  assert.equal(repo.getPlanDay(1).items.find((item) => item.exercise === "Bench Press").target_weight, 140);
   assert.equal(currentTrainingDataVersion(), beforeSuccess + 1, "committed mixed proposal bumps exactly once");
 });
 

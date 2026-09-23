@@ -284,8 +284,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   rather than reopening the log. Chat is the only setter UI — there is no settings form, by design.
 - **The race build is a read OVER the run engine, never a second engine** — `raceBuild()`
   (`src/repo/race-build.ts`) walks `raceRamp()` Monday by Monday for the ladder, so a week's km is
-  always the engine's own next step; its `kind` follows the engine's `ceil(days/7)` count (a
-  weekend race has peak → race week, no invented taper week). Finish estimates prefer the watch's
+  always the engine's own next step; its `kind` follows the engine's arrival count in CALENDAR
+  weeks to race week (`weeks_to_race_week`: peak → taper → race, never peak into race week). A
+  reset is recovery, not lost ground, and a long run taken well is held, never re-climbed to
+  (`RESET_TAKEN_FRACTION`, `demonstratedLongKm`). Finish estimates prefer the watch's
   predictor (≤3 weeks old, Riegel-adjusted) over a Riegel off a training run, and every comparison
   is a `fits`/`stretch`/`beyond_horizon` FIT, never a grade. The weekly ride is a PATTERN read off
   the log (3 of 6 weeks) — no new field. Details in `docs/ARCHITECTURE.md`.
@@ -293,10 +295,12 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   day NAME, state off the log, a rest/easy read as a caveat (never a replacement title). The Brief,
   Session header, week strip and Train overview print it verbatim; never derive a today state in a
   renderer. Details in `docs/ARCHITECTURE.md`.
-- **An empty plan day is never startable.** A restructure's undeclared empty day is stored as
-  `rest` (`planDayTypeForRestructure`, `src/repo/plan.ts`); an explicit empty `training` day
-  survives as a scaffold but neither Today's launch card nor the Plan editor's Train button offers
-  to start it. No plan at all is different — that card is the deliberate "Open session" door.
+- **Plan days hold STRENGTH only; runs and rest are the calendar's** (migration 110). A run is never a
+  plan item (`savePlanDay` strips it, `replacePlan` drops a day with nothing to lift) and a rest day is
+  never a plan row (`day_type:'rest'` is refused). Runs come from the stated run days + `weeklyRunPlan`
+  / the agenda; a non-lifting weekday is a run or rest day (`calendarDayRead`, plan-selection) and
+  `selectAdaptivePlanDay` answers it with `day_number:null`. An empty editor scaffold is never
+  startable. Details in `docs/ARCHITECTURE.md`.
 - **Garmin strength is a session, not an activity.** `upsertGarminActivity` deliberately skips the
   generic `activities` row for a strength type (no duplicate). `reconcileGarminStrength()` does the
   deterministic merge (physiology onto `sessions.garmin_json`, link, delete stale row) *always*, even
@@ -319,8 +323,8 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   `src/repo/readiness-bands.ts` (`LOW_READINESS` 35 = subdued/easy; `REST_GRADE_READINESS` 20
   inclusive = its own REST rule, softenable only to easy movement) — never hardcode a readiness
   threshold. And `trainedWithoutHarm` is `harmEvidenceOnDay(date) == null`: a hard-cardio day, a
-  new-longest run (`longestRunNovelty`), or a bad next morning (rest-grade readiness, low HRV
-  status, elevated RHR) is harm — a run-only day is never "unrated therefore fine", but a hard-cardio
+  new-longest run (`longestRunNovelty`), or a bad next morning (rest-grade readiness, or last
+  night's HRV/RHR past the athlete's OWN band — charged once per episode, at onset) is harm — a run-only day is never "unrated therefore fine", but a hard-cardio
   day is CLEARED when the next morning positively vouches (fresh readiness ≥ `SUPPORTIVE_READINESS`
   and no brake firing; absent data never vouches). "Morning readiness" comes from the ledger's own
   snapshot for that morning, since the stored Garmin value is the day's LAST sync and so is

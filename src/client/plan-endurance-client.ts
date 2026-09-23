@@ -1,5 +1,7 @@
 // @ts-check
-// Plan -> Endurance renderers plus the running-plan screen orchestration.
+// Plan -> Endurance renderers plus the running-plan screen orchestration. This is
+// the one home for runs: every run it shows comes from the run endpoints
+// (/run-plan, /training-agenda, /race-build, /run-compliance), never the lift plan.
 
 type EnduranceGoalRow = import("../contracts/client-api.js").ClientEnduranceGoal;
 type EnduranceComplianceRow = import("../contracts/client-api.js").ClientRunCompliance;
@@ -45,7 +47,6 @@ async function renderPlanEndurance(): Promise<void> {
   let goal: EnduranceGoalRow | null = null;
   let compliance: EnduranceComplianceRow | null = null;
   let agenda: EnduranceAgenda | null = null;
-  let plan: unknown = [];
   let settings: Record<string, unknown> | null = null;
   let raceBuild: EnduranceRaceBuild | null = null;
   let runPlan: EnduranceRunPlan | null = null;
@@ -56,11 +57,10 @@ async function renderPlanEndurance(): Promise<void> {
   let laterRunPlan: EnduranceRunPlan | null = null;
   let laterRaceBuild: EnduranceRaceBuild | null = null;
   try {
-    [goal, compliance, agenda, plan, settings, raceBuild, runPlan, nextAgenda, nextRunPlan, nextRaceBuild, laterAgenda, laterRunPlan, laterRaceBuild] = await Promise.all([
+    [goal, compliance, agenda, settings, raceBuild, runPlan, nextAgenda, nextRunPlan, nextRaceBuild, laterAgenda, laterRunPlan, laterRaceBuild] = await Promise.all([
       api("/endurance-goal").catch(() => null),
       api("/run-compliance").catch(() => null),
       api(`/training-agenda?date=${encodeURIComponent(today)}`).catch(() => null),
-      api("/plan").catch(() => []),
       api("/settings").then((response) => (enduranceModel().record(response).settings as Record<string, unknown> | null) || null).catch(() => null),
       api("/race-build").catch(() => null),
       api("/run-plan").catch(() => null),
@@ -74,7 +74,7 @@ async function renderPlanEndurance(): Promise<void> {
   } catch { /* paint with whatever resolved */ }
   if (token !== pollToken || !view.querySelector("#endPlanBody")) return;
   const units = typeof runUnits === "function" ? runUnits(settings?.run_units) : (settings?.run_units === "mi" ? "mi" : "km");
-  paintPlanEndurance(goal, compliance, agenda, plan, settings, raceBuild, {
+  paintPlanEndurance(goal, compliance, agenda, settings, raceBuild, {
     runPlan,
     nextAgenda,
     nextRunPlan,
@@ -91,7 +91,6 @@ function paintPlanEndurance(
   goalValue: EnduranceGoalRow | null,
   compliance: EnduranceComplianceRow | null,
   agenda: EnduranceAgenda | null,
-  plan: unknown,
   settings: Record<string, unknown> | null,
   raceBuild?: EnduranceRaceBuild | null,
   extra?: EndurancePaintExtra | null,
@@ -136,13 +135,10 @@ function paintPlanEndurance(
     ? `<div class="end-ramp-note reveal" style="${stagger(1)}"><span class="lbl">Steady readiness</span> — no race to peak for, so the plan holds a sustainable rhythm rather than ramping.${goal.weekly_km ? ` Target around <b>${escHtml(typeof fmtDist === "function" ? fmtDist(goal.weekly_km, units) : `${goal.weekly_km} km`)}/wk</b>.` : ""}</div>`
     : "";
 
-  const templateRuns = enduranceModel().runs(plan);
   const emptyHtml = !briefing.next && !briefing.remaining.length && !briefing.later.length
     ? `<div class="end-runs-empty card-stack-item reveal" style="${stagger(2)}">
          <div class="lbl">Upcoming runs</div>
-         <p>${templateRuns.length
-           ? "No open run waiting. Open this week's map below for the hybrid picture, or shape the next week at the bottom."
-           : "No runs waiting. Open this week's map below for the hybrid picture, or ask at the bottom if you want the coach to shape the next week around your lifting."}</p>
+         <p>No runs waiting. Open this week's map below for the hybrid picture, or ask at the bottom if you want the coach to shape the next week around your lifting.</p>
        </div>`
     : "";
   const complianceHtml = typeof runComplianceLine === "function" ? runComplianceLine(compliance) : "";
@@ -153,7 +149,7 @@ function paintPlanEndurance(
   const composer = `<details class="end-shape-fold card-stack-item reveal" style="${stagger(4)}">
       <summary><span class="lbl">Shape this week's runs</span></summary>
       <div class="end-shape">
-        <p class="end-shape-sub">Tell the coach what you want — it drafts run prescriptions you review and apply. Your lifting plan is never touched. <button class="linkbtn end-link" id="endEditRuns">Edit in Training →</button></p>
+        <p class="end-shape-sub">Tell the coach what you want — it picks it up in chat, where it can move your run days and read how you're doing. Your lifting plan is never touched.</p>
         <div class="end-chips">${chips}</div>
         <textarea id="endInstr" class="form-textarea" rows="2" placeholder="e.g. ease my long run, my knee's cranky — or find a tempo opening later this week"></textarea>
         <button id="endDraftBtn" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ASK THE COACH</button>
@@ -204,7 +200,6 @@ function paintPlanEndurance(
     });
   });
 
-  body.querySelector("#endEditRuns")?.addEventListener("click", () => renderPlanEditor());
   if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderPlanEndurance());
   body.querySelectorAll<HTMLElement>(".end-chip").forEach((button) => button.addEventListener("click", () => {
     const preset = presets[Number(button.dataset.egi) || 0];
@@ -233,16 +228,19 @@ function enduranceComposerRestore(): void {
   _endDrafting = false;
 }
 
+// Runs are not plan items, so a plan proposal can no longer carry them: the run
+// request goes to chat, which can move the stated run days (set_endurance_schedule)
+// and talk the week through. The draft/apply card below only ever renders an older
+// proposal that already exists.
 function draftEnduranceRuns(instruction: unknown): void {
   if (_endDrafting) return;
-  enduranceComposerLock();
-  const button = view.querySelector("#endDraftBtn");
-  if (button) btnBusy(button, "Asking…");
-  const status = view.querySelector("#endDraftStatus");
-  if (status) status.innerHTML = CairnUi.jobCaptionHtml();
-  const draftWrap = view.querySelector("#endDraft");
-  if (draftWrap) draftWrap.innerHTML = "";
-  runOp("proposal", { agent: "auto", instruction: String(instruction || "") }, enduranceProposalOpOpts());
+  const text = String(instruction || "").trim().slice(0, 600);
+  const g = globalThis as unknown as {
+    state?: { chatPrefill?: string | null };
+    activateTab?: (name: string) => unknown;
+  };
+  if (g.state) g.state.chatPrefill = text;
+  if (typeof g.activateTab === "function") g.activateTab("chat");
 }
 
 function enduranceProposalOpOpts(): ClientAgentOpHandlers {
@@ -262,7 +260,7 @@ function enduranceProposalOpOpts(): ClientAgentOpHandlers {
       const status = view.querySelector("#endDraftStatus");
       if (!status) return;
       status.textContent = enduranceModel().record(error).agent_status === "unconfigured"
-        ? "Drafting runs needs a coaching agent — connect one in Settings. You can still edit runs in Training."
+        ? "Drafting runs needs a coaching agent — connect one in Settings."
         : "The coach couldn't finish — try again, or pick another agent in Settings.";
     },
   };

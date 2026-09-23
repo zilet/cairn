@@ -32,7 +32,7 @@ function loadPreparation() {
   return context;
 }
 
-test("Today plan/session model groups sets, matches cardio once, prunes pending off-plan, and chooses prefill", () => {
+test("Today plan/session model groups sets, drops a stale run item, prunes pending off-plan, and chooses prefill", () => {
   const context = loadPreparation();
   const model = context.CairnTodayPlanSessionModel;
   const session = {
@@ -46,25 +46,21 @@ test("Today plan/session model groups sets, matches cardio once, prunes pending 
   const loggedByEx = model.groupLoggedSets(session);
   assert.deepEqual(plain(loggedByEx.Bench.map((set) => set.set_number)), [1, 2]);
 
+  // Runs left the strength plan. A cardio item an older payload still carries is
+  // dropped by the model itself — never an active, skipped or matched card.
   const items = [{ exercise: "Bench" }, { exercise: "Squat" }, { kind: "cardio", label: "Easy run" }];
-  const efforts = [{ label: "Easy run" }, { label: "Easy run" }];
-  const matchedCardio = model.matchCardioEfforts(
-    items.filter((item) => item.kind === "cardio"),
-    efforts,
-    (item, effort) => item.label === effort?.label
-  );
-  assert.equal(matchedCardio.size, 1);
+  assert.equal(model.matchCardioEfforts, undefined, "no run is matched against the lift list any more");
+  assert.deepEqual(plain(model.planItems({ items })), [{ exercise: "Bench" }, { exercise: "Squat" }]);
   const groups = model.itemGroups({
     items,
     loggedByEx,
-    matchedCardio,
     skips: session.skips,
-    isCardioItem: (item) => item.kind === "cardio",
-    cardioLabel: (item) => item.label || "Cardio",
   });
   assert.deepEqual(plain(groups.planEx), ["Bench"]);
   assert.deepEqual(plain(groups.offPlanEx), ["Curl"]);
   assert.deepEqual(plain(groups.skippedItems), [{ exercise: "Squat" }]);
+  assert.deepEqual(plain(groups.activeItems), [{ exercise: "Bench" }]);
+  assert.equal(groups.cardioItems, undefined);
 
   const state = {
     logDate: "2026-06-30",
@@ -245,7 +241,7 @@ test("a name the /last-sets response never mentions is not cached as 'no last se
   assert.equal(cached.has("last-set:Squat"), false, "silence is unknown, never a pinned null");
 });
 
-test("Today plan/session preparation assembles cardio, pending off-plan, prescriptions, and prefill data", async () => {
+test("Today plan/session preparation assembles lifts only, pending off-plan, prescriptions, and prefill data", async () => {
   const context = loadPreparation();
   const apiRequests = [];
   const cachedRequests = [];
@@ -273,9 +269,6 @@ test("Today plan/session preparation assembles cardio, pending off-plan, prescri
     session: { skips: ["Easy run"], sets: [] },
     isToday: true,
     suggestedPlanDayNumber: async () => 1,
-    isCardioItem: (item) => item.kind === "cardio",
-    cardioLabel: (item) => item.label || "Cardio",
-    cardioEffortMatches: (item, effort) => item.label === effort?.label,
     api: async (path) => {
       apiRequests.push(path);
       if (path.startsWith("/cardio")) return [{ label: "Easy run", duration_min: 38 }];
@@ -293,7 +286,11 @@ test("Today plan/session preparation assembles cardio, pending off-plan, prescri
   });
 
   assert.equal(result.day.name, "Strength + run");
-  assert.equal(result.matchedCardio.size, 1);
+  // The old payload's run never reaches the lift card or the session.
+  assert.deepEqual(plain(result.day.items.map((item) => item.exercise)), ["Bench"]);
+  assert.deepEqual(plain(result.activeItems.map((item) => item.exercise)), ["Bench"]);
+  assert.equal(result.matchedCardio, undefined);
+  assert.equal(result.cardioItems, undefined);
   assert.equal(result.skippedItems.length, 0);
   assert.deepEqual(result.pendingOffPlan, [{ name: "Curl" }]);
   assert.deepEqual(state.pendingOffPlan["2026-06-30"], [{ name: "Curl" }]);
@@ -304,13 +301,12 @@ test("Today plan/session preparation assembles cardio, pending off-plan, prescri
     duration_sec: null,
   });
   assert.equal(result.rxFor("Bench").action, "overload");
-  assert.equal(result.hasSyncedCardioToday, true);
-  assert.equal(result.expectingRun, false);
-  assert.deepEqual(apiRequests, [
-    "/cardio?date=2026-06-30",
-    "/settings",
-    "/strength-journey",
-  ]);
+  // A day that holds a lift never asks whether a run synced: that question only
+  // names a lift-less day "a run", and the planned run speaks from the agenda.
+  assert.equal(result.hasSyncedCardioToday, false);
+  assert.equal(result.isRunDay, false);
+  assert.equal(result.expectingRun, undefined);
+  assert.deepEqual(apiRequests, ["/strength-journey"]);
   assert.equal(
     cachedRequests.some((request) => request.path === "/program/progression?day=1"),
     true
@@ -371,9 +367,6 @@ test("durable daily composition wins over the weekly plan and preserves saved or
     suggestedPlanDayNumber: async () => {
       throw new Error("durable composition should bypass selection");
     },
-    isCardioItem: (item) => item.kind === "cardio",
-    cardioLabel: (item) => item.exercise || "Cardio",
-    cardioEffortMatches: () => false,
     api: async (path) => (path === "/strength-journey" ? {} : []),
     peekCached: () => null,
     cachedApi: async (path) => {
@@ -387,7 +380,8 @@ test("durable daily composition wins over the weekly plan and preserves saved or
   assert.equal(result.day.name, "Deadlift + bench");
   assert.equal(result.day.focus, "Full body");
   assert.equal(state.day, null, "custom session does not inherit Pull's day number");
-  assert.deepEqual(plain(result.activeItems.map((item) => item.exercise)), ["Deadlift", "Easy ride", "Pallof Press"]);
+  // Saved order holds; a run an older snapshot still carries is not a card.
+  assert.deepEqual(plain(result.activeItems.map((item) => item.exercise)), ["Deadlift", "Pallof Press"]);
   assert.equal(result.activeItems[0].fromSession, true);
   assert.equal(result.activeItems[0].fromPlan, false);
   assert.equal(

@@ -291,4 +291,113 @@ export const MIGRATIONS_101_150: Migration[] = [
       if (cleared) log.info(`[migrate] v109: cleared ${cleared} HRV value(s) that were Garmin's weekly average.`);
     },
   },
+  {
+    version: 110,
+    name: "plan-days-strength-only",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // Plan days hold STRENGTH work only. Runs moved to the run engine and the stated
+    // run days (weeklyRunPlan / flexibleTrainingAgenda compute every week live), and a
+    // rest day is now a calendar weekday the athlete neither lifts nor runs. So the
+    // repair removes what the plan used to carry for them:
+    //   1. every run item (plan_items.kind = 'cardio');
+    //   2. every plan day that carried no strength work — a v99 rest row, or a day that
+    //      held only runs. An empty TRAINING day that never held a run is an editor
+    //      scaffold and is left alone.
+    // History is never orphaned: a session or a composed card that pointed at a removed
+    // day keeps its row with the link cleared (the ring re-reads it off what was lifted,
+    // exactly as it does for any unlinked session). Remaining day_numbers are kept as
+    // they are — nothing needs them contiguous. Idempotent: a second pass finds no run
+    // item and no such day.
+    up: (db) => {
+      // No blanket try/catch — a real failure must roll the whole repair back rather
+      // than half-apply it. A partial database (a household instance or a test harness
+      // jumping from an old schema) that lacks one of the tables simply has nothing of
+      // that kind to repair.
+      const hasTable = (name: string): boolean =>
+        !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
+      const hasColumn = (table: string, column: string): boolean =>
+        (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
+      if (!hasTable("plan_days") || !hasTable("plan_items")) return;
+      if (!hasColumn("plan_items", "kind") || !hasColumn("plan_days", "day_type")) return;
+      const doomed = (
+        db
+          .prepare(
+            `SELECT pd.id AS id FROM plan_days pd
+              WHERE COALESCE(pd.day_type, 'training') = 'rest'
+                 OR (EXISTS (SELECT 1 FROM plan_items pi WHERE pi.plan_day_id = pd.id AND pi.kind = 'cardio')
+                     AND NOT EXISTS (SELECT 1 FROM plan_items pi WHERE pi.plan_day_id = pd.id
+                                      AND COALESCE(pi.kind, 'strength') != 'cardio'))`
+          )
+          .all() as Array<{ id: number }>
+      ).map((row) => Number(row.id));
+      for (const id of doomed) {
+        if (hasTable("sessions")) db.prepare(`UPDATE sessions SET plan_day_id = NULL WHERE plan_day_id = ?`).run(id);
+        if (hasTable("daily_session_compositions")) {
+          db.prepare(`UPDATE daily_session_compositions SET plan_day_id = NULL WHERE plan_day_id = ?`).run(id);
+        }
+      }
+      const removedItems = Number(db.prepare(`DELETE FROM plan_items WHERE kind = 'cardio'`).run().changes);
+      let removedDays = 0;
+      for (const id of doomed) {
+        db.prepare(`DELETE FROM plan_items WHERE plan_day_id = ?`).run(id);
+        removedDays += Number(db.prepare(`DELETE FROM plan_days WHERE id = ?`).run(id).changes);
+      }
+      // Every remaining day is a training day; the column stays for historical reads.
+      db.prepare(`UPDATE plan_days SET day_type = 'training' WHERE COALESCE(day_type, 'training') != 'training'`).run();
+      // 3. An open draft that only ever proposed RUNS (the weekly run-plan drafts, a
+      //    run-only chat or evolution draft) can no longer apply — runs are not plan
+      //    items. Retire it as the system does a stale draft ('superseded'), cancel any
+      //    announced/pending decision that would try to land it at the next boundary, and
+      //    close its review hold — the same three steps setProposalStatus takes, inlined
+      //    because a migration never calls app code.
+      let retiredDrafts = 0;
+      if (hasTable("plan_proposals") && hasColumn("plan_proposals", "parsed_json")) {
+        const drafts = db
+          .prepare(`SELECT id, parsed_json FROM plan_proposals WHERE status = 'draft'`)
+          .all() as Array<{ id: number; parsed_json: string | null }>;
+        for (const draft of drafts) {
+          let parsed: any = null;
+          try {
+            parsed = draft.parsed_json ? JSON.parse(draft.parsed_json) : null;
+          } catch {
+            continue; // unreadable — left for a person
+          }
+          const hasRuns = Array.isArray(parsed?.cardio) && parsed.cardio.length > 0;
+          const hasStrength =
+            (Array.isArray(parsed?.changes) && parsed.changes.length > 0) ||
+            (Array.isArray(parsed?.days) && parsed.days.length > 0);
+          if (!hasRuns || hasStrength) continue;
+          const id = Number(draft.id);
+          db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(id);
+          retiredDrafts++;
+          if (!hasTable("brain_decisions")) continue;
+          const linked = db
+            .prepare(
+              `SELECT id, status FROM brain_decisions
+                WHERE status IN ('announced','pending','review')
+                  AND ((source_ref_type = 'plan_proposal' AND source_ref_key = ?)
+                       OR json_extract(action_json, '$.proposal_id') = ?)`
+            )
+            .all(String(id), id) as Array<{ id: number; status: string }>;
+          for (const decision of linked) {
+            db.prepare(`UPDATE brain_decisions SET status = ? WHERE id = ?`).run(
+              decision.status === "review" ? "superseded" : "canceled",
+              decision.id
+            );
+            if (hasTable("brain_expectations")) {
+              db.prepare(
+                `UPDATE brain_expectations SET status = 'canceled' WHERE decision_id = ? AND status IN ('pending','mature')`
+              ).run(decision.id);
+            }
+          }
+        }
+      }
+      if (removedItems || removedDays || retiredDrafts) {
+        log.info(
+          `[migrate] v110: removed ${removedItems} run item(s) and ${removedDays} non-lifting plan day(s); retired ${retiredDrafts} run-only draft(s).`
+        );
+      }
+    },
+  },
 ];

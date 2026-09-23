@@ -664,11 +664,13 @@ test("an ordinary snapshot with no signal_support never reaches", () => {
   assert.deepEqual(env.reach.backed_by, []);
 });
 
-test("a saturated main lift group withdraws reach", () => {
+// Deep only (2026-09-23): a SHALLOW saturation on the main lift's group holds that
+// lift and no longer parks the day's reach — see test/eliteEnvelope.test.js.
+test("a deeply saturated main lift group withdraws reach", () => {
   const env = buildDailySessionDecision(
     snapshot({
       signal_support: pushSupport(),
-      muscle_load: [{ group: "quads", days_ago: 1, saturated: true, source: "strength" }],
+      muscle_load: [{ group: "quads", days_ago: 1, saturated: true, source: "strength", deep: true }],
     }),
     { now: NOW }
   );

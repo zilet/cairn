@@ -75,11 +75,10 @@ test("accepting a meal plan retires the other meal-plan drafts", () => {
   assert.equal(byId[a.id], "superseded", "the other draft is retired");
 });
 
-// A proposal can carry a week of run prescriptions (`cardio`) applied SURGICALLY:
-// each run attaches to its day, replacing that day's cardio while strength stays put;
-// a day with no plan yet is created as a dedicated run day. This is how a runner/hybrid
-// athlete accepts "this week's runs" without a full-plan restructure.
-test("applying a proposal's cardio prescriptions adds runs without disturbing strength", () => {
+// Runs are not plan items: a legacy proposal's `cardio` week is SET ASIDE (the week's
+// runs follow the stated run days and the run engine, live), never written, and never
+// an error that rolls back the strength half beside it.
+test("applying a proposal's cardio prescriptions sets the runs aside without disturbing strength", () => {
   resetTables("plan_proposals", "plan_items", "plan_days");
   repo.savePlanDay(1, "Lower", "legs", [{ exercise: "ZRunSquat", sets: 3, target_weight: 185 }]);
   const p = repo.createProposal("stub", "", "{}", {
@@ -90,24 +89,34 @@ test("applying a proposal's cardio prescriptions adds runs without disturbing st
       { day_number: 6, label: "Long run", target_distance_km: 16, target_zone: "easy", reason: "weekly long" },
     ],
   });
-  repo.applyProposal(p.id);
+  const r = repo.applyProposal(p.id);
+  assert.equal(r.ok, true, "the strength half applied");
+  assert.equal(r.runs_set_aside, 2, "both runs were set aside, not written");
 
-  // Day 1 keeps its (progressed) strength item AND gains the easy run.
+  // Day 1 keeps its (progressed) strength item and gains no run.
   const d1 = repo.getPlanDay(1);
   const d1strength = d1.items.filter((i) => i.kind !== "cardio");
   const d1cardio = d1.items.filter((i) => i.kind === "cardio");
   assert.equal(d1strength.length, 1, "strength work preserved");
   assert.equal(d1strength[0].target_weight, 190, "strength target progressed in place");
-  assert.equal(d1cardio.length, 1, "the easy run was added to day 1");
-  assert.equal(d1cardio[0].target_distance_km, 8);
-  assert.equal(d1cardio[0].target_zone, "Z2");
+  assert.equal(d1cardio.length, 0, "no run was written onto day 1");
 
-  // Day 6 was created as a dedicated run day with the long run.
-  const d6 = repo.getPlanDay(6);
-  assert.ok(d6, "a dedicated run day was created");
-  const d6cardio = d6.items.filter((i) => i.kind === "cardio");
-  assert.equal(d6cardio.length, 1);
-  assert.equal(d6cardio[0].target_distance_km, 16);
+  // No dedicated run day is created.
+  assert.equal(repo.getPlanDay(6), null, "no run day was created");
+});
+
+test("a proposal carrying ONLY runs lands nothing and stays a draft", () => {
+  resetTables("plan_proposals", "plan_items", "plan_days");
+  repo.savePlanDay(1, "Lower", "legs", [{ exercise: "ZRunSquat", sets: 3, target_weight: 185 }]);
+  const p = repo.createProposal("stub", "", "{}", {
+    summary: "this week's runs",
+    cardio: [{ day_number: 6, label: "Long run", target_distance_km: 16, target_zone: "easy" }],
+  });
+  const r = repo.applyProposal(p.id);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, repo.RUNS_ARE_NOT_PLAN_ITEMS);
+  assert.equal(repo.getProposal(p.id).status, "draft");
+  assert.equal(repo.getPlanDay(6), null);
 });
 
 // Applying a proposal whose change references a movement NOT yet on that day ADDS it

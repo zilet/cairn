@@ -44,8 +44,12 @@ test("a Done on the HRV directive holds through new below-band mornings", () => 
   repo.upsertGarminDailyMetric({ date: localDaysAgo(0), hrv_ms: 41 });
   repo.deriveDirectives();
   assert.equal(hrvDirectives().length, 0, "a new daily reading is not news");
-  // A materially worse morning is.
+  // One bad morning is not news either: the directive reads the WEEK's average.
   repo.upsertGarminDailyMetric({ date: localDaysAgo(0), hrv_ms: 25 });
+  repo.deriveDirectives();
+  assert.equal(hrvDirectives().length, 0, "a single night never resurfaces a wearable directive");
+  // A materially worse WEEK is.
+  for (let i = 2; i >= 1; i--) repo.upsertGarminDailyMetric({ date: localDaysAgo(i), hrv_ms: 25 });
   repo.deriveDirectives();
   assert.equal(hrvDirectives().length, 1);
 });

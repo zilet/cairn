@@ -29,6 +29,12 @@ type HealthMarkersRow = {
   // The active health_directive's own athlete-facing sentence when this marker
   // is currently shaping training/meals/watch — null otherwise (propagation.ts).
   active_directive?: unknown;
+  // Wearable recovery markers (HRV / Resting HR) only — what the status ABOVE is judged
+  // against (health-focus.ts's wearableWeeklyMarkerRead). 'week' carries a plain-words
+  // note ("this week's average (N nights)"); 'single' means too few nights for a trend,
+  // so `latest` is shown for reference but `in_optimal` is null — no status drawn from it.
+  status_basis?: unknown;
+  status_note?: unknown;
 };
 
 type HealthMarkersChartPoint = {
@@ -402,7 +408,8 @@ function markerPanelHtml(marker: HealthMarkersRow | null | undefined): string {
   // The row header now LEADS with the trajectory (trend-lead), so the panel caption
   // no longer repeats it for a multi-reading marker; a single reading still says so.
   const single = chart ? "" : "single reading";
-  const caption = [band ? escHtml(band) : "", side, single].filter(Boolean).join(" · ");
+  const weeklyNote = marker?.status_basis === "week" && marker?.status_note ? escHtml(String(marker.status_note)) : "";
+  const caption = [band ? escHtml(band) : "", side, single, weeklyNote].filter(Boolean).join(" · ");
   const latestValue = latest.value != null && latest.value !== "" ? formatMarkerNumber(latest.value) : "";
   const age = latest.date ? relAge(String(latest.date)) : "";
   const latestLine = latestValue
@@ -429,7 +436,11 @@ function hmkRowHtml(marker: HealthMarkersRow | null | undefined, index = 0): str
   // Every row shows the NUMBER it's compared to (optimal band, else lab range) —
   // never a written-out "in range". The status colour, not prose, says good/off/out.
   const ref = markerReferenceSub(marker);
-  const sub = [age, ref].filter(Boolean).join(" · ");
+  // A wearable recovery marker (HRV / Resting HR) whose status came from the week names
+  // that plainly — never a number-as-grade, and never for a lab reading (status_basis
+  // is 'single' there, so this stays empty).
+  const weeklyNote = marker?.status_basis === "week" && marker?.status_note ? String(marker.status_note) : "";
+  const sub = [age, ref, weeklyNote].filter(Boolean).join(" · ");
   const when = sub
     ? `<span class="hmk-when"${latest.date ? ` title="${escAttr(absDate(String(latest.date)))}"` : ""}>${escHtml(sub)}</span>`
     : "";

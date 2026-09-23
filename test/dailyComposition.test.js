@@ -780,19 +780,31 @@ test("real knee injury impacts feed the daily envelope through affected.exercise
   assert.equal(decision.candidates.find((item) => item.exercise === "Back Squat")?.action, "exclude");
 });
 
+// Plan days hold strength only (runs are the calendar's), so a descriptive tempo run
+// reaches the day's card as an agent-composed item — and the LIVE gather → decision
+// envelope is what certifies it against protective areas and reported joint pain.
+function descriptiveTempoItem() {
+  return {
+    exercise: "Tempo run",
+    kind: "cardio",
+    note: DESCRIPTIVE_TEMPO_NOTE,
+    target_duration_min: 40,
+    target_zone: "Z3",
+  };
+}
+
+function hybridPlanWithTempoRow() {
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  // The cardio row is stripped on save: the plan day holds the bench alone.
+  repo.savePlanDay(1, "Hybrid", "Run plus upper", [
+    descriptiveTempoItem(),
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 },
+  ]);
+}
+
 for (const area of ["knee", "ankle", "hip"]) {
-  test(`protective ${area} constraints flow through cardio gather, decision, and composition`, () => {
-    repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
-    repo.savePlanDay(1, "Hybrid", "Run plus upper", [
-      {
-        exercise: "Tempo run",
-        kind: "cardio",
-        note: DESCRIPTIVE_TEMPO_NOTE,
-        target_duration_min: 40,
-        target_zone: "Z3",
-      },
-      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 },
-    ]);
+  test(`protective ${area} constraints flow through gather, decision, and cardio composition`, () => {
+    hybridPlanWithTempoRow();
     repo.addContextEvent({
       kind: "injury",
       title: `Protective ${area}`,
@@ -801,32 +813,34 @@ for (const area of ["knee", "ankle", "hip"]) {
     });
 
     const snapshot = repo.gatherDailyDecisionSnapshot(DATE);
-    const cardio = snapshot.plan_items.find((item) => item.kind === "cardio");
-    assert.equal(cardio.exercise, "Tempo run", "descriptive prose derives a movement-bearing run identity");
-    assert.equal(repo.getPlanDay(1).items[0].note, DESCRIPTIVE_TEMPO_NOTE, "athlete-facing detail remains stored");
+    assert.deepEqual(
+      snapshot.plan_items.map((item) => item.exercise),
+      ["Bench Press"],
+      "the plan day carries no run — runs are the calendar's"
+    );
     const decision = repo.buildDailySessionDecision(snapshot, { now: "2031-07-01T12:00:00.000Z" });
     assert.ok(decision.protective_exclusions.some((item) => item.areas.includes(area)));
-    assert.equal(
-      decision.candidates.find((item) => item.exercise === "Tempo run")?.action,
-      "exclude",
-      "the pure decision routes the derived run identity through pain relevance"
-    );
 
-    const session = deterministicComposedSession(decision);
+    const { session, validation } = normalizeComposedSession(
+      agentSession([
+        descriptiveTempoItem(),
+        { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 },
+      ]),
+      decision
+    );
     assert.deepEqual(session.items.map((item) => item.exercise), ["Bench Press"]);
+    assert.ok(
+      validation.rejected.some(
+        (entry) => entry.exercise === "Tempo run" && entry.reason === "cardio_uncertified_under_exclusions"
+      ),
+      "the descriptive run identity is routed through pain relevance against the live protective areas"
+    );
+    assert.deepEqual(deterministicComposedSession(decision).items.map((item) => item.exercise), ["Bench Press"]);
   });
 }
 
-test("descriptive tempo survives save, gather, decision, and composition under unrelated shoulder protection", () => {
-  repo.savePlanDay(1, "Run", "Endurance", [
-    {
-      exercise: "Tempo run",
-      kind: "cardio",
-      note: DESCRIPTIVE_TEMPO_NOTE,
-      target_duration_min: 40,
-      target_zone: "Z3",
-    },
-  ]);
+test("descriptive tempo survives gather, decision, and composition under unrelated shoulder protection", () => {
+  hybridPlanWithTempoRow();
   repo.addContextEvent({
     kind: "injury",
     title: "Protective shoulder",
@@ -835,36 +849,37 @@ test("descriptive tempo survives save, gather, decision, and composition under u
   });
 
   const snapshot = repo.gatherDailyDecisionSnapshot(DATE);
-  const cardio = snapshot.plan_items.find((item) => item.kind === "cardio");
-  assert.equal(cardio.exercise, "Tempo run");
+  assert.equal(snapshot.plan_items.some((item) => item.kind === "cardio"), false);
   const decision = repo.buildDailySessionDecision(snapshot, { now: "2031-07-01T12:00:00.000Z" });
-  assert.notEqual(decision.candidates.find((item) => item.exercise === "Tempo run")?.action, "exclude");
-  const session = deterministicComposedSession(decision);
+  assert.ok(decision.protective_exclusions.some((item) => item.areas.includes("shoulder")));
+  const { session, validation } = normalizeComposedSession(agentSession([descriptiveTempoItem()]), decision);
+  assert.ok(!validation.rejected.some((entry) => entry.exercise === "Tempo run"));
   assert.equal(session.items[0].exercise, "Tempo run");
-  assert.equal(session.items[0].note, DESCRIPTIVE_TEMPO_NOTE);
+  assert.equal(session.items[0].note, DESCRIPTIVE_TEMPO_NOTE, "athlete-facing detail rides on the card");
 });
 
-test("descriptive tempo is excluded through save, gather, decision, and composition for recent left-knee pain", () => {
-  repo.savePlanDay(1, "Hybrid", "Run plus upper", [
-    {
-      exercise: "Tempo run",
-      kind: "cardio",
-      note: DESCRIPTIVE_TEMPO_NOTE,
-      target_duration_min: 40,
-      target_zone: "Z3",
-    },
-    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 },
-  ]);
+test("descriptive tempo is excluded through gather, decision, and composition for recent left-knee pain", () => {
+  hybridPlanWithTempoRow();
   db.prepare(`INSERT INTO sessions (date, joint_pain, kind) VALUES (?, 'left knee', 'strength')`).run(
     addDaysISO(DATE, -1)
   );
 
   const snapshot = repo.gatherDailyDecisionSnapshot(DATE);
   assert.equal(snapshot.feedback.joint_pain, "left knee");
-  assert.equal(snapshot.plan_items.find((item) => item.kind === "cardio").exercise, "Tempo run");
+  assert.equal(snapshot.plan_items.some((item) => item.kind === "cardio"), false);
   const decision = repo.buildDailySessionDecision(snapshot, { now: "2031-07-01T12:00:00.000Z" });
-  assert.equal(decision.candidates.find((item) => item.exercise === "Tempo run")?.action, "exclude");
-  assert.deepEqual(deterministicComposedSession(decision).items.map((item) => item.exercise), ["Bench Press"]);
+  assert.equal(decision.reported_joint_pain, "left knee");
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      descriptiveTempoItem(),
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 },
+    ]),
+    decision
+  );
+  assert.deepEqual(session.items.map((item) => item.exercise), ["Bench Press"]);
+  assert.ok(
+    validation.rejected.some((entry) => entry.exercise === "Tempo run" && entry.reason === "cardio_pain_relevant")
+  );
 });
 
 test("agent-authored descriptive tempo is canonicalized before candidate and protective-area checks", () => {
@@ -1902,10 +1917,10 @@ test("two agent-nested top sets on one day still seat only one top-set card", ()
   assert.equal(session.items[2].target_weight, 155, "the bench renders as its plain working block only");
 });
 
-// ── the athlete's own plan outranks the stated-run-days filter ───────────────
-// Stated run days anchor the SUGGESTION engines. A run written into the week's
-// own template is structure the athlete authored, and composition is not where
-// their week quietly loses a session.
+// ── stated run days bind every composed run ──────────────────────────────────
+// Stated run days anchor the run engine, and plan days carry no runs at all
+// (migration 110), so a composed run on a weekday the athlete did not name for
+// running is dropped whoever authored it — there is no plan-prescribed exception.
 
 const WEDNESDAY = "2031-07-02"; // DATE is a Tuesday; the day after is not a stated run day
 const TUE_THU_SAT = {
@@ -1927,11 +1942,12 @@ function statedRunDaysProfile() {
   });
 }
 
-test("a run the plan itself prescribes survives an unscheduled weekday", () => {
+test("a plan day cannot prescribe a run, so an unscheduled weekday's run is dropped even on a template day", () => {
   statedRunDaysProfile();
   repo.savePlanDay(3, "Easy run", "Easy aerobic", [
     { kind: "cardio", exercise: "Easy run", target_distance_km: 6, target_zone: "easy" },
   ]);
+  assert.deepEqual(repo.getPlanDay(3).items, [], "the cardio row is stripped on save");
   const env = () =>
     envelope({
       date: WEDNESDAY,
@@ -1941,14 +1957,23 @@ test("a run the plan itself prescribes survives an unscheduled weekday", () => {
     agentSession([{ kind: "cardio", exercise: "Easy run", target_distance_km: 6, target_zone: "easy" }]),
     env()
   );
+  assert.ok(!session?.items.some((i) => i.kind === "cardio"), "Wednesday is not a stated run day");
+  assert.ok(validation.rejected.some((r) => r.reason === "not_scheduled_run_day"));
+  // The deterministic half of the same morning carries no run either — same normalizer.
+  const deterministic = deterministicComposedSession(env());
+  assert.ok(!deterministic.items.some((i) => i.kind === "cardio"));
+});
+
+test("a composed run on a stated run weekday survives the scheduled-day filter", () => {
+  statedRunDaysProfile();
+  const { session, validation } = normalizeComposedSession(
+    agentSession([{ kind: "cardio", exercise: "Easy run", target_distance_km: 6, target_zone: "easy" }]),
+    envelope({ date: DATE })
+  );
   assert.ok(session);
-  assert.equal(session.items.length, 1, "the athlete's own Wednesday run is not composition's to delete");
+  assert.equal(session.items.length, 1, "Tuesday is a stated run day");
   assert.equal(session.items[0].kind, "cardio");
   assert.ok(!validation.rejected.some((r) => r.reason === "not_scheduled_run_day"));
-  // The deterministic half of the same morning keeps it too — same normalizer.
-  const deterministic = deterministicComposedSession(env());
-  assert.equal(deterministic.items.length, 1);
-  assert.equal(deterministic.items[0].kind, "cardio");
 });
 
 test("a run nobody planned is still dropped on an unscheduled weekday", () => {

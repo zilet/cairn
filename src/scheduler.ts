@@ -22,9 +22,7 @@ import {
   orphanSweepSignature,
   applyDueAnnouncedDecisions,
   applyProposalWithAutonomy,
-  buildRunPlanWithAutonomy,
 } from "./domain/brain/autonomy-service.js";
-import { lastAppliedRunPlanDate } from "./repo/sessions.js";
 import { registerTrainingCacheClear } from "./repo/training-cache.js";
 import { enqueueAgentJob, ensureWeekAheadJob } from "./agentJobs.js";
 import {
@@ -348,68 +346,10 @@ function daysBetweenStamps(a: string, b: string): number {
   return Number.isFinite(ms) ? Math.round(ms / DAY_MS) : Number.POSITIVE_INFINITY;
 }
 
-// ---- Weekly run-plan apply (Monday) ----
-// The applied plan's cardio rows are the only endurance prescription the Plan
-// screen and run-compliance can see — and NOTHING ever rebuilt them. The only
-// writers were the manual Apply button and the apply_run_plan MCP tool, so a run
-// plan applied once kept prescribing that week's mileage forever while the live
-// weekly mix moved on ("9.1 of 7.3 km this week", from a plan weeks out of date).
-//
-// This is the missing cadence: one bounded, reversible volume step at the natural
-// boundary of a training week. Autonomy is NOT re-implemented here —
-// buildRunPlanWithAutonomy hands the proposal to the same policy layer as every
-// other adaptation, which owns the tier, the announcement, the decision ledger and
-// the one-tap Undo. A week that already has an applied run plan is a calm no-op,
-// as is an athlete the deterministic engine declines to prescribe runs for.
-export const RUN_PLAN_APPLY_STATE_KEY = "run_plan_apply_last_slot";
-export const RUN_PLAN_APPLY_DAY = 1; // Monday
-
-// The gate, exported so the ownership test drives the real one: bg ops off means
-// the cadence is off, and the Monday slot is miss-tolerant like every other.
-export function runPlanApplyDue(now: Date, settings: { bg_ops_enabled: boolean; coach_hour: number }): boolean {
-  if (!settings.bg_ops_enabled) return false;
-  return weeklySlotDue(now, RUN_PLAN_APPLY_DAY, settings.coach_hour, RUN_PLAN_APPLY_STATE_KEY);
-}
-
-export function runPlanAppliedSince(weekStartISO: string): boolean {
-  const applied = lastAppliedRunPlanDate();
-  return !!applied && applied >= weekStartISO;
-}
-
-// The exact body the Monday tick runs, exported so the ownership test drives the
-// real decision rather than a restatement of it.
-export function weeklyRunPlanApplyTask(weekStartISO: string): repo.SchedulerTaskCompletion<unknown> {
-  // The machine only starts LEADING run weeks once the athlete has applied one
-  // auto-built run plan through the explicit propose/apply flow. Until that has
-  // happened the cardio rows on the plan are hand-authored — exactly what the
-  // athlete asked for, and never stale (see appliedRunPlanCoversWeek in
-  // repo/sessions.ts) — so there is nothing here to refresh, and under the default
-  // "lead" posture this tick would otherwise quiet-apply a machine week straight
-  // over the athlete's own. Handing over the run week stays an explicit act.
-  if (lastAppliedRunPlanDate() === null) {
-    log.debug(`[proactive] no auto run plan has ever been applied — the run week is the athlete's (calm no-op).`);
-    return { outcome: "no_op" };
-  }
-  if (runPlanAppliedSince(weekStartISO)) {
-    log.debug(`[proactive] this week's run plan is already applied (calm no-op).`);
-    return { outcome: "no_op" };
-  }
-  const result = buildRunPlanWithAutonomy(weekStartISO);
-  if (!result.ok) {
-    // A designed ok:false — no running history / goal to shape a week from.
-    log.debug(`[proactive] no run week to prescribe (calm no-op).`);
-    return { outcome: "no_op" };
-  }
-  const autonomy: any = result.autonomy;
-  log.info(
-    autonomy?.pending || autonomy?.announced
-      ? `[proactive] scheduled this week's run plan for its natural boundary.`
-      : autonomy?.tier === "quiet_apply"
-        ? `[proactive] applied this week's run plan.`
-        : `[proactive] this week's run plan is review-only under the configured posture.`
-  );
-  return { outcome: "succeeded", value: result };
-}
+// ---- (retired) Weekly run-plan apply ----
+// There was a Monday tick here that re-wrote the week's runs onto the plan as cardio
+// rows. Runs are never plan items now (migration 110): weeklyRunPlan computes each
+// week live from the stated run days, so there is nothing to keep current.
 
 /**
  * A once-per-day latch that remembers the day the work FINISHED, not the day it
@@ -1507,36 +1447,6 @@ export function startScheduler() {
     }
   };
 
-  // Its OWN tick, deliberately not a step inside proactiveTick: keeping the
-  // endurance week current is deterministic and spawns no agent, so it must not
-  // ride the settings.proactive_enabled toggle. Miss-tolerant like every other
-  // weekly slot — a process asleep on Monday morning catches up on the next tick.
-  let runPlanApplyBusy = false;
-  const runPlanApplyTick = async () => {
-    if (runPlanApplyBusy) return;
-    const now = new Date();
-    // The Monday slot's stamp depends on settings.coach_hour ONLY on the target day
-    // itself — on the other six, `weeklySlotStamp` walks back to the same Monday whatever
-    // the hour is. So when the two extreme hours agree, the stamp is settings-independent
-    // and the acknowledged-slot check can be made without loading settings at all: six
-    // days in seven, this tick costs one app_state read instead of two statements.
-    const stampAtMidnight = weeklySlotStamp(now, RUN_PLAN_APPLY_DAY, 0);
-    if (
-      stampAtMidnight === weeklySlotStamp(now, RUN_PLAN_APPLY_DAY, 23) &&
-      repo.getAppState(RUN_PLAN_APPLY_STATE_KEY) === stampAtMidnight
-    )
-      return;
-    const settings = repo.getSettings();
-    if (!runPlanApplyDue(now, settings)) return;
-    const slot = weeklySlotStamp(now, RUN_PLAN_APPLY_DAY, settings.coach_hour);
-    runPlanApplyBusy = true;
-    try {
-      await runScheduled(RUN_PLAN_APPLY_STATE_KEY, slot, RUN_PLAN_APPLY_STATE_KEY, () => weeklyRunPlanApplyTask(slot));
-    } finally {
-      runPlanApplyBusy = false;
-    }
-  };
-
   const s = repo.getSettings(); // also lazily creates the row (seeding env defaults)
   const schedulerZone = repo.recordedClientTimeZone() ?? "server local time until a device reports its zone";
   log.info(
@@ -1577,14 +1487,12 @@ export function startScheduler() {
   setInterval(inOwnerTimeZone(propagationTick), 60_000); // connected-brain re-derivation (≤ once/day)
   setInterval(inOwnerTimeZone(hrModelTick), 60_000); // personal HR model re-derivation (≤ once/day)
   setInterval(inOwnerTimeZone(weekAheadWarmTick), 60_000); // week-ahead cache warm (≤ once/day)
-  setInterval(inOwnerTimeZone(runPlanApplyTick), 60_000); // keep the applied run week current (Mondays)
   setInterval(heartbeatTick, 60_000); // readiness evidence; no agent/provider dependency
   setTimeout(inOwnerTimeZone(garminTick), 45_000); // the boot-time pass; later passes ride the minute tick
   setTimeout(inOwnerTimeZone(updateCheckTick), 30_000); // first update check shortly after boot (then daily)
   setTimeout(inOwnerTimeZone(propagationTick), 20_000); // catch up a day the process slept through
   setTimeout(inOwnerTimeZone(hrModelTick), 25_000); // same catch-up for the HR model
   setTimeout(inOwnerTimeZone(weekAheadWarmTick), 30_000); // catch up a day the process slept through
-  setTimeout(inOwnerTimeZone(runPlanApplyTick), 25_000); // catch up a Monday the process slept through
   setTimeout(inOwnerTimeZone(boundaryApplyTick), 5_000);
   setTimeout(inOwnerTimeZone(revisionTick), 15_000);
 

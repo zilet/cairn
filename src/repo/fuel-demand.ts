@@ -21,19 +21,21 @@
 //     fixed weekday), so re-deriving them off the weekly template would answer a
 //     different question than the app already answers on screen.
 //   • STRENGTH days come from `planDayStrengthGroups()` (which owns the heavy-lower
-//     classification) projected onto the date with the plan's Monday-anchored
-//     day_number→weekday convention.
+//     classification) laid onto the date by the lifting week's weekday map
+//     (plan-selection's strengthPlanDayOn) — a run or rest weekday carries none.
+//   • A REST day is the calendar's: a weekday the athlete neither lifts nor runs
+//     (calendarDayRead). Plan days hold strength only, so no plan row stands for it.
 //   • LOGGED work refines a date that has already started, via `dayLoad` and
 //     `hybridDayContext().cardio_today`.
 //
 // Absence is neutral: no plan, no agenda, nothing logged → "standard". Nothing here
 // throws; every failure degrades to the neutral read.
-import { db } from "../db.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import type { FlexibleRunKind, FlexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import type { WeeklyRunPlan } from "./run-progression.js";
 import type { PlanDayGroups } from "./training-read.js";
 import { dayLoad, hybridDayContext, planDayStrengthGroups } from "./training-read.js";
+import { calendarDayRead, planDayCandidates, strengthPlanDayOn, thisWeekPlanDayMap } from "./plan-selection.js";
 import { LB_PER_KG, addDaysISO, localDateISO } from "./shared.js";
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { mondayOf } from "../lib/dates.js";
@@ -207,50 +209,45 @@ function neutralDay(date: string): DayFuelDemand {
   return { date, demand: "standard", drivers: [], evidence: NEUTRAL_EVIDENCE.slice() };
 }
 
-// Plan days carry no inherent weekday, so day_number maps sequentially onto Mon..Sun
-// (wrapping for a plan shorter than a week). The SAME convention as the rotation
-// fallback (plan-selection.weekdayCandidate) and the hybrid forward projection
-// (training-read.planDayForFutureDate) — both of which keep it private, so this
-// mirrors the convention rather than reaching through a module boundary for it.
-// Best-effort by design: the agent owns the real day-by-day, and a wrong guess here
-// can only ever cost one quiet carb-bias line.
-function planDayForDate(date: string, ordered: readonly PlanDayGroups[]): PlanDayGroups | null {
-  if (!ordered.length) return null;
-  const weekday = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7; // Mon=0
-  return ordered[weekday % ordered.length] ?? null;
+// The strength plan day `date` carries, and whether it is a CALENDAR rest day, read
+// once per week so a seven-day window never re-derives the ring phase seven times.
+// Best-effort by design: the agent owns the real day-by-day, and a wrong guess here can
+// only ever cost one quiet carb-bias line.
+interface CalendarReader {
+  strengthDay(date: string): PlanDayGroups | null;
+  restDay(date: string): boolean;
 }
 
-interface PlanDayItemCount {
-  items: number;
-  cardio_items: number;
-}
-
-// How many items each plan day carries, so a programmed REST day (no items at all)
-// is distinguishable from a cardio-only day. `planDayStrengthGroups` deliberately
-// ignores cardio items, so on its own an empty group list cannot tell the two apart —
-// and calling a run day "light" is the one mistake this read must not make.
-function planDayItemCounts(): Map<number, PlanDayItemCount> {
-  const out = new Map<number, PlanDayItemCount>();
+function calendarReader(planDays: readonly PlanDayGroups[]): CalendarReader {
+  const byNumber = new Map(planDays.map((day) => [day.day_number, day]));
+  let candidates: ReturnType<typeof planDayCandidates> = [];
   try {
-    const rows = db
-      .prepare(
-        `SELECT pd.day_number AS day_number,
-                COUNT(pi.id) AS items,
-                SUM(CASE WHEN pi.kind = 'cardio' THEN 1 ELSE 0 END) AS cardio_items
-           FROM plan_days pd
-           LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id
-          GROUP BY pd.day_number`
-      )
-      .all() as any[];
-    for (const row of rows) {
-      const dayNumber = Number(row.day_number);
-      if (!Number.isFinite(dayNumber)) continue;
-      out.set(dayNumber, { items: Number(row.items) || 0, cardio_items: Number(row.cardio_items) || 0 });
-    }
+    candidates = planDayCandidates();
   } catch {
-    return out;
+    candidates = [];
   }
-  return out;
+  const weeks = new Map<string, ReturnType<typeof thisWeekPlanDayMap>>();
+  return {
+    strengthDay(date: string): PlanDayGroups | null {
+      if (!candidates.length) return null;
+      try {
+        const monday = mondayOf(date);
+        const week = weeks.get(monday) ?? thisWeekPlanDayMap(date);
+        weeks.set(monday, week);
+        const day = strengthPlanDayOn(date, { candidates, weekMap: week });
+        return day ? (byNumber.get(day.day_number) ?? null) : null;
+      } catch {
+        return null;
+      }
+    },
+    restDay(date: string): boolean {
+      try {
+        return calendarDayRead(date)?.kind === "rest";
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 interface RunDayRead {
@@ -340,8 +337,7 @@ function loggedWork(date: string): LoggedDay {
 
 interface DemandInputs {
   runs: RunDayRead;
-  planDays: readonly PlanDayGroups[];
-  itemCounts: Map<number, PlanDayItemCount>;
+  calendar: CalendarReader;
   today: string;
   carbBasis?: CarbBasis | null;
 }
@@ -351,16 +347,15 @@ function withCarbs(day: DayFuelDemand, basis: CarbBasis | null | undefined, endu
 }
 
 function classify(date: string, inputs: DemandInputs): DayFuelDemand {
-  const { runs, planDays, itemCounts, today } = inputs;
+  const { runs, calendar, today } = inputs;
   const drivers: string[] = [];
   const evidence: string[] = [];
 
   const runKinds = new Set(runs.byDate.get(date) ?? []);
   if (runs.available) evidence.push("flexible_training_agenda");
 
-  const planDay = planDayForDate(date, planDays);
+  const planDay = calendar.strengthDay(date);
   if (planDay) evidence.push("plan_days");
-  const counts = planDay ? itemCounts.get(planDay.day_number) : undefined;
 
   const logged = date <= today ? loggedWork(date) : null;
   if (logged?.strength) evidence.push("logged_sessions");
@@ -382,11 +377,11 @@ function classify(date: string, inputs: DemandInputs): DayFuelDemand {
 
   const demand: FuelDemandLevel = drivers.length
     ? "big"
-    : // A genuine rest day: the plan programs nothing at all that day, no run
+    : // A genuine rest day: the CALENDAR puts neither a lift nor a run here, no run
       // intention has landed on it, and (for a day already underway) nothing has
       // been logged. Anything less certain than that stays standard — absence of
       // evidence is neutral here, never a reason to read a day as light.
-      planDay && counts && counts.items === 0 && !runDay && !logged?.strength && !logged?.cardio
+      !planDay && calendar.restDay(date) && !runDay && !logged?.strength && !logged?.cardio
       ? "light"
       : "standard";
 
@@ -405,8 +400,7 @@ export function dayFuelDemand(date?: string, opts?: FuelDemandOpts): DayFuelDema
   try {
     return classify(d, {
       runs: agendaForWeek(mondayOf(d), today, opts),
-      planDays: planDayStrengthGroups(),
-      itemCounts: planDayItemCounts(),
+      calendar: calendarReader(planDayStrengthGroups()),
       today,
       carbBasis: opts?.carbBasis,
     });
@@ -437,8 +431,7 @@ export function fuelDemandWeek(date?: string, days = 7, opts?: FuelDemandOpts): 
   }
   const through = dates.length ? dates[dates.length - 1] : start;
   try {
-    const planDays = planDayStrengthGroups();
-    const itemCounts = planDayItemCounts();
+    const calendar = calendarReader(planDayStrengthGroups());
     // One agenda per ISO week the window touches — never one per day, which would
     // re-anchor "as of" seven times and hand back seven mutually inconsistent
     // placements of the same movable intentions.
@@ -454,7 +447,7 @@ export function fuelDemandWeek(date?: string, days = 7, opts?: FuelDemandOpts): 
     return {
       as_of: start,
       through,
-      days: dates.map((d) => classify(d, { runs: runsFor(d), planDays, itemCounts, today, carbBasis: opts?.carbBasis })),
+      days: dates.map((d) => classify(d, { runs: runsFor(d), calendar, today, carbBasis: opts?.carbBasis })),
     };
   } catch {
     return { as_of: start, through, days: dates.map((d) => withCarbs(neutralDay(d), opts?.carbBasis)) };

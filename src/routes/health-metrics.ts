@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  deriveWearableDirectives,
   getDailyMetrics,
   getRecoveryBaselineRead,
   getRecoverySummary,
@@ -63,6 +64,15 @@ export function ingestHealthMetrics(body: any = {}, forcedSource?: string) {
       );
     } catch (e: any) {
       errors.push({ date: row.date, error: e?.message ?? "write failed" });
+    }
+  }
+  // A night of HRV / resting HR moves the week a wearable directive reads — re-derive
+  // those (and only those) once per batch, not at the next daily propagation tick.
+  if (saved.length && rows.some((r) => r && (r.hrv_ms != null || r.resting_hr != null))) {
+    try {
+      deriveWearableDirectives();
+    } catch {
+      /* the ingest stands; the daily propagation tick re-derives anyway */
     }
   }
   return { ok: errors.length === 0, saved: saved.length, rows: saved, errors };

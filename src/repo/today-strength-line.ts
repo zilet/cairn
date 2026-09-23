@@ -20,15 +20,19 @@ import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getCachedDayRead } from "./day-read-cache.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
+import { withoutShadowActivities } from "./activity-shadow.js";
 import {
+  calendarDayRead,
   planDayCandidates,
   planDayLabel,
   planDayRole,
   resolveSessionPlanDay,
   selectedPlanDayForDate,
+  type CalendarDayRead,
   type PlanDayCandidate,
   type WeekdayPlanDayRole,
 } from "./plan-selection.js";
+import { RUN_KIND_LABELS } from "./run-edit.js";
 import { localDateISO } from "./shared.js";
 
 export type TodayStrengthState = "not_started" | "in_progress" | "logged" | "rest_day" | "no_lift" | "none";
@@ -75,12 +79,18 @@ function todaySession(date: string): { id: number; plan_day_id: number | null; f
 function runLoggedOn(date: string): { km: number | null } | null {
   try {
     const sport = activitySportWhere("a", RUN_SPORT_PATTERNS);
-    const row = db
-      .prepare(`SELECT COUNT(*) AS n, SUM(a.distance_km) AS km FROM activities a WHERE a.date = ? AND (${sport.sql})`)
-      .get(date, ...sport.params) as any;
-    if (!row || !Number(row.n)) return null;
-    const km = row.km == null || !Number.isFinite(Number(row.km)) ? null : Math.round(Number(row.km) * 10) / 10;
-    return { km };
+    // A hand-logged shadow of a synced run is one outing, not a doubled distance.
+    const rows = withoutShadowActivities(
+      db
+        .prepare(
+          `SELECT a.date AS date, a.type AS type, a.source AS source, a.external_id AS external_id, a.distance_km AS distance_km
+             FROM activities a WHERE a.date = ? AND (${sport.sql})`
+        )
+        .all(date, ...sport.params) as any[]
+    );
+    if (!rows.length) return null;
+    const km = rows.reduce((sum, r) => sum + (Number(r.distance_km) > 0 ? Number(r.distance_km) : 0), 0);
+    return { km: km > 0 ? Math.round(km * 10) / 10 : null };
   } catch {
     return null;
   }
@@ -212,19 +222,53 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
     }
   }
   const run = runLoggedOn(d);
-  const role = day ? planDayRole(day) : null;
+  // No plan day and no session: the CALENDAR says what today is. Plan days hold
+  // strength only, so a weekday the athlete does not lift has no row — a stated run
+  // weekday is a run day (role "endurance"), anything else is a rest day.
+  const calendar: CalendarDayRead | null =
+    !day && !session
+      ? (() => {
+          try {
+            return calendarDayRead(d);
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+  // A stated run weekday the week's run did not land on reads as rest in the Brief (the
+  // agenda put the "Saturday or Sunday" long run on Sunday) — the line agrees with it.
+  const readSaysRest = (() => {
+    try {
+      return (getCachedDayRead(d) as any)?.signals?.calendar_day === "rest";
+    } catch {
+      return false;
+    }
+  })();
+  const calendarRole: WeekdayPlanDayRole | null =
+    calendar?.kind === "run" && !readSaysRest ? "endurance" : calendar ? (calendar.kind === "lift" ? null : "rest") : null;
+  const role = day ? planDayRole(day) : calendarRole;
   const composition = acceptedComposition(d);
   const name = day ? planDayLabel(day) : null;
+  // A run day is named for its run, the way the athlete stated it ("Long run").
+  const runDayTitle =
+    calendarRole === "endurance" ? (RUN_KIND_LABELS[String(calendar?.run_kind ?? "")] ?? "Run day") : null;
 
   let state: TodayStrengthState;
   if (session) state = session.finished ? "logged" : "in_progress";
-  else if (!day) state = "none";
   else if (role === "rest") state = "rest_day";
+  else if (role === "endurance") state = "no_lift";
+  else if (!day) state = "none";
   else if (role === "strength") state = "not_started";
   else state = "no_lift";
 
   const reshaped = !!name && role === "strength" && composition.reshaped;
-  const title = name ? (reshaped ? `${name}, reshaped` : name) : session ? "Today's session" : null;
+  const title = name
+    ? reshaped
+      ? `${name}, reshaped`
+      : name
+    : session
+      ? "Today's session"
+      : runDayTitle;
   const suggestion =
     state === "not_started" || state === "in_progress" ? suggestionFor(d, composition.decisionKind) : null;
   return {

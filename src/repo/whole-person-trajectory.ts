@@ -12,6 +12,12 @@ import { painAreaLoadsExercise } from "./pain-relevance.js";
 // whole-person-trajectory, a cycle that buys nothing: the zone table is pure data.
 import { matchOptimalZone, optimalDistance } from "./propagation-data.js";
 import { recoverySessionDose } from "./training-read.js";
+import { withoutShadowActivities } from "./activities.js";
+import { exerciseIdentityKey } from "./exercise-canon.js";
+import { loadAtOrAbove } from "./outcome-comparability.js";
+// Called at read time only, so the program-state -> coach -> this-module cycle
+// never touches an uninitialized binding; the recency window has ONE owner.
+import { liftTrainedRecently } from "./program-state.js";
 import { getTrainingIntent, type TrainingPriority } from "./training-intent.js";
 import { isoDay } from "../lib/dates.js";
 
@@ -42,6 +48,47 @@ export interface WholePersonDomainRead {
    * suppressing finally opens) and survives as dated history inside `why`.
    */
   confounders: string[];
+  /**
+   * Strength only: how the lifts trained inside the current window moved. Machine
+   * register for consumers (the performance channel reads the verdict these
+   * produce, never a count of its own) — never a number shown to the athlete.
+   */
+  lift_counts?: StrengthLiftCounts;
+}
+
+/**
+ * The strength domain's lift tally. `improving`/`declining`/`steady` cover only
+ * lifts trained inside LIFT_CURRENT_WINDOW_DAYS (a lift untrained for weeks has no
+ * present trend — it is `not_recent`). `prescribed_lower` counts lifts whose only
+ * slide came from exposures where the card asked for less than the prior load and
+ * the athlete completed it; those read `steady`, never `declining`.
+ */
+export interface StrengthLiftCounts {
+  improving: number;
+  declining: number;
+  steady: number;
+  prescribed_lower: number;
+  not_recent: number;
+}
+
+// A domain is not "worse" because one lift in fifteen dipped. The decline must be
+// a meaningful share of what was trained recently: MORE lifts sliding than
+// advancing, and either at least two of them or more than half the rotation (so a
+// one-lift athlete whose one lift slides still reads down). Exported so every
+// consumer that asks "is strength under strain?" applies this bar rather than
+// deriving a stricter one of its own.
+export const STRENGTH_DECLINE_MIN_LIFTS = 2;
+
+export function strengthDeclineIsMeaningful(counts: {
+  improving: number;
+  declining: number;
+  steady?: number;
+}): boolean {
+  const improving = Math.max(0, Number(counts.improving) || 0);
+  const declining = Math.max(0, Number(counts.declining) || 0);
+  const steady = Math.max(0, Number(counts.steady) || 0);
+  if (declining === 0 || declining <= improving) return false;
+  return declining >= STRENGTH_DECLINE_MIN_LIFTS || declining * 2 > improving + declining + steady;
 }
 
 export interface WholePersonTrajectory {
@@ -534,6 +581,59 @@ function strengthRegressionExplanations(
   return { live, spent };
 }
 
+// ---------- a dip the card asked for ----------
+//
+// The same law the recovery-dose exclusion above holds for a whole session, held
+// per lift: a deliberately reduced exposure the athlete COMPLETED is not a failed
+// strength test. When the day's card prescribed a load below the lift's own prior
+// load (the persisted full-load reference — the recent working weight, else the
+// un-reduced plan target), the athlete met or exceeded that card, and the top set
+// stayed at or under the prior load, the lower est-1RM is the prescription's, not
+// the body's. Work at full load is evidence whatever the card said
+// (`performed_at_full_load`), a card the athlete fell short of still counts, and a
+// row with no stored reference is absence — nothing is set aside on a guess.
+type StoredDose = {
+  movement_key?: unknown;
+  exercise?: unknown;
+  challenge_verdict?: unknown;
+  performed_at_full_load?: unknown;
+  prescribed?: { target_weight?: unknown } | null;
+  achieved?: { top_weight?: unknown } | null;
+  full_load_reference?: { target_weight?: unknown; recent_working_weight?: unknown } | null;
+};
+
+function finiteLoad(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n !== 0 ? n : null;
+}
+
+function storedDosesForSession(sessionId: number): StoredDose[] {
+  try {
+    const row = db
+      .prepare(`SELECT facts_json FROM daily_session_outcomes WHERE session_id = ? ORDER BY id DESC LIMIT 1`)
+      .get(sessionId) as { facts_json?: string } | undefined;
+    if (!row?.facts_json) return [];
+    const facts = JSON.parse(String(row.facts_json));
+    return Array.isArray(facts?.dose_evidence) ? (facts.dose_evidence as StoredDose[]) : [];
+  } catch {
+    return []; // an unreadable outcome is no prescription evidence
+  }
+}
+
+function cardAskedForLess(dose: StoredDose): boolean {
+  if (dose.performed_at_full_load === true) return false;
+  const verdict = String(dose.challenge_verdict ?? "");
+  if (verdict !== "met" && verdict !== "exceeded") return false;
+  const card = finiteLoad(dose.prescribed?.target_weight);
+  const prior =
+    finiteLoad(dose.full_load_reference?.recent_working_weight) ?? finiteLoad(dose.full_load_reference?.target_weight);
+  const top = finiteLoad(dose.achieved?.top_weight);
+  if (card == null || prior == null || top == null) return false;
+  // Signed: assist is negative, and "less" means more assist (loadAtOrAbove).
+  return !loadAtOrAbove(card, prior) && loadAtOrAbove(top, card) && loadAtOrAbove(prior, top);
+}
+
 function strengthRead(start: string, end: string, parked: boolean): WholePersonDomainRead {
   const rows = db
     .prepare(
@@ -555,39 +655,113 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
     trajectoryEligibility.set(sessionId, eligible);
     return eligible;
   });
+  // Per lift, two series: every comparable exposure, and the ones left once a dip
+  // the card asked for is set aside (cardAskedForLess). The raw series is kept
+  // only so a lift whose slide was ENTIRELY prescribed can be counted as such.
+  const identities = new Map<string, string>();
+  const identity = (name: string): string => {
+    let key = identities.get(name);
+    if (key == null) {
+      try {
+        key = exerciseIdentityKey(name);
+      } catch {
+        key = name.trim().toLowerCase();
+      }
+      identities.set(name, key);
+    }
+    return key;
+  };
+  const sessionDoses = new Map<number, StoredDose[]>();
+  const cardBounded = (row: any): boolean => {
+    const sessionId = Number(row.session_id);
+    let doses = sessionDoses.get(sessionId);
+    if (!doses) {
+      doses = storedDosesForSession(sessionId);
+      sessionDoses.set(sessionId, doses);
+    }
+    if (!doses.length) return false;
+    const key = identity(String(row.exercise));
+    const dose = doses.find(
+      (candidate) =>
+        String(candidate.movement_key ?? "") === key ||
+        (candidate.exercise != null && identity(String(candidate.exercise)) === key)
+    );
+    return dose ? cardAskedForLess(dose) : false;
+  };
   const byLift = new Map<string, Map<string, number>>();
+  const honestByLift = new Map<string, Map<string, number>>();
   const muscleGroups = new Map<string, string | null>();
+  const lastTrained = new Map<string, string>();
+  // Recency is TRAINED, not comparable: a recovery-week exposure still says the
+  // lift is in the rotation, even though it is no strength test.
+  for (const row of rows) {
+    const key = `${row.exercise_id}|${row.exercise}`;
+    const date = String(row.date);
+    if (!lastTrained.has(key) || date > String(lastTrained.get(key))) lastTrained.set(key, date);
+  }
   for (const row of comparableRows) {
     const estimate = Number(row.weight) * (1 + Number(row.reps) / 30);
     const key = `${row.exercise_id}|${row.exercise}`;
+    const date = String(row.date);
     const dates = byLift.get(key) ?? new Map<string, number>();
-    dates.set(String(row.date), Math.max(dates.get(String(row.date)) ?? 0, estimate));
+    dates.set(date, Math.max(dates.get(date) ?? 0, estimate));
     byLift.set(key, dates);
     muscleGroups.set(key, row.muscle_group == null ? null : String(row.muscle_group));
+    if (!cardBounded(row)) {
+      const honest = honestByLift.get(key) ?? new Map<string, number>();
+      honest.set(date, Math.max(honest.get(date) ?? 0, estimate));
+      honestByLift.set(key, honest);
+    }
   }
-  const comparable = [...byLift.entries()]
-    .map(([key, dates]) => {
-      const points = [...dates.entries()].map(([date, value]) => ({ date, value }));
-      if (points.length < 4) return null;
-      const split = halves(points);
-      const tolerance = Math.max(1.5, Math.abs(split.first ?? 0) * 0.01);
-      return {
-        exercise: key.split("|").slice(1).join("|"),
-        muscle_group: muscleGroups.get(key) ?? null,
-        verdict: compare(split.first, split.last, tolerance),
-      };
-    })
-    .filter(
-      (row): row is { exercise: string; muscle_group: string | null; verdict: WholePersonVerdict } =>
-        row != null && row.verdict !== "unknown"
-    );
+  const grade = (dates: Map<string, number> | undefined): WholePersonVerdict => {
+    const points = [...(dates ?? new Map<string, number>()).entries()].map(([date, value]) => ({ date, value }));
+    if (points.length < 4) return "unknown";
+    const split = halves(points);
+    const tolerance = Math.max(1.5, Math.abs(split.first ?? 0) * 0.01);
+    return compare(split.first, split.last, tolerance);
+  };
+  type LiftRead = {
+    exercise: string;
+    muscle_group: string | null;
+    verdict: WholePersonVerdict;
+    prescribed_lower: boolean;
+  };
+  let notRecent = 0;
+  const comparable: LiftRead[] = [];
+  for (const [key, dates] of byLift.entries()) {
+    const raw = grade(dates);
+    if (raw === "unknown") continue;
+    // A lift untrained inside the current window has no present trend — the
+    // same guard program-state and the performance channel apply.
+    if (!liftTrainedRecently({ last_trained: lastTrained.get(key) ?? null }, end)) {
+      notRecent++;
+      continue;
+    }
+    const honest = grade(honestByLift.get(key));
+    const prescribedLower = raw === "worse" && honest !== "worse";
+    comparable.push({
+      exercise: key.split("|").slice(1).join("|"),
+      muscle_group: muscleGroups.get(key) ?? null,
+      // Too few exposures left once the card's dips are set aside reads as held.
+      verdict: prescribedLower ? (honest === "better" ? "better" : "holding") : raw,
+      prescribed_lower: prescribedLower,
+    });
+  }
   const improving = comparable.filter((row) => row.verdict === "better");
   const regressing = comparable.filter((row) => row.verdict === "worse");
+  const prescribedLower = comparable.filter((row) => row.prescribed_lower);
+  const liftCounts: StrengthLiftCounts = {
+    improving: improving.length,
+    declining: regressing.length,
+    steady: comparable.length - improving.length - regressing.length,
+    prescribed_lower: prescribedLower.length,
+    not_recent: notRecent,
+  };
   const verdict: WholePersonVerdict = !comparable.length
     ? "unknown"
-    : regressing.length
+    : strengthDeclineIsMeaningful(liftCounts)
       ? "worse"
-      : improving.length
+      : improving.length > regressing.length
         ? "better"
         : "holding";
   const names = (items: typeof comparable) =>
@@ -611,30 +785,41 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
       : { live: [], spent: [] };
   const confounders = explanations.live;
   const regressionWhy = `${regressing.length} comparable lift${regressing.length === 1 ? " needs" : "s need"} rebuilding: ${names(regressing)}${improving.length ? `; ${improving.length} other lift${improving.length === 1 ? " is" : "s are"} still advancing: ${names(improving)}` : ""}. Regression stays visible even when the overall program is improving.`;
+  // A slide too small to move the domain is still named — never hidden, only
+  // weighed against the rest of the rotation.
+  const minorityWhy = regressing.length
+    ? ` ${regressing.length} lift${regressing.length === 1 ? " is" : "s are"} slipping (${names(regressing)}), too small a share of the recently trained lifts to call the domain down.`
+    : "";
+  const prescribedWhy = prescribedLower.length
+    ? ` ${names(prescribedLower)} dipped only where the card prescribed a lighter load that was completed; those exposures are not read as regression.`
+    : "";
   return {
     domain: "strength",
     verdict,
     parked,
     confounders,
+    lift_counts: liftCounts,
     why:
       verdict === "unknown"
         ? "Not enough comparable loaded exposures yet."
         : verdict === "better"
-          ? `${improving.length} comparable lift${improving.length === 1 ? " is" : "s are"} advancing${improving.length ? `: ${names(improving)}` : ""}.`
+          ? `${improving.length} comparable lift${improving.length === 1 ? " is" : "s are"} advancing${improving.length ? `: ${names(improving)}` : ""}.${minorityWhy}${prescribedWhy}`
           : verdict === "holding"
-            ? "Comparable lift capacity held steady."
+            ? `Comparable lift capacity held steady.${minorityWhy}${prescribedWhy}`
             : // The regression itself is never softened — only the claim that nobody
               // can say why. What the window already explains is appended to it,
               // and so is what it USED to explain: a spent explanation leaves the
               // suppression list but stays in the record, dated, so a specialist
               // reading this `why` can cite what was already tried and cannot
               // propose it a second time as if it were new.
-              `${regressionWhy}${confounders.length ? ` This window already has an explanation on record: ${confounders.join(" ")}` : ""}${explanations.spent.length ? ` ${explanations.spent.join(" ")}` : ""}`,
+              `${regressionWhy}${prescribedWhy}${confounders.length ? ` This window already has an explanation on record: ${confounders.join(" ")}` : ""}${explanations.spent.length ? ` ${explanations.spent.join(" ")}` : ""}`,
     evidence_keys: rows.length
       ? [
           `logged_sets:${start}..${end}:n=${rows.length}`,
           `strength_exposures_comparable:${comparableRows.length}`,
           `strength_lifts_comparable:${comparable.length}`,
+          ...(notRecent ? [`strength_lifts_not_recent:${notRecent}`] : []),
+          ...(prescribedLower.length ? [`strength_lifts_prescribed_lower:${prescribedLower.length}`] : []),
           ...(explanations.spent.length ? [`strength_explanations_spent:${explanations.spent.length}`] : []),
         ]
       : [],
@@ -642,13 +827,20 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
 }
 
 function enduranceRead(start: string, end: string, parked: boolean): WholePersonDomainRead {
-  const rows = db
+  // Every activity on those dates is fetched (not only measured ones) so the
+  // shadow check sees the synced row a hand log duplicates; a hand log of an
+  // effort the watch already holds is one effort, not two — it would otherwise
+  // halve the mean and flip the direction.
+  const fetched = db
     .prepare(
-      `SELECT date, COALESCE(distance_km, 0) AS distance_km, COALESCE(duration_min, 0) AS duration_min
-       FROM activities WHERE date BETWEEN ? AND ? AND (distance_km > 0 OR duration_min > 0)
+      `SELECT id, date, type, source, external_id, distance_km, duration_min
+       FROM activities WHERE date BETWEEN ? AND ?
       ORDER BY date, id LIMIT 1000`
     )
     .all(start, end) as any[];
+  const rows = withoutShadowActivities(fetched).filter(
+    (row) => Number(row.distance_km) > 0 || Number(row.duration_min) > 0
+  );
   const points = rows.map((row) => ({
     date: String(row.date),
     value: Number(row.distance_km) > 0 ? Number(row.distance_km) : Number(row.duration_min) / 10,

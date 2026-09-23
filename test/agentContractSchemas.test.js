@@ -873,12 +873,9 @@ const CONSUMER_READS = [
       "revision.days[].items[].target_seconds",
       "revision.days[].items[].superset_group",
       "revision.days[].items[].mode",
+      // strictPlanItem still READS kind (to refuse anything but strength); the run
+      // field family is no longer admitted by PLAN_ITEM_KEYS (migration 110).
       "revision.days[].items[].kind",
-      "revision.days[].items[].target_distance_km",
-      "revision.days[].items[].target_duration_min",
-      "revision.days[].items[].target_zone",
-      "revision.days[].items[].interval",
-      "revision.days[].items[].interval_json",
       "revision.nutrition",
       "revision.nutrition.target_kcal",
       "revision.nutrition.protein_g",
@@ -961,51 +958,44 @@ test("the session schema never offers a value the session normalizer treats as f
 });
 
 test("the plan schema still ADMITS the values the session schema rejects", () => {
-  // The two schemas share RUN_PRESCRIPTION_PROPERTIES and RUN_INTERVAL_SCHEMA and want
-  // OPPOSITE bounds on it, so both directions need a test or the next tightening
-  // silently becomes a rejection.
+  // The two schemas want OPPOSITE bounds on the same numeric slots, so both directions
+  // need a test or the next tightening silently becomes a rejection.
   //
   // The asymmetry is not taste. The session schema is only ever handed to a decoder,
-  // and its consumer throws the whole payload away on a 0 or an []. The plan schema is
-  // ALSO an acceptance gate — isPlanProposalResult runs matchesJsonSchema over it — and
-  // its applier ignores those same values harmlessly. So a bound tightened on the
-  // shared fragment does not steer the coach, it rejects a usable proposal and burns
-  // the rotation. These are the exact payloads a coach emits when it fills every named
-  // slot on a steady run.
-  const proposals = {
-    "cardio entry with an empty interval": {
-      summary: "Steady week.",
-      cardio: [{ day_number: 3, label: "Easy run", target_duration_min: 40, interval: [] }],
-    },
-    "cardio entry with a zero distance": {
-      summary: "Steady week.",
-      cardio: [{ day_number: 3, label: "Easy run", target_distance_km: 0, target_duration_min: 40 }],
-    },
-    "cardio entry with a zero duration": {
-      summary: "Steady week.",
-      cardio: [{ day_number: 3, label: "Easy run", target_duration_min: 0, target_distance_km: 8 }],
-    },
-    "a days item with an empty interval": {
+  // and its consumer throws the whole payload away on a 0. The plan schema is ALSO an
+  // acceptance gate — isPlanProposalResult runs matchesJsonSchema over it — and its
+  // applier clamps those same values harmlessly (`it.sets ?? 3`). So a bound tightened
+  // there does not steer the coach, it rejects a usable proposal and burns the
+  // rotation. Runs left the plan schema (migration 110), so the law now rides the
+  // strength slots that remain.
+  const zeroItem = (field) => ({ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, [field]: 0 });
+  const proposals = {};
+  for (const field of ["sets", "rep_low", "rep_high", "warmup_sets", "target_seconds"]) {
+    proposals[`a days item with a zero ${field}`] = {
       summary: "First week.",
-      days: [
-        {
-          day_number: 1,
-          name: "Run",
-          items: [{ kind: "cardio", exercise: "Easy run", target_duration_min: 40, interval: [] }],
-        },
-      ],
-    },
-    "an interval carrying zero reps": {
-      summary: "Steady week.",
-      cardio: [
-        {
-          day_number: 3,
-          label: "Intervals",
-          target_duration_min: 40,
-          interval: [{ reps: 0, on: "400m", off: "200m", zone: "Z4" }],
-        },
-      ],
-    },
+      days: [{ day_number: 1, name: "Lower", items: [zeroItem(field)] }],
+    };
+  }
+  for (const field of ["sets", "rep_low", "rep_high", "target_seconds"]) {
+    proposals[`a change with a zero ${field}`] = {
+      summary: "Adjust.",
+      changes: [{ day_number: 1, exercise: "Back Squat", [field]: 0 }],
+    };
+  }
+  // A legacy restructure that still carries a run item is admitted — the applier
+  // strips it (strengthDaysOnly), it is never the gate's reason to burn the rotation.
+  proposals["a legacy days item carrying a run with an empty interval"] = {
+    summary: "First week.",
+    days: [
+      {
+        day_number: 1,
+        name: "Lower",
+        items: [
+          { exercise: "Back Squat", sets: 3 },
+          { kind: "cardio", exercise: "Easy run", target_duration_min: 40, interval: [] },
+        ],
+      },
+    ],
   };
   for (const [what, proposal] of Object.entries(proposals)) {
     assert.ok(
@@ -1016,59 +1006,72 @@ test("the plan schema still ADMITS the values the session schema rejects", () =>
     assert.equal(contracts.isPlanProposalResult(proposal), true, `isPlanProposalResult must accept ${what}`);
   }
 
-  // The shared fragments themselves stay permissive, which is what makes the above
-  // hold for every schema that spreads them.
-  const cardio = contracts.PLAN_PROPOSAL_SCHEMA.properties.cardio.items;
-  assert.equal(cardio.properties.target_distance_km.exclusiveMinimum, undefined);
-  assert.equal(cardio.properties.target_duration_min.exclusiveMinimum, undefined);
-  assert.equal(cardio.properties.interval.minItems, undefined);
-  assert.equal(cardio.properties.interval.type, "array");
+  // The plan side's bounds are permissive minimums, never exclusive ones.
+  const planItem = contracts.PLAN_PROPOSAL_SCHEMA.properties.days.items.properties.items.items;
+  for (const field of ["sets", "rep_low", "rep_high", "warmup_sets", "target_seconds"]) {
+    assert.equal(planItem.properties[field].exclusiveMinimum, undefined, `days items[].${field}`);
+    assert.equal(planItem.properties[field].minimum, 0, `days items[].${field}`);
+  }
 
-  // And the session node overrides them for itself rather than mutating the fragment.
+  // And the session node keeps its own strict bounds — including the run family, which
+  // a SESSION suggestion may still carry.
   const item = contracts.SESSION_SUGGESTION_SCHEMA.properties.items.items;
+  const sessionOk = (value) => matchesJsonSchema(contracts.SESSION_SUGGESTION_SCHEMA, { items: [value] }, { coerce: true });
+  for (const field of ["sets", "rep_low", "rep_high", "warmup_sets", "target_seconds"]) {
+    assert.equal(item.properties[field].exclusiveMinimum, 0);
+    assert.equal(sessionOk(zeroItem(field)), false, `the session schema rejects a zero ${field}`);
+  }
   assert.equal(item.properties.target_distance_km.exclusiveMinimum, 0);
   assert.equal(item.properties.target_duration_min.exclusiveMinimum, 0);
   assert.equal(item.properties.interval.minItems, 1);
 });
 
-test("day_type carries its vocabulary in prose, not in a nullable enum", () => {
-  // A nullable enum is the one construct an enforcing backend is most likely to
-  // reject, AND matchesJsonSchema (which has no anyOf) reads this very schema as a
-  // HARD acceptance gate — so the null would have to live inside the enum itself.
-  // The vocabulary is not lost: the applier owns it, and the test below proves it.
-  const day = contracts.PLAN_PROPOSAL_SCHEMA.properties.days.items.properties.day_type;
-  assert.deepEqual(day.type, ["string", "null"]);
-  assert.equal(day.enum, undefined, "day_type must not carry an enum containing null");
-  assert.match(day.description, /training\|rest/);
+test("the plan schema offers no run slots, and a run-only payload is not a plan proposal", () => {
+  // Plan days hold strength only (migration 110): the week's runs come from the stated
+  // run days and the run engine, never from a proposal.
+  assert.equal(contracts.PLAN_PROPOSAL_SCHEMA.properties.cardio, undefined, "no cardio[] week");
+  const planItem = contracts.PLAN_PROPOSAL_SCHEMA.properties.days.items.properties.items.items;
+  for (const field of ["target_distance_km", "target_duration_min", "target_zone", "interval", "interval_json"]) {
+    assert.equal(planItem.properties[field], undefined, `days items[] names no ${field}`);
+  }
+  const change = contracts.PLAN_PROPOSAL_SCHEMA.properties.changes.items;
+  for (const field of ["kind", "target_distance_km", "target_duration_min", "target_zone", "interval"]) {
+    assert.equal(change.properties[field], undefined, `changes[] names no ${field}`);
+  }
 
-  // The description is MODEL-VISIBLE, so it must agree with the prose twin about what
-  // SILENCE means. A `days` payload is a restructure — planDayTypeForRestructure reads
-  // an omitted day_type as 'training', not as "leave it as it was" — and a description
-  // saying otherwise would teach a model that skipping the field preserves a rest day,
-  // which silently fills that day with work.
-  assert.match(day.description, /omitted or null means training/);
-  assert.doesNotMatch(day.description, /unchanged/);
+  const runOnly = {
+    summary: "Steady week.",
+    cardio: [{ day_number: 3, label: "Easy run", target_duration_min: 40 }],
+  };
+  assert.equal(contracts.isPlanProposalResult(runOnly), false, "a cardio-only payload has no action here");
+  assert.equal(contracts.hasPlanProposalActions(runOnly), false, "and carries no plan action");
+  // Beside a real change the stray cardio[] is ignored, never the reason to reject.
+  const mixed = { ...runOnly, changes: [{ day_number: 1, exercise: "Back Squat", target_weight: 185 }] };
+  assert.equal(contracts.isPlanProposalResult(mixed), true);
+  assert.equal(contracts.hasPlanProposalActions(mixed), true);
+});
+
+test("a restructure day carries no day_type — rest is the calendar's, not a plan row", () => {
+  // day_type left the schema with the rest-day row (migration 110): a rest day is a
+  // weekday the athlete neither lifts nor runs. The model-visible schema must not
+  // offer the slot, and the prose twin must not ask for it.
+  const day = contracts.PLAN_PROPOSAL_SCHEMA.properties.days.items;
+  assert.equal(day.properties.day_type, undefined, "no day_type slot on a restructure day");
   const coachPrompt = readFileSync(new URL("../src/prompt/coach.ts", import.meta.url), "utf8");
-  assert.match(
-    coachPrompt,
-    /"day_type" → "training" \(the default if you omit it\) or "rest"/,
-    "the prose twin in src/prompt/coach.ts must still say training is the default"
-  );
+  assert.doesNotMatch(coachPrompt, /"day_type" →/, "the prose twin no longer asks for a day_type");
+  assert.match(coachPrompt, /RUNS ARE NOT PLAN ITEMS/, "and says why runs and rest never appear in days");
 
-  const proposal = (dayType) => ({
+  // A legacy payload that still names one is not refused by the gate — the applier
+  // drops a day left with nothing to lift — so the rotation never burns on it.
+  const legacy = {
     summary: "Name the rest day.",
     days: [
-      { day_number: 1, name: "Lower", focus: "lower", day_type: dayType, items: [{ exercise: "Back Squat", sets: 3 }] },
+      { day_number: 1, name: "Lower", focus: "lower", day_type: "training", items: [{ exercise: "Back Squat", sets: 3 }] },
       { day_number: 2, name: "Rest", focus: null, day_type: "rest", items: [] },
     ],
-  });
-  for (const value of ["training", "rest", null]) {
-    assert.ok(matchesJsonSchema(contracts.PLAN_PROPOSAL_SCHEMA, proposal(value), { coerce: true }));
-    assert.equal(contracts.isPlanProposalResult(proposal(value)), true);
-  }
-  // An off-vocabulary string is admitted HERE and rejected by the applier — the
-  // schema's job is to steer the decoder, not to be the vocabulary's last word.
-  assert.equal(contracts.isPlanProposalResult(proposal("sabbath")), true);
+  };
+  assert.ok(matchesJsonSchema(contracts.PLAN_PROPOSAL_SCHEMA, legacy, { coerce: true }));
+  assert.equal(contracts.isPlanProposalResult(legacy), true);
 });
 
 test("the case conference speaks an enforceable schema at both of its call sites", () => {
@@ -1190,6 +1193,25 @@ test("the case conference speaks an enforceable schema at both of its call sites
   const dayNode = contracts.CASE_CONFERENCE_DECISION_SCHEMA.properties.revision.properties.days.items;
   assert.deepEqual(Object.keys(dayNode.properties).sort(), ["day_number", "focus", "items", "name"]);
   assert.equal(dayNode.properties.day_type, undefined, "strictPlanDay allows no day_type on this lane");
-  // strictPlanItem reads `interval` through asRecord — an array would be rejected.
-  assert.deepEqual(dayNode.properties.items.items.properties.interval.type, ["object", "null"]);
+  // Strength only (migration 110): the item node names no run family, and the strict
+  // normalizer refuses a kind:'cardio' item or a run field outright.
+  const itemNode = dayNode.properties.items.items;
+  for (const field of ["target_distance_km", "target_duration_min", "target_zone", "interval", "interval_json"]) {
+    assert.equal(itemNode.properties[field], undefined, `the conference item names no ${field}`);
+  }
+  const withItem = (item) => ({
+    ...restructure,
+    revision: { ...restructure.revision, days: [{ ...restructure.revision.days[0], items: [item] }] },
+  });
+  assert.equal(
+    normalizeStrictCaseConferenceDecision(withItem({ kind: "cardio", exercise: "Easy run" })),
+    null,
+    "a run item is refused"
+  );
+  assert.equal(
+    normalizeStrictCaseConferenceDecision(withItem({ exercise: "Back Squat", sets: 3, target_distance_km: 5 })),
+    null,
+    "a run field on a strength item is refused"
+  );
+  assert.ok(normalizeStrictCaseConferenceDecision(withItem({ kind: "strength", exercise: "Back Squat", sets: 3 })));
 });

@@ -335,9 +335,12 @@ test("a subdued-but-not-rest-grade reading keeps the behavior it always had", ()
 
 // ---------- R3: never stack runs by default ----------
 
-test("planDayIsCardioOnly separates a Run day from a lifting day", () => {
+// Plan days hold strength only (migration 110): a cardio row is stripped on save, so a
+// "Run" template day can no longer exist — the run day is a calendar fact.
+test("planDayIsCardioOnly: a plan day can no longer be a Run day", () => {
   repo.savePlanDay(1, "Run", "Run", [{ kind: "cardio", exercise: "Easy run", target_duration_min: 40 }]);
-  assert.equal(planDayIsCardioOnly(1), true);
+  assert.deepEqual(repo.getPlanDay(1).items, [], "the cardio row is stripped on save");
+  assert.equal(planDayIsCardioOnly(1), false, "an empty scaffold is not a cardio-only day");
   repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
   repo.savePlanDay(2, "Push", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
   assert.equal(planDayIsCardioOnly(2), false);
@@ -482,9 +485,16 @@ function seedFineEasyDivergences(fromDaysAgo = 4) {
   }
 }
 
-test("the ladder does not open a cardio-only day the morning after a hard run", () => {
+// The run day is a CALENDAR fact now: REF (a Tuesday) is a stated run weekday that is
+// not a lifting weekday, so no strength day is due and the ladder has nothing to open.
+test("the ladder does not open a stated run weekday the morning after a hard run", () => {
   seedFineEasyDivergences();
-  repo.savePlanDay(1, "Run", "Run", [{ kind: "cardio", exercise: "Easy run", target_duration_min: 40 }]);
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
+  repo.savePlanDay(1, "Push", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.setProfile({
+    strength_schedule: { days: [{ dow: 1 }, { dow: 3 }, { dow: 5 }] },
+    endurance_schedule: { days: [{ dow: 2, kind: "easy" }, { dow: 6, kind: "long" }] },
+  });
   seedRunHistory(REF);
   seedRun(YESTERDAY, 9.85, 59);
   // Subdued but NOT rest-grade: the day's own read is the protective easy one, which
@@ -492,10 +502,9 @@ test("the ladder does not open a cardio-only day the morning after a hard run", 
   repo.upsertGarminDailyMetric({ date: REF, training_readiness: 30 });
   const read = dayRead(REF);
   assert.equal(read.kind, "easy", "the ladder must not turn this into another run day");
+  assert.equal(read.focus, null, "no lifting day is handed out on a run weekday");
   assert.equal(read.signals.easy_outcome_feedback?.active, true, "the pattern is still live evidence");
   assert.equal(read.signals.easy_outcome_feedback?.applied, false);
-  assert.equal(read.signals.run_stacking_hold?.hard_cardio_yesterday, true);
-  assert.equal(read.signals.run_stacking_hold?.longest_run_yesterday, true);
 });
 
 test("...but it still opens a lifting day on the same evidence", () => {
@@ -513,7 +522,9 @@ test("...but it still opens a lifting day on the same evidence", () => {
 
 // ---------- end to end: the envelope carries the hold, the session honors it ----------
 
-test("training anyway on a rest-grade morning gets movement, not the template's run", () => {
+// Plan days carry no runs, so the run a hold must catch arrives on a composed card —
+// and the LIVE envelope is what holds it.
+test("training anyway on a rest-grade morning gets movement, not a run", () => {
   repo.savePlanDay(1, "Run", "Run", [{ kind: "cardio", exercise: "Easy run", target_duration_min: 45 }]);
   seedRunHistory(REF);
   seedRun(YESTERDAY, 9.85, 59);
@@ -529,11 +540,22 @@ test("training anyway on a rest-grade morning gets movement, not the template's 
   const session = deterministicComposedSession(envelope);
   const names = session.items.map((i) => String(i.exercise));
   assert.ok(!names.some((n) => /\brun\b/i.test(n)), `a run survived: ${names.join(", ")}`);
+  const composed = normalizeComposedSession(runSession, envelope).session;
+  const composedNames = (composed?.items ?? []).map((i) => String(i.exercise));
+  assert.ok(
+    !composedNames.some((n) => /\brun\b/i.test(n)),
+    `a composed run survived the live hold: ${composedNames.join(", ")}`
+  );
 });
 
-test("an ordinary training day keeps its run and carries no hold", () => {
+test("an ordinary training day keeps a composed run and carries no hold", () => {
   repo.savePlanDay(1, "Run", "Run", [{ kind: "cardio", exercise: "Easy run", target_duration_min: 45 }]);
   repo.upsertGarminDailyMetric({ date: REF, training_readiness: 80, hrv: 60 });
   const { envelope } = decideDailySession(REF);
   assert.equal(envelope.endurance_hold, undefined);
+  const composed = normalizeComposedSession(runSession, envelope).session;
+  assert.ok(
+    composed?.items.some((i) => i.kind === "cardio" && /\brun\b/i.test(String(i.exercise))),
+    "with no hold, the card's run stays a run"
+  );
 });

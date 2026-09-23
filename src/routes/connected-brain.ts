@@ -41,6 +41,7 @@ import {
   recordHealthOutcomeAnnotations,
   setDirectiveStatusByUser,
   symptomMarkerLinks,
+  wearableWeeklyMarkerRead,
 } from "../domain/health/index.js";
 import { addMemory } from "../domain/person/index.js";
 import { backgroundOp } from "./background-op.js";
@@ -155,7 +156,14 @@ connectedBrainRouter.post("/health/review", async (req, res, next) => {
 // Markers re-ranked by impact (distance from OPTIMAL, most-actionable first).
 // Informational, not medical advice; the impact_score is an internal ordering
 // signal only and is never rendered as a user-facing grade.
-connectedBrainRouter.get("/markers/priority", (_req, res) => res.json(prioritizeMarkers()));
+// HRV / Resting HR are re-judged on the same week the directive engine reads
+// (wearableWeeklyMarkerRead, health-focus.ts) so this catalog can never disagree with a
+// directive over the same night's number — a single night still shows as the latest
+// reading, but never as the status.
+connectedBrainRouter.get("/markers/priority", (_req, res) => {
+  const priority = prioritizeMarkers();
+  res.json({ ...priority, markers: priority.markers.map(wearableWeeklyMarkerRead) });
+});
 
 // Marker-name canonicalization (analyte de-duplication). GET lists the learned
 // variant->canonical aliases; POST runs the agentic reconciler over the distinct

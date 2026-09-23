@@ -365,10 +365,17 @@ function directiveContentUnchanged(cur: any, d: DirectiveInput): boolean {
 // a row no longer desired is SOFT-RESOLVED (status_at stays NULL — a machine resolve,
 // never user feedback); a genuinely new directive is INSERTED. Idempotent: an unchanged
 // desired set produces zero inserts/updates/resolves. Returns the change tally.
-export function reconcileDirectives(source: string, desired: DirectiveInput[]) {
-  const existing = db
-    .prepare(`SELECT * FROM health_directives WHERE source = ? AND status = 'active'`)
-    .all(source) as any[];
+// `inScope` narrows which EXISTING active rows the pass owns: a scoped pass (the wearable
+// re-derive on a sync — deriveWearableDirectives) reconciles only its own markers' rows and
+// never soft-resolves a lab directive it did not compute. Omitted = the whole source.
+export function reconcileDirectives(
+  source: string,
+  desired: DirectiveInput[],
+  opts: { inScope?: (row: any) => boolean } = {}
+) {
+  const existing = (
+    db.prepare(`SELECT * FROM health_directives WHERE source = ? AND status = 'active'`).all(source) as any[]
+  ).filter((r) => !opts.inScope || opts.inScope(r));
   const existingByKey = new Map<string, any>();
   for (const r of existing) if (r.directive_key) existingByKey.set(String(r.directive_key), r);
   const desiredKeys = new Set<string>();

@@ -31,17 +31,31 @@ export const DAY_READ_OUTCOMES = {
       "The session's in — today is covered.",
     ],
   },
-  // The week's own seam. Not a brake and not an argument — the athlete built a rest
-  // day into their template and today is it, so the read simply says so. Every safety
-  // floor above still wins on a morning that has its own reason to rest, and keeps its
-  // own words; this one only speaks when nothing else needed to.
+  // The week's own seam. Not a brake and not an argument — today is a weekday the
+  // athlete neither lifts nor runs (a CALENDAR rest day; plan days hold strength only),
+  // so the read simply says so. The code keeps its historical name so the ledger's
+  // history stays one series. Every safety floor above still wins on a morning that has
+  // its own reason to rest, and keeps its own words; this one only speaks when nothing
+  // else needed to.
   template_rest_day: {
     code: "template_rest_day",
     reasons: [
       "Your week has a rest day here, and today is it.",
       "Today is the rest day your week is built around.",
-      "The plan leaves today open — this is the rest day in your week.",
-      "Your template puts a rest day here, so today is yours.",
+      "No lift and no run in your week today — this is its rest day.",
+      "Your week leaves today open, so today is yours.",
+    ],
+  },
+  // A stated run weekday that is not a lifting weekday. The run is the day's work and
+  // the run engine owns it; the read only names it, calmly, the way the rest day names
+  // itself. Every safety floor above it still speaks first.
+  stated_run_day: {
+    code: "stated_run_day",
+    reasons: [
+      "Today is one of your run days, with no lifting on it.",
+      "Your week puts a run here and no lift.",
+      "A run day in your week — the run is today's work.",
+      "Today belongs to the run your week sets here.",
     ],
   },
   acute_sleep_corroborated: {
@@ -1082,14 +1096,24 @@ const SIGNAL_VOICE_CONCEPTS: Record<string, RegExp> = Object.fromEntries(
 // sentence every Sunday morning for as long as the template stands.
 export const TEMPLATE_REST_DAY_WHY: readonly string[] = [
   "Your week has a rest day here, so today is yours — a walk or some easy mobility if you feel like moving.",
-  "Today is the rest day in your template. Nothing is owed; a gentle walk or some mobility is plenty.",
-  "The plan keeps today clear for recovery, so this is a rest day — move easily if you want to, or not at all.",
+  "Today is the rest day in your week. Nothing is owed; a gentle walk or some mobility is plenty.",
+  "Your week keeps today clear for recovery, so this is a rest day — move easily if you want to, or not at all.",
   "This is the rest day your week is built around. Some easy mobility or a walk fits it well.",
-  "Your template puts rest here, so today is open — an easy walk is the whole ask, and even that is optional.",
+  "No lift and no run in your week today, so it is open — an easy walk is the whole ask, and even that is optional.",
+];
+
+// The stated run day. The run itself — its distance and effort — lives on the
+// Endurance plan; these words only say that today is its day and the lifting waits.
+export const STATED_RUN_DAY_WHY: readonly string[] = [
+  "Today is one of your run days — nothing to lift, so the run is the day's work.",
+  "Your week puts a run here and no lift, so today belongs to the run.",
+  "A run day in your week: no lifting on the card, just the run, at the effort it asks for.",
+  "Today's work is the run your week sets here; the lifting picks back up on your next lift day.",
 ];
 
 export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> = {
   template_rest_day: TEMPLATE_REST_DAY_WHY,
+  stated_run_day: STATED_RUN_DAY_WHY,
   logged_loading_work_today: DONE_WHY.map((render) => render("session")),
   acute_sleep_corroborated: ACUTE_SLEEP_WHY,
   recovery_dose_overrun: DOSE_OVERRUN_WHY,
@@ -1146,6 +1170,9 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // read as an unexplained quiet day, which is exactly the sentence a first-class
   // rest day was built to stop producing.
   template_rest_day: /\b(?:plan|week|template)\b/i,
+  // The run is this read's whole basis: a phrasing that stops naming it is an
+  // unexplained quiet day on the morning the week asked for a run.
+  stated_run_day: /\brun\b/i,
   logged_loading_work_today: /\b(?:in today|done|books|covered|logged)\b/i,
   acute_sleep_corroborated: /\b(?:sleep|night|nights)\b/i,
   acute_signal_protection: /\b(?:protect|protecting|protection|recovery|guarding)\b/i,

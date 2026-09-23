@@ -1,5 +1,6 @@
 // @ts-check
-// Plan editor form reads and save-payload assembly.
+// Plan editor form reads and save-payload assembly. Lift days only: a run is never
+// a plan item (it lives in Plan -> Endurance), so a save carries strength items alone.
 
 type PlanEditorFormItem = {
   kind?: "strength" | "cardio";
@@ -11,10 +12,6 @@ type PlanEditorFormItem = {
   note?: unknown;
   warmup_sets?: unknown;
   target_seconds?: unknown;
-  target_distance_km?: unknown;
-  target_duration_min?: unknown;
-  target_zone?: unknown;
-  interval_note?: unknown;
 };
 
 type PlanEditorFormModelDay = {
@@ -29,7 +26,7 @@ type PlanEditorFormSaveDay = {
   day_number: number;
   name: string;
   focus: unknown;
-  day_type: "training" | "rest";
+  day_type: "training";
   items: Array<Record<string, unknown>>;
 };
 
@@ -73,14 +70,6 @@ function syncPlanModel(model: PlanEditorFormModelDay[], root: ParentNode): void 
     const day = model[planDatasetNumber(itEl, "d")];
     const item = day && day.items[planDatasetNumber(itEl, "i")];
     if (!item) return;
-    if (itEl.dataset.kind === "cardio") {
-      item.note = planText(itEl, ".pi-ex");
-      item.target_distance_km = planNumber(itEl, ".pi-km");
-      item.target_duration_min = planNumber(itEl, ".pi-min");
-      item.target_zone = (planText(itEl, ".pi-zone") || "").trim() || null;
-      item.interval_note = (planText(itEl, ".pi-ivl") || "").trim();
-      return;
-    }
     item.exercise = planText(itEl, ".pi-ex");
     item.sets = planNumber(itEl, ".pi-sets") ?? 3;
     item.rep_low = planNumber(itEl, ".pi-lo");
@@ -92,45 +81,20 @@ function syncPlanModel(model: PlanEditorFormModelDay[], root: ParentNode): void 
 }
 
 function planItemHasContent(item: PlanEditorFormItem): boolean {
-  if (isCardioItem(item)) {
-    const note = String(item.note || "").trim();
-    const zone = String(item.target_zone || "").trim();
-    return !!note || item.target_distance_km != null || item.target_duration_min != null || !!zone;
-  }
-  return !!String(item.exercise || "").trim();
+  return !isCardioItem(item) && !!String(item.exercise || "").trim();
 }
 
 function serializePlanDays(model: PlanEditorFormModelDay[]): PlanEditorFormSaveDay[] {
   return model.map((day, index) => {
-    // The blank-row filter runs FIRST. Marking a day as rest leaves its empty
-    // placeholder row in the DOM, and deciding rest-vs-training off the unfiltered
-    // list read that placeholder as work — so a rest day the athlete had just marked
-    // serialized as a training day and the seam quietly vanished on save.
+    // Blank rows and any run an older payload left in the model never travel: the
+    // plan the editor saves holds lifts only.
     const items = day.items.filter(planItemHasContent);
     return {
       day_number: index + 1,
       name: String(day.name || `Day ${index + 1}`),
       focus: day.focus || null,
-      // A rest day that somehow carries work is saved as the training day it plainly
-      // is, rather than sent to be refused: the server's invariant is real, and the
-      // editor's job is to keep the athlete from ever meeting it.
-      day_type: (String(day.day_type ?? "training") === "rest" && !items.length ? "rest" : "training") as
-        | "rest"
-        | "training",
+      day_type: "training" as const,
       items: items.map((item) => {
-        if (isCardioItem(item)) {
-          const intervalNote = String(item.interval_note || "").trim();
-          const note = String(item.note || "").trim();
-          const zone = String(item.target_zone || "").trim();
-          return {
-            kind: "cardio",
-            note: note || null,
-            target_distance_km: item.target_distance_km ?? null,
-            target_duration_min: item.target_duration_min ?? null,
-            target_zone: zone || null,
-            interval: intervalNote ? { note: intervalNote } : null,
-          };
-        }
         const note = String(item.note || "").trim();
         return {
           kind: "strength",

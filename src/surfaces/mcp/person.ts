@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   addBloodPressureReading,
   deriveDirectives,
+  deriveWearableDirectives,
   getDailyMetrics,
   listBloodPressureReadings,
   recordDailyMetrics,
@@ -379,7 +380,19 @@ export function registerPersonTools(server: McpToolRegistrar) {
       vo2max: z.number().nullable().optional().describe("VO2max in mL/kg/min, clamped 5-100; null/omit leaves any existing value untouched"),
       raw: z.any().optional().describe("source payload kept verbatim alongside the parsed fields, for debugging/traceability"),
     },
-    async ({ date, source, ...metrics }) => asText(recordDailyMetrics(source ?? "apple", date, metrics))
+    async ({ date, source, ...metrics }) => {
+      const row = recordDailyMetrics(source ?? "apple", date, metrics);
+      // Same edge as the REST ingest: a night of HRV / resting HR re-derives the wearable
+      // directives now, not at the next daily propagation tick.
+      if (metrics.hrv_ms != null || metrics.resting_hr != null) {
+        try {
+          deriveWearableDirectives();
+        } catch {
+          /* the write stands; the daily tick re-derives anyway */
+        }
+      }
+      return asText(row);
+    }
   );
 
   server.tool(

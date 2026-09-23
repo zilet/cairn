@@ -44,6 +44,7 @@ import {
   type OptimalZone,
   type ZoneProfile,
   MARKER_MAPPINGS,
+  WEARABLE_TREND_ZONES,
   classifyDirectiveIntent,
   markerGroup,
   markerSide,
@@ -51,6 +52,7 @@ import {
   medsTreatingZone,
   optimalDistance,
   presentGroups,
+  wearableTrendWindow,
 } from "./propagation-data.js";
 
 // The sex/age snapshot the connected-brain paths thread into matchOptimalZone so a
@@ -92,8 +94,12 @@ export {
   personalizeZone,
   presentGroups,
   psaHighBound,
+  WEARABLE_TREND_MIN_NIGHTS,
+  WEARABLE_TREND_WINDOW_DAYS,
+  WEARABLE_TREND_ZONES,
+  wearableTrendWindow,
 } from "./propagation-data.js";
-export type { DirectiveIntent, OptimalZone, ZoneProfile } from "./propagation-data.js";
+export type { DirectiveIntent, OptimalZone, WearableTrendWindow, ZoneProfile } from "./propagation-data.js";
 // The per-marker temporal-validity classification (how long a reading keeps describing
 // the person) — pure data + matchers, re-exported so `repo.*` sees it like the rest of
 // the connected-brain surface.
@@ -229,6 +235,9 @@ function wearableFitnessMarkers(days = 120): any[] {
     const last = points[points.length - 1];
     const before = points.length > 1 ? points[points.length - 2] : null;
     const personal = spec.label === "HRV" ? garminHrvPersonalBand(today) : null;
+    // HRV / resting HR: the week's average a directive reads (never one night). Null
+    // when the week holds too few readings — then no directive speaks for this marker.
+    const trendWindow = WEARABLE_TREND_ZONES.has(spec.label) ? wearableTrendWindow(points, today) : null;
     const zone = markerZone({ name: spec.label, personal_optimal: personal });
     const slope = lsqSlopePerDay(points);
     const n = points.length;
@@ -298,6 +307,7 @@ function wearableFitnessMarkers(days = 120): any[] {
       group_label: grp.label,
       source: "wearable", // provenance hint — these are device-derived, not a lab draw
       ...(personal ? { personal_optimal: personal } : {}),
+      ...(WEARABLE_TREND_ZONES.has(spec.label) ? { trend_window: trendWindow } : {}),
       latest: { value: last.value, flag: null, date: last.date, doc_id: null, kind: "wearable" },
       prev: before ? { value: before.value, date: before.date } : null,
       trend,
@@ -762,6 +772,9 @@ function deriveSignature(markers: any[], profile: ZoneProfile | null, meds: any[
     v: m?.latest?.value ?? null,
     f: m?.latest?.flag ?? null,
     d: m?.latest?.date ?? null,
+    // The week's average a wearable recovery directive reads — a backfilled earlier
+    // night moves it without moving the latest reading.
+    ...(m?.trend_window !== undefined ? { w: m.trend_window?.value ?? null } : {}),
   }));
   return brainDecisionFingerprint({
     snap,
@@ -870,6 +883,59 @@ export function deriveDirectives() {
   return { source: SOURCE, derived: result.saved, directives: listActiveDirectives() };
 }
 
+// The optimal-zone labels the wearable series feed (wearableFitnessMarkers' specs).
+const WEARABLE_MARKER_ZONES: readonly string[] = ["VO2max", "Resting HR", "HRV"];
+
+// THE SYNC EDGE. A wearable directive is about the last week of nights, and a new night
+// arrives with every watch sync — so waiting for the daily propagation tick left the HRV
+// card standing on the morning the athlete's own week was already back in range (the
+// Brief was precomputed against it at 04:00 and the next pass was a day away). This is
+// the same deterministic derivation scoped to the WEARABLE zones only: the mapped levers
+// for the device series, reconciled against the rows of those zones and nothing else, so
+// a lab directive is never touched and a zone a lab reading supplies (a lab VO2max wins
+// the fold) stays with the full pass. It honors the same Done/Dismiss suppression and the
+// same resurface-on-worse rule as deriveDirectives. No agent, no push — safe to call from
+// every ingest path. Returns the tally; a no-op pass writes nothing.
+export function deriveWearableDirectives() {
+  const SOURCE = "markers";
+  const { markers } = prioritizeMarkers();
+  const profile = zoneProfile();
+  const zoneOf = (name: unknown) => matchOptimalZone(String(name ?? ""), profile)?.label ?? null;
+  // Zones a non-wearable reading supplies belong to the full pass.
+  const labZones = new Set(
+    markers.filter((m: any) => m?.source !== "wearable").map((m: any) => zoneOf(m?.name)).filter(Boolean) as string[]
+  );
+  const scope = new Set(WEARABLE_MARKER_ZONES.filter((z) => !labZones.has(z)));
+  if (!scope.size) return { source: SOURCE, changed: 0, directives: listActiveDirectives() };
+  const wearable = markers.filter((m: any) => m?.source === "wearable" && scope.has(String(zoneOf(m?.name))));
+  const meds = (() => {
+    try {
+      return activeMedications();
+    } catch {
+      return [];
+    }
+  })();
+  const offMarkers = buildOffMarkers(wearable, profile);
+  const desired: DirectiveInput[] = [];
+  collectMappedDirectives(SOURCE, offMarkers, meds, new Set<string>(), new Set<string>(), desired);
+  resurfaceWorseningDirectives(SOURCE, desired);
+  const result = reconcileDirectives(SOURCE, desired, {
+    inScope: (row) => {
+      const marker = String(row?.marker ?? "");
+      return !!marker && !marker.includes("+") && scope.has(String(zoneOf(marker)));
+    },
+  });
+  if (result.changed > 0) {
+    try {
+      invalidateDayRead();
+    } catch {
+      /* cache bust is best-effort, never block */
+    }
+    recordActiveDirectiveDecisions(SOURCE);
+  }
+  return { source: SOURCE, changed: result.changed, directives: listActiveDirectives() };
+}
+
 // THE USER-FLIP EDGE. A person marking a directive Done/Dismissed is feedback the engine
 // reads (bumpDirectiveFeedbackCounter moves the derive signature, and shouldSuppressDirective
 // honors the verdict), but nothing re-ran the engine — so a suppressed twin from another
@@ -905,7 +971,15 @@ function buildOffMarkers(markers: any[], profile: ZoneProfile | null): Map<strin
   for (const m of markers) {
     const z = markerZone(m, profile);
     if (!z) continue;
-    const numericVal = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
+    // A wearable HRV / resting-HR series is judged on the WEEK's average, never the
+    // latest night; a week too thin to average raises nothing (wearableTrendWindow).
+    const weekly = m?.source === "wearable" && WEARABLE_TREND_ZONES.has(z.label);
+    if (weekly && !m?.trend_window) continue;
+    const numericVal = weekly
+      ? Number(m.trend_window.value)
+      : typeof m?.latest?.value === "number"
+        ? m.latest.value
+        : Number(m?.latest?.value);
     if (!Number.isFinite(numericVal)) continue;
     const flag: string | null = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
     const comparable = m?.latest?.unit_mismatch !== true;
@@ -1780,7 +1854,14 @@ export function directivesForCoach() {
     .map((d: any) => {
       const bc = bodyCompStaleness(d, weights);
       const directive = bc.stale && bc.reason ? `${d.directive} [Note: ${bc.reason}]` : d.directive;
+      // HRV / resting HR are RECOVERY readings — the day read already weighs them, night
+      // by night, against the athlete's own baseline (signal_state). Their directive is
+      // context for reading the day, never a standing order about it; the prompt
+      // projection and renderConnectedBrain key off this role to frame it that way.
+      const zone = d.marker && !String(d.marker).includes("+") ? matchOptimalZone(String(d.marker)) : null;
+      const recoveryContext = !!zone && WEARABLE_TREND_ZONES.has(zone.label);
       return {
+        ...(recoveryContext ? { role: "recovery_context" } : {}),
         domain: d.domain,
         marker: directiveDisplayMarker(d.marker),
         directive,

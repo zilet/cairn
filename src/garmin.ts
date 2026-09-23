@@ -13,6 +13,7 @@ import {
 } from "./repo/garmin-authorship.js";
 import { sessionsEligibleForGarminExport } from "./repo/garmin-strength-export.js";
 import { deriveHrModel } from "./repo/hr-model.js";
+import { deriveWearableDirectives } from "./repo/propagation.js";
 import { getGarminCredentials, getSettings, setGarminSyncStatus } from "./repo/settings.js";
 import { localDateISO } from "./repo/shared.js";
 import { log } from "./log.js";
@@ -1050,6 +1051,15 @@ async function syncGarminPass(options: GarminSyncOptions = {}) {
     if (options.daily !== false) {
       const afterRecovery = getGarminCoachSummary(Math.min(days, 14));
       emitMaterialGarminRecoveryTransition(beforeRecovery, afterRecovery, source.id);
+      // A new night moves the week an HRV / resting-HR directive reads, so re-derive the
+      // wearable directives HERE rather than at the next daily propagation tick — a week
+      // back inside the athlete's own band clears its card on the sync that shows it.
+      // Deterministic and scoped to the wearable zones; a lab directive is never touched.
+      try {
+        deriveWearableDirectives();
+      } catch (e: any) {
+        log.warn(`[garmin] wearable directive refresh skipped: ${e?.message ?? e}`);
+      }
     }
     upsertGarminSource({
       label: source.label,

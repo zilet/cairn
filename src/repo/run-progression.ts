@@ -6,9 +6,9 @@
 // compliance, recovery, the active periodization block and their real HR-zone
 // bpm bands, and emits a PERIODIZED weekly run mix — N easy Z2 runs + 1 long +
 // 1 rotated quality session (tempo / threshold / VO2 intervals / hills) — each
-// as a RunPrescription the existing setWeeklyRuns apply path accepts, with
-// concrete distances/durations, a bpm-bearing zone, and (for interval sessions)
-// a populated interval structure.
+// as a RunPrescription (a weekday slot, never a plan day — runs are not plan items),
+// with concrete distances/durations, a bpm-bearing zone, and (for interval sessions)
+// a populated interval structure. Computed live on every read.
 //
 // This is the deterministic FLOOR the agentic evolveProgram loop REFINES — never
 // reinvents — exactly as program-state.ts floors the strength evolution prompt.
@@ -49,21 +49,27 @@ import {
   formatEnduranceScheduleDays,
   type EnduranceSchedule,
 } from "./profile.js";
-import { createProposal, supersedeAutoRunPlanDrafts } from "./proposals.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "./reaction-model.js";
 import {
+  acwrCeilingKm,
+  easyRunCapKm,
+  isRampDownWeekOn,
   raceRamp,
+  recoveryEasyCapKm,
+  RESET_TAKEN_FRACTION,
+  type RunWeekShape,
   SUSTAINABLE_LONG_STEP_FACTOR,
   SUSTAINABLE_WEEKLY_BUILD_FACTOR,
   type RaceRamp,
   type RaceRampFit,
 } from "./run-ramp.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { harmEvidenceOnDay } from "./brain/read-adherence.js";
 import { classifyRunEffort, getHrModel, type HrModel, hrZoneLabel, type HrZoneKey, RUN_TYPE_SQL } from "./hr-model.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { isReadDayReadiness, sensorIsCurrent } from "./sensor-freshness.js";
-import { localDateISO } from "./shared.js";
-import { lowerBodyPlanDayNumbers } from "./training-read.js";
+import { daysBetweenISO, localDateISO } from "./shared.js";
+import { heavyLowerWeekdaySlots } from "./plan-selection.js";
 import { getTrainingIntent, type ResolvedTrainingIntent } from "./training-intent.js";
 import type { CoachPersonalModifier } from "../brain/coach-context-contract.js";
 import { round1 } from "../lib/numbers.js";
@@ -105,6 +111,58 @@ function recentRunDose(dateISO: string): { average_km: number | null; longest_km
     };
   } catch {
     return { average_km: null, longest_km: null };
+  }
+}
+// Was the longest run in the 28 days ending `anchorISO` — the same window the anchored
+// longest reads — taken WELL? `harmEvidenceOnDay` is the one answer to that question
+// (a poor rating, a run past the build's own ceiling, a bad next morning); a day it
+// clears is capacity the athlete has demonstrated, not a one-off to step back under.
+// No run on record, or an unreadable table, is not a vouch.
+function longestRunTakenWell(anchorISO: string): boolean {
+  try {
+    const sport = activitySportWhere("activities", RUN_SPORT_PATTERNS);
+    const row = db
+      .prepare(
+        `SELECT date FROM activities
+          WHERE date >= ? AND date <= ? AND distance_km > 0 AND (${sport.sql})
+          ORDER BY distance_km DESC, date DESC LIMIT 1`
+      )
+      .get(isoDaysAgo(anchorISO, 27), anchorISO, ...sport.params) as { date?: string } | undefined;
+    return row?.date ? harmEvidenceOnDay(String(row.date)) == null : false;
+  } catch {
+    return false;
+  }
+}
+// The longest MID-WEEK run of the 28 days ending `anchorISO` (the same anchored window
+// as the longest above): the longest run that was not its own Mon–Sun week's long
+// run. It is what the legs have already carried on a day that is not the long run, so
+// it is what a lone easy run on a three-run week may step one step past
+// (`easyRunCapKm`). Null with no such run on record — the cap is then the recovery
+// band, exactly as before.
+function demonstratedMidweekRunKm(anchorISO: string): number | null {
+  try {
+    const sport = activitySportWhere("activities", RUN_SPORT_PATTERNS);
+    const rows = db
+      .prepare(
+        `SELECT date, distance_km AS km FROM activities
+          WHERE date >= ? AND date <= ? AND distance_km > 0 AND (${sport.sql})
+          ORDER BY distance_km DESC`
+      )
+      .all(isoDaysAgo(anchorISO, 27), anchorISO, ...sport.params) as { date: string; km: number }[];
+    const longOfWeek = new Set<string>();
+    let best = 0;
+    for (const r of rows) {
+      const week = mondayOf(String(r.date));
+      // Rows arrive longest first, so the first row of each week is that week's long run.
+      if (!longOfWeek.has(week)) {
+        longOfWeek.add(week);
+        continue;
+      }
+      best = Math.max(best, Number(r.km) || 0);
+    }
+    return best > 0 ? round1(best) : null;
+  } catch {
+    return null;
   }
 }
 // A deterministic week ordinal (no app_state side-effects on a read): epoch weeks
@@ -484,12 +542,16 @@ export interface IntervalRep {
   zone: ZoneKey;
 }
 
-// A RunPrescription extended with interval STRUCTURE. Assignable to RunPrescription
-// for setWeeklyRuns; the `interval` field is what the integrator must wire into
-// setWeeklyRuns (persist as interval_json) + the renderers/PWA.
+// A RunPrescription extended with interval STRUCTURE. Computed live every read — runs
+// are never stored on the plan — and rendered by the Endurance tab and the agenda.
 export interface RunPlanPrescription extends RunPrescription {
   kind_label: "easy" | "long" | "quality"; // internal mix bucket (plain, never a score)
   interval?: IntervalRep[] | null;
+  /**
+   * Present (true) only on race day: the week's long slot IS the race — its weekday,
+   * its distance, the event's name. Additive; omitted on every ordinary run.
+   */
+  race?: true;
 }
 
 export interface WeeklyRunPlan {
@@ -510,11 +572,17 @@ export interface WeeklyRunPlan {
   // running actually lands by race week; `ideal_peak_km` is what the distance
   // usually leans on. The status compares the two and nothing else — it is a fit,
   // not a grade, and "beyond_horizon" describes a calendar, never an athlete.
+  //
+  // `capacity` is the ordinary run week the peak was read in when the athlete's run
+  // count is fixed (a supporting role, a stated calendar, a set session count) — the
+  // race ladder projects its weeks in the same runs, so the two cannot disagree about
+  // what a week holds. Null when the run count grows with the volume.
   goal_feasibility?: {
     status: RaceRampFit;
     week_km: number;
     constrained_peak_km: number;
     ideal_peak_km: number;
+    capacity?: (RunWeekShape & { demonstrated_midweek_km: number | null }) | null;
   } | null;
 }
 
@@ -656,6 +724,14 @@ export const STRENGTH_PEAK_PULL_DEFER_VARIANTS: ReadonlyArray<(phase: string) =>
     `Keeping the weekly running step ordinary while the lifting block works through its ${phase} — the race build picks the extra back up once that's behind you.`,
   (phase) =>
     `Strength is at its ${phase} this block, so the run build doesn't stretch this week; it steps as usual and waits for a quieter one.`,
+];
+
+// When the week's step is trimmed to what the last month of running supports (see
+// acwrCeilingKm). Plain words, no ratio: the athlete is never handed the number.
+export const RUN_ACWR_CEILING_VARIANTS: readonly [string, ...string[]] = [
+  "Keeping this week's step inside what the last month of running supports — a bigger jump off a lighter stretch is the kind that gets paid for later.",
+  "The step this week is sized to the last few weeks as a whole, not just the last one, so the build keeps climbing without a jump the legs haven't earned.",
+  "A little less than the full step this week: the month behind it had a lighter stretch in it, and the build holds up better when the weeks climb evenly.",
 ];
 
 // Reflecting the athlete's OWN stated run days back at them — never "anchored"/
@@ -989,13 +1065,14 @@ export function weeklyRunPlan(
 
   // Which weekday the long run is destined for. Read here, before anything sizes the
   // week, because the leg-load read below is anchored on it — and it is derived from
-  // the plan's lower-body days alone, so it is a property of the WEEK rather than of
-  // the day the question is asked. (The fatigue-aware slot preference further down
+  // the lifting week's lower-body WEEKDAYS alone (the strength ring laid onto the
+  // athlete's lifting weekdays), so it is a property of the WEEK rather than of the day
+  // the question is asked. (The fatigue-aware slot preference further down
   // may still move the run within the week; that one is allowed to change day to day,
   // and it changes only WHICH day, never how far.)
   let lowerDays: Set<number>;
   try {
-    lowerDays = lowerBodyPlanDayNumbers();
+    lowerDays = heavyLowerWeekdaySlots(week_start);
   } catch {
     lowerDays = new Set();
   }
@@ -1105,6 +1182,32 @@ export function weeklyRunPlan(
   if (anchorKm <= 0) {
     anchorKm = goal?.weekly_km && goal.weekly_km > 0 ? Math.min(goal.weekly_km, 20) : 15;
     rationale.push(`No mileage logged yet — starting conservatively around ${Math.round(anchorKm)} km.`);
+  }
+  // A scheduled reset is recovery, not lost ground. When the closed week was the race
+  // ramp's own reset week and it was genuinely run as a lighter week, the build picks
+  // up from the level the reset PAUSED — the week before it — rather than stepping
+  // ~10% off the reset itself. Stepping off the reset threw a 32.5 km week away: the
+  // week after it asked 29 km and the ladder re-climbed ground already covered. A reset
+  // run so light it reads as an absence (under RESET_TAKEN_FRACTION of the paused level)
+  // keeps the ordinary reactive anchor. Same closed-week family as above: both halves
+  // of the paused week are read one week before `volumeAnchor`.
+  const raceStillAhead = !(goal?.date && String(goal.date).slice(0, 10) < d);
+  if (raceStillAhead && closedWeekKm > 0 && isRampDownWeekOn(goal, mondayOf(volumeAnchor))) {
+    const pausedAnchor = shiftDaysISO(volumeAnchor, -7);
+    const pausedKm = Math.max(
+      recordedWeeklyKm(pausedAnchor, 0, RUN_SPORT_PATTERNS),
+      (() => {
+        try {
+          return getRunCompliance(mondayOf(pausedAnchor))?.actual_km ?? 0;
+        } catch {
+          return 0;
+        }
+      })()
+    );
+    if (pausedKm > closedWeekKm && closedWeekKm >= pausedKm * RESET_TAKEN_FRACTION) {
+      anchorKm = pausedKm;
+      rationale.push("Picking the build back up from where it paused — last week's reset was recovery, not lost ground.");
+    }
   }
 
   // The anchor's THIRD read: the longest run the athlete has demonstrated recently,
@@ -1224,7 +1327,13 @@ export function weeklyRunPlan(
   // count, so the plan never calls "build" the week the ladder calls "down". The
   // lifting block's week index is the fallback only when there is no race to count to.
   const downWeek = ramp ? ramp.down_week : ord % 4 === 0;
-  const taper = phase === "taper";
+  // The taper belongs to the WEEK too, and with a dated race the ramp owns it: the
+  // final taper week and race week, counted in calendar weeks to the race's own
+  // Monday. The goal's phase is ceil(days/7) off the plan DATE, so for a Sunday race
+  // it flipped the peak week to "taper" on its own Sunday — the peak long run's day —
+  // and tapered the week before race week at the race-week depth. The phase stays the
+  // fallback with no ramp to count to (a short race).
+  const taper = ramp ? ramp.taper_week : phase === "taper";
 
   let factor = 1.1; // default ~10% build
   // Whether this week's factor came from the ORDINARY build path. Every other branch
@@ -1234,8 +1343,14 @@ export function weeklyRunPlan(
   // eligible to be nudged upward.
   let standardBuild = false;
   if (taper) {
-    factor = 0.55;
-    rationale.push("Race week — tapering volume right down so you arrive fresh.");
+    // The ramp's taper shape when there is one (the final taper week ~0.7 of the peak,
+    // race week ~0.45 of the week before it); the flat race-week cut otherwise.
+    factor = ramp && anchorKm > 0 ? ramp.required_km / anchorKm : 0.55;
+    rationale.push(
+      ramp && ramp.weeks_to_race_week === 1
+        ? "The week before race week — trimming volume by about a third so the legs arrive fresh; the long run comes down with it."
+        : "Race week — tapering volume right down so you arrive fresh."
+    );
   } else if (recoveryWeek) {
     factor = 0.8;
     rationale.push("Recovery week is active — keeping the running rhythm with less volume and easy aerobic work.");
@@ -1310,6 +1425,7 @@ export function weeklyRunPlan(
   //     stretch is withheld.
   // Leg load speaks first when both apply: it's the one that describes tissue rather
   // than a calendar, and one sentence is enough.
+  let raceStepLine: string | null = null;
   if (ramp && standardBuild && anchorKm > 0 && !softHold) {
     const pull = ramp.required_km / anchorKm;
     if (pull > factor && legsSaturated) {
@@ -1325,9 +1441,8 @@ export function weeklyRunPlan(
       );
     } else if (pull > factor) {
       factor = Math.min(MAX_WEEKLY_BUILD_FACTOR, pull);
-      rationale.push(
-        `Stepping up a touch more than the usual 10% — ${goal?.event ? String(goal.event).slice(0, 60) : "your race"} is ${ramp.weeks_to_race} week${ramp.weeks_to_race === 1 ? "" : "s"} out, and this is the biggest step that still sits inside a safe build.`
-      );
+      raceStepLine = `Stepping up a touch more than the usual 10% — ${goal?.event ? String(goal.event).slice(0, 60) : "your race"} is ${ramp.weeks_to_race} week${ramp.weeks_to_race === 1 ? "" : "s"} out, and this is the biggest step that still sits inside a safe build.`;
+      rationale.push(raceStepLine);
     }
   }
 
@@ -1400,6 +1515,21 @@ export function weeklyRunPlan(
   }
 
   let weeklyKm = Math.max(6, round1(anchorKm * factor));
+  // The step must also sit inside what the last month of running supports: a week the
+  // engine prescribes never reads as a spike to the engine's own brake the Monday
+  // after (`acwrCeilingKm` — the four closed weeks before this one, the same weeks
+  // next Monday's spike read will divide by). Downward-only, and never below the level
+  // the week steps off, so it can trim a build but never turn it into a reduction.
+  // Anchored like the volume reads: the closed weeks ending `volumeAnchor`.
+  const acwrCeiling = acwrCeilingKm(
+    [3, 2, 1, 0].map((b) => recordedWeeklyKm(volumeAnchor, b, RUN_SPORT_PATTERNS)),
+    ENDURANCE_CHRONIC_FLOOR_KM
+  );
+  if (acwrCeiling != null && weeklyKm > Math.max(anchorKm, acwrCeiling) + 0.05) {
+    weeklyKm = Math.max(6, round1(Math.max(anchorKm, acwrCeiling)));
+    if (raceStepLine) rationale.splice(rationale.indexOf(raceStepLine), 1);
+    rationale.push(pickDayVariant(RUN_ACWR_CEILING_VARIANTS, week_start, "run-acwr-ceiling"));
+  }
 
   // --- run-day count ---
   let runDays =
@@ -1480,8 +1610,9 @@ export function weeklyRunPlan(
   }
 
   // --- distance distribution ---
-  // A lone easy day is recovery: 5–7 km, never a second long run.
-  const LONE_EASY_RECOVERY_CAP_KM = 7;
+  // A lone easy day with no quality beside it is recovery: 5–7 km, never a second long
+  // run (recoveryEasyCapKm). Beside a quality session it carries the week's aerobic
+  // volume instead, and its cap scales (easyRunCapKm) — see the easy caps below.
   const HOLD_WEEK_LONG_OF_LONGEST = 0.85;
   const easyCount = Math.max(1, runDays - 1 - (qualityType ? 1 : 0));
   // Long run ~32–38% of weekly volume, but never a >10% jump on the recent longest.
@@ -1534,9 +1665,25 @@ export function weeklyRunPlan(
   // which would be the mileage spike the whole cap exists to prevent, arriving
   // through the mix instead of through the factor.
   const longRoomKm = round1(weeklyKm - qualityKm - easyCount * 3);
-  let longKm = round1(weeklyKm * (taper ? 0.3 : 0.35));
+  // A taper with a race to count to takes the race curve's own taper long run (the
+  // final taper week ~55% of the long-run peak, race week ~30%) — the rung the ladder
+  // shows — rather than a share of a week that is itself shrinking.
+  const rampTaperLong = taper && ramp ? ramp.required_long_km : null;
+  let longKm = rampTaperLong ?? round1(weeklyKm * (taper ? 0.3 : 0.35));
+  // Whether the demonstrated longest was taken WELL (harmEvidenceOnDay clears its day)
+  // — asked at most once, and only by the two branches below that can use it.
+  let longestTakenWell: boolean | null = null;
+  const shownLongTakenWell = (): boolean => (longestTakenWell ??= longestRunTakenWell(volumeAnchor));
   if (prevLong > 0 && !longSuppressed) {
-    const raised = Math.min(prevLong, rampLongCeiling ?? prevLong, Math.max(longKm, longRoomKm));
+    // The raise reaches the race curve's own next long run — one safe step past the
+    // demonstrated longest — on an ordinary build week when that longest was taken
+    // well. Holding it at the longest already run left the ladder's long-run rung a
+    // number the engine never prescribed. A reset or a spike week, or a longest the
+    // body paid for, keeps the old ceiling: the demonstrated distance itself.
+    const stepsPastShown =
+      rampLongCeiling != null && rampLongCeiling > prevLong && !downWeek && !spiking && shownLongTakenWell();
+    const raiseCeiling = stepsPastShown ? (rampLongCeiling as number) : Math.min(prevLong, rampLongCeiling ?? prevLong);
+    const raised = Math.min(raiseCeiling, Math.max(longKm, longRoomKm));
     longKm = round1(Math.max(longKm, raised));
   }
   // A single step above the demonstrated longest, and never more than a bit over half
@@ -1546,14 +1693,30 @@ export function weeklyRunPlan(
   if (prevLong > 0) {
     longKm = round1(Math.min(longKm, prevLong * (longSuppressed ? 1.1 : SUSTAINABLE_LONG_STEP_FACTOR)));
   }
-  // A down week or a spike week is not the week to repeat the new longest: the reset
-  // (and the absorb-before-adding hold) held a 17.7 km long run at 17.7 km a week
-  // after it was first run. The long run sits a clear step under the demonstrated
-  // longest on those weeks, and comes back to it on the next build.
-  if ((downWeek || spiking) && !taper && prevLong > 0) {
+  // A spike week is not the week to repeat the new longest: the absorb-before-adding
+  // hold held a 17.7 km long run at 17.7 km a week after it was first run. The long
+  // run sits a clear step under the demonstrated longest there, and comes back to it
+  // on the next build. A scheduled down week does the same UNLESS that longest was
+  // taken well (`longestRunTakenWell` — harmEvidenceOnDay clears its day): then it is
+  // demonstrated capacity, and the reset HOLDS it — never steps under it, never steps
+  // past it — and takes its lighter week out of the easy days instead. A reset that
+  // cut a well-absorbed 17.7 km to 14.3 km left the ladder re-climbing to it for weeks.
+  const holdsDemonstratedLong =
+    downWeek && !spiking && !taper && !longSuppressed && prevLong > 0 && shownLongTakenWell();
+  if ((downWeek || spiking) && !taper && prevLong > 0 && !holdsDemonstratedLong) {
     longKm = round1(Math.min(longKm, prevLong * HOLD_WEEK_LONG_OF_LONGEST));
   }
-  longKm = round1(Math.min(longKm, weeklyKm * 0.55));
+  // The share cap yields to that hold only as far as the demonstrated distance and the
+  // room the week has left once the other runs take their minimum — never further.
+  const longShareCapKm = holdsDemonstratedLong
+    ? Math.max(weeklyKm * 0.55, Math.min(prevLong, longRoomKm))
+    : weeklyKm * 0.55;
+  longKm = round1(Math.min(longKm, longShareCapKm));
+  if (holdsDemonstratedLong && longKm >= prevLong - 0.05) {
+    rationale.push(
+      `The long run holds at the ${round1(prevLong)} km you've already run well — the reset comes out of the easy days, not the capacity you've shown.`
+    );
+  }
   longKm = Math.max(longKm, round1(weeklyKm * 0.25));
   if (supportingConstrained && prevLong > 0) longKm = round1(Math.min(longKm, prevLong * 1.1));
   if (taper) longKm = round1(Math.min(longKm, Math.max(6, prevLong * 0.6)));
@@ -1568,7 +1731,14 @@ export function weeklyRunPlan(
   // and then hands the easy run everything left over (8.2 km), and the athlete reads
   // a "long run" shorter than the "easy run". Same weekly total, same ceilings: the
   // long run takes the larger dose and the easy run(s) the remainder.
-  if (easyCount > 0 && longKm < easyEach) {
+  //
+  // Not in a race taper, though: there the long run is the race curve's taper long run
+  // on purpose, and growing it back to absorb the remainder undid the taper (a 13.4 km
+  // "long run" the week before race week, over the ladder's 9.8). The easy runs come
+  // down to meet it instead, and what they cannot carry stays off the card.
+  if (easyCount > 0 && longKm < easyEach && rampTaperLong != null) {
+    easyEach = longKm;
+  } else if (easyCount > 0 && longKm < easyEach) {
     longKm = round1(Math.min(easyEach, weeklyKm * 0.55));
     easyTotal = Math.max(easyCount * 3, round1(weeklyKm - longKm - qualityKm));
     easyEach = round1(Math.min(easyTotal / easyCount, longKm));
@@ -1578,9 +1748,21 @@ export function weeklyRunPlan(
   // (~19 km → 9.4 + 9.4); keeping a named quality day as easy would do the same
   // to both easies. Cap each in the 5–7 km recovery band (never above 70% of
   // the long). Extra kilometres stay unspent rather than piling onto the long.
+  //
+  // The one exception is a lone easy run on a week that DOES carry a quality session
+  // (the three-run easy + quality + long week). There it is not recovery; it is the
+  // aerobic volume day, and pinning it at 7 km left such a week unable to hold what
+  // the build asked: a 35 km week prescribed 31 and the rest was simply dropped. Its
+  // cap scales with the week and with the longest mid-week run already run, one step
+  // at a time (`easyRunCapKm`, the same numbers the race ladder projects with). Its
+  // intensity is untouched — still easy, still Z2.
+  const demonstratedMidweekKm = demonstratedMidweekRunKm(volumeAnchor);
   if (easyCount === 1 || (supportingConstrained && !qualityType)) {
-    const recoveryCap = round1(Math.min(LONE_EASY_RECOVERY_CAP_KM, Math.max(3, longKm * 0.7)));
-    if (easyEach > recoveryCap) easyEach = recoveryCap;
+    const easyCap =
+      easyCount === 1 && qualityType && !supportingConstrained
+        ? easyRunCapKm(weeklyKm, longKm, demonstratedMidweekKm)
+        : recoveryEasyCapKm(longKm);
+    if (easyEach > easyCap) easyEach = easyCap;
   }
 
   // --- slot assignment (day_number 1–7): quality mid-week, long late, easy spread —
@@ -1778,6 +1960,42 @@ export function weeklyRunPlan(
     interval: null,
   });
 
+  // ---- race day IS the week's long run ----
+  // With the race inside this Mon–Sun week, the engine must not prescribe a separate
+  // long run beside it: the run that week's long slot stands for is the race. It moves
+  // to the race's own weekday, carries the race distance, and names the event; any
+  // other run the week had put on race day steps off it. The week's other runs already
+  // follow the taper (the ramp's race-week factor sized them above).
+  const raceDate = goal?.is_race && goal.date ? String(goal.date).slice(0, 10) : null;
+  const raceSlot = raceDate ? daysBetweenISO(raceDate, week_start) : null;
+  const raceThisWeek = raceSlot != null && raceSlot >= 0 && raceSlot <= 6;
+  if (raceThisWeek && raceDate) {
+    const slot = (raceSlot as number) + 1;
+    const raceKm = Number(goal?.distance_km);
+    const event = String(goal?.event ?? "").trim();
+    for (let i = runs.length - 1; i >= 0; i--) {
+      if (runs[i].day_number === slot && runs[i].kind_label !== "long") runs.splice(i, 1);
+    }
+    const long = runs.find((r) => r.kind_label === "long");
+    const label = event ? `Race day — ${event}` : "Race day";
+    const raceRun: RunPlanPrescription = {
+      day_number: slot,
+      label,
+      kind_label: "long",
+      race: true,
+      target_distance_km: Number.isFinite(raceKm) && raceKm > 0 ? round1(raceKm) : (long?.target_distance_km ?? null),
+      target_duration_min: null,
+      target_zone: null,
+      note: "Race day — the run this whole build was for. Settle in early and run your own race.",
+      day_name: label,
+      focus: "Endurance · race",
+      interval: null,
+    };
+    if (long) Object.assign(long, raceRun);
+    else runs.push(raceRun);
+    rationale.push("Race day is this week's long run — no separate long run, and the other runs stay light around it.");
+  }
+
   // De-dupe day slots (an easy slot must never collide with the quality/long days).
   // On a stated schedule the remaining days are already exclusive — never spill
   // onto an unscheduled weekday to resolve a collision.
@@ -1794,10 +2012,11 @@ export function weeklyRunPlan(
   }
   runs.sort((a, b) => a.day_number - b.day_number);
 
-  const quality_focus = qualityRun ? qualityRun.label : null;
+  const quality_focus = qualityRun && runs.some((r) => r.kind_label === "quality") ? qualityRun.label : null;
   const placedEasyCount = runs.filter((r) => r.kind_label === "easy").length;
   const easyLabel = `${placedEasyCount} easy`;
-  const mix_summary = `${easyLabel} + 1 long${qualityRun ? ` + 1 ${qualityType}` : ""}`;
+  const qualityPlaced = !!qualityRun && runs.some((r) => r.kind_label === "quality");
+  const mix_summary = `${easyLabel} + ${raceThisWeek ? "race" : "1 long"}${qualityPlaced ? ` + 1 ${qualityType}` : ""}`;
   const phaseWord = goal?.is_race && goal.phase ? `${goal.phase} phase` : "steady";
   const holdClause = firmHold
     ? `, ${holdMarkerPhrase(firmHold)}`
@@ -1807,25 +2026,67 @@ export function weeklyRunPlan(
   const prescribedKm = round1(
     runs.reduce((sum, run) => sum + (run.target_distance_km != null ? Number(run.target_distance_km) : 0), 0)
   );
-  const why = `~${Math.round(prescribedKm || weeklyKm)} km this week (${phaseWord}): ${mix_summary}${qualityRun ? `, with ${qualityRun.label.toLowerCase()} as the quality work` : ", all easy aerobic"}${holdClause}.`;
+  // A quality run that stepped off race day is not this week's quality work, and a race
+  // week is never "all easy aerobic" — the race is the week's hard effort.
+  const qualityTail =
+    qualityRun && qualityPlaced
+      ? `, with ${qualityRun.label.toLowerCase()} as the quality work`
+      : raceThisWeek
+        ? ", easy running around race day"
+        : ", all easy aerobic";
+  const why = `~${Math.round(prescribedKm || weeklyKm)} km this week (${phaseWord}): ${mix_summary}${qualityTail}${holdClause}.`;
 
   // The fit, said plainly and only when it has something to say. A trajectory that
   // reaches what the distance leans on needs no sentence at all; one that does not
   // gets the two options and no verdict. The numbers come from the athlete's OWN
   // reachable trajectory, so the sentence describes their running rather than
   // measuring them against someone else's.
-  const goal_feasibility = ramp
-    ? {
-        status: ramp.fit,
-        week_km: ramp.required_km,
-        constrained_peak_km: ramp.constrained_peak_km,
-        ideal_peak_km: ramp.ideal_peak_km,
-      }
-    : null;
-  if (ramp && ramp.fit !== "fits") {
-    const variants = ramp.fit === "stretch" ? TIMELINE_CLOSE_VARIANTS : TIMELINE_FIT_VARIANTS;
+  //
+  // Where the build lands is read in the runs the athlete's week is actually made of,
+  // when that count is FIXED — a supporting role (three runs at most), a stated run
+  // calendar, or a set number of sessions. A three-run week holds only what its runs'
+  // caps let it hold, so a volume-only walk would promise a peak the engine never
+  // prescribes. The shape is the ORDINARY week's (quality in), not a protective week's.
+  // With no fixed count the runs grow with the volume and the walk stays volume only.
+  const fixedRunCount =
+    trainingIntent.endurance_role === "supporting" || namedRunCalendar || Number(goal?.weekly_sessions) > 0;
+  const capacityShape: RunWeekShape | null = (() => {
+    if (!ramp || !fixedRunCount) return null;
+    let n = Number(goal?.weekly_sessions) > 0 ? Math.min(6, Math.max(2, Math.round(Number(goal?.weekly_sessions)))) : 5;
+    if (trainingIntent.endurance_role === "supporting") n = Math.min(n, 3);
+    if (statedSchedule?.days.length) n = Math.min(n, statedSchedule.days.length);
+    const quality = n >= 3 && !(scheduled && scheduledQualitySlot == null);
+    return { easy_runs: Math.max(1, n - 1 - (quality ? 1 : 0)), quality };
+  })();
+  const fitRamp =
+    ramp && capacityShape
+      ? ((() => {
+          try {
+            return raceRamp(goal, week_start, anchorKm, prevLongForRamp, { shape: capacityShape, demonstratedMidweekKm });
+          } catch {
+            return null;
+          }
+        })() ?? ramp)
+      : ramp;
+  const goal_feasibility =
+    ramp && fitRamp
+      ? {
+          status: fitRamp.fit,
+          week_km: ramp.required_km,
+          constrained_peak_km: fitRamp.constrained_peak_km,
+          ideal_peak_km: ramp.ideal_peak_km,
+          capacity: capacityShape
+            ? { ...capacityShape, demonstrated_midweek_km: demonstratedMidweekKm }
+            : null,
+        }
+      : null;
+  // Silent in the taper: the build is behind the athlete by then, and "run the day off
+  // what you've built, or move the target" said in race week is not a choice anyone
+  // can act on. The machine register above still carries the fit.
+  if (ramp && fitRamp && fitRamp.fit !== "fits" && !ramp.taper_week) {
+    const variants = fitRamp.fit === "stretch" ? TIMELINE_CLOSE_VARIANTS : TIMELINE_FIT_VARIANTS;
     const say = pickDayVariant(variants, d, "run-ramp-timeline");
-    rationale.push(say(Math.round(ramp.constrained_peak_km), Math.round(ramp.ideal_peak_km)));
+    rationale.push(say(Math.round(fitRamp.constrained_peak_km), Math.round(ramp.ideal_peak_km)));
     // …and the RATE, when the rate is what the calendar broke rather than the
     // volume. Silent inside the margin, where the required step is the sustainable
     // one and the sentence above has already covered it.
@@ -1937,26 +2198,15 @@ export interface RunIntensityBalance {
   z2_top: number;
 }
 
-// Does the PLAN ask for easy running at all? Read off the applied plan's cardio
-// items rather than off weeklyRunPlan: the deterministic engine prescribes easy
-// mileage for essentially every runner, so consulting it would answer "yes"
-// unconditionally and the field would carry no information. The applied plan is
-// what the athlete is actually working from, so a "yes" here means the easy runs
-// the read is missing were genuinely asked for.
+// Does the athlete's week ask for easy running at all? Read off the STATED run days
+// (an easy or long day is easy running asked for) rather than off weeklyRunPlan: the
+// deterministic engine prescribes easy mileage for essentially every runner, so
+// consulting it would answer "yes" unconditionally and the field would carry no
+// information. The stated calendar is what the athlete is actually working from, so a
+// "yes" here means the easy runs the read is missing were genuinely asked for.
 function easyRunningIsPrescribed(): boolean {
   try {
-    const row = db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM plan_items
-          WHERE kind = 'cardio'
-            AND (LOWER(COALESCE(target_zone,'')) LIKE '%z1%'
-                 OR LOWER(COALESCE(target_zone,'')) LIKE '%z2%'
-                 OR LOWER(COALESCE(target_zone,'')) LIKE '%easy%'
-                 OR LOWER(COALESCE(note,'')) LIKE '%easy%'
-                 OR LOWER(COALESCE(note,'')) LIKE '%long run%')`
-      )
-      .get() as { n?: number } | undefined;
-    return Number(row?.n ?? 0) > 0;
+    return (getEnduranceSchedule()?.days ?? []).some((day) => day.kind === "easy" || day.kind === "long");
   } catch {
     return false;
   }
@@ -2281,33 +2531,15 @@ export function enduranceTestsDue(date?: string): { exercise: string; kind: "end
 }
 
 // ---------------------------------------------------------------------------
-// Apply path — map this week's deterministic run plan into a DRAFT plan proposal.
-// Shared by REST (`POST /api/program/run-plan/apply`) and MCP (`apply_run_plan`)
-// so the two near-mirror surfaces never drift (it was the one spot they did — a
-// `run(s)` vs grammatical-plural summary). applyProposal walks `parsed.cardio[]`
-// → setWeeklyRuns, which attaches each run to its day_number, REPLACES that day's
-// cardio while leaving strength intact, and carries the interval structure. Never
-// auto-applied. Returns the designed {ok:false} signal when there's no plan to propose.
+// The old apply path — retired. A week of runs used to be written onto plan days as
+// cardio items (setWeeklyRuns); runs now come from the stated run days and this engine,
+// computed live on every read, so there is nothing to apply. Shared by REST
+// (`POST /api/program/run-plan/apply`) and MCP (`apply_run_plan`), which keep their
+// shapes and answer with the designed {ok:false} signal.
 // ---------------------------------------------------------------------------
-export function buildRunPlanProposal(date?: string): { ok: false; error: string } | { ok: true; proposal: any } {
-  const plan = weeklyRunPlan(date);
-  if (!plan.available || !plan.runs.length) return { ok: false, error: "no run plan to propose" };
-  const cardio = plan.runs.map((r: any) => ({
-    day_number: r.day_number,
-    label: r.label ?? r.day_name ?? "Run",
-    target_distance_km: r.target_distance_km ?? null,
-    target_duration_min: r.target_duration_min ?? null,
-    target_zone: r.target_zone ?? null,
-    note: r.note ?? null,
-    day_name: r.day_name ?? r.label ?? "Run",
-    focus: r.focus ?? "Endurance",
-    interval: r.interval ?? null,
-  }));
-  const parsed = {
-    summary: `This week's runs — ${plan.mix_summary || `${cardio.length} run${cardio.length === 1 ? "" : "s"}`}`,
-    cardio,
-  };
-  supersedeAutoRunPlanDrafts();
-  const proposal = createProposal("auto-run-plan", "run plan", "", parsed);
-  return { ok: true, proposal };
+export const RUN_PLAN_IS_LIVE =
+  "Runs aren't applied to the plan any more — this week's runs follow your stated run days and update on their own.";
+
+export function buildRunPlanProposal(_date?: string): { ok: false; error: string } | { ok: true; proposal: any } {
+  return { ok: false, error: RUN_PLAN_IS_LIVE };
 }

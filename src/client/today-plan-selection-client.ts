@@ -113,7 +113,7 @@ type TodayPlanDayRecoveryMap = Record<number, TodayPlanDayRecovery>;
     session: TodayPlanSelectionSession | null | undefined,
     isToday: boolean,
     deps: TodayPlanSelectionDeps,
-  ): Promise<number> {
+  ): Promise<number | null> {
     const plan = deps.state.plan || [];
     const currentLoggedDay = planDayNumberForSession(session, plan);
     if (currentLoggedDay) return currentLoggedDay;
@@ -124,7 +124,12 @@ type TodayPlanDayRecoveryMap = Record<number, TodayPlanDayRecovery>;
       // stale browser history cache after a chat or plan edit.
       const selected = await deps.api(`/today-plan-day?date=${encodeURIComponent(deps.state.logDate)}`) as {
         day_number?: unknown;
+        source?: unknown;
       } | null;
+      // A calendar run or rest day has no plan day at all. Falling back to the first
+      // plan day here put Push's lift list under a Brief that said "run day"; null keeps
+      // the lift area empty while the pills still let the athlete train anyway.
+      if (selected?.source === "calendar" && selected.day_number == null) return null;
       const dayNumber = Number(selected?.day_number);
       if (Number.isFinite(dayNumber) && plan.some((day) => day.day_number === dayNumber)) return dayNumber;
       return plan[0]?.day_number ?? 1;

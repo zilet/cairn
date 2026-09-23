@@ -11,9 +11,7 @@ import {
   transitionBrainDecision,
 } from "./brain-decisions.js";
 import {
-  buildHrvGuardExpectation,
   buildLiftProgressionExpectations,
-  buildSleepGuardExpectation,
   buildTrainingFeedbackExpectations,
   liftProgressionSubjects,
   rebaseDeferredExpectations,
@@ -26,23 +24,18 @@ import {
   type AccountablePlanChangeRecord,
   type ClampAdjustment,
   type PlanPrescription,
-  type RunPrescription,
   applyPlanChange,
   getPlan,
-  getPlanDay,
   planPrescriptionDiff,
   planPrescriptionKey,
   planPrescriptionSnapshot,
   planRestructureReasons,
   replacePlan,
-  setWeeklyRuns,
 } from "./plan.js";
 import { PlanQualityError, type PlanQualityReport, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { orderPlanDaysForEffect } from "../domain/training/plan-item-order.js";
 import { computeGoalCheck, KCAL_ABSOLUTE_FLOOR, KCAL_PER_LB, recompositionStageAt } from "./profile.js";
-import { mergeStoredRun, resolveRunIndex, runEditPatchFromPayload, storedRunsFromItems } from "./run-edit.js";
 import { volumeRestoreLedger } from "./volume-guard.js";
-import { getRunCompliance } from "./sessions.js";
 import { localDateISO, parseDbTime } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "./proposal-intent.js";
@@ -383,6 +376,10 @@ function stampRecoveryWeekIfApplies(p: any, strict = false): void {
 }
 
 
+// Why a run-only proposal lands nothing. Athlete-facing (the apply receipt renders it).
+export const RUNS_ARE_NOT_PLAN_ITEMS =
+  "Runs aren't part of the lifting plan any more — they follow your stated run days, and each week's runs update on their own.";
+
 // A fresh weekly run-plan draft retires any prior un-applied one (agent
 // 'auto-run-plan'), so re-running the run-plan apply never stacks duplicates in the
 // Coach list — system 'superseded', not a user 'discarded'. Returns how many retired.
@@ -648,76 +645,6 @@ function recordAppliedProposalDecision(
         evaluator: "plan_adherence",
         evaluator_version: "plan-adherence-v1",
       });
-    }
-    // Run-plan apply: a week of run prescriptions (result.runs — the auto-run-plan
-    // proposal, or a chat/manual cardio update). Emit falsifiable, windowed run
-    // expectations mirroring the exercise/nutrition branches, so run-plan decisions
-    // earn real evaluations instead of only the generic plan-adherence proxy below:
-    //   (a) run_volume_adherence — did the prescribed weekly km actually get run?
-    //   (b) a recovery guard (recovery_rhr_delta) — ONLY when this plan RAISES weekly
-    //       km vs the prior prescription: expect resting-HR recovery not materially
-    //       worse. Distances read from the applied plan (getRunCompliance, post-
-    //       mutation), never the ledger-less result.runs shape.
-    const appliedRuns = Array.isArray(result?.runs) ? result.runs : [];
-    if (!nutrition && appliedRuns.length) {
-      let newWeeklyKm = 0;
-      try {
-        newWeeklyKm = Number(getRunCompliance().prescribed_km) || 0;
-      } catch {
-        newWeeklyKm = 0;
-      }
-      if (newWeeklyKm > 0) {
-        const runWindowDays = 28;
-        const expectedWindowKm = Math.round(newWeeklyKm * (runWindowDays / 7) * 10) / 10;
-        expectations.push({
-          metric_key: "run_volume_adherence",
-          subject_key: null,
-          direction: "complete",
-          baseline: { weekly_prescribed_km: newWeeklyKm },
-          target: { rate: 0.8, expected_km: expectedWindowKm },
-          window_start: today,
-          window_end: datePlusDays(today, runWindowDays),
-          minimum_data: { outings: 2 },
-          confounder_policy: "exclude_context_events",
-          confidence: "tentative",
-          evaluator: "run_volume_adherence",
-          evaluator_version: "run-volume-adherence-v1",
-        });
-        const priorWeeklyKm = Number(result?.prior_run_km);
-        if (Number.isFinite(priorWeeklyKm) && priorWeeklyKm > 0 && newWeeklyKm > priorWeeklyKm * 1.05) {
-          expectations.push({
-            metric_key: "recovery_rhr_delta",
-            subject_key: null,
-            direction: "at_most",
-            baseline: { prior_weekly_km: Math.round(priorWeeklyKm * 10) / 10, new_weekly_km: newWeeklyKm },
-            target: { max: 3 },
-            window_start: today,
-            window_end: datePlusDays(today, runWindowDays),
-            minimum_data: { nights: 6 },
-            confounder_policy: "exclude_context_events",
-            confidence: "tentative",
-            evaluator: "recovery_delta",
-            evaluator_version: "run-recovery-guard-v1",
-          });
-          // The same guard read through overnight HRV — but only for an athlete
-          // whose watch has actually been producing it. A wearable is optional
-          // here, so its absence writes nothing rather than an expectation that
-          // could never mature.
-          const guardContext = {
-            prior_weekly_km: Math.round(priorWeeklyKm * 10) / 10,
-            new_weekly_km: newWeeklyKm,
-          };
-          const hrvGuard = buildHrvGuardExpectation(today, runWindowDays, guardContext);
-          if (hrvGuard) expectations.push(hrvGuard);
-          // …and the same guard read through overnight SLEEP DURATION, under the same
-          // flowing-data rule. This is the one creator of `sleep_duration_delta`: the
-          // metric and its evaluator were declared with nothing ever writing an
-          // expectation against them, so the model carried a registered sleep lever it
-          // could never learn from.
-          const sleepGuard = buildSleepGuardExpectation(today, runWindowDays, guardContext);
-          if (sleepGuard) expectations.push(sleepGuard);
-        }
-      }
     }
     const accepted = result?.accepted ?? null;
     let nutritionBaseline: ReturnType<typeof estimateExpenditure> | null = null;
@@ -1056,21 +983,6 @@ function recordAppliedProposalDecision(
                 from: String(item.swap.from),
                 to: String(item.swap.to),
               })),
-            runs: Array.isArray(result?.runs) ? result.runs.slice(0, 14) : [],
-            run_reasons: [
-              ...(Array.isArray(p.parsed?.cardio) ? p.parsed.cardio : []),
-              ...(Array.isArray(p.parsed?.changes)
-                ? p.parsed.changes.filter((item: any) => String(item?.kind ?? "").toLowerCase() === "cardio")
-                : []),
-            ]
-              .filter((item: any) => item?.reason)
-              .slice(0, 14)
-              .map((item: any) => ({
-                day_number: item?.day_number ?? null,
-                label: item?.label ?? item?.exercise ?? null,
-                reason: item.reason,
-                reason_provenance: item?.reason_provenance ?? null,
-              })),
             proposal_evidence: proposalEvidence,
           };
     // Volume is the one prescription field nothing downstream can raise, so a
@@ -1408,18 +1320,24 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);
     return result;
   }
-  // A proposal may carry strength `changes`, a week of run prescriptions (`cardio`),
-  // or both. (A full split/frequency rewrite uses `days` → replacePlan above.)
+  // A proposal carries strength `changes`. (A full split/frequency rewrite uses `days`
+  // → replacePlan above.) Runs are NOT plan items (migration 110): a legacy `cardio[]`
+  // week or a kind:'cardio' change has nothing to write — the week's runs follow the
+  // stated run days and the run engine, live — so it is set aside, never an error that
+  // would roll back the strength half beside it.
   const hasChanges = Array.isArray(parsed.changes);
   const hasCardio = Array.isArray(parsed.cardio) && parsed.cardio.length;
   if (!hasChanges && !hasCardio) {
     throw new Error("Proposal has no valid changes, cardio, or days");
   }
+  if (!hasChanges) {
+    return { ok: false, id, applied: [], added: [], skipped: [], error: RUNS_ARE_NOT_PLAN_ITEMS };
+  }
   const applied: any[] = []; // target tweaks to existing prescriptions
   const added: any[] = []; // movements ADDED to a day (the "add a back movement" intent)
   const skipped: any[] = [];
   const clamped: ClampAdjustment[] = [];
-  const cardioRuns: any[] = [];
+  const runsSetAside: any[] = [];
   let caughtQuality: PlanQualityReport | null = null;
   const savepoint = `apply_plan_proposal_${Math.trunc(Number(id))}`;
   // Read once, BEFORE any mutation: the pre-change prescription each targeted change
@@ -1429,10 +1347,9 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   db.exec(`SAVEPOINT ${savepoint}`);
   for (const c of hasChanges ? parsed.changes : []) {
     try {
-      // A cardio entry inside `changes` has no loaded exercise to tweak — route it to
-      // the weekly-runs applier instead of skipping it (so mixed proposals apply runs).
+      // A run inside `changes` has no plan row to land on — set it aside (see above).
       if (String(c?.kind ?? "").toLowerCase() === "cardio") {
-        cardioRuns.push(c);
+        runsSetAside.push(c);
         continue;
       }
       // clamp:true — this is the auto/reviewed APPLY path, so the deterministic
@@ -1459,26 +1376,6 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       skipped.push({ ...c, error: e.message });
     }
   }
-  if (hasCardio) cardioRuns.push(...parsed.cardio);
-  let runs: { applied: any[] } | undefined;
-  // The plan's run km BEFORE this apply — the "prior prescription" the run-plan
-  // recovery guard compares against (read now while the plan is still pre-mutation).
-  let priorRunKm: number | null = null;
-  if (cardioRuns.length) {
-    try {
-      priorRunKm = getRunCompliance().prescribed_km;
-    } catch {
-      priorRunKm = null;
-    }
-    try {
-      runs = setWeeklyRuns(resolveCardioPrescriptions(cardioRuns), {
-        deferTrainingVersionBump: true,
-        deferDayReadInvalidation: true,
-      });
-    } catch (e: any) {
-      skipped.push({ kind: "cardio", error: e.message });
-    }
-  }
   // A multi-change session correction is one intent. If removal, addition, or a
   // prescription edit fails, roll the whole unit back so Today never shows a
   // half-fixed session with the accidental extra still present.
@@ -1499,10 +1396,10 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     };
   }
   const touchedDays = new Set<number>(
-    [
-      ...(hasChanges ? parsed.changes : []).map((change: any) => Number(change?.day_number)),
-      ...cardioRuns.map((run: any) => Number(run?.day_number)),
-    ].filter(Number.isFinite)
+    (hasChanges ? parsed.changes : [])
+      .filter((change: any) => String(change?.kind ?? "").toLowerCase() !== "cardio")
+      .map((change: any) => Number(change?.day_number))
+      .filter(Number.isFinite)
   );
   const priorIssues = new Set(beforeQuality.errors.map(qualityIssueKey));
   const quality = validateTrainingPlan(getPlan());
@@ -1528,7 +1425,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   // the UI claimed "✓ Applied" over a no-op. Only commit when something really
   // changed; otherwise leave the proposal a live draft and report ok:false so the
   // surface says so honestly instead of lying.
-  const changedAny = applied.some((a) => Number(a.updated) > 0) || added.length > 0 || (runs?.applied.length ?? 0) > 0;
+  const changedAny = applied.some((a) => Number(a.updated) > 0) || added.length > 0;
   if (!changedAny) {
     db.exec(`ROLLBACK TO ${savepoint}`);
     db.exec(`RELEASE ${savepoint}`);
@@ -1540,7 +1437,9 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       skipped,
       error: skipped.length
         ? "Couldn't apply these changes — the movement may need to be added through a plan restructure."
-        : "Nothing to change — your plan already matches this.",
+        : runsSetAside.length && !applied.length && !added.length
+          ? RUNS_ARE_NOT_PLAN_ITEMS
+          : "Nothing to change — your plan already matches this.",
       ...(clamped.length ? { clamped } : {}),
     };
   }
@@ -1560,8 +1459,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     applied,
     added,
     skipped,
-    ...(runs ? { runs: runs.applied } : {}),
-    ...(cardioRuns.length ? { prior_run_km: priorRunKm } : {}),
+    ...(runsSetAside.length || hasCardio ? { runs_set_aside: runsSetAside.length + (hasCardio ? parsed.cardio.length : 0) } : {}),
     ...(clamped.length ? { clamped } : {}),
     quality,
     proposal_freshness: proposalFreshness,
@@ -1578,81 +1476,4 @@ export function applyProposal(id: number, opts: ProposalApplyOptions = {}) {
   return withSqliteSavepoint(`apply_proposal_${Math.trunc(Number(id))}`, () => applyProposalUnit(id, opts));
 }
 
-// Map a coach-emitted cardio entry (from parsed.cardio, or a kind:'cardio' change)
-// onto a RunPrescription. Returns null when there's no usable day to attach it to.
-function toRunPrescription(c: any): RunPrescription | null {
-  const day_number = Math.trunc(Number(c?.day_number));
-  if (!Number.isFinite(day_number) || day_number < 1) return null;
-  return {
-    day_number,
-    label: c?.label ?? c?.exercise ?? null,
-    target_distance_km: c?.target_distance_km ?? null,
-    target_duration_min: c?.target_duration_min ?? null,
-    target_zone: c?.target_zone ?? null,
-    note: c?.note ?? null,
-    day_name: c?.day_name ?? null,
-    focus: c?.focus ?? null,
-    interval: c?.interval ?? null,
-  };
-}
-
-// What setWeeklyRuns should actually write for this payload.
-//
-// setWeeklyRuns replaces a day's cardio WHOLESALE, so a `cardio[]` entry is normally a
-// whole run and the entries for a day ARE that day's runs — how the Monday tick, a
-// run-plan proposal and a restructure's week of runs all mean it. That stays exactly
-// as it was.
-//
-// A chat run edit is different: the proposal may be held for review or scheduled for a
-// boundary, and a day snapshotted at build time would overwrite whatever landed in
-// between. Those entries are MARKED (`cardio_edit:true`) and carry the edit, so the
-// day's rows are re-read HERE, at the moment of the write, and the edit is folded onto
-// them. `src/repo/run-edit.ts` owns the fold; chat builds with the same one.
-function resolveCardioPrescriptions(entries: any[]): RunPrescription[] {
-  const byDay = new Map<number, any[]>();
-  for (const entry of entries) {
-    const dayNumber = Math.trunc(Number(entry?.day_number));
-    if (!Number.isFinite(dayNumber) || dayNumber < 1) continue;
-    if (!byDay.has(dayNumber)) byDay.set(dayNumber, []);
-    byDay.get(dayNumber)?.push(entry);
-  }
-  const out: RunPrescription[] = [];
-  for (const [dayNumber, dayEntries] of byDay) {
-    if (!dayEntries.some((entry) => entry?.cardio_edit === true)) {
-      for (const entry of dayEntries) {
-        const prescription = toRunPrescription(entry);
-        if (prescription) out.push(prescription);
-      }
-      continue;
-    }
-    const runs = storedRunsFromItems((getPlanDay(dayNumber) as any)?.items);
-    const first = dayEntries[0];
-    for (const entry of dayEntries) {
-      const patch = runEditPatchFromPayload(entry) ?? runEditPatchFromPayload({ ...entry, cardio_edit: true });
-      if (!patch) continue;
-      const index = resolveRunIndex(runs, patch);
-      // The day grew a second unnamed run while this edit was waiting. Guessing which
-      // one was meant is exactly what the build-time refusal exists to prevent, so let
-      // the caller roll the whole unit back and say so.
-      if (index == null) {
-        throw new Error(`day ${dayNumber} carries ${runs.length} runs and this change didn't say which one`);
-      }
-      runs[index >= 0 ? index : runs.length] = mergeStoredRun(index >= 0 ? runs[index] : null, patch);
-    }
-    for (const run of runs) {
-      out.push({
-        day_number: dayNumber,
-        label: run.label,
-        target_distance_km: run.target_distance_km,
-        target_duration_min: run.target_duration_min,
-        target_zone: run.target_zone,
-        note: null,
-        day_name: first?.day_name ?? null,
-        focus: first?.focus ?? null,
-        interval: run.interval ?? null,
-      });
-    }
-  }
-  return out;
-}
 

@@ -1,10 +1,10 @@
 import { db } from "../db.js";
 import { estimateExpenditure, type ExpenditureEstimate } from "./expenditure.js";
 import { currentBodyFatEstimate, effectiveGoalMode, getProfile, leannessAwareLossRates } from "./profile.js";
-import { getProgramState, type ProgramState } from "./program-state.js";
+import { getProgramState, liftTrainedRecently, type ProgramState } from "./program-state.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
-import { wholePersonTrajectory, type WholePersonTrajectory } from "./whole-person-trajectory.js";
+import { strengthDeclineIsMeaningful, wholePersonTrajectory, type WholePersonTrajectory } from "./whole-person-trajectory.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import { type CutTargetDerivation, deriveCutTarget } from "./cut-target.js";
 import type { UnderfuelingRead } from "./underfueling.js";
@@ -227,9 +227,20 @@ export function recompositionRead(
             line: `The completed-day trend is about ${round2(trend)} lb per week across the robust energy window.`,
           };
 
-  const regressingLifts = (program.lifts || []).filter((lift: any) => lift.status === "regressing");
+  // ONE bar for "strength is regressing" (strengthDeclineIsMeaningful): the trajectory's
+  // own proportionate verdict when it has one, else the same bar over the lifts trained
+  // recently — never a flat "two regressing lifts", which counted lifts out of rotation.
   const strengthDomain = whole.domains.find((domain) => domain.domain === "strength") ?? null;
-  const strengthRegression = regressingLifts.length >= 2 || strengthDomain?.verdict === "worse";
+  const recentLifts = (program.lifts || []).filter((lift: any) => liftTrainedRecently(lift, today));
+  const count = (status: string) => recentLifts.filter((lift: any) => lift.status === status).length;
+  const strengthRegression =
+    strengthDomain && strengthDomain.verdict !== "unknown" && (strengthDomain as any).lift_counts
+      ? strengthDomain.verdict === "worse"
+      : strengthDeclineIsMeaningful({
+          improving: count("progressing"),
+          declining: count("regressing"),
+          steady: count("plateaued"),
+        });
   const performanceStrain = underfueling.channels.some(
     (channel) => channel.key === "performance" && channel.direction === "strain"
   );

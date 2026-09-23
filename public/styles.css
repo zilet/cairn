@@ -5051,55 +5051,9 @@ button.hmk-row:active{background:var(--card-2)}
 .actlevel-seg .segbtn.active{background:var(--ink);color:var(--paper);border-color:var(--ink)}
 .actlevel-desc{color:var(--muted)}
 
-/* The cardio "tag" caps chip used wherever a cardio item names its modality. */
-.cardio-tag{display:inline-block;color:var(--sage);background:var(--sage-bg);
-  border-radius:999px;padding:1px 7px;font-size:.54rem;letter-spacing:.12em;vertical-align:middle}
-
-/* Plan view — a cardio row in the catalog gallery. */
-.prog-row-cardio .prog-row-name-static{font-size:.9rem;font-weight:500;color:var(--ink);
-  display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.prog-row-cardio-pres{color:var(--accent)!important;font-size:.86rem!important}
-
-/* Plan editor — the strength/cardio kind toggle + cardio number fields. */
-.pi-kind{display:inline-flex;gap:0;background:var(--card-2);border:1px solid var(--line);
-  border-radius:999px;padding:2px;margin:0 0 6px}
-.pi-kindbtn{border:none;background:transparent;color:var(--muted);border-radius:999px;
-  padding:5px 13px;font-family:var(--font-ui);font-weight:600;font-size:.66rem;
-  letter-spacing:.06em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
-/* active mode reads ink like every other segmented toggle (.segbtn / .disc-seg) */
-.pi-kindbtn.active{background:var(--ink);color:var(--paper)}
-.pi-nums-cardio{display:flex;gap:5px;align-items:center}
-.pi-nums-cardio input{
-  width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
-  border-radius:9px;padding:8px 6px;text-align:center;
-  font-family:var(--font-display);font-variation-settings:"opsz" 40;font-size:.9rem;
-}
-.pi-nums-cardio input::placeholder{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.06em}
-.pi-ivl{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
-  border-radius:9px;padding:8px 10px;font-size:.8rem;margin-top:6px}
+/* Plan editor — the day's add-row of ghost buttons. */
 .pday-add{display:flex;gap:8px;flex-wrap:wrap}
 .pday-add .ghostbtn{flex:0 0 auto}
-
-/* Today — a planned cardio card (reuses .ex card scaffold). The head is label + a small
-   "cardio" tag; min-width:0 + an ellipsizing name span keep a long label on one line so
-   it never wraps into a tall column that collides with the prescription on the right. */
-.ex-cardio .ex-name-static{flex:1;min-width:0;overflow:hidden}
-.cardio-name-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.ex-cardio-pres{color:var(--accent);font-family:var(--font-display);font-weight:600;
-  font-variation-settings:"opsz" 60;font-size:1rem;white-space:nowrap;flex:0 0 auto;
-  font-variant-numeric:lining-nums}
-.cardio-logrow{margin-top:11px}
-.cardio-log-btn{width:100%;text-align:center;margin-top:0}
-
-/* A run that already happened — the cardio analogue of garminSessionCard's calm
-   "done" read. Sage left-edge stamp (matching the strength done card vocabulary),
-   a ✓ before the headline, and real distance/zone/pace chips. No log button. */
-.ex-cardio-done{border-left:3px solid var(--sage)}
-/* flex:1 + min-width:0 so a long headline ellipsizes rather than crowding or pushing
-   the ✦ synced-from-Garmin tag (flex:none) off-row on a narrow phone. */
-.cardio-done-head{display:flex;align-items:baseline;gap:7px;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cardio-done-mark{color:var(--sage);font-weight:700;flex:0 0 auto}
-.cardio-done-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
 
 /* Sync trust: a quiet "synced 2h ago · Sync now" line. Shared by Today's run card
    and the Endurance view. A stale dot warms toward the accent when this morning's

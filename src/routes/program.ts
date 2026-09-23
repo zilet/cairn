@@ -340,9 +340,9 @@ programRouter.get("/program/playbook", (req, res) => {
 // DEXA-driven targeting: the body scan's regional read → concrete training +
 // nutrition targets, each with a "path to your next scan". {available:false} w/o DEXA.
 programRouter.get("/dexa-targeting", (_req, res) => res.json(dexaTargeting()));
-// Build this week's deterministic run mix and route it through the same autonomy
-// policy as strength progression. Lead mode lands the bounded update at its natural
-// boundary with Undo; review posture keeps a draft. Strength work stays intact.
+// RETIRED: runs are not written onto the plan (migration 110) — the week's runs are
+// computed live by weeklyRunPlan on the stated run days. Answers the designed
+// {ok:false, error} so an older client gets a clear reason rather than a 404.
 programRouter.post("/program/run-plan/apply", (req, res) => {
   const date = (req.body ?? {}).date ? String((req.body as any).date) : undefined;
   res.json(buildRunPlanWithAutonomy(date));

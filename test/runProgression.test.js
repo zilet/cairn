@@ -14,6 +14,7 @@ import {
   LEG_LOAD_LONG_DEFER_VARIANTS,
   LEG_LOAD_PLACEMENT_VARIANTS,
   LEG_LOAD_PULL_DEFER_VARIANTS,
+  RUN_PLAN_IS_LIVE,
   RUN_SCHEDULE_STATED_VARIANTS,
   STRENGTH_PEAK_PULL_DEFER_VARIANTS,
 } from "../dist/repo/run-progression.js";
@@ -633,10 +634,15 @@ const LEGS_SATURATED = {
   has_data: true,
 };
 
+// Four weeks out (a Monday race, so a whole number of weeks). A scheduled reset is
+// recovery, not lost ground (run-ramp.ts), so twelve weeks out from a half at 30 km/wk
+// no longer needs more than the ordinary ~10% step and the race pull never fires
+// there; four weeks out it genuinely does (a 1.12 step), which is the state these
+// tests need open to measure what withholds it.
 function seedRacingRunner(from = REF) {
   repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
   repo.setProfile({
-    endurance_goal: { mode: "race", event: "Test Half", date: fwd(84), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 },
+    endurance_goal: { mode: "race", event: "Test Half", date: fwd(28), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 },
   });
   seedRunner({ weeks: 10, perWeek: 3, km: 10, from });
 }
@@ -953,7 +959,7 @@ test("a huge mid-week block never raises the same week's ask, brake or no brake"
 });
 
 test("the race ramp cannot raise a week from inside it — a demonstrated long is a ceiling, not a pull", () => {
-  seedRacingRunner(); // the race is 84 days out from this Monday: an exact number of
+  seedRacingRunner(); // the race is 28 days out from this Monday: an exact number of
   // weeks, so weeks_to_race — the ramp's OTHER live input — holds constant Mon–Sun and
   // this test is measuring prevLongForRamp alone.
   const opts = { block: { week_index: 1 } };
@@ -1025,8 +1031,10 @@ test("a race that is not a whole number of weeks out still reads the same from e
 test("but the countdown still advances on the Monday rollover — the anchor must not freeze it", () => {
   repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
   repo.setProfile({
-    endurance_goal: { mode: "race", event: "Test Half", date: fwd(84), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 },
+    endurance_goal: { mode: "race", event: "Test Half", date: fwd(28), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 },
   });
+  // Four weeks out, not twelve: with resets read as recovery rather than lost ground the
+  // pull only fires on a runway short enough to need it (see seedRacingRunner).
   // History that ENDS the day before this Monday, plus a normal week logged inside the
   // test week — so next Monday has a real closed week to anchor on and the race pull,
   // which is what says the number out loud, fires on both weeks.
@@ -1294,28 +1302,21 @@ test("an explicit volumeAnchorDate still overrides the week-boundary default", (
 
 // ── buildRunPlanProposal (the apply path, shared by REST + MCP) ────────────────
 
-test("buildRunPlanProposal drafts a proposal whose cardio carries day_number + interval structure", () => {
+test("buildRunPlanProposal never drafts — a runner with a live plan gets the designed ok:false and nothing is written", () => {
+  // Runs are never plan items (migration 110): the week's runs follow the stated run
+  // days and the engine, computed live, so there is nothing to apply.
   repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
   repo.setProfile({ endurance_goal: { mode: "race", event: "Apply Half", date: fwd(84), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 } });
   seedRunner({ weeks: 10, perWeek: 3, km: 10 });
+  assert.equal(repo.weeklyRunPlan(REF).available, true, "the live run week is there to read");
 
   const out = repo.buildRunPlanProposal(REF);
-  assert.equal(out.ok, true, "a runner with a plan drafts a proposal");
-  const parsed = out.proposal.parsed;
-  assert.ok(Array.isArray(parsed.cardio) && parsed.cardio.length > 0, "the proposal carries a cardio array");
-  // Every mapped run keeps the day_number applyProposal→setWeeklyRuns needs to attach it.
-  assert.ok(parsed.cardio.every((c) => Number.isFinite(c.day_number)), "each cardio entry carries a day_number");
-  assert.ok(parsed.cardio.every((c) => typeof c.day_name === "string" && c.day_name.length > 0), "each carries a day_name");
-  // The interval structure survives the mapping (the keystone — a stripped interval = a lost workout).
-  const planRuns = repo.weeklyRunPlan(REF).runs;
-  const intervalRun = planRuns.find((r) => Array.isArray(r.interval) && r.interval.length);
-  if (intervalRun) {
-    const mapped = parsed.cardio.find((c) => c.day_number === intervalRun.day_number);
-    assert.ok(mapped && Array.isArray(mapped.interval) && mapped.interval.length, "an interval session's structure carries into the proposal");
-  }
-  // It's a DRAFT through the usual propose→apply path, never auto-applied.
-  assert.equal(out.proposal.status, "draft", "the proposal is a draft, never auto-applied");
-  assert.ok(/run/i.test(parsed.summary), "the summary names the runs");
+  assert.equal(out.ok, false, "the apply path is retired, even for a runner with a plan");
+  assert.equal(out.error, RUN_PLAN_IS_LIVE, "the designed, plain-words reason");
+  assert.equal(out.proposal, undefined, "no draft rides along");
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM plan_proposals`).get().n, 0, "no proposal row is written");
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM plan_items WHERE kind = 'cardio'`).get().n, 0, "no run lands on the plan");
+  assert.equal(violatesReadingGrammar(out.error), null, out.error);
   NO_SCORE(out, "buildRunPlanProposal");
 });
 
@@ -1328,7 +1329,7 @@ test("buildRunPlanProposal returns the designed ok:false when there is no run pl
 
 // ── the weekly cadence is the wrong home for a long-horizon claim ─────────────
 
-test("applying a weekly run plan writes no eight-week aerobic expectation", () => {
+test("the live run week writes no eight-week aerobic expectation — there is no weekly apply to hang one on", () => {
   repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
   repo.setProfile({ endurance_goal: { mode: "race", event: "Apply Half", date: fwd(84), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 } });
   seedRunner({ weeks: 10, perWeek: 3, km: 10 });
@@ -1337,18 +1338,17 @@ test("applying a weekly run plan writes no eight-week aerobic expectation", () =
     db.prepare(`INSERT INTO daily_metrics (source, date, vo2max, updated_at) VALUES ('apple', ?, ?, datetime('now'))`).run(back(off), 50);
   }
 
-  const out = repo.buildRunPlanProposal(REF);
-  assert.equal(out.ok, true);
-  assert.equal(repo.applyProposal(out.proposal.id).ok, true);
+  assert.equal(repo.weeklyRunPlan(REF).available, true);
+  assert.equal(repo.buildRunPlanProposal(REF).ok, false, "the retired apply path writes nothing");
 
   const written = db.prepare(`SELECT metric_key, COUNT(*) AS n FROM brain_expectations GROUP BY metric_key`).all();
   const byMetric = new Map(written.map((row) => [row.metric_key, row.n]));
-  assert.ok(byMetric.get("run_volume_adherence") > 0, "the weekly claim the run plan CAN make is still written");
   assert.equal(
     byMetric.get("vo2max_trend"),
     undefined,
-    "an eight-week aerobic trend is never attached to a decision that is remade every week"
+    "an eight-week aerobic trend is never attached to a week that is remade every read"
   );
+  assert.equal(byMetric.get("run_volume_adherence"), undefined, "and no applied-plan adherence claim either");
 });
 
 // ── the reading grammar, over the leg-load vocabulary ─────────────────────────

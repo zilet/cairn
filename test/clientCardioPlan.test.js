@@ -32,50 +32,35 @@ test("planned cardio helpers normalize structured intervals", () => {
   assert.equal(cardio.cardioIntervalNote(" 30 min easy "), "30 min easy");
 });
 
-test("planned cardio helpers separate short labels from coach prose", () => {
+// The label/art/sport helpers served the run card inside the lift list and the
+// run rows in the strength editor; runs left the strength plan, so those surfaces
+// (and the helpers) are gone. What stays is the cardio predicate and the one filter
+// every strength surface uses to keep an older payload's run out of it.
+test("the strength-plan filter keeps lifts and drops runs, rest rows and run-only days", () => {
   const cardio = loadCardioPlan();
 
   assert.equal(cardio.isCardioItem({ kind: "cardio" }), true);
   assert.equal(cardio.isCardioItem({ kind: "strength" }), false);
-  assert.equal(cardio.cardioLabel({ note: "Long run" }), "Long run");
-  assert.equal(
-    cardio.cardioLabel({ note: "Nasal-breathing pace. Watch the third kilometer dip.", target_zone: "Z2" }),
-    "Easy run"
-  );
-  assert.equal(
-    cardio.cardioDescription({ note: "Nasal-breathing pace. Watch the third kilometer dip." }),
-    "Nasal-breathing pace. Watch the third kilometer dip."
-  );
-  assert.equal(cardio.cardioArtPhrase({ note: "" }), "run");
-});
+  assert.equal(cardio.isCardioItem(null), false);
 
-test("running strides do not collide with the ride sport token", () => {
-  const cardio = loadCardioPlan();
-  const tempo = {
-    kind: "cardio",
-    exercise: "Tempo run",
-    note: "Continuous tempo at Z3; finish with relaxed strides.",
-    target_zone: "Z3",
-  };
+  const bench = { kind: "strength", exercise: "Bench" };
+  const run = { kind: "cardio", note: "Easy run", target_distance_km: 6 };
+  assert.deepEqual([...cardio.strengthPlanItems([bench, run]).map((item) => item.exercise)], ["Bench"]);
+  assert.equal(cardio.strengthPlanItems(null).length, 0);
 
-  assert.equal(cardio.cardioSport(tempo), "run");
-  assert.equal(cardio.cardioLabel(tempo), "Tempo run");
-});
+  assert.equal(cardio.isStrengthPlanDay({ items: [bench, run] }), true);
+  assert.equal(cardio.isStrengthPlanDay({ day_type: "rest", items: [] }), false);
+  assert.equal(cardio.isStrengthPlanDay({ items: [run] }), false, "a run-only day is not a lift day");
+  assert.equal(cardio.isStrengthPlanDay({ items: [] }), true, "an empty training day is the athlete's scaffold");
 
-test("exercise-only generated cardio preserves its label, art phrase, and modality", () => {
-  const cardio = loadCardioPlan();
-
-  for (const [exercise, sport] of [
-    ["Easy ride", "ride"],
-    ["Tempo run", "run"],
-    ["Pool swim", "swim"],
-    ["Erg row", "row"],
-    ["Trail hike", "hike"],
-  ]) {
-    assert.equal(cardio.cardioLabel({ kind: "cardio", exercise }), exercise);
-    assert.equal(cardio.cardioArtPhrase({ kind: "cardio", exercise }), exercise);
-    assert.equal(cardio.cardioSport({ kind: "cardio", exercise }), sport);
-  }
+  const days = cardio.strengthPlanDays([
+    { day_number: 1, name: "Pull", items: [bench, run] },
+    { day_number: 2, name: "Rest", day_type: "rest", items: [] },
+    { day_number: 3, name: "Long Run", items: [{ kind: "cardio", note: "Long run" }] },
+  ]);
+  assert.deepEqual([...days.map((day) => day.name)], ["Pull"]);
+  assert.deepEqual([...days[0].items.map((item) => item.exercise)], ["Bench"]);
+  assert.equal(cardio.cardioLabel, undefined, "the run-card label helpers are gone with the run card");
 });
 
 test("planned cardio prescription prefers concrete distance, zone, and intervals", () => {
