@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import type { WeeklyRunPlan, RunPlanPrescription } from "./run-progression.js";
-import { weeklyRunPlan } from "./run-progression.js";
+import { weekAsPlanned, weeklyRunPlan } from "./run-progression.js";
+import { applyRunDayIntensity, type RunDayIntensity, runDayIntensity } from "./run-day-intensity.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
 import { cardioEffort, sessionLoad } from "./training-read.js";
@@ -39,6 +40,10 @@ export interface FlexibleRunIntent {
   target_zone: string | null;
   completion: RunCompletionEvidence | null;
   rationale: string;
+  // This morning's call on the run (runDayIntensity): present only on the intent the
+  // morning re-decided, whose kind/label/targets above already carry the answer. The
+  // intent's `id` keeps the kind the WEEK planned, so the slot's identity is stable.
+  adjustment?: RunDayIntensity | null;
 }
 
 export interface FlexibleTrainingAgenda {
@@ -55,6 +60,9 @@ export interface FlexibleTrainingAgenda {
   } | null;
   today_guidance: "open" | "easy_only" | "not_first_choice" | "complete";
   why: string;
+  // The morning's call on the run the agenda opened for TODAY, when it is a quality or
+  // long run (the same object as that intent's `adjustment`). Null otherwise.
+  today_adjustment?: RunDayIntensity | null;
 }
 
 interface RunObservation {
@@ -161,6 +169,19 @@ function runObservations(start: string, through: string): RunObservation[] {
   }
 }
 
+// Was the week's harder running already done before `date`? The same observation
+// read that closes a quality intention (a hard watch label, real Z4+ time, a high
+// training effect, sustained Z3), at the smallest dose that could close one. The
+// run engine's morning read asks this before it re-decides today's quality day, so
+// the plan and this agenda cannot disagree about whether the week's quality is in.
+export function qualityRunLoggedBefore(weekStart: string, date: string): boolean {
+  const through = addDaysISO(date, -1);
+  if (!through || through < weekStart) return false;
+  return runObservations(weekStart, through).some(
+    (observation) => observation.quality && ((observation.duration_min ?? 0) >= 20 || (observation.distance_km ?? 0) >= 3)
+  );
+}
+
 function targetDoseMet(observation: RunObservation, prescription: RunPlanPrescription, fraction: number): boolean {
   const targetKm = validNumber(prescription.target_distance_km);
   const targetMin = validNumber(prescription.target_duration_min);
@@ -233,10 +254,12 @@ function matchingLongIndex(
 
 function matchCompletions(
   prescriptions: RunPlanPrescription[],
-  observations: RunObservation[]
+  observations: RunObservation[],
+  dayOf?: { weekStart: string; asOf: string; statedQualityDows: Set<number>; morningOwned?: Set<number> }
 ): Map<number, RunCompletionEvidence> {
   const completed = new Map<number, RunCompletionEvidence>();
   const remaining = new Set(prescriptions.map((_, index) => index));
+  const consumed = new Set<number>();
 
   // Biggest dose first, not calendar order. Read against a live week, date order
   // let a 4.9 km Tuesday jog close a long intention whose target a protective cut
@@ -253,8 +276,15 @@ function matchCompletions(
     // Arbitrate quality-vs-long before consuming either slot. A quality-bearing
     // observation can also be a clearly long-shaped outing; in that dual-match
     // case it closes the long intention rather than producing duplicate long work.
+    // A quality session THIS morning kept on (runDayIntensity — the athlete's word
+    // after the week's harder work was already in) belongs to today: an earlier run
+    // cannot close it.
     const quality = prescriptions.findIndex(
-      (run, index) => remaining.has(index) && run.kind_label === "quality" && qualityDoseMet(observation, run)
+      (run, index) =>
+        remaining.has(index) &&
+        run.kind_label === "quality" &&
+        !(dayOf?.morningOwned?.has(index) && observation.date < dayOf.asOf) &&
+        qualityDoseMet(observation, run)
     );
     // Quality must not steal long: a quality-flagged observation closes long only when
     // longDoseMet AND either (a) no open quality slot remains, or (b) the dose is clearly
@@ -263,19 +293,50 @@ function matchCompletions(
     if (quality >= 0 && !(observation.quality && long >= 0 && longShapedDose(observation, prescriptions[long]))) {
       completed.set(quality, completionEvidence(observation));
       remaining.delete(quality);
+      consumed.add(observation.id);
       continue;
     }
     if (long >= 0) {
       completed.set(long, completionEvidence(observation));
       remaining.delete(long);
+      consumed.add(observation.id);
       continue;
     }
+    // A quality slot this observation may not close (today's, kept by this morning) is
+    // not "open" to it either — otherwise a hard earlier run closes nothing at all.
+    const qualityOpenToIt = prescriptions.some(
+      (run, index) =>
+        remaining.has(index) &&
+        run.kind_label === "quality" &&
+        !(dayOf?.morningOwned?.has(index) && observation.date < dayOf.asOf)
+    );
     const easy = prescriptions.findIndex(
-      (run, index) => remaining.has(index) && run.kind_label === "easy" && easyDoseMet(observation, run, openQualityRemains(prescriptions, remaining))
+      (run, index) => remaining.has(index) && run.kind_label === "easy" && easyDoseMet(observation, run, qualityOpenToIt)
     );
     if (easy >= 0) {
       completed.set(easy, completionEvidence(observation));
       remaining.delete(easy);
+      consumed.add(observation.id);
+    }
+  }
+  // The quality DAY was run. A quality session is re-decided on its own morning
+  // (runDayIntensity), so a run logged on that day — easy because the morning said so,
+  // or because the athlete chose it — is that slot's answer once the day has passed:
+  // a trimmed week's short set (optional by construction) or the athlete's stated
+  // quality weekday. Leaving it open re-asked the session later in the week, which is
+  // exactly the catch-up this agenda never piles on.
+  if (dayOf) {
+    for (const index of [...remaining]) {
+      const run = prescriptions[index];
+      if (run.kind_label !== "quality") continue;
+      const date = provisionalDate(dayOf.weekStart, run.day_number);
+      if (!(date < dayOf.asOf)) continue;
+      if (!(run.dose === "short" || dayOf.statedQualityDows.has(isoDow(date)))) continue;
+      const onTheDay = observations.find((observation) => observation.date === date && !consumed.has(observation.id));
+      if (!onTheDay) continue;
+      completed.set(index, completionEvidence(onTheDay));
+      remaining.delete(index);
+      consumed.add(onTheDay.id);
     }
   }
   return completed;
@@ -375,6 +436,14 @@ function suggestedDatesFor(run: RunPlanPrescription, asOf: string, weekEnd: stri
   return run.kind_label === "easy" ? ranked : ranked.filter((date) => !blocked.has(date));
 }
 
+// Is this the run the plan's morning read decided? The plan decides the run on the
+// plan date's own weekday; its answer already sits on that run.
+function adjustedByPlan(plan: WeeklyRunPlan, run: RunPlanPrescription, weekStart: string): boolean {
+  const adj = plan.today_adjustment;
+  if (!adj) return false;
+  return provisionalDate(weekStart, run.day_number) === adj.date && run.kind_label === adj.kind;
+}
+
 export function flexibleTrainingAgenda(
   date?: string,
   opts?: {
@@ -399,7 +468,23 @@ export function flexibleTrainingAgenda(
   }
 
   const observations = runObservations(weekStart, asOf);
-  const completions = matchCompletions(plan.runs, observations);
+  const statedQualityDows = new Set(
+    (getEnduranceSchedule()?.days ?? []).filter((day) => day.kind === "quality").map((day) => day.dow)
+  );
+  const morningOwned = new Set<number>(
+    plan.today_adjustment?.kind === "quality"
+      ? plan.runs.map((run, index) => (adjustedByPlan(plan, run, weekStart) ? index : -1)).filter((index) => index >= 0)
+      : []
+  );
+  // A slot this morning turned to rest carries no distance, and a run with no target
+  // would close it on any outing; it is matched against what the WEEK planned there.
+  const planned = weekAsPlanned(plan);
+  const matchRuns = plan.runs.map((run, index) =>
+    plan.today_adjustment?.dose === "rest" && adjustedByPlan(plan, run, weekStart) && planned[index]
+      ? planned[index]
+      : run
+  );
+  const completions = matchCompletions(matchRuns, observations, { weekStart, asOf, statedQualityDows, morningOwned });
   const lowerDates = actualLowerBodyDates(weekStart, asOf);
   const cardioDates = cardioConflictDates(weekStart, asOf);
   const blocked = blockedKeyRunDates(lowerDates, cardioDates);
@@ -408,12 +493,15 @@ export function flexibleTrainingAgenda(
   const kindCount = new Map<FlexibleRunKind, number>();
   const intents: FlexibleRunIntent[] = plan.runs.map((run, index) => {
     const kind = run.kind_label;
-    const occurrence = (kindCount.get(kind) ?? 0) + 1;
-    kindCount.set(kind, occurrence);
+    // The slot's identity is the kind the WEEK put there, so a morning that turns
+    // Thursday's quality easy does not rename the slot.
+    const slotKind = run.planned_kind_label ?? kind;
+    const occurrence = (kindCount.get(slotKind) ?? 0) + 1;
+    kindCount.set(slotKind, occurrence);
     const anchor = provisionalDate(weekStart, run.day_number);
     const completion = completions.get(index) ?? null;
     return {
-      id: `${weekStart}:${kind}:${occurrence}`,
+      id: `${weekStart}:${slotKind}:${occurrence}`,
       kind,
       label: run.label ?? run.day_name ?? `${kind} run`,
       status: completion ? "completed" : "open",
@@ -429,6 +517,7 @@ export function flexibleTrainingAgenda(
       rationale: completion
         ? `A compatible ${kind} run is already logged this week; its calendar day does not need to match the provisional anchor.`
         : "This is a movable weekly intention; choose the calmest compatible opening in the window.",
+      ...(adjustedByPlan(plan, run, weekStart) ? { adjustment: plan.today_adjustment } : {}),
     };
   });
 
@@ -489,6 +578,39 @@ export function flexibleTrainingAgenda(
           : "This is a movable weekly intention; choose the calmest compatible opening in the window.";
   }
 
+  // ---- today's run, re-decided this morning ----
+  // The plan already decided the run on today's own weekday. A key run the window
+  // moved ONTO today (a long run placed on the other stated weekend day, a quality run
+  // shifted off a leg-loaded day) is decided here the same way, under the week's locks.
+  let todayAdjustment: RunDayIntensity | null = null;
+  const todayIndex = intents.findIndex((intent) => intent.status === "open" && intent.suggested_date === asOf);
+  if (todayIndex >= 0) {
+    const intent = intents[todayIndex];
+    if (intent.adjustment) {
+      todayAdjustment = intent.adjustment;
+    } else if (plan.adapt?.today) {
+      // Any run the window moved onto today — an easy one too, since a hard floor
+      // (rest-grade readiness, illness, pain) takes every run day.
+      try {
+        const run = plan.runs[todayIndex];
+        const adj = runDayIntensity(asOf, run, { locks: plan.adapt.locks, weekAnswersDip: plan.adapt.dip === true });
+        if (run.kind_label !== "easy" || adj.changed) {
+          const easyZone = plan.runs.find((r) => r.kind_label !== "quality")?.target_zone ?? null;
+          const moved = applyRunDayIntensity(run, adj, easyZone);
+          intent.kind = moved.kind_label;
+          intent.label = moved.label ?? intent.label;
+          intent.target_distance_km = validNumber(moved.target_distance_km);
+          intent.target_duration_min = validNumber(moved.target_duration_min);
+          intent.target_zone = adj.dose === "rest" ? null : (moved.target_zone ?? intent.target_zone);
+          intent.adjustment = adj;
+          todayAdjustment = adj;
+        }
+      } catch {
+        todayAdjustment = null;
+      }
+    }
+  }
+
   const open = intents.filter((intent) => intent.status === "open" && intent.suggested_date);
   const todayBlocked = blocked.has(asOf);
   const easyToday = open.find((intent) => intent.kind === "easy" && intent.suggested_date === asOf);
@@ -541,5 +663,6 @@ export function flexibleTrainingAgenda(
     why: allComplete
       ? "This week's compatible run intentions are already covered by actual logs."
       : "Run days are flexible: actual work closes compatible intentions, and unfinished work is never piled into catch-up volume.",
+    today_adjustment: todayAdjustment,
   };
 }

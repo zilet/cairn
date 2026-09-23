@@ -156,7 +156,7 @@ test("weeklyRunPlan with a stated schedule lands day_numbers on those dows", () 
   assert.ok(!plan.runs.some((r) => r.day_number === 5), "Friday is not a run day");
 });
 
-test("a constrained supporting week keeps a named quality day as easy, not dropped", () => {
+test("a constrained supporting week (fresh low readiness) keeps a named quality day as easy, not dropped", () => {
   repo.setProfile({
     age: 40,
     sex: "male",
@@ -194,6 +194,9 @@ test("a constrained supporting week keeps a named quality day as easy, not dropp
   };
   const plan = repo.weeklyRunPlan(MONDAY, { recovery: lowRecovery, block: { week_index: 1 } });
   assert.equal(plan.available, true);
+  // A low readiness reading dated the plan day is FRESH strain, not a recovery dip read
+  // off a median: it keeps the supporting role's constrained week, so the hard session
+  // sits out (test/eliteDipFix "fresh strain"). A dip alone does not (same file).
   assert.equal(plan.quality_focus, null, "the hard session sits out");
   const byDay = Object.fromEntries(plan.runs.map((r) => [r.day_number, r]));
   assert.equal(byDay[2]?.kind_label, "easy", "Tuesday easy stays");

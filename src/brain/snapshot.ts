@@ -19,6 +19,13 @@ export function runWithBrainSnapshot<T>(fn: () => T): T {
   return als.run(createScope(), fn);
 }
 
+// A NEW scope for `fn`, even inside an existing one. For a computation whose inputs
+// differ from the surrounding request's (a steered Brief read — see run-day-steer.ts),
+// so none of its memoized signals leak out into, or in from, the canonical read.
+export function runWithFreshBrainSnapshot<T>(fn: () => T): T {
+  return als.run(createScope(), fn);
+}
+
 export function brainSignal<T>(key: SignalKey, compute: () => T): T {
   const scope = als.getStore();
   if (!scope) return compute();

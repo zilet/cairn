@@ -238,6 +238,12 @@ type TodayRunLineDeps = Pick<TodayPlanSurfaceDeps, "escapeHtml"> & {
       dose.push(`${Math.round(min)} min`);
     }
     if (intent.target_zone) dose.push(String(intent.target_zone));
+    // This morning's call on a quality or long run, in its own words (the server
+    // decided it — kind, label and dose above already carry the answer).
+    const adjustment = intent.adjustment && typeof intent.adjustment === "object"
+      ? (intent.adjustment as Record<string, unknown>)
+      : null;
+    const why = adjustment ? String(adjustment.why || "").trim() : "";
     return `<div class="today-run-line reveal" style="--i:3;margin-top:10px" data-today-run>
         <div class="wrun-row wrun-${kind}">
           <div class="wrun-row-head">
@@ -245,6 +251,7 @@ type TodayRunLineDeps = Pick<TodayPlanSurfaceDeps, "escapeHtml"> & {
             <span class="wrun-label">${deps.escapeHtml(label)}</span>
           </div>
           ${dose.length ? `<div class="wrun-pres">${deps.escapeHtml(dose.join(" · "))}</div>` : ""}
+          ${why ? `<div class="wrun-note" data-today-run-why>${deps.escapeHtml(why)}</div>` : ""}
           <div class="wrun-note"><button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-today-run-go>This week's runs, in Endurance →</button></div>
         </div>
         ${options.syncLine || ""}

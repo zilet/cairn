@@ -46,6 +46,8 @@ type PlanEnduranceBriefingSession = {
   expect: string;
   sitsBy: string;
   status: "open" | "completed";
+  // Today's run only: the server's morning call on it, in its own words (empty otherwise).
+  morning?: string;
 };
 
 type PlanEnduranceBriefing = {
@@ -399,6 +401,7 @@ function planEnduranceSessionFromParts(
     today: string;
     raceBuild: PlanEnduranceRaceBuild | null | undefined;
     units?: unknown;
+    morning?: string;
   }
 ): PlanEnduranceBriefingSession {
   const pace = planEndurancePaceBand(opts.kind, opts.label, opts.raceBuild);
@@ -414,6 +417,7 @@ function planEnduranceSessionFromParts(
     expect: planEnduranceExpect(opts.kind, opts.note, pace, setup),
     sitsBy: planEnduranceSitsBy(opts.dayNumber, opts.date, opts.raceBuild),
     status: opts.status,
+    ...(opts.morning ? { morning: opts.morning } : {}),
   };
 }
 
@@ -440,10 +444,13 @@ function planEnduranceSessionsFromAgenda(
       );
       const label = String(intent.label || matched?.label || `${planEnduranceKindLabel(intent.kind)} run`);
       const note = String(matched?.note || "").trim();
+      const date = planEnduranceIntentDate(intent);
+      // Today's quality or long run carries the server's morning call on it.
+      const morning = date && date === today ? String(intent.adjustment?.why || "").trim() : "";
       return planEnduranceSessionFromParts({
         kind: intent.kind,
         label,
-        date: planEnduranceIntentDate(intent),
+        date,
         dayNumber: Number.isFinite(dayNumber) ? dayNumber : null,
         km: intent.target_distance_km ?? matched?.target_distance_km,
         min: intent.target_duration_min ?? matched?.target_duration_min,
@@ -454,6 +461,7 @@ function planEnduranceSessionsFromAgenda(
         today,
         raceBuild,
         units,
+        morning,
       });
     })
     .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
@@ -577,6 +585,7 @@ function planEnduranceBriefingHtml(briefing: PlanEnduranceBriefing | null | unde
         <div class="end-next-name">${escHtml(next.label)}</div>
         ${next.prescription ? `<div class="end-next-pres numeral">${escHtml(next.prescription)}</div>` : ""}
         <div class="read-contribs">
+          ${next.morning ? planEnduranceContrib("This morning", next.morning, "quiet") : ""}
           ${planEnduranceContrib("Setup", next.setup, "quiet")}
           ${planEnduranceContrib("Expect", next.expect, "quiet")}
           ${planEnduranceContrib("Sits by", next.sitsBy, "quiet")}

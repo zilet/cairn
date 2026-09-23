@@ -157,9 +157,11 @@ function seedRunner() {
 
 test("a thin recovery series does not ease the run week, while a covered one does", () => {
   seedRunner();
-  // Covered: a full month of resting HR, this week clearly raised against it.
-  for (let i = 0; i <= 6; i++) day(i, { resting_hr: 60 });
-  for (let i = 7; i <= 29; i++) day(i, { resting_hr: 52 });
+  // Covered: a full month of resting HR, this week clearly raised against it. Each on a
+  // recorded night, so the readings are VERIFIED — the run week's dip is read off the
+  // nights themselves (recoveryDipRead), and only a verified reading may open a caution.
+  for (let i = 0; i <= 6; i++) day(i, { resting_hr: 60, sleep_min: 450 });
+  for (let i = 7; i <= 29; i++) day(i, { resting_hr: 52, sleep_min: 450 });
   const covered = repo.getRecoverySummary(14);
   assert.ok(covered.delta.rhr != null && covered.delta.rhr > 2, "the control really does read recovery-down");
   const easedPlan = repo.weeklyRunPlan(TODAY(), { recovery: covered });
@@ -170,9 +172,9 @@ test("a thin recovery series does not ease the run week, while a covered one doe
 
   // Same story, episodic sampling: two raised mornings against seven older ones.
   resetTables("daily_metrics");
-  day(0, { resting_hr: 60 });
-  day(1, { resting_hr: 61 });
-  for (let i = 10; i <= 16; i++) day(i, { resting_hr: 52 });
+  day(0, { resting_hr: 60, sleep_min: 450 });
+  day(1, { resting_hr: 61, sleep_min: 450 });
+  for (let i = 10; i <= 16; i++) day(i, { resting_hr: 52, sleep_min: 450 });
   const thin = repo.getRecoverySummary(14);
   assert.equal(thin.delta.rhr, null);
   const thinPlan = repo.weeklyRunPlan(TODAY(), { recovery: thin });

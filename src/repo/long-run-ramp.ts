@@ -176,7 +176,8 @@ export function isQualityRunPrescription(item: { interval?: unknown; target_zone
  */
 export function templateLongRunKm(date?: string): number | null {
   try {
-    const plan = weeklyRunPlan(date);
+    // The week's long run, not this morning's call on it (runDayIntensity).
+    const plan = weeklyRunPlan(date, { adjustToday: false });
     if (!plan.available) return null;
     const long = plan.runs.find((run) => run.kind_label === "long" && run.race !== true);
     const km = Number(long?.target_distance_km);

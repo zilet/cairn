@@ -29,6 +29,8 @@ export function runComplianceRead(dateISO?: string): RunCompliance {
     live = weeklyRunPlan(weekStart, {
       compliance: getRunCompliance(shiftDays(weekStart, -7)),
       volumeAnchorDate: shiftDays(weekStart, -1),
+      // …nor as a Monday morning re-decides its own run.
+      adjustToday: false,
     });
   } catch {
     live = null;

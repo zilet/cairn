@@ -306,6 +306,51 @@ envelope `muscles.reduced` areas are now CLAMPED server-side (a hard 2-set cap, 
 factor) instead of merely asked for in the prompt, and `plan-selection.ts`'s adaptive day pick
 prefers a fresher day and says why, in the athlete's own words.
 
+**A run day is decided on its morning (`runDayIntensity`, `src/repo/run-day-intensity.ts`).** The
+week keeps its SHAPE — volume, days, the spike brake, the ACWR ceiling, the reset, taper and race
+week — but a trimmed week (ramp reset, spike brake, recovery dip) trims VOLUME, not intensity: the
+quality day keeps a SHORT set (`dose:"short"`) instead of dropping to easy. TODAY's run (only when the
+plan date is today) is then re-decided from that morning's evidence:
+- **HARD floors** (`HARD_RUN_FLOORS`: rest-grade readiness, illness, pain the run loads) take ANY run
+  day — easy days included, and through the locks except race day — to `dose:"rest"`: no distance, rest
+  or optional easy movement. The Brief's `stated_run_day` reads `rest` with no focus, so the Brief, the
+  Today run line and Endurance's "This morning" row say the same thing.
+- **Floors** (last night's HRV/RHR past the athlete's OWN band — `personalBand` over the summary's
+  VERIFIED series only, so a contradicted or unwitnessed reading neither brakes nor supports — a short
+  night, a run-down check-in, high soreness, legs DEEP in lifting, non-physiological harm on yesterday's
+  work, and the Brief's own running-volume spike, `runVolumeSpikeRead`) make quality easy and shorten a
+  long run by `LONG_FLOOR_FACTOR`. Nothing outranks a floor, the athlete's word included.
+- **Soft brakes** weigh against supports (good readiness, a night inside the own band, a good check-in,
+  legs clear, the learned trains-anyway record, a harm-free week, VO2max/predictor improving); a green
+  morning needs at least one support read off THIS morning. The `recovery_trend_down` brake is dropped
+  when the week's own trim already answers the dip (`adapt.dip` → `weekAnswersDip`): one dip, one trim.
+- **The athlete's word** (`classifyRunWord`) is safety-first: any pain/illness/fatigue/"easier" cue,
+  or a negation near a positive ("not feeling great", "do not push it"), reads DOWN and a mixed note is
+  down; UP needs an explicit ask ("hills today", "let's do the intervals", "train anyway") or a clear
+  "feel great/strong/fresh" with no down cue. A Brief steer is heard by the very read it steers:
+  `readToday` computes it inside `withRunDaySteer` (`src/repo/run-day-steer.ts`), a scope that also
+  opens a fresh brain snapshot and keys the day-read and coach-context memos, so the steer neither
+  misses its own read nor leaks into the canonical one; after the suggestion row is written every
+  surface hears it from the table.
+- An easy run on the athlete's stated QUALITY weekday in a week with no quality session (thin base,
+  fewer than three runs) opens to a short set on a green morning or the athlete's explicit ask, at the
+  easy run's own distance, under every floor — never in a race week, a constrained supporting week, or
+  once the week's harder running is in (`qualityRunLoggedBefore`).
+- With nothing from the morning in yet (`morning_read:false`), the read never calls the morning quiet
+  or steady; it says what the week planned (`awaiting_morning` / the pending variants).
+
+Locks the morning never re-decides: race day, taper, an applied recovery week, a health hold. The run
+in `weeklyRunPlan().runs` carries the answer (`planned_kind_label` names the week's slot, and the
+agenda's intent id keeps it), `today_adjustment` carries the why (a variant set); the agenda, the
+Brief's `stated_run_day` read, the Today run line and Endurance all read that one object. **Readers
+that sum or shape the WEEK never see the morning:** `weekAsPlanned(plan)` (the `planned_runs` snapshot)
+feeds race-build's volume/long run/banked test and a rest slot's completion matching; run compliance,
+the long-run ramp (`templateLongRunKm`) and the program digest read `adjustToday:false`; the week
+layout reads `planned_kind_label`. Readers of TODAY (the coach context, the agenda, daily decision,
+fuel demand, the run look-ahead, the plan-week strip, `GET /run-plan`) keep the morning's answer. A
+past stated-quality day that was run (easily) closes its slot — so no easy-day sentence promises the
+session "a fresher day" this week; they say it "can wait" / "comes round again".
+
 **Durable training identity, temporary events, and the rolling agenda.**
 `training-intent.ts` owns the athlete's ordered durable priorities, explicit endurance role, and
 optional sport-duration capability. `endurance_goal_json` remains the separate dated-race or standing
@@ -1567,6 +1612,26 @@ acceleration capped at 1.05. HRV now counts as down only past a 7% relative drop
 own baseline median, or 5 ms absolute when no baseline median is available. Direction is unchanged
 (only a drop counts) and the other `recoveryDown` terms (rhr / sleep / readiness / status) are
 untouched.
+
+**A recovery dip is read off the NIGHTS, and it is a bounded trim.** The week's HRV / resting-HR /
+sleep terms no longer read the 7-vs-30-day median delta: a median over whatever nights happened to
+sync moved with one late sync, so a missing night read as a low one and flipped the week. The dip is
+`recoveryDipRead` (`src/repo/run-day-intensity.ts`): a signal dips only when the newest three
+readings (`WEARABLE_TREND_MIN_NIGHTS`) inside the last seven days all sit past the athlete's OWN line
+— baseline less one of their own SDs, never narrower than `recoveryTrendBars` (nor the 7% band for
+HRV) — and the newest is current (`SENSOR_MAX_AGE_DAYS`). Consecutive READINGS, not days: a night
+that never synced neither starts nor ends a dip; no measured spread, no baseline or too few nights
+means no dip. HRV/RHR use the summary's VERIFIED series; sleep reads the wake-dated nights. The
+morning's `recovery_trend_down` soft brake reads the same function. When a dip does fire it stays
+the ~10% trim it always claimed: factor 0.9 (a scheduled reset's 0.8 stands when both apply), one
+fewer run only on a 4+-run week, a short quality set, and the long run held one step under the
+demonstrated longest (`HOLD_WEEK_LONG_OF_LONGEST`). It no longer triggers the supporting-role
+constrained week (its two-thirds volume cut) nor the long-run suppression that sized the long run
+off the eased week — those stay for an applied recovery week, health holds, and FRESH strain: a low
+readiness reading dated the plan day or a current strained/overreaching watch status
+(`freshStrain`). Fresh strain constrains the supporting role (the hard session sits out) and skips
+the long-run raise, but keeps a bounded floor under the long run — the same one step under the
+demonstrated longest, as far as the week has room — never a share of the eased week.
 
 **The training drive is a standing preference that selects, never one that decides.**
 `settings.training_drive` (`steady` by default, or `push`) lets the athlete answer ONE rest — the

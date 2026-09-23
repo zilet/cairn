@@ -1223,6 +1223,23 @@ export interface ClientRunPlanPrescription {
   day_name?: string | null;
   focus?: string | null;
   interval?: ClientIntervalRep[] | null;
+  dose?: "short";
+  planned_kind_label?: "easy" | "long" | "quality";
+}
+
+// This morning's call on today's quality or long run (src/repo/run-day-intensity.ts).
+// Only `why` is athlete-facing; the codes are the machine register.
+export interface ClientRunDayAdjustment {
+  date: ISODateString | string;
+  planned_kind: "easy" | "long" | "quality";
+  planned_dose: "full" | "short";
+  kind: "easy" | "long" | "quality";
+  // "rest": a hard floor — no run is prescribed (rest, or optional easy movement).
+  dose: "full" | "short" | "shortened" | "rest";
+  target_distance_km: number | null;
+  reason_code: string;
+  changed: boolean;
+  why: string;
 }
 
 export interface ClientWeeklyRunPlan {
@@ -1233,6 +1250,7 @@ export interface ClientWeeklyRunPlan {
   quality_focus: string | null;
   mix_summary: string;
   why: string;
+  today_adjustment?: ClientRunDayAdjustment | null;
 }
 
 // The race-build layer over the run plan (GET /api/race-build). Mirrors
@@ -1346,6 +1364,7 @@ export interface ClientFlexibleRunIntent {
   target_zone: string | null;
   completion: ClientRunCompletionEvidence | null;
   rationale: string;
+  adjustment?: ClientRunDayAdjustment | null;
 }
 
 export interface ClientFlexibleTrainingAgenda {
@@ -1362,6 +1381,7 @@ export interface ClientFlexibleTrainingAgenda {
   } | null;
   today_guidance: "open" | "easy_only" | "not_first_choice" | "complete";
   why: string;
+  today_adjustment?: ClientRunDayAdjustment | null;
 }
 
 export type ClientGroupVerdict = "advancing" | "stalling" | "building" | "maintaining";

@@ -290,13 +290,16 @@ function recoveryFixture({ band = "steady", readinessFresh = "fresh", status = n
 
 const totalRunKm = (plan) => plan.runs.reduce((s, r) => s + (r.target_distance_km ?? 0), 0);
 
-test("weeklyRunPlan eases volume + drops quality when fresh readiness is clearly LOW", () => {
+test("weeklyRunPlan eases volume + trims quality to a short, morning-decided set when fresh readiness is clearly LOW", () => {
   repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
   seedRunner({ weeks: 8, perWeek: 3, km: 12 }); // ~36 km base
   const steady = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "steady" }) });
   const low = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "low" }) });
   assert.ok(steady.available && low.available);
-  assert.equal(low.quality_focus, null, "no hard session while readiness reads low");
+  // A recovery dip trims VOLUME, not intensity: the quality day keeps a short set that
+  // its own morning decides (runDayIntensity — see test/eliteRunAdapt.test.js).
+  assert.match(low.quality_focus ?? "", /^Short /, "only a short hard set while readiness reads low");
+  assert.ok(low.runs.filter((r) => r.kind_label === "quality").every((r) => r.dose === "short"));
   assert.ok(totalRunKm(low) < totalRunKm(steady), `low readiness eases volume (${totalRunKm(low)} < ${totalRunKm(steady)})`);
   assert.ok(low.rationale.some((r) => /readiness/i.test(r)), "the readiness ease is explained in plain words");
   NO_SCORE(low, "run plan low readiness"); // banded words only — never the 0-100 number
@@ -317,7 +320,8 @@ test("weeklyRunPlan eases volume on a fresh STRAINED training status", () => {
   const steady = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ status: "PRODUCTIVE" }) });
   const strained = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ status: "STRAINED" }) });
   assert.ok(totalRunKm(strained) < totalRunKm(steady), "a strained status eases the week");
-  assert.equal(strained.quality_focus, null);
+  // Volume eases; the quality day keeps only a short, morning-decided set.
+  assert.match(strained.quality_focus ?? "", /^Short /);
   assert.ok(strained.rationale.some((r) => /strained/i.test(r)));
   NO_SCORE(strained, "run plan strained status");
 });

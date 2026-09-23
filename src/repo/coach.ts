@@ -93,6 +93,7 @@ import {
   registerTrainingCacheClear,
 } from "./training-cache.js";
 import { currentMarkerDataVersion } from "./marker-cache.js";
+import { runDaySteerKey } from "./run-day-steer.js";
 import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-context.js";
 // The "knows-me" layer — additive context keys (function-level cycle, same shape as
 // the existing coach↔intelligence import; resolved at call time, never at module init).
@@ -1227,7 +1228,15 @@ registerTrainingCacheClear(() => {
 
 function coachContextMemoKey(): string {
   const now = nowContext();
-  return [coachContextBackstopSignature(), currentMarkerDataVersion(), now.date, now.hour, now.tz ?? ""].join("|");
+  return [
+    coachContextBackstopSignature(),
+    currentMarkerDataVersion(),
+    now.date,
+    now.hour,
+    now.tz ?? "",
+    // A steered Brief read builds its own context (run-day-steer.ts); never share a slot.
+    runDaySteerKey(),
+  ].join("|");
 }
 
 export function getCoachContext(): CoachContext {

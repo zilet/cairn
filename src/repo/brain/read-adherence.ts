@@ -1480,11 +1480,25 @@ function personalLine(
     const value = night[field];
     if (date < morning && value != null) values.push(value);
   }
+  return personalBand(values, field)?.line ?? null;
+}
+
+/**
+ * The athlete's OWN band for one overnight field, from their own earlier readings: the
+ * mean, and the line one night has to cross to count (mean less — HRV — or plus —
+ * resting HR — one of their own standard deviations, never narrower than
+ * recoveryTrendBars). Null below RECOVERY_BASELINE_MIN_POINTS. The one formula the harm
+ * arms and the run morning read (run-day-intensity.ts) both charge a night against.
+ */
+export function personalBand(
+  values: readonly number[],
+  field: "hrv_ms" | "resting_hr"
+): { mean: number; line: number } | null {
   if (values.length < RECOVERY_BASELINE_MIN_POINTS) return null;
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-  const sd = sampleSd(values) ?? 0;
+  const sd = sampleSd([...values]) ?? 0;
   const bars = recoveryTrendBars({ hrv: mean, rhr: mean });
-  return field === "hrv_ms" ? mean - Math.max(bars.hrv, sd) : mean + Math.max(bars.rhr, sd);
+  return { mean, line: field === "hrv_ms" ? mean - Math.max(bars.hrv, sd) : mean + Math.max(bars.rhr, sd) };
 }
 
 function overnightPhysiologyUncached(morning: string): OvernightPhysiology {

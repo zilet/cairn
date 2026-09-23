@@ -3465,7 +3465,8 @@ function computeProgramAdjustments(
   //    the "what changed & why" surface spans running, not just lifting. Reuse the
   //    pre-computed plan from getCoachContext when threaded; else compute it lazily.
   try {
-    const rp = opts && "runPlan" in opts ? opts.runPlan : weeklyRunPlan();
+    // A week-level digest (mix_summary / why): the morning's call on today changes neither.
+    const rp = opts && "runPlan" in opts ? opts.runPlan : weeklyRunPlan(undefined, { adjustToday: false });
     if (rp?.available && rp.mix_summary) {
       push({
         kind: "cardio",

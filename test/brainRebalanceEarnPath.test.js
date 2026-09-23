@@ -146,12 +146,16 @@ test("a one-millisecond HRV move no longer eases the running week; a real drop s
       dayBefore(REF, n)
     );
   }
+  // The week reads its dip off the NIGHTS (recoveryDipRead): three verified nights, each
+  // sitting `hrv` off the athlete's own 60 ms, with their own spread behind the band.
   const withHrv = (hrv) => ({
     has_data: true,
     recovery: {},
     quality: {},
     delta: { hrv, rhr: 0, sleep: 0 },
     baseline: { hrv: 60 },
+    dispersion: { hrv: 4 },
+    verified: { hrv_ms: { readings: [0, 1, 2].map((n) => ({ date: dayBefore(REF, n), value: 60 + hrv })) } },
   });
   const easedBy = (plan) => plan.rationale.filter((line) => /Recovery's down this week/.test(line));
 
@@ -187,6 +191,8 @@ test("the run-volume holds say what opens them again", () => {
       quality: {},
       delta: { hrv: -8, rhr: 0, sleep: 0 },
       baseline: { hrv: 60 },
+      dispersion: { hrv: 4 },
+      verified: { hrv_ms: { readings: [0, 1, 2].map((n) => ({ date: dayBefore(REF, n), value: 52 })) } },
     },
   });
   const held = plan.rationale.find((line) => /Recovery's down this week/.test(line));

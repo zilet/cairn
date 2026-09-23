@@ -1,3 +1,4 @@
+import { withRunDaySteer } from "../../repo/run-day-steer.js";
 import { agentStatusFor } from "../../coachOps.js";
 import { db } from "../../db.js";
 import {
@@ -434,8 +435,12 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
 
     // A steered read is transient and never cached, so it keeps its own agent run —
     // the athlete asked for it, and the PWA sends it as a background job anyway.
+    // The steer is heard by the read it steers (withRunDaySteer): the run morning read
+    // otherwise only sees it once the suggestion row below is written, after this read.
     if (override) {
-      const read = await computeDayRead({ date, override, agent, priority: "interactive" });
+      const read = await withRunDaySteer(readDate, override, () =>
+        computeDayRead({ date, override, agent, priority: "interactive" })
+      );
       if (recordOutcome) recordDayReadSuggestion(readDate, read, override);
       return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
     }

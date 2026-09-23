@@ -236,9 +236,25 @@ test("weeklyRunPlan: the race pulls an ordinary build week up to the sustainable
   );
 });
 
+// A genuine recovery dip, as the week reads one (recoveryDipRead): three verified
+// nights running well under the athlete's own HRV band, with their spread behind it.
+const DIPPED_RECOVERY = {
+  delta: { hrv: -12, rhr: 4, sleep: -45 },
+  baseline: { hrv: 60 },
+  dispersion: { hrv: 4 },
+  verified: {
+    hrv_ms: {
+      readings: [0, 1, 2].map((n) => ({
+        date: new Date(Date.parse(`${REF}T00:00:00Z`) - n * 864e5).toISOString().slice(0, 10),
+        value: 48,
+      })),
+    },
+  },
+};
+
 test("weeklyRunPlan: a recovery-down week is NOT raised by the ramp", () => {
   const green = repo.weeklyRunPlan(REF, planOpts());
-  const down = repo.weeklyRunPlan(REF, planOpts({ recovery: { delta: { hrv: -12, rhr: 4, sleep: -45 } } }));
+  const down = repo.weeklyRunPlan(REF, planOpts({ recovery: DIPPED_RECOVERY }));
   assert.ok(totalKm(down) < 17, `a protective week eases below the anchor (got ${totalKm(down)} km)`);
   assert.ok(totalKm(down) < totalKm(green), "and stays well under the ramped week");
   assert.ok(
@@ -338,11 +354,11 @@ test("weeklyRunPlan: a demonstrated long run is a floor, not just a ceiling", ()
 });
 
 test("weeklyRunPlan: the long-run floor does not apply on a protected week", () => {
-  const down = repo.weeklyRunPlan(REF, planOpts({ recovery: { delta: { hrv: -12, rhr: 4, sleep: -45 } } }));
+  const down = repo.weeklyRunPlan(REF, planOpts({ recovery: DIPPED_RECOVERY }));
   const long = longRun(down);
   assert.ok(
     long.target_distance_km < 9.1,
-    `a recovery week owns the long run outright (got ${long.target_distance_km} km)`
+    `a protected week never raises the long run past the demonstrated 9.1 km (got ${long.target_distance_km} km)`
   );
 });
 

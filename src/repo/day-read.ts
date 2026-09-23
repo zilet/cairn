@@ -37,6 +37,8 @@ import { listActiveDirectives } from "./directives-read.js";
 import { RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
+import type { RunDayIntensity } from "./run-day-intensity.js";
+import { runDaySteerKey } from "./run-day-steer.js";
 import { planningContextEvents } from "./health.js";
 import { plainGroupWords } from "./exercise-canon.js";
 import { acuteGates, suppressSaturatedDue } from "./hybrid-load.js";
@@ -66,7 +68,7 @@ import { liftDows } from "./strength-schedule.js";
 import { getEnduranceGoal, getEnduranceSchedule, getPrimaryDiscipline, WEEKDAY_NAMES } from "./profile.js";
 import { RUN_KIND_LABELS } from "./run-edit.js";
 import { activeRecoveryWeek } from "./recovery-week.js";
-import { getProgramState, weeklyKm, type MesocycleState } from "./program-state.js";
+import { getProgramState, runVolumeSpikeRead, type MesocycleState } from "./program-state.js";
 import { runIntensityDiscipline } from "./run-progression.js";
 import { programBalance } from "./progression.js";
 import { addDaysISO, daysBetweenISO, localDateISO, nowContext } from "./shared.js";
@@ -1354,7 +1356,7 @@ export function dayRead(
   }
   const d = date || localDateISO();
   const now = nowContext();
-  const key = `${d}|${now.hour}|${now.tz ?? ""}|${coachContextBackstopSignature()}`;
+  const key = `${d}|${now.hour}|${now.tz ?? ""}|${coachContextBackstopSignature()}|${runDaySteerKey()}`;
   const hit = dayReadCache.get(key);
   if (hit) return hit;
   const value = computeDayRead(d);
@@ -1515,14 +1517,11 @@ function computeDayRead(
     // place. The anchor is YESTERDAY for the acute week (today is still being lived,
     // and a run logged this morning is not a week's worth of evidence) and TODAY for
     // the three prior weeks, exactly as the inline version computed them.
-    const acuteWeekEnd = addDaysISO(d, -1);
-    lastWeekKm = acuteWeekEnd ? weeklyKm(acuteWeekEnd, 0, RUN_SPORT_PATTERNS) : 0;
-    // The three prior weeks' average (the chronic base), ending a week back.
-    const priorKm = [1, 2, 3].map((weekBack) => weeklyKm(d, weekBack, RUN_SPORT_PATTERNS));
-    const chronic = priorKm.reduce((a, b) => a + b, 0) / priorKm.length;
-    // A meaningful spike: this week clearly above the chronic base (and a real
-    // amount of running, so a near-zero base doesn't trip on a single short run).
-    volumeSpike = lastWeekKm >= 25 && chronic > 0 && lastWeekKm > chronic * 1.5;
+    // (runVolumeSpikeRead holds that definition, and the run morning read uses the same
+    // one, so the Brief and the run engine can never disagree about a spiking week.)
+    const spike = runVolumeSpikeRead(d);
+    lastWeekKm = spike.last_week_km;
+    volumeSpike = spike.volume_spike;
   }
 
   // Recovery signal (unified). "clearly low" = short sleep or a low subjective
@@ -1809,8 +1808,10 @@ function computeDayRead(
   // a run day when the agenda has an open run suggested for it (with no run days stated,
   // that is the only way in), or — with no agenda to ask — when it is a stated run
   // weekday. A pure question; memoized like the pick.
-  let runDayMemo: { kind: string; label: string } | null | undefined;
-  function calendarRunToday(): { kind: string; label: string } | null {
+  // The intent carries this morning's call on a quality or long run (runDayIntensity,
+  // via the agenda) — its kind and label are already the answer, `adjustment` the why.
+  let runDayMemo: { kind: string; label: string; adjustment?: RunDayIntensity | null } | null | undefined;
+  function calendarRunToday(): { kind: string; label: string; adjustment?: RunDayIntensity | null } | null {
     if (runDayMemo !== undefined) return runDayMemo;
     runDayMemo = null;
     const pick = adaptivePlanDay();
@@ -1818,7 +1819,12 @@ function computeDayRead(
     const agenda = signalInput(() => flexibleTrainingAgenda(d), null);
     if (agenda?.available) {
       const intent = agenda.intents.find((i) => i.status === "open" && i.suggested_date === d) ?? null;
-      if (intent) runDayMemo = { kind: intent.kind, label: intent.label || RUN_KIND_LABELS[intent.kind] || "Run" };
+      if (intent)
+        runDayMemo = {
+          kind: intent.kind,
+          label: intent.label || RUN_KIND_LABELS[intent.kind] || "Run",
+          adjustment: intent.adjustment ?? null,
+        };
       return runDayMemo;
     }
     if (pick.day_type === "run") {
@@ -2634,13 +2640,37 @@ function computeDayRead(
       resolve: () => {
         const runDay = calendarRunToday();
         if (!runDay) return null;
-        (signals as any).stated_run_day = { run_kind: runDay.kind };
+        // A quality or long run is re-decided THIS morning (runDayIntensity): the kind
+        // and label are already the answer, and its own sentence says why. A long run a
+        // floor shortened reads easy — it is still the day's run, taken gently. The
+        // decision rides in `signals` (machine register) and the focus label, so a
+        // changed call is a new prose identity and an unchanged one never churns.
+        const adj = runDay.adjustment ?? null;
+        (signals as any).stated_run_day = {
+          run_kind: runDay.kind,
+          ...(adj
+            ? {
+                planned_kind: adj.planned_kind,
+                dose: adj.dose,
+                reason_code: adj.reason_code,
+                changed: adj.changed,
+              }
+            : {}),
+        };
+        const floorShortened = adj?.kind === "long" && adj.dose === "shortened" && adj.floors.length > 0;
+        // A hard floor (rest-grade readiness, illness, pain the run loads) leaves no run
+        // on the card at all: the read is rest, with no session named in the focus slot
+        // — the same answer the Today run line and Endurance print that morning.
+        const floorRest = adj?.dose === "rest";
         return {
           outcome: DAY_READ_OUTCOMES.stated_run_day,
           read: {
-            kind: (runDay.kind === "easy" ? "easy" : "train") as "easy" | "train",
-            focus: runDay.label,
-            why: pickDayVariant(STATED_RUN_DAY_WHY, d, "stated_run_day"),
+            kind: (floorRest ? "rest" : runDay.kind === "easy" || floorShortened ? "easy" : "train") as
+              | "rest"
+              | "easy"
+              | "train",
+            focus: floorRest ? null : runDay.label,
+            why: adj?.why ? adj.why : pickDayVariant(STATED_RUN_DAY_WHY, d, "stated_run_day"),
             est_minutes: null,
             signals,
           },

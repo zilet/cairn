@@ -53,6 +53,7 @@ import {
   canonicalEnduranceSport,
   configuredEnduranceSportKeys,
   enduranceSportPatterns,
+  RUN_SPORT_PATTERNS,
   sportPatternsForKey,
 } from "./endurance-sports.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
@@ -1279,6 +1280,25 @@ export function weeklyKm(date: string, weekBack: number, patterns: string[]): nu
     )
     .get(start, end, ...sport.params) as any;
   return Math.round(Number(row?.km ?? 0) * 10) / 10;
+}
+
+// ---- the running-volume spike (the Brief's `endurance_volume_spike`) ----
+// ONE definition, read by the Brief (day-read.ts) and by the run morning read
+// (run-day-intensity.ts), so the two can never disagree about a spiking week: the seven
+// days ending YESTERDAY (today is still being lived) against the average of the three
+// weeks before, and a real amount of running so a near-zero base cannot trip it.
+export const RUN_VOLUME_SPIKE_MIN_KM = 25;
+export const RUN_VOLUME_SPIKE_RATIO = 1.5;
+export function runVolumeSpikeRead(date: string): { last_week_km: number; chronic_km: number; volume_spike: boolean } {
+  const acuteWeekEnd = isoDaysAgo(date, 1);
+  const lastWeekKm = acuteWeekEnd ? weeklyKm(acuteWeekEnd, 0, RUN_SPORT_PATTERNS) : 0;
+  const priorKm = [1, 2, 3].map((weekBack) => weeklyKm(date, weekBack, RUN_SPORT_PATTERNS));
+  const chronic = priorKm.reduce((a, b) => a + b, 0) / priorKm.length;
+  return {
+    last_week_km: lastWeekKm,
+    chronic_km: chronic,
+    volume_spike: lastWeekKm >= RUN_VOLUME_SPIKE_MIN_KM && chronic > 0 && lastWeekKm > chronic * RUN_VOLUME_SPIKE_RATIO,
+  };
 }
 
 function weeklySportEvidence(date: string): Record<string, EnduranceSportVolumeEvidence> {

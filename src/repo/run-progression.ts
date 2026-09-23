@@ -65,6 +65,18 @@ import {
 } from "./run-ramp.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { harmEvidenceOnDay } from "./brain/read-adherence.js";
+// A function-only cycle (the agenda reads this module's weeklyRunPlan at call time):
+// the morning read asks the agenda's own observation read whether the week's quality
+// is already in, so the two can never disagree about it.
+import { qualityRunLoggedBefore } from "./flexible-training-agenda.js";
+import {
+  applyRunDayIntensity,
+  HRV_DIP_MIN_RELATIVE_DROP,
+  recoveryDipRead,
+  type RunDayIntensity,
+  type RunDayLock,
+  runDayIntensity,
+} from "./run-day-intensity.js";
 import { classifyRunEffort, getHrModel, type HrModel, hrZoneLabel, type HrZoneKey, RUN_TYPE_SQL } from "./hr-model.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { isReadDayReadiness, sensorIsCurrent } from "./sensor-freshness.js";
@@ -552,6 +564,14 @@ export interface RunPlanPrescription extends RunPrescription {
    * its distance, the event's name. Additive; omitted on every ordinary run.
    */
   race?: true;
+  /**
+   * "short" on a trimmed week's quality session (a reset, a spike brake, a recovery
+   * dip): the week keeps a SHORT stimulus on the quality day, and that morning decides
+   * whether it runs (run-day-intensity.ts). Omitted on every ordinary run.
+   */
+  dose?: "short";
+  /** Set only on the run the morning moved: the kind the WEEK put on this day. */
+  planned_kind_label?: "easy" | "long" | "quality";
 }
 
 export interface WeeklyRunPlan {
@@ -584,6 +604,32 @@ export interface WeeklyRunPlan {
     ideal_peak_km: number;
     capacity?: (RunWeekShape & { demonstrated_midweek_km: number | null }) | null;
   } | null;
+  // TODAY's quality or long run, re-decided from this morning's own signals
+  // (runDayIntensity). Present only when the plan is read for today and today holds a
+  // quality or long run; the run in `runs` already carries the answer, this is the why.
+  // Additive — null on every other read.
+  today_adjustment?: RunDayIntensity | null;
+  // The week's structure a morning never re-decides (race day, taper, recovery week,
+  // health hold) and whether the week is trimmed — handed to the agenda so a run it
+  // moves onto today is decided under the same locks. `dip`: the week's trim is the
+  // answer to a recovery dip (the morning must not brake on it again). Machine register.
+  adapt?: { locks: RunDayLock[]; trimmed: boolean; dip?: boolean; today: boolean };
+  // The week AS PLANNED, present only when this morning moved today's run. Readers that
+  // sum or shape the week read it through weekAsPlanned(), never `runs`.
+  planned_runs?: RunPlanPrescription[];
+}
+
+/**
+ * The week's runs as the WEEK planned them — before this morning re-decided today's run.
+ * Every reader that sums or shapes the week (race-build volume and long run, run
+ * compliance's prescription, the long-run ramp, the week layout) reads this, so a
+ * shortened long run or a rest morning never moves the week's own numbers.
+ */
+export function weekAsPlanned(
+  plan: Pick<WeeklyRunPlan, "runs" | "planned_runs"> | null | undefined
+): RunPlanPrescription[] {
+  if (!plan) return [];
+  return Array.isArray(plan.planned_runs) ? plan.planned_runs : Array.isArray(plan.runs) ? plan.runs : [];
 }
 
 const NO_RUN_PLAN = (week_start: string): WeeklyRunPlan => ({
@@ -829,6 +875,67 @@ function qualitySpec(
   }
 }
 
+// The SHORT version of the week's quality session, for a trimmed week (a reset, a
+// spike brake, a recovery dip). The week steps back in VOLUME; the stimulus stays, at
+// roughly half the work and a fixed small distance, so it sits inside the lighter week
+// rather than on top of it. Whether it runs at all is that morning's call
+// (runDayIntensity) — green keeps it, anything less makes the day easy.
+const SHORT_QUALITY_KM = 4;
+function shortQualitySpec(
+  type: "tempo" | "threshold" | "vo2" | "hills",
+  zones: RunZones,
+  hrModel: HrModel | null
+): ReturnType<typeof qualitySpec> {
+  switch (type) {
+    case "tempo":
+      return {
+        label: "Short tempo",
+        zoneKey: "Z3",
+        interval: null,
+        distance: SHORT_QUALITY_KM,
+        duration: null,
+        note: `A short tempo block — about 10 minutes at ${zoneTag("Z3", zones, hrModel)} inside an easy run.`,
+      };
+    case "threshold":
+      return {
+        label: "Short threshold",
+        zoneKey: "Z4",
+        interval: [{ reps: 3, on: "1km", off: "60s jog", zone: "Z4" }],
+        distance: SHORT_QUALITY_KM,
+        duration: null,
+        note: `3 × 1km at ${zoneTag("Z4", zones, hrModel)}, 60s easy jog between — a short set inside a lighter week.`,
+      };
+    case "vo2":
+      return {
+        label: "Short intervals",
+        zoneKey: "Z5",
+        interval: [{ reps: 4, on: "400m", off: "90s jog", zone: "Z5" }],
+        distance: SHORT_QUALITY_KM,
+        duration: null,
+        note: `4 × 400m brisk at ${zoneTag("Z5", zones, hrModel)}, 90s jog recovery — a short set inside a lighter week.`,
+      };
+    default:
+      return {
+        label: "Short hills",
+        zoneKey: "Z4",
+        interval: [{ reps: 6, on: "30s uphill", off: "jog down", zone: "Z4" }],
+        distance: SHORT_QUALITY_KM,
+        duration: null,
+        note: `6 × 30s uphill at ${zoneTag("Z4", zones, hrModel)} effort, jog down — a short set inside a lighter week.`,
+      };
+  }
+}
+
+// Said when a trimmed week keeps its quality day. A variant set, rotated per week.
+export const SHORT_QUALITY_KEPT_VARIANTS: ReadonlyArray<(session: string) => string> = [
+  (session) =>
+    `A lighter week trims the volume, not the edge — a short ${session} set stays on the quality day, and that morning decides it.`,
+  (session) =>
+    `The week steps back in distance, so the ${session} session shrinks to a short set rather than disappearing — it runs if the morning reads well.`,
+  (session) =>
+    `Less running this week, but a short ${session} stimulus stays on the quality day when the morning is green; otherwise that day goes easy.`,
+];
+
 // ---- the connected brain: endurance-limiting health directives shape the week ----
 // `isEnduranceHoldDirective` and the marker derivation behind it now live in
 // directives-read.ts (the leaf that already owns "what is the athlete acting on right
@@ -876,7 +983,11 @@ const MAX_WEEKLY_BUILD_FACTOR = SUSTAINABLE_WEEKLY_BUILD_FACTOR;
 // absolute floor in milliseconds for the case where the baseline median is missing
 // even though the delta is not. Direction is unchanged — only a DROP counts, and
 // every other recoveryDown term (rhr / sleep / readiness / status) is untouched.
-const HRV_DOWN_RELATIVE_DROP = 0.07;
+//
+// The weekly dip itself is now read night by night (recoveryDipRead in
+// run-day-intensity.ts), and this same 7% is the floor on that per-night line — one
+// number (HRV_DIP_MIN_RELATIVE_DROP, read at call time), so the pinned band and the
+// live read cannot drift apart.
 const HRV_DOWN_ABSOLUTE_DROP_MS = 5;
 
 // ---------------------------------------------------------------------------
@@ -903,15 +1014,17 @@ export const RUN_VOLUME_LEARNED_EASE_UNLOCK: readonly string[] = [
   "As the weeks start landing the way they used to, the build widens again.",
 ];
 
-// Is the HRV term of `recoveryDown` genuinely down? Exported for the pin in
+// Does a 7-vs-30-day HRV median delta clear the owner's band? Exported for the pin in
 // test/brainRebalanceEarnPath.test.js — the band is a product decision, not an
-// implementation detail, and it should be testable without staging a whole week.
+// implementation detail, and it should be testable without staging a whole week. The
+// week no longer brakes on the median delta itself (recoveryDipRead reads the nights);
+// this stays the band's one pinned statement.
 export function hrvReadsDown(delta: unknown, baselineMedian?: unknown): boolean {
   const drop = Number(delta);
   if (!Number.isFinite(drop) || drop >= 0) return false;
   const baseline = Number(baselineMedian);
   return Number.isFinite(baseline) && baseline > 0
-    ? Math.abs(drop) >= baseline * HRV_DOWN_RELATIVE_DROP
+    ? Math.abs(drop) >= baseline * HRV_DIP_MIN_RELATIVE_DROP
     : Math.abs(drop) >= HRV_DOWN_ABSOLUTE_DROP_MS;
 }
 
@@ -962,6 +1075,11 @@ export function weeklyRunPlan(
     // injected load is "read the week as if the legs were like this", not a claim
     // about one particular day of it.
     legLoad?: StrengthLegLoad | null;
+    // Re-decide TODAY's quality or long run from this morning's signals
+    // (runDayIntensity) and carry the answer on that run. Defaults to on exactly when
+    // the plan date is today: a past week is history and a future day has no morning
+    // yet, so neither is re-decided. Pass false to read the week as planned.
+    adjustToday?: boolean;
   }
 ): WeeklyRunPlan {
   const d = date || localDateISO();
@@ -1248,12 +1366,17 @@ export function weeklyRunPlan(
         })()
       : (runState?.longest_km_4wk ?? null);
 
-  // A BAND, not a sign — see hrvReadsDown. `recovery.baseline.hrv` is the comparison
-  // median the delta was taken against, so the relative test is against the athlete's
-  // own norm rather than a population figure; absent it, the millisecond floor stands.
-  const hrvDown = hrvReadsDown(recovery?.delta?.hrv, recovery?.baseline?.hrv);
-  const rhrUp = recovery?.delta?.rhr != null && recovery.delta.rhr > 2;
-  const sleepDown = recovery?.delta?.sleep != null && recovery.delta.sleep < -30;
+  // A DIP is a stretch of NIGHTS past the athlete's own line (recoveryDipRead), not the
+  // 7-vs-30-day median delta: a median over whatever nights synced moved with one late
+  // sync, and a missing night read as a low one. Now a night that never landed neither
+  // starts nor ends a dip, a stale series is absent, and the band is their own (never
+  // narrower than the 7% HRV band hrvReadsDown pins). Read as of the plan date, capped
+  // at today — there are no nights after today to read.
+  const nowDate = localDateISO();
+  const dip = recoveryDipRead(recovery, d <= nowDate ? d : nowDate);
+  const hrvDown = dip.hrv;
+  const rhrUp = dip.rhr;
+  const sleepDown = dip.sleep;
   // Wearable readiness/status weigh in ONLY when present and clearly low/strained — a
   // stale or missing reading changes nothing (absence never gates). Readiness is banded
   // to plain words upstream (readiness_band); a strained/overreaching/unproductive
@@ -1355,7 +1478,10 @@ export function weeklyRunPlan(
     factor = 0.8;
     rationale.push("Recovery week is active — keeping the running rhythm with less volume and easy aerobic work.");
   } else if (recoveryDown) {
-    factor = 0.9;
+    // A dip EASES the week (~10%). It never makes a scheduled reset week bigger — the
+    // reset's own 0.8 stands when both apply — and it never re-shapes the week beyond
+    // that trim (see supportingConstrained and the long-run hold below).
+    factor = downWeek ? 0.8 : 0.9;
     const bits: string[] = [];
     if (hrvDown || rhrUp || sleepDown) bits.push("sleep / HRV / resting HR");
     if (readinessLow) bits.push("this week's readiness is reading low");
@@ -1548,8 +1674,19 @@ export function weeklyRunPlan(
   // fall to two intentions rather than creating catch-up work — unless the
   // athlete named the weekdays. A stated run day stays on the calendar and the
   // hard session becomes easy; dropping it would erase a day they asked to keep.
+  //
+  // A recovery DIP is not one of those weeks. It already eases the volume through its
+  // own factor and keeps a short quality set on the quality day (trimmedWeek below);
+  // folding it in here as well stacked a two-thirds volume cut on top of that and
+  // collapsed the long run — a dip must stay a bounded trim, never a second structure.
+  // FRESH STRAIN is: a low readiness reading dated the plan day, or the watch reading
+  // the training as strained/overreaching while that status is current. Those are real,
+  // present signals — not a median over whatever nights synced — so they keep the
+  // supporting role's constrained week (the hard session sits out). The long run under
+  // them stays bounded (see freshStrainLongFloor below), never a collapse.
+  const freshStrain = readinessLow || statusStrained;
   const supportingConstrained =
-    trainingIntent.endurance_role === "supporting" && (recoveryDown || recoveryWeek || !!firmHold || !!softHold);
+    trainingIntent.endurance_role === "supporting" && (recoveryWeek || !!firmHold || !!softHold || freshStrain);
   const namedRunCalendar = !!statedSchedule?.days.length;
   if (trainingIntent.endurance_role === "supporting") {
     const normalSupportingDays = Math.min(runDays, 3);
@@ -1587,8 +1724,23 @@ export function weeklyRunPlan(
   // arriving merely rested, and holding it back until 12 km/wk was a rule written for
   // an athlete with nowhere in particular to be.
   const baseTooThin = weeklyKm < (raceTarget ? 10 : 12);
+  // A TRIMMED week — the ramp's reset, the spike brake, a recovery dip — trims VOLUME,
+  // not necessarily intensity. It used to drop the quality session outright (a spike or
+  // a dip) or keep it whole (a reset), both decided on Monday. Now the quality day keeps
+  // a SHORT stimulus (shortQualitySpec) and that morning decides whether it runs
+  // (runDayIntensity): green keeps it, anything less makes the day easy. The protective
+  // structure stays whole: an applied recovery week, a health flag, a thin base, fewer
+  // than three runs, and a taper that is also spiking or dipping keep no quality at all.
+  const trimmedWeek = downWeek || spiking || recoveryDown;
+  // A constrained supporting week keeps the hard session out (its stated days stay, eased).
   const includeQuality =
-    !recoveryWeek && !recoveryDown && !baseTooThin && runState?.status !== "spiking" && runDays >= 3 && !softHold;
+    !recoveryWeek &&
+    !baseTooThin &&
+    runDays >= 3 &&
+    !softHold &&
+    !supportingConstrained &&
+    !(taper && (recoveryDown || spiking));
+  const shortQuality = includeQuality && trimmedWeek && !taper;
   let qualityType: "tempo" | "threshold" | "vo2" | "hills" | null = null;
   if (includeQuality) {
     const pool = QUALITY_BY_PHASE[phase] ?? QUALITY_BY_PHASE.standing;
@@ -1597,9 +1749,11 @@ export function weeklyRunPlan(
     if (!runState?.has_quality && phase !== "sharpen" && phase !== "build")
       qualityType = pool.includes("tempo") ? "tempo" : qualityType;
     rationale.push(
-      runState?.has_quality
-        ? `Rotating in a ${qualityType} session — varying the hard stimulus keeps progress honest.`
-        : "It's been all one pace lately — adding a single quality session to lift your ceiling."
+      shortQuality
+        ? pickDayVariant(SHORT_QUALITY_KEPT_VARIANTS, week_start, "run-short-quality")(qualityType)
+        : runState?.has_quality
+          ? `Rotating in a ${qualityType} session — varying the hard stimulus keeps progress honest.`
+          : "It's been all one pace lately — adding a single quality session to lift your ceiling."
     );
   } else if (recoveryWeek) {
     rationale.push("Skipping quality during the recovery week — keep every run in easy Z2.");
@@ -1643,10 +1797,18 @@ export function weeklyRunPlan(
   // taper week or a health hold owns the long run outright, and a past long run is
   // not a reason to spend one during any of them.
   //
+  // A recovery DIP is not on that list. It holds the long run a clear step UNDER the
+  // demonstrated longest (the down-week / spike hold below), never collapses it to a
+  // share of an eased week: sized off the week, a dip turned a demonstrated long run
+  // into an easy-run-length one, and one late sync was enough to do it.
+  //
   // Saturated running legs suppress it too, and for exactly the same reason: what the
   // athlete has demonstrated is still true, it just isn't a good week to spend it. The
   // deferral is honest and temporary — the floor comes back the moment the legs do.
-  const protectiveSuppression = taper || recoveryWeek || recoveryDown || !!firmHold || !!softHold;
+  // Fresh strain (readinessLow / statusStrained) suppresses the raise too — not the week
+  // to reach for the demonstrated longest — but, unlike a recovery week or a hold, it
+  // keeps a bounded floor under the long run (freshStrainLongFloor, below).
+  const protectiveSuppression = taper || recoveryWeek || !!firmHold || !!softHold || freshStrain;
   const longSuppressed = protectiveSuppression || legsSaturated;
   if (legsSaturated && !protectiveSuppression && prevLong > 0) {
     rationale.push(pickDayVariant(LEG_LOAD_LONG_DEFER_VARIANTS, d, "run-long-leg-load")(legLoadPhrase));
@@ -1656,7 +1818,11 @@ export function weeklyRunPlan(
   // the same demonstrated long the plan can. Seeded blind (no 4-week longest in the
   // endurance state) it would cap a real long run against an invented one.
   const rampLongCeiling = ramp && (prevLongForRamp > 0 || prevLong <= 0) ? ramp.required_long_km : null;
-  const q = qualityType ? qualitySpec(qualityType, phase, zones, round1(weeklyKm * 0.18), hrModel) : null;
+  const q = qualityType
+    ? shortQuality
+      ? shortQualitySpec(qualityType, zones, hrModel)
+      : qualitySpec(qualityType, phase, zones, round1(weeklyKm * 0.18), hrModel)
+    : null;
   const qualityKm = q?.distance ?? 0;
   // What the week has left for a long run once the other runs have taken their
   // minimum useful distance. The raise must fit INSIDE the weekly step, not on top
@@ -1681,7 +1847,12 @@ export function weeklyRunPlan(
     // number the engine never prescribed. A reset or a spike week, or a longest the
     // body paid for, keeps the old ceiling: the demonstrated distance itself.
     const stepsPastShown =
-      rampLongCeiling != null && rampLongCeiling > prevLong && !downWeek && !spiking && shownLongTakenWell();
+      rampLongCeiling != null &&
+      rampLongCeiling > prevLong &&
+      !downWeek &&
+      !spiking &&
+      !recoveryDown &&
+      shownLongTakenWell();
     const raiseCeiling = stepsPastShown ? (rampLongCeiling as number) : Math.min(prevLong, rampLongCeiling ?? prevLong);
     const raised = Math.min(raiseCeiling, Math.max(longKm, longRoomKm));
     longKm = round1(Math.max(longKm, raised));
@@ -1701,16 +1872,30 @@ export function weeklyRunPlan(
   // demonstrated capacity, and the reset HOLDS it — never steps under it, never steps
   // past it — and takes its lighter week out of the easy days instead. A reset that
   // cut a well-absorbed 17.7 km to 14.3 km left the ladder re-climbing to it for weeks.
+  // A recovery DIP takes the spike's step under the longest, well taken or not: the
+  // body is saying something this week, so the long run eases with it — by that one
+  // bounded step, never by more.
   const holdsDemonstratedLong =
-    downWeek && !spiking && !taper && !longSuppressed && prevLong > 0 && shownLongTakenWell();
-  if ((downWeek || spiking) && !taper && prevLong > 0 && !holdsDemonstratedLong) {
+    downWeek && !spiking && !recoveryDown && !taper && !longSuppressed && prevLong > 0 && shownLongTakenWell();
+  if ((downWeek || spiking || recoveryDown) && !taper && prevLong > 0 && !holdsDemonstratedLong) {
     longKm = round1(Math.min(longKm, prevLong * HOLD_WEEK_LONG_OF_LONGEST));
   }
+  // Fresh strain's bounded floor: its suppression skips the raise, but the long run
+  // still holds the same one step under the demonstrated longest a dip or spike takes
+  // (as far as the week has room once the other runs take their minimum) — never sized
+  // down to a share of the eased week. Only when strain is the sole protective cause:
+  // a recovery week, a taper or a health flag owns the long run outright.
+  const freshStrainOnly = freshStrain && !taper && !recoveryWeek && !firmHold && !softHold;
+  const freshStrainLongFloor =
+    freshStrainOnly && prevLong > 0
+      ? round1(Math.min(prevLong * HOLD_WEEK_LONG_OF_LONGEST, Math.max(0, longRoomKm)))
+      : 0;
+  if (freshStrainLongFloor > 0) longKm = round1(Math.max(longKm, freshStrainLongFloor));
   // The share cap yields to that hold only as far as the demonstrated distance and the
   // room the week has left once the other runs take their minimum — never further.
   const longShareCapKm = holdsDemonstratedLong
     ? Math.max(weeklyKm * 0.55, Math.min(prevLong, longRoomKm))
-    : weeklyKm * 0.55;
+    : Math.max(weeklyKm * 0.55, freshStrainLongFloor);
   longKm = round1(Math.min(longKm, longShareCapKm));
   if (holdsDemonstratedLong && longKm >= prevLong - 0.05) {
     rationale.push(
@@ -1945,6 +2130,7 @@ export function weeklyRunPlan(
       day_name: qualityRun.label,
       focus: "Endurance · quality",
       interval: qualityRun.interval,
+      ...(shortQuality ? { dose: "short" as const } : {}),
     });
   }
   runs.push({
@@ -2016,7 +2202,7 @@ export function weeklyRunPlan(
   const placedEasyCount = runs.filter((r) => r.kind_label === "easy").length;
   const easyLabel = `${placedEasyCount} easy`;
   const qualityPlaced = !!qualityRun && runs.some((r) => r.kind_label === "quality");
-  const mix_summary = `${easyLabel} + ${raceThisWeek ? "race" : "1 long"}${qualityPlaced ? ` + 1 ${qualityType}` : ""}`;
+  const mix_summary = `${easyLabel} + ${raceThisWeek ? "race" : "1 long"}${qualityPlaced ? ` + 1 ${shortQuality ? "short " : ""}${qualityType}` : ""}`;
   const phaseWord = goal?.is_race && goal.phase ? `${goal.phase} phase` : "steady";
   const holdClause = firmHold
     ? `, ${holdMarkerPhrase(firmHold)}`
@@ -2102,7 +2288,112 @@ export function weeklyRunPlan(
     }
   }
 
-  return { available: true, week_start, runs, rationale, quality_focus, mix_summary, why, goal_feasibility };
+  // ---- today's run, re-decided this morning ----
+  // The week above is the SHAPE. Whether today's quality session runs (and how long
+  // today's long run is) is this morning's call, from this morning's evidence
+  // (runDayIntensity) — so a trimmed week's short set runs on a green morning and a
+  // normal week's session goes easy on a poor one. The week's own structure is handed
+  // over as locks and never re-decided. The summary lines above keep describing the
+  // WEEK; the run itself carries the morning's answer, and `today_adjustment` its why.
+  const locks: RunDayLock[] = [];
+  if (taper) locks.push("taper");
+  if (recoveryWeek) locks.push("recovery_week");
+  if (firmHold || softHold) locks.push("health_hold");
+  const adjustToday = opts?.adjustToday ?? d === localDateISO();
+  // The week's own trim IS the answer to a recovery dip (the eased volume, the short
+  // set, the long run a step under the longest) — handed to the morning so the same
+  // nights never brake it twice.
+  const dipTrim = (hrvDown || rhrUp || sleepDown) && !recoveryWeek && !taper;
+  let today_adjustment: RunDayIntensity | null = null;
+  // The week as planned, kept only when the morning moved a run: every reader that sums
+  // or shapes the WEEK (race build, compliance, the long-run ramp, the week layout)
+  // reads this, never the morning's answer (weekAsPlanned).
+  let planned_runs: RunPlanPrescription[] | null = null;
+  if (adjustToday) {
+    const todayNumber = (daysBetweenISO(d, week_start) ?? -1) + 1;
+    // Today's quality or long run first; else today's easy run — a hard floor takes any
+    // run day, and an easy run on the stated QUALITY weekday of a week with no quality
+    // session may open to a short set (below).
+    let index = runs.findIndex((r) => r.day_number === todayNumber && r.kind_label !== "easy");
+    if (index < 0) index = runs.findIndex((r) => r.day_number === todayNumber);
+    if (index >= 0) {
+      try {
+        const run = runs[index];
+        const weekQualityDone = run.kind_label === "quality" && qualityRunLoggedBefore(week_start, d);
+        // The stated quality weekday, left easy because the week holds no quality (a thin
+        // base, fewer than three runs). Not in a race week or a constrained supporting
+        // week (the hard session sits out there by design); the locks cover the rest.
+        const statedQualityDow = (statedSchedule?.days ?? []).find(
+          (day) => day.kind === "quality" && dowToDayNumber(day.dow) === todayNumber
+        );
+        const statedQualityDay =
+          run.kind_label === "easy" &&
+          !!statedQualityDow &&
+          !runs.some((r) => r.kind_label === "quality") &&
+          !raceThisWeek &&
+          !supportingConstrained;
+        let qualityRunForDay: Partial<RunPlanPrescription> | null = null;
+        if (statedQualityDay) {
+          const pool = QUALITY_BY_PHASE[phase] ?? QUALITY_BY_PHASE.standing;
+          let type = pool[ord % pool.length];
+          if (!runState?.has_quality && phase !== "sharpen" && phase !== "build")
+            type = pool.includes("tempo") ? "tempo" : type;
+          const spec = shortQualitySpec(type, zones, hrModel);
+          qualityRunForDay = {
+            label: spec.label,
+            day_name: spec.label,
+            focus: "Endurance · quality",
+            interval: spec.interval,
+            target_zone: zoneTag(spec.zoneKey, zones, hrModel),
+            // The week's own volume: the short set sits inside today's easy distance.
+            target_distance_km: run.target_distance_km ?? spec.distance,
+            note: spec.note,
+          };
+        }
+        const adj = runDayIntensity(d, run, {
+          locks,
+          weekQualityDone,
+          weekAnswersDip: dipTrim,
+          ...(statedQualityDay && qualityRunForDay
+            ? {
+                statedQualityDay: true,
+                quality: {
+                  label: qualityRunForDay.label,
+                  dose: "short" as const,
+                  target_distance_km: qualityRunForDay.target_distance_km ?? null,
+                },
+              }
+            : {}),
+        });
+        // An easy day the morning left alone carries no adjustment at all.
+        if (run.kind_label !== "easy" || adj.changed || adj.why) {
+          today_adjustment = adj;
+          if (adj.changed) {
+            planned_runs = runs.slice();
+            let moved = applyRunDayIntensity(run, adj, z2, qualityRunForDay);
+            if (adj.kind === "quality" && adj.dose === "short") moved = { ...moved, dose: "short" as const };
+            runs[index] = moved;
+          }
+        }
+      } catch {
+        today_adjustment = null;
+      }
+    }
+  }
+
+  return {
+    available: true,
+    week_start,
+    runs,
+    rationale,
+    quality_focus,
+    mix_summary,
+    why,
+    goal_feasibility,
+    today_adjustment,
+    ...(planned_runs ? { planned_runs } : {}),
+    adapt: { locks, trimmed: shortQuality, dip: dipTrim, today: adjustToday },
+  };
 }
 
 // ---------------------------------------------------------------------------

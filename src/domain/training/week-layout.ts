@@ -251,7 +251,12 @@ function runPlacement(opts?: { runPlan?: WeeklyRunPlan | null; agenda?: Flexible
 
   const runPlan = opts?.runPlan;
   if (runPlan?.available && Array.isArray(runPlan.runs) && runPlan.runs.length) {
-    const rows = runPlan.runs.map((r) => ({ day_number: Number(r.day_number), kind: String(r.kind_label) }));
+    // The kind the WEEK put on each day — a morning that turns today's quality easy does
+    // not move where the week's demanding runs sit.
+    const rows = runPlan.runs.map((r) => ({
+      day_number: Number(r.day_number),
+      kind: String(r.planned_kind_label ?? r.kind_label),
+    }));
     const fromPlan = { long: pick(rows, "long"), quality: pick(rows, "quality") };
     if (fromPlan.long != null || fromPlan.quality != null) return { ...fromPlan, source: "run_plan" };
   }

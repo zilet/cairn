@@ -38,6 +38,14 @@ fired); built as parallel packages in three waves, reviewed independently, integ
   calendar (`calendarDayRead`); runs come only from the stated run days + the run engine / agenda and
   live in Plan → Endurance; the Today card shows one run line outside the lift card; run writers
   (run-plan apply, chat `set_run`) are retired.
+- **A run day is decided on its own morning** (follow-up, same day): `runDayIntensity`
+  (`src/repo/run-day-intensity.ts`) re-decides a stated quality/long run from fresh personal signals
+  (morning readiness, verified last-night HRV/RHR vs the own band, sleep, check-in, legs, harm,
+  learned weight, fitness trend) and the athlete's own word; a trimmed week keeps a short quality set;
+  rest-grade readiness, illness and pain rest every run day; the volume spike is a floor; the word
+  leans cautious (any pain/illness/negation cue reads "down"). A recovery dip needs three consecutive
+  readings past the athlete's own line (`recoveryDipRead`) — a missing night is absent — and trims about
+  10%, never collapsing the week. Week readers (race ladder, compliance) see the week as planned.
 
 ## 2026-09-22 — Hybrid-athlete elite round: the coach reads the athlete's own normal
 

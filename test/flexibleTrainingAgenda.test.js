@@ -410,6 +410,17 @@ test("a lower-body-only date remains available for optional easy running", () =>
   assert.equal(agenda.today_guidance, "easy_only");
 });
 
+// An applied recovery week over the athlete's own program state — the state that
+// constrains a supporting week (a recovery dip no longer does).
+const recoveryWeekState = (recovery) => {
+  const state = repo.getProgramState(MONDAY, recovery);
+  return {
+    ...state,
+    mesocycle: { ...state.mesocycle, phase: "deload" },
+    recovery_week: { ...state.recovery_week, state: "applied" },
+  };
+};
+
 test("supporting endurance stays at three runs and falls to two when recovery is constrained (no stated calendar)", () => {
   repo.setProfile({
     age: 44,
@@ -449,7 +460,20 @@ test("supporting endurance stays at three runs and falls to two when recovery is
     recovery: { readiness_band: "low", training_status: "PRODUCTIVE" },
   };
   const steady = repo.weeklyRunPlan(MONDAY, { recovery: steadyRecovery, block: { week_index: 1 } });
-  const constrained = repo.weeklyRunPlan(MONDAY, { recovery: lowRecovery, block: { week_index: 1 } });
+  // What constrains a supporting week: an applied recovery week, a health hold, or FRESH
+  // strain — a low readiness reading dated the plan day, a current strained watch status.
+  // A recovery DIP read off the nights is a bounded trim of its own and keeps the three
+  // runs (test/eliteDipFix.test.js).
+  const constrained = repo.weeklyRunPlan(MONDAY, {
+    recovery: steadyRecovery,
+    programState: recoveryWeekState(steadyRecovery),
+    block: { week_index: 1 },
+  });
+  assert.equal(
+    repo.weeklyRunPlan(MONDAY, { recovery: lowRecovery, block: { week_index: 1 } }).runs.length,
+    2,
+    "fresh low readiness constrains the supporting week too"
+  );
   assert.equal(steady.runs.length, 3);
   assert.deepEqual(
     new Set(steady.runs.map((item) => item.kind_label)),
@@ -510,12 +534,12 @@ test("a constrained two-run supporting week reduces total volume and caps each r
     recovery: { readiness_band: "steady", training_status: "PRODUCTIVE" },
     delta: { hrv: null, rhr: null, sleep: null },
   };
-  const lowRecovery = {
-    ...steadyRecovery,
-    recovery: { readiness_band: "low", training_status: "PRODUCTIVE" },
-  };
   const steady = repo.weeklyRunPlan(MONDAY, { recovery: steadyRecovery, block: { week_index: 1 } });
-  const constrained = repo.weeklyRunPlan(MONDAY, { recovery: lowRecovery, block: { week_index: 1 } });
+  const constrained = repo.weeklyRunPlan(MONDAY, {
+    recovery: steadyRecovery,
+    programState: recoveryWeekState(steadyRecovery),
+    block: { week_index: 1 },
+  });
   const total = (weekly) => weekly.runs.reduce((sum, item) => sum + Number(item.target_distance_km || 0), 0);
   assert.equal(constrained.runs.length, 2);
   assert.ok(total(constrained) < total(steady), "dropping frequency also reduces total weekly volume");

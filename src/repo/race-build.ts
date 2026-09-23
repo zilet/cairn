@@ -51,7 +51,7 @@ import {
   type RaceRampCapacity,
   type RaceRampGoal,
 } from "./run-ramp.js";
-import { weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
+import { weekAsPlanned, weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
 import { localDateISO } from "./shared.js";
 import { planDayStrengthGroups } from "./training-read.js";
 
@@ -757,8 +757,10 @@ export function raceBuild(
   const phase: RacePhase = goal.phase ?? phaseForWeeks(weeksToRace, distance);
 
   // ---- this week, from the live engine ----
-  const plan = opts?.runPlan === undefined ? safe(() => weeklyRunPlan(asOf)) : opts.runPlan;
-  const runs = plan?.available ? plan.runs : [];
+  // The WEEK as planned — never this morning's call on today's run (a shortened long run
+  // or a rest morning must not move the week's volume, its long run or the banked test).
+  const plan = opts?.runPlan === undefined ? safe(() => weeklyRunPlan(asOf, { adjustToday: false })) : opts.runPlan;
+  const runs = plan?.available ? weekAsPlanned(plan) : [];
   const weekKm = round1(runs.reduce((s, r) => s + (r.target_distance_km != null ? Number(r.target_distance_km) : 0), 0));
   const longRun = runs.find((r) => r.kind_label === "long") ?? null;
   const qualityRun = runs.find((r) => r.kind_label === "quality") ?? null;
