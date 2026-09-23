@@ -68,7 +68,7 @@ test("the lift card and session never carry a run: a stale cardio item is droppe
   assert.deepEqual(plain(model.planItems(OLD_PLAN[0]).map((item) => item.exercise)), ["Bench"]);
 
   const requests = [];
-  const state = { logDate: "2026-09-23", day: 1, dayPicked: true, plan: plain(OLD_PLAN), pendingOffPlan: {} };
+  const state = { logDate: "2031-09-24", day: 1, dayPicked: true, plan: plain(OLD_PLAN), pendingOffPlan: {} };
   const result = await context.CairnTodayPlanSessionPreparation.preparePlanSession(prepDeps(state, requests));
   assert.deepEqual(plain(result.day.items.map((item) => item.exercise)), ["Bench"], "the prepared day is lifts only");
   assert.deepEqual(plain(result.activeItems.map((item) => item.exercise)), ["Bench"]);
@@ -81,7 +81,7 @@ test("the lift card and session never carry a run: a stale cardio item is droppe
 test("an old run-only day is not startable, and only a real synced run names a lift-less day a run", async () => {
   const context = loadPreparation();
   const requests = [];
-  const state = { logDate: "2026-09-23", day: 7, dayPicked: true, plan: plain(OLD_PLAN), pendingOffPlan: {} };
+  const state = { logDate: "2031-09-24", day: 7, dayPicked: true, plan: plain(OLD_PLAN), pendingOffPlan: {} };
   const quiet = await context.CairnTodayPlanSessionPreparation.preparePlanSession(prepDeps(state, requests));
   assert.equal(quiet.day.items.length, 0, "a run-only day carries no lift to launch");
   assert.equal(quiet.activeItems.length, 0);
@@ -110,7 +110,7 @@ test("the surface renderer draws lifts only, even when handed a cardio item", ()
       isToday: true,
       plan: [],
       activeDay: 1,
-      logDate: "2026-09-23",
+      logDate: "2031-09-24",
       strengthItems: [BENCH],
       activeItems: items,
       skippedItems: [EASY_RUN],
@@ -184,12 +184,12 @@ test("today's run is one line from the agenda, outside the lift card, and only f
   const agenda = {
     available: true,
     intents: [
-      { kind: "easy", label: "Easy <run>", status: "open", suggested_date: "2026-09-23", target_distance_km: 6, target_zone: "Z2" },
-      { kind: "long", label: "Long run", status: "open", suggested_date: "2026-09-27", target_distance_km: 16, target_zone: "Z2" },
+      { kind: "easy", label: "Easy <run>", status: "open", suggested_date: "2031-09-24", target_distance_km: 6, target_zone: "Z2" },
+      { kind: "long", label: "Long run", status: "open", suggested_date: "2031-09-28", target_distance_km: 16, target_zone: "Z2" },
     ],
   };
   const deps = { escapeHtml: escHtml, formatDistance: (km, units) => (units === "mi" ? `${km} mi?` : `${km} km`) };
-  const line = surface.runLineHtml(agenda, { date: "2026-09-23", syncLine: '<div data-cardio-sync></div>' }, deps);
+  const line = surface.runLineHtml(agenda, { date: "2031-09-24", syncLine: '<div data-cardio-sync></div>' }, deps);
   assert.match(line, /data-today-run/);
   assert.match(line, /Today · Easy/);
   assert.match(line, /Easy &lt;run&gt;/);
@@ -200,11 +200,11 @@ test("today's run is one line from the agenda, outside the lift card, and only f
   assert.match(line, /data-cardio-sync/, "the stale-sync nudge rides the run line now");
   assert.doesNotMatch(line, /Long run/, "a run suggested for another day stays in the week strip and Endurance");
 
-  assert.equal(surface.runLineHtml(agenda, { date: "2026-09-24" }, deps), "", "nothing opened today, nothing said");
+  assert.equal(surface.runLineHtml(agenda, { date: "2031-09-25" }, deps), "", "nothing opened today, nothing said");
   const done = { available: true, intents: [{ ...agenda.intents[0], status: "completed" }] };
-  assert.equal(surface.runLineHtml(done, { date: "2026-09-23" }, deps), "", "a run already in speaks in the Brief line");
-  assert.equal(surface.runLineHtml(null, { date: "2026-09-23" }, deps), "");
-  assert.equal(surface.runLineHtml({ available: false, intents: [] }, { date: "2026-09-23" }, deps), "");
+  assert.equal(surface.runLineHtml(done, { date: "2031-09-24" }, deps), "", "a run already in speaks in the Brief line");
+  assert.equal(surface.runLineHtml(null, { date: "2031-09-24" }, deps), "");
+  assert.equal(surface.runLineHtml({ available: false, intents: [] }, { date: "2031-09-24" }, deps), "");
 
   // Wired into Today OUTSIDE the plan region: its own slot after the lift card /
   // plan surface and before the week fold, fed by /training-agenda for the date.

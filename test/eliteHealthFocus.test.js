@@ -14,7 +14,7 @@ beforeEach(() => {
 
 const band = (lo, hi) => ({ hrv: { hrvSummary: { baseline: { balancedLow: lo, balancedUpper: hi } } } });
 // nights[i] is the reading i days ago (null = no night).
-const garminWeek = (nights, raw = band(43, 53)) => {
+const garminWeek = (nights, raw = band(44, 54)) => {
   nights.forEach((v, i) => {
     if (v != null) repo.upsertGarminDailyMetric({ date: localDaysAgo(i), hrv_ms: v, raw });
   });
@@ -26,14 +26,14 @@ function hrvMarker() {
 }
 
 test("wearableWeeklyMarkerRead re-judges HRV on the week's mean, not the latest night", () => {
-  // Last night is a real dip (34, well below the own band 43-53) but the week is normal (~46).
-  garminWeek([34, 48, 49, 48, 47, 49, 48]);
+  // Last night is a real dip (33, well below the own band 44-54) but the week is normal (~46).
+  garminWeek([33, 48, 49, 48, 47, 49, 48]);
   const raw = hrvMarker();
-  assert.equal(raw.latest.value, 34, "the single most-recent night is still on the row");
+  assert.equal(raw.latest.value, 33, "the single most-recent night is still on the row");
   assert.equal(raw.in_optimal, false, "BEFORE the fix, prioritizeMarkers() judges the single night");
 
   const after = repo.wearableWeeklyMarkerRead(raw);
-  assert.equal(after.latest.value, 34, "the latest reading is untouched — shown, never judged");
+  assert.equal(after.latest.value, 33, "the latest reading is untouched — shown, never judged");
   assert.equal(after.in_optimal, true, "AFTER: the week's own-band mean is what earns the status");
   assert.equal(after.status_basis, "week");
   assert.match(after.status_note, /this week's average/);
@@ -41,7 +41,7 @@ test("wearableWeeklyMarkerRead re-judges HRV on the week's mean, not the latest 
 });
 
 test("a genuinely low week still reads off — the mean, not any one night, drives the status", () => {
-  garminWeek([41, 40, 39, 42, 40, 38, 41]); // week averages ~40, own band 43-53
+  garminWeek([41, 40, 39, 42, 40, 38, 41]); // week averages ~40, own band 44-54
   const after = repo.wearableWeeklyMarkerRead(hrvMarker());
   assert.equal(after.in_optimal, false);
   assert.ok(after.distance > 0);
@@ -61,7 +61,7 @@ test("too few nights this week earns NO status — the latest reading shows, nev
 
 test("healthFocus() excludes an HRV card built from a single stray night, and includes a real weekly dip", () => {
   // A single very-low night inside an otherwise normal week must not surface a priority.
-  garminWeek([34, 48, 49, 48, 47, 49, 48]);
+  garminWeek([33, 48, 49, 48, 47, 49, 48]);
   const single = repo.healthFocus();
   const hrvCard = single.priorities.find((p) => p.markers.includes("HRV"));
   assert.equal(hrvCard, undefined, "one stray low night is not a Health-surface priority");

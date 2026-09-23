@@ -10,8 +10,8 @@ Migration **v110** (`plan-days-strength-only`: pure data repair — deletes card
 days that carry no strength work, after nulling `sessions.plan_day_id` /
 `daily_session_compositions.plan_day_id` that point at them; every remaining day is `training`).
 
-Triggered by a live morning where Today served a repeat of Monday's Push over the scheduled Lower A.
-Grounded in a live-data diagnosis (the envelope was capped at hold on 33 of 35 days and reach never
+Triggered by a morning where Today served a repeat of an upper day over the scheduled lower day.
+Grounded in a ledger diagnosis (the envelope was capped at hold on nearly every day and reach never
 fired); built as parallel packages in three waves, reviewed independently, integrated once:
 - **Plan day:** week coverage (a day already trained this week never stands in for an untrained one);
   `AcuteGateReading.deep` — shallow saturation holds load in place, only a deep residual swaps a day

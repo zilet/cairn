@@ -71,7 +71,7 @@ const LONG_PEAK_CEILING_KM = 20;
 // ---- how a week's volume is carried by its runs ------------------------------
 // weeklyRunPlan distributes a week's kilometres across its runs within per-run caps,
 // and the race ladder and the fit read have to know what those caps let a week hold —
-// or the ladder promises a 41 km week the engine can only fill to 31. The numbers
+// or the ladder promises a 45 km week the engine can only fill to 36. The numbers
 // live here, beside the weekly step, so the engine that prescribes a week and the
 // reads that project one share them.
 
@@ -162,7 +162,7 @@ export function deliverableRunWeek(
  * and the engine then holds, drops the quality session and cuts the long run — so a
  * week the engine itself prescribed must stay clear of that bar, or running it as
  * written trips the brake the very next Monday (a resume off a reset after a light
- * stretch did exactly that: 24 → 35.5 km, then a held week). The margin under 1.5
+ * stretch did exactly that: a ~45% jump, then a held week). The margin under 1.5
  * absorbs the brake's trailing seven-day window not lining up with Mon–Sun.
  */
 export const PRESCRIBED_ACWR_CEILING = 1.4;

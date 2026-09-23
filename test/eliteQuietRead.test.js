@@ -2,8 +2,8 @@
 //
 // Three laws, each pinned here:
 //   1. The long "you train anyway, and it costs you nothing" learning is a continuous
-//      WEIGHT with a small-sample floor, not a knife-edge conjunction — it missed its
-//      first live morning by one day (17 × 4 = 68 < 69).
+//      WEIGHT with a small-sample floor, not a knife-edge conjunction — it could miss a
+//      record by one day (14 × 4 = 56 < 57).
 //   2. Harm is judged against the athlete's OWN nights and charged once per episode —
 //      a seven-day watch verdict read LOW three mornings running used to be three harms.
 //   3. The day-read AGENT may not read a deterministic train day quieter without naming
@@ -66,28 +66,28 @@ function quietModel({ days, trainedThrough, costly = [], read = "easy" }) {
   return { as_of: TODAY(), window_days: 44, days_observed: recent.length, by_read: [], recent };
 }
 
-test("the live shape that missed by one day now carries weight, and one more clean day moves it a little", () => {
-  // 28 quiet mornings, 23 trained through, 6 of those at a cost: 17 clean — the 04:01
-  // morning the old conjunction refused (17 × 4 = 68 < 69).
-  const costly = [2, 6, 11, 15, 19, 23];
-  const seventeen = trainsAnywayWithoutHarm(quietModel({ days: 28, trainedThrough: 23, costly }), TODAY());
-  assert.equal(seventeen.trained_through, 23);
-  assert.equal(seventeen.trained_without_harm.length, 17);
-  assert.ok(seventeen.weight >= LEARNED_OPEN_EASY_WEIGHT, `weight ${seventeen.weight}`);
-  assert.equal(seventeen.mature, true);
-  assert.equal(learnedQuietStep("easy", seventeen.weight), "train");
+test("a record that missed by one day now carries weight, and one more clean day moves it a little", () => {
+  // 28 quiet mornings, 19 trained through, 5 of those at a cost: 14 clean — a record
+  // the old conjunction refused by one day (14 × 4 = 56 < 57).
+  const costly = [2, 6, 10, 14, 18];
+  const fourteen = trainsAnywayWithoutHarm(quietModel({ days: 28, trainedThrough: 19, costly }), TODAY());
+  assert.equal(fourteen.trained_through, 19);
+  assert.equal(fourteen.trained_without_harm.length, 14);
+  assert.ok(fourteen.weight >= LEARNED_OPEN_EASY_WEIGHT, `weight ${fourteen.weight}`);
+  assert.equal(fourteen.mature, true);
+  assert.equal(learnedQuietStep("easy", fourteen.weight), "train");
 
   resetTables("logged_sets", "sessions");
-  const eighteen = trainsAnywayWithoutHarm(
-    quietModel({ days: 28, trainedThrough: 23, costly: costly.slice(1) }),
+  const fifteen = trainsAnywayWithoutHarm(
+    quietModel({ days: 28, trainedThrough: 19, costly: costly.slice(1) }),
     TODAY()
   );
-  assert.equal(eighteen.trained_without_harm.length, 18);
-  assert.ok(eighteen.weight > seventeen.weight, "one more harm-free override weighs more");
-  assert.ok(eighteen.weight - seventeen.weight < 0.1, "…by a step, never a cliff");
+  assert.equal(fifteen.trained_without_harm.length, 15);
+  assert.ok(fifteen.weight > fourteen.weight, "one more harm-free override weighs more");
+  assert.ok(fifteen.weight - fourteen.weight < 0.1, "…by a step, never a cliff");
   // Deterministic: the same evidence gives the same weight.
-  assert.equal(trainsAnywayWithoutHarm(quietModel({ days: 28, trainedThrough: 23 }), TODAY()).weight,
-    trainsAnywayWithoutHarm(quietModel({ days: 28, trainedThrough: 23 }), TODAY()).weight);
+  assert.equal(trainsAnywayWithoutHarm(quietModel({ days: 28, trainedThrough: 19 }), TODAY()).weight,
+    trainsAnywayWithoutHarm(quietModel({ days: 28, trainedThrough: 19 }), TODAY()).weight);
 });
 
 test("a small sample moves nothing: two clean overrides, or fewer than ten quiet mornings", () => {
@@ -174,13 +174,13 @@ test("a seven-day LOW verdict read three mornings running is ONE harm, charged t
 });
 
 test("HRV is read against the athlete's own nights, not the watch's word", () => {
-  // A low-HRV athlete: their ordinary nights run 34-46 ms. A 37 is inside their own
+  // A low-HRV athlete: their ordinary nights run 35-47 ms. A 38 is inside their own
   // spread even with the watch calling the week LOW.
   const day = localDaysAgo(3);
   const morning = localDaysAgo(2);
   liftedOn(day);
-  ownNights(morning, 14, [34, 37, 40, 43, 46]);
-  repo.upsertGarminDailyMetric({ date: morning, hrv_ms: 37, hrv_status: "LOW" });
+  ownNights(morning, 14, [35, 38, 41, 44, 47]);
+  repo.upsertGarminDailyMetric({ date: morning, hrv_ms: 38, hrv_status: "LOW" });
   assert.equal(harmEvidenceOnDay(day), null);
 
   // A high-HRV athlete: 76-84 ms nights, and a 70 the watch still calls BALANCED is a
@@ -199,9 +199,9 @@ test("resting HR is read against their own nights, and a run of high mornings is
   liftedOn(d2);
   // Their own resting HR sits 48-52; the row's 7-day column is not a resting figure.
   ownNights(localDaysAgo(4), 14, [48, 49, 50, 51, 52], "resting_hr");
-  repo.upsertGarminDailyMetric({ date: d1, resting_hr: 50, hr_7d_avg: 71 });
-  repo.upsertGarminDailyMetric({ date: localDaysAgo(3), resting_hr: 56, hr_7d_avg: 71 });
-  repo.upsertGarminDailyMetric({ date: localDaysAgo(2), resting_hr: 57, hr_7d_avg: 71 });
+  repo.upsertGarminDailyMetric({ date: d1, resting_hr: 50, hr_7d_avg: 68 });
+  repo.upsertGarminDailyMetric({ date: localDaysAgo(3), resting_hr: 56, hr_7d_avg: 68 });
+  repo.upsertGarminDailyMetric({ date: localDaysAgo(2), resting_hr: 57, hr_7d_avg: 68 });
 
   const onset = harmEvidenceOnDay(d1);
   assert.equal(onset?.kind, "physiology_brake");

@@ -67,7 +67,7 @@ beforeEach(() => {
 
 const lift = (exercise, extra = {}) => ({ exercise, sets: 3, rep_low: 6, rep_high: 8, target_weight: 100, ...extra });
 
-// The live week's SHAPE, generic: five strength days over Mon–Fri, two of them lower.
+// A hybrid week's SHAPE, generic: five strength days over Mon–Fri, two of them lower.
 function seedStrengthWeek() {
   repo.savePlanDay(1, "Push", "Chest & shoulders", [lift("Barbell Bench Press"), lift("Overhead Press")]);
   repo.savePlanDay(2, "Pull", "Back & biceps", [lift("Barbell Row"), lift("Lat Pulldown")]);

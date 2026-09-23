@@ -104,7 +104,7 @@ test("a calendar run or rest day selects no lift — never the first plan day by
   const client = loadClient();
   for (const calendar of ["run", "rest"]) {
     const deps = {
-      state: { logDate: "2026-09-27", plan },
+      state: { logDate: "2026-07-05", plan },
       api: async () => ({ day_number: null, focus: null, source: "calendar", calendar, reason: null, candidates: [] }),
     };
     assert.equal(await client.suggestedPlanDayNumber({ sets: [] }, true, deps), null, `${calendar} day`);

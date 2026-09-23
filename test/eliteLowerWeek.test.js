@@ -280,16 +280,16 @@ test("a full-load lower session is working sets at the lift's own working weight
   repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
   repo.upsertExercise({ name: "Romanian Deadlift", muscle_group: "hamstrings", mode: "reps" });
   repo.upsertExercise({ name: "Leg Extension", muscle_group: "quads", mode: "reps" });
-  sets("2026-04-13", "Back Squat", 205, 6, 3);
-  sets("2026-04-13", "Romanian Deadlift", 185, 8, 2);
+  sets("2026-04-13", "Back Squat", 195, 6, 3);
+  sets("2026-04-13", "Romanian Deadlift", 165, 8, 2);
   sets("2026-04-13", "Leg Extension", 120, 12, 3);
 
-  sets(MON, "Back Squat", 205, 6, 2); // the reduced-area cap: two sets
+  sets(MON, "Back Squat", 195, 6, 2); // the reduced-area cap: two sets
   sets(MON, "Leg Extension", 130, 12, 3); // an isolation machine is not a leg session
   assert.equal(fullLoadLowerSessionThisWeek(WED), null);
-  sets(TUE, "Back Squat", 185, 8, 3); // three sets, eased below the working weight
+  sets(TUE, "Back Squat", 175, 8, 3); // three sets, eased below the working weight
   assert.equal(fullLoadLowerSessionThisWeek(WED), null);
-  sets(TUE, "Romanian Deadlift", 185, 8, 2); // the plan writes this lift at two sets
+  sets(TUE, "Romanian Deadlift", 165, 8, 2); // the plan writes this lift at two sets
   assert.equal(fullLoadLowerSessionThisWeek(WED), TUE);
   assert.equal(fullLoadLowerSessionThisWeek(TUE), null, "only days before the one asked about");
   assert.equal(fullLoadLowerSessionThisWeek("2026-04-27"), null, "a new week starts empty");
@@ -297,7 +297,7 @@ test("a full-load lower session is working sets at the lift's own working weight
 
 const PPLU = [day(1, "Push", "Barbell Bench Press"), day(2, "Pull", "Pendlay Row"), day(3, "Lower A", "Back Squat"), day(4, "Upper", "Overhead Press"), rest(5)];
 
-function liveWeek() {
+function hybridWeek() {
   // Mon–Fri lifting over a four-day pool: Mon Push, Tue Pull, Wed Lower A, Thu Upper, Fri
   // Push again — Wednesday is the week's only lower day.
   repo.replacePlan(PPLU);
@@ -307,7 +307,7 @@ function liveWeek() {
 }
 
 test("selection: the week's last lower day is kept over a deep leg dose while no full lower session has landed", () => {
-  liveWeek();
+  hybridWeek();
   repo.addActivity({ type: "run", duration_min: 100, distance_km: 16, date: TUE, text: "Long run" });
   const wednesday = repo.selectAdaptivePlanDay(WED);
   assert.equal(wednesday.selection.rotation.day_number, 3);
@@ -317,7 +317,7 @@ test("selection: the week's last lower day is kept over a deep leg dose while no
 });
 
 test("selection: work done THIS morning still moves the last lower day", () => {
-  liveWeek();
+  hybridWeek();
   repo.addActivity({ type: "run", duration_min: 100, distance_km: 16, date: WED, text: "Long run" });
   const wednesday = repo.selectAdaptivePlanDay(WED);
   assert.notEqual(wednesday.day_number, 3);
@@ -325,7 +325,7 @@ test("selection: work done THIS morning still moves the last lower day", () => {
 });
 
 test("gather: the week's lower question is stamped only on an unfulfilled lower day", () => {
-  liveWeek();
+  hybridWeek();
   const wed = gatherDailyDecisionSnapshot(WED);
   assert.equal(wed.plan.day_number, 3);
   assert.deepEqual(wed.weekly_lower, { last_chance: true });

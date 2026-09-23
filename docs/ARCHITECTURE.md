@@ -279,7 +279,7 @@ flag is saturated AND ≥ `DEEP_SATURATION_MULTIPLE` (1.25) × the bar. A shallo
 loaded one (half due credit, -1, never "mostly recovering"), so it cannot swap a plan day away, and
 `substituteSaturatedPlanItems` leaves its slot on the card at held load when the work was on an
 earlier day. Work done today still moves whatever its depth (the run-morning law). Before this, a
-quad residual 0.04 over its ceiling swapped a scheduled Lower A for a repeat of Monday's Push.
+quad residual a hair over its ceiling swapped a scheduled lower day for a repeat of an upper one.
 
 `acuteGate(group, date, residuals?)` / `acuteGates(date)` (same file) is the ONE acute-recovery
 question every consumer now asks, replacing four different hand-rolled versions of it (`rl?.heavy`
@@ -1507,7 +1507,7 @@ their own SDs, never narrower than `recoveryTrendBars`. With too few nights the 
 stand in (the `hrv_status` word; resting HR ≥ the row's `hr_7d_avg` + 5). Either way a brake is
 charged only at its ONSET: when the reading before it (within the signal's age bound) already sat past
 the same line, the dip predates the work and the day is not charged. A seven-day LOW verdict three
-mornings running (live: 09-17..09-19) used to be three harms. The vouch that clears a hard-cardio day
+mornings running used to be three harms. The vouch that clears a hard-cardio day
 still needs NO overnight brake at all, onset or not.
 
 **"Morning readiness" is not the stored Garmin value on a training day.**
@@ -1567,7 +1567,7 @@ tier and reach all read past it — and stacked-load rest is corroborated only b
 through ÷ (quiet mornings + 2)) × (clean ÷ (trained through + 2)), every morning recency-weighted
 (half-life 21 days) — zero below the small-sample floor (`LEARNED_TRAIN_MIN_MORNINGS` 10 quiet
 mornings, `LEARNED_TRAIN_MIN_CLEAN` 3 clean overrides). It replaced a conjunction (⅔ trained through,
-¾ clean, newest clean) that missed its first live morning by one day. `learnedQuietStep` picks the
+¾ clean, newest clean) that missed its first qualifying morning by one day. `learnedQuietStep` picks the
 rung: an easy read opens to train at `LEARNED_OPEN_EASY_WEIGHT`; a rest read eases to easy at
 `LEARNED_EASE_REST_WEIGHT` (spoken through the `outcome_feedback_soften` outcome) and opens to train at
 `LEARNED_OPEN_REST_WEIGHT`; a rest whose open is held (nothing due, saturated legs, a second run)
@@ -1582,7 +1582,7 @@ strength groups the acute gate reads saturated. It outranks both short ladders (
 day) and publishes `signals.learned_train_anyway` with `weight`, `applied` and `step`.
 
 **The day-read AGENT is quieter than a train baseline only on a NAMED, FRESH brake (2026-09-23).**
-`enforceDayReadSafetyPosture` lets the agent move left, and it did so as a habit (sixteen straight
+`enforceDayReadSafetyPosture` lets the agent move left, and it did so as a habit (long runs of
 "easy" Briefs; an "easy" over posture train / drive push). Now a train baseline read easy or rest must
 cite `brake` (a `DAY_READ_SCHEMA` field) naming one of `dayReadCitableBrakes(baseline)`
 (`src/repo/day-read.ts`): the fresh DECIDING brakes on the baseline's own signal state
@@ -3796,8 +3796,8 @@ new profile fields, and `{available:false, reason}` for everyone else. `raceBuil
   projected down rung holds rather than steps under. A projected rung is what the engine will
   PRESCRIBE: in the engine's own run week (`goal_feasibility.capacity`) it is held to
   `deliverableRunWeek`, and to `acwrCeilingKm` over the logged closed weeks and the rungs before it
-  — the engine's own per-run caps and spike headroom, so the ladder never promises a 41 km week
-  three runs fill to 31. `weeks_to_race` on each rung is the calendar count for the label.
+  — the engine's own per-run caps and spike headroom, so the ladder never promises a 45 km week
+  three runs fill to 36. `weeks_to_race` on each rung is the calendar count for the label.
 - **`leg_map`** — the seven-day ring (Mon–Sun plan template): the run per day, the strength day
   with `heavy_lower` from `lowerBodyPlanDayNumbers()`, and the habitual ride.
 - **`strength`** — the phase's heavy-lower principle (`STRENGTH_HINT`: heavy after the quality

@@ -18,7 +18,7 @@ beforeEach(() => {
 
 const band = (lo, hi) => ({ hrv: { hrvSummary: { baseline: { balancedLow: lo, balancedUpper: hi } } } });
 // nights[i] is the reading i days ago (null = no night).
-const garminWeek = (nights, raw = band(43, 53)) => {
+const garminWeek = (nights, raw = band(44, 54)) => {
   nights.forEach((v, i) => {
     if (v != null) repo.upsertGarminDailyMetric({ date: localDaysAgo(i), hrv_ms: v, raw });
   });
@@ -26,14 +26,14 @@ const garminWeek = (nights, raw = band(43, 53)) => {
 const active = (marker) => repo.listActiveDirectives().filter((d) => d.marker === marker);
 
 test("one short night inside a normal week raises no HRV directive", () => {
-  // Last night 34 ms — below the athlete's own band — but the week averages ~46.
-  garminWeek([34, 48, 49, 48, 47, 49, 48]);
+  // Last night 33 ms — below the athlete's own band — but the week averages ~46.
+  garminWeek([33, 48, 49, 48, 47, 49, 48]);
   repo.deriveDirectives();
   assert.equal(active("HRV").length, 0, "a single night is the day read's job, never a directive's");
 });
 
 test("a week averaging below the athlete's OWN band raises it, anchored on the average and worded as a trend", () => {
-  // This athlete's own band is 43–53 and the week averages ~40.
+  // This athlete's own band is 44–54 and the week averages ~40.
   garminWeek([41, 40, 39, 42, 40, 38, 41]);
   repo.deriveDirectives();
   const [d] = active("HRV");
@@ -83,9 +83,9 @@ test("the wearable re-derive clears the card on the sync that brings the week ba
     trigger_side: "high",
     trigger_date: localDaysAgo(30),
   });
-  // A strong week: tonight's sync lands 58 and rewrites the week above 43 on average.
-  for (let i = 1; i <= 3; i++) repo.upsertGarminDailyMetric({ date: localDaysAgo(i), hrv_ms: 52, raw: band(43, 53) });
-  repo.upsertGarminDailyMetric({ date: localDaysAgo(0), hrv_ms: 58, raw: band(43, 53) });
+  // A strong week: tonight's sync lands 58 and rewrites the week above 44 on average.
+  for (let i = 1; i <= 3; i++) repo.upsertGarminDailyMetric({ date: localDaysAgo(i), hrv_ms: 52, raw: band(44, 54) });
+  repo.upsertGarminDailyMetric({ date: localDaysAgo(0), hrv_ms: 58, raw: band(44, 54) });
   const out = repo.deriveWearableDirectives();
   assert.ok(out.changed >= 1);
   assert.equal(active("HRV").length, 0, "cleared on this sync, not at the next daily tick");
@@ -141,15 +141,15 @@ test("HRV directives reach prompts as context, never as an instruction; lab dire
 });
 
 test("the trend window is the mean of the week's readings and needs three nights", () => {
-  const asOf = "2026-09-23";
+  const asOf = "2031-09-24";
   const pts = [
-    { date: "2026-09-15", value: 30 }, // outside the week
-    { date: "2026-09-17", value: 46 },
-    { date: "2026-09-18", value: 41 },
-    { date: "2026-09-19", value: 44 },
-    { date: "2026-09-20", value: 37 },
-    { date: "2026-09-23", value: 55 },
+    { date: "2031-09-16", value: 31 }, // outside the week
+    { date: "2031-09-18", value: 47 },
+    { date: "2031-09-19", value: 40 },
+    { date: "2031-09-20", value: 45 },
+    { date: "2031-09-21", value: 38 },
+    { date: "2031-09-24", value: 54 },
   ];
-  assert.deepEqual(repo.wearableTrendWindow(pts, asOf), { value: 44.6, nights: 5, from: "2026-09-17", to: "2026-09-23" });
+  assert.deepEqual(repo.wearableTrendWindow(pts, asOf), { value: 44.8, nights: 5, from: "2031-09-18", to: "2031-09-24" });
   assert.equal(repo.wearableTrendWindow(pts.slice(-2), asOf), null);
 });

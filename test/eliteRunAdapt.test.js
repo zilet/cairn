@@ -1,6 +1,6 @@
-// The run day is decided ON ITS MORNING (owner: "it should all be taken into account at
-// what the next training should be and how hard the push should be … not a predefined
-// planned schedule — Thursday's run might still be hills if I am ok with that").
+// The run day is decided ON ITS MORNING (owner ruling: everything known that morning
+// decides what the next session is and how hard to push — not a predefined schedule; a
+// stated quality day can still be the hard session when the athlete is up for it).
 //
 //   • a trimmed week (reset, spike brake, recovery dip) trims VOLUME, not intensity: the
 //     stated quality day keeps a SHORT stimulus, and that morning decides whether it runs;
@@ -87,7 +87,7 @@ function seedOwnNights(n = 20) {
   }
 }
 
-const GOOD_NIGHT = { hrv_ms: 55, resting_hr: 50, sleep_min: 470, training_readiness: 72 };
+const GOOD_NIGHT = { hrv_ms: 54, resting_hr: 50, sleep_min: 470, training_readiness: 72 };
 function tonight(fields) {
   repo.upsertGarminDailyMetric({ date: TODAY, ...fields });
 }

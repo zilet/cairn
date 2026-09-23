@@ -115,7 +115,7 @@ function storeDose(session, exercise, { card, prior, top, verdict, fullLoad = fa
 // ── the bar itself ────────────────────────────────────────────────────────────
 test("a strength decline is meaningful only as a share of what was trained", () => {
   assert.equal(STRENGTH_DECLINE_MIN_LIFTS, 2);
-  // The live shape: Back Squat alone against fourteen advancing lifts.
+  // The shape: Back Squat alone against fourteen advancing lifts.
   assert.equal(strengthDeclineIsMeaningful({ improving: 14, declining: 1, steady: 4 }), false);
   assert.equal(strengthDeclineIsMeaningful({ improving: 11, declining: 2, steady: 4 }), false);
   assert.equal(strengthDeclineIsMeaningful({ improving: 1, declining: 1, steady: 0 }), false, "a tie is not a decline");

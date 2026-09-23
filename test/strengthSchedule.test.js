@@ -209,7 +209,7 @@ test("chat CAN clear a stated schedule with an explicit empty days: []", () => {
 // the weekday ring
 // ---------------------------------------------------------------------------
 
-// The athlete's live week: five strength days (numbered 1,2,3,4,6) and an empty editor
+// A hybrid athlete's week: five strength days (numbered 1,2,3,4,6) and an empty editor
 // scaffold. Plan days hold strength only — runs and rest are the calendar's, so the
 // weekend is not a plan row at all.
 const LIVE_RING = [
@@ -335,7 +335,7 @@ const strengthDay = (day_number, name, exercise) => ({
   name,
   items: [{ exercise, sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }],
 });
-// The athlete's live ring: five strength days. (Their rest day and long run are the
+// The same athlete's ring: five strength days. (Their rest day and long run are the
 // calendar's — a weekday neither lifted nor run on, and a stated run weekday — so they
 // are not plan rows; day 5 was the retired rest row, hence the gap.)
 const LIVE_PLAN = [
@@ -489,10 +489,10 @@ test("a recovering split day walks forward to the next fresh day, not a distant 
   assert.equal(monday.selection.adapted, true);
 });
 
-// The live Wednesday (2026-09-23): Push Monday, Pull Tuesday with a run, Lower A
-// scheduled. Legs carried the week's running, the scorer only compared against
-// Tuesday's session, and Monday's Push — "not just trained" — replaced Lower A. A
-// week of two Push days and no legs is not an adaptation, it is a hole.
+// A Wednesday with Push on Monday, Pull on Tuesday beside a run, and Lower A scheduled.
+// Legs carried the week's running, the scorer only compared against the day before's
+// session, and the Push day — "not just trained" — replaced Lower A. A week of two
+// Push days and no legs is not an adaptation, it is a hole.
 const PPL = [
   strengthDay(1, "Push", "Barbell Bench Press"),
   strengthDay(2, "Pull", "Pendlay Row"),

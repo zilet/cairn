@@ -329,9 +329,9 @@ export function enforceDayReadSafetyPosture(out: any, baseline: any, hasOverride
 }
 
 // ---------- the agent may not be quieter than the server without a NAMED, FRESH brake ----------
-// (2026-09-23.) The safety ladder above lets the agent move LEFT freely, and on the
-// live record it used that freedom as a habit rather than a judgement: sixteen straight
-// "easy" Briefs, and a 04:01 "easy" over a deterministic read whose signal state said
+// (2026-09-23.) The safety ladder above lets the agent move LEFT freely, and in
+// practice it used that freedom as a habit rather than a judgement: long runs of
+// "easy" Briefs, and an "easy" over a deterministic read whose signal state said
 // posture train and drive push. Nothing it could point to was firing; the caution came
 // from context the server had already weighed (a trend, a stale reading, an
 // informational note) and deliberately declined to brake on.

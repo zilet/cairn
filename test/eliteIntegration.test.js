@@ -1,8 +1,7 @@
-// Cross-package seams found while integrating the elite round against the live
-// snapshot (2026-09-23): a hard-effort label regex blind to Garmin's SNAKE_CASE, an HRV
-// trend braking a morning whose own night was already back at the norm, a pull-up
-// ladder logged at bodyweight missing from program state, and a two-month-old top set
-// buying a heavier card.
+// Cross-package seams found while integrating the elite round (2026-09-23): a
+// hard-effort label regex blind to Garmin's SNAKE_CASE, an HRV trend braking a morning
+// whose own night was already back at the norm, a pull-up ladder logged at bodyweight
+// missing from program state, and a two-month-old top set buying a heavier card.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { HARD_EFFORT } from "../dist/repo/heavy-load.js";
@@ -61,12 +60,12 @@ test("a lift that left the rotation two months ago re-baselines instead of stepp
     {
       day_number: 1,
       name: "Lower",
-      items: [{ exercise: "Romanian Deadlift", sets: 3, rep_low: 8, rep_high: 10, target_weight: 185 }],
+      items: [{ exercise: "Romanian Deadlift", sets: 3, rep_low: 8, rep_high: 10, target_weight: 175 }],
     },
   ]);
   for (const daysAgo of [70, 66, 62]) {
     for (let set = 0; set < 3; set++) {
-      repo.logSetByName({ date: localDaysAgo(daysAgo), exercise: "Romanian Deadlift", weight: 185, reps: 10, rir: 3 });
+      repo.logSetByName({ date: localDaysAgo(daysAgo), exercise: "Romanian Deadlift", weight: 175, reps: 10, rir: 3 });
     }
   }
   // The athlete kept training — the RDL is what left the rotation.
@@ -76,7 +75,7 @@ test("a lift that left the rotation two months ago re-baselines instead of stepp
   const presc = nextPrescription("Romanian Deadlift");
   assert.ok(presc);
   assert.ok(
-    presc.suggested.weight != null && presc.suggested.weight <= 185,
+    presc.suggested.weight != null && presc.suggested.weight <= 175,
     `a stale top-of-range run holds its last load (got ${presc.suggested.weight} via ${presc.action})`
   );
 });
@@ -87,18 +86,18 @@ test("a lower card completed in full counts as the week's full-load session, wha
     {
       day_number: 1,
       name: "Lower A",
-      items: [{ exercise: "Back Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 192.5 }],
+      items: [{ exercise: "Back Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 182.5 }],
     },
   ]);
-  // Two weeks back: a heavy triple-ish day that sets the logged working weight at 205.
-  for (let set = 0; set < 3; set++) repo.logSetByName({ date: "2031-04-07", exercise: "Back Squat", weight: 205, reps: 5 });
-  // Monday of the week under test: the composed card asks for 192.5 × 8–10 and it is done in full.
+  // Two weeks back: a heavy triple-ish day that sets the logged working weight at 195.
+  for (let set = 0; set < 3; set++) repo.logSetByName({ date: "2031-04-07", exercise: "Back Squat", weight: 195, reps: 5 });
+  // Monday of the week under test: the composed card asks for 182.5 × 8–10 and it is done in full.
   const MONDAY = "2031-04-21";
   repo.prepareDailySession({ date: MONDAY, source: "manual_plan", day_number: 1 });
-  // The live card: progression asked 192.5 at the 8-rep floor, below the old 205 working weight.
+  // The card: progression asked 182.5 at the 8-rep floor, below the old 195 working weight.
   const row = db.prepare(`SELECT id, items_json FROM daily_session_compositions WHERE date = ? AND status = 'active'`).get(MONDAY);
-  const items = JSON.parse(row.items_json).map((item) => ({ ...item, target_weight: 192.5 }));
+  const items = JSON.parse(row.items_json).map((item) => ({ ...item, target_weight: 182.5 }));
   db.prepare(`UPDATE daily_session_compositions SET items_json = ? WHERE id = ?`).run(JSON.stringify(items), row.id);
-  for (let set = 0; set < 3; set++) repo.logSetByName({ date: MONDAY, exercise: "Back Squat", weight: 192.5, reps: 9 });
+  for (let set = 0; set < 3; set++) repo.logSetByName({ date: MONDAY, exercise: "Back Squat", weight: 182.5, reps: 9 });
   assert.equal(fullLoadLowerSessionThisWeek("2031-04-23"), MONDAY);
 });

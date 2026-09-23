@@ -89,7 +89,7 @@ function seedNights(recent = [], { skip = [] } = {}) {
   }
 }
 
-// An episodic-wearer week shaped like the live one: a mix of ordinary and lowish nights,
+// An episodic-wearer week: a mix of ordinary and lowish nights,
 // never three low in a row, with a good night last night. The 7-day median sits just
 // inside the old band with that night, and just outside it without.
 const MIXED_WEEK = [56, 49, 47, 50, 46, 49, 45];
@@ -248,7 +248,7 @@ test("recoveryDipRead: no own spread, no baseline, or too few nights → absent,
     verified: { hrv_ms: { readings: readings.map((r) => ({ ...r, value: 47 })) } },
   };
   assert.equal(recoveryDipRead(tight, TODAY).hrv, false);
-  // And the live summary's own shape reads the same way.
+  // And the recovery summary's own shape reads the same way.
   seedNights([null, 40, 40, 40]);
   assert.equal(recoveryDipRead(getRecoverySummary(14), TODAY).hrv, true);
 });

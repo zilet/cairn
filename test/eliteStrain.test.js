@@ -90,13 +90,13 @@ test("quality sessions (tempo/VO2max/threshold labels, hills, sprints) never mak
   assert.notEqual(perf(r).direction, "strain");
 });
 
-test("a slower pace at a much lower heart rate is fitness, not strain (the long run at 155 vs 9 km at 163)", () => {
-  // Prior: 9 km @6:01/km @163 bpm. Recent: slower easy runs at a far lower heart rate,
-  // and the 17.7 km @5:54/km @155 long run — every recent run covers more ground per beat.
-  garminRun(-18, { km: 9.05, min: 54.5, hr: 163 });
-  garminRun(-21, { km: 9.05, min: 54.5, hr: 163 });
+test("a slower pace at a much lower heart rate is fitness, not strain (a long run at 154 vs 9 km at 162)", () => {
+  // Prior: 9 km @6:00/km @162 bpm. Recent: slower easy runs at a far lower heart rate,
+  // and a 16.8 km @5:54/km @154 long run — every recent run covers more ground per beat.
+  garminRun(-18, { km: 9.2, min: 55.2, hr: 162 });
+  garminRun(-21, { km: 9.2, min: 55.2, hr: 162 });
   // The recent mean RAW pace is ~6% slower than the prior one — the old read fired here.
-  garminRun(-3, { km: 17.74, min: 104.6, hr: 155 });
+  garminRun(-3, { km: 16.8, min: 99.1, hr: 154 });
   garminRun(-6, { km: 10, min: 66, hr: 140 }); // 6:36/km at 140 bpm
   garminRun(-9, { km: 10, min: 66, hr: 140 });
   const r = read();
@@ -177,7 +177,7 @@ test("the performance channel counts only regressing lifts trained inside the cu
 
 // ── activity shadows ──────────────────────────────────────────────────────────
 test("a hand log shadowing the synced run of the same day is one run, not two", () => {
-  garminRun(0, { km: 9.05, min: 54.5, hr: 163 });
+  garminRun(0, { km: 9.2, min: 55.2, hr: 162 });
   // The athlete's chat note, logged hours after the watch synced — distance only.
   db.prepare(`INSERT INTO activities (date, type, raw_text, distance_km, notes) VALUES (?, 'run', 'morning 9km run', 9, 'morning run')`).run(TODAY);
   // A metric-less note of the same run.
@@ -191,7 +191,7 @@ test("a hand log shadowing the synced run of the same day is one run, not two", 
 
 test("a hand log whose measurements disagree with the synced row stays a real effort", () => {
   const rows = [
-    { id: 1, date: TODAY, type: "run", source: "garmin", external_id: "x", distance_km: 9.05, duration_min: 54.5 },
+    { id: 1, date: TODAY, type: "run", source: "garmin", external_id: "x", distance_km: 9.2, duration_min: 55.2 },
     { id: 2, date: TODAY, type: "run", source: null, external_id: null, distance_km: 5, duration_min: null },
     { id: 3, date: TODAY, type: "ride", source: null, external_id: null, distance_km: null, duration_min: null },
     { id: 4, date: day(-1), type: "run", source: null, external_id: null, distance_km: 9, duration_min: null },

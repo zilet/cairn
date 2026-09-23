@@ -377,7 +377,7 @@ export interface DailyDecisionSignalSupport {
   // between a brake the athlete's own log may answer and a floor it may not.
   soft_brake_only?: true;
   // Every fresh brake is an ADVISORY one (hasFreshDecidingBrake is false) — the run-
-  // intensity caution is the live case: a finding about runs that may inform a lift
+  // intensity caution is the usual case: a finding about runs that may inform a lift
   // day but may not decide it. Omit-when-idle, like soft_brake_only.
   advisory_brake_only?: true;
 }
@@ -800,7 +800,7 @@ export function gatherDailyDecisionSnapshot(
 
   // Once today has work on it, readiness is the MORNING's (withMorningReadiness) — the
   // same summary the Brief's own dayRead builds for itself. Handing dayRead the raw
-  // summary here bypassed that law: a run at 07:00 synced a post-run readiness of 1,
+  // summary here bypassed that law: an early run synced a post-run readiness near zero,
   // and the envelope read it as a rest-grade morning on a day the lifting was still due.
   const recoverySummary = safe(() => withMorningReadiness(getRecoverySummary(14, undefined, d), d), null);
   const supportSlice = compactSignalSupport(d, recoverySummary);

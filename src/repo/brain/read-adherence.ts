@@ -1121,10 +1121,10 @@ const NO_SOFTENING: RestOverrideSoftening = Object.freeze({
 // ---------- THE BODY'S ANSWER IS READ AGAINST THIS ATHLETE, ONCE PER EPISODE ----------
 // (2026-09-23.) The overnight arms used to read two stand-ins: Garmin's `hrv_status`
 // word, and resting HR five beats over the row's own `hr_7d_avg`. The status word is a
-// SEVEN-DAY verdict, so one dip read LOW three mornings running (live: 09-17..09-19)
+// SEVEN-DAY verdict, so one dip read LOW three mornings running
 // and was charged as three separate harms to three different training days; and the
-// 7-day HR column is not even always a resting figure (it read 71-73 bpm against a
-// 54 bpm resting HR on the live record).
+// 7-day HR column is not even always a resting figure (it can read near 70 bpm against
+// a resting HR in the low fifties).
 //
 // So each overnight reading is now judged against the athlete's OWN nights: the
 // readings in the PERSONAL_BAND_DAYS before that morning, needing
@@ -1862,9 +1862,8 @@ export function easyOverrideSoftening(model: ReadAdherenceModel | null, asOf: st
 //
 // ---- a WEIGHT, not a cliff (2026-09-23) ----
 // It shipped as one conjunction — two thirds trained through AND three in four clean
-// AND the newest clean — and missed on its first live morning by a single day (17 × 4
-// = 68 < 69): twenty-three overrides, seventeen of them at no cost, counted exactly as
-// much as none. So the evidence is now a continuous weight:
+// AND the newest clean — and could miss by a single day (14 × 4 = 56 < 57): nineteen
+// overrides, fourteen of them at no cost, counted exactly as much as none. So the evidence is now a continuous weight:
 //
 //     weight = (trained through ÷ (quiet mornings + PRIOR)) × (clean ÷ (trained through + PRIOR))
 //

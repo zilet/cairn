@@ -1014,7 +1014,7 @@ export const RUN_VOLUME_LEARNED_EASE_UNLOCK: readonly string[] = [
   "As the weeks start landing the way they used to, the build widens again.",
 ];
 
-// Does a 7-vs-30-day HRV median delta clear the owner's band? Exported for the pin in
+// Does a 7-vs-30-day HRV median delta clear the pinned 7% band? Exported for the pin in
 // test/brainRebalanceEarnPath.test.js — the band is a product decision, not an
 // implementation detail, and it should be testable without staging a whole week. The
 // week no longer brakes on the median delta itself (recoveryDipRead reads the nights);
@@ -1304,8 +1304,8 @@ export function weeklyRunPlan(
   // A scheduled reset is recovery, not lost ground. When the closed week was the race
   // ramp's own reset week and it was genuinely run as a lighter week, the build picks
   // up from the level the reset PAUSED — the week before it — rather than stepping
-  // ~10% off the reset itself. Stepping off the reset threw a 32.5 km week away: the
-  // week after it asked 29 km and the ladder re-climbed ground already covered. A reset
+  // ~10% off the reset itself. Stepping off the reset threw the paused week away: the
+  // week after it asked ~10% less and the ladder re-climbed ground already covered. A reset
   // run so light it reads as an absence (under RESET_TAKEN_FRACTION of the paused level)
   // keeps the ordinary reactive anchor. Same closed-week family as above: both halves
   // of the paused week are read one week before `volumeAnchor`.
@@ -1865,13 +1865,13 @@ export function weeklyRunPlan(
     longKm = round1(Math.min(longKm, prevLong * (longSuppressed ? 1.1 : SUSTAINABLE_LONG_STEP_FACTOR)));
   }
   // A spike week is not the week to repeat the new longest: the absorb-before-adding
-  // hold held a 17.7 km long run at 17.7 km a week after it was first run. The long
+  // hold held a new longest at that same distance a week after it was first run. The long
   // run sits a clear step under the demonstrated longest there, and comes back to it
   // on the next build. A scheduled down week does the same UNLESS that longest was
   // taken well (`longestRunTakenWell` — harmEvidenceOnDay clears its day): then it is
   // demonstrated capacity, and the reset HOLDS it — never steps under it, never steps
   // past it — and takes its lighter week out of the easy days instead. A reset that
-  // cut a well-absorbed 17.7 km to 14.3 km left the ladder re-climbing to it for weeks.
+  // cut a well-absorbed longest by a fifth left the ladder re-climbing to it for weeks.
   // A recovery DIP takes the spike's step under the longest, well taken or not: the
   // body is saying something this week, so the long run eases with it — by that one
   // bounded step, never by more.
@@ -1918,8 +1918,8 @@ export function weeklyRunPlan(
   // long run takes the larger dose and the easy run(s) the remainder.
   //
   // Not in a race taper, though: there the long run is the race curve's taper long run
-  // on purpose, and growing it back to absorb the remainder undid the taper (a 13.4 km
-  // "long run" the week before race week, over the ladder's 9.8). The easy runs come
+  // on purpose, and growing it back to absorb the remainder undid the taper (a "long
+  // run" the week before race week well over the ladder's taper long run). The easy runs come
   // down to meet it instead, and what they cannot carry stays off the card.
   if (easyCount > 0 && longKm < easyEach && rampTaperLong != null) {
     easyEach = longKm;
@@ -1937,7 +1937,7 @@ export function weeklyRunPlan(
   // The one exception is a lone easy run on a week that DOES carry a quality session
   // (the three-run easy + quality + long week). There it is not recovery; it is the
   // aerobic volume day, and pinning it at 7 km left such a week unable to hold what
-  // the build asked: a 35 km week prescribed 31 and the rest was simply dropped. Its
+  // the build asked: a 38 km week prescribed 34 and the rest was simply dropped. Its
   // cap scales with the week and with the longest mid-week run already run, one step
   // at a time (`easyRunCapKm`, the same numbers the race ladder projects with). Its
   // intensity is untouched — still easy, still Z2.

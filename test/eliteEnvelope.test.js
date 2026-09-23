@@ -274,7 +274,7 @@ test("gather: a run on a stated lifting weekday stamps lift_day_open and a post-
   repo.setProfile({ strength_schedule: { days: [{ dow }] } });
   db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'run', 30, 5)`).run(DATE);
   // The watch's LAST sync after the run: a rest-grade number that says what the run cost.
-  repo.upsertGarminDailyMetric({ date: DATE, training_readiness: 1, hrv: 55 });
+  repo.upsertGarminDailyMetric({ date: DATE, training_readiness: 1, hrv: 52 });
   const snap = gatherDailyDecisionSnapshot(DATE);
   assert.equal(snap.lift_day_open?.after, "run");
   assert.notEqual(snap.lift_day_open?.rest_grade, true);
@@ -287,25 +287,25 @@ test("gather: a run on a stated lifting weekday stamps lift_day_open and a post-
 test("gather: two of the last three exposures at the top of the range with reps in reserve earn the floor", () => {
   repo.upsertExercise({ name: "Barbell Deadlift", muscle_group: "hamstrings", mode: "reps" });
   repo.savePlanDay(1, "Lower B", "Hinge", [
-    { exercise: "Barbell Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 205 },
+    { exercise: "Barbell Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 195 },
   ]);
   for (const [daysBack, rir] of [
-    [14, 4],
-    [9, 3],
-    [2, 2],
+    [14, 3],
+    [9, 2],
+    [2, 3],
   ]) {
     const date = addDaysISO(DATE, -daysBack);
-    repo.logSetByName({ date, exercise: "Barbell Deadlift", weight: 205, reps: 10, rir });
-    repo.logSetByName({ date, exercise: "Barbell Deadlift", weight: 205, reps: 10, rir });
+    repo.logSetByName({ date, exercise: "Barbell Deadlift", weight: 195, reps: 10, rir });
+    repo.logSetByName({ date, exercise: "Barbell Deadlift", weight: 195, reps: 10, rir });
   }
   const snap = gatherDailyDecisionSnapshot(DATE);
   const deadlift = snap.progression.find((p) => p.exercise === "Barbell Deadlift");
-  assert.deepEqual(deadlift?.earned, { working_weight: 205 });
+  assert.deepEqual(deadlift?.earned, { working_weight: 195 });
 });
 
 test("an earned lift keeps its step past a shallow hold and composes at or above its logged load", () => {
   repo.upsertExercise({ name: "Barbell Deadlift", muscle_group: "hamstrings", mode: "reps" });
-  repo.logSetByName({ date: "2031-07-10", exercise: "Barbell Deadlift", weight: 205, reps: 10 });
+  repo.logSetByName({ date: "2031-07-10", exercise: "Barbell Deadlift", weight: 195, reps: 10 });
   const target = (w) => ({ mode: "reps", sets: 3, rep_low: 6, rep_high: 8, target_weight: w, target_seconds: null });
   const base = {
     muscle_load: [{ group: "hamstrings", days_ago: 1, saturated: true, source: "endurance" }],
@@ -317,10 +317,10 @@ test("an earned lift keeps its step past a shallow hold and composes at or above
   ];
   const plain = buildDailySessionDecision(snapshot({ ...base, progression: prog() }), { now: NOW });
   assert.equal(plain.candidates[0].earned_floor, undefined);
-  const earned = buildDailySessionDecision(snapshot({ ...base, progression: prog({ earned: { working_weight: 205 } }) }), {
+  const earned = buildDailySessionDecision(snapshot({ ...base, progression: prog({ earned: { working_weight: 195 } }) }), {
     now: NOW,
   });
-  assert.equal(earned.candidates[0].earned_floor, 205);
+  assert.equal(earned.candidates[0].earned_floor, 195);
   const raw = {
     name: "Lower B",
     focus: "Hinge",
@@ -328,25 +328,25 @@ test("an earned lift keeps its step past a shallow hold and composes at or above
     est_minutes: 50,
     items: [{ exercise: "Barbell Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 165 }],
   };
-  assert.equal(normalizeComposedSession(raw, earned).session.items[0].target_weight, 205);
+  assert.equal(normalizeComposedSession(raw, earned).session.items[0].target_weight, 195);
 
   // An overload step on an earned lift is not converted to a hold by the shallow residual.
   const stepping = buildDailySessionDecision(
     snapshot({
       ...base,
-      progression: prog({ action: "overload", suggested_target: target(215), earned: { working_weight: 205 } }),
+      progression: prog({ action: "overload", suggested_target: target(205), earned: { working_weight: 195 } }),
     }),
     { now: NOW }
   );
   assert.equal(stepping.candidates[0].action, "overload");
-  assert.equal(stepping.candidates[0].authorized_target.target_weight, 215);
+  assert.equal(stepping.candidates[0].authorized_target.target_weight, 205);
 
   // A genuinely eased day keeps its easing: no floor on an easy cap.
   const easyDay = buildDailySessionDecision(
-    snapshot({ ...base, day_read: { ...snapshot().day_read, kind: "easy" }, progression: prog({ earned: { working_weight: 205 } }) }),
+    snapshot({ ...base, day_read: { ...snapshot().day_read, kind: "easy" }, progression: prog({ earned: { working_weight: 195 } }) }),
     { now: NOW }
   );
-  assert.ok(normalizeComposedSession(raw, easyDay).session.items[0].target_weight < 205);
+  assert.ok(normalizeComposedSession(raw, easyDay).session.items[0].target_weight < 195);
 });
 
 // ---------- review fixes (2026-09-23) ----------
@@ -404,9 +404,9 @@ test("a group loaded THIS morning holds whatever the lift has earned, and carrie
           muscle_group: null,
           action: "overload",
           why: "",
-          current_target: target(205),
-          suggested_target: target(210),
-          earned: { working_weight: 205 },
+          current_target: target(195),
+          suggested_target: target(200),
+          earned: { working_weight: 195 },
         },
       ],
       stated_rhythm: CLEAN_RHYTHM,

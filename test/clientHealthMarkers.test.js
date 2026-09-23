@@ -293,27 +293,27 @@ test("a wearable marker's weekly status note renders as plain words, never a raw
   const weekly = markers.hmkRowHtml({
     name: "HRV",
     unit: "ms",
-    latest: { value: 34, date: "2026-09-20", flag: null },
-    optimal: { low: 43, high: 53, dir: "low" },
+    latest: { value: 33, date: "2031-09-21", flag: null },
+    optimal: { low: 44, high: 54, dir: "low" },
     in_optimal: true, // AFTER the fix: the week's mean earns the status, not this one night
     status_basis: "week",
     status_note: "this week's average (7 nights)",
-    points: [{ value: 48, date: "2026-09-13" }, { value: 34, date: "2026-09-20" }],
+    points: [{ value: 48, date: "2031-09-14" }, { value: 33, date: "2031-09-21" }],
   }, 0);
   assert.match(weekly, /this week's average \(7 nights\)/, "the row states plainly what the status is judged against");
-  assert.match(weekly, /34/, "the single latest night still shows as the reading");
+  assert.match(weekly, /33/, "the single latest night still shows as the reading");
 
   // A single-night wearable reading (too few nights this week) carries no note and no
   // status colour — 'mute', never a guessed green/amber/red off one night.
   const single = markers.hmkRowHtml({
     name: "HRV",
     unit: "ms",
-    latest: { value: 30, date: "2026-09-20", flag: null },
-    optimal: { low: 43, high: 53, dir: "low" },
+    latest: { value: 30, date: "2031-09-21", flag: null },
+    optimal: { low: 44, high: 54, dir: "low" },
     in_optimal: null,
     status_basis: "single",
     status_note: null,
-    points: [{ value: 30, date: "2026-09-20" }],
+    points: [{ value: 30, date: "2031-09-21" }],
   }, 0);
   assert.doesNotMatch(single, /this week's average/);
   assert.match(single, /hdot-mute/, "no status is drawn from a single night");

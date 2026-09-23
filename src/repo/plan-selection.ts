@@ -250,7 +250,7 @@ function strengthDaysDoneThisWeek(date: string, anchors: readonly SessionAnchor[
 
 // ---- one genuinely loaded lower-body exposure a week (owner ruling, 2026-09-23) ----
 // The race build's own strength law is "heavy lower once a week" (race-build.ts
-// STRENGTH_HINT). A hybrid week that lifts Mon–Fri and runs Tue/Thu/weekend lands every
+// STRENGTH_HINT). A hybrid week that lifts most weekdays and runs between them can land every
 // lower day the morning after a run, and each of those mornings, read alone, had a
 // reason to lighten or move the legs — so the week as a whole could pass with no full
 // leg session at all. These reads let the selector and the envelope ask the WEEK'S
@@ -362,8 +362,8 @@ export function fullLoadLowerSessionThisWeek(date: string): string | null {
       const required = Math.min(LOWER_FULL_SETS_MAX, plannedSets.get(entry.exercise.toLowerCase()) ?? LOWER_FULL_SETS_MAX);
       if (working < required) return false;
       // Full load is "did the work the card asked for, or more": the day's own prescription
-      // counts as well as the logged working weight — a 192.5 × 8–10 card completed in full
-      // is a full lower session even when an old 205 × 5 top set sets the working weight.
+      // counts as well as the logged working weight — a 182.5 × 8–10 card completed in full
+      // is a full lower session even when an old 195 × 5 top set sets the working weight.
       const prescribed = prescribedTargetOn(entry.date, entry.exercise);
       if (prescribed != null && prescribed > 0 && loadAtOrAbove(top, prescribed)) return true;
       const reference = recentWorkingWeight(entry.exercise, 3, entry.date);
@@ -1156,9 +1156,9 @@ export function selectAdaptivePlanDay(date: string): AdaptivePlanDayPick | null 
   // ---- week coverage: a day already trained this week is not an alternative ----
   // With a lifting week in play the week is the unit the athlete programmed. While a
   // strength day is still untrained this week, a day they ALREADY did cannot stand in
-  // for today's — the scorer only ever saw the last session, so Monday's Push read as
-  // "not just trained" on Wednesday and replaced Lower A, leaving a week of two Push
-  // days and no legs. Once every strength day has had its turn, repeats are fair game
+  // for today's — the scorer only ever saw the last session, so an upper day trained two
+  // days earlier read as "not just trained" and replaced the lower day, leaving a week of
+  // two upper days and no legs. Once every strength day has had its turn, repeats are fair game
   // again (a short pool over five lifting days is SUPPOSED to repeat).
   const doneThisWeek = scheduled ? strengthDaysDoneThisWeek(date, anchors) : new Set<number>();
   const weekStillOpen = scorable.some((day) => !doneThisWeek.has(day.day_number));

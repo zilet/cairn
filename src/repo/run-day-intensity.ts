@@ -263,7 +263,7 @@ function lastNightOwnBand(
 // RECOVERY_DIP_MIN_NIGHTS readings inside the last RECOVERY_DIP_WINDOW_DAYS all sit past
 // the athlete's OWN line — the same line one morning's floor uses (their baseline less
 // one of their own standard deviations, never narrower than recoveryTrendBars; for HRV
-// never narrower than the owner's 7% band either). Consecutive READINGS, not calendar
+// never narrower than the pinned 7% band either). Consecutive READINGS, not calendar
 // days: a night that never synced is simply not in the list, so it can neither start a
 // dip (it is not low) nor end one (it is not usual). The newest of them must still be
 // current (SENSOR_MAX_AGE_DAYS) — a stale reading behaves as absent. Too few readings,
@@ -273,7 +273,7 @@ function lastNightOwnBand(
 // open a caution); sleep is self-verifying and reads the wake-dated nights directly.
 export const RECOVERY_DIP_WINDOW_DAYS = WEARABLE_TREND_WINDOW_DAYS;
 export const RECOVERY_DIP_MIN_NIGHTS = WEARABLE_TREND_MIN_NIGHTS;
-// The owner's 7% HRV band (2026-08-17, `hrvReadsDown` in run-progression.ts reads the
+// The 7% HRV band (owner ruling, 2026-08-17; `hrvReadsDown` in run-progression.ts reads the
 // same number): the per-night line never sits closer to the baseline than this.
 export const HRV_DIP_MIN_RELATIVE_DROP = 0.07;
 

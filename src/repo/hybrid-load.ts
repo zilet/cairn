@@ -353,7 +353,7 @@ export const SATURATED_CEILING = 2.0;
 // MOVE rather than be held. Just over the bar is the athlete's ordinary hybrid week
 // with one more session on it: the day's lifts stay and hold load (composition's
 // `muscle_saturated` hold already does that). Only a deep residual swaps a plan day
-// or re-points a slot to another area — otherwise a 0.04 margin on a quad residual
+// or re-points a slot to another area — otherwise a hair's margin on a quad residual
 // turned a whole week's lower days into repeats of the upper ones.
 export const DEEP_SATURATION_MULTIPLE = 1.25;
 

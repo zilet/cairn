@@ -138,7 +138,7 @@ test("C5: a long-tenure STEADY lift reaches the 'introduce' action with same-pat
 // A swap that mints a new row on a bodyweight ladder keeps the lift's history; an
 // assist the log no longer needs comes off; a handicapped day that still cleared
 // full load counts toward the step; a lighter capped session never steps past the
-// card. Offline fixtures shaped like the live log.
+// card. Synthetic offline fixtures.
 function logSession(name, daysAgo, sets) {
   sets.forEach(([weight, reps, rir], i) =>
     logSet(name, isoDaysAgo(daysAgo), { weight, reps, rir: rir ?? null, setNum: i + 1 })
@@ -150,7 +150,7 @@ function clearOutcomes() {
   db.prepare(`DELETE FROM daily_session_compositions`).run();
 }
 
-function linkHandicappedDose(name, daysAgo, { reasons, top, relevantSymptom = false, reference = 205 }) {
+function linkHandicappedDose(name, daysAgo, { reasons, top, relevantSymptom = false, reference = 195 }) {
   const date = isoDaysAgo(daysAgo);
   const ex = repo.findExercise(name);
   const session = repo.getOrCreateSession(date, null);
@@ -198,10 +198,10 @@ test("a swap onto a new bodyweight-ladder row keeps the lift's history — statu
   makeExercise("Neutral-Grip Pull-Up", { muscle_group: "back" });
   makeExercise("Wide-Grip Pull-Up", { muscle_group: "back" });
   makeExercise("Lat Pulldown", { muscle_group: "back" });
-  for (const [d, w] of [[60, -35], [53, -30], [46, -30], [39, -25], [32, -25]]) logSession("Assisted Pull-Up", d, [[w, 10], [w, 10]]);
-  for (const d of [26, 19, 12]) logSession("Neutral-Grip Pull-Up", d, [[null, 10, 2], [null, 10, 2], [null, 9, 1]]);
-  // The live shape: bodyweight working sets with an assisted finisher on the last day.
-  logSession("Neutral-Grip Pull-Up", 5, [[null, 8, 1], [null, 8, 0], [-10, 10, 0]]);
+  for (const [d, w] of [[60, -40], [53, -35], [46, -35], [39, -30], [32, -30]]) logSession("Assisted Pull-Up", d, [[w, 10], [w, 10]]);
+  for (const d of [26, 19, 12]) logSession("Neutral-Grip Pull-Up", d, [[null, 9, 2], [null, 9, 2], [null, 8, 1]]);
+  // The shape: bodyweight working sets with an assisted finisher on the last day.
+  logSession("Neutral-Grip Pull-Up", 5, [[null, 7, 1], [null, 7, 0], [-15, 9, 0]]);
   // A variant trained ALONGSIDE the new row is its own series, not a predecessor.
   logSession("Wide-Grip Pull-Up", 40, [[null, 6]]);
   logSession("Wide-Grip Pull-Up", 3, [[null, 7]]);
@@ -231,10 +231,10 @@ test("bodyweight sets at the top of the range retire the assist — never more h
   repo.setProfile({ weight_lb: 160 });
   makeExercise("Neutral-Grip Pull-Up", { muscle_group: "back" });
   planWith(2, { exercise: "Neutral-Grip Pull-Up", sets: 3, rep_low: 6, rep_high: 8, target_weight: -10, focus: "Pull" });
-  logSession("Neutral-Grip Pull-Up", 12, [[null, 10, 2], [null, 10, 2], [null, 10, 0], [null, 6, 0]]);
-  logSession("Neutral-Grip Pull-Up", 5, [[null, 10, 2], [null, 10, 0], [null, 10, 0]]);
+  logSession("Neutral-Grip Pull-Up", 12, [[null, 9, 2], [null, 9, 2], [null, 9, 0], [null, 6, 0]]);
+  logSession("Neutral-Grip Pull-Up", 5, [[null, 9, 2], [null, 9, 0], [null, 9, 0]]);
   // The latest session's assisted finisher is a back-off, not the working rung.
-  logSession("Neutral-Grip Pull-Up", 1, [[null, 8, 1], [null, 8, 0], [-10, 10, 0]]);
+  logSession("Neutral-Grip Pull-Up", 1, [[null, 8, 1], [null, 8, 0], [-15, 9, 0]]);
 
   const p = nextPrescription("Neutral-Grip Pull-Up", undefined, { autoreg: null, acute: null });
   assert.equal(p.suggested.weight, null, "bodyweight, not the plan's 10 lb assist");
@@ -261,26 +261,26 @@ test("one unassisted day is a good day, not the rung — the assist stays until 
 
 test("a handicapped day that cleared full load counts toward the step; a light or symptomatic one does not", () => {
   makeExercise("Barbell Deadlift", { muscle_group: "hamstrings" });
-  planWith(5, { exercise: "Barbell Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 205, focus: "Lower B" });
-  logSession("Barbell Deadlift", 20, [[205, 10, 3], [205, 10, 3]]);
-  logSession("Barbell Deadlift", 6, [[185, 10, 5], [205, 10, 2], [205, 10, 2]]);
-  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance"], top: 205 });
+  planWith(5, { exercise: "Barbell Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 195, focus: "Lower B" });
+  logSession("Barbell Deadlift", 20, [[195, 10, 3], [195, 10, 3]]);
+  logSession("Barbell Deadlift", 6, [[175, 10, 5], [195, 10, 2], [195, 10, 2]]);
+  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance"], top: 195 });
 
   const earned = nextPrescription("Barbell Deadlift", undefined, { autoreg: null, acute: null });
   assert.equal(earned.dose_eligibility.reason, "full_load_through_confound");
-  assert.equal(earned.action, "overload", "205 × 10 at RIR 2 after the run is a lower bound, not noise");
-  assert.ok(earned.suggested.weight > 205 && earned.suggested.weight <= 210, `a small step, got ${earned.suggested.weight}`);
+  assert.equal(earned.action, "overload", "195 × 10 at RIR 2 after the run is a lower bound, not noise");
+  assert.ok(earned.suggested.weight > 195 && earned.suggested.weight <= 200, `a small step, got ${earned.suggested.weight}`);
 
   // A movement-relevant symptom keeps full authority.
   clearOutcomes();
-  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance"], top: 205, relevantSymptom: true });
+  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance"], top: 195, relevantSymptom: true });
   const symptom = nextPrescription("Barbell Deadlift", undefined, { autoreg: null, acute: null });
   assert.equal(symptom.dose_eligibility.reason, "non_comparable");
-  assert.equal(symptom.suggested.weight, 205);
+  assert.equal(symptom.suggested.weight, 195);
 
   // Illness is not a handicap this rule forgives.
   clearOutcomes();
-  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance", "illness"], top: 205 });
+  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance", "illness"], top: 195 });
   assert.equal(
     nextPrescription("Barbell Deadlift", undefined, { autoreg: null, acute: null }).dose_eligibility.reason,
     "non_comparable"
@@ -288,7 +288,7 @@ test("a handicapped day that cleared full load counts toward the step; a light o
 
   // Under the lift's own recent working weight, the confound still explains it.
   clearOutcomes();
-  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance"], top: 205, reference: 215 });
+  linkHandicappedDose("Barbell Deadlift", 6, { reasons: ["loaded_endurance"], top: 195, reference: 205 });
   assert.equal(
     nextPrescription("Barbell Deadlift", undefined, { autoreg: null, acute: null }).dose_eligibility.reason,
     "non_comparable"
@@ -297,19 +297,19 @@ test("a handicapped day that cleared full load counts toward the step; a light o
 
 test("a range capped at a lighter load than the card proves the lighter load — no step past the card", () => {
   makeExercise("Pendlay Row", { muscle_group: "back" });
-  planWith(2, { exercise: "Pendlay Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 150, focus: "Pull" });
-  logSession("Pendlay Row", 20, [[145, 10, 2], [145, 10, 2], [145, 10, 2]]);
-  logSession("Pendlay Row", 13, [[145, 10, 2], [145, 10, 2], [145, 10, 2]]);
-  logSession("Pendlay Row", 1, [[135, 10, 2], [135, 10, 2], [135, 10, 2]]);
+  planWith(2, { exercise: "Pendlay Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 140, focus: "Pull" });
+  logSession("Pendlay Row", 20, [[135, 10, 2], [135, 10, 2], [135, 10, 2]]);
+  logSession("Pendlay Row", 13, [[135, 10, 2], [135, 10, 2], [135, 10, 2]]);
+  logSession("Pendlay Row", 1, [[125, 10, 2], [125, 10, 2], [125, 10, 2]]);
   const p = nextPrescription("Pendlay Row", undefined, { autoreg: null, acute: null });
-  assert.equal(p.suggested.weight, 150, "150 is the next load to own — 155 is a number nothing logged has touched");
+  assert.equal(p.suggested.weight, 140, "140 is the next load to own — 145 is a number nothing logged has touched");
   assert.equal(p.action, "hold");
 
   // The same capped session AT the card's load still earns the step.
   db.prepare(`DELETE FROM logged_sets`).run();
-  logSession("Pendlay Row", 13, [[150, 10, 2], [150, 10, 2], [150, 10, 2]]);
-  logSession("Pendlay Row", 1, [[150, 10, 2], [150, 10, 2], [150, 10, 2]]);
+  logSession("Pendlay Row", 13, [[140, 10, 2], [140, 10, 2], [140, 10, 2]]);
+  logSession("Pendlay Row", 1, [[140, 10, 2], [140, 10, 2], [140, 10, 2]]);
   const stepped = nextPrescription("Pendlay Row", undefined, { autoreg: null, acute: null });
   assert.equal(stepped.action, "overload");
-  assert.ok(stepped.suggested.weight > 150);
+  assert.ok(stepped.suggested.weight > 140);
 });
