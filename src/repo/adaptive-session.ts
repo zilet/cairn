@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { truncateAtWord } from "../brain/contract-utils.js";
 import { normalizePrescriptionItem, SESSION_PRESCRIPTION_LIMITS } from "../contracts/session-prescription.js";
+import { validSupersetGroup } from "./composition-pairing.js";
 import { deterministicComposedSession, normalizeComposedSession } from "./daily-composition.js";
 import {
   decideDailySession,
@@ -729,7 +730,9 @@ function normalizeItem(
     target_duration_min: null,
     target_zone: null,
     interval: null,
-    superset_group: boundedNumber(item.superset_group, 1, 50, true),
+    // A group id is an identity, not a magnitude: clamping one onto the range would fold
+    // two out-of-range groups into one superset, so an id the card cannot hold is none.
+    superset_group: validSupersetGroup(item.superset_group),
     ...(topSet ? { top_set: topSet } : {}),
     load_basis: itemLoadBasis(exercise, targetWeight),
     ...trustedMetadata,

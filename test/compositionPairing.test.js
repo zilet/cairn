@@ -562,3 +562,86 @@ test("a behind group never displaces the day's anchor, even when the anchor is p
   assert.equal(out[0].superset_group, out[1].superset_group);
   assert.equal(out[2].superset_group, out[3].superset_group);
 });
+
+test("a stored group outside 1..50, or a group of one, is no grouping — it never merges or collides downstream", () => {
+  const row = (position, exercise, superset_group, extra = {}) => ({
+    position,
+    kind: "strength",
+    exercise,
+    sets: 3,
+    rep_low: 10,
+    rep_high: 12,
+    superset_group,
+    note: null,
+    ...extra,
+  });
+  const items = [
+    // Two plan-saved groups past the payload's 1..50 range: clamped later, they would
+    // both land on group 50 and read as one four-item superset.
+    row(0, "Chest Dips", 51),
+    row(1, "Farmer's Carry", 51, { mode: "timed", target_seconds: 40 }),
+    row(2, "Standing Calf Raise", 60),
+    row(3, "Pallof Press", 60),
+    // A group 0 would clamp to 1 and collide with the first new pair.
+    row(4, "Hip Thrust", 0),
+    row(5, "Hanging Leg Raise", 0),
+    // A group of one pairs with nothing.
+    row(6, "Cable Lateral Raise", 7),
+    row(7, "Dumbbell Bench Press", null, { rep_low: 8, rep_high: 10 }),
+    row(8, "Chest-Supported Row", null, { rep_low: 8, rep_high: 10 }),
+  ];
+  const { items: out } = pairForSession(items, { envelope: envelope(), date: DATE, planSnapshot: false });
+  const group = (name) => out.find((i) => i.exercise === name).superset_group;
+  for (const name of [
+    "Chest Dips",
+    "Farmer's Carry",
+    "Standing Calf Raise",
+    "Pallof Press",
+    "Hip Thrust",
+    "Hanging Leg Raise",
+    "Cable Lateral Raise",
+  ]) {
+    assert.equal(group(name), null, `${name} carries no grouping`);
+  }
+  assert.equal(group("Dumbbell Bench Press"), 1, "the new pair takes the lowest id in range");
+  assert.equal(group("Chest-Supported Row"), 1);
+  for (const item of out) {
+    const g = item.superset_group;
+    assert.ok(g == null || (Number.isInteger(g) && g >= 1 && g <= 50), `${item.exercise}: ${g}`);
+  }
+  // The athlete's own snapshotted day is cleaned the same way: nothing is paired, but an
+  // out-of-range or lone group never survives onto the card.
+  const snap = pairForSession(
+    [row(0, "Chest Dips", 51), row(1, "Rope Pushdown", 51), row(2, "Barbell Curl", 3), row(3, "Hammer Curl", 3)],
+    { envelope: envelope(), date: DATE, planSnapshot: true }
+  ).items;
+  assert.deepEqual(
+    snap.map((i) => i.superset_group),
+    [null, null, 3, 3],
+    "an in-range pair the athlete saved stands; the out-of-range one is cleared"
+  );
+});
+
+test("plan-saved groups past the range reach the card as no grouping", () => {
+  seed([
+    ["Leg Extension", "quads"],
+    ["Lying Leg Curl", "hamstrings"],
+    ["Standing Calf Raise", "calves"],
+    ["Pallof Press", "core"],
+  ]);
+  repo.savePlanDay(1, "Lower", "Legs", [
+    { exercise: "Leg Extension", sets: 3, rep_low: 10, rep_high: 12, target_weight: 135, superset_group: 51 },
+    { exercise: "Lying Leg Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 120, superset_group: 51 },
+    { exercise: "Standing Calf Raise", sets: 3, rep_low: 10, rep_high: 15, target_weight: 90, superset_group: 60 },
+    { exercise: "Pallof Press", sets: 3, rep_low: 10, rep_high: 12, target_weight: 45, superset_group: 60 },
+  ]);
+  settlePlanPrescriptions();
+  const session = deterministicComposedSession(lowerEnvelope());
+  const groups = session.items.map((i) => i.superset_group);
+  for (const g of groups) assert.ok(g == null || (g >= 1 && g <= 50), JSON.stringify(groups));
+  assert.equal(byName(session, "Standing Calf Raise").superset_group, null);
+  assert.equal(byName(session, "Pallof Press").superset_group, null);
+  // The knee extension and flexion re-pair on their own, inside the range.
+  assert.equal(byName(session, "Leg Extension").superset_group, byName(session, "Lying Leg Curl").superset_group);
+  assert.equal(byName(session, "Leg Extension").superset_group, 1);
+});

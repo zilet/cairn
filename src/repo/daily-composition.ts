@@ -21,7 +21,7 @@ import {
 import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
 import { classifyPattern } from "./exercise-variations.js";
-import { collapseRegionDuplicates, pairForSession } from "./composition-pairing.js";
+import { collapseRegionDuplicates, pairForSession, validSupersetGroup } from "./composition-pairing.js";
 import { applyWeeklyDose } from "./composition-dose.js";
 import { weeklyDoseSoftLine } from "./weekly-dose-ledger.js";
 import { nextLoadStep } from "./progression.js";
@@ -1619,8 +1619,10 @@ function planItemToRaw(it: any): Record<string, unknown> {
     warmup_sets: it.warmup_sets ?? null,
     note: it.note ?? null,
     // A pairing the athlete (or an applied plan) saved on the day rides onto the card;
-    // pairForSession leaves an existing group alone and clears one left alone.
-    superset_group: it.superset_group ?? null,
+    // pairForSession leaves an existing group alone and clears one left alone. A group
+    // the card cannot hold (outside 1..50) is no grouping: clamped later, two such groups
+    // would merge into one, and a 0 would collide with the first new pair.
+    superset_group: validSupersetGroup(it.superset_group),
     brain_decision_id: it.brain_decision_id ?? null,
     brain_change_summary: it.brain_change_summary ?? null,
     brain_change_reason: it.brain_change_reason ?? null,

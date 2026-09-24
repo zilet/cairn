@@ -1028,7 +1028,10 @@ whatever the card already says — the existing note is never truncated to make 
 `CARD_NOTE_BUDGET` = 220 chars, the length past which the Today card stops printing a note at all) and the lowest `superset_group` id not already on the card.
 `dropOrphanSupersets` runs on EVERY card, `planSnapshot` included: a plan-saved pairing left with one
 member after today's clamps (an exclusion, a region collapse) is cleared in place rather than saying it
-is paired with nothing. A pairing never sets `changed`/`capped` — the caller re-numbers positions and
+is paired with nothing, and so is a group the card cannot hold (`validSupersetGroup`: a whole number in
+`SUPERSET_GROUP_MIN..MAX` = 1..50). A group id is an identity, never clamped: `planItemToRaw` and the
+session payload (`normalizeSessionPayload`) read it through the same helper, so two out-of-range groups
+can no longer fold into one superset at 50, nor a 0 collide with the first new pair at 1. A pairing never sets `changed`/`capped` — the caller re-numbers positions and
 tracks the reseat separately — and `planItemToRaw` now carries `superset_group` through so a plan-saved
 pairing reaches the card; a stand-in substitution clears it (a substitute is not the movement its slot
 was paired for).

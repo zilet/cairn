@@ -341,10 +341,31 @@ function placePairingNote(lead: any, follow: any, date: string): void {
   }
 }
 
-// A plan-saved pairing reaches the card with its `superset_group`; when today's clamps
-// left only one member of it on the card (an exclusion, a region collapse), the lone
-// item is no longer paired with anything and must not say it is. Cleared in place.
+// The range a card's `superset_group` may hold — the session payload clamps into it
+// (adaptive-session.ts `normalizeSessionPayload`), so a group outside it would be
+// clamped onto another: two plan-saved groups past 50 land on one group of four, and a
+// group 0 lands on 1 beside the first new pair.
+export const SUPERSET_GROUP_MIN = 1;
+export const SUPERSET_GROUP_MAX = 50;
+
+/** A stored `superset_group` the card can carry as it is, or null (no grouping). */
+export function validSupersetGroup(value: unknown): number | null {
+  if (value == null) return null;
+  const group = finite(value);
+  return group != null && Number.isInteger(group) && group >= SUPERSET_GROUP_MIN && group <= SUPERSET_GROUP_MAX
+    ? group
+    : null;
+}
+
+// A plan-saved pairing reaches the card with its `superset_group`. One the payload
+// cannot hold as it is (outside SUPERSET_GROUP_MIN..MAX, or not a whole number) is no
+// grouping at all, and it is cleared before any new pair is numbered; when today's
+// clamps left only one member of a group on the card (an exclusion, a region collapse),
+// the lone item is no longer paired with anything and must not say it is. Cleared in place.
 function dropOrphanSupersets(items: any[]): void {
+  for (const item of items) {
+    if (item?.superset_group != null && validSupersetGroup(item.superset_group) == null) item.superset_group = null;
+  }
   const counts = new Map<number, number>();
   for (const item of items) {
     const group = finite(item?.superset_group);
@@ -411,9 +432,11 @@ export function pairForSession(items: any[], ctx: PairingContext): PairingResult
   const used = new Set<number>(
     items.map((item) => finite(item?.superset_group)).filter((value): value is number => value != null)
   );
-  let groupId = 1;
+  let groupId = SUPERSET_GROUP_MIN;
   for (const [lead, follow] of pairs) {
     while (used.has(groupId)) groupId++;
+    // Past the range there is no id left to give: the pair is left unseated.
+    if (groupId > SUPERSET_GROUP_MAX) break;
     used.add(groupId);
     lead.item.superset_group = groupId;
     follow.item.superset_group = groupId;
