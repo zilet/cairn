@@ -47,7 +47,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       exercise: z.string(),
       weight: z.number().optional(),
       reps: z.number().int().optional(),
-      rir: z.number().optional().describe("reps in reserve"),
+      rir: z.number().optional().describe("reps in reserve, 0-10; a value outside that range is not stored (the set still is)"),
       duration_sec: z.number().optional().describe("seconds held/hung, for timed exercises"),
       exercise_mode: z
         .enum(["reps", "timed"])
@@ -168,7 +168,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       id: z.number().int().describe("the logged set's id, from get_session, recent_sessions, or get_session_detail"),
       weight: z.number().nullable().optional().describe("pounds; negative for assisted work, null for bodyweight; stored verbatim"),
       reps: z.number().int().nullable().optional().describe("reps completed; omit to leave unchanged, pass null to clear"),
-      rir: z.number().nullable().optional().describe("reps in reserve; omit to leave unchanged, pass null to clear"),
+      rir: z.number().nullable().optional().describe("reps in reserve, 0-10 (outside that range clears it); omit to leave unchanged, pass null to clear"),
       note: z.string().nullable().optional().describe("per-set note; omit to leave unchanged, pass null to clear"),
       duration_sec: z
         .number()

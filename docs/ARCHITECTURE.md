@@ -803,6 +803,16 @@ must never tell an athlete who has never logged RIR to come back at "RIR 2+" —
 picks the RIR-flavored phrasing only when an RIR was actually logged for that exposure; an athlete who
 never rates gets the identical meaning spoken in reps instead.
 
+**RIR is accepted 0–10, and read only in range.** `logSetByName`/`updateSet` (`sessions.ts`) store
+an out-of-range RIR as absent (the set itself is kept, `rir_ignored:true` on the log result), and
+progression and `setEffortWeight` read one through `plausibleRir` (`src/lib/numbers.ts`) — a 20 typed
+into the RIR field is not "very easy", it is a number from somewhere else. The same mistake on a
+**carry or hold kept in reps mode** (seconds typed as reps) is caught in `nextPrescription`: logged
+"reps" above 25 on a `holdLikeMovement` hold with `CARRY_LOGGED_AS_REPS_HOLD` ("log it as a timed
+carry") and never step or add sets. A NEW carry/hold is created timed by `findOrCreateExercise`'s
+`detectExerciseMode` default; an explicit `mode` (the plan-change ADD path passes `"reps"` for a
+change with no `target_seconds`) still wins.
+
 **Three evidence seams the strength-progression decision reads, none of them gates.**
 `estimateConfidenceFor(exercise, date)` (`calibration.ts`) reruns the SAME anchored/aging/never
 freshness ladder the calibration card's athlete-facing word runs on, so a lift the card calls
@@ -2896,6 +2906,22 @@ since the arithmetic is gone from the prompt, the site carries only what the jud
 the whole training/endurance/fuel key set and `recent_sessions`, since the pass re-judges no
 programming and re-derives no target.
 
+**Plan drafts go through the same pass** (`verifyPlanDraftVolume`, `src/coachOps/training.ts`, for
+`draftCoachProposal` and `evolveProgram` — so every redraw). `planDraftFloorPrecheck` measures the
+week the draft would leave behind (`draftPlanWeek` applies a `changes[]` draft to a copy of the plan)
+(with apply's own one-step set-reduction clamp, `clampSetReductionStep`, and a swap re-resolving the
+new movement's group) against `weeklySetTargets`: a priority group the draft takes under its low landmark is a
+`plan_group_below_volume_floor` breach, GRANDFATHERED against the current plan — a group already
+under stays legal unless the draft takes it lower still, and a first week (nothing current) is never
+measured. A recovery-week draft is exempt, as is every light week above and any request whose
+athlete-authored words ask for less (`athleteAskedForLess` — lighter, fewer sets/days, travel, short
+on time; deliberately generous, and never read off a system instruction). There is no
+judgement-only check, so a clean draft costs no turn; a breach runs the `plan_verify` repair (its own
+`PROMPT_CONTEXT_SITES` entry, handed the athlete's own words). A breach still `unresolved` is
+stamped on the stored draft (`volume_floor_unresolved`) and the draft is routed with
+`clamp_refused` — never for a reduction the athlete asked for — so it waits for their yes; the hold's
+reason and `user_explanation` name the groups it would leave under their floor.
+
 ---
 
 ## MCP server registration (`src/mcp.ts`, `scripts/gen-docs.mjs`)
@@ -3677,6 +3703,37 @@ per item per boundary, by `runUnderfuelingControlLoop()` the moment its own trai
 `proceed` (`buildVolumeRestoreProposal()` → the ordinary propose→apply path at `announce`, never
 quiet). A manual edit since the cut voids that item's debt — `openVolumeRestoreTargets()` drops an
 item the moment the live plan no longer matches what Cairn last left it at.
+
+**Volume also has a FLOOR, and the log is truth for set count.** The plan compiler only ever warned
+above a group's high landmark, so an agent-authored week of one- and two-set items read clean while
+the balance read called five groups due. `src/repo/volume-floor.ts` owns the contextual floor — the
+`MUSCLE_LANDMARKS` low side — and it applies only when the athlete's intent names muscle or strength
+and endurance is not the primary role (arms and calves only when muscle itself is a priority); a group
+the endurance work already carries (`enduranceCarriedGroups`, the same rule that keeps
+`programBalance` from calling it due) is exempt, and so is any deliberately light week
+(`lightWeekExemption`): a recovery week in force or scheduled within the landing week, a deload now
+or as the block's next week, a `deload-due` mesocycle, and the race taper or race week this week or
+next. The prompt's `weekly_set_targets` then reads `applies:false` with the `exempt` reason.
+`validateTrainingPlan(days, { volumeFloor })` stays pure: the callers that have a live athlete
+(`getPlanQuality`, the checked plan saves, proposal apply) pass `readVolumeFloorContext()`
+(`volume-floor-context.ts`), and it warns `muscle_density_low` — a warning, never an error. The same
+targets reach the plan-shaping prompts as DATA's `weekly_set_targets` and hold a redraw to them (see
+the verify section). The UP direction is `setCatchUp` (`progression.ts`): when the last two
+exposures of a lift each logged more GOOD working sets than prescribed (warm-ups excluded by the
+volume truth's `WARMUP_FRAC`; a set counts only within a small slack of the rep floor), the plan item
+takes one set toward them — never past what was logged, never past four. A GOOD set is working
+volume at the prescribed dose: within 90% of that session's top working load (signed, so 10% more
+assist for assisted work; bodyweight reads reps only), at or above the plan's target load, and near
+the rep floor — warm-up ramps and back-offs never count. Only exposures on or after the item's last
+applied `training_structure` change count, so a redraw's deliberate cut is never undone by older
+logs. It rides only a HOLD or a double-progression rep step — never a load step or a re-ground,
+one change at a time. It is a catch-up to work already being done, not new stress, so only a fuel
+`reduce` away from the destination, a regressing lift or an unfinished/short exposure blocks it;
+`hold`, `fast_loss` and a `sliding` cut verdict do not (they veto added LOAD). It never fires in a
+light week (the floor's own `lightWeekExemption`), on a braked/pain/fuel-reduced prescription, or on
+an item whose cut volume the restore ledger still owes. It rides the ordinary auto-progression
+proposal (`set_step`, the conditional `SET_CATCH_UP` voice, counted as a move by the Today Apply
+banner) → autonomy → ledger path.
 
 A restructure also now carries per-movement provenance it never had: `planPrescriptionSnapshot()` /
 `planPrescriptionDiff()` (`src/repo/plan.ts`) snapshot every strength prescription before

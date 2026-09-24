@@ -8,6 +8,7 @@ import {
 } from "./exercise-canon.js";
 import { classifyPattern, indirectGroupsForExercise, type MovementPattern } from "./exercise-variations.js";
 import { finite } from "../lib/numbers.js";
+import { type VolumeFloorContext, weeklySetTargets } from "./volume-floor.js";
 
 export type PlanQualitySeverity = "error" | "warning";
 
@@ -67,8 +68,29 @@ function issue(
   return { severity, code, message, ...extra };
 }
 
+export interface PlanQualityOptions {
+  /**
+   * The athlete's volume-floor context (volume-floor.ts). Omitted or null → no
+   * under-dose check at all, which is what a caller with no live athlete (a unit
+   * fixture, an import) gets. The compiler stays pure: callers resolve it.
+   */
+  volumeFloor?: VolumeFloorContext | null;
+}
+
+/** Effective planned weekly sets per canonical group — direct sets plus half credit for indirect work. */
+export function plannedWeeklyGroupSets(days: PlanQualityDay[]): Map<MuscleGroup, number> {
+  return validateTrainingPlanInternal(days, {}).groupSets;
+}
+
 /** Pure structural/quality compiler for a candidate training week. */
-export function validateTrainingPlan(days: PlanQualityDay[]): PlanQualityReport {
+export function validateTrainingPlan(days: PlanQualityDay[], opts: PlanQualityOptions = {}): PlanQualityReport {
+  return validateTrainingPlanInternal(days, opts).report;
+}
+
+function validateTrainingPlanInternal(
+  days: PlanQualityDay[],
+  opts: PlanQualityOptions
+): { report: PlanQualityReport; groupSets: Map<MuscleGroup, number> } {
   const errors: PlanQualityIssue[] = [];
   const warnings: PlanQualityIssue[] = [];
   const seenDays = new Set<number>();
@@ -293,7 +315,26 @@ export function validateTrainingPlan(days: PlanQualityDay[]): PlanQualityReport 
         )
       );
   }
-  return { ok: errors.length === 0, errors, warnings };
+  // UNDER-dose, the mirror of the check above — contextual by construction: the
+  // targets are empty unless the athlete's intent prioritizes muscle or strength and
+  // no deliberate light window is in force, and a group their endurance work already
+  // carries is not listed at all (volume-floor.ts). A one-day plan is a fragment, not
+  // a week, so it is not measured as one.
+  if (strengthDays >= 2) {
+    for (const target of weeklySetTargets(opts.volumeFloor)) {
+      const sets = groupSets.get(target.group as MuscleGroup) ?? 0;
+      if (sets < target.low)
+        warnings.push(
+          issue(
+            "warning",
+            "muscle_density_low",
+            `${target.group} volume is below the low weekly landmark (${sets.toFixed(1)} effective planned sets against ${target.low}); for a muscle and strength priority it needs more working sets across the week.`,
+            { muscle_group: target.group }
+          )
+        );
+    }
+  }
+  return { report: { ok: errors.length === 0, errors, warnings }, groupSets };
 }
 
 export function qualityIssueKey(value: PlanQualityIssue): string {

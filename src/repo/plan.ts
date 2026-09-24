@@ -19,6 +19,7 @@ import {
   trainingBackstopSignature,
 } from "./training-cache.js";
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
+import { readVolumeFloorContext } from "./volume-floor-context.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { type ReasonProvenance, normalizeHistoricalReason, validReasonProvenance } from "./proposal-truth.js";
 import { isItemSpecificChangeReason } from "../domain/training/exercise-notes.js";
@@ -757,9 +758,9 @@ function boundPrescriptionInt(
 // 5 → 4 → 3 → 2 inside a single apply, each hop legal on its own — one revision,
 // three sets gone. `revision_baseline` (the pre-apply prescription snapshot the
 // caller already reads for provenance) makes the whole revision the unit.
-const MAX_SET_REDUCTION_PER_APPLY = 1;
+export const MAX_SET_REDUCTION_PER_APPLY = 1;
 
-function clampSetReductionStep(
+export function clampSetReductionStep(
   exercise: string,
   current: number | null,
   requested: number | null
@@ -1201,7 +1202,7 @@ export function validatePlanPressSlots(days: Array<{ day_number?: unknown; items
 }
 
 export function getPlanQuality() {
-  return validateTrainingPlan(getPlan());
+  return validateTrainingPlan(getPlan(), { volumeFloor: readVolumeFloorContext() });
 }
 
 function planModeQualityError(
@@ -1300,7 +1301,7 @@ export function savePlanDayChecked(
   const candidate = getPlan().filter((day: any) => Number(day.day_number) !== Number(day_number));
   candidate.push({ day_number, name, focus, day_type: dayType, items: normalizedItems });
   candidate.sort((a: any, b: any) => Number(a.day_number) - Number(b.day_number));
-  const quality = validateTrainingPlan(candidate);
+  const quality = validateTrainingPlan(candidate, { volumeFloor: readVolumeFloorContext() });
   const beforeKeys = new Set(before.errors.map(qualityIssueKey));
   const blocking = quality.errors.filter(
     (entry) => Number(entry.day_number) === Number(day_number) || !beforeKeys.has(qualityIssueKey(entry))
@@ -1326,7 +1327,7 @@ export function replacePlanChecked(
     ...day,
     items: withAuthoritativeExerciseModes(day.items),
   }));
-  const quality = validateTrainingPlan(normalized);
+  const quality = validateTrainingPlan(normalized, { volumeFloor: readVolumeFloorContext() });
   if (!quality.ok && !opts.quality_override) throw new PlanQualityError(quality);
   const plan = replacePlan(normalized, { keepScaffolds: opts.keepScaffolds });
   return { ok: true, plan, quality, quality_override: !quality.ok };

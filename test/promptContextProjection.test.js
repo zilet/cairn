@@ -29,6 +29,7 @@ import {
   buildProgramEvolutionPrompt,
   buildSessionPrompt,
   buildSessionVerifyPrompt,
+  buildPlanDraftVerifyPrompt,
   buildWeekAheadPrompt,
   buildWeeklyReadPrompt,
 } from "../dist/prompt.js";
@@ -204,6 +205,15 @@ const SITES = [
     build: () => buildPlanVerifyPrompt({ daily_kcal: 2200, daily_protein_g: 170, days: [] }),
     kept: ["profile", "family", "memory", "learnings", "context_events", "directives"],
     dropped: ["plan", "recent_sessions", "meal_plan", "day_intake", "fueling", "coaching_focus", "garmin"],
+  },
+  {
+    // The plan-draft volume repair. Its breach is the server's arithmetic, so it
+    // needs the targets, the plan and the log to repair from, the stated week so a
+    // fix never adds a day, and the injury sources so a fix never loads a hurt area.
+    site: "plan_verify",
+    build: () => buildPlanDraftVerifyPrompt({ summary: "thin", days: [] }),
+    kept: ["training_intent", "weekly_set_targets", "plan", "recent_sessions", "strength_schedule", "context_events", "directives"],
+    dropped: ["recovery", "garmin", "meal_plan", "day_intake", "coaching_focus", "run_plan", "day_read"],
   },
 ];
 

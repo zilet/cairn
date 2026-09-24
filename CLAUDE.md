@@ -444,6 +444,9 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **RIR is optional, and its absence is not weakness** — with no RIR logged, capping the prescribed
   rep range on every working set IS the strength signal (`program-state.ts`/`progression-voice.ts`).
   Details in `docs/ARCHITECTURE.md`.
+- **Weekly volume has a contextual floor and the log is truth for set count** — `volume-floor.ts`
+  (muscle/strength intent only; endurance-carried groups and light weeks exempt), held by plan
+  quality, the redraw precheck and `setCatchUp`. Details in `docs/ARCHITECTURE.md`.
 - **Exercise names are resolved through `resolveExerciseName` (`src/repo/exercise-canon.ts`); never
   compare raw `exercises.name`.** One ladder (exact → one alias hop → key → a unique expanded key),
   read by every consumer AND by the `findOrCreateExercise` write chokepoint, so a spelling can never

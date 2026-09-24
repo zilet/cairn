@@ -171,8 +171,12 @@ function exRxLineHtml(rx: ClientPrescriptionLike, options: { supporting?: boolea
     </div>`;
 }
 
+// A move is anything Apply would change: a non-hold verdict, or a set-count catch-up
+// riding a hold (the load holds, the plan's set count still moves).
 function rxMoveCount(rxByExercise: ClientPrescriptionRecord | null | undefined): number {
-  return Object.values(rxByExercise || {}).filter((rx) => rx && rx.action && rx.action !== "hold").length;
+  return Object.values(rxByExercise || {}).filter(
+    (rx) => rx && rx.action && (rx.action !== "hold" || rx.set_step != null)
+  ).length;
 }
 
 Object.assign(globalThis, {

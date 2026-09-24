@@ -226,6 +226,7 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   // path the checking, not the work.
   session_verify: { model_class: "deep", reasoning: "medium" },
   meal_plan_verify: { model_class: "deep", reasoning: "medium" },
+  plan_verify: { model_class: "deep", reasoning: "medium" },
   // Clinical-adjacent reading — a curated or plausible-but-wrong result is costly.
   health: { model_class: "deep", reasoning: "high" },
   health_review: { model_class: "deep", reasoning: "high" },

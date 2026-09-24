@@ -84,6 +84,29 @@ const PLAN_SCHEMA = `{
 //     { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <n|null>, "superset_group": <int|null — same value pairs two items as a superset> }
 //   ] } ]`;
 
+// The weekly volume floor, as the plan-shaping prompts state it. The numbers live in
+// DATA.weekly_set_targets (volume-floor.ts) and the server re-checks any draft against
+// them (verify-floors.ts planDraftFloorPrecheck), so this line tells the agent how to
+// read them — it never restates a number.
+const VOLUME_FLOOR_RULE = `- WEEKLY VOLUME FLOOR: DATA.weekly_set_targets lists, for each priority muscle group, the
+  effective weekly working sets a week should land between (low..high; a direct set counts 1, a
+  compound's secondary group half) and what the current plan gives it now ("planned"). When it reads
+  applies:true, never leave a listed group under its low (and never take one already under it lower
+  still). Fix a short group with sets on the movements already there before adding one; most working
+  movements carry 2-4 sets, and a lone working set is a finisher, not a prescription. applies:false
+  means no floor this week, and "exempt" says why: a recovery or deload week (in force, scheduled or
+  due), the race taper, or the athlete asking for a lighter or smaller week — then shape the week to
+  what they asked. No muscle/strength priority also reads applies:false. Cairn re-checks this
+  arithmetic on every draft.`;
+
+// When the athlete's own words ask for a lighter or smaller week, the floor does not
+// apply to this draft — and DATA must say so, or the rule above would contradict them.
+function withAthleteLightWeek<T extends { weekly_set_targets?: unknown }>(ctx: T, askedLess?: boolean): T {
+  if (!askedLess || !ctx?.weekly_set_targets) return ctx;
+  const read = ctx.weekly_set_targets as Record<string, unknown>;
+  return { ...ctx, weekly_set_targets: { ...read, applies: false, exempt: "athlete_asked_less", targets: [] } };
+}
+
 // The active periodization block (goal / phase / week N of M), so the coach
 // periodizes toward it. "" when no block is running (the program-state mesocycle
 // read still gives deload timing). A nudge, never a gate.
@@ -93,8 +116,8 @@ function renderBlock(ctx: any): string {
   return `\nACTIVE TRAINING BLOCK: "${b.goal}" — ${b.focus}, ${b.phase} phase (${b.week_of}). Periodize toward this: in an accumulation phase build volume, in intensification push load, in a deload phase propose a LIGHTER week. Don't ramp volume and intensity at once.\n`;
 }
 // Training-target proposal prompt (existing coach).
-export function buildCoachPrompt(userInstruction?: string): string {
-  const ctx = getCoachContext();
+export function buildCoachPrompt(userInstruction?: string, opts: { athleteAskedLess?: boolean } = {}): string {
+  const ctx = withAthleteLightWeek(getCoachContext(), opts.athleteAskedLess);
   const disc = disciplineOf(ctx);
   const coachRole = disc === "endurance"
     ? "an endurance coach (with strength as supporting work)"
@@ -125,6 +148,7 @@ ${MECHANICS_ENCODING}
 ${MOVEMENT_NOTES_CONTRACT}
 - Small steps. Thin/absent data -> do not change. Progress a timed exercise ONLY when recent durations
   comfortably meet the current target; never propose target_weight for one.
+${VOLUME_FLOOR_RULE}
 
 KEEP TRAINING FRESH (anti-staleness — a plan that never changes gets abandoned):
 - Main lifts that are progressing stay put. But when an ACCESSORY has been unchanged for ~3-4 weeks,
@@ -176,8 +200,12 @@ ${promptData(ctx, "coach")}`;
 // add quality to a one-pace endurance base, and periodize toward the goal. Output
 // is the SAME PLAN_SCHEMA (changes/days) → a DRAFT proposal for review;
 // nothing auto-applies. Constitution: a suggestion, never a gate; no scores.
-export function buildProgramEvolutionPrompt(userInstruction?: string, state?: any): string {
-  const ctx = getCoachContext();
+export function buildProgramEvolutionPrompt(
+  userInstruction?: string,
+  state?: any,
+  opts: { athleteAskedLess?: boolean } = {}
+): string {
+  const ctx = withAthleteLightWeek(getCoachContext(), opts.athleteAskedLess);
   state = state ?? getProgramState();
   // Concrete variation candidates for any stalled lift, so "rotate a variation"
   // is actionable — the agent gets real same-pattern options to choose from
@@ -336,6 +364,7 @@ ${MOVEMENT_NOTES_CONTRACT}
   joint → pull volume or load back there, don't progress through it. Autoregulation is a brake, not the driver.
 - Prefer 1-3 focused, well-justified changes over a sweeping rewrite. Restructure the split (a "days"
   rewrite) only when frequency/recovery/plateaus clearly call for it.
+${VOLUME_FLOOR_RULE}
 
 ${buildEliteGuardrails(ctx)}
 
@@ -444,6 +473,8 @@ HOW TO COMPOSE IT:
   most likely to be wrong. Build a week they finish feeling like they could have done more; the
   progression engine earns the rest from real logged work. (When two lanes later ramp at once one
   has to yield — DATA.program_state.hybrid names which — but nothing has ramped yet.)
+  Modest has a floor: when DATA.weekly_set_targets reads applies:true, land each listed group at
+  the LOW end of its window across the week — the bottom of it, not the top, and not below it.
 - COMPLETE, NOT MAXIMAL. Across the week cover the basic patterns — a squat, a hinge, a horizontal
   press, a vertical press, a horizontal pull, a vertical pull — plus direct core and a carry. One
   or two accessories per day is plenty.

@@ -33,6 +33,12 @@ import {
   nutritionFloorsFor,
 } from "./nutrition-safety.js";
 import { coerceFinite as num } from "../lib/numbers.js";
+import { normalizedExerciseKey } from "./exercise-canon.js";
+import { clampSetReductionStep, getPlan } from "./plan.js";
+import { plannedWeeklyGroupSets, type PlanQualityDay } from "./plan-quality.js";
+import { RECOVERY_WEEK_INSTRUCTION_PREFIX } from "./recovery-week-ledger.js";
+import { athleteAskedForLess, type VolumeFloorContext, weeklySetTargets } from "./volume-floor.js";
+import { readVolumeFloorContext } from "./volume-floor-context.js";
 
 export interface FloorViolation {
   /** Stable machine code — the surface never renders it; tests and telemetry read it. */
@@ -296,6 +302,147 @@ export function sessionFloorPrecheck(
   const violations = sessionFloorViolations(draft, opts);
   const judgment_reasons = sessionJudgmentReasons(draft, opts);
   return { violations, judgment_applies: judgment_reasons.length > 0, judgment_reasons };
+}
+
+// --------------------------------------------------------- plan draft --
+
+/**
+ * The week a `changes[]` draft would leave behind, applied in memory to a copy of the
+ * current plan. Mirrors applyPlanChange's shape closely enough for a volume count —
+ * an update sets `sets`, `remove:true` (or the `sets:0` spelling) drops the item, a
+ * swap renames the slot, an unknown movement is ADDED (with the applier's default of
+ * three sets) — and never touches the database. A `days` draft is its own week.
+ */
+export function draftPlanWeek(draft: any, current: PlanQualityDay[]): PlanQualityDay[] {
+  if (Array.isArray(draft?.days)) return draft.days as PlanQualityDay[];
+  const week = (Array.isArray(current) ? current : []).map((day: any) => ({
+    ...day,
+    items: (Array.isArray(day?.items) ? day.items : []).map((item: any) => ({ ...item })),
+  }));
+  // The set-reduction step is measured against where the plan stood when the revision
+  // began — the same baseline applyPlanChange's clamp uses — so a payload naming one
+  // item several times still moves it one step, exactly as apply would land it.
+  const baseline = new Map<string, number>();
+  for (const day of week as any[])
+    for (const item of day.items as any[]) {
+      const sets = num(item?.sets);
+      if (sets != null) baseline.set(`${Number(day.day_number)}|${normalizedExerciseKey(String(item?.exercise ?? ""))}`, sets);
+    }
+  for (const change of Array.isArray(draft?.changes) ? draft.changes : []) {
+    if (String(change?.kind ?? "").toLowerCase() === "cardio") continue;
+    const day = week.find((d: any) => Number(d?.day_number) === Number(change?.day_number));
+    if (!day) continue;
+    const items = day.items as any[];
+    const find = (name: unknown) => {
+      const key = normalizedExerciseKey(String(name ?? ""));
+      return key ? items.findIndex((item) => normalizedExerciseKey(String(item?.exercise ?? "")) === key) : -1;
+    };
+    const sets = num(change?.sets);
+    if (change?.swap?.from) {
+      const at = find(change.swap.from);
+      if (at >= 0) {
+        const to = String(change.swap.to ?? items[at].exercise);
+        // The slot now trains what the NEW movement trains: its stored group when the
+        // catalog knows it, otherwise the compiler classifies it from its name.
+        let group: string | null = null;
+        try {
+          group = findExercise(to)?.muscle_group ?? null;
+        } catch {
+          group = null;
+        }
+        items[at] = { ...items[at], exercise: to, muscle_group: group };
+        if (sets != null && sets > 0) items[at].sets = sets;
+      }
+      continue;
+    }
+    const at = find(change?.exercise);
+    if (change?.remove === true || sets === 0) {
+      if (at >= 0) items.splice(at, 1);
+      continue;
+    }
+    if (at >= 0) {
+      if (sets != null) {
+        const from = baseline.get(`${Number(day.day_number)}|${normalizedExerciseKey(String(items[at].exercise ?? ""))}`);
+        const stepped = clampSetReductionStep(String(items[at].exercise ?? ""), from ?? null, sets).value ?? sets;
+        items[at] = { ...items[at], sets: stepped };
+      }
+    } else if (clean(change?.exercise)) {
+      items.push({ exercise: clean(change.exercise), sets: sets ?? 3, muscle_group: change?.muscle_group ?? null });
+    }
+  }
+  return week;
+}
+
+/**
+ * Every priority group a drafted week leaves under its weekly volume floor. Pure.
+ *
+ * GRANDFATHERED, not ratcheted: a group the CURRENT plan already carries under its
+ * floor is a violation only if the draft takes it LOWER still. A redraw is asked not
+ * to starve what is fed and not to deepen a shortfall — never to fix, in the same
+ * breath, every gap an older week left (and a first week, with nothing current, is
+ * never measured against a baseline it could only have matched).
+ */
+export function planVolumeFloorViolations(
+  candidate: PlanQualityDay[],
+  current: PlanQualityDay[],
+  ctx: VolumeFloorContext | null | undefined
+): FloorViolation[] {
+  const targets = weeklySetTargets(ctx);
+  if (!targets.length) return [];
+  const strengthDays = (Array.isArray(candidate) ? candidate : []).filter(
+    (day: any) =>
+      Array.isArray(day?.items) &&
+      day.items.some((item: any) => item && String(item.kind ?? "strength").toLowerCase() !== "cardio")
+  ).length;
+  if (strengthDays < 2) return [];
+  const after = plannedWeeklyGroupSets(candidate);
+  const before = plannedWeeklyGroupSets(current);
+  const round = (value: number) => Math.round(value * 10) / 10;
+  const out: FloorViolation[] = [];
+  for (const target of targets) {
+    const drafted = after.get(target.group as any) ?? 0;
+    const held = before.get(target.group as any) ?? 0;
+    if (drafted >= target.low) continue;
+    if (held < target.low && drafted >= held) continue;
+    out.push({
+      code: "plan_group_below_volume_floor",
+      field: "days[].items[].sets",
+      observed: round(drafted),
+      floor: target.low,
+      message:
+        held >= target.low
+          ? `${target.group} would get ${round(drafted)} effective working sets a week, below its ${target.low}-set floor (the current plan gives it ${round(held)}); add sets or a movement for ${target.group}.`
+          : `${target.group} would drop from ${round(held)} to ${round(drafted)} effective working sets a week, further under its ${target.low}-set floor; keep at least what it has now.`,
+    });
+  }
+  return out;
+}
+
+/**
+ * The redraw / evolution precheck. The only numeric floor a plan draft carries is
+ * weekly volume per priority group, and it is the server's arithmetic, not the
+ * model's. There is no judgement check for a plan draft here, so a clean draft costs
+ * no agent turn.
+ *
+ * A deliberately light week is exempt: a recovery-week draft, any light window the
+ * live context reads (a recovery week in force or scheduled, a deload now or next,
+ * a deload-due mesocycle, the race taper — readVolumeFloorContext), and any request
+ * whose OWN words ask for less (`athlete_request`, the athlete's sentence only; never
+ * a system instruction). The floor never argues with a week the athlete asked to be
+ * lighter.
+ */
+export function planDraftFloorPrecheck(
+  draft: any,
+  opts: { instruction?: unknown; athlete_request?: unknown } = {}
+): FloorPrecheck {
+  const none: FloorPrecheck = { violations: [], judgment_applies: false, judgment_reasons: [] };
+  if (String(opts.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)) return none;
+  if (athleteAskedForLess(opts.athlete_request)) return none;
+  const ctx = readVolumeFloorContext();
+  if (!weeklySetTargets(ctx).length) return none;
+  const current = getPlan() as PlanQualityDay[];
+  const violations = planVolumeFloorViolations(draftPlanWeek(draft, current), current, ctx);
+  return { violations, judgment_applies: false, judgment_reasons: [] };
 }
 
 /** The prompt's hand-over line for one violation set. Empty list → empty string. */
