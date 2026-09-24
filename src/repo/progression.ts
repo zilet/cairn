@@ -288,6 +288,11 @@ export interface Prescription {
   // A REPEATED deload escalated instead of repeating itself: 'rep_wave' dropped the
   // rep window, 'variation' rotated the movement out. Informational.
   escalated?: "rep_wave" | "variation";
+  // The slot's prescription is UNTESTED (prescription-authorship.ts: authored after the
+  // lift was last trained), so the fresh prescription stands at the plan until a session
+  // is run at it. Informational for consumers that must not add to an untested slot (the
+  // weekly dose). Reps path only; omit-when-false.
+  untested?: true;
   dose_eligibility?: {
     linked_outcome: boolean;
     eligible: boolean;
@@ -2668,6 +2673,7 @@ function repsPrescription(
     top_set: topSet,
     escalated,
     dose_eligibility: doseEligibility,
+    ...(untested ? { untested: true as const } : {}),
   };
 }
 

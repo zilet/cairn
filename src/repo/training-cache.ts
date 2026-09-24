@@ -259,7 +259,8 @@ export function resetTrainingDataCache(): void {
 
 // Cheap SQL BACKSTOP for the training memos: row COUNT + MAX(id) of every table that
 // feeds getProgramState / getWeeklyStats / estimateExpenditure (COUNT catches deletes,
-// MAX(id) catches inserts), plus the handful of profile fields those reads personalize
+// MAX(id) catches inserts), plan_items' newest prescribed_at + an id-weighted target
+// aggregate (in-place re-prescriptions), plus the handful of profile fields those reads personalize
 // on (weight/goal/sex/age — updated in place, so a count/max can't see them). A
 // superset for any single memo, which only ever over-invalidates (an extra recompute),
 // never serves stale data. A query failure yields a never-matching key so we rebuild
@@ -280,6 +281,11 @@ export function trainingBackstopSignature(): string {
            (SELECT COUNT(*) FROM garmin_daily_metrics) AS gdc, (SELECT COALESCE(MAX(id),0) FROM garmin_daily_metrics) AS gdm,
            (SELECT COUNT(*) FROM plan_days) AS pdc, (SELECT COALESCE(MAX(id),0) FROM plan_days) AS pdm,
            (SELECT COUNT(*) FROM plan_items) AS pic, (SELECT COALESCE(MAX(id),0) FROM plan_items) AS pim,
+           (SELECT COALESCE(MAX(prescribed_at),'') || ':' ||
+                   TOTAL(id * (COALESCE(exercise_id,0) * 1000003 + COALESCE(sets,0) * 10007 + COALESCE(rep_low,0) * 1009
+                               + COALESCE(rep_high,0) * 101 + COALESCE(target_seconds,0))) || ':' ||
+                   TOTAL(id * COALESCE(target_weight,0))
+              FROM plan_items) AS pit,
            (SELECT COUNT(*) FROM context_events) AS cec, (SELECT COALESCE(MAX(id),0) FROM context_events) AS cem,
            (SELECT COALESCE(SUM(archived),0) || ':' || COUNT(resolved_at) || ':' || COALESCE(MAX(end_date),'') || ':' || COALESCE(MAX(start_date),'')
               FROM context_events) AS ces`,
@@ -294,6 +300,10 @@ export function trainingBackstopSignature(): string {
       currentTrainingDataVersion(),
       r?.lsc, r?.lsm, r?.sc, r?.sm, r?.ec, r?.em, r?.ac, r?.am, r?.gac, r?.gam,
       r?.bwc, r?.bwm, r?.dmc, r?.dmm, r?.gdc, r?.gdm, r?.pdc, r?.pdm, r?.pic, r?.pim, r?.cec, r?.cem,
+      // A slot re-prescribed IN PLACE (restampSlot after a target step, a set step, a
+      // writer that defers its bump) moves neither COUNT nor MAX(id): the newest stamp and
+      // an id-weighted sum of every slot's movement and targets do.
+      r?.pit,
       // Editing, archiving, closing or re-dating an existing context event moves the
       // read too (a trip window confounds the fuel read) — COUNT/MAX(id) only see inserts.
       r?.ces,

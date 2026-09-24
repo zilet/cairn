@@ -21,7 +21,8 @@ import {
 import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
 import { classifyPattern } from "./exercise-variations.js";
-import { pressSlotKey } from "./plan-quality.js";
+import { collapseRegionDuplicates, pairForSession } from "./composition-pairing.js";
+import { applyWeeklyDose } from "./composition-dose.js";
 import { nextLoadStep } from "./progression.js";
 import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
@@ -176,46 +177,6 @@ export const HOLD_TARGET_NOTES: readonly [string, ...string[]] = [
 
 function isPrepCompositionItem(item: { exercise?: unknown; muscle_group?: unknown }): boolean {
   return isMobility(item.muscle_group == null ? null : String(item.muscle_group)) || isPrepMovement(String(item.exercise ?? ""));
-}
-
-function preferPressItem(a: any, b: any, candidateNames: Set<string>): any {
-  const aName = String(a?.exercise ?? "").toLowerCase();
-  const bName = String(b?.exercise ?? "").toLowerCase();
-  const aCand = candidateNames.has(aName);
-  const bCand = candidateNames.has(bName);
-  if (aCand !== bCand) return aCand ? a : b;
-  const aSets = finite(a?.sets) ?? 0;
-  const bSets = finite(b?.sets) ?? 0;
-  if (aSets !== bSets) return aSets > bSets ? a : b;
-  const aLoad = Math.abs(finite(a?.target_weight) ?? 0);
-  const bLoad = Math.abs(finite(b?.target_weight) ?? 0);
-  if (aLoad !== bLoad) return aLoad > bLoad ? a : b;
-  return a;
-}
-
-function dropDuplicatePressAngles(
-  items: any[],
-  candidateNames: Set<string>
-): { items: any[]; rejected: Array<{ exercise: string; reason: string }> } {
-  const rejected: Array<{ exercise: string; reason: string }> = [];
-  const keep = items.map(() => true);
-  const keeper = new Map<string, number>();
-  for (let i = 0; i < items.length; i++) {
-    const slot = pressSlotKey(String(items[i]?.exercise ?? ""));
-    if (!slot) continue;
-    const prev = keeper.get(slot);
-    if (prev == null) {
-      keeper.set(slot, i);
-      continue;
-    }
-    const winner = preferPressItem(items[prev], items[i], candidateNames) === items[i] ? i : prev;
-    const loser = winner === i ? prev : i;
-    keep[loser] = false;
-    keeper.set(slot, winner);
-    rejected.push({ exercise: String(items[loser]?.exercise ?? ""), reason: "duplicate_press_angle" });
-  }
-  if (!rejected.length) return { items, rejected };
-  return { items: items.filter((_, i) => keep[i]), rejected };
 }
 
 function compositionNoteFor(
@@ -1191,11 +1152,11 @@ export function normalizeComposedSession(
     kept.push(item);
   }
 
-  // One loaded movement per press angle — the weekly plan already refuses this at
-  // write time, but a composed session can still pile two flats (agent output, or
-  // a saturated-group stand-in stealing the other day's bench). Drop the extra
-  // here so Today's card cannot serve Dumbbell Bench then Barbell Bench.
-  const pressCollapsed = dropDuplicatePressAngles(
+  // One loaded movement per region (composition-pairing.ts) — the weekly plan already
+  // refuses a second flat press at write time, but a composed session can still pile
+  // two (agent output, or a saturated-group stand-in stealing the other day's bench).
+  // Drop the extra here so Today's card cannot serve Dumbbell Bench then Barbell Bench.
+  const pressCollapsed = collapseRegionDuplicates(
     kept,
     new Set(
       envelope.candidates
@@ -1484,12 +1445,47 @@ export function normalizeComposedSession(
   // Positions are only rewritten when something was actually inserted, so an
   // ordinary day's items come out of here byte-for-byte as they always have.
   if (insertedTopSet) withTopSets.forEach((item, index) => (item.position = index));
-  const assembled = insertedTopSet ? withTopSets : capped;
+  const withTopSetsOrCapped = insertedTopSet ? withTopSets : capped;
+  // ---- the week's dose: one extra set toward a group the week would leave short ----
+  // After the top set, so a reach always keeps its budget first; before ordering, so
+  // the card is ordered once. Never on the athlete's own snapshotted day. Identity when
+  // the envelope authorizes no fill (composition-dose.ts).
+  const dosed = opts.planSnapshot
+    ? { items: withTopSetsOrCapped, changed: false, estAddMin: 0 }
+    : applyWeeklyDose(withTopSetsOrCapped, {
+        envelope,
+        date: envelope.date,
+        budget: {
+          remainingSets,
+          itemSetCap,
+          cap,
+          minutesCap: envelope.caps.duration_min,
+          estMinutes: base.est_minutes,
+        },
+        reducedExercises,
+        saturatedGroups,
+        excludedGroups: excluded,
+        candidates,
+      });
+  if (dosed.changed) changed = true;
+  const assembled = dosed.items;
   // Session order is a coaching fact: prep → compounds → accessories → core →
   // cardio. Agentic restructures already persist this; today's composition must
   // too, so the athlete is not asked to tap "Order for effect" before they train.
-  const finalItems = orderPlanItemsForEffect(assembled);
+  let finalItems = orderPlanItemsForEffect(assembled);
   if (planItemsOutOfOrder(assembled)) {
+    finalItems.forEach((item, index) => (item.position = index));
+    changed = true;
+  }
+  // Antagonist pairs seated as supersets, inside each effect tier (composition-pairing.ts).
+  // Identity when nothing pairs; positions are only rewritten when it changed the card.
+  const paired = pairForSession(finalItems, {
+    envelope,
+    date: envelope.date,
+    planSnapshot: opts.planSnapshot === true,
+  });
+  if (paired.changed) {
+    finalItems = paired.items;
     finalItems.forEach((item, index) => (item.position = index));
     changed = true;
   }
@@ -1501,6 +1497,8 @@ export function normalizeComposedSession(
   reconcileEnvelopeReach(envelope, reachLanded);
 
   let est = base.est_minutes;
+  // The dose's added sets cost time; the day's own duration cap below still binds.
+  if (dosed.estAddMin > 0 && est != null) est += dosed.estAddMin;
   if (envelope.caps.duration_min != null && (est == null || est > envelope.caps.duration_min)) {
     est = envelope.caps.duration_min;
     changed = true;
