@@ -139,7 +139,7 @@ function hydrateBlock(row: any): ProgramBlock | null {
  * This drives the auto-complete path in advanceBlockWeek AND the default phase of a
  * freshly-created block. A user-created block can still set any phase, overriding it.
  */
-function derivePhase(weekIndex: number, totalWeeks: number, focus?: Focus): Phase {
+export function derivePhase(weekIndex: number, totalWeeks: number, focus?: Focus): Phase {
   if (totalWeeks <= 1) return "accumulation";
   // A peaking block's last week is REALIZATION (test/express what the block built),
   // not a deload — this is what makes testWeekDue's realization branch reachable.

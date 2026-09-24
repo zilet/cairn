@@ -37,7 +37,7 @@ import { normalizedExerciseKey } from "./exercise-canon.js";
 import { clampSetReductionStep, getPlan } from "./plan.js";
 import { plannedWeeklyGroupSets, type PlanQualityDay } from "./plan-quality.js";
 import { RECOVERY_WEEK_INSTRUCTION_PREFIX } from "./recovery-week-ledger.js";
-import { athleteAskedForLess, type VolumeFloorContext, weeklySetTargets } from "./volume-floor.js";
+import { type VolumeFloorContext, weeklySetTargets } from "./volume-floor.js";
 import { readVolumeFloorContext } from "./volume-floor-context.js";
 
 export interface FloorViolation {
@@ -426,18 +426,17 @@ export function planVolumeFloorViolations(
  *
  * A deliberately light week is exempt: a recovery-week draft, any light window the
  * live context reads (a recovery week in force or scheduled, a deload now or next,
- * a deload-due mesocycle, the race taper — readVolumeFloorContext), and any request
- * whose OWN words ask for less (`athlete_request`, the athlete's sentence only; never
- * a system instruction). The floor never argues with a week the athlete asked to be
- * lighter.
+ * a deload-due mesocycle, the race taper — readVolumeFloorContext). The athlete's
+ * own words are NOT an exemption here: the repair turn is handed them and honors a
+ * genuine request for less, and only the autonomy hold stands aside for one
+ * (coachOps/training.ts volumeFloorAutonomy).
  */
 export function planDraftFloorPrecheck(
   draft: any,
-  opts: { instruction?: unknown; athlete_request?: unknown } = {}
+  opts: { instruction?: unknown } = {}
 ): FloorPrecheck {
   const none: FloorPrecheck = { violations: [], judgment_applies: false, judgment_reasons: [] };
   if (String(opts.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)) return none;
-  if (athleteAskedForLess(opts.athlete_request)) return none;
   const ctx = readVolumeFloorContext();
   if (!weeklySetTargets(ctx).length) return none;
   const current = getPlan() as PlanQualityDay[];

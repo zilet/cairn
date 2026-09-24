@@ -2925,13 +2925,15 @@ week the draft would leave behind (`draftPlanWeek` applies a `changes[]` draft t
 new movement's group) against `weeklySetTargets`: a priority group the draft takes under its low landmark is a
 `plan_group_below_volume_floor` breach, GRANDFATHERED against the current plan — a group already
 under stays legal unless the draft takes it lower still, and a first week (nothing current) is never
-measured. A recovery-week draft is exempt, as is every light week above and any request whose
-athlete-authored words ask for less (`athleteAskedForLess` — lighter, fewer sets/days, travel, short
-on time; deliberately generous, and never read off a system instruction). There is no
-judgement-only check, so a clean draft costs no turn; a breach runs the `plan_verify` repair (its own
-`PROMPT_CONTEXT_SITES` entry, handed the athlete's own words). A breach still `unresolved` is
+measured. A recovery-week draft is exempt, as is every light week above. The athlete's own words
+are NOT an exemption: the precheck and the `plan_verify` repair (its own `PROMPT_CONTEXT_SITES`
+entry) still run, and the repair is handed the words so it can honor a genuine request for less.
+There is no judgement-only check, so a clean draft costs no turn. A breach still `unresolved` is
 stamped on the stored draft (`volume_floor_unresolved`) and the draft is routed with
-`clamp_refused` — never for a reduction the athlete asked for — so it waits for their yes; the hold's
+`clamp_refused` — except when the athlete's words explicitly ask for a lighter or smaller week
+(`athleteAskedForLess`: a lighter/easy week, deload, fewer sets/days/sessions, less volume, cut or
+scale back the training, short on time, away this week; "less X, more Y" contrasts and negations
+never count, and it is never read off a system instruction) — so it waits for their yes; the hold's
 reason and `user_explanation` name the groups it would leave under their floor.
 
 ---
@@ -3724,8 +3726,8 @@ and endurance is not the primary role (arms and calves only when muscle itself i
 the endurance work already carries (`enduranceCarriedGroups`, the same rule that keeps
 `programBalance` from calling it due) is exempt, and so is any deliberately light week
 (`lightWeekExemption`): a recovery week in force or scheduled within the landing week, a deload now
-or as the block's next week, a `deload-due` mesocycle, and the race taper or race week this week or
-next. The prompt's `weekly_set_targets` then reads `applies:false` with the `exempt` reason.
+or as the block's next week by its own phase plan (`derivePhase`; never a whole two-week block), a
+`deload-due` mesocycle, and the race taper or race week this week or next. The prompt's `weekly_set_targets` then reads `applies:false` with the `exempt` reason.
 `validateTrainingPlan(days, { volumeFloor })` stays pure: the callers that have a live athlete
 (`getPlanQuality`, the checked plan saves, proposal apply) pass `readVolumeFloorContext()`
 (`volume-floor-context.ts`), and it warns `muscle_density_low` — a warning, never an error. The same
@@ -3736,9 +3738,11 @@ volume truth's `WARMUP_FRAC`; a set counts only within a small slack of the rep 
 takes one set toward them — never past what was logged, never past four. A GOOD set is working
 volume at the prescribed dose: within 90% of that session's top working load (signed, so 10% more
 assist for assisted work; bodyweight reads reps only), at or above the plan's target load, and near
-the rep floor — warm-up ramps and back-offs never count. Only exposures on or after the item's last
-applied `training_structure` change count, so a redraw's deliberate cut is never undone by older
-logs. It rides only a HOLD or a double-progression rep step — never a load step or a re-ground,
+the rep floor — warm-up ramps and back-offs never count. Only exposures on or after the later of the
+item's last applied `training_structure` change (one ledger read per pass) and its `prescribed_at`
+count — and a PERSON's set change in the editor re-stamps `prescribed_at`
+(`stampPersonSetChanges`, from the person-save use case), so neither a redraw's deliberate cut nor
+the athlete's own is undone by older logs. It rides only a HOLD or a double-progression rep step — never a load step or a re-ground,
 one change at a time. It is a catch-up to work already being done, not new stress, so only a fuel
 `reduce` away from the destination, a regressing lift or an unfinished/short exposure blocks it;
 `hold`, `fast_loss` and a `sliding` cut verdict do not (they veto added LOAD). It never fires in a

@@ -2858,7 +2858,7 @@ export function planDayProgression(
   if (!day) return [];
   const items = db
     .prepare(
-      `SELECT pi.id AS plan_item_id, pi.kind AS kind, e.name AS name
+      `SELECT pi.id AS plan_item_id, pi.kind AS kind, e.name AS name, pi.prescribed_at AS prescribed_at
        FROM plan_items pi LEFT JOIN exercises e ON e.id = pi.exercise_id
       WHERE pi.plan_day_id = ? ORDER BY pi.position`
     )
@@ -2920,6 +2920,12 @@ export function planDayProgression(
     }
     return lightWeekMemo.value;
   };
+  // The restructure ledger, read ONCE for the pass (and only if a catch-up asks).
+  let structuralMemo: ((dayNumber: number, exercise: string) => string | null) | null = null;
+  const structuralSince = (dayNumber: number, exercise: string): string | null => {
+    if (!structuralMemo) structuralMemo = structuralChangeDates();
+    return structuralMemo(dayNumber, exercise);
+  };
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
@@ -2947,6 +2953,8 @@ export function planDayProgression(
         cut,
         liftState: liftStateFor(String(it.name), states),
         restoreKeys: owedRestoreKeys,
+        structuralSince,
+        prescribedAt: it.prescribed_at ? String(it.prescribed_at).slice(0, 10) : null,
         lightWeek,
       });
       out.push({ ...stepped, plan_item_id: it.plan_item_id, day_number: dayNumber });
@@ -2969,8 +2977,9 @@ export function planDayProgression(
 // slack (SET_STEP_REP_SLACK reps, or a fifth of the floor on a high-rep prescription,
 // whichever is larger) — so a log whose extra set is a lighter back-off or a failed,
 // short one never raises the plan. Only exposures on or after the item's last
-// STRUCTURAL change count (lastStructuralChangeDate), so a redraw's deliberate cut is
-// never undone by the log that came before it; and it rides only a hold or a rep step,
+// STRUCTURAL change or its last authoring count (structuralChangeDates, and
+// plan_items.prescribed_at — which a person's set change in the editor re-stamps), so
+// neither a redraw's deliberate cut nor the athlete's own is undone by older logs; and it rides only a hold or a rep step,
 // never a load step.
 //
 // It is a catch-up to work ALREADY being done, not new stress, so the cut reads that
@@ -2993,13 +3002,21 @@ const SET_STEP_REP_SLACK = 2;
 // ramp or a back-off.
 const SET_STEP_WORKING_FRAC = 0.9;
 
-// The date of the item's last STRUCTURAL change — the newest applied restructure that
-// touched this movement on this day (or rewrote the whole week) — or null when none is
-// on the ledger. A redraw's set count is a deliberate choice: only exposures on or
+// The later of two optional ISO dates.
+function latestDate(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a > b ? a : b;
+}
+
+// The date of each item's last STRUCTURAL change — the newest applied restructure that
+// touched that movement on that day (or rewrote the whole week) — as ONE read of the
+// ledger per pass. A redraw's set count is a deliberate choice: only exposures on or
 // after it can argue with it, so a cut the redraw made is never undone by the log from
-// before it.
-function lastStructuralChangeDate(dayNumber: number, exercise: string): string | null {
-  const key = normalizedExerciseKey(exercise);
+// before it. `lookup(day, exercise)` is null when nothing on the ledger touched it.
+function structuralChangeDates(): (dayNumber: number, exercise: string) => string | null {
+  const byItem = new Map<string, string>();
+  let wholeWeek: string | null = null;
   let rows: Array<{ effective_date: string | null; applied_at: string | null; action_json: string | null }> = [];
   try {
     rows = db
@@ -3010,9 +3027,13 @@ function lastStructuralChangeDate(dayNumber: number, exercise: string): string |
       )
       .all() as any[];
   } catch {
-    return null;
+    rows = [];
   }
+  // Newest first. Once a whole-week rewrite is seen, every OLDER per-item entry is
+  // older than it and cannot be any item's latest touch, so the walk stops there.
   for (const row of rows) {
+    const date = String(row.effective_date ?? row.applied_at ?? "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
     let action: any = null;
     try {
       action = JSON.parse(String(row.action_json ?? "{}"));
@@ -3020,18 +3041,16 @@ function lastStructuralChangeDate(dayNumber: number, exercise: string): string |
       continue;
     }
     const changes = Array.isArray(action?.changes) ? action.changes : [];
-    const touched =
-      changes.some(
-        (change: any) =>
-          Number(change?.day_number) === Number(dayNumber) &&
-          normalizedExerciseKey(String(change?.exercise ?? "")) === key
-      ) ||
-      (!changes.length && Array.isArray(action?.days) && action.days.length > 0);
-    if (!touched) continue;
-    const date = String(row.effective_date ?? row.applied_at ?? "").slice(0, 10);
-    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+    if (!changes.length && Array.isArray(action?.days) && action.days.length > 0) {
+      wholeWeek = date;
+      break;
+    }
+    for (const change of changes) {
+      const key = `${Number(change?.day_number)}|${normalizedExerciseKey(String(change?.exercise ?? ""))}`;
+      if (!byItem.has(key)) byItem.set(key, date);
+    }
   }
-  return null;
+  return (dayNumber, exercise) => byItem.get(`${Number(dayNumber)}|${normalizedExerciseKey(exercise)}`) ?? wholeWeek;
 }
 
 // The good working-set count of each of a lift's most recent exposures (on or after
@@ -3097,6 +3116,11 @@ function setCatchUp(
     cut: () => CutPressure;
     liftState: LiftState | null;
     restoreKeys: Set<string>;
+    // The pass's one read of the restructure ledger (structuralChangeDates).
+    structuralSince: (dayNumber: number, exercise: string) => string | null;
+    // plan_items.prescribed_at: when the slot was last authored — including a PERSON's
+    // set-count change in the editor (stampPersonSetChanges, plan.ts).
+    prescribedAt: string | null;
     lightWeek: () => string | null;
   }
 ): Prescription {
@@ -3123,7 +3147,7 @@ function setCatchUp(
     counts = recentGoodWorkingSetCounts(p.exercise, {
       repFloor: p.current.rep_low ?? null,
       targetWeight: planWeight,
-      since: lastStructuralChangeDate(ctx.dayNumber, p.exercise),
+      since: latestDate(ctx.structuralSince(ctx.dayNumber, p.exercise), ctx.prescribedAt),
     });
   } catch {
     return p;

@@ -30,6 +30,7 @@ import { plausibleRir } from "../dist/lib/numbers.js";
 import * as blocks from "../dist/repo/program-blocks.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { evolveProgram } from "../dist/coachOps.js";
+import { savePlanDayByPerson } from "../dist/domain/training/plan-save-use-case.js";
 import { buildPlanDraftVerifyPrompt, buildProgramEvolutionPrompt } from "../dist/prompt.js";
 
 const HYPERTROPHY = { strength_priority: true, muscle_priority: true, endurance_carried: [], exempt: null };
@@ -329,6 +330,12 @@ function isoDaysAgo(n) {
   return localDateISO(new Date(Date.now() - n * 864e5));
 }
 
+// A slot authored before any of the fixture's logs (a pre-v111 row reads as settled),
+// so only what a test adds on top — a redraw, a person's save — moves the window.
+function settle() {
+  db.prepare(`UPDATE plan_items SET prescribed_at = NULL`).run();
+}
+
 function logSets(name, date, sets) {
   const ex = repo.findExercise(name);
   const session = repo.getOrCreateSession(date, null);
@@ -358,6 +365,7 @@ function seedCurl({
   repo.savePlanDay(1, "Arms", null, [
     { exercise: "Dumbbell Curl", sets: planned, rep_low: 10, rep_high: 12, target_weight: 40 },
   ]);
+  settle();
   sessions.forEach((sets, i) => logSets("Dumbbell Curl", isoDaysAgo(9 - i * 4), sets));
 }
 
@@ -441,36 +449,67 @@ test("a deload phase never adds sets", () => {
 
 // ---------------------------------------- review fixes: light weeks and the clamp
 
-test("a request in the athlete's own words for less exempts the draft; a system instruction does not", () => {
+test("only an explicit request for a lighter or smaller week reads as asking for less", () => {
   for (const words of [
+    "make it easy this week",
     "make next week lighter",
-    "fewer sets, I'm short on time",
-    "I'm traveling Thursday to Sunday",
-    "drop to three days",
-    "cut back on volume while I'm sore",
+    "a lighter week please",
+    "deload next week",
+    "fewer sets this week",
+    "fewer training days for now",
+    "less volume for a bit",
+    "cut back on volume",
+    "scale it back this week",
+    "I'm short on time",
+    "I'm travelling this week",
+    "away next week, keep it simple",
   ])
     assert.equal(athleteAskedForLess(words), true, words);
-  for (const words of ["move heavy legs to Thursday", "build my week around my anchors", ""])
+  for (const words of [
+    "less cardio, more lifting",
+    "I'm sore in my knee",
+    "I'm sick of lunges, swap them",
+    "drop the leg extension and add incline press",
+    "move my rest day to Wednesday",
+    "I want to lift 3 days a week instead of 2",
+    "shorter rest times between sets please",
+    "back from my trip, ramp me up",
+    "at minimum 4 sets of chest",
+    "fewer machines, more free weights",
+    "I want to recover my bench strength",
+    "no pain anymore, push me",
+    "don't make it lighter",
+    "move heavy legs to Thursday",
+    "",
+  ])
     assert.equal(athleteAskedForLess(words), false, words);
+});
 
+test("the athlete's words never switch off the precheck or the prompt's targets", () => {
   repo.setProfile({ training_intent: { priorities: ["muscle", "strength"], endurance_role: "none" } });
   repo.replacePlan(fedWeek());
   const thin = { summary: "thin", days: thinWeek() };
-  assert.ok(planDraftFloorPrecheck(thin, { instruction: "evolve program" }).violations.length > 0);
-  assert.deepEqual(planDraftFloorPrecheck(thin, { athlete_request: "a lighter week please" }).violations, []);
+  assert.ok(planDraftFloorPrecheck(thin, { instruction: "make next week lighter" }).violations.length > 0);
+  const data = JSON.parse(buildProgramEvolutionPrompt("make next week lighter").split("\n").at(-1));
+  assert.equal(data.weekly_set_targets.applies, true, "wording alone never flips applies:false");
+  const repair = buildPlanDraftVerifyPrompt(thin, planVolumeFloorViolations(thinWeek(), fedWeek(), HYPERTROPHY), {
+    athlete_request: "make next week lighter",
+  });
+  assert.match(repair, /make next week lighter/, "the repair turn is handed their words");
 });
 
-test("an athlete-asked lighter redraw is never held against them", async () => {
+test("an athlete-asked lighter redraw still gets checked, but is never held against them", async () => {
   repo.setProfile({ training_intent: { priorities: ["muscle", "strength"], endurance_role: "none" } });
   repo.replacePlan(fedWeek());
   const draft = { summary: "A lighter week, as asked.", days: thinWeek() };
   const out = await withAgent("light-drafter", JSON.stringify(draft), () =>
-    evolveProgram("light-drafter", "restructure the week as the athlete asked — make it lighter, I'm traveling")
+    evolveProgram("light-drafter", "restructure the week as the athlete asked — make it lighter this week")
   );
   assert.equal(out.ok, true);
-  assert.ok(!out.verified?.unresolved?.length, "no breach on a week they asked to be lighter");
-  assert.ok(!out.proposal.parsed.volume_floor_unresolved, "nothing stamped on the draft");
-  assert.notEqual(out.autonomy?.review_reason_code ?? out.autonomy?.decision?.context?.review_reason_code, "safety_floor");
+  assert.ok(out.verified?.unresolved?.length, "the server's findings still ride on the outcome");
+  assert.notEqual(out.autonomy?.tier, "ask", `not held, got ${JSON.stringify(out.autonomy)}`);
+  const held = repo.getProposal(Number(out.proposal.id));
+  assert.notEqual(held.autonomy?.review_reason_code, "safety_floor");
 });
 
 test("a held draft names the groups it would leave under their floor", async () => {
@@ -547,6 +586,7 @@ test("an overload day takes the load step alone — never a set step on top", ()
 test("assisted work is compared signed: less assist is the harder set", () => {
   repo.upsertExercise({ name: "Assisted Dip", muscle_group: "triceps", mode: "reps" });
   repo.savePlanDay(1, "Push", null, [{ exercise: "Assisted Dip", sets: 2, rep_low: 8, rep_high: 12, target_weight: -30 }]);
+  settle();
   for (const d of [9, 5]) logSets("Assisted Dip", isoDaysAgo(d), [[-30, 9], [-30, 9], [-30, 9]]);
   const p = planDayProgression(1, { forNextSession: true }).find((x) => x.exercise === "Assisted Dip");
   assert.ok(p.action === "hold" || p.rep_step, `a hold or rep step, got ${p.action}`);
@@ -554,6 +594,7 @@ test("assisted work is compared signed: less assist is the harder set", () => {
   resetTraining();
   repo.upsertExercise({ name: "Assisted Dip", muscle_group: "triceps", mode: "reps" });
   repo.savePlanDay(1, "Push", null, [{ exercise: "Assisted Dip", sets: 2, rep_low: 8, rep_high: 12, target_weight: -30 }]);
+  settle();
   // The third set took far more assist: a back-off, not working volume.
   for (const d of [9, 5]) logSets("Assisted Dip", isoDaysAgo(d), [[-30, 9], [-30, 9], [-60, 9]]);
   const q = planDayProgression(1, { forNextSession: true }).find((x) => x.exercise === "Assisted Dip");
@@ -578,6 +619,36 @@ test("a scheduled recovery week never adds sets", () => {
   scheduleRecoveryCycle({ effective_on: addDaysISO(localDateISO(), 2), reason: "a planned light week" });
   seedCurl();
   assert.equal(curlOf().set_step, undefined);
+});
+
+test("a person's set cut in the editor is never walked back by older logs", () => {
+  seedCurl({ planned: 3, sessions: [Array(4).fill([40, 11]), Array(4).fill([40, 11])] });
+  assert.deepEqual(curlOf().set_step, { from: 3, to: 4 }, "the fixture would step without the save");
+  savePlanDayByPerson(1, "Arms", null, [
+    { exercise: "Dumbbell Curl", sets: 2, rep_low: 10, rep_high: 12, target_weight: 40 },
+  ]);
+  assert.equal(repo.getPlanDay(1).items[0].sets, 2);
+  assert.equal(curlOf().set_step, undefined, "their 2 stands until new sessions argue with it");
+  assert.equal(buildProgressionProposal(1, { forNextSession: true }).ok, false, "nothing proposes 2 → 3");
+});
+
+test("a person save that leaves sets alone keeps the slot's old stamp", () => {
+  seedCurl();
+  savePlanDayByPerson(1, "Arms (renamed)", null, [
+    { exercise: "Dumbbell Curl", sets: 2, rep_low: 10, rep_high: 12, target_weight: 40 },
+  ]);
+  assert.deepEqual(curlOf().set_step, { from: 2, to: 3 }, "an untouched set count still catches up");
+});
+
+test("only a block whose own phase plan puts a deload next week is exempted, and never a two-week block", () => {
+  repo.setProfile({ training_intent: { priorities: ["muscle", "strength"], endurance_role: "none" } });
+  repo.replacePlan(thinWeek());
+  blocks.createBlock({ goal: "Short", focus: "hypertrophy", total_weeks: 2, week_index: 1 });
+  assert.equal(readVolumeFloorContext().exempt, null, "a two-week block's first week is its only build week");
+  blocks.createBlock({ goal: "Peak", focus: "peak", total_weeks: 4, week_index: 3 });
+  assert.equal(readVolumeFloorContext().exempt, null, "a peak block ends in realization, not a deload");
+  blocks.createBlock({ goal: "Build", focus: "hypertrophy", total_weeks: 6, week_index: 4 });
+  assert.equal(readVolumeFloorContext().exempt, null, "two weeks out is still a building week");
 });
 
 // --------------------------------------------------------- 4. timed-work guards
