@@ -744,8 +744,24 @@ export const ESCALATE_WAVE_SETTLE: VoiceSet = [
 export const ESCALATE_VARIATION: VoiceSet1 = [
   (to) =>
     `This lift has already had a step back recently — rather than cutting it again, run ${to} for a stretch and come back to it fresh.`,
-  (to) => `A second cut here would be more of the same. Give ${to} a run instead, then re-test this one.`,
+  (to) => `A second cut here would be more of the same, so give ${to} a run instead and re-test this one after.`,
   (to) => `Twice backed off now — the movement is the thing to change, so take ${to} for a few weeks.`,
+];
+
+// An isolation lift grinding at a load whose next step is too big a jump for it: the
+// weight holds and the rep range moves up first. No numbers — the card carries them.
+export const ISOLATION_REP_RANGE: VoiceSet = [
+  "The stack jumps too far for this one, so it holds the weight and works a higher rep range first.",
+  "The next weight up is too big a jump here — keep the load and build into a higher rep range before it moves.",
+  "Adding weight would be a big leap on this lift, so the load stays and the reps climb into a higher range first.",
+];
+
+// The same move reached by EARNING the step: the range is capped, but the next weight
+// is a jump this lift does not take cleanly, so the range climbs first.
+export const ISOLATION_REP_RANGE_EARNED: VoiceSet = [
+  "You've filled the range, but the next weight is too big a jump here, so the load holds and the range moves up first.",
+  "The reps are all there — rather than a leap in weight, keep the load and take the range higher before it steps up.",
+  "Every set reached the top, and the next weight up is a big jump for this lift, so the load stays and the reps climb into a higher range.",
 ];
 
 // ---- the log is truth for set count ---------------------------------------
@@ -831,6 +847,8 @@ export function progressionVoicePhrases(): string[] {
     LEDGER_PATIENCE_HOLD,
     LEDGER_MISSED_DELOAD,
     ESCALATE_WAVE_SETTLE,
+    ISOLATION_REP_RANGE,
+    ISOLATION_REP_RANGE_EARNED,
     EARNED_OPEN_OVERLOAD_REPS,
     NOT_EARNED_HOLD_REPS,
     GRIND_HOLD,

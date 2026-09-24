@@ -80,6 +80,13 @@ import {
   slotStamp,
 } from "./prescription-authorship.js";
 import { painAreaLoadsGroup } from "./pain-relevance.js";
+import {
+  bouncedOffLoadStep,
+  coarseLoadStep,
+  isIsolationLift,
+  lastAppliedRepRangeMove,
+  movedRepRange,
+} from "./lift-response.js";
 export { painAreaLoadsExercise } from "./pain-relevance.js";
 import {
   appliedProgressionDeloads,
@@ -286,8 +293,12 @@ export interface Prescription {
     backoff: { sets: number; weight: number; rep_low?: number; rep_high?: number } | null;
   };
   // A REPEATED deload escalated instead of repeating itself: 'rep_wave' dropped the
-  // rep window, 'variation' rotated the movement out. Informational.
-  escalated?: "rep_wave" | "variation";
+  // rep window, 'variation' rotated the movement out. 'rep_range' is the isolation
+  // answer to a grind the next load step is too coarse to fix: the load holds and the
+  // range moves up (lift-response.ts). buildProgressionProposal writes it as a target
+  // change and marks it, so a lift is moved up a range once and the ordinary ladder
+  // answers any later stall.
+  escalated?: "rep_wave" | "variation" | "rep_range";
   // The slot's prescription is UNTESTED (prescription-authorship.ts: authored after the
   // lift was last trained), so the fresh prescription stands at the plan until a session
   // is run at it. Informational for consumers that must not add to an untested slot (the
@@ -2037,10 +2048,33 @@ function repsPrescription(
         )
       : null;
   let topSet: TopSetProtocol | undefined;
-  // A repeat deload rewrites the rep window instead of cutting load again (below).
+  // A repeat deload rewrites the rep window instead of cutting load again (below), and
+  // a coarse-stepped isolation lift moves it UP at the held load (the rep-range move).
   let waveRepLow: number | undefined;
   let waveRepHigh: number | undefined;
   let escalated: Prescription["escalated"];
+  // THE REP-RANGE MOVE (lift-response.ts). An isolation lift whose next load step is too
+  // coarse for it answers with the range, not the load: rep_low/rep_high +3 at the held
+  // weight, once. Two doors lead to it — a grind (RIR ≤ 1, in place of the deload) and an
+  // EARNED step (every working set capped the range at the current load, in place of the
+  // coarse jump: extended double progression). Both need the plan to agree with the log,
+  // reps that already reach within one of the new floor, and no earlier move still
+  // standing on this lift (the ledger read, taken only when a door is otherwise open).
+  const repRangeCandidate =
+    hasRange && !planBehind && !planAhead && !untested && !loadConstrained && baseWeight != null && baseWeight > 0
+      ? movedRepRange(repLow as number, repHigh as number)
+      : null;
+  const rangeMoveReaches =
+    repRangeCandidate != null && topReps != null && topReps >= repRangeCandidate.rep_low - 1;
+  let rangeLedger: boolean | null = null;
+  const rangeMoveUnspent = (): boolean => {
+    if (rangeLedger != null) return rangeLedger;
+    const prior = lastAppliedRepRangeMove(name, date);
+    rangeLedger = !(prior != null && (prior.rep_low == null || (repLow as number) >= prior.rep_low));
+    return rangeLedger;
+  };
+  // Whether the move stands in for an earned step (braked like one) or for a grind's deload.
+  let rangeMoveEarned = false;
 
   if (loadConstrained) {
     action = "hold";
@@ -2128,7 +2162,25 @@ function repsPrescription(
     );
     const grinding = lastRir != null && lastRir <= 1;
     const flatLong = flatWeeks >= varyAfterWeeks;
-    if (grinding) {
+    // An ISOLATION grind whose next load step is too coarse to take (a 15 lb lateral
+    // raise whose next step is 20): a tenth off is the same coarse jump the other way,
+    // so the answer is the rep range, not the load. The range moves up at the held
+    // weight — only when the athlete's reps already reach the new floor (within a rep),
+    // the plan agrees with the log, and this lift has not been moved up a range before
+    // (a later stall in the higher range falls to the ordinary ladder below, never a
+    // second move). Compounds and anything uncoarse keep the deload.
+    const repRange =
+      grinding && rangeMoveReaches && coarseLoadStep(name, baseWeight, group) && rangeMoveUnspent()
+        ? repRangeCandidate
+        : null;
+    if (repRange) {
+      action = "hold";
+      nextWeight = baseWeight;
+      waveRepLow = repRange.rep_low;
+      waveRepHigh = repRange.rep_high;
+      escalated = "rep_range";
+      why = say(voice.ISOLATION_REP_RANGE, "isolation_rep_range");
+    } else if (grinding) {
       action = "deload";
       nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
       why = counsel.doubt
@@ -2208,6 +2260,29 @@ function repsPrescription(
         : sayEffort(voice.REP_STAGE_OVERLOAD, voice.REP_STAGE_OVERLOAD_REPS, "rep_stage_overload")(
             repHigh as number
           );
+  } else if (
+    earned &&
+    !policy &&
+    repRangeCandidate != null &&
+    rangeMoveReaches &&
+    allSetsAtTop &&
+    workingSets.every((s) => s.weight != null && Math.abs(Number(s.weight) - (baseWeight as number)) < 0.1) &&
+    (coarseLoadStep(name, baseWeight, group) ||
+      // …or the log already shows this load's last step bouncing (taken, reps fell under
+      // the range, back to this load): the jump proved too coarse whatever its size.
+      (isIsolationLift(name, group) && bouncedOffLoadStep(name, baseWeight as number, repLow as number))) &&
+    rangeMoveUnspent()
+  ) {
+    // EXTENDED DOUBLE PROGRESSION. The range is capped at this load, and the next load is
+    // a jump this lift does not take cleanly — so the range climbs first, at the held
+    // weight. Once the higher range is capped too, the ordinary load step follows.
+    action = "hold";
+    nextWeight = baseWeight;
+    waveRepLow = repRangeCandidate.rep_low;
+    waveRepHigh = repRangeCandidate.rep_high;
+    escalated = "rep_range";
+    rangeMoveEarned = true;
+    why = say(voice.ISOLATION_REP_RANGE_EARNED, "isolation_rep_range_earned");
   } else if (earned) {
     // DOUBLE PROGRESSION — the LOAD stage. Every working set capped the range at RIR 2+
     // (or no range + a strong top set) → the small earned step up, then reset to the bottom.
@@ -2423,7 +2498,13 @@ function repsPrescription(
   if (untested) {
     /* the fresh prescription stands */
   } else if (response.verdict === "earned_hold") {
-    if (action === "overload") {
+    if (action === "overload" || (escalated === "rep_range" && rangeMoveEarned)) {
+      // An earned range move is an earned step, and is demoted the same one rung.
+      if (escalated === "rep_range") {
+        escalated = undefined;
+        waveRepLow = undefined;
+        waveRepHigh = undefined;
+      }
       action = "hold";
       nextWeight = baseWeight;
       repStep = false;
@@ -2441,6 +2522,7 @@ function repsPrescription(
   } else if (
     drive === "push" &&
     action === "hold" &&
+    escalated !== "rep_range" &&
     !loadConstrained &&
     !policy?.holds_load &&
     status !== "regressing" &&
@@ -2504,7 +2586,15 @@ function repsPrescription(
   // step (an earned overload the morning after a sore knee becomes a hold/deload).
   let autoregulated = false;
   const brake = brakeCtx
-    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.acute, name, date)
+    ? autoregBrake(
+        rangeMoveEarned && escalated === "rep_range" ? "overload" : action,
+        brakeCtx.canonGroup,
+        !!last,
+        brakeCtx.autoreg,
+        brakeCtx.acute,
+        name,
+        date
+      )
     : null;
   if (brake) {
     autoregulated = true;
@@ -2530,7 +2620,9 @@ function repsPrescription(
   // The protection is weaker, and it is honest about being weaker; fixing it properly
   // means teaching the ladder to ease assisted and bodyweight work, which is a change
   // to both brakes and out of scope here.
-  const painBrake = brakeCtx ? painBandBrake(action, brakeCtx.pain, name, date) : null;
+  const painBrake = brakeCtx
+    ? painBandBrake(rangeMoveEarned && escalated === "rep_range" ? "overload" : action, brakeCtx.pain, name, date)
+    : null;
   if (painBrake) {
     const loadCanEase = baseWeight != null && baseWeight > 0;
     const painAction = painBrake.action === "deload" && !loadCanEase ? "hold" : painBrake.action;
@@ -2573,6 +2665,15 @@ function repsPrescription(
   // to a sore joint or a smoked muscle, not evidence that a load cut is the wrong
   // lever for this lift — and restructuring a block, or rotating a movement, is not
   // what a sore knee is asking for. Its own sentence is the honest one.
+  // A rep-range move is a HOLD at the load. A brake that reshaped it (a movement-
+  // response deload, the autoregulation or pain gate) owns the card, and the range
+  // stays where the plan has it.
+  if (escalated === "rep_range" && (action !== "hold" || autoregulated)) {
+    escalated = undefined;
+    waveRepLow = undefined;
+    waveRepHigh = undefined;
+  }
+
   if (action === "deload" && !loadConstrained && !autoregulated && deloadedRecently(name, date)) {
     if (waveRunning(name, date)) {
       // A wave is already in flight. Stacking a second one changes the shape again
@@ -2593,7 +2694,9 @@ function repsPrescription(
       nextWeight = brakedDeload && nextWeight != null && nextWeight > 0 ? Math.min(waved, nextWeight) : waved;
       escalated = "rep_wave";
       why = say(voice.ESCALATE_REP_WAVE, "escalate_rep_wave")(waveRepLow, waveRepHigh);
-    } else if (varyCandidates.length > 0 && !freshPrescription) {
+    } else if (varyCandidates.length > 0 && !freshPrescription && !untested && status !== "progressing") {
+      // A lift the trend reads as progressing is never rotated out, whatever brake
+      // produced the repeat deload — the deload stands on its own instead.
       action = "vary";
       nextWeight = baseWeight;
       varyOptions = varyCandidates;
@@ -2617,7 +2720,7 @@ function repsPrescription(
   // knows nothing about peak weeks must land on a real, lighter session rather than
   // on one near-maximal single with the rest of the work missing.
   //
-  // A rep wave carries its new, lower window instead.
+  // A rep wave carries its new, lower window instead; a rep-range move its higher one.
   const suggested: PrescriptionTarget = topSet
     ? {
         sets: topSet.backoff?.sets ?? sets,
@@ -2638,6 +2741,8 @@ function repsPrescription(
     ? `top set ${topSet.weight} × ${topSet.reps}`
     : repStep
       ? "+1 rep"
+      : escalated === "rep_range" && waveRepLow != null && waveRepHigh != null
+        ? `hold, ${waveRepLow}–${waveRepHigh} reps`
       : // A retired assist moves the card off the plan's assist number, whatever the
         // day then does with it — the delta says so rather than "hold bodyweight".
         loadedDeltaText(assistRetired && planBehind ? planWeight : baseWeight, nextWeight);
@@ -3157,6 +3262,8 @@ function setCatchUp(
   const holdOrRepStep = (x: Prescription) => x.action === "hold" || (x.action === "overload" && x.rep_step === true);
   if (!holdOrRepStep(pre) || !holdOrRepStep(p)) return p;
   if (p.reground || pre.reground) return p;
+  // A rep-range move is already this exposure's one change.
+  if (p.escalated === "rep_range" || pre.escalated === "rep_range") return p;
   const planWeight = p.current.weight ?? null;
   if ((p.suggested?.weight ?? null) !== planWeight) return p;
   if (pre.autoregulated || pre.pain_protected || p.fuel_protected || p.pain_protected) return p;
@@ -3221,14 +3328,16 @@ function applyFuelProtection(
     // where it actually changed THAT lift — a lift already holding for its own
     // reason is not held by fueling, and gluing the day's clause onto it was how a
     // per-lift sentence ended up carrying somebody else's explanation.
-    if (!["overload", "vary", "introduce"].includes(prescription.action)) return prescription;
+    // A rep-range move is a step too (the range climbs), so a soft fuel hold holds it.
+    const rangeMove = prescription.escalated === "rep_range";
+    if (!["overload", "vary", "introduce"].includes(prescription.action) && !rangeMove) return prescription;
     // A soft fueling signal no longer erases a step the work earned when the
     // athlete has asked to be pushed. The near-maximal top set still comes off:
     // that is the genuinely costly piece of an underfed day, and the athlete's
     // declaration is about training hard, not about testing a single. The same
     // carve-out keeps a vary/introduce rotation — those are the stimulus, not
     // the costly single.
-    if (drive === "push" && prescription.action === "overload") {
+    if (drive === "push" && (prescription.action === "overload" || rangeMove)) {
       return prescription.top_set
         ? {
             ...prescription,
@@ -3263,6 +3372,8 @@ function applyFuelProtection(
       vary_to: undefined,
       vary_options: undefined,
       rep_step: undefined,
+      // …and a range move comes off with it: the card is the plan's own range again.
+      escalated: rangeMove ? undefined : prescription.escalated,
       // A near-maximal top set is exactly the kind of aggression this read is asking
       // to hold, so the peak protocol comes off with the step.
       top_set: undefined,
@@ -3289,7 +3400,8 @@ function applyFuelProtection(
   // declaration already carries under `hold_aggression`. Neither carve-out touches a
   // safety floor: a pain-braked prescription falls through to the reduction below, and
   // illness/symptom floors never reach this function at all.
-  const earnedStep = ["overload", "vary", "introduce"].includes(prescription.action);
+  const rangeStep = prescription.escalated === "rep_range";
+  const earnedStep = ["overload", "vary", "introduce"].includes(prescription.action) || rangeStep;
   const keepsFullVolume = !prescription.pain_protected && (atNearGoal || (drive === "push" && earnedStep));
   if (keepsFullVolume && (earnedStep || prescription.action === "hold")) {
     const parkedSingle = Boolean(prescription.top_set);
@@ -3301,7 +3413,7 @@ function applyFuelProtection(
       top_set: undefined,
       autoregulated: true,
       why:
-        prescription.action === "overload"
+        prescription.action === "overload" || rangeStep
           ? parkedSingle
             ? say(voice.LOG_EARNED_FUEL_PARK_SINGLE, "log_earned_fuel_park_single")
             : prescription.why
@@ -3361,6 +3473,7 @@ function applyFuelProtection(
     action: "deload",
     suggested: reduced,
     delta_text: "recovery dose",
+    escalated: rangeStep ? undefined : prescription.escalated,
     vary_to: undefined,
     vary_options: undefined,
     rep_step: undefined,
@@ -3437,7 +3550,21 @@ export function buildProgressionProposal(
         : p.suggested?.weight === null && planned != null && Number(planned) < 0);
     // A set-count catch-up is a real plan change on any hold or rep step it rides.
     const setStep = p.set_step != null && p.mode === "reps";
-    if (p.action === "hold" && !regroundOnly && !setStep) continue;
+    // A rep-range move is a HOLD at the load with a new range — a real target change
+    // (and a new prescription: the apply path re-stamps the slot, so the range stands
+    // until a session is run at it). A fuel or pain dose that reshaped it is not one.
+    const rangeMove =
+      p.action === "hold" &&
+      p.escalated === "rep_range" &&
+      p.mode === "reps" &&
+      !p.fuel_protected &&
+      !p.pain_protected &&
+      p.suggested?.rep_low != null &&
+      p.suggested?.rep_high != null &&
+      (p.current == null ||
+        p.suggested.rep_low !== p.current.rep_low ||
+        p.suggested.rep_high !== p.current.rep_high);
+    if (p.action === "hold" && !regroundOnly && !setStep && !rangeMove) continue;
     if (p.rep_step && !setStep) continue; // a double-progression rep advance is no plan change — the range already covers it
     // A peak-week top set is a SESSION protocol, not a plan target. Writing a
     // near-maximal single into plan_items would make it the number every later step
@@ -3479,6 +3606,9 @@ export function buildProgressionProposal(
       ...(p.escalated === "rep_wave" && !p.fuel_protected && !p.pain_protected
         ? { progression_escalation: "rep_wave" }
         : {}),
+      // …and the rep-range move's own trail: read back by lastAppliedRepRangeMove
+      // (lift-response.ts), so a lift is moved up a range once, never in a loop.
+      ...(rangeMove ? { progression_escalation: "rep_range" } : {}),
     };
     if (p.mode === "timed") {
       if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;
@@ -3493,8 +3623,8 @@ export function buildProgressionProposal(
       c.target_weight =
         suggestedWeight != null && suggestedWeight > 0 && planned != null && planned < 0 ? null : suggestedWeight;
     }
-    // Only a change that moves a target or the set count (or is a swap) is a real change.
-    if (c.target_weight !== undefined || c.target_seconds !== undefined || setStep) changes.push(c);
+    // Only a change that moves a target, the range or the set count (or is a swap) is a real change.
+    if (c.target_weight !== undefined || c.target_seconds !== undefined || setStep || rangeMove) changes.push(c);
   }
   if (!changes.length) return { ok: false, error: "nothing to propose for this day" };
   const parsed = {
