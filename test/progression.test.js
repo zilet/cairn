@@ -261,14 +261,16 @@ test("the compound step SCALES with the load — heavy lifts earn more than ligh
 });
 
 test("isolation lifts get the smaller 2.5 lb plate jump", () => {
+  // 40 lb, not lighter: at 30 lb a 2.5 lb step is a coarse jump for the lift, and an
+  // earned step there moves the rep range first (lift-response.ts, test/liftResponse.test.js).
   makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
-  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 30, focus: "Arms" });
-  logSet("Dumbbell Curl", isoDaysAgo(14), { weight: 27.5, reps: 12, rir: 2 });
-  logSet("Dumbbell Curl", isoDaysAgo(4), { weight: 30, reps: 12, rir: 2 });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 40, focus: "Arms" });
+  logSet("Dumbbell Curl", isoDaysAgo(14), { weight: 37.5, reps: 12, rir: 2 });
+  logSet("Dumbbell Curl", isoDaysAgo(4), { weight: 40, reps: 12, rir: 2 });
 
   const p = nextPrescription("Dumbbell Curl");
   assert.equal(p.action, "overload");
-  assert.equal(p.suggested.weight, 32.5, "isolation step is 2.5 lb, not 5");
+  assert.equal(p.suggested.weight, 42.5, "isolation step is 2.5 lb, not 5");
 });
 
 test("hold: reps not at the top / RIR low → hold the load, no bump", () => {
@@ -1246,13 +1248,13 @@ test("a volume phase paces the step down when it IS earned", () => {
 
 test("an isolation lift is untouched by the phase — plain double progression", () => {
   makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
-  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 30, focus: "Arms" });
-  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", isoDaysAgo(4), { weight: 30, reps: 12, rir: 2, setNum: s });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 40, focus: "Arms" });
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", isoDaysAgo(4), { weight: 40, reps: 12, rir: 2, setNum: s });
   blocks.createBlock({ goal: "Build", focus: "strength", total_weeks: 6, week_index: 1 });
 
   const p = nextPrescription("Dumbbell Curl");
   assert.equal(p.action, "overload");
-  assert.equal(p.suggested.weight, 32.5, "accessory work keeps its own 2.5 lb ladder");
+  assert.equal(p.suggested.weight, 42.5, "accessory work keeps its own 2.5 lb ladder");
 });
 
 test("peak week prescribes a heavy top set — and logging it re-anchors the estimate", () => {

@@ -14,8 +14,10 @@ import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 import { buildProgressionProposal, nextPrescription } from "../dist/repo/progression.js";
 import {
+  bouncedOffLoadStep,
   coarseLoadStep,
   isIsolationLift,
+  isStackLoaded,
   lastAppliedRepRangeMove,
   movedRepRange,
   REP_RANGE_CEILING,
@@ -44,7 +46,7 @@ function planWith(item, prescribedDaysAgo = 90) {
   return day;
 }
 
-function logSets(name, date, { weight, reps, rir, sets = 3 }) {
+function logSets(name, date, { weight, reps, rir = null, sets = 3 }) {
   const ex = repo.findExercise(name);
   const sess = repo.getOrCreateSession(date, null);
   for (let s = 1; s <= sets; s++)
@@ -68,11 +70,11 @@ function seedAppliedRepRange(exercise, daysAgo, rep_low, rep_high, weight) {
   );
 }
 
-// A rope pushdown on a light stack: 25 lb for 12–15, eight sessions over five weeks,
-// every set at 14 reps with one or none left. The next step (27.5) is a tenth of it.
+// The live rope pushdown: 57.5 lb for 12–15, eight sessions over five weeks, every set at
+// 14 reps with one or none left. The next pin (62.5) is a jump of nearly a tenth.
 const GRIND_DAYS = [38, 33, 28, 23, 17, 12, 7, 2];
-function seedPushdownGrind(name = "Rope Pushdown", weight = 25) {
-  makeExercise(name, "triceps");
+function seedPushdownGrind(name = "Rope Pushdown", weight = 57.5, group = "triceps") {
+  makeExercise(name, group);
   planWith({ exercise: name, sets: 3, rep_low: 12, rep_high: 15, target_weight: weight });
   GRIND_DAYS.forEach((d, i) => logSets(name, isoDaysAgo(d), { weight, reps: 14, rir: i % 2 ? 0 : 1 }));
 }
@@ -83,8 +85,15 @@ function seedPushdownGrind(name = "Rope Pushdown", weight = 25) {
 
 test("coarseLoadStep: an isolation stack whose next step is a large fraction of the load", () => {
   assert.equal(coarseLoadStep("Cable Lateral Raise", 15, "shoulders"), true, "15 → 20 on a lateral raise");
-  assert.equal(coarseLoadStep("Rope Pushdown", 25, "triceps"), true, "25 → 27.5 is a tenth");
-  assert.equal(coarseLoadStep("Rope Pushdown", 57.5, "triceps"), false, "57.5 → 60 is under the line");
+  assert.equal(coarseLoadStep("Rope Pushdown", 57.5, "triceps"), true, "a stack's next pin is 5 lb away");
+  assert.equal(coarseLoadStep("Rope Pushdown", 70, "triceps"), false, "5 of 70 is under the line");
+  assert.equal(coarseLoadStep("Cable Curl", 60, "biceps"), true);
+  assert.equal(coarseLoadStep("Seated Leg Curl", 50, "hamstrings"), true, "a leg curl is single-joint on a stack");
+  assert.equal(coarseLoadStep("Leg Extension", 60, "quads"), true);
+  assert.equal(coarseLoadStep("Pec Deck", 60, "chest"), true);
+  assert.equal(coarseLoadStep("EZ Bar Curl", 60, "biceps"), false, "a bar keeps the engine's 2.5 step");
+  assert.equal(coarseLoadStep("Dumbbell Curl", 40, "biceps"), false, "dumbbells keep the engine step");
+  assert.equal(coarseLoadStep("Dumbbell Curl", 25, "biceps"), true, "…which is coarse on a light pair");
   assert.equal(coarseLoadStep("Barbell Bench Press", 95, "chest"), false, "a compound is never on this ladder");
   assert.equal(coarseLoadStep("Back Squat", 45, "quads"), false, "a light compound is still a compound");
   assert.equal(coarseLoadStep("Assisted Dip", -30, "triceps"), false, "assist is not a stack to jump");
@@ -92,6 +101,12 @@ test("coarseLoadStep: an isolation stack whose next step is a large fraction of 
   assert.equal(coarseLoadStep("Rope Pushdown", 0, "triceps"), false);
   assert.equal(isIsolationLift("Cable Lateral Raise", "shoulders"), true, "the pattern covers a shared group");
   assert.equal(isIsolationLift("Overhead Press", "shoulders"), false);
+  assert.equal(isIsolationLift("Back Extension", "hamstrings"), false, "a back extension is a hinge");
+  assert.equal(isStackLoaded("Rope Pushdown"), true);
+  assert.equal(isStackLoaded("Machine Lateral Raise"), true);
+  assert.equal(isStackLoaded("Dumbbell Lateral Raise"), false);
+  assert.equal(isStackLoaded("Barbell Curl"), false);
+  assert.equal(isStackLoaded("Smith Machine Calf Raise"), false, "a smith machine is plate-loaded");
 });
 
 test("movedRepRange lifts both ends by three and stops at the ceiling", () => {
@@ -109,7 +124,7 @@ test("an isolation grind on a coarse stack moves up a rep range at the held weig
   const p = nextPrescription("Rope Pushdown");
   assert.equal(p.escalated, "rep_range");
   assert.equal(p.action, "hold");
-  assert.equal(p.suggested.weight, 25, "the weight is unchanged");
+  assert.equal(p.suggested.weight, 57.5, "the weight is unchanged");
   assert.equal(p.suggested.rep_low, 15);
   assert.equal(p.suggested.rep_high, 18);
   assert.ok(!p.vary_to && !p.vary_options, "no rotation rides along");
@@ -119,12 +134,13 @@ test("an isolation grind on a coarse stack moves up a rep range at the held weig
 });
 
 test("the rep-range voice is plain: one sentence, no numbers, grammar-clean", () => {
-  for (const line of voice.ISOLATION_REP_RANGE) {
+  for (const line of [...voice.ISOLATION_REP_RANGE, ...voice.ISOLATION_REP_RANGE_EARNED]) {
     assert.equal(violatesReadingGrammar(line), null, line);
     assert.doesNotMatch(line, /\d/, line);
     assert.equal(line.split(/[.!?](\s|$)/).filter((s) => s && s.trim()).length, 1, `one sentence: ${line}`);
   }
   assert.ok(voice.progressionVoicePhrases().includes(voice.ISOLATION_REP_RANGE[0]), "registered in the vocabulary");
+  assert.ok(voice.progressionVoicePhrases().includes(voice.ISOLATION_REP_RANGE_EARNED[0]));
 });
 
 test("a barbell compound grinding keeps the deload", () => {
@@ -140,16 +156,16 @@ test("a barbell compound grinding keeps the deload", () => {
 });
 
 test("an isolation grind whose next step is fine-grained keeps the deload", () => {
-  seedPushdownGrind("Rope Pushdown", 57.5);
-  const p = nextPrescription("Rope Pushdown");
-  assert.equal(p.action, "deload", "57.5 → 60 is not a coarse jump");
+  seedPushdownGrind("EZ Bar Curl", 60, "biceps");
+  const p = nextPrescription("EZ Bar Curl");
+  assert.equal(p.action, "deload", "60 → 62.5 on a bar is not a coarse jump");
   assert.equal(p.escalated, undefined);
 });
 
 test("a grind well below the new floor is not moved up — the reps are not there yet", () => {
   makeExercise("Rope Pushdown", "triceps");
-  planWith({ exercise: "Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 25 });
-  GRIND_DAYS.forEach((d) => logSets("Rope Pushdown", isoDaysAgo(d), { weight: 25, reps: 12, rir: 1 }));
+  planWith({ exercise: "Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 57.5 });
+  GRIND_DAYS.forEach((d) => logSets("Rope Pushdown", isoDaysAgo(d), { weight: 57.5, reps: 12, rir: 1 }));
   const p = nextPrescription("Rope Pushdown");
   assert.notEqual(p.escalated, "rep_range");
   assert.equal(p.action, "deload");
@@ -167,16 +183,16 @@ test("an assisted isolation lift is never moved up a rep range", () => {
 // progressing / fresh / untested lifts are never rotated
 // ---------------------------------------------------------------------------
 
-test("a progressing isolation lift gets its overload, not a rotation or a range move", () => {
-  makeExercise("Cable Lateral Raise", "shoulders");
-  planWith({ exercise: "Cable Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 15 });
-  logSets("Cable Lateral Raise", isoDaysAgo(24), { weight: 10, reps: 15, rir: 2 });
-  logSets("Cable Lateral Raise", isoDaysAgo(17), { weight: 15, reps: 12, rir: 2 });
-  logSets("Cable Lateral Raise", isoDaysAgo(10), { weight: 15, reps: 14, rir: 2 });
-  logSets("Cable Lateral Raise", isoDaysAgo(3), { weight: 15, reps: 15, rir: 2 });
-  const p = nextPrescription("Cable Lateral Raise");
+test("a progressing isolation lift on a fine step gets its overload, not a rotation or a range move", () => {
+  makeExercise("Dumbbell Curl", "biceps");
+  planWith({ exercise: "Dumbbell Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 40 });
+  logSets("Dumbbell Curl", isoDaysAgo(24), { weight: 35, reps: 12 });
+  logSets("Dumbbell Curl", isoDaysAgo(17), { weight: 40, reps: 10 });
+  logSets("Dumbbell Curl", isoDaysAgo(10), { weight: 40, reps: 11 });
+  logSets("Dumbbell Curl", isoDaysAgo(3), { weight: 40, reps: 12 });
+  const p = nextPrescription("Dumbbell Curl");
   assert.equal(p.action, "overload");
-  assert.ok(p.suggested.weight > 15);
+  assert.equal(p.suggested.weight, 42.5);
   assert.equal(p.escalated, undefined);
   assert.ok(!p.vary_to);
 });
@@ -240,7 +256,7 @@ test("the proposal writes the range move as a marked target change", () => {
   assert.equal(change.swap, undefined, "not a rotation");
   assert.equal(change.rep_low, 15);
   assert.equal(change.rep_high, 18);
-  assert.equal(change.target_weight, 25, "the load is held");
+  assert.equal(change.target_weight, 57.5, "the load is held");
   assert.equal(change.progression_escalation, "rep_range");
   assert.equal(change.progression_action, undefined, "not a deload in the audit trail");
 });
@@ -255,7 +271,7 @@ test("lead mode: the range move quiet-applies as a training_target, re-stamps th
   const item = repo.getPlanDay(1).items[0];
   assert.equal(item.rep_low, 15);
   assert.equal(item.rep_high, 18);
-  assert.equal(item.target_weight, 25);
+  assert.equal(item.target_weight, 57.5);
   const stamp = db.prepare(`SELECT prescribed_at FROM plan_items`).get().prescribed_at;
   assert.equal(String(stamp).slice(0, 10), localDateISO(), "the normal writer re-stamped the slot");
   assert.ok(lastAppliedRepRangeMove("Rope Pushdown"), "the ledger carries the move");
@@ -264,19 +280,19 @@ test("lead mode: the range move quiet-applies as a training_target, re-stamps th
   assert.equal(next.action, "hold", "an untested range stands as written");
   assert.equal(next.escalated, undefined, "it does not re-fire");
   assert.equal(next.suggested.rep_low, 15);
-  assert.equal(next.suggested.weight, 25);
+  assert.equal(next.suggested.weight, 57.5);
 });
 
 test("a range moved today off today's session does not re-fire or fall to a deload", () => {
   makeExercise("Rope Pushdown", "triceps");
-  planWith({ exercise: "Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 25 });
+  planWith({ exercise: "Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 57.5 });
   [35, 30, 25, 20, 14, 9, 4, 0].forEach((d) =>
-    logSets("Rope Pushdown", isoDaysAgo(d), { weight: 25, reps: 14, rir: 1 })
+    logSets("Rope Pushdown", isoDaysAgo(d), { weight: 57.5, reps: 14, rir: 1 })
   );
   // Applied at today's finish: a brain step stamps the bare day, so today's session reads
   // as trained under it — the fresh stamp is what keeps the plateau read quiet.
   db.prepare(`UPDATE plan_items SET rep_low = 15, rep_high = 18, prescribed_at = ?`).run(localDateISO());
-  seedAppliedRepRange("Rope Pushdown", 0, 15, 18, 25);
+  seedAppliedRepRange("Rope Pushdown", 0, 15, 18, 57.5);
   const p = nextPrescription("Rope Pushdown");
   assert.notEqual(p.action, "deload");
   assert.equal(p.escalated, undefined);
@@ -286,13 +302,138 @@ test("a range moved today off today's session does not re-fire or fall to a delo
 test("still grinding after a run in the higher range falls to the ordinary ladder — never a second move", () => {
   makeExercise("Rope Pushdown", "triceps");
   // The range was moved three weeks ago and has been trained since.
-  planWith({ exercise: "Rope Pushdown", sets: 3, rep_low: 15, rep_high: 18, target_weight: 25 }, 21);
-  seedAppliedRepRange("Rope Pushdown", 21, 15, 18, 25);
-  // Flat at 25 × 17 with nothing in reserve: the reps would reach a second move's floor,
+  planWith({ exercise: "Rope Pushdown", sets: 3, rep_low: 15, rep_high: 18, target_weight: 57.5 }, 21);
+  seedAppliedRepRange("Rope Pushdown", 21, 15, 18, 57.5);
+  // Flat at 57.5 × 17 with nothing in reserve: the reps would reach a second move's floor,
   // so only the ledger stands between this lift and a loop.
-  GRIND_DAYS.forEach((d, i) => logSets("Rope Pushdown", isoDaysAgo(d), { weight: 25, reps: 17, rir: i % 2 ? 0 : 1 }));
+  GRIND_DAYS.forEach((d, i) => logSets("Rope Pushdown", isoDaysAgo(d), { weight: 57.5, reps: 17, rir: i % 2 ? 0 : 1 }));
   const p = nextPrescription("Rope Pushdown");
   assert.notEqual(p.escalated, "rep_range", "no second range move");
   assert.equal(p.action, "deload", "the existing ladder answers");
   assert.equal(p.suggested.rep_low, 15, "the moved range stays");
+});
+
+// ---------------------------------------------------------------------------
+// the earned door: extended double progression (no RIR needed)
+// ---------------------------------------------------------------------------
+
+// The live cable lateral: 15 lb for 12–15, every working set capping 15, no RIR logged.
+function seedCableLateralCapped({ days = [24, 17, 10, 3], rep_low = 12, rep_high = 15, reps = 15 } = {}) {
+  makeExercise("Cable Lateral Raise", "shoulders");
+  planWith({ exercise: "Cable Lateral Raise", sets: 3, rep_low, rep_high, target_weight: 15 });
+  for (const d of days) logSets("Cable Lateral Raise", isoDaysAgo(d), { weight: 15, reps, rir: null });
+}
+
+test("live-like: a cable lateral capping 12–15 at 15 lb holds 15 and moves to 15–18 instead of jumping to 20", () => {
+  seedCableLateralCapped();
+  const p = nextPrescription("Cable Lateral Raise");
+  assert.equal(p.escalated, "rep_range");
+  assert.equal(p.action, "hold");
+  assert.equal(p.suggested.weight, 15);
+  assert.equal(p.suggested.rep_low, 15);
+  assert.equal(p.suggested.rep_high, 18);
+  assert.equal(p.delta_text, "hold, 15–18 reps");
+  assert.ok(voice.ISOLATION_REP_RANGE_EARNED.includes(p.why), `the earned sentence: ${p.why}`);
+  assert.doesNotMatch(p.why, /RIR|\d/, "no rating asked for, no numbers");
+
+  const out = buildProgressionProposal(1);
+  assert.equal(out.ok, true);
+  const change = out.proposal.parsed.changes.find((c) => c.exercise === "Cable Lateral Raise");
+  assert.equal(change.rep_low, 15);
+  assert.equal(change.rep_high, 18);
+  assert.equal(change.target_weight, 15);
+  assert.equal(change.progression_escalation, "rep_range");
+});
+
+test("once the higher range is capped too, the ordinary load step follows — no second move", () => {
+  makeExercise("Cable Lateral Raise", "shoulders");
+  planWith({ exercise: "Cable Lateral Raise", sets: 3, rep_low: 15, rep_high: 18, target_weight: 15 }, 21);
+  seedAppliedRepRange("Cable Lateral Raise", 21, 15, 18, 15);
+  for (const d of [24, 17]) logSets("Cable Lateral Raise", isoDaysAgo(d), { weight: 15, reps: 15, rir: null });
+  for (const d of [10, 3]) logSets("Cable Lateral Raise", isoDaysAgo(d), { weight: 15, reps: 18, rir: null });
+  const p = nextPrescription("Cable Lateral Raise");
+  assert.equal(p.action, "overload");
+  assert.equal(p.escalated, undefined, "the move is spent");
+  assert.equal(p.suggested.weight, 20);
+});
+
+test("an earned step on a fine-grained lift is the ordinary load step", () => {
+  makeExercise("EZ Bar Curl", "biceps");
+  planWith({ exercise: "EZ Bar Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 60 });
+  for (const d of [17, 10, 3]) logSets("EZ Bar Curl", isoDaysAgo(d), { weight: 60, reps: 12, rir: null });
+  const p = nextPrescription("EZ Bar Curl");
+  assert.equal(p.action, "overload");
+  assert.equal(p.escalated, undefined);
+});
+
+test("a capped top set over uncapped back-offs is not the earned door", () => {
+  makeExercise("Cable Lateral Raise", "shoulders");
+  planWith({ exercise: "Cable Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 15 });
+  for (const d of [17, 10, 3]) {
+    const ex = repo.findExercise("Cable Lateral Raise");
+    const sess = repo.getOrCreateSession(isoDaysAgo(d), null);
+    [15, 13, 12].forEach((reps, i) =>
+      db
+        .prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, ?, 15, ?)`)
+        .run(sess.id, ex.id, i + 1, reps)
+    );
+  }
+  const p = nextPrescription("Cable Lateral Raise");
+  assert.notEqual(p.escalated, "rep_range");
+  assert.equal(p.suggested.weight, 15);
+});
+
+test("a recovery brake wins over the earned range move", () => {
+  seedCableLateralCapped({ days: [24, 17, 10, 1] });
+  // Yesterday's session came back sore: an earned step holds, and so does the move.
+  db.prepare(`UPDATE sessions SET soreness = 5 WHERE date = ?`).run(isoDaysAgo(1));
+  const p = nextPrescription("Cable Lateral Raise");
+  assert.equal(p.escalated, undefined);
+  assert.equal(p.action, "hold");
+  assert.equal(p.suggested.rep_low, 12, "the plan's range stands");
+  assert.equal(p.suggested.weight, 15);
+});
+
+test("push drive never turns the range move back into the coarse jump", () => {
+  seedCableLateralCapped();
+  repo.setSettings({ training_drive: "push" });
+  const p = nextPrescription("Cable Lateral Raise");
+  assert.equal(p.escalated, "rep_range");
+  assert.equal(p.suggested.weight, 15);
+});
+
+test("a plan behind the log is re-grounded first, never range-moved in the same breath", () => {
+  makeExercise("Cable Lateral Raise", "shoulders");
+  planWith({ exercise: "Cable Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 10 });
+  for (const d of [17, 10, 3]) logSets("Cable Lateral Raise", isoDaysAgo(d), { weight: 15, reps: 15, rir: null });
+  const p = nextPrescription("Cable Lateral Raise");
+  assert.notEqual(p.escalated, "rep_range");
+});
+
+// ---------------------------------------------------------------------------
+// a bounce off the last load step prefers the range on the next earned step
+// ---------------------------------------------------------------------------
+
+function seedCurlBounce() {
+  makeExercise("Dumbbell Curl", "biceps");
+  planWith({ exercise: "Dumbbell Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 40 });
+  logSets("Dumbbell Curl", isoDaysAgo(35), { weight: 40, reps: 12 });
+  logSets("Dumbbell Curl", isoDaysAgo(28), { weight: 42.5, reps: 8 }); // the step did not hold
+  logSets("Dumbbell Curl", isoDaysAgo(21), { weight: 40, reps: 11 });
+  for (const d of [14, 7, 2]) logSets("Dumbbell Curl", isoDaysAgo(d), { weight: 40, reps: 12 });
+}
+
+test("bouncedOffLoadStep reads a step taken, missed and returned from", () => {
+  seedCurlBounce();
+  assert.equal(bouncedOffLoadStep("Dumbbell Curl", 40, 10), true);
+  assert.equal(bouncedOffLoadStep("Dumbbell Curl", 40, 8), false, "8 reps at the new load met a floor of 8");
+});
+
+test("a lift that bounced off its last step takes the range move on the next earned step", () => {
+  seedCurlBounce();
+  const p = nextPrescription("Dumbbell Curl");
+  assert.equal(p.escalated, "rep_range", "40 → 42.5 is a fine step on paper, but the log says it did not hold");
+  assert.equal(p.suggested.weight, 40);
+  assert.equal(p.suggested.rep_low, 13);
+  assert.equal(p.suggested.rep_high, 15);
 });

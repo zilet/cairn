@@ -756,6 +756,14 @@ export const ISOLATION_REP_RANGE: VoiceSet = [
   "Adding weight would be a big leap on this lift, so the load stays and the reps climb into a higher range first.",
 ];
 
+// The same move reached by EARNING the step: the range is capped, but the next weight
+// is a jump this lift does not take cleanly, so the range climbs first.
+export const ISOLATION_REP_RANGE_EARNED: VoiceSet = [
+  "You've filled the range, but the next weight is too big a jump here, so the load holds and the range moves up first.",
+  "The reps are all there — rather than a leap in weight, keep the load and take the range higher before it steps up.",
+  "Every set reached the top, and the next weight up is a big jump for this lift, so the load stays and the reps climb into a higher range.",
+];
+
 // ---- the log is truth for set count ---------------------------------------
 
 // The plan's set count can catch up to what the athlete has been doing. Arguments:
@@ -840,6 +848,7 @@ export function progressionVoicePhrases(): string[] {
     LEDGER_MISSED_DELOAD,
     ESCALATE_WAVE_SETTLE,
     ISOLATION_REP_RANGE,
+    ISOLATION_REP_RANGE_EARNED,
     EARNED_OPEN_OVERLOAD_REPS,
     NOT_EARNED_HOLD_REPS,
     GRIND_HOLD,
