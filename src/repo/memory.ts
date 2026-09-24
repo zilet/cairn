@@ -524,8 +524,12 @@ const OUTCOME_LESSONS = {
   // (see writeLearning) — and they are worded far enough apart that addMemory's
   // 0.6-Jaccard near-dup fold cannot silently merge them, which would have left one
   // row whose text said "shorter" while the evidence said "longer".
+  // Minutes are a TIME estimate, never a dose read: a session that finishes early
+  // says the minutes were over-budgeted, not that the work was too much. The old
+  // wording ("size suggestions down") was read by plan redraws as licence to cut
+  // working sets while the log showed every prescribed set completed.
   sessionsRunShort:
-    "Sessions have been finishing well under the suggested time lately; the coach can size suggestions down.",
+    "Sessions have been finishing well under the suggested time lately; the coach can budget fewer minutes — the work itself fits.",
   sessionsRunLong: "Sessions keep running past the suggested time lately; the coach can budget more minutes up front.",
 };
 
