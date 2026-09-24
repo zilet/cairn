@@ -414,6 +414,18 @@ function candidateAllowsFill(candidate: DailyDecisionCandidate | undefined, plan
   return false;
 }
 
+/**
+ * The machine-register soft line for a set of fills (`soft_preferences` under
+ * `weekly_dose_fill`). One writer, so composition can re-say it for only the fills that
+ * landed on the card (daily-composition.ts `reconcileEnvelopeDose`).
+ */
+export function weeklyDoseSoftLine(fills: ReadonlyArray<{ exercise: string; group: string }>): string {
+  const filledGroups = new Set(fills.map((f) => f.group));
+  return `The week would end short on ${[...filledGroups].join(" and ")}; one extra working set on ${fills
+    .map((f) => f.exercise)
+    .join(" and ")}, load unchanged.`;
+}
+
 /** Decide half. Pure. Nothing to fill → `{ dose: null, soft: null, rationale: null }`. */
 export function weeklyDoseDecision(
   snapshot: WeeklyDoseSnapshot | undefined,
@@ -461,10 +473,7 @@ export function weeklyDoseDecision(
     seen.add(key);
   }
   if (!fills.length) return EMPTY;
-  const filledGroups = new Set(fills.map((f) => f.group));
-  const soft = `The week would end short on ${[...filledGroups].join(" and ")}; one extra working set on ${fills
-    .map((f) => f.exercise)
-    .join(" and ")}, load unchanged.`;
+  const soft = weeklyDoseSoftLine(fills);
   return {
     dose: {
       gaps: snapshot.gaps.map((g) => ({ group: norm(g.group), short: finite(g.short) ?? 0 })),

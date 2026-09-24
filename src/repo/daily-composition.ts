@@ -23,6 +23,7 @@ import { getPlanDay } from "./plan.js";
 import { classifyPattern } from "./exercise-variations.js";
 import { collapseRegionDuplicates, pairForSession } from "./composition-pairing.js";
 import { applyWeeklyDose } from "./composition-dose.js";
+import { weeklyDoseSoftLine } from "./weekly-dose-ledger.js";
 import { nextLoadStep } from "./progression.js";
 import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
@@ -570,6 +571,40 @@ function reconcileEnvelopeReach(envelope: DailyDecisionEnvelope, landed: boolean
     }
   }
   if (!replaced) envelope.rationale.push({ code: "reach_no_room", text: why });
+}
+
+// The WEEK'S DOSE on the persisted envelope, reconciled against the card the same way
+// the reach is: the decision authorizes fills, composition decides which land (budget,
+// clock, per-item cap, the plan snapshot, a card whose set count moved). The envelope
+// then names only the fills the card carries — none landed, and `dose` goes, with its
+// precedence entry, soft line and rationale line; some landed, and `fills` and the soft
+// line name only those. Mutates in place for the same reason reconcileEnvelopeReach
+// does (the caller persists this same object). `landed` holds normalizedExerciseKey
+// values (applyWeeklyDose's `landed`).
+export function reconcileEnvelopeDose(envelope: DailyDecisionEnvelope, landed: ReadonlySet<string>): void {
+  const dose = envelope.dose;
+  if (!dose) return;
+  const fills = Array.isArray(dose.fills) ? dose.fills : [];
+  const keys = new Set([...landed].map((key) => normalizedExerciseKey(String(key ?? ""))));
+  const kept = fills.filter((fill) => keys.has(normalizedExerciseKey(String(fill?.exercise ?? ""))));
+  if (kept.length === fills.length && kept.length > 0) return;
+  if (kept.length) {
+    fills.splice(0, fills.length, ...kept);
+    for (const entry of envelope.soft_preferences) {
+      if (entry.code === "weekly_dose_fill") entry.detail = weeklyDoseSoftLine(kept);
+    }
+    return;
+  }
+  delete envelope.dose;
+  for (let i = envelope.precedence.length - 1; i >= 0; i--) {
+    if (envelope.precedence[i] === "weekly_dose_fill") envelope.precedence.splice(i, 1);
+  }
+  for (let i = envelope.soft_preferences.length - 1; i >= 0; i--) {
+    if (envelope.soft_preferences[i].code === "weekly_dose_fill") envelope.soft_preferences.splice(i, 1);
+  }
+  for (let i = envelope.rationale.length - 1; i >= 0; i--) {
+    if (envelope.rationale[i].code === "weekly_dose_fill") envelope.rationale.splice(i, 1);
+  }
 }
 
 // The heavy single as an item, shaped exactly like every other normalized reps
@@ -1467,7 +1502,7 @@ export function normalizeComposedSession(
   // the card is ordered once. Never on the athlete's own snapshotted day. Identity when
   // the envelope authorizes no fill (composition-dose.ts).
   const dosed = opts.planSnapshot
-    ? { items: withTopSetsOrCapped, changed: false, estAddMin: 0 }
+    ? { items: withTopSetsOrCapped, changed: false, estAddMin: 0, landed: [] as string[] }
     : applyWeeklyDose(withTopSetsOrCapped, {
         envelope,
         date: envelope.date,
@@ -1512,6 +1547,9 @@ export function normalizeComposedSession(
   // that does NOT carry it — an agent-authored single whose load can come from a
   // plan target. That one is judged against the logged working weight at insertion.
   reconcileEnvelopeReach(envelope, reachLanded);
+  // …and the dose the same way: after pairing, which still seats today's gap groups off
+  // `dose.gaps`, the envelope keeps only the fills this card carries.
+  reconcileEnvelopeDose(envelope, new Set(dosed.landed));
 
   let est = base.est_minutes;
   // The dose's added sets cost time; the day's own duration cap below still binds.

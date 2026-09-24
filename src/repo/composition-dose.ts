@@ -58,6 +58,12 @@ export interface WeeklyDoseComposeResult {
   // Minutes the added sets cost; the caller adds them to est_minutes BEFORE the
   // existing duration clamp.
   estAddMin: number;
+  // normalizedExerciseKey of every fill whose added set is on the returned card: landed
+  // on this pass, or already carried (the item holds more than the plan's own count — a
+  // card normalized twice, or an agent that already wrote the set). The caller
+  // reconciles the envelope's `dose` against it (reconcileEnvelopeDose), so the persisted
+  // envelope never names a fill the card does not carry.
+  landed: string[];
 }
 
 // What one working set costs on the clock, rest included. The same figure prices the
@@ -120,9 +126,9 @@ function cardWorkMinutes(items: readonly any[]): number {
  */
 export function applyWeeklyDose(items: any[], ctx: WeeklyDoseComposeContext): WeeklyDoseComposeResult {
   const fills = Array.isArray(ctx.envelope?.dose?.fills) ? ctx.envelope.dose.fills : [];
-  if (!fills.length || !Array.isArray(items) || !items.length) return { items, changed: false, estAddMin: 0 };
+  if (!fills.length || !Array.isArray(items) || !items.length)
+    return { items, changed: false, estAddMin: 0, landed: [] };
   let remaining = Math.max(0, Math.floor(ctx.budget.remainingSets));
-  if (remaining < 1) return { items, changed: false, estAddMin: 0 };
 
   // Lifts carrying a heavy single or the day's reach are not the fill's to touch — the
   // challenge keeps its budget and its card exactly as composed.
@@ -146,8 +152,8 @@ export function applyWeeklyDose(items: any[], ctx: WeeklyDoseComposeContext): We
   const out = items.slice();
   let added = 0;
   const done = new Set<string>();
+  const landed: string[] = [];
   for (const fill of fills) {
-    if (remaining < 1) break;
     const fillKey = normalizedExerciseKey(String(fill?.exercise ?? ""));
     if (!fillKey || done.has(fillKey) || challenged.has(fillKey)) continue;
     const index = out.findIndex(
@@ -155,6 +161,15 @@ export function applyWeeklyDose(items: any[], ctx: WeeklyDoseComposeContext): We
     );
     if (index < 0) continue;
     const item = out[index];
+    // Already carried: the fill's work is on the card whatever the budget says now.
+    const carried = finite(item.sets);
+    const planSets = finite(fill.sets);
+    if (carried != null && planSets != null && carried > planSets) {
+      landed.push(fillKey);
+      done.add(fillKey);
+      continue;
+    }
+    if (remaining < 1) continue;
     const name = String(item.exercise ?? "");
     const group = canonicalGroup(String(fill.group ?? "")) ?? String(fill.group ?? "").toLowerCase();
     if (!group || ctx.saturatedGroups.has(group) || ctx.excludedGroups.has(group)) continue;
@@ -179,7 +194,8 @@ export function applyWeeklyDose(items: any[], ctx: WeeklyDoseComposeContext): We
     added += 1;
     clock += WEEKLY_DOSE_MINUTES_PER_SET;
     done.add(fillKey);
+    landed.push(fillKey);
   }
-  if (!added) return { items, changed: false, estAddMin: 0 };
-  return { items: out, changed: true, estAddMin: added * WEEKLY_DOSE_MINUTES_PER_SET };
+  if (!added) return { items, changed: false, estAddMin: 0, landed };
+  return { items: out, changed: true, estAddMin: added * WEEKLY_DOSE_MINUTES_PER_SET, landed };
 }

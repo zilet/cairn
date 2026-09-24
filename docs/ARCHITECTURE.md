@@ -987,7 +987,12 @@ construction: it lands only on an item still carrying exactly the plan's own `se
 normalized twice, or an agent that already wrote more sets, never doubles it. The note rotates through
 `pickDayVariant(DOSE_FILL_NOTES, …)` and never carries a number; it leads the card's existing note only
 while the two fit `CARD_NOTE_BUDGET` (shared with the pairing hint) — otherwise the set lands and the
-line is dropped, never the athlete's cue.
+line is dropped, never the athlete's cue. The persisted envelope says only what the card carries:
+`applyWeeklyDose` reports which fills `landed` (added on this pass, or already carried — the item holds
+more than the plan's own count), and `reconcileEnvelopeDose` (`daily-composition.ts`, run next to
+`reconcileEnvelopeReach`, after pairing has read `dose.gaps`) keeps only those fills and re-says the
+soft line for them (`weeklyDoseSoftLine`); when none landed — a plan snapshot, the clock or a cap, an
+agent card whose set count moved — `dose` and its precedence, soft and rationale entries are removed.
 
 ### Pairing and movement regions (`src/repo/movement-region.ts`, `src/repo/composition-pairing.ts`, 2026-09-24)
 

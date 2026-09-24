@@ -12,7 +12,11 @@ import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { applyWeeklyDose, DOSE_FILL_NOTES, doseFillNote } from "../dist/repo/composition-dose.js";
 import { CARD_NOTE_BUDGET } from "../dist/repo/composition-pairing.js";
-import { deterministicComposedSession, normalizeComposedSession } from "../dist/repo/daily-composition.js";
+import {
+  deterministicComposedSession,
+  normalizeComposedSession,
+  reconcileEnvelopeDose,
+} from "../dist/repo/daily-composition.js";
 import { buildDailySessionDecision, gatherDailyDecisionSnapshot } from "../dist/repo/daily-decision.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
 import { buildProgressionProposal, planDayProgression } from "../dist/repo/progression.js";
@@ -596,4 +600,84 @@ test("a fill whose line would push the card's note past what Today shows keeps t
   const short = applyWeeklyDose([{ ...items[0], note: "Slow lowering." }], ctx).items[0].note;
   assert.ok(short.startsWith(doseFillNote("quads", WED, "Leg Extension").replace(/[.]+$/, "")), short);
   assert.ok(short.endsWith("Slow lowering."), short);
+});
+
+// ---------- the persisted envelope says only what the card carries ----------
+
+const doseTrail = (envelope) => ({
+  dose: "dose" in envelope,
+  precedence: envelope.precedence.includes("weekly_dose_fill"),
+  soft: envelope.soft_preferences.some((s) => s.code === "weekly_dose_fill"),
+  rationale: envelope.rationale.some((r) => r.code === "weekly_dose_fill"),
+});
+const NO_TRAIL = { dose: false, precedence: false, soft: false, rationale: false };
+
+test("a plan snapshot lands no fill, so the persisted envelope carries no dose and no dose line", () => {
+  seedWeek();
+  const { envelope } = decideWednesday();
+  assert.equal(doseTrail(envelope).dose, true);
+  deterministicComposedSession(envelope, { planSnapshot: true });
+  assert.deepEqual(doseTrail(envelope), NO_TRAIL);
+});
+
+test("a card whose set count no longer matches the plan lands no fill, and the envelope drops the dose", () => {
+  seedWeek();
+  const { envelope } = decideWednesday();
+  const fromEnvelope = deterministicComposedSession(clone(envelope));
+  // An agent's card that wrote the leg extension down a set: the fill is not the
+  // server's to re-add, so nothing lands.
+  const agentCard = clone(fromEnvelope);
+  const legExt = byName(agentCard, "Leg Extension");
+  legExt.sets = 1;
+  legExt.note = null;
+  const out = normalizeComposedSession(agentCard, envelope);
+  assert.equal(byName(out.session, "Leg Extension").sets, 1);
+  assert.deepEqual(doseTrail(envelope), NO_TRAIL);
+});
+
+test("a fill that does land keeps the dose; a card normalized twice keeps it too", () => {
+  seedWeek();
+  const { envelope } = decideWednesday();
+  const first = deterministicComposedSession(envelope);
+  assert.equal(byName(first, "Leg Extension").sets, 3);
+  assert.deepEqual(doseTrail(envelope), { dose: true, precedence: true, soft: true, rationale: true });
+  // The composed card comes back through composition (an accepted card): the set is
+  // already there, so the fill's work stands on the card and the dose stays.
+  const again = normalizeComposedSession(clone(first), envelope);
+  assert.equal(byName(again.session, "Leg Extension").sets, 3);
+  assert.equal(doseTrail(envelope).dose, true);
+  assert.deepEqual(envelope.dose.fills.map((f) => f.exercise), ["Leg Extension"]);
+});
+
+test("when only some fills land, the envelope's fills and soft line name only those", () => {
+  const envelope = {
+    date: WED,
+    kind: "train",
+    precedence: ["template", "weekly_dose_fill"],
+    soft_preferences: [
+      {
+        code: "weekly_dose_fill",
+        detail: "The week would end short on quads and hamstrings; one extra working set on Leg Extension and Lying Leg Curl, load unchanged.",
+      },
+    ],
+    rationale: [{ code: "weekly_dose_fill", text: "The week has come up a little short, so today adds a set where it fits." }],
+    dose: {
+      gaps: [
+        { group: "quads", short: 1 },
+        { group: "hamstrings", short: 1 },
+      ],
+      fills: [
+        { exercise: "Leg Extension", group: "quads", add_sets: 1, sets: 2 },
+        { exercise: "Lying Leg Curl", group: "hamstrings", add_sets: 1, sets: 3 },
+      ],
+    },
+  };
+  // The curl's card carries a set count the plan never wrote: only the extension lands.
+  reconcileEnvelopeDose(envelope, new Set(["leg extension"]));
+  assert.deepEqual(envelope.dose.fills.map((f) => f.exercise), ["Leg Extension"]);
+  const soft = envelope.soft_preferences.find((s) => s.code === "weekly_dose_fill").detail;
+  assert.ok(/Leg Extension/.test(soft) && !/Leg Curl/.test(soft) && !/hamstrings/.test(soft), soft);
+  assert.ok(envelope.precedence.includes("weekly_dose_fill"));
+  reconcileEnvelopeDose(envelope, new Set());
+  assert.deepEqual(doseTrail(envelope), NO_TRAIL);
 });
