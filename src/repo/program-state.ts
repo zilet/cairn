@@ -14,6 +14,7 @@
 // ============================================================================
 import { db } from "../db.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
+import { newestStampByExercise, slotAuthorship } from "./prescription-authorship.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
 import { getRecoverySummary } from "./coach.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear, trainingBackstopSignature } from "./training-cache.js";
@@ -663,7 +664,7 @@ function liftStates(date: string): LiftState[] {
   // and gradeRepsLift drops any row with no gradable point on its own.
   const exs = db
     .prepare(
-      `SELECT e.name AS name, e.muscle_group AS mg, e.mode AS mode,
+      `SELECT e.id AS id, e.name AS name, e.muscle_group AS mg, e.mode AS mode,
             MAX(s.date) AS last_date, COUNT(DISTINCT s.date) AS days
        FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
        JOIN sessions s ON s.id = ls.session_id
@@ -676,6 +677,8 @@ function liftStates(date: string): LiftState[] {
     )
     .all(date) as any[];
 
+  // When each movement's plan slot was prescribed — ONE read (prescription-authorship.ts).
+  const stamps = newestStampByExercise();
   const out: LiftState[] = [];
   for (const e of exs) {
     const name = String(e.name);
@@ -687,6 +690,15 @@ function liftStates(date: string): LiftState[] {
     // Not currently trained is never "regressing": the lift has no present trend,
     // and it re-baselines when it comes back into the rotation.
     const dormant = graded.status === "regressing" && !liftTrainedRecently({ last_trained }, date);
+    // A stall or a slide measured across a RE-PRESCRIPTION is not this prescription's
+    // trend: a slot written after the lift was last trained has nothing of its own to
+    // read yet, and a freshly written one is not "flat" on weeks of the old one. (A
+    // slide AFTER a fresh rewrite still reads — only an untested slot hides it.)
+    const authorship = slotAuthorship(stamps.get(Number(e.id)) ?? null, last_trained, date);
+    const represcribed =
+      !dormant &&
+      ((authorship.untested && (graded.status === "plateaued" || graded.status === "regressing")) ||
+        (authorship.fresh && graded.status === "plateaued"));
     out.push({
       ...graded,
       ...(dormant
@@ -694,6 +706,14 @@ function liftStates(date: string): LiftState[] {
             status: "new" as const,
             suggested_action: "hold" as const,
             why: "Not trained lately — no current trend to read; it re-baselines when it's back in the rotation.",
+          }
+        : {}),
+      ...(represcribed
+        ? {
+            status: "new" as const,
+            suggested_action: "hold" as const,
+            stall_signals: [],
+            why: "Newly prescribed — it gets a fair run as written before its trend is read again.",
           }
         : {}),
       family_key,

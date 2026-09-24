@@ -445,3 +445,46 @@ test("a reopened morning-run lifting day stays bounded while a deciding brake st
   assert.equal(env.caps.volume, "reduced");
   assert.ok(env.caps.duration_min <= 40, `bounded clock (got ${env.caps.duration_min})`);
 });
+
+// ---------- a FRESH prescription composes at the plan load ----------
+// The slot was rewritten after the lift was last logged: the progression holds it at
+// the plan (untested), it earns no floor off the older work, and the composed card
+// carries the load the athlete just wrote — never the heavier one it replaced.
+test("a fresh slot earns no floor and composes at the plan's own load", () => {
+  repo.upsertExercise({ name: "Barbell Deadlift", muscle_group: "hamstrings", mode: "reps" });
+  repo.savePlanDay(1, "Lower B", "Hinge", [
+    { exercise: "Barbell Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
+  ]);
+  // Older sessions that WOULD earn a 195 floor (the range capped with reserve)…
+  for (const daysBack of [14, 9, 4]) {
+    const date = addDaysISO(DATE, -daysBack);
+    for (let s = 0; s < 3; s++) repo.logSetByName({ date, exercise: "Barbell Deadlift", weight: 195, reps: 8, rir: 3 });
+  }
+  // …and the plan rewritten to 185 after them.
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(addDaysISO(DATE, -1));
+  const snap = gatherDailyDecisionSnapshot(DATE);
+  const deadlift = snap.progression.find((p) => p.exercise === "Barbell Deadlift");
+  assert.equal(deadlift?.action, "hold");
+  assert.equal(deadlift?.suggested_target?.target_weight, 185);
+  assert.equal(deadlift?.earned, undefined, "no floor off work done under the replaced prescription");
+  const env = buildDailySessionDecision(snap, { now: NOW });
+  const candidate = env.candidates.find((c) => c.exercise === "Barbell Deadlift");
+  assert.ok(candidate, `the deadlift is a candidate (kind ${env.kind})`);
+  {
+    assert.equal(candidate.earned_floor, undefined);
+    assert.ok(
+      candidate.authorized_target == null || candidate.authorized_target.target_weight <= 185,
+      "the hold authorizes the plan load, not the older one"
+    );
+    const raw = {
+      name: "Lower B",
+      focus: "Hinge",
+      why: "x",
+      est_minutes: 50,
+      items: [{ exercise: "Barbell Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 }],
+    };
+    const composed = normalizeComposedSession(raw, env).session.items.find((i) => i.exercise === "Barbell Deadlift");
+    assert.ok(composed, "the deadlift composes");
+    assert.equal(composed.target_weight, 185, "the card carries the plan load");
+  }
+});

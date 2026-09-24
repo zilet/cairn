@@ -22,6 +22,7 @@ import {
 import * as repo from "../dist/repo.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { db } from "../dist/db.js";
+import { replacePlanSettled, savePlanDaySettled } from "./_seed.js";
 
 function isoDaysAgo(n) {
   return new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
@@ -41,7 +42,7 @@ function dbInsertSet(sessionId, exId, { set_number = 1, weight = null, reps = nu
 // all ≥10 days ago so the acute-recovery brake never trips.
 function seedEarnedOverload() {
   repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest" });
-  repo.savePlanDay(1, "Push", "Push", [
+  savePlanDaySettled(1, "Push", "Push", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
   const ex = repo.findExercise("Barbell Bench Press");
@@ -111,7 +112,7 @@ test("review_everything: a progression stays a plain reviewable draft — nothin
 });
 
 test("lead mode: a structural days-restructure announces first, never quiet-applies", () => {
-  repo.savePlanDay(1, "Full", "Full", [
+  savePlanDaySettled(1, "Full", "Full", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 },
   ]);
   repo.setSettings({ lead_mode: "lead" });
@@ -146,7 +147,7 @@ test("lead mode: a structural days-restructure announces first, never quiet-appl
 });
 
 test("lead mode: a recovery proposal lands as a reversible overlay without replacing the plan", () => {
-  repo.savePlanDay(1, "Full", "Full", [
+  savePlanDaySettled(1, "Full", "Full", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
   repo.createBlock({ goal: "Build strength", focus: "strength", phase: "accumulation", week_index: 2, total_weeks: 6 });
@@ -217,7 +218,7 @@ function structuralParsed(name = "Two-day structure") {
 }
 
 function seedOneDayPlan() {
-  repo.savePlanDay(1, "Full", "Full", [
+  savePlanDaySettled(1, "Full", "Full", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 },
   ]);
 }
@@ -538,7 +539,7 @@ test("the canonical recovery-week draft is stamped domain 'recovery' at write ti
 // the empty day is not resurrected as a plan day — the week's rest still reads from
 // the calendar.
 test("a legacy plan rollback restores the old week and resurrects no rest row", () => {
-  repo.replacePlan([
+  replacePlanSettled([
     {
       day_number: 1,
       name: "Push",

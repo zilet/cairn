@@ -602,17 +602,23 @@ test("assisted work is compared signed: less assist is the harder set", () => {
 });
 
 test("a redraw's set count stands until exposures after it argue with it", () => {
-  seedCurl();
-  // The week was redrawn after the first exposure, and the redraw named this lift.
-  db.prepare(
-    `INSERT INTO brain_decisions (effective_date, kind, domain, summary, status, autonomy_tier, risk_class, action_json, applied_at)
-     VALUES (?, 'training_structure', 'training', 'redraw', 'applied', 'announce', 'moderate', ?, ?)`
-  ).run(
-    isoDaysAgo(7),
-    JSON.stringify({ changes: [{ day_number: 1, exercise: "Dumbbell Curl", sets: 2, change: "updated" }] }),
-    new Date().toISOString()
+  // Three sets logged twice against a written three; the redraw then cuts it to two.
+  seedCurl({ planned: 3, sessions: [Array(4).fill([40, 11]), Array(4).fill([40, 11])] });
+  assert.deepEqual(curlOf().set_step, { from: 3, to: 4 }, "the fixture would step without the redraw");
+  // A drafted week authors its set count on purpose: the slot is re-stamped today.
+  repo.replacePlan(
+    [{ day_number: 1, name: "Arms", items: [{ exercise: "Dumbbell Curl", sets: 2, rep_low: 10, rep_high: 12, target_weight: 40 }] }],
+    { by: "restructure" }
   );
-  assert.equal(curlOf().set_step, undefined, "one exposure since the redraw is not enough");
+  assert.equal(curlOf().set_step, undefined, "older logs never walk a redraw's cut back");
+  // …while a brain's own in-place set step is volume, not a new prescription.
+  seedCurl();
+  repo.applyPlanChange({ day_number: 1, exercise: "Dumbbell Curl", sets: 3 }, { clamp: true });
+  assert.equal(
+    db.prepare(`SELECT prescribed_at FROM plan_items`).get().prescribed_at,
+    null,
+    "a set step keeps the slot's stamp"
+  );
 });
 
 test("a scheduled recovery week never adds sets", () => {

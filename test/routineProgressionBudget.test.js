@@ -19,6 +19,7 @@ import {
 } from "../dist/domain/brain/autonomy-service.js";
 import * as repo from "../dist/repo.js";
 import { db } from "../dist/db.js";
+import { replacePlanSettled, savePlanDaySettled } from "./_seed.js";
 
 function isoDaysAgo(n) {
   return new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
@@ -36,7 +37,7 @@ function dbInsertSet(sessionId, exId, { set_number = 1, weight = null, reps = nu
 // so the acute-recovery brake never trips (same seed as brainAutonomyPlanPaths).
 function seedEarnedOverload() {
   repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest" });
-  repo.savePlanDay(1, "Push", "Push", [
+  savePlanDaySettled(1, "Push", "Push", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
   const ex = repo.findExercise("Barbell Bench Press");

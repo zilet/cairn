@@ -5,7 +5,7 @@
 // position, and the endurance block flags a one-pace base as needing quality work.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables } from "./_seed.js";
+import { db, repo, resetTables, savePlanDaySettled } from "./_seed.js";
 import {
   BUILDING_BASE_NOTE_VARIANTS,
   COMBINED_LOAD_RUN_YIELDS_QUIET_VARIANTS,
@@ -153,7 +153,7 @@ test("a steady (flat) timed hold reads 'maintaining' → overload, NOT a false p
 });
 
 function startReducedRecoveryWeek(appliedOn) {
-  repo.savePlanDay(1, "Recovery Push", "Push", [
+  savePlanDaySettled(1, "Recovery Push", "Push", [
     { exercise: "Recovery Trajectory Press", sets: 2, rep_low: 5, rep_high: 8, target_weight: 100 },
   ]);
   const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {

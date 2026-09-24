@@ -38,6 +38,7 @@ import { LAST_NIGHT_MAX_AGE_DAYS, isLastNight, isReadDayReadiness } from "./sens
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { weekWins } from "./sessions.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { planSlotStamps, slotAuthorship } from "./prescription-authorship.js";
 import {
   hasFreshBrake,
   hasFreshDecidingBrake,
@@ -1244,6 +1245,7 @@ function earnedLifts(date: string, planItems: any[], progression: any[]): Map<st
   const progressionByName = new Map(
     progression.map((p: any) => [String(p?.exercise ?? "").toLowerCase(), p] as const)
   );
+  const stamps = planSlotStamps();
   for (const item of planItems) {
     if (String(item?.kind ?? "").toLowerCase() === "cardio" || item?.mode === "timed") continue;
     const name = String(item?.exercise ?? "").trim();
@@ -1263,6 +1265,11 @@ function earnedLifts(date: string, planItems: any[], progression: any[]): Map<st
         .all(resolved.exercise_id, date, EARNED_EXPOSURES) as Array<{ d: string }>
     ).map((row) => String(row.d));
     if (dates.length < EARNED_MIN_QUALIFYING) continue;
+    // A FRESH prescription earns no floor: when the slot was written after the lift was
+    // last logged, nothing was trained at it, and the progression holds it at the plan
+    // (`untested`, progression.ts). A floor off the older work would lift the card
+    // straight back to the load the athlete just replaced.
+    if (slotAuthorship(stamps.get(Number(item?.id)) ?? null, dates[0], date).untested) continue;
     let qualifying = 0;
     // The floor is the load the range was actually CAPPED at — the heaviest top among
     // the qualifying exposures — never simply the heaviest recent set. A lone 80 × 10 among 70s

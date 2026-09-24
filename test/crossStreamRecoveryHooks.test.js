@@ -6,7 +6,7 @@ import {
   revertDecision,
 } from "../dist/domain/brain/autonomy-service.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
-import { repo, resetTables } from "./_seed.js";
+import { repo, resetTables, savePlanDaySettled, replacePlanSettled } from "./_seed.js";
 
 beforeEach(() => {
   resetTables(
@@ -33,7 +33,7 @@ beforeEach(() => {
 });
 
 function basePlan() {
-  repo.savePlanDay(1, "Full body", "Strength", [
+  savePlanDaySettled(1, "Full body", "Strength", [
     { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 5, target_weight: 225 },
     { exercise: "Barbell Bench Press", sets: 4, rep_low: 5, rep_high: 5, target_weight: 185 },
   ]);
@@ -178,7 +178,7 @@ function acceptDose(date, { setsLogged, rir, targetOffset = 0 }) {
 }
 
 test("recent comparable movement response brakes but never compounds progression", () => {
-  repo.savePlanDay(1, "Squat", "Strength", [
+  savePlanDaySettled(1, "Squat", "Strength", [
     { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 },
   ]);
   const today = localDateISO();

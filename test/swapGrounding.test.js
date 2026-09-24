@@ -182,7 +182,8 @@ test("an overshooting starting idea can never floor the athlete's real logged we
   assert.equal(nextPrescription("Incline Bench Press").suggested.weight, 145);
   assert.equal(buildProgressionProposal(1).ok, false, "an idea is never proposed as a plan change");
 
-  for (let s = 1; s <= 3; s++) logSet("Incline Bench Press", isoDaysAgo(1), { weight: 135, reps: 9, rir: 1, setNum: s });
+  // The first session at the rotated-in slot — on or after the day it was written.
+  for (let s = 1; s <= 3; s++) logSet("Incline Bench Press", isoDaysAgo(0), { weight: 135, reps: 9, rir: 1, setNum: s });
 
   const rx = nextPrescription("Incline Bench Press");
   assert.ok(!rx.starting_idea, "one logged set retires the idea for good");

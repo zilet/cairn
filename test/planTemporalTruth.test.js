@@ -902,6 +902,9 @@ function seedRegroundableDay(name = "Regen Bench Press") {
   repo.savePlanDay(1, "Push", "Chest", [
     { exercise: name, sets: 3, rep_low: 8, rep_high: 10, target_weight: null },
   ]);
+  // The slot predates the logs (an established prescription): a slot written AFTER
+  // its lift was last logged is a fresh one and holds at the plan instead.
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(addDaysISO(localDateISO(), -30));
   for (const back of [8, 2])
     for (let setNum = 1; setNum <= 3; setNum++)
       repo.logSetByName({

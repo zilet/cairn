@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { db, repo, savePlanDaySettled, replacePlanSettled } from "./_seed.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { runUnderfuelingControlLoop } from "../dist/domain/brain/underfueling-service.js";
 
@@ -43,7 +43,7 @@ function seedCoherentPrescriptionStrain() {
   repo.addCheckin(day(-1), { mood: 3, energy: 1, sleep_feel: 1 });
   repo.addCheckin(day(-2), { mood: 3, energy: 1, sleep_feel: 1 });
 
-  repo.savePlanDay(1, "Push", "Chest", [
+  savePlanDaySettled(1, "Push", "Chest", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
   const ex = repo.findExercise("Barbell Bench Press");

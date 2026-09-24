@@ -138,6 +138,7 @@ export * from "./repo/cut-target.js"; // the cut's calorie target, derived from 
 export * from "./repo/verify-floors.js"; // the deterministic half of the verify pass — every numeric floor a draft breaches
 export * from "./repo/volume-floor.js"; // the weekly per-group set floor a plan is held to (landmark low, contextual)
 export * from "./repo/volume-floor-context.js"; // the live intent/endurance/recovery context that floor reads
+export * from "./repo/prescription-authorship.js"; // when a plan slot was prescribed, and whether it has been trained since — the one source
 export * from "./repo/energy-deficiency.js"; // the male low-energy-availability symptom-cluster watch (protective, one-directional)
 export * from "./repo/energy-deficiency-snapshot.js"; // its memoized read + the small projection a prompt sees
 export * from "./repo/recomposition.js"; // phase-aware fat-loss + muscle/fuel protection synthesis

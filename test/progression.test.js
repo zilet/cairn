@@ -107,6 +107,11 @@ function makeExercise(name, { muscle_group = null, mode = "reps", constraint_not
 // The logs these tests write span weeks, so the prescription they are read against is
 // an ESTABLISHED one: backdate the slot's authored stamp past the settle window.
 // (A plan written today is a fresh prescription and never rotates — tested on its own.)
+// The same, for a fixture that writes its plan with savePlanDay directly.
+function settleSlots() {
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(isoDaysAgo(90));
+}
+
 function planWith(dayNumber, item) {
   const day = repo.savePlanDay(dayNumber, item.focus || `Day ${dayNumber}`, item.focus || null, [item]);
   db.prepare(`UPDATE plan_items SET prescribed_at = ? WHERE plan_day_id = ?`).run(isoDaysAgo(90), day.id);
@@ -456,7 +461,10 @@ test("a slot the plan just wrote is never rotated for a plateau measured before 
   assert.notEqual(fresh.action, "vary", "freshly authored — it runs before it is judged");
   assert.notEqual(fresh.action, "introduce");
   assert.ok(!fresh.vary_to);
-  assert.ok(progressionVoice.FRESH_PRESCRIPTION_HOLD.includes(fresh.why), `the fresh-prescription voice (${fresh.why})`);
+  // Written today, after every logged exposure: nothing was trained AT it yet, so the
+  // untested-prescription hold speaks (it outranks the plateau read entirely).
+  assert.equal(fresh.action, "hold");
+  assert.ok(progressionVoice.UNTESTED_PRESCRIPTION_HOLD.includes(fresh.why), `the untested-prescription voice (${fresh.why})`);
 
   // Re-saving the day unchanged keeps the stamp; once it has settled, the plateau speaks.
   db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(isoDaysAgo(30));
@@ -881,6 +889,7 @@ test("MCP apply_progression mirrors REST proposal shape and supersedes stale sam
     { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
     { exercise: "Overhead Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 95 },
   ]);
+  settleSlots();
   logSet("Bench Press", isoDaysAgo(14), { weight: 180, reps: 8, rir: 2 });
   logSet("Bench Press", isoDaysAgo(5), { weight: 185, reps: 8, rir: 2 });
   logSet("Overhead Press", isoDaysAgo(5), { weight: 95, reps: 6, rir: 1 });
@@ -1008,6 +1017,7 @@ test("programAdjustments flags missing-pattern GAPS (no core / grip / mobility)"
 test("programAdjustments surfaces a due deload + a due group, plain words", () => {
   makeExercise("Back Squat", { muscle_group: "quads" });
   repo.savePlanDay(1, "Legs", "Legs", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 315 }]);
+  settleSlots();
   // Sliding squat → a deload adaptation should appear. The first set is marked
   // AMRAP so the estimate is genuinely VERIFIED (see the calibration seam test
   // above) — an unverified slide reads as "hold and test", not "deload".
@@ -1440,6 +1450,7 @@ function seedRegressingAccessory() {
     { exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
     { exercise: "Cable Fly", sets: 3, rep_low: 10, rep_high: 12, target_weight: 60 },
   ]);
+  settleSlots();
   for (const [days, weight] of [[28, 60], [21, 57.5], [14, 55], [5, 52.5]]) {
     logSet("Cable Fly", isoDaysAgo(days), { weight, reps: 10, rir: 1 });
   }
@@ -2721,4 +2732,71 @@ test("the no-RIR ladder never asks for a rating the athlete does not give", () =
     const why = nextPrescription(name).why;
     assert.doesNotMatch(why, /\bRIR\b/i, `${name}: ${why}`);
   }
+});
+
+// ---- a FRESH prescription is the baseline (prescribed_at newer than the last exposure) ----
+// A plan rewritten today, below or above older logs: the plan's own load stands as a
+// hold until one session is run AT it. No re-ground, no catch-up, no in-flight anchor.
+
+function freshSlot(name, item, { group = "quads", stampDaysAgo = 0 } = {}) {
+  makeExercise(name, { muscle_group: group });
+  repo.savePlanDay(1, "Day", "Day", [{ exercise: name, ...item }]);
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(isoDaysAgo(stampDaysAgo));
+}
+
+test("a fresh slot below older, heavier logs holds at the plan — never pulled back up", () => {
+  freshSlot("Back Squat", { sets: 3, rep_low: 5, rep_high: 7, target_weight: 185 });
+  // A heavier session three weeks ago, the latest one lighter — both before today's rewrite.
+  for (let s = 1; s <= 3; s++) logSet("Back Squat", isoDaysAgo(23), { weight: 205, reps: 5, setNum: s });
+  logSet("Back Squat", isoDaysAgo(9), { weight: 185, reps: 7, setNum: 1 });
+  logSet("Back Squat", isoDaysAgo(9), { weight: 185, reps: 5, setNum: 2 });
+  const p = nextPrescription("Back Squat");
+  assert.equal(p.action, "hold");
+  assert.equal(p.suggested.weight, 185, "the plan's own load stands");
+  assert.equal(p.suggested.sets, 3);
+  assert.equal(p.suggested.rep_low, 5);
+  assert.ok(!p.reground, "no re-ground onto an older log");
+  assert.ok(progressionVoice.UNTESTED_PRESCRIPTION_HOLD.includes(p.why), p.why);
+  assert.equal(buildProgressionProposal(1).ok, false, "nothing is proposed against a number nobody has trained");
+});
+
+test("a fresh slot catches up to nothing: pulldown and calf targets stay where they were written", () => {
+  freshSlot("Lat Pulldown", { sets: 3, rep_low: 10, rep_high: 12, target_weight: 105 }, { group: "back" });
+  for (const d of [12, 5]) for (let s = 1; s <= 3; s++) logSet("Lat Pulldown", isoDaysAgo(d), { weight: 115, reps: 10, setNum: s });
+  const p = nextPrescription("Lat Pulldown");
+  assert.equal(p.action, "hold");
+  assert.equal(p.suggested.weight, 105);
+  assert.equal(p.current.weight, 105, "the card shows the plan, not the older working weight");
+});
+
+test("one session at the fresh prescription and the ordinary ladder resumes, from the plan target", () => {
+  freshSlot("Back Squat", { sets: 3, rep_low: 5, rep_high: 7, target_weight: 185 }, { stampDaysAgo: 6 });
+  for (let s = 1; s <= 3; s++) logSet("Back Squat", isoDaysAgo(23), { weight: 205, reps: 5, setNum: s });
+  // The first session AT the new prescription: every set capped the range.
+  for (let s = 1; s <= 3; s++) logSet("Back Squat", isoDaysAgo(2), { weight: 185, reps: 7, setNum: s });
+  const p = nextPrescription("Back Squat");
+  assert.ok(!progressionVoice.UNTESTED_PRESCRIPTION_HOLD.includes(p.why), "the untested hold is over");
+  assert.equal(p.action, "overload", `the capped session earns the step (${p.action}: ${p.why})`);
+  assert.ok(p.suggested.weight > 185 && p.suggested.weight <= 195, `a step from 185, got ${p.suggested.weight}`);
+});
+
+test("an in-flight rep wave never re-anchors a fresh slot above the plan", () => {
+  freshSlot("Overhead Press", { sets: 3, rep_low: 6, rep_high: 8, target_weight: 70 }, { group: "shoulders" });
+  for (const [d, w] of [[40, 80], [26, 75], [12, 75]])
+    for (let s = 1; s <= 3; s++) logSet("Overhead Press", isoDaysAgo(d), { weight: w, reps: 6, rir: 1, setNum: s });
+  const p = nextPrescription("Overhead Press");
+  assert.equal(p.action, "hold");
+  assert.equal(p.suggested.weight, 70, "the athlete's 70 stands");
+  assert.ok(!progressionVoice.ESCALATE_WAVE_SETTLE.includes(p.why), "no 'partway through' anchor");
+});
+
+test("a pain brake still applies on top of a fresh slot", () => {
+  freshSlot("Back Squat", { sets: 3, rep_low: 5, rep_high: 7, target_weight: 185 });
+  for (let s = 1; s <= 3; s++) logSet("Back Squat", isoDaysAgo(5), { weight: 205, reps: 5, setNum: s });
+  const p = nextPrescription("Back Squat", undefined, {
+    pain: null,
+    autoreg: { soreness: 5, performance: 1, joint_pain: "left knee", date: isoDaysAgo(0), soreness_groups: ["quads"], performance_groups: ["quads"] },
+  });
+  assert.ok(["hold", "deload"].includes(p.action));
+  assert.ok(p.suggested.weight <= 185, "a safety brake can only take the fresh load down");
 });

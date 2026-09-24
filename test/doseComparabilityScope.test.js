@@ -11,7 +11,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { db, localDaysAgo, repo, resetTables, seedIntake, seedWeight } from "./_seed.js";
+import { db, localDaysAgo, repo, resetTables, seedIntake, seedWeight, savePlanDaySettled, replacePlanSettled } from "./_seed.js";
 import {
   doseComparability,
   evaluatePerformedAtFullLoad,
@@ -381,7 +381,7 @@ test("full-load work drops recovery_dose and travel, and never illness or a rele
 // ===========================================================================
 
 function finishDay(items, date = DATE) {
-  repo.savePlanDay(1, "Mixed", "Mixed", items);
+  savePlanDaySettled(1, "Mixed", "Mixed", items);
   if (!items.some((item) => item.kind === "cardio")) {
     return repo.prepareDailySession({ date, source: "manual_plan", day_number: 1 });
   }
@@ -483,7 +483,7 @@ test("a reduced prescription performed at full working load is comparable; its s
     exit_on: addDaysISO(DATE, 7),
   });
   repo.activateRecoveryCycle(cycle.id, DATE);
-  repo.savePlanDay(1, "Mixed", "Mixed", [
+  savePlanDaySettled(1, "Mixed", "Mixed", [
     { exercise: "Pendlay Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 145 },
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 145 },
   ]);
@@ -524,7 +524,7 @@ test("a substitute with no plan-row sets does not grant full-load, even at recen
     repo.logSetByName({ date: history, exercise: "Dumbbell Bench Press", weight: 70, reps: 8, day_number: null });
   }
   // Another day's prescription must not become this session's full working load.
-  repo.savePlanDay(2, "Push", "Accessories", [
+  savePlanDaySettled(2, "Push", "Accessories", [
     { exercise: "Dumbbell Bench Press", sets: 4, rep_low: 8, rep_high: 10, target_weight: 70 },
   ]);
   const cycle = repo.scheduleRecoveryCycle({
@@ -532,7 +532,7 @@ test("a substitute with no plan-row sets does not grant full-load, even at recen
     exit_on: addDaysISO(DATE, 7),
   });
   repo.activateRecoveryCycle(cycle.id, DATE);
-  repo.savePlanDay(1, "Push", "Push", [
+  savePlanDaySettled(1, "Push", "Push", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 185 },
   ]);
   const prepared = repo.prepareDailySession({ date: DATE, source: "manual_plan", day_number: 1 });
@@ -707,7 +707,7 @@ function linkLegacyOutcome(
 
 test("an old facts row whose only marks are an override and an unrelated run still earns the step", () => {
   makeExercise("Overhead Press", "shoulders");
-  repo.savePlanDay(1, "Push", "Push", [
+  savePlanDaySettled(1, "Push", "Push", [
     { exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 95 },
   ]);
   const date = isoDaysAgo(5);
@@ -722,7 +722,7 @@ test("an old facts row whose only marks are an override and an unrelated run sti
 
 test("the same old row still holds a lift the run actually loaded", () => {
   makeExercise("Back Squat", "quads");
-  repo.savePlanDay(1, "Legs", "Legs", [
+  savePlanDaySettled(1, "Legs", "Legs", [
     { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 },
   ]);
   const date = isoDaysAgo(5);
@@ -770,7 +770,7 @@ test("a plan-behind re-ground does not launder an endurance-overlap dose into co
 
 test("an old row whose own dose came in short is still held", () => {
   makeExercise("Barbell Row", "back");
-  repo.savePlanDay(1, "Pull", "Pull", [
+  savePlanDaySettled(1, "Pull", "Pull", [
     { exercise: "Barbell Row", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
   ]);
   const date = isoDaysAgo(5);
@@ -789,7 +789,7 @@ test("an old row whose own dose came in short is still held", () => {
 // unblocking exactly it is why this change exists.
 test("the live row shape — an override plus somebody else's shortfall — no longer blocks a completed lift", () => {
   makeExercise("Overhead Press", "shoulders");
-  repo.savePlanDay(1, "Push", "Push", [
+  savePlanDaySettled(1, "Push", "Push", [
     { exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 95 },
   ]);
   const date = isoDaysAgo(5);
@@ -818,7 +818,7 @@ test("a legacy day-wide reason still holds every lift on the day", () => {
       "exercises"
     );
     makeExercise(name, "back");
-    repo.savePlanDay(1, "Pull", "Pull", [{ exercise: name, sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 }]);
+    savePlanDaySettled(1, "Pull", "Pull", [{ exercise: name, sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 }]);
     const date = isoDaysAgo(5);
     for (let s = 1; s <= 3; s++) logSet(name, date, { weight: 135, reps: 5, rir: 2, setNum: s });
     linkLegacyOutcome(name, date, { reasons: [reason] });
@@ -831,7 +831,7 @@ test("a legacy day-wide reason still holds every lift on the day", () => {
 
 test("a legacy facts row with no dose_context at all is not evidence of comparability", () => {
   makeExercise("Barbell Row", "back");
-  repo.savePlanDay(1, "Pull", "Pull", [
+  savePlanDaySettled(1, "Pull", "Pull", [
     { exercise: "Barbell Row", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
   ]);
   const date = isoDaysAgo(5);
@@ -848,7 +848,7 @@ test("a legacy facts row with no dose_context at all is not evidence of comparab
 // keeps the session's `partial` rather than dropping it.
 test("a dose with no prescribed set count keeps the session's partial", () => {
   makeExercise("Barbell Row", "back");
-  repo.savePlanDay(1, "Pull", "Pull", [
+  savePlanDaySettled(1, "Pull", "Pull", [
     { exercise: "Barbell Row", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
   ]);
   const date = isoDaysAgo(5);
@@ -864,7 +864,7 @@ test("a dose with no prescribed set count keeps the session's partial", () => {
 // in short, an unprovable dose is simply an unprovable dose.
 test("a dose with no prescribed set count on a clean day still earns the step", () => {
   makeExercise("Barbell Row", "back");
-  repo.savePlanDay(1, "Pull", "Pull", [
+  savePlanDaySettled(1, "Pull", "Pull", [
     { exercise: "Barbell Row", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
   ]);
   const date = isoDaysAgo(5);
@@ -882,7 +882,7 @@ test("a dose with no prescribed set count on a clean day still earns the step", 
 
 function seedTopSetOnlyBench() {
   makeExercise("Barbell Bench Press", "chest");
-  repo.savePlanDay(1, "Push", "Chest", [
+  savePlanDaySettled(1, "Push", "Chest", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
   const date = isoDaysAgo(4);
@@ -923,7 +923,7 @@ test("a top set at the ceiling buys the step when the athlete has asked to be pu
 // deliberately small and the volume is the point.
 test("a volume stretch owns the sentence even when the declaration bought the step", () => {
   makeExercise("Barbell Bench Press", "chest");
-  repo.savePlanDay(1, "Push", "Chest", [
+  savePlanDaySettled(1, "Push", "Chest", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
   const date = isoDaysAgo(4);
@@ -1019,7 +1019,7 @@ function seedHoldAggressionFuel() {
   repo.addCheckin(day(-1), { mood: 3, energy: 1, sleep_feel: 1 });
   repo.addCheckin(day(-2), { mood: 3, energy: 1, sleep_feel: 1 });
 
-  repo.savePlanDay(1, "Push", "Chest", [
+  savePlanDaySettled(1, "Push", "Chest", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
   const ex = repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest" });
@@ -1070,7 +1070,7 @@ test("the day's fueling sentence stays off a lift the fueling read never touched
   seedHoldAggressionFuel();
   // A second lift with nothing logged holds for its OWN reason, so the day-wide
   // fueling clause has no business on its card.
-  repo.savePlanDay(2, "Pull", "Back", [
+  savePlanDaySettled(2, "Pull", "Back", [
     { exercise: "Barbell Row", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 },
   ]);
   repo.upsertExercise({ name: "Barbell Row", muscle_group: "back" });
@@ -1423,7 +1423,7 @@ test("push keeps an earned step's full volume under a reduce; steady still takes
   assert.equal(repo.currentUnderfuelingRead(localDateISO()).action.training, "reduce");
 
   makeExercise("Barbell Bench Press", "chest");
-  repo.savePlanDay(1, "Push", "Chest", [
+  savePlanDaySettled(1, "Push", "Chest", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
   for (let s = 1; s <= 3; s++) logSet("Barbell Bench Press", localDaysAgo(4), { weight: 185, reps: 8, rir: 2, setNum: s });

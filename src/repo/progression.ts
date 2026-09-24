@@ -70,6 +70,7 @@ import {
 // the contract at the top of progression-voice.ts.
 import * as voice from "./progression-voice.js";
 import { lightWeekExemption } from "./volume-floor-context.js";
+import { planSlotStamps, slotAuthorship, slotStamp } from "./prescription-authorship.js";
 import { painAreaLoadsGroup } from "./pain-relevance.js";
 export { painAreaLoadsExercise } from "./pain-relevance.js";
 import {
@@ -203,10 +204,6 @@ const PEAK_HISTORY_DAYS = 400;
 // introduce a fresh variation before staleness sets in, at a block boundary, rather
 // than waiting for a measured plateau. Tenure = weeks since the lift was first logged.
 const INTRODUCE_TENURE_WEEKS = 12;
-// A slot whose prescription was authored this recently is not rotated for a plateau:
-// the flat weeks were measured under whatever the plan said before, so the movement
-// the athlete (or an agent) just wrote in gets a fair run first.
-const PRESCRIPTION_SETTLE_DAYS = 14;
 
 // How far a target may sit above the log's achievable load before it re-grounds:
 // Epley is an estimate, and a load the athlete just stepped up to sits a little past
@@ -703,7 +700,7 @@ function assistStepNext(
 }
 
 // Find the plan item (and its prescribed targets) for an exercise, if any.
-function planItemFor(name: string): {
+function planItemFor(name: string, stamps?: Map<number, string | null> | null): {
   plan_item_id: number;
   day_number: number;
   sets: number;
@@ -761,7 +758,7 @@ function planItemFor(name: string): {
             seconds: it.target_seconds ?? null,
             kind: cardio ? "cardio" : "strength",
             strength_position: strengthPosition,
-            prescribed_at: planItemPrescribedAt(it.id),
+            prescribed_at: stamps ? (stamps.get(Number(it.id)) ?? null) : slotStamp(Number(it.id)),
             day_exercises: (day.items || [])
               .filter((other: any) => other !== it && other.kind !== "cardio" && other.exercise)
               .map((other: any) => String(other.exercise)),
@@ -772,15 +769,6 @@ function planItemFor(name: string): {
     }
   }
   return null;
-}
-
-function planItemPrescribedAt(planItemId: unknown): string | null {
-  const id = Number(planItemId);
-  if (!Number.isInteger(id) || id <= 0) return null;
-  const row = db.prepare(`SELECT prescribed_at FROM plan_items WHERE id = ?`).get(id) as
-    | { prescribed_at: string | null }
-    | undefined;
-  return row?.prescribed_at ? String(row.prescribed_at).slice(0, 10) : null;
 }
 
 function isPrepWork(name: string, group: string | null): boolean {
@@ -1568,6 +1556,7 @@ export interface PrescriptionOpts {
   cut?: CutPressure | (() => CutPressure) | null; // the shared fuel/cut read for the pass (lazy when a thunk, recomputed when absent)
   estimate?: EstimateReader | null; // the shared, lazy per-lift calibration read for the pass
   drive?: TrainingDrive | null; // the athlete's standing posture (settings.training_drive); read from settings when absent
+  slotStamps?: Map<number, string | null> | null; // a pass's one read of plan_items.prescribed_at (planSlotStamps)
 }
 
 // The athlete's own standing declaration. It buys a handful of things below — a
@@ -1618,7 +1607,7 @@ export function nextPrescription(
   // manages it technically and still earns load. classifyConstraint draws the line so
   // a grip note no longer strands a lift at a stale weight (the cubital-tunnel bug).
   const loadConstrained = classifyConstraint(ex?.constraint_note) === "load";
-  const plan = planItemFor(exerciseName);
+  const plan = planItemFor(exerciseName, opts?.slotStamps ?? null);
   // Cardio plan items aren't progressed here (the runner loop owns those).
   if (plan && plan.kind === "cardio") return null;
   const cur = currentTarget(plan, mode);
@@ -1712,6 +1701,25 @@ interface PrescCtx {
   pain: PainBandRead | null; // this movement's traffic-light band; null = nothing stated (absent, not green)
 }
 
+// recentWorkingWeight over at most the sessions logged on or after `since` (the slot's
+// prescribed_at). Null when none of them carried a load.
+function workingWeightUnderPrescription(name: string, since: string | null): number | null {
+  const from = since ? String(since).slice(0, 10) : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return recentWorkingWeight(name);
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return null;
+  const inIds = ids.map(() => "?").join(",");
+  const row = db
+    .prepare(
+      `SELECT COUNT(DISTINCT s.date) AS n FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.exercise_id IN (${inIds}) AND ls.weight IS NOT NULL AND ls.weight != 0 AND s.date >= ?`
+    )
+    .get(...ids, from) as { n?: number } | undefined;
+  const since_count = Number(row?.n ?? 0);
+  if (!(since_count > 0)) return null;
+  return recentWorkingWeight(name, Math.min(3, since_count));
+}
+
 function repsPrescription(
   name: string,
   group: string | null,
@@ -1742,7 +1750,12 @@ function repsPrescription(
   const achievable = repLow != null ? achievableWorkingWeight(name, repLow, date) : null;
   const unreachable = (w: number | null): boolean =>
     w != null && w > 0 && achievable != null && w > achievable * REACHABLE_TOLERANCE;
-  const loggedWorking = recentWorkingWeight(name);
+  // Judged against the CURRENT prescription: when the slot carries an authored date,
+  // only the loaded sessions on or after it can re-ground it — the work done under an
+  // older prescription (a heavier block three weeks back) is not a working weight the
+  // athlete has shown at THIS one. With no authored date (a pre-v111 row) the window
+  // is the usual last few sessions.
+  const loggedWorking = workingWeightUnderPrescription(name, slotAuthorship(plan?.prescribed_at ?? null, null, date).since);
   const recentWorking = unreachable(loggedWorking) ? achievable : loggedWorking;
   // Sign is the encoding, not the name. A lift called "Assisted Pull-Up" with a
   // purely positive history is weighted work; the name must not freeze it as assist.
@@ -1783,28 +1796,45 @@ function repsPrescription(
   // the plan's own rep floor, the base is bodyweight (null) and an assist target is
   // BEHIND reality, re-grounded through the same proposal as any catch-up. Never
   // past bodyweight in one step: added load is earned from there by the ladder.
+  // A FRESH PRESCRIPTION IS THE BASELINE. When the slot was authored after the last
+  // time this lift was logged (plan_items.prescribed_at is newer than the latest
+  // exposure), nothing in the log was done AT it: the athlete (or a redraw) just wrote
+  // this load, and a three-week-old top set, an in-flight wave, or a heavier recent
+  // session cannot argue with a number nobody has trained yet. So the plan's own
+  // sets/reps/weight stand as a HOLD — no re-ground, no catch-up, no plan-ahead
+  // reach-down, no movement-response or push step off older work — and the first
+  // session at it sets the baseline. The safety floors (a load-limiting note, the
+  // autoregulation and pain brakes) still apply on top. One exposure on or after
+  // prescribed_at and the ordinary ladder resumes, judged against the plan target.
+  // The timed path has kept this rule all along (`evidencePredates`).
+  const authorship = slotAuthorship(plan?.prescribed_at ?? null, last?.date ?? null, date);
+  const untested = authorship.untested;
+  if (untested) baseWeight = planWeight;
   const assistRetired =
+    !untested &&
     baseWeight != null &&
     baseWeight < 0 &&
     repLow != null &&
     unassistedProvenSessions(name, repLow) >= ASSIST_RETIRE_SESSIONS;
   if (assistRetired) baseWeight = null;
   const planUnset =
-    !assistRetired && plan != null && planWeight == null && recentWorking != null && !(assistHistory && recentWorking > 0);
+    !untested && !assistRetired && plan != null && planWeight == null && recentWorking != null && !(assistHistory && recentWorking > 0);
   const planBehind =
-    planUnset ||
+    !untested &&
+    (planUnset ||
     (assistRetired && planWeight != null && planWeight < 0) ||
     (planWeight != null &&
       recentWorking != null &&
       !(planWeight < 0 && recentWorking > 0) &&
-      recentWorking > planWeight + 0.1);
+      recentWorking > planWeight + 0.1));
   // …and the mirror: a plan target the log cannot reach re-grounds DOWN to the
   // achievable load, through the same reground proposal as a catch-up. Except when the
   // plan is ONE earned step above a session finished with reps in reserve: Epley reads
   // the reps done, not the ones left, so 35 × 10 at RIR 4 made a written 40 look out of
   // reach and every card served the older, under-loaded 35. That target is the plan
   // stepping up on purpose, and the reps fill in at it.
-  const planAhead = !planBehind && unreachable(planWeight) && !steppedUpFromReserve(name, group, planWeight, repLow);
+  const planAhead =
+    !untested && !planBehind && unreachable(planWeight) && !steppedUpFromReserve(name, group, planWeight, repLow);
   if (planAhead) baseWeight = achievable;
 
   const sets = plan?.sets || 3;
@@ -1824,8 +1854,7 @@ function repsPrescription(
   // Equipment-ranked, compound-biased, plan-deduped same-pattern candidates —
   // computed ONCE and reused by the vary + introduce branches (and the introduce guard).
   const varyCandidates = rankedVaryOptions(name, brakeCtx, plan?.day_exercises ?? []);
-  const prescribedAge = plan?.prescribed_at ? daysBetweenISO(date, plan.prescribed_at) : null;
-  const freshPrescription = prescribedAge != null && prescribedAge >= 0 && prescribedAge < PRESCRIPTION_SETTLE_DAYS;
+  const freshPrescription = authorship.fresh;
   // A movement with nothing logged of its own and no number on the plan is exactly
   // the case a rotate-in creates. Rather than showing an empty target and "start
   // light", offer a conservative starting idea from a related lift the athlete does
@@ -1978,6 +2007,11 @@ function repsPrescription(
     action = "hold";
     nextWeight = baseWeight;
     why = say(voice.CONSTRAINED_HOLD, "constrained_hold");
+  } else if (untested) {
+    // See `untested` above: the fresh prescription stands until a session is run at it.
+    action = "hold";
+    nextWeight = planWeight;
+    why = say(voice.UNTESTED_PRESCRIPTION_HOLD, "untested_prescription_hold");
   } else if (peakProtocol) {
     // PEAK WEEK. The block's last week on a main lift is not another small step —
     // it is the week the work gets expressed: up to one heavy top set derived from
@@ -2340,12 +2374,16 @@ function repsPrescription(
     intent_key: `strength:reps:${repLow ?? "open"}-${repHigh ?? repLow ?? "open"}`,
   });
   // `earned_hold` (two comparable under-prescriptions) is the only movement-
-  // response verdict that demotes an earned overload. `insufficient` never does:
+  // response verdict that demotes an earned overload. Older comparable outcomes were
+  // measured under the PREVIOUS prescription, so a fresh slot skips this block and
+  // the push step below: it is judged from its own first session. `insufficient` never does:
   // before this pass a single comparable met/exceeded already left the ladder's
   // earned step standing, and it still does. Under push, that single met on a
   // full comparable dose is enough for the step — we do not wait for a second
   // comparable verdict to become earned_absorbed.
-  if (response.verdict === "earned_hold") {
+  if (untested) {
+    /* the fresh prescription stands */
+  } else if (response.verdict === "earned_hold") {
     if (action === "overload") {
       action = "hold";
       nextWeight = baseWeight;
@@ -2662,8 +2700,7 @@ function timedPrescription(
   // set says nothing about this load — and only a session on or after the current
   // prescription, so a step just applied is not re-stepped off the work before it.
   const working = load != null ? lastSets.filter((s) => s.weight != null && s.weight >= load) : [];
-  const evidencePredates =
-    load != null && !!plan?.prescribed_at && !!last && String(last.date) < String(plan.prescribed_at);
+  const evidencePredates = load != null && slotAuthorship(plan?.prescribed_at ?? null, last?.date ?? null).untested;
   // Solid = the latest hold comfortably met (or beat) the current target.
   const target = baseSeconds ?? 0;
   const held =
@@ -2858,7 +2895,7 @@ export function planDayProgression(
   if (!day) return [];
   const items = db
     .prepare(
-      `SELECT pi.id AS plan_item_id, pi.kind AS kind, e.name AS name, pi.prescribed_at AS prescribed_at
+      `SELECT pi.id AS plan_item_id, pi.kind AS kind, e.name AS name
        FROM plan_items pi LEFT JOIN exercises e ON e.id = pi.exercise_id
       WHERE pi.plan_day_id = ? ORDER BY pi.position`
     )
@@ -2920,12 +2957,8 @@ export function planDayProgression(
     }
     return lightWeekMemo.value;
   };
-  // The restructure ledger, read ONCE for the pass (and only if a catch-up asks).
-  let structuralMemo: ((dayNumber: number, exercise: string) => string | null) | null = null;
-  const structuralSince = (dayNumber: number, exercise: string): string | null => {
-    if (!structuralMemo) structuralMemo = structuralChangeDates();
-    return structuralMemo(dayNumber, exercise);
-  };
+  // When every slot was prescribed — ONE read for the pass (prescription-authorship.ts).
+  const slotStamps = planSlotStamps();
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
@@ -2943,6 +2976,7 @@ export function planDayProgression(
       cut,
       estimate,
       drive,
+      slotStamps,
     });
     if (p) {
       const protectedPrescription = applyFuelProtection(p, fuelProtection, today, drive, atNearGoal);
@@ -2953,8 +2987,7 @@ export function planDayProgression(
         cut,
         liftState: liftStateFor(String(it.name), states),
         restoreKeys: owedRestoreKeys,
-        structuralSince,
-        prescribedAt: it.prescribed_at ? String(it.prescribed_at).slice(0, 10) : null,
+        since: slotAuthorship(slotStamps.get(Number(it.plan_item_id)) ?? null, null, today).since,
         lightWeek,
       });
       out.push({ ...stepped, plan_item_id: it.plan_item_id, day_number: dayNumber });
@@ -2976,10 +3009,10 @@ export function planDayProgression(
 // the plan's target load when one exists, and at the plan's rep floor within a small
 // slack (SET_STEP_REP_SLACK reps, or a fifth of the floor on a high-rep prescription,
 // whichever is larger) — so a log whose extra set is a lighter back-off or a failed,
-// short one never raises the plan. Only exposures on or after the item's last
-// STRUCTURAL change or its last authoring count (structuralChangeDates, and
-// plan_items.prescribed_at — which a person's set change in the editor re-stamps), so
-// neither a redraw's deliberate cut nor the athlete's own is undone by older logs; and it rides only a hold or a rep step,
+// short one never raises the plan. Only exposures on or after the slot was prescribed
+// count (prescription-authorship.ts: a redraw's or a person's set count re-stamps the
+// slot, a brain's small set step does not), so neither a redraw's deliberate cut nor
+// the athlete's own is undone by older logs; and it rides only a hold or a rep step,
 // never a load step.
 //
 // It is a catch-up to work ALREADY being done, not new stress, so the cut reads that
@@ -3001,57 +3034,6 @@ const SET_STEP_REP_SLACK = 2;
 // Within this fraction of the session's top working load, a set is working, not a
 // ramp or a back-off.
 const SET_STEP_WORKING_FRAC = 0.9;
-
-// The later of two optional ISO dates.
-function latestDate(a: string | null, b: string | null): string | null {
-  if (!a) return b;
-  if (!b) return a;
-  return a > b ? a : b;
-}
-
-// The date of each item's last STRUCTURAL change — the newest applied restructure that
-// touched that movement on that day (or rewrote the whole week) — as ONE read of the
-// ledger per pass. A redraw's set count is a deliberate choice: only exposures on or
-// after it can argue with it, so a cut the redraw made is never undone by the log from
-// before it. `lookup(day, exercise)` is null when nothing on the ledger touched it.
-function structuralChangeDates(): (dayNumber: number, exercise: string) => string | null {
-  const byItem = new Map<string, string>();
-  let wholeWeek: string | null = null;
-  let rows: Array<{ effective_date: string | null; applied_at: string | null; action_json: string | null }> = [];
-  try {
-    rows = db
-      .prepare(
-        `SELECT effective_date, applied_at, action_json FROM brain_decisions
-          WHERE kind = 'training_structure' AND status = 'applied'
-          ORDER BY id DESC LIMIT 40`
-      )
-      .all() as any[];
-  } catch {
-    rows = [];
-  }
-  // Newest first. Once a whole-week rewrite is seen, every OLDER per-item entry is
-  // older than it and cannot be any item's latest touch, so the walk stops there.
-  for (const row of rows) {
-    const date = String(row.effective_date ?? row.applied_at ?? "").slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-    let action: any = null;
-    try {
-      action = JSON.parse(String(row.action_json ?? "{}"));
-    } catch {
-      continue;
-    }
-    const changes = Array.isArray(action?.changes) ? action.changes : [];
-    if (!changes.length && Array.isArray(action?.days) && action.days.length > 0) {
-      wholeWeek = date;
-      break;
-    }
-    for (const change of changes) {
-      const key = `${Number(change?.day_number)}|${normalizedExerciseKey(String(change?.exercise ?? ""))}`;
-      if (!byItem.has(key)) byItem.set(key, date);
-    }
-  }
-  return (dayNumber, exercise) => byItem.get(`${Number(dayNumber)}|${normalizedExerciseKey(exercise)}`) ?? wholeWeek;
-}
 
 // The good working-set count of each of a lift's most recent exposures (on or after
 // `since`), newest first. A set is GOOD when it is real working volume at the
@@ -3116,11 +3098,9 @@ function setCatchUp(
     cut: () => CutPressure;
     liftState: LiftState | null;
     restoreKeys: Set<string>;
-    // The pass's one read of the restructure ledger (structuralChangeDates).
-    structuralSince: (dayNumber: number, exercise: string) => string | null;
-    // plan_items.prescribed_at: when the slot was last authored — including a PERSON's
-    // set-count change in the editor (stampPersonSetChanges, plan.ts).
-    prescribedAt: string | null;
+    // Where evidence about THIS prescription starts (slotAuthorship.since): a redraw's
+    // or a person's set count re-stamps the slot, so older logs cannot walk it back.
+    since: string | null;
     lightWeek: () => string | null;
   }
 ): Prescription {
@@ -3147,7 +3127,7 @@ function setCatchUp(
     counts = recentGoodWorkingSetCounts(p.exercise, {
       repFloor: p.current.rep_low ?? null,
       targetWeight: planWeight,
-      since: latestDate(ctx.structuralSince(ctx.dayNumber, p.exercise), ctx.prescribedAt),
+      since: ctx.since,
     });
   } catch {
     return p;

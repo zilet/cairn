@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { db, localDaysAgo, repo } from "./_seed.js";
+import { db, localDaysAgo, repo, savePlanDaySettled, replacePlanSettled } from "./_seed.js";
 import { nextPrescription } from "../dist/repo/progression.js";
 import { recordDecision } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
@@ -72,7 +72,7 @@ function learnedMiss(
 function seedEarnedBench({ constrained = false } = {}) {
   const exercise = repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest" });
   if (constrained) repo.updateExercise(exercise.id, { constraint_note: "chest wall pain — hold load until pain-free" });
-  repo.savePlanDay(1, "Push", "Chest", [
+  savePlanDaySettled(1, "Push", "Chest", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 12, target_weight: 185 },
   ]);
   const session = repo.getOrCreateSession("2026-07-08", repo.getPlanDay(1).id);

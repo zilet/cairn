@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
-import { db, repo, resetTables } from "./_seed.js";
+import { db, repo, resetTables, savePlanDaySettled, replacePlanSettled } from "./_seed.js";
 
 const FIRST = "2024-08-01";
 const SECOND = "2024-08-05";
@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 
 function seedPlan() {
-  repo.savePlanDay(1, "Lower", "Squat", [
+  savePlanDaySettled(1, "Lower", "Squat", [
     { exercise: "Back Squat", sets: 2, rep_low: 5, rep_high: 5, target_weight: 225 },
   ]);
 }

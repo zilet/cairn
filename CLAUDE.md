@@ -445,6 +445,9 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **RIR is optional, and its absence is not weakness** — with no RIR logged, capping the prescribed
   rep range on every working set IS the strength signal (`program-state.ts`/`progression-voice.ts`).
   Details in `docs/ARCHITECTURE.md`.
+- **When a slot was prescribed has one source** — `src/repo/prescription-authorship.ts` stamps every plan
+  write and answers fresh/untested/since for every consumer; never re-derive it. An untested slot holds
+  at the plan. Details in `docs/ARCHITECTURE.md` "Prescription authorship".
 - **Weekly volume has a contextual floor and the log is truth for set count** — `volume-floor.ts`
   (muscle/strength intent only; endurance-carried groups and light weeks exempt), held by plan
   quality, the redraw precheck and `setCatchUp`. Details in `docs/ARCHITECTURE.md`.

@@ -19,7 +19,6 @@ import {
   planPrescriptionSnapshot,
   replacePlanChecked,
   savePlanDayChecked,
-  stampPersonSetChanges,
 } from "../../repo/plan.js";
 import { releasePlanAnnotationsForPersonSave } from "../../repo/plan-annotation-release.js";
 import { localDateISO } from "../../repo/shared.js";
@@ -55,18 +54,6 @@ function changedPrescriptionKeys(
     }
   }
   return [...keys];
-}
-
-// The slots whose SET COUNT the person changed (present before and after, sets
-// differ). prescribed_at's own key leaves sets out, so these are stamped explicitly —
-// the athlete's set count is theirs, and older logs must not argue it back up.
-function changedSetKeys(before: Map<string, PlanPrescription>, after: Map<string, PlanPrescription>): string[] {
-  const keys: string[] = [];
-  for (const [key, next] of after) {
-    const prior = before.get(key);
-    if (prior && prior.sets !== next.sets) keys.push(key);
-  }
-  return keys;
 }
 
 // What a day's session is built from, per plan day: the items in order, each with every
@@ -131,10 +118,10 @@ export function savePlanDayByPerson(
   const { result, changed } = withSqliteSavepoint("person_plan_day_save", () => {
     const before = planPrescriptionSnapshot();
     const itemsBefore = dayItemSignatures();
-    const saved = savePlanDayChecked(day_number, name, focus, items, checkedOpts);
-    const after = planPrescriptionSnapshot();
-    stampPersonSetChanges(changedSetKeys(before, after), date);
-    releasePlanAnnotationsForPersonSave(changedPrescriptionKeys(before, after));
+    // `by: "person"`: the athlete's own set count is a new prescription for them
+    // (prescription-authorship.ts), so the catch-up never walks their cut back.
+    const saved = savePlanDayChecked(day_number, name, focus, items, { ...checkedOpts, by: "person" });
+    releasePlanAnnotationsForPersonSave(changedPrescriptionKeys(before, planPrescriptionSnapshot()));
     return { result: saved, changed: changedItemDays(itemsBefore, dayItemSignatures()) };
   });
   refreshToday(changed, todayDayBefore, date);
@@ -151,12 +138,10 @@ export function replacePlanByPerson(
   const { result, changed } = withSqliteSavepoint("person_plan_replace", () => {
     const before = planPrescriptionSnapshot();
     const itemsBefore = dayItemSignatures();
-    const saved = replacePlanChecked(days, checkedOpts);
-    const after = planPrescriptionSnapshot();
-    stampPersonSetChanges(changedSetKeys(before, after), date);
+    const saved = replacePlanChecked(days, { ...checkedOpts, by: "person" });
     // The editor saves the whole week at once, so only what moved is the athlete's —
     // an untouched lift keeps its note and its Undo.
-    releasePlanAnnotationsForPersonSave(changedPrescriptionKeys(before, after), {
+    releasePlanAnnotationsForPersonSave(changedPrescriptionKeys(before, planPrescriptionSnapshot()), {
       retireUndoWhenFullyReleased: true,
     });
     return { result: saved, changed: changedItemDays(itemsBefore, dayItemSignatures()) };

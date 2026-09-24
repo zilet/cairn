@@ -167,3 +167,26 @@ export function seedRecoveryDay(date) {
 export function seedSleep(date, sleepMin) {
   return repo.recordDailyMetrics("apple", date, { sleep_min: sleepMin });
 }
+
+// A plan a fixture writes TODAY and then reads against sets dated in the PAST. Since
+// v111 a slot authored after its lift was last logged is a FRESH prescription and holds
+// at the plan until a session is run at it (`untested`, progression.ts) — which is not
+// what a fixture reading "the last few weeks of work against this plan" means. These
+// backdate every slot's authored stamp so the plan reads as the one the logs were done
+// under. A test ABOUT fresh prescriptions writes its plan with repo.savePlanDay itself.
+// Fixed and far back, because some fixtures log on fixed historical dates.
+export function settlePlanPrescriptions(at = "2000-01-01") {
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(at);
+}
+
+export function savePlanDaySettled(...args) {
+  const result = repo.savePlanDay(...args);
+  settlePlanPrescriptions();
+  return result;
+}
+
+export function replacePlanSettled(...args) {
+  const result = repo.replacePlan(...args);
+  settlePlanPrescriptions();
+  return result;
+}

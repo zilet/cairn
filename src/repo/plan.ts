@@ -20,6 +20,7 @@ import {
 } from "./training-cache.js";
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { readVolumeFloorContext } from "./volume-floor-context.js";
+import { type PrescriptionWriter, restampSlot, stampForWrite } from "./prescription-authorship.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { type ReasonProvenance, normalizeHistoricalReason, validReasonProvenance } from "./proposal-truth.js";
 import { isItemSpecificChangeReason } from "../domain/training/exercise-notes.js";
@@ -955,6 +956,7 @@ export function updateTarget(
     quality_override?: boolean;
     bump_cache?: boolean;
     invalidate_day_read?: boolean;
+    by?: PrescriptionWriter;
   } = {}
 ) {
   const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
@@ -965,7 +967,10 @@ export function updateTarget(
   const ex = resolvedId != null ? getExercise(resolvedId) : null;
   if (!ex) throw new Error(`No exercise "${exerciseName}"`);
   const cur = db
-    .prepare(`SELECT id, target_weight, target_seconds FROM plan_items WHERE plan_day_id = ? AND exercise_id = ?`)
+    .prepare(
+      `SELECT id, exercise_id, sets, rep_low, rep_high, target_weight, target_seconds, prescribed_at
+         FROM plan_items WHERE plan_day_id = ? AND exercise_id = ?`
+    )
     .get(day.id, ex.id) as any;
   if (!cur) throw new Error(`"${ex.name}" is not on plan day ${dayNumber}`);
 
@@ -1038,6 +1043,8 @@ export function updateTarget(
   const info = db
     .prepare(`UPDATE plan_items SET ${sets.join(", ")} WHERE plan_day_id = ? AND exercise_id = ?`)
     .run(...vals);
+  // A new target is a new prescription (prescription-authorship.ts).
+  if (info.changes) restampSlot(Number(cur.id), cur, opts.by ?? "brain");
   if (info.changes && opts.bump_cache !== false) afterSqliteCommit(bumpTrainingDataVersion);
   if (info.changes && opts.invalidate_day_read !== false) invalidateDayRead();
   return {
@@ -1072,8 +1079,8 @@ function insertPlanItem(row: {
   target_zone?: string | null;
   interval_json?: string | null;
   superset_group?: number | null;
-  // Omitted = authored now. A rewrite that keeps a slot's prescription passes the
-  // stamp it already had (null included), so re-saving a day never makes it fresh.
+  // Omitted = a brand-new slot, authored now (stampForWrite with no prior). A rewrite
+  // passes what stampForWrite decided for it (null included).
   prescribed_at?: string | null;
 }) {
   return db
@@ -1098,7 +1105,7 @@ function insertPlanItem(row: {
       row.target_zone ?? null,
       row.interval_json ?? null,
       row.superset_group ?? null,
-      row.prescribed_at === undefined ? localDateISO() : row.prescribed_at
+      row.prescribed_at === undefined ? stampForWrite(null, row, { by: "brain" }) : row.prescribed_at
     );
 }
 
@@ -1313,7 +1320,7 @@ export function savePlanDayChecked(
   name: string,
   focus: string | null,
   items: PlanItemInput[],
-  opts: { quality_override?: boolean; day_type?: string | null } = {}
+  opts: { quality_override?: boolean; day_type?: string | null; by?: PrescriptionWriter } = {}
 ) {
   const before = validateTrainingPlan(getPlan());
   // A rest day is refused BEFORE anything is read or validated: it is not a plan row
@@ -1331,7 +1338,7 @@ export function savePlanDayChecked(
   if (blocking.length && !opts.quality_override) {
     throw new PlanQualityError({ ok: false, errors: blocking, warnings: quality.warnings });
   }
-  const day = savePlanDay(day_number, name, focus, normalizedItems);
+  const day = savePlanDay(day_number, name, focus, normalizedItems, { by: opts.by });
   return { ok: true, day, quality, quality_override: blocking.length > 0 };
 }
 
@@ -1343,7 +1350,7 @@ export function replacePlanChecked(
     day_type?: string | null;
     items?: PlanItemInput[];
   }[],
-  opts: { quality_override?: boolean; keepScaffolds?: boolean } = {}
+  opts: { quality_override?: boolean; keepScaffolds?: boolean; by?: PrescriptionWriter } = {}
 ) {
   const normalized = strengthDaysOnly(days, { keepScaffolds: opts.keepScaffolds }).map((day) => ({
     ...day,
@@ -1351,7 +1358,7 @@ export function replacePlanChecked(
   }));
   const quality = validateTrainingPlan(normalized, { volumeFloor: readVolumeFloorContext() });
   if (!quality.ok && !opts.quality_override) throw new PlanQualityError(quality);
-  const plan = replacePlan(normalized, { keepScaffolds: opts.keepScaffolds });
+  const plan = replacePlan(normalized, { keepScaffolds: opts.keepScaffolds, by: opts.by });
   return { ok: true, plan, quality, quality_override: !quality.ok };
 }
 
@@ -1444,7 +1451,8 @@ export function applyPlanChange(
   if (match) {
     const current = db
       .prepare(
-        `SELECT pi.sets, pi.rep_low, pi.rep_high, e.mode
+        `SELECT pi.id, pi.exercise_id, pi.sets, pi.rep_low, pi.rep_high, pi.target_weight, pi.target_seconds,
+                pi.prescribed_at, e.mode
          FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
         WHERE pi.plan_day_id = ? AND e.name = ?`
       )
@@ -1525,6 +1533,9 @@ export function applyPlanChange(
     );
     updated += addCoachAdjustmentNote(day.id, match.ex_name, adjustmentReason);
     if (!updated) throw new Error(`No supported prescription fields supplied for "${match.ex_name}"`);
+    // Judged once over the whole change (target + reps + sets) against the slot as the
+    // change found it — a brain's set step alone is not a new prescription.
+    if (current?.id != null) restampSlot(Number(current.id), current, "brain");
     const stored = db
       .prepare(
         `SELECT pi.sets, pi.rep_low, pi.rep_high, pi.target_weight, pi.target_seconds, e.mode
@@ -1873,7 +1884,7 @@ function applyPlanSwap(
        prescribed_at = ?
      WHERE id = ?`
     )
-    .run(toEx.id, targetWeight, targetSeconds, note, sets, repLow, repHigh, localDateISO(), match.id);
+    .run(toEx.id, targetWeight, targetSeconds, note, sets, repLow, repHigh, stampForWrite(null, {}, { by: "brain" }), match.id);
   return {
     action: "swapped",
     day: dayNumber,
@@ -2052,64 +2063,6 @@ const numOrNull = (v: any): number | null => {
 // always written as a training day — a declared rest day is refused (resolvePlanDayType).
 // An empty day is allowed here, and only here: it is the editor's scaffold while the
 // athlete fills it in, and it is never startable and never takes a lifting weekday.
-// A slot's prescription identity: the movement, its rep range, and its target. Sets
-// are volume (a recovery week or a one-set trim is not a new prescription), and the
-// note is prose.
-function prescriptionKey(
-  exerciseId: number,
-  it: { rep_low?: unknown; rep_high?: unknown; target_weight?: unknown; target_seconds?: unknown }
-): string {
-  const n = (v: unknown) => (v == null || v === "" || !Number.isFinite(Number(v)) ? "" : String(Number(v)));
-  return [exerciseId, n(it.rep_low), n(it.rep_high), n(it.target_weight), n(it.target_seconds)].join("|");
-}
-
-// A PERSON's set count is authorship too. The key above leaves `sets` out on purpose
-// (a brain-applied recovery week or one-set trim is not a new prescription), but when
-// the athlete themselves changes a slot's sets in the editor, that number is theirs:
-// re-stamping the slot today is what keeps the set-count catch-up (setCatchUp,
-// progression.ts) from walking their cut back on logs from before it. Keys are
-// planPrescriptionKey's `day|exercise` (lowercased name). Called only by the person-save
-// use case, inside its savepoint.
-export function stampPersonSetChanges(keys: readonly string[], date = localDateISO()): number {
-  let stamped = 0;
-  const stmt = db.prepare(
-    `UPDATE plan_items SET prescribed_at = ?
-      WHERE id IN (SELECT pi.id FROM plan_items pi
-                     JOIN plan_days pd ON pd.id = pi.plan_day_id
-                     JOIN exercises e ON e.id = pi.exercise_id
-                    WHERE pd.day_number = ? AND lower(e.name) = ?)`
-  );
-  for (const key of keys) {
-    const at = key.indexOf("|");
-    if (at <= 0) continue;
-    stamped += Number(stmt.run(date, Number(key.slice(0, at)), key.slice(at + 1)).changes ?? 0);
-  }
-  return stamped;
-}
-
-function priorPrescriptionStamps(dayId: number): Map<string, string | null> {
-  const rows = db
-    .prepare(
-      `SELECT exercise_id, rep_low, rep_high, target_weight, target_seconds, prescribed_at
-         FROM plan_items WHERE plan_day_id = ? AND exercise_id IS NOT NULL`
-    )
-    .all(dayId) as any[];
-  const stamps = new Map<string, string | null>();
-  for (const row of rows) stamps.set(prescriptionKey(Number(row.exercise_id), row), row.prescribed_at ?? null);
-  return stamps;
-}
-
-// A re-save that leaves a slot exactly as it was keeps that slot's stamp (null — a
-// pre-v111 row — stays null). Anything new or changed is authored today.
-function carriedPrescriptionStamp(
-  prior: Map<string, string | null>,
-  exerciseId: number,
-  it: PlanItemInput
-): string | null | undefined {
-  const key = prescriptionKey(exerciseId, it as any);
-  return prior.has(key) ? (prior.get(key) ?? null) : undefined;
-}
-
 export function savePlanDay(
   day_number: number,
   name: string,
@@ -2120,13 +2073,19 @@ export function savePlanDay(
     deferDayReadInvalidation?: boolean;
     // Accepted for old callers; only an omitted value or 'training' is valid.
     day_type?: string | null;
+    // Who is writing (prescription-authorship.ts: a person's set change is a new
+    // prescription, a brain's is not). Omitted = the brain.
+    by?: PrescriptionWriter;
+    // An Undo restoring a snapshot: a stamp the item carries comes back as it was.
+    restoreStamps?: boolean;
   } = {}
 ) {
   const dayType = resolvePlanDayType(opts.day_type);
   const list = strengthItemsOnly(items);
   const existing = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(day_number) as any;
   let dayId: number;
-  let priorStamps = new Map<string, string | null>();
+  // The day's slots as they stood, by movement — what each rewrite is stamped against.
+  const prior = new Map<number, any>();
   if (existing) {
     db.prepare(`UPDATE plan_days SET name = ?, focus = ?, day_type = ? WHERE id = ?`).run(
       name,
@@ -2135,7 +2094,14 @@ export function savePlanDay(
       existing.id
     );
     dayId = existing.id;
-    priorStamps = priorPrescriptionStamps(dayId);
+    for (const row of db
+      .prepare(
+        `SELECT exercise_id, sets, rep_low, rep_high, target_weight, target_seconds, prescribed_at
+           FROM plan_items WHERE plan_day_id = ? AND exercise_id IS NOT NULL ORDER BY position`
+      )
+      .all(dayId) as any[]) {
+      if (!prior.has(Number(row.exercise_id))) prior.set(Number(row.exercise_id), row);
+    }
     db.prepare(`DELETE FROM plan_items WHERE plan_day_id = ?`).run(dayId);
   } else {
     dayId = Number(
@@ -2160,7 +2126,16 @@ export function savePlanDay(
       target_seconds: it.target_seconds ?? null,
       kind: "strength",
       superset_group: numOrNull(it.superset_group),
-      prescribed_at: carriedPrescriptionStamp(priorStamps, ex.id, it),
+      prescribed_at: stampForWrite(
+        prior.get(Number(ex.id)),
+        { ...it, exercise_id: ex.id, sets: it.sets ?? 3 },
+        {
+          by: opts.by ?? "brain",
+          ...(opts.restoreStamps && (it as any).prescribed_at !== undefined
+            ? { restore: (it as any).prescribed_at ?? null }
+            : {}),
+        }
+      ),
     });
   });
   // A changed plan day can change what "today" points at (focus/frequency) — refresh
@@ -2229,7 +2204,7 @@ export function replacePlan(
     day_type?: string | null;
     items?: PlanItemInput[];
   }[],
-  opts: { keepScaffolds?: boolean } = {}
+  opts: { keepScaffolds?: boolean; by?: PrescriptionWriter; restoreStamps?: boolean } = {}
 ) {
   if (!Array.isArray(days) || !days.length) throw new Error("replacePlan needs a non-empty days array");
   // Strength days only: run items are stripped and a day left with nothing to lift (a
@@ -2248,6 +2223,8 @@ export function replacePlan(
       savePlanDay(d.day_number, d.name || `Day ${i + 1}`, d.focus ?? null, d.items, {
         deferTrainingVersionBump: true,
         deferDayReadInvalidation: true,
+        by: opts.by,
+        restoreStamps: opts.restoreStamps,
       })
     );
     return getPlan();

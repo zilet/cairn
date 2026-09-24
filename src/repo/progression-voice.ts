@@ -723,6 +723,15 @@ export const ESCALATE_REP_WAVE: VoiceSet2 = [
     `Same lift, second step back — change the shape rather than the number: ${low}–${high} reps for a stretch, then re-test.`,
 ];
 
+// A FRESH prescription: the slot was written after the last time this lift was logged,
+// so nothing has been trained at it yet. It stands; the first session at it is where
+// the next step starts from.
+export const UNTESTED_PRESCRIPTION_HOLD: VoiceSet = [
+  "New prescription — run it as written; the first session at it is where the next step starts.",
+  "This is freshly written: do it as prescribed, and that first session becomes the number everything builds from.",
+  "A new prescription stands until you've trained it once — run it as written and let that session set the starting point.",
+];
+
 // The wave is ALREADY RUNNING. A second wave stacked on the first is the same
 // failure one rung up — the shape changed, it just hasn't had time to work yet.
 export const ESCALATE_WAVE_SETTLE: VoiceSet = [
@@ -825,6 +834,7 @@ export function progressionVoicePhrases(): string[] {
     EARNED_OPEN_OVERLOAD_REPS,
     NOT_EARNED_HOLD_REPS,
     GRIND_HOLD,
+    UNTESTED_PRESCRIPTION_HOLD,
     CARRY_LOGGED_AS_REPS_HOLD,
   ];
   const one: Array<[VoiceSet1, string | number]> = [

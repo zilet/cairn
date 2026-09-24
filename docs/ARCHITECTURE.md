@@ -815,6 +815,44 @@ must never tell an athlete who has never logged RIR to come back at "RIR 2+" —
 picks the RIR-flavored phrasing only when an RIR was actually logged for that exposure; an athlete who
 never rates gets the identical meaning spoken in reps instead.
 
+### Prescription authorship (`src/repo/prescription-authorship.ts`)
+
+ONE module answers "when was this slot's prescription written, and has the athlete trained it
+since?" (`plan_items.prescribed_at`, v111). Nothing else reads or writes the stamp's rules.
+
+**Write — `stampForWrite(prev, next, { by })`.** Identity (`prescriptionKey`) is the movement, the rep
+range and the target (load or seconds). An unchanged identity keeps its date (a pre-v111 NULL stays
+NULL = settled); a changed or brand-new slot is authored today. Sets are volume when the brain steps
+them (`by:"brain"`: a set catch-up, a recovery trim, an in-place change), but identity for the two
+writers that author a set count on purpose: a person's save (`by:"person"`, the plan-save use case)
+and a drafted week (`by:"restructure"`, a `days` proposal). Every write path goes through it:
+`insertPlanItem`, `savePlanDay`/`replacePlan` (stamped against each movement's prior row),
+`updateTarget` and `applyPlanChange` (`restampSlot` after the in-place update), and a swap. An Undo
+restores the slot's own date: the rollback snapshot carries `before_stamps`, and a slot that comes
+back exactly as it stood gets its stamp back (`withRestoredStamps`, `replacePlan({restoreStamps})`).
+This replaced the person-only `stampPersonSetChanges` pass and the set catch-up's separate read of
+the restructure ledger — a redraw's set count now re-stamps the slot itself.
+
+**Read — `slotAuthorship(stamp, lastExposure, date)`** → `{prescribed_at, age_days, fresh, untested,
+since}`, with batched loaders (`planSlotStamps`, `newestStampByExercise`, `stampsByPlanKey`) so a pass
+reads once, never per item. Consumers:
+- **`untested`** (written after the lift was last logged — nothing trained at it): the reps path holds
+  at the plan's own sets/reps/weight (`UNTESTED_PRESCRIPTION_HOLD`) — no re-ground, catch-up,
+  plan-ahead reach-down, in-flight wave anchor, movement-response or push step off older work (the
+  load-limiting note and the autoregulation/pain brakes still apply on top); the timed path holds a
+  loaded carry's load; `earnedLifts` (`daily-decision.ts`) earns no floor; the program-state read
+  does not call its old slide or stall this slot's trend. So a composition hold anchors on the plan
+  load and the slot never hosts a reach (reach needs an overload/carry candidate). One session on or
+  after `prescribed_at` and the ordinary ladder resumes.
+- **`fresh`** (within `PRESCRIPTION_SETTLE_DAYS`): no rotation for a plateau measured before it
+  (the reps vary guards), and program state does not call it flat.
+- **`since`**: re-grounding reads only loaded sessions logged under the current prescription
+  (`workingWeightUnderPrescription`), and the set catch-up counts only exposures from it.
+
+Evaluators and expectations compare outcomes with the target each decision recorded, not with the
+stamp, so they need nothing from here. Test fixtures that write a plan today and read it against
+past-dated sets use `savePlanDaySettled` / `replacePlanSettled` (`test/_seed.js`).
+
 **RIR is accepted 0–10, and read only in range.** `logSetByName`/`updateSet` (`sessions.ts`) store
 an out-of-range RIR as absent (the set itself is kept, `rir_ignored:true` on the log result), and
 progression and `setEffortWeight` read one through `plausibleRir` (`src/lib/numbers.ts`) — a 20 typed
@@ -3738,11 +3776,9 @@ volume truth's `WARMUP_FRAC`; a set counts only within a small slack of the rep 
 takes one set toward them — never past what was logged, never past four. A GOOD set is working
 volume at the prescribed dose: within 90% of that session's top working load (signed, so 10% more
 assist for assisted work; bodyweight reads reps only), at or above the plan's target load, and near
-the rep floor — warm-up ramps and back-offs never count. Only exposures on or after the later of the
-item's last applied `training_structure` change (one ledger read per pass) and its `prescribed_at`
-count — and a PERSON's set change in the editor re-stamps `prescribed_at`
-(`stampPersonSetChanges`, from the person-save use case), so neither a redraw's deliberate cut nor
-the athlete's own is undone by older logs. It rides only a HOLD or a double-progression rep step — never a load step or a re-ground,
+the rep floor — warm-up ramps and back-offs never count. Only exposures on or after the slot's
+`prescribed_at` count (prescription authorship: a redraw's or a person's set count re-stamps the slot),
+so neither a redraw's deliberate cut nor the athlete's own is undone by older logs. It rides only a HOLD or a double-progression rep step — never a load step or a re-ground,
 one change at a time. It is a catch-up to work already being done, not new stress, so only a fuel
 `reduce` away from the destination, a regressing lift or an unfinished/short exposure blocks it;
 `hold`, `fast_loss` and a `sliding` cut verdict do not (they veto added LOAD). It never fires in a

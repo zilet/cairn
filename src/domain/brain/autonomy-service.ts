@@ -46,6 +46,7 @@ import {
 } from "../../repo/nutrition.js";
 import { mealPlanDraftUnseen, mealPlanRefreshShape } from "../../repo/meal-plan-refresh.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
+import { stampsByPlanKey } from "../../repo/prescription-authorship.js";
 import { movementKey, normalizeExerciseName, normalizedExerciseKey } from "../../repo/exercise-canon.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
 import { computeGoalCheck, getProfile, setProfile } from "../../repo/profile.js";
@@ -639,16 +640,39 @@ function mergeTrainingRollback(
 function rollbackSnapshot(shape: ProposalShape): any {
   if (shape.domain === "recovery") return { kind: "recovery_cycle" };
   return shape.domain !== "nutrition"
-    ? { kind: "training_plan", plan: trainingPlanSnapshot() }
+    ? { kind: "training_plan", plan: trainingPlanSnapshot(), stamps: stampsByPlanKey() }
     : { kind: "nutrition_target", previous: getActiveNutritionTarget() };
 }
 
-function trainingRollbackPayload(before: any[]): any {
-  return { version: 2, before, after: trainingPlanSnapshot() };
+// `before_stamps` carries each slot's prescribed_at from before the decision, so an Undo
+// that restores a slot restores when it was written too (prescription-authorship.ts).
+function trainingRollbackPayload(before: any[], beforeStamps?: Record<string, string | null>): any {
+  return { version: 2, before, after: trainingPlanSnapshot(), ...(beforeStamps ? { before_stamps: beforeStamps } : {}) };
+}
+
+// A merged Undo plan, with the pre-decision stamp put back on every slot that comes
+// back EXACTLY as it stood before the decision. Anything else is stamped by the
+// ordinary rule against the live row.
+function withRestoredStamps(merged: any[], before: any[], stamps: unknown): any[] {
+  if (!stamps || typeof stamps !== "object") return merged;
+  const beforeByKey = new Map<string, any>();
+  for (const day of before)
+    for (const item of Array.isArray(day?.items) ? day.items : []) {
+      const key = planChangeKey(day.day_number, item?.exercise);
+      if (key && !beforeByKey.has(key)) beforeByKey.set(key, item);
+    }
+  return merged.map((day) => ({
+    ...day,
+    items: (Array.isArray(day?.items) ? day.items : []).map((item: any) => {
+      const key = planChangeKey(day.day_number, item?.exercise);
+      if (!key || !Object.hasOwn(stamps, key) || !sameValue(item, beforeByKey.get(key))) return item;
+      return { ...item, prescribed_at: (stamps as Record<string, string | null>)[key] };
+    }),
+  }));
 }
 
 function proposalRollbackPayload(rollback: any, result: any): any {
-  if (rollback.kind === "training_plan") return trainingRollbackPayload(rollback.plan);
+  if (rollback.kind === "training_plan") return trainingRollbackPayload(rollback.plan, rollback.stamps);
   if (rollback.kind === "recovery_cycle") {
     return {
       version: 1,
@@ -3597,20 +3621,21 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
         // A lift that no longer holds what this decision set is not the decision's to
         // walk back, whether or not a person's save marked it (older rows never were).
         const mismatched = mismatchedChangeKeys(decision.action, currentPlan);
-        replacePlan(
-          mergeTrainingRollback(
-            rollback.payload.before,
-            rollback.payload.after,
-            currentPlan,
-            Array.isArray((decision.action as any)?.swaps) ? (decision.action as any).swaps : [],
-            (dayNumber, item) =>
-              item?.kind !== "cardio" &&
-              (() => {
-                const key = planChangeKey(dayNumber, item?.exercise);
-                return isPersonSuperseded(personSuperseded, key) || (key != null && mismatched.has(key));
-              })()
-          )
+        const merged = mergeTrainingRollback(
+          rollback.payload.before,
+          rollback.payload.after,
+          currentPlan,
+          Array.isArray((decision.action as any)?.swaps) ? (decision.action as any).swaps : [],
+          (dayNumber, item) =>
+            item?.kind !== "cardio" &&
+            (() => {
+              const key = planChangeKey(dayNumber, item?.exercise);
+              return isPersonSuperseded(personSuperseded, key) || (key != null && mismatched.has(key));
+            })()
         );
+        replacePlan(withRestoredStamps(merged, rollback.payload.before, rollback.payload.before_stamps), {
+          restoreStamps: true,
+        });
       } else if (rollback?.kind === "nutrition_target") {
         const appliedTargetId = Number(decision.source_ref_type === "nutrition_target" ? decision.source_ref_key : 0);
         const activeBeforeUndo = getActiveNutritionTarget();

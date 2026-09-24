@@ -1298,7 +1298,8 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     // A restructure rewrites every prescription at once. Snapshot first, diff after,
     // so the ledger can say what moved per movement instead of only "the plan changed".
     const prescriptionsBefore = planPrescriptionSnapshot();
-    replacePlan(orderedDays);
+    // A drafted week authors its set counts on purpose (prescription-authorship.ts).
+    replacePlan(orderedDays, { by: "restructure" });
     const itemChanges = planPrescriptionDiff(
       prescriptionsBefore,
       planPrescriptionSnapshot(),
