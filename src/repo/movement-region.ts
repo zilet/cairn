@@ -90,6 +90,21 @@ export function movementRegionKey(name: string, _group?: string | null): Movemen
   return null;
 }
 
+// A regional isolation lift is an accessory whatever the swap-family table says: a leg
+// curl files as a hinge there and a leg extension as a squat, which would seat both
+// among the compounds (plan-item-order.ts `planItemEffectTier` reads this).
+const ACCESSORY_REGION = /^(?:knee-extension|knee-flexion|calf:|curl:|triceps:|lateral-raise|rear-delt)/;
+
+export function isAccessoryRegion(region: MovementRegion | null | undefined): boolean {
+  return !!region && ACCESSORY_REGION.test(region);
+}
+
+// A loaded press region (any bench angle, overhead) is compound work whatever group the
+// item carries — an incline dumbbell press with no stored group is still a press.
+export function isPressRegion(region: MovementRegion | null | undefined): boolean {
+  return !!region && (region.startsWith("horizontal-press:") || region === "vertical-press");
+}
+
 // Which side of an antagonist pair an exercise works, for supersets
 // (composition-pairing.ts `pairForSession`). Presses and rows are read off the region
 // first and the swap-family table second (a row has no region, but it is plainly a

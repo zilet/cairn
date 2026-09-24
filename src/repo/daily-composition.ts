@@ -1168,13 +1168,15 @@ export function normalizeComposedSession(
   // refuses a second flat press at write time, but a composed session can still pile
   // two (agent output, or a saturated-group stand-in stealing the other day's bench).
   // Drop the extra here so Today's card cannot serve Dumbbell Bench then Barbell Bench.
+  // On the athlete's own snapshotted day only the press-angle rule applies.
   const pressCollapsed = collapseRegionDuplicates(
     kept,
     new Set(
       envelope.candidates
         .map((candidate) => String(candidate.exercise ?? "").toLowerCase())
         .filter(Boolean)
-    )
+    ),
+    { pressOnly: opts.planSnapshot === true }
   );
   if (pressCollapsed.rejected.length) {
     rejected.push(...pressCollapsed.rejected);
@@ -1498,10 +1500,11 @@ export function normalizeComposedSession(
     date: envelope.date,
     planSnapshot: opts.planSnapshot === true,
   });
+  // A pairing reseats items (positions renumbered) but caps nothing: it never sets
+  // `changed`, which the validation reports as `capped`.
   if (paired.changed) {
     finalItems = paired.items;
     finalItems.forEach((item, index) => (item.position = index));
-    changed = true;
   }
   // A peak single on a reach-open day is still a top set on a card, and it says so
   // itself: every server-derived top set carries `reach`, and the loop above reads
@@ -1577,6 +1580,9 @@ function planItemToRaw(it: any): Record<string, unknown> {
     mode: it.mode ?? "reps",
     warmup_sets: it.warmup_sets ?? null,
     note: it.note ?? null,
+    // A pairing the athlete (or an applied plan) saved on the day rides onto the card;
+    // pairForSession leaves an existing group alone and clears one left alone.
+    superset_group: it.superset_group ?? null,
     brain_decision_id: it.brain_decision_id ?? null,
     brain_change_summary: it.brain_change_summary ?? null,
     brain_change_reason: it.brain_change_reason ?? null,
@@ -1641,6 +1647,8 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
           exercise: substitution.exercise,
           mode: stored?.mode ?? it?.mode,
         });
+        // A stand-in is not the movement its slot was paired for.
+        raw.superset_group = null;
         // A substitution never inherits the replaced movement's target. Reuse a
         // real working anchor only when this exact exercise has one; otherwise
         // establish the baseline without fabricated load/seconds.

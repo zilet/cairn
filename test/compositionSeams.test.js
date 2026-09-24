@@ -10,8 +10,14 @@
 // behavior, and these fixtures ARE the Upper & Arms / Lower A cards it exists for. So the
 // golden carries exactly its output and nothing else — `superset_group` on the bench +
 // row, curl + pushdown and leg curl + leg extension, and one pairing hint appended to each
-// pair's first `note`. Order, positions, loads, sets and reps are the pre-seam bytes; the
-// plan snapshot is untouched (test/compositionPairing.test.js owns the pairing rules).
+// pair's first `note`. Loads, sets and reps are the pre-seam bytes; the plan snapshot is
+// never paired (test/compositionPairing.test.js owns the pairing rules).
+//
+// And one correction: the effect tier now reads the movement region first
+// (plan-item-order.ts), so a leg curl is an accessory beside the leg extension instead of
+// a hinge among the compounds, and an incline dumbbell press with no stored group is a
+// press instead of an isolation lift. Those cards keep the order they were written in —
+// only the order, the positions, and which pair member carries the hint moved.
 // Synthetic fixtures only. Deterministic and offline (see test/run.mjs).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

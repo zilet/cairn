@@ -145,3 +145,45 @@ test("tiers: prep < primary < secondary < isolation < core < cardio", () => {
   assert.equal(planItemEffectTier({ exercise: "Plank" }), PLAN_ITEM_EFFECT_TIER.core);
   assert.equal(planItemEffectTier({ kind: "cardio", exercise: "Run" }), PLAN_ITEM_EFFECT_TIER.cardio);
 });
+
+test("the movement region answers first: leg curl and leg extension are accessories, a bare press is a press", () => {
+  // The swap-family table files a leg curl as a hinge and a leg extension (with its
+  // group) as a squat; on a card both are accessories after the compounds.
+  assert.equal(
+    planItemEffectTier({ exercise: "Lying Leg Curl", muscle_group: "hamstrings" }),
+    PLAN_ITEM_EFFECT_TIER.isolation
+  );
+  assert.equal(planItemEffectTier({ exercise: "Leg Curl" }), PLAN_ITEM_EFFECT_TIER.isolation);
+  assert.equal(
+    planItemEffectTier({ exercise: "Leg Extension", muscle_group: "quads" }),
+    PLAN_ITEM_EFFECT_TIER.isolation
+  );
+  assert.equal(planItemEffectTier({ exercise: "Leg Extension" }), PLAN_ITEM_EFFECT_TIER.isolation);
+  // A press with no stored group is still compound work.
+  assert.equal(planItemEffectTier({ exercise: "Incline Dumbbell Press" }), PLAN_ITEM_EFFECT_TIER.primary);
+  assert.equal(
+    planItemEffectTier({ exercise: "Incline Dumbbell Press", muscle_group: "chest" }),
+    PLAN_ITEM_EFFECT_TIER.primary
+  );
+  // Unchanged: the compounds, a hinge, a curl, a calf raise.
+  assert.equal(
+    planItemEffectTier({ exercise: "Romanian Deadlift", muscle_group: "hamstrings" }),
+    PLAN_ITEM_EFFECT_TIER.primary
+  );
+  assert.equal(planItemEffectTier({ exercise: "Barbell Curl" }), PLAN_ITEM_EFFECT_TIER.isolation);
+  assert.equal(
+    planItemEffectTier({ exercise: "Standing Calf Raise", muscle_group: "calves" }),
+    PLAN_ITEM_EFFECT_TIER.isolation
+  );
+
+  const items = [
+    { exercise: "Lying Leg Curl", kind: "strength", muscle_group: "hamstrings" },
+    { exercise: "Back Squat", kind: "strength", muscle_group: "quads" },
+    { exercise: "Leg Extension", kind: "strength", muscle_group: "quads" },
+    { exercise: "Romanian Deadlift", kind: "strength", muscle_group: "hamstrings" },
+  ];
+  assert.deepEqual(
+    orderPlanItemsForEffect(items).map((i) => i.exercise),
+    ["Back Squat", "Romanian Deadlift", "Lying Leg Curl", "Leg Extension"]
+  );
+});

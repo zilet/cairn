@@ -17,6 +17,7 @@
 
 import { isMobility, isPrepMovement } from "../../repo/exercise-canon.js";
 import { classifyPattern, type MovementPattern } from "../../repo/exercise-variations.js";
+import { isAccessoryRegion, isPressRegion, movementRegionKey } from "../../repo/movement-region.js";
 
 export type OrderablePlanItem = {
   kind?: string | null;
@@ -88,10 +89,20 @@ function itemName(item: OrderablePlanItem): string {
   return String(item.exercise ?? "").trim();
 }
 
-/** Tier for one item. Cardio always last; unclassified strength sits with isolation. */
+/**
+ * Tier for one item. Cardio always last; unclassified strength sits with isolation.
+ *
+ * The movement REGION (movement-region.ts) answers first where the swap-family table
+ * misfiles a lift for ordering: a leg curl reads as a hinge and a leg extension as a
+ * squat there (both accessories on a card), and a press with no stored group reads as
+ * nothing (an incline dumbbell press is still compound work).
+ */
 export function planItemEffectTier(item: OrderablePlanItem): number {
   if (isCardio(item)) return PLAN_ITEM_EFFECT_TIER.cardio;
   if (isPrep(item)) return PLAN_ITEM_EFFECT_TIER.prep;
+  const region = movementRegionKey(itemName(item));
+  if (isAccessoryRegion(region)) return PLAN_ITEM_EFFECT_TIER.isolation;
+  if (isPressRegion(region)) return PLAN_ITEM_EFFECT_TIER.primary;
   const pattern = classifyPattern(itemName(item), item.muscle_group ?? undefined);
   if (!pattern) return PLAN_ITEM_EFFECT_TIER.isolation;
   if (PRIMARY.has(pattern)) return PLAN_ITEM_EFFECT_TIER.primary;

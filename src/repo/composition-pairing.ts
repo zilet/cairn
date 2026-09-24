@@ -70,10 +70,15 @@ function isPrepItem(item: any, group: string | null): boolean {
  *
  * A press-angle collision keeps its historical reason (`duplicate_press_angle`); every
  * other region reports `duplicate_region`.
+ *
+ * `pressOnly` (the athlete's own snapshotted day, `manual_plan`): only the historical
+ * press-angle rule applies. The day they wrote keeps the two pushdowns or two calf
+ * raises they put on it; the press rule predates this module and has always held there.
  */
 export function collapseRegionDuplicates(
   items: any[],
-  candidateNames: Set<string>
+  candidateNames: Set<string>,
+  opts: { pressOnly?: boolean } = {}
 ): { items: any[]; rejected: Array<{ exercise: string; reason: string }> } {
   const rejected: Array<{ exercise: string; reason: string }> = [];
   const keep = items.map(() => true);
@@ -84,6 +89,7 @@ export function collapseRegionDuplicates(
     const name = String(item?.exercise ?? "");
     const region = movementRegionKey(name);
     if (!region) continue;
+    if (opts.pressOnly && !region.startsWith("horizontal-press:")) continue;
     // Only a region-keyed item pays for the group lookup (the prep check needs it).
     if (isPrepItem(item, storedGroup(item))) continue;
     const prev = keeper.get(region);
@@ -132,20 +138,6 @@ export const PAIRING_NOTES: readonly [string, ...string[]] = [
 // card drops a cue past this length), so a hint that would push an existing note over
 // it is not added there — it would hide the note it was appended to.
 const NOTE_BUDGET = 220;
-
-// A regional isolation lift is an accessory whatever the swap-family table says: a leg
-// curl files as a hinge there, which would seat it among the compounds.
-const ACCESSORY_REGION = /^(?:knee-extension|knee-flexion|calf:|curl:|triceps:|lateral-raise|rear-delt)/;
-
-// The card's effect tier, read through the movement region. Prep, core and cardio keep
-// their own tier; a regional accessory is an isolation lift.
-function pairingTier(item: any): number {
-  const tier = planItemEffectTier(item);
-  if (tier === PLAN_ITEM_EFFECT_TIER.prep || tier >= PLAN_ITEM_EFFECT_TIER.core) return tier;
-  const region = movementRegionKey(String(item?.exercise ?? ""));
-  if (region && ACCESSORY_REGION.test(region)) return PLAN_ITEM_EFFECT_TIER.isolation;
-  return tier;
-}
 
 // Heavy strength-range work (a bottom of five reps or fewer) gets its full rest.
 const HEAVY_REP_LOW = 5;
@@ -197,7 +189,9 @@ function readItems(items: any[], envelope: DailyDecisionEnvelope): ItemRead[] {
       ? PLAN_ITEM_EFFECT_TIER.cardio
       : isPrepItem(item, group)
         ? PLAN_ITEM_EFFECT_TIER.prep
-        : pairingTier(item);
+        : // The card's own effect tier, which reads the movement region first: a leg
+          // curl or leg extension is an accessory here exactly as in the card's order.
+          planItemEffectTier(item);
     const existingGroup = item?.superset_group != null;
     const warmups = (finite(item?.warmup_sets) ?? 0) > 0;
     const topSet = hasTopSetShape(item);
@@ -344,6 +338,21 @@ function placePairingNote(lead: any, follow: any, date: string): void {
   }
 }
 
+// A plan-saved pairing reaches the card with its `superset_group`; when today's clamps
+// left only one member of it on the card (an exclusion, a region collapse), the lone
+// item is no longer paired with anything and must not say it is. Cleared in place.
+function dropOrphanSupersets(items: any[]): void {
+  const counts = new Map<number, number>();
+  for (const item of items) {
+    const group = finite(item?.superset_group);
+    if (group != null) counts.set(group, (counts.get(group) ?? 0) + 1);
+  }
+  for (const item of items) {
+    const group = finite(item?.superset_group);
+    if (group != null && (counts.get(group) ?? 0) < 2) item.superset_group = null;
+  }
+}
+
 /**
  * Seat antagonist pairs as supersets on today's card. Runs on the FINAL list, after
  * `orderPlanItemsForEffect`; when `changed` is true the caller re-numbers positions.
@@ -362,13 +371,16 @@ function placePairingNote(lead: any, follow: any, date: string): void {
  *   first item one calm hint in `note`.
  *
  * Identity (the same array, `changed: false`) on a plan snapshot, and whenever nothing
- * pairs and no behind group moves.
+ * pairs and no behind group moves — except that a plan-saved group left with a single
+ * member on the card is cleared in place on any card, the snapshot included.
  */
 export function pairForSession(items: any[], ctx: PairingContext): PairingResult {
-  if (ctx.planSnapshot || !Array.isArray(items) || items.length < 2) return { items, changed: false };
+  if (!Array.isArray(items)) return { items, changed: false };
+  dropOrphanSupersets(items);
+  if (ctx.planSnapshot || items.length < 2) return { items, changed: false };
   const reads = readItems(items, ctx.envelope);
-  // Stable by tier: the card is already in effect order, except where the swap-family
-  // table misfiles a regional accessory among the compounds.
+  // Stable by tier: the card is already in effect order (the same tier read), so this
+  // only groups each tier's items together for the pairing pass.
   const sorted = [...reads].sort((a, b) => (a.tier !== b.tier ? a.tier - b.tier : a.index - b.index));
   const units: Unit[] = [];
   let reseated = false;

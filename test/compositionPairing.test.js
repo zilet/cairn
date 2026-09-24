@@ -182,17 +182,22 @@ test("Lower A: the leg extension pairs with the leg curl; the squat and the hing
 test("a group the week is behind on goes first in its tier and leads its pair — on today's card only", () => {
   seedLowerA();
   const before = repo.getPlanDay(1).items.map((item) => item.exercise);
+  // Both are accessories (the effect tier reads the movement region), so the plan's own
+  // order stands by default: the extension, then the curl.
   const plain = deterministicComposedSession(lowerEnvelope());
-  assert.ok(names(plain).indexOf("Lying Leg Curl") < names(plain).indexOf("Leg Extension"), "effect order by default");
+  assert.ok(
+    names(plain).indexOf("Leg Extension") < names(plain).indexOf("Lying Leg Curl"),
+    "the plan's order by default"
+  );
 
   const session = deterministicComposedSession(
-    lowerEnvelope({ dose: { gaps: [{ group: "quads", short: 2 }], fills: [] } })
+    lowerEnvelope({ dose: { gaps: [{ group: "hamstrings", short: 2 }], fills: [] } })
   );
   const order = names(session);
-  assert.ok(order.indexOf("Leg Extension") < order.indexOf("Lying Leg Curl"), "quads short: the extension goes first");
+  assert.ok(order.indexOf("Lying Leg Curl") < order.indexOf("Leg Extension"), "hamstrings short: the curl goes first");
   assert.equal(byName(session, "Leg Extension").superset_group, byName(session, "Lying Leg Curl").superset_group);
   assert.ok(
-    String(byName(session, "Leg Extension").note ?? "").includes("Lying Leg Curl"),
+    String(byName(session, "Lying Leg Curl").note ?? "").includes("Leg Extension"),
     "the leader carries the hint"
   );
   assert.equal(order[1], "Back Squat", "the anchor keeps its seat");
@@ -397,12 +402,12 @@ test("an author's own grouping stands, and a new pair takes an unused group", ()
 test("the athlete's own snapshotted day is never paired or reseated", () => {
   seedLowerA();
   const session = deterministicComposedSession(
-    lowerEnvelope({ dose: { gaps: [{ group: "quads", short: 2 }], fills: [] } }),
+    lowerEnvelope({ dose: { gaps: [{ group: "hamstrings", short: 2 }], fills: [] } }),
     { planSnapshot: true }
   );
   for (const item of session.items) assert.equal(item.superset_group, null);
   const order = names(session);
-  assert.ok(order.indexOf("Lying Leg Curl") < order.indexOf("Leg Extension"));
+  assert.ok(order.indexOf("Leg Extension") < order.indexOf("Lying Leg Curl"), "the order they wrote");
 });
 
 test("nothing to pair is identity: the same array back, unchanged", () => {
