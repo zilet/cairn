@@ -469,14 +469,15 @@ test("a slot the plan just wrote is never rotated for a plateau measured before 
   // Re-saving the day unchanged keeps the stamp; once it has settled, the plateau speaks.
   db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(isoDaysAgo(30));
   repo.savePlanDay(4, "Upper", "Upper", [
-    { exercise: "Triceps Rope Pushdown", sets: 2, rep_low: 12, rep_high: 15, target_weight: 50 },
+    { exercise: "Triceps Rope Pushdown", sets: 4, rep_low: 12, rep_high: 15, target_weight: 50 },
   ]);
-  assert.equal(db.prepare(`SELECT prescribed_at FROM plan_items`).get().prescribed_at, isoDaysAgo(30), "a set-count trim is not a new prescription");
+  // (A brain set INCREASE is volume; a set CUT is a new prescription whoever writes it.)
+  assert.equal(db.prepare(`SELECT prescribed_at FROM plan_items`).get().prescribed_at, isoDaysAgo(30), "a brain set increase is not a new prescription");
   assert.equal(nextPrescription("Triceps Rope Pushdown").action, "vary");
 
   // Changing the rep range IS a new prescription.
   repo.savePlanDay(4, "Upper", "Upper", [
-    { exercise: "Triceps Rope Pushdown", sets: 2, rep_low: 10, rep_high: 12, target_weight: 50 },
+    { exercise: "Triceps Rope Pushdown", sets: 4, rep_low: 10, rep_high: 12, target_weight: 50 },
   ]);
   assert.equal(db.prepare(`SELECT prescribed_at FROM plan_items`).get().prescribed_at, localDateISO());
 });

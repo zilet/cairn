@@ -133,7 +133,8 @@ planExercisesRouter.put("/plan/:day/target", (req, res) => {
       exercise,
       target_weight !== undefined && target_weight !== null ? Number(target_weight) : undefined,
       target_seconds !== undefined && target_seconds !== null ? Number(target_seconds) : undefined,
-      { quality_override: quality_override === true }
+      // A person's target edit is stamped at the instant it was made (prescription-authorship.ts).
+      { quality_override: quality_override === true, by: "person" }
     ));
   } catch (e: any) {
     res.status(400).json({ error: e.message, ...(e?.report ? { quality: e.report, quality_override_available: true } : {}) });

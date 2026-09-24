@@ -821,20 +821,31 @@ ONE module answers "when was this slot's prescription written, and has the athle
 since?" (`plan_items.prescribed_at`, v111). Nothing else reads or writes the stamp's rules.
 
 **Write — `stampForWrite(prev, next, { by })`.** Identity (`prescriptionKey`) is the movement, the rep
-range and the target (load or seconds). An unchanged identity keeps its date (a pre-v111 NULL stays
-NULL = settled); a changed or brand-new slot is authored today. Sets are volume when the brain steps
-them (`by:"brain"`: a set catch-up, a recovery trim, an in-place change), but identity for the two
-writers that author a set count on purpose: a person's save (`by:"person"`, the plan-save use case)
-and a drafted week (`by:"restructure"`, a `days` proposal). Every write path goes through it:
+range and the target (load or seconds). An unchanged identity keeps its stamp (a pre-v111 NULL stays
+NULL = settled); a changed or brand-new slot is stamped now (`stampNow`). A set count is identity for
+the two writers that author it on purpose — a person's save or target edit (`by:"person"`, the
+plan-save use case, the target route/tool) and a drafted week (`by:"restructure"`) — and a set CUT is
+a new prescription whoever writes it (a conductor's `plan_update` cut is not walked back); only a
+brain set INCREASE (the catch-up) is volume. A person's or a redraw's stamp is the full UTC instant, so
+an evening edit after a morning session reads as after it; a brain step stores the bare day — it is
+authored FROM the evidence already logged (a step applied at a session's finish is that session's
+consequence), and a bare day reads as the start of that day, which is also how every legacy
+date-only stamp keeps reading. Every write path goes through it:
 `insertPlanItem`, `savePlanDay`/`replacePlan` (stamped against each movement's prior row),
 `updateTarget` and `applyPlanChange` (`restampSlot` after the in-place update), and a swap. An Undo
-restores the slot's own date: the rollback snapshot carries `before_stamps`, and a slot that comes
-back exactly as it stood gets its stamp back (`withRestoredStamps`, `replacePlan({restoreStamps})`).
+restores the slot's own date: the rollback snapshot carries `before_stamps` and `after_stamps`, and a
+slot that comes back exactly as it stood gets its old stamp back while its live stamp is still the
+decision's own — a slot re-stamped since keeps that later stamp (`withRestoredStamps`,
+`replacePlan({restoreStamps})`).
 This replaced the person-only `stampPersonSetChanges` pass and the set catch-up's separate read of
 the restructure ledger — a redraw's set count now re-stamps the slot itself.
 
 **Read — `slotAuthorship(stamp, lastExposure, date)`** → `{prescribed_at, age_days, fresh, untested,
-since}`, with batched loaders (`planSlotStamps`, `newestStampByExercise`, `stampsByPlanKey`) so a pass
+since, since_at}`. The exposure is the latest session's day and its first set's `created_at`: an
+earlier day predates the stamp, a later one follows it, and on the stamp's own day an instant stamp is
+compared with that first set. `sinceClause` turns `since`/`since_at` into the SQL every "under this
+prescription" read uses (a later day, or that day's sets created at/after the stamp). `fresh` and
+`age_days` read the stamp's local day, with batched loaders (`planSlotStamps`, `newestStampByExercise`, `stampsByPlanKey`) so a pass
 reads once, never per item. Consumers:
 - **`untested`** (written after the lift was last logged — nothing trained at it): the reps path holds
   at the plan's own sets/reps/weight (`UNTESTED_PRESCRIPTION_HOLD`) — no re-ground, catch-up,
@@ -847,7 +858,10 @@ reads once, never per item. Consumers:
 - **`fresh`** (within `PRESCRIPTION_SETTLE_DAYS`): no rotation for a plateau measured before it
   (the reps vary guards), and program state does not call it flat.
 - **`since`**: re-grounding reads only loaded sessions logged under the current prescription
-  (`workingWeightUnderPrescription`), and the set catch-up counts only exposures from it.
+  (`workingWeightUnderPrescription`), the earned floor qualifies only exposures under it (a slot cut
+  and trained once is never floored back up), and the set catch-up counts only sets from it. A slot
+  written with NO load on a lift with loaded history still grounds (`planUnset`) — from sessions
+  under the prescription when there are any, else the latest history.
 
 Evaluators and expectations compare outcomes with the target each decision recorded, not with the
 stamp, so they need nothing from here. Test fixtures that write a plan today and read it against

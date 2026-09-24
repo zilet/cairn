@@ -38,6 +38,9 @@ const stampOf = (day = 1) =>
     )
     .get(day)?.at ?? null;
 const backdate = (n) => db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(daysAgo(n));
+// A person's or a redraw's stamp is a full UTC instant; a brain step's is a bare day.
+const isInstantToday = (stamp) =>
+  typeof stamp === "string" && stamp.includes("T") && localDateISO(new Date(stamp)) === TODAY;
 
 beforeEach(() => {
   resetTables(
@@ -77,7 +80,8 @@ test("stampForWrite keeps an unchanged slot's date, authors a changed or new one
   const prev = { exercise_id: 7, sets: 3, rep_low: 8, rep_high: 10, target_weight: 100, prescribed_at: "2026-01-05" };
   const today = "2026-03-01";
   assert.equal(stampForWrite(prev, { ...prev }, { by: "brain", today }), "2026-01-05");
-  assert.equal(stampForWrite(prev, { ...prev, sets: 2 }, { by: "brain", today }), "2026-01-05", "a brain set step");
+  assert.equal(stampForWrite(prev, { ...prev, sets: 4 }, { by: "brain", today }), "2026-01-05", "a brain set increase");
+  assert.equal(stampForWrite(prev, { ...prev, sets: 2 }, { by: "brain", today }), today, "a set CUT by any writer");
   assert.equal(stampForWrite(prev, { ...prev, sets: 2 }, { by: "person", today }), today, "a person's set change");
   assert.equal(stampForWrite(prev, { ...prev, sets: 2 }, { by: "restructure", today }), today, "a redraw's set count");
   assert.equal(stampForWrite(prev, { ...prev, target_weight: 105 }, { by: "brain", today }), today);
@@ -105,7 +109,14 @@ test("slotAuthorship: age, fresh, untested and since", () => {
   assert.equal(slotAuthorship("2026-03-01", "2026-03-01", "2026-03-05").untested, false, "a session on the day counts");
   assert.equal(slotAuthorship("2026-03-01", null, "2026-03-05").untested, false, "no history is its own case");
   const settled = slotAuthorship(null, "2026-02-20", "2026-03-05");
-  assert.deepEqual(settled, { prescribed_at: null, age_days: null, fresh: false, untested: false, since: null });
+  assert.deepEqual(settled, {
+    prescribed_at: null,
+    age_days: null,
+    fresh: false,
+    untested: false,
+    since: null,
+    since_at: null,
+  });
   assert.equal(
     slotAuthorship("2026-01-01", null, addDaysISO("2026-01-01", PRESCRIPTION_SETTLE_DAYS)).fresh,
     false,
@@ -140,14 +151,14 @@ test("every plan write stamps through the one rule", () => {
   assert.equal(stampOf(), TODAY, "a brain target step re-stamps");
 
   backdate(30);
-  repo.updateTarget(1, "Barbell Bench Press", 200);
-  assert.equal(stampOf(), TODAY, "a manual target edit re-stamps");
+  repo.updateTarget(1, "Barbell Bench Press", 200, undefined, { by: "person" }); // as the route and the MCP tool call it
+  assert.ok(isInstantToday(stampOf()), "a manual target edit re-stamps, at the instant it was made");
 
   backdate(30);
   savePlanDayByPerson(1, "Push", "Push", [
     { exercise: "Barbell Bench Press", sets: 2, rep_low: 6, rep_high: 8, target_weight: 200 },
   ]);
-  assert.equal(stampOf(), TODAY, "a person's set change is theirs");
+  assert.ok(isInstantToday(stampOf()), "a person's set change is theirs, at the instant it was made");
 
   backdate(30);
   repo.replacePlan(
@@ -160,7 +171,7 @@ test("every plan write stamps through the one rule", () => {
     ],
     { by: "restructure" }
   );
-  assert.equal(stampOf(), TODAY, "a redraw's set count re-stamps");
+  assert.ok(isInstantToday(stampOf()), "a redraw's set count re-stamps, at the instant it was made");
 
   backdate(30);
   repo.applyPlanChange(
@@ -301,4 +312,184 @@ test("rotation: a fresh slot is never rotated for a plateau measured before it",
   const p = nextPrescription("Triceps Rope Pushdown");
   assert.notEqual(p.action, "vary");
   assert.ok(!p.vary_to);
+});
+
+// ------------------------------------------------------------ review probes
+
+function logAt(name, date, sets, createdAtSql = null) {
+  const ex = repo.findExercise(name);
+  const sess = repo.getOrCreateSession(date, null);
+  sets.forEach(([weight, reps, rir = null], i) => {
+    if (createdAtSql)
+      db.prepare(
+        `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir, created_at) VALUES (?, ?, ?, ?, ?, ?, ${createdAtSql})`
+      ).run(sess.id, ex.id, i + 1, weight, reps, rir);
+    else
+      db.prepare(
+        `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(sess.id, ex.id, i + 1, weight, reps, rir);
+  });
+}
+
+test("earned floor: a slot cut and trained once is never floored back to the load it replaced", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.savePlanDay(1, "Lower", "Squat", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 205 },
+  ]);
+  backdate(60);
+  // Three capped sessions at 205 with reserve — enough to earn a 205 floor.
+  for (const n of [16, 11, 6])
+    logAt("Back Squat", daysAgo(n), [
+      [205, 5, 3],
+      [205, 5, 3],
+      [205, 5, 3],
+    ]);
+  // The athlete cuts it to 185, then trains it once at 185.
+  savePlanDayByPerson(1, "Lower", "Squat", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 },
+  ]);
+  logAt("Back Squat", TODAY, [
+    [185, 5, 3],
+    [185, 5, 3],
+    [185, 5, 3],
+  ]);
+  const tomorrow = addDaysISO(TODAY, 1);
+  const snap = gatherDailyDecisionSnapshot(tomorrow);
+  const squat = snap.progression.find((p) => p.exercise === "Back Squat");
+  assert.equal(squat?.earned, undefined, "one session under the cut is not two earned exposures");
+  const env = buildDailySessionDecision(snap, { now: `${tomorrow}T12:00:00.000Z` });
+  const candidate = env.candidates.find((c) => c.exercise === "Back Squat");
+  assert.ok(candidate);
+  assert.equal(candidate.earned_floor, undefined);
+  const composed = normalizeComposedSession(
+    {
+      name: "Lower",
+      focus: "Squat",
+      why: "x",
+      est_minutes: 45,
+      items: [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 }],
+    },
+    env
+  ).session.items.find((i) => i.exercise === "Back Squat");
+  assert.ok(composed.target_weight < 205, `the card never goes back to 205 (${composed.target_weight})`);
+});
+
+test("same-day edit: a morning session is not evidence for a plan the athlete rewrote that evening", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.savePlanDay(1, "Lower", "Squat", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 205 },
+  ]);
+  backdate(60);
+  logAt("Back Squat", daysAgo(7), [
+    [205, 7],
+    [205, 7],
+    [205, 7],
+  ]);
+  // Trained this morning (two hours ago), at the old load…
+  logAt(
+    "Back Squat",
+    TODAY,
+    [
+      [205, 6],
+      [205, 6],
+      [205, 6],
+    ],
+    "datetime('now','-2 hours')"
+  );
+  // …and rewrote the plan down this evening.
+  savePlanDayByPerson(1, "Lower", "Squat", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 185 },
+  ]);
+  const p = nextPrescription("Back Squat");
+  assert.equal(p.action, "hold");
+  assert.equal(p.suggested.weight, 185, "the morning's 205 does not re-ground the evening's 185");
+  assert.ok(!p.reground);
+
+  // A legacy bare-day stamp reads as the start of its day: the same session counts.
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(TODAY);
+  const legacy = slotAuthorship(TODAY, { date: TODAY, first_at: "2000-01-01 00:00:00" }, TODAY);
+  assert.equal(legacy.untested, false);
+  assert.equal(legacy.since_at, null);
+});
+
+test("a brain step applied at a session's finish is that session's consequence, never untested", () => {
+  repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.savePlanDay(1, "Push", "Push", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
+  ]);
+  backdate(40);
+  logAt(
+    "Barbell Bench Press",
+    TODAY,
+    [
+      [185, 8, 2],
+      [185, 8, 2],
+      [185, 8, 2],
+    ],
+    "datetime('now','-1 hours')"
+  );
+  repo.applyPlanChange({ day_number: 1, exercise: "Barbell Bench Press", target_weight: 190 }, { clamp: true });
+  const stamp = stampOf();
+  assert.equal(stamp, TODAY, "a brain step stores its day");
+  const first = db.prepare(`SELECT MIN(created_at) AS at FROM logged_sets`).get().at;
+  assert.equal(slotAuthorship(stamp, { date: TODAY, first_at: first }, TODAY).untested, false);
+});
+
+test("a redraw that omits the load still grounds a lift with loaded history", () => {
+  repo.upsertExercise({ name: "Leg Press", muscle_group: "quads", mode: "reps" });
+  repo.savePlanDay(1, "Lower", "Legs", [
+    { exercise: "Leg Press", sets: 3, rep_low: 10, rep_high: 12, target_weight: 300 },
+  ]);
+  backdate(60);
+  for (const n of [12, 5])
+    logAt("Leg Press", daysAgo(n), [
+      [320, 10],
+      [320, 10],
+      [320, 10],
+    ]);
+  repo.replacePlan(
+    [
+      {
+        day_number: 1,
+        name: "Lower",
+        items: [{ exercise: "Leg Press", sets: 3, rep_low: 10, rep_high: 12, target_weight: null }],
+      },
+    ],
+    { by: "restructure" }
+  );
+  const p = nextPrescription("Leg Press");
+  assert.equal(p.suggested.weight, 320, "grounded from the latest loaded history, not left empty");
+  assert.equal(p.reground, true);
+});
+
+test("a set CUT by the brain (a conductor's plan_update) re-stamps; a brain set increase does not", () => {
+  benchDay();
+  backdate(30);
+  repo.applyPlanChange({ day_number: 1, exercise: "Barbell Bench Press", sets: 4 }, { clamp: true });
+  assert.equal(stampOf(), daysAgo(30), "the catch-up direction keeps its date");
+  repo.applyPlanChange({ day_number: 1, exercise: "Barbell Bench Press", sets: 3 }, { clamp: true });
+  assert.equal(stampOf(), TODAY, "a deliberate cut is a new prescription");
+});
+
+test("Undo keeps a stamp something else wrote since, rather than restoring over it", () => {
+  benchDay();
+  backdate(40);
+  const ex = repo.findExercise("Barbell Bench Press");
+  for (const [n, w] of [
+    [28, 175],
+    [21, 180],
+    [10, 185],
+  ]) {
+    const sess = repo.getOrCreateSession(daysAgo(n), null);
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, ?, 8, 2)`
+    ).run(sess.id, ex.id, w);
+  }
+  const out = buildProgressionWithAutonomy(1);
+  assert.equal(out.autonomy?.ok, true);
+  // Something re-stamped the slot after the decision (its values untouched).
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(daysAgo(2));
+  assert.equal(revertDecision(out.autonomy.decision.id, "put it back").ok, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 185);
+  assert.equal(stampOf(), daysAgo(2), "the later stamp stands");
 });

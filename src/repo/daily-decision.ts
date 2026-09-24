@@ -28,7 +28,7 @@ import {
 } from "./plan-selection.js";
 import { getProgramState } from "./program-state.js";
 import { muscleGroupsForPainArea, painAreaLoadsExercise } from "./pain-relevance.js";
-import { planDayProgression, recentAutoregulation } from "./progression.js";
+import { planDayProgression, recentAutoregulation, workingWeightUnderPrescription } from "./progression.js";
 import { personalResponseModifierFor } from "./reaction-model.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
@@ -38,7 +38,7 @@ import { LAST_NIGHT_MAX_AGE_DAYS, isLastNight, isReadDayReadiness } from "./sens
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { weekWins } from "./sessions.js";
 import { addDaysISO, localDateISO } from "./shared.js";
-import { planSlotStamps, slotAuthorship } from "./prescription-authorship.js";
+import { planSlotStamps, sinceClause, slotAuthorship } from "./prescription-authorship.js";
 import {
   hasFreshBrake,
   hasFreshDecidingBrake,
@@ -1255,21 +1255,21 @@ function earnedLifts(date: string, planItems: any[], progression: any[]): Map<st
     if (repHigh == null || repHigh <= 0) continue;
     const resolved = resolveExerciseName(name);
     if (resolved.exercise_id == null) continue;
+    // Only work done under the slot's CURRENT prescription can earn its floor
+    // (prescription-authorship.ts): a fresh slot has none, so it earns nothing, and a
+    // slot trained once since a cut is not floored back up by the heavier sets before it.
+    const authorship = slotAuthorship(stamps.get(Number(item?.id)) ?? null, null, date);
+    const since = sinceClause(authorship);
     const dates = (
       db
         .prepare(
           `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-            WHERE ls.exercise_id = ? AND ls.weight > 0 AND ls.reps IS NOT NULL AND s.date < ?
+            WHERE ls.exercise_id = ? AND ls.weight > 0 AND ls.reps IS NOT NULL AND s.date < ? AND ${since.sql}
             ORDER BY s.date DESC LIMIT ?`
         )
-        .all(resolved.exercise_id, date, EARNED_EXPOSURES) as Array<{ d: string }>
+        .all(resolved.exercise_id, date, ...since.args, EARNED_EXPOSURES) as Array<{ d: string }>
     ).map((row) => String(row.d));
     if (dates.length < EARNED_MIN_QUALIFYING) continue;
-    // A FRESH prescription earns no floor: when the slot was written after the lift was
-    // last logged, nothing was trained at it, and the progression holds it at the plan
-    // (`untested`, progression.ts). A floor off the older work would lift the card
-    // straight back to the load the athlete just replaced.
-    if (slotAuthorship(stamps.get(Number(item?.id)) ?? null, dates[0], date).untested) continue;
     let qualifying = 0;
     // The floor is the load the range was actually CAPPED at — the heaviest top among
     // the qualifying exposures — never simply the heaviest recent set. A lone 80 × 10 among 70s
@@ -1281,9 +1281,9 @@ function earnedLifts(date: string, planItems: any[], progression: any[]): Map<st
         .prepare(
           `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir FROM logged_sets ls
              JOIN sessions s ON s.id = ls.session_id
-            WHERE ls.exercise_id = ? AND s.date = ? AND ls.weight > 0 AND ls.reps IS NOT NULL`
+            WHERE ls.exercise_id = ? AND s.date = ? AND ls.weight > 0 AND ls.reps IS NOT NULL AND ${since.sql}`
         )
-        .all(resolved.exercise_id, day) as Array<{ weight: number; reps: number; rir: number | null }>;
+        .all(resolved.exercise_id, day, ...since.args) as Array<{ weight: number; reps: number; rir: number | null }>;
       const top = Math.max(...sets.map((set) => Number(set.weight)));
       const working = sets.filter((set) => Number(set.weight) >= top * WORKING_SET_FRACTION);
       const met =
@@ -1297,7 +1297,7 @@ function earnedLifts(date: string, planItems: any[], progression: any[]): Map<st
       }
     }
     if (qualifying < EARNED_MIN_QUALIFYING) continue;
-    const workingWeight = recentWorkingWeight(name, EARNED_EXPOSURES, date);
+    const workingWeight = workingWeightUnderPrescription(name, authorship, { sessionsBack: EARNED_EXPOSURES, before: date });
     if (workingWeight == null || workingWeight <= 0 || earnedAt == null || earnedAt <= 0) continue;
     out.set(name.toLowerCase(), { working_weight: Math.min(workingWeight, earnedAt) });
   }

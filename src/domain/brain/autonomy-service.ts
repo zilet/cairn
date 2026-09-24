@@ -646,15 +646,24 @@ function rollbackSnapshot(shape: ProposalShape): any {
 
 // `before_stamps` carries each slot's prescribed_at from before the decision, so an Undo
 // that restores a slot restores when it was written too (prescription-authorship.ts).
+// `after_stamps` is what the decision itself left: an Undo only restores a slot's old
+// date while the slot still carries that stamp (nothing has re-stamped it since).
 function trainingRollbackPayload(before: any[], beforeStamps?: Record<string, string | null>): any {
-  return { version: 2, before, after: trainingPlanSnapshot(), ...(beforeStamps ? { before_stamps: beforeStamps } : {}) };
+  return {
+    version: 2,
+    before,
+    after: trainingPlanSnapshot(),
+    ...(beforeStamps ? { before_stamps: beforeStamps, after_stamps: stampsByPlanKey() } : {}),
+  };
 }
 
 // A merged Undo plan, with the pre-decision stamp put back on every slot that comes
-// back EXACTLY as it stood before the decision. Anything else is stamped by the
-// ordinary rule against the live row.
-function withRestoredStamps(merged: any[], before: any[], stamps: unknown): any[] {
-  if (!stamps || typeof stamps !== "object") return merged;
+// back EXACTLY as it stood before the decision, while its live stamp is still the one
+// the decision wrote. A slot re-stamped since (a later edit, a later decision) keeps
+// its current stamp; anything else is stamped by the ordinary rule against the live row.
+function withRestoredStamps(merged: any[], before: any[], stamps: unknown, afterStamps: unknown): any[] {
+  if (!stamps || typeof stamps !== "object" || !afterStamps || typeof afterStamps !== "object") return merged;
+  const live = stampsByPlanKey();
   const beforeByKey = new Map<string, any>();
   for (const day of before)
     for (const item of Array.isArray(day?.items) ? day.items : []) {
@@ -666,7 +675,9 @@ function withRestoredStamps(merged: any[], before: any[], stamps: unknown): any[
     items: (Array.isArray(day?.items) ? day.items : []).map((item: any) => {
       const key = planChangeKey(day.day_number, item?.exercise);
       if (!key || !Object.hasOwn(stamps, key) || !sameValue(item, beforeByKey.get(key))) return item;
-      return { ...item, prescribed_at: (stamps as Record<string, string | null>)[key] };
+      const current = live[key] ?? null;
+      const own = (afterStamps as Record<string, string | null>)[key] ?? null;
+      return { ...item, prescribed_at: current === own ? (stamps as Record<string, string | null>)[key] : current };
     }),
   }));
 }
@@ -3633,7 +3644,13 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
               return isPersonSuperseded(personSuperseded, key) || (key != null && mismatched.has(key));
             })()
         );
-        replacePlan(withRestoredStamps(merged, rollback.payload.before, rollback.payload.before_stamps), {
+        const restored = withRestoredStamps(
+          merged,
+          rollback.payload.before,
+          rollback.payload.before_stamps,
+          rollback.payload.after_stamps
+        );
+        replacePlan(restored, {
           restoreStamps: true,
         });
       } else if (rollback?.kind === "nutrition_target") {

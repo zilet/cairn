@@ -168,6 +168,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     async (target) =>
       asText(updateTarget(target.day_number, target.exercise, target.target_weight, target.target_seconds, {
         quality_override: target.quality_override === true,
+        by: "person",
       }))
   );
 

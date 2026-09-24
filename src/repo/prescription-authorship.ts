@@ -58,9 +58,30 @@ export function prescriptionKey(item: PrescriptionFields, by: PrescriptionWriter
 }
 
 /**
+ * The stamp a write made NOW stores. A person's save and a drafted week store the full
+ * UTC instant, so an edit made after a session on the same day reads as AFTER it (the
+ * morning's sets were done under the old prescription). A brain step stores the day:
+ * it is authored FROM the evidence already logged — a step applied at a session's
+ * finish is that session's own consequence — so a same-day session counts as its
+ * exposure (a bare day reads as the start of that day).
+ */
+export function stampNow(by: PrescriptionWriter, now: Date = new Date()): string {
+  return by === "brain" ? localDateISO(now) : now.toISOString();
+}
+
+// A deliberate set REDUCTION is a new prescription whoever writes it (a conductor's
+// plan_update cut must not be walked back by the catch-up); a brain's set INCREASE
+// (the catch-up itself) is volume, not identity.
+function setsReduced(prev: PrescriptionFields, next: PrescriptionFields): boolean {
+  const before = Number(prev.sets);
+  const after = Number(next.sets);
+  return prev.sets != null && next.sets != null && Number.isFinite(before) && Number.isFinite(after) && after < before;
+}
+
+/**
  * The `prescribed_at` to store for a write. `prev` is the slot as it stood (null for a
- * brand-new slot). Unchanged identity keeps prev's stamp; anything else is today.
- * `restore` is a stamp a snapshot carried back (an Undo): it wins outright.
+ * brand-new slot). Unchanged identity keeps prev's stamp; anything else is stamped now
+ * (stampNow). `restore` is a stamp a snapshot carried back (an Undo): it wins outright.
  */
 export function stampForWrite(
   prev: (PrescriptionFields & { prescribed_at?: string | null }) | null | undefined,
@@ -68,46 +89,135 @@ export function stampForWrite(
   opts: { by: PrescriptionWriter; today?: string; restore?: string | null }
 ): string | null {
   if (opts.restore !== undefined) return opts.restore;
-  const today = opts.today ?? localDateISO();
-  if (!prev) return today;
-  return prescriptionKey(prev, opts.by) === prescriptionKey(next, opts.by) ? (prev.prescribed_at ?? null) : today;
+  const now = opts.today ?? stampNow(opts.by);
+  if (!prev) return now;
+  if (setsReduced(prev, next)) return now;
+  return prescriptionKey(prev, opts.by) === prescriptionKey(next, opts.by) ? (prev.prescribed_at ?? null) : now;
 }
 
 export interface SlotAuthorship {
+  /** The stored stamp: a bare day (legacy / brain step) or a full UTC instant. */
   prescribed_at: string | null;
-  /** Days since it was written, as of `date`; null for an unstamped (settled) slot. */
+  /** Days since it was written (by its local day), as of `date`; null for an unstamped slot. */
   age_days: number | null;
   /** Written within PRESCRIPTION_SETTLE_DAYS. */
   fresh: boolean;
   /** Written after the lift's latest logged exposure: nothing has been trained at it yet. */
   untested: boolean;
-  /** Evidence about THIS prescription starts here (null = all history counts). */
+  /** The local day evidence about THIS prescription starts on (null = all history counts). */
   since: string | null;
+  /**
+   * On `since`'s own day, the UTC instant (SQLite `datetime` shape, comparable with
+   * logged_sets.created_at) from which a set counts; null for a bare-day stamp, where
+   * the whole day counts. Build SQL with `sinceClause`.
+   */
+  since_at: string | null;
 }
 
-// A stored stamp or session date as a real day key, or null.
+/** A logged exposure: the session's day and, when known, its first set's created_at (UTC). */
+export type Exposure = string | { date: unknown; first_at?: unknown } | null | undefined;
+
+// A stored session date as a real day key, or null.
 const stampDay = (value: unknown): string | null => isoDate(isoDay(value));
 
+// A timestamp (ISO or SQLite "YYYY-MM-DD HH:MM:SS", read as UTC) → epoch ms, or null.
+function instantMs(value: unknown): number | null {
+  const text = String(value ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(text)) return null;
+  const iso = text.includes("T") ? text : `${text.replace(" ", "T")}Z`;
+  const ms = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// The SQLite `datetime('now')` shape of an instant, so it compares with created_at.
+const sqliteInstant = (ms: number): string => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+
+/** A stored stamp normalised: a bare real day, a full ISO instant, or null. */
+export function normalizeStamp(value: unknown): string | null {
+  const day = isoDate(String(value ?? "").trim());
+  if (day) return day;
+  const ms = instantMs(value);
+  return ms == null ? null : new Date(ms).toISOString();
+}
+
+// The stamp's local day and (for an instant) its SQLite-shaped UTC time.
+function stampParts(stamp: unknown): { day: string; at: string | null } | null {
+  const normal = normalizeStamp(stamp);
+  if (!normal) return null;
+  if (!normal.includes("T")) return { day: normal, at: null };
+  const ms = Date.parse(normal);
+  return { day: localDateISO(new Date(ms)), at: sqliteInstant(ms) };
+}
+
 /**
- * Pure. `lastExposure` is the lift's latest logged session date (null = never logged).
+ * Pure. `lastExposure` is the lift's latest logged session — its day, and ideally its
+ * first set's created_at. A session on an earlier day predates the stamp and one on a
+ * later day follows it; on the stamp's OWN day, an instant stamp is compared with the
+ * session's first set (an evening edit after a morning session leaves the slot
+ * untested), and a bare-day stamp reads as the start of the day (the session counts).
  * A slot with no history at all is not "untested" here — that is the no-history case,
  * which every consumer already handles on its own terms.
  */
 export function slotAuthorship(
   prescribedAt: unknown,
-  lastExposure: unknown,
+  lastExposure: Exposure,
   date: string = localDateISO()
 ): SlotAuthorship {
-  const at = stampDay(prescribedAt);
-  const last = stampDay(lastExposure);
-  const age = at ? daysBetweenISO(String(date).slice(0, 10), at) : null;
+  const stamp = stampParts(prescribedAt);
+  const exposure =
+    lastExposure == null
+      ? null
+      : typeof lastExposure === "object"
+        ? { day: stampDay(lastExposure.date), first: instantMs(lastExposure.first_at) }
+        : { day: stampDay(lastExposure), first: instantMs(lastExposure) };
+  const age = stamp ? daysBetweenISO(String(date).slice(0, 10), stamp.day) : null;
+  let untested = false;
+  if (stamp && exposure?.day) {
+    if (exposure.day < stamp.day) untested = true;
+    else if (exposure.day === stamp.day && stamp.at && exposure.first != null)
+      untested = sqliteInstant(exposure.first) < stamp.at;
+  }
   return {
-    prescribed_at: at,
+    prescribed_at: normalizeStamp(prescribedAt),
     age_days: age,
     fresh: age != null && age >= 0 && age < PRESCRIPTION_SETTLE_DAYS,
-    untested: !!at && !!last && last < at,
-    since: at,
+    untested,
+    since: stamp?.day ?? null,
+    since_at: stamp?.at ?? null,
   };
+}
+
+/**
+ * The SQL that keeps only sets logged under the current prescription: a later day, or
+ * on `since`'s day a set created at/after `since_at` (the whole day for a bare stamp).
+ * `session` / `set` are the query's aliases for sessions and logged_sets.
+ */
+export function sinceClause(
+  authorship: Pick<SlotAuthorship, "since" | "since_at">,
+  session = "s",
+  set = "ls"
+): { sql: string; args: string[] } {
+  if (!authorship.since) return { sql: "1 = 1", args: [] };
+  if (!authorship.since_at) return { sql: `${session}.date >= ?`, args: [authorship.since] };
+  return {
+    sql: `(${session}.date > ? OR (${session}.date = ? AND ${set}.created_at >= ?))`,
+    args: [authorship.since, authorship.since, authorship.since_at],
+  };
+}
+
+/** The first set's created_at of one session for a set of exercise ids (the exposure instant). */
+export function sessionFirstSetAt(sessionId: unknown, exerciseIds: readonly number[]): string | null {
+  if (sessionId == null || !exerciseIds.length) return null;
+  try {
+    const row = db
+      .prepare(
+        `SELECT MIN(created_at) AS at FROM logged_sets WHERE session_id = ? AND exercise_id IN (${exerciseIds.map(() => "?").join(",")})`
+      )
+      .get(Number(sessionId), ...exerciseIds) as { at?: string | null } | undefined;
+    return row?.at ? String(row.at) : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---- batched reads (one query each, never per item) --------------------------
@@ -120,7 +230,7 @@ export function planSlotStamps(): Map<number, string | null> {
       id: number;
       prescribed_at: string | null;
     }>;
-    for (const row of rows) out.set(Number(row.id), stampDay(row.prescribed_at));
+    for (const row of rows) out.set(Number(row.id), normalizeStamp(row.prescribed_at));
   } catch {
     /* pre-v111 schema: every slot reads as settled */
   }
@@ -141,7 +251,7 @@ export function newestStampByExercise(): Map<number, string> {
       )
       .all() as Array<{ exercise_id: number; at: string | null }>;
     for (const row of rows) {
-      const at = stampDay(row.at);
+      const at = normalizeStamp(row.at);
       if (at) out.set(Number(row.exercise_id), at);
     }
   } catch {
@@ -156,7 +266,7 @@ export function slotStamp(planItemId: number): string | null {
     const row = db.prepare(`SELECT prescribed_at FROM plan_items WHERE id = ?`).get(Number(planItemId)) as
       | { prescribed_at: string | null }
       | undefined;
-    return stampDay(row?.prescribed_at);
+    return normalizeStamp(row?.prescribed_at);
   } catch {
     return null;
   }
@@ -201,7 +311,7 @@ export function stampsByPlanKey(): Record<string, string | null> {
       .all() as Array<{ day_number: number; exercise: string; prescribed_at: string | null }>;
     for (const row of rows) {
       const key = `${Number(row.day_number)}|${String(row.exercise).trim().toLowerCase()}`;
-      if (!(key in out)) out[key] = stampDay(row.prescribed_at);
+      if (!(key in out)) out[key] = normalizeStamp(row.prescribed_at);
     }
   } catch {
     /* pre-v111 schema */

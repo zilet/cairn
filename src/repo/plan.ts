@@ -20,7 +20,7 @@ import {
 } from "./training-cache.js";
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { readVolumeFloorContext } from "./volume-floor-context.js";
-import { type PrescriptionWriter, restampSlot, stampForWrite } from "./prescription-authorship.js";
+import { type PrescriptionWriter, restampSlot, stampForWrite, stampNow } from "./prescription-authorship.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { type ReasonProvenance, normalizeHistoricalReason, validReasonProvenance } from "./proposal-truth.js";
 import { isItemSpecificChangeReason } from "../domain/training/exercise-notes.js";
@@ -1884,7 +1884,7 @@ function applyPlanSwap(
        prescribed_at = ?
      WHERE id = ?`
     )
-    .run(toEx.id, targetWeight, targetSeconds, note, sets, repLow, repHigh, stampForWrite(null, {}, { by: "brain" }), match.id);
+    .run(toEx.id, targetWeight, targetSeconds, note, sets, repLow, repHigh, stampNow("brain"), match.id);
   return {
     action: "swapped",
     day: dayNumber,

@@ -70,7 +70,15 @@ import {
 // the contract at the top of progression-voice.ts.
 import * as voice from "./progression-voice.js";
 import { lightWeekExemption } from "./volume-floor-context.js";
-import { planSlotStamps, slotAuthorship, slotStamp } from "./prescription-authorship.js";
+import {
+  type Exposure,
+  planSlotStamps,
+  sessionFirstSetAt,
+  sinceClause,
+  type SlotAuthorship,
+  slotAuthorship,
+  slotStamp,
+} from "./prescription-authorship.js";
 import { painAreaLoadsGroup } from "./pain-relevance.js";
 export { painAreaLoadsExercise } from "./pain-relevance.js";
 import {
@@ -1701,23 +1709,40 @@ interface PrescCtx {
   pain: PainBandRead | null; // this movement's traffic-light band; null = nothing stated (absent, not green)
 }
 
-// recentWorkingWeight over at most the sessions logged on or after `since` (the slot's
-// prescribed_at). Null when none of them carried a load.
-function workingWeightUnderPrescription(name: string, since: string | null): number | null {
-  const from = since ? String(since).slice(0, 10) : "";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return recentWorkingWeight(name);
+// recentWorkingWeight over only the sessions logged under the slot's CURRENT
+// prescription (prescription-authorship.ts `sinceClause`: a later day, or on the
+// stamp's own day a set created after it). With no stamp, the usual window. Null when
+// none of those sessions carried a load. Shared by the reps path and the daily
+// decision's earned floor, so both read the same evidence.
+export function workingWeightUnderPrescription(
+  name: string,
+  authorship: Pick<SlotAuthorship, "since" | "since_at">,
+  opts: { sessionsBack?: number; before?: string } = {}
+): number | null {
+  const sessionsBack = opts.sessionsBack ?? 3;
+  if (!authorship.since) return recentWorkingWeight(name, sessionsBack, opts.before);
   const ids = progressionLineageIds(name);
   if (!ids.length) return null;
   const inIds = ids.map(() => "?").join(",");
+  const since = sinceClause(authorship);
+  const before = opts.before ? String(opts.before).slice(0, 10) : null;
   const row = db
     .prepare(
       `SELECT COUNT(DISTINCT s.date) AS n FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-        WHERE ls.exercise_id IN (${inIds}) AND ls.weight IS NOT NULL AND ls.weight != 0 AND s.date >= ?`
+        WHERE ls.exercise_id IN (${inIds}) AND ls.weight IS NOT NULL AND ls.weight != 0 AND ${since.sql}
+          ${before ? "AND s.date < ?" : ""}`
     )
-    .get(...ids, from) as { n?: number } | undefined;
-  const since_count = Number(row?.n ?? 0);
-  if (!(since_count > 0)) return null;
-  return recentWorkingWeight(name, Math.min(3, since_count));
+    .get(...ids, ...since.args, ...(before ? [before] : [])) as { n?: number } | undefined;
+  const count = Number(row?.n ?? 0);
+  if (!(count > 0)) return null;
+  return recentWorkingWeight(name, Math.min(sessionsBack, count), opts.before);
+}
+
+// The lift's latest logged exposure as prescription-authorship reads it: the session's
+// day and its first set's time.
+function lastExposureOf(name: string, last: ReturnType<typeof latestTopSet>): Exposure {
+  if (!last) return null;
+  return { date: last.date, first_at: sessionFirstSetAt(last.session_id, progressionLineageIds(name)) };
 }
 
 function repsPrescription(
@@ -1755,7 +1780,13 @@ function repsPrescription(
   // older prescription (a heavier block three weeks back) is not a working weight the
   // athlete has shown at THIS one. With no authored date (a pre-v111 row) the window
   // is the usual last few sessions.
-  const loggedWorking = workingWeightUnderPrescription(name, slotAuthorship(plan?.prescribed_at ?? null, null, date).since);
+  //
+  // A slot written with NO load on a lift with loaded history is still grounded
+  // (planUnset below): from the sessions under this prescription when there are any,
+  // else the latest history, exactly as before the stamp existed.
+  const authorship = slotAuthorship(plan?.prescribed_at ?? null, lastExposureOf(name, last), date);
+  const underPrescription = workingWeightUnderPrescription(name, authorship);
+  const loggedWorking = planWeight == null ? (underPrescription ?? recentWorkingWeight(name)) : underPrescription;
   const recentWorking = unreachable(loggedWorking) ? achievable : loggedWorking;
   // Sign is the encoding, not the name. A lift called "Assisted Pull-Up" with a
   // purely positive history is weighted work; the name must not freeze it as assist.
@@ -1806,9 +1837,12 @@ function repsPrescription(
   // session at it sets the baseline. The safety floors (a load-limiting note, the
   // autoregulation and pain brakes) still apply on top. One exposure on or after
   // prescribed_at and the ordinary ladder resumes, judged against the plan target.
-  // The timed path has kept this rule all along (`evidencePredates`).
-  const authorship = slotAuthorship(plan?.prescribed_at ?? null, last?.date ?? null, date);
-  const untested = authorship.untested;
+  // The timed path has kept this rule all along (`evidencePredates`). A slot written
+  // with no load at all is the exception: there is no number to stand, so it grounds
+  // like any unset slot (planUnset).
+  const groundsUnsetSlot =
+    plan != null && planWeight == null && recentWorking != null && !(assistHistory && recentWorking > 0);
+  const untested = authorship.untested && !groundsUnsetSlot;
   if (untested) baseWeight = planWeight;
   const assistRetired =
     !untested &&
@@ -2700,7 +2734,7 @@ function timedPrescription(
   // set says nothing about this load — and only a session on or after the current
   // prescription, so a step just applied is not re-stepped off the work before it.
   const working = load != null ? lastSets.filter((s) => s.weight != null && s.weight >= load) : [];
-  const evidencePredates = load != null && slotAuthorship(plan?.prescribed_at ?? null, last?.date ?? null).untested;
+  const evidencePredates = load != null && slotAuthorship(plan?.prescribed_at ?? null, lastExposureOf(name, last)).untested;
   // Solid = the latest hold comfortably met (or beat) the current target.
   const target = baseSeconds ?? 0;
   const held =
@@ -2987,7 +3021,7 @@ export function planDayProgression(
         cut,
         liftState: liftStateFor(String(it.name), states),
         restoreKeys: owedRestoreKeys,
-        since: slotAuthorship(slotStamps.get(Number(it.plan_item_id)) ?? null, null, today).since,
+        since: slotAuthorship(slotStamps.get(Number(it.plan_item_id)) ?? null, null, today),
         lightWeek,
       });
       out.push({ ...stepped, plan_item_id: it.plan_item_id, day_number: dayNumber });
@@ -3044,20 +3078,20 @@ const SET_STEP_WORKING_FRAC = 0.9;
 // load at all is bodyweight work, read on reps alone.
 function recentGoodWorkingSetCounts(
   name: string,
-  opts: { repFloor: number | null; targetWeight: number | null; since: string | null },
+  opts: { repFloor: number | null; targetWeight: number | null; since: Pick<SlotAuthorship, "since" | "since_at"> },
   limit = SET_STEP_EXPOSURES
 ): number[] {
   const ids = progressionLineageIds(name);
   if (!ids.length) return [];
   const inIds = ids.map(() => "?").join(",");
-  const since = opts.since ?? "0000-00-00";
+  const since = sinceClause(opts.since);
   const sessions = db
     .prepare(
       `SELECT s.id AS id FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-        WHERE ls.exercise_id IN (${inIds}) AND ls.reps IS NOT NULL AND ls.reps > 0 AND s.date >= ?
+        WHERE ls.exercise_id IN (${inIds}) AND ls.reps IS NOT NULL AND ls.reps > 0 AND ${since.sql}
         GROUP BY s.id ORDER BY MAX(s.date) DESC, s.id DESC LIMIT ?`
     )
-    .all(...ids, since, limit) as Array<{ id: number }>;
+    .all(...ids, ...since.args, limit) as Array<{ id: number }>;
   const repFloor = opts.repFloor;
   const slack = repFloor != null ? Math.max(SET_STEP_REP_SLACK, Math.round(repFloor * 0.2)) : 0;
   const minReps = repFloor != null && repFloor > 0 ? Math.max(1, repFloor - slack) : 1;
@@ -3065,10 +3099,11 @@ function recentGoodWorkingSetCounts(
   return sessions.map((session) => {
     const rows = db
       .prepare(
-        `SELECT weight, reps FROM logged_sets
-          WHERE exercise_id IN (${inIds}) AND session_id = ? AND reps IS NOT NULL AND reps > 0`
+        `SELECT ls.weight AS weight, ls.reps AS reps FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+          WHERE ls.exercise_id IN (${inIds}) AND ls.session_id = ? AND ls.reps IS NOT NULL AND ls.reps > 0
+            AND ${since.sql}`
       )
-      .all(...ids, session.id) as Array<{ weight: number | null; reps: number }>;
+      .all(...ids, session.id, ...since.args) as Array<{ weight: number | null; reps: number }>;
     const loads = rows.map((r) => (r.weight == null ? null : Number(r.weight)));
     const bodyweightOnly = loads.every((w) => w == null || w === 0);
     // Bodyweight is the zero of the signed scale: harder than any assist, easier than
@@ -3100,7 +3135,7 @@ function setCatchUp(
     restoreKeys: Set<string>;
     // Where evidence about THIS prescription starts (slotAuthorship.since): a redraw's
     // or a person's set count re-stamps the slot, so older logs cannot walk it back.
-    since: string | null;
+    since: Pick<SlotAuthorship, "since" | "since_at">;
     lightWeek: () => string | null;
   }
 ): Prescription {
