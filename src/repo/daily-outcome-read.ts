@@ -128,7 +128,7 @@ function nextExposureFor(outcome: DailySessionOutcome): DailyOutcomeAthleteRead[
       `SELECT pd.day_number
          FROM daily_session_compositions dsc
          JOIN plan_days pd ON pd.id = dsc.plan_day_id
-        WHERE dsc.id = ?`
+        WHERE dsc.id = ? AND dsc.source != 'athlete_override'`
     )
     .get(outcome.composition_id) as any;
   if (!Number.isInteger(Number(planDay?.day_number))) return null;

@@ -16,6 +16,7 @@ export * from "../../repo/plan-selection.js";
 export * from "../../repo/strength-schedule.js";
 export * from "../../repo/today-strength-line.js";
 export * from "./plan-upcoming.js";
+export * from "./plan-save-use-case.js";
 export { getEnduranceGoal } from "../../repo/profile.js";
 // getExerciseDetail now lives in repo/exercises.js, already star-exported above.
 export {

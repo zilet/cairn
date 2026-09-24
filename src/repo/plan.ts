@@ -23,6 +23,7 @@ import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { type ReasonProvenance, normalizeHistoricalReason, validReasonProvenance } from "./proposal-truth.js";
 import { isItemSpecificChangeReason } from "../domain/training/exercise-notes.js";
 import { orderPlanItemsForEffect, planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
+import { isPersonSuperseded, personSupersededMarker } from "./plan-annotation-release.js";
 
 export { PlanQualityError, pressSlotKey, validateTrainingPlan } from "./plan-quality.js";
 
@@ -219,6 +220,9 @@ function accountablePlanChanges(): Map<string, AccountablePlanChange> {
 
 function computeAccountablePlanChanges(): Map<string, AccountablePlanChange> {
   const map = new Map<string, AccountablePlanChange>();
+  // A key the athlete's own save took over (plan-annotation-release.ts) is claimed by
+  // no OLDER decision either: newest first, the first word on a key is final.
+  const released = new Set<string>();
   try {
     const rows = db
       .prepare(
@@ -251,6 +255,11 @@ function computeAccountablePlanChanges(): Map<string, AccountablePlanChange> {
           .toLowerCase();
         if (!Number.isFinite(day) || !exercise) continue;
         const key = `${day}|${exercise}`;
+        if (map.has(key) || released.has(key)) continue;
+        if (isPersonSuperseded(personSupersededMarker(context), key)) {
+          released.add(key);
+          continue;
+        }
         const reasonProvenance = validReasonProvenance(change?.reason_provenance)
           ? change.reason_provenance
           : null;
@@ -262,30 +271,29 @@ function computeAccountablePlanChanges(): Map<string, AccountablePlanChange> {
             row.created_at ??
             localDateISO()
         ).slice(0, 10);
-        if (!map.has(key))
-          map.set(key, {
-            decision_id: Number(row.id),
-            summary: normalizeHistoricalReason(
-              String(row.summary ?? "Cairn adjusted this exercise."),
-              null,
-              fallbackAsOf
-            ),
-            rationale: isItemSpecificChangeReason(change?.reason, row.summary)
-              ? normalizeHistoricalReason(change.reason, reasonProvenance, fallbackAsOf)
+        map.set(key, {
+          decision_id: Number(row.id),
+          summary: normalizeHistoricalReason(
+            String(row.summary ?? "Cairn adjusted this exercise."),
+            null,
+            fallbackAsOf
+          ),
+          rationale: isItemSpecificChangeReason(change?.reason, row.summary)
+            ? normalizeHistoricalReason(change.reason, reasonProvenance, fallbackAsOf)
+            : null,
+          reason_provenance: reasonProvenance,
+          reversible: !!row.reversible,
+          before:
+            change?.before && typeof change.before === "object"
+              ? {
+                  sets: change.before.sets ?? null,
+                  rep_low: change.before.rep_low ?? null,
+                  rep_high: change.before.rep_high ?? null,
+                  target_weight: change.before.target_weight ?? null,
+                  target_seconds: change.before.target_seconds ?? null,
+                }
               : null,
-            reason_provenance: reasonProvenance,
-            reversible: !!row.reversible,
-            before:
-              change?.before && typeof change.before === "object"
-                ? {
-                    sets: change.before.sets ?? null,
-                    rep_low: change.before.rep_low ?? null,
-                    rep_high: change.before.rep_high ?? null,
-                    target_weight: change.before.target_weight ?? null,
-                    target_seconds: change.before.target_seconds ?? null,
-                  }
-                : null,
-          });
+        });
       }
     }
   } catch {
