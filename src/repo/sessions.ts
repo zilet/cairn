@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { plausibleRir } from "../lib/numbers.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { detectStrengthCalibration } from "./calibration.js";
 import { reconcileDailySessionSafe } from "./daily-reconciliation.js";
@@ -571,6 +572,11 @@ function insertSetByName(
       normalized = "assist_sign";
     }
   }
+  // RIR is accepted 0–10. Anything else is not a reserve (seconds or a rep count
+  // typed into the wrong field); the set itself is real, so it is kept and the RIR
+  // is not — stored as absent, never as a number the progression engine would read.
+  const storedRir = plausibleRir(input.rir);
+  const rirIgnored = input.rir != null && storedRir == null;
   const info = db
     .prepare(
       `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir, note, duration_sec)
@@ -582,7 +588,7 @@ function insertSetByName(
       setNumber,
       storedWeight,
       input.reps ?? null,
-      input.rir ?? null,
+      storedRir,
       input.note ?? null,
       input.duration_sec ?? null
     );
@@ -645,11 +651,12 @@ function insertSetByName(
     set_number: setNumber,
     weight: storedWeight,
     reps: input.reps ?? null,
-    rir: input.rir ?? null,
+    rir: storedRir,
     duration_sec: input.duration_sec ?? null,
     est_1rm,
     pr,
     ...(normalized ? { normalized } : {}),
+    ...(rirIgnored ? { rir_ignored: true } : {}),
   };
 }
 
@@ -889,8 +896,9 @@ export function updateSet(
     vals.push(num(fields.reps));
   }
   if (fields.rir !== undefined) {
+    // The same 0–10 bound the log path holds: an out-of-range correction clears it.
     sets.push("rir = ?");
-    vals.push(num(fields.rir));
+    vals.push(plausibleRir(fields.rir));
   }
   if (fields.duration_sec !== undefined) {
     sets.push("duration_sec = ?");

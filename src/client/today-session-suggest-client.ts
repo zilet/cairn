@@ -25,7 +25,9 @@ type SuggestedSessionLike = Partial<ClientSessionSuggestion> | null | undefined;
     const timed = it.mode === "timed" || it.target_seconds != null;
     if (timed) {
       const secs = it.target_seconds != null ? fmtDur(it.target_seconds) : "time";
-      return `${it.sets ?? "?"} × ${secs}${todaySuggestLoadSuffix(it)}`;
+      // Only a loaded carry/hold names its load; an unloaded hold is time alone (no "· BW").
+      const load = it.target_weight == null ? 0 : Number(it.target_weight);
+      return `${it.sets ?? "?"} × ${secs}${Number.isFinite(load) && load !== 0 ? todaySuggestLoadSuffix(it) : ""}`;
     }
     const lo = it.rep_low;
     const hi = it.rep_high;

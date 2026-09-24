@@ -78,7 +78,7 @@ function exerciseDetailView(row: ExerciseDetailDataRow, deps: ExerciseDetailData
   const recentLines = recent.map((set) => {
     const load = set.weight == null ? 0 : Number(set.weight);
     const fig = set.duration_sec != null
-      ? `${load ? `${deps.fmtWeight(set.weight)}×` : ""}${deps.fmtDur(set.duration_sec)}`
+      ? `${load ? `${deps.escapeHtml(deps.fmtWeight(set.weight))}×` : ""}${deps.escapeHtml(deps.fmtDur(set.duration_sec))}`
       : `${deps.fmtWeight(set.weight)}×${deps.escapeHtml(set.reps)}${set.rir != null ? ` @${deps.escapeHtml(set.rir)}` : ""}`;
     return `<div class="detail-setline"><span>${deps.escapeHtml(set.date || "")}</span><span class="numeral">${fig}${set.pr ? ` <span class="prbadge">PR</span>` : ""}</span></div>`;
   }).join("");

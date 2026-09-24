@@ -135,6 +135,59 @@ test("every set owning the ceiling steps the load once and resets the seconds", 
   const change = prop.proposal.parsed.changes.find((c) => c.exercise === "Farmer's Carry");
   assert.equal(change.target_weight, p.suggested.weight, "the load step travels on the proposal");
   assert.equal(change.target_seconds, 40);
+
+  // Applied through the clamp path, the seconds reset survives with the load raise…
+  assert.equal(repo.applyProposal(prop.proposal.id).ok, true);
+  const item = repo.getPlanDay(1).items[0];
+  assert.equal(item.target_weight, p.suggested.weight);
+  assert.equal(item.target_seconds, 40, "a load step's shorter hold is not clamped");
+  // …and the fresh step is not re-stepped off the lighter work logged before it.
+  const next = nextPrescription("Farmer's Carry");
+  assert.equal(next.action, "hold");
+  assert.equal(next.suggested.weight, p.suggested.weight);
+  assert.equal(next.suggested.seconds, 40);
+});
+
+test("a seconds step is not re-stepped off the session before it", () => {
+  carry();
+  planCarry({ sets: 3, target_seconds: 40, target_weight: 50 });
+  logTimed("Farmer's Carry", isoDaysAgo(3), [[50, 48], [50, 48], [50, 48]]);
+  db.prepare(`UPDATE plan_items SET target_seconds = 44, prescribed_at = ?`).run(isoDaysAgo(0));
+  const p = nextPrescription("Farmer's Carry");
+  assert.equal(p.action, "hold");
+  assert.equal(p.suggested.seconds, 44);
+});
+
+test("solid reads only the sets at the load", () => {
+  carry();
+  planCarry({ sets: 2, target_seconds: 40, target_weight: 50 });
+  logTimed("Farmer's Carry", isoDaysAgo(3), [[30, 70], [50, 30]]);
+  const p = nextPrescription("Farmer's Carry");
+  assert.equal(p.action, "hold", "a long light carry does not earn time at 50");
+  assert.equal(p.suggested.seconds, 40);
+  assert.equal(p.suggested.weight, 50);
+});
+
+test("an incidental loaded set never makes an unloaded hold loaded", () => {
+  repo.upsertExercise({ name: "Plank", muscle_group: "core", mode: "timed" });
+  planCarry({ sets: 3, target_seconds: 60 }, "Plank");
+  logTimed("Plank", isoDaysAgo(3), [[null, 60], [25, 60], [null, 60]]);
+  const p = nextPrescription("Plank");
+  assert.equal(p.suggested.weight, undefined);
+  assert.equal(p.suggested.seconds, 66, "pure seconds progression, as before");
+});
+
+test("a load adopted off the log is never written into a plan with no load", () => {
+  carry();
+  planCarry({ sets: 2, target_seconds: 60 });
+  logTimed("Farmer's Carry", isoDaysAgo(3), [[50, 60], [50, 61]]);
+  const p = nextPrescription("Farmer's Carry");
+  assert.equal(p.suggested.weight, 50, "the card still opens at the logged load");
+  assert.equal(p.action, "hold", "no load step the plan never carried");
+  assert.equal(p.suggested.seconds, 60);
+  const prop = buildProgressionProposal(1);
+  const change = prop.ok ? prop.proposal.parsed.changes.find((c) => c.exercise === "Farmer's Carry") : null;
+  assert.equal(change?.target_weight, undefined);
 });
 
 test("a set short of the ceiling holds both load and time", () => {

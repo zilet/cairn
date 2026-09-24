@@ -20,20 +20,22 @@ import { recordSuggestion } from "../repo/memory.js";
 import { getPlan } from "../repo/plan.js";
 import { getEnduranceGoal, getProfile } from "../repo/profile.js";
 import { getProgramState } from "../repo/program-state.js";
-import { createProposal, getProposal } from "../repo/proposals.js";
+import { AUTO_EVOLUTION_INSTRUCTION, createProposal, getProposal } from "../repo/proposals.js";
+import { athleteAskedForLess } from "../repo/volume-floor.js";
+import { isAthleteRequestedRestructure, requestFromInstruction } from "../domain/brain/structure-request.js";
 import { RECOVERY_WEEK_INSTRUCTION_PREFIX, supersedeRecoveryWeekDrafts } from "../repo/recovery-week.js";
 import { interactiveTimeoutForOp } from "../repo/settings.js";
 import { listTrainingSymptoms } from "../repo/training-symptoms.js";
-import { sessionFloorPrecheck } from "../repo/verify-floors.js";
+import { planDraftFloorPrecheck, sessionFloorPrecheck } from "../repo/verify-floors.js";
 import { localDateISO } from "../repo/shared.js";
 import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 import { trainingBackstopSignature } from "../repo/training-cache.js";
 import type { FallbackResult } from "../agents.js";
 import { runChosen, runChosenStreaming } from "../runChosen.js";
-import { buildCoachPrompt, buildProgramEvolutionPrompt, buildWeekComposePrompt, buildSessionPrompt, buildDailyCompositionPrompt, buildExerciseExplanationPrompt, buildWeekAheadPrompt, buildSessionVerifyPrompt, buildExerciseReconcilePrompt } from "../prompt.js";
+import { buildCoachPrompt, buildProgramEvolutionPrompt, buildWeekComposePrompt, buildSessionPrompt, buildDailyCompositionPrompt, buildExerciseExplanationPrompt, buildWeekAheadPrompt, buildSessionVerifyPrompt, buildPlanDraftVerifyPrompt, buildExerciseReconcilePrompt } from "../prompt.js";
 import { applyProposalWithAutonomy } from "../domain/brain/autonomy-service.js";
 import { DAILY_SESSION_SUGGESTION_NORMALIZATION, EXERCISE_EXPLANATION_SCHEMA, EXERCISE_RECONCILE_SCHEMA, PLAN_PROPOSAL_SCHEMA, SESSION_SUGGESTION_SCHEMA, WEEK_AHEAD_SCHEMA, hasPlanProposalActions, isExerciseExplanationResult, isPlanProposalResult, isReconciliationResult, isSessionSuggestionResult, isWeekAheadResult, normalizeSessionSuggestionResult } from "../agent-contracts.js";
-import { agentFailure, agentStatusFor, runVerify } from "./shared.js";
+import { agentFailure, agentStatusFor, runVerify, type VerifyOutcome } from "./shared.js";
 import type { OpHooks } from "./shared.js";
 
 // Build ONE session on demand. ok:false is the designed failure signal when the
@@ -403,7 +405,7 @@ export function sessionSuggestCacheKey(opts: {
 // with agent_status and no meaningless empty draft is persisted.
 export async function draftCoachProposal(agent: string | undefined, instruction: string | undefined, hooks?: OpHooks) {
   hooks?.onPhase?.("reading your training");
-  const prompt = buildCoachPrompt(instruction);
+  const prompt = buildCoachPrompt(instruction, { athleteAskedLess: athleteAskedForLess(athleteWords(instruction)) });
   // No determinate `frac` here: the single draft call IS the long, opaque step, so we
   // let the indeterminate filament keep OSCILLATING throughout rather than pinning a
   // frozen half-full bar (a determinate frac only fits ops with a fast tail phase, like
@@ -433,11 +435,12 @@ export async function draftCoachProposal(agent: string | undefined, instruction:
     };
   }
   const { agent: chosen, result, tried } = run;
-  const proposal = createProposal(chosen, instruction ?? "", result.raw, result.parsed);
+  const { parsed, verified } = await verifyPlanDraftVolume(agent, result.parsed, instruction, hooks);
+  const proposal = createProposal(chosen, instruction ?? "", result.raw, parsed);
   let autonomy: any = null;
-  if (result.parsed && hasPlanProposalActions(result.parsed)) {
+  if (parsed && hasPlanProposalActions(parsed)) {
     try {
-      autonomy = applyProposalWithAutonomy(Number(proposal.id));
+      autonomy = applyProposalWithAutonomy(Number(proposal.id), volumeFloorAutonomy(verified, instruction));
     } catch {
       autonomy = null;
     }
@@ -445,6 +448,7 @@ export async function draftCoachProposal(agent: string | undefined, instruction:
   return {
     proposal: getProposal(Number(proposal.id)),
     autonomy,
+    ...(verified ? { verified } : {}),
     ok: !!result.parsed,
     agent: chosen,
     tried,
@@ -454,6 +458,72 @@ export async function draftCoachProposal(agent: string | undefined, instruction:
     exit_code: result.code,
     stderr: (result.stderr || "").slice(0, 800),
   };
+}
+
+// THE REDRAW VOLUME BACKSTOP. An agent-authored week once prescribed 1-2 working sets
+// on most items and left chest at half its low landmark while reading clean. So a plan
+// draft now passes the same two-stage verify the session and the meal plan do: the
+// server computes whether it leaves a priority group under its weekly set floor
+// (verify-floors.ts planDraftFloorPrecheck — grandfathered against the current plan,
+// exempt in a recovery week), and only then is an agent asked to REPAIR the named
+// groups. A clean draft costs no turn. A breach the repair did not clear stays
+// `unresolved` on the outcome AND on the stored draft, and the draft is held for the
+// athlete's yes rather than landing quietly (volumeFloorAutonomy) — never shipped as
+// clean. Fail-open like every verify: a dead repair ships the original draft with the
+// server's findings attached, and the same hold.
+// The ATHLETE's own words on a plan request, or "" for a system instruction. A chat
+// structure request carries them behind its prefix; the scheduler's weekly evolution,
+// a recovery week and the "auto:" review are the server talking, never the athlete;
+// anything else arrived typed through the evolve/proposal surfaces and is theirs.
+function athleteWords(instruction: string | undefined): string {
+  const text = String(instruction ?? "").trim();
+  if (!text) return "";
+  if (isAthleteRequestedRestructure({ instruction: text })) return requestFromInstruction(text);
+  if (
+    text === AUTO_EVOLUTION_INSTRUCTION ||
+    text === "evolve program" ||
+    text.startsWith("auto:") ||
+    text.startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)
+  )
+    return "";
+  return text;
+}
+
+async function verifyPlanDraftVolume(
+  agent: string | undefined,
+  parsed: any,
+  instruction: string | undefined,
+  hooks?: OpHooks
+): Promise<{ parsed: any; verified: VerifyOutcome<any>["verified"] }> {
+  if (!parsed || !hasPlanProposalActions(parsed)) return { parsed, verified: null };
+  hooks?.onPhase?.("checking the week's volume");
+  const athleteRequest = athleteWords(instruction);
+  const { draft, verified } = await runVerify(
+    agent,
+    parsed,
+    (d) => planDraftFloorPrecheck(d, { instruction, athlete_request: athleteRequest }),
+    (d, violations) => buildPlanDraftVerifyPrompt(d, violations, { athlete_request: athleteRequest }),
+    isPlanProposalResult,
+    "plan_verify",
+    hooks,
+    PLAN_PROPOSAL_SCHEMA
+  );
+  // The stored draft carries what the server found still standing, so a later
+  // surface (and the ledger's rationale) can say why it is waiting.
+  const unresolved = verified?.unresolved ?? [];
+  return { parsed: unresolved.length ? { ...draft, volume_floor_unresolved: unresolved } : draft, verified };
+}
+
+// An unresolved volume-floor breach is a refused safety floor for autonomy's purposes:
+// the draft waits for the athlete rather than landing quietly or announced — EXCEPT a
+// reduction the athlete asked for in their own words, which is never held against them
+// (the precheck already exempts it; this is the belt to that braces).
+function volumeFloorAutonomy(
+  verified: VerifyOutcome<any>["verified"],
+  instruction: string | undefined
+): { clamp_refused?: boolean } {
+  if (athleteAskedForLess(athleteWords(instruction))) return {};
+  return verified?.unresolved?.length ? { clamp_refused: true } : {};
 }
 
 // Adaptive program evolution: read the deterministic program-state (per-lift
@@ -475,7 +545,9 @@ export async function evolveProgram(
   // opts.task lets a caller focus the agent on a specific trigger ("your bench has
   // stalled + core is under-trained") WITHOUT changing the stored `instruction`
   // (the dedup key the scheduler uses to retire prior auto-evolution drafts).
-  const prompt = buildProgramEvolutionPrompt(opts?.task ?? instruction, state);
+  const prompt = buildProgramEvolutionPrompt(opts?.task ?? instruction, state, {
+    athleteAskedLess: athleteAskedForLess(athleteWords(instruction)),
+  });
   hooks?.onPhase?.("drafting how your plan should evolve");
   let run: FallbackResult;
   try {
@@ -499,7 +571,8 @@ export async function evolveProgram(
     };
   }
   const { agent: chosen, result, tried } = run;
-  const proposal = createProposal(chosen, instruction ?? "evolve program", result.raw, result.parsed);
+  const { parsed, verified } = await verifyPlanDraftVolume(agent, result.parsed, instruction, hooks);
+  const proposal = createProposal(chosen, instruction ?? "evolve program", result.raw, parsed);
   // A fresh recovery-week draft retires the prior one (same one-tap ask — the newest
   // read wins), so repeated taps never stack duplicate drafts in the Coach list.
   if (proposal?.id != null && String(instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)) {
@@ -517,9 +590,9 @@ export async function evolveProgram(
   // loosens. Only a genuinely parsed proposal has something to apply; a failed/unparsed draft
   // is left as a raw draft. Never throws — a bookkeeping failure never breaks the draft return.
   let autonomy: any = null;
-  if (proposal?.id != null && result.parsed && hasPlanProposalActions(result.parsed)) {
+  if (proposal?.id != null && parsed && hasPlanProposalActions(parsed)) {
     try {
-      autonomy = applyProposalWithAutonomy(Number(proposal.id));
+      autonomy = applyProposalWithAutonomy(Number(proposal.id), volumeFloorAutonomy(verified, instruction));
     } catch {
       autonomy = null;
     }
@@ -528,6 +601,7 @@ export async function evolveProgram(
     proposal,
     state,
     autonomy,
+    ...(verified ? { verified } : {}),
     ok: !!result.parsed,
     agent: chosen,
     tried,

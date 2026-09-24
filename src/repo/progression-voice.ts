@@ -364,6 +364,18 @@ export const TIMED_LOAD_STEP: VoiceSet2 = [
   (load, seconds) => `The time is yours on every set — take ${load} now and bring the hold back to ${seconds}s.`,
 ];
 
+export const TIMED_LOAD_NEW_HOLD: VoiceSet = [
+  "This load is new — own the planned time at it before anything moves.",
+  "Fresh target here — take the planned hold at this load for a session first.",
+  "Give this load and time a clean session before it steps again.",
+];
+
+export const TIMED_UNPLANNED_LOAD_HOLD: VoiceSet = [
+  "You own this time at this load — go heavier whenever you're ready.",
+  "Every set held the full time here — a heavier load is yours to pick when it feels right.",
+  "The time at this load is owned; add weight when you choose to.",
+];
+
 export const TIMED_LOAD_CEILING_HOLD: VoiceSet = [
   "Keep this load and time until every set holds the full duration — then the load moves.",
   "Stay here until each set owns the whole time; that's when the load steps up.",
@@ -727,6 +739,26 @@ export const ESCALATE_VARIATION: VoiceSet1 = [
   (to) => `Twice backed off now — the movement is the thing to change, so take ${to} for a few weeks.`,
 ];
 
+// ---- the log is truth for set count ---------------------------------------
+
+// The plan's set count can catch up to what the athlete has been doing. Arguments:
+// the plan's new count, then the good sets they have been logging (never fewer). It
+// is said as what the plan CAN do — the card is read before the change is applied —
+// and as a fact about work they already do, never as a push.
+export const SET_CATCH_UP: VoiceSet2 = [
+  (to, logged) => `You've been doing ${logged} good sets here — the plan can move to ${to}.`,
+  (to, logged) => `Your last sessions each carried ${logged} good sets of this, so the plan can follow you to ${to}.`,
+  (to, logged) => `The plan can catch up to your log: ${to} sets, where you've been doing ${logged}.`,
+];
+
+// A carry or hold logged in the reps column: seconds typed as reps read as a huge
+// rep count, so no step is taken on it until it is logged as time.
+export const CARRY_LOGGED_AS_REPS_HOLD: VoiceSet = [
+  "This one reads like time typed in as reps — log it as a timed carry and it can move on real numbers.",
+  "Those numbers look like seconds, not reps. Log it as a timed carry and the next step can follow them.",
+  "Holding here: this carry is being logged as reps, and a carry grows in time. Switch it to timed and it will move.",
+];
+
 // ---- the whole vocabulary, rendered ----------------------------------------
 // Every phrasing this engine can say, with representative arguments filled in, so
 // a test can hold ALL of it to the reading grammar at once. A set added above and
@@ -764,6 +796,8 @@ export function progressionVoicePhrases(): string[] {
     TIMED_RESPONSE_HOLD,
     TIMED_RESPONSE_DELOAD,
     TIMED_LOAD_CEILING_HOLD,
+    TIMED_LOAD_NEW_HOLD,
+    TIMED_UNPLANNED_LOAD_HOLD,
     JOINT_BRAKE_HOLD,
     JOINT_BRAKE_DELOAD,
     PAIN_AMBER_HOLD,
@@ -791,6 +825,7 @@ export function progressionVoicePhrases(): string[] {
     EARNED_OPEN_OVERLOAD_REPS,
     NOT_EARNED_HOLD_REPS,
     GRIND_HOLD,
+    CARRY_LOGGED_AS_REPS_HOLD,
   ];
   const one: Array<[VoiceSet1, string | number]> = [
     [PLATEAU_VARY_OPEN, 4],
@@ -818,6 +853,7 @@ export function progressionVoicePhrases(): string[] {
     [TIMED_LOAD_STEP, "55 lb", 40],
     [REALIZATION_TOP_SET, "205 lb", "single"],
     [ESCALATE_REP_WAVE, 3, 5],
+    [SET_CATCH_UP, 3, 3],
   ];
   const three: Array<[VoiceSet3, string | number, string | number, string | number]> = [
     [INTRODUCE_VARIATION, "Back Squat", 13, "Front Squat"],

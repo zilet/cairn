@@ -41,8 +41,8 @@ function progressHistorySessionCardHtml(session: unknown, index: number): string
 function progressHistoryEditSetHtml(set: ProgressHistorySet): string {
   const timed = set.duration_sec != null || set.mode === "timed";
   const fields = timed
-    ? `<input class="edset-w" type="number" inputmode="decimal" value="${set.weight ?? ""}" placeholder="wt" aria-label="weight">
-       <input class="edset-dur" inputmode="numeric" value="${set.duration_sec != null ? fmtDur(set.duration_sec) : ""}" placeholder="1:30" aria-label="duration">`
+    ? `<input class="edset-w" type="number" inputmode="decimal" value="${escAttr(set.weight ?? "")}" placeholder="wt" aria-label="weight">
+       <input class="edset-dur" inputmode="numeric" value="${set.duration_sec != null ? escAttr(fmtDur(set.duration_sec)) : ""}" placeholder="1:30" aria-label="duration">`
     : `<input class="edset-w" type="number" inputmode="decimal" value="${set.weight ?? ""}" placeholder="wt" aria-label="weight">
        <input class="edset-r" type="number" inputmode="numeric" value="${set.reps ?? ""}" placeholder="reps" aria-label="reps">
        <input class="edset-rir" type="number" inputmode="numeric" value="${set.rir ?? ""}" placeholder="rir" aria-label="rir">`;

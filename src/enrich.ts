@@ -372,13 +372,14 @@ function garminDetectedSetInputs(ga: any): GarminSetImportInput[] {
     const timed = garminSetIsTimed(set);
     const reps = asNum(set?.reps);
     const duration = asNum(set?.duration_sec);
-    const weight = timed ? null : kgToLb(set?.weight_kg);
+    // A loaded carry/hold keeps its load beside the duration (mirrors the export).
+    const weight = kgToLb(set?.weight_kg);
     // Must carry something loggable for its mode (reps OR a converted load for a
     // reps set; a duration for a timed hold). Otherwise skip — never log an empty set.
     if (timed ? duration == null : reps == null && weight == null) continue;
     usable.push({
       exercise: name,
-      weight: timed ? null : weight,
+      weight: weight ?? null,
       reps: timed ? null : reps ?? null,
       duration_sec: timed ? duration ?? null : null,
       exercise_mode: timed ? "timed" : "reps",
@@ -400,7 +401,7 @@ function agentGarminSetInputs(parsed: any): GarminSetImportInput[] {
     if (mode === "timed" ? duration == null : reps == null && weight == null) continue;
     usable.push({
       exercise,
-      weight: mode === "timed" ? null : weight ?? null,
+      weight: mode === "timed" ? weight || null : weight ?? null,
       reps: mode === "timed" ? null : reps ?? null,
       duration_sec: mode === "timed" ? duration ?? null : null,
       exercise_mode: mode,

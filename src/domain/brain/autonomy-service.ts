@@ -276,6 +276,31 @@ function liveReviewHoldsForProposal(proposalId: number): ParkedDecision[] {
   return listReviewDecisionsForProposal(proposalId).filter((decision) => decision.id != null);
 }
 
+// The athlete-facing reason a volume-floor hold carries: the groups the draft would
+// leave under their weekly set floor (verify-floors.ts writes one message per group,
+// each leading with the group), in plain words — never the set arithmetic. Null when
+// the draft carries no unresolved volume finding.
+function volumeFloorHoldReason(proposal: any): string | null {
+  const unresolved = Array.isArray(proposal?.parsed?.volume_floor_unresolved)
+    ? proposal.parsed.volume_floor_unresolved.map(String)
+    : [];
+  if (!unresolved.length) return null;
+  const groups = [
+    ...new Set(
+      unresolved
+        .map((line: string) => /^([a-z][a-z ]*?) would\b/i.exec(line.trim())?.[1]?.trim())
+        .filter((group: string | undefined): group is string => !!group)
+    ),
+  ] as string[];
+  const named =
+    groups.length === 0
+      ? "some muscle groups"
+      : groups.length === 1
+        ? groups[0]
+        : `${groups.slice(0, -1).join(", ")} and ${groups[groups.length - 1]}`;
+  return `This week would leave ${named} under ${groups.length === 1 ? "its" : "their"} weekly set floor, so it waits for your yes before it lands.`;
+}
+
 function holdProposalForReview(
   proposal: any,
   shape: ProposalShape,
@@ -339,6 +364,10 @@ function holdProposalForReview(
       proposal_id: proposal.id,
       review_reason_code: input.code,
       reason_provenance: proposalReasonProvenance(proposal),
+      // The waiting surface speaks a hold's own sentence; a volume-floor hold has one.
+      ...(input.code === "safety_floor" && volumeFloorHoldReason(proposal)
+        ? { user_explanation: volumeFloorHoldReason(proposal) }
+        : {}),
     },
     specialist: null,
     applied_at: null,
@@ -1309,9 +1338,16 @@ export function applyProposalWithAutonomy(
               : domainDemoted
                 ? "domain_policy"
                 : "requested_review";
+    // A plan draft the volume check could not repair says WHICH groups it would leave
+    // under their weekly floor, instead of the generic refused-floor line.
+    const volumeReason = code === "safety_floor" ? volumeFloorHoldReason(proposal) : null;
     return holdProposalForReview(proposal, shape, {
       code,
-      reasons: policy.reasons.length ? policy.reasons : ["This change was explicitly routed for review."],
+      reasons: volumeReason
+        ? [volumeReason]
+        : policy.reasons.length
+          ? policy.reasons
+          : ["This change was explicitly routed for review."],
       tier: policy.tier,
       policy_inputs: {
         requested_tier: input.requested_tier ?? null,

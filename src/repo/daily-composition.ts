@@ -368,7 +368,8 @@ function candidateHoldWeight(
     candidate.action === "hold" || candidate.action === "deload"
       ? (candidate.authorized_target ?? candidate.current_target)
       : candidate.current_target;
-  if (!target || target.mode === "timed") return undefined;
+  // Timed work too: a loaded carry/hold holds the progression's own load, never an older log.
+  if (!target) return undefined;
   return target.target_weight ?? null;
 }
 
@@ -382,14 +383,15 @@ function holdAnchor(
     (item: any) => String(item?.exercise ?? "").toLowerCase() === exercise.toLowerCase()
   );
   const mode = findExercise(exercise)?.mode === "timed" || planned?.mode === "timed" ? "timed" : "reps";
+  const prescribed = candidateHoldWeight(candidate);
   if (mode === "timed") {
     return {
       mode,
       target_seconds: recentWorkingSeconds(exercise) ?? finite(planned?.target_seconds),
-      target_weight: recentWorkingWeight(exercise) ?? finite(planned?.target_weight),
+      target_weight:
+        prescribed !== undefined ? prescribed : (recentWorkingWeight(exercise) ?? finite(planned?.target_weight)),
     };
   }
-  const prescribed = candidateHoldWeight(candidate);
   return {
     mode,
     target_seconds: null,

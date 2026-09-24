@@ -68,7 +68,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
     const id = row.id != null ? String(row.id) : "";
     const load = row.weight == null ? 0 : Number(row.weight);
     const figure = row.duration_sec != null
-      ? `${load ? `${fmtWeight(row.weight)} <span>×</span> ` : ""}${fmtDur(row.duration_sec)}`
+      ? `${load ? `${escHtml(fmtWeight(row.weight))} <span>×</span> ` : ""}${escHtml(fmtDur(row.duration_sec))}`
       : `${fmtWeight(row.weight)} <span>×</span> ${escHtml(row.reps ?? "")}${row.rir != null ? ` <span>@${escHtml(row.rir)}</span>` : ""}`;
     return `<span class="chip" data-set="${escAttr(id)}">${number != null ? `<span class="chip-n">#${escHtml(number)}</span> ` : ""}${figure}<button class="xbtn chip-x" data-del="${escAttr(id)}" title="delete">×</button></span>`;
   }
@@ -86,6 +86,8 @@ type DoneRuntimeGlobals = typeof globalThis & {
 
   function doneExerciseSummaries(sets: LoggedSetLike[]): DoneExerciseSummary[] {
     const byName = new Map<string, DoneExerciseSummary>();
+    // A loaded carry/hold's best set: heaviest load first, then the longest time at it.
+    const bestTimed = new Map<string, { weight: number; seconds: number }>();
     for (const raw of sets) {
       const set = raw && typeof raw === "object" ? raw : {};
       const name = String(set.exercise || "Work").trim() || "Work";
@@ -109,10 +111,10 @@ type DoneRuntimeGlobals = typeof globalThis & {
       if (duration > 0) {
         row.timedSec += duration;
         if (duration > row.bestDuration) row.bestDuration = duration;
-        // A loaded carry/hold's best is its heaviest load, then its longest time there.
-        if (weight > 0 && !(reps > 0) && (weight > row.bestLoad || (weight === row.bestLoad && duration >= row.bestDuration))) {
-          row.bestLoad = weight;
-          row.bestLoadLabel = `${fmtWeight(weight)} x ${fmtDur(duration)}`;
+        const prior = bestTimed.get(name);
+        if (weight > 0 && !(reps > 0) && (!prior || weight > prior.weight || (weight === prior.weight && duration > prior.seconds))) {
+          bestTimed.set(name, { weight, seconds: duration });
+          row.bestLoadLabel = `${fmtWeight(weight)} × ${fmtDur(duration)}`;
         }
       }
     }

@@ -136,6 +136,8 @@ export * from "./repo/whole-person-trajectory.js"; // standing "everything bette
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation
 export * from "./repo/cut-target.js"; // the cut's calorie target, derived from logged intake + the measured weight trend
 export * from "./repo/verify-floors.js"; // the deterministic half of the verify pass — every numeric floor a draft breaches
+export * from "./repo/volume-floor.js"; // the weekly per-group set floor a plan is held to (landmark low, contextual)
+export * from "./repo/volume-floor-context.js"; // the live intent/endurance/recovery context that floor reads
 export * from "./repo/energy-deficiency.js"; // the male low-energy-availability symptom-cluster watch (protective, one-directional)
 export * from "./repo/energy-deficiency-snapshot.js"; // its memoized read + the small projection a prompt sees
 export * from "./repo/recomposition.js"; // phase-aware fat-loss + muscle/fuel protection synthesis
