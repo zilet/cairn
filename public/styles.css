@@ -6481,6 +6481,10 @@ body[data-tab="session"] .tabbar{display:none}
 .sess-fresh-chip{flex:0 0 auto;font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
   color:var(--sage-text);background:var(--sage-bg);border:0;border-radius:99px;padding:3px 9px;cursor:pointer;
   align-self:center}
+/* "Pair" — a superset partner, beside the set count in .ex-meta. Quieter than the
+   sage "new this week" chip: an outline, never a fill. */
+.ex-pair-chip{flex:0 0 auto;font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 8px;align-self:center}
 .sess-fresh-why{color:var(--ink-2);font-size:.8rem;line-height:1.45;margin-top:6px}
 .feedback-prompt{margin-bottom:2px}
 /* The Session destination is deliberately still — no entrance stagger. Beyond

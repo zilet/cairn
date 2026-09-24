@@ -127,7 +127,8 @@ New/changed components (CSS must implement, the client JS must emit):
 - Today exercise card `.ex`: art thumb `.ex-art` (`.artile-sm/md`) left of `.ex-name`
   (display serif, ~1.15rem, weight 540); target weight as `.ex-target` display numeral;
   set chips `.chip` are cream pills; completed card gets `.ex-complete` → sage left-edge stamp
-  + a small sage "✓ done" mark, slight desaturation.
+  + a small sage "✓ done" mark, slight desaturation. A superset partner (`superset_group`)
+  carries a quiet outlined `.ex-pair-chip` ("Pair") in `.ex-meta` beside the set count.
 - Plan tab (Program gallery): `.prog-day` card per plan day:
   `.prog-head` (weekday/status small caps when the week projection knows one — else
   `Day N` — + `.prog-name` display italic + `.prog-focus` muted line + optional

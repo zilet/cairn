@@ -90,6 +90,15 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
   assert.doesNotMatch(html, /Press <heavy>|keep ribs <down>|elbow <quiet>|earned <move>/);
 });
 
+test("a superset partner says so quietly beside the set count; an ordinary card does not", () => {
+  const cards = loadTodayCards();
+  const base = { exercise: "Rope Pushdown", sets: 3, rep_low: 10, rep_high: 12, fromSession: true };
+  const paired = cards.exerciseCardHtml({ ...base, superset_group: 2 }, [], {}, null, null, {});
+  assert.match(paired, /<div class="ex-meta">[\s\S]*class="ex-pair-chip"[^>]*>Pair<\/span><\/div>/);
+  const alone = cards.exerciseCardHtml({ ...base, superset_group: null }, [], {}, null, null, {});
+  assert.doesNotMatch(alone, /ex-pair-chip/);
+});
+
 // A card asks the athlete to train. It carries NO pain widget at all any more —
 // pain is reported in words, in the session note or in chat, and the extraction
 // lane reads it. Nothing on a card should ever ask them to fill in a form mid-set.
