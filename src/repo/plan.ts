@@ -24,7 +24,7 @@ import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { type ReasonProvenance, normalizeHistoricalReason, validReasonProvenance } from "./proposal-truth.js";
 import { isItemSpecificChangeReason } from "../domain/training/exercise-notes.js";
 import { orderPlanItemsForEffect, planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
-import { isPersonSuperseded, personSupersededMarker } from "./plan-annotation-release.js";
+import { changeMatchesPrescription, isPersonSuperseded, personSupersededMarker } from "./plan-annotation-release.js";
 
 export { PlanQualityError, pressSlotKey, validateTrainingPlan } from "./plan-quality.js";
 
@@ -58,6 +58,8 @@ type AccountablePlanChange = {
   reason_provenance: ReasonProvenance | null;
   reversible: boolean;
   before: Omit<PlanPrescription, "day_number" | "exercise"> | null;
+  /** The change entry's recorded numbers, so the read can check the plan still holds them. */
+  recorded: Record<string, unknown>;
 };
 
 // The accountability decoration's OWN backstop: the brain ledger and the proposals it
@@ -294,6 +296,11 @@ function computeAccountablePlanChanges(): Map<string, AccountablePlanChange> {
                   target_seconds: change.before.target_seconds ?? null,
                 }
               : null,
+          recorded: Object.fromEntries(
+            ["sets", "rep_low", "rep_high", "target_weight", "target_seconds"]
+              .filter((field) => Object.hasOwn(change, field))
+              .map((field) => [field, change[field]])
+          ),
         });
       }
     }
@@ -531,7 +538,13 @@ function decorateAccountablePlan(days: any[]): any[] {
           .trim()
           .toLowerCase()}`
       );
-      return change
+      // The note is the decision's claim about the numbers IT set. Once the item holds
+      // something else — a person's edit, a later path that recorded no decision — the
+      // claim is stale and the item reads plain. An entry that recorded no numbers keeps
+      // annotating (changeMatchesPrescription answers null). Checked here rather than in
+      // the memoized map because the item side changes with the plan, and getPlan's own
+      // cache key already covers plan mutations (planMutationSignature).
+      return change && changeMatchesPrescription(change.recorded, item) !== false
         ? {
             ...item,
             brain_decision_id: change.decision_id,

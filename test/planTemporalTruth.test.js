@@ -127,6 +127,9 @@ test("July 16 evidence stays absolutely anchored through July 17 proposal, July 
     superseded_by: null,
     evaluator_version: null,
   });
+  // The applied decision's numbers are on the plan — a note is only rendered over the
+  // prescription its own decision wrote (decorateAccountablePlan).
+  db.prepare(`UPDATE plan_items SET target_weight = 105`).run();
 
   const proposal = repo.getProposal(proposalId);
   assert.match(proposal.parsed.changes[0].reason, /July 16, 2026/);

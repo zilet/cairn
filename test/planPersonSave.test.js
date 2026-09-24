@@ -333,3 +333,62 @@ test("a kept plan-day link never makes the plan day the full-load anchor of an a
   assert.equal(dose.full_load_reference.sets, null, "the athlete's own prescription, not the plan day's");
   assert.equal(dose.full_load_reference.target_weight, null);
 });
+
+// Rows written before a person's save released anything can still name a lift whose numbers
+// have since moved. The read holds each note to the numbers its own decision recorded.
+function setBenchDirectly(fields) {
+  const sets = Object.keys(fields)
+    .map((field) => `${field} = ?`)
+    .join(", ");
+  db.prepare(
+    `UPDATE plan_items SET ${sets}
+      WHERE exercise_id = (SELECT id FROM exercises WHERE name = ?)
+        AND plan_day_id = (SELECT id FROM plan_days WHERE day_number = 1)`
+  ).run(...Object.values(fields), BENCH.exercise);
+}
+
+test("a note whose decision's numbers the plan no longer holds reads plain; a matching one stays", () => {
+  seedPlan();
+  const decisionId = quietApplyStep();
+  setBenchDirectly({ target_weight: 110 });
+  assert.equal(
+    item(1, BENCH.exercise).brain_decision_id,
+    undefined,
+    "no 'add the step' over a bench it no longer holds"
+  );
+  assert.equal(item(1, BENCH.exercise).brain_change_reason, undefined);
+  assert.equal(item(1, ROW.exercise).brain_decision_id, decisionId, "the row still holds what the decision set");
+  assert.match(item(1, ROW.exercise).brain_change_reason, /actually lift/);
+});
+
+test("a change entry that recorded no numbers keeps annotating", () => {
+  seedPlan();
+  const decisionId = quietApplyStep();
+  const decision = repo.getBrainDecision(decisionId);
+  repo.patchBrainDecision(decisionId, {
+    action: {
+      ...decision.action,
+      changes: decision.action.changes.map((change) =>
+        change.exercise === BENCH.exercise
+          ? { day_number: change.day_number, exercise: change.exercise, reason: change.reason }
+          : change
+      ),
+    },
+  });
+  setBenchDirectly({ target_weight: 110 });
+  assert.equal(item(1, BENCH.exercise).brain_decision_id, decisionId, "nothing to compare, so nothing is hidden");
+});
+
+test("Undo leaves a lift that no longer holds the decision's numbers exactly as it stands", () => {
+  seedPlan();
+  const decisionId = quietApplyStep();
+  // The weight still equals what the decision set, but the sets moved underneath it: a
+  // field-by-field merge alone would walk the weight back to 115 on a prescription the
+  // decision no longer owns.
+  setBenchDirectly({ sets: 5 });
+  assert.equal(revertDecision(decisionId, "undo").ok, true);
+  const bench = item(1, BENCH.exercise);
+  assert.equal(bench.target_weight, 120);
+  assert.equal(bench.sets, 5);
+  assert.equal(item(1, ROW.exercise).target_weight, 40, "a lift still holding the decision's numbers is undone");
+});

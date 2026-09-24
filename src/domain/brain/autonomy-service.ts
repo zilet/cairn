@@ -70,7 +70,12 @@ import { recordAsyncFailure } from "../../diagnostics.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { refreshPreparedDayForPlanChange } from "../../repo/adaptive-session.js";
-import { isPersonSuperseded, personSupersededMarker, planChangeKey } from "../../repo/plan-annotation-release.js";
+import {
+  isPersonSuperseded,
+  mismatchedChangeKeys,
+  personSupersededMarker,
+  planChangeKey,
+} from "../../repo/plan-annotation-release.js";
 import { revertGarminReconcile } from "../../repo/activities.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 import {
@@ -3588,15 +3593,22 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
         Array.isArray(rollback.payload.before) &&
         Array.isArray(rollback.payload.after)
       ) {
+        const currentPlan = trainingPlanSnapshot();
+        // A lift that no longer holds what this decision set is not the decision's to
+        // walk back, whether or not a person's save marked it (older rows never were).
+        const mismatched = mismatchedChangeKeys(decision.action, currentPlan);
         replacePlan(
           mergeTrainingRollback(
             rollback.payload.before,
             rollback.payload.after,
-            trainingPlanSnapshot(),
+            currentPlan,
             Array.isArray((decision.action as any)?.swaps) ? (decision.action as any).swaps : [],
             (dayNumber, item) =>
               item?.kind !== "cardio" &&
-              isPersonSuperseded(personSuperseded, planChangeKey(dayNumber, item?.exercise))
+              (() => {
+                const key = planChangeKey(dayNumber, item?.exercise);
+                return isPersonSuperseded(personSuperseded, key) || (key != null && mismatched.has(key));
+              })()
           )
         );
       } else if (rollback?.kind === "nutrition_target") {

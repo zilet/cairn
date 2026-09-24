@@ -53,6 +53,56 @@ export function isPersonSuperseded(marker: PersonSupersededMarker | null, key: s
   return marker.keys.includes(key);
 }
 
+// ---------- does the plan still hold what the decision wrote? ----------
+// A decision's note is a claim about the prescription IT set. Rows written before a
+// person's save released anything (or changed through any other path) can still name a
+// lift whose numbers have since moved: "resetting to 192.5 lb" over a squat now at 185.
+// So a change entry is compared, field by field, against the item as it stands — only
+// the fields the entry actually recorded (a number, or an explicit null). An entry that
+// recorded none of them (a bare reason, a days-only restructure) proves nothing either
+// way and answers `null`, which callers treat as the old behavior.
+const RECORDED_PRESCRIPTION_FIELDS = ["sets", "rep_low", "rep_high", "target_weight", "target_seconds"] as const;
+
+function sameRecordedValue(recorded: unknown, current: unknown): boolean {
+  if (recorded == null || current == null) return recorded == null && current == null;
+  const a = Number(recorded);
+  const b = Number(current);
+  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 1e-9;
+}
+
+export function changeMatchesPrescription(change: any, item: any): boolean | null {
+  let compared = false;
+  for (const field of RECORDED_PRESCRIPTION_FIELDS) {
+    if (!change || !Object.hasOwn(change, field)) continue;
+    const recorded = change[field];
+    if (recorded !== null && !Number.isFinite(Number(recorded))) continue;
+    compared = true;
+    if (!sameRecordedValue(recorded, item?.[field])) return false;
+  }
+  return compared ? true : null;
+}
+
+/**
+ * The `day|exercise` keys where the plan no longer holds what this decision recorded.
+ * Undo treats them exactly like a person-released key: the item stays as it stands.
+ */
+export function mismatchedChangeKeys(action: any, planDays: any[]): Set<string> {
+  const current = new Map<string, any>();
+  for (const day of Array.isArray(planDays) ? planDays : []) {
+    for (const item of Array.isArray(day?.items) ? day.items : []) {
+      const key = planChangeKey(day?.day_number, item?.exercise);
+      if (key && !current.has(key)) current.set(key, item);
+    }
+  }
+  const out = new Set<string>();
+  for (const change of Array.isArray(action?.changes) ? action.changes : []) {
+    const key = planChangeKey(change?.day_number, change?.exercise);
+    if (!key || !current.has(key)) continue;
+    if (changeMatchesPrescription(change, current.get(key)) === false) out.add(key);
+  }
+  return out;
+}
+
 function decisionChangeKeys(action: any): string[] {
   const keys = new Set<string>();
   for (const change of Array.isArray(action?.changes) ? action.changes : []) {
