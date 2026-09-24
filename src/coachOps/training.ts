@@ -405,7 +405,7 @@ export function sessionSuggestCacheKey(opts: {
 // with agent_status and no meaningless empty draft is persisted.
 export async function draftCoachProposal(agent: string | undefined, instruction: string | undefined, hooks?: OpHooks) {
   hooks?.onPhase?.("reading your training");
-  const prompt = buildCoachPrompt(instruction, { athleteAskedLess: athleteAskedForLess(athleteWords(instruction)) });
+  const prompt = buildCoachPrompt(instruction);
   // No determinate `frac` here: the single draft call IS the long, opaque step, so we
   // let the indeterminate filament keep OSCILLATING throughout rather than pinning a
   // frozen half-full bar (a determinate frac only fits ops with a fast tail phase, like
@@ -501,7 +501,7 @@ async function verifyPlanDraftVolume(
   const { draft, verified } = await runVerify(
     agent,
     parsed,
-    (d) => planDraftFloorPrecheck(d, { instruction, athlete_request: athleteRequest }),
+    (d) => planDraftFloorPrecheck(d, { instruction }),
     (d, violations) => buildPlanDraftVerifyPrompt(d, violations, { athlete_request: athleteRequest }),
     isPlanProposalResult,
     "plan_verify",
@@ -545,9 +545,7 @@ export async function evolveProgram(
   // opts.task lets a caller focus the agent on a specific trigger ("your bench has
   // stalled + core is under-trained") WITHOUT changing the stored `instruction`
   // (the dedup key the scheduler uses to retire prior auto-evolution drafts).
-  const prompt = buildProgramEvolutionPrompt(opts?.task ?? instruction, state, {
-    athleteAskedLess: athleteAskedForLess(athleteWords(instruction)),
-  });
+  const prompt = buildProgramEvolutionPrompt(opts?.task ?? instruction, state);
   hooks?.onPhase?.("drafting how your plan should evolve");
   let run: FallbackResult;
   try {

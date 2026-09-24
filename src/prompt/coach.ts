@@ -95,17 +95,9 @@ const VOLUME_FLOOR_RULE = `- WEEKLY VOLUME FLOOR: DATA.weekly_set_targets lists,
   still). Fix a short group with sets on the movements already there before adding one; most working
   movements carry 2-4 sets, and a lone working set is a finisher, not a prescription. applies:false
   means no floor this week, and "exempt" says why: a recovery or deload week (in force, scheduled or
-  due), the race taper, or the athlete asking for a lighter or smaller week — then shape the week to
-  what they asked. No muscle/strength priority also reads applies:false. Cairn re-checks this
-  arithmetic on every draft.`;
-
-// When the athlete's own words ask for a lighter or smaller week, the floor does not
-// apply to this draft — and DATA must say so, or the rule above would contradict them.
-function withAthleteLightWeek<T extends { weekly_set_targets?: unknown }>(ctx: T, askedLess?: boolean): T {
-  if (!askedLess || !ctx?.weekly_set_targets) return ctx;
-  const read = ctx.weekly_set_targets as Record<string, unknown>;
-  return { ...ctx, weekly_set_targets: { ...read, applies: false, exempt: "athlete_asked_less", targets: [] } };
-}
+  due) or the race taper. No muscle/strength priority also reads applies:false. If the athlete's own
+  words in the TASK explicitly ask for a lighter or smaller week, you may go under a low for them —
+  say so in the rationale. Cairn re-checks this arithmetic on every draft.`;
 
 // The active periodization block (goal / phase / week N of M), so the coach
 // periodizes toward it. "" when no block is running (the program-state mesocycle
@@ -116,8 +108,8 @@ function renderBlock(ctx: any): string {
   return `\nACTIVE TRAINING BLOCK: "${b.goal}" — ${b.focus}, ${b.phase} phase (${b.week_of}). Periodize toward this: in an accumulation phase build volume, in intensification push load, in a deload phase propose a LIGHTER week. Don't ramp volume and intensity at once.\n`;
 }
 // Training-target proposal prompt (existing coach).
-export function buildCoachPrompt(userInstruction?: string, opts: { athleteAskedLess?: boolean } = {}): string {
-  const ctx = withAthleteLightWeek(getCoachContext(), opts.athleteAskedLess);
+export function buildCoachPrompt(userInstruction?: string): string {
+  const ctx = getCoachContext();
   const disc = disciplineOf(ctx);
   const coachRole = disc === "endurance"
     ? "an endurance coach (with strength as supporting work)"
@@ -200,12 +192,8 @@ ${promptData(ctx, "coach")}`;
 // add quality to a one-pace endurance base, and periodize toward the goal. Output
 // is the SAME PLAN_SCHEMA (changes/days) → a DRAFT proposal for review;
 // nothing auto-applies. Constitution: a suggestion, never a gate; no scores.
-export function buildProgramEvolutionPrompt(
-  userInstruction?: string,
-  state?: any,
-  opts: { athleteAskedLess?: boolean } = {}
-): string {
-  const ctx = withAthleteLightWeek(getCoachContext(), opts.athleteAskedLess);
+export function buildProgramEvolutionPrompt(userInstruction?: string, state?: any): string {
+  const ctx = getCoachContext();
   state = state ?? getProgramState();
   // Concrete variation candidates for any stalled lift, so "rotate a variation"
   // is actionable — the agent gets real same-pattern options to choose from

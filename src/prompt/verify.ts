@@ -152,7 +152,7 @@ export function buildPlanDraftVerifyPrompt(
   const ctx = getCoachContext();
   const asked = String(opts.athlete_request ?? "").trim();
   const askedSection = asked
-    ? `\nTHE ATHLETE ASKED FOR (their own words — the repair must still honor this):\n${asked.slice(0, 600)}\n`
+    ? `\nTHE ATHLETE ASKED FOR (their own words — the repair must still honor this):\n${asked.slice(0, 600)}\nIf these words explicitly ask for a lighter or smaller week (fewer sets or days, a deload, less volume, short on time, away this week), honor them: leave a group under its floor rather than add back what they asked to drop, and say so in "violations".\n`
     : "";
   return `${CAIRN_PERSONA}
 

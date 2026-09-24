@@ -2042,6 +2042,30 @@ function prescriptionKey(
   return [exerciseId, n(it.rep_low), n(it.rep_high), n(it.target_weight), n(it.target_seconds)].join("|");
 }
 
+// A PERSON's set count is authorship too. The key above leaves `sets` out on purpose
+// (a brain-applied recovery week or one-set trim is not a new prescription), but when
+// the athlete themselves changes a slot's sets in the editor, that number is theirs:
+// re-stamping the slot today is what keeps the set-count catch-up (setCatchUp,
+// progression.ts) from walking their cut back on logs from before it. Keys are
+// planPrescriptionKey's `day|exercise` (lowercased name). Called only by the person-save
+// use case, inside its savepoint.
+export function stampPersonSetChanges(keys: readonly string[], date = localDateISO()): number {
+  let stamped = 0;
+  const stmt = db.prepare(
+    `UPDATE plan_items SET prescribed_at = ?
+      WHERE id IN (SELECT pi.id FROM plan_items pi
+                     JOIN plan_days pd ON pd.id = pi.plan_day_id
+                     JOIN exercises e ON e.id = pi.exercise_id
+                    WHERE pd.day_number = ? AND lower(e.name) = ?)`
+  );
+  for (const key of keys) {
+    const at = key.indexOf("|");
+    if (at <= 0) continue;
+    stamped += Number(stmt.run(date, Number(key.slice(0, at)), key.slice(at + 1)).changes ?? 0);
+  }
+  return stamped;
+}
+
 function priorPrescriptionStamps(dayId: number): Map<string, string | null> {
   const rows = db
     .prepare(
