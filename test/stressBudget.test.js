@@ -276,6 +276,7 @@ test("taper week (2026-10-21): the leg lifts cap at two sets and a lighter load;
     { now: NOW }
   );
   assert.equal(env.stress.code, "race_taper_legs");
+  assert.equal(env.stress.load_held, undefined, "the taper eases the load too");
   assert.deepEqual([...env.stress.groups].sort(), ["calves", "hamstrings", "quads"]);
   assert.ok(env.precedence.includes("race_taper_legs"));
   assert.ok(env.rationale.some((r) => r.code === "race_taper_legs" && RACE_TAPER_LEGS_RATIONALE.includes(r.text)));
@@ -340,6 +341,7 @@ test("race week (2026-10-28): the squat sits out, calves stay light, the upper b
     { now: NOW }
   );
   assert.equal(env.stress.code, "race_week_legs");
+  assert.equal(env.stress.load_held, undefined);
   assert.deepEqual([...env.muscles.excluded].sort(), ["hamstrings", "quads"]);
   assert.ok(env.muscles.reduced.includes("calves"));
   assert.ok(!env.muscles.reduced.includes("chest") && !env.muscles.excluded.includes("chest"));
@@ -424,14 +426,49 @@ test("Friday before Sunday's long run, the week's legs already landed: accessori
   assert.notEqual(env.candidates.find((c) => c.exercise === "Deadlift").reason_code, "key_run_eve");
 
   const items = normalizeComposedSession(LOWER_B_RAW, env).session.items;
+  // Sets only: the split squat is trained at its prescribed load, one set short.
+  assert.deepEqual([...env.stress.load_held].sort(), ["calves", "quads"]);
   const bss = byName(items, "Bulgarian Split Squat");
   assert.equal(bss.sets, 2);
-  assert.equal(bss.target_weight, 54);
-  assert.equal(byName(items, "Seated Calf Raise").sets, 2);
+  assert.equal(bss.target_weight, 60, "the load holds on the eve of a key run");
+  assert.ok(!bss.reach && !bss.top_set, "a trimmed slot never hosts the reach");
+  const calf = byName(items, "Seated Calf Raise");
+  assert.equal(calf.sets, 2);
+  assert.equal(calf.target_weight, 125);
   const deadlift = byName(items, "Deadlift");
   assert.equal(deadlift.sets, 3);
   assert.equal(deadlift.target_weight, 225);
   assert.equal(byName(items, "Pallof Press").sets, 3);
+});
+
+test("a group another rule also reduces takes the full clamp on a key-run eve", () => {
+  seedExercises();
+  const env = buildDailySessionDecision(
+    snapshot({
+      date: "2026-10-02",
+      planItems: LOWER_B_ITEMS,
+      program: {
+        mesocycle_phase: "accumulation",
+        adaptations_due: [],
+        volume_low_groups: [],
+        volume_high_groups: ["quads"],
+      },
+      stress: {
+        race_week_kind: "build",
+        race_phase: "sharpen",
+        days_to_race: 30,
+        key_run: { kind: "long", in_days: 2 },
+      },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.stress.code, "key_run_eve");
+  assert.deepEqual(env.stress.load_held, ["calves"], "quads are reduced by the volume read too");
+  const items = normalizeComposedSession(LOWER_B_RAW, env).session.items;
+  const bss = byName(items, "Bulgarian Split Squat");
+  assert.equal(bss.sets, 2);
+  assert.equal(bss.target_weight, 54);
+  assert.equal(byName(items, "Seated Calf Raise").target_weight, 125);
 });
 
 test("a lower safety floor stands the key-run eve down", () => {

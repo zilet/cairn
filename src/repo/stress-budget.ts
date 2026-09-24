@@ -15,8 +15,11 @@ import type { EnduranceRole } from "./training-intent.js";
 // the envelope's existing muscle lists — a group it names is REDUCED or EXCLUDED — so
 // composition needs nothing new. REDUCED is composition's existing reduced-area clamp,
 // reused exactly as it is (daily-composition.ts `REDUCED_ITEM_SET_CAP` = 2 working sets
-// per item, `REDUCED_INTENSITY_FACTOR` = 0.9 on the target load or seconds). That is a
-// clamp on TODAY'S card inside the day's safety bounds, never a write to the stored
+// per item, `REDUCED_INTENSITY_FACTOR` = 0.9 on the target load or seconds) — except
+// that the key-run eve holds LOAD (`load_held`): its groups lose sets only, keep the
+// prescribed weight and still never host the reach. A slot trimmed before every long run
+// has to be trained at its prescription some time, or it is never tested. Either way it
+// is a clamp on TODAY'S card inside the day's safety bounds, never a write to the stored
 // prescription, so the "composition never moves the prescription" law holds.
 //
 // The rules, in precedence order (the first that applies is the only one that speaks):
@@ -33,7 +36,9 @@ import type { EnduranceRole } from "./training-intent.js";
 //      week-layout's `runPlacement`), never the raw stated schedule, which may name two
 //      long-run days. It applies only while the race build is active (a build, reset or
 //      peak week outside the base phase). Only the day's lower ACCESSORY groups are
-//      reduced — every lower group on the card except the anchor compound's own. It
+//      reduced — every lower group on the card except the anchor compound's own — and
+//      only in SETS: the load holds (`load_held`, unless another rule also reduced the
+//      group, which then takes the full clamp). It
 //      never fires on a day the weekly lower guarantee holds (`lowerWeekHolds`, owner
 //      ruling 2026-09-23: the week's one full leg session keeps its sets and load), never
 //      touches a group that guarantee holds, stands down when `lowerSafetyFloor` already
@@ -165,6 +170,11 @@ export function stressBudgetSuspendsWeeklyLower(snapshot: StressBudgetSnapshot |
 export interface DailyDecisionStress {
   code: StressBudgetReason;
   groups: string[];
+  // The groups reduced ONLY by a load-holding rule (the key-run eve): composition cuts
+  // their sets to the reduced-area cap and keeps their load — no eased weight, no reach.
+  // A group some other rule also reduced is not here and takes the full reduced clamp.
+  // Omit-when-idle.
+  load_held?: string[];
 }
 
 export interface StressBudgetDecisionContext {
@@ -203,6 +213,10 @@ export interface StressBudgetDecision {
   // The note an item carries when ONLY this rule excluded its group (the candidate's
   // `note`; its reason_code is `code`). null keeps the generic exclusion note.
   excluded_note: string | null;
+  // The rule trims SETS only and keeps the load (the key-run eve): a slot trimmed every
+  // week before the long run must still be trained at its prescribed weight, or it
+  // never gets tested. Taper and race week leave this off and ease the load too.
+  load_held?: true;
 }
 
 // ---- athlete-facing lines (every one through pickDayVariant; grammar-clean) ----
@@ -231,12 +245,13 @@ export const RACE_WEEK_EXCLUDED_NOTES: readonly [string, ...string[]] = [
 type EveLine = (run: string, when: string) => string;
 export const KEY_RUN_EVE_RATIONALE: readonly [EveLine, ...EveLine[]] = [
   (run, when) =>
-    `With the ${run} ${when}, the smaller leg lifts go a little lighter today — the main lift stays as written.`,
+    `With the ${run} ${when}, the smaller leg lifts take fewer sets today at the same weights; the main lift stays as written.`,
   (run, when) =>
-    `The ${run} ${when} is a key session in the build, so today's extra leg work eases off while the main lift keeps its sets.`,
+    `The ${run} ${when} is a key session in the build, so the extra leg work is shorter today — same weights, fewer sets — and the main lift keeps its full session.`,
   (run, when) =>
-    `Today's leg accessories stay light so the ${run} ${when} starts on fresh legs; the main lift is untouched.`,
-  (run, when) => `A key ${run} lands ${when}, so keep the extra leg work lighter today and the main lift as planned.`,
+    `Fewer sets on the leg accessories today, at your usual weights, so the ${run} ${when} starts on fresh legs; the main lift is untouched.`,
+  (run, when) =>
+    `A key ${run} lands ${when}, so the extra leg work stops early today while keeping its weights, and the main lift goes as planned.`,
 ];
 
 const EMPTY: StressBudgetDecision = {
@@ -318,10 +333,11 @@ export function stressBudgetDecision(
   const when = keyRun.in_days === 1 ? "tomorrow" : "in two days";
   return {
     code: "key_run_eve",
+    load_held: true,
     reduced: accessory,
     excluded: [],
     rationale: pickDayVariant(KEY_RUN_EVE_RATIONALE, ctx.date, "stress_budget:key_run_eve")(run, when),
-    soft: `Last lift day before the placed ${keyRun.kind} run — lower accessory work lighter (${accessory.join(", ")})${
+    soft: `Last lift day before the placed ${keyRun.kind} run — lower accessory sets trimmed, load held (${accessory.join(", ")})${
       ctx.anchor ? `; ${ctx.anchor.exercise} keeps its full session` : ""
     }`,
     excluded_note: null,

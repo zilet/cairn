@@ -1037,6 +1037,14 @@ export function normalizeComposedSession(
   // Resolved on the way past, while the stored exercise (and so its group) is in
   // hand — the clamping pass below works on item names alone.
   const reducedExercises = new Set<string>();
+  // Reduced groups whose LOAD holds (the stress budget's key-run eve): sets come down to
+  // the reduced cap, the weight stays the prescription's — still no reach.
+  const loadHeldGroups = new Set(
+    (Array.isArray(envelope.stress?.load_held) ? envelope.stress.load_held : []).map(
+      (g) => canonicalGroup(g) ?? String(g).toLowerCase()
+    )
+  );
+  const loadHeldExercises = new Set<string>();
   const saturatedGroups = new Set(
     (Array.isArray(envelope.muscles.saturated) ? envelope.muscles.saturated : []).map(
       (g) => canonicalGroup(g) ?? String(g).toLowerCase()
@@ -1129,6 +1137,7 @@ export function normalizeComposedSession(
       continue;
     }
     if (group && reducedGroups.has(canonicalGroup(group) ?? group)) reducedExercises.add(exercise.toLowerCase());
+    if (group && loadHeldGroups.has(canonicalGroup(group) ?? group)) loadHeldExercises.add(exercise.toLowerCase());
     const novel = !isCardio && !stored;
     if (novel) {
       // A novel movement is not in the canon, so it carries no muscle_group and the
@@ -1255,8 +1264,10 @@ export function normalizeComposedSession(
     if (candidate?.action === "deload" && !candidate.authorized_target) {
       intensityFactor = Math.min(intensityFactor, 0.9);
     }
-    // A reduced area never gets a heavier target than the day already allows.
-    if (isReduced) intensityFactor = Math.min(intensityFactor, REDUCED_INTENSITY_FACTOR);
+    // A reduced area never gets a heavier target than the day already allows. A
+    // load-held area (the key-run eve) loses sets only; its weight stays.
+    const loadHeld = loadHeldExercises.has(String(next.exercise ?? "").toLowerCase());
+    if (isReduced && !loadHeld) intensityFactor = Math.min(intensityFactor, REDUCED_INTENSITY_FACTOR);
     const hold = candidate?.action === "hold" || envelope.caps.intensity === "hold";
     // A stand-in is exempt from the hold clamp ONLY when its load is proven —
     // `load_basis === "logged"`, the movement's own recent WORKING weight.

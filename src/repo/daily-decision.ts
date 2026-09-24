@@ -1535,6 +1535,16 @@ const EMPTY_STRESS_DECISION: StressBudgetDecision = {
 };
 const EMPTY_DOSE_DECISION: WeeklyDoseDecision = { dose: null, soft: null, rationale: null };
 
+// The stress budget's sets-only groups: reduced by it and by nothing else.
+function loadHeldGroups(
+  reduced: readonly string[],
+  stressReduced: readonly string[],
+  baseReduced: readonly string[]
+): { load_held?: string[] } {
+  const held = stressReduced.filter((g) => reduced.includes(g) && !baseReduced.includes(g));
+  return held.length ? { load_held: held } : {};
+}
+
 function safe<T>(fn: () => T, fallback: T): T {
   try {
     const v = fn();
@@ -2876,7 +2886,11 @@ export function buildDailySessionDecision(
   }
   const stressEnvelope: DailyDecisionStress | null =
     stress.code && (stressReduced.length || stressExcluded.length)
-      ? { code: stress.code, groups: dedupe([...stressReduced, ...stressExcluded]) }
+      ? {
+          code: stress.code,
+          groups: dedupe([...stressReduced, ...stressExcluded]),
+          ...(stress.load_held ? loadHeldGroups(reduced, stressReduced, baseReduced) : {}),
+        }
       : null;
 
   // ---- Render-safe rationale ----
