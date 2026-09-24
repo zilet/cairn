@@ -124,6 +124,17 @@ test("Today training move count ignores holds", () => {
   );
 });
 
+test("a set-count catch-up riding a hold is a move, so Apply has something to land", () => {
+  const today = loadTodayTraining();
+  assert.equal(
+    today.rxMoveCount({
+      squat: { action: "hold" },
+      curl: { action: "hold", set_step: { from: 2, to: 3 } },
+    }),
+    1
+  );
+});
+
 // The cardio verb / log-phrase / dominant-zone helpers served only the run card
 // inside Today's lift list. Runs left the strength plan (they live in Plan ->
 // Endurance), so that card and its helpers are gone.

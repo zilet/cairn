@@ -361,6 +361,11 @@ export interface CoachContextEnvelope {
   program_state: CoachProgramState;
   performance: CoachRecord | null;
   program_balance: CoachRecord | null;
+  // The weekly per-group set floor (landmark low..high) the plan is held to, with what
+  // the current plan gives each group. `applies:false` with no targets when the
+  // athlete's intent does not prioritize muscle/strength or a light week is in force.
+  // Optional so partial context builders and imported DBs never synthesize it.
+  weekly_set_targets?: CoachRecord | null;
   recent_load: CoachRecord[];
   // Saturated groups from acuteGates() — the decision input the "do NOT program
   // these" prompt block reads. `recent_load` stays the descriptive recency list

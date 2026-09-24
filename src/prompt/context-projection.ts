@@ -226,6 +226,11 @@ const PLAN_SITE: PromptSiteSpec = {
     // rule 1: renderTrainingConstraints ships at every site that carries this key,
     // and it names the key as the thing the constraint comes from.
     "training_constraints",
+    // The weekly per-group set floor the draft is held to (volume-floor.ts). Earned
+    // under rule 1: the prompt names DATA.weekly_set_targets as the check to run on
+    // its own week, and the server's redraw precheck holds the draft to the same
+    // numbers afterwards.
+    "weekly_set_targets",
   ],
   sessions: SESSIONS_FULL,
 };
@@ -272,6 +277,9 @@ export const PROMPT_CONTEXT_SITES = {
       "coaching_focus",
       "signal_state",
       "training_constraints",
+      // The per-group weekly set window a first week should land inside — the prose
+      // names it ("KEEP THE FIRST DOSE MODEST" is bounded below by it, not by zero).
+      "weekly_set_targets",
     ],
     sessions: SESSIONS_RECENT,
   },
@@ -449,6 +457,26 @@ export const PROMPT_CONTEXT_SITES = {
   meal_plan_verify: {
     keys: [...PERSON, ...HEALTH_CORE],
     sessions: 0,
+  },
+
+  // The plan-draft VOLUME repair (a bounded second pass over a redraw / evolution whose
+  // week the server found starving a priority group). The breach arrives already
+  // computed (verify-floors.ts planDraftFloorPrecheck), so the repair needs only what
+  // a sound fix reads: the athlete's intent and the per-group targets, the current
+  // plan and what they actually log (to prescribe added sets they can do), the stated
+  // lifting week (so a fix never adds a day), and every injury/constraint source (so
+  // a fix never loads an injured area). DROPPED: fuel, recovery, endurance, the brain
+  // reads — it re-judges no programming beyond the named groups.
+  plan_verify: {
+    keys: [
+      ...PERSON,
+      ...TRAINING_CORE,
+      "program_balance",
+      "weekly_set_targets",
+      "week_layout",
+      ...HEALTH_CORE,
+    ],
+    sessions: SESSIONS_MINIMAL,
   },
 
   // The quiet cross-domain insight. Its text names its own ground truth: "recovery,

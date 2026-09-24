@@ -604,6 +604,7 @@ export interface ClientPrescription {
   day_number?: number; // the plan day this lift sits on (for the swap apply path)
   autoregulated?: boolean; // recovery braked this step (informational)
   rep_step?: boolean; // double-progression rep advance (load held, reps climb in-range)
+  set_step?: { from: number; to: number } | null; // the plan's set count catching up to the log
   // Optional heavier look for this lift (peak week from progression, or a reach
   // day). Absent on ordinary cards. The session screen reads this when the
   // accepted composition did not already inject a 1-set reach item.

@@ -33,6 +33,7 @@ import { muscleGroupTrajectory, planExerciseNames, testWeekDue } from "./muscle-
 import { coachingFocus } from "./coaching-focus.js";
 import { type AcuteGateReading, acuteGates } from "./hybrid-load.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
+import { weeklySetTargetsRead } from "./volume-floor-context.js";
 import { memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, dayIntakeTarget, getDayIntake, mealPlanForCoach } from "./nutrition.js";
 import { listFuelingFeedback } from "./fueling.js";
@@ -808,6 +809,7 @@ function buildTrainingSlice(
   | "program_state"
   | "performance"
   | "program_balance"
+  | "weekly_set_targets"
   | "recent_load"
   | "acute_gates"
   | "progression"
@@ -867,6 +869,17 @@ function buildTrainingSlice(
     // Volume balance per canonical muscle group over the last 2 weeks (bands +
     // which groups are DUE / running HIGH, in plain words). Mobility excluded.
     program_balance: programBal,
+    // The weekly per-group set FLOOR the plan is held to (landmark low..high, only
+    // for a muscle/strength priority, endurance-carried groups and light windows
+    // exempt) beside what the current plan gives each group. The plan compiler and
+    // the redraw precheck hold a draft to exactly these numbers (volume-floor.ts).
+    weekly_set_targets: (() => {
+      try {
+        return weeklySetTargetsRead(today) as any;
+      } catch {
+        return null;
+      }
+    })(),
     // ACUTE recovery: which muscle groups got hammered in the last day or two —
     // folding ENDURANCE (a long ride/run never touches logged_sets) in with recent
     // strength. Lets the coach plan AROUND smoked muscles instead of recommending a

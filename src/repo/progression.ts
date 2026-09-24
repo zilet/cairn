@@ -14,11 +14,12 @@
 // (e.g. −30 = 30 lb assist); timed lifts progress in seconds, never load.
 // ============================================================================
 import { db } from "../db.js";
-import { round5 } from "../lib/numbers.js";
+import { plausibleRir, round5 } from "../lib/numbers.js";
 import {
   canonicalGroup,
   classifyConstraint,
   classifyMuscleGroup,
+  detectExerciseMode,
   exerciseIdentityKey,
   ISOLATION_GROUPS,
   isMobility,
@@ -27,12 +28,14 @@ import {
   type MuscleGroup,
   MUSCLE_LANDMARKS,
   normalizedExerciseKey,
+  normalizeExerciseName,
   plainGroupWords,
   progressionLineageIds,
   resolveExerciseName,
   trainingRowsSignature,
 } from "./exercise-canon.js";
 import {
+  classifyPattern,
   type Equipment,
   effectiveVolumeByGroup,
   examplesForGroup,
@@ -65,6 +68,7 @@ import {
 // a SET of phrasings, rotated per day and per exercise — never a literal here. See
 // the contract at the top of progression-voice.ts.
 import * as voice from "./progression-voice.js";
+import { lightWeekExemption } from "./volume-floor-context.js";
 import { painAreaLoadsGroup } from "./pain-relevance.js";
 export { painAreaLoadsExercise } from "./pain-relevance.js";
 import {
@@ -102,6 +106,7 @@ import {
   VOLUME_RESTORE_INSTRUCTION,
   type VolumeCutCause,
   openVolumeRestoreDraftIds,
+  openVolumeRestoreTargets,
   volumeRestorePayload,
 } from "./volume-guard.js";
 import { type LiftState, getProgramState, LIFT_CURRENT_WINDOW_DAYS } from "./program-state.js";
@@ -247,6 +252,11 @@ export interface Prescription {
   pain_protected?: boolean;
   movement_response?: RecentMovementResponseVerdict; // repeated comparable dose evidence that supported or braked the step
   rep_step?: boolean; // double-progression REP advance (load held, reps climb in-range) — no plan change
+  // The plan's SET COUNT catching up to what the log shows (setCatchUp): the last two
+  // exposures each carried more good working sets than prescribed, so the item takes
+  // one set toward them. `from` is the plan's count, `to` the new one. It is a real
+  // plan change even on a hold, so buildProgressionProposal writes it.
+  set_step?: { from: number; to: number };
   // The active training block's phase, when one shaped this prescription. Purely
   // informational for surfaces; the phase's effect is already in the numbers.
   block_phase?: ActiveBlockContext["phase"];
@@ -832,7 +842,8 @@ function latestTopSet(
   return {
     weight: top.weight ?? null,
     reps: top.reps ?? null,
-    rir: top.rir != null ? Number(top.rir) : null,
+    // Out-of-range RIR (seconds or a rep count typed into the wrong field) is absent.
+    rir: plausibleRir(top.rir),
     duration_sec: top.duration_sec ?? null,
     date: String(latestSession.date),
     session_id: Number(latestSession.id),
@@ -895,7 +906,7 @@ function latestWorkingSets(name: string): { weight: number | null; reps: number 
   return working.map((r) => ({
     weight: r.weight ?? null,
     reps: r.reps != null ? Number(r.reps) : null,
-    rir: r.rir != null ? Number(r.rir) : null,
+    rir: plausibleRir(r.rir),
   }));
 }
 
@@ -1513,6 +1524,30 @@ export function nextPrescription(
   if (!last && !plan) return null;
 
   const date = String(opts?.date || localDateISO()).slice(0, 10);
+  // A CARRY or isometric HOLD kept in reps mode, with a "rep" count no set of reps
+  // reaches: that is seconds typed into the reps column (and, as often, junk in the
+  // RIR field beside it). Reading it as reps is how "12 on every set — add the small
+  // step" got said over a carry. No step is taken on numbers that mean something
+  // else; the card holds and says how to log it so it can move.
+  if (
+    mode === "reps" &&
+    last?.reps != null &&
+    Number(last.reps) > CARRY_REPS_AS_SECONDS &&
+    holdLikeMovement(exerciseName, group)
+  ) {
+    const suggested: PrescriptionTarget = cur
+      ? { ...cur }
+      : { sets: plan?.sets || 3, weight: last.weight ?? null };
+    return {
+      exercise: exerciseName,
+      mode,
+      action: "hold",
+      suggested,
+      current: cur,
+      delta_text: "hold",
+      why: voice.liftVoice(voice.CARRY_LOGGED_AS_REPS_HOLD, date, "carry_logged_as_reps_hold", exerciseName),
+    };
+  }
   const brakeCtx: PrescCtx = {
     canonGroup,
     autoreg,
@@ -1539,6 +1574,15 @@ export function nextPrescription(
   if (mode === "timed")
     return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
   return repsPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
+}
+
+// Above this many "reps" on a carry or hold, the number is seconds, not reps.
+const CARRY_REPS_AS_SECONDS = 25;
+
+// A movement whose work is TIME under load — a loaded carry, or anything the
+// name-level timed detector already calls a hold (plank, hang, wall sit).
+function holdLikeMovement(name: string, group: string | null): boolean {
+  return classifyPattern(name, group ?? undefined) === "carry" || detectExerciseMode(name) === "timed";
 }
 
 interface PrescCtx {
@@ -2634,6 +2678,30 @@ export function planDayProgression(
   const estimate = estimateReader(today);
   // The athlete's standing declaration is a property of the day too — read once.
   const drive = readTrainingDrive();
+  // Items whose volume is still owed back after a cut: the restore ledger owns their
+  // climb, so the set-count catch-up stays off them (read once for the day).
+  const owedRestoreKeys = (() => {
+    try {
+      return new Set(openVolumeRestoreTargets().map((t) => `${t.day_number}|${normalizeExerciseName(t.exercise)}`));
+    } catch {
+      return new Set<string>();
+    }
+  })();
+  // The light-week read (recovery week, deload now or next, deload-due, race taper) is
+  // the plan floor's own exemption. Costly, so lazy and at most once per pass.
+  let lightWeekMemo: { value: string | null } | null = null;
+  const lightWeek = (): string | null => {
+    if (!lightWeekMemo) {
+      let value: string | null = null;
+      try {
+        value = lightWeekExemption(today);
+      } catch {
+        value = null;
+      }
+      lightWeekMemo = { value };
+    }
+    return lightWeekMemo.value;
+  };
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
@@ -2654,10 +2722,216 @@ export function planDayProgression(
     });
     if (p) {
       const protectedPrescription = applyFuelProtection(p, fuelProtection, today, drive, atNearGoal);
-      out.push({ ...protectedPrescription, plan_item_id: it.plan_item_id, day_number: dayNumber });
+      const stepped = setCatchUp(protectedPrescription, p, {
+        date: today,
+        dayNumber,
+        block,
+        cut,
+        liftState: liftStateFor(String(it.name), states),
+        restoreKeys: owedRestoreKeys,
+        lightWeek,
+      });
+      out.push({ ...stepped, plan_item_id: it.plan_item_id, day_number: dayNumber });
     }
   }
   return out;
+}
+
+// ---- the log is truth for set count ------------------------------------------
+// An agent-authored week can prescribe one or two working sets on a lift the athlete
+// has been doing three sets of every time. The load ladder never reads set COUNT, so
+// the log kept saying "the prescription is short" and nothing listened. This is the
+// bounded answer: when the last SET_STEP_EXPOSURES exposures of a lift EACH carried
+// more good working sets than the plan prescribes, the plan item takes ONE set toward
+// them — never past what the athlete actually did, never past SET_STEP_CAP.
+//
+// "Good working sets" means working volume AT the prescribed dose: within 90% of the
+// session's top working load (warm-up ramps and back-offs never count), at or above
+// the plan's target load when one exists, and at the plan's rep floor within a small
+// slack (SET_STEP_REP_SLACK reps, or a fifth of the floor on a high-rep prescription,
+// whichever is larger) — so a log whose extra set is a lighter back-off or a failed,
+// short one never raises the plan. Only exposures on or after the item's last
+// STRUCTURAL change count (lastStructuralChangeDate), so a redraw's deliberate cut is
+// never undone by the log that came before it; and it rides only a hold or a rep step,
+// never a load step.
+//
+// It is a catch-up to work ALREADY being done, not new stress, so the cut reads that
+// veto a LOAD step do not all veto it. `hold`, `fast_loss` and even a `sliding` cut
+// verdict leave it alone: those veto added load because a new stimulus on a body
+// losing ground is the risk, and here nothing new is asked — writing a smaller
+// number than the athlete does protects nothing, it only makes the plan disagree
+// with the log. What DOES block it is the fuel read asking outright for a lighter
+// dose (`reduce` away from the destination — the plan must not grow toward the log
+// then), and THIS lift regressing or coming in short. It never fires in a light week
+// (the plan floor's own exemption: recovery week, deload now or next, deload-due, race
+// taper), on a braked/pain-protected/fuel-reduced prescription, or
+// on an item whose cut volume the restore ledger still owes (that ledger owns the
+// climb). It rides the ordinary proposal → autonomy path like any target step.
+const SET_STEP_EXPOSURES = 2;
+const SET_STEP_CAP = 4; // working sets, compound and isolation alike
+const SET_STEP_REP_SLACK = 2;
+
+// Within this fraction of the session's top working load, a set is working, not a
+// ramp or a back-off.
+const SET_STEP_WORKING_FRAC = 0.9;
+
+// The date of the item's last STRUCTURAL change — the newest applied restructure that
+// touched this movement on this day (or rewrote the whole week) — or null when none is
+// on the ledger. A redraw's set count is a deliberate choice: only exposures on or
+// after it can argue with it, so a cut the redraw made is never undone by the log from
+// before it.
+function lastStructuralChangeDate(dayNumber: number, exercise: string): string | null {
+  const key = normalizedExerciseKey(exercise);
+  let rows: Array<{ effective_date: string | null; applied_at: string | null; action_json: string | null }> = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT effective_date, applied_at, action_json FROM brain_decisions
+          WHERE kind = 'training_structure' AND status = 'applied'
+          ORDER BY id DESC LIMIT 40`
+      )
+      .all() as any[];
+  } catch {
+    return null;
+  }
+  for (const row of rows) {
+    let action: any = null;
+    try {
+      action = JSON.parse(String(row.action_json ?? "{}"));
+    } catch {
+      continue;
+    }
+    const changes = Array.isArray(action?.changes) ? action.changes : [];
+    const touched =
+      changes.some(
+        (change: any) =>
+          Number(change?.day_number) === Number(dayNumber) &&
+          normalizedExerciseKey(String(change?.exercise ?? "")) === key
+      ) ||
+      (!changes.length && Array.isArray(action?.days) && action.days.length > 0);
+    if (!touched) continue;
+    const date = String(row.effective_date ?? row.applied_at ?? "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+  }
+  return null;
+}
+
+// The good working-set count of each of a lift's most recent exposures (on or after
+// `since`), newest first. A set is GOOD when it is real working volume at the
+// prescribed dose: within SET_STEP_WORKING_FRAC of that session's top working load
+// (so a warm-up ramp and a back-off never count), at or above the plan's target
+// load when one exists, and within a small slack of the rep floor. Loads are compared
+// SIGNED — an assist is negative, so less assist is the harder set. A session with no
+// load at all is bodyweight work, read on reps alone.
+function recentGoodWorkingSetCounts(
+  name: string,
+  opts: { repFloor: number | null; targetWeight: number | null; since: string | null },
+  limit = SET_STEP_EXPOSURES
+): number[] {
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return [];
+  const inIds = ids.map(() => "?").join(",");
+  const since = opts.since ?? "0000-00-00";
+  const sessions = db
+    .prepare(
+      `SELECT s.id AS id FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.exercise_id IN (${inIds}) AND ls.reps IS NOT NULL AND ls.reps > 0 AND s.date >= ?
+        GROUP BY s.id ORDER BY MAX(s.date) DESC, s.id DESC LIMIT ?`
+    )
+    .all(...ids, since, limit) as Array<{ id: number }>;
+  const repFloor = opts.repFloor;
+  const slack = repFloor != null ? Math.max(SET_STEP_REP_SLACK, Math.round(repFloor * 0.2)) : 0;
+  const minReps = repFloor != null && repFloor > 0 ? Math.max(1, repFloor - slack) : 1;
+  const target = opts.targetWeight != null && Number.isFinite(Number(opts.targetWeight)) ? Number(opts.targetWeight) : null;
+  return sessions.map((session) => {
+    const rows = db
+      .prepare(
+        `SELECT weight, reps FROM logged_sets
+          WHERE exercise_id IN (${inIds}) AND session_id = ? AND reps IS NOT NULL AND reps > 0`
+      )
+      .all(...ids, session.id) as Array<{ weight: number | null; reps: number }>;
+    const loads = rows.map((r) => (r.weight == null ? null : Number(r.weight)));
+    const bodyweightOnly = loads.every((w) => w == null || w === 0);
+    // Bodyweight is the zero of the signed scale: harder than any assist, easier than
+    // any added load (the same reading latestWorkingSets uses).
+    const signed = (w: number | null): number => (w == null ? 0 : w);
+    const top = Math.max(...loads.map(signed));
+    // The lowest load still inside the working band: 90% of a load, or 10% more assist.
+    const band = top > 0 ? top * SET_STEP_WORKING_FRAC : top < 0 ? top * (2 - SET_STEP_WORKING_FRAC) : 0;
+    return rows.filter((r, i) => {
+      if (Number(r.reps) < minReps) return false;
+      if (bodyweightOnly && target == null) return true;
+      const w = signed(loads[i]);
+      if (w < band - 1e-9) return false; // a warm-up ramp or a back-off
+      if (target != null && w < target - 1e-9) return false; // under the prescribed load
+      return true;
+    }).length;
+  });
+}
+
+function setCatchUp(
+  p: Prescription,
+  pre: Prescription,
+  ctx: {
+    date: string;
+    dayNumber: number;
+    block: ActiveBlockContext | null;
+    cut: () => CutPressure;
+    liftState: LiftState | null;
+    restoreKeys: Set<string>;
+    lightWeek: () => string | null;
+  }
+): Prescription {
+  if (p.mode !== "reps" || !p.current) return p;
+  // A carry or hold kept in reps mode is time typed as reps; its count waits with it.
+  if (holdLikeMovement(p.exercise, null)) return p;
+  const planned = Number(p.current.sets) || 0;
+  if (planned < 1 || planned >= SET_STEP_CAP) return p;
+  // ONE change at a time: the set count rides only a HOLD or a double-progression REP
+  // step — never a load step, a re-ground, a deload, a rotation, a peak-week protocol,
+  // a starting idea, or any recovery brake. A step in load plus a step in volume on
+  // the same exposure is two stimuli, and the log vouched for neither together.
+  const holdOrRepStep = (x: Prescription) => x.action === "hold" || (x.action === "overload" && x.rep_step === true);
+  if (!holdOrRepStep(pre) || !holdOrRepStep(p)) return p;
+  if (p.reground || pre.reground) return p;
+  const planWeight = p.current.weight ?? null;
+  if ((p.suggested?.weight ?? null) !== planWeight) return p;
+  if (pre.autoregulated || pre.pain_protected || p.fuel_protected || p.pain_protected) return p;
+  if (p.top_set || p.starting_idea || p.suggested?.sets !== planned) return p;
+  if (ctx.block?.phase === "deload") return p;
+  if (ctx.restoreKeys.has(`${ctx.dayNumber}|${normalizeExerciseName(p.exercise)}`)) return p;
+  let counts: number[];
+  try {
+    counts = recentGoodWorkingSetCounts(p.exercise, {
+      repFloor: p.current.rep_low ?? null,
+      targetWeight: planWeight,
+      since: lastStructuralChangeDate(ctx.dayNumber, p.exercise),
+    });
+  } catch {
+    return p;
+  }
+  if (counts.length < SET_STEP_EXPOSURES || !counts.every((n) => n > planned)) return p;
+  // A lift slipping, or an exposure the session never finished / came in short on
+  // set count, is not the log vouching for more sets. (A missed load or rep
+  // CHALLENGE — `under_prescribed` — says nothing about set count; the per-set rep
+  // floor and load band above are the quality test for that.)
+  if (ctx.liftState?.status === "regressing") return p;
+  if (p.dose_eligibility?.reason === "unfinished" || p.dose_eligibility?.reason === "partial") return p;
+  const cut = ctx.cut();
+  if (cut.reduce && !cut.near_goal) return p;
+  // A deliberately light week — a recovery week in force or scheduled, a deload now or
+  // next, a deload-due mesocycle, the race taper — is the same exemption the plan's
+  // volume floor reads (volume-floor-context.ts), read last because it is the costly one.
+  if (ctx.lightWeek()) return p;
+  const to = Math.min(planned + 1, SET_STEP_CAP, ...counts);
+  if (to <= planned) return p;
+  const say = voice.liftVoice(voice.SET_CATCH_UP, ctx.date, "set_catch_up", p.exercise)(to, Math.min(...counts));
+  return {
+    ...p,
+    suggested: { ...p.suggested, sets: to },
+    set_step: { from: planned, to },
+    why: p.why ? `${p.why} ${say}` : say,
+  };
 }
 
 // The fuel read's TRAINING consequence, said in the TRAINING register.
@@ -2898,8 +3172,10 @@ export function buildProgressionProposal(
       (p.suggested?.weight != null
         ? planned == null || Math.abs(Number(p.suggested.weight) - Number(planned)) > 0.1
         : p.suggested?.weight === null && planned != null && Number(planned) < 0);
-    if (p.action === "hold" && !regroundOnly) continue;
-    if (p.rep_step) continue; // a double-progression rep advance is no plan change — the range already covers it
+    // A set-count catch-up is a real plan change on any hold or rep step it rides.
+    const setStep = p.set_step != null && p.mode === "reps";
+    if (p.action === "hold" && !regroundOnly && !setStep) continue;
+    if (p.rep_step && !setStep) continue; // a double-progression rep advance is no plan change — the range already covers it
     // A peak-week top set is a SESSION protocol, not a plan target. Writing a
     // near-maximal single into plan_items would make it the number every later step
     // is measured from, long after the peak week is over — the result reaches the
@@ -2950,8 +3226,8 @@ export function buildProgressionProposal(
       c.target_weight =
         suggestedWeight != null && suggestedWeight > 0 && planned != null && planned < 0 ? null : suggestedWeight;
     }
-    // Only a change that moves a target (or is a swap) is a real change.
-    if (c.target_weight !== undefined || c.target_seconds !== undefined) changes.push(c);
+    // Only a change that moves a target or the set count (or is a swap) is a real change.
+    if (c.target_weight !== undefined || c.target_seconds !== undefined || setStep) changes.push(c);
   }
   if (!changes.length) return { ok: false, error: "nothing to propose for this day" };
   const parsed = {
@@ -3036,6 +3312,17 @@ const LIFT_ONLY_GROUPS = new Set(["quads", "hamstrings", "glutes"]);
 
 function enduranceSupported(group: string, weeklySessions: number): boolean {
   return !LIFT_ONLY_GROUPS.has(group) && weeklySessions >= ENDURANCE_SUPPORTED_PER_WEEK;
+}
+
+// The regions the athlete's endurance work is carrying right now, by the same rule
+// that keeps programBalance from calling them "due". The plan's volume floor
+// (volume-floor.ts) exempts exactly these, so the balance read and the plan
+// compiler can never disagree about whether a runner's calves are neglected.
+export function enduranceCarriedGroups(weeks = 2, date = localDateISO()): string[] {
+  const out: string[] = [];
+  for (const [group, weekly] of enduranceByRegion(weeks, String(date).slice(0, 10)))
+    if (enduranceSupported(group, weekly)) out.push(group);
+  return out;
 }
 
 function enduranceByRegion(weeks: number, date: string): Map<string, number> {

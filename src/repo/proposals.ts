@@ -33,6 +33,7 @@ import {
   replacePlan,
 } from "./plan.js";
 import { PlanQualityError, type PlanQualityReport, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
+import { readVolumeFloorContext } from "./volume-floor-context.js";
 import { orderPlanDaysForEffect } from "../domain/training/plan-item-order.js";
 import { computeGoalCheck, KCAL_ABSOLUTE_FLOOR, KCAL_PER_LB, recompositionStageAt } from "./profile.js";
 import { volumeRestoreLedger } from "./volume-guard.js";
@@ -1291,7 +1292,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     // finishers → cardio). The editor's manual ↑↓ path does not go through here,
     // so athlete peer-order stays until the next compose or an explicit Order-for-effect.
     const orderedDays = orderPlanDaysForEffect(parsed.days as Parameters<typeof replacePlan>[0]);
-    const quality = validateTrainingPlan(orderedDays);
+    const quality = validateTrainingPlan(orderedDays, { volumeFloor: readVolumeFloorContext() });
     if (!quality.ok)
       throw new Error(`Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`);
     // A restructure rewrites every prescription at once. Snapshot first, diff after,
@@ -1402,7 +1403,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       .filter(Number.isFinite)
   );
   const priorIssues = new Set(beforeQuality.errors.map(qualityIssueKey));
-  const quality = validateTrainingPlan(getPlan());
+  const quality = validateTrainingPlan(getPlan(), { volumeFloor: readVolumeFloorContext() });
   const blockingQuality = quality.errors.filter(
     (entry) =>
       !priorIssues.has(qualityIssueKey(entry)) || (entry.day_number != null && touchedDays.has(entry.day_number))

@@ -1,6 +1,7 @@
 // exercise-variations.ts — deterministic, pure exercise variation/alternatives library.
 // No DB writes, no agent calls. All logic is keyword-based classification + curated data.
 import { canonicalGroup, classifyMuscleGroup, isMobility, type MuscleGroup } from "./exercise-canon.js";
+import { plausibleRir } from "../lib/numbers.js";
 
 export type Equipment =
   | "barbell"
@@ -564,8 +565,9 @@ export function examplesForGroup(group: string, n = 3): string[] {
 // Effort weight by reps-in-reserve: ≤3 RIR is a real working set; a set left far from
 // failure (RIR 5+) counts less. Null RIR (not logged) is trusted as a full set.
 export function setEffortWeight(rir: number | null | undefined): number {
-  const r = Number(rir);
-  if (rir == null || !Number.isFinite(r)) return 1;
+  // An RIR outside 0–10 is a value typed into the wrong field, not a reserve: absent.
+  const r = plausibleRir(rir);
+  if (r == null) return 1;
   if (r <= 3) return 1;
   if (r < 5) return 0.75;
   return 0.5;

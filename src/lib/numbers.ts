@@ -78,3 +78,17 @@ export function stableJson(value: unknown): string {
     .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
     .join(",")}}`;
 }
+
+/** Reps in reserve is only meaningful from 0 to 10 — the bounds a set can be logged with. */
+export const RIR_MIN = 0;
+export const RIR_MAX = 10;
+
+/**
+ * A logged RIR, or null when there is none worth reading. A value outside 0–10 is
+ * not a reserve anybody has — it is seconds or a rep count typed into the wrong
+ * field — so it reads as ABSENT, never as "very easy".
+ */
+export function plausibleRir(value: unknown): number | null {
+  const n = finite(value);
+  return n != null && n >= RIR_MIN && n <= RIR_MAX ? n : null;
+}

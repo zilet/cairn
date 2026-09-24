@@ -138,3 +138,51 @@ ${promptData(ctx, "session_verify")}
 
 ${VERIFY_RESULT_NOTE}`;
 }
+
+// Repair a drafted plan change (a redraw or an evolution) that the server found
+// starving a priority group. Called only when the pre-check found a breach — a plan
+// draft carries no judgement-only check here — so this is a REPAIR turn, not a
+// review: add the missing weekly volume with the smallest change and leave the rest
+// of the athlete's week exactly as drafted.
+export function buildPlanDraftVerifyPrompt(
+  draft: any,
+  violations: FloorViolation[] = [],
+  opts: { athlete_request?: unknown } = {}
+): string {
+  const ctx = getCoachContext();
+  const asked = String(opts.athlete_request ?? "").trim();
+  const askedSection = asked
+    ? `\nTHE ATHLETE ASKED FOR (their own words — the repair must still honor this):\n${asked.slice(0, 600)}\n`
+    : "";
+  return `${CAIRN_PERSONA}
+
+Right now you are acting as Cairn's training VOLUME CHECKER. A change to the athlete's lifting week was
+just drafted. Before it lands, repair the weekly volume breaches Cairn found. This is a backstop, not a
+rewrite — it remains a SUGGESTION the athlete can change.
+
+${breachSection(violations)}
+${askedSection}
+HOW TO REPAIR (smallest change that clears every listed breach):
+- DATA.weekly_set_targets names each priority group's weekly window. Count effective sets the way
+  Cairn does: a working set of a movement whose main group is the named one counts 1; a compound's
+  secondary group (a press for triceps and front delts, a row or pull-up for biceps, a squat or hinge
+  for glutes) counts a half.
+- First raise "sets" on movements for that group already in the draft (2-4 working sets each); only
+  add a movement when that cannot reach the floor, and then place it on an existing lifting day. Never
+  add a lifting day, never move a day, never touch a movement unrelated to the named groups.
+- Prescribe any added movement from what the athlete actually logs (DATA.recent_sessions) or start it
+  light with a "NEW — start light, log actual" note. Respect every constraint_note and active injury —
+  never load an injured area to reach a number.
+- Keep the draft's own shape: a "days" draft stays a "days" draft, a "changes" draft stays a "changes"
+  draft (add or edit entries in its "changes" list).
+- Encoding integrity — do not corrupt these in a repair:
+${MECHANICS_ENCODING}
+
+THE DRAFTED CHANGE TO REPAIR:
+${JSON.stringify(draft)}
+
+DATA (the athlete's intent, the per-group targets, the current plan and what they log):
+${promptData(ctx, "plan_verify")}
+
+${VERIFY_RESULT_NOTE}`;
+}
