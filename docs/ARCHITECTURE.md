@@ -664,6 +664,22 @@ bounds — every clamp, easing, hold and exclusion still applies, but nothing is
 reach, no peak single, no earned floor, and a progression target only when it does not ask for more
 load or time).
 
+**The composition pipeline's order is now fixed end to end (`normalizeComposedSession`,
+`daily-composition.ts`, 2026-09-24).** Saturated substitution (`substituteSaturatedPlanItems`) runs
+first, so a stand-in is itself subject to every later gate. Per-item gates (hold/deload/exclude/
+equipment, the reduced-area clamp) settle each candidate's action and target next. `collapseRegionDuplicates`
+(`composition-pairing.ts`) then drops a second loaded movement occupying the same region — see
+Pairing and movement regions below; on `planSnapshot` (the athlete's own day) only the historical
+press-angle rule still applies. The caps loop and the `earned_floor` raise follow, then the top-set/
+reach insertion — so a reach always claims its minutes and set budget before anything downstream can
+spend it. `applyWeeklyDose` (`composition-dose.ts`) lands the week's dose fills next — see Weekly dose
+ledger below — followed by `orderPlanItemsForEffect` (prep → primary → secondary → isolation → core →
+cardio, which now reads the movement region before the swap-family table), then `pairForSession` seats
+antagonist supersets within an effect tier, then `reconcileEnvelopeReach`, then the duration-cap clamp
+(which now also absorbs the dose's added minutes). Dose and pairing never touch `target_weight`/
+`target_seconds`/rep range on a real item, and the run/lift stress budget (see below) speaks only
+through the existing muscle lists, so composition needed no new clamp shape for any of the three.
+
 **A plateau measured under another prescription never rotates the slot.** `plan_items.prescribed_at`
 (v111) is the local date the slot's movement + rep range + target was last authored; `savePlanDay`
 carries a slot's stamp through a re-save that leaves it unchanged (sets are volume, not identity),
@@ -937,6 +953,174 @@ structural-looking injury over, only on the athlete's yes), REST `PUT /api/profi
 it read-only. The supportive movements it asks for (side plank, Pallof press, bird dog, single-arm
 rows/presses, clamshell, cat-cow, 90/90 breathing…) are in the SEED catalog of both seed modes; an
 existing catalog is never mutated — a draft that names one creates it through `findOrCreateExercise`.
+
+### Weekly dose ledger (`src/repo/weekly-dose-ledger.ts`, `composition-dose.ts`, 2026-09-24)
+
+Answers "how far does each muscle group's week sit under its contextual floor once today and the
+week's remaining lift days plan lands?" — and, when a group would end the week short, authorizes ONE
+extra working set on one of today's items toward it. Three reads, the daily-decision split: the plain
+LEDGER (`weeklyDoseLedger(date)`, a pure read any surface can ask), the GATHER half
+(`weeklyDoseSnapshot`, stamped onto `DailyDecisionSnapshot.weekly_dose` only when it has something to
+say — an ordinary morning fingerprints exactly as before this module existed), and the DECIDE half
+(`weeklyDoseDecision`, a pure function of that snapshot slice landing on the envelope as `dose`,
+spread only when present). `applyWeeklyDose` is composition's own half (see the pipeline order above).
+
+`done` is `effectiveVolumeByGroup` over sets logged Monday through YESTERDAY only — never today's own
+sets, so the read stands still all day — and `today_planned`/`later_planned` reuse `plannedWeeklyGroupSets`
+over `strengthPlanDayOn`/`thisWeekPlanDayMap`, the same compiler plan quality's own floor warning uses,
+so the ledger and that warning can never disagree about the same week. `short` is `max(0, low − done −
+today_planned − later_planned)`, floored at `WEEKLY_DOSE_MIN_GAP` (0.5 sets) before it counts as a gap.
+
+The fill must never: land on the day's ANCHOR (its first primary-tier/compound item, read through
+`movementRegionKey` — see Pairing and movement regions), land on strength-range work (`rep_low <=
+WEEKLY_DOSE_STRENGTH_REP_LOW` = 5 — a hybrid athlete's extra dose belongs on accessories and
+moderate-rep work, never the heaviest sets), add to an **untested** slot
+(`Prescription.untested` — prescription-authorship.ts), change a load, run on a non-`train` day, a run
+day, a light/exempt/recovery week, a deload/deload-due mesocycle phase, or a group the envelope
+excludes/reduces/saturates/reads deep/week-holds. At most `WEEKLY_DOSE_MAX_FILLS_PER_DAY` (2) fills a
+day, one set each, ranked isolation-before-compound, then a `supportWorkRead` weak link first, then
+progressing > maintaining > plateaued > new. `applyWeeklyDose` additionally never touches a lift
+carrying the day's reach/top set (that challenge keeps its own budget) and respects the day's
+per-item/day set caps and `caps.duration_min` (each added set costs `WEEKLY_DOSE_MINUTES_PER_SET` =
+2.5 minutes, added to `est_minutes` before the existing duration clamp). A fill is idempotent by
+construction: it lands only on an item still carrying exactly the plan's own `sets` count, so a card
+normalized twice, or an agent that already wrote more sets, never doubles it. The note rotates through
+`pickDayVariant(DOSE_FILL_NOTES, …)` and never carries a number.
+
+### Pairing and movement regions (`src/repo/movement-region.ts`, `src/repo/composition-pairing.ts`, 2026-09-24)
+
+`movementRegionKey(name)` answers which narrow REGION a lift occupies — narrower than a movement
+pattern: flat and incline press are different regions, and so are a straight- and bent-knee calf
+raise, an overhead triceps extension and a pushdown, a supinated and a neutral curl. `null` means "no
+region rule applies," never "unknown, drop it"; the big compounds (squat, hinge, row, pull-up) have no
+region, so a squat and a leg press both stay on a card. Two consumers:
+- **`collapseRegionDuplicates`** generalizes the old press-angle-only rule
+  (`dropDuplicatePressAngles`, now removed from `daily-composition.ts`) to every region: one loaded
+  movement per region on a composed card, keeper preferring today's own template, then more sets, then
+  the heavier load. `opts.pressOnly` (passed on `planSnapshot`) restricts the rule back to press angles
+  only — the athlete's own written day keeps the two pushdowns or two calf raises they put on it.
+- **`isAccessoryRegion`/`isPressRegion`** feed `planItemEffectTier` (`plan-item-order.ts`): a leg curl
+  or leg extension is an ACCESSORY on a card even though the swap-family table files them as a hinge
+  and a squat for swap purposes, and a press with no stored `muscle_group` is still compound work. This
+  is also what the weekly dose ledger and the day's anchor detection read to find the day's first
+  compound.
+
+`ANTAGONIST_OF`/`antagonistSide` (also in `movement-region.ts`) name which side of an antagonist pair a
+lift works — horizontal/vertical push↔pull, elbow flexion↔extension, knee extension↔flexion — read off
+the region first and the swap-family pattern table second; flyes, dips, carries, hinges and squats sit
+on no side and never pair.
+
+**`pairForSession`** seats antagonist pairs as `superset_group` supersets on today's FINAL card, inside
+one effect tier only, after `orderPlanItemsForEffect`. Never paired: prep, timed work, anything
+carrying warm-up sets, a top set/reach and the block right after it, the same lift twice, heavy
+strength-range work (`rep_low <= 5`), an item an author already grouped (its grouping stands), and the
+day's first primary when it is heavy. A group the week is behind on (`envelope.dose.gaps`, `short >
+0`) is seated first within its tier and leads its pair, unless the pair holds the day's anchor, which
+keeps its seat. Each new pair gets one `pickDayVariant` hint in `note` (`PAIRING_NOTES`, appended after
+whatever the card already says — the existing note is never truncated to make room, budget
+`NOTE_BUDGET` = 220 chars) and the lowest `superset_group` id not already on the card.
+`dropOrphanSupersets` runs on EVERY card, `planSnapshot` included: a plan-saved pairing left with one
+member after today's clamps (an exclusion, a region collapse) is cleared in place rather than saying it
+is paired with nothing. A pairing never sets `changed`/`capped` — the caller re-numbers positions and
+tracks the reseat separately — and `planItemToRaw` now carries `superset_group` through so a plan-saved
+pairing reaches the card; a stand-in substitution clears it (a substitute is not the movement its slot
+was paired for).
+
+### Run/lift stress budget (`src/repo/stress-budget.ts`, 2026-09-24)
+
+One weekly stress budget for the legs, across running and lifting, for a hybrid athlete building to a
+dated race. It speaks entirely through the envelope's EXISTING muscle lists (`reduced`/`excluded`), so
+composition needed no new clamp shape. `raceBuild(date)`'s current week `kind`/`phase` is the one
+week-kind read (never a second race-phase read); `runPlacement` (now exported from
+`src/domain/training/week-layout.ts`) is read through `weeklyRunPlan`, never the raw stated schedule
+(which may name two long-run days). Rules, in precedence order — the first that applies is the only one
+that speaks:
+1. **Taper week** (`race_taper_legs`): every lower-body group on today's card is REDUCED (the existing
+   2-set cap, ×0.9 load) — upper body untouched.
+2. **Race week** (`race_week_legs`): quads/hamstrings/glutes are EXCLUDED, calves/core REDUCED — upper
+   body untouched.
+3. **The eve of a placed key run** (`key_run_eve`): today is the last lift day before a placed quality
+   or long run landing at most two days out with no lift day between (`strengthPlanDayOn` on
+   tomorrow); only the day's lower ACCESSORY groups reduce (every lower group except the day's anchor's
+   own), and only in SETS — the load HOLDS (`load_held: true`, `sole_reduced` on the envelope's `stress`
+   field). It never fires when the weekly lower guarantee holds today (`lowerWeekHolds`), never touches
+   a group that guarantee holds (`weekHeldGroups`), stands down when `lowerSafetyFloor` already governs
+   the legs, and stands down when the endurance-led key-run protect already lightens every lower group
+   for the same run (one rule per run).
+4. No day-after-a-hard-run rule of its own — `acuteGate` (hybrid-load.ts) already answers that
+   question.
+
+Taper and race week also SUSPEND the weekly lower guarantee (`stressBudgetSuspendsWeeklyLower`, asked
+by `daily-decision.ts` before it resolves `lowerWeekHolds`): the race build's own law for those two
+weeks is light legs, then legs off. On a key-run eve, when the supporting runner's "the run stays
+optional after strength" line would otherwise print (`enduranceSupporting && hasRelevantOpenKeyRun`),
+it stands down (`keyRunEveTrimmed`) rather than co-appearing with the eve's own "fewer sets so the run
+lands" line, which says the opposite.
+
+`sole_reduced` — the groups the stress budget reduced that NO other rule reduced — also fixed a
+substitution bug: `saturated-substitution.ts`'s `substitutionGroups` used to treat every reduced RUN_PRIME
+group as recovering tissue needing a stand-in; now a `calendarOnly` set (`envelope.stress.sole_reduced`)
+is excluded from that swap, so a taper/race-week/key-run-eve trim stays on the card, trimmed in place,
+never swapped away as if it were an acute-recovery gate.
+
+### Selection by response (`src/repo/lift-response.ts`, `progression.ts`, 2026-09-24)
+
+How a stalled lift's next move is picked, instead of one default (deload). `isIsolationLift` (an
+isolation group, or a single-joint pattern/name) and `isStackLoaded` (a pinned cable/machine stack, or
+a stack-worded name with no free/plate implement) feed `coarseLoadStep(name, weight, group)`: true when
+the next real load step (the engine's own `nextLoadStep`, floored at `STACK_MIN_STEP` = 5 lb on a
+pinned stack) is at least `COARSE_STEP_FRACTION` (8%) of the working weight. `movedRepRange(low, high)`
+is the move itself: both ends +`REP_RANGE_MOVE` (3), or `null` past `REP_RANGE_CEILING` (25) — the
+ordinary ladder answers from there.
+
+Two doors lead to the move, both isolation-only, both requiring the plan to agree with the log, reps
+already reaching within one of the new floor, and the move UNSPENT on this lift
+(`lastAppliedRepRangeMove`, below):
+- **A grind** (RIR ≤ 1) that would otherwise deload, when the next step is coarse: the load HOLDS and
+  the range moves up instead (`escalated: "rep_range"`, `ISOLATION_REP_RANGE` voice) — a rope pushdown
+  grinding at 57.5 lb whose next pin is 62.5 does not need a deload, it needs a higher rep range at the
+  same pin.
+- **An EARNED step** (extended double progression): every working set capped the range at the held
+  load, and the next load is a jump this lift does not take cleanly — either `coarseLoadStep` reads true,
+  or the log shows the load bouncing off before (`bouncedOffLoadStep`: taken, reps fell under the floor,
+  then a return to this load or lighter). The range moves up instead of the load
+  (`ISOLATION_REP_RANGE_EARNED` voice), and is demoted the same one rung an ordinary earned overload is
+  (`earned_hold` verdict → hold, unescalated).
+
+**Once only.** `lastAppliedRepRangeMove(exerciseName, asOf)` reads the applied proposal ledger
+(`plan_proposals` rows carrying `changes[].progression_escalation: "rep_range"`, written by
+`buildProgressionProposal`) for the latest APPLIED move on this lift; a lift already moved up a range
+answers to the ordinary ladder from then on, on its NEXT stall, so the move can never loop. No time
+window: the marker is permanent per lift until a later ladder event overwrites it.
+
+**Brakes and protections win.** A movement-response deload, `autoregBrake`, `painBandBrake` or a fuel
+protection (`applyFuelProtection`) that reshapes the action clears `escalated`/the wave rep range back
+to unset — a rep-range move is a HOLD at the load, and whichever brake reshaped the card owns it. An
+earned range move is treated as an overload for brake/fuel purposes (so it is held/parked the same way
+a real overload would be), and `setCatchUp` treats `escalated === "rep_range"` as the exposure's own
+one change (it never also runs a set catch-up the same pass). A lift the trend reads `progressing` is
+never rotated to `vary` off a repeat deload, whatever brake produced it — the deload stands on its own
+sentence instead. `buildProgressionProposal` writes a real range move as a target change (new
+`rep_low`/`rep_high`, weight unchanged) carrying its own `progression_escalation: "rep_range"` marker —
+a genuine new prescription (`prescription-authorship.ts` re-stamps the slot), so the range stands at the
+plan until a session is run at it.
+
+**Cache signature.** `trainingBackstopSignature()` (`src/repo/training-cache.ts`) used to see only
+`COUNT`/`MAX(id)` over `plan_items`, which cannot see an in-place re-prescription (a rep-range move, a
+restamp after a target/set step) — a slot rewritten in place moves neither. It now also folds in
+`plan_items`' newest `prescribed_at` plus an id-weighted `TOTAL()` aggregate over each slot's exercise,
+sets, rep range, target seconds and target weight, so an in-place rewrite invalidates the training memos
+(`getProgramState`/`getWeeklyStats`/`estimateExpenditure`) exactly like an insert or delete already did.
+
+### Test harness: offline agent CLIs by default (`test/run.mjs`)
+
+The suite is offline like CI, which has no agent CLI installed — but a developer machine typically
+does, and anything that picks an agent (an enrichment job, a Brief read asked for fresh) would probe
+every CLI in `agents.json` and could run one for real. Each worker now gets its own
+`agents.offline.json` (`AGENTS_CONFIG` env var): every real CLI's `command` is rewritten to a
+nonexistent binary, so each reads "not installed" everywhere; names, args and capabilities are
+untouched, and the offline `stub` agent is unchanged. A test that needs its own agent table still sets
+`AGENTS_CONFIG` itself.
 
 ### Body, nutrition, capture
 

@@ -4,6 +4,58 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-09-24 — Pairing round: the week's dose, one movement per region, the race build's stress budget
+
+No schema change (`user_version` stays at v111 — `plan_items.prescribed_at` from the prior round). Built
+as parallel packages behind seams landed in a Wave 0 (stub modules + optional, omit-when-idle envelope/
+snapshot fields), reviewed and integrated in a final wave.
+
+- **Weekly dose ledger** (`src/repo/weekly-dose-ledger.ts` + `composition-dose.ts`): reads each muscle
+  group's week against its contextual floor (log through yesterday, plus what today and the week's
+  remaining lift days still plan), and when a group would end the week short, authorizes ONE extra
+  working set on an eligible item on today's card. Never on the day's anchor, never on strength-range
+  work, never on an untested slot, never a load change, never on a non-train/run/light/exempt/recovery
+  day. At most two fills a day, ranked accessory-first and by a lagging-lift weak-link read.
+- **Movement regions and pairing** (`src/repo/movement-region.ts` + `src/repo/composition-pairing.ts`):
+  `movementRegionKey` generalizes the old press-angle-only duplicate rule to every narrow region (flat
+  vs. incline press, straight- vs. bent-knee calf, a curl grip, a pushdown vs. an overhead extension), so
+  a composed card never serves two loaded movements in the same region — except the athlete's own
+  written day, which keeps only the historical press rule. The same region read now feeds
+  `planItemEffectTier` (a leg curl and a leg extension are accessories on a card, not a hinge and a
+  squat), and antagonist pairs (push↔pull, curl↔triceps, knee extension↔flexion) are seated as
+  `superset_group` supersets within one effect tier on the FINAL card — never on prep, timed work, a top
+  set/reach block, heavy strength-range work, or an item an author already grouped. A group the week is
+  behind on leads its pair while fresh. A plan-saved pairing now survives the round trip through
+  composition (`planItemToRaw` carries `superset_group`); a pairing left with one member after today's
+  clamps is cleared, never left claiming a partner that is gone.
+- **Run/lift stress budget** (`src/repo/stress-budget.ts`): one weekly stress budget for the legs across
+  running and lifting, for a hybrid athlete building to a dated race, speaking entirely through the
+  existing `reduced`/`excluded` muscle lists. Taper week eases every lower-body lift; race week excludes
+  the heavy leg lifts and eases calves/core; the eve of a placed key run (quality or long, ≤2 days out,
+  no lift day between) trims the day's lower ACCESSORY sets only and holds their load, standing down
+  whenever the weekly lower guarantee, a safety floor, or the existing endurance key-run protect already
+  speaks for the same run. Taper and race week also suspend that weekly lower guarantee, and a group only
+  the stress budget reduced is fixed to stay on the card trimmed in place rather than swapped away by
+  saturated substitution (a pre-existing bug this round closed).
+- **Selection by response** (`src/repo/lift-response.ts` + `progression.ts`): a stalled ISOLATION lift
+  whose next real load step is too coarse (a pinned stack, floored at a 5 lb minimum jump) answers with a
+  higher rep range at the held load instead of a deload — reached either by a grind (RIR ≤ 1) or by an
+  earned step the load jump would otherwise refuse (extended double progression, using a bounced-load-step
+  read as an alternate trigger). The move applies once per lift, remembered by reading the applied
+  proposal ledger for its own marker, so a later stall in the higher range falls through to the ordinary
+  ladder; every existing brake and fuel protection still wins over it, and a lift the trend calls
+  `progressing` is never rotated to `vary` off a repeat deload. A cache fix
+  (`trainingBackstopSignature`, `src/repo/training-cache.ts`) closes a gap the round's own re-prescriptions
+  exposed: an in-place rewrite (a restamp, a rep-range move) moved neither `COUNT` nor `MAX(id)` on
+  `plan_items`, so the training memos could serve a stale read after one; the signature now also folds in
+  the newest `prescribed_at` and an id-weighted aggregate of every slot's movement and targets.
+- **Test harness**: `test/run.mjs` now hands every worker an `agents.offline.json` with every non-`stub`
+  CLI's command rewritten to a nonexistent binary, so a developer machine's installed CLIs are never
+  probed or spawned by a test that picks an agent — the suite is offline by construction, not by luck.
+
+Details in `docs/ARCHITECTURE.md`: "The composition pipeline's order is now fixed end to end", "Weekly
+dose ledger", "Pairing and movement regions", "Run/lift stress budget", and "Selection by response".
+
 ## 2026-09-23 — Elite coaching round: the brain challenges on evidence, and runs leave the strength plan
 
 Migration **v110** (`plan-days-strength-only`: pure data repair — deletes cardio `plan_items` and plan
