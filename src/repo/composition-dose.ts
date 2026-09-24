@@ -3,6 +3,7 @@ import { isPrepPlanItem } from "../domain/training/plan-item-order.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import type { DailyDecisionCandidate, DailyDecisionEnvelope } from "./daily-decision.js";
 import { canonicalGroup, normalizedExerciseKey } from "./exercise-canon.js";
+import { WEEKLY_DOSE_STRENGTH_REP_LOW } from "./weekly-dose-ledger.js";
 
 // Composition's half of the weekly dose (weekly-dose-ledger.ts): the envelope's
 // `dose.fills` land on today's card as ONE extra working set on an item, inside the
@@ -158,6 +159,10 @@ export function applyWeeklyDose(items: any[], ctx: WeeklyDoseComposeContext): We
     if (ctx.reducedExercises.has(name.toLowerCase())) continue;
     if (String(item.mode ?? "reps").toLowerCase() === "timed" || item.target_seconds != null) continue;
     if (isPrepPlanItem(item)) continue;
+    // Strength-range work never takes the added set (weekly-dose-ledger.ts), whatever
+    // an agent's card wrote for it.
+    const repLow = finite(item.rep_low);
+    if (repLow != null && repLow <= WEEKLY_DOSE_STRENGTH_REP_LOW) continue;
     const candidate = ctx.candidates.get(name.toLowerCase());
     if (candidate?.action === "exclude" || candidate?.top_set) continue;
     const sets = finite(item.sets);

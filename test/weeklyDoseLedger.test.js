@@ -189,7 +189,9 @@ test("(a) a week short on quads fills one set on Leg Extension; the squat is unt
   const legExt = byName(session, "Leg Extension");
   assert.equal(legExt.sets, 3, "two planned sets become three");
   assert.equal(legExt.target_weight, 135);
-  assert.equal(legExt.note, doseFillNote("quads", WED, "Leg Extension"));
+  // The fill's line leads the note; the pairing hint (the curl is its antagonist) follows.
+  assert.ok(legExt.note.startsWith(doseFillNote("quads", WED, "Leg Extension")), legExt.note);
+  assert.equal(legExt.superset_group, byName(session, "Lying Leg Curl").superset_group);
   assert.equal(legExt.brain_change_reason ?? null, null, "the fill speaks in the note, not the brain reason");
   const squat = byName(session, "Back Squat");
   assert.equal(squat.sets, 3);
@@ -199,7 +201,7 @@ test("(a) a week short on quads fills one set on Leg Extension; the squat is unt
 
 // ---------- (b) an untested slot never takes the set ----------
 
-test("(b) an untested slot never takes a set — the fill moves to a tested lift or stays off", () => {
+test("(b) an untested slot never takes a set, and the heavy anchor is never the fallback", () => {
   seedWeek();
   // Leg Extension re-prescribed after it was last trained: untested until run at it.
   db.prepare(
@@ -207,9 +209,14 @@ test("(b) an untested slot never takes a set — the fill moves to a tested lift
   ).run(TUE);
   const legExtRx = planDayProgression(3).find((p) => p.exercise === "Leg Extension");
   assert.equal(legExtRx.untested, true);
-  const { envelope } = decideWednesday();
-  assert.ok(!(envelope.dose?.fills ?? []).some((f) => f.exercise === "Leg Extension"));
-  assert.equal(byName(deterministicComposedSession(envelope), "Leg Extension").sets, 2);
+  // The only other quads work today is the Back Squat: the day's anchor, strength-range
+  // reps (5–7). It never takes the week's extra set, so nothing fills at all.
+  const { snapshot, envelope } = decideWednesday();
+  assert.equal("weekly_dose" in snapshot, false, "no eligible quads item: the slice stays off");
+  assert.equal("dose" in envelope, false);
+  const card = deterministicComposedSession(envelope);
+  assert.equal(byName(card, "Leg Extension").sets, 2);
+  assert.equal(byName(card, "Back Squat").sets, 3, "the anchor keeps its prescription");
 
   // Every quads slot untested: nothing to fill at all, and the snapshot stays idle.
   db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(TUE);

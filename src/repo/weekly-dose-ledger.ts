@@ -14,13 +14,7 @@ import type {
 } from "./daily-decision.js";
 import { getPlan } from "./plan.js";
 import { type PlanQualityDay, plannedWeeklyGroupSets } from "./plan-quality.js";
-import {
-  HEAVY_LOWER_GROUPS,
-  calendarDayRead,
-  isLowerMainLift,
-  strengthPlanDayOn,
-  thisWeekPlanDayMap,
-} from "./plan-selection.js";
+import { calendarDayRead, strengthPlanDayOn, thisWeekPlanDayMap } from "./plan-selection.js";
 import type { ProgramState } from "./program-state.js";
 import type { Prescription } from "./progression.js";
 import { addDaysISO } from "./shared.js";
@@ -72,7 +66,8 @@ export interface WeeklyDoseEligibleItem {
 
 // The snapshot slice (`DailyDecisionSnapshot.weekly_dose`). Fingerprinted: keep it
 // compact, JSON-only, and stable for a given day's inputs. `eligible` is already in
-// fill order (accessories before anchors, a weak link first, a moving lift first).
+// fill order (accessories before compounds, a weak link first, a moving lift first). The
+// day's anchor and strength-range work (rep_low <= 5) are never eligible.
 export interface WeeklyDoseSnapshot {
   gaps: WeeklyDoseGap[];
   eligible: WeeklyDoseEligibleItem[];
@@ -213,13 +208,33 @@ const LOWER_GROUPS = new Set(["quads", "hamstrings", "glutes", "calves"]);
 // A moving lift takes the set first; a lift still building its baseline ("new") last.
 const STATUS_RANK: Record<string, number> = { progressing: 0, maintaining: 1, plateaued: 2, new: 3 };
 
-// An ANCHOR is the day's compound work: a primary-tier movement, and for the legs one
-// of the main lower lifts by name — the pattern classifier files a leg extension with
-// the squats, and a machine isolation is exactly what the fill should reach for first.
-function isAnchorItem(item: any, group: string): boolean {
-  if (planItemEffectTier(item) !== PLAN_ITEM_EFFECT_TIER.primary) return false;
-  if (!HEAVY_LOWER_GROUPS.has(group)) return true;
-  return isLowerMainLift(String(item?.exercise ?? ""), group);
+// A COMPOUND is primary-tier work (planItemEffectTier, which reads the movement region
+// first, so a leg extension or a leg curl is an accessory here, never a squat or a
+// hinge). A moderate-rep compound may still take a set, after every accessory.
+function isCompoundItem(item: any): boolean {
+  return planItemEffectTier(item) === PLAN_ITEM_EFFECT_TIER.primary;
+}
+
+// Strength-range work (a bottom of five reps or fewer) never takes an added set: for a
+// hybrid athlete the extra dose belongs on accessories and moderate-rep work, never on
+// the heavy sets that already cost the most. Same line the pairing module draws.
+export const WEEKLY_DOSE_STRENGTH_REP_LOW = 5;
+
+function isStrengthRange(item: any): boolean {
+  const repLow = finite(item?.rep_low);
+  return repLow != null && repLow <= WEEKLY_DOSE_STRENGTH_REP_LOW;
+}
+
+// The day's ANCHOR: its first primary-tier (compound) item, the same read the stress
+// budget and the pairing pass use. It keeps its prescription as written.
+function dayAnchorIndex(items: readonly any[]): number {
+  return items.findIndex(
+    (item) =>
+      !!item &&
+      String(item.kind ?? "strength").toLowerCase() !== "cardio" &&
+      !isPrepPlanItem(item) &&
+      isCompoundItem(item)
+  );
 }
 
 function itemGroup(item: any): string | null {
@@ -267,12 +282,15 @@ export function weeklyDoseSnapshot(date: string, ctx: WeeklyDoseGatherContext): 
   }
 
   // Cheap per-item eligibility first, so an ordinary card never pays for the ledger.
-  type Pre = WeeklyDoseEligibleItem & { index: number; anchor: boolean; status: number };
+  type Pre = WeeklyDoseEligibleItem & { index: number; compound: boolean; status: number };
   const pre: Pre[] = [];
+  const anchorIndex = dayAnchorIndex(items);
   items.forEach((item, index) => {
     if (!item || String(item.kind ?? "strength").toLowerCase() === "cardio") return;
     if (String(item.mode ?? "reps").toLowerCase() === "timed" || item.target_seconds != null) return;
     if (isPrepPlanItem(item)) return;
+    // Never the day's anchor, never strength-range work: accessories and moderate reps only.
+    if (index === anchorIndex || isStrengthRange(item)) return;
     const exercise = String(item.exercise ?? "").trim();
     const group = itemGroup(item);
     const sets = finite(item.sets);
@@ -288,7 +306,7 @@ export function weeklyDoseSnapshot(date: string, ctx: WeeklyDoseGatherContext): 
       group,
       sets,
       index,
-      anchor: isAnchorItem(item, group),
+      compound: isCompoundItem(item),
       status: STATUS_RANK[status] ?? 4,
     });
   });
@@ -314,7 +332,7 @@ export function weeklyDoseSnapshot(date: string, ctx: WeeklyDoseGatherContext): 
   }
   candidates.sort(
     (a, b) =>
-      Number(a.anchor) - Number(b.anchor) ||
+      Number(a.compound) - Number(b.compound) ||
       Number(weakLinks.has(b.group)) - Number(weakLinks.has(a.group)) ||
       a.status - b.status ||
       a.index - b.index
