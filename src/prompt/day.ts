@@ -797,7 +797,24 @@ export function buildDailyCompositionPrompt(envelope: any, ctx?: CoachContext): 
     })
     .join("\n");
   const excludedList = Array.isArray(muscles.excluded) ? muscles.excluded : [];
-  const reducedList = Array.isArray(muscles.reduced) ? muscles.reduced : [];
+  const allReduced: string[] = Array.isArray(muscles.reduced) ? muscles.reduced : [];
+  // The key-run eve's areas (stress-budget.ts `load_held`) are a calendar trim, not
+  // recovering tissue: fewer sets at the SAME weight, and the day's anchor lift stays as
+  // written. Read off the envelope itself (not the coach context, so no promptData key).
+  const stress = envelope?.stress ?? null;
+  const loadHeldAreas: string[] =
+    stress?.load_held === true && Array.isArray(stress.sole_reduced)
+      ? stress.sole_reduced.filter((g: unknown) => allReduced.includes(String(g)))
+      : [];
+  const holdLift = loadHeldAreas.length && typeof stress?.hold_exercise === "string" ? stress.hold_exercise : null;
+  const reducedList = allReduced.filter((g) => !loadHeldAreas.includes(g));
+  const loadHeldLine = loadHeldAreas.length
+    ? `\n- FEWER SETS, SAME WEIGHT (a key run is close): ${loadHeldAreas.join(", ")}. Keep every lift here at its prescribed weight and write fewer sets — do NOT lower the load; the server caps the sets whatever you write.${
+        holdLift
+          ? ` ${holdLift} is the day's main lift and stays exactly as written (all its sets, its weight) — the trim is for the other lifts in these areas.`
+          : ""
+      }`
+    : "";
   const requiredList = Array.isArray(muscles.required) ? muscles.required : [];
   return `${CAIRN_PERSONA}
 
@@ -812,7 +829,7 @@ THE ENVELOPE (decided for you — compose inside it):
 - Focus: ${envelope?.template?.focus ?? "general"}.
 - Required muscle areas to hit: ${requiredList.length ? requiredList.join(", ") : "coach's discretion within allowed"}.
 - Allowed areas: ${(Array.isArray(muscles.allowed) ? muscles.allowed : []).join(", ") || "any not excluded"}.
-- REDUCE (recently loaded — keep light, do NOT overload): ${reducedList.length ? reducedList.join(", ") : "none"}. The server clamps these areas down (fewer sets, an easier target) whatever you write, so compose them light on purpose rather than having it done to you.
+- REDUCE (recently loaded — keep light, do NOT overload): ${reducedList.length ? reducedList.join(", ") : "none"}. The server clamps these areas down (fewer sets, an easier target) whatever you write, so compose them light on purpose rather than having it done to you.${loadHeldLine}
 - EXCLUDED (do NOT program any loaded work here): ${excludedList.length ? excludedList.join(", ") : "none"}.
 - Caps: volume=${caps.volume ?? "normal"}, intensity=${caps.intensity ?? "normal"}${caps.duration_min ? `, about ${caps.duration_min} minutes total` : ""}.
 

@@ -1059,7 +1059,9 @@ that speaks:
    (composition's `reducedExercises`/`loadHeldExercises`) and the candidate's reduced-group hold pass
    over it — only while its group is in `sole_reduced`; a group another rule also reduced clamps the
    anchor too. Only in SETS — the load HOLDS (`load_held: true`, `sole_reduced` on the envelope's `stress`
-   field). It never fires when the weekly lower guarantee holds today (`lowerWeekHolds`), never touches
+   field). An agent composing the card is told the same (`buildDailyCompositionPrompt`, read off the
+   envelope): the eve's areas leave the REDUCE line ("an easier target") for their own "fewer sets, same
+   weight" line, which names the anchor that stays as written. It never fires when the weekly lower guarantee holds today (`lowerWeekHolds`), never touches
    a group that guarantee holds (`weekHeldGroups`), stands down when `lowerSafetyFloor` already governs
    the legs, and stands down when the endurance-led key-run protect already lightens every lower group
    for the same run (one rule per run).

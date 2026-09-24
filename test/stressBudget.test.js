@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { normalizeComposedSession } from "../dist/repo/daily-composition.js";
+import { buildDailyCompositionPrompt } from "../dist/prompt.js";
 import {
   buildDailySessionDecision,
   gatherDailyDecisionSnapshot,
@@ -496,6 +497,46 @@ test("Lower A the day before Thursday's quality run: the squat as written; RDL, 
     assert.equal(item.target_weight, weight, `${name}: the load holds`);
   }
   assert.equal(byName(items, "Barbell Bench Press").sets, 3);
+});
+
+test("an agent composing the eve is told fewer sets at the same weight, and which lift stays as written", () => {
+  seedExercises();
+  const env = buildDailySessionDecision(
+    snapshot({
+      date: "2026-09-30",
+      planItems: LOWER_A_ITEMS,
+      program: {
+        mesocycle_phase: "accumulation",
+        adaptations_due: [],
+        volume_low_groups: [],
+        volume_high_groups: ["chest"],
+      },
+      stress: {
+        race_week_kind: "build",
+        race_phase: "sharpen",
+        days_to_race: 32,
+        key_run: { kind: "quality", in_days: 1 },
+      },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.stress.hold_exercise, "Back Squat");
+  const prompt = buildDailyCompositionPrompt(env);
+  const reduceLine = prompt.split("\n").find((line) => line.startsWith("- REDUCE"));
+  assert.ok(reduceLine, prompt);
+  // The volume read's chest is still an ordinary reduce; the eve's leg areas are not.
+  assert.match(reduceLine, /chest/);
+  assert.doesNotMatch(reduceLine, /quads|hamstrings|calves/, reduceLine);
+  const eveLine = prompt.split("\n").find((line) => /same weight/i.test(line));
+  assert.ok(eveLine, "the eve's areas get their own instruction");
+  for (const g of ["quads", "hamstrings", "calves"]) assert.match(eveLine, new RegExp(g));
+  assert.doesNotMatch(eveLine, /easier target/);
+  assert.match(eveLine, /Back Squat[^.]*as written/);
+
+  // An ordinary reduce reads as it always has.
+  const plain = buildDailyCompositionPrompt({ ...env, stress: undefined });
+  assert.match(plain, /- REDUCE[^\n]*quads[^\n]*an easier target/);
+  assert.doesNotMatch(plain, /same weight/i);
 });
 
 test("a key-run eve anchor whose group another rule reduces takes that rule's clamp", () => {
