@@ -2,6 +2,7 @@ import { finite } from "../lib/numbers.js";
 import { isPrepPlanItem } from "../domain/training/plan-item-order.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import type { DailyDecisionCandidate, DailyDecisionEnvelope } from "./daily-decision.js";
+import { CARD_NOTE_BUDGET } from "./composition-pairing.js";
 import { canonicalGroup, normalizedExerciseKey } from "./exercise-canon.js";
 import { WEEKLY_DOSE_STRENGTH_REP_LOW } from "./weekly-dose-ledger.js";
 
@@ -79,16 +80,17 @@ export function doseFillNote(group: string, date: string, exercise: string): str
   return pick(group);
 }
 
-const NOTE_BUDGET = 500;
-
 // Same rule composition uses for its own sentences: the athlete's note is never
-// truncated (their safety cues sit at the end of it); the server's line yields.
+// truncated (their safety cues sit at the end of it); the server's line yields. The
+// budget is the card's own (CARD_NOTE_BUDGET, the length past which Today stops
+// printing a note at all), so a line that would push the athlete's cue past it — and
+// hide the cue with it — is dropped; the set still lands.
 function withDoseNote(note: unknown, text: string): string {
   const existing = String(note ?? "").trim();
-  if (!existing) return text.slice(0, NOTE_BUDGET);
+  if (!existing) return text.length > CARD_NOTE_BUDGET ? "" : text;
   if (existing.toLowerCase().includes(text.toLowerCase())) return existing;
   const lead = `${text.replace(/[.]+$/, "")}. `;
-  if (lead.length + existing.length > NOTE_BUDGET) return existing;
+  if (lead.length + existing.length > CARD_NOTE_BUDGET) return existing;
   return `${lead}${existing}`;
 }
 

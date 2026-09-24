@@ -135,9 +135,12 @@ export const PAIRING_NOTES: readonly [string, ...string[]] = [
 ];
 
 // A card prints its note as a per-movement cue only while it stays short (the Today
-// card drops a cue past this length), so a hint that would push an existing note over
-// it is not added there — it would hide the note it was appended to.
-const NOTE_BUDGET = 220;
+// card drops a cue past this length — `todayCardsReasonIsItemSpecific`,
+// src/client/today-cards-client.ts, which cannot import server code and so carries the
+// same number), so a server line that would push an existing note over it is not added
+// there — it would hide the note it was appended to. Shared by every composition pass
+// that appends a line to a card's note (the pairing hint here, the dose fill's line).
+export const CARD_NOTE_BUDGET = 220;
 
 // Heavy strength-range work (a bottom of five reps or fewer) gets its full rest.
 const HEAVY_REP_LOW = 5;
@@ -316,10 +319,10 @@ function pairingNote(self: any, partner: any, date: string): string | null {
 // to make room — the hint is what yields. Null when it does not fit.
 function withPairingNote(existing: unknown, text: string): string | null {
   const current = String(existing ?? "").trim();
-  if (!current) return text.length > NOTE_BUDGET ? null : text;
+  if (!current) return text.length > CARD_NOTE_BUDGET ? null : text;
   if (current.toLowerCase().includes(text.toLowerCase())) return current;
   const joined = `${/[.!?]$/.test(current) ? current : `${current}.`} ${text}`;
-  return joined.length > NOTE_BUDGET ? null : joined;
+  return joined.length > CARD_NOTE_BUDGET ? null : joined;
 }
 
 // One hint per pair: on the first item, naming the second; when the first item's note

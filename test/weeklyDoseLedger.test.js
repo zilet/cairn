@@ -11,6 +11,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { applyWeeklyDose, DOSE_FILL_NOTES, doseFillNote } from "../dist/repo/composition-dose.js";
+import { CARD_NOTE_BUDGET } from "../dist/repo/composition-pairing.js";
 import { deterministicComposedSession, normalizeComposedSession } from "../dist/repo/daily-composition.js";
 import { buildDailySessionDecision, gatherDailyDecisionSnapshot } from "../dist/repo/daily-decision.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
@@ -566,4 +567,33 @@ test("composition never breaks the day's clock or the per-item cap", () => {
   assert.equal(applyWeeklyDose(items, ctx({ minutesCap: 20 })).changed, false);
   assert.equal(applyWeeklyDose(items, ctx({ remainingSets: 0 })).changed, false);
   assert.equal(applyWeeklyDose(items, ctx({ minutesCap: null })).items[0].sets, 3, "no clock, no clock limit");
+});
+
+test("a fill whose line would push the card's note past what Today shows keeps the set and drops the line", () => {
+  const envelope = {
+    date: WED,
+    dose: { gaps: [{ group: "quads", short: 2 }], fills: [{ exercise: "Leg Extension", group: "quads", add_sets: 1, sets: 2 }] },
+  };
+  // The athlete's own cue: short enough to print on the card on its own.
+  const cue =
+    "Pause for a full second at the top of every rep and keep the pad just above the ankle, never on the shin; slow the lowering to three seconds and stop if the knee pinches at all.";
+  assert.ok(cue.length <= CARD_NOTE_BUDGET && cue.length > CARD_NOTE_BUDGET - 60, String(cue.length));
+  const items = [{ exercise: "Leg Extension", sets: 2, rep_low: 10, rep_high: 12, target_weight: 135, mode: "reps", note: cue }];
+  const ctx = {
+    envelope,
+    date: WED,
+    budget: { remainingSets: 10, itemSetCap: 6, cap: 12, minutesCap: 60, estMinutes: 20 },
+    reducedExercises: new Set(),
+    saturatedGroups: new Set(),
+    excludedGroups: new Set(),
+    candidates: new Map(),
+  };
+  const out = applyWeeklyDose(items, ctx);
+  assert.equal(out.items[0].sets, 3, "the set still lands");
+  assert.equal(out.items[0].note, cue, "the athlete's cue is untouched and still fits the card");
+  assert.ok(out.items[0].note.length <= CARD_NOTE_BUDGET);
+  // A short cue has room: the line leads it.
+  const short = applyWeeklyDose([{ ...items[0], note: "Slow lowering." }], ctx).items[0].note;
+  assert.ok(short.startsWith(doseFillNote("quads", WED, "Leg Extension").replace(/[.]+$/, "")), short);
+  assert.ok(short.endsWith("Slow lowering."), short);
 });

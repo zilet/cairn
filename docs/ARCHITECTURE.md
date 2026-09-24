@@ -985,7 +985,9 @@ per-item/day set caps and `caps.duration_min` (each added set costs `WEEKLY_DOSE
 2.5 minutes, added to `est_minutes` before the existing duration clamp). A fill is idempotent by
 construction: it lands only on an item still carrying exactly the plan's own `sets` count, so a card
 normalized twice, or an agent that already wrote more sets, never doubles it. The note rotates through
-`pickDayVariant(DOSE_FILL_NOTES, …)` and never carries a number.
+`pickDayVariant(DOSE_FILL_NOTES, …)` and never carries a number; it leads the card's existing note only
+while the two fit `CARD_NOTE_BUDGET` (shared with the pairing hint) — otherwise the set lands and the
+line is dropped, never the athlete's cue.
 
 ### Pairing and movement regions (`src/repo/movement-region.ts`, `src/repo/composition-pairing.ts`, 2026-09-24)
 
@@ -1018,7 +1020,7 @@ day's first primary when it is heavy. A group the week is behind on (`envelope.d
 0`) is seated first within its tier and leads its pair, unless the pair holds the day's anchor, which
 keeps its seat. Each new pair gets one `pickDayVariant` hint in `note` (`PAIRING_NOTES`, appended after
 whatever the card already says — the existing note is never truncated to make room, budget
-`NOTE_BUDGET` = 220 chars) and the lowest `superset_group` id not already on the card.
+`CARD_NOTE_BUDGET` = 220 chars, the length past which the Today card stops printing a note at all) and the lowest `superset_group` id not already on the card.
 `dropOrphanSupersets` runs on EVERY card, `planSnapshot` included: a plan-saved pairing left with one
 member after today's clamps (an exclusion, a region collapse) is cleared in place rather than saying it
 is paired with nothing. A pairing never sets `changed`/`capped` — the caller re-numbers positions and
