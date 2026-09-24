@@ -67,6 +67,7 @@ import {
   type StressBudgetSnapshot,
   stressBudgetDecision,
   stressBudgetSnapshot,
+  stressBudgetSuspendsWeeklyLower,
 } from "./stress-budget.js";
 import type { Prescription } from "./progression.js";
 
@@ -2183,7 +2184,14 @@ export function buildDailySessionDecision(
     snapshot.day_read.recovery_week ||
     snapshot.program.mesocycle_phase === "deload" ||
     snapshot.program.mesocycle_phase === "recovery";
-  const lowerWeekHolds = snapshot.weekly_lower != null && kind === "train" && heavyLowerOnPlan && !lowerSafetyFloor;
+  // Taper and race week stand the guarantee down: the race build's own law for those
+  // weeks is light legs, then legs off (stress-budget.ts).
+  const lowerWeekHolds =
+    snapshot.weekly_lower != null &&
+    kind === "train" &&
+    heavyLowerOnPlan &&
+    !lowerSafetyFloor &&
+    !stressBudgetSuspendsWeeklyLower(snapshot.stress_budget);
   const loadedTodayGroup = (group: string) =>
     snapshot.muscle_load.some((m) => m.group === group && m.saturated && m.days_ago === 0);
   // The groups held rather than reduced on the last chance: the day's lower groups,
