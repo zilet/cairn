@@ -1083,6 +1083,13 @@ export function normalizeComposedSession(
     )
   );
   const loadHeldExercises = new Set<string>();
+  // …except the day's anchor lift the eve names (`hold_exercise`): the trim is
+  // item-scoped, so while its group is reduced only by the eve, the anchor keeps its
+  // sets, its load and its reach eligibility, whatever the other items in its group take.
+  const stressHoldExercise =
+    envelope.stress?.load_held === true && typeof envelope.stress.hold_exercise === "string"
+      ? envelope.stress.hold_exercise.trim().toLowerCase()
+      : null;
   const saturatedGroups = new Set(
     (Array.isArray(envelope.muscles.saturated) ? envelope.muscles.saturated : []).map(
       (g) => canonicalGroup(g) ?? String(g).toLowerCase()
@@ -1174,8 +1181,15 @@ export function normalizeComposedSession(
       rejected.push({ exercise, reason: "excluded_group" });
       continue;
     }
-    if (group && reducedGroups.has(canonicalGroup(group) ?? group)) reducedExercises.add(exercise.toLowerCase());
-    if (group && loadHeldGroups.has(canonicalGroup(group) ?? group)) loadHeldExercises.add(exercise.toLowerCase());
+    const stressHeldAnchor =
+      stressHoldExercise != null &&
+      exercise.trim().toLowerCase() === stressHoldExercise &&
+      !!group &&
+      loadHeldGroups.has(canonicalGroup(group) ?? group);
+    if (group && !stressHeldAnchor && reducedGroups.has(canonicalGroup(group) ?? group))
+      reducedExercises.add(exercise.toLowerCase());
+    if (group && !stressHeldAnchor && loadHeldGroups.has(canonicalGroup(group) ?? group))
+      loadHeldExercises.add(exercise.toLowerCase());
     const novel = !isCardio && !stored;
     if (novel) {
       // A novel movement is not in the canon, so it carries no muscle_group and the

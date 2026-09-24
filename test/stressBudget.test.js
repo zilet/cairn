@@ -3,7 +3,8 @@
 // speaking through the envelope's muscle lists:
 //   1. taper week  -> the day's leg groups REDUCED (composition's 2-set cap, 0.9 load)
 //   2. race week   -> quads/hamstrings/glutes EXCLUDED, calves/core reduced
-//   3. key-run eve -> the day's lower ACCESSORY groups reduced; never the anchor's group,
+//   3. key-run eve -> every lower item EXCEPT the day's anchor lift trimmed in sets (load
+//      held); the anchor stays as written even beside an accessory in its own group;
 //      never while the weekly lower guarantee holds, never under a lower safety floor
 // Upper-body work holds throughout. Synthetic fixtures only; deterministic and offline.
 import assert from "node:assert/strict";
@@ -443,6 +444,89 @@ test("Friday before Sunday's long run, the week's legs already landed: accessori
   assert.equal(byName(items, "Pallof Press").sets, 3);
 });
 
+test("Lower A the day before Thursday's quality run: the squat as written; RDL, leg extension, leg curl and calf trimmed at their loads", () => {
+  seedExercises();
+  for (const date of ["2026-09-08", "2026-09-15"]) repo.logSetByName({ date, exercise: "Leg Curl", weight: 120, reps: 11 });
+  const env = buildDailySessionDecision(
+    snapshot({
+      date: "2026-09-30",
+      planItems: LOWER_A_ITEMS,
+      stress: {
+        race_week_kind: "build",
+        race_phase: "sharpen",
+        days_to_race: 32,
+        key_run: { kind: "quality", in_days: 1 },
+      },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.stress.code, "key_run_eve");
+  assert.equal(env.stress.load_held, true);
+  assert.equal(env.stress.hold_exercise, "Back Squat", "the anchor is named, not its group");
+  assert.deepEqual([...env.stress.sole_reduced].sort(), ["calves", "hamstrings", "quads"]);
+  assert.ok(!env.muscles.reduced.includes("chest"), "upper work is untouched");
+  assert.notEqual(env.candidates.find((c) => c.exercise === "Back Squat").action, "hold");
+  for (const name of ["Romanian Deadlift", "Leg Extension", "Leg Curl", "Standing Calf Raise"]) {
+    assert.equal(env.candidates.find((c) => c.exercise === name).reason_code, "key_run_eve", name);
+  }
+
+  const raw = {
+    ...LOWER_A_RAW,
+    items: [
+      it("Back Squat", 3, 185, 5, 7),
+      it("Romanian Deadlift", 3, 205),
+      it("Leg Extension", 3, 135, 10, 12),
+      it("Leg Curl", 3, 120, 10, 12),
+      it("Standing Calf Raise", 3, 90, 10, 12),
+      it("Barbell Bench Press", 3, 135, 5, 7),
+    ],
+  };
+  const items = normalizeComposedSession(raw, env).session.items;
+  const squat = byName(items.filter((i) => !i.top_set_of), "Back Squat");
+  assert.equal(squat.sets, 3, "the anchor keeps every set");
+  assert.equal(squat.target_weight, 185, "and its load");
+  for (const [name, weight] of [
+    ["Romanian Deadlift", 205],
+    ["Leg Extension", 135],
+    ["Leg Curl", 120],
+    ["Standing Calf Raise", 90],
+  ]) {
+    const item = byName(items, name);
+    assert.equal(item.sets, 2, `${name}: two sets`);
+    assert.equal(item.target_weight, weight, `${name}: the load holds`);
+  }
+  assert.equal(byName(items, "Barbell Bench Press").sets, 3);
+});
+
+test("a key-run eve anchor whose group another rule reduces takes that rule's clamp", () => {
+  seedExercises();
+  const env = buildDailySessionDecision(
+    snapshot({
+      date: "2026-09-30",
+      planItems: LOWER_A_ITEMS,
+      program: {
+        mesocycle_phase: "accumulation",
+        adaptations_due: [],
+        volume_low_groups: [],
+        volume_high_groups: ["quads"],
+      },
+      stress: {
+        race_week_kind: "build",
+        race_phase: "sharpen",
+        days_to_race: 32,
+        key_run: { kind: "quality", in_days: 1 },
+      },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.stress.code, "key_run_eve");
+  assert.equal(env.stress.hold_exercise, undefined, "quads are not the eve's alone");
+  const items = normalizeComposedSession(LOWER_A_RAW, env).session.items;
+  const squat = byName(items, "Back Squat");
+  assert.equal(squat.sets, 2, "the volume read clamps the squat as it always has");
+  assert.equal(squat.target_weight, 166.5);
+});
+
 test("an eve-only group is trimmed in place, never swapped, on a morning a run also loaded another group", () => {
   seedExercises();
   repo.replacePlan(PLAN);
@@ -564,6 +648,7 @@ test("the eve never reduces a group the weekly guarantee holds, and the decision
   const sb = { race_week_kind: "build", race_phase: "build", days_to_race: 30, key_run: { kind: "long", in_days: 1 } };
   const out = stressBudgetDecision(sb, ctx);
   assert.deepEqual(out.reduced, ["calves"]);
+  assert.equal(out.hold_exercise, undefined, "the deadlift's group has no other item to trim");
   assert.deepEqual(stressBudgetDecision(sb, ctx), out, "same inputs, same answer");
   assert.equal(stressBudgetDecision(sb, { ...ctx, lowerWeekHolds: true }).code, null);
   assert.equal(stressBudgetDecision(sb, { ...ctx, kind: "rest" }).code, null);
@@ -639,8 +724,12 @@ test("gather end to end: Wednesday owes the week's legs, so Thursday's quality r
   const { weekly_lower: _owed, ...landed } = open;
   const trimmed = buildDailySessionDecision(landed, { now: NOW });
   assert.equal(trimmed.stress?.code, "key_run_eve");
-  assert.ok(!trimmed.muscles.reduced.includes("quads"), "the squat's group");
+  // Item-scoped: the leg extension shares the squat's group and is trimmed; the squat
+  // itself is the anchor the trim passes over.
+  assert.ok(trimmed.muscles.reduced.includes("quads"), "the leg extension's group");
   assert.ok(trimmed.muscles.reduced.includes("hamstrings"));
+  assert.equal(trimmed.stress.hold_exercise, "Back Squat");
+  assert.notEqual(trimmed.candidates.find((c) => c.exercise === "Back Squat").reason_code, "key_run_eve");
 });
 
 test("gather end to end: Friday after a full Wednesday leg session trims the accessories before Sunday's long run", () => {

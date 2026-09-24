@@ -1051,8 +1051,14 @@ that speaks:
    body untouched.
 3. **The eve of a placed key run** (`key_run_eve`): today is the last lift day before a placed quality
    or long run landing at most two days out with no lift day between (`strengthPlanDayOn` on
-   tomorrow); only the day's lower ACCESSORY groups reduce (every lower group except the day's anchor's
-   own), and only in SETS — the load HOLDS (`load_held: true`, `sole_reduced` on the envelope's `stress`
+   tomorrow). The trim is ITEM-scoped: every lower item on the card except the day's anchor lift itself
+   (its first primary) takes it — Lower A keeps the squat as written while the RDL, leg extension, leg
+   curl and calf raise trim, the leg extension included although it shares the squat's group; Lower B
+   keeps the deadlift while the split squat and seated calf trim. The groups those items train join
+   `reduced`, and the envelope's `stress.hold_exercise` names the anchor so the reduced-area clamp
+   (composition's `reducedExercises`/`loadHeldExercises`) and the candidate's reduced-group hold pass
+   over it — only while its group is in `sole_reduced`; a group another rule also reduced clamps the
+   anchor too. Only in SETS — the load HOLDS (`load_held: true`, `sole_reduced` on the envelope's `stress`
    field). It never fires when the weekly lower guarantee holds today (`lowerWeekHolds`), never touches
    a group that guarantee holds (`weekHeldGroups`), stands down when `lowerSafetyFloor` already governs
    the legs, and stands down when the endurance-led key-run protect already lightens every lower group

@@ -1536,16 +1536,22 @@ const EMPTY_STRESS_DECISION: StressBudgetDecision = {
 const EMPTY_DOSE_DECISION: WeeklyDoseDecision = { dose: null, soft: null, rationale: null };
 
 // The groups the stress budget reduced and no other rule did (stress-budget.ts
-// `sole_reduced`), and whether its rule holds their load.
+// `sole_reduced`), whether its rule holds their load, and — under a held load — the
+// anchor lift the trim passes over, while its group is one only this rule reduced.
 function stressSoleReduced(
   reduced: readonly string[],
   stressReduced: readonly string[],
   baseReduced: readonly string[],
-  loadHeld: boolean
-): { sole_reduced?: string[]; load_held?: true } {
+  loadHeld: boolean,
+  hold: { exercise: string; group: string | null } | null
+): { sole_reduced?: string[]; load_held?: true; hold_exercise?: string } {
   const sole = stressReduced.filter((g) => reduced.includes(g) && !baseReduced.includes(g));
   if (!sole.length) return {};
-  return { sole_reduced: sole, ...(loadHeld ? { load_held: true as const } : {}) };
+  return {
+    sole_reduced: sole,
+    ...(loadHeld ? { load_held: true as const } : {}),
+    ...(loadHeld && hold && hold.group && sole.includes(hold.group) ? { hold_exercise: hold.exercise } : {}),
+  };
 }
 
 function safe<T>(fn: () => T, fallback: T): T {
@@ -2293,6 +2299,15 @@ export function buildDailySessionDecision(
       }),
     EMPTY_STRESS_DECISION
   );
+  // The anchor lift a key-run eve's trim passes over (stress-budget.ts `hold_exercise`):
+  // it keeps its own progression, while its group reads reduced only for the others.
+  const stressHold =
+    stress.code && stress.hold_exercise && stressAnchorItem
+      ? {
+          exercise: stress.hold_exercise,
+          group: stressAnchorItem.muscle_group ? String(stressAnchorItem.muscle_group).toLowerCase() : null,
+        }
+      : null;
   const stressReduced = dedupe(stress.code ? stress.reduced.map((g) => String(g).toLowerCase()) : []);
   const stressExcluded = dedupe(stress.code ? stress.excluded.map((g) => String(g).toLowerCase()) : []);
   if (stress.code && (stressReduced.length || stressExcluded.length)) {
@@ -2752,9 +2767,17 @@ export function buildDailySessionDecision(
       const weekHeldDeep = !!group && weekHeldGroups.has(group) && deepGroups.has(group);
       const earned = loadedToday || weekHeldDeep ? undefined : prog?.earned;
       const shallowHold = !!group && saturated.includes(group) && !reduced.includes(group) && !earned;
+      // The key-run eve's anchor stays as written: its group reads reduced for the other
+      // items in it, never for the anchor itself, unless another rule reduced it too.
+      const stressHeldAnchor =
+        stressHold != null &&
+        !!group &&
+        it.exercise.toLowerCase() === stressHold.exercise.toLowerCase() &&
+        stressReduced.includes(group) &&
+        !baseReduced.includes(group);
       if (
         group &&
-        (reduced.includes(group) || shallowHold) &&
+        ((reduced.includes(group) && !stressHeldAnchor) || shallowHold) &&
         (action === "overload" || action === "carry")
       ) {
         action = "hold";
@@ -2896,7 +2919,7 @@ export function buildDailySessionDecision(
       ? {
           code: stress.code,
           groups: dedupe([...stressReduced, ...stressExcluded]),
-          ...stressSoleReduced(reduced, stressReduced, baseReduced, stress.load_held === true),
+          ...stressSoleReduced(reduced, stressReduced, baseReduced, stress.load_held === true, stressHold),
         }
       : null;
 

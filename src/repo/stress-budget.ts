@@ -35,10 +35,14 @@ import type { EnduranceRole } from "./training-intent.js";
 //      no lifting. "Placed" is the run engine's week (weeklyRunPlan read through
 //      week-layout's `runPlacement`), never the raw stated schedule, which may name two
 //      long-run days. It applies only while the race build is active (a build, reset or
-//      peak week outside the base phase). Only the day's lower ACCESSORY groups are
-//      reduced — every lower group on the card except the anchor compound's own — and
-//      only in SETS: the load holds (`load_held`, unless another rule also reduced the
-//      group, which then takes the full clamp). It
+//      peak week outside the base phase). Every lower item on the card EXCEPT the
+//      day's anchor lift itself is trimmed — item-scoped, not group-scoped: on Lower A
+//      the squat stays as written while the RDL, leg extension, leg curl and calf raise
+//      take the trim, the leg extension included although it shares the squat's group.
+//      The groups those items train are reduced, and the anchor is named on the
+//      envelope (`hold_exercise`) so the reduced-area clamp and the progression hold
+//      pass over it. Only in SETS: the load holds (`load_held`, unless another rule also
+//      reduced the group, which then takes the full clamp — anchor included). It
 //      never fires on a day the weekly lower guarantee holds (`lowerWeekHolds`, owner
 //      ruling 2026-09-23: the week's one full leg session keeps its sets and load), never
 //      touches a group that guarantee holds, stands down when `lowerSafetyFloor` already
@@ -62,9 +66,8 @@ import type { EnduranceRole } from "./training-intent.js";
 // (`stressBudgetSuspendsWeeklyLower`): "heavy lower once a week" is the build's law, and
 // the race build's own law for those two weeks is light legs, then legs off.
 //
-// Must never: touch the anchor compound's group on a key-run eve, change a load or a set
-// count directly (that is composition's, via the muscle lists), or touch upper-body
-// groups.
+// Must never: touch the anchor lift itself on a key-run eve, change a load or a set count
+// directly (that is composition's, via the muscle lists), or touch upper-body groups.
 
 export type StressBudgetReason = Extract<DailyDecisionReason, "key_run_eve" | "race_taper_legs" | "race_week_legs">;
 
@@ -179,6 +182,11 @@ export interface DailyDecisionStress {
   // group another rule also reduced is not in `sole_reduced` and takes the full clamp.
   // Omit-when-idle.
   load_held?: true;
+  // The day's anchor lift on a key-run eve, when its group is one the eve reduced for
+  // the OTHER items in it (a squat beside a leg extension): it stays exactly as written
+  // — no set trim, no progression hold. Only while its group is in `sole_reduced`; a
+  // group another rule reduced clamps the anchor too. Omit-when-idle.
+  hold_exercise?: string;
 }
 
 export interface StressBudgetDecisionContext {
@@ -221,6 +229,9 @@ export interface StressBudgetDecision {
   // week before the long run must still be trained at its prescribed weight, or it
   // never gets tested. Taper and race week leave this off and ease the load too.
   load_held?: true;
+  // The anchor lift the trim passes over (the key-run eve), present only when one of
+  // the reduced groups is the anchor's own. See DailyDecisionStress.hold_exercise.
+  hold_exercise?: string;
 }
 
 // ---- athlete-facing lines (every one through pickDayVariant; grammar-clean) ----
@@ -330,14 +341,32 @@ export function stressBudgetDecision(
   ) {
     return EMPTY;
   }
+  // Item-scoped: the groups of every lower item on the card except the anchor itself.
+  const anchorName = ctx.anchor?.exercise ? String(ctx.anchor.exercise).trim().toLowerCase() : null;
   const anchorGroup = ctx.anchor?.muscle_group ? String(ctx.anchor.muscle_group).toLowerCase() : null;
-  const accessory = lowerOnDay.filter((g) => g !== anchorGroup && !ctx.weekHeldGroups.has(g));
+  const accessory = [
+    ...new Set(
+      (ctx.planItems ?? [])
+        .filter(
+          (it) =>
+            String(it.kind ?? "").toLowerCase() !== "cardio" &&
+            !!it.muscle_group &&
+            String(it.exercise ?? "")
+              .trim()
+              .toLowerCase() !== anchorName
+        )
+        .map((it) => String(it.muscle_group).toLowerCase())
+    ),
+  ].filter((g) => lowerOnDay.includes(g) && !ctx.weekHeldGroups.has(g));
   if (!accessory.length) return EMPTY;
+  const holdExercise =
+    ctx.anchor?.exercise && anchorGroup && accessory.includes(anchorGroup) ? String(ctx.anchor.exercise) : null;
   const run = keyRun.kind === "long" ? "long run" : "quality run";
   const when = keyRun.in_days === 1 ? "tomorrow" : "in two days";
   return {
     code: "key_run_eve",
     load_held: true,
+    ...(holdExercise ? { hold_exercise: holdExercise } : {}),
     reduced: accessory,
     excluded: [],
     rationale: pickDayVariant(KEY_RUN_EVE_RATIONALE, ctx.date, "stress_budget:key_run_eve")(run, when),
