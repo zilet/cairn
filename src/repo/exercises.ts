@@ -1140,6 +1140,44 @@ export function achievableWorkingWeight(name: string, repLow: number, date: stri
   return load > 0 ? load : null;
 }
 
+// Reps in reserve a logged rating may add to a set's Epley read. A rating is the
+// athlete's own estimate, so a large one ("RIR 6") is trusted only this far.
+const RESERVE_REPS_CAP = 3;
+
+// What a reach needs to know about a lift before it asks for a heavier look: when it
+// was last done at all (any set, loaded or not), and the best reserve-aware Epley
+// estimate inside `windowDays` ending on `date`. Lineage-aware like
+// recentWorkingWeight. null when the lift has no logged set on or before `date`.
+export function recentLiftEvidence(
+  name: string,
+  date: string,
+  windowDays: number
+): { last_date: string; best_e1rm: number | null } | null {
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return null;
+  const inIds = ids.map(() => "?").join(",");
+  const day = String(date).slice(0, 10);
+  const last = db
+    .prepare(
+      `SELECT MAX(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.exercise_id IN (${inIds}) AND s.date <= ?`
+    )
+    .get(...ids, day) as { d: string | null } | undefined;
+  if (!last?.d) return null;
+  const since = addDaysISO(day, -windowDays);
+  const best = since
+    ? (db
+        .prepare(
+          `SELECT MAX(ls.weight * (1 + (ls.reps + MIN(COALESCE(ls.rir, 0), ?)) / 30.0)) AS e1rm
+             FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+            WHERE ls.exercise_id IN (${inIds}) AND s.date >= ? AND s.date <= ? AND ls.weight > 0 AND ls.reps > 0`
+        )
+        .get(RESERVE_REPS_CAP, ...ids, since, day) as { e1rm: number | null } | undefined)
+    : undefined;
+  const e1rm = Number(best?.e1rm);
+  return { last_date: String(last.d), best_e1rm: e1rm > 0 ? e1rm : null };
+}
+
 // True when the last few sessions of this lift were assisted or bodyweight
 // (negative / 0 / null working weights) — the history recentWorkingWeight
 // ignores because it only reads non-zero loaded sets. Empty history is false:

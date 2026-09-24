@@ -583,3 +583,69 @@ test("rx.top_set prefills the first unlogged row when the card has not split", (
     duration_sec: null,
   });
 });
+
+test("a server top set folds into its own block as ONE card: top set first, block after", () => {
+  const context = loadPreparation();
+  const model = context.CairnTodayPlanSessionModel;
+  const note = "You've earned a heavier look at this one today — one set, leave a rep in the tank";
+  const items = model.planItems({
+    items: [
+      { exercise: "Dumbbell Bench Press", sets: 1, rep_low: 5, rep_high: 5, target_weight: 60, note, reach: { weight: 60, reps: 5, note } },
+      { exercise: "Dumbbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 55, note: "Chest volume." },
+      { exercise: "Chest-Supported Row", sets: 3, rep_low: 10, rep_high: 12, target_weight: 40 },
+    ],
+  });
+  assert.equal(items.length, 2, "one bench card, not two");
+  const bench = plain(items[0]);
+  assert.equal(bench.sets, 4, "the top set is the card's first set, so progress counts it");
+  assert.equal(bench.top_sets, 1);
+  assert.equal(bench.target_weight, 55, "the card's own dose is the block");
+  assert.equal(bench.note, "Chest volume.");
+  assert.deepEqual(bench.reach, { weight: 60, reps: 5, note });
+
+  // One card claims every bench set; the first row opens at the top set, the rest at the block.
+  const loggedByEx = { "Dumbbell Bench Press": [{ exercise: "Dumbbell Bench Press", set_number: 1, weight: 60, reps: 5 }] };
+  const attribution = model.cardAttribution({ items, loggedByEx });
+  assert.equal(attribution.get(items[0]).sets.length, 1);
+  assert.deepEqual(plain(model.prefillFor(items[0], {}, {})), { weight: 60, reps: 5, rir: null, duration_sec: null });
+  assert.deepEqual(plain(model.prefillFor(items[0], loggedByEx, {}, null, attribution.get(items[0]))), {
+    weight: 55,
+    reps: 8,
+    rir: null,
+    duration_sec: null,
+  });
+
+  // An AMRAP reach (no load) or a lone one-set item with no block behind it stays as it is.
+  const untouched = model.planItems({
+    items: [
+      { exercise: "Pull-up", sets: 3, rep_low: 6, rep_high: 8, target_weight: null, reach: { amrap: true, note: "x" } },
+      { exercise: "Back Squat", sets: 1, rep_low: 3, rep_high: 3, target_weight: 230, reach: { weight: 230, reps: 3 } },
+    ],
+  });
+  assert.equal(untouched.length, 2);
+  assert.equal(untouched[1].top_sets, undefined);
+});
+
+test("an agent single that names its block folds the same way — heavier, one set, directly ahead", () => {
+  const context = loadPreparation();
+  const model = context.CairnTodayPlanSessionModel;
+  const folded = model.planItems({
+    items: [
+      { exercise: "Back Squat", sets: 1, rep_low: 2, rep_high: 2, target_weight: 235, top_set_of: "Back Squat", note: "Work up to it." },
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 },
+    ],
+  });
+  assert.equal(folded.length, 1);
+  assert.equal(folded[0].sets, 4);
+  assert.equal(folded[0].top_sets, 1);
+  assert.deepEqual(plain(folded[0].reach), { weight: 235, reps: 2, note: "Work up to it." });
+
+  // Not heavier than its block: left as two cards.
+  const lighter = model.planItems({
+    items: [
+      { exercise: "Back Squat", sets: 1, rep_low: 2, rep_high: 2, target_weight: 215, top_set_of: "Back Squat" },
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 },
+    ],
+  });
+  assert.equal(lighter.length, 2);
+});

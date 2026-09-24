@@ -23,8 +23,13 @@ function makeExercise(name, { muscle_group = null, mode = "reps" } = {}) {
   repo.upsertExercise({ name, muscle_group, mode });
   return repo.findExercise(name);
 }
+// The logs span weeks, so the prescription they are read against is an ESTABLISHED
+// one: backdate the slot's authored stamp past the settle window (a slot written
+// today never rotates — see progression.test.js).
 function planWith(dayNumber, item) {
-  return repo.savePlanDay(dayNumber, item.focus || `Day ${dayNumber}`, item.focus || null, [item]);
+  const day = repo.savePlanDay(dayNumber, item.focus || `Day ${dayNumber}`, item.focus || null, [item]);
+  db.prepare(`UPDATE plan_items SET prescribed_at = ? WHERE plan_day_id = ?`).run(isoDaysAgo(120), day.id);
+  return day;
 }
 function logSet(name, date, { weight = null, reps = null, rir = null, setNum = 1 } = {}) {
   const ex = repo.findExercise(name);

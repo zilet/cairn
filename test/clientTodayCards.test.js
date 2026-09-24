@@ -610,3 +610,35 @@ test("Reach line escapes athlete-authored note text", () => {
   assert.match(html, /go &lt;after&gt; it/);
   assert.doesNotMatch(html, /go <after> it/);
 });
+
+test("a folded top set reads as the lift's top set inside ONE card, and a standing hold verdict steps aside", () => {
+  const cards = loadTodayCards();
+  const note = "You've earned a heavier look at this one today — one set, leave a rep in the tank";
+  const item = {
+    fromSession: true,
+    fromPlan: true,
+    exercise: "Dumbbell Bench Press",
+    sets: 4,
+    top_sets: 1,
+    rep_low: 8,
+    rep_high: 10,
+    target_weight: 55,
+    note: "Chest volume.",
+    reach: { weight: 60, reps: 5, note },
+  };
+  const hold = { action: "hold", suggested: { sets: 3, rep_low: 8, rep_high: 10, weight: 55 }, why: "Holding this weight counts as progress." };
+  const html = cards.exerciseCardHtml(item, [], { weight: 60, reps: 5, rir: null }, 0, hold);
+  assert.match(html, /3 × 8–10 @ <span class="ex-target numeral">55 lb<\/span>/, "the header is the block's own dose");
+  assert.match(html, />Top set · 60 lb × 5 — You've earned a heavier look/);
+  assert.doesNotMatch(html, /Reach ·/);
+  assert.doesNotMatch(html, /ex-rx/, "no HOLD verdict beside the heavier look");
+  assert.doesNotMatch(html, /counts as progress/);
+  assert.match(html, /data-rx="off"/, "the live progression refresh leaves it off too");
+  assert.match(html, /0 \/ 4 <span>sets<\/span>/, "progress counts the top set");
+
+  // An overload verdict agrees with the reach and stays.
+  const overload = { action: "overload", suggested: { sets: 3, rep_low: 8, rep_high: 10, weight: 55 }, why: "Earn the rep." };
+  const agreeing = cards.exerciseCardHtml(item, [], {}, 0, overload);
+  assert.match(agreeing, /ex-rx/);
+  assert.doesNotMatch(agreeing, /data-rx="off"/);
+});

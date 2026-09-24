@@ -350,8 +350,11 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **The daily envelope's up direction is `reach`, a separate field — never a sixth posture.**
   `SignalPosture` is a five-value safety ladder. `reach.level='push'` licenses ONE challenge top set
   on the first eligible compound (`src/repo/daily-composition.ts`), computed from the LOGGED working
-  weight, never a plan target; composition reports back so the persisted envelope never promises a
-  reach that is not on a card. `item.reach` persists only for server-derived items.
+  weight, never a plan target, and only on a lift the progression engine is moving and did recently;
+  composition reports back so the persisted envelope never promises a reach that is not on a card.
+  `item.reach` persists only for server-derived items. A hold keeps the progression's own target,
+  never an older log, and `earned_floor` is the only composition raise — see `docs/ARCHITECTURE.md`
+  "Composition never moves the prescription".
 - **Consecutive loading days are a caveat, never a brake of their own** — `daily_decision_v7`,
   `src/repo/day-read.ts`/`daily-decision.ts`. Details in `docs/ARCHITECTURE.md`.
 - **The rest trade is carried by the CALENDAR; the ring is never touched** — `tradeRestDay`,

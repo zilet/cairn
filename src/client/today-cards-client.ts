@@ -91,6 +91,9 @@ function todayCardsReach(item: TodayExerciseItem, rx: TodayPrescription): Record
 function todayCardsReachLine(item: TodayExerciseItem, rx: TodayPrescription): string {
   const reach = todayCardsReach(item, rx);
   if (!reach) return "";
+  // A top set folded into its own block's card is that lift's first set, not a
+  // separate exercise — it reads as the card's top set.
+  const label = (todayFinite(item.top_sets) ?? 0) > 0 ? "Top set" : "Reach";
   const note = todayString(reach.note).trim();
   const weight = todayFinite(reach.weight);
   const reps = todayFinite(reach.reps);
@@ -106,7 +109,7 @@ function todayCardsReachLine(item: TodayExerciseItem, rx: TodayPrescription): st
   } else if (reps != null) {
     dose = `× ${reps}`;
   }
-  return `<div class="ex-note">${escHtml("Reach")}${dose ? ` · ${escHtml(dose)}` : ""}${note ? ` — ${escHtml(note)}` : ""}</div>`;
+  return `<div class="ex-note">${escHtml(label)}${dose ? ` · ${escHtml(dose)}` : ""}${note ? ` — ${escHtml(note)}` : ""}</div>`;
 }
 
 function todayCardsCleanNote(note: unknown, hasDose: boolean): string {
@@ -148,9 +151,12 @@ function exerciseCardHtml(
   const offPlan = !item.fromPlan && !item.fromSession;
   const timed = todayCardsExTimed(item, loggedSets, options.exModes);
   const range = offPlan ? "" : item.rep_low === item.rep_high ? `${item.rep_low}` : `${item.rep_low}–${item.rep_high}`;
+  // A folded top set is on its own line; the header is the block's dose.
+  const topSets = Math.max(0, todayFinite(item.top_sets) ?? 0);
+  const blockSets = topSets && Number(item.sets) > topSets ? Number(item.sets) - topSets : item.sets;
   const targetText = timed
     ? `${item.sets ?? "?"} × ${item.target_seconds != null ? fmtDur(item.target_seconds) : "time"}`
-    : `${item.sets} × ${range}`;
+    : `${blockSets} × ${range}`;
   // `reground` says the STORED target sits behind what the athlete is already
   // lifting (server: progression.ts `planBehind`), so that number is stale rather
   // than authoritative — printing it would lead the card with the one load nobody
@@ -236,9 +242,14 @@ function exerciseCardHtml(
   const splitReachCard = item.fromSession === true && Number(item.sets) === 1 && keyed;
   const noteIsReach = !!(reachLine && note && ((reachNote && note === reachNote) || splitReachCard));
   const cue = todayCardsItemCue(item, note);
+  // The heavier look and a standing "hold"/"deload"/"vary" verdict cannot share a
+  // card: the athlete would be told to reach and to stay put in one breath. The top
+  // set is today's instruction, so the standing verdict steps aside on that card.
+  const rxAction = todayString(todayRecord(rx).action);
+  const rxSilenced = !!reachLine && !!rx && rxAction !== "overload";
   // Decision-level narration and Undo live once above the cards. A card keeps
   // only a cue unique to this movement (swap, straps, start light).
-  return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${headlineDose ? ` data-dose="headline"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
+  return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${headlineDose ? ` data-dose="headline"` : ""}${rxSilenced ? ` data-rx="off"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         ${tile}
         <div class="ex-top-main">
@@ -251,7 +262,7 @@ function exerciseCardHtml(
       ${!noteIsReach && cue ? `<div class="ex-note">${escHtml(cue)}</div>` : ""}
       ${item.constraint_note ? `<div class="ex-flag">${escHtml(item.constraint_note)}</div>` : ""}
       ${item.journey_line ? `<div class="ex-journey" data-journey-role="${escAttr(item.journey_role || "support")}">${escHtml(item.journey_line)}</div>` : ""}
-      ${!complete ? CairnTodayTraining.exRxLineHtml(rx, { supporting: headlineDose }) : ""}
+      ${!complete && !rxSilenced ? CairnTodayTraining.exRxLineHtml(rx, { supporting: headlineDose }) : ""}
       ${reachLine}
       <div class="logged" data-logged>${loggedSets.map(todayCardsSetChip).join("")}</div>
       ${lastSetLine}

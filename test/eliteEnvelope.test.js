@@ -181,7 +181,8 @@ test("composition seats ONE challenge set on the fresh compound and holds the sh
       muscle_load: [{ group: "quads", days_ago: 1, saturated: true, source: "endurance" }],
       progression: [
         { exercise: "Back Squat", muscle_group: null, action: "overload", why: "", current_target: target(225), suggested_target: target(235) },
-        { exercise: "Bench Press", muscle_group: null, action: "hold", why: "", current_target: target(155), suggested_target: target(155) },
+        // A rep step: the engine is moving the lift at its load, so it may host.
+        { exercise: "Bench Press", muscle_group: null, action: "overload", why: "", current_target: target(155), suggested_target: target(155) },
       ],
     }),
     { now: NOW }
@@ -301,6 +302,22 @@ test("gather: two of the last three exposures at the top of the range with reps 
   const snap = gatherDailyDecisionSnapshot(DATE);
   const deadlift = snap.progression.find((p) => p.exercise === "Barbell Deadlift");
   assert.deepEqual(deadlift?.earned, { working_weight: 195 });
+});
+
+test("gather: the earned floor is the load the range was capped at, never a lone heavier set", () => {
+  repo.upsertExercise({ name: "Barbell Curl", muscle_group: "biceps", mode: "reps" });
+  repo.savePlanDay(1, "Arms", "Arms", [{ exercise: "Barbell Curl", sets: 2, rep_low: 10, rep_high: 12, target_weight: 75 }]);
+  const log = (daysBack, sets) => {
+    const date = addDaysISO(DATE, -daysBack);
+    for (const [weight, reps, rir] of sets) repo.logSetByName({ date, exercise: "Barbell Curl", weight, reps, rir });
+  };
+  log(14, [[70, 12, null], [70, 12, null]]);
+  log(9, [[60, 12, null], [60, 12, null]]);
+  // The newest exposure: one heavier set that fell short of the 12-rep ceiling.
+  log(2, [[70, 10, 4], [80, 10, 2], [70, 10, 3]]);
+  const snap = gatherDailyDecisionSnapshot(DATE);
+  const curl = snap.progression.find((p) => p.exercise === "Barbell Curl");
+  assert.deepEqual(curl?.earned, { working_weight: 70 }, "70 capped the range; the lone 80 × 10 did not");
 });
 
 test("an earned lift keeps its step past a shallow hold and composes at or above its logged load", () => {

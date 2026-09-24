@@ -5,6 +5,10 @@
 type TodayPlanSessionModelPlanItem = import("../contracts/client.js").ClientPlanItem & {
   fromPlan?: boolean;
   reach?: { weight?: unknown; reps?: unknown; note?: unknown; amrap?: unknown } | null;
+  /** Leading top-set sets folded into this card (see foldTopSetCards); `sets` counts them. */
+  top_sets?: number;
+  /** An agent-composed one-set single: the lift whose block it leads (never a reach). */
+  top_set_of?: string | null;
 };
 type TodayPlanSessionModelPlanDay = {
   id?: number;
@@ -86,7 +90,64 @@ type TodayPlanSessionModelApi = {
   }
 
   function planItems(day: TodayPlanSessionModelPlanDay | null | undefined): TodayPlanSessionModelPlanItem[] {
-    return Array.isArray(day?.items) ? day.items.filter((item) => !isRunItem(item)) : [];
+    return Array.isArray(day?.items) ? foldTopSetCards(day.items.filter((item) => !isRunItem(item))) : [];
+  }
+
+  function sameLift(a: TodayPlanSessionModelPlanItem, b: TodayPlanSessionModelPlanItem): boolean {
+    const left = String(a.exercise || "").trim().toLowerCase();
+    return !!left && left === String(b.exercise || "").trim().toLowerCase();
+  }
+
+  // A server top set — the day's reach, or a peak single — arrives as its own one-set
+  // item directly ahead of the back-off block of the SAME lift. Two cards with one
+  // name read as a duplicate exercise, so the card list folds them: ONE card whose
+  // first set is the top set (its own "Top set" line and prefill) and whose remaining
+  // sets are the block. `sets` counts both, so progress and completion stay the
+  // server's total; `top_sets` lets the header print the block's own dose. The stored
+  // composition is untouched — this is how the card reads it.
+  function foldTopSetCards(items: TodayPlanSessionModelPlanItem[]): TodayPlanSessionModelPlanItem[] {
+    const out: TodayPlanSessionModelPlanItem[] = [];
+    for (let index = 0; index < items.length; index++) {
+      const top = items[index];
+      const block = items[index + 1];
+      const reach = top?.reach && typeof top.reach === "object" ? top.reach : null;
+      // The server's reach/peak single, or an agent's single that names its block and
+      // really is heavier than it.
+      const agentSingle =
+        !reach &&
+        !!top?.top_set_of &&
+        !!block &&
+        sameLift({ exercise: top.top_set_of } as TodayPlanSessionModelPlanItem, block) &&
+        finiteOrNull(top.target_weight) != null &&
+        finiteOrNull(block.target_weight) != null &&
+        Number(top.target_weight) > Number(block.target_weight);
+      const topWeight = reach ? finiteOrNull(reach.weight) : agentSingle ? finiteOrNull(top.target_weight) : null;
+      const foldable =
+        topWeight != null &&
+        Number(top.sets) === 1 &&
+        !!block &&
+        sameLift(top, block) &&
+        !block.reach &&
+        !(Number(block.top_sets) > 0);
+      if (!foldable || !block) {
+        out.push(top);
+        continue;
+      }
+      // `reach` here is the card's display shape for its first set (label, prefill);
+      // it is never written back.
+      out.push({
+        ...block,
+        sets: (Number(block.sets) || 0) + 1,
+        top_sets: 1,
+        reach: {
+          weight: topWeight,
+          reps: finiteOrNull(reach?.reps) ?? finiteOrNull(top.rep_low),
+          note: reach?.note ?? top.note ?? null,
+        },
+      });
+      index++;
+    }
+    return out;
   }
 
   function groupLoggedSets(session: TodayPlanSessionModelSession | null | undefined): Record<string, TodayPlanSessionModelLoggedSet[]> {

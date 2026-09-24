@@ -82,6 +82,8 @@ test("C4: a superset_group pairs two items and survives read-back", () => {
 test("C4: buildProgressionProposal turns a stalled 'vary' into a swap change, not a no-op", () => {
   repo.upsertExercise({ name: "Leg Press", muscle_group: "quads" });
   repo.savePlanDay(1, "Legs", "Legs", [{ exercise: "Leg Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 400 }]);
+  // An established prescription: a slot written today never rotates.
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(isoDaysAgo(90));
   // Flat for many weeks at RIR 2 (not grinding) → the engine reads 'vary'.
   for (const d of [35, 28, 21, 14, 7, 2]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
 

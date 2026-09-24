@@ -1263,6 +1263,11 @@ function earnedLifts(date: string, planItems: any[], progression: any[]): Map<st
     ).map((row) => String(row.d));
     if (dates.length < EARNED_MIN_QUALIFYING) continue;
     let qualifying = 0;
+    // The floor is the load the range was actually CAPPED at — the heaviest top among
+    // the qualifying exposures — never simply the heaviest recent set. A lone 80 × 10 among 70s
+    // that fell short of a 12-rep ceiling earned nothing at 80, and flooring the card
+    // there raised it above a plan the engine had just reset to 75.
+    let earnedAt: number | null = null;
     for (const day of dates) {
       const sets = db
         .prepare(
@@ -1278,12 +1283,15 @@ function earnedLifts(date: string, planItems: any[], progression: any[]): Map<st
         working.every(
           (set) => Number(set.reps) >= repHigh && (set.rir == null || Number(set.rir) >= EARNED_MIN_RIR)
         );
-      if (met) qualifying++;
+      if (met) {
+        qualifying++;
+        if (earnedAt == null || top > earnedAt) earnedAt = top;
+      }
     }
     if (qualifying < EARNED_MIN_QUALIFYING) continue;
     const workingWeight = recentWorkingWeight(name, EARNED_EXPOSURES, date);
-    if (workingWeight == null || workingWeight <= 0) continue;
-    out.set(name.toLowerCase(), { working_weight: workingWeight });
+    if (workingWeight == null || workingWeight <= 0 || earnedAt == null || earnedAt <= 0) continue;
+    out.set(name.toLowerCase(), { working_weight: Math.min(workingWeight, earnedAt) });
   }
   return out;
 }
