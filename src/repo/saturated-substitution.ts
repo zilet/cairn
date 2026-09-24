@@ -211,7 +211,11 @@ function substitutionGroups(
   };
   const groups = new Set<MuscleGroup>(groupList(envelope.muscles?.saturated).filter((g) => !holdsInPlace(g)));
   if (enduranceConflictFired(envelope)) {
+    // A group only the stress budget reduced (a taper, race week or key-run eve) is a
+    // calendar trim, not recovering tissue: it stays on the card, trimmed in place.
+    const calendarOnly = new Set<MuscleGroup>(groupList(envelope.stress?.sole_reduced));
     for (const group of groupList(envelope.muscles?.reduced)) {
+      if (calendarOnly.has(group)) continue;
       if ((RUN_PRIME_GROUPS as readonly string[]).includes(group) && !holdsInPlace(group)) groups.add(group);
     }
   }

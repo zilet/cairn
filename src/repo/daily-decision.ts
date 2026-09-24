@@ -67,6 +67,7 @@ import {
   type StressBudgetSnapshot,
   stressBudgetDecision,
   stressBudgetSnapshot,
+  stressBudgetSuspendsWeeklyLower,
 } from "./stress-budget.js";
 import type { Prescription } from "./progression.js";
 
@@ -1534,6 +1535,19 @@ const EMPTY_STRESS_DECISION: StressBudgetDecision = {
 };
 const EMPTY_DOSE_DECISION: WeeklyDoseDecision = { dose: null, soft: null, rationale: null };
 
+// The groups the stress budget reduced and no other rule did (stress-budget.ts
+// `sole_reduced`), and whether its rule holds their load.
+function stressSoleReduced(
+  reduced: readonly string[],
+  stressReduced: readonly string[],
+  baseReduced: readonly string[],
+  loadHeld: boolean
+): { sole_reduced?: string[]; load_held?: true } {
+  const sole = stressReduced.filter((g) => reduced.includes(g) && !baseReduced.includes(g));
+  if (!sole.length) return {};
+  return { sole_reduced: sole, ...(loadHeld ? { load_held: true as const } : {}) };
+}
+
 function safe<T>(fn: () => T, fallback: T): T {
   try {
     const v = fn();
@@ -2183,7 +2197,14 @@ export function buildDailySessionDecision(
     snapshot.day_read.recovery_week ||
     snapshot.program.mesocycle_phase === "deload" ||
     snapshot.program.mesocycle_phase === "recovery";
-  const lowerWeekHolds = snapshot.weekly_lower != null && kind === "train" && heavyLowerOnPlan && !lowerSafetyFloor;
+  // Taper and race week stand the guarantee down: the race build's own law for those
+  // weeks is light legs, then legs off (stress-budget.ts).
+  const lowerWeekHolds =
+    snapshot.weekly_lower != null &&
+    kind === "train" &&
+    heavyLowerOnPlan &&
+    !lowerSafetyFloor &&
+    !stressBudgetSuspendsWeeklyLower(snapshot.stress_budget);
   const loadedTodayGroup = (group: string) =>
     snapshot.muscle_load.some((m) => m.group === group && m.saturated && m.days_ago === 0);
   // The groups held rather than reduced on the last chance: the day's lower groups,
@@ -2868,7 +2889,11 @@ export function buildDailySessionDecision(
   }
   const stressEnvelope: DailyDecisionStress | null =
     stress.code && (stressReduced.length || stressExcluded.length)
-      ? { code: stress.code, groups: dedupe([...stressReduced, ...stressExcluded]) }
+      ? {
+          code: stress.code,
+          groups: dedupe([...stressReduced, ...stressExcluded]),
+          ...stressSoleReduced(reduced, stressReduced, baseReduced, stress.load_held === true),
+        }
       : null;
 
   // ---- Render-safe rationale ----
