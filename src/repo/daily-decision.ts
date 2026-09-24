@@ -23,6 +23,7 @@ import {
   planDayFocus,
   selectAdaptivePlanDay,
   selectedPlanDayForDate,
+  thisWeekPlanDayMap,
   trainAnywayPlanDay,
   weeklyLowerExposure,
 } from "./plan-selection.js";
@@ -926,6 +927,13 @@ export function gatherDailyDecisionSnapshot(
   const progression =
     selected?.day_number != null ? (safe(() => planDayProgression(selected.day_number), []) as any[]) : [];
   const earned = safe(() => earnedLifts(d, Array.isArray(planDay?.items) ? planDay.items : [], progression), new Map());
+  // This week's weekday → plan-day map, read at most once for the whole snapshot (the
+  // weekly-lower read and the weekly dose both ask it). Lazy: most mornings need neither.
+  let weekMapRead: ReturnType<typeof thisWeekPlanDayMap> | undefined;
+  const thisWeekMap = (): ReturnType<typeof thisWeekPlanDayMap> => {
+    weekMapRead ??= thisWeekPlanDayMap(d);
+    return weekMapRead;
+  };
   // The week's lower-body question, asked only on a morning whose plan day carries
   // squat/hinge work — every other morning serializes exactly as before. Strength items
   // only: a cardio row never makes a day a lower day.
@@ -939,7 +947,7 @@ export function gatherDailyDecisionSnapshot(
         return group != null && HEAVY_LOWER_GROUPS.has(group);
       });
     if (!lowerDay) return undefined;
-    const week = safe(() => weeklyLowerExposure(d), null);
+    const week = safe(() => weeklyLowerExposure(d, { week: thisWeekMap() }), null);
     if (!week || !week.lift_day || week.fulfilled_on != null) return undefined;
     return { last_chance: week.later_lower_dates.length === 0 };
   })();
@@ -1021,6 +1029,7 @@ export function gatherDailyDecisionSnapshot(
         muscleLoad,
         readKind: read?.kind ?? null,
         recoveryWeek: signals?.recovery_week != null && signals.recovery_week !== false,
+        weekMap: thisWeekMap,
       }),
     undefined
   );

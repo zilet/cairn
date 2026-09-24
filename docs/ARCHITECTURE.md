@@ -1068,6 +1068,11 @@ that speaks:
 4. No day-after-a-hard-run rule of its own — `acuteGate` (hybrid-load.ts) already answers that
    question.
 
+The gather's race read (a `weeklyRunPlan` plus `raceBuild`, and tomorrow's lifting) is memoized per
+(date, legs-or-core, real today, run-day steer, `coachContextBackstopSignature()`) in a few slots
+cleared with every training memo — the dayRead memo's key shape — so repeated gathers of one morning
+stop re-running the run engine while any stored change still reads through at once.
+
 Taper and race week also SUSPEND the weekly lower guarantee (`stressBudgetSuspendsWeeklyLower`, asked
 by `daily-decision.ts` before it resolves `lowerWeekHolds`): the race build's own law for those two
 weeks is light legs, then legs off. On a key-run eve, when the supporting runner's "the run stays

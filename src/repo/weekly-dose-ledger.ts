@@ -92,6 +92,9 @@ export interface WeeklyDoseGatherContext {
   // dayRead's kind for the date, and whether a recovery week is in force.
   readKind: string | null;
   recoveryWeek: boolean;
+  // The gather's own thisWeekPlanDayMap(date), read at most once per snapshot and shared
+  // with the weekly-lower read. Optional: the ledger reads its own without it.
+  weekMap?: () => ReturnType<typeof thisWeekPlanDayMap>;
 }
 
 // ---------- the ledger ----------
@@ -137,11 +140,16 @@ function planItemsByDayNumber(): Map<number, readonly any[]> {
  */
 export function weeklyDoseLedger(
   date: string,
-  opts: { todayItems?: readonly any[]; floor?: VolumeFloorContext | null } = {}
+  opts: {
+    todayItems?: readonly any[];
+    floor?: VolumeFloorContext | null;
+    // The caller's own thisWeekPlanDayMap(date), when it already read one.
+    week?: ReturnType<typeof thisWeekPlanDayMap>;
+  } = {}
 ): WeeklyDoseLedger | null {
   const d = String(date || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
-  const week = thisWeekPlanDayMap(d);
+  const week = opts.week ?? thisWeekPlanDayMap(d);
   if (!week.lift_dows.length) return null;
   const floor = opts.floor !== undefined ? opts.floor : readVolumeFloorContext(d);
   if (!floor) return null;
@@ -272,18 +280,10 @@ export function weeklyDoseSnapshot(date: string, ctx: WeeklyDoseGatherContext): 
     liftStatus.set(normalizedExerciseKey(String(lift?.exercise ?? "")), String(lift?.status ?? ""));
   }
 
-  // A key run on today's own calendar keeps the legs' extra work off the card.
-  let keyRunToday = false;
-  try {
-    const cal = calendarDayRead(d);
-    keyRunToday = cal?.run_kind === "quality" || cal?.run_kind === "long";
-  } catch {
-    keyRunToday = false;
-  }
-
-  // Cheap per-item eligibility first, so an ordinary card never pays for the ledger.
+  // Cheap per-item eligibility first, so an ordinary card never pays for the calendar
+  // read or the ledger.
   type Pre = WeeklyDoseEligibleItem & { index: number; compound: boolean; status: number };
-  const pre: Pre[] = [];
+  const eligible: Pre[] = [];
   const anchorIndex = dayAnchorIndex(items);
   items.forEach((item, index) => {
     if (!item || String(item.kind ?? "strength").toLowerCase() === "cardio") return;
@@ -295,13 +295,12 @@ export function weeklyDoseSnapshot(date: string, ctx: WeeklyDoseGatherContext): 
     const group = itemGroup(item);
     const sets = finite(item.sets);
     if (!exercise || !group || sets == null || sets < 1) return;
-    if (keyRunToday && LOWER_GROUPS.has(group)) return;
     if (ctx.muscleLoad.get(group)?.saturated) return;
     const key = normalizedExerciseKey(exercise);
     if (!prescriptionAllowsFill(progression.get(key), sets)) return;
     const status = liftStatus.get(key) ?? "";
     if (status === "regressing") return;
-    pre.push({
+    eligible.push({
       exercise,
       group,
       sets,
@@ -310,9 +309,24 @@ export function weeklyDoseSnapshot(date: string, ctx: WeeklyDoseGatherContext): 
       status: STATUS_RANK[status] ?? 4,
     });
   });
-  if (!pre.length) return undefined;
+  if (!eligible.length) return undefined;
 
-  const ledger = weeklyDoseLedger(d, { todayItems: items });
+  // A key run on today's own calendar keeps the legs' extra work off the card — asked
+  // only when a leg item is still in line.
+  let pre = eligible;
+  if (eligible.some((p) => LOWER_GROUPS.has(p.group))) {
+    let keyRunToday = false;
+    try {
+      const cal = calendarDayRead(d);
+      keyRunToday = cal?.run_kind === "quality" || cal?.run_kind === "long";
+    } catch {
+      keyRunToday = false;
+    }
+    if (keyRunToday) pre = eligible.filter((p) => !LOWER_GROUPS.has(p.group));
+    if (!pre.length) return undefined;
+  }
+
+  const ledger = weeklyDoseLedger(d, { todayItems: items, week: ctx.weekMap?.() });
   if (!ledger?.applies) return undefined;
   const gaps = ledger.groups
     .filter((g) => g.short >= WEEKLY_DOSE_MIN_GAP)

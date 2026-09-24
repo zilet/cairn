@@ -6,7 +6,10 @@ import { canonicalGroup, classifyMuscleGroup } from "./exercise-canon.js";
 import { strengthPlanDayOn } from "./plan-selection.js";
 import { dowToDayNumber, getEnduranceGoal, isoDow } from "./profile.js";
 import { raceBuild } from "./race-build.js";
+import { runDaySteerKey } from "./run-day-steer.js";
 import { type WeeklyRunPlan, weeklyRunPlan } from "./run-progression.js";
+import { localDateISO } from "./shared.js";
+import { coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
 import type { EnduranceRole } from "./training-intent.js";
 
 // The WEEK'S STRESS BUDGET for the legs: one budget across running and lifting for a
@@ -123,6 +126,21 @@ function safeRead<T>(fn: () => T): T | null {
   }
 }
 
+// The race read below (the race build, the week's run plan, tomorrow's lifting) is the
+// expensive half of the gather — a whole weeklyRunPlan plus raceBuild on every lower-day
+// gather while a race is on file — and it is a pure function of the date, whether the
+// card carries legs, and the stored state. So it is memoized on the same key shape the
+// day read uses: the date, the real today and the run-day steer (the run plan reads
+// both), and the coach-context backstop signature (training-cache.ts), which sees every
+// insert, delete and in-place update to the tables these reads touch, plus profile and
+// settings by value. A few slots, not one: the look-ahead asks tomorrow between two of
+// today's reads. Cleared with every other training memo (the test isolate included).
+const STRESS_READ_MEMO_SLOTS = 8;
+const stressReadCache = new Map<string, StressBudgetSnapshot | undefined>();
+registerTrainingCacheClear(() => {
+  stressReadCache.clear();
+});
+
 /** Gather half. `undefined` = nothing to say (the key stays off the snapshot). */
 export function stressBudgetSnapshot(date: string, ctx: StressBudgetGatherContext): StressBudgetSnapshot | undefined {
   if (ctx.enduranceRole === "none") return undefined;
@@ -131,6 +149,21 @@ export function stressBudgetSnapshot(date: string, ctx: StressBudgetGatherContex
   );
   const lowerOnCard = [...groups].some((g) => LOWER_GROUPS.has(g));
   if (!lowerOnCard && !groups.has("core")) return undefined;
+  const key = `${date}|${lowerOnCard ? "legs" : "core"}|${localDateISO()}|${runDaySteerKey()}|${coachContextBackstopSignature()}`;
+  if (stressReadCache.has(key)) {
+    const hit = stressReadCache.get(key);
+    return hit ? structuredClone(hit) : undefined;
+  }
+  const value = stressRaceRead(date, lowerOnCard);
+  if (stressReadCache.size >= STRESS_READ_MEMO_SLOTS) {
+    const oldest = stressReadCache.keys().next().value;
+    if (oldest !== undefined) stressReadCache.delete(oldest);
+  }
+  stressReadCache.set(key, value ? structuredClone(value) : undefined);
+  return value;
+}
+
+function stressRaceRead(date: string, lowerOnCard: boolean): StressBudgetSnapshot | undefined {
   // Cheap guard first: raceBuild and the run engine are only asked with a dated race.
   const goal = safeRead(() => getEnduranceGoal(date));
   if (!goal?.is_race || !goal.date) return undefined;

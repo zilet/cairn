@@ -743,6 +743,27 @@ test("gather: the Wednesday before a placed quality run and the Friday before a 
   );
 });
 
+test("gather: the race read is memoized, and a change to the stored race is read at once", () => {
+  seedAthlete();
+  seedRuns("2026-09-30");
+  const ctx = { dayType: "training", planItems: PLAN[2].items, enduranceRole: "supporting" };
+  const first = stressBudgetSnapshot("2026-09-30", ctx);
+  assert.deepEqual(first.key_run, { kind: "quality", in_days: 1 });
+  const again = stressBudgetSnapshot("2026-09-30", ctx);
+  assert.deepEqual(again, first, "the same inputs read the same");
+  again.key_run.kind = "long";
+  assert.equal(stressBudgetSnapshot("2026-09-30", ctx).key_run.kind, "quality", "a caller's copy is its own");
+  // The race moves into this week's taper window: the next read says so, no stale hit.
+  repo.setProfile({
+    endurance_goal: { mode: "race", event: "Riverside Half", date: "2026-10-11", distance_km: 21.1, target: "sub-2:00" },
+  });
+  const moved = stressBudgetSnapshot("2026-09-30", ctx);
+  assert.notDeepEqual(moved, first, JSON.stringify(moved));
+  // And no race at all is nothing to say.
+  repo.setProfile({ endurance_goal: null });
+  assert.equal(stressBudgetSnapshot("2026-09-30", ctx), undefined);
+});
+
 test("gather end to end: Wednesday owes the week's legs, so Thursday's quality run trims nothing", () => {
   seedAthlete();
   seedRuns("2026-09-30");
