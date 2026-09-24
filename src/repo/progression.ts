@@ -21,7 +21,6 @@ import {
   classifyMuscleGroup,
   detectExerciseMode,
   exerciseIdentityKey,
-  ISOLATION_GROUPS,
   isMobility,
   isPrepMovement,
   movementKey,
@@ -129,6 +128,7 @@ import {
 import { type LiftState, getProgramState, LIFT_CURRENT_WINDOW_DAYS } from "./program-state.js";
 import { coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
 import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
+import { easedLoad, isIsolationGroup, STEP_CEIL_COMPOUND, STEP_CEIL_ISOLATION } from "./load-grid.js";
 import { supportWorkRead } from "./support-work.js";
 // Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
 // compute when programAdjustments is called standalone (Today/Progress). The module
@@ -173,8 +173,8 @@ const STEP_FRAC = 0.1; // ≤10% of the current load…
 // lift deserves (so nothing gets SMALLER than it used to be) and rounded onto the
 // 2.5 lb plate grid. Below ~200 lb this reproduces the old flat cap exactly.
 const STEP_CEIL_FRAC = 0.025;
-const STEP_CEIL_COMPOUND = 5; // the compound floor: never smaller than 5 lb
-const STEP_CEIL_ISOLATION = 2.5; // the isolation floor: never smaller than 2.5 lb
+// The compound floor (5 lb) and isolation floor (2.5 lb) are STEP_CEIL_COMPOUND /
+// STEP_CEIL_ISOLATION in load-grid.ts, the one plate grid every easing rounds onto.
 // Timed holds progress by a RELATIVE step — a fraction of the current hold, clamped to
 // a sane floor/ceiling — so a 20s plank and a 120s dead hang each progress proportionally
 // (a flat +N is trivial on a long hold and a huge jump on a short one). Timed work moves
@@ -568,19 +568,6 @@ function timedStep(seconds: number, modifier?: CoachPersonalModifier | null): nu
       safety_ceiling: SECONDS_STEP_MAX,
     })
   );
-}
-
-// Isolation groups get the smaller (2.5 lb) plate jump; compounds get 5 lb.
-function isIsolationGroup(group: string | null): boolean {
-  const g = canonicalGroup(group);
-  return !!g && ISOLATION_GROUPS.has(g);
-}
-
-// The smallest real load jump the engine takes on a lift of this group — the plate-grid
-// floor its own overload step never goes under (STEP_CEIL_COMPOUND / STEP_CEIL_ISOLATION).
-// An eased load is rounded onto this grid so a card never prints a number no bar loads.
-export function minimumLoadStep(group: string | null): number {
-  return isIsolationGroup(group) ? STEP_CEIL_ISOLATION : STEP_CEIL_COMPOUND;
 }
 
 // The step ceiling for a lift: PROPORTIONAL to what is on the bar, floored at the
@@ -3325,6 +3312,13 @@ function setCatchUp(
 // second calorie move is made." ended up printed under a bench press. The
 // consequence (hold this step / take a lighter dose) belongs on the lift; the
 // calorie mechanics behind it belong to the surfaces that already carry them.
+// The stored muscle group of a lift by name (through the one resolver), or null.
+function storedGroupOf(name: string): string | null {
+  const resolved = resolveExerciseName(name);
+  if (resolved.exercise_id == null) return null;
+  return (getExercise(resolved.exercise_id) as any)?.muscle_group ?? null;
+}
+
 function applyFuelProtection(
   prescription: Prescription,
   read: UnderfuelingRead,
@@ -3479,7 +3473,8 @@ function applyFuelProtection(
     if (prescription.mode === "timed" && Number.isFinite(Number(base.seconds)))
       reduced.seconds = Math.max(10, Math.round(Number(base.seconds) * 0.8));
     if (prescription.mode === "reps" && Number.isFinite(Number(base.weight)) && Number(base.weight) > 0)
-      reduced.weight = Math.round(Number(base.weight) * 0.9 * 2) / 2;
+      // Onto the lift's own load grid (load-grid.ts), never a half-pound no bar loads.
+      reduced.weight = easedLoad(base.weight, 0.9, prescription.exercise, storedGroupOf(prescription.exercise));
   }
   return {
     ...prescription,

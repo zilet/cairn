@@ -25,7 +25,7 @@ import { collapseRegionDuplicates, pairForSession, validSupersetGroup } from "./
 import { applyWeeklyDose } from "./composition-dose.js";
 import { weeklyDoseSoftLine } from "./weekly-dose-ledger.js";
 import { nextLoadStep } from "./progression.js";
-import { loadIncrement } from "./lift-response.js";
+import { easedLoad } from "./load-grid.js";
 import { stressBudgetItemNotes } from "./stress-budget.js";
 import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
@@ -126,31 +126,6 @@ function perItemSetCap(envelope: DailyDecisionEnvelope): number {
     default:
       return 6;
   }
-}
-
-// How far under the intended ease the grid may round before it reads as a cut rather
-// than an easing (0.9 → no lower than ~0.85 of the prescription).
-const EASED_LOAD_SLACK = 0.05;
-
-// An eased load a bar, a pair of dumbbells or a stack can actually be set to: the
-// factor's load rounded DOWN onto the lift's own increment (`loadIncrement` — the
-// engine's minimum plate jump for its group, the stack floor on a pinned stack), so a
-// 185 lb squat eases to 165, never 166.5. When a coarse step at a light load would
-// round further than EASED_LOAD_SLACK under the intended ease, the nearest step below
-// the prescription stands in; when no step lands under it at all, the prescription
-// holds — the trimmed sets carry the easing.
-function easedTarget(value: unknown, factor: number, exercise: unknown, group: string | null): number | null {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n === 0) return value == null ? null : Number(value);
-  // Negative weight means assistance. Multiplying it toward zero would make
-  // the movement harder, so retain the known safe anchor instead.
-  if (n < 0) return n;
-  const step = loadIncrement(String(exercise ?? ""), group);
-  const eased = n * factor;
-  const down = Math.floor(eased / step + 1e-9) * step;
-  if (down > 0 && down < n && down >= n * (factor - EASED_LOAD_SLACK) - 1e-9) return down;
-  const nearest = Math.round(eased / step) * step;
-  return nearest > 0 && nearest < n ? nearest : n;
 }
 
 const ADAPTATION_NOTE_BUDGET = 500;
@@ -1402,7 +1377,9 @@ export function normalizeComposedSession(
         next.target_seconds = seconds;
       } else if (next.target_weight != null) {
         const exerciseKey = String(next.exercise ?? "").toLowerCase();
-        const weight = easedTarget(
+        // Onto the lift's own load grid (load-grid.ts): a 185 squat eases to 165, never
+        // 166.5. Assistance is never multiplied toward harder.
+        const weight = easedLoad(
           next.target_weight,
           intensityFactor,
           next.exercise,

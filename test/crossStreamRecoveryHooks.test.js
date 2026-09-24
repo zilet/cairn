@@ -105,7 +105,7 @@ test("an active cycle adapts the selected plan day and snapshots durable cycle p
   assert.equal(prepared.daily_session.items[0].sets, 2);
   assert.equal(
     prepared.daily_session.items[0].target_weight,
-    // The overlay's 191.5 eased ×0.9 is 172.35, rounded down onto the squat's 5 lb grid.
+    // The overlay's 190 (225 × 0.85 on the grid) eased ×0.9 is 171, down onto the 5 lb grid.
     170,
     "the recovery overlay is retained inside the stricter day-level easy cap, on a loadable number"
   );

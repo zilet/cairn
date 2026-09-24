@@ -2526,6 +2526,8 @@ test("planDayProgression: far from goal a reduce still takes the recovery dose",
   const p = planDayProgression(1, { forNextSession: true }).find((row) => row.exercise === "Back Squat");
   assert.equal(p.action, "deload", "away from goal the recovery dose stands");
   assert.equal(p.suggested.sets, 2, "half the sets, rounded up");
+  // 185 × 0.9 = 166.5, rounded down onto the squat's 5 lb grid (load-grid.ts).
+  assert.equal(p.suggested.weight, 165, "the eased load is one a bar can hold");
   assert.equal(p.fuel_protected, true, "and the restore ledger is owed the volume");
   assert.equal(String(p.delta_text), "recovery dose");
 });

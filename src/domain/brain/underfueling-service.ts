@@ -23,6 +23,7 @@ import { currentUnderfuelingRead } from "../../repo/underfueling-snapshot.js";
 import type { UnderfuelingRead } from "../../repo/underfueling.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "../../repo/reaction-model.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
+import { easedLoad } from "../../repo/load-grid.js";
 
 export { currentUnderfuelingRead } from "../../repo/underfueling-snapshot.js";
 
@@ -328,7 +329,8 @@ function recoveryItems(items: any[]): any[] {
       sets: Number.isFinite(Number(item?.sets)) ? Math.max(1, Math.ceil(Number(item.sets) / 2)) : item?.sets,
       target_weight:
         Number.isFinite(targetWeight) && targetWeight > 0
-          ? Math.round(targetWeight * 0.9 * 2) / 2
+          ? // Onto the lift's own load grid (load-grid.ts), never a half-pound no bar loads.
+            easedLoad(targetWeight, 0.9, item?.exercise, item?.muscle_group == null ? null : String(item.muscle_group))
           : item?.target_weight,
       target_seconds:
         Number.isFinite(targetSeconds) && targetSeconds > 0

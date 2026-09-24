@@ -292,6 +292,11 @@ test("persistent strain links a reversible recovery week and fuel step, applies 
   assert.equal(first.recovery.announced, true);
   assert.equal(first.nutrition.decision.context.coordination_key, first.coordination_key);
   assert.equal(first.recovery.decision.context.coordination_key, first.coordination_key);
+  const recoveryDraft = repo
+    .listProposals()
+    .find((p) => p.parsed?.coordination_key === first.coordination_key && Array.isArray(p.parsed?.days));
+  // 185 × 0.9 = 166.5, rounded down onto the bench's 5 lb grid (load-grid.ts).
+  assert.equal(recoveryDraft.parsed.days[0].items[0].target_weight, 165, "the recovery week's load is loadable");
 
   const second = runUnderfuelingControlLoop(today(), { read: read("persistent_strain", "persistent-again") });
   assert.equal(second.action, "none");

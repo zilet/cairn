@@ -2146,12 +2146,17 @@ server's lead sentence will not fit ahead of an existing note within the budget,
 untouched. `itemAlreadyHasProgressionHoldWhy()` skips the reduced/eased/hold note entirely when a
 `hold`/`deload` candidate already carries its own non-empty `progression_evidence.why` — a card no
 longer prints "Holding the current target today" directly above a progression sentence that already
-says why. Every eased load (easy ×0.8, deload/reduced ×0.9) lands on the lift's own grid —
-`easedTarget` rounds DOWN onto `loadIncrement` (`lift-response.ts`: the engine's `minimumLoadStep`, 5 lb
-compound / 2.5 lb isolation, never under `STACK_MIN_STEP` on a pinned stack), so a 185 squat eases to
-165, never 166.5; a floor more than 5 points under the intended ease takes the nearest step below the
-prescription instead, none at all keeps the prescription, and assistance (negative) is never
-multiplied. The three note families (`REDUCED_AREA_NOTES`/`EASED_TODAY_NOTES`/`HOLD_TARGET_NOTES`) are
+says why. Every eased load lands on the lift's own grid through ONE helper, `easedLoad`
+(`src/repo/load-grid.ts`, a leaf module so every path imports it without a cycle): composition's easy
+×0.8 / deload and reduced ×0.9, the recovery overlay's ×0.85 (`recoveryLoad`, recovery-cycles.ts), the
+fuel recovery dose's ×0.9 (`applyFuelProtection`, progression.ts) and the recovery-week proposal's ×0.9
+(`recoveryItems`, underfueling-service.ts). It rounds DOWN onto `loadIncrement` (the engine's
+`minimumLoadStep`, 5 lb compound / 2.5 lb isolation, never under `STACK_MIN_STEP` on a pinned stack),
+so a 185 squat eases to 165, never 166.5; a floor more than 5 points under the intended ease takes the
+nearest step below the prescription instead, and none at all keeps the prescription. Assistance
+(negative) is never multiplied toward harder — the recovery overlay's `assistFactor` 1.1 grows it and
+rounds UP onto the same grid (−30 → −35). The engine's own deload ladder (`round5`) was already
+loadable and is untouched; agent-written loads that no path eased are never rounded. The three note families (`REDUCED_AREA_NOTES`/`EASED_TODAY_NOTES`/`HOLD_TARGET_NOTES`) are
 now variant sets rotated by `pickDayVariant(date, ...:exercise)` rather than one literal each, keyed
 per exercise so two lifts in the same state on one screen do not print identical text while one lift
 stays stable through the day.

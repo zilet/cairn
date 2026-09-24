@@ -11,7 +11,6 @@ import { USER_VETO_SQL } from "./brain-decisions.js";
 import {
   canonicalGroup,
   classifyMuscleGroup,
-  detectImplement,
   expandExerciseAbbreviations,
   ISOLATION_GROUPS,
   normalizedExerciseKey,
@@ -20,7 +19,11 @@ import {
 import { classifyPattern, type MovementPattern } from "./exercise-variations.js";
 // A cycle (progression imports this module), resolved at call time: nothing here runs
 // at module init, and nextLoadStep is a hoisted function declaration.
-import { minimumLoadStep, nextLoadStep } from "./progression.js";
+import { nextLoadStep } from "./progression.js";
+// The stack read and the load grid live in the leaf module every easing path shares;
+// re-exported here, where the coarse-step read has always published them.
+import { isStackLoaded, STACK_MIN_STEP } from "./load-grid.js";
+export { isStackLoaded, loadIncrement, STACK_MIN_STEP } from "./load-grid.js";
 import { localDateISO } from "./shared.js";
 
 /** The next load step, as a fraction of the working weight, at which it reads coarse. */
@@ -29,8 +32,6 @@ export const COARSE_STEP_FRACTION = 0.08;
 export const REP_RANGE_MOVE = 3;
 /** The highest rep_high a rep-range move may write; past it the ordinary ladder answers. */
 export const REP_RANGE_CEILING = 25;
-/** The smallest real jump on a pinned weight stack (cable or selectorized machine). */
-export const STACK_MIN_STEP = 5;
 
 // Single-joint patterns whose muscle group is not itself an isolation group — a lateral
 // raise files under "shoulders", which also holds the overhead press. ISOLATION_GROUPS
@@ -49,21 +50,6 @@ const SINGLE_JOINT_PATTERNS: ReadonlySet<MovementPattern> = new Set<MovementPatt
 // those are hinges.
 const SINGLE_JOINT_NAME_RE =
   /\b(pec decks?|flyes?|flys?|leg extensions?|leg curls?|hamstring curls?|(?:triceps?|overhead|cable|rope) extensions?|abduct\w*|adduct\w*)\b/;
-// A name that says the load is a pinned stack even when no implement word is in it.
-const STACK_NAME_RE =
-  /\b(pushdowns?|push downs?|pec decks?|ropes?|stack|selectori[sz]ed|leg extensions?|leg curls?|hamstring curls?|face pulls?|abduct\w*|adduct\w*)\b/;
-// Implements with their own (finer) loading grid: never a stack, whatever else the name says.
-const FREE_OR_PLATE_IMPLEMENTS = new Set([
-  "a barbell",
-  "dumbbells",
-  "a kettlebell",
-  "an EZ bar",
-  "a smith machine",
-  "a trap bar",
-  "a hex bar",
-  "a landmine",
-  "a band",
-]);
 
 function nameKey(name: string): string {
   return expandExerciseAbbreviations(String(name ?? "")).toLowerCase();
@@ -76,18 +62,6 @@ export function isIsolationLift(name: string, group: string | null | undefined):
   const pattern = classifyPattern(String(name ?? ""), group ?? undefined);
   if (pattern != null && SINGLE_JOINT_PATTERNS.has(pattern)) return true;
   return SINGLE_JOINT_NAME_RE.test(nameKey(name));
-}
-
-/**
- * A pinned weight stack: the name carries a cable or machine implement, or a stack
- * movement word (pushdown, pec deck, leg extension…), and no free-weight or plate
- * implement. Its real jump is at least STACK_MIN_STEP whatever the plate grid says.
- */
-export function isStackLoaded(name: string): boolean {
-  const implement = detectImplement(String(name ?? ""));
-  if (implement && FREE_OR_PLATE_IMPLEMENTS.has(implement)) return false;
-  if (implement === "a cable machine" || implement === "a machine") return true;
-  return STACK_NAME_RE.test(nameKey(name));
 }
 
 /**
@@ -110,16 +84,6 @@ export function coarseLoadStep(
   const engineStep = nextLoadStep(w, group ?? null) - w;
   const step = isStackLoaded(name) ? Math.max(engineStep, STACK_MIN_STEP) : engineStep;
   return step > 0 && step / w >= COARSE_STEP_FRACTION;
-}
-
-/**
- * The lift's own load increment: the engine's minimum plate jump for its group
- * (`minimumLoadStep` — 5 lb compound, 2.5 lb isolation), never under STACK_MIN_STEP on a
- * pinned stack. Dumbbells and barbells keep the engine grid for their group.
- */
-export function loadIncrement(name: string, group: string | null | undefined): number {
-  const grid = minimumLoadStep(group ?? null);
-  return isStackLoaded(name) ? Math.max(grid, STACK_MIN_STEP) : grid;
 }
 
 /** The range one rep-range move writes, or null when it would pass REP_RANGE_CEILING. */
