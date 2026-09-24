@@ -302,6 +302,40 @@ export const KEY_RUN_EVE_RATIONALE: readonly [EveLine, ...EveLine[]] = [
     `A key ${run} lands ${when}, so the extra leg work stops early today while keeping its weights, and the main lift goes as planned.`,
 ];
 
+// The note a composed card item carries when ONLY this budget reduced its group
+// (`stress.sole_reduced`). The generic reduced-area note says the area is still carrying
+// recent work — false here: these legs are fresh, and it is the race build easing them.
+// A group another rule also reduced keeps that rule's wording. Rotated per item through
+// `pickDayVariant` by daily-composition.ts.
+export const RACE_TAPER_ITEM_NOTES: readonly [string, ...string[]] = [
+  "Taper week — lighter and fewer sets so your legs arrive fresh for the race.",
+  "Lighter this week, and shorter, so the legs reach the start line fresh.",
+  "A taper dose: fewer sets at an easier weight, with freshness for the race in mind.",
+  "The build is done, so this one stays short and a touch lighter through the taper.",
+];
+
+export const RACE_WEEK_ITEM_NOTES: readonly [string, ...string[]] = [
+  "Race week — kept short and light so the legs stay fresh for the race.",
+  "Just a little light work here this week; the race is what the legs are saving for.",
+  "Easy and brief in race week, enough to keep it moving without spending the legs.",
+  "Race week: a lighter touch and fewer sets, so the start line finds you fresh.",
+];
+
+export const KEY_RUN_EVE_ITEM_NOTES: readonly [string, ...string[]] = [
+  "Fewer sets today at the same weight, so the key run ahead starts on fresh legs.",
+  "Same weight, fewer sets — the key run coming up gets the legs fresh.",
+  "Stopping a little early on this one, weight unchanged, with the key run in mind.",
+  "Shorter today at your usual weight, so the legs keep something for the key run.",
+];
+
+/** The per-item note set for a stress-budget-only reduction, by the rule that spoke. */
+export function stressBudgetItemNotes(code: unknown): readonly [string, ...string[]] | null {
+  if (code === "race_taper_legs") return RACE_TAPER_ITEM_NOTES;
+  if (code === "race_week_legs") return RACE_WEEK_ITEM_NOTES;
+  if (code === "key_run_eve") return KEY_RUN_EVE_ITEM_NOTES;
+  return null;
+}
+
 const EMPTY: StressBudgetDecision = {
   code: null,
   reduced: [],

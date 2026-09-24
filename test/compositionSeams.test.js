@@ -193,7 +193,9 @@ function lowerEnvelope(overrides = {}) {
 }
 
 // Captured by running these exact fixtures against dist built from 948636f8 (before
-// the seams), then frozen; the pairing fields above were added when pairing landed. Compared as serialized JSON text so key order and
+// the seams), then frozen; the pairing fields above were added when pairing landed, and the
+// reduced area's eased loads moved onto the load grid (184.5 → 180, 108 → 105) when a card
+// stopped printing unloadable targets. Compared as serialized JSON text so key order and
 // undefined-vs-absent count exactly as they would in a stored composition.
 const GOLDEN = JSON.parse(readFileSync(new URL("./fixtures/composition-seams-golden.json", import.meta.url), "utf8"));
 const GOLDEN_UPPER_AGENT = GOLDEN.upper_agent;

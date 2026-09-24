@@ -576,6 +576,13 @@ function isIsolationGroup(group: string | null): boolean {
   return !!g && ISOLATION_GROUPS.has(g);
 }
 
+// The smallest real load jump the engine takes on a lift of this group — the plate-grid
+// floor its own overload step never goes under (STEP_CEIL_COMPOUND / STEP_CEIL_ISOLATION).
+// An eased load is rounded onto this grid so a card never prints a number no bar loads.
+export function minimumLoadStep(group: string | null): number {
+  return isIsolationGroup(group) ? STEP_CEIL_ISOLATION : STEP_CEIL_COMPOUND;
+}
+
 // The step ceiling for a lift: PROPORTIONAL to what is on the bar, floored at the
 // minimum plate jump for its kind, on the 2.5 lb plate grid. A 100 lb press keeps
 // the familiar 5 lb cap; a 300 lb squat earns 7.5 — the same relative step, not the

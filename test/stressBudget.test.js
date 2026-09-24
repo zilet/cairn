@@ -9,7 +9,7 @@
 // Upper-body work holds throughout. Synthetic fixtures only; deterministic and offline.
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
-import { normalizeComposedSession } from "../dist/repo/daily-composition.js";
+import { normalizeComposedSession, REDUCED_AREA_NOTES } from "../dist/repo/daily-composition.js";
 import { buildDailyCompositionPrompt } from "../dist/prompt.js";
 import {
   buildDailySessionDecision,
@@ -20,8 +20,11 @@ import {
 import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
 import { substituteSaturatedPlanItems } from "../dist/repo/saturated-substitution.js";
 import {
+  KEY_RUN_EVE_ITEM_NOTES,
   KEY_RUN_EVE_RATIONALE,
+  RACE_TAPER_ITEM_NOTES,
   RACE_TAPER_LEGS_RATIONALE,
+  RACE_WEEK_ITEM_NOTES,
   RACE_WEEK_EXCLUDED_NOTES,
   RACE_WEEK_LEGS_RATIONALE,
   stressBudgetDecision,
@@ -287,15 +290,23 @@ test("taper week (2026-10-21): the leg lifts cap at two sets and a lighter load;
   assert.ok(!env.muscles.reduced.includes("chest"));
 
   const items = normalizeComposedSession(LOWER_A_RAW, env).session.items;
-  for (const [name, weight] of [
-    ["Back Squat", 185],
-    ["Romanian Deadlift", 205],
-    ["Leg Extension", 135],
-    ["Standing Calf Raise", 90],
+  // The ×0.9 ease lands on each lift's own load grid, rounded down: 5 lb on a compound
+  // and a stack, 2.5 lb on an isolation calf raise — never 166.5 or 121.5.
+  for (const [name, eased] of [
+    ["Back Squat", 165],
+    ["Romanian Deadlift", 180],
+    ["Leg Extension", 120],
+    ["Standing Calf Raise", 80],
   ]) {
     const item = byName(items, name);
     assert.equal(item.sets, 2, `${name}: the reduced-area cap`);
-    assert.equal(item.target_weight, Math.round(weight * 0.9 * 100) / 100, `${name}: the reduced-area load factor`);
+    assert.equal(item.target_weight, eased, `${name}: the reduced-area load, on the grid`);
+    // Fresh legs eased by the race build — the taper's reason, never "still carrying work".
+    assert.ok(
+      RACE_TAPER_ITEM_NOTES.some((n) => item.note.startsWith(n.replace(/[.]+$/, ""))),
+      `${name}: ${item.note}`
+    );
+    assert.ok(!REDUCED_AREA_NOTES.some((n) => item.note.includes(n)), `${name}: ${item.note}`);
   }
   const bench = byName(items, "Barbell Bench Press");
   assert.equal(bench.sets, 3);
@@ -359,7 +370,14 @@ test("race week (2026-10-28): the squat sits out, calves stay light, the upper b
   const items = normalizeComposedSession(LOWER_A_RAW, env).session.items;
   assert.equal(byName(items, "Back Squat"), undefined, "the squat is off the card");
   assert.equal(byName(items, "Romanian Deadlift"), undefined);
-  assert.equal(byName(items, "Standing Calf Raise").sets, 2);
+  const calfRace = byName(items, "Standing Calf Raise");
+  assert.equal(calfRace.sets, 2);
+  assert.equal(calfRace.target_weight, 80, "90 × 0.9 onto the calf raise's 2.5 lb grid");
+  assert.ok(
+    RACE_WEEK_ITEM_NOTES.some((n) => calfRace.note.startsWith(n.replace(/[.]+$/, ""))),
+    calfRace.note
+  );
+  assert.ok(!REDUCED_AREA_NOTES.some((n) => calfRace.note.includes(n)), calfRace.note);
   const bench = byName(items, "Barbell Bench Press");
   assert.equal(bench.sets, 3);
   assert.equal(bench.target_weight, 135);
@@ -436,9 +454,18 @@ test("Friday before Sunday's long run, the week's legs already landed: accessori
   assert.equal(bss.sets, 2);
   assert.equal(bss.target_weight, 60, "the load holds on the eve of a key run");
   assert.ok(!bss.reach && !bss.top_set, "a trimmed slot never hosts the reach");
+  assert.ok(
+    KEY_RUN_EVE_ITEM_NOTES.some((n) => bss.note.startsWith(n.replace(/[.]+$/, ""))),
+    bss.note
+  );
+  assert.ok(!REDUCED_AREA_NOTES.some((n) => bss.note.includes(n)), bss.note);
   const calf = byName(items, "Seated Calf Raise");
   assert.equal(calf.sets, 2);
   assert.equal(calf.target_weight, 125);
+  assert.ok(
+    KEY_RUN_EVE_ITEM_NOTES.some((n) => calf.note.startsWith(n.replace(/[.]+$/, ""))),
+    calf.note
+  );
   const deadlift = byName(items, "Deadlift");
   assert.equal(deadlift.sets, 3);
   assert.equal(deadlift.target_weight, 225);
@@ -565,7 +592,7 @@ test("a key-run eve anchor whose group another rule reduces takes that rule's cl
   const items = normalizeComposedSession(LOWER_A_RAW, env).session.items;
   const squat = byName(items, "Back Squat");
   assert.equal(squat.sets, 2, "the volume read clamps the squat as it always has");
-  assert.equal(squat.target_weight, 166.5);
+  assert.equal(squat.target_weight, 165, "185 × 0.9 rounded down onto the barbell's 5 lb grid");
 });
 
 test("an eve-only group is trimmed in place, never swapped, on a morning a run also loaded another group", () => {
@@ -627,7 +654,14 @@ test("a group another rule also reduces takes the full clamp on a key-run eve", 
   const items = normalizeComposedSession(LOWER_B_RAW, env).session.items;
   const bss = byName(items, "Bulgarian Split Squat");
   assert.equal(bss.sets, 2);
-  assert.equal(bss.target_weight, 54);
+  // 60 × 0.9 = 54; the 5 lb grid's floor (50) would cut past the ease, so the nearest
+  // step under the prescription stands in.
+  assert.equal(bss.target_weight, 55);
+  // Reduced by the volume read too: the fatigue wording stays.
+  assert.ok(
+    REDUCED_AREA_NOTES.some((n) => bss.note.includes(n)),
+    bss.note
+  );
   assert.equal(byName(items, "Seated Calf Raise").target_weight, 125);
 });
 
@@ -854,11 +888,22 @@ test("every line is a variant set of at least four that holds the reading gramma
     RACE_WEEK_LEGS_RATIONALE,
     RACE_WEEK_EXCLUDED_NOTES,
     KEY_RUN_EVE_RATIONALE,
+    RACE_TAPER_ITEM_NOTES,
+    RACE_WEEK_ITEM_NOTES,
+    KEY_RUN_EVE_ITEM_NOTES,
   ]) {
     assert.ok(set.length >= 4);
     assert.equal(new Set(set).size, set.length);
   }
-  for (const line of [...RACE_TAPER_LEGS_RATIONALE, ...RACE_WEEK_LEGS_RATIONALE, ...RACE_WEEK_EXCLUDED_NOTES, ...eve]) {
+  for (const line of [
+    ...RACE_TAPER_LEGS_RATIONALE,
+    ...RACE_WEEK_LEGS_RATIONALE,
+    ...RACE_WEEK_EXCLUDED_NOTES,
+    ...eve,
+    ...RACE_TAPER_ITEM_NOTES,
+    ...RACE_WEEK_ITEM_NOTES,
+    ...KEY_RUN_EVE_ITEM_NOTES,
+  ]) {
     assert.equal(violatesReadingGrammar(line), null, line);
     assert.ok(!/\d/.test(line), `no numbers: ${line}`);
   }

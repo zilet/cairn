@@ -1080,6 +1080,13 @@ optional after strength" line would otherwise print (`enduranceSupporting && has
 it stands down (`keyRunEveTrimmed`) rather than co-appearing with the eve's own "fewer sets so the run
 lands" line, which says the opposite.
 
+A card item whose group is in `sole_reduced` says this budget's reason, never the generic reduced-area
+note ("still carrying recent work" is false on fresh legs): `RACE_TAPER_ITEM_NOTES` /
+`RACE_WEEK_ITEM_NOTES` on an eased item, `KEY_RUN_EVE_ITEM_NOTES` ("fewer sets, same weight") on a
+load-held item whose sets were actually trimmed (`stressBudgetItemNotes`, rotated by composition per
+exercise). A load-held item the DAY eased anyway takes `EASED_TODAY_NOTES`; a group another rule also
+reduced keeps `REDUCED_AREA_NOTES`.
+
 `sole_reduced` — the groups the stress budget reduced that NO other rule reduced — also fixed a
 substitution bug: `saturated-substitution.ts`'s `substitutionGroups` used to treat every reduced RUN_PRIME
 group as recovering tissue needing a stand-in; now a `calendarOnly` set (`envelope.stress.sole_reduced`)
@@ -2139,7 +2146,12 @@ server's lead sentence will not fit ahead of an existing note within the budget,
 untouched. `itemAlreadyHasProgressionHoldWhy()` skips the reduced/eased/hold note entirely when a
 `hold`/`deload` candidate already carries its own non-empty `progression_evidence.why` — a card no
 longer prints "Holding the current target today" directly above a progression sentence that already
-says why. The three note families (`REDUCED_AREA_NOTES`/`EASED_TODAY_NOTES`/`HOLD_TARGET_NOTES`) are
+says why. Every eased load (easy ×0.8, deload/reduced ×0.9) lands on the lift's own grid —
+`easedTarget` rounds DOWN onto `loadIncrement` (`lift-response.ts`: the engine's `minimumLoadStep`, 5 lb
+compound / 2.5 lb isolation, never under `STACK_MIN_STEP` on a pinned stack), so a 185 squat eases to
+165, never 166.5; a floor more than 5 points under the intended ease takes the nearest step below the
+prescription instead, none at all keeps the prescription, and assistance (negative) is never
+multiplied. The three note families (`REDUCED_AREA_NOTES`/`EASED_TODAY_NOTES`/`HOLD_TARGET_NOTES`) are
 now variant sets rotated by `pickDayVariant(date, ...:exercise)` rather than one literal each, keyed
 per exercise so two lifts in the same state on one screen do not print identical text while one lift
 stays stable through the day.

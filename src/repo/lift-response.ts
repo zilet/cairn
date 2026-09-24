@@ -20,7 +20,7 @@ import {
 import { classifyPattern, type MovementPattern } from "./exercise-variations.js";
 // A cycle (progression imports this module), resolved at call time: nothing here runs
 // at module init, and nextLoadStep is a hoisted function declaration.
-import { nextLoadStep } from "./progression.js";
+import { minimumLoadStep, nextLoadStep } from "./progression.js";
 import { localDateISO } from "./shared.js";
 
 /** The next load step, as a fraction of the working weight, at which it reads coarse. */
@@ -110,6 +110,16 @@ export function coarseLoadStep(
   const engineStep = nextLoadStep(w, group ?? null) - w;
   const step = isStackLoaded(name) ? Math.max(engineStep, STACK_MIN_STEP) : engineStep;
   return step > 0 && step / w >= COARSE_STEP_FRACTION;
+}
+
+/**
+ * The lift's own load increment: the engine's minimum plate jump for its group
+ * (`minimumLoadStep` — 5 lb compound, 2.5 lb isolation), never under STACK_MIN_STEP on a
+ * pinned stack. Dumbbells and barbells keep the engine grid for their group.
+ */
+export function loadIncrement(name: string, group: string | null | undefined): number {
+  const grid = minimumLoadStep(group ?? null);
+  return isStackLoaded(name) ? Math.max(grid, STACK_MIN_STEP) : grid;
 }
 
 /** The range one rep-range move writes, or null when it would pass REP_RANGE_CEILING. */

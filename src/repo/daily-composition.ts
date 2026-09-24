@@ -25,6 +25,8 @@ import { collapseRegionDuplicates, pairForSession, validSupersetGroup } from "./
 import { applyWeeklyDose } from "./composition-dose.js";
 import { weeklyDoseSoftLine } from "./weekly-dose-ledger.js";
 import { nextLoadStep } from "./progression.js";
+import { loadIncrement } from "./lift-response.js";
+import { stressBudgetItemNotes } from "./stress-budget.js";
 import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 import { type SaturatedSubstitution, substituteSaturatedPlanItems } from "./saturated-substitution.js";
@@ -126,13 +128,29 @@ function perItemSetCap(envelope: DailyDecisionEnvelope): number {
   }
 }
 
-function scaledTarget(value: unknown, factor: number): number | null {
+// How far under the intended ease the grid may round before it reads as a cut rather
+// than an easing (0.9 → no lower than ~0.85 of the prescription).
+const EASED_LOAD_SLACK = 0.05;
+
+// An eased load a bar, a pair of dumbbells or a stack can actually be set to: the
+// factor's load rounded DOWN onto the lift's own increment (`loadIncrement` — the
+// engine's minimum plate jump for its group, the stack floor on a pinned stack), so a
+// 185 lb squat eases to 165, never 166.5. When a coarse step at a light load would
+// round further than EASED_LOAD_SLACK under the intended ease, the nearest step below
+// the prescription stands in; when no step lands under it at all, the prescription
+// holds — the trimmed sets carry the easing.
+function easedTarget(value: unknown, factor: number, exercise: unknown, group: string | null): number | null {
   const n = Number(value);
   if (!Number.isFinite(n) || n === 0) return value == null ? null : Number(value);
   // Negative weight means assistance. Multiplying it toward zero would make
   // the movement harder, so retain the known safe anchor instead.
   if (n < 0) return n;
-  return Math.round(n * factor * 100) / 100;
+  const step = loadIncrement(String(exercise ?? ""), group);
+  const eased = n * factor;
+  const down = Math.floor(eased / step + 1e-9) * step;
+  if (down > 0 && down < n && down >= n * (factor - EASED_LOAD_SLACK) - 1e-9) return down;
+  const nearest = Math.round(eased / step) * step;
+  return nearest > 0 && nearest < n ? nearest : n;
 }
 
 const ADAPTATION_NOTE_BUDGET = 500;
@@ -1083,6 +1101,16 @@ export function normalizeComposedSession(
     )
   );
   const loadHeldExercises = new Set<string>();
+  // Reduced ONLY by the stress budget (`stress.sole_reduced`): a calendar trim on fresh
+  // legs, so the card says the race build's reason, never "still carrying recent work".
+  const stressSoleGroups = new Set(
+    (Array.isArray(envelope.stress?.sole_reduced) ? envelope.stress.sole_reduced : []).map(
+      (g) => canonicalGroup(g) ?? String(g).toLowerCase()
+    )
+  );
+  const stressSoleExercises = new Set<string>();
+  // Each loaded item's stored group, for the load grid an eased target rounds onto.
+  const groupByExercise = new Map<string, string>();
   // …except the day's anchor lift the eve names (`hold_exercise`): the trim is
   // item-scoped, so while its group is reduced only by the eve, the anchor keeps its
   // sets, its load and its reach eligibility, whatever the other items in its group take.
@@ -1186,8 +1214,11 @@ export function normalizeComposedSession(
       exercise.trim().toLowerCase() === stressHoldExercise &&
       !!group &&
       loadHeldGroups.has(canonicalGroup(group) ?? group);
-    if (group && !stressHeldAnchor && reducedGroups.has(canonicalGroup(group) ?? group))
+    if (group) groupByExercise.set(exercise.toLowerCase(), group);
+    if (group && !stressHeldAnchor && reducedGroups.has(canonicalGroup(group) ?? group)) {
       reducedExercises.add(exercise.toLowerCase());
+      if (stressSoleGroups.has(canonicalGroup(group) ?? group)) stressSoleExercises.add(exercise.toLowerCase());
+    }
     if (group && !stressHeldAnchor && loadHeldGroups.has(canonicalGroup(group) ?? group))
       loadHeldExercises.add(exercise.toLowerCase());
     const novel = !isCardio && !stored;
@@ -1297,6 +1328,7 @@ export function normalizeComposedSession(
       changed = true;
     }
     const isReduced = reducedExercises.has(String(next.exercise ?? "").toLowerCase());
+    const stressOnly = isReduced && stressSoleExercises.has(String(next.exercise ?? "").toLowerCase());
     const authorizedSets = Math.max(1, Number(next.sets) || requestedSets);
     const setCapForItem = isReduced ? Math.min(itemSetCap, REDUCED_ITEM_SET_CAP) : itemSetCap;
     const boundedSets = Math.min(authorizedSets, setCapForItem, remainingSets);
@@ -1369,21 +1401,39 @@ export function normalizeComposedSession(
         if (seconds !== next.target_seconds) changed = true;
         next.target_seconds = seconds;
       } else if (next.target_weight != null) {
-        const weight = scaledTarget(next.target_weight, intensityFactor);
+        const exerciseKey = String(next.exercise ?? "").toLowerCase();
+        const weight = easedTarget(
+          next.target_weight,
+          intensityFactor,
+          next.exercise,
+          groupByExercise.get(exerciseKey) ?? (next.muscle_group == null ? null : String(next.muscle_group))
+        );
         if (weight !== next.target_weight) changed = true;
         next.target_weight = weight;
       }
       // Reduced-area and day-level easing say something the progression why does
       // not (this area is still carrying work; today's cap came down). Always add
       // on loaded work. Prep/mobility is not a lift — don't stamp a load story on it.
+      // An area only the stress budget reduced is fresh — the race build eases it — so it
+      // says that rule's reason instead; a load-held one (the key-run eve) eased here only
+      // by the day's own cap takes the day's wording, its weight no longer "the same".
       if (!isPrepCompositionItem(next)) {
+        const stressNotes = stressOnly && !loadHeld ? stressBudgetItemNotes(envelope.stress?.code) : null;
         next.note = adaptationNote(
           next.note,
-          isReduced
-            ? compositionNoteFor(REDUCED_AREA_NOTES, envelope.date, "reduced", next.exercise)
-            : compositionNoteFor(EASED_TODAY_NOTES, envelope.date, "eased", next.exercise)
+          stressNotes
+            ? compositionNoteFor(stressNotes, envelope.date, "stress", next.exercise)
+            : isReduced && !stressOnly
+              ? compositionNoteFor(REDUCED_AREA_NOTES, envelope.date, "reduced", next.exercise)
+              : compositionNoteFor(EASED_TODAY_NOTES, envelope.date, "eased", next.exercise)
         );
       }
+    } else if (loadHeld && stressOnly && boundedSets < authorizedSets && !isPrepCompositionItem(next)) {
+      // The key-run eve's trim: fewer sets, the prescription's weight — said as such,
+      // in place of the plain hold line the candidate's reduced-group hold would print.
+      const eveNotes = stressBudgetItemNotes(envelope.stress?.code);
+      if (eveNotes)
+        next.note = adaptationNote(next.note, compositionNoteFor(eveNotes, envelope.date, "stress", next.exercise));
     } else if (hold && !itemAlreadyHasProgressionHoldWhy(candidate) && !isPrepCompositionItem(next)) {
       next.note = adaptationNote(
         next.note,

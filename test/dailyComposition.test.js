@@ -9,6 +9,7 @@ import {
   REDUCED_AREA_NOTES,
 } from "../dist/repo/daily-composition.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
+import { KEY_RUN_EVE_ITEM_NOTES, RACE_TAPER_ITEM_NOTES } from "../dist/repo/stress-budget.js";
 import { REACH_NO_ROOM_WHY } from "../dist/repo/daily-decision.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { db, repo, resetTables } from "./_seed.js";
@@ -1139,6 +1140,92 @@ test("a reduced area keeps its movement but comes down in sets and target", () =
   assert.equal(validation.capped, true, "the clamp is reported");
   assert.equal(validation.rejected.length, 0, "nothing is thrown away");
   assert.ok(REDUCED_AREA_NOTES.includes(squat.note), "and it is said in plain words from the reduced set");
+});
+
+// An eased target is a load a bar, a pair of dumbbells or a stack can be set to: the
+// factor's load rounded DOWN onto the lift's own increment (5 lb compound, 2.5 lb
+// isolation, never under 5 lb on a pinned stack). Assistance is never multiplied.
+test("an eased load lands on the lift's own grid: barbell, dumbbell, stack, assisted", () => {
+  const lifts = [
+    ["Back Squat", "quads", 185, 165], // 166.5 → the barbell's 5 lb grid
+    ["Dumbbell Curl", "biceps", 25, 22.5], // an isolation dumbbell keeps its 2.5 lb grid
+    ["Rope Pushdown", "triceps", 57.5, 50], // 51.75 → a pinned stack's 5 lb floor
+    ["Dumbbell Bench Press", "chest", 55, 50], // 49.5: the floor (45) cuts too deep, so the nearest step under
+    ["Cable Lateral Raise", "shoulders", 20, 20], // no stack step under 20 lands near 18: the prescription holds
+    ["Assisted Pull-Up", "back", -30, -30], // assistance is never multiplied toward harder
+  ];
+  for (const [name, group] of lifts) repo.upsertExercise({ name, muscle_group: group, mode: "reps" });
+  const items = lifts.map(([exercise, , target_weight]) => ({
+    exercise,
+    sets: 3,
+    rep_low: 8,
+    rep_high: 10,
+    target_weight,
+  }));
+  anchorPlan(items);
+  const { session } = normalizeComposedSession(
+    agentSession(items.map((i) => ({ ...i }))),
+    reducedEnvelope(["quads", "biceps", "triceps", "chest", "shoulders", "back"], {
+      caps: { volume: "normal", intensity: "normal", duration_min: 90 },
+    })
+  );
+  for (const [name, , , eased] of lifts) {
+    const item = session.items.find((i) => i.exercise === name);
+    assert.ok(item, name);
+    assert.equal(item.target_weight, eased, name);
+  }
+});
+
+test("an easy day's eased load also lands on the grid", () => {
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  anchorPlan([{ exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 }]);
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 }]),
+    envelope({ caps: { volume: "reduced", intensity: "easy", duration_min: 30 } })
+  );
+  assert.equal(session.items[0].target_weight, 120, "155 × 0.8 = 124, down onto the 5 lb grid");
+});
+
+// A group only the race build's stress budget reduced (`stress.sole_reduced`) is FRESH:
+// its note says the build's reason, never the generic "still carrying recent work".
+const stressEnvelope = (stress, extra = {}) =>
+  reducedEnvelope(stress.sole_reduced, {
+    stress: { groups: stress.sole_reduced, ...stress },
+    ...extra,
+  });
+
+test("a taper-only reduced item says the taper's reason, not fatigue", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  anchorPlan([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 185 }]);
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 185 }]),
+    stressEnvelope({ code: "race_taper_legs", sole_reduced: ["quads"] })
+  );
+  const squat = session.items[0];
+  assert.equal(squat.sets, 2);
+  assert.equal(squat.target_weight, 165);
+  assert.ok(RACE_TAPER_ITEM_NOTES.includes(squat.note), squat.note);
+  assert.ok(!REDUCED_AREA_NOTES.includes(squat.note), squat.note);
+});
+
+test("a key-run eve trim says fewer sets at the same weight; the day's own easing takes the day's words", () => {
+  repo.upsertExercise({ name: "Romanian Deadlift", muscle_group: "hamstrings", mode: "reps" });
+  const rdl = { exercise: "Romanian Deadlift", sets: 3, rep_low: 8, rep_high: 10, target_weight: 205 };
+  anchorPlan([rdl]);
+  const eve = { code: "key_run_eve", sole_reduced: ["hamstrings"], load_held: true };
+  const held = normalizeComposedSession(agentSession([{ ...rdl }]), stressEnvelope(eve)).session.items[0];
+  assert.equal(held.sets, 2);
+  assert.equal(held.target_weight, 205, "the eve holds the load");
+  assert.ok(KEY_RUN_EVE_ITEM_NOTES.includes(held.note), held.note);
+
+  const eased = normalizeComposedSession(
+    agentSession([{ ...rdl }]),
+    stressEnvelope(eve, { caps: { volume: "reduced", intensity: "easy", duration_min: 30 } })
+  ).session.items[0];
+  assert.equal(eased.target_weight, 160, "205 × 0.8 on the grid");
+  assert.ok(EASED_TODAY_NOTES.includes(eased.note), eased.note);
+  assert.ok(!KEY_RUN_EVE_ITEM_NOTES.includes(eased.note), "never 'same weight' on an eased load");
+  assert.ok(!REDUCED_AREA_NOTES.includes(eased.note), eased.note);
 });
 
 test("an untouched area in the same session keeps the volume it was composed with", () => {
