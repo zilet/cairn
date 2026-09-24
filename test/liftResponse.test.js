@@ -24,7 +24,7 @@ import {
 } from "../dist/repo/lift-response.js";
 import * as voice from "../dist/repo/progression-voice.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
-import { buildProgressionWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
+import { buildProgressionWithAutonomy, revertDecision } from "../dist/domain/brain/autonomy-service.js";
 import { localDateISO } from "../dist/repo/shared.js";
 
 function isoDaysAgo(n) {
@@ -281,6 +281,29 @@ test("lead mode: the range move quiet-applies as a training_target, re-stamps th
   assert.equal(next.escalated, undefined, "it does not re-fire");
   assert.equal(next.suggested.rep_low, 15);
   assert.equal(next.suggested.weight, 57.5);
+});
+
+test("an Undo of the range move sticks: the next boundary never re-proposes it", () => {
+  seedPushdownGrind();
+  repo.setSettings({ lead_mode: "lead" });
+  const out = buildProgressionWithAutonomy(1);
+  assert.equal(out.autonomy.tier, "quiet_apply");
+  assert.equal(repo.getPlanDay(1).items[0].rep_low, 15);
+  const undone = revertDecision(out.autonomy.decision.id);
+  assert.equal(undone.ok, true, undone.error);
+  const item = repo.getPlanDay(1).items[0];
+  assert.equal(item.rep_low, 12, "Undo restored the range");
+  assert.equal(item.rep_high, 15);
+
+  // The next boundary: the athlete's "no" is the move's answer; it never comes back.
+  const next = nextPrescription("Rope Pushdown");
+  assert.notEqual(next.escalated, "rep_range", "no re-proposal of the vetoed move");
+  const again = buildProgressionWithAutonomy(1);
+  const change = again.ok ? again.proposal?.parsed?.changes?.find((c) => c.exercise === "Rope Pushdown") : null;
+  assert.notEqual(change?.progression_escalation, "rep_range", "no second range move is drafted");
+  const after = repo.getPlanDay(1).items[0];
+  assert.equal(after.rep_low, 12, "nothing re-applied the range");
+  assert.ok(lastAppliedRepRangeMove("Rope Pushdown")?.vetoed, "the ledger reads the move as vetoed");
 });
 
 test("a range moved today off today's session does not re-fire or fall to a deload", () => {

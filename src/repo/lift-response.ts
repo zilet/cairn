@@ -7,6 +7,7 @@
 // Consumed by progression.ts. Must never: write to the plan itself, change what counts
 // as a stall, or move a barbell compound off its deload ladder.
 import { db } from "../db.js";
+import { USER_VETO_SQL } from "./brain-decisions.js";
 import {
   canonicalGroup,
   classifyMuscleGroup,
@@ -135,23 +136,35 @@ function localDayOf(stamp: unknown): string | null {
  * (buildProgressionProposal writes it). No window: a lift that has already been moved
  * up a range is answered by the ordinary ladder from then on, whenever it next stalls,
  * so the move can never loop. Fail-soft — an unreadable row counts as nothing.
+ *
+ * `vetoed` is the athlete's answer to it: the brain decision that landed the proposal
+ * was undone or refused (brain-decisions.ts `USER_VETO_SQL`, the same "no" the
+ * re-propose etiquette reads). Undo walks the plan back but leaves the proposal
+ * `applied`, so without this the restored range reads as a move never taken and the
+ * same move re-proposes and quiet-applies again at the next boundary. A vetoed move is
+ * spent: the ordinary ladder answers the lift from then on.
  */
 export function lastAppliedRepRangeMove(
   exerciseName: string,
   asOf: string = localDateISO()
-): { day: string; rep_low: number | null; rep_high: number | null } | null {
+): { day: string; rep_low: number | null; rep_high: number | null; vetoed: boolean } | null {
   const key = normalizedExerciseKey(String(exerciseName ?? ""));
   if (!key) return null;
   const until = String(asOf ?? "").slice(0, 10);
-  let rows: Array<{ parsed_json: string | null; created_at: string }> = [];
+  let rows: Array<{ parsed_json: string | null; created_at: string; vetoed: number | null }> = [];
   try {
     rows = db
       .prepare(
-        `SELECT parsed_json, created_at FROM plan_proposals
-          WHERE status = 'applied' AND parsed_json LIKE '%rep_range%'
-          ORDER BY created_at DESC, id DESC`
+        `SELECT p.parsed_json, p.created_at,
+                EXISTS (SELECT 1 FROM brain_decisions
+                         WHERE source_ref_type = 'plan_proposal'
+                           AND source_ref_key = CAST(p.id AS TEXT)
+                           AND ${USER_VETO_SQL}) AS vetoed
+           FROM plan_proposals p
+          WHERE p.status = 'applied' AND p.parsed_json LIKE '%rep_range%'
+          ORDER BY p.created_at DESC, p.id DESC`
       )
-      .all() as Array<{ parsed_json: string | null; created_at: string }>;
+      .all() as Array<{ parsed_json: string | null; created_at: string; vetoed: number | null }>;
   } catch {
     return null;
   }
@@ -171,7 +184,7 @@ export function lastAppliedRepRangeMove(
     );
     if (!hit) continue;
     const num = (v: unknown): number | null => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-    return { day, rep_low: num(hit.rep_low), rep_high: num(hit.rep_high) };
+    return { day, rep_low: num(hit.rep_low), rep_high: num(hit.rep_high), vetoed: Number(row?.vetoed) === 1 };
   }
   return null;
 }

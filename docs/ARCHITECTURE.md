@@ -1091,7 +1091,11 @@ already reaching within one of the new floor, and the move UNSPENT on this lift
 (`plan_proposals` rows carrying `changes[].progression_escalation: "rep_range"`, written by
 `buildProgressionProposal`) for the latest APPLIED move on this lift; a lift already moved up a range
 answers to the ordinary ladder from then on, on its NEXT stall, so the move can never loop. No time
-window: the marker is permanent per lift until a later ladder event overwrites it.
+window: the marker is permanent per lift until a later ladder event overwrites it. An UNDONE move is
+spent too: Undo (`revertDecision`) restores the old range but leaves the proposal `applied`, so the
+ledger also reads whether the brain decision that landed it was vetoed (`vetoed`, via
+`brain-decisions.ts`'s `USER_VETO_SQL` — reverted, rejected, or held by the athlete, the same "no"
+`hasRecentDecisionVeto` reads). A vetoed move never re-proposes; the ordinary ladder answers the lift.
 
 **Brakes and protections win.** A movement-response deload, `autoregBrake`, `painBandBrake` or a fuel
 protection (`applyFuelProtection`) that reshapes the action clears `escalated`/the wave rep range back

@@ -363,6 +363,13 @@ export function recentAppliedRotations(days = 21, asOf = localDateISO()): Applie
 // vetoes. `canceled` is deliberately kept OUT of the demotion counters
 // (domainShouldDemote) — this read is only about respecting a recent "no" before
 // re-proposing the same kind, never about eroding autonomy.
+//
+// USER_VETO_SQL is that predicate as SQL over a `brain_decisions` row (unaliased
+// columns), shared with every reader that asks "did the athlete say no to THIS
+// change" rather than to a kind — the rep-range move's ledger (lift-response.ts).
+export const USER_VETO_SQL = `(status IN ('rejected','reverted')
+           OR (status = 'canceled' AND json_extract(context_json, '$.held_by_user') = 1))`;
+
 export function hasRecentDecisionVeto(kind: string, days = 5): boolean {
   const key = String(kind || "").trim();
   if (!key) return false;
@@ -372,10 +379,7 @@ export function hasRecentDecisionVeto(kind: string, days = 5): boolean {
       `SELECT 1 FROM brain_decisions
        WHERE kind = ?
          AND created_at >= datetime('now', ?)
-         AND (
-           status IN ('rejected','reverted')
-           OR (status = 'canceled' AND json_extract(context_json, '$.held_by_user') = 1)
-         )
+         AND ${USER_VETO_SQL}
        LIMIT 1`
     )
     .get(key, `-${window} days`);

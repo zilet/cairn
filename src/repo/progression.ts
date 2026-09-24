@@ -2070,7 +2070,13 @@ function repsPrescription(
   const rangeMoveUnspent = (): boolean => {
     if (rangeLedger != null) return rangeLedger;
     const prior = lastAppliedRepRangeMove(name, date);
-    rangeLedger = !(prior != null && (prior.rep_low == null || (repLow as number) >= prior.rep_low));
+    // Spent when the moved range still stands, or when the athlete undid it: an Undo
+    // restores the old range, and reading that as "never moved" re-proposed the same
+    // move at every boundary.
+    rangeLedger = !(
+      prior != null &&
+      (prior.vetoed || prior.rep_low == null || (repLow as number) >= prior.rep_low)
+    );
     return rangeLedger;
   };
   // Whether the move stands in for an earned step (braked like one) or for a grind's deload.
