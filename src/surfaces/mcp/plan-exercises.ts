@@ -20,8 +20,8 @@ import {
   planUpcomingNote,
   planWeek,
   reconcileExerciseGroups,
-  replacePlanChecked,
-  savePlanDayChecked,
+  replacePlanByPerson,
+  savePlanDayByPerson,
   suggestAlternatives,
   suggestVariations,
   updateExercise,
@@ -180,7 +180,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     },
     async (day) => {
       try {
-        const result = savePlanDayChecked(day.day_number, day.name, day.focus ?? null, day.items, {
+        const result = savePlanDayByPerson(day.day_number, day.name, day.focus ?? null, day.items, {
           quality_override: day.quality_override,
           day_type: day.day_type ?? null,
         });
@@ -233,7 +233,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     },
     async ({ days, quality_override }) => {
       try {
-        const result = replacePlanChecked(days, { quality_override });
+        const result = replacePlanByPerson(days, { quality_override });
         return asText(result.plan);
       } catch (error) {
         if (error instanceof PlanQualityError) return asText({ ok: false, quality: error.report });

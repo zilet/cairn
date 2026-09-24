@@ -162,7 +162,7 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
         .regex(/^[a-f0-9]{64}$/)
         .optional()
         .describe("adaptive preview fingerprint; stale candidates return a fresh preview without writing"),
-      day_number: z.number().int().optional().describe("explicit plan day; omit for the adaptive selection"),
+      day_number: z.number().int().optional().describe("explicit plan day; omit for the adaptive selection. With athlete_override it names the plan day the custom session belongs to; omitted, the day keeps the plan-day link it already has"),
       agent_job_id: z
         .number()
         .int()

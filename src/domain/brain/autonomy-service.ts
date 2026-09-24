@@ -70,6 +70,7 @@ import { recordAsyncFailure } from "../../diagnostics.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { refreshPreparedDayForPlanChange } from "../../repo/adaptive-session.js";
+import { isPersonSuperseded, personSupersededMarker, planChangeKey } from "../../repo/plan-annotation-release.js";
 import { revertGarminReconcile } from "../../repo/activities.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 import {
@@ -502,7 +503,17 @@ function indexedPlanItems(items: any[]): Array<{ key: string; base: string; item
 // Undo only the fields still owned by this decision. A later manual edit or a newer
 // coaching decision wins: reverting an old bench target must never restore a stale
 // whole-plan snapshot over a newly added run day, exercise, note, or target.
-function mergeTrainingRollback(before: any[], after: any[], current: any[], swaps: any[] = []): any[] {
+//
+// `released` names what a person's own plan save took over since
+// (plan-annotation-release.ts): that item is theirs outright, so Undo keeps it exactly
+// as it stands even where a value happens to equal the decision's `after`.
+function mergeTrainingRollback(
+  before: any[],
+  after: any[],
+  current: any[],
+  swaps: any[] = [],
+  released: (dayNumber: number, item: any) => boolean = () => false
+): any[] {
   const byDay = (days: any[]) => new Map(days.map((day) => [Number(day.day_number), day]));
   const beforeDays = byDay(before);
   const afterDays = byDay(after);
@@ -551,6 +562,12 @@ function mergeTrainingRollback(before: any[], after: any[], current: any[], swap
     const handledBefore = new Set<string>();
     for (const currentEntry of currentItems) {
       const rotation = rotations.get(currentEntry.key);
+      if (released(dayNumber, currentEntry.item)) {
+        items.push(currentEntry.item);
+        if (rotation) handledBefore.add(rotation.beforeKey);
+        if (beforeByKey.has(currentEntry.key)) handledBefore.add(currentEntry.key);
+        continue;
+      }
       const rotatedFrom = rotation ? beforeByKey.get(rotation.beforeKey) : null;
       const rotatedTo = rotation ? afterByKey.get(rotation.afterKey) : null;
       if (rotatedFrom && rotatedTo && sameValue(currentEntry.item, rotatedTo.item)) {
@@ -568,6 +585,7 @@ function mergeTrainingRollback(before: any[], after: any[], current: any[], swap
     // only missing item restored. Current-only insertions and user removals remain.
     for (const beforeEntry of beforeItems) {
       if (handledBefore.has(beforeEntry.key)) continue;
+      if (released(dayNumber, beforeEntry.item)) continue;
       const item = rollbackItem(beforeEntry.item, afterByKey.get(beforeEntry.key)?.item, null);
       if (item != null) items.push(item);
     }
@@ -3519,9 +3537,13 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
   if (!decision || decision.status !== "applied" || !decision.reversible)
     return { ok: false, error: "decision is not reversible" };
   const rollback = getBrainRollback(id);
+  const personSuperseded = personSupersededMarker(decision.context);
   try {
     return withSqliteSavepoint(`revert_decision_${id}`, () => {
       if (rollback?.kind === "training_plan" && Array.isArray(rollback.payload)) {
+        // A legacy whole-plan snapshot cannot leave part of the plan alone, so it never
+        // runs over an item the athlete has saved themselves since.
+        if (personSuperseded) throw new Error("the athlete has since saved this plan themselves");
         // Legacy snapshots remain reversible. New writes use a three-way snapshot below.
         replacePlan(withCurrentDayTypes(rollback.payload));
       } else if (
@@ -3535,7 +3557,10 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
             rollback.payload.before,
             rollback.payload.after,
             trainingPlanSnapshot(),
-            Array.isArray((decision.action as any)?.swaps) ? (decision.action as any).swaps : []
+            Array.isArray((decision.action as any)?.swaps) ? (decision.action as any).swaps : [],
+            (dayNumber, item) =>
+              item?.kind !== "cardio" &&
+              isPersonSuperseded(personSuperseded, planChangeKey(dayNumber, item?.exercise))
           )
         );
       } else if (rollback?.kind === "nutrition_target") {

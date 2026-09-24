@@ -29,8 +29,8 @@ import {
   planWeek,
   reconcileExerciseGroups,
   recoveryWeekStatus,
-  replacePlanChecked,
-  savePlanDayChecked,
+  replacePlanByPerson,
+  savePlanDayByPerson,
   suggestAlternatives,
   suggestVariations,
   updateExercise,
@@ -145,7 +145,7 @@ planExercisesRouter.put("/plan", (req, res) => {
   try {
     const body = req.body ?? {};
     // The editor's own save: a day the athlete just added and has not filled survives.
-    const result = replacePlanChecked(body.days, { quality_override: body.quality_override === true, keepScaffolds: true });
+    const result = replacePlanByPerson(body.days, { quality_override: body.quality_override === true, keepScaffolds: true });
     // Preserve the established REST success shape (the plan array). Quality is
     // available at GET /plan/quality; rejected writes include the report below.
     res.json(result.plan);
@@ -157,7 +157,7 @@ planExercisesRouter.put("/plan", (req, res) => {
 planExercisesRouter.put("/plan/:day", (req, res) => {
   try {
     const b = req.body ?? {};
-    const result = savePlanDayChecked(Number(req.params.day), b.name, b.focus ?? null, b.items ?? [], { quality_override: b.quality_override === true, day_type: b.day_type ?? null });
+    const result = savePlanDayByPerson(Number(req.params.day), b.name, b.focus ?? null, b.items ?? [], { quality_override: b.quality_override === true, day_type: b.day_type ?? null });
     res.json(result.day);
   } catch (e: any) {
     res.status(400).json({ error: e.message, ...(e?.report ? { quality: e.report, quality_override_available: true } : {}) });

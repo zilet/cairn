@@ -374,6 +374,35 @@ function envelopePlanDayId(envelope: DailyDecisionEnvelope): number | null {
   return day?.id != null ? Number(day.id) : null;
 }
 
+// The plan day an athlete's own session is still OF. An override is the athlete
+// reshaping today, not abandoning the week: re-authoring the day that was already
+// "Upper Body & Arms" must not turn it into an anonymous "Session" and cost the ring
+// its anchor. An explicit day_number names the day when it is on the plan; otherwise
+// the link the day already holds — the active composition's, else the session row's —
+// is kept.
+// Nothing links a day that never had one (an open "just start" on an empty plan).
+// The content resolvers still drop a link the logged work no longer resembles
+// (resolveSessionPlanDay), so a kept link never forces a wrong name.
+function athleteOverridePlanDayId(date: string, dayNumber: unknown, existingRow: any): number | null {
+  if (dayNumber != null) {
+    // A day that is not on the plan (renumbered, removed) names nothing: fall back to
+    // the link the day already holds rather than refusing the athlete's own session.
+    const day = getPlanDay(Number(dayNumber));
+    if (day?.id != null) return Number(day.id);
+  }
+  const sessionId = existingRow ? Number(existingRow.session_id) : null;
+  const session =
+    sessionId != null
+      ? sessionRowsForDate(date).find((row) => Number(row.id) === sessionId)
+      : sessionRowsForDate(date)[0];
+  const linked = Number(existingRow?.plan_day_id ?? session?.plan_day_id);
+  if (!Number.isInteger(linked) || linked <= 0) return null;
+  const live = db
+    .prepare(`SELECT id FROM plan_days WHERE id = ? AND COALESCE(day_type, 'training') != 'rest'`)
+    .get(linked) as any;
+  return live ? Number(live.id) : null;
+}
+
 function parseJson(value: unknown): unknown {
   if (typeof value !== "string" || !value) return null;
   try {
@@ -1229,11 +1258,13 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
           }
         : {
             plan_day_id:
-              canonicalAgent?.kind === "session_compose" &&
-              decision?.envelope &&
-              decision.envelope.kind !== "rest"
-                ? envelopePlanDayId(decision.envelope)
-                : null,
+              source === "athlete_override"
+                ? athleteOverridePlanDayId(date, input.day_number, existingRow)
+                : canonicalAgent?.kind === "session_compose" &&
+                    decision?.envelope &&
+                    decision.envelope.kind !== "rest"
+                  ? envelopePlanDayId(decision.envelope)
+                  : null,
             payload: normalizeSessionPayload(
               boundedAgent ?? input.session,
               source === "agent_suggest",
@@ -1313,7 +1344,8 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
       ).run(current.id);
     }
     // A plan snapshot binds the existing session to that plan day. A custom
-    // suggestion owns no weekly-template provenance, so clear any stale link.
+    // suggestion owns no weekly-template provenance, so clear any stale link; an
+    // athlete override keeps the day it was already of (athleteOverridePlanDayId).
     db.prepare(`UPDATE sessions SET plan_day_id = ? WHERE id = ?`).run(prepared.plan_day_id, session.id);
     // The session has no logged sets (assertSessionsUnstarted just proved it), so
     // any skips and finish stamp belong to the prescription being replaced: an
@@ -1370,6 +1402,13 @@ export interface RefreshPreparedDayInput {
   date?: string;
   /** Plan days the change touched. Empty/omitted means "whichever day this date holds". */
   day_numbers?: readonly number[];
+  /**
+   * A person's own plan save that REMOVED the day this snapshot was taken from (the
+   * caller read it before the save — see activeCompositionPlanDayNumber): retire the
+   * unstarted snapshot instead of leaving it standing, so the next Today read composes
+   * from the plan as it is now. Off for every other caller.
+   */
+  retire_when_day_gone?: boolean;
 }
 
 export type RefreshPreparedDayReason =
@@ -1379,7 +1418,8 @@ export type RefreshPreparedDayReason =
   | "day_not_changed"
   | "session_started"
   | "session_finished"
-  | "unchanged";
+  | "unchanged"
+  | "retired_day_gone";
 
 export interface RefreshPreparedDayResult {
   refreshed: boolean;
@@ -1412,13 +1452,32 @@ export function refreshPreparedDayForPlanChange(input: RefreshPreparedDayInput =
   if (!PLAN_SOURCES.has(source)) return { refreshed: false, date, reason: "not_plan_sourced" };
   const planDay = db.prepare(`SELECT day_number FROM plan_days WHERE id = ?`).get(Number(row.plan_day_id)) as any;
   const dayNumber = boundedNumber(planDay?.day_number, 1, 60, true);
-  if (dayNumber == null) return { refreshed: false, date, reason: "plan_day_missing" };
+  const sameDateSessions = sessionRowsForDate(date);
+  const started = sameDateSessions.some((session) => meaningfulSessionReasons(session).length > 0);
+  const finished = sameDateSessions.some((session) => session?.finished_at != null);
+  if (dayNumber == null) {
+    // The day the snapshot came from left the plan. Only a person's save retires it,
+    // and only while nothing was lived on it — the same locks as the re-take below. A
+    // snapshot that never held a lift (a rest read's empty day) was never a plan day's.
+    const heldWork = (() => {
+      const items = parseJson(row.items_json);
+      return Array.isArray(items) && items.length > 0;
+    })();
+    if (input.retire_when_day_gone && heldWork && !started && !finished) {
+      db.prepare(
+        `UPDATE daily_session_compositions
+            SET status = 'superseded', superseded_at = datetime('now')
+          WHERE id = ? AND status = 'active'`
+      ).run(row.id);
+      return { refreshed: true, date, reason: "retired_day_gone" };
+    }
+    return { refreshed: false, date, reason: "plan_day_missing" };
+  }
   const wanted = (input.day_numbers ?? []).map((day) => Number(day)).filter((day) => Number.isFinite(day));
   if (wanted.length && !wanted.includes(dayNumber)) {
     return { refreshed: false, date, reason: "day_not_changed", day_number: dayNumber };
   }
-  const sameDateSessions = sessionRowsForDate(date);
-  if (sameDateSessions.some((session) => meaningfulSessionReasons(session).length > 0)) {
+  if (started) {
     return { refreshed: false, date, reason: "session_started", day_number: dayNumber };
   }
   // `finished_at` alone carries no logged-set evidence, so `meaningfulSessionReasons`
@@ -1428,7 +1487,7 @@ export function refreshPreparedDayForPlanChange(input: RefreshPreparedDayInput =
   // underneath a day they already finished. A finish stamp is lived, full stop — the
   // refresh must never reopen it (never clear skips or the finish stamp underneath an
   // athlete who has already closed the day out).
-  if (sameDateSessions.some((session) => session?.finished_at != null)) {
+  if (finished) {
     return { refreshed: false, date, reason: "session_finished", day_number: dayNumber };
   }
   const constraints = normalizedRecord(parseJson(row.constraints_json));
@@ -1451,6 +1510,18 @@ export function refreshPreparedDayForPlanChange(input: RefreshPreparedDayInput =
     ...(prepared.reused === true ? { reason: "unchanged" as const } : {}),
     ...(compositionId == null ? {} : { composition_id: compositionId }),
   };
+}
+
+/** The plan day number today's active composition was taken from, if it still has one. */
+export function activeCompositionPlanDayNumber(date?: string): number | null {
+  const row = db
+    .prepare(
+      `SELECT pd.day_number AS day_number
+         FROM daily_session_compositions dsc JOIN plan_days pd ON pd.id = dsc.plan_day_id
+        WHERE dsc.date = ? AND dsc.status = 'active' LIMIT 1`
+    )
+    .get(validateDate(date)) as any;
+  return boundedNumber(row?.day_number, 1, 60, true);
 }
 
 export function listDailySessionCompositions() {

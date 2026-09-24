@@ -870,10 +870,14 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     const intent_key = intentIdentity(it);
     const mode: MovementDoseEvidence["mode"] =
       it.mode === "timed" || finite(it.target_seconds) != null ? "timed" : "reps";
+    // An athlete override keeps its plan-day link for the day's name and the ring, but
+    // its prescription is the athlete's own — never the plan day's full-load anchor.
     const full_load_reference = fullLoadReferenceFor(
       String(it.exercise),
       date,
-      composition.plan_day_id == null ? null : Number(composition.plan_day_id)
+      composition.plan_day_id == null || composition.source === "athlete_override"
+        ? null
+        : Number(composition.plan_day_id)
     );
     const performed_at_full_load = evaluatePerformedAtFullLoad(mode, achievedDose, full_load_reference);
     return {
