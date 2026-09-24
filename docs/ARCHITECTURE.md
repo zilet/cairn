@@ -150,11 +150,23 @@ proceed-only), the kind is `train`, and the day's main-lift group is not DEEP-sa
 (`AcuteGateReading.deep`; an early-out — composition re-checks the actual host).
 `hold_aggression` keeps `level: "push"` and trims only the challenge item (`reach_trimmed_by_fueling`:
 fueling keeps today's reach to the working sets). Policy `daily_decision_v7`. On an open reach day, composition injects one challenge top set
-on the first *eligible* compound — never a reduced, excluded, saturated, or ungrouped item — at
-1×3–5 from the logged working weight (`round5(recentWorkingWeight × 1.075)`, `REACH_TOP_SET_NOTES`),
-counting as one working set against the volume cap; assisted and bodyweight lifts (by logged
-history) get an AMRAP note on the last working set instead. A loaded lift with no history is skipped,
-not AMRAP'd. If no item lands, the persisted envelope keeps `level: "push"` and swaps `why` to
+on the first *eligible* compound (`classifyPattern` squat/hinge/lunge/horizontal or vertical push or
+pull — a curl never hosts) — never a reduced, excluded, saturated, or ungrouped item, never a
+lift whose candidate the progression engine is holding, deloading, re-grounding or rotating (only
+`overload`/`carry` host), and never one with no logged set inside `REACH_EXPOSURE_WINDOW_DAYS` (21).
+It is priced off the log: ONE ordinary earned step above `recentWorkingWeight` (`nextLoadStep`, the
+same cap an overload takes), at the reps the best reserve-aware Epley estimate of that window
+(`recentLiftEvidence`: `reps + min(rir, 3)`) holds with one rep in hand, capped at the block's
+`rep_low` — so 55 × 10 reaches 60 × 5, not 60 × 3–5. No estimate, a step that does not sit above the
+block (a load-step overload already IS the day's heavier look), or no rep to spare seats nothing
+(`REACH_TOP_SET_NOTES`). It counts as one working set against the volume cap; assisted and
+bodyweight lifts (by logged history) get an AMRAP note on the last working set instead, under the
+same host gates. A loaded lift with no history is skipped, not AMRAP'd. The PWA folds a one-set
+`item.reach` card into the same-lift block right behind it (`foldTopSetCards`,
+`today-plan-session-model.ts`): ONE card, a "Top set" line, `sets` counting both, and a standing
+non-overload verdict silenced on that card (`data-rx="off"`). An agent's nested `top_set` passes the same
+candidate gate (dropped over a hold/deload/vary/re-ground) and is marked `top_set_of` (never
+`reach`), so a heavier one-set single directly ahead of its block folds the same way. If no item lands, the persisted envelope keeps `level: "push"` and swaps `why` to
 `REACH_NO_ROOM_WHY` (`reach_no_room` in soft preferences / rationale only — composition already
 treats a precedence entry as a constraint). The session screen labels **Reach** only from
 `item.reach` or `rx.top_set`, never by inferring a 1-set sibling card, and prefills the first
@@ -624,6 +636,32 @@ which is that lift's protocol. `voice.CUT_HOLDING_WIN` is now reserved for the c
 `reduce`/`sliding` HOLD, never a plan-behind catch-up or a phase hold, and never a `fast_loss` day
 (which has its own, separate reason for holding).
 
+**Composition never moves the prescription on its own (2026-09-24).** The plan target is the
+prescription and the progression engine owns moving it (`authorized_target`). A hold — the lift's or
+the day's — keeps the candidate's own target (`candidateHoldWeight`), not an older logged weight;
+only a candidate-less (agent-authored) movement anchors on the log. The one composition raise left is
+`earned_floor`, now the heaviest top load among the qualifying exposures that actually capped the
+range (never a lone heavier set), and a card it raises says so in its own `brain_change_reason`
+(`EARNED_FLOOR_REASONS`). Any card whose final load differs from a pound load its
+`brain_change_reason` names drops that sentence (`reconcileLoadReason`; the rx line already carries
+the verdict, and kg figures are never compared). Either rewrite also clears the decision link
+(`brain_decision_id`, provenance, summary, reversible), which described a number no longer on the
+card. A hold never anchors a rotated-in substitute on the replaced lift's target.
+`manual_plan` composes with `planSnapshot: true`: the athlete's day as written inside today's safety
+bounds — every clamp, easing, hold and exclusion still applies, but nothing is added or raised (no
+reach, no peak single, no earned floor, and a progression target only when it does not ask for more
+load or time).
+
+**A plateau measured under another prescription never rotates the slot.** `plan_items.prescribed_at`
+(v111) is the local date the slot's movement + rep range + target was last authored; `savePlanDay`
+carries a slot's stamp through a re-save that leaves it unchanged (sets are volume, not identity),
+and a swap restamps. Inside `PRESCRIPTION_SETTLE_DAYS` (14) a flat-long read holds
+(`FRESH_PRESCRIPTION_HOLD`) instead of `vary`/`introduce`/escalated variation; NULL (pre-v111) reads
+as settled. `rankedVaryOptions` also filters against the plan DAY: no movement already on it, and no
+bench-style press (close-grip included — `pressSlotKey` leaves it out of the angle slots) when the day
+already presses or dips; then it prefers a variation with logged history (`historyRerank`) so the
+rotated card opens on a real load.
+
 **A target the log cannot reach re-grounds, in both directions.** `achievableWorkingWeight`
 (`exercises.ts`) inverts the best Epley estimate of the last six weeks at the plan's rep floor. A
 catch-up lands there, never on the heaviest top set whatever its reps (a calf raise at 90 × 8 used to
@@ -631,6 +669,9 @@ become 90 × 15), and a plan target more than `REACHABLE_TOLERANCE` (5%) above i
 restructure's squat the athlete's best week never touched — re-grounds DOWN (`PLAN_AHEAD_HOLD`,
 `reground: true`) through the same propose→apply path as a catch-up. Within 5% is reaching, not out of
 reach: a load just stepped up to is held while the reps fill in. No history in the window is no ceiling.
+Nor is a plan ONE earned step (`clampedOverload`) above a latest session whose every working set
+reached the rep floor at a logged RIR ≥ 2 (`steppedUpFromReserve`): Epley reads the reps done, not
+the ones left, so 35 × 10 at RIR 4 no longer drags a written 40 back to 35. No rating is not reserve.
 
 **Dose comparability is a per-lift question, not a per-session one.** Each `dose_evidence` entry
 carries its own `comparable` flag and reasons in `facts_json` — a shortfall blocks only the lift that

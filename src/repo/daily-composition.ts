@@ -14,16 +14,20 @@ import {
 import {
   findExercise,
   hasUnloadedWorkingHistory,
+  recentLiftEvidence,
   recentWorkingSeconds,
   recentWorkingWeight,
 } from "./exercises.js";
 import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
+import { classifyPattern } from "./exercise-variations.js";
 import { pressSlotKey } from "./plan-quality.js";
+import { nextLoadStep } from "./progression.js";
 import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 import { type SaturatedSubstitution, substituteSaturatedPlanItems } from "./saturated-substitution.js";
-import { round5, finite } from "../lib/numbers.js";
+import { finite } from "../lib/numbers.js";
+import { daysBetweenISO } from "../lib/dates.js";
 import { orderPlanItemsForEffect, planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
 
 // Stage 3 of the adaptive daily training plan — bounded agent composition.
@@ -64,6 +68,12 @@ export interface CompositionValidation {
 // reduced — so nothing here rewrites its choices behind its back.
 export interface ComposeSessionOptions {
   substituteSaturated?: boolean;
+  // `manual_plan`: the athlete snapshotted a day of their OWN plan, and that day is
+  // what they get, inside today's safety bounds. Every clamp, easing, hold, exclusion
+  // and cap still applies — a brake still LOWERS a load — but nothing is added or
+  // raised on top of what they wrote: no reach, no peak single, no earned floor, and a
+  // progression target is taken only when it does not ask for more load or time.
+  planSnapshot?: boolean;
 }
 
 function volumeCap(envelope: DailyDecisionEnvelope): number {
@@ -239,6 +249,69 @@ function trustedCandidateMetadata(candidate: DailyDecisionEnvelope["candidates"]
   };
 }
 
+// Would the progression's authorized target ask for MORE than this item already
+// prescribes — more load (the larger signed value: less assist is harder too), load
+// on a bodyweight card, or more seconds? Only a plan snapshot asks.
+function authorizedTargetRaises(
+  item: any,
+  candidate: DailyDecisionEnvelope["candidates"][number] | undefined
+): boolean {
+  const target = candidate?.authorized_target;
+  if (!target) return false;
+  if (target.mode === "timed") {
+    const want = finite(target.target_seconds);
+    const have = finite(item.target_seconds);
+    return want != null && (have == null || want > have);
+  }
+  const want = finite(target.target_weight);
+  const have = finite(item.target_weight);
+  if (want == null) return false;
+  return have == null ? want > 0 : want > have;
+}
+
+// The athlete-facing reason for a card's number when composition's own floor set it.
+export const EARNED_FLOOR_REASONS: readonly [(w: number) => string, ...((w: number) => string)[]] = [
+  (w) => `Your recent sets have already capped the range at ${w} lb, so today starts there rather than below it.`,
+  (w) => `Recent work at ${w} lb went clean at the top of the range — the card keeps you there.`,
+  (w) => `You've been owning ${w} lb for the full range lately, so this doesn't drop under it.`,
+];
+
+// Pounds only: card loads are pounds, so a kilogram figure is never compared (and so
+// never read as contradicting the card).
+const LOAD_IN_TEXT = /(\d+(?:\.\d+)?)\s*(?:lb|lbs)\b/gi;
+
+function textNamesOtherLoad(text: unknown, weight: number): boolean {
+  const named = [...String(text ?? "").matchAll(LOAD_IN_TEXT)].map((m) => Number(m[1]));
+  if (!named.length) return false;
+  return !named.some((n) => Math.abs(n - Math.abs(weight)) < 0.01);
+}
+
+// A plan item's `brain_change_reason` explains the number the plan change wrote
+// ("resetting to 75 lb"). Once today's card carries a different number — the
+// progression's own step, an easing, a hold — that sentence describes a load nobody
+// is being asked to lift, printed right beside the one they are. It goes, with the
+// decision link it rode on (the card no longer shows that decision's number). The
+// lift's current verdict is NOT promoted into its place: the card's rx line already
+// says it, and one sentence twice is noise.
+function reconcileLoadReason(item: any): boolean {
+  if (item.mode === "timed") return false;
+  const weight = finite(item.target_weight);
+  if (weight == null || !textNamesOtherLoad(item.brain_change_reason, weight)) return false;
+  detachDecisionReason(item, null);
+  return true;
+}
+
+// Replace (or clear) a card's decision reason and drop every field that pointed it at
+// the plan decision it came from, so Undo and provenance never describe a number
+// composition itself put on the card.
+function detachDecisionReason(item: any, reason: string | null): void {
+  item.brain_change_reason = reason;
+  item.brain_change_reason_provenance = null;
+  item.brain_change_summary = null;
+  item.brain_decision_id = null;
+  item.brain_change_reversible = null;
+}
+
 function applyAuthorizedTarget(item: any, candidate: DailyDecisionEnvelope["candidates"][number] | undefined): boolean {
   const target = candidate?.authorized_target;
   if (!target) return false;
@@ -276,7 +349,31 @@ function applyRecoveryCycleTarget(item: any, envelope: DailyDecisionEnvelope): b
   return true;
 }
 
-function holdAnchor(exercise: string, envelope: DailyDecisionEnvelope) {
+// The load a HOLD keeps, as the progression engine already decided it: a held lift's
+// authorized target, or — when the DAY holds a lift the engine would have stepped —
+// its current target, never the step. undefined when there is no such read (an
+// agent-authored movement with no candidate), and the logged anchor below answers.
+// It is the prescription, not the log: a plan that stepped 35 → 40 off sets finished
+// at RIR 4 is held at 40, not dragged back to the older 35.
+function candidateHoldWeight(
+  candidate: DailyDecisionEnvelope["candidates"][number] | undefined
+): number | null | undefined {
+  // A rotated-in substitute carries the REPLACED lift's targets; its own load is
+  // answered by its own log below, never by a barbell number on a dumbbell card.
+  if (!candidate || candidate.substitution_for) return undefined;
+  const target =
+    candidate.action === "hold" || candidate.action === "deload"
+      ? (candidate.authorized_target ?? candidate.current_target)
+      : candidate.current_target;
+  if (!target || target.mode === "timed") return undefined;
+  return target.target_weight ?? null;
+}
+
+function holdAnchor(
+  exercise: string,
+  envelope: DailyDecisionEnvelope,
+  candidate?: DailyDecisionEnvelope["candidates"][number]
+) {
   const planDay = envelope.template.day_number == null ? null : (getPlanDay(envelope.template.day_number) as any);
   const planned = (Array.isArray(planDay?.items) ? planDay.items : []).find(
     (item: any) => String(item?.exercise ?? "").toLowerCase() === exercise.toLowerCase()
@@ -289,15 +386,21 @@ function holdAnchor(exercise: string, envelope: DailyDecisionEnvelope) {
       target_weight: null,
     };
   }
+  const prescribed = candidateHoldWeight(candidate);
   return {
     mode,
     target_seconds: null,
-    target_weight: recentWorkingWeight(exercise) ?? finite(planned?.target_weight),
+    target_weight:
+      prescribed !== undefined ? prescribed : (recentWorkingWeight(exercise) ?? finite(planned?.target_weight)),
   };
 }
 
-function clampHeldTarget(item: any, envelope: DailyDecisionEnvelope): boolean {
-  const anchor = holdAnchor(String(item.exercise ?? ""), envelope);
+function clampHeldTarget(
+  item: any,
+  envelope: DailyDecisionEnvelope,
+  candidate?: DailyDecisionEnvelope["candidates"][number]
+): boolean {
+  const anchor = holdAnchor(String(item.exercise ?? ""), envelope, candidate);
   let changed = false;
   if (anchor.mode === "timed") {
     if (item.target_weight != null) {
@@ -397,6 +500,47 @@ function itemMuscleGroup(item: any): string | null {
   return canonicalGroup(group) ?? group;
 }
 
+// A reach is a heavier look at a lift the progression engine is MOVING. A held,
+// deloading, re-grounding or rotating lift has been read as not ready for more, and a
+// top set above it contradicts the card's own verdict ("hold — holding this weight
+// counts as progress" under "you've earned a heavier look"). `carry` is a lift the
+// engine has no verdict on; it may host. No candidate at all (an agent's custom day)
+// leaves the question to the evidence gates below.
+const REACH_HOST_ACTIONS: ReadonlySet<string> = new Set(["overload", "carry"]);
+
+// The heavier look is priced off RECENT work. A lift last done five weeks ago has no
+// current working weight to reach from, whatever its old log says — the engine's own
+// "current" window is four weeks, and a near-top single asks for tighter than that.
+export const REACH_EXPOSURE_WINDOW_DAYS = 21;
+
+// The reach belongs on a COMPOUND — a curl or a pushdown is never the day's heavier look.
+const REACH_COMPOUND_PATTERNS: ReadonlySet<string> = new Set([
+  "squat",
+  "hinge",
+  "lunge",
+  "horizontal-push",
+  "vertical-push",
+  "horizontal-pull",
+  "vertical-pull",
+]);
+
+// Reps the reach leaves in hand against the recent best estimate.
+const REACH_RESERVE_REPS = 1;
+
+function reachCandidateAllows(candidate: DailyDecisionEnvelope["candidates"][number] | undefined): boolean {
+  if (!candidate) return true;
+  if (!REACH_HOST_ACTIONS.has(candidate.action)) return false;
+  return candidate.progression_evidence?.reground !== true;
+}
+
+function reachEvidence(exercise: string, dateISO: string): { best_e1rm: number | null } | null {
+  const evidence = recentLiftEvidence(exercise, dateISO, REACH_EXPOSURE_WINDOW_DAYS);
+  if (!evidence) return null;
+  const age = daysBetweenISO(dateISO, evidence.last_date);
+  if (age == null || age < 0 || age > REACH_EXPOSURE_WINDOW_DAYS) return null;
+  return { best_e1rm: evidence.best_e1rm };
+}
+
 function reachHostLoad(exercise: string): { kind: "loaded"; weight: number } | { kind: "unloaded" } | null {
   const working = recentWorkingWeight(exercise);
   if (working != null && working > 0) return { kind: "loaded", weight: working };
@@ -409,7 +553,9 @@ function isReachHostItem(
   item: any,
   reducedExercises: Set<string>,
   saturatedGroups: Set<string>,
-  excludedGroups: Set<string>
+  excludedGroups: Set<string>,
+  candidate: DailyDecisionEnvelope["candidates"][number] | undefined,
+  dateISO: string
 ): boolean {
   if (!item) return false;
   if (item.kind === "cardio" || item.mode === "timed") return false;
@@ -424,6 +570,9 @@ function isReachHostItem(
   if (isMobility(group) || isPrepMovement(exercise)) return false;
   if (excludedGroups.has(group) || excludedGroups.has(String(group).toLowerCase())) return false;
   if (saturatedGroups.has(group) || saturatedGroups.has(String(group).toLowerCase())) return false;
+  if (!REACH_COMPOUND_PATTERNS.has(String(classifyPattern(exercise, group) ?? ""))) return false;
+  if (!reachCandidateAllows(candidate)) return false;
+  if (!reachEvidence(exercise, dateISO)) return false;
   return reachHostLoad(exercise) != null;
 }
 
@@ -491,23 +640,38 @@ function topSetItemFor(backoff: any, candidate: any, dateISO: string): Record<st
   };
 }
 
+// The reach, priced off the log. The load is ONE ordinary earned step above the logged
+// working weight (the engine's own step, so a reach is never a bigger jump than an
+// overload), and the reps are what the recent best reserve-aware Epley estimate says
+// that load holds with a rep left in hand, never more than the block's own floor. A
+// flat ×1.075 at 3–5 turned 55 × 10 into 60 × 3–5 — under the lift's own estimate, so
+// not a heavier look at all — while nothing stopped a step the log could not carry.
+// Null when there is no estimate, when the step does not sit above the block, or when
+// the estimate leaves no rep at that load.
 function reachTopSetItemFor(backoff: any, working: number, dateISO: string): Record<string, unknown> | null {
   if (backoff?.kind === "cardio" || backoff?.mode === "timed") return null;
   if (working == null || working <= 0) return null;
-  const weight = round5(working * 1.075);
-  if (weight <= working) return null;
+  const exercise = String(backoff?.exercise ?? "");
+  const e1rm = reachEvidence(exercise, dateISO)?.best_e1rm ?? null;
+  if (e1rm == null || e1rm <= 0) return null;
+  const weight = nextLoadStep(working, itemMuscleGroup(backoff));
+  if (!(weight > working)) return null;
   // A "heavier look" that does not sit above the block the athlete will actually
   // work is not a reach — skip rather than print a same-or-lighter top set.
   const blockWeight = finite(backoff?.target_weight);
   if (blockWeight != null && weight <= blockWeight) return null;
+  const repFloor = finite(backoff?.rep_low);
+  const heldReps = Math.floor(30 * (e1rm / weight - 1) - REACH_RESERVE_REPS + 1e-9);
+  const reps = repFloor != null && repFloor > 0 ? Math.min(repFloor, heldReps) : heldReps;
+  if (!(reps >= 1)) return null;
   const note = pickDayVariant(REACH_TOP_SET_NOTES, dateISO, "daily-composition:reach-top-set");
   return {
     position: 0,
     kind: "strength",
     exercise: backoff.exercise,
     sets: 1,
-    rep_low: 3,
-    rep_high: 5,
+    rep_low: reps,
+    rep_high: reps,
     target_weight: weight,
     target_seconds: null,
     warmup_sets: null,
@@ -518,7 +682,7 @@ function reachTopSetItemFor(backoff: any, working: number, dateISO: string): Rec
     target_zone: null,
     interval: null,
     superset_group: null,
-    reach: { weight, reps: 3, note },
+    reach: { weight, reps, note },
   };
 }
 
@@ -565,6 +729,9 @@ function agentTopSetItemFor(backoff: any, top: any, dateISO: string): Record<str
     superset_group: null,
     load_basis:
       weight != null && weight < 0 ? "assisted" : weight != null && weight > 0 ? "loaded" : (backoff.load_basis ?? null),
+    // Which block this single leads, so the card list can fold the two into one card.
+    // Deliberately not `reach`: see above.
+    top_set_of: backoff.exercise,
   };
 }
 
@@ -1084,7 +1251,9 @@ export function normalizeComposedSession(
       continue;
     }
     const requestedSets = Math.max(1, Number(next.sets) || 1);
-    if (applyAuthorizedTarget(next, candidate)) changed = true;
+    if (!(opts.planSnapshot && authorizedTargetRaises(next, candidate)) && applyAuthorizedTarget(next, candidate)) {
+      changed = true;
+    }
     if (applyRecoveryCycleTarget(next, envelope)) changed = true;
     Object.assign(next, trustedCandidateMetadata(candidate));
     // After trustedCandidateMetadata, never before: a stand-in has no candidate of
@@ -1132,7 +1301,7 @@ export function normalizeComposedSession(
     // from today's template, correctly clears it rather than shipping an unproven
     // number.
     const substitutionProven = substitution?.load_basis === "logged";
-    if (hold && !substitutionProven && clampHeldTarget(next, envelope)) changed = true;
+    if (hold && !substitutionProven && clampHeldTarget(next, envelope, candidate)) changed = true;
     // A lift whose own log has earned past a shallow hold (`earned_floor`, the logged
     // working weight) is never prescribed under it on a day that is not itself eased —
     // an eased day (easy, deload, a deep or same-day reduced area) keeps its easing.
@@ -1141,6 +1310,7 @@ export function normalizeComposedSession(
     const earnedFloor = finite(candidate?.earned_floor);
     if (
       intensityFactor === 1 &&
+      !opts.planSnapshot &&
       earnedFloor != null &&
       earnedFloor > 0 &&
       next.mode !== "timed" &&
@@ -1148,6 +1318,16 @@ export function normalizeComposedSession(
       (finite(next.target_weight) == null || (finite(next.target_weight) as number) < earnedFloor)
     ) {
       next.target_weight = earnedFloor;
+      // The card says why its number sits above the plan's: the plan-history reason
+      // it carried ("resetting to 75") describes a number no longer on it.
+      detachDecisionReason(
+        next,
+        pickDayVariant(
+          EARNED_FLOOR_REASONS,
+          envelope.date,
+          `daily-composition:earned-floor:${normalizedExerciseKey(String(next.exercise ?? ""))}`
+        )(earnedFloor)
+      );
       changed = true;
     }
     if (intensityFactor < 1) {
@@ -1177,6 +1357,7 @@ export function normalizeComposedSession(
         compositionNoteFor(HOLD_TARGET_NOTES, envelope.date, "hold", next.exercise)
       );
     }
+    if (reconcileLoadReason(next)) changed = true;
     capped.push(next);
   }
   // ---- the peak week's heavy single, ahead of its own back-off block ----
@@ -1197,7 +1378,7 @@ export function normalizeComposedSession(
   const withTopSets: any[] = [];
   let insertedTopSet = false;
   let topSetsInserted = 0;
-  const topSetsAllowed = dayAllowsTopSet(envelope);
+  const topSetsAllowed = dayAllowsTopSet(envelope) && !opts.planSnapshot;
   // A day that had to move work off a recovering group is not a day to reach on.
   // The stand-in itself sits on an allowed group and would otherwise qualify as a
   // host, but the reason it is on the card at all is that the body is still
@@ -1213,7 +1394,7 @@ export function normalizeComposedSession(
     const group = itemMuscleGroup({ exercise: entry.replaced });
     return group == null || deepGroups.has(group);
   });
-  const reachOpen = reachChallengeOpen(envelope) && !substitutionParksReach;
+  const reachOpen = reachChallengeOpen(envelope) && !substitutionParksReach && !opts.planSnapshot;
   let reachHostConsumed = false;
   let reachLanded = false;
   for (const item of capped) {
@@ -1221,9 +1402,28 @@ export function normalizeComposedSession(
     const nestedTop = item.top_set;
     delete item.top_set;
     const isHost =
-      !reachHostConsumed && isReachHostItem(item, reducedExercises, saturatedGroups, excluded);
+      !reachHostConsumed &&
+      isReachHostItem(
+        item,
+        reducedExercises,
+        saturatedGroups,
+        excluded,
+        candidates.get(String(item.exercise ?? "").toLowerCase()),
+        envelope.date
+      );
     const hostLoad = isHost ? reachHostLoad(String(item.exercise ?? "")) : null;
-    if (nestedTop && !insertedTopSet && topSetsAllowed && remainingSets >= 1 && capped.length + topSetsInserted + 1 <= cap) {
+    // An agent's single is held to the same verdict as the server's reach: never above a
+    // lift the engine is holding, deloading, re-grounding or rotating.
+    const nestedAllowed = reachCandidateAllows(candidates.get(String(item.exercise ?? "").toLowerCase()));
+    if (nestedTop && !nestedAllowed) changed = true;
+    if (
+      nestedTop &&
+      nestedAllowed &&
+      !insertedTopSet &&
+      topSetsAllowed &&
+      remainingSets >= 1 &&
+      capped.length + topSetsInserted + 1 <= cap
+    ) {
       const top = agentTopSetItemFor(item, nestedTop, envelope.date);
       if (top) {
         withTopSets.push(top);
@@ -1472,7 +1672,10 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
   };
 }
 
-export function deterministicComposedSession(envelope: DailyDecisionEnvelope): ComposedSession {
+export function deterministicComposedSession(
+  envelope: DailyDecisionEnvelope,
+  opts: Pick<ComposeSessionOptions, "planSnapshot"> = {}
+): ComposedSession {
   // ---- a stated run day carries no lifting card ----
   // The run is the day's work and it lives on the Endurance plan (weeklyRunPlan /
   // the agenda), never on a strength card. With no plan day to compose from, the
@@ -1508,7 +1711,10 @@ export function deterministicComposedSession(envelope: DailyDecisionEnvelope): C
   const raw = deterministicSessionRawFromEnvelope(envelope);
   // Plan-sourced by construction — every item above came off the athlete's own
   // weekly template — so the saturated-group substitution law applies.
-  const { session } = normalizeComposedSession(raw, envelope, { substituteSaturated: true });
+  const { session } = normalizeComposedSession(raw, envelope, {
+    substituteSaturated: true,
+    planSnapshot: opts.planSnapshot === true,
+  });
   // The raw payload is built from safe template/plan items, so it always
   // normalizes; this null-guard is defensive only.
   return (

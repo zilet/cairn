@@ -62,6 +62,8 @@ type TodayProgressionDeps = {
       const name = (card.dataset.card || "").toLowerCase();
       const rx = name ? rxByEx[name] || null : null;
       const complete = card.classList.contains("ex-complete");
+      // A card carrying today's top set silenced its standing verdict at paint.
+      if (card.dataset.rx === "off") return;
       const existing = card.querySelector(".ex-rx");
       // The card stamped whether its header already carries today's dose; a live
       // refresh must not quietly reintroduce the second number the paint removed.

@@ -104,8 +104,13 @@ function makeExercise(name, { muscle_group = null, mode = "reps", constraint_not
 }
 
 // One plan day with a single strength item carrying its prescribed targets.
+// The logs these tests write span weeks, so the prescription they are read against is
+// an ESTABLISHED one: backdate the slot's authored stamp past the settle window.
+// (A plan written today is a fresh prescription and never rotates — tested on its own.)
 function planWith(dayNumber, item) {
-  return repo.savePlanDay(dayNumber, item.focus || `Day ${dayNumber}`, item.focus || null, [item]);
+  const day = repo.savePlanDay(dayNumber, item.focus || `Day ${dayNumber}`, item.focus || null, [item]);
+  db.prepare(`UPDATE plan_items SET prescribed_at = ? WHERE plan_day_id = ?`).run(isoDaysAgo(90), day.id);
+  return day;
 }
 
 // Log a top set for an exercise on a given ISO date (UTC). reps/weight for reps
@@ -408,6 +413,100 @@ test("a plan target out of reach for its rep floor re-grounds down to what the l
   assert.match(p.why, /recent|reach|range/i);
   assert.equal(p.reground, true, "it rides the same reground proposal as a catch-up");
   assert.ok(p.suggested.weight < 205 && p.suggested.weight >= 185, `re-grounded to an achievable load (${p.suggested.weight})`);
+});
+
+// Epley reads the reps DONE, not the ones left. A written target one earned step above a
+// session finished with reps in reserve is the plan stepping up on purpose — it is not
+// "out of reach", and the card must not be dragged back to the older, lighter load.
+test("a plan one step above sets finished at RIR 2+ is a deliberate step up, not out of reach", () => {
+  makeExercise("Chest-Supported Row", { muscle_group: "back" });
+  planWith(4, { exercise: "Chest-Supported Row", sets: 3, rep_low: 10, rep_high: 12, target_weight: 40, focus: "Upper" });
+  for (let s = 1; s <= 2; s++) logSet("Chest-Supported Row", isoDaysAgo(6), { weight: 35, reps: 10, rir: 4, setNum: s });
+  const p = nextPrescription("Chest-Supported Row");
+  assert.notEqual(p.reground, true, "no re-ground down to 35");
+  assert.equal(p.suggested.weight, 40, "the written 40 stands");
+
+  // The same sets with no rating are not reserve: the out-of-reach read stands.
+  db.prepare(`UPDATE logged_sets SET rir = NULL`).run();
+  const unrated = nextPrescription("Chest-Supported Row");
+  assert.equal(unrated.reground, true);
+  assert.equal(unrated.suggested.weight, 35);
+
+  // …and neither is a jump bigger than one earned step.
+  db.prepare(`UPDATE logged_sets SET rir = 4`).run();
+  planWith(4, { exercise: "Chest-Supported Row", sets: 3, rep_low: 10, rep_high: 12, target_weight: 50, focus: "Upper" });
+  assert.equal(nextPrescription("Chest-Supported Row").reground, true);
+});
+
+// ---- rotation guards: a plateau measured under another prescription, and the day it lands on ----
+
+function flatPushdownLog(name = "Triceps Rope Pushdown") {
+  // Same top load across >3 weeks, one set a session, RIR 2 — the flat-long shape the
+  // plain vary test uses.
+  for (const d of [35, 28, 21, 14, 7, 2]) logSet(name, isoDaysAgo(d), { weight: 50, reps: 12, rir: 2 });
+}
+
+test("a slot the plan just wrote is never rotated for a plateau measured before it", () => {
+  makeExercise("Triceps Rope Pushdown", { muscle_group: "triceps" });
+  repo.savePlanDay(4, "Upper", "Upper", [
+    { exercise: "Triceps Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 50 },
+  ]);
+  flatPushdownLog();
+  const fresh = nextPrescription("Triceps Rope Pushdown");
+  assert.notEqual(fresh.action, "vary", "freshly authored — it runs before it is judged");
+  assert.notEqual(fresh.action, "introduce");
+  assert.ok(!fresh.vary_to);
+  assert.ok(progressionVoice.FRESH_PRESCRIPTION_HOLD.includes(fresh.why), `the fresh-prescription voice (${fresh.why})`);
+
+  // Re-saving the day unchanged keeps the stamp; once it has settled, the plateau speaks.
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(isoDaysAgo(30));
+  repo.savePlanDay(4, "Upper", "Upper", [
+    { exercise: "Triceps Rope Pushdown", sets: 2, rep_low: 12, rep_high: 15, target_weight: 50 },
+  ]);
+  assert.equal(db.prepare(`SELECT prescribed_at FROM plan_items`).get().prescribed_at, isoDaysAgo(30), "a set-count trim is not a new prescription");
+  assert.equal(nextPrescription("Triceps Rope Pushdown").action, "vary");
+
+  // Changing the rep range IS a new prescription.
+  repo.savePlanDay(4, "Upper", "Upper", [
+    { exercise: "Triceps Rope Pushdown", sets: 2, rep_low: 10, rep_high: 12, target_weight: 50 },
+  ]);
+  assert.equal(db.prepare(`SELECT prescribed_at FROM plan_items`).get().prescribed_at, localDateISO());
+});
+
+test("a rotation never adds a third press to a day that already benches and dips, and prefers a movement with history", () => {
+  for (const [name, group] of [
+    ["Dumbbell Bench Press", "chest"],
+    ["Chest Dips", "chest"],
+    ["Triceps Rope Pushdown", "triceps"],
+    ["Close-Grip Bench Press", "triceps"],
+    ["Cable Overhead Tricep Extension", "triceps"],
+  ])
+    makeExercise(name, { muscle_group: group });
+  // Both candidates have history, so the history preference alone would lead with the press.
+  logSet("Close-Grip Bench Press", isoDaysAgo(60), { weight: 95, reps: 8 });
+  logSet("Cable Overhead Tricep Extension", isoDaysAgo(60), { weight: 40, reps: 12 });
+  flatPushdownLog();
+  const settle = () => db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run(isoDaysAgo(90));
+
+  repo.savePlanDay(4, "Upper", "Upper", [{ exercise: "Triceps Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 50 }]);
+  settle();
+  const alone = nextPrescription("Triceps Rope Pushdown");
+  assert.equal(alone.action, "vary");
+  assert.equal(alone.vary_to, "Close-Grip Bench Press", "with no press on the day, the logged press may lead");
+
+  repo.savePlanDay(4, "Upper", "Upper", [
+    { exercise: "Dumbbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 55 },
+    { exercise: "Chest Dips", sets: 2, rep_low: 8, rep_high: 12, target_weight: null },
+    { exercise: "Triceps Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 50 },
+  ]);
+  settle();
+  const beside = nextPrescription("Triceps Rope Pushdown");
+  assert.equal(beside.action, "vary");
+  assert.equal(beside.vary_to, "Cable Overhead Tricep Extension", "the logged non-press variation leads");
+  assert.ok(
+    !(beside.vary_options ?? []).some((o) => /bench/i.test(o.name) || /\bdips?\b/i.test(o.name)),
+    `no press or dip duplicates the day (${(beside.vary_options ?? []).map((o) => o.name).join(", ")})`
+  );
 });
 
 test("a catch-up lands on what the reps support, not the heaviest top set", () => {

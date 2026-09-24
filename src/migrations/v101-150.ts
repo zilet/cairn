@@ -400,4 +400,12 @@ export const MIGRATIONS_101_150: Migration[] = [
       }
     },
   },
+  {
+    // When a plan slot's prescription was last authored. A plateau read measured under
+    // an older prescription must not rotate a movement the athlete (or an agent) just
+    // wrote into the day. NULL keeps every existing row reading as settled.
+    version: 111,
+    name: "plan-item-prescribed-at",
+    up: (db) => addColumn(db, "plan_items", "prescribed_at TEXT"),
+  },
 ];

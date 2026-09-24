@@ -197,6 +197,9 @@ function trustedItemMetadata(
   // omit-when-absent so an ordinary item's snapshot (and therefore its request
   // fingerprint) is unchanged by the field existing at all.
   const substitutionFor = boundedText(item.substitution_for, 120);
+  // Server-marked: the block this one-set agent single leads, so the card list can
+  // fold the two into one card. Omit-when-absent like substitution_for.
+  const topSetOf = boundedText(item.top_set_of, 120);
   return {
     brain_decision_id: boundedNumber(item.brain_decision_id, 1, Number.MAX_SAFE_INTEGER, true),
     brain_change_summary: durableSnapshotText(item.brain_change_summary, 500),
@@ -207,6 +210,7 @@ function trustedItemMetadata(
       item.brain_change_reversible == null ? null : item.brain_change_reversible === true,
     ...(reach ? { reach } : {}),
     ...(substitutionFor ? { substitution_for: substitutionFor } : {}),
+    ...(topSetOf ? { top_set_of: topSetOf } : {}),
   };
 }
 
@@ -1189,8 +1193,10 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
           // The athlete picked a day of their OWN plan, so the saturated-group
           // substitution law applies: a slot whose group is still recovering is
           // re-pointed at other work from their own week rather than served
-          // lighter. The day they chose is still the day they get.
-          { substituteSaturated: true }
+          // lighter. The day they chose is still the day they get — and it is a
+          // snapshot: nothing is added or raised on top of it (no reach, no earned
+          // floor, no progression step above what they wrote).
+          { substituteSaturated: true, planSnapshot: true }
         ).session ??
         // Pass the live envelope so reconcile and persist share one object.
         deterministicComposedSession(
@@ -1202,7 +1208,8 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
               plan_day_id: manualPlan.plan_day_id,
               intent: "template",
             },
-          })
+          }),
+          { planSnapshot: true }
         )
       : null;
   const boundedAgent =

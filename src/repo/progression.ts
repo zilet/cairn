@@ -44,6 +44,7 @@ import {
   achievableWorkingWeight,
   findExercise,
   getExercise,
+  recentWorkingSeconds,
   recentWorkingWeight,
   unassistedProvenSessions,
 } from "./exercises.js";
@@ -191,6 +192,10 @@ const PEAK_HISTORY_DAYS = 400;
 // introduce a fresh variation before staleness sets in, at a block boundary, rather
 // than waiting for a measured plateau. Tenure = weeks since the lift was first logged.
 const INTRODUCE_TENURE_WEEKS = 12;
+// A slot whose prescription was authored this recently is not rotated for a plateau:
+// the flat weeks were measured under whatever the plan said before, so the movement
+// the athlete (or an agent) just wrote in gets a fair run first.
+const PRESCRIPTION_SETTLE_DAYS = 14;
 
 // How far a target may sit above the log's achievable load before it re-grounds:
 // Epley is an estimate, and a load the athlete just stepped up to sits a little past
@@ -650,6 +655,14 @@ function clampedOverload(
   return rounded;
 }
 
+// The next load one ordinary earned step above `current` — the plate grid and the
+// per-session cap an overload takes, with no phase pacing or learned modifier. The
+// daily reach prices its heavier look off this, so a reach is never a bigger jump
+// than the engine itself would take.
+export function nextLoadStep(current: number, group: string | null): number {
+  return clampedOverload(current, group);
+}
+
 // Peel assist toward bodyweight. Never crosses sign in one step — landing at or
 // past 0 is bodyweight (null), matching the earned-assist branch.
 function assistStepNext(
@@ -687,6 +700,12 @@ function planItemFor(name: string): {
   // couple of movements are the day's main work; what follows them is accessory —
   // the same reading calibration.ts uses to decide which lifts are worth re-testing.
   strength_position: number;
+  // When this slot's prescription was last authored (plan_items.prescribed_at, v111);
+  // null for a row older than the stamp.
+  prescribed_at: string | null;
+  // The other strength movements on the same plan day — what a rotation must not
+  // duplicate.
+  day_exercises: string[];
 } | null {
   // TIERED, mirroring resolvePlanSwapSlot: an EXACT spelling always beats a resolved
   // one (a day that names the lift verbatim wins over a day that only aliases onto
@@ -726,6 +745,10 @@ function planItemFor(name: string): {
             seconds: it.target_seconds ?? null,
             kind: cardio ? "cardio" : "strength",
             strength_position: strengthPosition,
+            prescribed_at: planItemPrescribedAt(it.id),
+            day_exercises: (day.items || [])
+              .filter((other: any) => other !== it && other.kind !== "cardio" && other.exercise)
+              .map((other: any) => String(other.exercise)),
           };
         }
         if (!cardio) strengthPosition += 1;
@@ -733,6 +756,15 @@ function planItemFor(name: string): {
     }
   }
   return null;
+}
+
+function planItemPrescribedAt(planItemId: unknown): string | null {
+  const id = Number(planItemId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const row = db.prepare(`SELECT prescribed_at FROM plan_items WHERE id = ?`).get(id) as
+    | { prescribed_at: string | null }
+    | undefined;
+  return row?.prescribed_at ? String(row.prescribed_at).slice(0, 10) : null;
 }
 
 function isPrepWork(name: string, group: string | null): boolean {
@@ -856,6 +888,27 @@ function latestLoggedSessionDate(through: string): string | null {
   const date = row?.date ? String(row.date) : null;
   latestSessionMemo = { key, date };
   return date;
+}
+
+// Is `planWeight` the plan deliberately stepping up from the latest session? Every
+// loaded working set there reached `repLow` with a logged RIR of at least
+// RIR_IN_RESERVE, and the target sits no further above that load than one earned step
+// (clampedOverload — the same cap an overload may take). No rating is not reserve.
+function steppedUpFromReserve(
+  name: string,
+  group: string | null,
+  planWeight: number | null,
+  repLow: number | undefined
+): boolean {
+  if (planWeight == null || planWeight <= 0 || repLow == null) return false;
+  const sets = latestWorkingSets(name);
+  if (!sets.length) return false;
+  const working = sets[0]?.weight;
+  if (working == null || working <= 0 || planWeight <= working) return false;
+  const reserved = sets.every(
+    (s) => s.weight === working && s.reps != null && s.reps >= repLow && s.rir != null && s.rir >= RIR_IN_RESERVE
+  );
+  return reserved && planWeight <= clampedOverload(working, group);
 }
 
 function latestWorkingSets(name: string): { weight: number | null; reps: number | null; rir: number | null }[] {
@@ -1380,7 +1433,24 @@ function waveRunning(name: string, date: string): boolean {
 // equipment + heavier COMPOUND loading (the owner's explicit goal), gently biased
 // by learned 'preference' memories, never re-suggesting a movement/slot already in
 // the week. Pure over suggestAlternatives.
-function rankedVaryOptions(name: string, ctx?: PrescCtx): { name: string; why: string }[] {
+// A variation that is itself a loaded bench-style press (close-grip included, which
+// `pressSlotKey` deliberately leaves out of the angle slots) is one more chest press.
+function horizontalPressFamily(name: string): boolean {
+  if (pressSlotKey(name) != null) return true;
+  const n = normalizedExerciseKey(name).replace(/[-_]/g, " ");
+  return /\bbench\b/.test(n) && /\bpress\b/.test(n) && !/\b(overhead|ohp|military)\b/.test(n);
+}
+
+// Pressing already on the day: a bench-style press, or dips (a chest/triceps press).
+function dayCarriesPress(dayNames: string[]): boolean {
+  return dayNames.some((n) => horizontalPressFamily(n) || /\bdips?\b/i.test(n));
+}
+
+function rankedVaryOptions(
+  name: string,
+  ctx?: PrescCtx,
+  dayNames: string[] = []
+): { name: string; why: string }[] {
   const equip = ctx?.availableEquipment ?? [];
   const exclude = ctx?.excludeNames ?? [];
   const prefs = ctx?.preferences ?? [];
@@ -1402,9 +1472,39 @@ function rankedVaryOptions(name: string, ctx?: PrescCtx): { name: string; why: s
         (candidatePress != null && pressSlotKey(planned) === candidatePress)
     );
   });
-  return riskRerank(preferenceRerank(filtered, name, prefs), ctx?.date)
+  // A rotation lands on THIS day, so it must not duplicate what the day already
+  // presses: rotating a pushdown into a close-grip bench beside a dumbbell bench and
+  // dips hands the athlete a third chest press. Leaving a lift that already IS a
+  // press for another press stays allowed — the slot is the same one.
+  const dayPresses = dayCarriesPress(dayNames) && !horizontalPressFamily(name);
+  const dayKeys = new Set(dayNames.map((n) => normalizedExerciseKey(n)));
+  const dayMoves = new Set(dayNames.map((n) => movementKey(n)));
+  const onDay = filtered.filter(
+    (candidate) =>
+      !dayKeys.has(normalizedExerciseKey(candidate.name)) &&
+      !dayMoves.has(movementKey(candidate.name)) &&
+      !(dayPresses && horizontalPressFamily(candidate.name))
+  );
+  return riskRerank(historyRerank(preferenceRerank(onDay, name, prefs)), ctx?.date)
     .slice(0, 3)
     .map((v) => ({ name: v.name, why: v.why }));
+}
+
+// Prefer a variation the athlete has actually loaded: its card opens on their own
+// working weight instead of a blank "establish a baseline". Stable otherwise.
+function historyRerank(candidates: ExerciseVariation[]): ExerciseVariation[] {
+  if (candidates.length < 2) return candidates;
+  const logged = (candidate: ExerciseVariation): boolean => {
+    try {
+      return recentWorkingWeight(candidate.name) != null || recentWorkingSeconds(candidate.name) != null;
+    } catch {
+      return false;
+    }
+  };
+  return candidates
+    .map((c, i) => ({ c, i, logged: logged(c) }))
+    .sort((a, b) => Number(b.logged) - Number(a.logged) || a.i - b.i)
+    .map((x) => x.c);
 }
 
 // Demote movements this athlete's own tolerance memory has FLAGGED. A swap-in is a
@@ -1645,8 +1745,12 @@ function repsPrescription(
       !(planWeight < 0 && recentWorking > 0) &&
       recentWorking > planWeight + 0.1);
   // …and the mirror: a plan target the log cannot reach re-grounds DOWN to the
-  // achievable load, through the same reground proposal as a catch-up.
-  const planAhead = !planBehind && unreachable(planWeight);
+  // achievable load, through the same reground proposal as a catch-up. Except when the
+  // plan is ONE earned step above a session finished with reps in reserve: Epley reads
+  // the reps done, not the ones left, so 35 × 10 at RIR 4 made a written 40 look out of
+  // reach and every card served the older, under-loaded 35. That target is the plan
+  // stepping up on purpose, and the reps fill in at it.
+  const planAhead = !planBehind && unreachable(planWeight) && !steppedUpFromReserve(name, group, planWeight, repLow);
   if (planAhead) baseWeight = achievable;
 
   const sets = plan?.sets || 3;
@@ -1665,7 +1769,9 @@ function repsPrescription(
   let fallthroughHold = false;
   // Equipment-ranked, compound-biased, plan-deduped same-pattern candidates —
   // computed ONCE and reused by the vary + introduce branches (and the introduce guard).
-  const varyCandidates = rankedVaryOptions(name, brakeCtx);
+  const varyCandidates = rankedVaryOptions(name, brakeCtx, plan?.day_exercises ?? []);
+  const prescribedAge = plan?.prescribed_at ? daysBetweenISO(date, plan.prescribed_at) : null;
+  const freshPrescription = prescribedAge != null && prescribedAge >= 0 && prescribedAge < PRESCRIPTION_SETTLE_DAYS;
   // A movement with nothing logged of its own and no number on the plan is exactly
   // the case a rotate-in creates. Rather than showing an empty target and "start
   // light", offer a conservative starting idea from a related lift the athlete does
@@ -1901,7 +2007,7 @@ function repsPrescription(
       why = counsel.doubt
         ? say(voice.LEDGER_MISSED_DELOAD, "ledger_missed_deload")
         : say(voice.PLATEAU_GRIND_DELOAD, "plateau_grind_deload");
-    } else if (flatLong) {
+    } else if (flatLong && !freshPrescription) {
       action = "vary";
       nextWeight = baseWeight;
       // Carry a concrete same-pattern candidate so "switch it up" is actionable (Today
@@ -1919,7 +2025,9 @@ function repsPrescription(
       action = "hold";
       nextWeight = baseWeight;
       // Same hold, three different truths about why it is the right one.
-      why = cut.any
+      why = flatLong
+        ? say(voice.FRESH_PRESCRIPTION_HOLD, "fresh_prescription_hold")
+        : cut.any
         ? say(voice.PLATEAU_CUT_HOLD, "plateau_cut_hold")
         : counsel.patience > 0
           ? say(voice.LEDGER_PATIENCE_HOLD, "ledger_patience_hold")
@@ -1942,7 +2050,8 @@ function repsPrescription(
     !loadConstrained &&
     state?.status === "maintaining" &&
     (brakeCtx?.tenureWeeks ?? 0) >= INTRODUCE_TENURE_WEEKS &&
-    varyCandidates.length > 0
+    varyCandidates.length > 0 &&
+    !freshPrescription
   ) {
     // PROACTIVE variety: the lift is holding steady but you've run it a long time —
     // introduce a fresh same-pattern variation (ranked toward heavier compound
@@ -2353,7 +2462,7 @@ function repsPrescription(
       nextWeight = brakedDeload && nextWeight != null && nextWeight > 0 ? Math.min(waved, nextWeight) : waved;
       escalated = "rep_wave";
       why = say(voice.ESCALATE_REP_WAVE, "escalate_rep_wave")(waveRepLow, waveRepHigh);
-    } else if (varyCandidates.length > 0) {
+    } else if (varyCandidates.length > 0 && !freshPrescription) {
       action = "vary";
       nextWeight = baseWeight;
       varyOptions = varyCandidates;

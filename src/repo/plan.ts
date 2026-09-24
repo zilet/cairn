@@ -1041,11 +1041,14 @@ function insertPlanItem(row: {
   target_zone?: string | null;
   interval_json?: string | null;
   superset_group?: number | null;
+  // Omitted = authored now. A rewrite that keeps a slot's prescription passes the
+  // stamp it already had (null included), so re-saving a day never makes it fresh.
+  prescribed_at?: string | null;
 }) {
   return db
     .prepare(
-      `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds, kind, target_distance_km, target_duration_min, target_zone, interval_json, superset_group)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds, kind, target_distance_km, target_duration_min, target_zone, interval_json, superset_group, prescribed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       row.plan_day_id,
@@ -1063,7 +1066,8 @@ function insertPlanItem(row: {
       row.target_duration_min ?? null,
       row.target_zone ?? null,
       row.interval_json ?? null,
-      row.superset_group ?? null
+      row.superset_group ?? null,
+      row.prescribed_at === undefined ? localDateISO() : row.prescribed_at
     );
 }
 
@@ -1835,10 +1839,11 @@ function applyPlanSwap(
   const info = db
     .prepare(
       `UPDATE plan_items SET exercise_id = ?, target_weight = ?, target_seconds = ?, note = ?,
-       sets = COALESCE(?, sets), rep_low = COALESCE(?, rep_low), rep_high = COALESCE(?, rep_high)
+       sets = COALESCE(?, sets), rep_low = COALESCE(?, rep_low), rep_high = COALESCE(?, rep_high),
+       prescribed_at = ?
      WHERE id = ?`
     )
-    .run(toEx.id, targetWeight, targetSeconds, note, sets, repLow, repHigh, match.id);
+    .run(toEx.id, targetWeight, targetSeconds, note, sets, repLow, repHigh, localDateISO(), match.id);
   return {
     action: "swapped",
     day: dayNumber,
@@ -2017,6 +2022,40 @@ const numOrNull = (v: any): number | null => {
 // always written as a training day — a declared rest day is refused (resolvePlanDayType).
 // An empty day is allowed here, and only here: it is the editor's scaffold while the
 // athlete fills it in, and it is never startable and never takes a lifting weekday.
+// A slot's prescription identity: the movement, its rep range, and its target. Sets
+// are volume (a recovery week or a one-set trim is not a new prescription), and the
+// note is prose.
+function prescriptionKey(
+  exerciseId: number,
+  it: { rep_low?: unknown; rep_high?: unknown; target_weight?: unknown; target_seconds?: unknown }
+): string {
+  const n = (v: unknown) => (v == null || v === "" || !Number.isFinite(Number(v)) ? "" : String(Number(v)));
+  return [exerciseId, n(it.rep_low), n(it.rep_high), n(it.target_weight), n(it.target_seconds)].join("|");
+}
+
+function priorPrescriptionStamps(dayId: number): Map<string, string | null> {
+  const rows = db
+    .prepare(
+      `SELECT exercise_id, rep_low, rep_high, target_weight, target_seconds, prescribed_at
+         FROM plan_items WHERE plan_day_id = ? AND exercise_id IS NOT NULL`
+    )
+    .all(dayId) as any[];
+  const stamps = new Map<string, string | null>();
+  for (const row of rows) stamps.set(prescriptionKey(Number(row.exercise_id), row), row.prescribed_at ?? null);
+  return stamps;
+}
+
+// A re-save that leaves a slot exactly as it was keeps that slot's stamp (null — a
+// pre-v111 row — stays null). Anything new or changed is authored today.
+function carriedPrescriptionStamp(
+  prior: Map<string, string | null>,
+  exerciseId: number,
+  it: PlanItemInput
+): string | null | undefined {
+  const key = prescriptionKey(exerciseId, it as any);
+  return prior.has(key) ? (prior.get(key) ?? null) : undefined;
+}
+
 export function savePlanDay(
   day_number: number,
   name: string,
@@ -2033,6 +2072,7 @@ export function savePlanDay(
   const list = strengthItemsOnly(items);
   const existing = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(day_number) as any;
   let dayId: number;
+  let priorStamps = new Map<string, string | null>();
   if (existing) {
     db.prepare(`UPDATE plan_days SET name = ?, focus = ?, day_type = ? WHERE id = ?`).run(
       name,
@@ -2041,6 +2081,7 @@ export function savePlanDay(
       existing.id
     );
     dayId = existing.id;
+    priorStamps = priorPrescriptionStamps(dayId);
     db.prepare(`DELETE FROM plan_items WHERE plan_day_id = ?`).run(dayId);
   } else {
     dayId = Number(
@@ -2065,6 +2106,7 @@ export function savePlanDay(
       target_seconds: it.target_seconds ?? null,
       kind: "strength",
       superset_group: numOrNull(it.superset_group),
+      prescribed_at: carriedPrescriptionStamp(priorStamps, ex.id, it),
     });
   });
   // A changed plan day can change what "today" points at (focus/frequency) — refresh

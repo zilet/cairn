@@ -80,6 +80,14 @@ export const PLATEAU_HOLD: VoiceSet = [
   "Nothing's moved lately — hold here and win an extra clean rep before the weight goes up.",
 ];
 
+// A flat read taken under an OLDER prescription, on a slot the plan only just wrote:
+// the plateau measured something else, so this one runs before it is judged.
+export const FRESH_PRESCRIPTION_HOLD: VoiceSet = [
+  "This one was just written into your plan — run it as it stands for a couple of weeks before judging it.",
+  "Freshly set on the plan, so it gets a fair run first: same load, clean reps, and see how it moves.",
+  "New on this day's card — give it a couple of weeks as written before anything changes.",
+];
+
 export const NO_HISTORY_PLANNED_HOLD: VoiceSet = [
   "Nothing logged yet — start where the plan sits and log your actual sets.",
   "No sets on this one yet — begin at what's written and log what you really do.",
@@ -719,6 +727,7 @@ export function progressionVoicePhrases(): string[] {
     REGRESSING_DELOAD,
     PLATEAU_GRIND_DELOAD,
     PLATEAU_HOLD,
+    FRESH_PRESCRIPTION_HOLD,
     NO_HISTORY_PLANNED_HOLD,
     BODYWEIGHT_OVERLOAD,
     ASSIST_TO_BODYWEIGHT,

@@ -967,6 +967,8 @@ export interface ClientDailySessionItem extends ClientSessionSuggestionItem {
   // Present on a reach top-set item (and on an assisted/bodyweight AMRAP host).
   // Athlete-facing `note` is authored on the server; the client only labels "Reach".
   reach?: ClientDailySessionReach | null;
+  // Present on an agent-composed one-set top set: the lift whose block it leads.
+  top_set_of?: string | null;
 }
 
 export interface ClientDailySessionComposition {
