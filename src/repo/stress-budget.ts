@@ -170,11 +170,15 @@ export function stressBudgetSuspendsWeeklyLower(snapshot: StressBudgetSnapshot |
 export interface DailyDecisionStress {
   code: StressBudgetReason;
   groups: string[];
-  // The groups reduced ONLY by a load-holding rule (the key-run eve): composition cuts
-  // their sets to the reduced-area cap and keeps their load — no eased weight, no reach.
-  // A group some other rule also reduced is not here and takes the full reduced clamp.
+  // The groups the stress budget reduced that NO other rule reduced. They are a
+  // calendar trim, not recovering tissue: saturated substitution never moves them, and
+  // under `load_held` composition keeps their load. Omit-when-idle.
+  sole_reduced?: string[];
+  // The rule trims sets only (the key-run eve): `sole_reduced` groups take the
+  // reduced-area set cap at the prescribed weight — no eased load, still no reach. A
+  // group another rule also reduced is not in `sole_reduced` and takes the full clamp.
   // Omit-when-idle.
-  load_held?: string[];
+  load_held?: true;
 }
 
 export interface StressBudgetDecisionContext {

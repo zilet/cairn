@@ -1535,14 +1535,17 @@ const EMPTY_STRESS_DECISION: StressBudgetDecision = {
 };
 const EMPTY_DOSE_DECISION: WeeklyDoseDecision = { dose: null, soft: null, rationale: null };
 
-// The stress budget's sets-only groups: reduced by it and by nothing else.
-function loadHeldGroups(
+// The groups the stress budget reduced and no other rule did (stress-budget.ts
+// `sole_reduced`), and whether its rule holds their load.
+function stressSoleReduced(
   reduced: readonly string[],
   stressReduced: readonly string[],
-  baseReduced: readonly string[]
-): { load_held?: string[] } {
-  const held = stressReduced.filter((g) => reduced.includes(g) && !baseReduced.includes(g));
-  return held.length ? { load_held: held } : {};
+  baseReduced: readonly string[],
+  loadHeld: boolean
+): { sole_reduced?: string[]; load_held?: true } {
+  const sole = stressReduced.filter((g) => reduced.includes(g) && !baseReduced.includes(g));
+  if (!sole.length) return {};
+  return { sole_reduced: sole, ...(loadHeld ? { load_held: true as const } : {}) };
 }
 
 function safe<T>(fn: () => T, fallback: T): T {
@@ -2889,7 +2892,7 @@ export function buildDailySessionDecision(
       ? {
           code: stress.code,
           groups: dedupe([...stressReduced, ...stressExcluded]),
-          ...(stress.load_held ? loadHeldGroups(reduced, stressReduced, baseReduced) : {}),
+          ...stressSoleReduced(reduced, stressReduced, baseReduced, stress.load_held === true),
         }
       : null;
 

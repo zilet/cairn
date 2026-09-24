@@ -1040,7 +1040,10 @@ export function normalizeComposedSession(
   // Reduced groups whose LOAD holds (the stress budget's key-run eve): sets come down to
   // the reduced cap, the weight stays the prescription's — still no reach.
   const loadHeldGroups = new Set(
-    (Array.isArray(envelope.stress?.load_held) ? envelope.stress.load_held : []).map(
+    (envelope.stress?.load_held === true && Array.isArray(envelope.stress.sole_reduced)
+      ? envelope.stress.sole_reduced
+      : []
+    ).map(
       (g) => canonicalGroup(g) ?? String(g).toLowerCase()
     )
   );

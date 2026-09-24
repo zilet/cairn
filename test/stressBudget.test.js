@@ -16,6 +16,7 @@ import {
   WEEKLY_LOWER_HELD_RATIONALE,
 } from "../dist/repo/daily-decision.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
+import { substituteSaturatedPlanItems } from "../dist/repo/saturated-substitution.js";
 import {
   KEY_RUN_EVE_RATIONALE,
   RACE_TAPER_LEGS_RATIONALE,
@@ -427,7 +428,8 @@ test("Friday before Sunday's long run, the week's legs already landed: accessori
 
   const items = normalizeComposedSession(LOWER_B_RAW, env).session.items;
   // Sets only: the split squat is trained at its prescribed load, one set short.
-  assert.deepEqual([...env.stress.load_held].sort(), ["calves", "quads"]);
+  assert.equal(env.stress.load_held, true);
+  assert.deepEqual([...env.stress.sole_reduced].sort(), ["calves", "quads"]);
   const bss = byName(items, "Bulgarian Split Squat");
   assert.equal(bss.sets, 2);
   assert.equal(bss.target_weight, 60, "the load holds on the eve of a key run");
@@ -439,6 +441,39 @@ test("Friday before Sunday's long run, the week's legs already landed: accessori
   assert.equal(deadlift.sets, 3);
   assert.equal(deadlift.target_weight, 225);
   assert.equal(byName(items, "Pallof Press").sets, 3);
+});
+
+test("an eve-only group is trimmed in place, never swapped, on a morning a run also loaded another group", () => {
+  seedExercises();
+  repo.replacePlan(PLAN);
+  const env = buildDailySessionDecision(
+    snapshot({
+      date: "2026-10-02",
+      planItems: LOWER_B_ITEMS,
+      muscle_load: [{ group: "calves", days_ago: 1, saturated: true, source: "endurance", deep: true }],
+      endurance: [{ type: "run", days_ago: 1, intensity: "hard", load: "heavy", regions: ["calves"] }],
+      stress: {
+        race_week_kind: "build",
+        race_phase: "sharpen",
+        days_to_race: 30,
+        key_run: { kind: "long", in_days: 2 },
+      },
+    }),
+    { now: NOW }
+  );
+  assert.ok(env.precedence.includes("endurance_lower_conflict"), "the run reduced the calves");
+  assert.equal(env.stress.code, "key_run_eve");
+  assert.deepEqual(env.stress.sole_reduced, ["quads"], "the calves are the run's, the quads the eve's alone");
+  const moved = substituteSaturatedPlanItems(LOWER_B_RAW, env);
+  assert.ok(
+    !moved.substitutions.some((sub) => sub.replaced === "Bulgarian Split Squat"),
+    JSON.stringify(moved.substitutions)
+  );
+  const items = normalizeComposedSession(LOWER_B_RAW, env, { substituteSaturated: true }).session.items;
+  const bss = byName(items, "Bulgarian Split Squat");
+  assert.ok(bss, "the split squat stays on the card");
+  assert.equal(bss.sets, 2);
+  assert.equal(bss.target_weight, 60);
 });
 
 test("a group another rule also reduces takes the full clamp on a key-run eve", () => {
@@ -463,7 +498,7 @@ test("a group another rule also reduces takes the full clamp on a key-run eve", 
     { now: NOW }
   );
   assert.equal(env.stress.code, "key_run_eve");
-  assert.deepEqual(env.stress.load_held, ["calves"], "quads are reduced by the volume read too");
+  assert.deepEqual(env.stress.sole_reduced, ["calves"], "quads are reduced by the volume read too");
   const items = normalizeComposedSession(LOWER_B_RAW, env).session.items;
   const bss = byName(items, "Bulgarian Split Squat");
   assert.equal(bss.sets, 2);
