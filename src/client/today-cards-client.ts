@@ -187,6 +187,12 @@ function exerciseCardHtml(
   const exerciseLogged = todayFinite(item.exerciseLogged) ?? done;
   const goal = offPlan ? 0 : Number(item.sets) || 0;
   const complete = !!goal && done >= goal;
+  // A superset partner (server-seated antagonist pair, or the plan's own grouping) says
+  // so quietly beside the set count; the pairing hint itself rides in the note.
+  const pairChip =
+    todayFinite(item.superset_group) != null
+      ? `<span class="ex-pair-chip" title="Superset — alternate sets with its partner">Pair</span>`
+      : "";
   const progress = `<span class="ex-prog${complete ? " done" : ""}" data-prog>${done}${goal ? ` / ${goal}` : ""} <span>set${done === 1 && !goal ? "" : "s"}</span></span>`;
   const tile = artImg("exercise", exercise, "artile-sm ex-art", art("exercise", exercise, item.muscle_group));
   const reveal = revealIdx != null ? Number(revealIdx) : null;
@@ -267,7 +273,7 @@ function exerciseCardHtml(
         </div>
         ${skipButton}${removeButton}
       </div>
-      <div class="ex-meta">${progress}</div>
+      <div class="ex-meta">${progress}${pairChip}</div>
       ${!noteIsReach && cue ? `<div class="ex-note">${escHtml(cue)}</div>` : ""}
       ${item.constraint_note ? `<div class="ex-flag">${escHtml(item.constraint_note)}</div>` : ""}
       ${item.journey_line ? `<div class="ex-journey" data-journey-role="${escAttr(item.journey_role || "support")}">${escHtml(item.journey_line)}</div>` : ""}

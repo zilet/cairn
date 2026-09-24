@@ -5,6 +5,13 @@
 // an ordinary morning's snapshot and envelope carry none of the new optional keys, so
 // every stored input_fingerprint stays valid. When a seam starts doing real work, the
 // days it touches get their own tests; this golden stays an ordinary day.
+//
+// One deliberate exception: antagonist pairing (composition-pairing.ts) is ordinary-day
+// behavior, and these fixtures ARE the Upper & Arms / Lower A cards it exists for. So the
+// golden carries exactly its output and nothing else — `superset_group` on the bench +
+// row, curl + pushdown and leg curl + leg extension, and one pairing hint appended to each
+// pair's first `note`. Order, positions, loads, sets and reps are the pre-seam bytes; the
+// plan snapshot is untouched (test/compositionPairing.test.js owns the pairing rules).
 // Synthetic fixtures only. Deterministic and offline (see test/run.mjs).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -180,7 +187,7 @@ function lowerEnvelope(overrides = {}) {
 }
 
 // Captured by running these exact fixtures against dist built from 948636f8 (before
-// the seams), then frozen. Compared as serialized JSON text so key order and
+// the seams), then frozen; the pairing fields above were added when pairing landed. Compared as serialized JSON text so key order and
 // undefined-vs-absent count exactly as they would in a stored composition.
 const GOLDEN = JSON.parse(readFileSync(new URL("./fixtures/composition-seams-golden.json", import.meta.url), "utf8"));
 const GOLDEN_UPPER_AGENT = GOLDEN.upper_agent;
