@@ -2333,7 +2333,11 @@ export function buildDailySessionDecision(
 
   // Supporting endurance + open key work on a hard-lower template: the run is
   // optional context, not a plan failure. Name quality and long work accurately.
-  if (enduranceSupporting && hasRelevantOpenKeyRun && hardLowerOnPlan && kind === "train") {
+  // Not on a key-run eve the stress budget has already trimmed for: that read puts the
+  // run first ("fewer sets so the run lands"), and a second line calling the same run
+  // optional so the lifting lands would say the opposite on the same card.
+  const keyRunEveTrimmed = stress.code === "key_run_eve" && (stressReduced.length > 0 || stressExcluded.length > 0);
+  if (enduranceSupporting && hasRelevantOpenKeyRun && hardLowerOnPlan && kind === "train" && !keyRunEveTrimmed) {
     const supportingKeyDetail =
       openKeyRun?.kind === "long"
         ? "Supporting cardio context — the long run is optional after strength"
