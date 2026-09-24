@@ -54,6 +54,25 @@ beforeEach(() => {
   );
 });
 
+// ---- a pinned clock ----
+// Every fixture here is relative to "today", and the seeded runner has six steady weeks
+// behind it. The deload-due law counts loaded ROLLING seven-day windows, so whether six
+// of them line up depends on the weekday: on a Thursday through Monday the six-week
+// streak completes and the morning reads an accumulated-load rest instead of the stated
+// run day, and the real calendar decided which. The clock is pinned to a Wednesday noon
+// (local time, so every timezone agrees on the date); it still advances in real time.
+const RealDate = Date;
+const CLOCK_OFFSET = new RealDate(2026, 8, 23, 12, 0, 0).getTime() - RealDate.now();
+globalThis.Date = class PinnedDate extends RealDate {
+  constructor(...args) {
+    if (args.length) super(...args);
+    else super(RealDate.now() + CLOCK_OFFSET);
+  }
+  static now() {
+    return RealDate.now() + CLOCK_OFFSET;
+  }
+};
+
 const TODAY = localDateISO();
 const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 const dowOf = (iso) => new Date(`${iso}T00:00:00Z`).getUTCDay();

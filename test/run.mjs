@@ -5,7 +5,7 @@
 // dist/*.js (built by the `pretest` script), so the hot path is just node:test.
 import { availableParallelism } from "node:os";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -56,11 +56,29 @@ const workers = Math.max(
 );
 reporter ||= workers === 1 ? "spec" : "dot";
 
+// The suite is offline, exactly like CI (which has no agent CLI installed). A developer
+// machine does have them, and anything that picks an agent — an activity's enrichment
+// job, a Brief read asked for fresh — would probe every CLI in agents.json and could run
+// one for real (network, a login, a bill). Each worker gets a copy of agents.json whose
+// real CLIs point at commands that do not exist, so they read "not installed" everywhere;
+// names, args and capabilities are untouched, and the offline `stub` stays as it is.
+// A test that needs its own agent table still sets AGENTS_CONFIG itself.
+function offlineAgentsConfig(dir) {
+  const agents = JSON.parse(readFileSync(path.join(root, "agents.json"), "utf8"));
+  for (const [name, def] of Object.entries(agents)) {
+    if (name !== "stub" && def && typeof def === "object") def.command = `cairn-test-offline-${name}`;
+  }
+  const file = path.join(dir, "agents.offline.json");
+  writeFileSync(file, JSON.stringify(agents));
+  return file;
+}
+
 function envFor(dir) {
   return {
     ...process.env,
     DATA_DIR: dir,
     DB_PATH: path.join(dir, "cairn-test.db"),
+    AGENTS_CONFIG: offlineAgentsConfig(dir),
     // Belt-and-suspenders: make sure no real connector/agent creds leak into a run.
     GEMINI_API_KEY: "",
     GOOGLE_AI_KEY: "",

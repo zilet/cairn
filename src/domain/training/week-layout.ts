@@ -230,7 +230,7 @@ const UNMOVABLE_STACK_VARIANTS: ReadonlyArray<(span: string) => string> = [
 
 // ---- run placement ----
 
-interface RunPlacement {
+export interface RunPlacement {
   long: number | null;
   quality: number | null;
   source: WeekLayoutRead["source"];
@@ -241,7 +241,8 @@ interface RunPlacement {
 // stable answer and leads; the flexible agenda is a rolling reconciliation that moves
 // day to day — a fine last resort, a poor basis for a line that would otherwise
 // flicker on and off through the week.
-function runPlacement(opts?: { runPlan?: WeeklyRunPlan | null; agenda?: FlexibleTrainingAgenda | null }): RunPlacement {
+// Exported so the stress budget (src/repo/stress-budget.ts) reads the same placement.
+export function runPlacement(opts?: { runPlan?: WeeklyRunPlan | null; agenda?: FlexibleTrainingAgenda | null }): RunPlacement {
   const pick = (rows: { day_number: number; kind: string }[], kind: string): number | null => {
     const hit = rows
       .filter((r) => r.kind === kind && onRing(r.day_number))

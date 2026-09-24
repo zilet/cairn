@@ -23,6 +23,7 @@ import {
   planDayFocus,
   selectAdaptivePlanDay,
   selectedPlanDayForDate,
+  thisWeekPlanDayMap,
   trainAnywayPlanDay,
   weeklyLowerExposure,
 } from "./plan-selection.js";
@@ -53,6 +54,23 @@ import {
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import { longestRunNovelty } from "./training-read.js";
 import { stableJson, finite } from "../lib/numbers.js";
+import { PLAN_ITEM_EFFECT_TIER, planItemEffectTier } from "../domain/training/plan-item-order.js";
+import {
+  type DailyDecisionDose,
+  type WeeklyDoseDecision,
+  type WeeklyDoseSnapshot,
+  weeklyDoseDecision,
+  weeklyDoseSnapshot,
+} from "./weekly-dose-ledger.js";
+import {
+  type DailyDecisionStress,
+  type StressBudgetDecision,
+  type StressBudgetSnapshot,
+  stressBudgetDecision,
+  stressBudgetSnapshot,
+  stressBudgetSuspendsWeeklyLower,
+} from "./stress-budget.js";
+import type { Prescription } from "./progression.js";
 
 // The deterministic daily-decision envelope (Stage 2 of the adaptive daily
 // training plan). This is the
@@ -138,6 +156,17 @@ export const DAILY_DECISION_REASONS = [
   // lives on the Endurance plan, so the card carries no lifting (plan days hold strength
   // only). Never a brake — the athlete's own week.
   "stated_run_day",
+  // The week would end a muscle group short of its floor, so one of today's items takes
+  // one extra working set toward it (weekly-dose-ledger.ts / composition-dose.ts).
+  "weekly_dose_fill",
+  // Tomorrow's placed run is a key one (quality or long) inside a race build: today's
+  // lower ACCESSORY work is lighter. Never on a day the weekly lower guarantee holds
+  // (stress-budget.ts).
+  "key_run_eve",
+  // The race build's taper week: the legs keep their lifts at a lighter dose.
+  "race_taper_legs",
+  // Race week: the heavy leg work sits out; calves and core stay light.
+  "race_week_legs",
 ] as const;
 
 // The run day's headline line on the envelope. Rotates like every repeating
@@ -361,6 +390,12 @@ export interface DailyDecisionSnapshot {
   // (plan-selection's `weeklyLowerExposure`). `last_chance`: the lifting week lays no
   // further lower day after today. Omit-when-idle — absent on every other morning.
   weekly_lower?: { last_chance: boolean };
+  // The week's dose read (weekly-dose-ledger.ts `weeklyDoseSnapshot`): groups the week
+  // would leave under their floor and today's items eligible to take a set toward them.
+  // Omit-when-idle — an ordinary morning fingerprints exactly as before.
+  weekly_dose?: WeeklyDoseSnapshot;
+  // The race build / key-run read (stress-budget.ts `stressBudgetSnapshot`). Omit-when-idle.
+  stress_budget?: StressBudgetSnapshot;
 }
 
 export interface DailyDecisionSignalSupport {
@@ -530,6 +565,13 @@ export interface DailyDecisionEnvelope {
   // upper-body-only session) instead. Optional so historical envelope_json rows remain
   // readable, and omit-when-idle so an ordinary day serializes unchanged.
   endurance_hold?: { no_run: true; reasons: string[] };
+  // The week's dose for today: the short groups it read and the one-set fills it
+  // authorizes (weekly-dose-ledger.ts). Composition lands the fills (composition-dose.ts).
+  // Optional so historical envelope_json rows remain readable; omit-when-idle.
+  dose?: DailyDecisionDose;
+  // Which stress-budget rule spoke and the leg groups it reduced or excluded
+  // (stress-budget.ts). Optional and omit-when-idle, like `dose`.
+  stress?: DailyDecisionStress;
 }
 
 export interface DailyDecisionReach {
@@ -885,6 +927,13 @@ export function gatherDailyDecisionSnapshot(
   const progression =
     selected?.day_number != null ? (safe(() => planDayProgression(selected.day_number), []) as any[]) : [];
   const earned = safe(() => earnedLifts(d, Array.isArray(planDay?.items) ? planDay.items : [], progression), new Map());
+  // This week's weekday → plan-day map, read at most once for the whole snapshot (the
+  // weekly-lower read and the weekly dose both ask it). Lazy: most mornings need neither.
+  let weekMapRead: ReturnType<typeof thisWeekPlanDayMap> | undefined;
+  const thisWeekMap = (): ReturnType<typeof thisWeekPlanDayMap> => {
+    weekMapRead ??= thisWeekPlanDayMap(d);
+    return weekMapRead;
+  };
   // The week's lower-body question, asked only on a morning whose plan day carries
   // squat/hinge work — every other morning serializes exactly as before. Strength items
   // only: a cardio row never makes a day a lower day.
@@ -898,7 +947,7 @@ export function gatherDailyDecisionSnapshot(
         return group != null && HEAVY_LOWER_GROUPS.has(group);
       });
     if (!lowerDay) return undefined;
-    const week = safe(() => weeklyLowerExposure(d), null);
+    const week = safe(() => weeklyLowerExposure(d, { week: thisWeekMap() }), null);
     if (!week || !week.lift_day || week.fulfilled_on != null) return undefined;
     return { last_chance: week.later_lower_dates.length === 0 };
   })();
@@ -966,6 +1015,33 @@ export function gatherDailyDecisionSnapshot(
     const scale = Number(personalResponseModifierFor("plan_complexity")?.scale);
     return Number.isFinite(scale) && scale >= 0.5 && scale < 1 ? scale : null;
   }, null);
+  // The week's dose and the race build's stress budget, each read fail-soft and stamped
+  // only when it has something to say (weekly-dose-ledger.ts, stress-budget.ts).
+  const todayPlanItems: readonly any[] = Array.isArray(planDay?.items) ? planDay.items : [];
+  const weeklyDose = safe(
+    () =>
+      weeklyDoseSnapshot(d, {
+        dayType: planDayType,
+        dayNumber: selected?.day_number ?? null,
+        planItems: todayPlanItems,
+        progression: progression as Prescription[],
+        programState: programState ?? null,
+        muscleLoad,
+        readKind: read?.kind ?? null,
+        recoveryWeek: signals?.recovery_week != null && signals.recovery_week !== false,
+        weekMap: thisWeekMap,
+      }),
+    undefined
+  );
+  const stressBudget = safe(
+    () =>
+      stressBudgetSnapshot(d, {
+        dayType: planDayType,
+        planItems: todayPlanItems,
+        enduranceRole: resolvedIntent.endurance_role,
+      }),
+    undefined
+  );
   return {
     date: d,
     request: {
@@ -1165,6 +1241,8 @@ export function gatherDailyDecisionSnapshot(
     ...(statedRhythm ? { stated_rhythm: statedRhythm } : {}),
     ...(liftDayOpen ? { lift_day_open: liftDayOpen } : {}),
     ...(weeklyLower ? { weekly_lower: weeklyLower } : {}),
+    ...(weeklyDose ? { weekly_dose: weeklyDose } : {}),
+    ...(stressBudget ? { stress_budget: stressBudget } : {}),
   };
 }
 
@@ -1454,6 +1532,35 @@ function hasUnstartedAdaptiveComposition(date: string): boolean {
   } catch {
     return false;
   }
+}
+
+const EMPTY_STRESS_DECISION: StressBudgetDecision = {
+  code: null,
+  reduced: [],
+  excluded: [],
+  rationale: null,
+  soft: null,
+  excluded_note: null,
+};
+const EMPTY_DOSE_DECISION: WeeklyDoseDecision = { dose: null, soft: null, rationale: null };
+
+// The groups the stress budget reduced and no other rule did (stress-budget.ts
+// `sole_reduced`), whether its rule holds their load, and — under a held load — the
+// anchor lift the trim passes over, while its group is one only this rule reduced.
+function stressSoleReduced(
+  reduced: readonly string[],
+  stressReduced: readonly string[],
+  baseReduced: readonly string[],
+  loadHeld: boolean,
+  hold: { exercise: string; group: string | null } | null
+): { sole_reduced?: string[]; load_held?: true; hold_exercise?: string } {
+  const sole = stressReduced.filter((g) => reduced.includes(g) && !baseReduced.includes(g));
+  if (!sole.length) return {};
+  return {
+    sole_reduced: sole,
+    ...(loadHeld ? { load_held: true as const } : {}),
+    ...(loadHeld && hold && hold.group && sole.includes(hold.group) ? { hold_exercise: hold.exercise } : {}),
+  };
 }
 
 function safe<T>(fn: () => T, fallback: T): T {
@@ -2105,7 +2212,14 @@ export function buildDailySessionDecision(
     snapshot.day_read.recovery_week ||
     snapshot.program.mesocycle_phase === "deload" ||
     snapshot.program.mesocycle_phase === "recovery";
-  const lowerWeekHolds = snapshot.weekly_lower != null && kind === "train" && heavyLowerOnPlan && !lowerSafetyFloor;
+  // Taper and race week stand the guarantee down: the race build's own law for those
+  // weeks is light legs, then legs off (stress-budget.ts).
+  const lowerWeekHolds =
+    snapshot.weekly_lower != null &&
+    kind === "train" &&
+    heavyLowerOnPlan &&
+    !lowerSafetyFloor &&
+    !stressBudgetSuspendsWeeklyLower(snapshot.stress_budget);
   const loadedTodayGroup = (group: string) =>
     snapshot.muscle_load.some((m) => m.group === group && m.saturated && m.days_ago === 0);
   // The groups held rather than reduced on the last chance: the day's lower groups,
@@ -2163,6 +2277,54 @@ export function buildDailySessionDecision(
   // stays the template / kind read — soft bias must not steal the headline.
   const intentRationale: Array<{ code: DailyDecisionReason; text: string }> = [];
 
+  // ---- the week's stress budget for the legs (stress-budget.ts) ----
+  // A race build's taper and race week, and the eve of a placed key run, speak through
+  // the same muscle lists every other rule does: the groups it names join `reduced` or
+  // `excluded` below. It is handed the weekly lower guarantee and the lower safety floor
+  // so it can stand aside for both. Fail-soft: a problem in the rule never costs the
+  // day its decision.
+  const stressAnchorItem = snapshot.plan_items.find(
+    (it) =>
+      String(it.kind ?? "").toLowerCase() !== "cardio" &&
+      planItemEffectTier(it) === PLAN_ITEM_EFFECT_TIER.primary
+  );
+  const stress = safe(
+    () =>
+      stressBudgetDecision(snapshot.stress_budget, {
+        date: snapshot.date,
+        kind,
+        baseKind,
+        trainAnyway,
+        lowerWeekHolds,
+        weekHeldGroups,
+        lowerSafetyFloor,
+        anchor: stressAnchorItem
+          ? { exercise: stressAnchorItem.exercise, muscle_group: stressAnchorItem.muscle_group }
+          : null,
+        planItems: snapshot.plan_items,
+        injuryExcluded: dedupe([...injuryGroups, ...jointGroups]),
+        enduranceRole: trainingIntent.endurance_role,
+        snapshot,
+      }),
+    EMPTY_STRESS_DECISION
+  );
+  // The anchor lift a key-run eve's trim passes over (stress-budget.ts `hold_exercise`):
+  // it keeps its own progression, while its group reads reduced only for the others.
+  const stressHold =
+    stress.code && stress.hold_exercise && stressAnchorItem
+      ? {
+          exercise: stress.hold_exercise,
+          group: stressAnchorItem.muscle_group ? String(stressAnchorItem.muscle_group).toLowerCase() : null,
+        }
+      : null;
+  const stressReduced = dedupe(stress.code ? stress.reduced.map((g) => String(g).toLowerCase()) : []);
+  const stressExcluded = dedupe(stress.code ? stress.excluded.map((g) => String(g).toLowerCase()) : []);
+  if (stress.code && (stressReduced.length || stressExcluded.length)) {
+    fire(precedence, stress.code);
+    if (stress.soft) soft.push({ code: stress.code, detail: stress.soft });
+    if (stress.rationale) intentRationale.push({ code: stress.code, text: stress.rationale });
+  }
+
   if (enduranceReduced.length) {
     fire(precedence, "endurance_lower_conflict");
     let detail = `Recent ${heavyEndurance[0]?.type ?? "endurance"} already loaded the legs`;
@@ -2195,7 +2357,11 @@ export function buildDailySessionDecision(
 
   // Supporting endurance + open key work on a hard-lower template: the run is
   // optional context, not a plan failure. Name quality and long work accurately.
-  if (enduranceSupporting && hasRelevantOpenKeyRun && hardLowerOnPlan && kind === "train") {
+  // Not on a key-run eve the stress budget has already trimmed for: that read puts the
+  // run first ("fewer sets so the run lands"), and a second line calling the same run
+  // optional so the lifting lands would say the opposite on the same card.
+  const keyRunEveTrimmed = stress.code === "key_run_eve" && (stressReduced.length > 0 || stressExcluded.length > 0);
+  if (enduranceSupporting && hasRelevantOpenKeyRun && hardLowerOnPlan && kind === "train" && !keyRunEveTrimmed) {
     const supportingKeyDetail =
       openKeyRun?.kind === "long"
         ? "Supporting cardio context — the long run is optional after strength"
@@ -2308,7 +2474,7 @@ export function buildDailySessionDecision(
   }
 
   // ---- Muscle envelope ----
-  const excluded = dedupe([...injuryGroups, ...jointGroups]);
+  const excluded = dedupe([...injuryGroups, ...jointGroups, ...stressExcluded]);
   const injuredExercises = new Set(
     snapshot.constraints.injuries
       .filter((injury) => (injury.constraint_level ?? "protective") === "protective")
@@ -2335,12 +2501,13 @@ export function buildDailySessionDecision(
         (m.deep === true || (m.days_ago === 0 && !(statedStack && LOWER_BODY_GROUPS.has(m.group))))
     )
     .map((m) => m.group);
-  const reduced = dedupe([
+  const baseReduced = dedupe([
     ...enduranceReduced,
     ...acuteReduced,
     ...snapshot.program.volume_high_groups,
     ...snapshot.plan.over,
-  ]).filter((g) => !excluded.includes(g));
+  ]);
+  const reduced = dedupe([...baseReduced, ...stressReduced]).filter((g) => !excluded.includes(g));
   const required = dedupe(snapshot.plan_items.map((it) => it.muscle_group).filter((g): g is string => !!g)).filter(
     (g) => !excluded.includes(g)
   );
@@ -2553,18 +2720,32 @@ export function buildDailySessionDecision(
         (isCardio && protectiveExclusions.length > 0 && cardioProtectiveRelevance !== false) ||
         cardioJointPainRelevance === true
       ) {
+        const injuryExcludes =
+          injuredExercises.has(it.exercise.toLowerCase()) ||
+          (group != null && injuryGroups.includes(group)) ||
+          (isCardio && protectiveExclusions.length > 0 && cardioProtectiveRelevance !== false);
+        // A group ONLY the stress budget excluded is sitting out for the race, not for pain.
+        const stressOnly =
+          !injuryExcludes &&
+          stress.code != null &&
+          group != null &&
+          stressExcluded.includes(group) &&
+          !jointGroups.includes(group) &&
+          cardioJointPainRelevance !== true;
         candidates.push({
           exercise: it.exercise,
           muscle_group: it.muscle_group,
           action: "exclude",
-          reason_code:
-            injuredExercises.has(it.exercise.toLowerCase()) ||
-            (group != null && injuryGroups.includes(group)) ||
-            (isCardio && protectiveExclusions.length > 0 && cardioProtectiveRelevance !== false)
-              ? "injury_exclusion"
+          reason_code: injuryExcludes
+            ? "injury_exclusion"
+            : stressOnly && stress.code
+              ? stress.code
               : "joint_pain_reduce",
           substitution_for: null,
-          note: "Swap for a pattern that spares the flagged area",
+          note:
+            stressOnly && stress.excluded_note
+              ? stress.excluded_note
+              : "Swap for a pattern that spares the flagged area",
           current_target: null,
           authorized_target: null,
           progression_evidence: null,
@@ -2595,9 +2776,17 @@ export function buildDailySessionDecision(
       const weekHeldDeep = !!group && weekHeldGroups.has(group) && deepGroups.has(group);
       const earned = loadedToday || weekHeldDeep ? undefined : prog?.earned;
       const shallowHold = !!group && saturated.includes(group) && !reduced.includes(group) && !earned;
+      // The key-run eve's anchor stays as written: its group reads reduced for the other
+      // items in it, never for the anchor itself, unless another rule reduced it too.
+      const stressHeldAnchor =
+        stressHold != null &&
+        !!group &&
+        it.exercise.toLowerCase() === stressHold.exercise.toLowerCase() &&
+        stressReduced.includes(group) &&
+        !baseReduced.includes(group);
       if (
         group &&
-        (reduced.includes(group) || shallowHold) &&
+        ((reduced.includes(group) && !stressHeldAnchor) || shallowHold) &&
         (action === "overload" || action === "carry")
       ) {
         action = "hold";
@@ -2605,7 +2794,9 @@ export function buildDailySessionDecision(
           ? "weekly_lower_exposure"
           : saturated.includes(group)
             ? "muscle_saturated"
-            : "endurance_lower_conflict";
+            : stress.code && stressReduced.includes(group) && !baseReduced.includes(group)
+              ? stress.code
+              : "endurance_lower_conflict";
       }
       if (lowPerformance && !repeatedUnder && (action === "overload" || action === "carry")) {
         action = "hold";
@@ -2695,6 +2886,52 @@ export function buildDailySessionDecision(
     soft.push({ code: reachCode, detail: reach.why });
   }
 
+  const muscles: DailyDecisionEnvelope["muscles"] = {
+    required,
+    allowed,
+    reduced,
+    excluded,
+    saturated,
+    deep: [...deepGroups],
+    ...(weekHeld.length ? { week_held: weekHeld } : {}),
+  };
+  const caps: DailyDecisionEnvelope["caps"] = { volume, intensity, duration_min: duration };
+
+  // ---- the week's dose (weekly-dose-ledger.ts) ----
+  // Asked last, once the day's caps, muscle lists, candidates and reach are final, so a
+  // fill can never contradict any of them. Composition lands the fills. Fail-soft.
+  const doseDecision = safe(
+    () =>
+      weeklyDoseDecision(snapshot.weekly_dose, {
+        date: snapshot.date,
+        kind,
+        dayType: snapshot.plan.day_type,
+        runDay,
+        trainAnyway,
+        caps,
+        muscles,
+        candidates,
+        recoveryWeek: snapshot.day_read.recovery_week,
+        mesocyclePhase: snapshot.program.mesocycle_phase,
+        snapshot,
+      }),
+    EMPTY_DOSE_DECISION
+  );
+  const dose = doseDecision.dose && doseDecision.dose.fills.length ? doseDecision.dose : null;
+  if (dose) {
+    fire(precedence, "weekly_dose_fill");
+    if (doseDecision.soft) soft.push({ code: "weekly_dose_fill", detail: doseDecision.soft });
+    if (doseDecision.rationale) intentRationale.push({ code: "weekly_dose_fill", text: doseDecision.rationale });
+  }
+  const stressEnvelope: DailyDecisionStress | null =
+    stress.code && (stressReduced.length || stressExcluded.length)
+      ? {
+          code: stress.code,
+          groups: dedupe([...stressReduced, ...stressExcluded]),
+          ...stressSoleReduced(reduced, stressReduced, baseReduced, stress.load_held === true, stressHold),
+        }
+      : null;
+
   // ---- Render-safe rationale ----
   if (runDay && kind !== "rest") {
     fire(precedence, "stated_run_day");
@@ -2754,16 +2991,8 @@ export function buildDailySessionDecision(
         ? { day_type: snapshot.plan.day_type }
         : {}),
     },
-    muscles: {
-      required,
-      allowed,
-      reduced,
-      excluded,
-      saturated,
-      deep: [...deepGroups],
-      ...(weekHeld.length ? { week_held: weekHeld } : {}),
-    },
-    caps: { volume, intensity, duration_min: duration },
+    muscles,
+    caps,
     recovery_cycle: snapshot.recovery_cycle,
     candidates,
     hard_constraints: hard,
@@ -2775,6 +3004,8 @@ export function buildDailySessionDecision(
     reported_joint_pain: snapshot.feedback?.joint_pain ?? null,
     reach,
     ...(enduranceHold ? { endurance_hold: enduranceHold } : {}),
+    ...(dose ? { dose } : {}),
+    ...(stressEnvelope ? { stress: stressEnvelope } : {}),
   };
 }
 

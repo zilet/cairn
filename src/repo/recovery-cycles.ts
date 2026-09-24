@@ -5,6 +5,7 @@ import {
   RECOVERY_WEEK_ACTIVE_DAYS,
 } from "./recovery-week-ledger.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
+import { easedLoad } from "./load-grid.js";
 
 export const RECOVERY_CYCLE_COOLDOWN_DAYS = 21;
 export const RECOVERY_OVERLAY_MAX_BYTES = 1024;
@@ -404,13 +405,14 @@ function reducedPositive(value: unknown, fraction: number): number | null {
   return Math.max(1, Math.round(number * fraction));
 }
 
-function recoveryLoad(value: unknown): number | null {
+// Known positive load eases by 15% and assisted load takes 10% more assistance, both
+// onto the lift's own load grid (load-grid.ts) — a 225 squat reads 190, never 191.5.
+function recoveryLoad(value: unknown, item: { exercise?: unknown; muscle_group?: unknown }): number | null {
   if (value == null || value === "") return null;
   const load = Number(value);
   if (!Number.isFinite(load)) return null;
-  if (load > 0) return Math.max(0.5, Math.round(load * 0.85 * 2) / 2);
-  if (load < 0) return Math.round(load * 1.1 * 2) / 2;
-  return 0;
+  const group = item.muscle_group == null ? null : String(item.muscle_group);
+  return easedLoad(load, 0.85, item.exercise, group, { assistFactor: 1.1 });
 }
 
 // Build a temporary prescription from a base plan-day snapshot. The input is
@@ -439,7 +441,7 @@ export function adaptBasePlanDayForRecovery<T extends Record<string, any>>(
       // A one-set prescription cannot reduce volume further, so known positive
       // load eases by 15%. Negative assisted encoding becomes more assisted,
       // never harder; bodyweight/null remains athlete-selected.
-      item.target_weight = recoveryLoad(item.target_weight);
+      item.target_weight = recoveryLoad(item.target_weight, item);
     }
     item.effort = "easy";
     item.recovery_overlay = true;

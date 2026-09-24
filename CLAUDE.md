@@ -133,7 +133,10 @@ everywhere. Details: `docs/ARCHITECTURE.md`'s "Enforced structured output" secti
 its own throwaway temp `DATA_DIR`/`DB_PATH`) and injects `test/_isolate.mjs` via `--import` — a root
 `beforeEach` that wipes the whole DB. So correctness is independent of file order and shard count,
 and a bare `node --test` invocation SKIPS that wipe. The suite is deterministic and offline: no agent
-CLI, no network. The `stub` agent in `agents.json` is the offline smoke path for propose/apply.
+CLI, no network. The `stub` agent in `agents.json` is the offline smoke path for propose/apply. Each
+worker also runs with its own `agents.offline.json` (`AGENTS_CONFIG`): every non-`stub` CLI's command
+is rewritten to a nonexistent binary, so a real machine's installed CLIs are never probed or spawned by
+a test that picks an agent.
 
 When verifying by hand, run **one file per invocation with its own `mktemp -d`**. Passing several
 files to a single `node --test` with one `DB_PATH` runs them as *parallel* child processes against
@@ -451,6 +454,16 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Weekly volume has a contextual floor and the log is truth for set count** — `volume-floor.ts`
   (muscle/strength intent only; endurance-carried groups and light weeks exempt), held by plan
   quality, the redraw precheck and `setCatchUp`. Details in `docs/ARCHITECTURE.md`.
+- **The weekly dose fills a group's shortfall with one extra set — never a load, never an untested
+  slot, never the day's anchor or strength-range work.** `weekly-dose-ledger.ts` / `composition-dose.ts`.
+  Movement REGIONS (`movement-region.ts`), not raw muscle group, decide which items collapse as
+  duplicates and pair as antagonist supersets on today's card (`composition-pairing.ts`). Details in
+  `docs/ARCHITECTURE.md` "Weekly dose ledger" and "Pairing and movement regions".
+- **A race build's taper/race week and the eve of a placed key run trim the legs through the ordinary
+  `reduced`/`excluded` muscle lists, never a second gate** (`stress-budget.ts`) — and a coarse-stepped
+  isolation grind (or an earned step past too big a jump) moves up a rep range at the held load
+  exactly once, remembered on the applied-proposal ledger (`lift-response.ts`). Details in
+  `docs/ARCHITECTURE.md` "Run/lift stress budget" and "Selection by response".
 - **Exercise names are resolved through `resolveExerciseName` (`src/repo/exercise-canon.ts`); never
   compare raw `exercises.name`.** One ladder (exact → one alias hop → key → a unique expanded key),
   read by every consumer AND by the `findOrCreateExercise` write chokepoint, so a spelling can never

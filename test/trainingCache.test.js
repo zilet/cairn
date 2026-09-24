@@ -13,6 +13,7 @@ import {
   currentFoodDataVersion,
   bumpTrainingDataVersion,
   resetTrainingDataCache,
+  trainingBackstopSignature,
 } from "../dist/repo/training-cache.js";
 
 const REF = "2026-04-20";
@@ -209,6 +210,60 @@ test("a current-day food write invalidates the memo without entering completed-d
   const b = repo.estimateExpenditure(21);
   assert.equal(b.intake_avg_kcal, null, "unfinished current-day intake stays outside maintenance");
   assert.ok(currentFoodDataVersion() > 0, "the write still invalidated the memo for other food reads");
+});
+
+// A slot's prescription moves IN PLACE — restampSlot after a target step, or a writer
+// that defers its version bump — so plan_items' COUNT/MAX(id) never see it. The
+// backstop reads the newest prescribed_at and an aggregate of every slot's targets too,
+// so a re-prescribed lift is not served a stale trend read off the old slot.
+function seedSlidingSquatUnderSettledPlan() {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.savePlanDay(1, "Lower", "Squat", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 },
+  ]);
+  db.prepare("UPDATE plan_items SET prescribed_at = ?").run("2000-01-01");
+  const ex = repo.findExercise("Back Squat");
+  for (const [n, w] of [
+    [30, 265],
+    [23, 255],
+    [16, 245],
+    [9, 235],
+  ]) {
+    const sess = repo.getOrCreateSession(back(n), null);
+    db.prepare(
+      "INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, ?, 5, 1)"
+    ).run(sess.id, ex.id, w);
+  }
+  bumpTrainingDataVersion(); // the raw fixture writes above; the app's writers bump themselves
+}
+
+test("BACKSTOP path: an in-place re-prescription (restamp, no version bump) invalidates the memo", () => {
+  seedSlidingSquatUnderSettledPlan();
+  const settled = repo.getProgramState(REF).lifts.find((l) => l.exercise === "Back Squat");
+  assert.equal(settled.status, "regressing", "the settled slot's slide reads");
+
+  const v = currentTrainingDataVersion();
+  db.prepare("UPDATE plan_items SET prescribed_at = ?").run(back(1));
+  assert.equal(currentTrainingDataVersion(), v, "the restamp did NOT bump the version");
+  const fresh = repo.getProgramState(REF).lifts.find((l) => l.exercise === "Back Squat");
+  assert.equal(fresh.status, "new", `the re-prescribed slot is untested, not a stale slide (${fresh.status})`);
+});
+
+test("BACKSTOP path: an in-place target or set change moves the backstop signature", () => {
+  seedSlidingSquatUnderSettledPlan();
+  const base = trainingBackstopSignature();
+  assert.equal(trainingBackstopSignature(), base, "stable while nothing moves");
+  for (const [column, value] of [
+    ["target_weight", 230],
+    ["sets", 4],
+    ["rep_low", 4],
+    ["rep_high", 6],
+    ["target_seconds", 30],
+  ]) {
+    const before = trainingBackstopSignature();
+    db.prepare(`UPDATE plan_items SET ${column} = ?`).run(value);
+    assert.notEqual(trainingBackstopSignature(), before, `an in-place ${column} edit is seen`);
+  }
 });
 
 test("resetTrainingDataCache resets the counters (the isolate hook)", () => {

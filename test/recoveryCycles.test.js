@@ -33,7 +33,8 @@ test("a recovery overlay preserves the base plan and movement order while boundi
     "frequency and movement patterns stay intact"
   );
   assert.equal(adapted.items[0].sets, 2);
-  assert.equal(adapted.items[0].target_weight, 191.5, "the overlay eases load even when set count is already low");
+  // 225 × 0.85 = 191.25, rounded down onto the squat's 5 lb grid (load-grid.ts).
+  assert.equal(adapted.items[0].target_weight, 190, "the overlay eases load even when set count is already low");
   assert.equal(adapted.items[1].sets, 1);
   assert.equal(adapted.items[1].target_seconds, 30);
   assert.equal(adapted.items[2].target_duration_min, 20);
@@ -49,12 +50,15 @@ test("one-set prescriptions still ease positive and assisted loads", () => {
     items: [
       { exercise: "Bench Press", sets: 1, rep_low: 5, rep_high: 5, target_weight: 200 },
       { exercise: "Assisted Pull-up", sets: 1, rep_low: 5, rep_high: 5, target_weight: -30 },
+      { exercise: "Dumbbell Curl", muscle_group: "biceps", sets: 1, rep_low: 10, rep_high: 12, target_weight: 25 },
     ],
   });
   assert.equal(adapted.items[0].sets, 1);
   assert.equal(adapted.items[0].target_weight, 170);
   assert.equal(adapted.items[1].sets, 1);
-  assert.equal(adapted.items[1].target_weight, -33, "more assistance is the easier direction");
+  // 30 × 1.1 = 33 of assist, rounded UP (more help) onto the 5 lb grid.
+  assert.equal(adapted.items[1].target_weight, -35, "more assistance is the easier direction");
+  assert.equal(adapted.items[2].target_weight, 20, "an isolation dumbbell eases onto its 2.5 lb grid (21.25 → 20)");
 });
 
 test("a non-default stored working fraction consistently changes recovery dose", () => {

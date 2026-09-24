@@ -402,8 +402,12 @@ export interface WeeklyLowerExposure {
  * lifting week (the guarantee is about a week they described or lived) or the plan holds
  * no lower strength day at all. Read off the same weekday map the selector uses.
  */
-export function weeklyLowerExposure(date: string): WeeklyLowerExposure | null {
-  const { map, lift_dows } = thisWeekPlanDayMap(date);
+export function weeklyLowerExposure(
+  date: string,
+  opts: { week?: ReturnType<typeof thisWeekPlanDayMap> } = {}
+): WeeklyLowerExposure | null {
+  // `week` is the caller's own thisWeekPlanDayMap(date) when it already read one.
+  const { map, lift_dows } = opts.week ?? thisWeekPlanDayMap(date);
   if (!lift_dows.length || ![...map.values()].some((day) => isHeavyLowerPlanDay(day))) return null;
   const dow = new Date(`${date}T00:00:00Z`).getUTCDay();
   return {

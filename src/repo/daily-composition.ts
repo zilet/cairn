@@ -21,8 +21,12 @@ import {
 import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
 import { classifyPattern } from "./exercise-variations.js";
-import { pressSlotKey } from "./plan-quality.js";
+import { collapseRegionDuplicates, pairForSession, validSupersetGroup } from "./composition-pairing.js";
+import { applyWeeklyDose } from "./composition-dose.js";
+import { weeklyDoseSoftLine } from "./weekly-dose-ledger.js";
 import { nextLoadStep } from "./progression.js";
+import { easedLoad } from "./load-grid.js";
+import { stressBudgetItemNotes } from "./stress-budget.js";
 import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 import { type SaturatedSubstitution, substituteSaturatedPlanItems } from "./saturated-substitution.js";
@@ -124,15 +128,6 @@ function perItemSetCap(envelope: DailyDecisionEnvelope): number {
   }
 }
 
-function scaledTarget(value: unknown, factor: number): number | null {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n === 0) return value == null ? null : Number(value);
-  // Negative weight means assistance. Multiplying it toward zero would make
-  // the movement harder, so retain the known safe anchor instead.
-  if (n < 0) return n;
-  return Math.round(n * factor * 100) / 100;
-}
-
 const ADAPTATION_NOTE_BUDGET = 500;
 
 // The athlete's own note is never truncated. It carries their safety cues — a
@@ -176,46 +171,6 @@ export const HOLD_TARGET_NOTES: readonly [string, ...string[]] = [
 
 function isPrepCompositionItem(item: { exercise?: unknown; muscle_group?: unknown }): boolean {
   return isMobility(item.muscle_group == null ? null : String(item.muscle_group)) || isPrepMovement(String(item.exercise ?? ""));
-}
-
-function preferPressItem(a: any, b: any, candidateNames: Set<string>): any {
-  const aName = String(a?.exercise ?? "").toLowerCase();
-  const bName = String(b?.exercise ?? "").toLowerCase();
-  const aCand = candidateNames.has(aName);
-  const bCand = candidateNames.has(bName);
-  if (aCand !== bCand) return aCand ? a : b;
-  const aSets = finite(a?.sets) ?? 0;
-  const bSets = finite(b?.sets) ?? 0;
-  if (aSets !== bSets) return aSets > bSets ? a : b;
-  const aLoad = Math.abs(finite(a?.target_weight) ?? 0);
-  const bLoad = Math.abs(finite(b?.target_weight) ?? 0);
-  if (aLoad !== bLoad) return aLoad > bLoad ? a : b;
-  return a;
-}
-
-function dropDuplicatePressAngles(
-  items: any[],
-  candidateNames: Set<string>
-): { items: any[]; rejected: Array<{ exercise: string; reason: string }> } {
-  const rejected: Array<{ exercise: string; reason: string }> = [];
-  const keep = items.map(() => true);
-  const keeper = new Map<string, number>();
-  for (let i = 0; i < items.length; i++) {
-    const slot = pressSlotKey(String(items[i]?.exercise ?? ""));
-    if (!slot) continue;
-    const prev = keeper.get(slot);
-    if (prev == null) {
-      keeper.set(slot, i);
-      continue;
-    }
-    const winner = preferPressItem(items[prev], items[i], candidateNames) === items[i] ? i : prev;
-    const loser = winner === i ? prev : i;
-    keep[loser] = false;
-    keeper.set(slot, winner);
-    rejected.push({ exercise: String(items[loser]?.exercise ?? ""), reason: "duplicate_press_angle" });
-  }
-  if (!rejected.length) return { items, rejected };
-  return { items: items.filter((_, i) => keep[i]), rejected };
 }
 
 function compositionNoteFor(
@@ -609,6 +564,40 @@ function reconcileEnvelopeReach(envelope: DailyDecisionEnvelope, landed: boolean
     }
   }
   if (!replaced) envelope.rationale.push({ code: "reach_no_room", text: why });
+}
+
+// The WEEK'S DOSE on the persisted envelope, reconciled against the card the same way
+// the reach is: the decision authorizes fills, composition decides which land (budget,
+// clock, per-item cap, the plan snapshot, a card whose set count moved). The envelope
+// then names only the fills the card carries — none landed, and `dose` goes, with its
+// precedence entry, soft line and rationale line; some landed, and `fills` and the soft
+// line name only those. Mutates in place for the same reason reconcileEnvelopeReach
+// does (the caller persists this same object). `landed` holds normalizedExerciseKey
+// values (applyWeeklyDose's `landed`).
+export function reconcileEnvelopeDose(envelope: DailyDecisionEnvelope, landed: ReadonlySet<string>): void {
+  const dose = envelope.dose;
+  if (!dose) return;
+  const fills = Array.isArray(dose.fills) ? dose.fills : [];
+  const keys = new Set([...landed].map((key) => normalizedExerciseKey(String(key ?? ""))));
+  const kept = fills.filter((fill) => keys.has(normalizedExerciseKey(String(fill?.exercise ?? ""))));
+  if (kept.length === fills.length && kept.length > 0) return;
+  if (kept.length) {
+    fills.splice(0, fills.length, ...kept);
+    for (const entry of envelope.soft_preferences) {
+      if (entry.code === "weekly_dose_fill") entry.detail = weeklyDoseSoftLine(kept);
+    }
+    return;
+  }
+  delete envelope.dose;
+  for (let i = envelope.precedence.length - 1; i >= 0; i--) {
+    if (envelope.precedence[i] === "weekly_dose_fill") envelope.precedence.splice(i, 1);
+  }
+  for (let i = envelope.soft_preferences.length - 1; i >= 0; i--) {
+    if (envelope.soft_preferences[i].code === "weekly_dose_fill") envelope.soft_preferences.splice(i, 1);
+  }
+  for (let i = envelope.rationale.length - 1; i >= 0; i--) {
+    if (envelope.rationale[i].code === "weekly_dose_fill") envelope.rationale.splice(i, 1);
+  }
 }
 
 // The heavy single as an item, shaped exactly like every other normalized reps
@@ -1076,6 +1065,34 @@ export function normalizeComposedSession(
   // Resolved on the way past, while the stored exercise (and so its group) is in
   // hand — the clamping pass below works on item names alone.
   const reducedExercises = new Set<string>();
+  // Reduced groups whose LOAD holds (the stress budget's key-run eve): sets come down to
+  // the reduced cap, the weight stays the prescription's — still no reach.
+  const loadHeldGroups = new Set(
+    (envelope.stress?.load_held === true && Array.isArray(envelope.stress.sole_reduced)
+      ? envelope.stress.sole_reduced
+      : []
+    ).map(
+      (g) => canonicalGroup(g) ?? String(g).toLowerCase()
+    )
+  );
+  const loadHeldExercises = new Set<string>();
+  // Reduced ONLY by the stress budget (`stress.sole_reduced`): a calendar trim on fresh
+  // legs, so the card says the race build's reason, never "still carrying recent work".
+  const stressSoleGroups = new Set(
+    (Array.isArray(envelope.stress?.sole_reduced) ? envelope.stress.sole_reduced : []).map(
+      (g) => canonicalGroup(g) ?? String(g).toLowerCase()
+    )
+  );
+  const stressSoleExercises = new Set<string>();
+  // Each loaded item's stored group, for the load grid an eased target rounds onto.
+  const groupByExercise = new Map<string, string>();
+  // …except the day's anchor lift the eve names (`hold_exercise`): the trim is
+  // item-scoped, so while its group is reduced only by the eve, the anchor keeps its
+  // sets, its load and its reach eligibility, whatever the other items in its group take.
+  const stressHoldExercise =
+    envelope.stress?.load_held === true && typeof envelope.stress.hold_exercise === "string"
+      ? envelope.stress.hold_exercise.trim().toLowerCase()
+      : null;
   const saturatedGroups = new Set(
     (Array.isArray(envelope.muscles.saturated) ? envelope.muscles.saturated : []).map(
       (g) => canonicalGroup(g) ?? String(g).toLowerCase()
@@ -1167,7 +1184,18 @@ export function normalizeComposedSession(
       rejected.push({ exercise, reason: "excluded_group" });
       continue;
     }
-    if (group && reducedGroups.has(canonicalGroup(group) ?? group)) reducedExercises.add(exercise.toLowerCase());
+    const stressHeldAnchor =
+      stressHoldExercise != null &&
+      exercise.trim().toLowerCase() === stressHoldExercise &&
+      !!group &&
+      loadHeldGroups.has(canonicalGroup(group) ?? group);
+    if (group) groupByExercise.set(exercise.toLowerCase(), group);
+    if (group && !stressHeldAnchor && reducedGroups.has(canonicalGroup(group) ?? group)) {
+      reducedExercises.add(exercise.toLowerCase());
+      if (stressSoleGroups.has(canonicalGroup(group) ?? group)) stressSoleExercises.add(exercise.toLowerCase());
+    }
+    if (group && !stressHeldAnchor && loadHeldGroups.has(canonicalGroup(group) ?? group))
+      loadHeldExercises.add(exercise.toLowerCase());
     const novel = !isCardio && !stored;
     if (novel) {
       // A novel movement is not in the canon, so it carries no muscle_group and the
@@ -1191,17 +1219,19 @@ export function normalizeComposedSession(
     kept.push(item);
   }
 
-  // One loaded movement per press angle — the weekly plan already refuses this at
-  // write time, but a composed session can still pile two flats (agent output, or
-  // a saturated-group stand-in stealing the other day's bench). Drop the extra
-  // here so Today's card cannot serve Dumbbell Bench then Barbell Bench.
-  const pressCollapsed = dropDuplicatePressAngles(
+  // One loaded movement per region (composition-pairing.ts) — the weekly plan already
+  // refuses a second flat press at write time, but a composed session can still pile
+  // two (agent output, or a saturated-group stand-in stealing the other day's bench).
+  // Drop the extra here so Today's card cannot serve Dumbbell Bench then Barbell Bench.
+  // On the athlete's own snapshotted day only the press-angle rule applies.
+  const pressCollapsed = collapseRegionDuplicates(
     kept,
     new Set(
       envelope.candidates
         .map((candidate) => String(candidate.exercise ?? "").toLowerCase())
         .filter(Boolean)
-    )
+    ),
+    { pressOnly: opts.planSnapshot === true }
   );
   if (pressCollapsed.rejected.length) {
     rejected.push(...pressCollapsed.rejected);
@@ -1273,6 +1303,7 @@ export function normalizeComposedSession(
       changed = true;
     }
     const isReduced = reducedExercises.has(String(next.exercise ?? "").toLowerCase());
+    const stressOnly = isReduced && stressSoleExercises.has(String(next.exercise ?? "").toLowerCase());
     const authorizedSets = Math.max(1, Number(next.sets) || requestedSets);
     const setCapForItem = isReduced ? Math.min(itemSetCap, REDUCED_ITEM_SET_CAP) : itemSetCap;
     const boundedSets = Math.min(authorizedSets, setCapForItem, remainingSets);
@@ -1294,8 +1325,10 @@ export function normalizeComposedSession(
     if (candidate?.action === "deload" && !candidate.authorized_target) {
       intensityFactor = Math.min(intensityFactor, 0.9);
     }
-    // A reduced area never gets a heavier target than the day already allows.
-    if (isReduced) intensityFactor = Math.min(intensityFactor, REDUCED_INTENSITY_FACTOR);
+    // A reduced area never gets a heavier target than the day already allows. A
+    // load-held area (the key-run eve) loses sets only; its weight stays.
+    const loadHeld = loadHeldExercises.has(String(next.exercise ?? "").toLowerCase());
+    if (isReduced && !loadHeld) intensityFactor = Math.min(intensityFactor, REDUCED_INTENSITY_FACTOR);
     const hold = candidate?.action === "hold" || envelope.caps.intensity === "hold";
     // A stand-in is exempt from the hold clamp ONLY when its load is proven —
     // `load_basis === "logged"`, the movement's own recent WORKING weight.
@@ -1343,21 +1376,41 @@ export function normalizeComposedSession(
         if (seconds !== next.target_seconds) changed = true;
         next.target_seconds = seconds;
       } else if (next.target_weight != null) {
-        const weight = scaledTarget(next.target_weight, intensityFactor);
+        const exerciseKey = String(next.exercise ?? "").toLowerCase();
+        // Onto the lift's own load grid (load-grid.ts): a 185 squat eases to 165, never
+        // 166.5. Assistance is never multiplied toward harder.
+        const weight = easedLoad(
+          next.target_weight,
+          intensityFactor,
+          next.exercise,
+          groupByExercise.get(exerciseKey) ?? (next.muscle_group == null ? null : String(next.muscle_group))
+        );
         if (weight !== next.target_weight) changed = true;
         next.target_weight = weight;
       }
       // Reduced-area and day-level easing say something the progression why does
       // not (this area is still carrying work; today's cap came down). Always add
       // on loaded work. Prep/mobility is not a lift — don't stamp a load story on it.
+      // An area only the stress budget reduced is fresh — the race build eases it — so it
+      // says that rule's reason instead; a load-held one (the key-run eve) eased here only
+      // by the day's own cap takes the day's wording, its weight no longer "the same".
       if (!isPrepCompositionItem(next)) {
+        const stressNotes = stressOnly && !loadHeld ? stressBudgetItemNotes(envelope.stress?.code) : null;
         next.note = adaptationNote(
           next.note,
-          isReduced
-            ? compositionNoteFor(REDUCED_AREA_NOTES, envelope.date, "reduced", next.exercise)
-            : compositionNoteFor(EASED_TODAY_NOTES, envelope.date, "eased", next.exercise)
+          stressNotes
+            ? compositionNoteFor(stressNotes, envelope.date, "stress", next.exercise)
+            : isReduced && !stressOnly
+              ? compositionNoteFor(REDUCED_AREA_NOTES, envelope.date, "reduced", next.exercise)
+              : compositionNoteFor(EASED_TODAY_NOTES, envelope.date, "eased", next.exercise)
         );
       }
+    } else if (loadHeld && stressOnly && boundedSets < authorizedSets && !isPrepCompositionItem(next)) {
+      // The key-run eve's trim: fewer sets, the prescription's weight — said as such,
+      // in place of the plain hold line the candidate's reduced-group hold would print.
+      const eveNotes = stressBudgetItemNotes(envelope.stress?.code);
+      if (eveNotes)
+        next.note = adaptationNote(next.note, compositionNoteFor(eveNotes, envelope.date, "stress", next.exercise));
     } else if (hold && !itemAlreadyHasProgressionHoldWhy(candidate) && !isPrepCompositionItem(next)) {
       next.note = adaptationNote(
         next.note,
@@ -1484,14 +1537,50 @@ export function normalizeComposedSession(
   // Positions are only rewritten when something was actually inserted, so an
   // ordinary day's items come out of here byte-for-byte as they always have.
   if (insertedTopSet) withTopSets.forEach((item, index) => (item.position = index));
-  const assembled = insertedTopSet ? withTopSets : capped;
+  const withTopSetsOrCapped = insertedTopSet ? withTopSets : capped;
+  // ---- the week's dose: one extra set toward a group the week would leave short ----
+  // After the top set, so a reach always keeps its budget first; before ordering, so
+  // the card is ordered once. Never on the athlete's own snapshotted day. Identity when
+  // the envelope authorizes no fill (composition-dose.ts).
+  const dosed = opts.planSnapshot
+    ? { items: withTopSetsOrCapped, changed: false, estAddMin: 0, landed: [] as string[] }
+    : applyWeeklyDose(withTopSetsOrCapped, {
+        envelope,
+        date: envelope.date,
+        budget: {
+          remainingSets,
+          itemSetCap,
+          cap,
+          minutesCap: envelope.caps.duration_min,
+          estMinutes: base.est_minutes,
+        },
+        reducedExercises,
+        saturatedGroups,
+        excludedGroups: excluded,
+        candidates,
+      });
+  if (dosed.changed) changed = true;
+  const assembled = dosed.items;
   // Session order is a coaching fact: prep → compounds → accessories → core →
   // cardio. Agentic restructures already persist this; today's composition must
   // too, so the athlete is not asked to tap "Order for effect" before they train.
-  const finalItems = orderPlanItemsForEffect(assembled);
+  let finalItems = orderPlanItemsForEffect(assembled);
   if (planItemsOutOfOrder(assembled)) {
     finalItems.forEach((item, index) => (item.position = index));
     changed = true;
+  }
+  // Antagonist pairs seated as supersets, inside each effect tier (composition-pairing.ts).
+  // Identity when nothing pairs; positions are only rewritten when it changed the card.
+  const paired = pairForSession(finalItems, {
+    envelope,
+    date: envelope.date,
+    planSnapshot: opts.planSnapshot === true,
+  });
+  // A pairing reseats items (positions renumbered) but caps nothing: it never sets
+  // `changed`, which the validation reports as `capped`.
+  if (paired.changed) {
+    finalItems = paired.items;
+    finalItems.forEach((item, index) => (item.position = index));
   }
   // A peak single on a reach-open day is still a top set on a card, and it says so
   // itself: every server-derived top set carries `reach`, and the loop above reads
@@ -1499,8 +1588,13 @@ export function normalizeComposedSession(
   // that does NOT carry it — an agent-authored single whose load can come from a
   // plan target. That one is judged against the logged working weight at insertion.
   reconcileEnvelopeReach(envelope, reachLanded);
+  // …and the dose the same way: after pairing, which still seats today's gap groups off
+  // `dose.gaps`, the envelope keeps only the fills this card carries.
+  reconcileEnvelopeDose(envelope, new Set(dosed.landed));
 
   let est = base.est_minutes;
+  // The dose's added sets cost time; the day's own duration cap below still binds.
+  if (dosed.estAddMin > 0 && est != null) est += dosed.estAddMin;
   if (envelope.caps.duration_min != null && (est == null || est > envelope.caps.duration_min)) {
     est = envelope.caps.duration_min;
     changed = true;
@@ -1565,6 +1659,11 @@ function planItemToRaw(it: any): Record<string, unknown> {
     mode: it.mode ?? "reps",
     warmup_sets: it.warmup_sets ?? null,
     note: it.note ?? null,
+    // A pairing the athlete (or an applied plan) saved on the day rides onto the card;
+    // pairForSession leaves an existing group alone and clears one left alone. A group
+    // the card cannot hold (outside 1..50) is no grouping: clamped later, two such groups
+    // would merge into one, and a 0 would collide with the first new pair.
+    superset_group: validSupersetGroup(it.superset_group),
     brain_decision_id: it.brain_decision_id ?? null,
     brain_change_summary: it.brain_change_summary ?? null,
     brain_change_reason: it.brain_change_reason ?? null,
@@ -1629,6 +1728,8 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
           exercise: substitution.exercise,
           mode: stored?.mode ?? it?.mode,
         });
+        // A stand-in is not the movement its slot was paired for.
+        raw.superset_group = null;
         // A substitution never inherits the replaced movement's target. Reuse a
         // real working anchor only when this exact exercise has one; otherwise
         // establish the baseline without fabricated load/seconds.
