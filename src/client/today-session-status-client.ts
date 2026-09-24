@@ -66,8 +66,9 @@ type DoneRuntimeGlobals = typeof globalThis & {
     const row = set && typeof set === "object" ? set : {};
     const number = row.set_number ?? (index != null ? index + 1 : null);
     const id = row.id != null ? String(row.id) : "";
+    const load = row.weight == null ? 0 : Number(row.weight);
     const figure = row.duration_sec != null
-      ? fmtDur(row.duration_sec)
+      ? `${load ? `${fmtWeight(row.weight)} <span>×</span> ` : ""}${fmtDur(row.duration_sec)}`
       : `${fmtWeight(row.weight)} <span>×</span> ${escHtml(row.reps ?? "")}${row.rir != null ? ` <span>@${escHtml(row.rir)}</span>` : ""}`;
     return `<span class="chip" data-set="${escAttr(id)}">${number != null ? `<span class="chip-n">#${escHtml(number)}</span> ` : ""}${figure}<button class="xbtn chip-x" data-del="${escAttr(id)}" title="delete">×</button></span>`;
   }
@@ -108,6 +109,11 @@ type DoneRuntimeGlobals = typeof globalThis & {
       if (duration > 0) {
         row.timedSec += duration;
         if (duration > row.bestDuration) row.bestDuration = duration;
+        // A loaded carry/hold's best is its heaviest load, then its longest time there.
+        if (weight > 0 && !(reps > 0) && (weight > row.bestLoad || (weight === row.bestLoad && duration >= row.bestDuration))) {
+          row.bestLoad = weight;
+          row.bestLoadLabel = `${fmtWeight(weight)} x ${fmtDur(duration)}`;
+        }
       }
     }
     return [...byName.values()].sort((a, b) =>

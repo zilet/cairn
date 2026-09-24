@@ -164,7 +164,11 @@ function exerciseCardHtml(
   // still exactly one dose, just the true one. Loaded work only: the server emits
   // `reground` on the reps branch alone.
   const regrounding = rx?.reground === true;
-  const showTargetLoad = !timed && item.target_weight != null && !regrounding;
+  // A loaded carry/hold carries its load in the header too ("2 × 0:40 @ 55"); an
+  // unloaded hold is time alone.
+  const showTargetLoad = timed
+    ? item.target_weight != null && Number(item.target_weight) !== 0
+    : item.target_weight != null && !regrounding;
   const target = offPlan
     ? `<span class="ex-sets ex-offplan">off-plan</span>`
     : `<span class="ex-sets">${targetText}${showTargetLoad ? ` @ <span class="ex-target numeral">${fmtWeight(item.target_weight)}</span>` : ""}</span>`;
@@ -186,8 +190,13 @@ function exerciseCardHtml(
   const progress = `<span class="ex-prog${complete ? " done" : ""}" data-prog>${done}${goal ? ` / ${goal}` : ""} <span>set${done === 1 && !goal ? "" : "s"}</span></span>`;
   const tile = artImg("exercise", exercise, "artile-sm ex-art", art("exercise", exercise, item.muscle_group));
   const reveal = revealIdx != null ? Number(revealIdx) : null;
+  // Timed rows take an optional load before the time (a carry, a weighted hold);
+  // blank = unloaded. prefillFor already opens it at the plan's load, else the last logged one.
+  const timedLoad = prefill.weight != null && Number(prefill.weight) !== 0 ? prefill.weight : "";
   const logrow = timed
-    ? `<div class="logrow" data-ex="${encodeURIComponent(exercise)}"${exKeyAttr} data-day="${escAttr(options.day ?? "")}" data-mode="timed">
+    ? `<div class="logcaps logcaps-timed" aria-hidden="true"><span>WT</span><span>TIME</span><i></i><i></i></div>
+      <div class="logrow logrow-timed" data-ex="${encodeURIComponent(exercise)}"${exKeyAttr} data-day="${escAttr(options.day ?? "")}" data-mode="timed">
+        <input type="number" inputmode="decimal" placeholder="WT" class="in-w" aria-label="${escAttr(`${exercise} weight (optional)`)}" value="${escAttr(timedLoad ?? "")}">
         <input type="text" inputmode="numeric" autocomplete="off" placeholder="TIME · 1:30" class="in-dur" aria-label="${escAttr(`${exercise} duration`)}" value="${prefill.duration_sec != null ? fmtDur(prefill.duration_sec) : ""}">
         <button type="button" class="timerbtn" data-stopwatch-state="idle" aria-label="${escAttr(`Start ${exercise} stopwatch`)}" aria-pressed="false">Start</button>
         <button class="logbtn">+</button>

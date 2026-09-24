@@ -78,7 +78,10 @@ async function openSessionEdit(sess: HistorySession, fromEl: Element) {
         if (!row.isConnected) return; // a set deleted mid-edit
         const id = row.dataset.setid;
         const body = row.dataset.kind === "timed"
-          ? { duration_sec: parseDur(row.querySelector<HTMLInputElement>(".edset-dur")?.value) }
+          ? {
+              weight: numOrNull(row.querySelector<HTMLInputElement>(".edset-w")?.value),
+              duration_sec: parseDur(row.querySelector<HTMLInputElement>(".edset-dur")?.value),
+            }
           : {
               weight: numOrNull(row.querySelector<HTMLInputElement>(".edset-w")?.value),
               reps: numOrNull(row.querySelector<HTMLInputElement>(".edset-r")?.value),

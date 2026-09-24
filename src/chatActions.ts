@@ -408,7 +408,8 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     type: "log_set",
     applyMode: "immediate",
     shape: `{ "type": "log_set", "exercise": "Back Squat", "weight": 195, "reps": 8, "rir": 2, "day_number": 1 },
-    { "type": "log_set", "exercise": "Dead Hang", "duration_sec": 45, "exercise_mode": "timed" }`,
+    { "type": "log_set", "exercise": "Dead Hang", "duration_sec": 45, "exercise_mode": "timed" },
+    { "type": "log_set", "exercise": "Farmer's Carry", "weight": 50, "duration_sec": 50, "exercise_mode": "timed" }`,
     guidance: [
       `When you log_set or otherwise name an exercise, use a CLEAN canonical name (e.g. "Incline DB Press", "Romanian Deadlift") — not a descriptive/throwaway phrase ("incline db press 3x10 lol") — and reuse an existing KNOWN-EXERCISE name when it matches, so the same movement stays one entry.`,
     ],

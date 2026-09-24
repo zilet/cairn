@@ -144,11 +144,14 @@ type TodaySessionSetModelApi = {
         return { ok: false, message: "Time? e.g. 1:30 or 90", focus: () => durEl?.focus() };
       }
       if (durEl) durEl.value = deps.fmtDur(sec);
+      // Optional load for a carry/weighted hold; blank = unloaded.
+      const weightRaw = row.querySelector<HTMLInputElement>(".in-w")?.value ?? "";
+      const weight = weightRaw === "" || !Number.isFinite(Number(weightRaw)) ? null : Number(weightRaw);
       return {
         ok: true,
         body: {
           exercise,
-          weight: null,
+          weight,
           reps: null,
           rir: null,
           duration_sec: sec,
@@ -197,7 +200,11 @@ type TodaySessionSetModelApi = {
     const data = responseRecord(lastSet);
     let base = "";
     if (data.duration_sec != null) {
-      base = `Last time: ${deps.fmtDur(Number(data.duration_sec))}`;
+      const load = data.weight == null ? 0 : Number(data.weight);
+      const time = deps.fmtDur(Number(data.duration_sec));
+      base = Number.isFinite(load) && load !== 0
+        ? `Last time: ${load < 0 ? `${-load} lb assist` : load} × ${time}`
+        : `Last time: ${time}`;
     } else if (data.reps != null) {
       const reps = Number(data.reps);
       if (!Number.isFinite(reps)) return "";
@@ -213,6 +220,30 @@ type TodaySessionSetModelApi = {
     }
     const dateIso = typeof data.date === "string" ? data.date : "";
     return dateIso ? `${base} · ${humanDate(dateIso)}` : base;
+  }
+
+  // A timed set beats last time on load × time: a longer hold at the same or a
+  // heavier load, or a heavier load held at least as long (signed: less assist is
+  // heavier; blank = unloaded). Mirrors the server's isTimedPr against one prior set.
+  function timedSetBeats(
+    current: { weight: number | null; seconds: number },
+    last: { weight?: unknown; duration_sec?: unknown },
+  ): boolean {
+    const lastSec = Number(last.duration_sec) || 0;
+    const lastW = last.weight == null ? 0 : Number(last.weight) || 0;
+    const w = current.weight ?? 0;
+    return (w >= lastW && current.seconds > lastSec) || (w > lastW && current.seconds >= lastSec);
+  }
+
+  function currentTimedSetFromRow(
+    row: HTMLElement,
+    deps: Pick<ClientTodaySessionControllerDeps, "parseDur">,
+  ): { weight: number | null; seconds: number } | null {
+    const sec = deps.parseDur(row.querySelector<HTMLInputElement>(".in-dur")?.value || "");
+    if (sec == null || sec <= 0) return null;
+    const raw = row.querySelector<HTMLInputElement>(".in-w")?.value ?? "";
+    const weight = raw === "" || !Number.isFinite(Number(raw)) ? null : Number(raw);
+    return { weight, seconds: sec };
   }
 
   function currentSetScoreFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): number | null {
@@ -252,11 +283,17 @@ type TodaySessionSetModelApi = {
     const baseText = lineEl.textContent || "";
     const timed = row.dataset.mode === "timed";
     const inputs = timed
-      ? [row.querySelector<HTMLInputElement>(".in-dur")]
+      ? [row.querySelector<HTMLInputElement>(".in-w"), row.querySelector<HTMLInputElement>(".in-dur")]
       : [row.querySelector<HTMLInputElement>(".in-w"), row.querySelector<HTMLInputElement>(".in-r")];
     const update = () => {
-      const current = currentSetScoreFromRow(row, deps);
-      const beats = current != null && current > baseline;
+      let beats: boolean;
+      if (timed) {
+        const current = currentTimedSetFromRow(row, deps);
+        beats = current != null && timedSetBeats(current, data);
+      } else {
+        const current = currentSetScoreFromRow(row, deps);
+        beats = current != null && current > baseline;
+      }
       lineEl.textContent = beats ? "That beats last time" : baseText;
       lineEl.classList.toggle("ex-lastset-beat", beats);
     };

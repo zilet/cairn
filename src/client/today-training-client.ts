@@ -27,7 +27,9 @@ function rxTargetText(rx: ClientPrescriptionLike): string {
   if (rx?.mode === "timed") {
     const seconds = finiteNumber(suggested.seconds);
     const secs = seconds != null ? fmtDur(Math.round(seconds)) : "time";
-    return `${suggested.sets ?? "?"} × ${secs}`;
+    // A loaded carry/hold leads with its load, like a lift: "55 · 2 × 0:40".
+    const load = finiteNumber(suggested.weight);
+    return `${load ? `${load < 0 ? `${-load} assist` : fmtWeight(load)} · ` : ""}${suggested.sets ?? "?"} × ${secs}`;
   }
   const lo = suggested.rep_low;
   const hi = suggested.rep_high;

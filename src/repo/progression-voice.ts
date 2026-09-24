@@ -331,7 +331,7 @@ export const MOVEMENT_RESPONSE_DELOAD: VoiceSet = [
   "The last two sessions landed short while this was held — take one small step down and rebuild.",
 ];
 
-// ---- timed-mode verdicts (seconds, never load) ------------------------------
+// ---- timed-mode verdicts (seconds first; a loaded carry/hold steps load at the ceiling)
 
 export const TIMED_CONSTRAINED_HOLD: VoiceSet = [
   "This hold has a load-limiting note — keep it where it is, don't extend.",
@@ -352,12 +352,22 @@ export const TIMED_NO_HISTORY_PLANNED_HOLD: VoiceSet = [
 ];
 
 export const TIMED_OVERLOAD: VoiceSet2 = [
-  (step, base) =>
-    `The hold's solid — add ${step}s (a proportional step for a ${base}s hold). Progress timed work in time, never load.`,
-  (step, base) =>
-    `That hold is owned — take ${step}s more; on a ${base}s hold that's the right size of step. Timed work grows in time, not load.`,
+  (step, base) => `The hold's solid — add ${step}s (a proportional step for a ${base}s hold).`,
+  (step, base) => `That hold is owned — take ${step}s more; on a ${base}s hold that's the right size of step.`,
   (step, base) =>
     `Solid hold — stretch it by ${step}s, the proportional step from ${base}s. Time is how this one progresses.`,
+];
+
+export const TIMED_LOAD_STEP: VoiceSet2 = [
+  (load, seconds) => `Every set owned the full time — go to ${load} and start back at ${seconds}s.`,
+  (load, seconds) => `You held the whole time on every set — step up to ${load} and rebuild from ${seconds}s.`,
+  (load, seconds) => `The time is yours on every set — take ${load} now and bring the hold back to ${seconds}s.`,
+];
+
+export const TIMED_LOAD_CEILING_HOLD: VoiceSet = [
+  "Keep this load and time until every set holds the full duration — then the load moves.",
+  "Stay here until each set owns the whole time; that's when the load steps up.",
+  "Hold this load and duration until every set lasts the full time, then it gets heavier.",
 ];
 
 export const TIMED_DOSE_UNFINISHED_HOLD: VoiceSet = [
@@ -753,6 +763,7 @@ export function progressionVoicePhrases(): string[] {
     TIMED_DEFAULT_HOLD,
     TIMED_RESPONSE_HOLD,
     TIMED_RESPONSE_DELOAD,
+    TIMED_LOAD_CEILING_HOLD,
     JOINT_BRAKE_HOLD,
     JOINT_BRAKE_DELOAD,
     PAIN_AMBER_HOLD,
@@ -804,6 +815,7 @@ export function progressionVoicePhrases(): string[] {
     [EARNED_RANGE_OVERLOAD, 12, 8],
     [EARNED_RANGE_OVERLOAD_REPS, 12, 8],
     [TIMED_OVERLOAD, 5, 45],
+    [TIMED_LOAD_STEP, "55 lb", 40],
     [REALIZATION_TOP_SET, "205 lb", "single"],
     [ESCALATE_REP_WAVE, 3, 5],
   ];

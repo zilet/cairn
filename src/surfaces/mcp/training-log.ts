@@ -42,7 +42,7 @@ import { asText, type McpToolRegistrar } from "./shared.js";
 export function registerTrainingLogTools(server: McpToolRegistrar) {
   server.tool(
     "log_set",
-    "Log one working set into today's session, creating the session if none exists. Weight is in pounds and the sign is meaningful: negative is an assisted movement (-30 means 30 lb of assistance), and an omitted weight means bodyweight. A positive weight on a lift whose recent history is assisted is stored as assistance when it falls inside that lift's recent assist band, so pass a value above the band when the athlete truly went weighted. Timed exercises (plank, dead hang) take duration_sec with exercise_mode 'timed' instead of weight and reps. The exercise name is resolved against the catalog and may be canonicalized in the background. Does not update the weekly plan.",
+    "Log one working set into today's session, creating the session if none exists. Weight is in pounds and the sign is meaningful: negative is an assisted movement (-30 means 30 lb of assistance), and an omitted weight means bodyweight. A positive weight on a lift whose recent history is assisted is stored as assistance when it falls inside that lift's recent assist band, so pass a value above the band when the athlete truly went weighted. Timed exercises (plank, dead hang) take duration_sec with exercise_mode 'timed' instead of reps; a loaded carry or hold (farmer's carry, weighted plank) also passes its weight. The exercise name is resolved against the catalog and may be canonicalized in the background. Does not update the weekly plan.",
     {
       exercise: z.string(),
       weight: z.number().optional(),

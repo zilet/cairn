@@ -195,12 +195,15 @@ export function validateTrainingPlan(days: PlanQualityDay[]): PlanQualityReport 
             )
           );
         }
-        if (weight != null || repLow != null || repHigh != null) {
+        // A timed item may carry a load (a carry, a weighted plank: lb × time;
+        // negative = assist, null = bodyweight) — but never a rep target. The code
+        // keeps its historical name so existing callers still match it.
+        if (repLow != null || repHigh != null) {
           errors.push(
             issue(
               "error",
               "timed_load_incoherence",
-              `${exercise} on day ${dayLabel} is timed work, so it cannot also prescribe load or reps.`,
+              `${exercise} on day ${dayLabel} is timed work, so it cannot also prescribe reps.`,
               { ...dayExtra, exercises: [exercise] }
             )
           );

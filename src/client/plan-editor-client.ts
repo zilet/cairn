@@ -147,7 +147,7 @@ function progDayHtml(
           </div>
           <div class="prog-row-nums">
             <span class="numeral">${item.sets ?? "?"} × ${range}</span>
-            ${!timed && item.target_weight != null ? `<span class="numeral prog-row-wt">${escHtml(fmtWeightLb(item.target_weight))}</span>` : ""}
+            ${item.target_weight != null && (!timed || Number(item.target_weight) !== 0) ? `<span class="numeral prog-row-wt">${escHtml(fmtWeightLb(item.target_weight))}</span>` : ""}
           </div>
         </div>`;
   }).join("");

@@ -658,8 +658,8 @@ interface ExerciseRollup {
 // Ranking any set carrying a number above every bodyweight set got this backwards in
 // exactly one place, but the place that matters: a machine-assisted pull-up outranked
 // a true one and shipped as the day's best set. Ties fall through to reps, which is
-// what separates two bodyweight sets. Timed movements rank on `duration_sec` and carry
-// no load at all.
+// what separates two bodyweight sets. Timed movements rank on `duration_sec`; a loaded
+// carry/hold also carries its heaviest load as `top_weight`.
 function summarizeSets(sets: readonly unknown[]): ExerciseRollup[] {
   const byExercise = new Map<string, ExerciseRollup>();
   for (const raw of sets) {
@@ -680,6 +680,9 @@ function summarizeSets(sets: readonly unknown[]): ExerciseRollup[] {
       const seconds = Number(set.duration_sec);
       const best = Number(row.top_duration_sec);
       if (Number.isFinite(seconds) && (!Number.isFinite(best) || seconds > best)) row.top_duration_sec = seconds;
+      const load = Number(set.weight);
+      if (set.weight != null && Number.isFinite(load) && load !== 0 && (row.top_weight == null || load > Number(row.top_weight)))
+        row.top_weight = load;
       continue;
     }
     const weight = Number(set.weight);

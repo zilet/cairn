@@ -604,17 +604,18 @@ function insertSetByName(
   }
 
   // PR check. Reps exercises: a new all-time est-1RM (Epley). Timed exercises:
-  // strictly beating the previous max duration; est_1rm stays null for timed.
+  // load × time (isTimedPr); est_1rm stays null for timed.
   let pr = false;
   let est_1rm: number | null = null;
   if (ex.mode === "timed") {
     if ((input.duration_sec ?? 0) > 0) {
       const prev = db
         .prepare(
-          `SELECT MAX(duration_sec) AS m FROM logged_sets WHERE exercise_id = ? AND id != ? AND duration_sec IS NOT NULL`
+          `SELECT weight, duration_sec FROM logged_sets
+            WHERE exercise_id = ? AND id != ? AND duration_sec IS NOT NULL AND duration_sec > 0`
         )
-        .get(ex.id, info.lastInsertRowid) as any;
-      pr = input.duration_sec! > (prev?.m ?? 0);
+        .all(ex.id, info.lastInsertRowid) as any[];
+      pr = isTimedPr({ weight: storedWeight, duration_sec: input.duration_sec! }, prev);
     }
   } else if ((storedWeight ?? 0) > 0 && (input.reps ?? 0) > 0) {
     est_1rm = epley1RM(storedWeight!, input.reps!);
@@ -2152,6 +2153,31 @@ function bestDuration(rows: Array<{ duration_sec: any }>): number {
   return best;
 }
 
+// A timed set's PR is load × time. Load is signed (negative = assist, so less assist
+// is heavier); null/0 = unloaded. A longer hold than anything at this load or heavier
+// is a PR; a load heavier than anything before is a PR once it holds at least as long
+// as the heaviest prior load did. With no load anywhere this is "the longest hold".
+// No prior timed set → no baseline → not a PR.
+export function isTimedPr(
+  set: { weight: number | null | undefined; duration_sec: number },
+  prior: Array<{ weight: any; duration_sec: any }>
+): boolean {
+  const load = (w: any) => {
+    const n = Number(w);
+    return w == null || !Number.isFinite(n) ? 0 : n;
+  };
+  const priors = prior
+    .map((p) => ({ w: load(p.weight), t: Number(p.duration_sec) }))
+    .filter((p) => Number.isFinite(p.t) && p.t > 0);
+  const t = Number(set.duration_sec);
+  if (!priors.length || !(t > 0)) return false;
+  const w = load(set.weight);
+  const atOrAbove = priors.filter((p) => p.w >= w);
+  if (atOrAbove.length) return t > Math.max(...atOrAbove.map((p) => p.t));
+  const topLoad = Math.max(...priors.map((p) => p.w));
+  return t >= Math.max(...priors.filter((p) => p.w === topLoad).map((p) => p.t));
+}
+
 // Display helpers — whole loads render clean, a plate-and-a-half shows one decimal;
 // a hold renders as M:SS (or Ns under a minute); a prior date renders "Jul 6".
 function fmtWeight(w: number): string {
@@ -2161,6 +2187,26 @@ function fmtDuration(sec: number): string {
   const s = Math.round(sec);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+// The session's representative timed set: the heaviest load (signed), then the
+// longest hold at it. null when no set carries a duration.
+function topTimedSet<T extends { weight: any; duration_sec: any }>(sets: T[]): T | null {
+  let top: T | null = null;
+  for (const s of sets) {
+    if (!(Number(s.duration_sec) > 0)) continue;
+    const w = s.weight == null ? 0 : Number(s.weight);
+    const tw = top == null ? null : top.weight == null ? 0 : Number(top.weight);
+    if (top == null || w > (tw as number) || (w === tw && Number(s.duration_sec) > Number(top.duration_sec))) top = s;
+  }
+  return top;
+}
+// "55 lb × 50s" for a loaded carry/hold, "50s hold" for an unloaded one.
+function timedSetLabel(s: { weight: any; duration_sec: any }): string {
+  const w = s.weight == null ? 0 : Number(s.weight);
+  const t = Number(s.duration_sec);
+  if (Number.isFinite(w) && w > 0) return `${fmtWeight(w)} lb × ${fmtDuration(t)}`;
+  if (Number.isFinite(w) && w < 0) return `${fmtWeight(Math.abs(w))} lb assist × ${fmtDuration(t)}`;
+  return `${fmtDuration(t)} hold`;
 }
 const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function shortDate(iso: string): string {
@@ -2274,15 +2320,18 @@ function prsForSession(
   const out: Array<{ exercise: string; kind: "e1rm" | "duration"; label: string }> = [];
   for (const { exId, name, mode, exSets } of groupByExercise(rows).values()) {
     if (mode === "timed") {
-      const sessionBest = bestDuration(exSets);
-      if (sessionBest <= 0) continue;
+      if (bestDuration(exSets) <= 0) continue;
       const prior = db
-        .prepare(`SELECT l.duration_sec AS duration_sec FROM logged_sets l JOIN sessions s ON s.id = l.session_id
+        .prepare(`SELECT l.weight AS weight, l.duration_sec AS duration_sec FROM logged_sets l JOIN sessions s ON s.id = l.session_id
                   WHERE l.exercise_id = ? AND s.date < ? AND l.duration_sec IS NOT NULL`)
         .all(exId, date) as any[];
       if (!prior.length) continue; // no baseline — first-ever timed logging
-      if (sessionBest > bestDuration(prior)) {
-        out.push({ exercise: name, kind: "duration", label: `${fmtDuration(sessionBest)} hold — new best` });
+      // The session's winning set: the heaviest load, then the longest hold, that is a PR.
+      const winner = exSets
+        .filter((s) => Number(s.duration_sec) > 0 && isTimedPr({ weight: s.weight, duration_sec: Number(s.duration_sec) }, prior))
+        .sort((a, b) => Number(b.weight ?? 0) - Number(a.weight ?? 0) || Number(b.duration_sec) - Number(a.duration_sec))[0];
+      if (winner) {
+        out.push({ exercise: name, kind: "duration", label: `${timedSetLabel(winner)} — new best` });
       }
     } else {
       const sessionBest = bestE1rm(exSets);
@@ -2311,8 +2360,8 @@ function prsForSession(
 // a clean delta can't be computed (a mode/type mismatch, e.g. graduating off assistance).
 function describePrev(mode: string, prevSets: SessionSet[], prevDate: string): string {
   if (mode === "timed") {
-    const d = bestDuration(prevSets);
-    return d > 0 ? `${fmtDuration(d)} hold on ${shortDate(prevDate)}` : `logged on ${shortDate(prevDate)}`;
+    const top = topTimedSet(prevSets);
+    return top ? `${timedSetLabel(top)} on ${shortDate(prevDate)}` : `logged on ${shortDate(prevDate)}`;
   }
   const top = topRepsSet(prevSets);
   if (top) {
@@ -2346,13 +2395,26 @@ function buildComparison(
 ): Comparison {
   const base = { exercise: name, prev_date: prevDate };
   if (mode === "timed") {
-    const cur = bestDuration(curSets);
-    const prev = bestDuration(prevSets);
-    if (cur > 0 && prev > 0) {
-      const d = Math.round(cur - prev);
+    const curTop = topTimedSet(curSets);
+    const prevTop = topTimedSet(prevSets);
+    if (curTop && prevTop) {
+      const cw = curTop.weight == null ? 0 : Number(curTop.weight);
+      const pw = prevTop.weight == null ? 0 : Number(prevTop.weight);
+      const prev_label = `${timedSetLabel(prevTop)} on ${shortDate(prevDate)}`;
+      // A load change is the headline (signed: less assist is up); same load compares time.
+      if (cw !== pw) {
+        const d = cw - pw;
+        return {
+          ...base,
+          prev_label,
+          delta_label: `${d > 0 ? "+" : "-"}${fmtWeight(Math.abs(d))} lb`,
+          direction: d > 0 ? "up" : "down",
+        };
+      }
+      const d = Math.round(Number(curTop.duration_sec) - Number(prevTop.duration_sec));
       return {
         ...base,
-        prev_label: `${fmtDuration(prev)} hold on ${shortDate(prevDate)}`,
+        prev_label,
         delta_label: d === 0 ? "matched" : `${d > 0 ? "+" : "-"}${Math.abs(d)}s`,
         direction: d > 0 ? "up" : d < 0 ? "down" : "even",
       };

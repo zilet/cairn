@@ -85,7 +85,9 @@ export { renderJsonContract } from "./json-contract.js";
 // `weight`, and either wording alone would silently narrow the rule at the other site.
 export const MECHANICS_ENCODING = `- Assisted movements use NEGATIVE weight (target_weight when prescribing, weight when logging); bodyweight uses null.
 - TIMED exercises (mode:'timed', e.g. plank, dead hang) log duration_sec and are prescribed via
-  target_seconds — progression is in seconds (+5-15s/step), never load.`;
+  target_seconds — progression is in seconds (+5-15s/step). A loaded carry/hold (farmer's carry,
+  weighted plank) also carries target_weight: seconds climb first, then one load step with the
+  seconds reset lower — never both at once. Never reps on a timed item.`;
 
 // How movements and notes work. The server also enforces this (prep is not overloaded;
 // session stories stay off exercise cards; day's items are ordered for effect).

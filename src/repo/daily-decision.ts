@@ -573,7 +573,8 @@ function prescriptionTarget(value: any, mode: unknown): DailyDecisionTarget | nu
     sets: finite(value.sets),
     rep_low: timed ? null : finite(value.rep_low),
     rep_high: timed ? null : finite(value.rep_high),
-    target_weight: timed ? null : finite(value.weight),
+    // Timed work may carry a load (a carry, a weighted hold) beside its seconds.
+    target_weight: finite(value.weight),
     target_seconds: timed ? finite(value.seconds) : null,
   };
   return target;

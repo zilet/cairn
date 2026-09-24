@@ -168,7 +168,7 @@ function strictPlanChange(value: unknown): JsonObject | null {
       return null;
   }
   if (!(typeof input.exercise === "string" && input.exercise.trim()) && !swap) return null;
-  if (input.mode === "timed" && (input.target_weight != null || input.rep_low != null || input.rep_high != null))
+  if (input.mode === "timed" && (input.rep_low != null || input.rep_high != null))
     return null;
   if (input.mode === "reps" && input.target_seconds != null) return null;
   return normalizeJsonObject(input);
@@ -206,7 +206,7 @@ function strictPlanItem(value: unknown): boolean {
   if (!nullableInteger(input.superset_group, 1, 100)) return false;
   if (input.mode != null && input.mode !== "reps" && input.mode !== "timed") return false;
   if (typeof input.exercise !== "string" || !input.exercise.trim()) return false;
-  if (input.mode === "timed" && (input.target_weight != null || input.rep_low != null || input.rep_high != null))
+  if (input.mode === "timed" && (input.rep_low != null || input.rep_high != null))
     return false;
   if (input.mode === "reps" && input.target_seconds != null) return false;
   return true;

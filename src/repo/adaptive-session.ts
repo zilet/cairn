@@ -710,10 +710,8 @@ function normalizeItem(
     mode === "timed" && core.target_seconds != null
       ? resolveAgentSeconds(exercise, core.target_seconds, agentSource, trustedAgentNormalized)
       : null;
-  const targetWeight =
-    mode === "timed"
-      ? null
-      : resolveAgentWeight(exercise, item.target_weight, agentSource, athleteSource, trustedAgentNormalized);
+  // Timed work may carry a load (lb × time); it resolves through the same load trust boundary.
+  const targetWeight = resolveAgentWeight(exercise, item.target_weight, agentSource, athleteSource, trustedAgentNormalized);
   const topSet = normalizeTopSet(item.top_set, exercise, agentSource, athleteSource, trustedAgentNormalized);
   return {
     position,

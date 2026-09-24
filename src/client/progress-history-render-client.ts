@@ -2,7 +2,12 @@
 // Progress History card and edit-sheet render helpers.
 
 function progressHistorySetFigure(set: ProgressHistorySet): string {
-  return set.duration_sec != null ? fmtDur(set.duration_sec) : `${fmtWeight(set.weight)}×${set.reps}`;
+  if (set.duration_sec != null) {
+    // A loaded carry/hold shows its load with the time; an unloaded hold is time alone.
+    const w = set.weight == null ? 0 : Number(set.weight);
+    return w ? `${fmtWeight(set.weight)}×${fmtDur(set.duration_sec)}` : fmtDur(set.duration_sec);
+  }
+  return `${fmtWeight(set.weight)}×${set.reps}`;
 }
 
 function progressHistorySessionCardHtml(session: unknown, index: number): string {
@@ -36,7 +41,8 @@ function progressHistorySessionCardHtml(session: unknown, index: number): string
 function progressHistoryEditSetHtml(set: ProgressHistorySet): string {
   const timed = set.duration_sec != null || set.mode === "timed";
   const fields = timed
-    ? `<input class="edset-dur" inputmode="numeric" value="${set.duration_sec != null ? fmtDur(set.duration_sec) : ""}" placeholder="1:30" aria-label="duration">`
+    ? `<input class="edset-w" type="number" inputmode="decimal" value="${set.weight ?? ""}" placeholder="wt" aria-label="weight">
+       <input class="edset-dur" inputmode="numeric" value="${set.duration_sec != null ? fmtDur(set.duration_sec) : ""}" placeholder="1:30" aria-label="duration">`
     : `<input class="edset-w" type="number" inputmode="decimal" value="${set.weight ?? ""}" placeholder="wt" aria-label="weight">
        <input class="edset-r" type="number" inputmode="numeric" value="${set.reps ?? ""}" placeholder="reps" aria-label="reps">
        <input class="edset-rir" type="number" inputmode="numeric" value="${set.rir ?? ""}" placeholder="rir" aria-label="rir">`;

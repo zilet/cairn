@@ -645,7 +645,10 @@ export function buildPlanICS(opts: { now?: Date; startWeekday?: number } = {}): 
   };
   const fmtItem = (it: any) => {
     const name = it.exercise || "exercise";
-    if (it.mode === "timed" && it.target_seconds) return `${name} ${it.sets || 1}×${it.target_seconds}s`;
+    if (it.mode === "timed" && it.target_seconds) {
+      const load = it.target_weight != null && Number(it.target_weight) !== 0 ? ` @ ${it.target_weight}` : "";
+      return `${name} ${it.sets || 1}×${it.target_seconds}s${load}`;
+    }
     const lo = it.rep_low,
       hi = it.rep_high;
     const reps = lo && hi ? (lo === hi ? `${lo}` : `${lo}-${hi}`) : lo || hi || "";
@@ -949,9 +952,6 @@ export function updateTarget(
     if (ex.mode === "reps" && target_seconds !== undefined && target_seconds !== null) {
       throw new Error(`Cannot set target_seconds on reps-based exercise "${ex.name}"`);
     }
-    if (ex.mode === "timed" && target_weight !== undefined && target_weight !== null) {
-      throw new Error(`Cannot set target_weight on timed exercise "${ex.name}"`);
-    }
     const bounded = canonicalizeAgentPrescriptionLoad(
       ex,
       "update",
@@ -1207,7 +1207,7 @@ export function getPlanQuality() {
 function planModeQualityError(
   dayNumber: number,
   exercise: string,
-  code: "timed_load_incoherence" | "reps_timed_incoherence",
+  code: "reps_timed_incoherence",
   message: string
 ): PlanQualityError {
   return new PlanQualityError(
@@ -1536,7 +1536,8 @@ export function applyPlanChange(
   // group auto-classifies), then append it with the change's prescription + sensible
   // defaults, carrying the coach's reason as the note so the "why" survives.
   assertNoRedundantPress(dayItems, name);
-  const timed = ts !== undefined && tw === undefined;
+  // Seconds make it timed work; a load beside them is a loaded carry/hold.
+  const timed = ts !== undefined;
   const boundedSets = boundPrescriptionInt("sets", name, c.sets, 1, 20);
   const boundedRepLow = boundPrescriptionInt("rep_low", name, c.rep_low, 1, 100);
   const boundedRepHigh = boundPrescriptionInt("rep_high", name, c.rep_high, 1, 100);
@@ -1557,10 +1558,6 @@ export function applyPlanChange(
   if (ex.mode === "reps" && ts !== undefined) {
     const message = `Cannot set target_seconds on reps-based exercise "${ex.name}"`;
     throw planModeQualityError(dayNumber, ex.name, "reps_timed_incoherence", message);
-  }
-  if (ex.mode === "timed" && tw !== undefined) {
-    const message = `Cannot set target_weight on timed exercise "${ex.name}"`;
-    throw planModeQualityError(dayNumber, ex.name, "timed_load_incoherence", message);
   }
   const pos = (
     db.prepare(`SELECT COALESCE(MAX(position), -1) + 1 AS p FROM plan_items WHERE plan_day_id = ?`).get(day.id) as any
@@ -1673,7 +1670,13 @@ function groundIncomingMovement(ex: {
     const ownSeconds = recentWorkingSeconds(ex.name);
     if (ownSeconds == null) return none;
     const seconds = Math.round(ownSeconds);
-    return { target_weight: null, target_seconds: seconds, grounding: { kind: "direct", label: `${seconds}s` } };
+    // A loaded carry/hold carries its own logged load with the time (never a sibling's).
+    const ownLoad = recentWorkingWeight(ex.name);
+    return {
+      target_weight: ownLoad,
+      target_seconds: seconds,
+      grounding: { kind: "direct", label: ownLoad != null ? `${seconds}s at ${swapLoadLabel(ownLoad)}` : `${seconds}s` },
+    };
   }
   const ownWeight = recentWorkingWeight(ex.name);
   if (ownWeight != null)
@@ -1788,10 +1791,6 @@ function applyPlanSwap(
     const message = `Cannot set target_seconds on reps-based exercise "${toEx.name}"`;
     throw planModeQualityError(dayNumber, toEx.name, "reps_timed_incoherence", message);
   }
-  if (toEx.mode === "timed" && change.target_weight != null) {
-    const message = `Cannot set target_weight on timed exercise "${toEx.name}"`;
-    throw planModeQualityError(dayNumber, toEx.name, "timed_load_incoherence", message);
-  }
   const timed = toEx.mode === "timed";
   let targetWeight =
     change.target_weight != null && Number.isFinite(Number(change.target_weight)) ? Number(change.target_weight) : null;
@@ -1900,7 +1899,7 @@ export function addExerciseToPlanDay(
   ).p;
   const timed = ex.mode === "timed";
   const grounded = groundIncomingMovement(ex);
-  const targetWeight = timed ? null : grounded.target_weight;
+  const targetWeight = grounded.target_weight;
   // A timed slot always lands with a duration — its own logged hold when there is
   // one, otherwise the conservative default. Either way something IS prescribed, so
   // the note must not tell the athlete to start light and log their own value while

@@ -340,7 +340,7 @@ export function substituteSaturatedPlanItems(
         sets: finite(item?.sets),
         rep_low: mode === "timed" ? null : finite(item?.rep_low),
         rep_high: mode === "timed" ? null : finite(item?.rep_high),
-        target_weight: mode === "timed" ? null : finite(item?.target_weight),
+        target_weight: finite(item?.target_weight),
         target_seconds: mode === "timed" ? finite(item?.target_seconds) : null,
         warmup_sets: finite(item?.warmup_sets),
         mode,
@@ -444,9 +444,9 @@ export function substituteSaturatedPlanItems(
     // carries the assist sign (negative = assisted), and the plan target carries
     // whatever sign the athlete stored — so neither path can flip an assisted
     // lift into a loaded one.
-    const loggedWeight = entry.mode === "timed" ? null : recentWorkingWeight(entry.exercise);
+    const loggedWeight = recentWorkingWeight(entry.exercise);
     const loggedSeconds = entry.mode === "timed" ? recentWorkingSeconds(entry.exercise) : null;
-    const weight = entry.mode === "timed" ? null : (loggedWeight ?? entry.target_weight);
+    const weight = loggedWeight ?? entry.target_weight;
     const seconds = entry.mode === "timed" ? (loggedSeconds ?? entry.target_seconds) : null;
     // Only a LOGGED number is proven. A plan-target fallback is a number this
     // module read off the athlete's own prescription for a movement they have

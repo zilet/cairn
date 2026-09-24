@@ -311,7 +311,7 @@ GUARDRAILS:
 - The set weights are ALREADY in the user's own units (pounds) — do NOT convert, re-scale, or
   invent weights. Copy the detected weight through as-is. weight = null means bodyweight (push-ups,
   pull-ups, dips); a NEGATIVE weight means an assisted movement (leave that sign intact).
-- Timed holds (plank, dead hang, wall sit) → set "duration_sec" + "mode":"timed" with weight null;
+- Timed holds (plank, dead hang, wall sit) → set "duration_sec" + "mode":"timed" (weight only for a loaded carry/hold, else null);
   everything else → "mode":"reps" with reps (and weight when loaded).
 - Group consecutive identical detected sets faithfully — one entry per working set, in order.
 - "extrapolated" is true iff you emitted at least one set.

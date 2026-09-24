@@ -262,7 +262,9 @@ function slotFor(set: GarminExportPayloadSet): { repetitionCount: number | null;
   const timed = set.mode === "timed";
   return {
     repetitionCount: timed ? null : set.reps == null ? null : Math.max(0, Math.round(set.reps)),
-    weight: timed ? null : garminWeightGrams(set.weight),
+    // A loaded carry/hold sends its load beside its duration — the same slot fields
+    // a reps set uses (grams; assist/bodyweight stay null).
+    weight: garminWeightGrams(set.weight),
     duration: timed && set.duration_sec != null && set.duration_sec > 0 ? Math.round(set.duration_sec) : DEFAULT_SET_SEC,
   };
 }

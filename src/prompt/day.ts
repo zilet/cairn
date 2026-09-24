@@ -308,7 +308,8 @@ function debriefFacts(date: string): string {
         if (!cur || score > cur._score) top.set(s.exercise, { ...s, _score: score });
       }
       const fmtSet = (s: any): string => {
-        if (s.mode === "timed" && s.duration_sec != null) return `${s.duration_sec}s`;
+        if (s.mode === "timed" && s.duration_sec != null)
+          return s.weight != null && Number(s.weight) !== 0 ? `${s.weight} lb × ${s.duration_sec}s` : `${s.duration_sec}s`;
         if (s.weight == null && s.reps != null) return `${s.reps} reps (bodyweight)`;
         if (s.weight != null && s.reps != null) {
           const w = Number(s.weight);

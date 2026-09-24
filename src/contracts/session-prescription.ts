@@ -172,7 +172,6 @@ export function normalizePrescriptionItem(
     if (present(item.target_weight) && weight == null) {
       throw new Error(`timed item ${position + 1} target_weight must be numeric`);
     }
-    if (weight != null && weight !== 0) throw new Error(`timed item ${position + 1} cannot also prescribe a weight`);
   } else {
     if (present(item.target_seconds)) throw new Error(`reps item ${position + 1} cannot prescribe target_seconds`);
     if (targetReps != null) {

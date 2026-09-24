@@ -108,7 +108,19 @@ importing everything from `./repo.js` unchanged.
   Brief-only repaint (`upgradeBriefInPlace`) withholds "Start session" exactly like the initial paint,
   instead of re-deriving an approximation of the rule from the DOM.
 - Epley est-1RM (`getProgress`) and PR detection (in `logSetByName`, returns `pr`/`est_1rm` — for
-  `mode:'timed'` exercises a PR is a new max `duration_sec` and `est_1rm` stays null).
+  `mode:'timed'` exercises a PR is load × time via `isTimedPr` and `est_1rm` stays null).
+- **Loaded timed work (the timed-exercise law).** A timed item is a TIME and, optionally, a LOAD —
+  a carry or weighted hold (`target_weight` beside `target_seconds`; negative = assist, null =
+  unloaded). A rep target on a timed item is still an error (`timed_load_incoherence`, kept as the
+  code name). Composition carries the load through (`load_basis:"loaded"`), the log row takes WT +
+  TIME, and Garmin gets the load on the same slot fields a reps set uses. Progression
+  (`timedPrescription`, `progression.ts`) moves seconds first, capped at `LOADED_HOLD_CEILING_SEC`
+  (60 s, or the prescription itself when already longer); only when EVERY set at the load owns the
+  ceiling does the load take one ordinary step (`clampedOverload`, or an assist peel) with the
+  seconds reset to two-thirds of the ceiling — never both at once. Brakes and deloads ease seconds
+  and keep the load. A timed PR (`isTimedPr`, `sessions.ts`) is a hold longer than anything at that
+  load or heavier, or a load heavier than any before held at least as long as the heaviest prior
+  load was. Unloaded holds keep pure seconds progression and the longest-hold PR.
 - Exercise CRUD (`listExercises`/`upsertExercise`/`updateExercise` — `mode` is `'reps'` or
   `'timed'`), the exercise guide (`getExerciseDetail`), volume-by-muscle (`getVolumeByMuscle`),
   training calendar (`getTrainingCalendar`).
@@ -2034,7 +2046,7 @@ make it reach any prompt until that site lists it. See "The prompt-boundary cont
 ### Schema notes
 
 `plan_items` has `warmup_sets` and `target_seconds` (the latter prescribes hold time for timed
-exercises). `exercises` has `mode` (`'reps'` default | `'timed'`). `logged_sets` has `duration_sec`
+exercises; a loaded carry/hold also carries `target_weight`). `exercises` has `mode` (`'reps'` default | `'timed'`). `logged_sets` has `duration_sec`
 (timed sets may have null weight/reps). `settings` has `onboarded`, `enrich_enabled`, `art_enabled`,
 `art_enabled_at` (UTC stamp written by `setSettings` on every off→on flip of `art_enabled`; the
 spend-telemetry window) and `meal_prefs` (free-text meal/schedule preferences — e.g. "I train fasted

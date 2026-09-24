@@ -25,7 +25,7 @@ type SuggestedSessionLike = Partial<ClientSessionSuggestion> | null | undefined;
     const timed = it.mode === "timed" || it.target_seconds != null;
     if (timed) {
       const secs = it.target_seconds != null ? fmtDur(it.target_seconds) : "time";
-      return `${it.sets ?? "?"} × ${secs}`;
+      return `${it.sets ?? "?"} × ${secs}${todaySuggestLoadSuffix(it)}`;
     }
     const lo = it.rep_low;
     const hi = it.rep_high;

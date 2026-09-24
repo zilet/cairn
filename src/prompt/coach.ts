@@ -48,7 +48,7 @@ const PLAN_SCHEMA = `{
   "summary": "one or two sentences on the overall adjustment",
   "changes": [
     { "day_number": <1-7>, "exercise": "<exact exercise name>", "target_weight": <number|null>, "sets": <number>, "rep_low": <number>, "rep_high": <number>, "reason": "<why>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|activity|plan|null>", "source_ref_key": "<source ID/date|null>" } },
-    { "day_number": <1-7>, "exercise": "<exact exercise name>", "target_seconds": <number>, "sets": <number>, "reason": "<why — ONLY for mode:'timed' exercises; omit reps/load>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|plan|null>", "source_ref_key": "<source ID/date|null>" } },
+    { "day_number": <1-7>, "exercise": "<exact exercise name>", "target_seconds": <number>, "sets": <number>, "reason": "<why — ONLY for mode:'timed' exercises; omit reps (target_weight only for a loaded carry/hold)>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|plan|null>", "source_ref_key": "<source ID/date|null>" } },
     { "day_number": <1-7>, "exercise": "<exact current exercise>", "remove": true, "reason": "<why remove it; NEVER use sets:0>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|plan|null>", "source_ref_key": "<source ID/date|null>" } },
     { "day_number": <1-7>, "swap": { "from": "<exact current exercise>", "to": "<new same-pattern movement>" }, "sets": <number|null>, "rep_low": <number|null>, "rep_high": <number|null>, "target_weight": <number|null>, "reason": "<why rotate it in>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|plan|null>", "source_ref_key": "<source ID/date|null>" } }
   ],
@@ -124,7 +124,7 @@ NON-NEGOTIABLE GUARDRAILS:
 ${MECHANICS_ENCODING}
 ${MOVEMENT_NOTES_CONTRACT}
 - Small steps. Thin/absent data -> do not change. Progress a timed exercise ONLY when recent durations
-  comfortably meet the current target; never propose target_weight for one.
+  comfortably meet the current target; propose target_weight for one only when it is a loaded carry/hold.
 
 KEEP TRAINING FRESH (anti-staleness — a plan that never changes gets abandoned):
 - Main lifts that are progressing stay put. But when an ACCESSORY has been unchanged for ~3-4 weeks,
@@ -370,7 +370,7 @@ const WEEK_COMPOSE_SCHEMA = `{
   "days": [
     { "day_number": <1-7>, "name": "<day name, e.g. Lower>", "focus": "<focus, e.g. lower>", "items": [
       { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <number|null>, "superset_group": <int|null — same value pairs two items as a superset>, "note": "<optional cue, e.g. 'NEW — start light, log actual'>" },
-      { "exercise": "<name>", "sets": <n>, "target_seconds": <n>, "note": "<ONLY for a held/timed movement — omit reps and load>" }
+      { "exercise": "<name>", "sets": <n>, "target_seconds": <n>, "note": "<ONLY for a held/timed movement — omit reps; target_weight only for a loaded carry/hold>" }
     ] }
   ],
   "notes": "<optional coaching notes, may be empty>"

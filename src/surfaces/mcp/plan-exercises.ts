@@ -43,7 +43,11 @@ const planItemShape = z.object({
   sets: z.number().int().optional(),
   rep_low: z.number().int().nullable().optional(),
   rep_high: z.number().int().nullable().optional(),
-  target_weight: z.number().nullable().optional().describe("lb; negative = assisted, null = bodyweight"),
+  target_weight: z
+    .number()
+    .nullable()
+    .optional()
+    .describe("lb; negative = assisted, null = bodyweight. A timed item may carry one too (a carry or weighted hold: load × target_seconds)"),
   note: z.string().nullable().optional(),
   warmup_sets: z.number().int().nullable().optional().describe("# of warmup sets before working sets"),
   target_seconds: z
@@ -51,7 +55,7 @@ const planItemShape = z.object({
     .int()
     .nullable()
     .optional()
-    .describe("prescribed hold/duration in seconds, for timed exercises"),
+    .describe("prescribed hold/duration in seconds, for timed exercises (never with rep_low/rep_high)"),
   mode: z
     .enum(["reps", "timed"])
     .nullable()
@@ -153,7 +157,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
 
   server.tool(
     "update_target",
-    "Update the prescribed target for an exercise on a given plan day: target_weight (lb) for reps exercises and/or target_seconds for timed exercises.",
+    "Update the prescribed target for an exercise on a given plan day: target_weight (lb) and/or target_seconds for timed exercises (a loaded carry or hold carries both).",
     {
       day_number: z.number().int(),
       exercise: z.string(),
@@ -263,7 +267,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
         .nullable()
         .optional()
         .describe("canonical or legacy muscle-group label, canonicalized on write; null clears it. Omit to leave unchanged on an existing exercise"),
-      mode: z.enum(["reps", "timed"]).optional().describe("'timed' logs duration_sec instead of weight/reps. Omit to leave unchanged on an existing exercise"),
+      mode: z.enum(["reps", "timed"]).optional().describe("'timed' logs duration_sec instead of reps (plus an optional load for carries/weighted holds). Omit to leave unchanged on an existing exercise"),
     },
     // A user-facing create (via the coach/MCP client) opts into the same quiet
     // background enrichment the REST route does — canonicalize + classify + guide

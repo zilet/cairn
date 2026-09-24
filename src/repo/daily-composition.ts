@@ -261,7 +261,10 @@ function authorizedTargetRaises(
   if (target.mode === "timed") {
     const want = finite(target.target_seconds);
     const have = finite(item.target_seconds);
-    return want != null && (have == null || want > have);
+    if (want != null && (have == null || want > have)) return true;
+    const wantLoad = finite(target.target_weight);
+    const haveLoad = finite(item.target_weight);
+    return wantLoad != null && (haveLoad == null ? wantLoad > 0 : wantLoad > haveLoad);
   }
   const want = finite(target.target_weight);
   const have = finite(item.target_weight);
@@ -328,7 +331,7 @@ function applyAuthorizedTarget(item: any, candidate: DailyDecisionEnvelope["cand
   // survive without giving the agent freedom to invent a heavier target.
   assign("rep_low", target.mode === "timed" ? null : target.rep_low);
   assign("rep_high", target.mode === "timed" ? null : target.rep_high);
-  assign("target_weight", target.mode === "timed" ? null : target.target_weight);
+  assign("target_weight", target.target_weight);
   assign("target_seconds", target.mode === "timed" ? target.target_seconds : null);
   if (item.mode !== target.mode) {
     item.mode = target.mode;
@@ -383,7 +386,7 @@ function holdAnchor(
     return {
       mode,
       target_seconds: recentWorkingSeconds(exercise) ?? finite(planned?.target_seconds),
-      target_weight: null,
+      target_weight: recentWorkingWeight(exercise) ?? finite(planned?.target_weight),
     };
   }
   const prescribed = candidateHoldWeight(candidate);
@@ -403,8 +406,10 @@ function clampHeldTarget(
   const anchor = holdAnchor(String(item.exercise ?? ""), envelope, candidate);
   let changed = false;
   if (anchor.mode === "timed") {
-    if (item.target_weight != null) {
-      item.target_weight = null;
+    // A held carry/hold never goes heavier than its own anchor (signed: less assist is harder).
+    const load = finite(item.target_weight);
+    if (load != null && (anchor.target_weight == null || load > anchor.target_weight)) {
+      item.target_weight = anchor.target_weight;
       changed = true;
     }
     const requested = finite(item.target_seconds);
@@ -1553,7 +1558,7 @@ function planItemToRaw(it: any): Record<string, unknown> {
     sets: it.sets ?? 3,
     rep_low: it.rep_low ?? null,
     rep_high: it.rep_high ?? null,
-    target_weight: it.mode === "timed" ? null : (it.target_weight ?? null),
+    target_weight: it.target_weight ?? null,
     target_seconds: it.mode === "timed" ? (it.target_seconds ?? null) : null,
     mode: it.mode ?? "reps",
     warmup_sets: it.warmup_sets ?? null,
@@ -1626,7 +1631,7 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
         // real working anchor only when this exact exercise has one; otherwise
         // establish the baseline without fabricated load/seconds.
         if (stored?.mode === "timed") {
-          raw.target_weight = null;
+          raw.target_weight = recentWorkingWeight(substitution.exercise);
           raw.target_seconds = recentWorkingSeconds(substitution.exercise);
         } else {
           raw.target_weight = recentWorkingWeight(substitution.exercise);

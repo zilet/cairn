@@ -227,9 +227,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   `docs/ARCHITECTURE.md`.
 - **Weight encoding**: negative `weight`/`target_weight` = assisted movement (`-30` = 30 lb assist);
   `null` = bodyweight. The PWA and prompts rely on this.
-- **Timed exercises** (`exercises.mode = 'timed'`): sets log `duration_sec` (weight/reps may be
-  null), plans prescribe `target_seconds`, progression is in seconds — never load. Proposal
-  `changes[]` may carry `target_seconds` instead of `target_weight`.
+- **Timed exercises** (`exercises.mode = 'timed'`): sets log `duration_sec` (reps null), plans
+  prescribe `target_seconds`; a loaded carry/hold also carries a weight — seconds progress to a
+  ceiling first, then one load step with the seconds reset, never both (`docs/ARCHITECTURE.md`
+  "Loaded timed work"). A timed item never takes reps.
 - Est-1RM is Epley on the best set per day.
 - **Sensor age and acute muscle fatigue each have exactly one source of truth**: `src/repo/sensor-freshness.ts`
   (a stale wearable reading behaves as absent, never as current) and `hybrid-load.ts`'s `acuteGate()`

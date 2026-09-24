@@ -161,6 +161,12 @@ const STEP_CEIL_ISOLATION = 2.5; // the isolation floor: never smaller than 2.5 
 const SECONDS_STEP_FRAC = 0.1; // ~10% of the current hold…
 const SECONDS_STEP_MIN = 3; // …never smaller than 3s (a real nudge on a short hold)
 const SECONDS_STEP_MAX = 20; // …never larger than 20s in one step (a long hold doesn't leap)
+// LOADED timed work (a carry, a weighted hold) double-progresses: seconds climb to a
+// hold ceiling first, and only once EVERY set owns the ceiling does the load take one
+// step while the seconds reset lower. Never both at once. A prescription already past
+// the ceiling is its own ceiling.
+const LOADED_HOLD_CEILING_SEC = 60;
+const LOADED_HOLD_RESET_FRAC = 2 / 3; // 60s → 40s after a load step
 const DELOAD_FRAC = 0.1; // a deload backs the load off ~10%
 // Reps genuinely in hand. At RIR ≥ 2 the set was finished with room to spare; at
 // RIR ≤ 1 it was a grind. The one place the engine draws that line.
@@ -802,7 +808,11 @@ function prepWorkPrescription(
 function currentTarget(plan: ReturnType<typeof planItemFor>, mode: "reps" | "timed"): PrescriptionTarget | null {
   if (!plan) return null;
   if (mode === "timed") {
-    return { sets: plan.sets || 1, seconds: plan.seconds ?? undefined };
+    return {
+      sets: plan.sets || 1,
+      seconds: plan.seconds ?? undefined,
+      ...(plan.weight != null && plan.weight !== 0 ? { weight: plan.weight } : {}),
+    };
   }
   return {
     sets: plan.sets || 0,
@@ -2545,9 +2555,37 @@ function repsPrescription(
   };
 }
 
+// The latest session's timed sets for a lift — load and time per set, so a loaded
+// carry/hold can ask "did EVERY set own the time at this load". Empty when nothing's logged.
+function latestTimedSets(name: string, sessionId: number | undefined): { weight: number | null; seconds: number }[] {
+  if (sessionId == null) return [];
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return [];
+  const inIds = ids.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT weight, duration_sec FROM logged_sets
+        WHERE exercise_id IN (${inIds}) AND session_id = ? AND duration_sec IS NOT NULL AND duration_sec > 0`
+    )
+    .all(...ids, sessionId) as any[];
+  return rows.map((r) => ({ weight: r.weight == null ? null : Number(r.weight), seconds: Number(r.duration_sec) }));
+}
+
+// A timed lift's working load: the plan's, else the heaviest (signed — less assist is
+// harder) load the last session carried. null = bodyweight/unloaded work.
+function timedWorkingLoad(plan: ReturnType<typeof planItemFor>, lastSets: { weight: number | null }[]): number | null {
+  if (plan?.weight != null && plan.weight !== 0) return plan.weight;
+  let best: number | null = null;
+  for (const s of lastSets) {
+    if (s.weight == null || s.weight === 0 || !Number.isFinite(s.weight)) continue;
+    if (best == null || s.weight > best) best = s.weight;
+  }
+  return best;
+}
+
 function timedPrescription(
   name: string,
-  _group: string | null,
+  group: string | null,
   loadConstrained: boolean,
   plan: ReturnType<typeof planItemFor>,
   cur: PrescriptionTarget | null,
@@ -2571,6 +2609,10 @@ function timedPrescription(
   const held = last?.duration_sec != null ? Math.round(Number(last.duration_sec)) : null;
   const solid = held != null && target > 0 && held >= target;
   const doseEligibility = linkedDoseEligibility(last?.session_id, name);
+  const lastSets = last ? latestTimedSets(name, last.session_id) : [];
+  const load = timedWorkingLoad(plan, lastSets);
+  let nextLoad: number | null = load;
+  let loadStepped = false;
 
   if (loadConstrained) {
     action = "hold";
@@ -2590,6 +2632,32 @@ function timedPrescription(
     const step = timedStep(base, brakeCtx?.personalModifier);
     nextSeconds = base + step;
     why = say(voice.TIMED_OVERLOAD, "timed_overload")(step, base);
+    if (load != null) {
+      // Loaded carry/hold: seconds up to the ceiling, then one load step — never both.
+      const ceiling = Math.max(LOADED_HOLD_CEILING_SEC, base);
+      const working = lastSets.filter((s) => s.weight != null && s.weight >= load);
+      const everySetOwned = base > 0 && working.length >= sets && working.every((s) => s.seconds >= base);
+      if (base < ceiling) {
+        const capped = Math.min(step, ceiling - base);
+        nextSeconds = base + capped;
+        why = say(voice.TIMED_OVERLOAD, "timed_overload")(capped, base);
+      } else if (everySetOwned) {
+        nextLoad =
+          load > 0
+            ? clampedOverload(load, group, brakeCtx?.personalModifier)
+            : assistStepNext(load, group, brakeCtx?.personalModifier, 1);
+        nextSeconds = Math.max(10, Math.round(ceiling * LOADED_HOLD_RESET_FRAC));
+        loadStepped = true;
+        why = say(voice.TIMED_LOAD_STEP, "timed_load_step")(
+          nextLoad == null ? "bodyweight" : nextLoad < 0 ? `${Math.abs(nextLoad)} lb assist` : `${nextLoad} lb`,
+          nextSeconds
+        );
+      } else {
+        action = "hold";
+        nextSeconds = base;
+        why = say(voice.TIMED_LOAD_CEILING_HOLD, "timed_load_ceiling_hold");
+      }
+    }
   } else {
     action = "hold";
     nextSeconds = baseSeconds ?? held;
@@ -2610,6 +2678,8 @@ function timedPrescription(
     if (action === "overload") {
       action = "hold";
       nextSeconds = baseSeconds;
+      nextLoad = load;
+      loadStepped = false;
       why = say(voice.TIMED_RESPONSE_HOLD, "timed_response_hold");
     } else if (action === "hold" && last && doseEligibility.eligible) {
       action = "deload";
@@ -2620,7 +2690,8 @@ function timedPrescription(
 
   // AUTOREGULATION GATE (timed): a sore joint this hold loads, high soreness, or a
   // just-smoked group holds/eases the duration rather than extending. Timed work
-  // eases in SECONDS, never load. Applied last so it wins over the earned extension.
+  // eases in SECONDS (a loaded carry keeps its load). Applied last so it wins over
+  // the earned extension.
   let autoregulated = false;
   const brake = brakeCtx
     ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.acute, name, date)
@@ -2629,12 +2700,14 @@ function timedPrescription(
     autoregulated = true;
     action = brake.action;
     why = brake.why;
+    nextLoad = load;
+    loadStepped = false;
     if (brake.action === "hold") nextSeconds = baseSeconds;
     else nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;
   }
 
   // PAIN TRAFFIC LIGHT (timed): the same per-movement bands, eased in SECONDS —
-  // timed work never carries load, so a red band shortens the hold instead. With no
+  // a red band shortens the hold (a loaded carry keeps its load). With no
   // duration on record there is nothing to shorten, so red degrades to the hold's
   // sentence rather than claiming a cut that did not happen (the reps path does the
   // same for bodyweight and assisted work).
@@ -2644,6 +2717,8 @@ function timedPrescription(
     const canEase = baseSeconds != null && baseSeconds > 10;
     const painAction = painBrake.action === "deload" && !canEase ? "hold" : painBrake.action;
     autoregulated = true;
+    nextLoad = load;
+    loadStepped = false;
     action = painAction;
     why =
       painAction === painBrake.action
@@ -2656,8 +2731,14 @@ function timedPrescription(
     }
   }
 
-  const suggested: PrescriptionTarget = { sets, seconds: nextSeconds ?? undefined };
-  const delta_text = secondsDeltaText(baseSeconds, nextSeconds);
+  const suggested: PrescriptionTarget = {
+    sets,
+    seconds: nextSeconds ?? undefined,
+    ...(load != null ? { weight: nextLoad } : {}),
+  };
+  const delta_text = loadStepped
+    ? `${loadedDeltaText(load, nextLoad)}, ${nextSeconds}s`
+    : secondsDeltaText(baseSeconds, nextSeconds);
 
   return {
     exercise: ex_name(name),
@@ -3052,6 +3133,9 @@ export function buildProgressionProposal(
     };
     if (p.mode === "timed") {
       if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;
+      // A loaded carry/hold's load step travels with its seconds reset.
+      if (p.suggested.weight !== undefined && p.suggested.weight !== (planned ?? null))
+        c.target_weight = p.suggested.weight;
     } else if (p.suggested.weight !== undefined) {
       // A re-ground on an assisted-history lift never writes a positive target
       // in one step — bodyweight (null) is the furthest it may travel.

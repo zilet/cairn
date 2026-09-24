@@ -762,6 +762,8 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .logcaps span{flex:1 1 0;min-width:0;text-align:center;font-family:var(--font-ui);font-size:.58rem;
   font-weight:600;letter-spacing:.14em;color:var(--muted)}
 .logcaps i{flex:0 0 44px}
+/* timed row: WT · TIME · stopwatch · + — the first spacer sits over the stopwatch */
+.logcaps-timed i:first-of-type{flex-basis:56px}
 .logcaps + .logrow{margin-top:4px}
 .logrow input{
   width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);

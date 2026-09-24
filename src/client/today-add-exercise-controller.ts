@@ -171,6 +171,8 @@ type TodayAddExerciseDeps = {
     if (logRow) {
       const dur = logRow.querySelector<HTMLElement>(".in-dur");
       if (dur) dur.setAttribute?.("aria-label", `${canonical} duration`);
+      const wt = dur ? logRow.querySelector<HTMLElement>(".in-w") : null;
+      if (wt) wt.setAttribute?.("aria-label", `${canonical} weight (optional)`);
     }
 
     if (typedName !== canonical) forgetExMode(deps.state, typedName);
@@ -339,6 +341,11 @@ type TodayAddExerciseDeps = {
             ? deps.fmtDur(seconds)
             : String(seconds);
       fillInput(logRow.querySelector<HTMLInputElement>(".in-dur"), text);
+      // A loaded carry/hold opens at its last load; an unloaded one stays blank.
+      const load = Number(lastSet.weight);
+      if (lastSet.weight != null && Number.isFinite(load) && load !== 0) {
+        fillInput(logRow.querySelector<HTMLInputElement>(".in-w"), lastSet.weight);
+      }
       return;
     }
     fillInput(logRow.querySelector<HTMLInputElement>(".in-w"), lastSet.weight);
