@@ -26,6 +26,11 @@ import {
   sanitizeAgentEnv,
 } from "../dist/agents.js";
 
+// This file pins the SHIPPED agents.json (its login argv and status probes), while the
+// harness hands every worker an offline copy whose real CLIs cannot launch
+// (test/run.mjs). Nothing here spawns a CLI, so it reads the real table.
+process.env.AGENTS_CONFIG = path.join(import.meta.dirname, "..", "agents.json");
+
 test("resolveLoginArgv returns the server-chosen login argv per agent", () => {
   assert.deepEqual(resolveLoginArgv("claude"), ["claude", "auth", "login"]);
   assert.deepEqual(resolveLoginArgv("codex"), ["codex", "login", "--device-auth"]);
