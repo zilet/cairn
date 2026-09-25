@@ -25,29 +25,37 @@ function agentName(agent: CoachAgent): string {
 // clear record here". Each row shows the sentence the conference wrote for a person,
 // not its machine summary. Pull-only: it waits here, it never notifies.
 function coachWaitingDecisionsHtml(rows: unknown): string {
-  const items = coachMealRows(rows)
+  const all = coachMealRows(rows)
     .map((d) => ({
       summary: String(d.summary ?? "").trim(),
       explanation: String(d.explanation ?? "").trim(),
+      forClinician: d.for_clinician === true,
     }))
-    .filter((d) => d.explanation)
-    .slice(0, 4);
-  if (!items.length) return "";
-  const body = items
-    .map(
-      (d) => `<div class="plan-upcoming-item">
+    .filter((d) => d.explanation);
+  const disclosure = (label: string, items: typeof all): string => {
+    if (!items.length) return "";
+    const body = items
+      .map(
+        (d) => `<div class="plan-upcoming-item">
         ${d.summary ? `<p class="plan-upcoming-line">${escHtml(d.summary)}</p>` : ""}
         <p class="plan-upcoming-why">${escHtml(d.explanation)}</p>
       </div>`
-    )
-    .join("");
-  // Collapsed by default, same footnote-weight disclosure as the Plan tab's
-  // forward note — the count stays visible so "waiting on you" never goes dark,
-  // the rationale paragraphs are one tap away.
-  return `<details class="plan-upcoming reveal">
-    <summary><span class="lbl plan-upcoming-strip">Waiting on you (${items.length})</span></summary>
+      )
+      .join("");
+    // Collapsed by default, same footnote-weight disclosure as the Plan tab's
+    // forward note — the count stays visible so "waiting on you" never goes dark,
+    // the rationale paragraphs are one tap away.
+    return `<details class="plan-upcoming reveal">
+    <summary><span class="lbl plan-upcoming-strip">${escHtml(label)} (${items.length})</span></summary>
     <div class="plan-upcoming-body">${body}</div>
   </details>`;
+  };
+  // A clinician-floor hold or a conference's clinical note is for the athlete AND their
+  // doctor — information to take to a visit, never counted as something they owe the coach.
+  return (
+    disclosure("Waiting on you", all.filter((d) => !d.forClinician).slice(0, 4)) +
+    disclosure("For you and your doctor", all.filter((d) => d.forClinician).slice(0, 4))
+  );
 }
 
 // ---------- Coach ----------

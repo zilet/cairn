@@ -1,4 +1,5 @@
 import type { SpecialistDomain, SpecialistOpinion } from "../../brain/specialist-contract.js";
+import { clinicalActionText } from "../../brain/autonomy.js";
 import { markerGroup } from "../../repo/propagation-data.js";
 
 // ============================================================================
@@ -41,6 +42,22 @@ const CONFLICT_PARTIES: Readonly<Record<ConferenceConflictKey, readonly Speciali
   race_strength: ["training", "endurance", "recovery"],
   clinical_autonomy: [],
 };
+
+/** An unresolved conflict of these keys is a SAFETY question — load on a part that
+ * hurts, a food the athlete must not eat, a medication meeting a supplement — and keeps
+ * a revision at `ask` in every lead mode. The other two (`deficit_recovery`,
+ * `race_strength`) are coaching TRADE-OFFS the team settles by the block's priority
+ * order; under lead an unresolved one is said out loud (announce), never parked.
+ * `clinical_autonomy` is neither: it is the clinician floor, handled on its own. */
+const SAFETY_CONFLICTS: ReadonlySet<ConferenceConflictKey> = new Set([
+  "injury_load",
+  "medication_supplement",
+  "allergy_meal",
+]);
+
+export function conflictIsSafetyFloor(key: ConferenceConflictKey): boolean {
+  return SAFETY_CONFLICTS.has(key);
+}
 
 /** What one act-now finding governs: a domain the brain changes itself, and the
  * areas inside it the directive's own words name (empty = the whole domain). */
@@ -456,6 +473,35 @@ export function clinicalAutonomyFromRevision(inputs: ConferenceConflictInputs, r
     (lever) =>
       lever.domain === scope.domain && (lever.areas.length === 0 || lever.areas.some((area) => scope.areas.has(area)))
   );
+}
+
+/**
+ * The clinician floor for ONE executable change, and nothing else in the bundle.
+ *
+ * A conference is a bundle: one revision the server can execute, plus parallel actions
+ * that are prose. The floor is judged against the REVISION — an act-now finding that
+ * governs what it touches (clinicalAutonomyFromRevision), or words in the change itself
+ * that make it clinical (a diagnosis, a medication, a dose). A clinical sentence among the
+ * parallel actions is routed on its own, to the athlete and their doctor; it never drags
+ * a calorie hold or a squat hold onto the floor with it, and a conductor's own
+ * `risk_class` never moves the answer in either direction.
+ */
+export function revisionHoldsClinicalFloor(inputs: ConferenceConflictInputs, revision: unknown): boolean {
+  if (record(revision) == null) return false;
+  return clinicalAutonomyFromRevision(inputs, revision) || clinicalActionText(JSON.stringify(revision));
+}
+
+/** A stored proposal payload in the conference's revision shape, so a HELD change can be
+ * re-read by the same floor that routed it. Null for a payload that is none of the three. */
+export function revisionFromProposalPayload(parsed: unknown): Record<string, unknown> | null {
+  const payload = record(parsed);
+  if (!payload) return null;
+  const summary = typeof payload.summary === "string" ? payload.summary : null;
+  if (payload.kind === "nutrition_target" && record(payload.nutrition))
+    return { type: "nutrition_target", summary, nutrition: payload.nutrition, notes: payload.notes ?? null };
+  if (Array.isArray(payload.days)) return { type: "plan_restructure", summary, days: payload.days };
+  if (Array.isArray(payload.changes)) return { type: "plan_update", summary, changes: payload.changes };
+  return null;
 }
 
 /** Which specialist domains may close a conflict. */

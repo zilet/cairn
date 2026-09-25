@@ -14,6 +14,9 @@ export interface PlanUpcomingItem {
   // The conductor's own athlete-facing sentence, when one exists. Optional so the
   // pre-existing forward items keep exactly the shape the Plan surface already reads.
   explanation?: string | null;
+  // On an `awaiting` row only: this is for the athlete AND their doctor (a clinician-floor
+  // hold or a conference's clinical note), not a decision the athlete owes the coach.
+  for_clinician?: boolean;
 }
 
 export interface PlanUpcomingNote {
@@ -81,7 +84,7 @@ export function planUpcomingNote(windowDays = 10): PlanUpcomingNote | null {
   // good intent evaporates unseen.
   const awaiting = awaitingBrainDecisions()
     .filter((d) => planDomain(d.domain))
-    .map((d) => row(d, d.decided_date))
+    .map((d) => ({ ...row(d, d.decided_date), ...(d.for_clinician ? { for_clinician: true } : {}) }))
     .filter((item) => item.summary);
 
   if (!items.length && !landed.length && !awaiting.length) return null;

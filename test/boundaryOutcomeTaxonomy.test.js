@@ -201,11 +201,12 @@ test("a decision pointing at a proposal that no longer exists is a broken refere
 
 // ---------- the conference door ----------
 // A case_conference revision with a live draft behind it is a question the conductor put
-// to the athlete. The deterministic sweeps may not answer it for them — the live rows
-// this exists for are ids 71/72/74, drafted 2026-08-08 and still waiting.
+// to the athlete. Under announce_first the deterministic sweeps may not answer it for them
+// — the live rows this exists for are ids 71/72/74, drafted 2026-08-08. Under LEAD
+// (2026-09-25 ruling) a hold on no floor is a parked idea, and is re-offered; a hold over
+// an unresolved SAFETY conflict is a floor and stays.
 
-test("a case-conference draft awaiting the athlete is never adopted, set aside, or re-announced", () => {
-  repo.setSettings({ lead_mode: "lead" });
+function heldConferenceRevision(context = { proposal_held: true }) {
   seedPlanDay();
   const proposal = repo.createProposal("case_conference", "case conference: what should this week be?", "", {
     summary: "A bounded revision the conference proposed",
@@ -225,7 +226,7 @@ test("a case-conference draft awaiting the athlete is never adopted, set aside, 
     risk_class: "moderate",
     reversible: false,
     input_fingerprint: null,
-    context: { proposal_held: true },
+    context,
     action: { proposal_id: Number(proposal.id) },
     specialist: null,
     applied_at: null,
@@ -233,7 +234,12 @@ test("a case-conference draft awaiting the athlete is never adopted, set aside, 
     superseded_by: null,
     evaluator_version: null,
   });
-  const decisionId = Number(held.decision.id);
+  return { proposal, decisionId: Number(held.decision.id) };
+}
+
+test("announce_first: a case-conference draft awaiting the athlete is never adopted, set aside, or re-announced", () => {
+  repo.setSettings({ lead_mode: "announce_first" });
+  const { proposal, decisionId } = heldConferenceRevision();
   const before = decisionsForProposal(proposal.id).length;
 
   for (let tick = 0; tick < 3; tick += 1) {
@@ -248,6 +254,29 @@ test("a case-conference draft awaiting the athlete is never adopted, set aside, 
   assert.equal(after.status, "review", "and the question is still open");
   assert.equal(after.context.thaw_attempted, undefined, "the sweep did not even stamp the row");
   assert.equal(decisionsForProposal(proposal.id).length, before, "no decision churn across repeated ticks");
+});
+
+test("lead: a conference hold on no floor is re-offered, not left waiting on the athlete", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const { proposal } = heldConferenceRevision();
+  const thaw = thawParkedReviewDecisions();
+  assert.equal(thaw.thawed, 1, "the team decides; the athlete is told");
+  assert.ok(
+    ["pending", "announced", "applied"].includes(String(repo.getProposal(Number(proposal.id)).autonomy?.status)),
+    "the change owns a boundary now"
+  );
+  assert.equal(repo.awaitingBrainDecisions().length, 0, "nothing is left waiting on them");
+});
+
+test("lead: a conference hold over an unresolved SAFETY conflict stays a floor", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const { proposal, decisionId } = heldConferenceRevision({
+    proposal_held: true,
+    unresolved_conflicts: ["injury_load"],
+  });
+  assert.equal(thawParkedReviewDecisions().thawed, 0);
+  assert.equal(repo.getBrainDecision(decisionId).status, "review", "a hurt part under load is the athlete's call");
+  assert.equal(repo.getProposal(Number(proposal.id)).status, "draft");
 });
 
 test("an ADVISORY conference with no draft behind it still thaws out of the review queue", () => {

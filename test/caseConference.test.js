@@ -8,7 +8,11 @@ import {
   runCaseConference,
 } from "../dist/domain/brain/case-conference.js";
 import { getBrainDecision } from "../dist/repo/brain-decisions.js";
-import { applyDueAnnouncedDecisions } from "../dist/domain/brain/autonomy-service.js";
+import {
+  applyDueAnnouncedDecisions,
+  applyProposalWithAutonomy,
+  thawParkedReviewDecisions,
+} from "../dist/domain/brain/autonomy-service.js";
 import { normalizeStrictCaseConferenceDecision } from "../dist/brain/case-conference-contract.js";
 import { normalizeSpecialistOpinion } from "../dist/brain/specialist-contract.js";
 import { normalizeJsonObject } from "../dist/brain/contract-utils.js";
@@ -190,11 +194,35 @@ test("case conference shares one snapshot, runs specialists in parallel, and emi
   assert.equal(result.ok, true);
   assert.equal(snapshots.size, 1);
   assert.equal(result.opinions.length, 3);
-  assert.equal(result.decision.autonomy_tier, "ask", "specialist/conference policy cannot be promoted to quiet apply");
+  // Under lead a specialist's "ask" is an opinion about how loudly to say it, not a floor
+  // (Amendment 3): the reading is a heads-up, never promoted to a quiet apply, and —
+  // being advice, with nothing to approve — never parked in the athlete's queue.
+  assert.equal(
+    result.decision.autonomy_tier,
+    "announce",
+    "specialist/conference policy cannot be promoted to quiet apply"
+  );
   const recorded = getBrainDecision(result.recorded_decision_id);
   assert.equal(recorded.kind, "case_conference");
-  assert.equal(recorded.status, "review");
+  assert.equal(recorded.status, "observed");
+  assert.equal(recorded.context.lead_ceiling_eased, "ask->announce");
   assert.equal(recorded.specialist.opinions.length, 3);
+});
+
+test("announce_first keeps a specialist's ask: the same advisory conference parks for review", async () => {
+  repo.setSettings({ lead_mode: "announce_first" });
+  const result = await runCaseConference(
+    "stub",
+    { question: "How should the cut and race build coexist?", domains: ["training", "recovery"] },
+    {
+      context: healthyContext,
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () => conductorDecision({ autonomy_tier: "ask" }),
+    }
+  );
+  const recorded = getBrainDecision(result.recorded_decision_id);
+  assert.equal(recorded.autonomy_tier, "ask");
+  assert.equal(recorded.status, "review");
 });
 
 test("an unaccounted deterministic conflict demotes an executable revision to review", async () => {
@@ -709,7 +737,11 @@ const lipidContext = () => ({
     track: 0,
   },
   directives: [
-    { domain: "nutrition", marker: "LDL-C", directive: "Swap saturated fat for unsaturated oils and add soluble fiber." },
+    {
+      domain: "nutrition",
+      marker: "LDL-C",
+      directive: "Swap saturated fat for unsaturated oils and add soluble fiber.",
+    },
     { domain: "training", marker: "HRV", directive: "Favor easy aerobic work while HRV is low.", uncertain: 1 },
   ],
 });
@@ -773,7 +805,10 @@ test("an act-now finding still gates a revision that acts on what its directive 
   });
   assert.equal(clinicalAutonomyFromRevision(lipid, fueling(60)), true);
   assert.equal(clinicalAutonomyFromRevision(lipid, fueling(null)), false);
-  assert.equal(clinicalAutonomyFromRevision(lipid, { ...lifting, summary: "Hold bench while ApoB is rechecked" }), true);
+  assert.equal(
+    clinicalAutonomyFromRevision(lipid, { ...lifting, summary: "Hold bench while ApoB is rechecked" }),
+    true
+  );
 });
 
 test("an advice-only conference over the same finding is not forced to clinician", async () => {
@@ -902,7 +937,9 @@ test("a conductor cannot self-attest away the clinical floor", async () => {
   );
 });
 
-test("a decision whose own action carries medication changes is clinician-directed even without a flagged snapshot", async () => {
+test("a medication sentence among the parallel actions goes to the athlete and their doctor; the bench change beside it lands", async () => {
+  // A conference is a bundle routed action by action (2026-09-25 ruling). The clinical
+  // sentence used to put the whole bundle — the bench step included — on the floor.
   seedPlan();
   repo.setSettings({ lead_mode: "lead" });
   const result = await runCaseConference(
@@ -914,8 +951,8 @@ test("a decision whose own action carries medication changes is clinician-direct
       conductorRun: async () =>
         conductorDecision({
           domain: "training",
-          risk_class: "low",
-          parallel_actions: ["reduce the medication dosage alongside the block"],
+          risk_class: "clinical",
+          parallel_actions: ["reduce the medication dosage alongside the block", "keep easy runs conversational"],
           revision: {
             type: "plan_update",
             summary: "Small bench change",
@@ -925,9 +962,19 @@ test("a decision whose own action carries medication changes is clinician-direct
     }
   );
 
-  assert.equal(result.decision.autonomy_tier, "clinician");
-  assert.equal(result.execution.applied, false);
-  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
+  assert.notEqual(result.decision.autonomy_tier, "clinician", "a clinical sentence elsewhere never gates the change");
+  assert.equal(result.execution.applied, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 120);
+  const recorded = getBrainDecision(result.recorded_decision_id);
+  assert.equal(recorded.context.deterministic_clinical, false);
+  assert.equal(recorded.context.clinician_note_count, 1);
+  const waiting = repo.awaitingBrainDecisions();
+  assert.equal(waiting.filter((row) => !row.for_clinician).length, 0, "nothing waits on the athlete");
+  const notes = waiting.filter((row) => row.for_clinician);
+  assert.equal(notes.length, 1, "the medication sentence is filed for them and their doctor");
+  assert.match(notes[0].explanation, /medication dosage/);
+  assert.doesNotMatch(notes[0].explanation, /easy runs/, "only the clinical sentence travels to the doctor");
+  assert.equal(getBrainDecision(notes[0].id).status, "observed", "information, not a pending approval");
 });
 
 test("a malformed conductor envelope preserves specialist findings as degraded advice", async () => {
@@ -1311,4 +1358,149 @@ test("a conference can route a typed nutrition target through the proposal and a
   assert.ok(result.proposal_id);
   assert.equal(repo.getProposal(result.proposal_id).parsed.kind, "nutrition_target");
   assert.equal(getBrainDecision(result.recorded_decision_id).action.conference_revision_type, "nutrition_target");
+});
+
+// ---- a conference is a bundle, routed action by action (2026-09-25 ruling) ----------
+// Live shape (brain_decisions 27114): an act-now lipid finding beside a bundle of ordinary
+// coaching — a calorie/protein hold, an intake gap, strength aggression during the cut,
+// session sizing, an easy-run ceiling. Two coaching trade-offs stayed open and the old
+// floor read the whole envelope as clinical, so everything sat at the clinician tier.
+const liveBundleContext = () => ({
+  ...deficitStrainContext(),
+  endurance_goal: { mode: "race", is_race: true, distance_km: 21.1, phase: "build" },
+  health_focus: lipidContext().health_focus,
+  directives: lipidContext().directives,
+});
+
+const LIVE_PARALLEL_ACTIONS = [
+  "Hold 2,407 kcal and 175 g protein through the settling window.",
+  "Close the logged-intake gap on training days.",
+  "Hold strength aggression at RIR 1-2 during the cut.",
+  "Size sessions to 30-40 minutes.",
+  "Keep easy runs under the aerobic ceiling.",
+  "Ask your doctor whether a statin medication fits ApoB 134 and Lp(a) 102.8.",
+];
+
+test("a mixed bundle: the fueling hold lands with a heads-up, only the clinical step goes to the doctor", async () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const result = await runCaseConference(
+    "stub",
+    { question: "What should the next two weeks be?", domains: ["training", "nutrition", "recovery", "health"] },
+    {
+      context: liveBundleContext,
+      specialistRun: async (_agent, _prompt, domain) =>
+        opinion(domain, { autonomy_ceiling: domain === "health" ? "clinician" : "ask" }),
+      // Adversarial in every self-attesting field: clinical risk, clinician tier, irreversible.
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "cross_domain",
+          risk_class: "clinical",
+          autonomy_tier: "clinician",
+          reversible: false,
+          parallel_actions: LIVE_PARALLEL_ACTIONS,
+          revision: {
+            type: "nutrition_target",
+            summary: "Hold the settling-window target",
+            nutrition: { target_kcal: 2407, protein_g: 175, carbs_g: null, fat_g: null, delta_kcal: 0 },
+            notes: "Hold through the settling window.",
+          },
+        }),
+    }
+  );
+
+  assert.ok(result.conflicts.includes("deficit_recovery") && result.conflicts.includes("race_strength"));
+  assert.ok(!result.conflicts.includes("clinical_autonomy"), "a lipid finding governs no calorie or protein number");
+  assert.notEqual(result.decision.autonomy_tier, "clinician");
+  assert.notEqual(result.decision.autonomy_tier, "ask", "an open trade-off is announced, never parked, under lead");
+  const recorded = getBrainDecision(result.recorded_decision_id);
+  assert.ok(["announced", "pending", "applied"].includes(recorded.status), `got ${recorded.status}`);
+  assert.equal(recorded.context.deterministic_clinical, false);
+  assert.equal(recorded.context.conductor_risk_class, "clinical", "what the conductor said is on the record");
+  assert.equal(recorded.context.conductor_reversible, false);
+
+  const waiting = repo.awaitingBrainDecisions();
+  assert.equal(waiting.filter((row) => !row.for_clinician).length, 0, "nothing in the bundle waits on the athlete");
+  const notes = waiting.filter((row) => row.for_clinician);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0].explanation, /statin/);
+});
+
+test("the Oct-4 squat-hold shape: a bounded load hold lands under lead with its receipt", async () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(3, "Lower", "Legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 6, target_weight: 205 },
+    { exercise: "Romanian Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
+  ]);
+  const result = await runCaseConference(
+    "stub",
+    { question: "How should the lower anchors run through the settling window?", domains: ["training", "recovery"] },
+    {
+      context: lipidContext,
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          autonomy_tier: "ask",
+          reversible: false,
+          user_explanation: "Back Squat holds at 185 through Oct 4 instead of the 205 step; RDL holds at 185.",
+          revision: {
+            type: "plan_update",
+            summary: "Hold Day 3 lower-body anchor loads through 2026-10-04",
+            changes: [
+              { day_number: 3, exercise: "Back Squat", target_weight: 185, reason: "hold through 2026-10-04" },
+              { day_number: 3, exercise: "Romanian Deadlift", target_weight: 185, reason: "hold through 2026-10-04" },
+            ],
+          },
+        }),
+    }
+  );
+  const recorded = getBrainDecision(result.recorded_decision_id);
+  assert.notEqual(recorded.status, "review", "a bounded reversible hold is the team's call, not a question");
+  assert.ok(["announced", "pending", "applied"].includes(recorded.status), `got ${recorded.status}`);
+  assert.equal(recorded.action.user_explanation.includes("185"), true, "the receipt says what changed and why");
+  assert.equal(repo.awaitingBrainDecisions().length, 0);
+});
+
+test("a squat hold an OLDER rule put on the clinician floor is re-read by today's rule and re-offered", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(3, "Lower", "Legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 6, target_weight: 205 },
+  ]);
+  const proposal = repo.createProposal("case_conference", "case conference: lower anchors", "", {
+    summary: "Hold Day 3 lower-body anchor loads through 2026-10-04",
+    changes: [{ day_number: 3, exercise: "Back Squat", target_weight: 185, reason: "hold through 2026-10-04" }],
+  });
+  // The co-occurrence rule: an act-now lipid finding plus ANY revision was clinical.
+  const held = applyProposalWithAutonomy(Number(proposal.id), { clinical: true });
+  assert.equal(held.tier, "clinician");
+  repo.patchBrainDecision(Number(held.decision.id), {
+    source: "case_conference",
+    context: { ...held.decision.context, deterministic_clinical: true, unresolved_conflicts: ["clinical_autonomy"] },
+  });
+  const lipidInputs = conferenceConflictInputs(lipidContext());
+
+  const thaw = thawParkedReviewDecisions("lead", { conflictInputs: () => lipidInputs });
+  assert.equal(thaw.thawed, 1);
+  const reread = getBrainDecision(Number(held.decision.id));
+  assert.equal(reread.context.floor_reread.clinical, false, "a lipid finding governs no squat load");
+  assert.ok(
+    ["pending", "announced", "applied"].includes(String(repo.getProposal(Number(proposal.id)).autonomy?.status)),
+    "the hold owns a boundary now"
+  );
+  assert.equal(repo.awaitingBrainDecisions().length, 0);
+});
+
+test("a referral or a lab retest is filed for the doctor, but only clinical words gate a change", async () => {
+  const { clinicalActionText, clinicianNoteText } = await import("../dist/brain/autonomy.js");
+  for (const line of [
+    "Book a cardiology referral about Lp(a).",
+    "Retest ApoB with your doctor in 12 weeks.",
+    "Ask your physician whether a statin fits.",
+  ]) {
+    assert.equal(clinicianNoteText(line), true, line);
+    assert.equal(clinicalActionText(line), false, `${line} — a note, never the floor`);
+  }
+  assert.equal(clinicianNoteText("Hold 2,407 kcal and 175 g protein through the settling window."), false);
+  assert.equal(clinicianNoteText("Keep easy runs under the aerobic ceiling."), false);
+  assert.equal(clinicianNoteText("Review the medication dosage."), true, "the floor's words are notes too");
 });

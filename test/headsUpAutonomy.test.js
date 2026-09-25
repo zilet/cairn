@@ -172,6 +172,24 @@ test("the thaw re-offers a parked decision once, and only once", () => {
   assert.equal(second.superseded, 0);
 });
 
+test("a hold an OLDER thaw pass stamped gets one read by this one, and an aged draft ends with a receipt", () => {
+  // The stuck shape: a pass stamped the row, the re-offer re-held it (an aged draft came
+  // back as a stale ask carrying the stamp), and no sweep ever read it again.
+  repo.setSettings({ lead_mode: "lead" });
+  seedPlanDay();
+  const proposal = trainingDraft("A nudge an older pass left parked");
+  const held = heldReviewDecision(proposal.id);
+  const id = Number(held.decision.id);
+  repo.patchBrainDecision(id, { context: { ...held.decision.context, thaw_attempted: true } });
+  db.prepare(`UPDATE plan_proposals SET created_at = datetime('now', '-10 days') WHERE id = ?`).run(Number(proposal.id));
+
+  const result = thawParkedReviewDecisions();
+  assert.equal(result.superseded, 1, "the aged draft is set aside, not re-held");
+  assert.equal(repo.getProposal(Number(proposal.id)).status, "superseded");
+  assert.notEqual(repo.getBrainDecision(id).status, "review", "nothing is left waiting on the athlete");
+  assert.equal(repo.awaitingBrainDecisions().length, 0);
+});
+
 test("the thaw leaves a user-locked hold exactly where it is", () => {
   repo.setSettings({ lead_mode: "lead" });
   seedPlanDay();
@@ -210,23 +228,61 @@ function clinicianHold(overrides) {
   });
 }
 
-test("the thaw leaves a clinician-tier hold exactly where it is", () => {
+test("a clinician-tier ADVISORY conference is re-filed as a reading; its clinical words go to the athlete and their doctor", () => {
+  // Advice changes nothing, so there is nothing on it to approve (2026-09-25 ruling). The
+  // live row: a whole bundle of ordinary coaching parked at the clinician tier for days.
   repo.setSettings({ lead_mode: "lead" });
-  // The floor as the SERVER marked it (the conductor path records deterministic_clinical).
-  const marked = Number(clinicianHold({ context: { advisory_only: true, deterministic_clinical: true } }).decision.id);
+  // The floor as an OLDER rule marked it (co-occurrence with an act-now finding).
+  // (Distinct actions: the ledger fingerprint would otherwise fold the two into one row.)
+  const marked = Number(
+    clinicianHold({ context: { advisory_only: true, deterministic_clinical: true }, action: { seed: 1 } }).decision.id
+  );
   // …and a legacy row with no marks whose own words are clinical.
   const worded = Number(
     clinicianHold({
       context: {},
+      action: { seed: 2 },
       summary: "Ferritin and B12 both sit low — worth discussing a medication review with your doctor.",
     }).decision.id
   );
+  assert.notEqual(marked, worded);
 
-  assert.equal(thawParkedReviewDecisions().thawed, 0);
+  assert.equal(thawParkedReviewDecisions().thawed, 2);
   for (const id of [marked, worded]) {
-    assert.equal(repo.getBrainDecision(id).status, "review", "the clinician floor is deterministic");
-    assert.equal(repo.getBrainDecision(id).autonomy_tier, "clinician");
+    const after = repo.getBrainDecision(id);
+    assert.equal(after.status, "observed", "advice never waits on the athlete");
+    assert.notEqual(after.autonomy_tier, "clinician");
+    assert.equal(after.context.floor_reread.advisory, true, "the re-read is on the record");
   }
+  const notes = repo
+    .listBrainDecisions({ status: "observed", kind: "case_conference" })
+    .filter((row) => row.context?.for_clinician === true);
+  assert.equal(notes.length, 1, "only the clinical sentence becomes a note for the doctor");
+  assert.match(notes[0].action.user_explanation, /medication review/);
+  const waiting = repo.awaitingBrainDecisions();
+  assert.equal(waiting.filter((row) => !row.for_clinician).length, 0, "nothing waits on the athlete");
+  assert.equal(waiting.filter((row) => row.for_clinician).length, 1, "the note is for them and their doctor");
+});
+
+test("the thaw leaves a hold on a genuinely CLINICAL change exactly where it is", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedPlanDay();
+  const proposal = repo.createProposal("case_conference", "case conference: iron", "", {
+    summary: "Hold the press while the iron medication dosage is reviewed",
+    changes: [{ day_number: 1, exercise: "ZHeadsUp Press", target_weight: 100, reason: "hold" }],
+  });
+  const held = applyProposalWithAutonomy(Number(proposal.id), { clinical: true });
+  assert.equal(held.tier, "clinician");
+  repo.patchBrainDecision(Number(held.decision.id), { source: "case_conference" });
+  const inputs = { clinicalAttention: false, clinicalLevers: [], clinicalMarkers: [] };
+
+  assert.equal(thawParkedReviewDecisions("lead", { conflictInputs: () => inputs }).thawed, 0);
+  const after = repo.getBrainDecision(Number(held.decision.id));
+  assert.equal(after.status, "review", "the clinician floor is deterministic");
+  assert.equal(after.autonomy_tier, "clinician");
+  assert.equal(after.context.floor_reread.clinical, true, "re-read by today's rule, and still clinical");
+  assert.equal(repo.getProposal(Number(proposal.id)).status, "draft", "nothing clinical ever applies on its own");
+  assert.equal(repo.awaitingBrainDecisions().filter((row) => !row.for_clinician).length, 0);
 });
 
 test("training vocabulary is not clinical vocabulary — 'prescribed easy dose' never holds the floor", () => {

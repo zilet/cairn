@@ -51,7 +51,7 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "list_waiting_brain_decisions",
-    "Read the coaching decisions still waiting on the athlete, across every domain, each with the athlete-facing sentence the case conference wrote for it. Not time-windowed: a hold stays until it is resolved.",
+    "Read the coaching decisions still waiting on the athlete, across every domain, each with the athlete-facing sentence the case conference wrote for it. Not time-windowed: a hold stays until it is resolved. Rows with for_clinician:true are for the athlete and their doctor (a clinician-floor hold, or a clinical note a conference lifted out of a bundle so the rest could land) — information to take to a visit, not a decision the athlete owes the coach.",
     { limit: z.number().int().min(1).max(100).optional() },
     async ({ limit }) => asText(awaitingBrainDecisions(limit ?? 20))
   );
