@@ -8,6 +8,7 @@ import {
   upsertGarminActivity,
   upsertGarminDailyMetric,
   upsertGarminSource,
+  withoutGarminDailyAuditFields,
 } from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
@@ -39,7 +40,7 @@ export function registerGarminTools(server: McpToolRegistrar) {
     });
 
   server.tool("garmin_export_backfill",
-    "Send finished Cairn strength sessions older than the 7-day sync window back to Garmin, in batches, oldest first. Dry run by default: reports per session what would happen (unchanged / fill_or_replace / create / retarget / drop_surplus / skip_no_mapped_sets), naming the target activity and any Cairn-made shells it would withdraw, and which lifts the FIT catalog could not place, writing and queueing nothing. Pass apply:true to enqueue the exports on the serial queue.",
+    "Send finished Cairn strength sessions older than the 7-day sync window back to Garmin, in batches, oldest first. Dry run by default: reports per session what would happen (unchanged / fill_or_replace / create / retarget / drop_surplus / skip_no_mapped_sets), naming the target activity and any Cairn-made shells it would withdraw, which lifts the FIT catalog could not place, and the calories a Cairn-made manual shell would be set to (calorie_write_kcal — never a watch recording; an unchanged session can still owe one), writing and queueing nothing. Pass apply:true to enqueue the exports on the serial queue.",
     {
       since: z.string().optional().describe("Earliest session date (YYYY-MM-DD); omit for all history"),
       until: z.string().optional().describe("Latest session date (YYYY-MM-DD)"),
@@ -90,7 +91,7 @@ export function registerGarminTools(server: McpToolRegistrar) {
       body_battery_max: z.number().nullable().optional().describe("Garmin's maximum Body Battery reading for the day. Omit to leave the stored value alone; pass null to clear it"),
       active_calories: z.number().nullable().optional().describe("active (non-BMR) calories burned in the day (kcal). Omit to leave the stored value alone; pass null to clear it"),
     },
-    async ({ source_id, ...metric }) => asText(upsertGarminDailyMetric(metric, source_id, { nullsClear: true })));
+    async ({ source_id, ...metric }) => asText(upsertGarminDailyMetric(withoutGarminDailyAuditFields(metric), source_id, { nullsClear: true })));
 
   server.tool("get_garmin_summary",
     "Compact coach-facing Garmin summary: recent endurance load and recovery metrics. Use as context, not as plan authority.",

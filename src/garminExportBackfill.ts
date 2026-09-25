@@ -22,9 +22,15 @@
 // it — a second copy of those rules is how a preview starts lying about retargets and
 // orphaned shells — but the world can move between the preview and the job (a watch
 // recording syncs, a set is edited), in which case the exporter's answer wins.
-import { garminExportFingerprint, planGarminExportTarget, type GarminExportPayloadSet } from "./garminExport.js";
+import {
+  garminExportFingerprint,
+  pendingShellCalories,
+  planGarminExportTarget,
+  type GarminExportPayloadSet,
+} from "./garminExport.js";
 import * as repo from "./repo.js";
 import { localDateISO } from "./repo/shared.js";
+import { estimateStrengthSessionKcal } from "./repo/strength-energy.js";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
@@ -76,6 +82,15 @@ export interface GarminBackfillPreview {
   /** What the exporter would hash for this session, predicted from today's rows. */
   predicted_fingerprint: string;
   planned: GarminBackfillPlan;
+  /** Cairn's energy estimate for the session (repo/strength-energy.ts), or null. */
+  estimated_kcal: number | null;
+  /**
+   * The calories a MANUAL shell would be set to on this pass, or null when none are
+   * owed (a watch recording, no estimate, or the ledger already says this number). A
+   * set list can be `unchanged` and still owe this — every shell exported before
+   * pricing existed does.
+   */
+  calorie_write_kcal: number | null;
 }
 
 export interface GarminBackfillResult {
@@ -85,6 +100,8 @@ export interface GarminBackfillResult {
   total_eligible?: number;
   batch?: GarminBackfillPreview[];
   enqueued?: number;
+  /** Sessions in the batch whose manual shell owes a calorie write. */
+  calorie_writes?: number;
   /** Distinct unplaceable lift names across the batch, in first-seen order. */
   unmapped_exercises?: string[];
   /** Movements a `refine_unmapped` pass would take, whether or not it took them. */
@@ -200,6 +217,18 @@ function previewOne(
   else if (plan.mode === "create" || !plan.target_id) planned = "create";
   else planned = "fill_or_replace";
 
+  let estimatedKcal: number | null = null;
+  try {
+    estimatedKcal = estimateStrengthSessionKcal(sessionId)?.kcal ?? null;
+  } catch {
+    estimatedKcal = null;
+  }
+  // The exporter's own calorie rule, over the target it would write to.
+  const calorieWrite =
+    planned === "skip_no_mapped_sets"
+      ? null
+      : pendingShellCalories({ prior, target_id: plan.target_id, source: plan.source, estimate_kcal: estimatedKcal });
+
   return {
     session_id: sessionId,
     date: session.date,
@@ -214,6 +243,8 @@ function previewOne(
       : null,
     predicted_fingerprint: fingerprint,
     planned,
+    estimated_kcal: estimatedKcal,
+    calorie_write_kcal: calorieWrite,
   };
 }
 
@@ -282,7 +313,10 @@ export async function garminExportBackfill(opts: GarminBackfillOptions = {}): Pr
     const { enqueueEnrich } = await import("./enrich.js");
     const sessionIds: number[] = [];
     for (const preview of batch) {
-      if (preview.planned === "unchanged" || preview.planned === "skip_no_mapped_sets") continue;
+      if (preview.planned === "skip_no_mapped_sets") continue;
+      // An unchanged set list still goes to the exporter when its shell owes calories;
+      // the exporter skips the sets and writes only the price.
+      if (preview.planned === "unchanged" && preview.calorie_write_kcal == null) continue;
       enqueueEnrich("garmin_export", preview.session_id);
       sessionIds.push(preview.session_id);
       enqueued++;
@@ -327,6 +361,7 @@ export async function garminExportBackfill(opts: GarminBackfillOptions = {}): Pr
     total_eligible: eligible.length,
     batch,
     enqueued,
+    calorie_writes: batch.filter((preview) => preview.calorie_write_kcal != null).length,
     unmapped_exercises: [...unmappedInBatch.values()],
     ...(refineCandidates ? { refine_candidates: refineCandidates } : {}),
     refine_queued: refineQueued,

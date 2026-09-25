@@ -138,8 +138,27 @@ sync, the exporter and the repair migration all read:
   measured span, while a watch recording's own duration always stands.
 - **Calories.** Garmin auto-calculates a figure for a manual activity that has no heart
   rate and flags it `isAutoCalcCalories`; on a Cairn shell that is a constant 65.534 —
-  a number nobody produced. It reads as **absent**, never as a measurement. An activity
-  the athlete entered by hand keeps Garmin's estimate: that one is still theirs.
+  a number nobody produced. Once the exporter prices the shell (below) its calories are
+  Cairn's OWN estimate echoing back. Either way any calories on a Cairn-authored
+  activity read as **absent**, never as a measurement. An activity the athlete entered
+  by hand keeps Garmin's estimate: that one is still theirs.
+- **Day energy.** Garmin adds every MANUAL activity's calories above resting to the
+  day's summary: `activeKilocalories = wellnessActiveKilocalories (watch-measured) +
+  burnedKilocalories (non-watch: manual entries, imports)`, `totalKilocalories = bmrKilocalories +
+  active`, and each manual activity adds `max(0, kcal − fullDayBmr/1440 × minutes)` to
+  `burned` (verified live). So `garmin_daily_metrics.active_calories` /
+  `total_calories` are stored **net of Cairn's own shells**
+  (`src/repo/garmin-shell-energy.ts`, migration v113): the shells' share is
+  `Σ max(0, shell kcal − fullDayBmr/1440 × minutes)` (a shell's kcal is the ledger's
+  `calories_sent` first, then the synced payload), capped at `burned` and `active` —
+  never all of `burned`, which also carries the athlete's own non-watch energy. The
+  subtracted amount is `cairn_shell_kcal`, beside the raw `burned_calories` /
+  `wellness_active_calories`; it is recomputed from the raw summary on every sync, so a
+  re-sync never subtracts twice. When the share cannot be told (no full-day BMR rate, a
+  shell with no calories on record yet) the stored net values are left as they are,
+  never overwritten with Garmin's gross ones. Only the sync writes these three columns;
+  the manual daily-metric REST/MCP writes drop them. The law this keeps: the estimate Cairn sends Garmin never moves Cairn's own
+  TDEE.
 - **HRV status.** `hrv_status` stores only `balanced` / `unbalanced` / `low` / `poor`.
   Garmin also sends `NONE`, which is the watch saying it has no status yet; anything
   outside the documented set is stored as NULL, so absence looks like absence.
@@ -253,6 +272,22 @@ duration onto the slot. A mismatch (three logged sets onto an eight-set watch se
 is REPLACE: one ACTIVE slot per Cairn set, spread across the session span. A positional
 fill of the first N would relabel the wrong lifts.
 
+**Shell calories.** A manual shell has no heart rate, so Garmin would show its 65.534
+placeholder. After the sets land, the exporter prices a shell **Cairn authored** — never
+a watch recording — with `PUT /activity-service/activity/{id}` carrying only
+`{activityId, summaryDTO: {calories}, metadataDTO: {autoCalcCalories: false}}` (verified
+live: name, duration, start time and exerciseSets are untouched). The number is
+`src/repo/strength-energy.ts`: gross kcal = MET × canonical bodyweight (as of the
+session's date) × working hours, MET from the 2024 Adult Compendium — 3.5 (02054, general),
+5.0 (02052, loaded squat/hinge compounds at least half the working sets), 5.8 (02055,
+paired/circuit set density) — with working time capped at `sets × 3.5 + 8` minutes so a
+session left open is not billed. No bodyweight or no working set means no write. What was
+sent is `export.calories_sent`; calories are their own check beside the sets fingerprint,
+so an unchanged session still gets a pending calorie write. The sets receipt is recorded
+first and the calorie PUT runs after it on whatever is left of the job's budget, so a
+failed or slow calorie PUT never fails the sets export — it is simply retried on the
+next pass. A 404/410 marks the shell `calories_refused`, and it stops being owed.
+
 **Lookback.** `finishSession` exports the session just finished. A Garmin *sync* only
 enqueues finished sessions from the last 7 days, so turning the (default-on) toggle on
 does not silently backfill a month of history into the athlete's Garmin calendar.
@@ -272,7 +307,11 @@ activity if there is one, the activity the sets would land on (`target_activity_
 shells it would withdraw (`surplus_activity_ids`), the prior export record, and `planned`:
 `unchanged` / `fill_or_replace` / `create` / `retarget` (the sets move onto the watch's own
 recording and Cairn's shells are withdrawn) / `drop_surplus` (nothing is rewritten; only a
-surplus shell is removed) / `skip_no_mapped_sets`. `total_eligible` and `remaining` say how
+surplus shell is removed) / `skip_no_mapped_sets`. `estimated_kcal` is the session's
+energy estimate and `calorie_write_kcal` the calories a Cairn shell would be set to
+(null for a watch recording or when the ledger already holds that number) — an
+`unchanged` session can still owe one, and APPLY enqueues it for that write alone;
+`calorie_writes` counts them. `total_eligible` and `remaining` say how
 much history is left to walk.
 
 `planned` and `predicted_fingerprint` are a PREDICTION. `planned` **calls the exporter's own

@@ -1398,3 +1398,73 @@ test("v112 clears a legacy status stamp from ACTIVE directives only, so an un-hi
   );
   d.close();
 });
+
+// v113: Cairn's own strength shells, taken back OUT of the stored day energy. Garmin
+// adds each manual activity's calories above resting to the day's burned/active/total
+// kcal, and the sync stored those verbatim — so Cairn's own write-back leaked into the
+// expenditure prior. Subtracted ONCE per row, stamped, never twice.
+test("v113 takes Cairn's shells out of stored Garmin day energy, once", () => {
+  const v113 = MIGRATIONS.find((m) => m.version === 113);
+  const d = new DatabaseSync(":memory:");
+  // A household DB jumping from an old schema: no table at all is a no-op, not a throw.
+  v113.up(d);
+  d.exec(`CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, garmin_json TEXT);`);
+  d.exec(`CREATE TABLE garmin_activities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, external_id TEXT, name TEXT, date TEXT, duration_min REAL, raw_json TEXT
+  );`);
+  d.exec(`CREATE TABLE garmin_daily_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, active_calories REAL, total_calories REAL,
+    bmr_calories REAL, raw_json TEXT
+  );`);
+  const rawShell = (kcal, sec) => JSON.stringify({ calories: kcal, duration: sec, manualActivity: true });
+  const insertActivity = d.prepare(
+    "INSERT INTO garmin_activities (external_id, name, date, duration_min, raw_json) VALUES (?, ?, ?, ?, ?)"
+  );
+  // 1) The verified day: summary carries burned, the only manual activity is ours.
+  insertActivity.run("a1", "Pull · Cairn", "2026-09-10", 32, rawShell(194, 1920));
+  // 2) No summary blob: the BMR formula over the placeholder shell (65.534 / 32 min).
+  insertActivity.run("a2", "Legs · Cairn", "2026-09-11", 32, rawShell(65.534, 1920));
+  // 3) A shell known only to the export ledger (renamed on Garmin), plus the athlete's own manual entry.
+  insertActivity.run("a3", "Renamed", "2026-09-12", 32, rawShell(194, 1920));
+  insertActivity.run("a4", "Yoga", "2026-09-12", 60, rawShell(200, 3600));
+  d.exec(`INSERT INTO sessions (date, garmin_json) VALUES
+    ('2026-09-12', '{"export":{"activity_id":"a3","source":"manual","fingerprint":"x"}}')`);
+  const insertDay = d.prepare(
+    "INSERT INTO garmin_daily_metrics (date, active_calories, total_calories, bmr_calories, raw_json) VALUES (?, ?, ?, ?, ?)"
+  );
+  const summary = (s) => JSON.stringify({ summary: s });
+  insertDay.run("2026-09-10", 513, 2438, 1925, summary({ burnedKilocalories: 151, wellnessActiveKilocalories: 362 }));
+  insertDay.run("2026-09-11", 423, 2348, 1925, null);
+  const rate = 1925 / 1440;
+  const ours = 194 - rate * 32;
+  const theirs = 200 - rate * 60;
+  insertDay.run("2026-09-12", 400 + ours + theirs, 1925 + 400 + ours + theirs, 1925, summary({ burnedKilocalories: ours + theirs }));
+  insertDay.run("2026-09-13", 600, 2525, 1925, summary({ burnedKilocalories: 0 })); // no shell
+  // 4) The ledger's sent price outranks the stale placeholder in the stored list payload,
+  //    and burned also carries a non-manual import (200) that is the athlete's own.
+  insertActivity.run("a5", "Push · Cairn", "2026-09-14", 32, rawShell(65.534, 1920));
+  d.exec(`INSERT INTO sessions (date, garmin_json) VALUES
+    ('2026-09-14', '{"export":{"activity_id":"a5","source":"manual","fingerprint":"y","calories_sent":194}}')`);
+  insertDay.run("2026-09-14", 362 + 351, 1925 + 362 + 351, 1925, summary({ burnedKilocalories: 351 }));
+
+  v113.up(d);
+  v113.up(d); // idempotent: only NULL-stamped rows are ever touched
+
+  const rows = Object.fromEntries(
+    d.prepare("SELECT * FROM garmin_daily_metrics ORDER BY date").all().map((r) => [r.date, r])
+  );
+  assert.equal(rows["2026-09-10"].active_calories, 362);
+  assert.equal(rows["2026-09-10"].total_calories, 2287);
+  assert.equal(rows["2026-09-10"].cairn_shell_kcal, 151);
+  assert.equal(rows["2026-09-10"].burned_calories, 151);
+  assert.equal(rows["2026-09-10"].wellness_active_calories, 362);
+  const placeholder = Math.round((65.534 - rate * 32) * 10) / 10;
+  assert.equal(rows["2026-09-11"].cairn_shell_kcal, placeholder);
+  assert.equal(rows["2026-09-11"].active_calories, Math.round((423 - placeholder) * 10) / 10);
+  assert.equal(rows["2026-09-12"].cairn_shell_kcal, Math.round(ours * 10) / 10, "the athlete's own yoga stays");
+  assert.equal(rows["2026-09-13"].cairn_shell_kcal, 0);
+  assert.equal(rows["2026-09-13"].active_calories, 600);
+  assert.equal(rows["2026-09-14"].cairn_shell_kcal, Math.round(ours * 10) / 10, "194 from the ledger, not 65.534");
+  assert.equal(Math.round(rows["2026-09-14"].active_calories), 362 + 200, "the athlete's import stays");
+  d.close();
+});

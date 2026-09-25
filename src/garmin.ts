@@ -11,6 +11,7 @@ import {
   garminActivityDurationSec,
   isCairnAuthoredName,
 } from "./repo/garmin-authorship.js";
+import { neutralizeCairnShellEnergy } from "./repo/garmin-shell-energy.js";
 import { sessionsEligibleForGarminExport } from "./repo/garmin-strength-export.js";
 import { deriveHrModel } from "./repo/hr-model.js";
 import { deriveWearableDirectives } from "./repo/propagation.js";
@@ -634,6 +635,23 @@ export function foldDailySummary(s: any, m: GarminDailyMetricInput) {
   }
 }
 
+/**
+ * Take Cairn's own strength shells back OUT of the day's energy (see
+ * repo/garmin-shell-energy.ts). Runs after foldDailySummary and recomputes from the RAW
+ * summary every time, so a re-sync never subtracts twice. The activity pass of the same
+ * sync has already landed, so the day's shells are known; a shell created after this
+ * fold is corrected by the next sync, which re-folds the recent days.
+ */
+export function foldCairnShellEnergy(s: any, m: GarminDailyMetricInput) {
+  if (!s) return;
+  const folded = neutralizeCairnShellEnergy(s, m.date);
+  m.active_calories = folded.active_calories;
+  m.total_calories = folded.total_calories;
+  m.cairn_shell_kcal = folded.cairn_shell_kcal;
+  m.burned_calories = folded.burned_calories;
+  m.wellness_active_calories = folded.wellness_active_calories;
+}
+
 function foldWeight(weight: any, iso: string, m: GarminDailyMetricInput) {
   const list = weight?.dateWeightList;
   if (!Array.isArray(list) || !list.length) return;
@@ -696,6 +714,7 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
       const summary = await rawGet(client, `/usersummary-service/usersummary/daily/${displayName}?calendarDate=${iso}`);
       if (summary) {
         foldDailySummary(summary, metric);
+        foldCairnShellEnergy(summary, metric);
         metric.raw = { ...((metric.raw as any) || {}), summary };
       }
     }

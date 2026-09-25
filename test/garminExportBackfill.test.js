@@ -10,7 +10,7 @@ import { db, repo } from "./_seed.js";
 let nextActivityId = 9000;
 
 function install() {
-  const calls = { get: [], put: [], create: [], delete: [] };
+  const calls = { get: [], put: [], create: [], delete: [], calories: [] };
   const api = {
     async getExerciseSets(activityId) {
       calls.get.push(String(activityId));
@@ -25,6 +25,9 @@ function install() {
     },
     async deleteActivity(activityId) {
       calls.delete.push(String(activityId));
+    },
+    async setActivityCalories(activityId, kcal) {
+      calls.calories.push({ activityId: String(activityId), kcal });
     },
   };
   setGarminStrengthApiForTests(() => api);
@@ -423,4 +426,45 @@ test("an applied backfill records exactly one ledger row; a dry run records none
   assert.match(row.rationale, /2026-04-01 to 2026-06-01/);
 
   await drainQueue();
+});
+
+test("an unchanged shell that was never priced is previewed as a calorie write, and apply sends only that", async () => {
+  const calls = install();
+  const sessionId = seedFinishedSession("2026-04-01", 2);
+  await exportSessionToGarmin(sessionId); // no bodyweight yet → sets land, no price
+  await drainQueue();
+  assert.equal(calls.calories.length, 0);
+  const shellId = repo.getSessionGarminExport(sessionId).activity_id;
+  const putsBefore = calls.put.length;
+
+  repo.logWeight(176.4, "2026-03-30");
+  const preview = await garminExportBackfill();
+  const row = preview.batch[0];
+  assert.equal(row.planned, "unchanged");
+  assert.ok(row.estimated_kcal > 0);
+  assert.equal(row.calorie_write_kcal, row.estimated_kcal);
+  assert.equal(preview.calorie_writes, 1);
+  assert.equal(calls.calories.length, 0, "a dry run sends nothing");
+
+  const applied = await garminExportBackfill({ apply: true });
+  assert.equal(applied.enqueued, 1);
+  await drainQueue();
+  assert.deepEqual(calls.calories, [{ activityId: shellId, kcal: row.estimated_kcal }]);
+  assert.equal(calls.put.length, putsBefore, "the sets are not re-sent");
+
+  const after = await garminExportBackfill();
+  assert.equal(after.batch[0].calorie_write_kcal, null);
+  assert.equal(after.calorie_writes, 0);
+});
+
+test("a watch day never previews a calorie write", async () => {
+  install();
+  repo.logWeight(176.4, "2026-03-30");
+  const sessionId = seedFinishedSession("2026-04-01", 2);
+  seedLinkedActivity(sessionId, "watch-cal", "2026-04-01", { avg_hr: 131, calories: 300 });
+
+  const row = (await garminExportBackfill()).batch[0];
+  assert.equal(row.watch_activity_id, "watch-cal");
+  assert.ok(row.estimated_kcal > 0);
+  assert.equal(row.calorie_write_kcal, null);
 });

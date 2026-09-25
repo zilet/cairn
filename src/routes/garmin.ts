@@ -10,6 +10,7 @@ import {
   upsertGarminActivity,
   upsertGarminDailyMetric,
   upsertGarminSource,
+  withoutGarminDailyAuditFields,
 } from "../domain/training/index.js";
 
 export const garminRouter = Router();
@@ -79,7 +80,7 @@ garminRouter.get("/garmin/daily", (req, res) =>
 garminRouter.post("/garmin/daily", (req, res) => {
   try {
     res.json(
-      upsertGarminDailyMetric(req.body ?? {}, req.body?.source_id ? Number(req.body.source_id) : undefined, {
+      upsertGarminDailyMetric(withoutGarminDailyAuditFields(req.body ?? {}), req.body?.source_id ? Number(req.body.source_id) : undefined, {
         nullsClear: true,
       })
     );

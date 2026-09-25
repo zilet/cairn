@@ -18,7 +18,7 @@ import { db, repo, isoDaysAgo } from "./_seed.js";
 const TODAY = isoDaysAgo(0);
 
 function fakeApi(options = {}) {
-  const calls = { get: [], put: [], create: [], delete: [] };
+  const calls = { get: [], put: [], create: [], delete: [], calories: [] };
   const api = {
     async getExerciseSets(activityId) {
       calls.get.push(String(activityId));
@@ -39,6 +39,14 @@ function fakeApi(options = {}) {
     async deleteActivity(activityId) {
       calls.delete.push(String(activityId));
       if (options.deleteThrows) throw options.deleteThrows;
+    },
+    async setActivityCalories(activityId, kcal) {
+      calls.calories.push({ activityId: String(activityId), kcal });
+      if (options.caloriesThrows) {
+        const error = options.caloriesThrows;
+        options.caloriesThrows = null; // one failure only, so the retry can be observed
+        throw error;
+      }
     },
   };
   return { api, calls };
@@ -1033,4 +1041,134 @@ test("correcting a session's duration re-exports in place", async () => {
   assert.equal(result.activity_id, "9001");
   assert.equal(calls.create.length, 1);
   assert.equal(calls.put.length, 2);
+});
+
+// ---- shell calories -----------------------------------------------------------
+// A manual shell carries no heart rate, so Garmin shows a 65.534 placeholder. Cairn
+// prices it with its own estimate (repo/strength-energy.ts) through a separate PUT,
+// and ONLY a shell it authored — a watch recording's calories are the watch's own.
+
+test("a created shell is priced with Cairn's estimate and the ledger remembers it", async () => {
+  repo.logWeight(176.4, TODAY); // 80 kg
+  const calls = install();
+  const sessionId = seedFinishedSession(3);
+  const { estimateStrengthSessionKcal } = await import("../dist/repo/strength-energy.js");
+  const estimate = estimateStrengthSessionKcal(sessionId);
+  assert.ok(estimate && estimate.kcal > 0);
+
+  const result = await exportSessionToGarmin(sessionId);
+
+  assert.equal(result.mode, "create");
+  assert.deepEqual(calls.calories, [{ activityId: "9001", kcal: estimate.kcal }]);
+  assert.equal(result.calories_kcal, estimate.kcal);
+  assert.equal(repo.getSessionGarminExport(sessionId).calories_sent, estimate.kcal);
+
+  // Unchanged sets and an already-sent price: nothing goes out at all.
+  const again = await exportSessionToGarmin(sessionId);
+  assert.equal(again.skipped, "unchanged");
+  assert.equal(calls.calories.length, 1);
+  assert.equal(calls.put.length, 1);
+});
+
+test("an unchanged shell exported before pricing existed gets the calorie write alone", async () => {
+  const calls = install();
+  const sessionId = seedFinishedSession(3);
+  // Exported with no bodyweight on file: sets land, no estimate, no calorie write.
+  await exportSessionToGarmin(sessionId);
+  assert.equal(calls.calories.length, 0);
+  assert.equal(repo.getSessionGarminExport(sessionId).calories_sent, undefined);
+  const putsBefore = calls.put.length;
+
+  repo.logWeight(176.4, TODAY);
+  const result = await exportSessionToGarmin(sessionId);
+
+  assert.equal(result.skipped, "unchanged", "the sets fingerprint did not move");
+  assert.equal(calls.put.length, putsBefore, "no sets re-PUT");
+  assert.equal(calls.create.length, 1, "no second shell");
+  assert.equal(calls.calories.length, 1);
+  assert.equal(calls.calories[0].activityId, "9001");
+  assert.equal(repo.getSessionGarminExport(sessionId).calories_sent, calls.calories[0].kcal);
+});
+
+test("a watch recording's calories are never touched", async () => {
+  repo.logWeight(176.4, TODAY);
+  const calls = install({ existing: { exerciseSets: [activeSlot(0)] } });
+  const sessionId = seedFinishedSession(3);
+  const activity = seedWatchActivity("watch-cal", { avg_hr: 128, calories: 290 });
+  repo.reconcileGarminStrength(activity.id);
+
+  await exportSessionToGarmin(sessionId);
+  await exportSessionToGarmin(sessionId);
+
+  assert.equal(calls.put[0].activityId, "watch-cal");
+  assert.equal(calls.calories.length, 0);
+  assert.equal(repo.getSessionGarminExport(sessionId).calories_sent, undefined);
+});
+
+test("a failed calorie write never fails the sets export, and the next pass retries it", async () => {
+  repo.logWeight(176.4, TODAY);
+  const failure = Object.assign(new Error("boom"), { status: 500 });
+  const calls = install({ caloriesThrows: failure });
+  const sessionId = seedFinishedSession(3);
+
+  const first = await exportSessionToGarmin(sessionId);
+
+  assert.equal(first.ok, true);
+  assert.equal(first.mode, "create");
+  assert.equal(calls.put.length, 1, "the sets landed");
+  assert.equal(first.calories_error, "boom");
+  const stored = repo.getSessionGarminExport(sessionId);
+  assert.ok(stored.fingerprint, "the sets export is recorded, not rolled back");
+  assert.equal(stored.calories_sent, undefined, "an unsent price stays unsent");
+
+  const second = await exportSessionToGarmin(sessionId);
+  assert.equal(second.skipped, "unchanged");
+  assert.equal(calls.put.length, 1, "the retry is the calorie write alone");
+  assert.equal(calls.calories.length, 2);
+  assert.equal(repo.getSessionGarminExport(sessionId).calories_sent, calls.calories[1].kcal);
+});
+
+test("a shell Garmin answers 404 to for calories stops being owed a price", async () => {
+  repo.logWeight(176.4, TODAY);
+  const gone = Object.assign(new Error("Not Found"), { status: 404 });
+  const calls = install({ caloriesThrows: gone });
+  const sessionId = seedFinishedSession(3);
+
+  const first = await exportSessionToGarmin(sessionId);
+  assert.equal(first.ok, true, "the sets export still reports success");
+  assert.equal(calls.calories.length, 1);
+  const stored = repo.getSessionGarminExport(sessionId);
+  assert.equal(stored.calories_refused, "9001");
+  assert.equal(stored.calories_sent, undefined);
+
+  const again = await exportSessionToGarmin(sessionId);
+  assert.equal(again.skipped, "unchanged");
+  assert.equal(calls.calories.length, 1, "no PUT into the void on every sync");
+});
+
+test("the sets receipt is on the ledger before the calorie PUT is even attempted", async () => {
+  repo.logWeight(176.4, TODAY);
+  const calls = install();
+  const sessionId = seedFinishedSession(3);
+  let seenAtPriceTime = null;
+  const { api } = fakeApi();
+  setGarminStrengthApiForTests(() => ({
+    ...api,
+    createManualActivity: async (input) => {
+      calls.create.push(input);
+      return { activityId: 9001 };
+    },
+    async setActivityCalories(activityId, kcal) {
+      seenAtPriceTime = repo.getSessionGarminExport(sessionId);
+      calls.calories.push({ activityId: String(activityId), kcal });
+    },
+  }));
+
+  const result = await exportSessionToGarmin(sessionId);
+
+  assert.equal(result.ok, true);
+  assert.ok(seenAtPriceTime?.fingerprint, "the sets fingerprint was recorded first");
+  assert.equal(seenAtPriceTime.exported_sets, 3);
+  assert.equal(seenAtPriceTime.calories_sent, undefined);
+  assert.equal(repo.getSessionGarminExport(sessionId).calories_sent, calls.calories[0].kcal);
 });

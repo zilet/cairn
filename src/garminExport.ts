@@ -32,9 +32,10 @@ import { garminSourceLabel, reconcileGarminStrength, upsertGarminActivity, upser
 import { ensureGarminMapping } from "./repo/exercises.js";
 import { cairnShellActivityName, isCairnAuthoredName } from "./repo/garmin-authorship.js";
 import { garminWeightGrams } from "./repo/garmin-exercise-map.js";
-import { clearSessionGarminExport, deleteGarminActivityByExternalId, garminExportSetRows, getSessionGarminExport, listSessionGarminStrengthActivities, recordSessionGarminExport, sessionGarminExportContext } from "./repo/garmin-strength-export.js";
+import { clearSessionGarminExport, deleteGarminActivityByExternalId, garminExportSetRows, getSessionGarminExport, listSessionGarminStrengthActivities, recordSessionGarminExport, recordSessionGarminExportCalories, sessionGarminExportContext } from "./repo/garmin-strength-export.js";
 import { getGarminCredentials, getSettings } from "./repo/settings.js";
 import { localDateISO } from "./repo/shared.js";
+import { estimateStrengthSessionKcal, type StrengthEnergyEstimate } from "./repo/strength-energy.js";
 import type {
   GarminExportSetRow,
   GarminLinkedStrengthActivity,
@@ -50,6 +51,11 @@ export interface GarminStrengthWriteApi {
     activityId: number;
   }>;
   deleteActivity(activityId: string | number): Promise<void>;
+  /**
+   * Set a MANUAL shell's calories and stop Garmin auto-calculating them. Only ever
+   * called on an activity Cairn authored — never on a watch recording.
+   */
+  setActivityCalories(activityId: string | number, kcal: number): Promise<void>;
 }
 
 // The Garmin client carries no request timeout of its own, and this queue is SERIAL —
@@ -159,6 +165,22 @@ export function createLiveGarminStrengthApi(makeClient: () => Promise<any> = mak
     async deleteActivity(activityId) {
       await guard(() =>
         withDeadline("delete", (async () => rawDelete(await client(), `/activity-service/activity/${activityId}`))())
+      );
+    },
+    async setActivityCalories(activityId, kcal) {
+      // Verified live (2026-09-25): a PUT of just these three fields answers empty and
+      // leaves the name, duration, start time and exerciseSets untouched; a GET then
+      // shows summaryDTO.calories = kcal and metadataDTO.autoCalcCalories = false.
+      // Whether the create POST would honour calories is untested, so the shell is
+      // created as before and priced here.
+      const body = {
+        activityId: Number(activityId),
+        summaryDTO: { calories: Math.round(kcal) },
+        metadataDTO: { autoCalcCalories: false },
+      };
+      await guard(() =>
+        withDeadline("calories", (async () =>
+          rawPut(await client(), `/activity-service/activity/${activityId}`, body))())
       );
     },
   };
@@ -426,6 +448,10 @@ export interface GarminExportResult {
   exported_sets?: number;
   skipped_sets?: number;
   skipped_exercises?: string[];
+  /** Calories set on the manual shell by THIS pass (never on a watch recording). */
+  calories_kcal?: number;
+  /** A calorie write that failed; the sets export stands and the next pass retries. */
+  calories_error?: string;
 }
 
 function hasPhysiology(activity: { avg_hr: number | null; calories: number | null }): boolean {
@@ -712,12 +738,94 @@ async function retractGarminExport(sessionId: number, reason: string): Promise<G
   return { ok: true, skipped: `${reason}_retracted`, activity_id: prior.activity_id };
 }
 
+// ---- shell calories --------------------------------------------------------
+/**
+ * The estimate for this session, or null when it cannot be priced (no bodyweight, no
+ * working set). Never throws — calories are a nicety on top of the sets.
+ */
+function sessionEnergyEstimate(sessionId: number): StrengthEnergyEstimate | null {
+  try {
+    return estimateStrengthSessionKcal(sessionId);
+  } catch (e: any) {
+    log.warn(`[garmin-export] session ${sessionId}: no calorie estimate: ${e?.message ?? e}`);
+    return null;
+  }
+}
+
+/**
+ * The calories still owed to this activity, or null when none are. ONLY a manual shell
+ * Cairn authored is ever priced; a watch recording's calories are the watch's own
+ * measurement. A different activity than the ledger's (a fresh create) owes the full
+ * estimate; a shell Garmin already answered 404/410 to owes nothing. Pure — the
+ * backfill preview asks the same question.
+ */
+export function pendingShellCalories(input: {
+  prior: GarminSessionExportRecord | null;
+  target_id: string | null;
+  source: "watch" | "manual";
+  estimate_kcal: number | null;
+}): number | null {
+  if (input.source !== "manual" || input.estimate_kcal == null || input.estimate_kcal <= 0) return null;
+  const same = !!input.target_id && input.prior?.activity_id === input.target_id;
+  if (same && input.prior?.calories_refused === input.target_id) return null;
+  const sent = same ? (input.prior?.calories_sent ?? null) : null;
+  return sent === input.estimate_kcal ? null : input.estimate_kcal;
+}
+
+/** The calorie bookkeeping a rewrite of the SAME manual shell carries forward. */
+function carriedCalorieFields(
+  prior: GarminSessionExportRecord | null,
+  targetId: string,
+  source: "watch" | "manual"
+): Pick<GarminSessionExportRecord, "calories_sent" | "calories_refused"> {
+  if (source !== "manual" || !prior || prior.activity_id !== targetId) return {};
+  return {
+    ...(prior.calories_sent != null ? { calories_sent: prior.calories_sent } : {}),
+    ...(prior.calories_refused ? { calories_refused: prior.calories_refused } : {}),
+  };
+}
+
+/**
+ * Set the shell's calories, AFTER the sets receipt is already on the ledger, and patch
+ * only the calorie outcome onto it. A failure is logged and reported, never thrown: the
+ * sets already landed, and leaving `calories_sent` unmoved is what makes the next
+ * export retry the write. A 404/410 means the shell takes no price, so it is marked
+ * and stops being owed.
+ */
+async function sendShellCalories(
+  api: GarminStrengthWriteApi,
+  sessionId: number,
+  activityId: string,
+  kcal: number,
+  budgetMs: number = GARMIN_WRITE_TIMEOUT_MS
+): Promise<{ sent: number | null; error?: string }> {
+  try {
+    await withDeadline("calories", api.setActivityCalories(activityId, kcal), budgetMs);
+    recordSessionGarminExportCalories(sessionId, activityId, { sent: kcal });
+    return { sent: kcal };
+  } catch (e: any) {
+    const message = e?.message ?? String(e);
+    const status = garminErrorStatus(e);
+    if (status === 404 || status === 410) {
+      recordSessionGarminExportCalories(sessionId, activityId, { refused: true });
+    }
+    log.warn(`[garmin-export] session ${sessionId}: calories not set on activity ${activityId}: ${message}`);
+    return { sent: null, error: message };
+  }
+}
+
+/** Whatever is left of the one export job's budget, capped at a single write's. */
+function remainingBudgetMs(startedAt: number): number {
+  return Math.min(GARMIN_WRITE_TIMEOUT_MS, GARMIN_EXPORT_JOB_MS - (Date.now() - startedAt));
+}
+
 /**
  * Push one finished Cairn strength session to Garmin. Returns a plain result rather
  * than throwing — an unconfigured connector, a Garmin-owned day, an unmappable
  * workout and an unchanged one are all ordinary outcomes, not errors.
  */
 export async function exportSessionToGarmin(sessionId: number): Promise<GarminExportResult> {
+  const startedAt = Date.now();
   const settings = getSettings();
   if (!settings.garmin_export_strength) return { ok: true, skipped: "export_disabled" };
   if (!getGarminCredentials().configured) return { ok: true, skipped: "garmin_not_configured" };
@@ -756,9 +864,36 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
   // still be stale or missing (a record written before it existed, or a mapping that
   // has since been filled in), and correcting it costs nothing: no network, same
   // fingerprint, same activity. The write itself stays skipped.
+  //
+  // The shell's CALORIES are their own check, beside the fingerprint (whose shape does
+  // not change): an unchanged set list can still owe a calorie write — every shell
+  // exported before pricing existed, or one whose calorie PUT failed last time.
+  const estimate = sessionEnergyEstimate(sessionId);
   if (plan.unchanged && prior) {
+    const owed = pendingShellCalories({
+      prior,
+      target_id: prior.activity_id,
+      source: prior.source,
+      estimate_kcal: estimate?.kcal ?? null,
+    });
+    // The receipt first, then the price patched onto it on its own.
     if (!sameReceipt(prior, receipt)) recordSessionGarminExport(sessionId, { ...prior, ...receipt });
-    return { ok: true, skipped: "unchanged", activity_id: prior.activity_id };
+    let calories: { sent: number | null; error?: string } | null = null;
+    if (owed != null) {
+      try {
+        const api = await strengthApi();
+        calories = await sendShellCalories(api, sessionId, prior.activity_id, owed, remainingBudgetMs(startedAt));
+      } catch (e: any) {
+        calories = { sent: null, error: e?.message ?? String(e) };
+      }
+    }
+    return {
+      ok: true,
+      skipped: "unchanged",
+      activity_id: prior.activity_id,
+      ...(calories?.sent != null ? { calories_kcal: calories.sent } : {}),
+      ...(calories?.error ? { calories_error: calories.error } : {}),
+    };
   }
 
   // A retarget whose delete failed re-arms retarget on every later pass, which would
@@ -772,8 +907,13 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
   const targetActivity = targetId ? linked.find((row) => String(row.external_id) === targetId) : undefined;
   const durationMin = session.duration_min ?? targetActivity?.duration_min ?? null;
 
+  // The calorie write that follows a landed sets export, decided inside the job and
+  // sent AFTER it with whatever budget the job left — a slow price can never turn a
+  // successful sets export into a reported failure.
+  let pricing: { api: GarminStrengthWriteApi; activityId: string; kcal: number } | null = null;
+  let result: GarminExportResult;
   try {
-    return await withDeadline(
+    result = await withDeadline(
       "export",
       (async () => {
         const api = await strengthApi();
@@ -884,6 +1024,16 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
         );
         const remainingCreated = createdIds.filter((id) => survivingLocally.has(id) || stillPending.includes(id));
 
+        // Price the shell. Only a manual activity Cairn authored; a retarget onto the
+        // watch's recording dropped our shell, so there is nothing to price there.
+        const owed = pendingShellCalories({
+          prior,
+          target_id: targetId,
+          source,
+          estimate_kcal: estimate?.kcal ?? null,
+        });
+        if (owed != null) pricing = { api, activityId: targetId, kcal: owed };
+
         const resolvedMode: "fill" | "replace" | "create" | "retarget" =
           mode === "create" || mode === "retarget" ? mode : (payload?.mode ?? priorWriteMode(prior));
         recordSessionGarminExport(sessionId, {
@@ -897,6 +1047,7 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
           created_ids: remainingCreated,
           pending_deletes: stillPending,
           ...receipt,
+          ...carriedCalorieFields(prior, targetId, source),
         });
         return {
           ok: true,
@@ -914,4 +1065,18 @@ export async function exportSessionToGarmin(sessionId: number): Promise<GarminEx
     log.warn(`[garmin-export] session ${sessionId} failed: ${message}`);
     return { ok: false, error: message };
   }
+
+  // The sets and their receipt are on the ledger. Price the shell with what is left of
+  // the job's budget; an exhausted budget just leaves the price owed for the next pass.
+  const owedPrice = pricing as { api: GarminStrengthWriteApi; activityId: string; kcal: number } | null;
+  if (result.ok && owedPrice) {
+    const budget = remainingBudgetMs(startedAt);
+    const calories =
+      budget > 0
+        ? await sendShellCalories(owedPrice.api, sessionId, owedPrice.activityId, owedPrice.kcal, budget)
+        : { sent: null, error: "no time left in the export job" };
+    if (calories.sent != null) result.calories_kcal = calories.sent;
+    if (calories.error) result.calories_error = calories.error;
+  }
+  return result;
 }

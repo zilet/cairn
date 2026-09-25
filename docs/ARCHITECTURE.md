@@ -4366,6 +4366,14 @@ summary + memory.
   candidate choice), and what Garmin already holds is recorded on `sessions.garmin_json.export`
   (`{activity_id, source, fingerprint, exported_at, mode}`) so an unchanged session skips before any
   network call. `reconcileGarminStrength` carries that record forward when it rebuilds the blob.
+  A manual shell Cairn authored (never a watch recording) is also PRICED — calories from
+  `src/repo/strength-energy.ts` (Compendium MET × bodyweight × capped working time), sent by a
+  separate PUT and remembered as `export.calories_sent`, a check of its own beside the fingerprint
+  so a pending or failed calorie write is retried without re-sending sets. That estimate must never
+  echo into Cairn's own energy math: the sync stores `garmin_daily_metrics.active_calories` /
+  `total_calories` NET of what Cairn's shells added to Garmin's day (`cairn_shell_kcal`,
+  `src/repo/garmin-shell-energy.ts`, migration v113), and `garminActivityCalories` reads any
+  calories on a Cairn-authored activity as absent.
   Full behavior — the three write cases, FILL vs REPLACE, the retarget repair — is in
   `docs/GARMIN.md`. Sessions older than the 7-day sync window are never picked up
   automatically, so `POST /api/garmin/export-backfill` (`src/garminExportBackfill.ts`) previews

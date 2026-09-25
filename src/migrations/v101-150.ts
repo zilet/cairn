@@ -13,6 +13,7 @@ import { log } from "../log.js";
 import { addColumn, type Migration } from "./helpers.js";
 import { repairExerciseIdentity } from "./frozen/v103-exercise-identity-repair.js";
 import { repairStrengthObjectiveIdentity } from "./frozen/v108-strength-objective-identity.js";
+import { repairCairnShellEnergy } from "./frozen/v113-cairn-shell-energy.js";
 import {
   GARMIN_HRV_STATUSES,
   elapsedMinutesFromRaw,
@@ -431,6 +432,38 @@ export const MIGRATIONS_101_150: Migration[] = [
         .run();
       if (Number(cleared.changes) > 0) {
         log.info(`[migrate] v112: cleared a stale status stamp from ${cleared.changes} active directive(s).`);
+      }
+    },
+  },
+  {
+    version: 113,
+    name: "garmin-cairn-shell-energy",
+    // Cairn's own strength shells, taken back OUT of the day's energy.
+    //
+    // A finished session is written to Garmin as a manual "shell" activity, and Garmin
+    // adds each manual activity's calories (above resting) to the day's active and
+    // total kcal. The sync stored those verbatim, and the expenditure prior reads them —
+    // so Cairn's own write-back leaked into Cairn's TDEE (5–35 kcal/day at Garmin's
+    // placeholder, ~150 once the shell carries a real estimate). The sync now stores the
+    // totals NET of what the shells contributed (repo/garmin-shell-energy.ts) and records
+    // that amount in `cairn_shell_kcal`; the raw `burned_calories` /
+    // `wellness_active_calories` ride beside it so the identity stays auditable.
+    //
+    // Two-step: the three columns also live in db.ts's create block. The repair
+    // subtracts ONCE per row — only rows whose `cairn_shell_kcal` is still NULL, each
+    // stamped with the amount (0 on a day with no shell) — so a re-run touches nothing.
+    // The transform is the frozen repairCairnShellEnergy.
+    up: (db) => {
+      addColumn(db, "garmin_daily_metrics", "cairn_shell_kcal REAL");
+      addColumn(db, "garmin_daily_metrics", "burned_calories REAL");
+      addColumn(db, "garmin_daily_metrics", "wellness_active_calories REAL");
+      try {
+        const { adjusted, stamped } = repairCairnShellEnergy(db);
+        if (adjusted) {
+          log.info(`[migrate] v113: took Cairn's own shells out of ${adjusted} Garmin day(s) (${stamped} stamped).`);
+        }
+      } catch {
+        /* a DB predating garmin_daily_metrics has nothing to repair */
       }
     },
   },

@@ -313,7 +313,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   **Strength also travels OUT**: a finished Cairn session is written back as that day's Garmin
   exercise sets (`src/garminExport.ts`, non-agentic `garmin_export` enrich kind, FIT enums from
   `src/repo/garmin-exercise-map.ts` — never invented), onto the watch's own activity when there is
-  one; a Garmin-owned day (`cairn_sets_authoritative === false`) stays inbound-only. See
+  one; a Garmin-owned day (`cairn_sets_authoritative === false`) stays inbound-only. A shell
+  Cairn creates carries Cairn's OWN calorie estimate, so `garmin_daily_metrics.active_calories` /
+  `total_calories` are stored NET of Cairn's shells (`cairn_shell_kcal`,
+  `src/repo/garmin-shell-energy.ts`) — our estimate must never reach Cairn's TDEE. See
   `docs/GARMIN.md`.
 - **Autoregulation feedback** (`sessions.soreness`/`performance`/`joint_pain`) and subjective
   `checkins` are optional signals that INFORM coach selection — they never override progressive

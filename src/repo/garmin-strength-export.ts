@@ -43,6 +43,19 @@ export interface GarminSessionExportRecord {
   exported_sets?: number;
   skipped_sets?: number;
   skipped_exercises?: string[];
+  /**
+   * The calories Cairn last SET on this manual shell (repo/strength-energy.ts), so a
+   * pending write is its own check beside the sets fingerprint. Absent on a watch
+   * recording (never touched) and on a shell whose calorie write has not landed yet —
+   * which is exactly what makes the next export retry it.
+   */
+  calories_sent?: number;
+  /**
+   * The activity id Garmin answered 404/410 to when asked to take calories. That
+   * shell no longer takes a price, so it stops being owed one — otherwise every
+   * unchanged sync would re-PUT into the void.
+   */
+  calories_refused?: string;
 }
 
 function idList(value: unknown): string[] {
@@ -53,6 +66,12 @@ function idList(value: unknown): string[] {
 function countOrNull(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : null;
+}
+
+function kcalOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
 }
 
 /** Movement NAMES, deduped and bounded — a display label, never the whole log. */
@@ -201,6 +220,8 @@ export function getSessionGarminExport(sessionId: number): GarminSessionExportRe
   const exported = countOrNull(record.exported_sets);
   const skipped = countOrNull(record.skipped_sets);
   const skippedExercises = nameList(record.skipped_exercises);
+  const caloriesSent = kcalOrNull(record.calories_sent);
+  const caloriesRefused = String(record.calories_refused ?? "").trim();
   return {
     activity_id: activityId,
     source: record.source === "watch" ? "watch" : "manual",
@@ -212,6 +233,8 @@ export function getSessionGarminExport(sessionId: number): GarminSessionExportRe
     ...(exported == null ? {} : { exported_sets: exported }),
     ...(skipped == null ? {} : { skipped_sets: skipped }),
     ...(skippedExercises.length ? { skipped_exercises: skippedExercises } : {}),
+    ...(caloriesSent == null || record.source === "watch" ? {} : { calories_sent: caloriesSent }),
+    ...(!caloriesRefused || record.source === "watch" ? {} : { calories_refused: caloriesRefused }),
   };
 }
 
@@ -231,8 +254,34 @@ export function recordSessionGarminExport(sessionId: number, record: GarminSessi
   for (const key of ["exported_sets", "skipped_sets"]) {
     if (countOrNull(stored[key]) == null) delete stored[key];
   }
+  // Calories belong to a shell Cairn authored; a watch recording is never written.
+  if (kcalOrNull(stored.calories_sent) == null || stored.source === "watch") delete stored.calories_sent;
+  if (!String(stored.calories_refused ?? "").trim() || stored.source === "watch") delete stored.calories_refused;
   blob.export = stored;
   db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), sessionId);
+}
+
+/**
+ * Patch ONLY the calorie outcome onto the stored record — after the sets receipt has
+ * already been written, so a slow calorie PUT can never hold the sets ledger hostage.
+ * A no-op unless the record still points at this same manual shell: if another pass
+ * moved the sets meanwhile (a retarget onto the watch), this late answer is stale.
+ */
+export function recordSessionGarminExportCalories(
+  sessionId: number,
+  activityId: string,
+  outcome: { sent?: number; refused?: boolean }
+): void {
+  const current = getSessionGarminExport(sessionId);
+  if (!current || current.source !== "manual" || current.activity_id !== activityId) return;
+  const next: GarminSessionExportRecord = { ...current };
+  delete next.pending_delete;
+  if (outcome.sent != null) {
+    next.calories_sent = outcome.sent;
+    delete next.calories_refused;
+  }
+  if (outcome.refused) next.calories_refused = activityId;
+  recordSessionGarminExport(sessionId, next);
 }
 
 /**

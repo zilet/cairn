@@ -69,6 +69,9 @@ test("an activity Cairn authored says so in its own name", () => {
 
 test("Garmin's auto-calculated calories on a Cairn shell read as absent", () => {
   assert.equal(garminActivityCalories({ calories: 65.534, isAutoCalcCalories: true }, { cairnAuthored: true }), null);
+  // Once Cairn prices its own shell, that number echoing back is still not a
+  // measurement — any calories on a Cairn-authored shell read as absent.
+  assert.equal(garminActivityCalories({ calories: 194, isAutoCalcCalories: false }, { cairnAuthored: true }), null);
   // The sentinel is an encoding artifact wherever it appears.
   assert.equal(garminActivityCalories({ calories: 65.534 }, {}), null);
   // An athlete's own manual entry keeps Garmin's estimate: it is still theirs.

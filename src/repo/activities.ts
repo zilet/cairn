@@ -702,6 +702,11 @@ export interface GarminDailyMetricInput {
   race_predict_half_sec?: number | null;
   race_predict_marathon_sec?: number | null;
   training_load_balance?: string | null;
+  // Cairn's own strength shells, taken back out of the day's energy (migration v113,
+  // repo/garmin-shell-energy.ts). active/total_calories are stored NET of this.
+  cairn_shell_kcal?: number | null;
+  burned_calories?: number | null;
+  wellness_active_calories?: number | null;
   raw?: any;
 }
 
@@ -1111,6 +1116,10 @@ const GARMIN_DAILY_COLS = [
   "race_predict_half_sec",
   "race_predict_marathon_sec",
   "training_load_balance",
+  // Cairn's own shells taken back out of the day's energy (migration v113)
+  "cairn_shell_kcal",
+  "burned_calories",
+  "wellness_active_calories",
 ] as const;
 
 // Every stored column EXCEPT `raw_json`. The multi-day window reads (the coach
@@ -1120,7 +1129,29 @@ const GARMIN_DAILY_COLS = [
 // Project instead — same row shape minus the blob. Keep in sync with the
 // `garmin_daily_metrics` CREATE TABLE in db.ts; the single-row/list routes that
 // genuinely want the blob keep using `SELECT *` + `hydrateJson`.
-const GARMIN_DAILY_ROW_COL_LIST = ["id", "source_id", "date", ...GARMIN_DAILY_COLS, "created_at", "updated_at"];
+// The v113 energy-audit columns (what Cairn's own shells added to Garmin's day, and
+// the raw burned / wellness-active split) stay out: they explain active/total_calories,
+// which are already stored net of them, and no window read or fingerprint needs them.
+const GARMIN_DAILY_AUDIT_COLS = new Set<string>(["cairn_shell_kcal", "burned_calories", "wellness_active_calories"]);
+
+/**
+ * A caller-supplied daily metric (REST / MCP) minus the v113 energy-audit fields. Those
+ * are written ONLY by the sync's own fold (repo/garmin-shell-energy.ts): a hand-set
+ * `cairn_shell_kcal` would claim a subtraction that never happened.
+ */
+export function withoutGarminDailyAuditFields<T extends Record<string, any>>(input: T): T {
+  const out: Record<string, any> = { ...(input ?? {}) };
+  for (const col of GARMIN_DAILY_AUDIT_COLS) delete out[col];
+  return out as T;
+}
+const GARMIN_DAILY_ROW_COL_LIST = [
+  "id",
+  "source_id",
+  "date",
+  ...GARMIN_DAILY_COLS.filter((col) => !GARMIN_DAILY_AUDIT_COLS.has(col)),
+  "created_at",
+  "updated_at",
+];
 export const GARMIN_DAILY_ROW_COLS = GARMIN_DAILY_ROW_COL_LIST.join(", ");
 
 function isRealIsoDate(value: unknown): value is string {

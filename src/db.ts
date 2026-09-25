@@ -569,6 +569,12 @@ CREATE TABLE IF NOT EXISTS garmin_daily_metrics (
   race_predict_half_sec INTEGER,
   race_predict_marathon_sec INTEGER,
   training_load_balance TEXT,  -- load-balance feedback phrase (e.g. "BALANCED")
+  -- Cairn's own strength shells, taken back OUT of the day's energy (migration v113):
+  -- active_calories/total_calories are stored NET of cairn_shell_kcal, so Cairn's
+  -- estimate sent to Garmin never echoes into its own expenditure prior.
+  cairn_shell_kcal REAL,
+  burned_calories REAL,          -- raw summary burnedKilocalories (manual activities)
+  wellness_active_calories REAL, -- raw summary wellnessActiveKilocalories (watch-measured)
   raw_json TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
