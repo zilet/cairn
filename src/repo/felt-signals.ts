@@ -27,6 +27,7 @@ import { getAppState, setAppState } from "./app-state.js";
 import { localDateISO } from "./shared.js";
 import { beliefDispositionMap, feltSignalBeliefId } from "./belief-dispositions.js";
 import { isoDaysAgo } from "../lib/dates.js";
+import { collapseByDateLatestNonNull } from "./checkin-days.js";
 
 export interface FeltSignalPattern {
   id: string;
@@ -92,35 +93,6 @@ function kindWord(kind: unknown): string | null {
   if (k === "easy") return "easy";
   if (k === "train" || k === "done") return "training";
   return null;
-}
-
-// A check-in is saved INCREMENTALLY — the athlete may write the same date's row
-// several times as the morning's fields fill in (live data: one date saved five
-// times). A "how many check-ins" or "how many days read low" count must count
-// DAYS, never rows, or one athlete's habit of saving in stages inflates their
-// sample size and can flip a minority into a manufactured majority. This collapses
-// a rowset to one value per date PER COLUMN — the latest non-null write for that
-// column — assuming the rows already arrive ordered id DESC within each date
-// (every caller here orders `date DESC, id DESC`), so the first non-null value
-// seen per date/column during a single pass IS the latest one.
-export function collapseByDateLatestNonNull<T extends Record<string, unknown> & { date: unknown }>(
-  rows: T[],
-  cols: readonly string[]
-): Array<{ date: string } & Record<string, unknown>> {
-  const byDate = new Map<string, { date: string } & Record<string, unknown>>();
-  for (const row of rows) {
-    const date = String(row.date ?? "").slice(0, 10);
-    if (!date) continue;
-    let entry = byDate.get(date);
-    if (!entry) {
-      entry = { date };
-      byDate.set(date, entry);
-    }
-    for (const col of cols) {
-      if (entry[col] == null && row[col] != null) entry[col] = row[col];
-    }
-  }
-  return [...byDate.values()];
 }
 
 // ---------------------------------------------------------------------------

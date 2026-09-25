@@ -79,7 +79,7 @@ import {
 } from "./run-day-intensity.js";
 import {
   classifyRunEffort,
-  easyCeiling,
+  easyCeilingFromZ2Top,
   getHrModel,
   type HrModel,
   hrZoneLabel,
@@ -2530,7 +2530,7 @@ export function runIntensityDiscipline(date?: string): RunIntensityDiscipline | 
   // same answer as no model.
   if (!Number.isFinite(z2Top) || z2Top < 100) return null;
   // The line "above the easy ceiling" is drawn at, and the number every sentence names.
-  const ceilingBpm = Number(easyCeiling(model));
+  const ceilingBpm = easyCeilingFromZ2Top(z2Top);
   // −1: the SQL range is inclusive of both `since` and the read date, so a span of
   // WINDOW−1 back is what makes the window actually hold fourteen days, not fifteen.
   const since = isoDaysAgo(d, RUN_INTENSITY_WINDOW_DAYS - 1);

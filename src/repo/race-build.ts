@@ -309,8 +309,8 @@ export function paceBandsFor(racePaceSecPerKm: number, distanceKm: number): Pace
 // into Z3 on a warm or hilly day at the right pace; the ceiling is the line that holds.
 function easyCeilingBpm(asOf: string): number | null {
   try {
-    const ceiling = Number(easyCeiling(getHrModel(asOf)));
-    return Number.isFinite(ceiling) && ceiling > 0 ? Math.round(ceiling) : null;
+    const ceiling = easyCeiling(getHrModel(asOf));
+    return ceiling != null && ceiling > 0 ? ceiling : null;
   } catch {
     return null;
   }

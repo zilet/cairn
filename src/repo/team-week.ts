@@ -39,7 +39,8 @@ import { vouchedRunCompliance, weeklyAerobicLoad } from "./sessions.js";
 import { addDaysISO, clipText, joinList, localDateISO, metricLabel, parseDbTime } from "./shared.js";
 import { cutQualityRead, cutQualityWeekLine } from "./cut-quality.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { DAY_READ_ADHERENCE_METRIC, dayReadCallFromVerdict, type DayReadCall } from "./brain/read-adherence.js";
+import { DAY_READ_ADHERENCE_METRIC, dayReadCallFromVerdict } from "./brain/read-adherence.js";
+import { type ConclusiveDayReadCall, DAY_READ_LANDED_VARIANTS, dayReadLandedKey } from "./brain/day-read-call.js";
 
 // app_state stamp bounding the unseen-insight backlog drain to once per LOCAL day
 // (its value is the read's local day). See insightItems for why.
@@ -624,60 +625,19 @@ function watchingItems(asOf: string): TeamWeekWatch[] {
 
 // ---- the morning read, landed ---------------------------------------------------
 //
-// A day-read verdict judges the READ, not the athlete (dayReadCall, read-adherence.ts),
-// and the generic "Day read adherence didn't land the way we expected" read to the
-// athlete as being marked down for training through an easy morning they came through
-// fine. So each of the read's calls speaks in its own words: a harmless day past a
-// quiet read is the team LEARNING, a vindicated one keeps the caution without a
-// told-you-so, and a training read however the session was shaped is simply taken.
-// Variant sets through pickDayVariant keyed on the read's own date, never one literal.
-const DAY_READ_LANDED: Readonly<Record<string, readonly [string, ...string[]]>> = {
-  too_cautious_easy: [
-    "You trained through an easy read and came through fine — the read will lean less cautious.",
-    "You went past an easy read with nothing afterwards saying it cost you, so the easy calls are learning from it.",
-    "An easy morning you turned into real training went fine — the team reads that as what you can carry.",
-  ],
-  too_cautious_rest: [
-    "You trained through a rest read and came through fine — the read will lean less cautious.",
-    "You went ahead on a rest morning with nothing afterwards saying it cost you, so the rest calls are learning from it.",
-    "A rest morning you trained through went fine — the team reads that as what you can carry.",
-  ],
-  vindicated: [
-    "You trained through a quiet read and it showed a cost afterwards, so the team keeps that caution where it was.",
-    "A quiet morning you trained through asked for some room afterwards — the team holds that caution for now.",
-  ],
-  held_train: [
-    "You trained on a training read — shaping the session as you went counts as taking it.",
-    "A training morning you shaped to how you felt landed the way the read expected.",
-  ],
-  held_quiet: [
-    "A quiet read you took landed the way the team expected.",
-    "You took a quiet morning as read, and it landed as expected.",
-  ],
-  not_taken: [
-    "You kept a training morning quiet — the team takes that as information about the day, nothing to make up.",
-    "A training read you sat out tells the team something about that day; nothing to make up.",
-  ],
-};
-
+// A day-read verdict judges the READ, not the athlete, so each of the read's calls
+// speaks in its own words (DAY_READ_LANDED_VARIANTS, day-read-call.ts), through
+// pickDayVariant keyed on the read's own date, never one literal.
 function dayReadLandedLine(
-  call: DayReadCall,
+  call: ConclusiveDayReadCall,
   kind: string,
   date: string
-): { text: string; tone: "good" | "quiet" } | null {
-  const key =
-    call === "too_cautious"
-      ? kind === "rest"
-        ? "too_cautious_rest"
-        : "too_cautious_easy"
-      : call === "held"
-        ? kind === "train"
-          ? "held_train"
-          : "held_quiet"
-        : call;
-  const variants = DAY_READ_LANDED[key];
-  if (!variants) return null;
-  return { text: pickDayVariant(variants, date, `team_week_${key}`), tone: call === "held" ? "good" : "quiet" };
+): { text: string; tone: "good" | "quiet" } {
+  const key = dayReadLandedKey(call, kind);
+  return {
+    text: pickDayVariant(DAY_READ_LANDED_VARIANTS[key], date, `team_week_${key}`),
+    tone: call === "held" ? "good" : "quiet",
+  };
 }
 
 // ---- landed[]: evaluations that closed CONCLUSIVELY this week, verdict in words --

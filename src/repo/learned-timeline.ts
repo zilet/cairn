@@ -6,6 +6,7 @@ import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { whatWorksForYou } from "./reaction-model.js";
 import { clipText, metricLabel } from "./shared.js";
 import { DAY_READ_ADHERENCE_METRIC, dayReadCallFromVerdict } from "./brain/read-adherence.js";
+import { DAY_READ_CALL_TITLES } from "./brain/day-read-call.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import type { BrainDecision } from "../brain/decision-contract.js";
 import type { BrainEvaluation } from "../brain/evaluation-contract.js";
@@ -237,20 +238,13 @@ function latestExpectationOutcome(decision: BrainDecision): {
   return candidates[0] ?? { expectation: null, evaluation: null };
 }
 
-// A morning read's verdict judges the READ (dayReadCall, read-adherence.ts), so its
-// title names the read's call — never "a result Cairn is adjusting from" over a day the
-// athlete simply trained through and came through fine.
-const DAY_READ_OUTCOME_TITLES: Readonly<Record<string, string>> = {
-  held: "A morning read you took",
-  too_cautious: "A morning read more cautious than the day needed",
-  vindicated: "A quiet morning read the day after backed up",
-  not_taken: "A training morning you kept quiet",
-};
-
+// A morning read's verdict judges the READ (day-read-call.ts), so its title names the
+// read's call — never "a result Cairn is adjusting from" over a day the athlete simply
+// trained through and came through fine.
 function dayReadOutcomeTitle(expectation: BrainExpectation | null, evaluation: BrainEvaluation | null): string | null {
   if (expectation?.metric_key !== DAY_READ_ADHERENCE_METRIC || !evaluation) return null;
   const call = dayReadCallFromVerdict(evaluation.verdict, evaluation.actual);
-  return call ? (DAY_READ_OUTCOME_TITLES[call] ?? null) : null;
+  return call ? DAY_READ_CALL_TITLES[call] : null;
 }
 
 function decisionOutcomeTitle(decision: BrainDecision, evaluation: BrainEvaluation | null): string {

@@ -9,17 +9,19 @@ import {
 } from "./expectation-contract.js";
 import { isoDate, type JsonObject } from "./contract-utils.js";
 import {
-  DAY_READ_CALL_MEASURES,
   READ_ADHERENCE_MEASURES,
-  dayReadCall,
-  dayReadCallNeedsHarm,
   dayTrainingTruth,
   harmEvidenceOnDay,
   isPredictiveDayReadKind,
   readAdherenceOutcome,
-  type DayReadCall,
-  type HarmEvidence,
 } from "../repo/brain/read-adherence.js";
+import {
+  DAY_READ_CALL_EXPLANATION,
+  DAY_READ_CALL_MEASURES,
+  dayReadCall,
+  dayReadCallNeedsHarm,
+  dayReadCallWasOff,
+} from "../repo/brain/day-read-call.js";
 import { completedIntakeRange } from "../repo/intake-window.js";
 import { mealPlanAdherence } from "../repo/nutrition.js";
 import { canonicalEnduranceSport } from "../repo/endurance-sports.js";
@@ -527,7 +529,7 @@ function planAdherenceObservation(context: EvaluatorContext): MetricObservation 
 // Did the MORNING READ's call hold? The one same-day metric in the registry, and the
 // only one that can mature overnight.
 //
-// The verdict judges the READ, never the athlete (dayReadCall, read-adherence.ts):
+// The verdict judges the READ, never the athlete (dayReadCall, day-read-call.ts):
 // `aligned` when the call held — followed, or a quiet read trained through that the
 // harm test says the day did need — and `not_aligned` only when the read was off: more
 // cautious than a day that went fine (calibration evidence the softening ladders act
@@ -550,14 +552,6 @@ function planAdherenceObservation(context: EvaluatorContext): MetricObservation 
 //     exercises, other loads, extra or fewer sets, a skipped slot — is the athlete
 //     working with the read, never a miss of it.
 //   • Adherence is a COUNT of days, never a rate and never a grade.
-const DAY_READ_CALL_EXPLANATION: Readonly<Record<Exclude<DayReadCall, "unclear">, string>> = Object.freeze({
-  held: "The day went the way the morning read suggested, so its call held.",
-  vindicated: "Training went past a quiet read and a cost showed afterwards, so the read's caution fit the day.",
-  too_cautious:
-    "Training went past a quiet read with nothing afterwards saying it cost anything, so the read was more cautious than the day needed — the quiet reads learn from it.",
-  not_taken: "A training read met a quieter day than it expected — information about that day, never a miss.",
-});
-
 function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservation {
   const { expectation } = context;
   const readDate = isoDate(expectation.subject_key) ?? expectation.window_start;
@@ -584,16 +578,9 @@ function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservati
   const outcome = readAdherenceOutcome(readKind, truth);
   // The SAME harm test the softening ladders read, so the verdict and the ladders
   // cannot disagree about which quiet mornings were trained through harmlessly.
-  let harm: HarmEvidence | null = null;
-  if (dayReadCallNeedsHarm(readKind, outcome)) {
-    try {
-      harm = harmEvidenceOnDay(readDate);
-    } catch {
-      harm = null;
-    }
-  }
+  const harm = dayReadCallNeedsHarm(readKind, outcome) ? harmEvidenceOnDay(readDate) : null;
   const call = dayReadCall(readKind, outcome, harm);
-  const readOff = call === "too_cautious" || call === "not_taken" ? 1 : 0;
+  const readOff = dayReadCallWasOff(call) ? 1 : 0;
   const actual: JsonObject = {
     // `value` serves the `at_least` train comparison; `occurrences` serves the
     // `avoid` rest/easy one (compareExpectation reads occurrences first there) and

@@ -56,7 +56,7 @@ import { db } from "../db.js";
 import { createHash } from "node:crypto";
 import { capProtectiveRaise, type CutTdeeBasis, cutReaffirmation, deriveCutTarget } from "./cut-target.js";
 import { estimateExpenditure } from "./expenditure.js";
-import { collapseByDateLatestNonNull } from "./felt-signals.js";
+import { collapseByDateLatestNonNull } from "./checkin-days.js";
 import { getActiveNutritionTarget, getLatestNutritionTarget } from "./nutrition.js";
 import { computeGoalCheck } from "./profile.js";
 import { getProgramState } from "./program-state.js";
