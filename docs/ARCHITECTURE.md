@@ -1776,7 +1776,9 @@ its date, whatever superseded it afterwards; any other live question closes `can
 never the verdict: team-week's "How it landed" (variant sets, a harmless day reads as the team
 learning, tone `quiet`), the Learned timeline's titles, the reaction model's "you usually train
 anyway … none of them showed a cost", and the look-back's harmless sets. Verdicts stored before the
-call existed are read back through `dayReadCallFromVerdict` (harm asked now).
+call existed are read back through `dayReadCallFromVerdict` (harm asked now). The call vocabulary and
+every athlete-facing wording for it live in one pure module, `src/repo/brain/day-read-call.ts`; the
+ledger-backed helpers stay in `read-adherence.ts`.
 
 `writeDayRead()`'s ledger write is now `recordDayReadDecision()` (same module), whose identity is
 the read's own decision fingerprint — kind, focus, override, and the existing
@@ -2395,7 +2397,8 @@ creeps forward a sync at a time); anything newer is **emit**. `reconcileDirectiv
 as part of the desired state: an acknowledged desire with no active row REVIVES the athlete's own
 Done'd row (same source, `directive_key` and trigger date — id/created_at kept, no twin), and a desire
 without a stamp re-opens an acknowledged row as a to-do (a newer draw is news). So an acknowledged
-directive is simply an active row whose `status_at` is set (`isAcknowledgedDirective`,
+directive is simply an active row whose `status_at` is set (`isAcknowledgedDirective` in
+`src/repo/directive-feedback.ts`, the pure module that owns every status/stamp meaning;
 `hydrateDirective` → `acknowledged: true`; no column): every coaching read (`listActiveDirectives`,
 `directivesForCoach` — which tags it `acknowledged`, and `renderConnectedBrain` says "build on it,
 don't re-announce it") keeps seeing it, while the to-do surfaces drop it as news — the Today health
@@ -3981,6 +3984,9 @@ told (announce = apply-and-tell with one-tap Undo). Concretely:
   demotion; at its boundary, evidence drift is recorded (`boundary_drift_tolerated`) rather than
   parking it; and any ending where it cannot land (the plan refuses it, it aged out, the thaw set it
   aside) is answered once in chat (`meta.kind:'request_outcome'`, `context.athlete_told_at`).
+  Module map: `athlete-request-outcome.ts` owns the tell and its per-sweep budget, `thaw-rereads.ts`
+  what the thaw re-reads on a parked row, `conference-clinician-notes.ts` the doctor notes;
+  `autonomy-service.ts` keeps the loops and re-exports the public names.
 - **The waiting surface splits.** `awaitingBrainDecisions()` marks `for_clinician` on a clinician-floor
   hold and lists recent (21-day) clinician notes; the Plan note and Changes screen render them under
   "For you and your doctor", never "Waiting on you".
