@@ -118,6 +118,23 @@ test("a day the athlete also hand-entered an activity keeps THEIR energy and dro
   assert.ok(m.active_calories > 900, "the athlete's own yoga stays in the day");
 });
 
+test("a Garmin day that does not add up never leaves Cairn below what the watch measured", () => {
+  // Live 2026-09-23: active 201 against wellness 46 + burned 160, a 304 kcal / 108 min
+  // shell (share 159.6). Subtracting it all would read 41.4 — under the watch's 46.
+  const date = isoDaysAgo(2);
+  seedShell(date, 304, 108);
+  const m = fold(date, {
+    activeKilocalories: 201,
+    wellnessActiveKilocalories: 46,
+    burnedKilocalories: 160,
+    totalKilocalories: 2126,
+    bmrKilocalories: FULL_DAY_BMR,
+  });
+  assert.equal(m.active_calories, 46);
+  assert.equal(m.total_calories, 1971);
+  assert.equal(m.cairn_shell_kcal, 155);
+});
+
 test("no Cairn shell on the date: the totals are Garmin's own, stamped zero", () => {
   const date = isoDaysAgo(2);
   const m = fold(date, {

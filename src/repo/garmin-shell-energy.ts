@@ -205,11 +205,17 @@ export function neutralizeCairnShellEnergy(summary: any, date: string): CairnShe
       wellness_active_calories: wellness,
     };
   }
-  const minus = (value: number | null) => (value == null ? value : round1(Math.max(0, value - owned)));
+  // What the watch measured is never ours to take back. Garmin's own day does not
+  // always add up (live 2026-09-23: active 201 against wellness 46 + burned 160), and
+  // an exact shell share subtracted from the short side would leave the day below the
+  // watch's own reading — so the removal stops at wellness.
+  const removed =
+    active != null && wellness != null ? round1(Math.min(owned, Math.max(0, active - wellness))) : owned;
+  const minus = (value: number | null) => (value == null ? value : round1(Math.max(0, value - removed)));
   return {
     active_calories: minus(active),
     total_calories: minus(total),
-    cairn_shell_kcal: owned,
+    cairn_shell_kcal: removed,
     burned_calories: burned,
     wellness_active_calories: wellness,
   };
