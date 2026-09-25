@@ -9,7 +9,7 @@
 //   totalKilocalories  = bmrKilocalories + activeKilocalories
 //
 // and each manual activity adds max(0, activity kcal − fullDayBmr/1440 × minutes) to
-// `burned` (verified live on the athlete's account). Watch recordings live inside
+// `burned` (verified against Garmin Connect). Watch recordings live inside
 // wellnessActive and never in burned.
 //
 // So reading the day's totals verbatim would feed Cairn's OWN estimate back into its
@@ -54,7 +54,7 @@ function num(value: unknown): number | null {
  * told. Pure.
  *
  * Our share is Σ max(0, shell kcal − full-day bmr/min × minutes) — exactly what Garmin
- * adds per manual activity (verified live: 194 kcal / 32 min at bmr 1925 → 151;
+ * adds per manual activity (e.g. 194 kcal / 32 min at bmr 1925 → 151;
  * 65.534 / 31 min → 24) — capped at `burned`. It is NEVER simply all of `burned`:
  * burned also carries whatever else reached the day outside the watch (the athlete's
  * own hand-entered activity, an Edge / phone / Zwift import), and that energy is real.
@@ -206,7 +206,7 @@ export function neutralizeCairnShellEnergy(summary: any, date: string): CairnShe
     };
   }
   // What the watch measured is never ours to take back. Garmin's own day does not
-  // always add up (live 2026-09-23: active 201 against wellness 46 + burned 160), and
+  // always add up (e.g. active 201 against wellness 46 + burned 160), and
   // an exact shell share subtracted from the short side would leave the day below the
   // watch's own reading — so the removal stops at wellness.
   const removed =

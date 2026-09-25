@@ -46,11 +46,11 @@ function seedFinishedDayBmr(daysAgo = 1) {
   repo.upsertGarminDailyMetric({ date: isoDaysAgo(daysAgo), bmr_calories: FULL_DAY_BMR });
 }
 
-test("the verified live day: a 194 kcal / 32 min shell comes back out of active and total", () => {
+test("a partial day: a 194 kcal / 32 min shell comes back out of active and total", () => {
   const today = isoDaysAgo(0);
   seedFinishedDayBmr();
   seedShell(today, 194, 32);
-  // The athlete's real summary (partial day): active = wellnessActive + burned,
+  // A partial-day summary: active = wellnessActive + burned,
   // total = bmr + active.
   const summary = {
     activeKilocalories: 513,
@@ -119,7 +119,7 @@ test("a day the athlete also hand-entered an activity keeps THEIR energy and dro
 });
 
 test("a Garmin day that does not add up never leaves Cairn below what the watch measured", () => {
-  // Live 2026-09-23: active 201 against wellness 46 + burned 160, a 304 kcal / 108 min
+  // A day Garmin reports as active 201 against wellness 46 + burned 160, a 304 kcal / 108 min
   // shell (share 159.6). Subtracting it all would read 41.4 — under the watch's 46.
   const date = isoDaysAgo(2);
   seedShell(date, 304, 108);

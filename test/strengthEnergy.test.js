@@ -99,7 +99,7 @@ test("a session left open is capped at the working time its sets account for", (
 });
 
 test("a session typed in after the fact is priced by its sets, not its one-minute span", () => {
-  // Live case: 8 sets logged in a minute read as 5 kcal — worse than Garmin's placeholder.
+  // 8 sets typed in within a minute would read as 5 kcal — worse than Garmin's placeholder.
   const batch = estimateStrengthKcal({ sets: sets("Bench Press", 8), duration_min: 1, bodyweight_kg: KG });
   assert.equal(batch.minutes, 8 * 3.5 + 8);
   // Just above ~1.5 min per set the recorded span is still believed.
