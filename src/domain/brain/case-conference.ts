@@ -31,6 +31,7 @@ import {
   conflictsFromInputs,
   deterministicConferenceConflicts,
   revisionHoldsClinicalFloor,
+  unresolvedConflictCeiling,
   type ConferenceConflictKey,
 } from "./conference-conflicts.js";
 import { getCoachContext } from "../../repo/coach.js";
@@ -43,11 +44,8 @@ import { MAX_DEFERRED_EXPECTATIONS } from "../../repo/brain/change-expectations.
 import { createProposal } from "../../repo/proposals.js";
 import { changesReduceSets } from "../../repo/volume-guard.js";
 import { runChosen, runChosenWithCoachReads } from "../../runChosen.js";
-import {
-  applyProposalWithAutonomy,
-  conferenceClinicianNotes,
-  recordConferenceClinicianNotes,
-} from "./autonomy-service.js";
+import { applyProposalWithAutonomy } from "./autonomy-service.js";
+import { conferenceClinicianNotes, recordConferenceClinicianNotes } from "./conference-clinician-notes.js";
 import { specialistCharter } from "./specialist-charters.js";
 import { blockPriority, type PriorityTrack } from "../../repo/road-ahead.js";
 
@@ -698,22 +696,15 @@ export async function runCaseConference(
   const modelCeiling = leadModelCeiling(specialistCeiling, leadMode);
   const leadCeilingEased = modelCeiling !== specialistCeiling ? `${specialistCeiling}->${modelCeiling}` : null;
   specialistCeiling = modelCeiling;
-  // What an UNRESOLVED conflict does depends on what kind of question it is. The clinical
-  // one is the clinician floor; a safety one (a hurt part under load, an allergy, a
-  // medication meeting a supplement) keeps the change at ask in every mode; a coaching
-  // trade-off (deficit vs recovery, race vs strength) is the team's call by the block's
-  // priority order, so under lead it is announced with the reasoning, never parked.
+  // What an UNRESOLVED conflict does depends on what kind of question it is
+  // (unresolvedConflictCeiling): the clinical one is the clinician floor; a safety one (a
+  // hurt part under load, an allergy, a medication meeting a supplement) keeps the change
+  // at ask in every mode; a coaching trade-off (deficit vs recovery, race vs strength) is
+  // the team's call by the block's priority order, so under lead it is announced with the
+  // reasoning, never parked.
   const safetyUnresolved = unresolvedConflicts.some((conflict) => conflictIsSafetyFloor(conflict));
-  if (unresolvedConflicts.length) {
-    specialistCeiling = moreRestrictiveTier(
-      specialistCeiling,
-      unresolvedConflicts.includes("clinical_autonomy")
-        ? "clinician"
-        : safetyUnresolved
-          ? "ask"
-          : leadModelCeiling("ask", leadMode)
-    );
-  }
+  const conflictCeiling = unresolvedConflictCeiling(unresolvedConflicts, leadMode);
+  if (conflictCeiling) specialistCeiling = moreRestrictiveTier(specialistCeiling, conflictCeiling);
   // A plan_update that LOWERS prescribed volume is not one bounded load step, and
   // it must not take the tier meant for one. Volume is the field nothing downstream
   // can raise again (src/repo/volume-guard.ts), so a cut is structural: it announces

@@ -1,5 +1,6 @@
 import type { SpecialistDomain, SpecialistOpinion } from "../../brain/specialist-contract.js";
-import { clinicalActionText } from "../../brain/autonomy.js";
+import { clinicalActionText, leadModelCeiling, type CairnLeadMode } from "../../brain/autonomy.js";
+import type { AutonomyTier } from "../../brain/decision-contract.js";
 import { markerGroup } from "../../repo/propagation-data.js";
 
 // ============================================================================
@@ -57,6 +58,20 @@ const SAFETY_CONFLICTS: ReadonlySet<ConferenceConflictKey> = new Set([
 
 export function conflictIsSafetyFloor(key: ConferenceConflictKey): boolean {
   return SAFETY_CONFLICTS.has(key);
+}
+
+/** The tier a revision is held at by the conflicts it left UNRESOLVED; null with none
+ * open. The clinical one is the clinician floor; a safety one keeps the change at ask in
+ * every mode; a coaching trade-off is the team's call by the block's priority order, so
+ * under lead it is announced with the reasoning (leadModelCeiling), never parked. */
+export function unresolvedConflictCeiling(
+  unresolved: readonly ConferenceConflictKey[],
+  leadMode?: CairnLeadMode | null
+): AutonomyTier | null {
+  if (!unresolved.length) return null;
+  if (unresolved.includes("clinical_autonomy")) return "clinician";
+  if (unresolved.some((conflict) => conflictIsSafetyFloor(conflict))) return "ask";
+  return leadModelCeiling("ask", leadMode);
 }
 
 /** What one act-now finding governs: a domain the brain changes itself, and the

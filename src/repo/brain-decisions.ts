@@ -280,6 +280,28 @@ function awaitingExplanation(decision: BrainDecision): string | null {
   return trimmed ? trimmed.slice(0, 700) : null;
 }
 
+function awaitingEntry(
+  d: BrainDecision,
+  id: number,
+  explanation: string,
+  effectiveDate: string,
+  decidedDate: string,
+  forClinician: boolean
+): AwaitingBrainDecision {
+  return {
+    id,
+    kind: String(d.kind),
+    domain: String(d.domain),
+    summary: String(d.summary ?? ""),
+    effective_date: effectiveDate,
+    decided_date: decidedDate,
+    autonomy_tier: String(d.autonomy_tier),
+    status: String(d.status),
+    explanation,
+    for_clinician: forClinician,
+  };
+}
+
 export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
   const out: AwaitingBrainDecision[] = [];
   // `review` only. An `observed` row is an advisory the brain noted and chose not to
@@ -302,18 +324,7 @@ export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
     }
     const decided = String(d.effective_date ?? "").slice(0, 10) || stampDay(d.created_at);
     if (!decided) continue;
-    out.push({
-      id,
-      kind: String(d.kind),
-      domain: String(d.domain),
-      summary: String(d.summary ?? ""),
-      effective_date: String(d.effective_date ?? decided),
-      decided_date: decided,
-      autonomy_tier: String(d.autonomy_tier),
-      status: String(d.status),
-      explanation,
-      for_clinician: clinicianFloorHolds(d),
-    });
+    out.push(awaitingEntry(d, id, explanation, String(d.effective_date ?? decided), decided, clinicianFloorHolds(d)));
   }
   const noteFloor = addDaysISO(localDateISO(), -CLINICIAN_NOTE_WINDOW_DAYS) ?? "";
   const seenNotes = new Set<string>();
@@ -327,18 +338,7 @@ export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
     const key = explanation.toLowerCase();
     if (seenNotes.has(key)) continue;
     seenNotes.add(key);
-    out.push({
-      id,
-      kind: String(d.kind),
-      domain: String(d.domain),
-      summary: String(d.summary ?? ""),
-      effective_date: decided,
-      decided_date: decided,
-      autonomy_tier: String(d.autonomy_tier),
-      status: String(d.status),
-      explanation,
-      for_clinician: true,
-    });
+    out.push(awaitingEntry(d, id, explanation, decided, decided, true));
   }
   const cap = Math.max(1, Math.trunc(Number(limit)) || 20);
   return out.sort((a, b) => b.decided_date.localeCompare(a.decided_date) || b.id - a.id).slice(0, cap);
