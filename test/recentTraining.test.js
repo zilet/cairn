@@ -110,6 +110,30 @@ test("a Garmin-linked cardio row carries a real start time, body-reaction detail
   assert.equal(row.note, "tempo effort", "the effort label drives a calm deterministic note");
 });
 
+test("a run's note follows the athlete's own HR model, not Garmin's effort label", () => {
+  // LTHR 167 → easy ceiling 149 (+2 tolerance). Garmin labels this 142-bpm run TEMPO.
+  const model = {
+    observed_max: 182,
+    lthr: 167,
+    lthr_basis: "field_test",
+    zones: { z1_top: 142, z2_top: 149, z3_top: 157, z4_top: 165 },
+    resting: 54,
+    confidence: "anchored",
+    basis_runs: 40,
+    window_days: 183,
+    updated_at: null,
+  };
+  db.prepare(
+    `INSERT INTO hr_model_state (id, as_of, model_json, updated_at) VALUES (1, ?, ?, datetime('now'))
+     ON CONFLICT(id) DO UPDATE SET as_of = excluded.as_of, model_json = excluded.model_json`
+  ).run(TODAY, JSON.stringify(model));
+  const act = repo.addActivity({ type: "run", duration_min: 47, distance_km: 6.48, pace: "7:15/km", date: TODAY });
+  seedGarminFor(act.id, TODAY);
+  const row = repo.recentTraining(6).find((r) => r.kind === "activity");
+  assert.equal(row.detail.te_label, "TEMPO", "Garmin still calls it tempo");
+  assert.equal(row.note, "easy run", "the personal model wins for a run");
+});
+
 test("getWeeklyStats counts cardio this week (week_cardio / week_cardio_km)", () => {
   repo.addActivity({ type: "run", duration_min: 47, distance_km: 6.48, date: TODAY });
   repo.addActivity({ type: "walking", duration_min: 60, distance_km: 4.57, date: TODAY });

@@ -4,6 +4,7 @@ import { emitEnrichTransition } from "../enrichBus.js";
 import { reconcileDailySessionsForDateSafe } from "./daily-reconciliation.js";
 import { isCairnAuthoredName } from "./garmin-authorship.js";
 import { invalidateDayRead, invalidateDayReadIfDecisionChanged } from "./intelligence.js";
+import { classifyRunEffort } from "./hr-model.js";
 import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
@@ -325,10 +326,18 @@ function _hasAny(o: Record<string, any>): boolean {
   return Object.values(o).some((v) => v != null);
 }
 
-// A Garmin effort label ("TEMPO" / "AEROBIC_BASE" / "VO2MAX") → a calm note, else
-// fall back to the dominant HR zone. Deterministic; no agent on this path.
-function _cardioNote(d: Record<string, any> | null): string | null {
+// A run is read against the athlete's OWN HR model first (hr-model.ts is the one
+// source of "was that run easy"); Garmin's effort label uses Garmin's zones and
+// called a 150-bpm conversational run "tempo". Only when the personal model can't
+// speak does the Garmin label ("TEMPO" / "AEROBIC_BASE" / "VO2MAX") make a calm
+// note, else the dominant HR zone. Deterministic; no agent on this path.
+const RUN_EFFORT_NOTE = { easy: "easy run", steady: "steady effort", quality: "quality effort" } as const;
+function _cardioNote(d: Record<string, any> | null, type?: string | null, durationMin?: number | null): string | null {
   if (!d) return null;
+  if (/run/i.test(String(type || "")) && d.avg_hr != null) {
+    const effort = classifyRunEffort(d.avg_hr, d.moving_min ?? durationMin ?? null);
+    if (effort !== "unknown") return RUN_EFFORT_NOTE[effort];
+  }
   if (d.te_label) return `${String(d.te_label).replace(/_/g, " ").toLowerCase()} effort`;
   const zones = Array.isArray(d.hr_zones) ? d.hr_zones : [];
   if (zones.length) {
@@ -462,7 +471,7 @@ export function recentTraining(limit = 6): FeedRow[] {
       at: a.g_start ? String(a.g_start) : null, // real activity start (Garmin); manual logs stay date-only
       title: a.type || a.raw_text || "activity",
       stats: stats || a.notes || "",
-      note: _cardioNote(detail),
+      note: _cardioNote(detail, a.type, a.duration_min),
       source: a.g_start ? "garmin" : a.source || null,
       meta: { duration_min: a.duration_min ?? null, distance_km: a.distance_km ?? null, pace: a.pace ?? null },
       detail,
