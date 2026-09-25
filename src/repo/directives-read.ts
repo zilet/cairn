@@ -21,10 +21,22 @@ import { db } from "../db.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { classifyDirectiveIntent } from "./propagation-data.js";
 
-// hydrate a stored row: surface `uncertain` as a boolean for consumers.
+// ACKNOWLEDGED — the athlete tapped "Got it" (Done) on a directive whose trigger still
+// stands. The guidance stays IN EFFECT (status 'active', so every coaching read keeps
+// seeing it); `status_at` records when they acknowledged it, which is what takes it off
+// the athlete's to-do surfaces. No extra column: an active row carries a status_at ONLY
+// through that acknowledgement (the propagation engine re-activates a Done'd row whose
+// reading has not changed; a flip back to active clears the stamp). It retires when a
+// newer reading no longer calls for it, or the athlete dismisses it.
+export function isAcknowledgedDirective(row: any): boolean {
+  return !!row && row.status === "active" && row.status_at != null && String(row.status_at).trim() !== "";
+}
+
+// hydrate a stored row: surface `uncertain` as a boolean for consumers, and whether the
+// athlete has already acknowledged it (in effect, but no longer a new item).
 export function hydrateDirective(row: any) {
   if (!row) return row;
-  return { ...row, uncertain: !!row.uncertain };
+  return { ...row, uncertain: !!row.uncertain, acknowledged: isAcknowledgedDirective(row) };
 }
 
 export function listActiveDirectives() {

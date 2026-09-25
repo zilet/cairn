@@ -676,10 +676,12 @@ function interventionMarker(): ReactionPattern | null {
   }
   const intervs: Interv[] = [];
   try {
+    // A Done is the athlete acting on a finding — whether the engine then retired it
+    // (resolved) or kept it in effect as acknowledged (active, stamped).
     const dirs = db
       .prepare(
         `SELECT marker, status_at, directive FROM health_directives
-        WHERE status = 'resolved' AND status_at IS NOT NULL AND marker IS NOT NULL`
+        WHERE status IN ('resolved', 'active') AND status_at IS NOT NULL AND marker IS NOT NULL`
       )
       .all() as any[];
     for (const d of dirs) {

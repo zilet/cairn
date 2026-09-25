@@ -2803,6 +2803,8 @@ export interface ClientDirective {
   age_days?: number | null;
   trigger_date?: string | null;
   resurfaced_from_id?: number | null;
+  // The athlete said "Got it" on a reading that still stands: in effect, not a new item.
+  acknowledged?: boolean;
   [key: string]: unknown;
 }
 

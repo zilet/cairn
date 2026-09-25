@@ -2362,20 +2362,44 @@ updated in place, a row no longer desired is soft-resolved, and a new one is ins
 instead of clear-all-then-reinsert. `directivesForCoach()` condenses the active set for the prompt.
 Plus `addDirective`/`getDirective`/`listActiveDirectives`/`listDirectives`/`updateDirective`.
 
-**Wearable markers are read against the athlete's own band, and a Done on one holds.** Garmin's HRV
-status judges each night against a personal "balanced" range (`raw_json.hrv.hrvSummary.baseline`),
-which can sit wholly below the population `HRV` zone; when a recent sync carries it,
-`wearableFitnessMarkers` stamps it as `personal_optimal` and `markerZone()` hands that band to the
-ranking, the directive engine and the review contexts alike. And a user Done on a lab directive
-holds until the next draw, but a wearable series "draws" every morning, so that rule re-created the
-HRV directive the same second it was marked Done. For `source: "wearable"` markers a Done now holds
-like a dismissal: only a materially worse reading brings it back (`shouldSuppressDirective`).
+**A Done on a finding that still stands is an ACKNOWLEDGEMENT, not a cure.** The athlete's "Got it"
+(PWA; `status:'resolved'` on `PUT /api/directives/:id` / `update_directive`) means "I know", never
+"my ApoB is fixed". `directiveFeedbackVerdict()` (`src/repo/propagation.ts`) reads the last user
+feedback for a directive's identity three ways: a **Dismiss** suppresses it until the marker is
+materially worse; a **Done** whose trigger still stands — a lab's same draw, or a wearable reading no
+materially worse than the one acknowledged — is **acknowledge**: the pass keeps desiring it, stamped
+with the athlete's `status_at` and the trigger snapshot they acknowledged (so "materially worse" never
+creeps forward a sync at a time); anything newer is **emit**. `reconcileDirectives()` treats the stamp
+as part of the desired state: an acknowledged desire with no active row REVIVES the athlete's own
+Done'd row (same source, `directive_key` and trigger date — id/created_at kept, no twin), and a desire
+without a stamp re-opens an acknowledged row as a to-do (a newer draw is news). So an acknowledged
+directive is simply an active row whose `status_at` is set (`isAcknowledgedDirective`,
+`hydrateDirective` → `acknowledged: true`; no column): every coaching read (`listActiveDirectives`,
+`directivesForCoach` — which tags it `acknowledged`, and `renderConnectedBrain` says "build on it,
+don't re-announce it") keeps seeing it, while the to-do surfaces drop it as news — the Today health
+card counts only unacknowledged rows, and the PWA lists it quietly under the new ones with no "Got
+it" control (Dismiss stays). It retires when a newer draw is back in optimal (the pass no longer
+desires it) or on a Dismiss; a materially worse newer draw still resurfaces a fresh row
+(`resurfaceWorseningDirectives`). A flip back to `active` clears the stamp (an un-hide is a to-do). The
+derive signature carries an engine tag, so the first pass after an upgrade re-reads existing Done rows
+— a Done'd directive whose draw still stands comes back into effect with no data migration.
+
+**Wearable markers are read against the athlete's own band.** Garmin's HRV status judges each night
+against a personal "balanced" range (`raw_json.hrv.hrvSummary.baseline`), which can sit wholly below
+the population `HRV` zone; when a recent sync carries it, `wearableFitnessMarkers` stamps it as
+`personal_optimal` and `markerZone()` hands that band to the ranking, the directive engine and the
+review contexts alike. A wearable series "draws" every morning, so a Done on one holds (acknowledged)
+until a materially worse week, never until "the next draw".
 
 **A wearable recovery directive reads the WEEK, clears on the sync, and is context, not an order.**
 HRV and resting HR (`WEARABLE_TREND_ZONES`, `src/repo/propagation-data.ts`) are judged on
 `trend_window` — the mean of the readings in the last 7 days (`wearableTrendWindow`, ≥3 nights, else
 no directive at all) — never the latest night; a single short night is the day read's last-night
-brake, not a standing card. The value, trigger and "materially worse" test all use that average.
+brake, not a standing card. **A thin week is no verdict**: while the series is current but holds too
+few nights to average, the zone is HELD (`heldWearableZones`) — the reconcile neither mints nor
+retires its row, so an athlete who wears the watch to bed episodically no longer sees the card
+soft-resolved each thin week and re-minted on the next three-night one. A series past its sensor-age
+bound (`stale`) reads as absent and its row retires. The value, trigger and "materially worse" test all use that average.
 The wording says which read it is (`recoveryReadingKind`): a week against the athlete's own band, a
 week against the population zone (fallback, worded "read this loosely"), or one reading (a clinic
 pulse). `deriveWearableDirectives()` is the same derivation scoped to the wearable zones

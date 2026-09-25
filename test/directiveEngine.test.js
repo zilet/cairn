@@ -56,15 +56,19 @@ test("a changed marker updates the directive in place (id + created_at preserved
 });
 
 // (b) --------------------------------------------------------------------------
-test("user Done, then re-derive the SAME data → no resurface", () => {
+test("user Done, then re-derive the SAME data → acknowledged, still in effect, no new row", () => {
   seedHealthDoc("2025-12-01", [marker("ApoB", 120, { unit: "mg/dL", flag: "high" })]);
   repo.deriveDirectives();
   const watch = activeMarkersWatch("ApoB")[0];
   repo.updateDirective(watch.id, { status: "resolved" }); // Done
+  const rowsAfterDone = rowCount();
 
   repo.deriveDirectives(); // unchanged marker snapshot
-  assert.equal(activeMarkersWatch("ApoB").length, 0, "the Done'd recheck stays suppressed at the same reading");
-  assert.equal(statusOf(watch.id).status, "resolved", "the original row remains resolved (never re-inserted)");
+  const kept = activeMarkersWatch("ApoB");
+  assert.equal(kept.length, 1, "the Done'd directive is still in effect at the same reading");
+  assert.equal(kept[0].id, watch.id, "the athlete's own row came back — never a re-inserted twin");
+  assert.equal(kept[0].acknowledged, true, "…as ACKNOWLEDGED, not a new item");
+  assert.equal(rowCount(), rowsAfterDone, "no row was inserted");
 });
 
 // (c) --------------------------------------------------------------------------
@@ -136,11 +140,11 @@ test("generic long-tail honors Done/idempotence like the mapped path", () => {
 
   repo.updateDirective(note[0].id, { status: "resolved" });
   repo.deriveDirectives();
-  assert.equal(
-    repo.listActiveDirectives().filter((d) => (d.marker || "") === "Potassium").length,
-    0,
-    "a Done'd long-tail note stays suppressed at the same reading"
-  );
+  const after = repo.listActiveDirectives().filter((d) => (d.marker || "") === "Potassium");
+  assert.equal(after.length, 1, "a Done'd long-tail note stays in effect at the same reading");
+  assert.equal(after[0].id, note[0].id);
+  assert.equal(after[0].acknowledged, true, "…acknowledged, never a new item");
+  assert.equal(rowCount(), before, "and nothing was inserted");
 });
 
 test("a cluster directive honors Done + zero-churn", () => {
@@ -162,11 +166,13 @@ test("a cluster directive honors Done + zero-churn", () => {
   const stillActive = repo
     .listActiveDirectives()
     .filter((d) => (d.marker || "") === cluster[0].marker && d.domain === "watch");
-  assert.equal(stillActive.length, 0, "a Done'd cluster read stays suppressed at the same data");
+  assert.equal(stillActive.length, 1, "a Done'd cluster read stays in effect at the same data");
+  assert.equal(stillActive[0].acknowledged, true, "…acknowledged");
+  assert.equal(rowCount(), before, "no twin row was written");
 });
 
 // (g) --------------------------------------------------------------------------
-test("a LEGACY user-resolved row without intent_key still suppresses", () => {
+test("a LEGACY user-resolved row without intent_key is still recognized (kept in effect, acknowledged)", () => {
   // A row written before the intent_key column existed: intent_key NULL, resolved by the
   // user (status_at set), stamped from ApoB=120 on the same date the new reading carries.
   const legacyDirective =
@@ -181,7 +187,12 @@ test("a LEGACY user-resolved row without intent_key still suppresses", () => {
   const nut = repo
     .listActiveDirectives()
     .filter((d) => (d.marker || "") === "ApoB" && d.domain === "nutrition");
-  assert.equal(nut.length, 0, "the legacy resolve suppresses the equivalent nutrition lever (intent classified on the fly)");
+  assert.equal(nut.length, 1, "the equivalent nutrition lever is in effect");
+  assert.equal(
+    nut[0].acknowledged,
+    true,
+    "…carried as acknowledged: the legacy Done is honored (intent classified on the fly), never re-raised as new"
+  );
 });
 
 // recency ----------------------------------------------------------------------

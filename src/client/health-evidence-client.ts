@@ -28,6 +28,7 @@ type HealthDirectiveRow = {
   rationale?: unknown;
   trigger_date?: unknown;
   resurfaced_from_id?: unknown;
+  acknowledged?: unknown;
 };
 
 (() => {
@@ -118,10 +119,17 @@ type HealthDirectiveRow = {
       triggerDate && typeof relAge === "function" && typeof absDate === "function"
         ? `<p class="hb-dwhen" title="${escAttr(absDate(triggerDate))}">measured ${escHtml(relAge(triggerDate))}</p>`
         : "";
+    // Acknowledged: the athlete already said "Got it" on this reading. It keeps shaping
+    // their coaching, so it stays listed — but quietly, without the to-do control.
+    const acknowledged = d.acknowledged === true;
     // Status-neutral: resurfaced_from_id follows a Done'd OR a Dismissed directive that
     // materially worsened — so this must not assume the athlete "marked this done".
-    const resurfaced = d.resurfaced_from_id
-      ? `<p class="hb-dresurfaced">You've handled this before — newer results bring it back.</p>`
+    const resurfaced =
+      d.resurfaced_from_id && !acknowledged
+        ? `<p class="hb-dresurfaced">You've handled this before — newer results bring it back.</p>`
+        : "";
+    const ackLine = acknowledged
+      ? `<p class="hb-dack">Got it — still shaping your coaching until new results change it.</p>`
       : "";
     const evCount = d.marker && evMap ? evMap.get(String(d.marker).toLowerCase()) || 0 : 0;
     const evidence =
@@ -129,7 +137,10 @@ type HealthDirectiveRow = {
         ? `<button class="linkbtn-quiet hb-devidence" type="button" data-evidence="${escAttr(String(d.marker))}" aria-expanded="false">see the evidence${evCount > 0 ? ` <span class="hb-evcount">(${evCount})</span>` : ""}</button>
        <div class="hb-evbox" hidden></div>`
         : "";
-    return `<div class="hb-directive reveal${soft ? " hb-directive-soft" : ""}" style="${stagger(i + 1)}" data-dir="${escAttr(d.id)}">
+    const done = acknowledged
+      ? ""
+      : `<button class="hb-dbtn hb-ddone" data-ddone="${escAttr(d.id)}" title="I've got this — it keeps shaping your coaching until new results change the picture">Got it</button>`;
+    return `<div class="hb-directive reveal${soft ? " hb-directive-soft" : ""}${acknowledged ? " hb-directive-ack" : ""}" style="${stagger(i + 1)}" data-dir="${escAttr(d.id)}">
     <div class="hb-dmain">
       ${marker}
       ${resurfaced}
@@ -138,9 +149,10 @@ type HealthDirectiveRow = {
       ${when}
       ${cite}
       ${evidence}
+      ${ackLine}
     </div>
     <div class="hb-dctl">
-      <button class="hb-dbtn hb-ddone" data-ddone="${escAttr(d.id)}" title="Got it — this comes back only if new results change the picture">Done</button>
+      ${done}
       <button class="hb-dbtn hb-ddismiss" data-ddismiss="${escAttr(d.id)}" title="Not useful — stay quiet unless it gets materially worse">Dismiss</button>
     </div>
   </div>`;

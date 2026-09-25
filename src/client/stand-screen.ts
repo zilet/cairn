@@ -380,13 +380,19 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
   function activeDirectives(): Array<Record<string, unknown>> {
     return (DATA?.directives || []).filter((d) => !d.status || d.status === "active");
   }
+  // Only a finding the athlete has not yet acknowledged earns the watch dot; an
+  // acknowledged one still counts as shaping the plan (it does), just quietly.
+  function connectionsStatus(): StandStatus {
+    return activeDirectives().some((d) => d.acknowledged !== true) ? "watch" : "mute";
+  }
   function connectionsTile(): string {
     const n = activeDirectives().length;
     if (!n && !(DATA?.markers || []).length) return "";
     const read = n ? `<b>${n}</b> shaping your plan` : "nothing in effect";
+    const st = connectionsStatus();
     return `<button class="stand-tile reveal" data-connections>
-      <span class="stand-tile-top"><span class="hdot hdot-${n ? "watch" : "mute"}"></span><span class="stand-tile-name">Connections</span></span>
-      <span class="stand-tile-read ${n ? "watch" : ""}">${read}</span><span class="stand-tile-arw" aria-hidden="true">›</span>
+      <span class="stand-tile-top"><span class="hdot hdot-${st}"></span><span class="stand-tile-name">Connections</span></span>
+      <span class="stand-tile-read ${st === "watch" ? "watch" : ""}">${read}</span><span class="stand-tile-arw" aria-hidden="true">›</span>
     </button>`;
   }
 
@@ -443,7 +449,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     const checkup = checkupTile();
     if (checkup) tiles.push({ st: DATA?.checkup?.due_now?.length ? "warn" : "watch", html: checkup });
     const conn = connectionsTile();
-    if (conn) tiles.push({ st: activeDirectives().length ? "watch" : "mute", html: conn });
+    if (conn) tiles.push({ st: connectionsStatus(), html: conn });
     const supp = supplementsTile();
     if (supp) tiles.push({ st: "ok", html: supp });
     const age = ageTile();

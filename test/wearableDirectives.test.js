@@ -38,18 +38,29 @@ test("a Done on the HRV directive holds through new below-band mornings", () => 
   repo.deriveDirectives();
   const [row] = hrvDirectives();
   assert.ok(row, "the below-band series raised a directive");
-  repo.setDirectiveStatusByUser(row.id, "resolved");
-  assert.equal(hrvDirectives().length, 0, "not re-created the same second");
+  const back = repo.setDirectiveStatusByUser(row.id, "resolved");
+  assert.equal(back.status, "active", "the tap returns the row as it now stands");
+  assert.equal(back.acknowledged, true, "a Done on a standing reading is an acknowledgement");
+  const acknowledged = () => hrvDirectives().filter((d) => d.acknowledged);
+  assert.deepEqual(acknowledged().map((d) => d.id), [row.id], "kept in effect, never re-created as new");
   // A new morning, still below the band but no worse.
   repo.upsertGarminDailyMetric({ date: localDaysAgo(0), hrv_ms: 41 });
   repo.deriveDirectives();
-  assert.equal(hrvDirectives().length, 0, "a new daily reading is not news");
+  assert.deepEqual(hrvDirectives().map((d) => [d.id, d.acknowledged]), [[row.id, true]], "a new daily reading is not news");
   // One bad morning is not news either: the directive reads the WEEK's average.
   repo.upsertGarminDailyMetric({ date: localDaysAgo(0), hrv_ms: 25 });
   repo.deriveDirectives();
-  assert.equal(hrvDirectives().length, 0, "a single night never resurfaces a wearable directive");
+  assert.deepEqual(
+    hrvDirectives().map((d) => [d.id, d.acknowledged]),
+    [[row.id, true]],
+    "a single night never resurfaces a wearable directive"
+  );
   // A materially worse WEEK is.
   for (let i = 2; i >= 1; i--) repo.upsertGarminDailyMetric({ date: localDaysAgo(i), hrv_ms: 25 });
   repo.deriveDirectives();
-  assert.equal(hrvDirectives().length, 1);
+  const now = hrvDirectives();
+  assert.equal(now.length, 1);
+  assert.notEqual(now[0].id, row.id, "news is a new row");
+  assert.equal(now[0].acknowledged, false, "…in front of the athlete again");
+  assert.equal(now[0].resurfaced_from_id, row.id);
 });

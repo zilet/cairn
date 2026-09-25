@@ -145,12 +145,15 @@ async function directiveLoaderResolve(id: string, status: "resolved" | "dismisse
     toast("Couldn't update");
     return;
   }
-  toast(status === "resolved" ? "Marked done" : "Dismissed");
+  // A "Got it" on a finding whose reading still stands comes back ACKNOWLEDGED: still in
+  // effect, so the card stays (quietly) rather than collapsing away.
+  const kept = directiveLoaderRecord(directiveLoaderRecord(res).directive).status === "active";
+  toast(status === "dismissed" ? "Dismissed" : kept ? "Got it — still shaping your coaching" : "Got it");
   swrInvalidate(DIRECTIVES_CACHE_KEY); // don't flash the just-resolved item back from cache
   const after = () => {
     void directiveLoaderLoad(pollToken);
   };
-  if (card) collapseEl(card, after);
+  if (card && !kept) collapseEl(card, after);
   else after();
 }
 
