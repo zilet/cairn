@@ -1,11 +1,22 @@
 import { db } from "../../db.js";
 import {
   clinicianFloorHolds,
+  clinicianNoteText,
   decideAutonomyTier,
   domainShouldDemote,
+  leadModelCeiling,
   nextNaturalBoundary,
   surpriseBudgetAllows,
 } from "../../brain/autonomy.js";
+import {
+  conferenceConflictInputs,
+  conflictIsSafetyFloor,
+  revisionFromProposalPayload,
+  revisionHoldsClinicalFloor,
+  type ConferenceConflictInputs,
+} from "./conference-conflicts.js";
+import { getCoachContext } from "../../repo/coach.js";
+import { listTrainingSymptoms } from "../../repo/training-symptoms.js";
 import {
   athleteRestructureLandingDate,
   enqueueStructureRebuild,
@@ -67,6 +78,7 @@ import {
   regenerationReceiptRationale,
 } from "./draft-regeneration.js";
 import { setAppStateStrict } from "../../repo/app-state.js";
+import { addChatMessage } from "../../repo/chat.js";
 import { recordAsyncFailure } from "../../diagnostics.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
@@ -1352,6 +1364,12 @@ export function applyProposalWithAutonomy(
   }
   const domainDemoted = domainIsDemoted(shape.domain);
   const leadMode = getSettings().lead_mode;
+  // A restructure the athlete asked for in their own words (the chat hand-off, or the
+  // same instruction typed into the evolve field). Their ask is an explicit request
+  // whichever caller routed it — the producer that drafted it (evolveProgram) passes no
+  // input here, so the provenance is read off the proposal itself.
+  const athleteAsked = shape.kind === "training_structure" && isAthleteRequestedRestructure(proposal);
+  const explicitRequest = !!input.explicit_user_request || athleteAsked;
   const policy = decideAutonomyTier({
     kind: shape.kind,
     risk_class: clinical ? "clinical" : shape.risk,
@@ -1362,6 +1380,11 @@ export function applyProposalWithAutonomy(
     user_locked: input.user_locked,
     clamp_refused: input.clamp_refused,
     domain_demoted: domainDemoted,
+    // The athlete's own request is their decision, not a coach surprise: the veto-rate
+    // demotion never turns it into a heads-up. Live, a chat "rebuild today's session"
+    // was announced for the next boundary on a demoted domain, went stale there, and
+    // was set aside without the athlete ever hearing why.
+    explicit_user_request: explicitRequest,
     clinical,
   });
   if (policy.tier === "ask" || policy.tier === "clinician" || policy.tier === "observe") {
@@ -1411,12 +1434,6 @@ export function applyProposalWithAutonomy(
   // (materialChangesThisWeek also excludes it from the count, so it never spends the
   // budget for other changes either).
   const routineChange = ROUTINE_CHANGE_SOURCES.has(String(proposal.agent ?? ""));
-  // A restructure the athlete asked for in their own words (the chat hand-off, or the
-  // same instruction typed into the evolve field). Their ask is an explicit request
-  // whichever caller routed it — the producer that drafted it (evolveProgram) passes no
-  // input here, so the provenance is read off the proposal itself.
-  const athleteAsked = shape.kind === "training_structure" && isAthleteRequestedRestructure(proposal);
-  const explicitRequest = !!input.explicit_user_request || athleteAsked;
   // A spent surprise budget is a WAIT, not a refusal (2026-08-17 ruling). The change
   // keeps its ledger row, its expectation and its one-tap undo; it simply announces and
   // lands at the next natural boundary, where the boundary pass re-checks the budget and
@@ -2010,6 +2027,14 @@ function supersedeStaleDraftOnThaw(proposal: any, decision: ParkedDecision, fres
   // Retires the draft AND every live review hold pointing at it, in one authoritative
   // call, so the sweep cannot leave the decision open behind a dead draft.
   setProposalStatus(Number(proposal.id), "superseded");
+  if (decisionWasTheAthletesRequest(decision)) {
+    tellAthleteTheirRequestDidNotLand(
+      decision,
+      freshness.status === "changed"
+        ? `Your ${changed || "training"} picture moved after you asked, so it no longer fit the plan as it stands.`
+        : "It was drafted without a record of the plan it was written against, so I couldn't safely lay it on the plan you have now."
+    );
+  }
 }
 
 /**
@@ -2023,7 +2048,7 @@ function supersedeStaleDraftOnThaw(proposal: any, decision: ParkedDecision, fres
  */
 function recordRetiredDraftReceipt(args: {
   shape: { kind: string; domain: BrainDomain; risk: any };
-  outcome: "stale_proposal" | "stale_plan" | "premise_gone" | "source_superseded";
+  outcome: "stale_proposal" | "stale_plan" | "premise_gone" | "source_superseded" | "apply_refused";
   why: string;
   source: string;
   sourceRefType: "plan_proposal" | "meal_plan";
@@ -2062,6 +2087,107 @@ function recordRetiredDraftReceipt(args: {
     // The receipt is the athlete-facing half; losing it must not abort the sweep.
     recordAsyncFailure("apply", "retire_draft_receipt", err);
   }
+}
+
+// ---- THE ATHLETE'S OWN REQUEST IS ANSWERED, NEVER SILENTLY SET ASIDE --------------
+//
+// A change the athlete asked for in their own words (a chat plan edit, their own
+// restructure) is THEIR decision. When one cannot land — the plan moved under it past
+// what a rebuild can answer, an apply refused it, it waited past its ceiling — the
+// ending used to be a `superseded` ledger row no athlete surface reads: live, a chat
+// "rebuild today's session" was held, then set aside at the next 04:00 sweep, and nobody
+// told the person who asked. So every such ending also answers them, in chat, once, in
+// plain words — pull-only (it waits in the conversation, never a notification).
+function decisionWasTheAthletesRequest(decision: { context?: unknown } | null | undefined): boolean {
+  const context = (decision?.context ?? {}) as Record<string, any>;
+  // A legacy background-chat draft the orphan sweep adopted is routed with the explicit
+  // flag for its boundary, but it was the coach reading a chat signal — not the athlete's
+  // own words — so its endings are ledger receipts, not chat replies.
+  if (context.orphan_sibling_cleanup?.provenance === "background_chat") return false;
+  return context.explicit_user_request === true || context.athlete_requested_restructure === true;
+}
+
+function tellAthleteTheirRequestDidNotLand(
+  decision: { id?: number | null; summary?: unknown; action?: unknown } | null | undefined,
+  why: string
+): void {
+  try {
+    const id = Number(decision?.id);
+    if (!(id > 0)) return;
+    const fresh = getBrainDecision(id) ?? decision;
+    const context = ((fresh as any)?.context ?? {}) as Record<string, any>;
+    // Once per request: every later sweep that walks the same row stays quiet.
+    if (context.athlete_told_at) return;
+    const asked = String((fresh as any)?.summary ?? "")
+      .trim()
+      .replace(/[.!\s]+$/, "")
+      .slice(0, 200);
+    const text = `${asked ? `The change you asked for — ${asked} — didn't land.` : "A change you asked for didn't land."} ${why.trim()} Nothing on your plan changed from it; ask again and I'll build it from where you are now.`;
+    addChatMessage("assistant", text, null, {
+      kind: "request_outcome",
+      decision_id: id,
+      proposal_id: Number(((fresh as any)?.action as any)?.proposal_id) || null,
+    });
+    patchBrainDecision(id, {
+      context: { ...context, athlete_told_at: new Date().toISOString(), athlete_told: text.slice(0, 700) },
+    });
+  } catch (err) {
+    // The chat line is the athlete-facing half; losing it must never abort a sweep.
+    recordAsyncFailure("apply", "tell_athlete_request_outcome", err);
+  }
+}
+
+// The plan refused a held or scheduled change. Retire the draft (so no sweep re-offers
+// the same refusal), close the decision with the reason on it, file the readable receipt
+// and — when the change was the athlete's own request — answer them in chat. False when
+// the retirement itself failed; the caller then parks the decision exactly as before, so
+// nothing is lost.
+function retireRefusedDraft(decision: ParkedDecision, proposalId: number, reason: string): boolean {
+  try {
+    const proposal = getProposal(proposalId);
+    if (proposal?.status === "draft") setProposalStatus(proposalId, "superseded", { recordDecision: false });
+    patchBrainDecision(Number(decision.id), {
+      status: "rejected",
+      reversible: false,
+      context: {
+        ...((decision.context ?? {}) as Record<string, any>),
+        review_required: false,
+        apply_error: reason.slice(0, 300),
+        boundary_outcome: "apply_threw",
+        athlete_request_refused: decisionWasTheAthletesRequest(decision),
+      },
+    });
+    const shape = proposal
+      ? proposalShape(proposal)
+      : { kind: decision.kind, domain: decision.domain, risk: decision.risk_class };
+    recordRetiredDraftReceipt({
+      shape: shape as any,
+      outcome: "apply_refused",
+      why: `The plan refused this change: ${plainApplyRefusal(reason)}`,
+      source: proposal?.agent || decision.source || "autonomy",
+      sourceRefType: "plan_proposal",
+      sourceRefKey: proposalId,
+      reviewDecisionId: decision.id ?? null,
+      action: { proposal_id: proposalId, outcome: "refused_by_plan", apply_error: reason.slice(0, 300) },
+    });
+    if (decisionWasTheAthletesRequest(decision))
+      tellAthleteTheirRequestDidNotLand(decision, `The plan refused it: ${plainApplyRefusal(reason)}`);
+    return true;
+  } catch (err) {
+    recordAsyncFailure("apply", "retire_refused_athlete_request", err);
+    return false;
+  }
+}
+
+// An apply error in words a person can read: the plan-quality prefix is dropped (the
+// messages behind it are already sentences), and a bare machine error is not repeated.
+function plainApplyRefusal(reason: string): string {
+  const text = String(reason ?? "")
+    .replace(/^Plan quality check failed:\s*/i, "")
+    .trim();
+  if (!text || /^(?:Error|TypeError|SqliteError)\b|\bproposal \d+\b/i.test(text))
+    return "it no longer fit the plan as it stands.";
+  return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
 /**
@@ -2277,6 +2403,166 @@ function retireHoldsWithEndedSource(): number {
   return retired;
 }
 
+// ---- THE CLINICAL HALF OF A CONFERENCE BUNDLE --------------------------------------
+//
+// A conference is routed action by action (2026-09-25 ruling): the clinician floor is
+// judged on its executable revision alone, and a clinical sentence elsewhere in the
+// bundle — a medication, a referral, a clinical test — is filed for the athlete AND THEIR
+// DOCTOR as its own `observed` row at the clinician tier: information to take to a visit,
+// nothing to approve, nothing held behind it (awaitingBrainDecisions lists it as
+// `for_clinician`). The ledger fingerprint covers the notes, so the same sentence from
+// next week's conference folds into the existing row instead of stacking a second one.
+export function conferenceClinicianNotes(lines: readonly unknown[]): string[] {
+  return [
+    ...new Set(lines.map((line) => String(line ?? "").trim()).filter((line) => line && clinicianNoteText(line))),
+  ].slice(0, 6);
+}
+
+export function recordConferenceClinicianNotes(
+  notes: readonly string[],
+  input: { rationale?: string | null; conference_decision_id?: number | null; snapshot_id?: string | null }
+): void {
+  if (!notes.length) return;
+  try {
+    recordDecision({
+      effective_date: null,
+      kind: "case_conference",
+      domain: "health",
+      summary: notes[0].slice(0, 300),
+      rationale: input.rationale ?? null,
+      source: "case_conference",
+      source_ref_type: null,
+      source_ref_key: null,
+      status: "observed",
+      autonomy_tier: "clinician",
+      risk_class: "clinical",
+      reversible: true,
+      input_fingerprint: null,
+      context: {
+        snapshot_id: input.snapshot_id ?? null,
+        for_clinician: true,
+        deterministic_clinical: true,
+        advisory_only: true,
+        conference_decision_id: input.conference_decision_id ?? null,
+      },
+      action: { user_explanation: notes.join(" ").slice(0, 700), clinician_notes: [...notes] },
+      specialist: null,
+      applied_at: null,
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: null,
+    });
+  } catch (err) {
+    // The note is the informational half; losing it must never undo the decision beside it.
+    recordAsyncFailure("apply", "conference_clinician_note", err);
+  }
+}
+
+// The thaw's own version: a row stamped by an older pass gets one read by this one.
+const THAW_PASS_VERSION = 2;
+
+// The one-off re-read of a conference-marked clinician floor (see the thaw). Versioned so
+// a later rule change can re-read again without a migration.
+const CONFERENCE_FLOOR_REREAD_VERSION = 1;
+
+function conferenceFloorNeedsReread(decision: ParkedDecision, context: Record<string, any>, proposal: any): boolean {
+  if (String(decision.source ?? "") !== "case_conference") return false;
+  if (context.user_locked === true) return false;
+  if (Number(context.floor_reread?.version) >= CONFERENCE_FLOOR_REREAD_VERSION) return false;
+  // A clinical mark the CHAT detector put on the athlete's own words is not the
+  // conference's to re-read.
+  if (serverClinicalProvenance(proposal?.parsed?.clinical_provenance) !== null) return false;
+  return clinicianFloorHolds(decision);
+}
+
+function defaultConflictInputsToday(): ConferenceConflictInputs {
+  const on = localDateISO();
+  let symptomAreas: string[] | null = null;
+  try {
+    symptomAreas = listTrainingSymptoms({ on, include_resolved: false, seed_legacy: false })
+      .filter((event) => event.status === "active" && event.scope !== "systemic" && !event.legacy_unconfirmed)
+      .map((event) => event.area_text);
+  } catch {
+    symptomAreas = null;
+  }
+  return conferenceConflictInputs(getCoachContext(), { activeSymptomAreas: symptomAreas });
+}
+
+// A parked conference reading with no live change behind it, re-filed as what it is: an
+// observation. Its clinical sentences (if any) become the athlete-and-doctor note; the
+// rest is the ordinary reading. Returns false only when the write failed.
+function refileParkedConferenceAdvice(
+  decision: ParkedDecision,
+  context: Record<string, any>,
+  leadMode: CairnLeadModeValue
+): boolean {
+  const action = (decision.action ?? {}) as Record<string, any>;
+  const notes = conferenceClinicianNotes([
+    decision.summary,
+    ...(Array.isArray(action.parallel_actions) ? action.parallel_actions : []),
+  ]);
+  const policy = decideAutonomyTier({
+    kind: decision.kind,
+    risk_class: decision.risk_class === "clinical" ? "moderate" : decision.risk_class,
+    reversible: true,
+    lead_mode: leadMode,
+  });
+  const refiled = patchBrainDecision(decision.id!, {
+    status: "observed",
+    autonomy_tier: leadModelCeiling(policy.tier, leadMode),
+    risk_class: decision.risk_class === "clinical" ? "moderate" : decision.risk_class,
+    context: {
+      ...context,
+      review_required: false,
+      thaw_outcome: "observed",
+      thaw_reasons: ["advice changes nothing, so it never waits on the athlete"],
+      deterministic_clinical: false,
+      floor_reread: {
+        version: CONFERENCE_FLOOR_REREAD_VERSION,
+        at: new Date().toISOString(),
+        clinical: false,
+        advisory: true,
+        was_tier: decision.autonomy_tier ?? null,
+        was_deterministic_clinical: context.deterministic_clinical ?? null,
+      },
+    },
+  });
+  if (!refiled) return false;
+  recordConferenceClinicianNotes(notes, {
+    rationale: decision.rationale ?? null,
+    conference_decision_id: decision.id ?? null,
+  });
+  return true;
+}
+
+// A held draft past its age ceiling, set aside with the receipt a person can read — and,
+// when it was the athlete's own request, an answer in chat.
+function setAsideAgedDraftOnThaw(proposal: any, decision: ParkedDecision, ceilingDays: number): void {
+  const shape = proposalShape(proposal);
+  recordRetiredDraftReceipt({
+    shape,
+    outcome: "stale_proposal",
+    why: `This draft waited more than ${ceilingDays} days, so it no longer describes where you are.`,
+    source: proposal.agent || "autonomy",
+    sourceRefType: "plan_proposal",
+    sourceRefKey: Number(proposal.id),
+    reviewDecisionId: decision.id ?? null,
+    action: {
+      proposal_id: proposal.id,
+      outcome: "superseded_stale_proposal",
+      reason_provenance: proposalReasonProvenance(proposal),
+    },
+  });
+  // Retires the draft AND every live review hold pointing at it.
+  setProposalStatus(Number(proposal.id), "superseded");
+  if (decisionWasTheAthletesRequest(decision)) {
+    tellAthleteTheirRequestDidNotLand(
+      decision,
+      `It waited more than ${ceilingDays} days for its day, so it no longer described your week.`
+    );
+  }
+}
+
 // Thaw for decisions frozen at `status: 'review'`. A decision parked under an older,
 // stricter policy — or by a surprise budget that has since rolled over — used to sit in
 // the queue forever showing "NEEDS YOUR DECISION", because nothing re-read it when the
@@ -2287,19 +2573,105 @@ function retireHoldsWithEndedSource(): number {
 // the sweep retry it on the next tick. Floors above are never re-offered, and under
 // 'review_everything' the sweep does nothing at all — the athlete has asked to see
 // everything, so nothing may be adopted or set aside on their behalf.
+export interface ThawDeps {
+  /** Today's conflict question sheet, for re-reading a conference-marked clinician floor.
+   * Defaults to the full coach context; injectable for tests. Read at most once a sweep. */
+  conflictInputs?: () => ConferenceConflictInputs | null;
+}
+
 export function thawParkedReviewDecisions(
   // Read ONCE per sweep by the caller and threaded down, not re-read per decision: this
   // walks up to 100 rows a tick and `reofferParkedAdvisory` asked for the same row each time.
-  leadMode: CairnLeadModeValue = getSettings().lead_mode
+  leadMode: CairnLeadModeValue = getSettings().lead_mode,
+  deps: ThawDeps = {}
 ): { thawed: number; superseded: number; skipped: number } {
   let thawed = 0;
   let superseded = 0;
   let skipped = 0;
   if (leadMode === "review_everything") return { thawed, superseded, skipped };
-  for (const decision of listBrainDecisions({ status: "review", limit: 100 })) {
+  // Built lazily and once: only a conference-marked floor row ever needs it.
+  let todaysInputs: ConferenceConflictInputs | null | undefined;
+  const conflictInputsToday = (): ConferenceConflictInputs | null => {
+    if (todaysInputs === undefined) {
+      try {
+        todaysInputs = (deps.conflictInputs ?? defaultConflictInputsToday)();
+      } catch {
+        todaysInputs = null;
+      }
+    }
+    return todaysInputs;
+  };
+  for (const listed of listBrainDecisions({ status: "review", limit: 100 })) {
+    let decision = listed;
     try {
-      const context = (decision.context ?? {}) as Record<string, any>;
-      if (context.thaw_attempted === true) {
+      let context = (decision.context ?? {}) as Record<string, any>;
+      const proposalId =
+        Number((decision.action as any)?.proposal_id) ||
+        (decision.source_ref_type === "plan_proposal" ? Number(decision.source_ref_key) : 0);
+      const proposal = proposalId > 0 ? getProposal(proposalId) : null;
+      // ADVICE NEVER WAITS ON THE ATHLETE (lead, 2026-09-25 ruling). A case conference
+      // parked with no live draft behind it changes nothing, so there is nothing on it
+      // to approve — yet live, a whole bundle of ordinary coaching (a calorie hold, a
+      // protein target, a run ceiling) sat at the clinician tier for days because an
+      // older rule read the act-now lipid finding as a floor over advice. It is re-filed
+      // as `observed`; any clinical sentence in it goes to the athlete and their doctor as
+      // its own note. Ahead of the thaw_attempted and floor skips on purpose: those are
+      // exactly what kept it parked.
+      if (
+        leadMode === "lead" &&
+        decision.kind === "case_conference" &&
+        proposal?.status !== "draft" &&
+        !carriesPendingChange(decision.action) &&
+        !liveStructureBuild(decision) &&
+        context.user_locked !== true
+      ) {
+        if (refileParkedConferenceAdvice(decision, context, leadMode)) thawed += 1;
+        else skipped += 1;
+        continue;
+      }
+      // A CONFERENCE-MARKED FLOOR IS RE-READ BY TODAY'S RULE, once. A held revision the
+      // conference put on the clinician floor under an older rule (co-occurrence, or a
+      // clinical sentence elsewhere in the bundle) is judged again by
+      // revisionHoldsClinicalFloor against today's findings. Still clinical: it stays,
+      // stamped. Not clinical: the older rule's marks are lifted and the hold is re-offered
+      // below like any other. A chat-detected clinical request is never re-read here.
+      if (proposal?.status === "draft" && conferenceFloorNeedsReread(decision, context, proposal)) {
+        const revision = revisionFromProposalPayload(proposal.parsed);
+        const inputs = revision ? conflictInputsToday() : null;
+        if (!inputs || !revision) {
+          skipped += 1;
+          continue;
+        }
+        const reread = { version: CONFERENCE_FLOOR_REREAD_VERSION, at: new Date().toISOString() };
+        if (revisionHoldsClinicalFloor(inputs, revision)) {
+          patchBrainDecision(decision.id!, { context: { ...context, floor_reread: { ...reread, clinical: true } } });
+          skipped += 1;
+          continue;
+        }
+        decision =
+          patchBrainDecision(decision.id!, {
+            autonomy_tier: "ask",
+            risk_class: "moderate",
+            context: {
+              ...context,
+              clinical: false,
+              deterministic_clinical: false,
+              policy_inputs: { ...((context.policy_inputs ?? {}) as Record<string, any>), clinical: false },
+              review_reason_code: "floor_reread",
+              // A stamp an older pass carried onto this row must not stop the one
+              // re-offer the lifted floor is owed.
+              thaw_attempted: false,
+              floor_reread: { ...reread, clinical: false, lifted_reason_code: context.review_reason_code ?? null },
+            },
+          }) ?? decision;
+        context = (decision.context ?? {}) as Record<string, any>;
+      }
+      // Once per decision PER THAW PASS VERSION. A row an older pass stamped was re-offered
+      // into endings that could re-hold it under its own stamp (an aged draft re-held as a
+      // stale ask) and so never be read again; this pass has terminal endings for those
+      // (the age set-aside, the refused-draft retirement), so every such row is owed ONE
+      // more read by it — the built-in re-evaluation of what older passes left parked.
+      if (context.thaw_attempted === true && Number(context.thaw_pass ?? 1) >= THAW_PASS_VERSION) {
         skipped += 1;
         continue;
       }
@@ -2311,7 +2683,12 @@ export function thawParkedReviewDecisions(
       if (
         clinicianFloorHolds(decision) ||
         context.user_locked === true ||
-        THAW_FLOOR_REASON_CODES.has(String(context.review_reason_code ?? ""))
+        THAW_FLOOR_REASON_CODES.has(String(context.review_reason_code ?? "")) ||
+        // A conference hold over a SAFETY conflict it could not close (a hurt part under
+        // load, an allergy, a medication meeting a supplement) is a floor, whatever code an
+        // older writer stamped on it — re-offering it would land exactly that change.
+        (Array.isArray(context.unresolved_conflicts) &&
+          context.unresolved_conflicts.some((key: unknown) => conflictIsSafetyFloor(String(key) as any)))
       ) {
         skipped += 1;
         continue;
@@ -2331,10 +2708,6 @@ export function thawParkedReviewDecisions(
         skipped += 1;
         continue;
       }
-      const proposalId =
-        Number((decision.action as any)?.proposal_id) ||
-        (decision.source_ref_type === "plan_proposal" ? Number(decision.source_ref_key) : 0);
-      const proposal = proposalId > 0 ? getProposal(proposalId) : null;
       // THE CONFERENCE DOOR. A case_conference revision held with a LIVE DRAFT behind it
       // is a question the conductor put to the athlete and is waiting on
       // (docs/ELITE-BRAIN-IMPLEMENTATION.md). The sweep may not answer it for them — not
@@ -2342,13 +2715,22 @@ export function thawParkedReviewDecisions(
       // even by stamping the decision, which would be churn on a row the athlete has not
       // touched. An ADVISORY conference (no draft behind it) is untouched by this and
       // still thaws to `observed`, per the 2026-08-17 no-parking-above-ask ruling.
-      if (decision.kind === "case_conference" && proposal?.status === "draft") {
+      //
+      // Under LEAD the door is closed (2026-09-25 ruling): a hold that reached this point
+      // is on no floor (the floor skip above already took those), so it is exactly the
+      // parked idea Amendment 3 retired, and it is re-offered like any other hold.
+      if (leadMode !== "lead" && decision.kind === "case_conference" && proposal?.status === "draft") {
         skipped += 1;
         continue;
       }
       const stamped =
         patchBrainDecision(decision.id!, {
-          context: { ...context, thaw_attempted: true, thaw_attempted_at: new Date().toISOString() },
+          context: {
+            ...context,
+            thaw_attempted: true,
+            thaw_pass: THAW_PASS_VERSION,
+            thaw_attempted_at: new Date().toISOString(),
+          },
         }) ?? decision;
       const stampedContext = (stamped.context ?? {}) as Record<string, any>;
       if (!proposal || proposal.status !== "draft") {
@@ -2377,8 +2759,43 @@ export function thawParkedReviewDecisions(
         superseded += 1;
         continue;
       }
-      const result = applyProposalWithAutonomy(proposalId, {});
+      // The age ceiling, read HERE rather than left to the re-offer: routed through
+      // applyProposalWithAutonomy an aged draft is re-held as a stale ask that carries
+      // this very thaw stamp, so no later sweep would ever read it again — a permanent
+      // question about a draft too old to apply. A producer that can read it again is
+      // regenerated once; anything else is set aside with the receipt.
+      const shape = proposalShape(proposal);
+      const ceilingDays = shape.kind === "training_structure" ? 14 : 7;
+      const createdAt = parseDbTime(proposal.created_at)?.getTime() ?? Number.NaN;
+      if (Number.isFinite(createdAt) && (Date.now() - createdAt) / 86_400_000 > ceilingDays) {
+        const regenerated = attemptStaleDraftRegeneration(proposal, shape, {
+          freshness,
+          aged: true,
+          clinical: serverClinicalProvenance(proposal.parsed?.clinical_provenance) !== null,
+          asOf: localDateISO(),
+          parked: stamped,
+        });
+        if (regenerated.regenerated) {
+          thawed += 1;
+          continue;
+        }
+        setAsideAgedDraftOnThaw(proposal, stamped, ceilingDays);
+        superseded += 1;
+        continue;
+      }
+      const result = applyProposalWithAutonomy(proposalId, {
+        ...(decisionWasTheAthletesRequest(stamped) ? { explicit_user_request: true } : {}),
+      });
       if (["pending", "announced", "applied"].includes(String(result?.decision?.status ?? ""))) thawed += 1;
+      else if (
+        result?.ok === false &&
+        !result?.decision &&
+        retireRefusedDraft(stamped, proposalId, String(result?.error ?? ""))
+      )
+        // The plan refused the change outright (the quality check, a movement that is
+        // gone). A second identical refusal on every later sweep asks nobody anything;
+        // the draft is retired with the reason on its receipt.
+        superseded += 1;
       else skipped += 1;
     } catch {
       // Per-decision isolation: one bad row must never break the sweep.
@@ -3213,6 +3630,9 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
       // live failure this closes was a requested week deferred behind the automatic
       // weekly evolution's budget consumption.
       const athleteAsked = shape.kind === "training_structure" && isAthleteRequestedRestructure(proposal);
+      // Any OTHER change the athlete asked for in their own words (a chat target edit, a
+      // swap, a session rebuild). The restructure above has its own rebuild path.
+      const athleteRequest = !athleteAsked && decisionWasTheAthletesRequest(announced);
       const budgetBlocks = () =>
         !routineChange &&
         !athleteAsked &&
@@ -3299,9 +3719,35 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         }
         // No rebuild could be queued: fall through to the ordinary hold below.
       }
+      // THE SAME LAW FOR EVERY OTHER REQUEST OF THEIRS. A target or a swap the athlete
+      // asked for is laid on the plan as it stands at the boundary: drift since they asked
+      // does not retire it, because their word is the decision and the compare-and-set
+      // gate exists to protect them from the COACH's stale drafts, not from their own
+      // request. applyProposal still refuses what no longer fits (the movement a swap
+      // takes out is gone, the plan-quality check fails) — and that refusal is answered in
+      // chat below, never parked. The floors stay: a clinical or locked request, or the
+      // review_everything posture, keeps the ordinary hold.
+      const requestFloors = decisionIsTheAthletes(announced);
+      const requestDriftTolerated =
+        athleteRequest &&
+        !!boundaryFreshness &&
+        (boundaryFreshness.status === "changed" || boundaryFreshness.status === "unverified") &&
+        !requestFloors.clinical &&
+        !requestFloors.user_locked &&
+        getSettings().lead_mode !== "review_everything";
+      if (requestDriftTolerated) {
+        patchBrainDecision(announced.id!, {
+          context: {
+            ...(announced.context ?? {}),
+            boundary_drift_tolerated: boundaryFreshness!.changed_components,
+            boundary_drift_reason: "the athlete asked for this change; drift since they asked does not retire it",
+          },
+        });
+      }
       if (
         boundaryFreshness &&
         !(athleteAsked && contextOnlyDrift) &&
+        !requestDriftTolerated &&
         (boundaryFreshness.status === "changed" || boundaryFreshness.status === "unverified")
       ) {
         const regenerated = attemptStaleDraftRegeneration(proposal, shape, {
@@ -3426,6 +3872,12 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
             reason_provenance: proposalReasonProvenance(proposal),
           },
         });
+        if (athleteRequest || athleteAsked) {
+          tellAthleteTheirRequestDidNotLand(
+            announced,
+            `It waited more than ${freshnessDays} days for its day, so it no longer described your week.`
+          );
+        }
         recordFailure(announced.id!, "stale_proposal");
         continue;
       }
@@ -3549,7 +4001,17 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         budgetLandedInPass.add(boundaryBudgetKey);
       }
     } catch (error: any) {
-      parkForReview(announced, String(error?.message ?? error ?? "unexpected apply error"), "apply_threw");
+      const reason = String(error?.message ?? error ?? "unexpected apply error");
+      const requestProposalId = Number((announced.action as any)?.proposal_id);
+      // The athlete's own request that the plan refused (the plan-quality check, a swap
+      // whose movement is gone) is ANSWERED, not parked: a review row they cannot act on
+      // is the silence this closes. Its draft is retired so no sweep re-offers the same
+      // refusal, and they are told in chat what happened and why.
+      if (requestProposalId > 0 && decisionWasTheAthletesRequest(announced) && retireRefusedDraft(announced, requestProposalId, reason)) {
+        recordFailure(announced.id!, "apply_threw");
+        continue;
+      }
+      parkForReview(announced, reason, "apply_threw");
     }
   }
   return {

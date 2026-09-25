@@ -14,6 +14,7 @@ import {
   normalizeProposedExpectation,
 } from "../brain/expectation-contract.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
+import { clinicianFloorHolds } from "../brain/autonomy.js";
 import { retireSupersededExpectations } from "./brain/expectation-arbitration.js";
 
 function json(value: unknown): string | null {
@@ -259,7 +260,17 @@ export function landedBrainDecisions(windowDays = 7, asOf = localDateISO()): Lan
 // are dated by their creation.
 export interface AwaitingBrainDecision extends UpcomingBrainDecision {
   decided_date: string;
+  // FOR THE ATHLETE AND THEIR DOCTOR, not a decision the athlete owes the coach
+  // (2026-09-25 ruling). True for a hold on the deterministic clinician floor
+  // (clinicianFloorHolds) and for a conference's clinical note — the sentence it lifted
+  // out of a bundle so the rest could land. Surfaces render these under their own
+  // "For you and your doctor" mast, never as "Waiting on you".
+  for_clinician: boolean;
 }
+
+// A conference's clinical note is information to take to a visit, not an open question,
+// so unlike a hold it DOES recede: three weeks, then it lives only in the ledger.
+const CLINICIAN_NOTE_WINDOW_DAYS = 21;
 
 const AWAITING_BOOKKEEPING_KINDS = new Set(["health_directive", "day_read"]);
 
@@ -301,6 +312,32 @@ export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
       autonomy_tier: String(d.autonomy_tier),
       status: String(d.status),
       explanation,
+      for_clinician: clinicianFloorHolds(d),
+    });
+  }
+  const noteFloor = addDaysISO(localDateISO(), -CLINICIAN_NOTE_WINDOW_DAYS) ?? "";
+  const seenNotes = new Set<string>();
+  for (const d of listBrainDecisions({ status: "observed", kind: "case_conference", limit: 100 })) {
+    if ((d.context as any)?.for_clinician !== true) continue;
+    const id = Number(d.id);
+    const explanation = awaitingExplanation(d);
+    const decided = stampDay(d.created_at);
+    if (!Number.isFinite(id) || !explanation || !decided || decided < noteFloor) continue;
+    // The same sentence from two conferences is one thing to ask a doctor about.
+    const key = explanation.toLowerCase();
+    if (seenNotes.has(key)) continue;
+    seenNotes.add(key);
+    out.push({
+      id,
+      kind: String(d.kind),
+      domain: String(d.domain),
+      summary: String(d.summary ?? ""),
+      effective_date: decided,
+      decided_date: decided,
+      autonomy_tier: String(d.autonomy_tier),
+      status: String(d.status),
+      explanation,
+      for_clinician: true,
     });
   }
   const cap = Math.max(1, Math.trunc(Number(limit)) || 20);

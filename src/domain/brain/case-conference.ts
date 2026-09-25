@@ -1,6 +1,6 @@
 import { db } from "../../db.js";
 import { CASE_CONFERENCE_DECISION_SCHEMA, SPECIALIST_OPINION_SCHEMA } from "../../agent-contracts.js";
-import { clinicalActionText, decideAutonomyTier } from "../../brain/autonomy.js";
+import { decideAutonomyTier, leadModelCeiling } from "../../brain/autonomy.js";
 import {
   normalizeStrictCaseConferenceDecision,
   type CaseConferenceDecision,
@@ -26,9 +26,11 @@ import {
   citedConflictResolutions,
   clinicalAutonomyFromRevision,
   conferenceConflictInputs,
+  conflictIsSafetyFloor,
   conflictParties,
   conflictsFromInputs,
   deterministicConferenceConflicts,
+  revisionHoldsClinicalFloor,
   type ConferenceConflictKey,
 } from "./conference-conflicts.js";
 import { getCoachContext } from "../../repo/coach.js";
@@ -41,7 +43,11 @@ import { MAX_DEFERRED_EXPECTATIONS } from "../../repo/brain/change-expectations.
 import { createProposal } from "../../repo/proposals.js";
 import { changesReduceSets } from "../../repo/volume-guard.js";
 import { runChosen, runChosenWithCoachReads } from "../../runChosen.js";
-import { applyProposalWithAutonomy } from "./autonomy-service.js";
+import {
+  applyProposalWithAutonomy,
+  conferenceClinicianNotes,
+  recordConferenceClinicianNotes,
+} from "./autonomy-service.js";
 import { specialistCharter } from "./specialist-charters.js";
 import { blockPriority, type PriorityTrack } from "../../repo/road-ahead.js";
 
@@ -366,7 +372,7 @@ function conductorPrompt(
         : `${conflict} (NOT closeable by citation — a revision that acts on what the act-now finding governs stays clinician-directed whatever you write)`;
     })
     .join("; ");
-  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object. The literal contract is ${CONFERENCE_PROMPT_SCHEMA}. kind MUST be "case_conference". A resolved_conflicts entry is only counted when its evidence_key is one of the evidence_keys of a specialist whose domain is a party to that conflict, and its resolution says in one line how that evidence settles it — naming a conflict without a real citation leaves it unresolved and the decision is safely demoted, so leave a conflict you cannot honestly close out of the array. ${conflicts.length ? `Conflicts open here: ${resolvable}.` : "No deterministic conflicts were detected, so resolved_conflicts should be empty."} revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":1200,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. ${
+  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object. The literal contract is ${CONFERENCE_PROMPT_SCHEMA}. kind MUST be "case_conference". A resolved_conflicts entry is only counted when its evidence_key is one of the evidence_keys of a specialist whose domain is a party to that conflict, and its resolution says in one line how that evidence settles it — naming a conflict without a real citation leaves it unresolved and the decision is safely demoted, so leave a conflict you cannot honestly close out of the array. ${conflicts.length ? `Conflicts open here: ${resolvable}.` : "No deterministic conflicts were detected, so resolved_conflicts should be empty."} revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":1200,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed: keep any clinical step (a medication, a referral, a clinical test) in its own parallel_actions sentence and out of the revision — the server routes it to the athlete and their doctor, and it never holds the non-clinical changes beside it. ${
     priority.length
       ? `RECONCILE BY THE BLOCK'S PRIORITY ORDER: ${priority.map((track) => TRACK_WORDS[track]).join(" > ")}. When two opinions pull against each other, the earlier goal's next step wins and the later goal's step is protected or deferred, never silently dropped; name the deferral in deferred. `
       : ""
@@ -651,13 +657,26 @@ export async function runCaseConference(
   // into resolved_conflicts — or down-classifying its own risk_class — must never
   // lower that floor: a clinical decision stays clinician-directed even when the
   // clinical specialist was absent or permissive.
-  const clinicalActionJson = JSON.stringify({
-    summary: decision.summary,
-    revision: decision.revision,
-    parallel_actions: decision.parallel_actions,
-  }).toLowerCase();
+  //
+  // A CONFERENCE IS A BUNDLE, ROUTED ACTION BY ACTION (2026-09-25 ruling). The floor is
+  // judged against the one change the server can execute — the revision — never against
+  // the whole envelope. It used to read summary + revision + every parallel action as
+  // one string, so a single "ask your doctor about a statin" beside a calorie hold put
+  // the hold, the protein target and the run ceiling on the clinician floor together,
+  // and the whole bundle sat waiting for days. A clinical sentence elsewhere in the
+  // bundle is lifted out as a note FOR THE ATHLETE AND THEIR DOCTOR (recorded below as
+  // its own observed row) and never gates the change beside it.
   const deterministicClinical =
-    enforcedConflicts.includes("clinical_autonomy") || clinicalActionText(clinicalActionJson);
+    enforcedConflicts.includes("clinical_autonomy") ||
+    (decision.revision != null && revisionHoldsClinicalFloor(conflictInputs, decision.revision));
+  const clinicianNotes = conferenceClinicianNotes([decision.summary, ...decision.parallel_actions]);
+  // Reversibility is the SERVER's fact, not the conductor's claim. Every executable
+  // revision type lands with a server-owned rollback snapshot and one-tap Undo, and
+  // advice changes nothing there is to take back. A conductor writing reversible:false
+  // used to walk any change onto the irreversibility floor — model discretion over the
+  // tier, the same thing clinicianFloorHolds refuses in the clinical direction.
+  const conductorReversible = decision.reversible;
+  decision.reversible = true;
   // …and in the OTHER direction too (clinicianFloorHolds, src/brain/autonomy.ts): a
   // conductor's own `risk_class:'clinical'` on a change the server finds non-clinical
   // is model discretion over the tier. It is recorded as what the conductor said and
@@ -674,10 +693,25 @@ export async function runCaseConference(
   // clinician-directed.
   const specialistAskedForClinician = specialistCeiling === "clinician";
   if (specialistAskedForClinician && !deterministicClinical) specialistCeiling = "ask";
+  const leadMode = getSettings().lead_mode;
+  // Under lead, a model-requested ask is a heads-up (leadModelCeiling, Amendment 3).
+  const modelCeiling = leadModelCeiling(specialistCeiling, leadMode);
+  const leadCeilingEased = modelCeiling !== specialistCeiling ? `${specialistCeiling}->${modelCeiling}` : null;
+  specialistCeiling = modelCeiling;
+  // What an UNRESOLVED conflict does depends on what kind of question it is. The clinical
+  // one is the clinician floor; a safety one (a hurt part under load, an allergy, a
+  // medication meeting a supplement) keeps the change at ask in every mode; a coaching
+  // trade-off (deficit vs recovery, race vs strength) is the team's call by the block's
+  // priority order, so under lead it is announced with the reasoning, never parked.
+  const safetyUnresolved = unresolvedConflicts.some((conflict) => conflictIsSafetyFloor(conflict));
   if (unresolvedConflicts.length) {
     specialistCeiling = moreRestrictiveTier(
       specialistCeiling,
-      unresolvedConflicts.includes("clinical_autonomy") ? "clinician" : "ask"
+      unresolvedConflicts.includes("clinical_autonomy")
+        ? "clinician"
+        : safetyUnresolved
+          ? "ask"
+          : leadModelCeiling("ask", leadMode)
     );
   }
   // A plan_update that LOWERS prescribed volume is not one bounded load step, and
@@ -699,7 +733,7 @@ export async function runCaseConference(
     risk_class: decision.risk_class,
     reversible: decision.reversible,
     requested_tier: specialistCeiling,
-    lead_mode: getSettings().lead_mode,
+    lead_mode: leadMode,
     clinical: deterministicClinical,
   });
   decision.autonomy_tier = policy.tier;
@@ -730,6 +764,9 @@ export async function runCaseConference(
       deterministic_clinical: deterministicClinical,
       conductor_risk_class: conductorRiskClass,
       specialist_ceiling_softened: specialistAskedForClinician && !deterministicClinical ? "clinician->ask" : null,
+      lead_ceiling_eased: leadCeilingEased,
+      conductor_reversible: conductorReversible,
+      clinician_note_count: clinicianNotes.length,
       trajectory,
       optimizes: boundedStrings(focus.optimizes),
       parks: boundedStrings(focus.parks),
@@ -742,6 +779,15 @@ export async function runCaseConference(
       optimizes: boundedStrings(focus.optimizes),
       parks: boundedStrings(focus.parks),
     }) ?? {};
+
+  // The clinical half of the bundle, filed for the athlete and their doctor
+  // (recordConferenceClinicianNotes) — never a gate on the change beside it.
+  const recordClinicianNotes = (conferenceDecisionId: number | null): void =>
+    recordConferenceClinicianNotes(clinicianNotes, {
+      rationale: decision.rationale,
+      conference_decision_id: conferenceDecisionId,
+      snapshot_id: snapshot.id,
+    });
 
   if (decision.revision) {
     const parsed =
@@ -774,9 +820,12 @@ export async function runCaseConference(
     // The floor travels with the change: the executable decision is marked clinical by
     // the SERVER's read, so its hold carries the clinical_ceiling code and the thaw
     // recognises it — never by the tier alone.
+    // …and so does an unresolved SAFETY conflict: it holds as a refused safety floor
+    // (`safety_floor`), which no sweep re-offers on the athlete's behalf.
     const autonomy = applyProposalWithAutonomy(proposal.id, {
       requested_tier: policy.tier,
       clinical: deterministicClinical || undefined,
+      clamp_refused: (!deterministicClinical && safetyUnresolved) || undefined,
     });
     const execution = executionSummary(autonomy);
     assertActive();
@@ -810,6 +859,7 @@ export async function runCaseConference(
     if (autonomyDecision) {
       assertActive();
       recordDecision(autonomyDecision, revisionHeld ? [] : decision.expectations);
+      recordClinicianNotes(Number(autonomyDecision.id) || null);
       decision.autonomy_tier = autonomyDecision.autonomy_tier;
       return {
         ok: autonomy?.ok === true,
@@ -882,6 +932,7 @@ export async function runCaseConference(
       superseded_by: null,
       evaluator_version: null,
     });
+    recordClinicianNotes(Number(held.decision.id) || null);
     return {
       ok: autonomy?.ok === true,
       snapshot_id: snapshot.id,
@@ -915,8 +966,14 @@ export async function runCaseConference(
   // open the app — it is recorded as `observed`, not parked at `review` where it would
   // sit in the queue asking for a decision that has no change behind it to approve.
   // Only ask and clinician — the floors — still park for review.
+  //
+  // And under lead, not even those (2026-09-25 ruling): advice changes nothing, so there
+  // is nothing on it for the athlete to approve. A conference that found a safety
+  // question it could not close says so in its reading; its clinical half is filed for
+  // the athlete and their doctor (recordClinicianNotes) — neither waits in the queue.
+  // announce_first and review_everything keep the park, as the athlete asked.
   const advisoryTier = policy.tier;
-  const advisoryParks = advisoryTier === "ask" || advisoryTier === "clinician";
+  const advisoryParks = leadMode !== "lead" && (advisoryTier === "ask" || advisoryTier === "clinician");
   decision.autonomy_tier = advisoryTier;
   assertActive();
   const recorded = recordDecision(
@@ -949,6 +1006,7 @@ export async function runCaseConference(
     },
     decision.expectations
   );
+  recordClinicianNotes(Number(recorded.decision.id) || null);
   return {
     ok: true,
     snapshot_id: snapshot.id,

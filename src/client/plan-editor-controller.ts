@@ -165,18 +165,23 @@ function planUpcomingNoteHtml(note: import("../contracts/client.js").ClientPlanU
   // took effect, leaving a reshaped week with nothing to explain it.
   const landedItems = note && Array.isArray(note.landed) ? note.landed.slice(0, 2) : [];
   // Still waiting on the athlete — shown first, because it is the only one of the
-  // three that is an open question rather than a report.
-  const awaitingItems = note && Array.isArray(note.awaiting) ? note.awaiting.slice(0, 2) : [];
+  // three that is an open question rather than a report. A `for_clinician` row is not
+  // theirs to answer alone: it is for them and their doctor, under its own mast.
+  const awaitingAll = note && Array.isArray(note.awaiting) ? note.awaiting : [];
+  const awaitingItems = awaitingAll.filter((it) => !it?.for_clinician).slice(0, 2);
+  const clinicianItems = awaitingAll.filter((it) => !!it?.for_clinician).slice(0, 2);
   const rows = planUpcomingRowsHtml(comingItems);
   const landedRows = planUpcomingRowsHtml(landedItems);
   const awaitingRows = planUpcomingRowsHtml(awaitingItems);
-  if (!rows.trim() && !landedRows.trim() && !awaitingRows.trim()) return "";
+  const clinicianRows = planUpcomingRowsHtml(clinicianItems);
+  if (!rows.trim() && !landedRows.trim() && !awaitingRows.trim() && !clinicianRows.trim()) return "";
   // Collapsed by default: a single footnote-weight strip naming only the sections
   // that have items, so "Waiting on you" stays discoverable without reprinting the
   // full rationale paragraphs every time the plan opens. One tap expands to the
   // full content below; the plan itself never has to scroll past this to be seen.
   const strip = [
     awaitingRows.trim() ? `Waiting on you (${planUpcomingCount(awaitingItems)})` : "",
+    clinicianRows.trim() ? `For you and your doctor (${planUpcomingCount(clinicianItems)})` : "",
     rows.trim() ? `Coming up (${planUpcomingCount(comingItems)})` : "",
     landedRows.trim() ? `Where this came from (${planUpcomingCount(landedItems)})` : "",
   ]
@@ -186,6 +191,7 @@ function planUpcomingNoteHtml(note: import("../contracts/client.js").ClientPlanU
     <summary><span class="lbl plan-upcoming-strip">${escHtml(strip)}</span></summary>
     <div class="plan-upcoming-body">
       ${awaitingRows.trim() ? `<span class="lbl plan-upcoming-mast">Waiting on you</span>${awaitingRows}` : ""}
+      ${clinicianRows.trim() ? `<span class="lbl plan-upcoming-mast">For you and your doctor</span>${clinicianRows}` : ""}
       ${rows.trim() ? `<span class="lbl plan-upcoming-mast">Coming up</span>${rows}` : ""}
       ${landedRows.trim() ? `<span class="lbl plan-upcoming-mast">Where this came from</span>${landedRows}` : ""}
     </div>

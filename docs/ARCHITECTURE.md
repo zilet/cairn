@@ -3953,7 +3953,37 @@ decisions through today's policy, skipping anything held behind a floor and stam
 `thaw_attempted` so each is retried once rather than every sweep. It also leaves the **conference door**
 alone: a `case_conference` decision with a LIVE DRAFT behind it is a question the conductor put to the
 athlete, so the sweep never adopts it, sets it aside, or even stamps it. An ADVISORY conference (no
-draft behind it) still thaws to `observed`, per the 2026-08-17 no-parking-above-ask ruling.
+draft behind it) still thaws to `observed`, per the 2026-08-17 no-parking-above-ask ruling. Since
+2026-09-25 the door stands only under `announce_first` (see below).
+
+**Only floors wait on the athlete (2026-09-25 ruling, VISION Amendment 3).** Under `lead` an ask is
+reserved for clinical, locked, irreversible and a refused safety clamp; everything else is decided and
+told (announce = apply-and-tell with one-tap Undo). Concretely:
+- **A conference is a bundle, routed action by action.** The clinician floor is judged on the one
+  executable change (`revisionHoldsClinicalFloor`, `conference-conflicts.ts`: relevance via
+  `clinicalAutonomyFromRevision`, or clinical words in the revision itself) — never on summary +
+  parallel actions read as one string. A clinical sentence elsewhere in the bundle is filed as its own
+  `observed` clinician-tier row (`context.for_clinician`), for the athlete and their doctor.
+  Reversibility is the server's fact (every revision type has a rollback; advice has nothing to undo),
+  never the conductor's `reversible`.
+- **Model tiers are opinions.** `leadModelCeiling()` (`src/brain/autonomy.ts`) turns a specialist's or
+  conductor's requested `ask` into `announce` under lead. An unresolved coaching TRADE-OFF
+  (`deficit_recovery`, `race_strength`) announces; an unresolved SAFETY conflict (`injury_load`,
+  `allergy_meal`, `medication_supplement` — `conflictIsSafetyFloor`) holds as `safety_floor`, which no
+  sweep re-offers. Advisory conferences never park under lead.
+- **The thaw clears what older rules parked.** Under lead it re-files a parked advisory conference as
+  `observed` ahead of the floor/stamp skips; re-reads a conference-marked clinician hold once against
+  today's findings (`floor_reread`, versioned) and lifts the marks when the change is not clinical;
+  closes the conference door; sets aside a draft past its age ceiling with a receipt (instead of
+  re-holding it under its own thaw stamp); and retires a draft the plan refuses outright. The stamp is
+  versioned (`thaw_pass`), so a row an older pass stamped gets exactly one read by this one.
+- **The athlete's own request is their decision.** `explicit_user_request` exempts it from veto-rate
+  demotion; at its boundary, evidence drift is recorded (`boundary_drift_tolerated`) rather than
+  parking it; and any ending where it cannot land (the plan refuses it, it aged out, the thaw set it
+  aside) is answered once in chat (`meta.kind:'request_outcome'`, `context.athlete_told_at`).
+- **The waiting surface splits.** `awaitingBrainDecisions()` marks `for_clinician` on a clinician-floor
+  hold and lists recent (21-day) clinician notes; the Plan note and Changes screen render them under
+  "For you and your doctor", never "Waiting on you".
 
 **Every non-applying ending names itself.** `failed` is one bucket holding six very different endings,
 so the pass also returns `failed_outcomes` — one `{id, class, calm}` per failed id, classed

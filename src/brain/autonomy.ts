@@ -19,6 +19,13 @@ export interface AutonomyPolicyInput {
   clamp_refused?: boolean;
   domain_demoted?: boolean;
   /**
+   * The athlete asked for THIS change in their own words (a chat plan edit, their own
+   * restructure). Their request is their decision, not the coach's surprise, so the
+   * veto-rate demotion — which exists to rein in the COACH's own initiative after the
+   * athlete undid it — never turns it into a heads-up. Every floor still applies.
+   */
+  explicit_user_request?: boolean;
+  /**
    * A STANDING refresh whose diff against what is already in force is bounded — the
    * weekly meal plan rebuilt with the same targets and the same shape of week, with
    * different food in the slots. Deterministic and caller-supplied (repo's
@@ -119,7 +126,7 @@ export function decideAutonomyTier(input: AutonomyPolicyInput): AutonomyPolicyDe
     );
   }
 
-  if (input.domain_demoted && tier === "quiet_apply") {
+  if (input.domain_demoted && !input.explicit_user_request && tier === "quiet_apply") {
     tier = "announce";
     reasons.push("recent reversals moved this domain to announce-first");
   }
@@ -137,6 +144,19 @@ export function decideAutonomyTier(input: AutonomyPolicyInput): AutonomyPolicyDe
     reasons: [...new Set(reasons)],
     natural_boundary_required: tier === "quiet_apply" || tier === "announce",
   };
+}
+
+// WHO MAY MAKE A CHANGE WAIT ON THE ATHLETE (VISION Amendment 3). Under lead an ask is
+// reserved for the floors — clinical, explicitly locked, irreversible, and a refused
+// safety clamp. A tier a MODEL requested (a specialist's `autonomy_ceiling`, the
+// conductor's own `autonomy_tier`) is an opinion about how loudly to say a change, not a
+// floor: under lead a requested `ask` becomes `announce` — the change lands at its
+// boundary with a heads-up and the one-tap Undo. `announce_first` and
+// `review_everything` keep the model's ask, and `clinician` is never touched here (it is
+// the deterministic floor's alone — see clinicianFloorHolds).
+export function leadModelCeiling(requested: AutonomyTier, leadMode?: CairnLeadMode | null): AutonomyTier {
+  if ((leadMode ?? DEFAULT_LEAD_MODE) !== "lead") return requested;
+  return requested === "ask" ? "announce" : requested;
 }
 
 // The natural boundary a scheduled change lands at: a structural change (the shape of
@@ -163,6 +183,18 @@ export const CLINICAL_ACTION_PATTERN =
 
 export function clinicalActionText(text: string): boolean {
   return CLINICAL_ACTION_PATTERN.test(String(text ?? ""));
+}
+
+// Which sentence of a conference bundle is FOR THE ATHLETE AND THEIR DOCTOR. Wider than
+// the floor on purpose — a drug class, a referral, a clinical test, "with your doctor" —
+// because it only decides where a sentence is filed (an informational note), never
+// whether a change may land. The gating floor stays CLINICAL_ACTION_PATTERN.
+const CLINICIAN_NOTE_PATTERN =
+  /\bstatins?\b|ezetimibe|pcsk9|\breferr|cardiolog|endocrinolog|nephrolog|hematolog|\bphysician\b|\byour (?:doctor|gp|clinician|physician)\b|\bclinician\b|\b(?:lab|blood) ?(?:test|work|panel|draw)s?\b|\bretest\b|\bimaging\b|\b(?:ecg|ekg|dexa|cac) (?:scan|score|test)\b/i;
+
+export function clinicianNoteText(text: string): boolean {
+  const value = String(text ?? "");
+  return clinicalActionText(value) || CLINICIAN_NOTE_PATTERN.test(value);
 }
 
 // Whether a RECORDED decision stands on the deterministic floor. Reads the server's own

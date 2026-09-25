@@ -239,6 +239,8 @@ export interface ClientPlanUpcomingItem {
   domain: string;
   // The conductor's own sentence to the athlete, where a case conference wrote one.
   explanation?: string | null;
+  // On an `awaiting` row: for the athlete AND their doctor, not a decision owed the coach.
+  for_clinician?: boolean;
 }
 // `landed` carries changes that already took effect in the last week — the "why does
 // my week look different" half. `awaiting` carries decisions still waiting on the
