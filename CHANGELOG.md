@@ -5,6 +5,24 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.9.1] — 2026-09-25
+
+### Changed
+
+- **Garmin shows real strength calories.** Sessions Cairn writes to Garmin carry an estimate
+  from your sets, bodyweight and time (2024 Compendium METs) instead of Garmin's 66 kcal
+  placeholder. Cairn's own energy math never counts it: Garmin's day is read back with that
+  share removed (migration 113).
+- **Smarter session cards.** A lagging muscle group gets one extra set, antagonist lifts pair
+  as supersets, and every eased load lands on weights your equipment actually has.
+- **Race-aware legs.** Taper, race week and the day before a key run lighten leg work instead
+  of skipping it.
+- **The plan respects what you did.** Loaded carries and holds, a weekly volume floor, and
+  fresh prescriptions that stand until you've trained them.
+- **Calmer brain.** Easy-run heart rate allows normal noise, check-ins count by day, a "Done"
+  on a lab finding acknowledges it rather than clearing it, and only safety floors wait for
+  your answer.
+
 ## [1.9.0] — 2026-09-23
 
 ### Changed
