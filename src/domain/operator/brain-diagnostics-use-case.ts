@@ -2,7 +2,7 @@ import { db } from "../../db.js";
 import { listBrainDecisions, listBrainExpectations } from "../../repo/brain-decisions.js";
 import { latestBrainEvaluation, listBrainToolCalls } from "../../repo/brain-evaluations.js";
 import { normalizeStrictCaseConferenceDecision } from "../../brain/case-conference-contract.js";
-import { readAdherenceModel } from "../../repo/brain/read-adherence.js";
+import { DAY_READ_ADHERENCE_METRIC, readAdherenceModel } from "../../repo/brain/read-adherence.js";
 import { staleOpenEndedContextEvents } from "../brain/evaluation-service.js";
 import { RETIRED_EXPECTATION_STATUSES } from "../../repo/brain/expectation-arbitration.js";
 import { localDateISO } from "../../repo/shared.js";
@@ -68,7 +68,10 @@ function parsed(value: unknown): any {
 // whose outcome the day had already decided keeps its own question when a later read
 // replaces it (see dayReadOutcomeLocked in repo/brain/read-adherence.ts). So these
 // counts can exceed `read_adherence.days_observed`, which counts one MORNING read per
-// day. Both are correct; they are counting different things.
+// day. Both are correct; they are counting different things. Only the read the athlete
+// was given reaches a conclusive verdict — the other closes `canceled` — and a
+// day-read `not_aligned` means the READ was off (too cautious, or a training read on a
+// quiet day), never that the athlete missed (`actual.read_call`, dayReadCall).
 function expectationHealth() {
   const today = localDateISO();
   const rows = db
@@ -145,9 +148,32 @@ function expectationHealth() {
         evaluated: forMetricEvaluated.length,
         conclusive: (metricVerdicts.aligned ?? 0) + (metricVerdicts.not_aligned ?? 0),
         latest_verdicts: metricVerdicts,
+        // Day reads only: WHICH WAY each judged read's call went (held / too_cautious /
+        // vindicated / not_taken), because the verdict alone cannot say whether a
+        // not_aligned was a read too cautious for the day or a training read met quiet.
+        ...(metricKey === DAY_READ_ADHERENCE_METRIC ? { read_calls: dayReadCallCounts() } : {}),
       };
     }),
   };
+}
+
+function dayReadCallCounts(): Record<string, number> {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT COALESCE(json_extract(v.actual_json, '$.read_call'), 'unrecorded') AS call, COUNT(*) AS n
+           FROM brain_evaluations v
+           JOIN brain_expectations x ON x.id = v.expectation_id
+           JOIN (SELECT expectation_id, MAX(id) AS id FROM brain_evaluations GROUP BY expectation_id) newest
+             ON newest.id = v.id
+          WHERE x.metric_key = ? AND v.verdict IN ('aligned', 'not_aligned')
+          GROUP BY call`
+      )
+      .all(DAY_READ_ADHERENCE_METRIC) as Array<{ call: string; n: number }>;
+    return Object.fromEntries(rows.map((row) => [String(row.call), Number(row.n)]));
+  } catch {
+    return {};
+  }
 }
 
 function brainAggregateMetrics() {

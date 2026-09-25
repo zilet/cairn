@@ -91,6 +91,16 @@ prompt renders — the tuning decision the counts inform (should the Brief actua
 chronically-underslept athlete this often?) belongs to the athlete, not to a threshold this loop
 moves on its own.
 
+**The verdict judges the READ, not the athlete (2026-09-25).** Followed/diverged stays the
+behavioural fact (`actual.followed`, the rolling counts, the softening ladders). The ledger verdict
+instead records the read's call (`dayReadCall`, `actual.read_call`): `held` (followed) and
+`vindicated` (a quiet read trained through that `harmEvidenceOnDay` shows cost something) are
+`aligned`; `too_cautious` (a quiet read trained through with no harm — the calibration evidence the
+softening ladders loosen on) and `not_taken` (a train read on a quiet day) are `not_aligned`. So a
+`not_aligned` day read always means the read was off, never that the athlete missed. Only the read
+the athlete was given (`morningDecisionsByDate`) is judged per date. Details:
+`docs/ARCHITECTURE.md` "The read predicts something now".
+
 Same-day verdicts are TERMINAL once evaluated — re-asking whether a specific, already-closed
 calendar day was a rest day is work that can only repeat its own answer, and left unbounded it
 would compete with genuinely new long-window maturations for the nightly evaluation pass's fixed

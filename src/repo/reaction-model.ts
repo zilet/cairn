@@ -39,7 +39,7 @@ import { weeklyTonnage, weeklyKm } from "./program-state.js";
 // The metric key only — read-adherence sits below this module in the graph (db,
 // brain-decisions, profile, shared, training-intent, training-read), so nothing
 // imports upward and the name stays a single source of truth.
-import { DAY_READ_ADHERENCE_METRIC } from "./brain/read-adherence.js";
+import { DAY_READ_ADHERENCE_METRIC, dayReadCallFromVerdict } from "./brain/read-adherence.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
 // Rollback-as-evidence (W3.2): brain_rollbacks was written on every reversible
 // decision but never read back as a signal about the decision KIND itself. See
@@ -1837,8 +1837,22 @@ function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLe
     // for the current athlete.
     const window = ordered.filter((row) => dayGap(latestDate, row.evaluated_at) <= 365);
     if (window.length < READ_ADHERENCE_MIN_OUTCOMES) continue;
-    const followed = window.filter((row) => row.verdict === "aligned").length;
+    // FOLLOWED is behaviour, read off `actual.followed`: since the verdict judges the
+    // READ (dayReadCall), an `aligned` quiet read can be one the athlete trained
+    // through that a cost afterwards vindicated — not one they took. Older verdicts
+    // without the field fall back to the verdict, which then still meant exactly this.
+    const tookIt = (row: EvaluatedDecisionRow): boolean =>
+      typeof row.actual?.followed === "boolean" ? row.actual.followed : row.verdict === "aligned";
+    const followed = window.filter(tookIt).length;
     const diverged = window.length - followed;
+    // The days they went past a quiet read with nothing afterwards saying it cost them —
+    // the calibration evidence the softening ladders act on, named here so the sentence
+    // can say what the brain is doing with it.
+    const harmless =
+      kind === "train"
+        ? 0
+        : window.filter((row) => !tookIt(row) && dayReadCallFromVerdict(row.verdict, row.actual) === "too_cautious")
+            .length;
     // A pattern, not a tally: it has to be lopsided before it is worth a sentence.
     const majority = Math.max(followed, diverged);
     if (majority * 3 < window.length * 2) continue;
@@ -1849,9 +1863,14 @@ function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLe
     // Everything else here is the machine register the model and the provenance trail
     // read; "they usually take it" printed on a screen the athlete is reading is the
     // same voice bug the signal state's `summary` already had.
+    // "It cost you nothing" is only said when it is the majority of the days they went
+    // past the read — the same evidence the quiet reads are loosening on.
+    const learnsFromIt = !followsIt && harmless > 0 && harmless * 2 >= diverged;
     const statement = followsIt
       ? `When the morning ${label}, you usually take it — ${followed} of the last ${window.length}.`
-      : `When the morning ${label}, you usually train anyway — ${diverged} of the last ${window.length}.`;
+      : learnsFromIt
+        ? `When the morning ${label}, you usually train anyway — ${diverged} of the last ${window.length}, and ${harmless === diverged ? "none of them" : `only ${diverged - harmless} of them`} showed a cost.`
+        : `When the morning ${label}, you usually train anyway — ${diverged} of the last ${window.length}.`;
     out.push({
       key: `day_read:${DAY_READ_ADHERENCE_METRIC}:${kind}`,
       domain: "cross_domain",
@@ -1864,7 +1883,9 @@ function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLe
       // What this learning is FOR, said plainly and TO the athlete — it lands right
       // after the statement above in the Learned timeline. It shapes how a read is
       // worded and how much weight sits behind it, and it moves no number by itself.
-      change: "It shapes how confidently the morning read is offered — never what it's allowed to say.",
+      change: learnsFromIt
+        ? "Those mornings teach the quiet reads to lean less cautious for you — the safety and health floors never move for it."
+        : "It shapes how confidently the morning read is offered — never what it's allowed to say.",
       confidence: window.length >= 10 ? "observed" : "tentative",
       evidence_n: window.length,
       // A morning read is never applied — it is a suggestion — so every outcome here

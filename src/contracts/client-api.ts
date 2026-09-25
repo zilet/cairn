@@ -3113,6 +3113,7 @@ export interface ClientTeamWeekLanded {
   text: string;
   verdict: string;
   when: string;
+  tone?: "good" | "quiet" | string;
 }
 export interface ClientTeamWeekInsight {
   id: number;

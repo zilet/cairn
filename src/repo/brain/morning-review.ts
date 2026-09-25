@@ -76,10 +76,14 @@ const KEPT_EASY_VARIANTS = [
   "The read said easy yesterday, and it stayed that way.",
 ] as const;
 
+// A quiet read trained through with nothing since saying it cost them is the TEAM
+// learning, not a note against the athlete: it is exactly the evidence the softening
+// ladders loosen the quiet reads on, so the sentence says so (owner ruling, 2026-09-25 —
+// "treat what I do as a signal back to the brain").
 const DIVERGED_REST_HARMLESS_VARIANTS = [
-  "The read said rest yesterday; you trained anyway, and nothing since suggests it cost you.",
-  "Yesterday called for rest and you went ahead — noted, with no sign it cost you anything.",
-  "You overrode yesterday's rest read, and it looks to have landed fine.",
+  "The read said rest yesterday; you trained anyway and nothing since suggests it cost you — the rest calls will lean less cautious for it.",
+  "Yesterday called for rest and you went ahead with no sign it cost you — the team takes that as what you can carry.",
+  "You trained through yesterday's rest read and it cost you nothing visible — the read learns from that.",
 ] as const;
 
 const DIVERGED_REST_PLAIN_VARIANTS = [
@@ -88,9 +92,9 @@ const DIVERGED_REST_PLAIN_VARIANTS = [
 ] as const;
 
 const DIVERGED_EASY_HARMLESS_VARIANTS = [
-  "The read said easy yesterday; you went past it, and it looks to have cost nothing visible.",
-  "Yesterday asked for easy and you pushed on — noted, with nothing rougher showing since.",
-  "You went further than yesterday's easy read asked, and nothing since says it cost you.",
+  "You trained through yesterday's easy read and came through fine — the read will lean less cautious.",
+  "Yesterday asked for easy and you went further with nothing rougher showing since — the easy calls learn from that.",
+  "You went further than yesterday's easy read asked, and nothing since says it cost you — the team takes that as what you can carry.",
 ] as const;
 
 const DIVERGED_EASY_PLAIN_VARIANTS = [

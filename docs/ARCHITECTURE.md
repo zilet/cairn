@@ -1756,6 +1756,28 @@ easy — and work that can't be graded stays `unclear` rather than guessing eith
 a COUNT of followed/diverged days, never a rate or a grade, and VISION.md's no-score rule applies to
 it exactly as it does to anything else read by a person.
 
+**The verdict judges the READ's call, never the athlete** (2026-09-25). `readAdherenceOutcome` stays
+the behavioural fact (followed/diverged, `actual.followed`) that the rolling model, the softening
+ladders and the look-back read. The evaluator stores the read's call beside it — `dayReadCall(kind,
+outcome, harm)` as `actual.read_call`: `held` (followed; a train read is held by ANY logged training,
+so a session shaped live — other lifts, other loads, more or fewer sets, a skipped slot — is never a
+miss) → `aligned`; `vindicated` (a rest/easy read trained through and `harmEvidenceOnDay` found a
+cost) → `aligned`; `too_cautious` (trained through with no harm) → `not_aligned`; `not_taken` (a
+train read, nothing logged) → `not_aligned`. `too_cautious` is exactly the evidence
+`restOverrideSoftening` / `easyOverrideSoftening` / `trainsAnywayWithoutHarm` already loosen future
+quiet reads on, through the SAME harm test, so the ledger and the ladders cannot disagree about which
+mornings were harmless. Because harm reads the NEXT morning, a quiet read the day went past is not
+judged until that morning has closed too (`dayReadExpectationAwaitingMorning`, one extra night), and
+a harm fact that moves later (a session rated afterwards) re-opens the verdict like a late set does.
+**One read per day is judged**: `dayReadExpectationRole` makes the given read
+(`morningDecisionsByDate` — last predictive read before the first set) the only judged question of
+its date, whatever superseded it afterwards; any other live question closes `canceled` (live
+2026-09-23 had an early `easy` read and the given `train` read both judged). Surfaces speak the call,
+never the verdict: team-week's "How it landed" (variant sets, a harmless day reads as the team
+learning, tone `quiet`), the Learned timeline's titles, the reaction model's "you usually train
+anyway … none of them showed a cost", and the look-back's harmless sets. Verdicts stored before the
+call existed are read back through `dayReadCallFromVerdict` (harm asked now).
+
 `writeDayRead()`'s ledger write is now `recordDayReadDecision()` (same module), whose identity is
 the read's own decision fingerprint — kind, focus, override, and the existing
 `dayReadInputFingerprint` — instead of the whole mutable `signals` blob the old inline write

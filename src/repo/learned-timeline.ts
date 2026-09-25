@@ -5,6 +5,7 @@ import { listBrainDecisions, listBrainExpectations } from "./brain-decisions.js"
 import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { whatWorksForYou } from "./reaction-model.js";
 import { clipText, metricLabel } from "./shared.js";
+import { DAY_READ_ADHERENCE_METRIC, dayReadCallFromVerdict } from "./brain/read-adherence.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import type { BrainDecision } from "../brain/decision-contract.js";
 import type { BrainEvaluation } from "../brain/evaluation-contract.js";
@@ -236,6 +237,22 @@ function latestExpectationOutcome(decision: BrainDecision): {
   return candidates[0] ?? { expectation: null, evaluation: null };
 }
 
+// A morning read's verdict judges the READ (dayReadCall, read-adherence.ts), so its
+// title names the read's call — never "a result Cairn is adjusting from" over a day the
+// athlete simply trained through and came through fine.
+const DAY_READ_OUTCOME_TITLES: Readonly<Record<string, string>> = {
+  held: "A morning read you took",
+  too_cautious: "A morning read more cautious than the day needed",
+  vindicated: "A quiet morning read the day after backed up",
+  not_taken: "A training morning you kept quiet",
+};
+
+function dayReadOutcomeTitle(expectation: BrainExpectation | null, evaluation: BrainEvaluation | null): string | null {
+  if (expectation?.metric_key !== DAY_READ_ADHERENCE_METRIC || !evaluation) return null;
+  const call = dayReadCallFromVerdict(evaluation.verdict, evaluation.actual);
+  return call ? (DAY_READ_OUTCOME_TITLES[call] ?? null) : null;
+}
+
 function decisionOutcomeTitle(decision: BrainDecision, evaluation: BrainEvaluation | null): string {
   if (decision.status === "reverted") return "A change that was put back";
   if (decision.status === "superseded") return "A decision Cairn updated";
@@ -260,10 +277,20 @@ function brainDecisionItems(): LearnedItem[] {
       if (!VISIBLE_DECISION_STATUSES.has(decision.status) && !evaluation) continue;
       const summary = clip(decision.summary, 240);
       if (!summary) continue;
-      const expected = expectation
-        ? `Expected ${metricLabel(expectation.metric_key)} to ${expectation.direction.replace(/_/g, " ")}.`
-        : "";
-      const observed = evaluation?.explanation ? clip(evaluation.explanation, 220) : "";
+      const dayReadTitle = dayReadOutcomeTitle(expectation, evaluation);
+      const readKind = String(expectation?.baseline?.read_kind ?? "");
+      const expected = dayReadTitle
+        ? readKind
+          ? `The morning read said ${readKind}.`
+          : ""
+        : expectation
+          ? `Expected ${metricLabel(expectation.metric_key)} to ${expectation.direction.replace(/_/g, " ")}.`
+          : "";
+      // A day-read verdict written before the read's call was recorded carries the
+      // generic "did not land within the expectation" line — the title already says what
+      // the day taught, so that line is dropped rather than read as a mark against them.
+      const genericDayRead = !!dayReadTitle && /^The observed result/.test(String(evaluation?.explanation ?? ""));
+      const observed = evaluation?.explanation && !genericDayRead ? clip(evaluation.explanation, 220) : "";
       const detail = clip([summary, expected, observed].filter(Boolean).join(" "), 420);
       // Attribute the call to the case-conference specialist who owned it, when the
       // conference durably stored a structured opinion on this decision.
@@ -277,7 +304,7 @@ function brainDecisionItems(): LearnedItem[] {
             decision.effective_date
         ),
         kind: "outcome",
-        title: decisionOutcomeTitle(decision, evaluation),
+        title: dayReadTitle ?? decisionOutcomeTitle(decision, evaluation),
         detail,
         source: `accountability · ${clip(decision.domain, 24)}`,
         ...(voice ? { voice: voice.line } : {}),

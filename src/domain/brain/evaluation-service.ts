@@ -15,7 +15,9 @@ import {
 import { isoDate } from "../../brain/contract-utils.js";
 import { getBrainDecision, getBrainExpectation, setBrainExpectationStatus } from "../../repo/brain-decisions.js";
 import {
+  dayReadExpectationAwaitingMorning,
   dayReadExpectationOutcomeLocked,
+  dayReadExpectationRole,
   dayReadExpectationSurvivesSupersession,
 } from "../../repo/brain/read-adherence.js";
 import { addDaysISO, localDateISO } from "../../repo/shared.js";
@@ -253,14 +255,18 @@ function contextEventConfounders(expectation: BrainExpectation): string[] {
   });
 }
 
+const NOT_THE_GIVEN_READ = "Another read of this day was the one given before training, so only that read is judged.";
+
 function canceledEvaluation(
   expectation: BrainExpectation,
-  decision: BrainDecision
+  decision: BrainDecision,
+  override?: string
 ): Omit<BrainEvaluation, "id" | "evaluated_at"> {
   const reason =
-    decision.status === "superseded" || decision.superseded_by != null
+    override ??
+    (decision.status === "superseded" || decision.superseded_by != null
       ? "The decision was superseded before its outcome could be interpreted."
-      : "The decision was canceled or reversed before its outcome could be interpreted.";
+      : "The decision was canceled or reversed before its outcome could be interpreted.");
   return {
     expectation_id: expectation.id!,
     verdict: "canceled",
@@ -286,10 +292,21 @@ export function evaluateExpectation(
   // replacement retired the read, but it cannot un-log the training that answered it.
   // The rule of what "already decided" means belongs to read-adherence.ts, which
   // answers false for every other metric — so this stays one condition, not a branch.
-  if (decisionCanceled(decision) && !dayReadExpectationOutcomeLocked(expectation)) {
+  //
+  // ONE READ PER DAY IS JUDGED — the one the athlete was given (dayReadExpectationRole).
+  // Asked only once the window has closed, because until the day is over a later read
+  // can still become the given one. The given read is judged whatever superseded it
+  // afterwards; every other read of the date closes as canceled, so a date never carries
+  // two verdicts. `null` (any other metric, or a legacy day) keeps the rule above as is.
+  const role = date >= expectation.window_end ? dayReadExpectationRole(expectation, decision.id) : null;
+  if (role === "not_morning") return canceledEvaluation(expectation, decision, NOT_THE_GIVEN_READ);
+  if (role !== "morning" && decisionCanceled(decision) && !dayReadExpectationOutcomeLocked(expectation)) {
     return canceledEvaluation(expectation, decision);
   }
   if (date < expectation.window_end) return null;
+  // A quiet read the day went past is judged by the harm test, which needs the morning
+  // after — wait for it to close rather than read an unsynced morning as "no harm".
+  if (dayReadExpectationAwaitingMorning(expectation, date)) return null;
 
   const observation = observeExpectation({ expectation, decision, as_of: date });
   const confounders = [...overlappingDecisionConfounders(expectation), ...contextEventConfounders(expectation)];
