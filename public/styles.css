@@ -4938,6 +4938,9 @@ button.hmk-row:active{background:var(--card-2)}
 .hb-directive-soft .hb-dtext{font-style:italic;color:var(--ink-2)}
 .hb-dsoft{color:var(--gold);font-style:normal;font-weight:600}
 .hb-dresurfaced{font-size:.76rem;color:var(--accent);font-style:italic;line-height:1.45;margin:0 0 6px}
+/* acknowledged ("Got it") — still in effect, settled below the new findings, quieter */
+.hb-directive-ack .hb-dtext{color:var(--ink-2)}
+.hb-dack{font-size:.72rem;color:var(--sage);line-height:1.45;margin:7px 0 0}
 .hb-drat{font-size:.8rem;color:var(--muted);line-height:1.45;margin:5px 0 0;max-width:50ch}
 .hb-dwhen{font-size:.68rem;color:var(--muted);margin:6px 0 0}
 .hb-dcite{font-size:.68rem;color:var(--muted);font-style:italic;margin-top:6px;opacity:.85}

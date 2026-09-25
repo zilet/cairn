@@ -413,7 +413,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   draw resurfaces its directive as a fresh row (`resurfaceWorseningDirectives`,
   `resurfaced_from_id`) — news gets a row, never an invisible in-place edit. Directives
   are informational, not medical advice; `uncertain`/uncited ones are a softer nudge. The user flips
-  `active|resolved|dismissed`.
+  `active|resolved|dismissed` — but a Done on a finding whose reading still stands is an
+  ACKNOWLEDGEMENT, not a cure: it stays in effect for coaching (`acknowledged`, off the to-do
+  surfaces) until a newer reading no longer calls for it; only a Dismiss suppresses. Details in
+  `docs/ARCHITECTURE.md` "The connected brain".
 
 - **A painless structural condition is a movement consideration, never an injury.**
   `profile.movement_considerations_json` shapes plan prompts only; filing "mild scoliosis" as an

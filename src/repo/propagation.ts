@@ -5,11 +5,12 @@ import {
   type DirectiveInput,
   defaultDirectiveKey,
   directiveFeedbackCounter,
+  getDirective,
   normalizeDirectiveKey,
   reconcileDirectives,
   updateDirective,
 } from "./directives.js";
-import { hydrateDirective, listActiveDirectives } from "./directives-read.js";
+import { hydrateDirective, isAcknowledgedDirective, listActiveDirectives } from "./directives-read.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
 import {
@@ -460,8 +461,11 @@ function medInteractionClause(
 
 // The last USER feedback (Done/Dismiss — status_at NOT NULL) for a directive's IDENTITY
 // (canonical marker, domain, intent), matched ACROSS sources so a Done on the 'markers'
-// directive suppresses the 'health_review' twin and vice-versa. Machine soft-resolves
-// (status_at NULL) never count. Legacy rows written before intent_key existed are matched
+// directive governs the 'health_review' twin and vice-versa. An ACKNOWLEDGED row (a Done
+// the engine kept in effect — active with its stamp) is that same Done, so it counts too.
+// Machine soft-resolves (status_at NULL) never count. One Done cascades onto every twin
+// under the SAME stamp, so a tie prefers this directive's own row, then a row that
+// carries the trigger snapshot the verdict is judged against (an agent echo may not). Legacy rows written before intent_key existed are matched
 // by classifying their text on the fly, with a directive_key fallback for same-source
 // repeats. Marker-less directives match on the empty canonical key.
 function lastDirectiveFeedback(
@@ -474,10 +478,11 @@ function lastDirectiveFeedback(
   const rows = db
     .prepare(
       `SELECT * FROM health_directives
-     WHERE domain = ? AND status IN ('resolved', 'dismissed') AND status_at IS NOT NULL
-     ORDER BY COALESCE(status_at, created_at) DESC, id DESC`
+     WHERE domain = ? AND status IN ('active', 'resolved', 'dismissed') AND status_at IS NOT NULL
+     ORDER BY COALESCE(status_at, created_at) DESC, (COALESCE(directive_key, '') = ?) DESC,
+              (trigger_date IS NULL) ASC, id DESC`
     )
-    .all(domain) as any[];
+    .all(domain, directiveKey ?? "") as any[];
   for (const r of rows) {
     const rCanon = r.marker ? canonicalMarker(String(r.marker)).key : "";
     if (rCanon !== canon) continue;
@@ -574,20 +579,49 @@ export function resurfaceWorseningDirectives(source: string, desired: DirectiveI
   return resurfaced;
 }
 
-function shouldSuppressDirective(feedback: any, ctx: MarkerContext): boolean {
-  if (!feedback) return false;
-  if (feedback.status === "dismissed") return !markerMateriallyWorse(feedback, ctx);
-  // A lab's Done holds until the NEXT DRAW — a new panel is news. A wearable series
-  // "draws" every morning, so that rule re-created the directive the same second the
-  // athlete marked it Done, and again each day after. For a wearable a Done holds like
-  // a dismissal: only a materially worse reading brings it back.
-  if (feedback.status === "resolved" && ctx.marker?.source === "wearable") return !markerMateriallyWorse(feedback, ctx);
-  if (feedback.status === "resolved") {
-    const oldDate = String(feedback.trigger_date || "");
-    const newDate = String(ctx.marker?.latest?.date || "");
-    return !newDate || oldDate === newDate;
-  }
-  return false;
+// What the athlete's last word on a directive means for THIS pass.
+//   suppress    — a Dismiss ("not relevant"), until the marker gets materially worse.
+//   acknowledge — a Done ("got it") while the trigger still stands: the guidance stays IN
+//                 EFFECT for coaching, carried as an acknowledged row (never a new to-do,
+//                 never a fresh insert each pass). A lab's trigger stands until the NEXT
+//                 DRAW; a wearable series "draws" every morning, so its Done holds until a
+//                 materially worse week — never re-born with each sync.
+//   emit        — no feedback, or news since it: a newer draw (lab) or a materially worse
+//                 reading (wearable / dismissed) puts it back in front of the athlete.
+// A reading back inside optimal never reaches this question: buildOffMarkers drops it,
+// the pass no longer desires the directive, and the reconcile retires it.
+type FeedbackVerdict = "suppress" | "acknowledge" | "emit";
+
+function directiveFeedbackVerdict(feedback: any, ctx: MarkerContext): FeedbackVerdict {
+  if (!feedback) return "emit";
+  if (feedback.status === "dismissed") return markerMateriallyWorse(feedback, ctx) ? "emit" : "suppress";
+  const done = feedback.status === "resolved" || isAcknowledgedDirective(feedback);
+  if (!done) return "emit";
+  if (ctx.marker?.source === "wearable") return markerMateriallyWorse(feedback, ctx) ? "emit" : "acknowledge";
+  const oldDate = String(feedback.trigger_date || "");
+  const newDate = String(ctx.marker?.latest?.date || "");
+  return !newDate || oldDate === newDate ? "acknowledge" : "emit";
+}
+
+// Fold the verdict into a desired directive. An acknowledged one carries the athlete's
+// stamp and the trigger snapshot they acknowledged — the baseline a later "materially
+// worse" is judged against must not creep forward one wearable sync at a time — and no
+// resurfaced link (it never left). Anything emitted carries NO stamp, so a re-opened
+// acknowledgement (a newer draw) reads as a to-do again, linked to the feedback it follows.
+function withFeedback(input: DirectiveInput, feedback: any, verdict: FeedbackVerdict): DirectiveInput {
+  if (verdict !== "acknowledge") return { ...input, status_at: null, resurfaced_from_id: feedback?.id ?? null };
+  const frozen =
+    feedback.trigger_value != null &&
+    Number.isFinite(Number(feedback.trigger_value)) &&
+    feedback.trigger_side &&
+    feedback.trigger_date
+      ? {
+          trigger_value: Number(feedback.trigger_value),
+          trigger_side: feedback.trigger_side,
+          trigger_date: feedback.trigger_date,
+        }
+      : {};
+  return { ...input, ...frozen, status_at: feedback.status_at, resurfaced_from_id: undefined };
 }
 
 function directiveSourceRef(row: any): string {
@@ -777,12 +811,48 @@ function deriveSignature(markers: any[], profile: ZoneProfile | null, meds: any[
     ...(m?.trend_window !== undefined ? { w: m.trend_window?.value ?? null } : {}),
   }));
   return brainDecisionFingerprint({
+    // The engine's own feedback semantics. Bumped when what a Done/Dismiss MEANS changes,
+    // so the first pass after an upgrade re-reads existing feedback instead of
+    // short-circuiting on an unchanged marker snapshot ("ack" = a Done on a standing
+    // reading stays in effect as an acknowledged row).
+    engine: "ack-1",
     snap,
     profile: profile ? { sex: profile.sex ?? null, age: profile.age ?? null } : null,
     meds: (Array.isArray(meds) ? meds : []).map((x: any) => String(x?.label ?? x?.name ?? x ?? "")).sort(),
     fb: directiveFeedbackCounter(),
     ages,
   });
+}
+
+// A THIN WEEK IS NO VERDICT. HRV / resting HR are judged on the week's average, and a
+// week holding fewer than WEARABLE_TREND_MIN_NIGHTS nights has none — for an athlete who
+// wears the watch to bed episodically (hard days, by choice) that is most weeks. Absent
+// is not "back in range": without this, every thin week soft-resolved the standing
+// directive and the next three-night week minted it again, a new row every few days.
+// So a wearable recovery zone whose series is still CURRENT but too thin to average is
+// HELD — the pass neither mints nor retires its row. A series past its sensor-age bound
+// (`stale`) reads as absent and lets the row retire as before.
+function heldWearableZones(markers: any[], profile: ZoneProfile | null): Set<string> {
+  const held = new Set<string>();
+  for (const m of Array.isArray(markers) ? markers : []) {
+    if (m?.source !== "wearable") continue;
+    const z = markerZone(m, profile);
+    if (!z || !WEARABLE_TREND_ZONES.has(z.label)) continue;
+    if (!m?.trend_window && !m?.stale) held.add(z.label);
+  }
+  return held;
+}
+
+// The reconcile scope that leaves a held wearable zone's rows untouched (single-marker
+// rows only — a cluster label never names a wearable zone). Undefined when nothing is held.
+function outsideHeldZones(held: Set<string>, profile: ZoneProfile | null): ((row: any) => boolean) | undefined {
+  if (!held.size) return undefined;
+  return (row: any) => {
+    const marker = String(row?.marker ?? "");
+    if (!marker || marker.includes("+")) return true;
+    const label = matchOptimalZone(marker, profile)?.label;
+    return !label || !held.has(label);
+  };
 }
 
 // THE PROPAGATION ENGINE. A flagged/sub-optimal biomarker propagates into every
@@ -860,7 +930,9 @@ export function deriveDirectives() {
   // A worsening reading is news: soft-resolve the row it superseded so the reconcile
   // INSERTS its replacement (new id, new created_at) instead of silently overwriting.
   resurfaceWorseningDirectives(SOURCE, desired);
-  const result = reconcileDirectives(SOURCE, desired);
+  const result = reconcileDirectives(SOURCE, desired, {
+    inScope: outsideHeldZones(heldWearableZones(markers, profile), profile),
+  });
   setAppState(DERIVE_SIG_KEY, sig);
   if (result.changed > 0) {
     // Directives actually changed → today's cached Brief is stale. Invalidate HERE (the
@@ -919,10 +991,12 @@ export function deriveWearableDirectives() {
   const desired: DirectiveInput[] = [];
   collectMappedDirectives(SOURCE, offMarkers, meds, new Set<string>(), new Set<string>(), desired);
   resurfaceWorseningDirectives(SOURCE, desired);
+  const held = heldWearableZones(wearable, profile);
   const result = reconcileDirectives(SOURCE, desired, {
     inScope: (row) => {
       const marker = String(row?.marker ?? "");
-      return !!marker && !marker.includes("+") && scope.has(String(zoneOf(marker)));
+      const zone = String(zoneOf(marker));
+      return !!marker && !marker.includes("+") && scope.has(zone) && !held.has(zone);
     },
   });
   if (result.changed > 0) {
@@ -937,7 +1011,7 @@ export function deriveWearableDirectives() {
 }
 
 // THE USER-FLIP EDGE. A person marking a directive Done/Dismissed is feedback the engine
-// reads (bumpDirectiveFeedbackCounter moves the derive signature, and shouldSuppressDirective
+// reads (bumpDirectiveFeedbackCounter moves the derive signature, and directiveFeedbackVerdict
 // honors the verdict), but nothing re-ran the engine — so a suppressed twin from another
 // source, or a directive whose whole cluster the flip retires, lingered until the next lab
 // or the next daily tick. Re-derive HERE, synchronously, so the board settles at once.
@@ -949,6 +1023,10 @@ export function deriveWearableDirectives() {
 //
 // Only resolved/dismissed re-derive: a flip back to `active` is the athlete un-hiding a row,
 // and a pass that no longer desires it would soft-resolve it right back out from under them.
+//
+// A Done ("Got it") on a directive whose reading still stands comes back from that pass
+// ACKNOWLEDGED — active, stamped, still shaping coaching — so the row is re-read after the
+// pass and the caller sees the state the athlete's tap actually left.
 export function setDirectiveStatusByUser(id: number, status: string) {
   const updated = updateDirective(id, { status });
   if (updated && (status === "resolved" || status === "dismissed")) {
@@ -957,6 +1035,7 @@ export function setDirectiveStatusByUser(id: number, status: string) {
     } catch {
       /* the flip is the athlete's action and always stands; re-derivation is best-effort */
     }
+    return getDirective(id) ?? updated;
   }
   return updated;
 }
@@ -1049,26 +1128,30 @@ function collectMappedDirectives(
       if (directive_key && seen.has(directive_key)) continue; // already emitted this zone+domain directive this run
       const intent = classifyDirectiveIntent(d.directive, d.intent ?? null);
       const feedback = lastDirectiveFeedback(z.label, d.domain, intent, directive_key);
-      if (shouldSuppressDirective(feedback, ctx)) continue;
+      const verdict = directiveFeedbackVerdict(feedback, ctx);
+      if (verdict === "suppress") continue;
       const augment = !!treating && i === medAugmentIdx;
       desired.push(
         applyStaleness(
-          {
-            source,
-            domain: d.domain,
-            marker: z.label,
-            directive_key,
-            intent_key: intent,
-            directive: augment ? `${d.directive} ${medInteractionClause(z.label, ctx.side, treating!)}` : d.directive,
-            rationale: d.rationale,
-            citation: d.citation ?? null,
-            uncertain: d.uncertain || !d.citation || augment,
-            trigger_value: numericVal,
-            trigger_side: ctx.side,
-            trigger_date: readingDate,
-            resurfaced_from_id: feedback?.id ?? null,
-            status: "active",
-          },
+          withFeedback(
+            {
+              source,
+              domain: d.domain,
+              marker: z.label,
+              directive_key,
+              intent_key: intent,
+              directive: augment ? `${d.directive} ${medInteractionClause(z.label, ctx.side, treating!)}` : d.directive,
+              rationale: d.rationale,
+              citation: d.citation ?? null,
+              uncertain: d.uncertain || !d.citation || augment,
+              trigger_value: numericVal,
+              trigger_side: ctx.side,
+              trigger_date: readingDate,
+              status: "active",
+            },
+            feedback,
+            verdict
+          ),
           readingDate
         )
       );
@@ -1280,38 +1363,44 @@ function collectGenericLongTail(
     const directive_key = normalizeDirectiveKey(`generic:${name}:watch`);
     if (directive_key && seen.has(directive_key)) continue;
     const feedback = lastDirectiveFeedback(name, "watch", "notice", directive_key);
-    // Suppress a note the athlete already dismissed/resolved at this same flag, unless the
-    // flag direction changed or a newer reading landed (there's no numeric optimal band
-    // here to judge "materially worse", so anchor on the flag side + reading date).
+    // Suppress a note the athlete dismissed at this same flag, and keep one they marked
+    // Done in effect (acknowledged) at this same reading — unless the flag direction
+    // changed or a newer reading landed (there's no numeric optimal band here to judge
+    // "materially worse", so anchor on the flag side + reading date).
+    let verdict: FeedbackVerdict = "emit";
     if (feedback) {
       const sameSide = String(feedback.trigger_side || "") === flag;
       const newDate = String(m?.latest?.date ?? "");
       const sameDate = String(feedback.trigger_date || "") === newDate;
+      const done = feedback.status === "resolved" || isAcknowledgedDirective(feedback);
       if (feedback.status === "dismissed" && sameSide) continue;
-      if (feedback.status === "resolved" && (sameDate || !newDate)) continue;
+      if (done && (sameDate || !newDate)) verdict = "acknowledge";
     }
     const value = m?.latest?.value;
     const valStr = value != null && value !== "" ? ` (${value}${m?.unit ? ` ${m.unit}` : ""})` : "";
     const readingDate: string | null = m?.latest?.date ?? null;
     desired.push(
       applyStaleness(
-        {
-          source,
-          domain: "watch",
-          marker: name,
-          directive_key,
-          intent_key: "notice",
-          directive: `Your lab flagged ${name}${valStr} as ${flag}. It isn't one of the levers Cairn maps, so it's worth mentioning at your next visit to understand what's driving it.`,
-          rationale:
-            "A flagged marker outside Cairn's mapped levers is surfaced as a soft watch item so nothing the lab flagged goes unnoticed. Informational, not medical advice.",
-          citation: null,
-          uncertain: true,
-          trigger_value: Number.isFinite(Number(value)) ? Number(value) : null,
-          trigger_side: flag,
-          trigger_date: readingDate,
-          resurfaced_from_id: feedback?.id ?? null,
-          status: "active",
-        },
+        withFeedback(
+          {
+            source,
+            domain: "watch",
+            marker: name,
+            directive_key,
+            intent_key: "notice",
+            directive: `Your lab flagged ${name}${valStr} as ${flag}. It isn't one of the levers Cairn maps, so it's worth mentioning at your next visit to understand what's driving it.`,
+            rationale:
+              "A flagged marker outside Cairn's mapped levers is surfaced as a soft watch item so nothing the lab flagged goes unnoticed. Informational, not medical advice.",
+            citation: null,
+            uncertain: true,
+            trigger_value: Number.isFinite(Number(value)) ? Number(value) : null,
+            trigger_side: flag,
+            trigger_date: readingDate,
+            status: "active",
+          },
+          feedback,
+          verdict
+        ),
         readingDate
       )
     );
@@ -1375,25 +1464,29 @@ function emitFiringClusters(
       if (directive_key && seen.has(directive_key)) continue; // already emitted this cluster directive this run
       const intent = classifyDirectiveIntent(d.directive, d.intent ?? null);
       const feedback = lastDirectiveFeedback(cl.markerLabel, d.domain, intent, directive_key);
-      if (shouldSuppressDirective(feedback, cl.ctx)) continue;
+      const verdict = directiveFeedbackVerdict(feedback, cl.ctx);
+      if (verdict === "suppress") continue;
       desired.push(
         applyStaleness(
-          {
-            source,
-            domain: d.domain,
-            marker: cl.markerLabel,
-            directive_key,
-            intent_key: intent,
-            directive: d.directive,
-            rationale: d.rationale,
-            citation: d.citation ?? null,
-            uncertain: d.uncertain || !d.citation,
-            trigger_value: cl.ctx.value,
-            trigger_side: cl.ctx.side,
-            trigger_date: readingDate,
-            resurfaced_from_id: feedback?.id ?? null,
-            status: "active",
-          },
+          withFeedback(
+            {
+              source,
+              domain: d.domain,
+              marker: cl.markerLabel,
+              directive_key,
+              intent_key: intent,
+              directive: d.directive,
+              rationale: d.rationale,
+              citation: d.citation ?? null,
+              uncertain: d.uncertain || !d.citation,
+              trigger_value: cl.ctx.value,
+              trigger_side: cl.ctx.side,
+              trigger_date: readingDate,
+              status: "active",
+            },
+            feedback,
+            verdict
+          ),
           readingDate
         )
       );
@@ -1523,10 +1616,17 @@ export function applyReviewDirectives(directives: any[]) {
     // when a zone/value actually resolved; a watch-only or unresolved marker is left
     // to the agent's judgment, same as everywhere else in this function.
     if (ctx && !offOptimal(ctx.value, ctx.zone, ctx.flag)) continue;
-    // Keep suppressing prior feedback UNLESS the marker is now clearly worse than
-    // it was when last handled. Conservative: with no resolvable context we can't
-    // prove a worsening, so we honor the prior dismiss/resolve (skip).
-    if (feedback && !(ctx && markerMateriallyWorse(feedback, ctx))) continue;
+    // Keep honoring prior feedback UNLESS the marker is now clearly worse than it was
+    // when last handled. A Done on the SAME reading stays in effect as an acknowledged
+    // row (the engine's verdict); anything else is suppressed. Conservative: with no
+    // resolvable context we can't prove the trigger still stands or a worsening, so we
+    // honor the prior dismiss/resolve (skip).
+    let verdict: FeedbackVerdict = "emit";
+    if (feedback) {
+      if (ctx && markerMateriallyWorse(feedback, ctx)) verdict = "emit";
+      else if (ctx && directiveFeedbackVerdict(feedback, ctx) === "acknowledge") verdict = "acknowledge";
+      else continue;
+    }
     // Citation verification (Stream 4 — grounding): a medical system must not
     // surface an unverified citation. An agent-emitted citation is accepted only
     // when it matches a recognized guideline body OR a cached evidence_cache row;
@@ -1536,7 +1636,7 @@ export function applyReviewDirectives(directives: any[]) {
     // Supplement / interaction safety gate: annotate (never block) a supplement
     // suggestion the user's markers contraindicate (e.g. iron with replete ferritin).
     const safe = safetyGate({ domain, marker, directive, rationale: d.rationale ?? null }, safetyCtx);
-    desired.push({
+    const reviewDirective: DirectiveInput = {
       source: "health_review",
       domain,
       marker,
@@ -1553,9 +1653,9 @@ export function applyReviewDirectives(directives: any[]) {
       ...(ctx
         ? { trigger_value: ctx.value, trigger_side: ctx.side, trigger_date: ctx.marker?.latest?.date ?? null }
         : {}),
-      resurfaced_from_id: feedback?.id ?? null,
       status: "active",
-    });
+    };
+    desired.push(withFeedback(reviewDirective, feedback, verdict));
   }
   // Diff-based reconcile (never clear-all + reinsert): an unchanged review re-save churns
   // zero rows, a changed directive updates in place, a dropped one soft-resolves.
@@ -1873,6 +1973,9 @@ export function directivesForCoach() {
         trigger_side: d.trigger_side,
         trigger_date: d.trigger_date,
         created_at: d.created_at,
+        // The athlete already said "got it": still in effect — build on it, never
+        // re-announce it as news.
+        ...(d.acknowledged ? { acknowledged: true } : {}),
         stale_measurement: bc.stale,
         rescan_reason: bc.reason,
       };

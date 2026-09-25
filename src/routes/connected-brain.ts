@@ -286,9 +286,10 @@ connectedBrainRouter.get("/directives", (req, res) =>
 connectedBrainRouter.get("/symptom-links", (_req, res) => res.json({ links: symptomMarkerLinks() }));
 
 // User-controlled status flip (the review side of propose-review-apply). This
-// is feedback memory, not just a hide: resolved/dismissed directives suppress
-// equivalent future advice until the relevant marker changes enough. Nothing
-// auto-applies. 400 on a bad status, 404 on an unknown id.
+// is feedback memory, not just a hide: a Done ('resolved') on a reading that still
+// stands comes back ACKNOWLEDGED — still in effect for coaching, no longer a new item —
+// and a Dismiss suppresses equivalent future advice until the relevant marker changes
+// enough. Nothing auto-applies. 400 on a bad status, 404 on an unknown id.
 connectedBrainRouter.put("/directives/:id", (req, res) => {
   const status = String(req.body?.status ?? "");
   if (!["active", "resolved", "dismissed"].includes(status)) {

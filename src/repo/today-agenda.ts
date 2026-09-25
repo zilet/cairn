@@ -621,8 +621,11 @@ function healthCandidate(
   // This is an attention delta for NOW, never a historical Today card. The durable
   // health strategy remains in Stand and in the plan-shaping brain regardless.
   if (date !== (opts.asOf ?? localDateISO())) return null;
-  const directives = listActiveDirectives() as any[];
-  if (!Array.isArray(directives) || !directives.length) return null; // nothing flagged → silent
+  // An ACKNOWLEDGED directive (the athlete's "Got it" on a reading that still stands) keeps
+  // shaping coaching in the background, but it is not news: only the rows the athlete has
+  // not yet acknowledged can claim a Today slot or move its revision.
+  const directives = (listActiveDirectives() as any[]).filter((d) => !d?.acknowledged);
+  if (!Array.isArray(directives) || !directives.length) return null; // nothing new flagged → silent
   const focus = healthFocus();
   const actNow = Number(focus?.act_now) || 0;
   const track = Number(focus?.track) || 0;

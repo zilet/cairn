@@ -12,6 +12,7 @@ type HealthDirectivesRow = {
   rationale?: unknown;
   trigger_date?: unknown;
   resurfaced_from_id?: unknown;
+  acknowledged?: unknown;
 };
 
 type HealthDirectivesEvidenceSummary = {
@@ -57,7 +58,10 @@ function directivesSectionHtml(rows: unknown, evSummary: HealthDirectivesEvidenc
   if (!active.length) return directivesEmptyHtml();
   let directiveIndex = 0;
   const groups = CairnHealthClient.DIRECTIVE_DOMAINS.map(([key, label, glyph]) => {
-    const groupRows = active.filter((directive) => (directive.domain || "watch") === key);
+    // New findings lead; the ones the athlete already acknowledged settle below them.
+    const groupRows = active
+      .filter((directive) => (directive.domain || "watch") === key)
+      .sort((a, b) => Number(a.acknowledged === true) - Number(b.acknowledged === true));
     if (!groupRows.length) return "";
     return `<div class="hb-dgroup">
       <div class="hb-dgrouphead"><span class="hb-dglyph" aria-hidden="true">${glyph}</span><span class="hb-dgname">${label}</span></div>

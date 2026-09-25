@@ -523,7 +523,7 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
       for (const d of fresh) {
         const dom = String(d.domain ?? "watch");
         (byDomain[dom] ||= []).push(
-          `  - ${String(d.directive ?? "").trim()}${d.rationale ? ` (why: ${String(d.rationale).trim()})` : ""}${directiveAgeTag(d)}${directiveCitationTag(d)}`
+          `  - ${String(d.directive ?? "").trim()}${d.rationale ? ` (why: ${String(d.rationale).trim()})` : ""}${directiveAgeTag(d)}${directiveCitationTag(d)}${d.acknowledged ? " [athlete acknowledged — still in effect; build on it, don't re-announce it as news]" : ""}`
         );
       }
       lines.push("DERIVED HEALTH DIRECTIVES (the connected brain — your labs propagated into this domain; honor these):");

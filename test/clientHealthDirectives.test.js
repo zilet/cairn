@@ -137,8 +137,37 @@ test("health directives render measured date, resurfaced framing, and updated Do
   assert.match(html, /measured/);
   assert.match(html, /hb-dresurfaced/);
   assert.match(html, /You've handled this before — newer results bring it back\./);
-  assert.match(html, /title="Got it — this comes back only if new results change the picture"/);
+  assert.match(html, /data-ddone="1"[^>]*>Got it<\/button>/, "the Done control reads as an acknowledgement");
+  assert.match(html, /title="I've got this — it keeps shaping your coaching until new results change the picture"/);
   assert.match(html, /title="Not useful — stay quiet unless it gets materially worse"/);
+});
+
+test("an ACKNOWLEDGED directive stays listed, quietly, with no to-do control", () => {
+  const directives = loadHealthDirectives();
+  const html = directives.directivesSectionHtml(
+    [
+      {
+        id: 5,
+        domain: "nutrition",
+        marker: "ApoB",
+        directive: "Keep fiber up",
+        status: "active",
+        acknowledged: true,
+        resurfaced_from_id: 3,
+      },
+      { id: 6, domain: "nutrition", marker: "LDL-C", directive: "Swap toward olive oil", status: "active" },
+    ],
+    { research_enabled: true },
+  );
+
+  assert.match(html, /Keep fiber up/, "the acknowledged finding is still shown — it is still in effect");
+  assert.match(html, /hb-directive-ack/);
+  assert.match(html, /Got it — still shaping your coaching until new results change it\./);
+  assert.doesNotMatch(html, /data-ddone="5"/, "no 'Got it' control on a finding already acknowledged");
+  assert.match(html, /data-ddismiss="5"/, "it can still be dismissed as not relevant");
+  assert.match(html, /data-ddone="6"/, "a new finding keeps its control");
+  assert.ok(html.indexOf("Swap toward olive oil") < html.indexOf("Keep fiber up"), "new findings lead the group");
+  assert.doesNotMatch(html, /hb-dresurfaced/, "an acknowledged row never claims newer results brought it back");
 });
 
 test("health directives omit measured date and resurfaced framing when absent", () => {

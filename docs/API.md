@@ -236,7 +236,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/directives` | Active cross-domain directives (?all=1 includes resolved/dismissed). Each row carries a freshness verdict (acute / age_days / stale) anchored to the marker's real reading date, so the PWA can stop surfacing a stale acute finding (e.g. a 2-week-old hs-CRP) as a current training/nutrition shaper while chronic findings stay put. |
-| PUT | `/api/directives/:id` | User-controlled status flip (the review side of propose-review-apply). This is feedback memory, not just a hide: resolved/dismissed directives suppress equivalent future advice until the relevant marker changes enough. Nothing auto-applies. 400 on a bad status, 404 on an unknown id. |
+| PUT | `/api/directives/:id` | User-controlled status flip (the review side of propose-review-apply). This is feedback memory, not just a hide: a Done ('resolved') on a reading that still stands comes back ACKNOWLEDGED — still in effect for coaching, no longer a new item — and a Dismiss suppresses equivalent future advice until the relevant marker changes enough. Nothing auto-applies. 400 on a bad status, 404 on an unknown id. |
 | POST | `/api/directives/derive` | Re-run the deterministic propagation engine over the latest markers. |
 
 ## `/endurance-goal`

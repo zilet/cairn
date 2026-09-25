@@ -234,7 +234,10 @@ export function updateDirective(id: number, fields: DirectiveInput) {
     vals.push(nextStatus);
     statusChanged = nextStatus !== cur.status;
     if (nextStatus !== cur.status && fields.status_at === undefined) {
-      sets.push("status_at = datetime('now')");
+      // A flip back to ACTIVE is the athlete un-hiding a row: it is a to-do again, so it
+      // carries no stamp — an active row's status_at means "acknowledged"
+      // (isAcknowledgedDirective), and an un-hide is not an acknowledgement.
+      sets.push(nextStatus === "active" ? "status_at = NULL" : "status_at = datetime('now')");
     }
   }
   if (statusChanged && !cur.directive_key && fields.directive_key === undefined) {
@@ -347,7 +350,11 @@ function directiveContentUnchanged(cur: any, d: DirectiveInput): boolean {
     return Math.abs(an - bn) < 1e-9;
   };
   const side = (v: any) => (["low", "high", "unknown"].includes(String(v)) ? String(v) : null);
+  const stamp = (v: any) => (v == null ? null : String(v).trim().slice(0, 40) || null);
   return (
+    // The acknowledgement is part of the desired state: an acknowledged desire keeps its
+    // stamp, and a desire without one (a newer draw — news) re-opens the row as a to-do.
+    stamp(cur.status_at) === stamp(d.status_at) &&
     normText(cur.directive) === normText(d.directive) &&
     numEq(cur.trigger_value, d.trigger_value) &&
     side(cur.trigger_side) === side(d.trigger_side) &&
@@ -356,6 +363,31 @@ function directiveContentUnchanged(cur: any, d: DirectiveInput): boolean {
     normText(cur.citation) === normText(d.citation) &&
     !!cur.uncertain === !!d.uncertain
   );
+}
+
+// Re-activate the athlete's own Done'd row for an acknowledged desire: the newest
+// user-resolved row of this source with the same directive_key AND the same trigger
+// reading (so a Done from an older draw is never dragged forward). Content is refreshed in
+// place through updateDirective (no status change there, so no cascade / feedback bump),
+// then the status flips back to active with the acknowledgement stamp. Null when no such
+// row exists — the caller inserts instead.
+function reviveAcknowledgedRow(source: string, key: string, d: DirectiveInput): any | null {
+  const triggerDate = d.trigger_date == null ? "" : String(d.trigger_date).trim().slice(0, 20);
+  const row = db
+    .prepare(
+      `SELECT * FROM health_directives
+        WHERE source = ? AND directive_key = ? AND status = 'resolved' AND status_at IS NOT NULL
+          AND COALESCE(trigger_date, '') = ?
+        ORDER BY status_at DESC, id DESC LIMIT 1`
+    )
+    .get(source, key, triggerDate) as any;
+  if (!row) return null;
+  updateDirective(row.id, { ...d, status: undefined, status_at: undefined, resurfaced_from_id: undefined });
+  db.prepare(`UPDATE health_directives SET status = 'active', status_at = ? WHERE id = ?`).run(
+    String(d.status_at).trim().slice(0, 40),
+    row.id
+  );
+  return getDirective(row.id);
 }
 
 // Diff-based reconcile of one source's ACTIVE directives toward a desired set — the
@@ -394,12 +426,32 @@ export function reconcileDirectives(
     }
     const cur = key ? existingByKey.get(key) : null;
     if (!cur) {
+      // An ACKNOWLEDGED desire (the athlete's Done on a reading that still stands) brings
+      // its own Done'd row back into effect instead of writing a twin beside it — one row,
+      // id and created_at preserved, the athlete's stamp kept. Only the same source, same
+      // key and same trigger reading qualifies; anything else is inserted.
+      const revived = d.status_at && key ? reviveAcknowledgedRow(source, key, d) : null;
+      if (revived) {
+        updated++;
+        continue;
+      }
       addDirective(d);
       inserted++;
       continue;
     }
     if (directiveContentUnchanged(cur, d)) continue; // keep untouched
-    updateDirective(cur.id, { ...d, status: undefined, status_at: undefined }); // in place, stays active
+    // In place, stays active. The acknowledgement stamp follows the desired state.
+    // A re-opened acknowledgement is linked to the feedback it follows — never to itself.
+    const resurfacedFrom =
+      d.resurfaced_from_id != null && Number(d.resurfaced_from_id) === Number(cur.id)
+        ? undefined
+        : d.resurfaced_from_id;
+    updateDirective(cur.id, {
+      ...d,
+      status: undefined,
+      status_at: d.status_at ?? null,
+      resurfaced_from_id: resurfacedFrom,
+    });
     updated++;
   }
   for (const r of existing) {

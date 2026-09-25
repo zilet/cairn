@@ -238,7 +238,7 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "list_directives",
-    "List the connected-brain cross-domain health directives (a flagged finding propagated into nutrition/training/watch, with rationale, an evidence citation where well-established, and an `uncertain` flag where the lever is real but unsettled). Active by default; pass all:true for the full history incl. resolved/dismissed feedback rows.",
+    "List the connected-brain cross-domain health directives (a flagged finding propagated into nutrition/training/watch, with rationale, an evidence citation where well-established, and an `uncertain` flag where the lever is real but unsettled). Active by default — including `acknowledged:true` rows the athlete marked Done while the reading still stands, which stay in effect for coaching; pass all:true for the full history incl. resolved/dismissed feedback rows.",
     { all: z.boolean().optional() },
     async ({ all }) => asText(annotateDirectiveRecheck(annotateDirectiveFreshness(listDirectives({ all: !!all }))))
   );
@@ -252,7 +252,7 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "update_directive",
-    "Flip a directive's status (the review side of propose-review-apply — nothing auto-applies). `resolved` means handled for that marker snapshot; `dismissed` suppresses equivalent future advice until the marker materially changes. Returns the updated directive, or null when the id is unknown.",
+    "Flip a directive's status (the review side of propose-review-apply — nothing auto-applies). `resolved` is the athlete's Done ('got it'): while the marker's reading still stands the directive stays in effect as `acknowledged` (still shaping coaching, no longer a new item) until a newer reading no longer calls for it; `dismissed` suppresses equivalent future advice until the marker materially changes. Returns the updated directive, or null when the id is unknown.",
     { id: z.number().int(), status: z.enum(["active", "resolved", "dismissed"]) },
     // Mirrors PUT /api/directives/:id: a Done/Dismiss re-derives synchronously so a
     // cross-source twin is suppressed on the same flip.

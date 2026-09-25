@@ -101,13 +101,20 @@ function newLabChange(stampSql: string): Change | null {
 }
 
 // ---- source: a health directive (connected-brain finding) resolved since the stamp ----
+// A "Got it" on a finding that still stands is an acknowledgement, not a close-out: the
+// engine keeps that row in effect (active, stamped), and the Done's cascade leaves its
+// cross-source twins resolved under the SAME stamp — so a resolved row sharing its stamp
+// with an acknowledged one was never closed out and is not news here.
 function resolvedDirectiveChange(stampSql: string): Change | null {
   try {
     const row = db
       .prepare(
-        `SELECT marker, domain, directive, status_at FROM health_directives
-          WHERE status = 'resolved' AND status_at IS NOT NULL AND status_at > ?
-          ORDER BY status_at DESC, id DESC LIMIT 1`
+        `SELECT marker, domain, directive, status_at FROM health_directives d
+          WHERE d.status = 'resolved' AND d.status_at IS NOT NULL AND d.status_at > ?
+            AND NOT EXISTS (
+              SELECT 1 FROM health_directives a WHERE a.status = 'active' AND a.status_at = d.status_at
+            )
+          ORDER BY d.status_at DESC, d.id DESC LIMIT 1`
       )
       .get(stampSql) as any;
     if (!row) return null;
