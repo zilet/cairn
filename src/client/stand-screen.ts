@@ -383,7 +383,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
   // Only a finding the athlete has not yet acknowledged earns the watch dot; an
   // acknowledged one still counts as shaping the plan (it does), just quietly.
   function connectionsStatus(): StandStatus {
-    return activeDirectives().some((d) => d.acknowledged !== true) ? "watch" : "mute";
+    return activeDirectives().some((d) => !CairnHealthClient.isAcknowledgedDirective(d)) ? "watch" : "mute";
   }
   function connectionsTile(): string {
     const n = activeDirectives().length;

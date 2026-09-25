@@ -107,6 +107,13 @@ type HealthDirectiveRow = {
     return map;
   }
 
+  // The ONE client read of a directive's acknowledgement: the server's `acknowledged` flag
+  // (src/repo/directive-feedback.ts) — the athlete said "Got it" on a reading that still
+  // stands, so it is in effect but no longer a new item.
+  function isAcknowledgedDirective(d: { acknowledged?: unknown } | null | undefined): boolean {
+    return d?.acknowledged === true;
+  }
+
   function directiveHtml(d: HealthDirectiveRow, i = 0, evMap: Map<string, number> | null = null): string {
     const soft = d.uncertain && !d.citation;
     const marker = d.marker ? `<span class="hb-dmarker">${escHtml(d.marker)}</span>` : "";
@@ -121,7 +128,7 @@ type HealthDirectiveRow = {
         : "";
     // Acknowledged: the athlete already said "Got it" on this reading. It keeps shaping
     // their coaching, so it stays listed — but quietly, without the to-do control.
-    const acknowledged = d.acknowledged === true;
+    const acknowledged = isAcknowledgedDirective(d);
     // Status-neutral: resurfaced_from_id follows a Done'd OR a Dismissed directive that
     // materially worsened — so this must not assume the athlete "marked this done".
     const resurfaced =
@@ -160,6 +167,7 @@ type HealthDirectiveRow = {
 
   const CAIRN_HEALTH_EVIDENCE = {
     DIRECTIVE_DOMAINS,
+    isAcknowledgedDirective,
     evidenceSafeUrl,
     truncateEvidenceBody,
     evidenceListHtml,

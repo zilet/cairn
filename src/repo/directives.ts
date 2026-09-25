@@ -4,6 +4,7 @@
 // through src/repo.ts, so callers are unchanged.
 import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { directiveStatusStamp, statusFlipIsFeedback } from "./directive-feedback.js";
 import { dedupeActiveDirectives, directiveIdentityKey, hydrateDirective } from "./directives-read.js";
 // Function-level cycle (doctor-loop imports listDirectives back from here);
 // scheduleDirectiveRecheck is only called at runtime inside updateDirective, so
@@ -123,7 +124,7 @@ export function addDirective(fields: DirectiveInput = {}) {
         : String(fields.citation).trim().slice(0, 600),
       fields.uncertain ? 1 : 0,
       status,
-      fields.status_at == null ? null : String(fields.status_at).trim().slice(0, 40) || null,
+      directiveStatusStamp(fields.status_at),
       triggerValue,
       triggerSide,
       fields.trigger_date == null ? null : String(fields.trigger_date).trim().slice(0, 20) || null,
@@ -238,10 +239,9 @@ export function updateDirective(id: number, fields: DirectiveInput) {
     vals.push(nextStatus);
     statusChanged = nextStatus !== cur.status;
     if (nextStatus !== cur.status && fields.status_at === undefined) {
-      // A flip back to ACTIVE is the athlete un-hiding a row: it is a to-do again, so it
-      // carries no stamp — an active row's status_at means "acknowledged"
-      // (isAcknowledgedDirective), and an un-hide is not an acknowledgement.
-      sets.push(nextStatus === "active" ? "status_at = NULL" : "status_at = datetime('now')");
+      // An active row's status_at means "acknowledged" (isAcknowledgedDirective), so an
+      // un-hide back to active carries no stamp.
+      sets.push(statusFlipIsFeedback(nextStatus) ? "status_at = datetime('now')" : "status_at = NULL");
     }
   }
   if (statusChanged && !cur.directive_key && fields.directive_key === undefined) {
@@ -267,7 +267,7 @@ export function updateDirective(id: number, fields: DirectiveInput) {
   }
   if (fields.status_at !== undefined) {
     sets.push("status_at = ?");
-    vals.push(fields.status_at == null ? null : String(fields.status_at).trim().slice(0, 40) || null);
+    vals.push(directiveStatusStamp(fields.status_at));
   }
   if (fields.trigger_value !== undefined) {
     sets.push("trigger_value = ?");
@@ -354,11 +354,10 @@ function directiveContentUnchanged(cur: any, d: DirectiveInput): boolean {
     return Math.abs(an - bn) < 1e-9;
   };
   const side = (v: any) => (["low", "high", "unknown"].includes(String(v)) ? String(v) : null);
-  const stamp = (v: any) => (v == null ? null : String(v).trim().slice(0, 40) || null);
   return (
     // The acknowledgement is part of the desired state: an acknowledged desire keeps its
     // stamp, and a desire without one (a newer draw — news) re-opens the row as a to-do.
-    stamp(cur.status_at) === stamp(d.status_at) &&
+    directiveStatusStamp(cur.status_at) === directiveStatusStamp(d.status_at) &&
     normText(cur.directive) === normText(d.directive) &&
     numEq(cur.trigger_value, d.trigger_value) &&
     side(cur.trigger_side) === side(d.trigger_side) &&
@@ -373,9 +372,9 @@ function directiveContentUnchanged(cur: any, d: DirectiveInput): boolean {
 // user-resolved row of this source with the same directive_key AND the same trigger
 // reading (so a Done from an older draw is never dragged forward). Content is refreshed in
 // place through updateDirective (no status change there, so no cascade / feedback bump),
-// then the status flips back to active with the acknowledgement stamp. Null when no such
+// then the status flips back to active with the acknowledgement stamp. False when no such
 // row exists — the caller inserts instead.
-function reviveAcknowledgedRow(source: string, key: string, d: DirectiveInput): any | null {
+function reviveAcknowledgedRow(source: string, key: string, d: DirectiveInput): boolean {
   const triggerDate = d.trigger_date == null ? "" : String(d.trigger_date).trim().slice(0, 20);
   // A live series' date moves every morning; the acknowledged verdict that produced this
   // desire already established it is the same standing reading (not materially worse).
@@ -386,14 +385,14 @@ function reviveAcknowledgedRow(source: string, key: string, d: DirectiveInput): 
           AND (? = 1 OR COALESCE(trigger_date, '') = ?)
         ORDER BY status_at DESC, id DESC LIMIT 1`
     )
-    .get(source, key, d.live_series === true ? 1 : 0, triggerDate) as any;
-  if (!row) return null;
+    .get(source, key, d.live_series === true ? 1 : 0, triggerDate) as { id: number } | undefined;
+  if (!row) return false;
   updateDirective(row.id, { ...d, status: undefined, status_at: undefined, resurfaced_from_id: undefined });
   db.prepare(`UPDATE health_directives SET status = 'active', status_at = ? WHERE id = ?`).run(
-    String(d.status_at).trim().slice(0, 40),
+    directiveStatusStamp(d.status_at),
     row.id
   );
-  return getDirective(row.id);
+  return true;
 }
 
 // Diff-based reconcile of one source's ACTIVE directives toward a desired set — the
@@ -436,8 +435,7 @@ export function reconcileDirectives(
       // its own Done'd row back into effect instead of writing a twin beside it — one row,
       // id and created_at preserved, the athlete's stamp kept. Only the same source, same
       // key and same trigger reading qualifies; anything else is inserted.
-      const revived = d.status_at && key ? reviveAcknowledgedRow(source, key, d) : null;
-      if (revived) {
+      if (d.status_at && key && reviveAcknowledgedRow(source, key, d)) {
         updated++;
         continue;
       }

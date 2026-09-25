@@ -2554,6 +2554,7 @@ declare global {
 
     CairnHealthEvidence: {
       DIRECTIVE_DOMAINS: readonly (readonly [string, string, string])[];
+      isAcknowledgedDirective(directive: { acknowledged?: unknown } | null | undefined): boolean;
       evidenceSafeUrl(value: unknown): string | null;
       truncateEvidenceBody(text: unknown): string;
       evidenceListHtml(evidence: unknown): string;

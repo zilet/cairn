@@ -114,6 +114,7 @@ const CAIRN_HEALTH_CLIENT = {
   HEALTH_HERO_ART,
   askCoach,
   DIRECTIVE_DOMAINS: CairnHealthEvidence.DIRECTIVE_DOMAINS,
+  isAcknowledgedDirective: CairnHealthEvidence.isAcknowledgedDirective,
   guessUploadMime,
   evidenceSafeUrl: CairnHealthEvidence.evidenceSafeUrl,
   truncateEvidenceBody: CairnHealthEvidence.truncateEvidenceBody,
