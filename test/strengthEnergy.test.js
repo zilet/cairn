@@ -98,6 +98,15 @@ test("a session left open is capped at the working time its sets account for", (
   assert.equal(short.minutes, 32);
 });
 
+test("a session typed in after the fact is priced by its sets, not its one-minute span", () => {
+  // Live case: 8 sets logged in a minute read as 5 kcal — worse than Garmin's placeholder.
+  const batch = estimateStrengthKcal({ sets: sets("Bench Press", 8), duration_min: 1, bodyweight_kg: KG });
+  assert.equal(batch.minutes, 8 * 3.5 + 8);
+  // Just above ~1.5 min per set the recorded span is still believed.
+  const brisk = estimateStrengthKcal({ sets: sets("Bench Press", 8), duration_min: 13, bodyweight_kg: KG });
+  assert.equal(brisk.minutes, 13);
+});
+
 test("no bodyweight or no working set is no estimate", () => {
   assert.equal(estimateStrengthKcal({ sets: sets("Bench Press", 4), duration_min: 30, bodyweight_kg: null }), null);
   assert.equal(estimateStrengthKcal({ sets: sets("Bench Press", 4), duration_min: 30, bodyweight_kg: 0 }), null);

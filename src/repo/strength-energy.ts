@@ -53,6 +53,8 @@ export const CIRCUIT_MIN_SPAN_MIN = 15;
  */
 export const MINUTES_PER_SET = 3.5;
 export const WARMUP_MIN = 8;
+/** Below ~1.5 minutes per set the recorded duration is batch logging, not training time. */
+export const MIN_MINUTES_PER_SET = 1.5;
 
 export interface StrengthEnergySet {
   exercise: string;
@@ -142,7 +144,11 @@ export function estimateStrengthKcal(input: {
 
   const cap = working.length * MINUTES_PER_SET + WARMUP_MIN;
   const duration = num(input.duration_min);
-  const minutes = Math.round((duration != null && duration > 0 ? Math.min(duration, cap) : cap) * 10) / 10;
+  // A duration shorter than the sets could physically take is a session logged after
+  // the fact (first-to-last set typed in a minute), not a fast workout — it says
+  // nothing about the time trained, so the set list's own account stands.
+  const credible = duration != null && duration >= working.length * MIN_MINUTES_PER_SET;
+  const minutes = Math.round((credible ? Math.min(duration, cap) : cap) * 10) / 10;
   const { met, code } = STRENGTH_MET[basis];
   return {
     kcal: Math.round(met * kg * (minutes / 60)),
