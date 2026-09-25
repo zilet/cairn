@@ -306,6 +306,90 @@ export function readAdherenceOutcome(kind: string, truth: DayTrainingTruth): Rea
   }
 }
 
+// ---------- THE VERDICT JUDGES THE READ, NOT THE ATHLETE (owner ruling, 2026-09-25) ----------
+//
+// "I follow the path and alternate exercises, weights and volume to what I can do and
+// feel good about — treat that as a signal back to the brain." The adherence outcome
+// above is a fact about BEHAVIOUR (followed / diverged) and stays exactly as it is: the
+// softening ladders below and the look-back read it. But the ledger's verdict on a
+// `day_read_adherence` expectation used to be that same behavioural fact, so a day the
+// athlete trained through a quiet read and came through fine was stored `not_aligned`
+// and rendered to them as "didn't land the way we expected" — the athlete scored as
+// the miss, when the evidence is actually about the READ.
+//
+// So the verdict now asks whether the READ's call held, and names which way it was off:
+//
+//   held          the athlete did what the read suggested (for a train read: logged
+//                 ANY training — a session shaped live, other exercises, other loads,
+//                 more or fewer sets, a skipped slot, all of it counts). → aligned
+//   vindicated    a quiet (rest/easy) read trained through, and harmEvidenceOnDay found
+//                 a cost — the read's caution fit the day.                → aligned
+//   too_cautious  a quiet read trained through with NOTHING saying it cost them — the
+//                 read was more cautious than the day needed. This is calibration
+//                 evidence about the read, the exact evidence the three softening
+//                 ladders below already act on (restOverrideSoftening,
+//                 easyOverrideSoftening, trainsAnywayWithoutHarm), read through the
+//                 SAME harm test, so the ledger and the ladders cannot disagree about
+//                 which mornings were harmless.                            → not_aligned
+//   not_taken     a train read with nothing logged — the other direction: the day the
+//                 athlete chose was quieter than the read.                 → not_aligned
+//   unclear       ungraded work on an easy read.                          → inconclusive
+//
+// `not_aligned` therefore always means "the read was off", never "the athlete missed".
+// Harm needs the NEXT morning (rating, physiology, readiness), so a quiet read that was
+// trained through is not judged until that morning has closed too
+// (dayReadExpectationAwaitingMorning).
+export type DayReadCall = "held" | "vindicated" | "too_cautious" | "not_taken" | "unclear";
+
+// The one mapping from behaviour + harm to the read's call. `harm` is consulted only
+// for a quiet read that was trained through; pass null anywhere else.
+export function dayReadCall(kind: string, outcome: ReadAdherenceOutcome, harm: HarmEvidence | null): DayReadCall {
+  if (outcome === "unclear") return "unclear";
+  if (outcome === "followed") return "held";
+  if (kind === "train") return "not_taken";
+  return harm ? "vindicated" : "too_cautious";
+}
+
+// What the VERDICT measures, in plain words — stored on every verdict beside the
+// behavioural `measures` so a reader can never mistake one for the other.
+export const DAY_READ_CALL_MEASURES: Readonly<Record<PredictiveDayReadKind, string>> = Object.freeze({
+  train: "any training was logged, however the session was shaped",
+  easy: "the day stayed at or below easy, or going past it showed a cost afterwards",
+  rest: "no training was logged, or training through it showed a cost afterwards",
+});
+
+// The read's call as a stored verdict records it. Verdicts written before the call was
+// recorded (`actual.read_call` absent) are read back through the same rule: a
+// not_aligned quiet read is asked the harm test NOW, because its old verdict was only
+// ever the behavioural fact and must not be rendered as the athlete's miss. Null when
+// the row is not a conclusive day-read verdict.
+export function dayReadCallFromVerdict(verdict: unknown, actual: unknown): DayReadCall | null {
+  if (verdict !== "aligned" && verdict !== "not_aligned") return null;
+  const stored = actual && typeof actual === "object" ? (actual as Record<string, unknown>) : null;
+  const recorded = String(stored?.read_call ?? "");
+  if (["held", "vindicated", "too_cautious", "not_taken"].includes(recorded)) return recorded as DayReadCall;
+  const kind = String(stored?.read_kind ?? "");
+  if (!isPredictiveDayReadKind(kind)) return null;
+  if (verdict === "aligned") return "held";
+  if (kind === "train") return "not_taken";
+  const date = String(stored?.read_date ?? "");
+  let harm: HarmEvidence | null = null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    try {
+      harm = harmEvidenceOnDay(date);
+    } catch {
+      harm = null;
+    }
+  }
+  return dayReadCall(kind, "diverged", harm);
+}
+
+// Does judging this read's call need the harm test? Only a quiet read the day went
+// past — every other shape is settled by the log alone.
+export function dayReadCallNeedsHarm(kind: string, outcome: ReadAdherenceOutcome): boolean {
+  return (kind === "rest" || kind === "easy") && outcome === "diverged";
+}
+
 // ---------- an outcome the day has already decided ----------
 //
 // Within one calendar day the two facts these outcomes turn on only ever go TRUE:
@@ -352,6 +436,117 @@ export function dayReadExpectationOutcomeLocked(expectation: {
   }
 }
 
+function dayReadExpectationSubject(expectation: {
+  metric_key?: unknown;
+  subject_key?: unknown;
+  baseline?: unknown;
+}): { date: string; kind: PredictiveDayReadKind } | null {
+  if (String(expectation.metric_key ?? "") !== DAY_READ_ADHERENCE_METRIC) return null;
+  const date = String(expectation.subject_key ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const baseline = expectation.baseline;
+  const kind = baseline && typeof baseline === "object" ? (baseline as Record<string, unknown>).read_kind : null;
+  return isPredictiveDayReadKind(kind) ? { date, kind } : null;
+}
+
+// Is this expectation still WAITING for the morning after its day? A quiet read the
+// day went past is judged by harmEvidenceOnDay, whose strongest arms are the NEXT
+// morning's — the rating entered then, that night's HRV / resting HR, the readiness the
+// next read recorded. The nightly pass runs in the small hours, before that morning has
+// synced, so judging at the first pass would read "no harm" off an absence and call the
+// read too cautious on a day the body was about to answer. It waits until the morning
+// after has CLOSED too (the same "a closed day" bar the evaluator already holds the
+// read's own day to), which costs one night and only on these days. Answers false for
+// every other metric and every other shape, so the caller needs no metric test.
+export function dayReadExpectationAwaitingMorning(
+  expectation: { metric_key?: unknown; subject_key?: unknown; baseline?: unknown },
+  asOf: string
+): boolean {
+  const subject = dayReadExpectationSubject(expectation);
+  if (!subject) return false;
+  const morningAfter = addDaysISO(subject.date, 1);
+  if (!morningAfter || asOf > morningAfter) return false;
+  try {
+    return dayReadCallNeedsHarm(subject.kind, readAdherenceOutcome(subject.kind, dayTrainingTruth(subject.date)));
+  } catch {
+    return false;
+  }
+}
+
+// ---------- ONE READ PER DAY IS JUDGED ----------
+//
+// A date can carry more than one live question: a prior read whose outcome the day had
+// already decided keeps its expectation when a later read replaces it (the lock above),
+// and the evaluator re-judged any superseded read the day went on to decide. Both were
+// written to stop evidence being thrown away — and together they judged two reads for
+// one day. Live, 2026-09-23: an early `easy` read and the `train` read the athlete
+// actually opened to were both judged, the easy one `not_aligned` — a read nobody
+// trained against, scored as the day's miss.
+//
+// The judged read is the one the athlete was GIVEN: the last predictive read before the
+// first logged set, or the date's last predictive read when nothing was lifted — exactly
+// morningDecisionsByDate, the same row the rolling model and the ladders read, so the
+// verdict and the calibration can never be about different reads.
+//
+//   "morning"      this expectation's decision IS that read — judge it, whatever
+//                  superseded it later (a post-training recompute is commentary).
+//   "not_morning"  another read was the one given — close this one as canceled.
+//   null           not a day-read question, the day's read cannot be determined, or
+//                  the given read carries no question of its own (a legacy row) — the
+//                  caller keeps its pre-existing rule.
+export type DayReadExpectationRole = "morning" | "not_morning";
+
+export function dayReadExpectationRole(
+  expectation: { metric_key?: unknown; subject_key?: unknown; baseline?: unknown },
+  decisionId: unknown
+): DayReadExpectationRole | null {
+  const subject = dayReadExpectationSubject(expectation);
+  if (!subject) return null;
+  const judged = judgedDayReadDecisionId(subject.date);
+  if (judged == null) return null;
+  return judged === Number(decisionId) ? "morning" : "not_morning";
+}
+
+// The decision whose question stands for `date`, or null when there is none to name.
+//
+// Normally that is simply the given read (morningDecisionsByDate). One legacy shape
+// needs a step back: before the fingerprint hashed the claim, a recompute that reached
+// the SAME kind wrote its own row, so a date can hold a run of identical claims ending
+// at the given read. That is one claim restated, and it is judged once — on the row
+// that first made it, which is where migration 91 put its question back. Null when the
+// judged row carries no expectation of its own (a pre-ledger read), so the caller keeps
+// its older rule rather than cancelling every question of that day.
+function judgedDayReadDecisionId(date: string): number | null {
+  let given: MorningDecision | undefined;
+  try {
+    given = morningDecisionsByDate(date, date).get(date);
+  } catch {
+    return null;
+  }
+  if (!given) return null;
+  let judged = Number(given.id);
+  try {
+    const rows = db
+      .prepare(
+        `SELECT id, created_at, action_json FROM brain_decisions
+          WHERE kind = 'day_read' AND source_ref_type = 'day_read' AND source_ref_key = ?
+          ORDER BY created_at, id`
+      )
+      .all(date) as Array<{ id: number; created_at: string | null; action_json: string | null }>;
+    const predictive = rows.filter((row) => isPredictiveDayReadKind(decisionActionKind(row)));
+    const at = predictive.findIndex((row) => Number(row.id) === judged);
+    for (let i = at - 1; i >= 0 && decisionActionKind(predictive[i]!) === given.kind; i--) {
+      judged = Number(predictive[i]!.id);
+    }
+    const own = db
+      .prepare(`SELECT 1 FROM brain_expectations WHERE decision_id = ? AND metric_key = ? LIMIT 1`)
+      .get(judged, DAY_READ_ADHERENCE_METRIC);
+    return own ? judged : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------- the expectation ----------
 
 export interface DayReadForLedger {
@@ -378,12 +573,13 @@ export function dayReadAdherenceExpectation(date: string, read: DayReadForLedger
     read_kind: kind,
     focus: typeof read.focus === "string" && read.focus.trim() ? read.focus.trim() : null,
     est_minutes: Number.isFinite(Number(read.est_minutes)) ? Number(read.est_minutes) : null,
+    // The READ's call, which is what the verdict judges (see dayReadCall).
     prediction:
       kind === "train"
-        ? "a training session is logged on this day"
+        ? "a training session is logged on this day, however it is shaped"
         : kind === "rest"
-          ? "no training session is logged on this day"
-          : "training on this day stays at or below easy",
+          ? "no training session is logged on this day, or training through it shows a cost"
+          : "training on this day stays at or below easy, or going past it shows a cost",
   };
   const shared = {
     metric_key: DAY_READ_ADHERENCE_METRIC,
@@ -573,10 +769,10 @@ export function recordDayReadDecision(
   // question survives.
   //
   // INVARIANT, and the one place it is visible: a date may now hold two LIVE
-  // expectations — a locked prior plus the new claim. Both are real, separately
-  // falsifiable predictions and both must be judged, so `expectation_health` counts
+  // expectations — a locked prior plus the new claim — so `expectation_health` counts
   // two while `readAdherenceModel` (which reads the MORNING read only) counts one.
-  // That divergence is expected, not drift.
+  // Only ONE of them is ever judged: the read the athlete was given
+  // (dayReadExpectationRole); the other closes as canceled at evaluation.
   const truth = priors.length ? safeDayTrainingTruth(date) : null;
   for (const prior of priors) {
     const locked = !!truth && dayReadOutcomeLocked(decisionActionKind(prior), truth);
@@ -603,12 +799,25 @@ function adherenceFactsChanged(actual: unknown, truth: DayTrainingTruth): boolea
   if (!actual || typeof actual !== "object") return true;
   const stored = actual as Record<string, unknown>;
   const count = (value: unknown): number | null => (Number.isFinite(Number(value)) ? Number(value) : null);
-  return (
+  if (
     count(stored.logged_sets) !== truth.sets ||
     count(stored.logged_activities) !== truth.activities ||
     count(stored.real_activities) !== truth.real_activities ||
     String(stored.load ?? "") !== truth.load
-  );
+  )
+    return true;
+  // The read's call also rests on the harm test for a quiet read the day went past — a
+  // session rated poorly after the fact moves it just as surely as a late set does.
+  // Only verdicts that recorded a call carry this fact, so older rows are untouched.
+  const call = String(stored.read_call ?? "");
+  if (call !== "too_cautious" && call !== "vindicated") return false;
+  let harmKind: string | null = null;
+  try {
+    harmKind = harmEvidenceOnDay(truth.date)?.kind ?? null;
+  } catch {
+    harmKind = null;
+  }
+  return (stored.harm_kind ?? null) !== harmKind;
 }
 
 // Work logged for a day that has ALREADY been judged re-opens that judgement.
@@ -625,8 +834,10 @@ function adherenceFactsChanged(actual: unknown, truth: DayTrainingTruth): boolea
 // Deliberately narrow, so it cannot undo the terminality it sits beside:
 //   • only the same-day adherence metric, never a long-window expectation;
 //   • only the affected date;
-//   • only while the decision it belongs to is still the read that STOOD (a
-//     superseded read's verdict is `canceled` and re-judging it is meaningless);
+//   • only while the decision it belongs to is still the read that STOOD, or is the
+//     read the athlete was given (dayReadExpectationRole — a read a post-training
+//     recompute superseded is still the one judged); any other superseded read's
+//     verdict is `canceled` and re-judging it is meaningless;
 //   • and only when the day's logged facts actually moved, so an unrelated write
 //     for a past date (a backfilled meal, a weigh-in) re-opens nothing.
 // evaluateMatureExpectations closes any re-opened row again the moment it produces
@@ -647,11 +858,13 @@ export function reopenDayReadAdherence(date: string): number[] {
         WHERE expectation.metric_key = ?
           AND expectation.subject_key = ?
           AND expectation.status IN ('evaluated', 'canceled')
-          AND decision.status = 'observed'
-          AND decision.superseded_by IS NULL
+          AND ((decision.status = 'observed' AND decision.superseded_by IS NULL) OR decision.id = ?)
         ORDER BY expectation.id LIMIT 20`
     )
-    .all(DAY_READ_ADHERENCE_METRIC, date) as Array<{ id: number; actual_json: string | null }>;
+    .all(DAY_READ_ADHERENCE_METRIC, date, judgedDayReadDecisionId(date) ?? 0) as Array<{
+    id: number;
+    actual_json: string | null;
+  }>;
   if (!rows.length) return [];
 
   const truth = dayTrainingTruth(date);

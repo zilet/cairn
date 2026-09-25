@@ -9,10 +9,16 @@ import {
 } from "./expectation-contract.js";
 import { isoDate, type JsonObject } from "./contract-utils.js";
 import {
+  DAY_READ_CALL_MEASURES,
   READ_ADHERENCE_MEASURES,
+  dayReadCall,
+  dayReadCallNeedsHarm,
   dayTrainingTruth,
+  harmEvidenceOnDay,
   isPredictiveDayReadKind,
   readAdherenceOutcome,
+  type DayReadCall,
+  type HarmEvidence,
 } from "../repo/brain/read-adherence.js";
 import { completedIntakeRange } from "../repo/intake-window.js";
 import { mealPlanAdherence } from "../repo/nutrition.js";
@@ -31,6 +37,10 @@ export interface MetricObservation {
   evidence_keys: string[];
   counts: Record<string, number>;
   issues: string[];
+  // Optional plain-words explanation for a CONCLUSIVE verdict, replacing the generic
+  // "landed / did not land within the expectation" line. Only a metric whose verdict
+  // is rendered back to the athlete needs one (day_read_adherence).
+  verdict_explanation?: string;
 }
 
 export interface EvaluatorContext {
@@ -514,8 +524,15 @@ function planAdherenceObservation(context: EvaluatorContext): MetricObservation 
   };
 }
 
-// Was the MORNING READ followed? The one same-day metric in the registry, and the
+// Did the MORNING READ's call hold? The one same-day metric in the registry, and the
 // only one that can mature overnight.
+//
+// The verdict judges the READ, never the athlete (dayReadCall, read-adherence.ts):
+// `aligned` when the call held — followed, or a quiet read trained through that the
+// harm test says the day did need — and `not_aligned` only when the read was off: more
+// cautious than a day that went fine (calibration evidence the softening ladders act
+// on), or a train read on a day the athlete kept quiet. The behavioural fact (followed
+// / diverged) still rides on `actual.followed` for the rolling counts.
 //
 // The observed day is the expectation's `subject_key` (the read's own date), NOT
 // the window span: the window deliberately ends a day later so the expectation
@@ -529,8 +546,18 @@ function planAdherenceObservation(context: EvaluatorContext): MetricObservation 
 //   • An `easy` read against work that could not be graded stays INCONCLUSIVE.
 //     Presence without a grade cannot answer "did it stay easy?", and guessing
 //     against the athlete is exactly what this metric must never do.
-//   • Adherence is a COUNT of followed/diverged days, never a rate and never a
-//     grade. It informs; it changes no threshold.
+//   • A train read is held by ANY logged training. A session shaped live — other
+//     exercises, other loads, extra or fewer sets, a skipped slot — is the athlete
+//     working with the read, never a miss of it.
+//   • Adherence is a COUNT of days, never a rate and never a grade.
+const DAY_READ_CALL_EXPLANATION: Readonly<Record<Exclude<DayReadCall, "unclear">, string>> = Object.freeze({
+  held: "The day went the way the morning read suggested, so its call held.",
+  vindicated: "Training went past a quiet read and a cost showed afterwards, so the read's caution fit the day.",
+  too_cautious:
+    "Training went past a quiet read with nothing afterwards saying it cost anything, so the read was more cautious than the day needed — the quiet reads learn from it.",
+  not_taken: "A training read met a quieter day than it expected — information about that day, never a miss.",
+});
+
 function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservation {
   const { expectation } = context;
   const readDate = isoDate(expectation.subject_key) ?? expectation.window_start;
@@ -555,17 +582,37 @@ function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservati
   }
   const truth = dayTrainingTruth(readDate);
   const outcome = readAdherenceOutcome(readKind, truth);
-  const diverged = outcome === "diverged" ? 1 : 0;
+  // The SAME harm test the softening ladders read, so the verdict and the ladders
+  // cannot disagree about which quiet mornings were trained through harmlessly.
+  let harm: HarmEvidence | null = null;
+  if (dayReadCallNeedsHarm(readKind, outcome)) {
+    try {
+      harm = harmEvidenceOnDay(readDate);
+    } catch {
+      harm = null;
+    }
+  }
+  const call = dayReadCall(readKind, outcome, harm);
+  const readOff = call === "too_cautious" || call === "not_taken" ? 1 : 0;
   const actual: JsonObject = {
     // `value` serves the `at_least` train comparison; `occurrences` serves the
-    // `avoid` rest/easy one (compareExpectation reads occurrences first there).
-    value: readKind === "train" ? (truth.trained ? 1 : 0) : diverged,
-    occurrences: diverged,
+    // `avoid` rest/easy one (compareExpectation reads occurrences first there) and
+    // counts the READ being more cautious than the day needed — not the athlete
+    // training through it, which a cost afterwards can vindicate.
+    value: readKind === "train" ? (truth.trained ? 1 : 0) : readOff,
+    occurrences: readOff,
     read_kind: readKind,
-    // The exact test applied, in plain words, stored ON the verdict so a followed
-    // `train` day can never be read back later as a hard one.
-    measures: READ_ADHERENCE_MEASURES[readKind],
+    // What the verdict measures (the read's call), and the behavioural test beside it,
+    // both in plain words and stored ON the verdict so a followed `train` day can never
+    // be read back later as a hard one, nor a harmless day past a quiet read as a miss.
+    measures: DAY_READ_CALL_MEASURES[readKind],
+    behaviour_measures: READ_ADHERENCE_MEASURES[readKind],
     followed: outcome === "followed",
+    read_call: call,
+    // Machine register — which harm arm fired, if any. Only asked for a quiet read the
+    // day went past; null everywhere else.
+    harm_kind: harm?.kind ?? null,
+    harm_detail: harm?.detail ?? null,
     trained: truth.trained,
     load: truth.load,
     logged_sets: truth.sets,
@@ -578,7 +625,7 @@ function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservati
     // One deterministic, reproducible line about the closed day — true whether or
     // not anything was logged, which is what lets a followed rest day conclude.
     evidence_keys: [
-      `day_read_adherence:${readDate}:read=${readKind}:sets=${truth.sets}:activities=${truth.real_activities}/${truth.activities}:load=${truth.load}`,
+      `day_read_adherence:${readDate}:read=${readKind}:sets=${truth.sets}:activities=${truth.real_activities}/${truth.activities}:load=${truth.load}:call=${call}`,
     ],
     counts: {
       closed_days: 1,
@@ -590,6 +637,7 @@ function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservati
       outcome === "unclear"
         ? ["Work was logged that could not be graded, so whether the day stayed easy can't be read."]
         : [],
+    ...(call !== "unclear" ? { verdict_explanation: DAY_READ_CALL_EXPLANATION[call] } : {}),
   };
 }
 
@@ -1096,9 +1144,11 @@ export function evaluateMetricObservation(
       allConfounders.push("No supporting evidence rows existed in the evaluation window.");
     } else {
       verdict = aligned ? "aligned" : "not_aligned";
-      explanation = aligned
-        ? "The observed result landed within the expectation after enough comparable data was available."
-        : "The observed result did not land within the expectation after enough comparable data was available.";
+      explanation =
+        observation.verdict_explanation ??
+        (aligned
+          ? "The observed result landed within the expectation after enough comparable data was available."
+          : "The observed result did not land within the expectation after enough comparable data was available.");
     }
   }
   const ignored = ignoredMinimumDataRules(expectation, observation);

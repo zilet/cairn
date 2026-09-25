@@ -335,7 +335,16 @@ function captureTeamWeekSectionsHtml(
     .map((l) => {
       const line = String(l?.text || "").trim();
       if (!line) return "";
-      const tone = l?.verdict === "aligned" ? " team-good" : l?.verdict === "not_aligned" ? " team-watch" : "";
+      // An explicit tone wins: a morning read the athlete worked past is the team
+      // learning, so it never wears the "watch" styling a not_aligned verdict would.
+      const tone =
+        l?.tone === "quiet"
+          ? ""
+          : l?.tone === "good" || l?.verdict === "aligned"
+            ? " team-good"
+            : l?.verdict === "not_aligned"
+              ? " team-watch"
+              : "";
       return `<li class="team-item${tone}"><span class="team-item-line">${esc(line)}</span></li>`;
     })
     .filter(Boolean);

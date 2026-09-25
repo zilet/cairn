@@ -93,6 +93,25 @@ test("teamWeekSectionsHtml renders every populated section with escaping, domain
   assert.doesNotMatch(html, /<2225>|<up>|<fibre>|<dipped>/);
 });
 
+test("a morning read the athlete worked past renders quiet, never in the watch styling", () => {
+  const cards = loadCards();
+  const team = {
+    ...fullTeam(),
+    landed: [
+      {
+        text: "You trained through an easy read and came through fine — the read will lean less cautious.",
+        verdict: "not_aligned",
+        when: "2026-07-12",
+        tone: "quiet",
+      },
+      { text: "Marker direction didn't land the way we expected", verdict: "not_aligned", when: "2026-07-11" },
+    ],
+  };
+  const html = cards.teamWeekSectionsHtml(team, escapeHtml);
+  assert.match(html, /<li class="team-item"><span class="team-item-line">You trained through an easy read/);
+  assert.match(html, /<li class="team-item team-watch"><span class="team-item-line">Marker direction/);
+});
+
 test("display caps fold the overflow into a quiet expander per section", () => {
   const cards = loadCards();
   const team = {
