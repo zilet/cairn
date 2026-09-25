@@ -20,11 +20,14 @@ import { seed } from "./seed.js";
 import { installSeedArt } from "./art.js";
 import * as repo from "./repo.js";
 import { localDateISO } from "./repo/shared.js";
+import { selectAdaptivePlanDay } from "./repo/plan-selection.js";
 import { log } from "./log.js";
 import { round5 } from "./lib/numbers.js";
 
 const DAY = 86_400_000;
-const now = new Date();
+// Captured once per seedDemo() run (not at import), so every row of one seed shares one
+// frame and a caller holding a pinned clock seeds against that clock's day.
+let now = new Date();
 // LOCAL-day frame, not toISOString(): demo rows key on the same local day the rest
 // of the codebase uses, and recordDailyMetrics rejects future dates against
 // localDateISO() — a UTC slice here made iso(0) "tomorrow" between 00:00 and
@@ -125,9 +128,19 @@ function trainingHistory(exId: Record<string, number>, planDayId: Record<number,
   const insertSet = db.prepare(
     `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir, note) VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
-  const tops = [41, 34, 27, 20, 13, 6];   // top of each weekly block (days ago)
-  const offs = [0, 1, 3, 4];              // ~4 sessions/week
-  let gi = 0;                             // global session index → rotates the 5-day split
+  // Every date here is RELATIVE to today, so the lifting week the brain reads off this
+  // log (strengthScheduleRead's observed 3-of-6-weeks pattern) is relative to today's
+  // weekday too. Today's weekday MUST be one of those lifting weekdays: a calendar rest
+  // day has no plan day and nothing to start, and the curated Brief below says "train".
+  // Blocks start exactly 7·k days ago (same weekday as today) and never reach today or
+  // yesterday, so on ANY weekday the pattern is: today lifts, yesterday rests, and the
+  // last session was two days ago.
+  const tops = [42, 35, 28, 21, 14, 7];   // top of each weekly block (days ago) — today's weekday
+  const offs = [0, 2, 3, 5];              // ~4 sessions/week: today's weekday, +2, +3, +5
+  // Global session index → rotates the 5-day split. Starting at 3 makes the LAST logged
+  // session (two days ago) Push, so the ring hands today Pull — the day the curated
+  // Brief's prose was written for (brief() still follows whatever the selection says).
+  let gi = 3;
   db.exec("BEGIN");
   try {
     for (let w = 0; w < tops.length; w++) {
@@ -139,7 +152,7 @@ function trainingHistory(exId: Record<string, number>, planDayId: Record<number,
         const date = iso(daysAgo);
         const dur = 45 + ((gi * 7) % 18); // 45–62 min, deterministic
         // light, occasional autoregulation feedback
-        const soreness = off === 4 ? 3 : null;
+        const soreness = off === 5 ? 3 : null;
         const performance = off === 0 ? 4 : null;
         const sid = Number(
           insertSession.run(date, planDayId[planNum], dur, null, soreness, performance, `${date} 07:05:00`).lastInsertRowid
@@ -666,16 +679,34 @@ function garminStrength() {
 }
 
 // ---------- the cached Brief (written LAST — recovery/check-ins invalidate it) ----------
+// A curated read is pinned: nothing recomputes it, so it must agree with the calendar
+// on its own. A "train" Brief over a day the lifting week reads as rest shows a train
+// headline with nothing to start (no plan day, empty preview). So the Brief FOLLOWS the
+// same selection Today's session card is built from, and carries it as
+// `plan_selection` exactly like a computed read does, which pins selectedPlanDayForDate
+// to the day the prose names. trainingHistory() phases the log so that day is Pull on
+// every weekday; the prose below is written for it.
 function brief() {
   const today = iso(0);
   repo.invalidateDayRead(today);
+  const pick = selectAdaptivePlanDay(today);
+  const day =
+    pick?.day_type === "training" && pick.day_number != null
+      ? (db.prepare(`SELECT name FROM plan_days WHERE day_number = ?`).get(pick.day_number) as { name: string } | undefined)
+      : undefined;
+  // Unreachable with the history above; if the calendar ever disagrees, no curated
+  // read beats a wrong one — the deterministic floor then answers the day honestly.
+  if (!pick || !day) return;
+  const pull = day.name === "Pull";
   repo.saveDayRead(today, {
     kind: "train",
-    headline: "A strong, controlled Pull day.",
-    why: "You slept just under 7 hours and your HRV's back in range after Saturday's long run — recovered and due. Three lifts in this week; this is the day to earn the back work. Keep bar speed honest and stop a rep shy.",
-    focus: "Pull — back, rear delts, biceps",
+    headline: `A strong, controlled ${day.name} day.`,
+    why: pull
+      ? "You slept just under 7 hours and your HRV's back in range after the long run — recovered and due. Three lifts in the past week; this is the day to earn the back work. Keep bar speed honest and stop a rep shy."
+      : "You slept just under 7 hours and your HRV's back in range after the long run — recovered and due. Three lifts in the past week; keep bar speed honest and stop a rep shy.",
+    focus: pull ? "Pull — back, rear delts, biceps" : pick.focus,
     est_minutes: 55,
-    signals: { consecutive_training_days: 0, has_recovery_data: true },
+    signals: { consecutive_training_days: 0, has_recovery_data: true, plan_selection: pick.selection },
     source: "agent",
     agent: "claude",
     // Hand-authored prose over illustrative signals: no live recompute can ever
@@ -689,6 +720,7 @@ function brief() {
 // install) so the seed-art builder can drive it in-process against a throwaway DB
 // without copying a stale pack over the images it's about to generate.
 export function seedDemo() {
+  now = new Date();
   wipe();
   seed(); // exercises + plan_days + plan_items (+ a baseline session/profile we replace)
   // clear seed's baseline session + example profile leftovers, keep plan/exercises

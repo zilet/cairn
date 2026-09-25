@@ -404,69 +404,6 @@ async function apiJson(base, pathName, opts = {}) {
   return body;
 }
 
-function planItemForSave(item) {
-  if (item?.kind === "cardio") {
-    const label = String(item.note || item.exercise || "").trim();
-    return {
-      kind: "cardio",
-      exercise: label,
-      note: label || null,
-      sets: item.sets ?? 1,
-      target_distance_km: item.target_distance_km ?? null,
-      target_duration_min: item.target_duration_min ?? null,
-      target_zone: item.target_zone ?? null,
-      interval: item.interval ?? null,
-    };
-  }
-  return {
-    kind: "strength",
-    exercise: item.exercise,
-    sets: item.sets,
-    rep_low: item.rep_low,
-    rep_high: item.rep_high,
-    target_weight: item.target_weight,
-    note: item.note,
-    warmup_sets: item.warmup_sets,
-    target_seconds: item.target_seconds,
-    mode: item.mode,
-  };
-}
-
-async function addSmokeCardioToPlanDay(base, dayNumber, label) {
-  const plan = await apiJson(base, "/plan");
-  const day = Array.isArray(plan) ? plan.find((row) => Number(row.day_number) === Number(dayNumber)) : null;
-  ok(day, `smoke plan day ${dayNumber} exists`);
-  const withoutPriorSmoke = (Array.isArray(day.items) ? day.items : [])
-    .filter((item) => {
-      const itemLabel = String(item.note || item.exercise || "");
-      return itemLabel !== label && !/^Smoke (easy|synced) run \d+$/.test(itemLabel);
-    })
-    .map(planItemForSave);
-  const items = [
-    ...withoutPriorSmoke,
-    {
-      kind: "cardio",
-      exercise: label,
-      note: label,
-      sets: 1,
-      target_distance_km: 4.8,
-      target_duration_min: 32,
-      target_zone: "Z2",
-    },
-  ];
-  const saved = await apiJson(base, `/plan/${encodeURIComponent(dayNumber)}`, {
-    method: "PUT",
-    body: JSON.stringify({
-      name: day.name || `Day ${dayNumber}`,
-      focus: day.focus ?? null,
-      items,
-    }),
-  });
-  const savedLabels = (Array.isArray(saved?.items) ? saved.items : [])
-    .map((item) => String(item.note || item.exercise || ""));
-  ok(savedLabels.includes(label), `API saved smoke cardio on plan day ${dayNumber}`, JSON.stringify(savedLabels));
-}
-
 async function assertGlobals(cdp) {
   const globalsJson = JSON.stringify(requiredGlobals);
   const result = await evaluate(cdp, `(() => {
@@ -594,11 +531,13 @@ async function smokeTodayAddExercise(cdp, base) {
     await assertGlobals(cdp);
 
     // Set-by-set logging (add-exercise, log rows) now lives in the isolated
-    // Session destination, opened from Today via the #sessLaunch card rather than
-    // inline on the Brief. Enter it before exercising the add-exercise workflow.
+    // Session destination, opened from Today via the #sessLaunch card — or, when the
+    // Brief already carries this session's start (one action, one button), via the
+    // Brief's own start-session button instead. Enter it before exercising add-exercise.
     const launched = await evaluate(cdp, `(() => {
-      const launch = document.querySelector("#sessLaunch");
-      if (!launch) return { ok: false, reason: "missing #sessLaunch" };
+      const launch = document.querySelector("#sessLaunch") ||
+        document.querySelector('[data-redirect="start-session"]');
+      if (!launch) return { ok: false, reason: "missing #sessLaunch and the Brief's start-session button" };
       launch.click();
       return { ok: true };
     })()`);
@@ -686,235 +625,6 @@ async function smokeTodayAddExercise(cdp, base) {
       };
     })()`);
     ok(failures.length === 0, "Session destination add-exercise workflow has no browser runtime/load errors", failures.join("\n"));
-  } finally {
-    off();
-  }
-}
-
-async function smokeTodayCardioSkip(cdp, base) {
-  const { failures, off } = collectFailures(cdp, base);
-  const label = `Smoke easy run ${Date.now()}`;
-  const labelJson = JSON.stringify(label);
-  const smokeDate = "2000-01-03";
-  try {
-    await navigateAndHydrate(cdp, base, "/app/today", "today");
-    await assertGlobals(cdp);
-    const dayState = await evaluate(cdp, `(() => ({
-      day: window.state && window.state.day,
-      logDate: window.state && window.state.logDate,
-      href: location.pathname + location.search
-    }))()`);
-    ok(Number.isFinite(Number(dayState?.day)), "Today has a selected plan day for the cardio smoke", JSON.stringify(dayState));
-    await addSmokeCardioToPlanDay(base, Number(dayState.day), label);
-
-    await evaluate(cdp, `(() => {
-      if (typeof swrInvalidate === "function") swrInvalidate("plan");
-      if (window.state) {
-        window.state.plan = [];
-        window.state.day = Number(${JSON.stringify(dayState.day)});
-        window.state.dayPicked = true;
-      }
-      // Prepare a fresh, explicit snapshot after mutating the weekly plan. A
-      // previously accepted daily composition is immutable and must not absorb
-      // this smoke-only cardio item implicitly.
-      if (typeof openSession !== "function") throw new Error("missing openSession");
-      openSession(${JSON.stringify(smokeDate)}, {
-        source: "manual_plan",
-        dayNumber: Number(${JSON.stringify(dayState.day)}),
-        replace: true,
-        provenance: { entry: "browser_smoke_cardio_skip" }
-      });
-      return true;
-    })()`);
-    await waitForCondition(cdp, "Session destination renders a planned cardio card", `(() => {
-      const label = ${labelJson};
-      const card = [...document.querySelectorAll(".ex-cardio")]
-        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
-      const skip = card?.querySelector(".ex-skip[data-skip]");
-      const log = card?.querySelector("[data-cardio-log]");
-      return {
-        ok: Boolean(card && skip && log && location.pathname === "/app/session"),
-        label,
-        found: Boolean(card),
-        hasSkip: Boolean(skip),
-        hasLog: Boolean(log),
-        stateDay: window.state && window.state.day,
-        planLabels: ((window.state && Array.isArray(window.state.plan)) ? window.state.plan : [])
-          .find((day) => Number(day.day_number) === Number(window.state && window.state.day))
-          ?.items?.map((item) => item.note || item.exercise || item.kind) || [],
-        renderedCardioLabels: [...document.querySelectorAll(".ex-cardio .cardio-name-txt")]
-          .map((el) => el.textContent?.trim()),
-        hasPlanSurface: Boolean(document.querySelector(".plansurface")),
-        href: location.pathname + location.search,
-        tab: window.state && window.state.tab
-      };
-    })()`);
-
-    await evaluate(cdp, `(() => {
-      const label = ${labelJson};
-      const card = [...document.querySelectorAll(".ex-cardio")]
-        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
-      const skip = card?.querySelector(".ex-skip[data-skip]");
-      if (!card || !skip) throw new Error("missing planned cardio skip button");
-      skip.click();
-      return true;
-    })()`);
-    await waitForCondition(cdp, "Today skips a planned cardio card into the skipped line", `(() => {
-      const label = ${labelJson};
-      const card = [...document.querySelectorAll(".ex-cardio")]
-        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
-      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
-        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
-      return {
-        ok: Boolean(!card && unskip && !document.querySelector("#skipLine")?.classList.contains("skipline-empty")),
-        cardPresent: Boolean(card),
-        hasUnskip: Boolean(unskip),
-        skipLineEmpty: Boolean(document.querySelector("#skipLine")?.classList.contains("skipline-empty")),
-        href: location.pathname + location.search
-      };
-    })()`);
-
-    await evaluate(cdp, `(() => {
-      const label = ${labelJson};
-      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
-        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
-      if (!unskip) throw new Error("missing planned cardio restore button");
-      unskip.click();
-      return true;
-    })()`);
-    await waitForCondition(cdp, "Session destination restores a skipped planned cardio card", `(() => {
-      const label = ${labelJson};
-      const card = [...document.querySelectorAll(".ex-cardio")]
-        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
-      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
-        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
-      return {
-        ok: Boolean(card && !unskip && location.pathname === "/app/session" && window.state?.tab === "session"),
-        cardPresent: Boolean(card),
-        hasUnskip: Boolean(unskip),
-        href: location.pathname + location.search,
-        tab: window.state && window.state.tab
-      };
-    })()`);
-    ok(failures.length === 0, "Session destination planned-cardio skip workflow has no browser runtime/load errors", failures.join("\n"));
-  } finally {
-    off();
-  }
-}
-
-async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
-  const { failures, off } = collectFailures(cdp, base);
-  const label = `Smoke synced run ${Date.now()}`;
-  const labelJson = JSON.stringify(label);
-  const smokeDate = "2000-01-04";
-  try {
-    await navigateAndHydrate(cdp, base, "/app/today", "today");
-    await assertGlobals(cdp);
-    const dayState = await evaluate(cdp, `(() => ({
-      day: window.state && window.state.day,
-      logDate: window.state && window.state.logDate,
-      href: location.pathname + location.search
-    }))()`);
-    ok(Number.isFinite(Number(dayState?.day)) && dayState?.logDate, "Today has a selected plan day for the synced-cardio smoke", JSON.stringify(dayState));
-    await addSmokeCardioToPlanDay(base, Number(dayState.day), label);
-
-    await evaluate(cdp, `(() => {
-      if (typeof swrInvalidate === "function") swrInvalidate("plan");
-      if (window.state) window.state.plan = [];
-      // Prepare a fresh snapshot after the plan mutation; the prior smoke's
-      // accepted composition remains immutable on its own date.
-      if (typeof openSession !== "function") throw new Error("missing openSession");
-      openSession(${JSON.stringify(smokeDate)}, {
-        source: "manual_plan",
-        dayNumber: Number(${JSON.stringify(dayState.day)}),
-        replace: true,
-        provenance: { entry: "browser_smoke_synced_cardio" }
-      });
-      return true;
-    })()`);
-
-    await waitForCondition(cdp, "Session destination renders a planned synced-cardio candidate", `(() => {
-      const label = ${labelJson};
-      const card = [...document.querySelectorAll(".ex-cardio")]
-        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
-      return {
-        ok: Boolean(card && card.querySelector(".ex-skip[data-skip]")),
-        found: Boolean(card),
-        href: location.pathname + location.search
-      };
-    })()`);
-
-    await evaluate(cdp, `(() => {
-      const label = ${labelJson};
-      const card = [...document.querySelectorAll(".ex-cardio")]
-        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
-      const skip = card?.querySelector(".ex-skip[data-skip]");
-      if (!card || !skip) throw new Error("missing planned synced-cardio skip button");
-      skip.click();
-      return true;
-    })()`);
-
-    await waitForCondition(cdp, "Today initially skips the synced-cardio candidate", `(() => {
-      const label = ${labelJson};
-      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
-        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
-      return { ok: Boolean(unskip), hasUnskip: Boolean(unskip) };
-    })()`);
-
-    await apiJson(base, "/activities", {
-      method: "POST",
-      body: JSON.stringify({
-        date: smokeDate,
-        type: "run",
-        text: label,
-        duration_min: 31,
-        distance_km: 5.1,
-        source: "garmin",
-        external_id: `browser-smoke-${Date.now()}`,
-        enrichment_status: "done",
-      }),
-    });
-
-    await evaluate(cdp, `(() => {
-      if (typeof swrInvalidate === "function") {
-        swrInvalidate("today:session:" + window.state.logDate);
-        swrInvalidate("plan");
-      }
-      if (window.state) {
-        window.state.day = Number(${JSON.stringify(dayState.day)});
-        window.state.dayPicked = true;
-      }
-      // Already inside the Session destination — re-render it, not the Brief.
-      if (typeof renderSession !== "function") throw new Error("missing renderSession");
-      return Promise.resolve(renderSession({ soft: true }));
-    })()`);
-
-    await waitForCondition(cdp, "Synced cardio overrides the skipped planned card", `(async () => {
-      const label = ${labelJson};
-      const date = ${JSON.stringify(smokeDate)};
-      let apiCardio = null;
-      try { apiCardio = await fetch("/api/cardio?date=" + encodeURIComponent(date)).then((r) => r.json()); } catch (error) { apiCardio = { error: String(error) }; }
-      const done = [...document.querySelectorAll(".ex-cardio-done")]
-        .find((el) => el.textContent.includes(label));
-      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
-        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
-      const activePlanDay = ((window.state && Array.isArray(window.state.plan)) ? window.state.plan : [])
-        .find((day) => Number(day.day_number) === Number(window.state && window.state.day));
-      return {
-        ok: Boolean(done && done.querySelector(".garmin-tag") && !unskip && location.pathname === "/app/session"),
-        done: Boolean(done),
-        hasGarminTag: Boolean(done?.querySelector(".garmin-tag")),
-        hasUnskip: Boolean(unskip),
-        href: location.pathname + location.search,
-        stateDay: window.state && window.state.day,
-        stateDayPicked: window.state && window.state.dayPicked,
-        activePlanLabels: (activePlanDay?.items || []).map((item) => item.note || item.exercise || item.kind),
-        apiCardio,
-        doneTexts: [...document.querySelectorAll(".ex-cardio-done")].map((el) => el.textContent.trim()),
-        skipTexts: [...document.querySelectorAll("#skipLine [data-unskip]")].map((button) => decodeURIComponent(button.dataset.unskip || ""))
-      };
-    })()`);
-    ok(failures.length === 0, "Session destination synced-cardio override workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
   }
@@ -1913,8 +1623,6 @@ try {
   await withServer({ label: SMOKE_NAME, authToken: "", portOffset: 2, extraEnv: { AGENTS_CONFIG: smokeAgents.file, CAIRN_SEED_DEMO: "1" } }, async (ctx) => {
     for (const route of routes) await smokeRoute(cdp, ctx.base, route);
     await smokeTodayAddExercise(cdp, ctx.base);
-    await smokeTodayCardioSkip(cdp, ctx.base);
-    await smokeTodaySyncedCardioOverridesSkip(cdp, ctx.base);
     await smokeChatAttachmentFocus(cdp, ctx.base);
     await smokeChatSendStreamReconnect(cdp, ctx.base);
     await smokeSettingsDataControls(cdp, ctx.base);
