@@ -16,11 +16,14 @@ import { db, repo, resetTables } from "./_seed.js";
 import {
   classifyRunEffort,
   deriveHrModel,
+  easyCeiling,
+  EASY_CEILING_TOLERANCE_BPM,
   efficiencyPhrase,
   efficiencyTrend,
   getHrModel,
   hrModelForCoach,
   hrZoneLabel,
+  isEasyHr,
 } from "../dist/repo/hr-model.js";
 import {
   calibrationStatus,
@@ -134,6 +137,63 @@ test("the model reads THIS athlete's numbers — 182 max, a 163×54min effort �
     "45 minutes at 157 is real work for this athlete"
   );
   assert.equal(classifyRunEffort(144, 40, model), "easy", "40 minutes at 144 is an easy run");
+});
+
+// ── the easy-ceiling tolerance ───────────────────────────────────────────────
+// One beat of measurement noise must never flip a genuinely easy run into "above
+// the easy ceiling": a talk-test-easy run averaging one beat over z2_top is still
+// easy. The bug this guards: a Sep 22 easy run averaging 150 bpm on a 149 bpm
+// z2_top was flagged "above the easy ceiling" from raw z2_top with no tolerance.
+test("a 150 bpm average on a 149 bpm z2_top reads as easy (one beat of noise)", () => {
+  const model = {
+    observed_max: 182,
+    lthr: 167,
+    lthr_basis: "field_test",
+    zones: { z1_top: 142, z2_top: 149, z3_top: 157, z4_top: 165 },
+    resting: 54,
+    confidence: "anchored",
+    basis_runs: 12,
+    window_days: 183,
+    updated_at: null,
+  };
+  assert.equal(easyCeiling(model), 149 + EASY_CEILING_TOLERANCE_BPM, "the ceiling carries the tolerance");
+  assert.equal(isEasyHr(150, model), true, "150 on a 149 top, within tolerance, is easy");
+  assert.equal(classifyRunEffort(150, 45, model), "easy", "and the run classifies as easy, not steady");
+});
+
+test("152 bpm on the same 149 bpm z2_top genuinely clears the tolerance and is not easy", () => {
+  const model = {
+    observed_max: 182,
+    lthr: 167,
+    lthr_basis: "field_test",
+    zones: { z1_top: 142, z2_top: 149, z3_top: 157, z4_top: 165 },
+    resting: 54,
+    confidence: "anchored",
+    basis_runs: 12,
+    window_days: 183,
+    updated_at: null,
+  };
+  assert.equal(isEasyHr(152, model), false, "152 clears 149 + 2 tolerance");
+  assert.notEqual(classifyRunEffort(152, 45, model), "easy");
+});
+
+// The case-conference misread this guards against: z1_top (the RECOVERY line) is
+// never the easy ceiling. hr_model.easy_ceiling_bpm and hr_model.bands name the
+// bands explicitly so a reader can never reach for z1 meaning "easy".
+test("hrModelForCoach names the easy ceiling explicitly — never z1_top", () => {
+  seedThisAthlete();
+  const model = deriveHrModel(REF);
+  const spoken = hrModelForCoach(REF);
+  assert.equal(spoken.easy_ceiling_bpm, model.zones.z2_top + EASY_CEILING_TOLERANCE_BPM);
+  assert.notEqual(spoken.easy_ceiling_bpm, model.zones.z1_top, "the easy ceiling is never the recovery line");
+  assert.ok(spoken.bands, "named bands ride beside the raw Z1..Z5 labels");
+  assert.match(spoken.bands.recovery, /recovery/i);
+  assert.match(spoken.bands.easy, /easy/i);
+  assert.match(spoken.bands.steady, /steady/i);
+  assert.match(spoken.bands.threshold, /threshold/i);
+  // The boundaries themselves are unchanged model fractions — only the label differs.
+  assert.match(spoken.bands.recovery, new RegExp(`${model.zones.z1_top}`));
+  assert.match(spoken.bands.easy, new RegExp(`${model.zones.z2_top}`));
 });
 
 test("one freak max-HR reading never drags the whole zone table up with it", () => {

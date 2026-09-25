@@ -94,6 +94,35 @@ function kindWord(kind: unknown): string | null {
   return null;
 }
 
+// A check-in is saved INCREMENTALLY — the athlete may write the same date's row
+// several times as the morning's fields fill in (live data: one date saved five
+// times). A "how many check-ins" or "how many days read low" count must count
+// DAYS, never rows, or one athlete's habit of saving in stages inflates their
+// sample size and can flip a minority into a manufactured majority. This collapses
+// a rowset to one value per date PER COLUMN — the latest non-null write for that
+// column — assuming the rows already arrive ordered id DESC within each date
+// (every caller here orders `date DESC, id DESC`), so the first non-null value
+// seen per date/column during a single pass IS the latest one.
+export function collapseByDateLatestNonNull<T extends Record<string, unknown> & { date: unknown }>(
+  rows: T[],
+  cols: readonly string[]
+): Array<{ date: string } & Record<string, unknown>> {
+  const byDate = new Map<string, { date: string } & Record<string, unknown>>();
+  for (const row of rows) {
+    const date = String(row.date ?? "").slice(0, 10);
+    if (!date) continue;
+    let entry = byDate.get(date);
+    if (!entry) {
+      entry = { date };
+      byDate.set(date, entry);
+    }
+    for (const col of cols) {
+      if (entry[col] == null && row[col] != null) entry[col] = row[col];
+    }
+  }
+  return [...byDate.values()];
+}
+
 // ---------------------------------------------------------------------------
 // 1) override_rhythm — the athlete keeps steering the Brief the same way. Reads
 //    the recorded day_read SUGGESTIONS (canonical reads carry override:null; a
@@ -212,9 +241,12 @@ function checkinSignal(refDate: string): FeltSignalPattern | null {
     return null;
   }
   if (!rows.length) return null;
+  // ONE row per date per column — a check-in saved several times in one morning
+  // must count as one day, not one row per save.
+  const days = collapseByDateLatestNonNull(rows, ["energy", "sleep_feel"]);
 
   const analyze = (col: "energy" | "sleep_feel") => {
-    const vals = rows.map((r) => Number(r[col])).filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
+    const vals = days.map((r) => Number(r[col])).filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
     if (vals.length < CHECKIN_MIN_SAMPLES) return null;
     const low = vals.filter((v) => v <= CHECKIN_LOW_MAX).length;
     const frac = low / vals.length;

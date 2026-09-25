@@ -77,7 +77,15 @@ import {
   type RunDayLock,
   runDayIntensity,
 } from "./run-day-intensity.js";
-import { classifyRunEffort, getHrModel, type HrModel, hrZoneLabel, type HrZoneKey, RUN_TYPE_SQL } from "./hr-model.js";
+import {
+  classifyRunEffort,
+  getHrModel,
+  type HrModel,
+  hrZoneLabel,
+  type HrZoneKey,
+  isEasyHr,
+  RUN_TYPE_SQL,
+} from "./hr-model.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { isReadDayReadiness, sensorIsCurrent } from "./sensor-freshness.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
@@ -2551,7 +2559,7 @@ export function runIntensityDiscipline(date?: string): RunIntensityDiscipline | 
       if (effort === "unknown") continue;
       runs_classified += 1;
       if (effort === "easy") easy_count += 1;
-      if (hr > z2Top) above_easy_count += 1;
+      if (!isEasyHr(hr, model)) above_easy_count += 1;
     }
     return { runs_classified, easy_count, above_easy_count };
   };

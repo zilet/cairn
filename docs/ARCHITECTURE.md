@@ -4086,6 +4086,17 @@ language — it never invents a band from an age formula. State persists in `hr_
 the athlete's physiology. Aerobic efficiency (m·min⁻¹·bpm⁻¹) is tracked internally and voiced only
 as comparative direction — never a number.
 
+**The easy ceiling has ONE tolerance, and ONE name.** `easyCeiling(model)`/`isEasyHr(hr, model)` are
+the single answer to "is this average HR easy for this athlete" — Z2 top plus
+`EASY_CEILING_TOLERANCE_BPM` (2 bpm), so one beat of measurement noise (a strap dropout, a rounding
+edge) never flips a talk-test-easy run into "above the easy ceiling". `classifyRunEffort` and
+`runIntensityDiscipline`'s above/below-easy tally both route through it; the displayed zone bands
+(`zones`, Z1–Z5) keep the model's own raw fractions unchanged. `hrModelForCoach()` — the `hr_model`
+prompt key — carries this ceiling explicitly as `easy_ceiling_bpm`, plus `bands` (recovery/easy/
+steady/threshold, the same four boundaries as `zones` under plain-English names): a reader unfamiliar
+with this athlete's zone numbering can no longer mistake `z1_top` (the recovery line) for the easy
+ceiling — the misread a case-conference opinion once made.
+
 `calibration.ts` is the elite-coach testing loop for BOTH domains: what is anchored, how stale it
 is (freshness words, never day counts), and whether a test is worth suggesting — `due` only when a
 stale quantity is actually steering a live decision (a dated race for the run zones; three
@@ -4097,6 +4108,17 @@ Epley path. Suggestions rotate variant sets, pass the reading grammar, are cappe
 nothing — pull, never push. Surfaces: `GET /api/calibration/status` + the `get_calibration_status`
 MCP tool, one quiet freshness line on Endurance, and coach-context keys projected at the `day_read`
 and `session` sites only.
+
+## Felt signals count DAYS, never rows (`src/repo/felt-signals.ts`)
+
+A `checkins` row is saved incrementally as the morning's fields fill in, so one date can carry
+several rows. `collapseByDateLatestNonNull()` folds a rowset to one value per date PER COLUMN (the
+latest non-null write for that column) before anything counts a sample or averages one — otherwise a
+day saved five times outweighs four days saved once, and a minority read can be counted into a
+manufactured majority. `checkinSignal()` (the `checkin_signal` felt-signal pattern) and
+`energy-deficiency.ts`'s `moodEnergyArm()` both collapse through it before their `>=N samples` gates
+and averages; extend any new "most check-ins"/persistence read over `checkins` the same way rather
+than counting rows.
 
 ## The goal-anchored run ramp (`src/repo/run-ramp.ts`)
 

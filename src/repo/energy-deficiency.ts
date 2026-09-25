@@ -56,6 +56,7 @@ import { db } from "../db.js";
 import { createHash } from "node:crypto";
 import { capProtectiveRaise, type CutTdeeBasis, cutReaffirmation, deriveCutTarget } from "./cut-target.js";
 import { estimateExpenditure } from "./expenditure.js";
+import { collapseByDateLatestNonNull } from "./felt-signals.js";
 import { getActiveNutritionTarget, getLatestNutritionTarget } from "./nutrition.js";
 import { computeGoalCheck } from "./profile.js";
 import { getProgramState } from "./program-state.js";
@@ -336,14 +337,18 @@ function moodEnergyArm(asOf: string): EnergyDeficiencyArm {
   let rows: any[] = [];
   try {
     rows = db
-      .prepare(`SELECT date, mood, energy FROM checkins WHERE date BETWEEN ? AND ? ORDER BY date LIMIT 200`)
+      .prepare(`SELECT date, mood, energy FROM checkins WHERE date BETWEEN ? AND ? ORDER BY date, id DESC LIMIT 200`)
       .all(priorFrom, asOf) as any[];
   } catch {
     rows = [];
   }
+  // A check-in is saved incrementally — several rows can share one date — so this
+  // collapses to one value per date per column before it counts samples or
+  // averages them; otherwise a day saved five times outweighs four days saved once.
+  const days = collapseByDateLatestNonNull(rows, ["mood", "energy"]);
   const recent: number[] = [];
   const prior: number[] = [];
-  for (const row of rows) {
+  for (const row of days) {
     const values = [finite(row.mood), finite(row.energy)].filter((value): value is number => value != null);
     if (!values.length) continue;
     (isoDay(row.date) >= recentFrom ? recent : prior).push(mean(values)!);

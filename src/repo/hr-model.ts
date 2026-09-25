@@ -298,6 +298,31 @@ export function zonesFromLthr(lthr: number): NonNullable<HrModel["zones"]> {
   };
 }
 
+// One beat of measurement noise (a strap dropout, a rounding edge, a 150 read on a
+// 149 ceiling) must never flip a genuinely easy run into "above the easy ceiling" —
+// the athlete's own talk-test pace does not change because the average landed one
+// beat over a line drawn from a model, not a stopwatch. This is the ONE tolerance;
+// every "is this HR easy" question goes through `isEasyHr`/`easyCeiling` below so no
+// consumer re-derives its own slop.
+export const EASY_CEILING_TOLERANCE_BPM = 2;
+
+/** The athlete's own easy ceiling, in bpm — Z2 top plus the one measurement-noise
+ * tolerance. Null when the model can't speak. This IS the number "over the easy
+ * ceiling" language means; never the raw `zones.z2_top` on its own. */
+export function easyCeiling(model?: HrModel): number | null {
+  const m = model || getHrModel();
+  return m.zones ? m.zones.z2_top + EASY_CEILING_TOLERANCE_BPM : null;
+}
+
+/** Is this average HR easy for this athlete — within the noise-tolerant easy
+ * ceiling? `null`/`unknown` inputs read as not-easy (a caller with nothing to
+ * classify should not count it toward "easy" either way). */
+export function isEasyHr(hr: number | null | undefined, model?: HrModel): boolean {
+  const value = num(hr);
+  const ceiling = easyCeiling(model);
+  return value != null && ceiling != null && value <= ceiling;
+}
+
 export function hrZoneBand(key: HrZoneKey, model?: HrModel): { low: number | null; high: number | null } {
   const m = model || getHrModel();
   if (!m.zones) return { low: null, high: null };
@@ -344,7 +369,7 @@ export function classifyRunEffort(
   const hr = num(avgHr);
   if (hr == null || !m.zones || m.confidence === "insufficient") return "unknown";
   const minutes = num(durationMin);
-  if (hr <= m.zones.z2_top) {
+  if (isEasyHr(hr, m)) {
     // A short blast that still averaged easy is a warm-up, not a session — but it
     // is not "quality" either, and the neutral floor for it is exactly "easy".
     return "easy";
@@ -426,7 +451,11 @@ export function efficiencyTrend(windowDays = 120, dateISO?: string): EfficiencyT
 
   const points: EfficiencyPoint[] = [...buckets.entries()]
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-    .map(([month, bucket]) => ({ month, mean: Math.round((bucket.sum / bucket.runs) * 1000) / 1000, runs: bucket.runs }));
+    .map(([month, bucket]) => ({
+      month,
+      mean: Math.round((bucket.sum / bucket.runs) * 1000) / 1000,
+      runs: bucket.runs,
+    }));
   const runs = rows.length;
 
   let direction: EfficiencyTrend["direction"] = null;
@@ -481,7 +510,36 @@ export interface HrModelSummary {
   basis_runs: number;
   /** Athlete-facing bpm bands, derived — never an age formula. Null when unavailable. */
   zones: Record<HrZoneKey, string> | null;
+  /**
+   * THE number "easy" / "over the easy ceiling" means for this athlete — Z2 top
+   * plus the one measurement-noise tolerance (see `easyCeiling`/`EASY_CEILING_TOLERANCE_BPM`
+   * above). Named explicitly so a reader — human or agent — can never reach for
+   * `zones.z1` (the recovery line, always well BELOW this) when it means "easy".
+   * A misread here once had a case-conference opinion enforce a <142 bpm ceiling
+   * on easy running when the athlete's own talk-test pace sits at ~150.
+   */
+  easy_ceiling_bpm: number | null;
+  /**
+   * The same four bands `zones` carries, under plain-English effort names instead
+   * of "Z1"/"Z2"/… — z1_top is the RECOVERY line, not the easy ceiling above.
+   * Boundaries are the model's own unchanged fractions; only the label changes.
+   */
+  bands: { recovery: string; easy: string; steady: string; threshold: string } | null;
   efficiency: "improving" | "holding" | "easing" | null;
+}
+
+const BAND_NAMES: Record<"z1" | "z2" | "z3" | "z4", string> = {
+  z1: "recovery",
+  z2: "easy",
+  z3: "steady",
+  z4: "threshold",
+};
+
+function namedBand(key: "z1" | "z2" | "z3" | "z4", model: HrModel): string {
+  const band = hrZoneBand(key, model);
+  if (band.low != null && band.high != null) return `${BAND_NAMES[key]} ${band.low}–${band.high} bpm`;
+  if (band.high != null) return `${BAND_NAMES[key]} ≤${band.high} bpm`;
+  return BAND_NAMES[key];
 }
 
 /**
@@ -500,6 +558,15 @@ export function hrModelForCoach(dateISO?: string): HrModelSummary {
     lthr_basis: model.lthr_basis,
     confidence: model.confidence,
     basis_runs: model.basis_runs,
+    easy_ceiling_bpm: available ? easyCeiling(model) : null,
+    bands: available
+      ? {
+          recovery: namedBand("z1", model),
+          easy: namedBand("z2", model),
+          steady: namedBand("z3", model),
+          threshold: namedBand("z4", model),
+        }
+      : null,
     zones: available
       ? {
           z1: hrZoneLabel("z1", model),

@@ -139,6 +139,24 @@ test("a fortnight of threshold 'easy' runs reads as compressed, with the numbers
   assert.match(read.summary, /none read easy/);
 });
 
+// The measurement-noise tolerance: a talk-test-easy run that averages a beat or
+// two over z2_top (148 here) must still read easy — a chest-strap rounding edge
+// must never flip a genuinely easy morning into "above the easy ceiling".
+test("a run at z2_top + the noise tolerance still reads easy, not above the ceiling", () => {
+  seedModelBasis(REF);
+  const at = (days) => shift(REF, -days);
+  // 150 bpm on a 148 bpm ceiling — one beat past the raw top, inside the tolerance.
+  logRun({ date: at(2), minutes: 40, km: 8, avgHr: 150, maxHr: 165 });
+  logRun({ date: at(5), minutes: 40, km: 8, avgHr: 150, maxHr: 165 });
+  logRun({ date: at(9), minutes: 40, km: 8, avgHr: 150, maxHr: 165 });
+  logRun({ date: at(12), minutes: 40, km: 8, avgHr: 150, maxHr: 165 });
+
+  const read = runIntensityDiscipline(REF);
+  assert.equal(read.easy_count, 4, "all four read easy, within the noise tolerance");
+  assert.equal(read.above_easy_count, 0);
+  assert.notEqual(read.status, "compressed", "noise-level overage must never read as a compressed fortnight");
+});
+
 test("a mixed week is polarized, not compressed — real easy days are the healthy case", () => {
   seedModelBasis(REF);
   const at = (days) => shift(REF, -days);

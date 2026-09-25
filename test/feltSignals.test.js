@@ -132,6 +132,37 @@ test("checkin_signal makes no negative claim when reads are not low", () => {
   assert.equal(p, undefined, "good energy never manufactures a low-energy claim");
 });
 
+// A check-in is saved INCREMENTALLY, so several rows can share one date (live
+// data: one date saved five times). Counting ROWS instead of DAYS lets a single
+// habit of saving in stages manufacture a majority that was never there.
+test("checkin_signal counts DAYS, not rows: duplicate saves for one date count once", () => {
+  // One low reading saved five times must read as ONE low day, not five.
+  for (let i = 0; i < 5; i++) seedCheckin(daysBefore(REF, 1), { sleep_feel: 1 });
+  // Four more distinct, non-low days — five distinct days total, one of them low.
+  for (const n of [2, 3, 4, 5]) seedCheckin(daysBefore(REF, n), { sleep_feel: 4 });
+  const p = buildFeltSignals(REF).patterns.find((x) => x.kind === "checkin_signal");
+  assert.equal(p, undefined, "1 of 5 distinct days low is nowhere near the 60% persistence gate");
+});
+
+// The exact live-data shape the bug was diagnosed from: per-day sleep_feel across
+// a 21-day window is Sep 7->2, Sep 9->3, Sep 13->3, Sep 20->2, Sep 21->4 — 2 of 5
+// distinct days low. Row-counting (Sep 20 saved 5x, Sep 7 saved 3x, etc.) used to
+// read this as 8 of 13 rows low (>=60%) and wrongly fire "rough sleep most
+// check-ins". Collapsed to days, 2 of 5 (40%) must stay silent.
+test("checkin_signal: the live Sep-2026 shape does not manufacture the 'rough sleep' belief", () => {
+  const ref = "2026-09-25";
+  const day = (dateISO, value, saves) => {
+    for (let i = 0; i < saves; i++) seedCheckin(dateISO, { sleep_feel: value });
+  };
+  day("2026-09-07", 2, 3);
+  day("2026-09-09", 3, 1);
+  day("2026-09-13", 3, 1);
+  day("2026-09-20", 2, 5);
+  day("2026-09-21", 4, 2);
+  const p = buildFeltSignals(ref).patterns.find((x) => x.kind === "checkin_signal");
+  assert.equal(p, undefined, "2 of 5 distinct days low (40%) must not fire the persistence belief");
+});
+
 // ---------------------------------------------------------------------------
 // fueling_response
 // ---------------------------------------------------------------------------
