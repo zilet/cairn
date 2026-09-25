@@ -377,6 +377,30 @@ function stampRecoveryWeekIfApplies(p: any, strict = false): void {
 }
 
 
+// The PLAN refused this proposal — its quality check, a movement no longer on the day,
+// a nutrition target outside what the reviewed draft allows. A designed answer about the
+// proposal itself, so a caller may retire the draft and say why. Anything else an apply
+// throws (a locked database, a broken invariant) is NOT a refusal: the draft is still a
+// good request and must stay reviewable. The name stays "Error" so every surface that
+// prints `String(error)` reads exactly as before; `code` is the discriminator.
+export const PROPOSAL_REFUSED = "proposal_refused";
+export class ProposalRefusedError extends Error {
+  readonly code = PROPOSAL_REFUSED;
+}
+export function isProposalRefusal(error: unknown): boolean {
+  return error instanceof ProposalRefusedError || (error as { code?: unknown } | null)?.code === PROPOSAL_REFUSED;
+}
+
+// A failure that says nothing about the proposal: a SQLite error (node:sqlite raises a
+// plain Error carrying `code: 'ERR_SQLITE_ERROR'`, and "database is locked" has no
+// prefix to match on) or a JS runtime fault. Inside the per-change loop these are
+// collected as skipped entries, so the ok:false they produce must not read as a refusal.
+function isInternalApplyFault(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && code.startsWith("ERR_SQLITE")) return true;
+  return error instanceof TypeError || error instanceof ReferenceError || error instanceof RangeError;
+}
+
 // Why a run-only proposal lands nothing. Athlete-facing (the apply receipt renders it).
 export const RUNS_ARE_NOT_PLAN_ITEMS =
   "Runs aren't part of the lifting plan any more — they follow your stated run days, and each week's runs update on their own.";
@@ -1203,7 +1227,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       ? { ...parsed.nutrition, target_kcal: Math.round(revalidatedKcal) }
       : parsed.nutrition;
     const incompatibility = reviewedNutritionTargetIncompatibility(reviewedNutrition);
-    if (incompatibility) throw new Error(incompatibility);
+    if (incompatibility) throw new ProposalRefusedError(incompatibility);
     const { nutrition, clamped } = clampNutritionTarget(reviewedNutrition, { preserveReviewedKcal: true });
     // Close the loop: PERSIST the accepted (clamped, lean-safe) target so the fuel
     // card, goal math and next check-in read THIS number instead of re-deriving the
@@ -1252,7 +1276,9 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   if (recoveryProposal) {
     const quality = Array.isArray(parsed.days) ? validateTrainingPlan(parsed.days) : null;
     if (quality && !quality.ok)
-      throw new Error(`Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`);
+      throw new ProposalRefusedError(
+        `Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`
+      );
     const decision = opts.decisionId != null ? getBrainDecision(Number(opts.decisionId)) : null;
     const effectiveOn = String(
       decision?.effective_date ?? opts.freshnessCheckedAt ?? localDateISO()
@@ -1294,7 +1320,9 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     const orderedDays = orderPlanDaysForEffect(parsed.days as Parameters<typeof replacePlan>[0]);
     const quality = validateTrainingPlan(orderedDays, { volumeFloor: readVolumeFloorContext() });
     if (!quality.ok)
-      throw new Error(`Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`);
+      throw new ProposalRefusedError(
+        `Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`
+      );
     // A restructure rewrites every prescription at once. Snapshot first, diff after,
     // so the ledger can say what moved per movement instead of only "the plan changed".
     const prescriptionsBefore = planPrescriptionSnapshot();
@@ -1330,10 +1358,10 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   const hasChanges = Array.isArray(parsed.changes);
   const hasCardio = Array.isArray(parsed.cardio) && parsed.cardio.length;
   if (!hasChanges && !hasCardio) {
-    throw new Error("Proposal has no valid changes, cardio, or days");
+    throw new ProposalRefusedError("Proposal has no valid changes, cardio, or days");
   }
   if (!hasChanges) {
-    return { ok: false, id, applied: [], added: [], skipped: [], error: RUNS_ARE_NOT_PLAN_ITEMS };
+    return { ok: false, id, applied: [], added: [], skipped: [], refused: true, error: RUNS_ARE_NOT_PLAN_ITEMS };
   }
   const applied: any[] = []; // target tweaks to existing prescriptions
   const added: any[] = []; // movements ADDED to a day (the "add a back movement" intent)
@@ -1375,7 +1403,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       if (e instanceof PlanQualityError || (e?.name === "PlanQualityError" && e?.report)) {
         caughtQuality = e.report as PlanQualityReport;
       }
-      skipped.push({ ...c, error: e.message });
+      skipped.push({ ...c, error: e.message, ...(isInternalApplyFault(e) ? { internal_fault: true } : {}) });
     }
   }
   // A multi-change session correction is one intent. If removal, addition, or a
@@ -1391,6 +1419,9 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       added: [],
       skipped,
       ...(caughtQuality ? { quality: caughtQuality } : {}),
+      // Every part the plan itself turned down is a refusal; one that failed for an
+      // internal reason (a locked database) leaves the draft a live request.
+      refused: !skipped.some((entry) => entry.internal_fault === true),
       error: caughtQuality
         ? "No changes were saved because the resulting plan failed its structural quality check."
         : "No changes were saved because one part of this plan update could not be applied.",
@@ -1419,6 +1450,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       added: [],
       skipped: blockingQuality.map((entry) => ({ error: entry.message, quality_code: entry.code })),
       quality,
+      refused: true,
       error: "No changes were saved because the resulting plan failed its structural quality check.",
     };
   }
@@ -1437,6 +1469,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       applied,
       added,
       skipped,
+      refused: true,
       error: skipped.length
         ? "Couldn't apply these changes — the movement may need to be added through a plan restructure."
         : runsSetAside.length && !applied.length && !added.length

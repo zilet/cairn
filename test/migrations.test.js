@@ -1369,3 +1369,32 @@ test("v109 clears only the HRV values that were Garmin's weekly average on a nig
   assert.equal(blob.hrv.hrvSummary.weeklyAvg, 42);
   d.close();
 });
+
+test("v112 clears a legacy status stamp from ACTIVE directives only, so an un-hide never reads as acknowledged", () => {
+  const v112 = MIGRATIONS.find((m) => m.version === 112);
+  const d = new DatabaseSync(":memory:");
+  // A household DB jumping from an old schema: no table at all is a no-op, not a throw.
+  v112.up(d);
+  d.exec(`CREATE TABLE health_directives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT DEFAULT 'active', status_at TEXT
+  );`);
+  const insert = d.prepare("INSERT INTO health_directives (status, status_at) VALUES (?, ?)");
+  insert.run("active", "2026-08-01 10:00:00"); // un-hidden back to active: the old flip stamped it
+  insert.run("active", null);
+  insert.run("resolved", "2026-08-02 10:00:00"); // the athlete's own Done — kept
+  insert.run("dismissed", "2026-08-03 10:00:00"); // the athlete's own Dismiss — kept
+
+  v112.up(d);
+  v112.up(d); // idempotent
+  const rows = d.prepare("SELECT status, status_at FROM health_directives ORDER BY id").all();
+  assert.deepEqual(
+    rows.map((r) => [r.status, r.status_at]),
+    [
+      ["active", null],
+      ["active", null],
+      ["resolved", "2026-08-02 10:00:00"],
+      ["dismissed", "2026-08-03 10:00:00"],
+    ]
+  );
+  d.close();
+});

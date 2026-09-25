@@ -79,6 +79,7 @@ import {
 } from "./run-day-intensity.js";
 import {
   classifyRunEffort,
+  easyCeiling,
   getHrModel,
   type HrModel,
   hrZoneLabel,
@@ -2467,8 +2468,11 @@ export interface RunIntensityDiscipline {
   runs_classified: number;
   easy_count: number;
   above_easy_count: number;
-  /** The athlete's OWN easy ceiling, bpm. A measurement, never a grade. */
+  /** The personal model's raw Z2 top, bpm — the zone edge, not the spoken ceiling. */
   z2_top: number;
+  /** The athlete's OWN easy ceiling, bpm (`easyCeiling`: Z2 top + the noise tolerance).
+   * THE number every athlete-facing and prompt surface names. A measurement, never a grade. */
+  easy_ceiling_bpm: number;
   lthr: number;
   /** Whether the plan actually asks for easy running (see easyRunningIsPrescribed). */
   easy_prescribed: boolean;
@@ -2494,7 +2498,8 @@ export interface RunIntensityBalance {
   runs_classified: number;
   easy_count: number;
   above_easy_count: number;
-  z2_top: number;
+  /** The athlete's own easy ceiling (`easyCeiling`) — the one number a prompt sees. */
+  easy_ceiling_bpm: number;
 }
 
 // Does the athlete's week ask for easy running at all? Read off the STATED run days
@@ -2524,6 +2529,8 @@ export function runIntensityDiscipline(date?: string): RunIntensityDiscipline | 
   // then speak that number to the athlete with confidence. Implausible model,
   // same answer as no model.
   if (!Number.isFinite(z2Top) || z2Top < 100) return null;
+  // The line "above the easy ceiling" is drawn at, and the number every sentence names.
+  const ceilingBpm = Number(easyCeiling(model));
   // −1: the SQL range is inclusive of both `since` and the read date, so a span of
   // WINDOW−1 back is what makes the window actually hold fourteen days, not fifteen.
   const since = isoDaysAgo(d, RUN_INTENSITY_WINDOW_DAYS - 1);
@@ -2590,13 +2597,13 @@ export function runIntensityDiscipline(date?: string): RunIntensityDiscipline | 
   const prescribed = easy_prescribed ? ", and the plan does ask for easy running" : "";
   const summary =
     status === "compressed"
-      ? `Across the last ${RUN_INTENSITY_WINDOW_DAYS} days, ${above_easy_count} of ${runs_classified} classified ${plural(runs_classified)} finished above this athlete's own easy ceiling of ${z2Top} bpm (threshold around ${lthr} bpm) and none read easy${prescribed}.`
+      ? `Across the last ${RUN_INTENSITY_WINDOW_DAYS} days, ${above_easy_count} of ${runs_classified} classified ${plural(runs_classified)} finished above this athlete's own easy ceiling of ${ceilingBpm} bpm (threshold around ${lthr} bpm) and none read easy${prescribed}.`
       : status === "polarized"
-        ? `Across the last ${RUN_INTENSITY_WINDOW_DAYS} days, ${easy_count} of ${runs_classified} classified ${plural(runs_classified)} read easy and ${above_easy_count} sat above the ${z2Top} bpm easy ceiling.`
+        ? `Across the last ${RUN_INTENSITY_WINDOW_DAYS} days, ${easy_count} of ${runs_classified} classified ${plural(runs_classified)} read easy and ${above_easy_count} sat above the ${ceilingBpm} bpm easy ceiling.`
         : `Only ${runs_classified} ${plural(runs_classified)} in the last ${RUN_INTENSITY_WINDOW_DAYS} days can be read against this athlete's heart-rate model — too thin to describe the easy/hard split.`;
 
   const chronic_summary = chronic?.drifting
-    ? `Across the last ${RUN_INTENSITY_CHRONIC_WINDOW_DAYS} days, ${chronic.above_easy_count} of ${chronic.runs_classified} classified ${plural(chronic.runs_classified)} finished above this athlete's own easy ceiling of ${z2Top} bpm — most of the easy running has drifted up${prescribed}.`
+    ? `Across the last ${RUN_INTENSITY_CHRONIC_WINDOW_DAYS} days, ${chronic.above_easy_count} of ${chronic.runs_classified} classified ${plural(chronic.runs_classified)} finished above this athlete's own easy ceiling of ${ceilingBpm} bpm — most of the easy running has drifted up${prescribed}.`
     : null;
 
   return {
@@ -2606,6 +2613,7 @@ export function runIntensityDiscipline(date?: string): RunIntensityDiscipline | 
     easy_count,
     above_easy_count,
     z2_top: z2Top,
+    easy_ceiling_bpm: ceilingBpm,
     lthr,
     easy_prescribed,
     chronic,
@@ -2631,7 +2639,7 @@ function intensityBalance(date: string): RunIntensityBalance | null {
     runs_classified: read.runs_classified,
     easy_count: read.easy_count,
     above_easy_count: read.above_easy_count,
-    z2_top: read.z2_top,
+    easy_ceiling_bpm: read.easy_ceiling_bpm,
   };
 }
 

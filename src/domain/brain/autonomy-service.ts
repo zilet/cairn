@@ -61,11 +61,12 @@ import { stampsByPlanKey } from "../../repo/prescription-authorship.js";
 import { movementKey, normalizeExerciseName, normalizedExerciseKey } from "../../repo/exercise-canon.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
 import { computeGoalCheck, getProfile, setProfile } from "../../repo/profile.js";
-import { applyProposal, getProposal, listProposals, listReviewHeldProposals, proposalStatus, setProposalStatus, type NormalizedProposalApplyPayload, type OrphanSiblingCleanup } from "../../repo/proposals.js";
+import { applyProposal, getProposal, isProposalRefusal, listProposals, listReviewHeldProposals, proposalStatus, ProposalRefusedError, setProposalStatus, type NormalizedProposalApplyPayload, type OrphanSiblingCleanup } from "../../repo/proposals.js";
 import { RECOVERY_WEEK_INSTRUCTION_PREFIX, revertRecoveryWeekIfOwned } from "../../repo/recovery-week.js";
 import { MEAL_REFRESH_REQUEST_KEY } from "../../repo/meal-refresh-retry.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "../../repo/proposal-intent.js";
 import { buildProgressionProposal } from "../../repo/progression.js";
+import { changesReduceSets } from "../../repo/volume-guard.js";
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { capProtectiveRaise, cutReaffirmation, deriveCutTarget } from "../../repo/cut-target.js";
 import { getSettings } from "../../repo/settings.js";
@@ -125,7 +126,7 @@ function captureEvidenceForShape(shape: ProposalShape, asOf: string) {
   return shape.kind === "nutrition_target" ? captureNutritionProposalEvidence(asOf) : captureProposalEvidence(asOf);
 }
 
-function proposalShape(proposal: any): ProposalShape {
+function proposalShape(proposal: any, opts: { volumeCutIsStructural?: boolean } = {}): ProposalShape {
   if (proposal?.parsed?.kind === "nutrition_target")
     return { kind: "nutrition_target", domain: "nutrition", risk: "low" };
   const recoveryWeek = String(proposal?.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX);
@@ -142,6 +143,23 @@ function proposalShape(proposal: any): ProposalShape {
     // (an unrelated restructure whose prose says "lighter" must not qualify).
     return { kind: "training_structure", domain: "training", risk: "moderate" };
   }
+  // A changes[] payload that LOWERS prescribed volume is structural on every path the
+  // coach's own initiative takes — the conference, a re-offer, the boundary, an orphan
+  // adoption: volume is the field nothing downstream raises again (volume-guard.ts), so
+  // a cut may never take the quiet tier meant for one lift's load nudge. Read against
+  // what the plan holds now — the same detector the case conference classifies with.
+  // Two sources keep the bounded shape whatever routes them: a cut drafted from the
+  // athlete's own conversation (their decision — a cut is no floor) and the routine
+  // progression engine, whose one-step bound and restore ledger ride the changes[]
+  // apply path. The routing entry may opt a caller out too (applyProposalWithAutonomy).
+  if (
+    opts.volumeCutIsStructural !== false &&
+    Array.isArray(proposal?.parsed?.changes) &&
+    !chatOrphanIntent(proposal) &&
+    !ROUTINE_CHANGE_SOURCES.has(String(proposal?.agent ?? "")) &&
+    changesReduceSets(proposal.parsed.changes)
+  )
+    return { kind: "training_structure", domain: "training", risk: "moderate" };
   // A changes[] payload carrying a swap is an exercise rotation, not a bare target
   // tweak — classify it as such for the ledger. It stays low-risk/quiet_apply and
   // shares training_target's next-boundary + freshness handling (kind !== structure).
@@ -1263,7 +1281,14 @@ export function applyProposalWithAutonomy(
 ): any {
   const proposal = getProposal(proposalId);
   if (!proposal) return { ok: false, error: "proposal not found" };
-  const shape = proposalShape(proposal);
+  // A volume cut is structural for the coach's own initiative (proposalShape). Two
+  // routings keep the bounded tier as well: the athlete's own words (their decision — a
+  // cut is no floor), and a protective safety response, which rides the changes[] apply
+  // path where volume-guard's one-step bound and restore ledger are the guard that fits
+  // it — announcing it would park protection until next Monday.
+  const shape = proposalShape(proposal, {
+    volumeCutIsStructural: !(input.explicit_user_request || input.safety_response),
+  });
   const clinicalProvenance =
     serverClinicalProvenance(input.clinical_provenance) ??
     serverClinicalProvenance(proposal.parsed?.clinical_provenance);
@@ -1621,6 +1646,7 @@ export function applyProposalWithAutonomy(
       ok: false,
       applied: false,
       tier: policy.tier,
+      ...(isProposalRefusal(error) ? { refused: true } : {}),
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -1986,7 +2012,12 @@ function reofferParkedAdvisory(
 // live case for this: diet-break drafts written before the cut was reaffirmed. Adopting
 // one on thaw would apply a plan the athlete's own picture has already contradicted, so
 // the sweep supersedes it and records why in the ledger, where the athlete can read it.
-function supersedeStaleDraftOnThaw(proposal: any, decision: ParkedDecision, freshness: ProposalFreshness): void {
+function supersedeStaleDraftOnThaw(
+  proposal: any,
+  decision: ParkedDecision,
+  freshness: ProposalFreshness,
+  tells: ThawTellBudget
+): void {
   const shape = proposalShape(proposal);
   const changed = freshness.changed_components.join(" and ");
   const why =
@@ -2027,7 +2058,7 @@ function supersedeStaleDraftOnThaw(proposal: any, decision: ParkedDecision, fres
   // Retires the draft AND every live review hold pointing at it, in one authoritative
   // call, so the sweep cannot leave the decision open behind a dead draft.
   setProposalStatus(Number(proposal.id), "superseded");
-  if (decisionWasTheAthletesRequest(decision)) {
+  if (thawMayTellAthlete(decision, proposal, draftAgeCeilingDays(shape), tells)) {
     tellAthleteTheirRequestDidNotLand(
       decision,
       freshness.status === "changed"
@@ -2142,7 +2173,12 @@ function tellAthleteTheirRequestDidNotLand(
 // and — when the change was the athlete's own request — answer them in chat. False when
 // the retirement itself failed; the caller then parks the decision exactly as before, so
 // nothing is lost.
-function retireRefusedDraft(decision: ParkedDecision, proposalId: number, reason: string): boolean {
+function retireRefusedDraft(
+  decision: ParkedDecision,
+  proposalId: number,
+  reason: string,
+  mayTell: (proposal: any) => boolean = () => true
+): boolean {
   try {
     const proposal = getProposal(proposalId);
     if (proposal?.status === "draft") setProposalStatus(proposalId, "superseded", { recordDecision: false });
@@ -2170,7 +2206,7 @@ function retireRefusedDraft(decision: ParkedDecision, proposalId: number, reason
       reviewDecisionId: decision.id ?? null,
       action: { proposal_id: proposalId, outcome: "refused_by_plan", apply_error: reason.slice(0, 300) },
     });
-    if (decisionWasTheAthletesRequest(decision))
+    if (decisionWasTheAthletesRequest(decision) && mayTell(proposal))
       tellAthleteTheirRequestDidNotLand(decision, `The plan refused it: ${plainApplyRefusal(reason)}`);
     return true;
   } catch (err) {
@@ -2458,6 +2494,68 @@ export function recordConferenceClinicianNotes(
   }
 }
 
+// ---- A THAW ANSWERS WHAT IS STILL CURRENT, AND NEVER IN A BURST ------------------
+//
+// The thaw re-reads every row an older pass stamped (THAW_PASS_VERSION), so the first
+// sweep after a deploy walks requests that may be weeks old. Telling the athlete about
+// each one would land a stack of "the change you asked for didn't land" lines about
+// things they asked for a month ago. So a thaw ending tells only when the request is
+// still current — inside its own age ceiling, plus the grace a daily sweep needs to
+// catch it at expiry — and at most THAW_REQUEST_TELLS_PER_SWEEP times a sweep. Any
+// other ending is closed silently with its receipt (the ledger still reads it), and the
+// row is stamped so no later pass tells it either: once per decision, told or not.
+const THAW_REQUEST_TELLS_PER_SWEEP = 2;
+const REQUEST_TELL_GRACE_DAYS = 2;
+
+interface ThawTellBudget {
+  remaining: number;
+}
+
+function draftAgeCeilingDays(shape: { kind: string }): number {
+  return shape.kind === "training_structure" ? 14 : 7;
+}
+
+function thawMayTellAthlete(
+  decision: ParkedDecision,
+  proposal: any,
+  ceilingDays: number,
+  tells: ThawTellBudget
+): boolean {
+  if (!decisionWasTheAthletesRequest(decision)) return false;
+  const id = Number(decision.id);
+  const fresh = id > 0 ? (getBrainDecision(id) ?? decision) : decision;
+  const context = ((fresh as any)?.context ?? {}) as Record<string, any>;
+  // Already answered: nothing to spend, and tellAthleteTheirRequestDidNotLand stays quiet.
+  if (context.athlete_told_at || context.athlete_not_told) return false;
+  const createdAt = parseDbTime(proposal?.created_at)?.getTime() ?? Number.NaN;
+  const current =
+    Number.isFinite(createdAt) && (Date.now() - createdAt) / 86_400_000 <= ceilingDays + REQUEST_TELL_GRACE_DAYS;
+  if (current && tells.remaining > 0) {
+    tells.remaining -= 1;
+    return true;
+  }
+  if (id > 0) {
+    try {
+      patchBrainDecision(id, {
+        context: { ...context, athlete_not_told: current ? "thaw_sweep_cap" : "request_not_current" },
+      });
+    } catch (err) {
+      recordAsyncFailure("apply", "thaw_request_not_told", err);
+    }
+  }
+  return false;
+}
+
+// The requested tier a held draft was routed with, as the re-offer should carry it. A
+// requested `clinician` is an opinion, never the floor (that is clinicianFloorHolds',
+// already checked before any re-offer), so it reads as an ask; under lead an ask is a
+// heads-up (leadModelCeiling). Nothing recorded — or an unknown value — carries nothing.
+function thawRequestedTier(context: Record<string, any>, leadMode: CairnLeadModeValue): AutonomyTier | undefined {
+  const requested = String(context.policy_inputs?.requested_tier ?? "");
+  if (!["quiet_apply", "announce", "ask", "clinician"].includes(requested)) return undefined;
+  return leadModelCeiling((requested === "clinician" ? "ask" : requested) as AutonomyTier, leadMode);
+}
+
 // The thaw's own version: a row stamped by an older pass gets one read by this one.
 const THAW_PASS_VERSION = 2;
 
@@ -2537,7 +2635,12 @@ function refileParkedConferenceAdvice(
 
 // A held draft past its age ceiling, set aside with the receipt a person can read — and,
 // when it was the athlete's own request, an answer in chat.
-function setAsideAgedDraftOnThaw(proposal: any, decision: ParkedDecision, ceilingDays: number): void {
+function setAsideAgedDraftOnThaw(
+  proposal: any,
+  decision: ParkedDecision,
+  ceilingDays: number,
+  tells: ThawTellBudget
+): void {
   const shape = proposalShape(proposal);
   recordRetiredDraftReceipt({
     shape,
@@ -2555,7 +2658,7 @@ function setAsideAgedDraftOnThaw(proposal: any, decision: ParkedDecision, ceilin
   });
   // Retires the draft AND every live review hold pointing at it.
   setProposalStatus(Number(proposal.id), "superseded");
-  if (decisionWasTheAthletesRequest(decision)) {
+  if (thawMayTellAthlete(decision, proposal, ceilingDays, tells)) {
     tellAthleteTheirRequestDidNotLand(
       decision,
       `It waited more than ${ceilingDays} days for its day, so it no longer described your week.`
@@ -2589,6 +2692,7 @@ export function thawParkedReviewDecisions(
   let superseded = 0;
   let skipped = 0;
   if (leadMode === "review_everything") return { thawed, superseded, skipped };
+  const tells: ThawTellBudget = { remaining: THAW_REQUEST_TELLS_PER_SWEEP };
   // Built lazily and once: only a conference-marked floor row ever needs it.
   let todaysInputs: ConferenceConflictInputs | null | undefined;
   const conflictInputsToday = (): ConferenceConflictInputs | null => {
@@ -2755,7 +2859,7 @@ export function thawParkedReviewDecisions(
           thawed += 1;
           continue;
         }
-        supersedeStaleDraftOnThaw(proposal, stamped, freshness);
+        supersedeStaleDraftOnThaw(proposal, stamped, freshness, tells);
         superseded += 1;
         continue;
       }
@@ -2765,7 +2869,7 @@ export function thawParkedReviewDecisions(
       // question about a draft too old to apply. A producer that can read it again is
       // regenerated once; anything else is set aside with the receipt.
       const shape = proposalShape(proposal);
-      const ceilingDays = shape.kind === "training_structure" ? 14 : 7;
+      const ceilingDays = draftAgeCeilingDays(shape);
       const createdAt = parseDbTime(proposal.created_at)?.getTime() ?? Number.NaN;
       if (Number.isFinite(createdAt) && (Date.now() - createdAt) / 86_400_000 > ceilingDays) {
         const regenerated = attemptStaleDraftRegeneration(proposal, shape, {
@@ -2779,18 +2883,27 @@ export function thawParkedReviewDecisions(
           thawed += 1;
           continue;
         }
-        setAsideAgedDraftOnThaw(proposal, stamped, ceilingDays);
+        setAsideAgedDraftOnThaw(proposal, stamped, ceilingDays, tells);
         superseded += 1;
         continue;
       }
+      // The tier the change was first asked at rides with the re-offer, through the same
+      // lead ceiling the caller's own policy used: a conference revision asked at `ask`
+      // re-offered with nothing would be re-derived as a bare target tweak and land
+      // QUIETLY — louder was the whole of what was asked for it.
+      const requestedTier = thawRequestedTier(stampedContext, leadMode);
       const result = applyProposalWithAutonomy(proposalId, {
+        ...(requestedTier ? { requested_tier: requestedTier } : {}),
         ...(decisionWasTheAthletesRequest(stamped) ? { explicit_user_request: true } : {}),
       });
       if (["pending", "announced", "applied"].includes(String(result?.decision?.status ?? ""))) thawed += 1;
       else if (
         result?.ok === false &&
+        (result as any)?.refused === true &&
         !result?.decision &&
-        retireRefusedDraft(stamped, proposalId, String(result?.error ?? ""))
+        retireRefusedDraft(stamped, proposalId, String(result?.error ?? ""), (refused) =>
+          thawMayTellAthlete(stamped, refused ?? proposal, ceilingDays, tells)
+        )
       )
         // The plan refused the change outright (the quality check, a movement that is
         // gone). A second identical refusal on every later sweep asks nobody anything;
@@ -3620,7 +3733,10 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         recordFailure(announced.id!, "canceled_moot");
         continue;
       }
-      const shape = proposalShape(proposal);
+      // A volume cut is judged at the boundary as it was routed: structural when routing
+      // recorded it so, bounded when routing kept it bounded (the athlete's own cut, a
+      // protective or routine step — see applyProposalWithAutonomy).
+      const shape = proposalShape(proposal, { volumeCutIsStructural: announced.kind === "training_structure" });
       const boundaryBudgetKind = shape.domain === "nutrition" ? shape.kind : undefined;
       const boundaryBudgetKey = `${shape.domain}:${boundaryBudgetKind ?? "*"}`;
       const coordinated = (announced.context as any)?.coordinated_update === true;
@@ -3955,7 +4071,12 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
           freshnessCheckedAt: asOf,
           revalidatedTargetKcal,
         }) as any;
-        if (!result?.ok) throw new Error(String(result?.error ?? "the change could not be applied"));
+        if (!result?.ok) {
+          // A designed ok:false carries whether the PLAN turned it down; only that is a
+          // refusal the athlete is told about. Anything else stays a parked, retryable row.
+          const message = String(result?.error ?? "the change could not be applied");
+          throw result?.refused === true ? new ProposalRefusedError(message) : new Error(message);
+        }
         const updated = getBrainDecision(announced.id!);
         if (!updated || updated.status !== "applied") throw new Error("the decision did not reach applied status");
         if (
@@ -4006,8 +4127,15 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
       // The athlete's own request that the plan refused (the plan-quality check, a swap
       // whose movement is gone) is ANSWERED, not parked: a review row they cannot act on
       // is the silence this closes. Its draft is retired so no sweep re-offers the same
-      // refusal, and they are told in chat what happened and why.
-      if (requestProposalId > 0 && decisionWasTheAthletesRequest(announced) && retireRefusedDraft(announced, requestProposalId, reason)) {
+      // refusal, and they are told in chat what happened and why. ONLY a genuine plan
+      // refusal: a locked database or a broken invariant says nothing about the request,
+      // so it parks exactly as before — never retired, never "the plan refused it".
+      if (
+        isProposalRefusal(error) &&
+        requestProposalId > 0 &&
+        decisionWasTheAthletesRequest(announced) &&
+        retireRefusedDraft(announced, requestProposalId, reason)
+      ) {
         recordFailure(announced.id!, "apply_threw");
         continue;
       }

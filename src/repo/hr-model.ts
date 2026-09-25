@@ -311,7 +311,13 @@ export const EASY_CEILING_TOLERANCE_BPM = 2;
  * ceiling" language means; never the raw `zones.z2_top` on its own. */
 export function easyCeiling(model?: HrModel): number | null {
   const m = model || getHrModel();
-  return m.zones ? m.zones.z2_top + EASY_CEILING_TOLERANCE_BPM : null;
+  return m.zones ? easyCeilingFromZ2Top(m.zones.z2_top) : null;
+}
+
+/** The same ceiling from a Z2 top a caller already holds (a stored read that carried
+ * only the zone). One rule, so no surface re-adds its own tolerance. */
+export function easyCeilingFromZ2Top(z2Top: number): number {
+  return Math.round(z2Top) + EASY_CEILING_TOLERANCE_BPM;
 }
 
 /** Is this average HR easy for this athlete — within the noise-tolerant easy

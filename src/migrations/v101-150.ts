@@ -408,4 +408,30 @@ export const MIGRATIONS_101_150: Migration[] = [
     name: "plan-item-prescribed-at",
     up: (db) => addColumn(db, "plan_items", "prescribed_at TEXT"),
   },
+  {
+    version: 112,
+    name: "directive-active-status-at-clear",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // An ACTIVE directive carrying `status_at` now means "acknowledged" (the athlete's
+    // Done on a finding that still stands — isAcknowledgedDirective). Before that
+    // meaning existed, every status flip stamped status_at, the un-hide back to active
+    // included, so a legacy active row can carry a stamp nobody meant as a Done and
+    // would read as acknowledged: off the to-do surfaces for a finding the athlete never
+    // saw through. Every such row predates acknowledgement, so the stamp is cleared.
+    // Resolved/dismissed rows keep theirs — that stamp is the athlete's own feedback.
+    // Idempotent: a second pass finds no active row with a stamp.
+    up: (db) => {
+      const hasTable = !!db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'health_directives'`)
+        .get();
+      if (!hasTable) return;
+      const cleared = db
+        .prepare(`UPDATE health_directives SET status_at = NULL WHERE status = 'active' AND status_at IS NOT NULL`)
+        .run();
+      if (Number(cleared.changes) > 0) {
+        log.info(`[migrate] v112: cleared a stale status stamp from ${cleared.changes} active directive(s).`);
+      }
+    },
+  },
 ];

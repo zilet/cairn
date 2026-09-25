@@ -1504,3 +1504,67 @@ test("a referral or a lab retest is filed for the doctor, but only clinical word
   assert.equal(clinicianNoteText("Keep easy runs under the aerobic ceiling."), false);
   assert.equal(clinicianNoteText("Review the medication dosage."), true, "the floor's words are notes too");
 });
+
+// ---- a re-offered revision keeps the tier it was asked at; a volume cut is structural ----
+
+test("a thawed conference hold is re-offered at the tier it was asked at, never re-derived quieter", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(3, "Lower", "Legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 6, target_weight: 205 },
+  ]);
+  const proposal = repo.createProposal("case_conference", "case conference: lower anchors", "", {
+    summary: "Hold Day 3 squat at 185",
+    changes: [{ day_number: 3, exercise: "Back Squat", target_weight: 185 }],
+  });
+  // An older pass parked it at the specialist's ask.
+  const held = applyProposalWithAutonomy(Number(proposal.id), { requested_tier: "ask" });
+  assert.equal(held.decision.status, "review");
+  assert.equal(held.decision.context.policy_inputs.requested_tier, "ask");
+  repo.patchBrainDecision(Number(held.decision.id), { source: "case_conference" });
+
+  const thaw = thawParkedReviewDecisions("lead");
+  assert.equal(thaw.thawed, 1);
+  // Under lead an ask is a heads-up (leadModelCeiling) — announced, never a quiet landing.
+  assert.equal(String(repo.getProposal(Number(proposal.id)).autonomy?.status), "announced");
+});
+
+test("a plan_update that CUTS sets is structural on every routing path, not a bounded target nudge", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(3, "Lower", "Legs", [
+    { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 6, target_weight: 205 },
+    { exercise: "Romanian Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
+  ]);
+  const cut = (agent, instruction = "case conference: volume") =>
+    repo.createProposal(agent, instruction, "", {
+      summary: "Take a set off the Day 3 squat",
+      changes: [{ day_number: 3, exercise: "Back Squat", sets: 3 }],
+    });
+  // Re-offered with nothing at all (the shape a thaw or an orphan adoption re-derives from).
+  const coach = applyProposalWithAutonomy(Number(cut("case_conference").id), {});
+  assert.equal(coach.decision.kind, "training_structure");
+  assert.equal(coach.decision.status, "announced", "a cut announces rather than landing quietly");
+
+  // A load-only change on the same day is still a bounded target nudge.
+  const nudge = repo.createProposal("case_conference", "case conference: load", "", {
+    summary: "Hold the RDL at 175",
+    changes: [{ day_number: 3, exercise: "Romanian Deadlift", target_weight: 175 }],
+  });
+  const quiet = applyProposalWithAutonomy(Number(nudge.id), {});
+  assert.equal(quiet.decision.kind, "training_target");
+
+  // The athlete's own cut is their decision, and a protective step is what quiet_apply
+  // exists for: neither is turned into a structural announcement.
+  const asked = applyProposalWithAutonomy(Number(cut("chat").id), { explicit_user_request: true });
+  assert.notEqual(asked.decision?.kind, "training_structure");
+  const protective = applyProposalWithAutonomy(Number(cut("energy-deficiency").id), {
+    requested_tier: "quiet_apply",
+    safety_response: true,
+  });
+  assert.notEqual(protective.decision?.kind, "training_structure");
+  // Nor is a cut drafted from the athlete's conversation, or the routine engine's own
+  // step, whatever later routes it with nothing (a thaw, an orphan adoption).
+  const fromChat = applyProposalWithAutonomy(Number(cut("chat", "chat: plan edit").id), {});
+  assert.notEqual(fromChat.decision?.kind, "training_structure");
+  const routine = applyProposalWithAutonomy(Number(cut("auto-progression", "auto: progression").id), {});
+  assert.notEqual(routine.decision?.kind, "training_structure");
+});

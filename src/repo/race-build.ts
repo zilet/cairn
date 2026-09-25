@@ -37,7 +37,7 @@ import { weekLayoutRead, type WeekLayoutRead } from "../domain/training/week-lay
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { harmEvidenceOnDay } from "./brain/read-adherence.js";
 import { matchEnduranceModality } from "./heavy-load.js";
-import { getHrModel } from "./hr-model.js";
+import { easyCeiling, getHrModel } from "./hr-model.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
 import { heavyLowerWeekdaySlots, thisWeekPlanDayMap } from "./plan-selection.js";
 import { dowToDayNumber, getEnduranceGoal, isoDow, statedRunDows } from "./profile.js";
@@ -304,12 +304,13 @@ export function paceBandsFor(racePaceSecPerKm: number, distanceKm: number): Pace
 }
 
 // The easy ceiling the run intensity read and the prescriptions already hold easy
-// running to (the personal model's Z2 top). A pace band alone lets an easy run drift
+// running to (the personal model's Z2 top plus its one noise tolerance — `easyCeiling`,
+// the same number every other surface speaks). A pace band alone lets an easy run drift
 // into Z3 on a warm or hilly day at the right pace; the ceiling is the line that holds.
 function easyCeilingBpm(asOf: string): number | null {
   try {
-    const top = Number(getHrModel(asOf)?.zones?.z2_top);
-    return Number.isFinite(top) && top > 0 ? Math.round(top) : null;
+    const ceiling = Number(easyCeiling(getHrModel(asOf)));
+    return Number.isFinite(ceiling) && ceiling > 0 ? Math.round(ceiling) : null;
   } catch {
     return null;
   }

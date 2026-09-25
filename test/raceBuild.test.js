@@ -4,7 +4,7 @@
 // day" fix (an undeclared empty day is a rest day, never a startable training day).
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables } from "./_seed.js";
+import { db, repo, resetTables } from "./_seed.js";
 import {
   fmtClock,
   paceBandsFor,
@@ -17,6 +17,7 @@ import {
   riegel,
 } from "../dist/repo/race-build.js";
 import { raceRamp } from "../dist/repo/run-ramp.js";
+import { hrModelForCoach } from "../dist/repo/hr-model.js";
 
 // Sunday 2026-09-13 is the as-of; Riverside Half is Sunday 2026-11-01 (7 weeks out).
 const TODAY = "2026-09-13";
@@ -278,9 +279,14 @@ test("raceBuild lays out the half: estimate from the watch, fit against the targ
   assert.equal(out.paces.bands.find((b) => b.key === "race").fast_sec_per_km, Math.round(6300 / HALF));
   assert.ok(out.paces.bands.some((b) => b.key === "threshold"));
   // Only easy and long carry an HR ceiling, and only as the model's own number or null.
+  // That number is the ONE easy ceiling (Z2 top + the noise tolerance) the coach's HR
+  // model and every athlete-facing read name — never the raw zone edge.
+  const coachCeiling = hrModelForCoach(TODAY).easy_ceiling_bpm;
   for (const band of out.paces.bands) {
-    if (band.key === "easy" || band.key === "long") assert.ok("hr_ceiling_bpm" in band);
-    else assert.equal(band.hr_ceiling_bpm, undefined);
+    if (band.key === "easy" || band.key === "long") {
+      assert.ok("hr_ceiling_bpm" in band);
+      assert.equal(band.hr_ceiling_bpm, coachCeiling);
+    } else assert.equal(band.hr_ceiling_bpm, undefined);
   }
   assert.ok(out.this_week, "the live engine prescribed a week");
   assert.ok(out.this_week.km > 0);
@@ -483,4 +489,37 @@ test("a restructure's empty day is never written as a plan day, so it can never 
     "a restructure with no strength day at all is refused rather than wiping the plan"
   );
   assert.deepEqual(repo.getPlan().map((d) => d.day_number), [1], "and the refused restructure changed nothing");
+});
+
+test("the easy and long bands carry the ONE easy ceiling: Z2 top plus the noise tolerance", () => {
+  seedRaceProfile("sub-1:45");
+  seedHybridRunner();
+  seedLiftingPlan();
+  // The HR-model fixture athlete: observed max 180 and a 54-minute effort at 163 put
+  // threshold at 166, so Z2 tops out at 148 — and the ceiling every surface names is 150.
+  const source = Number(
+    db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin', 'race-build-hr')`).run().lastInsertRowid
+  );
+  const basis = [
+    [20, 54, 11, 163, 179],
+    [26, 30, 6, 152, 180],
+    [40, 28, 5.5, 147, 179],
+    [55, 25, 5, 143, 174],
+    [70, 33, 6.5, 146, 176],
+  ];
+  for (const [days, minutes, km, avgHr, maxHr] of basis)
+    db.prepare(
+      `INSERT INTO garmin_activities
+         (source_id, external_id, date, type, name, duration_min, moving_min, distance_km, avg_hr, max_hr)
+       VALUES (?, ?, ?, 'running', 'Run', ?, ?, ?, ?, ?)`
+    ).run(source, `race-build-hr-${days}`, daysBefore(TODAY, days), minutes, minutes, km, avgHr, maxHr);
+
+  const out = raceBuild(TODAY);
+  assert.equal(out.available, true, out.reason);
+  const coach = hrModelForCoach(TODAY);
+  assert.equal(coach.easy_ceiling_bpm, 150, "the coach's HR model names 150");
+  for (const key of ["easy", "long"]) {
+    const band = out.paces.bands.find((b) => b.key === key);
+    assert.equal(band.hr_ceiling_bpm, 150, `${key} pace band names the same 150, never the raw 148`);
+  }
 });

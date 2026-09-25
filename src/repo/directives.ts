@@ -36,6 +36,10 @@ export interface DirectiveInput {
   trigger_side?: string | null; // low | high | unknown
   trigger_date?: string | null;
   resurfaced_from_id?: number | null;
+  // Pass-local, NEVER persisted: the trigger is a wearable series whose date tracks the
+  // live reading (propagation.ts withFeedback), so "the same reading" means "not
+  // materially worse", never "the same trigger_date".
+  live_series?: boolean;
 }
 
 export const DIRECTIVE_DOMAINS = new Set(["nutrition", "training", "watch"]);
@@ -373,14 +377,16 @@ function directiveContentUnchanged(cur: any, d: DirectiveInput): boolean {
 // row exists — the caller inserts instead.
 function reviveAcknowledgedRow(source: string, key: string, d: DirectiveInput): any | null {
   const triggerDate = d.trigger_date == null ? "" : String(d.trigger_date).trim().slice(0, 20);
+  // A live series' date moves every morning; the acknowledged verdict that produced this
+  // desire already established it is the same standing reading (not materially worse).
   const row = db
     .prepare(
       `SELECT * FROM health_directives
         WHERE source = ? AND directive_key = ? AND status = 'resolved' AND status_at IS NOT NULL
-          AND COALESCE(trigger_date, '') = ?
+          AND (? = 1 OR COALESCE(trigger_date, '') = ?)
         ORDER BY status_at DESC, id DESC LIMIT 1`
     )
-    .get(source, key, triggerDate) as any;
+    .get(source, key, d.live_series === true ? 1 : 0, triggerDate) as any;
   if (!row) return null;
   updateDirective(row.id, { ...d, status: undefined, status_at: undefined, resurfaced_from_id: undefined });
   db.prepare(`UPDATE health_directives SET status = 'active', status_at = ? WHERE id = ?`).run(

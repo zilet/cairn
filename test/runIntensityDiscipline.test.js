@@ -14,7 +14,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
 import { runIntensityDiscipline, runVarietyRead } from "../dist/repo/run-progression.js";
-import { getHrModel } from "../dist/repo/hr-model.js";
+import { getHrModel, hrModelForCoach } from "../dist/repo/hr-model.js";
 import { dayPlanningSignalState, violatesReadingGrammar } from "../dist/repo/day-read.js";
 import {
   buildUnifiedSignalState,
@@ -131,10 +131,15 @@ test("a fortnight of threshold 'easy' runs reads as compressed, with the numbers
   assert.equal(read.easy_count, 0);
   assert.equal(read.above_easy_count, 4);
   assert.equal(read.z2_top, 148);
+  // The spoken ceiling is easyCeiling's — Z2 top plus the one noise tolerance — so the
+  // athlete, the prompts and hrModelForCoach all name the same number.
+  assert.equal(read.easy_ceiling_bpm, 150);
+  assert.equal(read.easy_ceiling_bpm, hrModelForCoach(REF).easy_ceiling_bpm);
   assert.equal(read.lthr, 166);
   assert.equal(read.easy_prescribed, true, "the plan does ask for the easy runs that aren't happening");
   // The machine register cites its own evidence rather than asserting a mood.
-  assert.match(read.summary, /148 bpm/);
+  assert.match(read.summary, /150 bpm/);
+  assert.doesNotMatch(read.summary, /148 bpm/, "never the raw zone edge");
   assert.match(read.summary, /4 of 4/);
   assert.match(read.summary, /none read easy/);
 });
@@ -243,7 +248,7 @@ test("the compressed read reaches the planning state as a caution that overrules
   assert.equal(obs.safety_override, undefined, "a pattern about a fortnight may not overrule today");
   assert.equal(obs.summary, runIntensityDiscipline(REF).summary, "one summary, written once");
   assert.equal(obs.voice.key, "run_intensity_compressed");
-  assert.equal(obs.voice.subject, "148 bpm");
+  assert.equal(obs.voice.subject, "150 bpm");
   assert.equal(state.dimensions.training_load_tolerance.status, "watch");
 });
 
@@ -405,7 +410,7 @@ test("run_variety carries the intensity balance, which is how the weekly read se
     runs_classified: 4,
     easy_count: 0,
     above_easy_count: 4,
-    z2_top: 148,
+    easy_ceiling_bpm: 150,
   });
 
   // …and it reaches the two sites the endurance bundle serves, on the existing key.
@@ -484,7 +489,7 @@ test("a three-week majority above the easy ceiling reads as chronic drift", () =
     read.chronic.above_easy_count * 2 > read.chronic.runs_classified,
     "the finding is a strict majority, not a count"
   );
-  assert.match(read.chronic_summary, /148 bpm/);
+  assert.match(read.chronic_summary, /150 bpm/);
   assert.match(read.chronic_summary, /21 days/);
 });
 
@@ -529,7 +534,7 @@ test("the chronic observation is advisory: visible at watch, unable to move the 
   assert.equal(obs.direction, "caution");
   assert.equal(obs.advisory_brake, true, "a discipline finding about one lane may not decide what today is");
   assert.equal(obs.voice.key, "run_intensity_chronic_drift");
-  assert.equal(obs.voice.subject, "148 bpm");
+  assert.equal(obs.voice.subject, "150 bpm");
   assert.equal(obs.summary, runIntensityDiscipline(REF).chronic_summary, "one summary, written once");
   assert.equal(state.dimensions.training_load_tolerance.status, "watch", "it IS visible");
   assert.notEqual(

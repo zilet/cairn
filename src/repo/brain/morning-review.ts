@@ -217,8 +217,10 @@ function quietOverrideStreak(date: string): number {
 function easyCeiling(date: string): string | null {
   const read = safe(() => runIntensityDiscipline(date));
   if (!read || read.status !== "compressed") return null;
-  const top = Number(read.z2_top);
-  return Number.isFinite(top) ? `${Math.round(top)} bpm` : null;
+  // `easy_ceiling_bpm` (Z2 top + the noise tolerance), never the raw zone edge: the
+  // same number the signal-state voice and the coach's HR model name.
+  const ceiling = Number(read.easy_ceiling_bpm);
+  return Number.isFinite(ceiling) ? `${Math.round(ceiling)} bpm` : null;
 }
 
 const STREAK_WORDS = ["", "one", "two", "three", "four", "five", "six", "seven"] as const;

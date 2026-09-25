@@ -15,6 +15,7 @@ import {
 } from "./sensor-freshness.js";
 import { recoveryTrendBars } from "./recovery-trend.js";
 import { hrvTrendRead, performanceChannelRead } from "./recovery-science.js";
+import { easyCeilingFromZ2Top } from "./hr-model.js";
 import type { SensorCadence } from "./sensor-cadence.js";
 import {
   dominantSensorCadenceEntry,
@@ -2476,7 +2477,15 @@ export function planningSignalState(input: {
   // because a row asserting "your easy runs are fine" is a sentence the coach then has
   // to spend attention discounting.
   const runIntensity = input.runIntensity;
-  if (runIntensity?.status === "compressed" && Number.isFinite(Number(runIntensity.z2_top)))
+  // The ceiling the athlete hears is `easyCeiling`'s (Z2 top + the noise tolerance) —
+  // the same number the read's own summary and hrModelForCoach name. A read that carried
+  // only the zone edge gets the tolerance through the same one rule.
+  const easyCeilingBpm = Number.isFinite(Number(runIntensity?.easy_ceiling_bpm))
+    ? Math.round(Number(runIntensity.easy_ceiling_bpm))
+    : Number.isFinite(Number(runIntensity?.z2_top))
+      ? easyCeilingFromZ2Top(Number(runIntensity.z2_top))
+      : null;
+  if (runIntensity?.status === "compressed" && easyCeilingBpm != null)
     observations.push(
       observation(
         "training_load_tolerance",
@@ -2488,7 +2497,7 @@ export function planningSignalState(input: {
           runIntensity.summary || "Recent runs finished above this athlete's own easy ceiling, and none read easy."
         ),
         {
-          voice: { key: "run_intensity_compressed", subject: `${Math.round(Number(runIntensity.z2_top))} bpm` },
+          voice: { key: "run_intensity_compressed", subject: `${easyCeilingBpm} bpm` },
           coverage: {
             samples: Number(runIntensity.runs_classified) || 1,
             window_days: Number(runIntensity.window_days) || null,
@@ -2516,11 +2525,7 @@ export function planningSignalState(input: {
   // the reach and show at watch, and it should not be able to walk a lifting day down
   // a rung. Never per-run: nothing here fires on a single outing, and the read is
   // silent below its own six-run floor.
-  else if (
-    runIntensity?.chronic?.drifting &&
-    runIntensity?.chronic_summary &&
-    Number.isFinite(Number(runIntensity.z2_top))
-  )
+  else if (runIntensity?.chronic?.drifting && runIntensity?.chronic_summary && easyCeilingBpm != null)
     observations.push(
       observation(
         "training_load_tolerance",
@@ -2532,7 +2537,7 @@ export function planningSignalState(input: {
         {
           voice: {
             key: "run_intensity_chronic_drift",
-            subject: `${Math.round(Number(runIntensity.z2_top))} bpm`,
+            subject: `${easyCeilingBpm} bpm`,
           },
           coverage: {
             samples: Number(runIntensity.chronic.runs_classified) || 1,

@@ -294,3 +294,30 @@ test("a Got it on a standing finding is not announced as 'you closed out' — a 
   assert.equal(closed.status, "resolved", "nothing keeps a marker-less note in effect");
   assert.match(String(repo.sinceLastLookedCandidate()?.title), /closed out/i, "a real close-out still reads as one");
 });
+
+// ---- an acknowledged wearable finding keeps its baseline, not its date ----
+
+test("an acknowledged HRV directive still standing months on reads CURRENT: the baseline stays, the date follows the watch", async () => {
+  const { annotateDirectiveFreshness } = await import("../dist/repo/propagation.js");
+  for (let i = 3; i >= 1; i--) repo.upsertGarminDailyMetric({ date: localDaysAgo(i), hrv_ms: 40 });
+  repo.deriveDirectives();
+  const [row] = repo.listActiveDirectives().filter((d) => d.marker === "HRV");
+  assert.ok(row, "a below-band week raised the HRV directive");
+  assert.equal(repo.setDirectiveStatusByUser(row.id, "resolved").acknowledged, true);
+  const baseline = Number(repo.getDirective(row.id).trigger_value);
+  // The acknowledgement was made months ago: its snapshot carries that morning's date.
+  db.prepare(`UPDATE health_directives SET trigger_date = ? WHERE id = ?`).run(isoDaysAgo(120), row.id);
+
+  // The watch keeps confirming it — this morning is still below band, no worse.
+  repo.upsertGarminDailyMetric({ date: localDaysAgo(0), hrv_ms: 40 });
+  repo.deriveDirectives();
+  repo.deriveWearableDirectives();
+
+  const [after] = repo.listActiveDirectives().filter((d) => d.marker === "HRV");
+  assert.ok(after, "still in effect");
+  assert.equal(after.acknowledged, true, "still acknowledged — no new to-do");
+  assert.equal(Number(after.trigger_value), baseline, "the materially-worse baseline does not creep forward");
+  assert.equal(after.trigger_date, localDaysAgo(0), "the date is the live reading's, not the acknowledgement's");
+  const [annotated] = annotateDirectiveFreshness([after], localDaysAgo(0));
+  assert.ok(!annotated.past_validity, "a finding the watch still confirms never ages out of what the coach honors");
+});

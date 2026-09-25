@@ -533,9 +533,10 @@ function markerMateriallyWorse(feedback: any, ctx: MarkerContext): boolean {
 // row, at the top of the list, with a new trigger value and date, and a new fingerprint
 // for recordActiveDirectiveDecisions to write into the ledger.
 //
-// Idempotent by construction: it requires a strictly newer trigger_date, so re-deriving
-// against the same panel (which the enrichment queue does once per ingested document)
-// resurfaces nothing the second time.
+// Idempotent by construction: a lab requires a strictly newer trigger_date, so
+// re-deriving against the same panel (which the enrichment queue does once per ingested
+// document) resurfaces nothing the second time; a wearable series (whose row's date
+// follows the live morning) rests on the value alone — see the guard below.
 export function resurfaceWorseningDirectives(source: string, desired: DirectiveInput[]): number {
   let existing: any[] = [];
   try {
@@ -560,7 +561,12 @@ export function resurfaceWorseningDirectives(source: string, desired: DirectiveI
 
     const newDate = String(d.trigger_date ?? "").slice(0, 10);
     const oldDate = String(cur.trigger_date ?? "").slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate) || !(newDate > oldDate)) continue; // same draw → no news
+    // A wearable series' row already carries the live morning's date (withFeedback), so
+    // a week that turned materially worse by this morning's sync is news on the same
+    // date; idempotency there rests on the value — the resurfaced row carries the worse
+    // number, and is not materially worse than itself on the next pass.
+    const newer = d.live_series === true ? newDate >= oldDate : newDate > oldDate;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate) || !newer) continue; // same draw → no news
 
     const zone = matchOptimalZone(String(d.marker ?? cur.marker ?? ""));
     const value = Number(d.trigger_value);
@@ -604,12 +610,28 @@ function directiveFeedbackVerdict(feedback: any, ctx: MarkerContext): FeedbackVe
 }
 
 // Fold the verdict into a desired directive. An acknowledged one carries the athlete's
-// stamp and the trigger snapshot they acknowledged — the baseline a later "materially
-// worse" is judged against must not creep forward one wearable sync at a time — and no
-// resurfaced link (it never left). Anything emitted carries NO stamp, so a re-opened
-// acknowledgement (a newer draw) reads as a to-do again, linked to the feedback it follows.
-function withFeedback(input: DirectiveInput, feedback: any, verdict: FeedbackVerdict): DirectiveInput {
-  if (verdict !== "acknowledge") return { ...input, status_at: null, resurfaced_from_id: feedback?.id ?? null };
+// stamp and the trigger BASELINE they acknowledged (value and side) — the baseline a later
+// "materially worse" is judged against must not creep forward one wearable sync at a
+// time — and no resurfaced link (it never left). Anything emitted carries NO stamp, so a
+// re-opened acknowledgement (a newer draw) reads as a to-do again, linked to the feedback
+// it follows.
+//
+// The DATE is a different fact. For a lab, an acknowledgement only ever stands on the
+// same draw, so the acknowledged date IS the live one. A wearable series "draws" every
+// morning, and trigger_date is what the card's "measured N ago" and the directive's
+// validity read (annotateDirectiveFreshness → readingPastValidity, the fast HRV/RHR
+// class) are judged on: frozen, a still-standing acknowledged HRV directive would read
+// as weeks old and drop out of what the coach honors while the watch kept confirming it.
+// So a wearable's date tracks the live reading; only the baseline stays put.
+function withFeedback(
+  input: DirectiveInput,
+  feedback: any,
+  verdict: FeedbackVerdict,
+  opts: { wearable?: boolean } = {}
+): DirectiveInput {
+  const series = opts.wearable ? { live_series: true } : {};
+  if (verdict !== "acknowledge")
+    return { ...input, ...series, status_at: null, resurfaced_from_id: feedback?.id ?? null };
   const frozen =
     feedback.trigger_value != null &&
     Number.isFinite(Number(feedback.trigger_value)) &&
@@ -618,10 +640,10 @@ function withFeedback(input: DirectiveInput, feedback: any, verdict: FeedbackVer
       ? {
           trigger_value: Number(feedback.trigger_value),
           trigger_side: feedback.trigger_side,
-          trigger_date: feedback.trigger_date,
+          trigger_date: opts.wearable && input.trigger_date ? input.trigger_date : feedback.trigger_date,
         }
       : {};
-  return { ...input, ...frozen, status_at: feedback.status_at, resurfaced_from_id: undefined };
+  return { ...input, ...series, ...frozen, status_at: feedback.status_at, resurfaced_from_id: undefined };
 }
 
 function directiveSourceRef(row: any): string {
@@ -1150,7 +1172,8 @@ function collectMappedDirectives(
               status: "active",
             },
             feedback,
-            verdict
+            verdict,
+            { wearable: ctx.marker?.source === "wearable" }
           ),
           readingDate
         )
@@ -1485,7 +1508,8 @@ function emitFiringClusters(
               status: "active",
             },
             feedback,
-            verdict
+            verdict,
+            { wearable: cl.ctx.marker?.source === "wearable" }
           ),
           readingDate
         )
@@ -1655,7 +1679,7 @@ export function applyReviewDirectives(directives: any[]) {
         : {}),
       status: "active",
     };
-    desired.push(withFeedback(reviewDirective, feedback, verdict));
+    desired.push(withFeedback(reviewDirective, feedback, verdict, { wearable: ctx?.marker?.source === "wearable" }));
   }
   // Diff-based reconcile (never clear-all + reinsert): an unchanged review re-save churns
   // zero rows, a changed directive updates in place, a dropped one soft-resolves.

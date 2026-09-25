@@ -259,6 +259,46 @@ test("two reads for one date (the live 2026-09-23 shape): only the read they wer
   assert.ok(landed.every((line) => !/didn't land/.test(line.text)));
 });
 
+test("two same-kind reads where the earlier question was already closed: the given read is still judged", () => {
+  reset();
+  const date = localDaysAgo(2);
+  const earlier = readAt(date, "easy", "04:01:00");
+  // The legacy shape: before the fingerprint hashed the claim, a same-kind recompute wrote
+  // its own row (and question) for the same date. Copied row for row, later in the morning.
+  const copyRow = (table, where, overrides) => {
+    const cols = db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .map((c) => c.name)
+      .filter((c) => c !== "id");
+    const exprs = cols.map((c) => (c in overrides ? "?" : c));
+    const values = cols.filter((c) => c in overrides).map((c) => overrides[c]);
+    return Number(
+      db
+        .prepare(`INSERT INTO ${table} (${cols.join(", ")}) SELECT ${exprs.join(", ")} FROM ${table} WHERE ${where}`)
+        .run(...values).lastInsertRowid
+    );
+  };
+  const given = copyRow("brain_decisions", `id = ${earlier}`, {
+    created_at: `${date} 08:16:00`,
+    input_fingerprint: `legacy-restated-${date}`,
+  });
+  copyRow("brain_expectations", `decision_id = ${earlier}`, { decision_id: given });
+  trainedAt(date, "11:54:00", 4);
+  // An older rule already closed the midnight row's question as not-the-morning.
+  db.prepare(`UPDATE brain_expectations SET status = 'canceled' WHERE decision_id = ?`).run(earlier);
+
+  evaluateMatureExpectations(TODAY());
+  assert.notEqual(verdictOf(given).verdict, "canceled", "a closed predecessor is never the one judged");
+  const conclusive = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM brain_evaluations e JOIN brain_expectations x ON x.id = e.expectation_id
+        WHERE x.subject_key = ? AND e.verdict IN ('aligned','not_aligned')`
+    )
+    .get(date).n;
+  assert.equal(conclusive, 1, "the date ends with exactly one verdict, never none");
+});
+
 // ------------------------------------------------ the words the athlete reads
 
 test("the team's week speaks a harmless easy day as the team learning, in rotating words", () => {

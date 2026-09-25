@@ -265,7 +265,7 @@ function logHardRun(date) {
 }
 
 // The same fixture athlete the run-intensity suite is built around: threshold 166,
-// easy ceiling 148 bpm. Every basis run sits outside the 14-day window.
+// Z2 top 148 bpm, so an easy ceiling of 150. Every basis run sits outside the 14-day window.
 function seedEasyCeiling(anchor) {
   logWatchRun({ date: shiftDay(anchor, -20), minutes: 54, km: 11, avgHr: 163, maxHr: 179 });
   logWatchRun({ date: shiftDay(anchor, -26), minutes: 30, km: 6, avgHr: 152, maxHr: 180 });
@@ -296,8 +296,9 @@ test("a hard run behind a quiet read is NAMED as the cause, with the athlete's o
   const passage = review.passages[0];
   // The cause, not the bare fact of divergence.
   assert.match(passage, /\brun\b/i, "the run is what the brain knew and never said");
-  // The unlock, in the athlete's own measured ceiling — the one number allowed here.
-  assert.match(passage, /148 bpm/);
+  // The unlock, in the athlete's own measured ceiling — the one number allowed here: Z2
+  // top 148 plus the noise tolerance, the same 150 every other surface names.
+  assert.match(passage, /150 bpm/);
   assert.doesNotMatch(passage, /\d+\s*(?:\/\s*100|%|points?|scores?)/i, "no grades, ever");
   assert.equal(violatesReadingGrammar(passage), null);
   assert.doesNotMatch(passage, /— noted\.$/, "the curt ledger entry is what this replaces");

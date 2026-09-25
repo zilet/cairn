@@ -516,6 +516,12 @@ export function dayReadExpectationRole(
 // that first made it, which is where migration 91 put its question back. Null when the
 // judged row carries no expectation of its own (a pre-ledger read), so the caller keeps
 // its older rule rather than cancelling every question of that day.
+//
+// Only a LIVE question can stand for the day (pending, mature, or already evaluated). A
+// predecessor whose question was canceled — closed as not-the-morning by an older rule —
+// is stepped over, never chosen: choosing it would cancel the given read's live question
+// as "not the morning" while the chosen one never reaches a verdict, and the date would
+// end with none at all.
 function judgedDayReadDecisionId(date: string): number | null {
   let given: MorningDecision | undefined;
   try {
@@ -533,11 +539,22 @@ function judgedDayReadDecisionId(date: string): number | null {
           ORDER BY created_at, id`
       )
       .all(date) as Array<{ id: number; created_at: string | null; action_json: string | null }>;
+    const liveQuestion = db.prepare(
+      `SELECT 1 FROM brain_expectations
+        WHERE decision_id = ? AND metric_key = ? AND status IN ('pending', 'mature', 'evaluated')
+        LIMIT 1`
+    );
+    const hasLiveQuestion = (id: number): boolean => !!liveQuestion.get(id, DAY_READ_ADHERENCE_METRIC);
     const predictive = rows.filter((row) => isPredictiveDayReadKind(decisionActionKind(row)));
     const at = predictive.findIndex((row) => Number(row.id) === judged);
+    let earliestLive: number | null = hasLiveQuestion(judged) ? judged : null;
     for (let i = at - 1; i >= 0 && decisionActionKind(predictive[i]!) === given.kind; i--) {
       judged = Number(predictive[i]!.id);
+      if (hasLiveQuestion(judged)) earliestLive = judged;
     }
+    if (earliestLive != null) return earliestLive;
+    // No live question anywhere in the run: the earlier rule — the row that first made
+    // the claim, when it carries a question at all (a closed one may still be re-opened).
     const own = db
       .prepare(`SELECT 1 FROM brain_expectations WHERE decision_id = ? AND metric_key = ? LIMIT 1`)
       .get(judged, DAY_READ_ADHERENCE_METRIC);
