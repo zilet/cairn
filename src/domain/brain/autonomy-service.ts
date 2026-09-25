@@ -2016,7 +2016,7 @@ function supersedeStaleDraftOnThaw(
   proposal: any,
   decision: ParkedDecision,
   freshness: ProposalFreshness,
-  tells: ThawTellBudget
+  tells: RequestTellBudget
 ): void {
   const shape = proposalShape(proposal);
   const changed = freshness.changed_components.join(" and ");
@@ -2058,7 +2058,7 @@ function supersedeStaleDraftOnThaw(
   // Retires the draft AND every live review hold pointing at it, in one authoritative
   // call, so the sweep cannot leave the decision open behind a dead draft.
   setProposalStatus(Number(proposal.id), "superseded");
-  if (thawMayTellAthlete(decision, proposal, draftAgeCeilingDays(shape), tells)) {
+  if (sweepMayTellAthlete(decision, proposal, draftAgeCeilingDays(shape), tells)) {
     tellAthleteTheirRequestDidNotLand(
       decision,
       freshness.status === "changed"
@@ -2494,34 +2494,46 @@ export function recordConferenceClinicianNotes(
   }
 }
 
-// ---- A THAW ANSWERS WHAT IS STILL CURRENT, AND NEVER IN A BURST ------------------
+// ---- A SWEEP ANSWERS WHAT IS STILL CURRENT, AND NEVER IN A BURST -----------------
 //
-// The thaw re-reads every row an older pass stamped (THAW_PASS_VERSION), so the first
-// sweep after a deploy walks requests that may be weeks old. Telling the athlete about
-// each one would land a stack of "the change you asked for didn't land" lines about
-// things they asked for a month ago. So a thaw ending tells only when the request is
-// still current — inside its own age ceiling, plus the grace a daily sweep needs to
-// catch it at expiry — and at most THAW_REQUEST_TELLS_PER_SWEEP times a sweep. Any
-// other ending is closed silently with its receipt (the ledger still reads it), and the
-// row is stamped so no later pass tells it either: once per decision, told or not.
-const THAW_REQUEST_TELLS_PER_SWEEP = 2;
+// Both deterministic sweeps end athlete requests — the thaw (which re-reads every row an
+// older pass stamped, THAW_PASS_VERSION) and the boundary pass (whose age ceiling retires
+// whatever waited too long). The first of either after a deploy can walk requests that
+// are weeks old, and telling the athlete about each one would land a stack of "the change
+// you asked for didn't land" lines about things they asked for a month ago. So a sweep
+// ending tells only when the request is still current — inside its own age ceiling, plus
+// the grace a daily sweep needs to catch it at expiry — and at most
+// REQUEST_TELLS_PER_SWEEP times a sweep, counted on ONE budget the scheduler tick shares
+// across both passes. Any other ending is closed silently with its receipt (the ledger
+// still reads it), and the row is stamped so no later pass tells it either: once per
+// decision, told or not.
+const REQUEST_TELLS_PER_SWEEP = 2;
 const REQUEST_TELL_GRACE_DAYS = 2;
 
-interface ThawTellBudget {
+/** How many "your request didn't land" lines a sweep may still write. One per tick,
+ * shared by the thaw and the boundary pass (see scheduler.ts). */
+export interface RequestTellBudget {
   remaining: number;
+}
+
+export function newRequestTellBudget(): RequestTellBudget {
+  return { remaining: REQUEST_TELLS_PER_SWEEP };
 }
 
 function draftAgeCeilingDays(shape: { kind: string }): number {
   return shape.kind === "training_structure" ? 14 : 7;
 }
 
-function thawMayTellAthlete(
+// `isRequest` defaults to the ledger's own flag; the boundary pass also passes a
+// restructure the athlete asked for by instruction (isAthleteRequestedRestructure).
+function sweepMayTellAthlete(
   decision: ParkedDecision,
   proposal: any,
   ceilingDays: number,
-  tells: ThawTellBudget
+  tells: RequestTellBudget,
+  isRequest: boolean = decisionWasTheAthletesRequest(decision)
 ): boolean {
-  if (!decisionWasTheAthletesRequest(decision)) return false;
+  if (!isRequest) return false;
   const id = Number(decision.id);
   const fresh = id > 0 ? (getBrainDecision(id) ?? decision) : decision;
   const context = ((fresh as any)?.context ?? {}) as Record<string, any>;
@@ -2537,10 +2549,10 @@ function thawMayTellAthlete(
   if (id > 0) {
     try {
       patchBrainDecision(id, {
-        context: { ...context, athlete_not_told: current ? "thaw_sweep_cap" : "request_not_current" },
+        context: { ...context, athlete_not_told: current ? "sweep_cap" : "request_not_current" },
       });
     } catch (err) {
-      recordAsyncFailure("apply", "thaw_request_not_told", err);
+      recordAsyncFailure("apply", "sweep_request_not_told", err);
     }
   }
   return false;
@@ -2639,7 +2651,7 @@ function setAsideAgedDraftOnThaw(
   proposal: any,
   decision: ParkedDecision,
   ceilingDays: number,
-  tells: ThawTellBudget
+  tells: RequestTellBudget
 ): void {
   const shape = proposalShape(proposal);
   recordRetiredDraftReceipt({
@@ -2658,7 +2670,7 @@ function setAsideAgedDraftOnThaw(
   });
   // Retires the draft AND every live review hold pointing at it.
   setProposalStatus(Number(proposal.id), "superseded");
-  if (thawMayTellAthlete(decision, proposal, ceilingDays, tells)) {
+  if (sweepMayTellAthlete(decision, proposal, ceilingDays, tells)) {
     tellAthleteTheirRequestDidNotLand(
       decision,
       `It waited more than ${ceilingDays} days for its day, so it no longer described your week.`
@@ -2680,6 +2692,8 @@ export interface ThawDeps {
   /** Today's conflict question sheet, for re-reading a conference-marked clinician floor.
    * Defaults to the full coach context; injectable for tests. Read at most once a sweep. */
   conflictInputs?: () => ConferenceConflictInputs | null;
+  /** The sweep's shared tell budget (see RequestTellBudget); a fresh one when omitted. */
+  tells?: RequestTellBudget;
 }
 
 export function thawParkedReviewDecisions(
@@ -2692,7 +2706,7 @@ export function thawParkedReviewDecisions(
   let superseded = 0;
   let skipped = 0;
   if (leadMode === "review_everything") return { thawed, superseded, skipped };
-  const tells: ThawTellBudget = { remaining: THAW_REQUEST_TELLS_PER_SWEEP };
+  const tells: RequestTellBudget = deps.tells ?? newRequestTellBudget();
   // Built lazily and once: only a conference-marked floor row ever needs it.
   let todaysInputs: ConferenceConflictInputs | null | undefined;
   const conflictInputsToday = (): ConferenceConflictInputs | null => {
@@ -2902,7 +2916,7 @@ export function thawParkedReviewDecisions(
         (result as any)?.refused === true &&
         !result?.decision &&
         retireRefusedDraft(stamped, proposalId, String(result?.error ?? ""), (refused) =>
-          thawMayTellAthlete(stamped, refused ?? proposal, ceilingDays, tells)
+          sweepMayTellAthlete(stamped, refused ?? proposal, ceilingDays, tells)
         )
       )
         // The plan refused the change outright (the quality check, a movement that is
@@ -2918,7 +2932,7 @@ export function thawParkedReviewDecisions(
   return { thawed, superseded, skipped };
 }
 
-export function adoptOrphanedDrafts(): {
+export function adoptOrphanedDrafts(opts: { tells?: RequestTellBudget } = {}): {
   adopted: number;
   skipped: number;
   thawed: number;
@@ -2946,7 +2960,7 @@ export function adoptOrphanedDrafts(): {
   // leaves alone — a parked apply_error carries a pending change, so the thaw never touches
   // it, and nothing else ever asked whether the change it carries still exists.
   const closed = retireHoldsWithEndedSource();
-  const thaw = thawParkedReviewDecisions(leadMode);
+  const thaw = thawParkedReviewDecisions(leadMode, { tells: opts.tells });
   let adopted = 0;
   let skipped = 0;
   const now = Date.now();
@@ -3493,7 +3507,11 @@ const CALM_BOUNDARY_OUTCOMES = new Set<BoundaryOutcomeClass>([
   "stale_proposal",
 ]);
 
-export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
+export function applyDueAnnouncedDecisions(
+  asOf = localDateISO(),
+  // The sweep's shared tell budget (RequestTellBudget); a fresh one when omitted.
+  opts: { tells?: RequestTellBudget } = {}
+): {
   applied: number[];
   failed: number[];
   /** One entry per id in `failed`, in the same order, saying WHICH ending it was. */
@@ -3511,6 +3529,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
   // a breakage in every count that watches this pass.
   set_aside: number[];
 } {
+  const tells = opts.tells ?? newRequestTellBudget();
   const due = [
     ...listBrainDecisions({ status: "announced", limit: 100 }),
     ...listBrainDecisions({ status: "pending", limit: 100 }).filter(
@@ -3988,7 +4007,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
             reason_provenance: proposalReasonProvenance(proposal),
           },
         });
-        if (athleteRequest || athleteAsked) {
+        if (sweepMayTellAthlete(announced, proposal, freshnessDays, tells, athleteRequest || athleteAsked)) {
           tellAthleteTheirRequestDidNotLand(
             announced,
             `It waited more than ${freshnessDays} days for its day, so it no longer described your week.`
@@ -4134,7 +4153,9 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         isProposalRefusal(error) &&
         requestProposalId > 0 &&
         decisionWasTheAthletesRequest(announced) &&
-        retireRefusedDraft(announced, requestProposalId, reason)
+        retireRefusedDraft(announced, requestProposalId, reason, (refused) =>
+          sweepMayTellAthlete(announced, refused, draftAgeCeilingDays(proposalShape(refused)), tells)
+        )
       ) {
         recordFailure(announced.id!, "apply_threw");
         continue;

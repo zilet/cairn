@@ -22,6 +22,8 @@ import {
   orphanSweepSignature,
   applyDueAnnouncedDecisions,
   applyProposalWithAutonomy,
+  newRequestTellBudget,
+  type RequestTellBudget,
 } from "./domain/brain/autonomy-service.js";
 import { registerTrainingCacheClear } from "./repo/training-cache.js";
 import { enqueueAgentJob, ensureWeekAheadJob } from "./agentJobs.js";
@@ -270,13 +272,13 @@ let lastOrphanSweepAt = 0;
 
 // Exported so the idle-cost test drives the real gate rather than a restatement of it.
 // Isolated so a failure here never blocks the boundary application that follows it.
-export function runOrphanSweepIfDue(now = Date.now()): boolean {
+export function runOrphanSweepIfDue(now = Date.now(), tells?: RequestTellBudget): boolean {
   try {
     const signature = orphanSweepSignature();
     if (signature === lastOrphanSweepSignature && now - lastOrphanSweepAt < ORPHAN_SWEEP_CADENCE_MS) return false;
     lastOrphanSweepSignature = signature;
     lastOrphanSweepAt = now;
-    const orphans = adoptOrphanedDrafts();
+    const orphans = adoptOrphanedDrafts({ tells });
     if (orphans.adopted) log.info(`[brain] adopted ${orphans.adopted} orphaned draft(s) into the autonomy ledger.`);
     return true;
   } catch (e: any) {
@@ -469,11 +471,14 @@ export function startScheduler() {
   let boundaryApplyDate = "";
   const boundaryApplyTick = () => {
     const today = localToday();
-    runOrphanSweepIfDue();
+    // ONE tell budget for the tick: the thaw (inside the orphan sweep) and the boundary
+    // pass together write at most two "your request didn't land" lines.
+    const tells = newRequestTellBudget();
+    runOrphanSweepIfDue(Date.now(), tells);
     if (boundaryApplyDate === today) return;
     boundaryApplyDate = today;
     try {
-      const result = applyDueAnnouncedDecisions(today);
+      const result = applyDueAnnouncedDecisions(today, { tells });
       if (result.applied.length)
         log.info(`[brain] applied ${result.applied.length} announced change(s) at their natural boundary.`);
       // Also not a failure: the draft's evidence had moved, so the producing op was

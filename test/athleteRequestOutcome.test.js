@@ -4,6 +4,7 @@ import { decideAutonomyTier } from "../dist/brain/autonomy.js";
 import {
   applyDueAnnouncedDecisions,
   applyProposalWithAutonomy,
+  newRequestTellBudget,
   thawParkedReviewDecisions,
 } from "../dist/domain/brain/autonomy-service.js";
 import { db } from "../dist/db.js";
@@ -168,10 +169,71 @@ test("the first thaw after a deploy tells at most two recent requests and closes
 
   const contexts = [...recent, old].map(({ decisionId }) => repo.getBrainDecision(decisionId).context);
   assert.equal(contexts.filter((c) => c.athlete_told_at).length, 2);
-  assert.equal(contexts.filter((c) => c.athlete_not_told === "thaw_sweep_cap").length, 1);
+  assert.equal(contexts.filter((c) => c.athlete_not_told === "sweep_cap").length, 1);
   assert.equal(repo.getBrainDecision(old.decisionId).context.athlete_not_told, "request_not_current");
 
   // Strictly once per decision: another sweep says nothing more.
   thawParkedReviewDecisions("lead");
   assert.equal(repo.listChatMessages(50).length, before + 2);
+});
+
+// An announced request of the athlete's, `days` old by the time its boundary comes.
+function announcedRequest(summary, days, targetWeight) {
+  const proposal = chatDraft(summary, [{ day_number: 1, exercise: "ZReq Press", target_weight: targetWeight }]);
+  const scheduled = applyProposalWithAutonomy(Number(proposal.id), {
+    requested_tier: "announce",
+    explicit_user_request: true,
+  });
+  assert.equal(scheduled.decision.status, "announced");
+  db.prepare(`UPDATE plan_proposals SET created_at = ? WHERE id = ?`).run(sqlAgo(days), proposal.id);
+  return { proposalId: Number(proposal.id), decisionId: Number(scheduled.decision.id), due: scheduled.effective_date };
+}
+
+test("the first boundary after a deploy tells at most two aged requests and closes older ones silently", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedDay([{ exercise: "ZReq Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }]);
+  // Three that just crossed their 7-day ceiling, and two from over a month ago.
+  const recent = [
+    announcedRequest("Press to 101 on day 1", 8, 101),
+    announcedRequest("Press to 102 on day 1", 8, 102),
+    announcedRequest("Press to 103 on day 1", 8, 103),
+  ];
+  const old = [announcedRequest("Press to 104 on day 1", 40, 104), announcedRequest("Press to 99 on day 1", 45, 99)];
+  const before = repo.listChatMessages(50).length;
+
+  const due = applyDueAnnouncedDecisions(recent[0].due);
+  assert.deepEqual(due.applied, [], "every one of them waited past its ceiling");
+  for (const { proposalId, decisionId } of [...recent, ...old]) {
+    assert.equal(repo.getProposal(proposalId).status, "superseded", "each is closed with its receipt");
+    assert.equal(repo.getBrainDecision(decisionId).context.boundary_outcome, "stale_proposal");
+  }
+  const told = repo.listChatMessages(50).slice(before);
+  assert.equal(told.length, 2, "no burst: at most two tells a sweep");
+  assert.ok(told.every((m) => /didn't land/.test(m.content)));
+  assert.ok(!told.some((m) => /Press to (104|99)/.test(m.content)), "a month-old request is not news");
+
+  const contexts = [...recent, ...old].map(({ decisionId }) => repo.getBrainDecision(decisionId).context);
+  assert.equal(contexts.filter((c) => c.athlete_told_at).length, 2);
+  assert.equal(contexts.filter((c) => c.athlete_not_told === "sweep_cap").length, 1);
+  for (const { decisionId } of old)
+    assert.equal(repo.getBrainDecision(decisionId).context.athlete_not_told, "request_not_current");
+
+  // Strictly once per decision: another pass says nothing more.
+  applyDueAnnouncedDecisions(recent[0].due);
+  assert.equal(repo.listChatMessages(50).length, before + 2);
+});
+
+test("the thaw and the boundary pass share one tell budget per tick", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedDay([{ exercise: "ZReq Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }]);
+  parkedRequest("Press to 101 on day 1", 8, 101);
+  parkedRequest("Press to 102 on day 1", 8, 102);
+  const aged = announcedRequest("Press to 103 on day 1", 8, 103);
+  const before = repo.listChatMessages(50).length;
+
+  const tells = newRequestTellBudget();
+  thawParkedReviewDecisions("lead", { tells });
+  applyDueAnnouncedDecisions(aged.due, { tells });
+  assert.equal(repo.listChatMessages(50).length, before + 2, "two for the whole tick, not two per pass");
+  assert.equal(repo.getBrainDecision(aged.decisionId).context.athlete_not_told, "sweep_cap");
 });
