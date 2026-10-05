@@ -3,7 +3,6 @@
   <a href="https://github.com/zilet/cairn/releases/latest"><img src="https://img.shields.io/github/v/release/zilet/cairn?color=8a7f70" alt="Latest release"></a>
   <a href="https://github.com/zilet/cairn/pkgs/container/cairn"><img src="https://img.shields.io/badge/ghcr.io-zilet%2Fcairn-8a7f70?logo=docker&logoColor=white" alt="GHCR image"></a>
   <a href="https://github.com/zilet/cairn/actions/workflows/ci.yml"><img src="https://github.com/zilet/cairn/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/zilet/cairn/stargazers"><img src="https://img.shields.io/github/stars/zilet/cairn?style=social" alt="Stars"></a>
 </p>
 
 
@@ -366,13 +365,21 @@ A cairn is a stack of stones on a trail. It doesn't shout, it doesn't follow you
 tell you where to go — it sits at the junction and marks the path, and you consult it when you get
 there. That's the whole idea.
 
+## Help it find the people it's for
+
+Cairn is young, and it grows the way it behaves: quietly, by word of mouth, from people it actually
+helps. If that's you, three things move it further than anything else:
+
+- **Star the repo** if these are the rules you'd want for your own data. It's how the next person
+  finds it.
+- **Show how you run it** in [Discussions](https://github.com/zilet/cairn/discussions): a Pi on a
+  shelf, a NAS, a VPS, a household of three.
+- **Open an issue when a read gets you wrong.** A read that missed is the most useful bug report
+  Cairn can get.
+
 ## Contributing & license
 
 Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) (Node 26, the thin-adapter rule,
 the migration + service-worker conventions) and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 Licensed under [MIT](LICENSE). Built with Node 26 + TypeScript, Express, `node:sqlite`,
 `@modelcontextprotocol/sdk`, a vanilla PWA, and Docker.
-
-<a href="https://star-history.com/#zilet/cairn&Date">
-  <img src="https://api.star-history.com/svg?repos=zilet/cairn&type=Date" alt="Star history" width="600">
-</a>

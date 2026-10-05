@@ -3,6 +3,7 @@
 //
 //   npm run promo -- [--out media] [--only today,fuel] [--scheme light|dark] [--port 8820]
 //   npm run promo -- --probe /app/today      # print the route's tappable controls, record nothing
+//   npm run promo -- --social                # only the 1280×640 social card, from the demo's own numbers
 //
 // It boots the BUILT server (run `npm run build` first) on a throwaway DATA_DIR seeded
 // with the fictional demo persona and an OFFLINE agents table — the same isolation the
@@ -513,6 +514,145 @@ async function renderHtml(cdp, html, file, { width, height }) {
   rmSync(htmlFile, { force: true });
 }
 
+// ---------- the social card (GitHub's 1280×640) ----------
+// An outcome, not a tagline: the demo persona's own squat line, bodyweight and race ladder,
+// read from the API at render time beside a live Today screen. Nothing on it is typed in.
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+const wordFor = (n) => NUMBER_WORDS[n] ?? String(n);
+const shortDate = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
+async function socialData(base) {
+  const get = async (route) => (await fetch(`${base}${route}`)).json();
+  const [squat, weights, race] = await Promise.all([get("/api/progress/Back%20Squat"), get("/api/bodyweight"), get("/api/race-build")]);
+  // The heavy day's top set: each new high, minus a lighter day superseded within three days.
+  const highs = [];
+  for (const p of squat.points || []) if (!highs.length || p.topWeight > highs.at(-1).topWeight) highs.push(p);
+  const steps = highs.filter((p, i) => {
+    const next = highs[i + 1];
+    return !next || (Date.parse(next.date) - Date.parse(p.date)) / 864e5 > 3;
+  });
+  const capacity = race.capacity || {};
+  const ladder = [];
+  if (capacity.best_week_km) ladder.push({ km: capacity.best_week_km, kind: "logged", week_start: capacity.floor_week_start });
+  for (const w of race.weeks || []) ladder.push({ km: w.km, kind: w.kind, week_start: w.week_start, current: w.current });
+  return {
+    unit: squat.unit || "lb",
+    reps: steps.at(-1)?.topReps,
+    steps,
+    weight: { from: weights[0]?.weight_lb, to: weights.at(-1)?.weight_lb, weeks: Math.round((Date.parse(weights.at(-1)?.date) - Date.parse(weights[0]?.date)) / (7 * 864e5)) },
+    race: { event: race.race?.event, date: race.race?.date, weeks: race.race?.weeks_to_race, km: race.race?.distance_km },
+    floorKm: capacity.best_week_km,
+    ladder,
+  };
+}
+
+function squatSvg(steps, w, h) {
+  const pad = { l: 10, r: 18, t: 16, b: 14 };
+  const ys = steps.map((p) => p.topWeight);
+  const lo = Math.min(...ys) - 4;
+  const hi = Math.max(...ys) + 2;
+  const x = (i) => pad.l + (i * (w - pad.l - pad.r)) / Math.max(1, steps.length - 1);
+  const y = (v) => pad.t + ((hi - v) * (h - pad.t - pad.b)) / (hi - lo);
+  const line = steps.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.topWeight).toFixed(1)}`).join(" ");
+  const area = `${line} L${x(steps.length - 1).toFixed(1)},${h} L${x(0).toFixed(1)},${h} Z`;
+  const dots = steps
+    .map((p, i) => {
+      const last = i === steps.length - 1;
+      return `<circle cx="${x(i)}" cy="${y(p.topWeight)}" r="${last ? 8 : 5.5}" fill="${last ? PALETTE.dawn : PALETTE.ground}" stroke="${last ? PALETTE.dawn : PALETTE.ink}" stroke-width="3"/>`;
+    })
+    .join("");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><defs><linearGradient id="sq" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="${PALETTE.dawn}" stop-opacity=".22"/><stop offset="1" stop-color="${PALETTE.dawn}" stop-opacity="0"/></linearGradient></defs>
+    <path d="${area}" fill="url(#sq)"/><path d="${line}" fill="none" stroke="${PALETTE.ink}" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>${dots}</svg>`;
+}
+
+function ladderSvg(ladder, floorKm, w, h) {
+  const top = Math.max(...ladder.map((l) => l.km)) * 1.12;
+  const gap = 10;
+  const bw = (w - gap * (ladder.length - 1)) / ladder.length;
+  const y = (km) => h - (km * h) / top;
+  const bars = ladder
+    .map((l, i) => {
+      const bx = i * (bw + gap);
+      const fill = l.kind === "logged" ? PALETTE.ink : l.kind === "peak" ? PALETTE.dawn : l.kind === "race" ? "none" : `${PALETTE.ink}2e`;
+      const stroke = l.kind === "race" ? `stroke="${PALETTE.dawn}" stroke-width="3" stroke-dasharray="5 4"` : "";
+      return `<rect x="${bx}" y="${y(l.km)}" width="${bw}" height="${h - y(l.km)}" rx="5" fill="${fill}" ${stroke}/>`;
+    })
+    .join("");
+  const fy = y(floorKm);
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="visible">${bars}
+    <line x1="-6" x2="${w + 6}" y1="${fy}" y2="${fy}" stroke="${PALETTE.ink}" stroke-width="2" stroke-dasharray="3 5" opacity=".55"/>
+    <text x="0" y="${fy - 8}" text-anchor="start" font-family="Martian Mono" font-size="11" letter-spacing=".06em" fill="${PALETTE.ink2}">BEST WEEK ${floorKm} KM</text></svg>`;
+}
+
+function socialHtml(d, phonePng) {
+  const first = d.steps[0];
+  const last = d.steps.at(-1);
+  const lost = Math.round((d.weight.from - d.weight.to) * 10) / 10;
+  return `<!doctype html><meta charset="utf-8"><style>${fontFace}
+  html,body{margin:0;width:1280px;height:640px;overflow:hidden;background:${PALETTE.ground};color:${PALETTE.ink};font-family:"Hanken Grotesk",sans-serif}
+  body{position:relative;background-image:radial-gradient(ellipse at 88% 115%, ${PALETTE.dawn}30, transparent 55%),radial-gradient(ellipse at 0% 0%, #ffffff55, transparent 50%)}
+  .mono{font:500 15px/1.2 "Martian Mono",monospace;letter-spacing:.12em;text-transform:uppercase}
+  .copy{position:absolute;left:72px;top:64px;width:470px}
+  .k{color:${PALETTE.dawn};margin-bottom:26px}
+  h1{font:400 60px/1.04 "Young Serif",serif;letter-spacing:-.015em;margin:0}
+  h1 em{font-style:normal;color:${PALETTE.dawn}}
+  .sub{font-size:23px;line-height:1.42;color:${PALETTE.ink2};margin:26px 0 0}
+  .brand{position:absolute;left:72px;bottom:54px;display:flex;align-items:center;gap:14px;font:400 30px "Young Serif",serif}
+  .brand .mono{font-size:14px;color:${PALETTE.ink2};margin-left:10px;letter-spacing:.08em;text-transform:none}
+  .card{position:absolute;background:#fbf9f4;border-radius:22px;box-shadow:0 22px 50px rgba(25,29,32,.14),0 3px 10px rgba(25,29,32,.07);padding:20px 24px;box-sizing:border-box}
+  .card .mono{font-size:12.5px;color:${PALETTE.ink2}}
+  .big{font:400 40px/1.05 "Young Serif",serif;margin:8px 0 4px;letter-spacing:-.01em}
+  .big small{font-size:22px;color:${PALETTE.ink2}}
+  .note{font-size:16px;color:${PALETTE.ink2}}
+  .note b{color:${PALETTE.ink};font-weight:600}
+  .squat{left:576px;top:52px;width:392px;height:262px}
+  .race{left:576px;top:334px;width:430px;height:256px}
+  .legend{display:flex;gap:16px;font-size:14px;color:${PALETTE.ink2};margin-top:12px}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .phone{position:absolute;right:56px;top:40px;width:262px;height:566px;border-radius:40px;background:${PALETTE.ink};padding:9px;box-sizing:border-box;
+         box-shadow:0 34px 70px rgba(25,29,32,.28),0 6px 18px rgba(25,29,32,.16);transform:rotate(3deg)}
+  .phone img{width:100%;height:100%;object-fit:cover;object-position:top;border-radius:32px;display:block}
+  .undo{position:absolute;left:870px;top:274px;z-index:3;display:flex;align-items:center;gap:12px;background:${PALETTE.ink};color:${PALETTE.ground};
+        border-radius:999px;padding:11px 12px 11px 20px;font-size:16px;box-shadow:0 14px 30px rgba(25,29,32,.25)}
+  .undo span{background:${PALETTE.ground};color:${PALETTE.ink};border-radius:999px;padding:6px 14px;font-weight:600}
+  .demo{position:absolute;right:58px;bottom:14px;font-size:12px;color:${PALETTE.ink2};opacity:.8}</style>
+  <div class="copy">
+    <div class="mono k">Cairn 2.0 · self-hosted wellness OS</div>
+    <h1>Stronger, lighter, and <em>${wordFor(d.race.weeks)} weeks</em> from race day.</h1>
+    <p class="sub">Lifts, runs, food, sleep and labs read as one picture. A coaching team makes the next call. You keep Undo.</p>
+  </div>
+  <div class="brand">${MARK(46, PALETTE.ink)}Cairn<span class="mono">github.com/zilet/cairn</span></div>
+  <div class="phone"><img src="${pathToFileURL(phonePng).href}"></div>
+  <div class="card squat">
+    <div class="mono">Back squat · top set × ${d.reps}</div>
+    <div class="big">${first.topWeight} → ${last.topWeight} <small>${esc(d.unit)}</small></div>
+    ${squatSvg(d.steps, 344, 108)}
+    <div class="note"><b>${wordFor(d.steps.length - 1)} earned steps</b> while bodyweight came down ${lost} ${esc(d.unit)}</div>
+  </div>
+  <div class="undo">Team: Back Squat ${d.steps.at(-2)?.topWeight} → ${last.topWeight} ${esc(d.unit)}<span>↺ Undo</span></div>
+  <div class="card race">
+    <div class="mono">${esc(d.race.event || "Race")} · ${shortDate(d.race.date)}</div>
+    <div class="big" style="font-size:30px;margin-bottom:26px">Sized to what you've run</div>
+    ${ladderSvg(d.ladder, d.floorKm, 382, 104)}
+    <div class="legend"><span><i style="background:${PALETTE.ink}"></i>run</span><span><i style="background:${PALETTE.ink}2e"></i>planned</span><span><i style="background:${PALETTE.dawn}"></i>peak ${d.ladder.find((l) => l.kind === "peak")?.km} km</span><span><i style="border:2px dashed ${PALETTE.dawn};box-sizing:border-box"></i>race week</span></div>
+  </div>
+  <div class="demo">Fictional demo persona · no real health data</div>`;
+}
+
+async function renderSocial(cdp, base, work) {
+  await setup(cdp);
+  await navigate(cdp, `${base}/app/today`);
+  await waitForView(cdp, "today");
+  await sleep(2200);
+  const phonePng = path.join(work, "social-phone.png");
+  writeFileSync(phonePng, Buffer.from((await cdp.command("Page.captureScreenshot", { format: "png" })).data, "base64"));
+  const data = await socialData(base);
+  const target = path.join(OUT, "social-preview.png");
+  await renderHtml(cdp, socialHtml(data, phonePng), target, { width: 1280, height: 640 });
+  console.log(`✓ social: ${path.relative(root, target)}`);
+}
+
 // ---------- probe mode ----------
 async function probe(cdp, base, route) {
   await navigate(cdp, `${base}${route}`);
@@ -558,6 +698,10 @@ async function main() {
 
     if (args.probe) {
       await probe(cdp, server.base, args.probe);
+      return;
+    }
+    if (args.flags.has("social")) {
+      await renderSocial(cdp, server.base, work);
       return;
     }
 
@@ -634,8 +778,7 @@ async function main() {
     };
     const trailer = path.join(OUT, "cairn-v2-trailer.mp4");
     xfadeJoin([still(tOpen, 3.2, "t-open"), ...beats, still(tClose, 3.6, "t-close")], trailer);
-    // The repo's social preview card (GitHub's 1280×640).
-    await renderHtml(cdp, cardHtml({ mark: true, kicker: "Self-hosted wellness OS", title: "Cairn 2.0", sub: "A coach that has already read your whole day.", width: 1280, height: 640 }), path.join(OUT, "social-preview.png"), { width: 1280, height: 640 });
+    await renderSocial(cdp, server.base, work);
     console.log(`✓ trailer: ${path.relative(root, trailer)}`);
   } catch (error) {
     if (server) error.serverLog = server.serverLog();
