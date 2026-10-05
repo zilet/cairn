@@ -21,9 +21,10 @@ import { BUNDLES } from "../scripts/build-client.mjs";
 import { serverEntry, withServer } from "../scripts/smoke-server.mjs";
 import { localDateISO } from "../dist/repo/shared.js";
 
-// The app shell boots via the LAST bundle (it carries the 10-boot shim). Derive
-// it from the build manifest so a bundle rename/reshape can't silently break this.
-const bootBundleUrl = BUNDLES[BUNDLES.length - 1].output.replace(/^public/, "");
+// The app shell boots via the LAST EAGER bundle (it carries the 10-boot shim); lazy
+// bundles are listed after it but never ship in index.html. Derive it from the build
+// manifest so a bundle rename/reshape can't silently break this.
+const bootBundleUrl = BUNDLES.filter((bundle) => !bundle.lazy).at(-1).output.replace(/^public/, "");
 
 const AUTH_TOKEN = "cairn-smoke-auth-token";
 
