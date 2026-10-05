@@ -2,7 +2,8 @@
    01b · Fonts — self-hosted, latin subset, OFL (public/fonts/OFL-*.txt)
    Vendored from the @fontsource tarballs; the app does not load third-party
    fonts. Each face is precached in public/sw.js CORE_ASSETS, and index.html
-   preloads the two that paint first (Hanken Grotesk, Young Serif).
+   preloads the three that paint first (Hanken Grotesk, Young Serif, and the
+   mono label face at 400, whose late swap re-wrapped long labels).
    ------------------------------------------------------------------- */
 @font-face{
   font-family:"Young Serif";font-style:normal;font-weight:400;font-display:swap;

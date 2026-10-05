@@ -1,5 +1,6 @@
 // @ts-check
-// Train in one request. Each Train screen (the home, Program, Endurance) asks for its
+// Train in one request. Each Train screen (the home, Program, Endurance — and Horizon's
+// goal line, whose cards grew out of the Train home's journey reads) asks for its
 // reads by their own paths, as it always has; this primes the request layer with ONE
 // GET /train-home?view=… whose `responses` carry every one of those bodies, keyed by
 // path (routes/screen-responses.ts). A read the fan-in came back without asks for
@@ -7,7 +8,7 @@
 // goes straight to its last-known paint (api-reach.ts). Any write clears every prime.
 // Asked once per open: the same view's same reads asked again inside a few seconds (a
 // repaint, the SWR refresh behind it) ride the first, like the Health fan-in.
-type TrainFanInView = "overview" | "program" | "endurance";
+type TrainFanInView = "overview" | "program" | "endurance" | "goal";
 
 (() => {
   const REUSE_MS = 3000;
@@ -21,6 +22,11 @@ type TrainFanInView = "overview" | "program" | "endurance";
         "/program/blocks/active", "/program/adjustments", "/test-week", "/muscle-trajectory", "/dexa-targeting",
         "/plan/look-ahead",
       ];
+    }
+    if (view === "goal") {
+      // Horizon -> Goal line (horizon-screen.ts renderHorizonGoal): the journey story,
+      // its milestones, the road ahead and the All-goals board's path read.
+      return ["/journey", "/journey/milestones", "/journey/timeline", `/today-path?date=${q(date)}`];
     }
     if (view === "endurance") {
       return [

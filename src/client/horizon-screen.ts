@@ -92,6 +92,8 @@ function wireHorizonBack(root: ParentNode): void {
       horizonBackHtml() +
       `<div id="horizonGoalBody" class="horizon-goal">${loadingState("Reading the goal line…")}</div>`;
     wireHorizonBack(view);
+    // One /train-home?view=goal trip answers the four reads below (train-fan-in-client.ts).
+    if (typeof CairnTrainFanIn !== "undefined") CairnTrainFanIn.prime("goal");
     const [journey, milestones, timeline, path] = await Promise.all([
       api("/journey").catch(() => null),
       api("/journey/milestones").catch(() => null),

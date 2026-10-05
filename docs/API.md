@@ -919,7 +919,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/train-home` | Train in ONE request (routes/screen-responses.ts): `?view=overview\|program\|endurance` picks the screen, `?date=` is the device's local day its dated reads are keyed by. `responses` is keyed by the path each individual route answers, with that route's exact body — every one of those routes still stands on its own. Not memoized: the reads are computed on every open, as the individual routes are. |
+| GET | `/api/train-home` | Train in ONE request (routes/screen-responses.ts): `?view=overview\|program\|endurance` picks the screen (`goal` serves Horizon's goal line, `fuel` Today's Fuel with `?hour=`), `?date=` is the device's local day its dated reads are keyed by. `responses` is keyed by the path each individual route answers, with that route's exact body — every one of those routes still stands on its own. Not memoized: the reads are computed on every open, as the individual routes are. |
 
 ## `/training-agenda`
 

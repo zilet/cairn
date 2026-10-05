@@ -410,6 +410,36 @@ test("the Brief's DATA payload stays under its byte ceiling", () => {
   assert.ok(dataBlock(buildDailyCompositionPrompt(ENVELOPE)).length < full.length * 0.4, "a narrow site cuts far more");
 });
 
+test("a wearable metric that never reported stays out of the prompt; a stale one stays in", () => {
+  seedDemo();
+  const full = repo.getCoachContext().recovery.quality;
+  const stub = Object.entries(full).find(([, m]) => m && m.freshness === "missing" && m.latest_value == null);
+  const kept = Object.entries(full).find(([, m]) => m && m.latest_value != null);
+  assert.ok(stub && kept, "the demo carries both a never-reported metric and a real one");
+  const quality = JSON.parse(dataBlock(buildDayReadPrompt())).recovery.quality;
+  assert.ok(!Object.hasOwn(quality, stub[0]), `${stub[0]} has no reading and rides as an absent key`);
+  assert.ok(Object.hasOwn(quality, kept[0]), `${kept[0]} has a reading and stays`);
+  // A reading that exists but has gone stale is evidence of its own; it is never dropped.
+  const projected = projectCoachContext(
+    { recovery: { quality: { hrv_ms: { latest_value: 51, latest_date: "2026-01-01", sample_count: 1, freshness: "stale" } } } },
+    "day_read"
+  );
+  assert.equal(projected.recovery.quality.hrv_ms.freshness, "stale");
+});
+
+test("directives reach a prompt without their storage identity", () => {
+  seedDemo();
+  const directives = JSON.parse(dataBlock(buildDayReadPrompt())).directives;
+  assert.ok(Array.isArray(directives) && directives.length > 0, "the demo brain carries directives");
+  for (const row of directives) {
+    assert.ok(!Object.hasOwn(row, "directive_key"), "directive_key is the server's dedupe slug, not model input");
+    assert.ok(!Object.hasOwn(row, "created_at"), "created_at is a write stamp; trigger_date carries the reading");
+    assert.ok(row.directive || row.context_note, "the directive's words still ride");
+  }
+  // The coach context itself is untouched: routes and MCP still see the identity.
+  assert.ok(repo.getCoachContext().directives.every((row) => typeof row.directive_key === "string"));
+});
+
 test("getCoachContext stays complete for every non-prompt consumer", () => {
   seedDemo();
   const ctx = repo.getCoachContext();

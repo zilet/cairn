@@ -154,24 +154,65 @@
     };
   }
 
-  // The reads behind Fuel's top slots (the day, the intake band, the ideas). Each slot
-  // used to paint its own skeleton and fill in on its own answer, and every answer
-  // pushed the slots under it down (the meals list and the day card both grow). On a
-  // cold open they are asked together up front, through the SAME cache keys the slots
-  // read, and the surface is written once they have answered — so every slot paints
-  // from its warm peek in one frame. Bounded: a slow read fills in when it lands.
-  // Returns null when every read is already warm (paint at once).
-  const FIRST_PAINT_WAIT_MS = 1500;
-  function firstPaint(date: string, isToday: boolean): Promise<void> | null {
+  // The week-menu card's read (meal-menu-card-controller.ts, under MEALS_KEY).
+  const MENU_PATH = "/mealplans?limit=12";
+
+  // The reads behind Fuel's top slots, as [path, SWR key]: the day, the intake band,
+  // and on today's Fuel the ideas for this hour and the meal-plan journal the week-menu
+  // card reads.
+  function slotReads(date: string, isToday: boolean, h: number): Array<[string, string]> {
     const T = CairnFuelTodayController;
     const I = CairnIdeaCardController;
     const reads: Array<[string, string]> = [
       [T.dayPath(date), T.dayKey(date)],
       [T.bandPath(date), T.bandKey(date)],
-      ...(isToday ? ([[I.path(date, hour()), I.key(date)]] as Array<[string, string]>) : []),
     ];
+    if (isToday) reads.push([I.path(date, h), I.key(date)], [MENU_PATH, MEALS_KEY]);
+    return reads;
+  }
+
+  // Today's Fuel asks those reads in ONE request: /train-home?view=fuel
+  // (routes/screen-responses.ts) carries each body keyed by the path its slot asks
+  // with, and primes the request layer (apiPrime) — every slot keeps asking for its
+  // own path and gets its answer without a trip, cold or revalidating a warm peek. A
+  // read the fan-in came back without asks for itself, and any write clears the
+  // primes. Skipped when every read would be served from a peek without asking, and
+  // asked once per open: a repaint inside a few seconds rides the first.
+  const SERVE_FRESH_MS = 3000; // cachedApi's serveFreshFor: younger peeks never ask
+  const FAN_IN_REUSE_MS = 3000;
+  let lastFanIn: { key: string; at: number } | null = null;
+  function primeFanIn(date: string, reads: Array<[string, string]>, h: number): void {
+    try {
+      if (reads.every(([, key]) => !!peekCached(key, SERVE_FRESH_MS)?.fresh)) return;
+      const path = `/train-home?view=fuel&date=${encodeURIComponent(date)}&hour=${h}`;
+      const key = `${path} ${typeof apiWriteGeneration === "function" ? apiWriteGeneration() : 0}`;
+      if (lastFanIn && lastFanIn.key === key && Date.now() - lastFanIn.at < FAN_IN_REUSE_MS) return;
+      lastFanIn = { key, at: Date.now() };
+      apiPrime(
+        reads.map(([read]) => read),
+        api(path as "/train-home").then((value) => (value as { responses?: unknown } | null)?.responses ?? null)
+      );
+    } catch {
+      /* every slot simply asks for its own path */
+    }
+  }
+
+  // Each slot used to paint its own skeleton and fill in on its own answer, and every
+  // answer pushed the slots under it down (the meals list and the day card both grow,
+  // and the week-menu card lands far taller than its placeholder). On a cold open the
+  // reads are asked together up front, through the SAME cache keys the slots read —
+  // with the lazy meals bundle the menu card renders from — and the surface is written
+  // once they have answered, so every slot (the menu card too) paints from its warm
+  // peek in one frame. Bounded: a slow read fills in when it lands. Returns null when
+  // every read is already warm (paint at once).
+  const FIRST_PAINT_WAIT_MS = 1500;
+  function firstPaint(date: string, isToday: boolean): Promise<void> | null {
+    const h = hour();
+    const reads = slotReads(date, isToday, h);
+    if (isToday) primeFanIn(date, reads, h);
     if (reads.every(([, key]) => !!peekCached(key))) return null;
-    const pending = reads.map(([path, key]) => cachedApi(path, { key }));
+    const pending: Promise<unknown>[] = reads.map(([path, key]) => cachedApi(path, { key }));
+    if (isToday && typeof ensureBundle === "function") pending.push(ensureBundle("meals"));
     for (const read of pending) read.catch(() => {});
     return settledWithin(pending, FIRST_PAINT_WAIT_MS);
   }

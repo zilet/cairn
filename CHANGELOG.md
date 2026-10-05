@@ -49,6 +49,9 @@ link redirects. See [`docs/OPERATIONS.md`](docs/OPERATIONS.md#upgrading-from-v1x
   watch's own wake-up readiness.
 - **Meal plans draft on request.** Automatic weekly drafts are now an opt-in setting, off by default
   (migration 114).
+- **A lighter Brief prompt.** Directives shed their storage identity and wearable metrics that
+  never reported stay out of the prompt (each only at the prompt boundary; routes and MCP see
+  everything), so the morning read ships ~114 KB instead of ~121 KB.
 - **Faster opens.** Train, Health and Session each load with one request. Lazy bundles keep the
   eager shell under its 220 KB budget.
 

@@ -78,13 +78,21 @@ test("GET /train-home answers each view's reads, each exactly as its own route d
       "/plan/look-ahead"],
     endurance: ["/stats", "/endurance-prs", "/endurance-goal", "/run-compliance", "/settings", "/run-plan", "/race-build",
       `/training-agenda?date=${date}`, "/program-state", `/calibration/status?date=${date}`],
+    // Horizon's goal line and Today's Fuel ride the same fan-in.
+    goal: ["/journey", "/journey/milestones", "/journey/timeline", `/today-path?date=${date}`],
+    fuel: [`/nutrition/day?date=${date}`, `/nutrition/intake-band?date=${date}`, `/fuel/ideas?date=${date}&hour=9`,
+      "/mealplans?limit=12"],
   };
   for (const [view, paths] of Object.entries(expected)) {
-    const { body, cc } = await get(`/api/train-home?view=${view}&date=${date}`);
+    const { body, cc } = await get(`/api/train-home?view=${view}&date=${date}${view === "fuel" ? "&hour=9" : ""}`);
     assert.deepEqual(Object.keys(body.responses).sort(), [...paths].sort(), view);
     assert.equal(cc, "private, no-cache");
     await assertMirrorsRoutes(body.responses);
   }
+  // Fuel without a usable hour asks its ideas without one, exactly as the card would.
+  const hourless = await get(`/api/train-home?view=fuel&date=${date}&hour=25`);
+  assert.ok(`/fuel/ideas?date=${date}` in hourless.body.responses);
+  await assertMirrorsRoutes(hourless.body.responses);
   // An unknown view is the home.
   const unknown = await get(`/api/train-home?view=nope&date=${date}`);
   assert.deepEqual(Object.keys(unknown.body.responses).sort(), [...expected.overview].sort());

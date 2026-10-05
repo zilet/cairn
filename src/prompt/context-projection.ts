@@ -854,6 +854,12 @@ function compactSessions(sessions: unknown, limit: number, detail: "full" | "sum
 //     only so a resting-HR row can be checked against its own floor (READING_TRUST,
 //     src/repo/coach.ts) and is never surfaced on its own; its quality entry is a
 //     coverage map for a signal no prompt may speak about.
+function neverRecorded(metric: unknown): boolean {
+  if (!metric || typeof metric !== "object" || Array.isArray(metric)) return false;
+  const row = metric as Record<string, unknown>;
+  return row.freshness === "missing" && row.latest_value == null && !Number(row.sample_count);
+}
+
 function compactRecovery(view: unknown): unknown {
   if (!view || typeof view !== "object" || Array.isArray(view)) return view;
   const row = view as Record<string, unknown>;
@@ -861,7 +867,11 @@ function compactRecovery(view: unknown): unknown {
   const { coverage: _coverage, provenance: _provenance, ...rest } = row;
   if (rest.quality && typeof rest.quality === "object" && !Array.isArray(rest.quality)) {
     const { min_hr: _minHr, ...qualityRest } = rest.quality as Record<string, unknown>;
-    rest.quality = qualityRest;
+    // A metric the athlete's devices have never reported in the window is a fixed-shape
+    // "missing" stub — thirty of them on a typical setup, ~4 KB that says nothing a
+    // missing key does not. Dropped here only; a STALE reading (it has a value) stays,
+    // because how old a reading is is evidence (sensor-freshness).
+    rest.quality = Object.fromEntries(Object.entries(qualityRest).filter(([, metric]) => !neverRecorded(metric)));
   }
   if (rest.verified && typeof rest.verified === "object" && !Array.isArray(rest.verified)) {
     rest.verified = Object.fromEntries(
@@ -958,12 +968,17 @@ function compactReadAdherence(model: unknown): unknown {
 // own baseline (signal_state). Shipped under `directive`, a Brief agent read "favor easy
 // aerobic work" as an order and eased days the deterministic state only watched. So its
 // text rides as `context_note` — the same words, keyed as what they are — and every lab
-// directive passes through untouched. Structure, never string surgery.
+// directive passes through otherwise whole. Structure, never string surgery.
+// Every row also sheds two storage fields at the prompt boundary: `directive_key` is a
+// slug of the directive's own text (the identity the server dedupes and diffs on, never
+// something a model reads or echoes back), and `created_at` is the row's write stamp
+// (`trigger_date` is the reading's date, which is the one that means something). Over a
+// typical connected brain that was ~2.5 KB riding every Brief.
 function compactDirectives(directives: unknown): unknown {
   if (!Array.isArray(directives)) return directives;
   return directives.map((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return item;
-    const row = item as Record<string, unknown>;
+    const { directive_key: _key, created_at: _written, ...row } = item as Record<string, unknown>;
     if (row.role !== "recovery_context") return row;
     const { directive, ...rest } = row;
     return { ...rest, context_note: directive ?? null };

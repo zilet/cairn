@@ -96,8 +96,9 @@ for a move that ships with new icon bytes, since its version bump asks iOS insta
   .09em · `-widest` .14em.
 - The faces are **self-hosted**: latin-subset woff2 under `public/fonts/` (from the `@fontsource`
   tarballs, OFL texts beside them), declared in `src/styles/foundation/fonts.css` with
-  `font-display:swap`, precached in `public/sw.js` `CORE_ASSETS`, and `index.html` preloads only
-  Hanken Grotesk and Young Serif. The app does not load third-party fonts, and no font is ever
+  `font-display:swap`, precached in `public/sw.js` `CORE_ASSETS`, and `index.html` preloads
+  Hanken Grotesk, Young Serif and Martian Mono 400 (the label face: loaded late, its wider
+  letters re-wrapped Today's path kicker and shifted the page). The app does not load third-party fonts, and no font is ever
   fetched from a CDN.
 
 ## Stones

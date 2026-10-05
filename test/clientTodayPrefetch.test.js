@@ -249,11 +249,18 @@ test("the Train fan-in primes each view's reads from ONE /train-home", async () 
   context.CairnTrainFanIn.prime("endurance");
   context.CairnTrainFanIn.prime("program");
   context.CairnTrainFanIn.prime("overview", ["/stats", "/journey"]);
+  context.CairnTrainFanIn.prime("goal");
   assert.deepEqual(asked, [
     "/train-home?view=endurance&date=2026-09-26",
     "/train-home?view=program&date=2026-09-26",
     "/train-home?view=overview&date=2026-09-26",
+    "/train-home?view=goal&date=2026-09-26",
   ]);
+  assert.deepEqual(
+    primed[3].paths,
+    ["/journey", "/journey/milestones", "/journey/timeline", "/today-path?date=2026-09-26"],
+    "Horizon's goal line: the journey cards and the All-goals board"
+  );
   assert.ok(primed[0].paths.includes("/training-agenda?date=2026-09-26"));
   assert.ok(primed[0].paths.includes("/calibration/status?date=2026-09-26"));
   assert.ok(primed[1].paths.includes("/strength-journeys") && primed[1].paths.includes("/dexa-targeting"));

@@ -1,4 +1,5 @@
-// The Train and You -> Health screen fan-ins: the bodies other GET routes answer,
+// The Train (with Horizon's goal line and Today's Fuel) and You -> Health screen
+// fan-ins: the bodies other GET routes answer,
 // computed in ONE request and keyed by the exact path the PWA asks for them with —
 // the same contract as the Today and Horizon-race fan-ins (routes/today-responses.ts):
 //   • each entry is produced by the SAME function its individual route calls, with the
@@ -53,8 +54,13 @@ import { calibrationStatus, dueCalibrations } from "../repo/calibration.js";
 import { forwardTimeline } from "../repo/forward-timeline.js";
 import { journeyMilestones, journeyRead } from "../repo/journey.js";
 import { getBodyMetricsSummary, normalizeUnit } from "../repo/body-metrics.js";
+import { todayPath } from "../repo/today-path.js";
+import { intakeBand } from "../repo/intake-band.js";
+import { fuelIdeas } from "../repo/fuel-ideas.js";
+import { listMealPlans } from "../domain/nutrition/index.js";
 import { buildClinicalReportData, clinicalReportJson, parseReportSections } from "../report.js";
 import { directivesResponse } from "./connected-brain.js";
+import { nutritionDayResponse } from "./nutrition.js";
 import { settingsResponse } from "./operator.js";
 
 export type ScreenResponses = Record<string, unknown>;
@@ -75,23 +81,51 @@ function screenDate(dateQuery: unknown): string {
   return todayDateParam(dateQuery);
 }
 
-export const TRAIN_HOME_VIEWS = ["overview", "program", "endurance"] as const;
+export const TRAIN_HOME_VIEWS = ["overview", "program", "endurance", "goal", "fuel"] as const;
 export type TrainHomeView = (typeof TRAIN_HOME_VIEWS)[number];
 
 function trainView(value: unknown): TrainHomeView {
   return (TRAIN_HOME_VIEWS as readonly string[]).includes(String(value)) ? (value as TrainHomeView) : "overview";
 }
 
+/** The device's local hour Fuel's ideas are asked with, or null when it sent none (or a bad one). */
+function screenHour(hourQuery: unknown): number | null {
+  const hour = hourQuery != null ? Number(hourQuery) : Number.NaN;
+  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : null;
+}
+
 /**
  * Train in one request: `view=overview` (the Train home's twelve reads), `program`
  * (Program's state, anchors, performance, block, adjustments, test week, trajectory,
- * DEXA targeting) or `endurance` (the Endurance screen's week). Dated reads key on
- * `date` exactly as the screen spells them.
+ * DEXA targeting) or `endurance` (the Endurance screen's week). Two screens that grew
+ * out of Train's reads ride the same fan-in: `goal` (Horizon -> Goal line: the journey
+ * story, its milestones, the road-ahead timeline — the cards Train's overview used to
+ * fold away — and the All-goals board's today-path read) and `fuel` (Today -> Fuel's
+ * first paint: the day, the intake band, the ideas for `hour`, and the meal-plan
+ * journal its week-menu card reads). Dated reads key on `date` exactly as the screen
+ * spells them.
  */
-export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown): ScreenResponses {
+export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQuery?: unknown): ScreenResponses {
   const out: ScreenResponses = {};
   const date = screenDate(dateQuery);
   const view = trainView(viewQuery);
+  if (view === "goal") {
+    put(out, "/journey", () => journeyRead(undefined));
+    put(out, "/journey/milestones", () => journeyMilestones(undefined));
+    put(out, "/journey/timeline", () => forwardTimeline(undefined));
+    put(out, `/today-path?date=${q(date)}`, () => todayPath(date));
+    return out;
+  }
+  if (view === "fuel") {
+    const hour = screenHour(hourQuery);
+    put(out, `/nutrition/day?date=${q(date)}`, () => nutritionDayResponse(date));
+    put(out, `/nutrition/intake-band?date=${q(date)}`, () => intakeBand(date));
+    put(out, `/fuel/ideas?date=${q(date)}${hour == null ? "" : `&hour=${hour}`}`, () =>
+      fuelIdeas(date, { hour: hour ?? undefined, exclude: [] })
+    );
+    put(out, "/mealplans?limit=12", () => listMealPlans(12));
+    return out;
+  }
   if (view !== "endurance") put(out, "/coaching-focus", () => getCoachingFocus());
   if (view === "overview") {
     put(out, "/stats", () => getWeeklyStats());

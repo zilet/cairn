@@ -222,6 +222,12 @@ test("Train, Horizon, Ask, Settings and the week menu preload their closure and 
     [...SHELL_EARLY_READS, "/train-home?view=program&date=2026-09-26", "/profile"].map((p) => `/api${p}`),
     "{date} is the device's local date, the one CairnTrainFanIn asks with"
   );
+  const goalLine = runBoot({ pathname: "/app/horizon/goal" });
+  assert.deepEqual(
+    goalLine.calls,
+    [...SHELL_EARLY_READS, "/train-home?view=goal&date=2026-09-26", "/profile"].map((p) => `/api${p}`),
+    "a cold goal-line link starts its one fan-in with the shell's reads"
+  );
   const plan = runBoot({ pathname: "/app/train/plan" });
   assert.deepEqual(
     plan.links.map((l) => l.href),
@@ -336,6 +342,7 @@ test("the early reads are the ones the boot and each lazy view always ask for", 
     /async function renderPlanEditor\(\): Promise<void> \{\s*return paintPlanEditor\(\);/
   );
   assert.deepEqual(Object.keys(VIEW_EARLY_READS).sort(), [
+    "horizon:goal",
     "plan:edit",
     "progress:program",
     "stand",
@@ -352,6 +359,11 @@ test("the early reads are the ones the boot and each lazy view always ask for", 
       read("src/client/progress-program-controller.ts")
     )?.[0] || "";
   assert.match(program, /CairnTrainFanIn\.prime\("program"\)[\s\S]*?deps\s*\.api\("\/coaching-focus"\)/);
+  // Horizon › Goal line primes the same fan-in for "goal" before its four reads.
+  assert.deepEqual(VIEW_EARLY_READS["horizon:goal"], ["/train-home?view=goal&date={date}"]);
+  const goal =
+    /async function renderHorizonGoal\(\)[\s\S]*?\n {2}\}\n/.exec(read("src/client/horizon-screen.ts"))?.[0] || "";
+  assert.match(goal, /CairnTrainFanIn\.prime\("goal"\)[\s\S]*?api\("\/journey"\)/);
   const train = read("src/client/train-fan-in-client.ts");
   assert.match(train, /const date = localISO\(\);/);
   assert.match(train, /const path = `\/train-home\?view=\$\{view\}&date=\$\{encodeURIComponent\(date\)\}`;/);

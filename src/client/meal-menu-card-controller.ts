@@ -19,6 +19,7 @@ type MealMenuCardHandle = (() => void) & {
 };
 
 (() => {
+  // The same path Fuel's first paint asks (and its fan-in primes, fuel-deps.ts).
   const PLANS_PATH = "/mealplans?limit=12";
 
   function mountMealMenuCard(host: HTMLElement, deps: MealMenuCardControllerDeps): MealMenuCardHandle {

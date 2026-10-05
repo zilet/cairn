@@ -44,6 +44,8 @@ export const VIEW_EARLY_READS = {
   "stand:share": ["/you-health?leaf=share"],
   // Train › Program: renderProgressProgram primes CairnTrainFanIn("program") first.
   "progress:program": ["/train-home?view=program&date={date}"],
+  // Horizon › Goal line: renderHorizonGoal primes CairnTrainFanIn("goal") first.
+  "horizon:goal": ["/train-home?view=goal&date={date}"],
   // The plan editor asks its three head reads (CairnPlanHead.headReads) on every
   // paint, and /plan through cachedApi({key:"plan"}), which answers without asking
   // only from an SWR row younger than its 3 s serveFreshFor. A `[path, swrKey, ms]`
